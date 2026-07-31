@@ -194,7 +194,7 @@ loop:
 - DB：Postgres（`jobs` / `events` / `findings` / `canvas_nodes` / `canvas_edges`）
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
 - 画布：**React Flow（@xyflow/react，MIT）+ elkjs 服务端布局**。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
-- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（claude-code server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）；事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
+- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 三家可换：**claude-code（默认）/ opencode / codex**，`AGENT_PROVIDER` 配置切换，凭据按家注入（ANTHROPIC_*/OPENAI_*/OPENROUTER_*）。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
 - Plane：自托管 Community + API Token
 
 暂不引入 Multica/ClawTeam，避免与 Plane 双看板；接口预留「执行器可替换」。

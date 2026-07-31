@@ -11,7 +11,8 @@ export default {
   base: "node:20-bookworm",
   run: [
     "apt-get update && apt-get install -y git python3 ca-certificates ripgrep",
-    "npm install -g @anthropic-ai/claude-code",
+    // 三家 CLI 全预装，AGENT_PROVIDER 运行时切换（claude-code | opencode | codex）
+    "npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex",
   ],
   workdir: "/workspace",
   cmd: ["sleep", "infinity"],

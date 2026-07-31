@@ -69,16 +69,24 @@ export const config = {
   runtime: {
     provider: str("SANDBOX_PROVIDER", "local-docker"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepflowhunter-agent:latest"),
+    /** agentbox-sdk agent provider：claude-code | opencode | codex（同一 API 可换） */
+    agentProvider: str("AGENT_PROVIDER", "claude-code"),
+    agentModel: str("AGENT_MODEL"),
     anthropicKey: str("ANTHROPIC_API_KEY"),
     anthropicBaseUrl: str("ANTHROPIC_BASE_URL"),
     anthropicAuthToken: str("ANTHROPIC_AUTH_TOKEN"),
-    agentModel: str("AGENT_MODEL"),
-    /** 注入沙箱的 Claude Code 环境变量（只放非空项，§9：密钥仅调度器持有） */
+    openaiKey: str("OPENAI_API_KEY"),
+    openaiBaseUrl: str("OPENAI_BASE_URL"),
+    openrouterKey: str("OPENROUTER_API_KEY"),
+    /** 注入沙箱的 Agent 环境变量（只放非空项，密钥仅调度器持有，§9） */
     get agentEnv(): Record<string, string> {
       const env: Record<string, string> = {};
       if (this.anthropicKey) env.ANTHROPIC_API_KEY = this.anthropicKey;
       if (this.anthropicBaseUrl) env.ANTHROPIC_BASE_URL = this.anthropicBaseUrl;
       if (this.anthropicAuthToken) env.ANTHROPIC_AUTH_TOKEN = this.anthropicAuthToken;
+      if (this.openaiKey) env.OPENAI_API_KEY = this.openaiKey;
+      if (this.openaiBaseUrl) env.OPENAI_BASE_URL = this.openaiBaseUrl;
+      if (this.openrouterKey) env.OPENROUTER_API_KEY = this.openrouterKey;
       return env;
     },
   },
