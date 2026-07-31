@@ -6,6 +6,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "dev": "pnpm --filter @dfh/scheduler dev",
+    "dev:web": "pnpm --filter @dfh/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:up": "docker compose -f deploy/docker-compose.yml up -d",

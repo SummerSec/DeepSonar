@@ -159,8 +159,8 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
   if (existing.length > 0) return;
   const [project] = await sql`SELECT canvas_id FROM projects WHERE id = ${job.project_id as string}`;
   if (!project) return;
-  const [{ count }] = await sql<[{ count: number }]>`
-    SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE canvas_id = ${project.canvas_id} AND node_type = 'job'`;
+  const [{ next_x }] = await sql<[{ next_x: number }]>`
+    SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${project.canvas_id}`;
   await sql`
     INSERT INTO canvas_nodes ${sql({
       canvas_id: project.canvas_id,
@@ -168,7 +168,7 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
       node_type: "job",
       title: `${job.type} #${(jobId as string).slice(0, 8)}`,
       body_json: { type: job.type, payload: job.payload_json } as never,
-      x: 100 + count * 300,
+      x: next_x,
       y: 300,
       status: "running",
     })}`;
