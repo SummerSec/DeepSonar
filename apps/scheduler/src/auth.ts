@@ -109,6 +109,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /credentials": "profiles:read",
   "GET /audit-logs": "admin",
   "POST /credentials": "profiles:write",
+  "PATCH /credentials/:id": "profiles:write",
   "POST /credentials/:id/rotate": "profiles:write",
   "POST /credentials/:id/status": "profiles:write",
   "POST /credentials/:id/test": "profiles:read",

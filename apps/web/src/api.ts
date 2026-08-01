@@ -115,12 +115,17 @@ export interface FindingSummary {
   canvas_id?: string | null;
 }
 
+/** 思考强度（与 agentbox AgentReasoningEffort 对齐） */
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
 /** Agent profile（§8.1）：env_keys 只是变量名引用，密钥不落库 */
 export interface AgentProfile {
   id: string;
   name: string;
   agent_cli: "claude-code" | "open-code" | "codex";
   model: string | null;
+  /** 思考强度；null = provider 默认 */
+  reasoning: ReasoningEffort | null;
   env_keys: string[];
   /** §6.2：绑定的 Provider Credential（优先于 env_keys） */
   credential_id?: string | null;
@@ -266,6 +271,7 @@ export type ProfileInput = {
   name: string;
   agent_cli: string;
   model?: string | null;
+  reasoning?: ReasoningEffort | null;
   env_keys: string[];
   modules: string[];
   skills: Record<string, unknown>[];
@@ -283,6 +289,8 @@ export type ProfileInput = {
 export type RoleConfigInput = {
   agent_cli: "claude-code" | "open-code" | "codex";
   model?: string | null;
+  /** 思考强度；null = provider 默认 */
+  reasoning?: ReasoningEffort | null;
   env_keys: string[];
   /** 非敏感环境变量（疑似密钥名会被后端拒绝，引导改用 Credential） */
   env_vars: Record<string, string>;
@@ -306,6 +314,7 @@ export interface RoleConfigView {
   project_id: string | null;
   agent_cli: "claude-code" | "open-code" | "codex";
   model: string | null;
+  reasoning: ReasoningEffort | null;
   env_keys: string[];
   env_vars_json: Record<string, string>;
   modules_json: string[];
@@ -397,7 +406,7 @@ function authHeaders(): Record<string, string> {
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   // 无 body 时不要带 application/json，否则 Fastify 会因空 JSON body 直接 400
-  // （FST_ERR_CTP_EMPTY_JSON_BODY）—— 同步/取消/归档等无参 POST 都会踩中
+  // （FST_ERR_CTP_EMPTY_JSON_BODY）—— 凭据测试/同步/取消/归档等无参 POST 都会踩中
   const headers: Record<string, string> = { ...authHeaders() };
   let payload: string | undefined;
   if (body !== undefined) {
@@ -559,6 +568,15 @@ export const api = {
     project_id?: string | null;
     metadata?: Record<string, unknown>;
   }) => send<ProviderCredential>("POST", "/credentials", c),
+  /** 更新非敏感字段（名称 / 项目 / base_url 等 metadata）；密钥仍走 rotate */
+  updateCredential: (
+    id: string,
+    patch: {
+      name?: string;
+      project_id?: string | null;
+      metadata?: Record<string, unknown>;
+    },
+  ) => send<ProviderCredential>("PATCH", `/credentials/${id}`, patch),
   rotateCredential: (id: string, secret: string) =>
     send<ProviderCredential>("POST", `/credentials/${id}/rotate`, { secret }),
   setCredentialStatus: (id: string, status: "active" | "disabled" | "rotation_required") =>

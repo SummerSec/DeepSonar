@@ -22,39 +22,53 @@ export async function testCredential(cred: {
   }
 
   const meta = (cred.public_metadata_json ?? {}) as { base_url?: string };
-  const baseUrl = (meta.base_url ?? mapping.defaultBaseUrl ?? "").replace(/\/$/, "");
+  const baseUrl = (meta.base_url ?? mapping.defaultBaseUrl ?? "").replace(/\/+$/, "");
+  // base_url 常见两种写法：主机根（https://api.openai.com）或已带 /v1（OpenAI SDK 习惯）
+  // 统一拼出 .../v1/models，避免 /v1/v1/models
+  const modelsUrl = (root: string) => {
+    const r = root.replace(/\/+$/, "");
+    if (/\/v\d+$/i.test(r)) return `${r}/models`;
+    return `${r}/v1/models`;
+  };
+  const summarize = async (url: string, res: Response) => {
+    if (res.ok) return { ok: true as const, detail: `连接成功（HTTP ${res.status} · ${url}）` };
+    let bodyHint = "";
+    try {
+      const t = (await res.text()).trim().slice(0, 80);
+      if (t) bodyHint = ` · ${t}`;
+    } catch {
+      /* ignore */
+    }
+    return { ok: false as const, detail: `HTTP ${res.status} · ${url}${bodyHint}` };
+  };
 
   try {
     switch (cred.provider) {
       case "anthropic":
       case "kimi": {
-        if (!baseUrl) return { ok: false, detail: "缺 base_url" };
-        const res = await fetch(`${baseUrl}/v1/models`, {
+        if (!baseUrl) return { ok: false, detail: "缺 base_url（可在凭据编辑里补）" };
+        const url = modelsUrl(baseUrl);
+        const res = await fetch(url, {
           headers: { "x-api-key": secret, Authorization: `Bearer ${secret}`, "anthropic-version": "2023-06-01" },
           signal: AbortSignal.timeout(10_000),
         });
-        return res.ok
-          ? { ok: true, detail: `连接成功（HTTP ${res.status}）` }
-          : { ok: false, detail: `HTTP ${res.status}` };
+        return summarize(url, res);
       }
       case "openai": {
-        const url = (baseUrl || "https://api.openai.com") + "/v1/models";
+        const url = modelsUrl(baseUrl || "https://api.openai.com");
         const res = await fetch(url, {
           headers: { Authorization: `Bearer ${secret}` },
           signal: AbortSignal.timeout(10_000),
         });
-        return res.ok
-          ? { ok: true, detail: `连接成功（HTTP ${res.status}）` }
-          : { ok: false, detail: `HTTP ${res.status}` };
+        return summarize(url, res);
       }
       case "openrouter": {
-        const res = await fetch("https://openrouter.ai/api/v1/models", {
+        const url = "https://openrouter.ai/api/v1/models";
+        const res = await fetch(url, {
           headers: { Authorization: `Bearer ${secret}` },
           signal: AbortSignal.timeout(10_000),
         });
-        return res.ok
-          ? { ok: true, detail: `连接成功（HTTP ${res.status}）` }
-          : { ok: false, detail: `HTTP ${res.status}` };
+        return summarize(url, res);
       }
       default:
         return { ok: false, detail: `${cred.provider} 的连接测试暂未实现` };

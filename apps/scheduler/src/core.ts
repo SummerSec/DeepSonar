@@ -149,10 +149,15 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
 
 // ---------- Agent profile（决策层）：项目绑定 → 冻结快照（下一 job 生效，历史可复现） ----------
 
+/** 与 agentbox-sdk AgentReasoningEffort 对齐；null = provider 默认 */
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
 export interface AgentProfileSnapshot {
   name: string;
   agent_cli: string;
   model: string | null;
+  /** 思考/推理强度（下一 job 生效，随快照冻结） */
+  reasoning: ReasoningEffort | null;
   env_keys: string[];
   /** 绑定的 Provider Credential（§6.2）：快照只存 id/provider，密钥运行时解密，不进快照 */
   credential_id: string | null;
@@ -206,10 +211,17 @@ export async function resolveProfileSnapshot(
     WHERE pc.profile_id = ${row.id as string} AND pc.purpose = 'llm'
     LIMIT 1`;
 
+  const reasoningRaw = (row.reasoning as string | null) ?? null;
+  const reasoning: ReasoningEffort | null =
+    reasoningRaw === "low" || reasoningRaw === "medium" || reasoningRaw === "high" || reasoningRaw === "xhigh"
+      ? reasoningRaw
+      : null;
+
   return {
     name: row.name as string,
     agent_cli: row.agent_cli as string,
     model: (row.model as string) ?? null,
+    reasoning,
     env_keys: (row.env_keys as string[]) ?? [],
     credential_id: (cred?.id as string) ?? null,
     credential_provider: (cred?.provider as string) ?? null,

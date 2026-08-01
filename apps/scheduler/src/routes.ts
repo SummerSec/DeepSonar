@@ -38,10 +38,13 @@ const CreateJobBody = z.object({
 });
 
 // Agent profile（§8.1）：env_keys 只存变量名引用，密钥永不落库
+const ReasoningEffort = z.enum(["low", "medium", "high", "xhigh"]);
 const ProfileBody = z.object({
   name: z.string().min(1),
   agent_cli: z.enum(["claude-code", "open-code", "codex"]).default("claude-code"),
   model: z.string().nullish(),
+  /** 思考强度（agentbox reasoning）；null/省略 = provider 默认 */
+  reasoning: ReasoningEffort.nullish(),
   env_keys: z.array(z.string()).default([]),
   modules: z.array(z.string()).default([]), // Git 模块源勾选（["<source_id>:<module_id>"]）
   skills: z.array(z.record(z.string(), z.unknown())).default([]),
@@ -524,6 +527,7 @@ export function registerRoutes(app: FastifyInstance) {
           name: body.name,
           agent_cli: body.agent_cli,
           model: body.model ?? null,
+          reasoning: body.reasoning ?? null,
           env_keys: body.env_keys as never,
           modules_json: body.modules as never,
           skills_json: body.skills as never,
@@ -558,6 +562,7 @@ export function registerRoutes(app: FastifyInstance) {
     if (body.name !== undefined) sets.name = body.name;
     if (body.agent_cli !== undefined) sets.agent_cli = body.agent_cli;
     if (body.model !== undefined) sets.model = body.model;
+    if (body.reasoning !== undefined) sets.reasoning = body.reasoning;
     if (body.env_keys !== undefined) sets.env_keys = body.env_keys;
     if (body.modules !== undefined) sets.modules_json = body.modules;
     if (body.skills !== undefined) sets.skills_json = body.skills;
@@ -1112,6 +1117,17 @@ export function registerRoutes(app: FastifyInstance) {
   app.get("/credentials", async () =>
     sql`SELECT ${CRED_SAFE} FROM credentials ORDER BY created_at DESC`);
 
+  /** 规范化 public metadata：base_url 去尾斜杠，空串删除 key */
+  function normalizeCredentialMeta(raw: Record<string, unknown>): Record<string, unknown> {
+    const meta = { ...raw };
+    if (typeof meta.base_url === "string") {
+      const u = meta.base_url.trim().replace(/\/+$/, "");
+      if (u) meta.base_url = u;
+      else delete meta.base_url;
+    }
+    return meta;
+  }
+
   app.post("/credentials", async (req, reply) => {
     const body = CredentialBody.parse(req.body);
     if (!isProviderKnown(body.provider)) {
@@ -1132,7 +1148,7 @@ export function registerRoutes(app: FastifyInstance) {
         ciphertext: enc.ciphertext,
         nonce: enc.nonce,
         auth_tag: enc.auth_tag,
-        public_metadata_json: body.metadata as never,
+        public_metadata_json: normalizeCredentialMeta(body.metadata) as never,
         fingerprint: fingerprintOf(body.secret),
         last4: last4Of(body.secret),
         created_by: req.actor?.name ?? null,
@@ -1147,6 +1163,38 @@ export function registerRoutes(app: FastifyInstance) {
       after: { name: row.name, provider: row.provider, fingerprint: row.fingerprint, last4: row.last4 },
     });
     return reply.code(201).send(row);
+  });
+
+  // 非敏感字段可改：名称 / 项目归属 / public metadata（如 base_url）
+  // 密钥仍只能走 rotate；provider/kind 创建后不可改（避免绑定语义漂移）
+  app.patch("/credentials/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        name: z.string().trim().min(1).max(100).optional(),
+        project_id: z.string().uuid().nullable().optional(),
+        /** 整体替换 public_metadata_json（非密钥：base_url 等）；传 {} 可清空 */
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      })
+      .refine((b) => b.name !== undefined || b.project_id !== undefined || b.metadata !== undefined, {
+        message: "至少提供 name / project_id / metadata 之一",
+      })
+      .parse(req.body);
+
+    const sets: Record<string, unknown> = {};
+    if (body.name !== undefined) sets.name = body.name;
+    if (body.project_id !== undefined) sets.project_id = body.project_id;
+    if (body.metadata !== undefined) {
+      sets.public_metadata_json = normalizeCredentialMeta(body.metadata);
+    }
+    if (Object.keys(sets).length === 0) {
+      return reply.code(400).send({ error: "没有可更新的字段" });
+    }
+
+    const [row] = await sql`
+      UPDATE credentials SET ${sql(sets as never)} WHERE id = ${id} RETURNING ${CRED_SAFE}`;
+    if (!row) return reply.code(404).send({ error: "credential not found" });
+    return row;
   });
 
   app.post("/credentials/:id/rotate", async (req, reply) => {

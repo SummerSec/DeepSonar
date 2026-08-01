@@ -168,6 +168,8 @@ CREATE TABLE agent_profiles (
   name text NOT NULL UNIQUE,
   agent_cli text NOT NULL DEFAULT 'claude-code',
   model text,
+  /** agentbox reasoning effort：low|medium|high|xhigh；NULL = provider 默认 */
+  reasoning text,
   env_keys text[] NOT NULL DEFAULT '{}',
   skills_json jsonb NOT NULL DEFAULT '[]',
   commands_json jsonb NOT NULL DEFAULT '[]',
@@ -176,7 +178,9 @@ CREATE TABLE agent_profiles (
   modules_json jsonb NOT NULL DEFAULT '[]',
   prompt_suffix text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT agent_profiles_reasoning_check
+    CHECK (reasoning IS NULL OR reasoning IN ('low', 'medium', 'high', 'xhigh'))
 );
 
 CREATE TABLE skill_sources (

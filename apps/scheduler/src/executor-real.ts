@@ -211,6 +211,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const cliName = snapshot?.agent_cli ?? config.runtime.agentProvider;
   const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
   const model = snapshot?.model ?? config.runtime.agentModel ?? undefined;
+  const reasoning = snapshot?.reasoning ?? undefined;
   // env 注入两条路径（§6.2/§6.3）：
   // 1. 目标路径——profile 绑定 Credential：铸造短期 DFH_JOB_TOKEN 注入沙箱，
   //    沙箱经 Model Gateway 调用模型（真实 Key 不出调度器进程；job 终态即吊销）
@@ -331,7 +332,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
         : ["/workspace/findings.jsonl", "/workspace/done.json"];
 
   await emit("progress", {
-    message: `真实 agent 启动（${provider}${snapshot ? ` / profile=${snapshot.name}` : " / env 全局配置"}）`,
+    message: `真实 agent 启动（${provider}${model ? ` / model=${model}` : ""}${reasoning ? ` / reasoning=${reasoning}` : ""}${snapshot ? ` / profile=${snapshot.name}` : " / env 全局配置"}）`,
   });
 
   // 代码摄入（RUN-01/§10）：hub 只读图不需要代码；其余按任务 repo_path/repo_url 摄入
@@ -353,6 +354,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     {
       provider,
       model,
+      reasoning,
       env,
       prompt,
       // Agent 配置下发（skills/commands/mcps/subAgents 随 setup 差量上传）

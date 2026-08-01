@@ -15,9 +15,10 @@ async function main() {
     console.error("[fatal-guard] unhandledRejection:", reason instanceof Error ? reason.message : reason);
   });
 
-  console.log("[boot] 运行数据库迁移…");
+  console.log("[boot] 应用数据库 schema / 迁移…");
   const applied = await migrate();
-  if (applied.length > 0) console.log(`[boot] 已应用迁移: ${applied.join(", ")}`);
+  if (applied.length > 0) console.log(`[boot] 已应用: ${applied.join(", ")}`);
+  else console.log("[boot] schema 已就绪（无需变更）");
 
   const app = Fastify({ logger: { level: "info" } });
   await app.register(websocket);

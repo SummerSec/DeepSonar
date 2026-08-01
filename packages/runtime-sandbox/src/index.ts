@@ -49,4 +49,4 @@ export class NoopRunner implements SandboxRunner {
 }
 
 export { AgentboxRunner, forceRemoveContainer, listDfhContainers, runRealAgent } from "./agentbox.js";
-export type { DfhContainer, RealAgentResult, RealAgentSpec } from "./agentbox.js";
+export type { DfhContainer, RealAgentResult, RealAgentSpec, ReasoningEffort } from "./agentbox.js";

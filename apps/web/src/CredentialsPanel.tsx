@@ -1,16 +1,17 @@
-import { ArrowsClockwise, Check, Key, MagnifyingGlass, Plugs, Prohibit } from "@phosphor-icons/react";
+import { ArrowsClockwise, Check, Key, MagnifyingGlass, PencilSimple, Plugs, Prohibit } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type Project, type ProviderCredential } from "./api";
 
 /**
  * Provider Credential 管理（§6.2/§6.4）：LLM/Plane/Git 上游密钥的加密登记。
  * 与「API Token」（平台访问）严格分离。密文永不回显：列表只有指纹与末四位。
+ * 非敏感字段（名称 / base_url / 项目）可事后修改；密钥只能轮换。
  */
 
 const PROVIDERS: { value: string; label: string; baseUrlHint?: string }[] = [
   { value: "anthropic", label: "Anthropic", baseUrlHint: "https://api.anthropic.com（可留空）" },
   { value: "kimi", label: "Kimi for Coding", baseUrlHint: "默认 https://api.kimi.com/coding" },
-  { value: "openai", label: "OpenAI", baseUrlHint: "https://api.openai.com（可留空）" },
+  { value: "openai", label: "OpenAI 兼容", baseUrlHint: "https://api.openai.com 或网关 …/v1" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "plane", label: "Plane" },
   { value: "git", label: "Git（私有仓库）" },
@@ -38,7 +39,16 @@ export function CredentialsPanel() {
   const [projectId, setProjectId] = useState("");
   const [rotatingId, setRotatingId] = useState<string | null>(null);
   const [rotateSecret, setRotateSecret] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editProjectId, setEditProjectId] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const metaBaseUrl = (c: ProviderCredential): string => {
+    const v = c.public_metadata_json?.base_url;
+    return typeof v === "string" ? v : "";
+  };
 
   const load = () => {
     setError("");
@@ -60,12 +70,12 @@ export function CredentialsPanel() {
         provider,
         secret: secret.trim(),
         project_id: projectId || null,
-        metadata: baseUrl.trim() ? { base_url: baseUrl.trim() } : {},
+        metadata: baseUrl.trim() ? { base_url: baseUrl.trim().replace(/\/+$/, "") } : {},
       });
       setName("");
       setSecret("");
       setBaseUrl("");
-      setNotice("已加密登记。密钥只保存在密文里，此后无法查看原文，只能轮换。");
+      setNotice("已加密登记。密钥不可再查看（只能轮换）；名称与 base_url 可随时编辑。");
       load();
     } catch (e) {
       setError(String(e));
@@ -82,6 +92,43 @@ export function CredentialsPanel() {
       setRotatingId(null);
       setRotateSecret("");
       setNotice("轮换完成，旧密钥已废弃。");
+      load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startEdit = (c: ProviderCredential) => {
+    if (editingId === c.id) {
+      setEditingId(null);
+      return;
+    }
+    setRotatingId(null);
+    setEditingId(c.id);
+    setEditName(c.name);
+    setEditBaseUrl(metaBaseUrl(c));
+    setEditProjectId(c.project_id ?? "");
+  };
+
+  const saveEdit = async (id: string) => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const current = creds.find((c) => c.id === id);
+      const nextMeta: Record<string, unknown> = { ...(current?.public_metadata_json ?? {}) };
+      const url = editBaseUrl.trim().replace(/\/+$/, "");
+      if (url) nextMeta.base_url = url;
+      else delete nextMeta.base_url;
+      await api.updateCredential(id, {
+        name: editName.trim(),
+        project_id: editProjectId || null,
+        metadata: nextMeta,
+      });
+      setEditingId(null);
+      setNotice("已更新名称 / base_url / 项目归属（下一 job 生效；密钥未改）。");
       load();
     } catch (e) {
       setError(String(e));
@@ -154,7 +201,8 @@ export function CredentialsPanel() {
       <div className="text-[13px] leading-relaxed text-zinc-500">
         上游服务密钥（LLM / Plane / Git）经 AES-256-GCM 加密落库，主密钥由调度器的{" "}
         <code className="font-mono text-zinc-400">DFH_MASTER_KEY_FILE</code> 持有。
-        绑定到角色运行配置后，运行时解密注入沙箱——取代手填环境变量名。
+        密钥提交后不可回看、只能轮换；名称与{" "}
+        <code className="font-mono text-zinc-400">base_url</code> 等非敏感元数据可随时修改。
       </div>
 
       {/* 登记 */}
@@ -213,7 +261,7 @@ export function CredentialsPanel() {
         </button>
       </div>
 
-      {notice && <div className="text-[12px] text-run-400">{notice}</div>}
+      {notice && <div className="break-all text-[12px] text-run-400">{notice}</div>}
       {error && <div className="text-[12px] text-red-400">{error}</div>}
 
       {/* 列表 */}
@@ -254,8 +302,20 @@ export function CredentialsPanel() {
                     <Plugs size={14} />
                   </button>
                   <button
-                    onClick={() => setRotatingId(rotatingId === c.id ? null : c.id)}
-                    title="轮换"
+                    onClick={() => startEdit(c)}
+                    title="编辑名称 / base_url / 项目"
+                    className={`rounded p-1 hover:bg-ink-800 hover:text-acc-400 ${
+                      editingId === c.id ? "bg-ink-800 text-acc-400" : "text-zinc-500"
+                    }`}
+                  >
+                    <PencilSimple size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingId(null);
+                      setRotatingId(rotatingId === c.id ? null : c.id);
+                    }}
+                    title="轮换密钥"
                     className="rounded p-1 text-zinc-500 hover:bg-ink-800 hover:text-acc-400"
                   >
                     <ArrowsClockwise size={14} />
@@ -281,11 +341,61 @@ export function CredentialsPanel() {
               </div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[11px] text-zinc-500">
                 <span>{projectName(c.project_id)}</span>
+                <span className="max-w-full truncate" title={metaBaseUrl(c) || "未设置 base_url"}>
+                  base_url {metaBaseUrl(c) || "（默认）"}
+                </span>
                 <span>指纹 {c.fingerprint.slice(0, 8)}</span>
                 <span>v{c.key_version}</span>
                 {c.last_used_at && <span>最近用 {new Date(c.last_used_at).toLocaleString()}</span>}
                 {c.rotated_at && <span>轮换于 {new Date(c.rotated_at).toLocaleDateString()}</span>}
               </div>
+              {editingId === c.id && (
+                <div className="mt-2 flex flex-col gap-2 rounded-md border border-ink-700 bg-ink-900/50 p-2">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-zinc-500">
+                    编辑非敏感字段 · provider 不可改
+                  </div>
+                  <input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="名称"
+                    className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 text-zinc-200 outline-none focus:border-acc-500"
+                  />
+                  <input
+                    value={editBaseUrl}
+                    onChange={(e) => setEditBaseUrl(e.target.value)}
+                    placeholder={PROVIDERS.find((p) => p.value === c.provider)?.baseUrlHint
+                      ? `base_url：${PROVIDERS.find((p) => p.value === c.provider)?.baseUrlHint}`
+                      : "base_url（留空=用 provider 默认）"}
+                    className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
+                    spellCheck={false}
+                  />
+                  <select
+                    value={editProjectId}
+                    onChange={(e) => setEditProjectId(e.target.value)}
+                    className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-zinc-200 outline-none"
+                  >
+                    <option value="">全局</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => saveEdit(c.id)}
+                      disabled={busy || !editName.trim()}
+                      className="rounded-md bg-acc-500 px-3 py-1.5 text-ink-950 hover:bg-acc-400 disabled:opacity-40"
+                    >
+                      保存
+                    </button>
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="rounded-md border border-ink-600 px-3 py-1.5 text-zinc-400 hover:border-ink-500 hover:text-zinc-200"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
               {rotatingId === c.id && (
                 <div className="mt-2 flex gap-2">
                   <input

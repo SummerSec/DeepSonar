@@ -182,9 +182,15 @@ export async function forceRemoveContainer(containerId: string): Promise<void> {
 
 // ---------- 真实 Agent 运行（§8 事件通道 + 文件契约） ----------
 
+/** 与 agentbox-sdk AgentReasoningEffort 对齐 */
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
 export interface RealAgentSpec {
   provider: "claude-code" | "open-code" | "codex";
+  /** 模型 ID（如 claude-sonnet-4-5、gpt-5、kimi-k2） */
   model?: string;
+  /** 思考/推理强度；缺省由 provider 默认 */
+  reasoning?: ReasoningEffort;
   env: Record<string, string>;
   prompt: string;
   /** Agent 配置下发（agentbox setup 差量上传，见 §8.1 agent_profiles） */
@@ -239,6 +245,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const run = agent.stream({
     input: spec.prompt,
     model: spec.model,
+    ...(spec.reasoning ? { reasoning: spec.reasoning } : {}),
   });
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）

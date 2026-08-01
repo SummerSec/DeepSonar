@@ -32,9 +32,12 @@ interface EnvPair {
   value: string;
 }
 
+type ReasoningForm = "" | "low" | "medium" | "high" | "xhigh";
+
 interface ConfigForm {
   agent_cli: string;
   model: string;
+  reasoning: ReasoningForm;
   credential_id: string; // "" = 不绑定（退回 env_keys 过渡路径）
   env_keys: string; // 逗号分隔
   env_pairs: EnvPair[]; // 非敏感环境变量键值对
@@ -51,6 +54,7 @@ interface ConfigForm {
 const EMPTY: ConfigForm = {
   agent_cli: "claude-code",
   model: "",
+  reasoning: "",
   credential_id: "",
   env_keys: "",
   env_pairs: [],
@@ -70,6 +74,7 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
   return {
     agent_cli: cfg.agent_cli,
     model: cfg.model ?? "",
+    reasoning: (cfg.reasoning as ReasoningForm | null) ?? "",
     // 首期 UI 只暴露单条 purpose=llm 绑定（多用途绑定后端已支持）
     credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
     env_keys: (cfg.env_keys ?? []).join(", "),
@@ -165,6 +170,7 @@ export function RoleConfigEditor({
       const body: RoleConfigInput = {
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         model: form.model.trim() || null,
+        reasoning: form.reasoning || null,
         env_keys: form.env_keys.split(",").map((s) => s.trim()).filter(Boolean),
         env_vars,
         modules: form.modules,
@@ -235,9 +241,32 @@ export function RoleConfigEditor({
               </select>
             </div>
             <div>
-              <label className={labelCls}>模型（空=默认）</label>
-              <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls} placeholder="k3" />
+              <label className={labelCls}>模型 ID（空=默认）</label>
+              <input
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                className={inputCls}
+                placeholder="如 claude-sonnet-4-5 / gpt-5 / k3"
+                spellCheck={false}
+              />
             </div>
+          </div>
+          <div>
+            <label className={labelCls}>思考强度（reasoning effort）</label>
+            <select
+              value={form.reasoning}
+              onChange={(e) => setForm({ ...form, reasoning: e.target.value as ReasoningForm })}
+              className={inputCls}
+            >
+              <option value="">默认（由模型/CLI 决定）</option>
+              <option value="low">low — 轻量，省 token</option>
+              <option value="medium">medium — 均衡</option>
+              <option value="high">high — 深入推理</option>
+              <option value="xhigh">xhigh — 最强（慢/贵）</option>
+            </select>
+            <p className="mt-1 text-[10px] leading-5 text-zinc-600">
+              写入 job 快照后下一任务生效；部分模型/中转可能忽略该参数。
+            </p>
           </div>
           <div>
             <label className={labelCls}>LLM Credential</label>
