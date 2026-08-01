@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Background,
+  BackgroundVariant,
   Controls,
+  MarkerType,
   MiniMap,
   ReactFlow,
   type Edge,
@@ -9,38 +11,64 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
+import { layoutNodes } from "./layout";
 import { nodeTypes } from "./nodes";
 import { Sidebar } from "./Sidebar";
 
+/** 边语义色（图例与之一致，不产生文字 label） */
 const EDGE_STYLE: Record<string, { stroke: string; animated?: boolean }> = {
-  child: { stroke: "#95999f" },
-  produces: { stroke: "#e2a03f", animated: true },
-  verifies: { stroke: "#22a06b" },
-  next: { stroke: "#3a76f0" },
+  child: { stroke: "#3f3f48" },
+  produces: { stroke: "#d97706", animated: true },
+  verifies: { stroke: "#10b981" },
+  next: { stroke: "#38bdf8" },
 };
 
+const NODE_W = 248;
+
 function toFlow(data: CanvasData): { nodes: Node[]; edges: Edge[] } {
+  const pos = layoutNodes(data.nodes, data.edges);
   return {
     nodes: data.nodes.map((n) => ({
       id: n.id,
       type: n.node_type,
-      position: { x: n.x, y: n.y },
-      width: n.w,
-      height: n.h,
+      position: pos.get(n.id) ?? { x: n.x, y: n.y },
+      width: NODE_W,
       data: { canvas: n },
       draggable: false,
       connectable: false,
     })),
-    edges: data.edges.map((e) => ({
-      id: e.id,
-      source: e.from_node_id,
-      target: e.to_node_id,
-      label: e.edge_type,
-      animated: EDGE_STYLE[e.edge_type]?.animated ?? false,
-      style: { stroke: EDGE_STYLE[e.edge_type]?.stroke ?? "#95999f", strokeWidth: 2 },
-      labelStyle: { fill: "#666", fontSize: 11 },
-    })),
+    edges: data.edges.map((e) => {
+      const st = EDGE_STYLE[e.edge_type] ?? { stroke: "#3f3f48" };
+      return {
+        id: e.id,
+        source: e.from_node_id,
+        target: e.to_node_id,
+        type: "smoothstep",
+        animated: st.animated ?? false,
+        style: { stroke: st.stroke, strokeWidth: 1.5, opacity: 0.85 },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: st.stroke },
+      };
+    }),
   };
+}
+
+/** 边语义图例（替代旧的边上文字 label） */
+function Legend() {
+  const items = [
+    { color: EDGE_STYLE.produces.stroke, label: "produces 产出" },
+    { color: EDGE_STYLE.verifies.stroke, label: "verifies 验证" },
+    { color: EDGE_STYLE.child.stroke, label: "child 包含" },
+  ];
+  return (
+    <div className="absolute bottom-4 left-4 z-10 flex items-center gap-4 rounded-lg border border-ink-700 bg-ink-900/90 px-3 py-2 backdrop-blur">
+      {items.map((it) => (
+        <span key={it.label} className="flex items-center gap-1.5">
+          <span className="inline-block h-0.5 w-4 rounded" style={{ background: it.color }} />
+          <span className="font-mono text-[10px] text-zinc-400">{it.label}</span>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export function CanvasView({ projectId }: { projectId: string }) {
@@ -56,6 +84,7 @@ export function CanvasView({ projectId }: { projectId: string }) {
         .canvas(projectId)
         .then((d) => alive && (setData(d), setError(null)))
         .catch((e) => alive && setError(String(e)));
+    setData(null);
     load();
     const t = setInterval(load, 5000);
     return () => {
@@ -74,11 +103,26 @@ export function CanvasView({ projectId }: { projectId: string }) {
     [data],
   );
 
-  if (error) return <div className="canvas-error">画布加载失败：{error}</div>;
-  if (!data) return <div className="canvas-loading">加载中…</div>;
+  if (error)
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="rounded-[10px] border border-red-900/60 bg-red-950/40 px-6 py-4 text-sm text-red-300">
+          画布加载失败：{error}
+        </div>
+      </div>
+    );
+  if (!data)
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-zinc-500">
+          <span className="dfh-live-dot inline-block size-2 rounded-full bg-acc-500" />
+          正在连接调度器…
+        </div>
+      </div>
+    );
 
   return (
-    <div className="canvas-wrap">
+    <div className="relative flex-1">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -88,13 +132,22 @@ export function CanvasView({ projectId }: { projectId: string }) {
         nodesConnectable={false}
         elementsSelectable
         fitView
+        fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
         minZoom={0.2}
         proOptions={{ hideAttribution: false }}
       >
-        <Background gap={24} />
-        <Controls showInteractive={false} />
-        <MiniMap pannable zoomable />
+        <Background variant={BackgroundVariant.Dots} gap={26} size={1.5} color="#222228" />
+        <Controls showInteractive={false} position="bottom-right" />
+        <MiniMap
+          pannable
+          zoomable
+          nodeColor="#2a2a31"
+          nodeStrokeColor="#3f3f48"
+          position="top-right"
+          style={{ width: 140, height: 90 }}
+        />
       </ReactFlow>
+      <Legend />
       {selected && <Sidebar node={selected} onClose={() => setSelected(null)} />}
     </div>
   );

@@ -1,68 +1,96 @@
-* { box-sizing: border-box; }
+@import "tailwindcss";
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
+
+/*
+ * DeepFlowHunter 画布主题（dark tech 座舱）
+ * 圆角规则：卡片 10px / 控件 8px / 徽章全圆角
+ * 品牌 accent：emerald；状态色仅作语义用途
+ */
+@theme {
+  --font-sans: "Geist Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+
+  --color-ink-950: #09090b;
+  --color-ink-900: #101013;
+  --color-ink-850: #16161a;
+  --color-ink-800: #1e1e23;
+  --color-ink-700: #2a2a31;
+  --color-ink-600: #3f3f48;
+
+  --color-acc-300: #6ee7b7;
+  --color-acc-400: #34d399;
+  --color-acc-500: #10b981;
+
+  --color-run-400: #38bdf8;
+  --color-warn-400: #fbbf24;
+  --color-crit-500: #f43f5e;
+  --color-high-500: #f97316;
+}
+
 html, body, #root { height: 100%; margin: 0; }
 body {
-  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  background: #f6f7f9;
-  color: #1f2329;
+  background: var(--color-ink-950);
+  color: #e4e4e7;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
 
-.app { display: flex; flex-direction: column; height: 100%; }
+/* ---------- React Flow 深色化 ---------- */
+.react-flow { background: var(--color-ink-950); }
+.react-flow__attribution { background: transparent; color: var(--color-ink-600); }
+.react-flow__attribution a { color: var(--color-ink-600); }
 
-.topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 16px; background: #fff; border-bottom: 1px solid #e5e7eb;
-}
-.logo { font-weight: 700; letter-spacing: 0.5px; }
-.topbar select { padding: 4px 8px; border: 1px solid #d0d5dd; border-radius: 6px; }
-.hint { margin-left: auto; color: #95999f; font-size: 12px; }
-
-.canvas-wrap { position: relative; flex: 1; }
-.canvas-loading, .canvas-error { padding: 40px; text-align: center; color: #666; }
-.canvas-error { color: #e5484d; }
-
-/* ---- 自定义节点 ---- */
-.dfh-node {
-  width: 100%; height: 100%;
-  background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
-  padding: 8px 10px; font-size: 12px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+.react-flow__controls {
+  border-radius: 8px;
   overflow: hidden;
+  border: 1px solid var(--color-ink-700);
+  box-shadow: none;
 }
-.dfh-node.selected { outline: 2px solid #3a76f0; }
-.dfh-node-finding { border-color: #f3d1a7; background: #fffaf3; }
-.dfh-node-human { border-color: #f0b8b8; background: #fff5f5; }
-.dfh-node-root { border-color: #b9d0f7; background: #f5f9ff; }
+.react-flow__controls-button {
+  background: var(--color-ink-850);
+  border-bottom: 1px solid var(--color-ink-700);
+  fill: #a1a1aa;
+}
+.react-flow__controls-button:hover { background: var(--color-ink-800); }
+.react-flow__controls-button svg { fill: #a1a1aa; }
 
-.dfh-node-header {
-  display: flex; align-items: center; gap: 6px;
-  border-left: 3px solid transparent; padding-left: 6px; margin-bottom: 4px;
+.react-flow__minimap {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--color-ink-700);
+  background: var(--color-ink-900) !important;
 }
-.dfh-node-type { color: #95999f; font-size: 11px; }
-.dfh-node-title { font-weight: 600; line-height: 1.3; }
-.dfh-node-sub { color: #8a8f99; font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.react-flow__minimap-mask { fill: rgb(9 9 11 / 0.72); }
 
-.pill {
-  color: #fff; font-size: 10px; line-height: 1;
-  padding: 3px 6px; border-radius: 999px;
+.react-flow__edge-path { stroke-width: 1.5; }
+.react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
+.react-flow__handle { opacity: 0; } /* 只读画布：连接点不可见 */
+
+/* ---------- 节点选中态 ---------- */
+.react-flow__node.selected .dfh-node {
+  border-color: var(--color-acc-500);
+  box-shadow: 0 0 0 1px var(--color-acc-500);
 }
 
-/* ---- 侧栏 ---- */
-.sidebar {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 340px;
-  background: #fff; border-left: 1px solid #e5e7eb;
-  display: flex; flex-direction: column; z-index: 10;
+/* ---------- 侧栏滑入（reduced-motion 降级） ---------- */
+@keyframes dfh-slide-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
 }
-.sidebar-head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 12px 14px; border-bottom: 1px solid #eef0f3;
+.dfh-sidebar { animation: dfh-slide-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+@keyframes dfh-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
-.sidebar-head button { border: none; background: none; font-size: 20px; cursor: pointer; color: #95999f; }
-.sidebar-body { padding: 12px 14px; overflow-y: auto; font-size: 12px; }
-.sidebar-body dl { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0 0 14px; }
-.sidebar-body dt { color: #95999f; }
-.sidebar-body dd { margin: 0; word-break: break-all; }
-.sidebar-body pre { margin: 0; white-space: pre-wrap; font-size: 11px; }
-.events { list-style: none; padding: 0; margin: 0; }
-.events li { padding: 6px 0; border-bottom: 1px dashed #eef0f3; }
-.ev-payload { color: #555; }
-.error { color: #e5484d; }
+.dfh-live-dot { animation: dfh-pulse-dot 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dfh-sidebar { animation: none; }
+  .dfh-live-dot { animation: none; }
+  .react-flow__edge.animated .react-flow__edge-path { animation: none !important; }
+}

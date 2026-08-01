@@ -4,26 +4,30 @@ import type { CanvasNode } from "./api";
 export type DFHNodeData = { canvas: CanvasNode };
 export type DFHNode = Node<DFHNodeData, string>;
 
-const STATUS_COLOR: Record<string, string> = {
-  active: "#3a76f0",
-  running: "#3a76f0",
-  succeeded: "#22a06b",
-  confirmed: "#22a06b",
-  open: "#e2a03f",
-  pending: "#95999f",
-  failed: "#e5484d",
-  timeout: "#e5484d",
-  orphan: "#e5484d",
-  cancelled: "#95999f",
-  false_positive: "#95999f",
-  needs_human: "#e2a03f",
+/** 语义状态色（与侧栏/图例共用同一套） */
+export const STATUS_COLOR: Record<string, string> = {
+  active: "#38bdf8",
+  running: "#38bdf8",
+  claimed: "#38bdf8",
+  provisioning: "#38bdf8",
+  succeeded: "#34d399",
+  confirmed: "#34d399",
+  pending: "#71717a",
+  open: "#fbbf24",
+  needs_human: "#fbbf24",
+  waiting_human: "#fbbf24",
+  failed: "#f87171",
+  timeout: "#f87171",
+  orphan: "#f87171",
+  cancelled: "#71717a",
+  false_positive: "#71717a",
 };
 
-const SEVERITY_COLOR: Record<string, string> = {
-  low: "#95999f",
-  medium: "#e2a03f",
-  high: "#e5484d",
-  critical: "#b3247a",
+export const SEVERITY_COLOR: Record<string, string> = {
+  low: "#71717a",
+  medium: "#fbbf24",
+  high: "#f97316",
+  critical: "#f43f5e",
 };
 
 const TYPE_LABEL: Record<string, string> = {
@@ -34,35 +38,64 @@ const TYPE_LABEL: Record<string, string> = {
   human: "需人工",
 };
 
-function Pill({ text, color }: { text: string; color: string }) {
-  return (
-    <span className="pill" style={{ background: color }}>
-      {text}
-    </span>
-  );
-}
+/** 运行中状态：状态点带呼吸脉冲 */
+const LIVE_STATUS = new Set(["running", "claimed", "provisioning", "active"]);
 
-function BaseNode({ data, selected }: NodeProps<DFHNode>) {
+function BaseNode({ data }: NodeProps<DFHNode>) {
   const n = data.canvas;
-  const statusColor = STATUS_COLOR[n.status ?? ""] ?? "#95999f";
+  const status = n.status ?? "";
+  const statusColor = STATUS_COLOR[status] ?? "#71717a";
   const severity = (n.body_json?.severity as string) ?? null;
+  const sevColor = severity ? (SEVERITY_COLOR[severity] ?? "#71717a") : null;
+  const jobType = (n.body_json?.type as string) ?? null;
+  const location = (n.body_json?.location as string) ?? null;
+
   return (
-    <div className={`dfh-node dfh-node-${n.node_type} ${selected ? "selected" : ""}`}>
+    <div className="dfh-node w-full rounded-[10px] border border-ink-700 bg-ink-850/95 px-3 py-2.5">
       <Handle type="target" position={Position.Left} isConnectable={false} />
-      <div className="dfh-node-header" style={{ borderLeftColor: statusColor }}>
-        <span className="dfh-node-type">{TYPE_LABEL[n.node_type] ?? n.node_type}</span>
-        {n.status && <Pill text={n.status} color={statusColor} />}
-        {severity && <Pill text={severity} color={SEVERITY_COLOR[severity] ?? "#95999f"} />}
+
+      {/* 头部：类型 + 状态 */}
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+          {TYPE_LABEL[n.node_type] ?? n.node_type}
+        </span>
+        {status && (
+          <span className="ml-auto flex items-center gap-1.5">
+            <span
+              className={`inline-block size-1.5 rounded-full ${LIVE_STATUS.has(status) ? "dfh-live-dot" : ""}`}
+              style={{ background: statusColor }}
+            />
+            <span className="font-mono text-[10px]" style={{ color: statusColor }}>
+              {status}
+            </span>
+          </span>
+        )}
       </div>
-      <div className="dfh-node-title">{n.title}</div>
-      {n.node_type === "finding" && Boolean(n.body_json?.location) && (
-        <div className="dfh-node-sub">{String(n.body_json.location)}</div>
-      )}
-      {n.node_type === "job" && Boolean(n.body_json?.last_progress) && (
-        <div className="dfh-node-sub">
-          {String((n.body_json.last_progress as { message?: string })?.message ?? "")}
-        </div>
-      )}
+
+      {/* 标题：最多两行 */}
+      <div
+        className="mt-1.5 text-[13px] font-medium leading-snug text-zinc-100"
+        style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+      >
+        {n.title}
+      </div>
+
+      {/* 底部元信息：位置 / job 类型 / severity */}
+      <div className="mt-1.5 flex items-center gap-2">
+        {location && (
+          <span className="truncate font-mono text-[11px] text-zinc-500">{location}</span>
+        )}
+        {jobType && <span className="truncate font-mono text-[11px] text-zinc-500">{jobType}</span>}
+        {severity && (
+          <span
+            className="ml-auto font-mono text-[10px] font-medium uppercase tracking-wider"
+            style={{ color: sevColor ?? undefined }}
+          >
+            {severity}
+          </span>
+        )}
+      </div>
+
       <Handle type="source" position={Position.Right} isConnectable={false} />
     </div>
   );
