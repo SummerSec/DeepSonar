@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dfh
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 deploy/.env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: deepflowhunter
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dfh -d deepflowhunter"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [dfh]
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.scheduler
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://dfh:${POSTGRES_PASSWORD}@postgres:5432/deepflowhunter
+      SCHEDULER_HOST: 0.0.0.0
+      SCHEDULER_PORT: 3100
+      DFH_AUTH_REQUIRED: "true"
+    volumes:
+      - blob_data:/app/data
+      - ./master.key:/run/secrets/dfh_master_key:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [dfh]
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "${DFH_WEB_PORT:-8080}:8080"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+    networks: [dfh]
+
+volumes:
+  postgres_data:
+  blob_data:
+
+networks:
+  dfh:
+    driver: bridge
