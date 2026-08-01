@@ -15,6 +15,7 @@ import { audit } from "./audit.js";
 import { config } from "./config.js";
 import { decryptSecret, isProviderKnown, PROVIDER_ENV_MAP } from "./credentials.js";
 import { sql } from "./db.js";
+import { inc } from "./metrics.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 
@@ -232,8 +233,11 @@ export function registerGateway(app: FastifyInstance): void {
           signal: AbortSignal.timeout(config.gateway.upstreamTimeoutMs),
         });
       } catch (e) {
+        inc("dfh_provider_errors_total", { provider: cred.provider as string });
         return deny(reply, 502, `上游不可达: ${e instanceof Error ? e.message : e}`, "upstream_unreachable");
       }
+      inc("dfh_model_requests_total", { provider: cred.provider as string });
+      if (upstream.status >= 500) inc("dfh_provider_errors_total", { provider: cred.provider as string });
 
       // 响应直通：非流式缓存全文以解析 usage；流式边转发边扫描
       const isSse = (upstream.headers.get("content-type") ?? "").includes("text/event-stream");
@@ -267,6 +271,7 @@ export function registerGateway(app: FastifyInstance): void {
         reply.raw.end();
       }
       if (scanned > 0) {
+        inc("dfh_model_tokens_total", { provider: cred.provider as string }, scanned);
         await sql`UPDATE job_tokens SET used_tokens = used_tokens + ${scanned} WHERE id = ${jt.id}`;
       }
     },

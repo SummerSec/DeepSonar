@@ -4,7 +4,16 @@ import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { config } from "./config.js";
 
-export const sql = postgres(config.databaseUrl, { max: 10 });
+export const sql = postgres(config.databaseUrl, {
+  // §12.3 连接治理：池上限 + 语句/空闲/连接超时（迁移在同一连接上执行，statement_timeout 不宜过小）
+  max: config.db.poolMax,
+  idle_timeout: config.db.idleTimeoutSec,
+  connect_timeout: config.db.connectTimeoutSec,
+  connection: {
+    application_name: "dfh-scheduler",
+    statement_timeout: config.db.statementTimeoutMs,
+  },
+});
 
 const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../migrations");
 

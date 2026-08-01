@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { audit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import { inc } from "./metrics.js";
 
 /**
  * 平台 API Token 鉴权（§6.1/SEC-01）
@@ -138,6 +139,7 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
 
   // §7.2：认证失败与越权必须进审计（不写 Authorization 头/Token 本体）
   const denyAudited = (code: number, error: string, errorCode: string) => {
+    inc("dfh_api_auth_failed_total", { reason: errorCode });
     void audit(req, {
       action: code === 401 ? "auth.failed" : "auth.denied",
       resourceType: "route",

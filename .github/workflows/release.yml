@@ -1,0 +1,76 @@
+name: release
+
+# 可发布制品（§12.1）：tag v* 触发 —— 镜像固定版本推到 GHCR + Management Skill Release 附件
+# 制品：deepflowhunter-scheduler / deepflowhunter-web / deepflowhunter-agent（digest 固定）
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler }
+          - { name: web, dockerfile: deploy/Dockerfile.web }
+          - { name: agent, dockerfile: deploy/Dockerfile.agent }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      # scheduler/web 镜像构建内嵌 pnpm install --frozen-lockfile，lockfile 先验一遍
+      - run: pnpm install --frozen-lockfile
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/deepflowhunter-${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  management-skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 打包 Management Skill
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          tar -czf "deepflowhunter-management-skill-${VERSION}.tar.gz" -C skills deepflowhunter-management
+
+      - name: 发布 Release + 附件
+        uses: softprops/action-gh-release@v2
+        with:
+          files: deepflowhunter-management-skill-*.tar.gz
+          generate_release_notes: true

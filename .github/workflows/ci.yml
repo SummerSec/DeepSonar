@@ -1,0 +1,54 @@
+name: ci
+
+# QA 门禁（§14）+ 生产制品构建验证（§12.1：dist 产物可启动、迁移可应用）
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+env:
+  DATABASE_URL: postgres://dfh:dfh-ci-pass@127.0.0.1:5432/deepflowhunter
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dfh
+          POSTGRES_PASSWORD: dfh-ci-pass
+          POSTGRES_DB: deepflowhunter
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dfh -d deepflowhunter"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r typecheck
+
+      - run: pnpm -r build
+
+      # 生产制品冒烟：node dist 启动（非 tsx）+ 迁移自动应用 + /health 可达
+      - name: dist boot smoke
+        env:
+          AGENT_MODE: fake
+          SCHEDULER_PORT: "3100"
+          DFH_HUB_ENABLED: "false"
+        run: |
+          node apps/scheduler/dist/index.js &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3100/health && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:3100/health

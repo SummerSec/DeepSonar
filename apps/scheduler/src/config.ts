@@ -120,6 +120,14 @@ export const config = {
     upstreamTimeoutMs: int("DFH_GATEWAY_UPSTREAM_TIMEOUT_MS", 120_000),
   },
 
+  /** 数据库连接治理（§12.3）：池上限、语句/空闲超时 */
+  db: {
+    poolMax: int("DFH_DB_POOL_MAX", 10),
+    statementTimeoutMs: int("DFH_DB_STATEMENT_TIMEOUT_MS", 60_000),
+    idleTimeoutSec: int("DFH_DB_IDLE_TIMEOUT_SEC", 30),
+    connectTimeoutSec: int("DFH_DB_CONNECT_TIMEOUT_SEC", 10),
+  },
+
   runtime: {
     provider: str("SANDBOX_PROVIDER", "local-docker"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepflowhunter-agent:latest"),

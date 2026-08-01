@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { ingestEvent, transitionJob } from "./core.js";
 import { sql } from "./db.js";
 import { executeReal } from "./executor-real.js";
+import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner } from "./runtime.js";
 
@@ -13,6 +14,20 @@ import { runner } from "./runtime.js";
  */
 
 const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
+
+/** 在执行的 job（优雅退出 drain 用，§12.2） */
+const inFlight = new Set<Promise<void>>();
+
+/** 等所有在执行的 job 收尾（超时强制返回；超时未完成的由下次启动 reconcile 接管为 orphan） */
+export async function drainInFlight(timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (inFlight.size > 0 && Date.now() < deadline) {
+    await Promise.race([Promise.allSettled([...inFlight]), new Promise((r) => setTimeout(r, 500))]);
+  }
+  if (inFlight.size > 0) {
+    console.warn(`[dispatcher] drain 超时，仍有 ${inFlight.size} 个 job 在执行（重启后由 reconcile 判 orphan）`);
+  }
+}
 
 /** 内置 real 类型；其余 job.type 若在角色注册表（agent_roles）中也为 real（Phase ② 自定义角色） */
 const REAL_BASE_TYPES = new Set(["audit_module", "verify_finding", "hub_reason"]);
@@ -47,7 +62,9 @@ export async function dispatchOnce(): Promise<number> {
     const row = await transitionJob(job.id, "claimed", { claimed_at: new Date() });
     if (!row) continue;
     claimed++;
-    void runJob(job.id).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));
+    const p = runJob(job.id).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));
+    inFlight.add(p);
+    void p.finally(() => inFlight.delete(p));
   }
   return claimed;
 }
@@ -99,6 +116,7 @@ async function runJob(jobId: string) {
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    inc("dfh_jobs_failed_total", { reason: "exception" });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
     await sql`UPDATE jobs SET status = 'failed', finished_at = now(), error = ${msg} WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')`;
     await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'running'`;
@@ -106,7 +124,10 @@ async function runJob(jobId: string) {
     stopLeaseRenewal(jobId);
     if (handle) {
       const h = handle;
-      await runner.destroy(h).catch((e) => console.error(`[dispatcher] 沙箱回收失败 ${h.sandboxId}:`, e));
+      await runner.destroy(h).catch((e) => {
+        inc("dfh_sandbox_cleanup_failed_total");
+        console.error(`[dispatcher] 沙箱回收失败 ${h.sandboxId}:`, e);
+      });
     }
     await planeWriteback(jobId).catch((e) => console.error("[plane] 回写异常:", e));
   }

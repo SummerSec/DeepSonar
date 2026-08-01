@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "./audit.js";
 import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
+import { renderMetrics } from "./metrics.js";
 import { config } from "./config.js";
 import {
   encryptSecret,
@@ -1218,6 +1219,10 @@ export function registerRoutes(app: FastifyInstance) {
       ORDER BY at DESC, id DESC
       LIMIT ${limit}`;
   });
+
+  // ---------- 指标（§13.1：Prometheus 文本；内部网络抓取，走普通认证） ----------
+  app.get("/metrics", async (_req, reply) =>
+    reply.type("text/plain; version=0.0.4").send(await renderMetrics()));
 
   app.get("/health", async () => ({ ok: true, ts: Date.now() }));
 }

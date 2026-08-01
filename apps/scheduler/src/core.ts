@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { EventEnvelope, FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import { inc } from "./metrics.js";
 import { expandModules } from "./skill-sources.js";
 
 // ---------- 状态机（§3.3）：允许的状态迁移 ----------
@@ -259,6 +260,7 @@ export async function createJob(input: CreateJobInput) {
         ingress_key: input.ingressKey ?? null,
       })}
       RETURNING *`;
+    inc("dfh_jobs_created_total", { type: input.type });
     return { job, duplicated: false };
   } catch (e: unknown) {
     // jobs_active_issue_uniq：已有活动 job 占用同一 issue
@@ -775,6 +777,15 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
 
   // verify_finding 闭环：结论写回 finding；confirmed 强制交给 Hub 验收并决定后续 Agent。
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+  // §13.1 指标：终态计数 + 时长
+  if (status === "failed") inc("dfh_jobs_failed_total", { reason: "failed" });
+  if (job?.started_at) {
+    const dur = (Date.now() - new Date(job.started_at as string).getTime()) / 1000;
+    if (dur > 0) {
+      inc("dfh_job_duration_seconds_sum", undefined, Math.round(dur));
+      inc("dfh_job_duration_seconds_count");
+    }
+  }
   let forceHubReview = false;
   let hubSourceNodeIds: string[] = [];
   let hubTrigger: Record<string, unknown> | undefined;
