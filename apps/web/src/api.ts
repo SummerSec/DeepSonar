@@ -120,6 +120,9 @@ export interface AgentProfile {
   agent_cli: "claude-code" | "open-code" | "codex";
   model: string | null;
   env_keys: string[];
+  /** §6.2：绑定的 Provider Credential（优先于 env_keys） */
+  credential_id?: string | null;
+  credential_provider?: string | null;
   modules_json: string[];
   skills_json: Record<string, unknown>[];
   commands_json: Record<string, unknown>[];
@@ -232,6 +235,24 @@ export interface ApiTokenCreated extends ApiToken {
   rotated_from?: string;
 }
 
+/** Provider Credential（§6.2）：永不返回密文，只有指纹/last4 */
+export interface ProviderCredential {
+  id: string;
+  name: string;
+  kind: "llm_provider" | "plane" | "git";
+  provider: string;
+  project_id: string | null;
+  key_version: number;
+  public_metadata_json: Record<string, unknown>;
+  fingerprint: string;
+  last4: string;
+  status: "active" | "disabled" | "rotation_required";
+  last_used_at: string | null;
+  rotated_at: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
 export type ProfileInput = {
   name: string;
   agent_cli: string;
@@ -243,6 +264,8 @@ export type ProfileInput = {
   mcps: Record<string, unknown>[];
   subagents: Record<string, unknown>[];
   prompt_suffix?: string | null;
+  /** §6.2：绑定的 Provider Credential（优先于 env_keys） */
+  credential_id?: string | null;
 };
 
 async function get<T>(path: string): Promise<T> {
@@ -372,5 +395,21 @@ export const api = {
     send<ApiTokenCreated>("POST", "/tokens", t),
   revokeToken: (id: string) => send<ApiToken>("POST", `/tokens/${id}/revoke`),
   rotateToken: (id: string) => send<ApiTokenCreated>("POST", `/tokens/${id}/rotate`),
+  /** Provider Credential（§6.4，与 API Token 分离） */
+  credentials: () => get<ProviderCredential[]>("/credentials"),
+  createCredential: (c: {
+    name: string;
+    kind?: string;
+    provider: string;
+    secret: string;
+    project_id?: string | null;
+    metadata?: Record<string, unknown>;
+  }) => send<ProviderCredential>("POST", "/credentials", c),
+  rotateCredential: (id: string, secret: string) =>
+    send<ProviderCredential>("POST", `/credentials/${id}/rotate`, { secret }),
+  setCredentialStatus: (id: string, status: "active" | "disabled" | "rotation_required") =>
+    send<ProviderCredential>("POST", `/credentials/${id}/status`, { status }),
+  testCredential: (id: string) =>
+    send<{ ok: boolean; detail: string }>("POST", `/credentials/${id}/test`),
   health: () => get<{ ok: boolean; ts: number }>("/health"),
 };

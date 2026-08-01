@@ -5,3 +5,5 @@ data/
 *.log
 .DS_Store
 .playwright-cli/
+deploy/.env
+.dfh-master-key

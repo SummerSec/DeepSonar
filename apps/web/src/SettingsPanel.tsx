@@ -6,12 +6,14 @@ import {
   type EffectiveRules,
   type ProfileInput,
   type ProjectRole,
+  type ProviderCredential,
   type ProjectSettings,
   type SkillSource,
   type SkillSourceDetail,
 } from "./api";
 
 import { TokensPanel } from "./TokensPanel";
+import { CredentialsPanel } from "./CredentialsPanel";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3）：Agent 配置（profile CRUD + Git 模块勾选）+ 规则配置
@@ -19,7 +21,7 @@ import { TokensPanel } from "./TokensPanel";
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "profiles" | "rules" | "roles" | "sources" | "plane" | "tokens";
+type Tab = "profiles" | "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials";
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
@@ -59,6 +61,7 @@ interface ProfileForm {
   name: string;
   agent_cli: string;
   model: string;
+  credential_id: string; // "" = 不绑定（退回 env_keys 过渡路径）
   env_keys: string; // 逗号分隔
   prompt_suffix: string;
   modules: string[]; // 勾选的 Git 模块（"<source_id>:<module_id>"）
@@ -73,7 +76,8 @@ const EMPTY_FORM: ProfileForm = {
   name: "",
   agent_cli: "claude-code",
   model: "",
-  env_keys: "ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN",
+  credential_id: "",
+  env_keys: "",
   prompt_suffix: "",
   modules: [],
   skills: "[]",
@@ -88,6 +92,7 @@ function formOf(p: AgentProfile): ProfileForm {
     name: p.name,
     agent_cli: p.agent_cli,
     model: p.model ?? "",
+    credential_id: p.credential_id ?? "",
     env_keys: p.env_keys.join(", "),
     prompt_suffix: p.prompt_suffix ?? "",
     modules: p.modules_json ?? [],
@@ -152,6 +157,7 @@ export function SettingsPanel({
   const [rules, setRules] = useState<EffectiveRules | null>(null);
   const [bindings, setBindings] = useState<Record<string, string>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
+  const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
   const [newSource, setNewSource] = useState({ name: "", repo_url: "", branch: "main" });
   const [roles, setRoles] = useState<ProjectRole[]>([]);
@@ -195,6 +201,10 @@ export function SettingsPanel({
         .catch(() => {});
     }
     api
+      .credentials()
+      .then(setCredentials)
+      .catch(() => {});
+    api
       .skillSources()
       .then(async (list) => {
         setSources(list);
@@ -228,6 +238,7 @@ export function SettingsPanel({
         name: form.name.trim(),
         agent_cli: form.agent_cli,
         model: form.model.trim() || null,
+        credential_id: form.credential_id || null,
         env_keys: form.env_keys.split(",").map((s) => s.trim()).filter(Boolean),
         prompt_suffix: form.prompt_suffix.trim() || null,
         modules: form.modules,
@@ -449,6 +460,7 @@ export function SettingsPanel({
         { key: "roles", label: "角色注册表" },
         { key: "sources", label: "模块源" },
         { key: "rules", label: "全局规则" },
+        { key: "credentials", label: "凭据" },
         { key: "tokens", label: "API Token" },
       ];
   const activeTab = tabList.some((t) => t.key === tab) ? tab : tabList[0].key;
@@ -550,9 +562,28 @@ export function SettingsPanel({
                 </div>
               </div>
               <div>
-                <label className={labelCls}>env 引用（逗号分隔，只存变量名，值取调度器环境）</label>
-                <input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} />
+                <label className={labelCls}>Provider Credential（§6.2 推荐：加密登记的上游密钥）</label>
+                <select
+                  value={form.credential_id}
+                  onChange={(e) => setForm({ ...form, credential_id: e.target.value })}
+                  className={inputCls}
+                >
+                  <option value="">不绑定（退回 env 引用过渡路径）</option>
+                  {credentials
+                    .filter((c) => c.status === "active")
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}（{c.provider} …{c.last4}）
+                      </option>
+                    ))}
+                </select>
               </div>
+              {form.credential_id === "" && (
+                <div>
+                  <label className={labelCls}>env 引用（过渡路径，逗号分隔变量名，值取调度器环境）</label>
+                  <input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} />
+                </div>
+              )}
               <div>
                 <label className={labelCls}>提示词后缀（追加到任务 prompt）</label>
                 <textarea value={form.prompt_suffix} onChange={(e) => setForm({ ...form, prompt_suffix: e.target.value })} rows={2} className={`${inputCls} resize-y`} placeholder="例如：重点关注认证绕过与注入类漏洞" />
@@ -965,6 +996,8 @@ export function SettingsPanel({
             </div>
           </div>
         )}
+
+        {activeTab === "credentials" && !projectId && <CredentialsPanel />}
 
         {activeTab === "tokens" && !projectId && <TokensPanel />}
 

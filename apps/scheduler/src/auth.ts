@@ -103,6 +103,11 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /tokens": "tokens:manage",
   "POST /tokens/:id/revoke": "tokens:manage",
   "POST /tokens/:id/rotate": "tokens:manage",
+  "GET /credentials": "profiles:read",
+  "POST /credentials": "profiles:write",
+  "POST /credentials/:id/rotate": "profiles:write",
+  "POST /credentials/:id/status": "profiles:write",
+  "POST /credentials/:id/test": "profiles:read",
   "GET /ws": "tasks:read",
 };
 

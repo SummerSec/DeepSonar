@@ -3,6 +3,14 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
 import { config } from "./config.js";
+import {
+  encryptSecret,
+  fingerprintOf,
+  isProviderKnown,
+  last4Of,
+  type Encrypted,
+} from "./credentials.js";
+import { testCredential } from "./credential-test.js";
 import { createJob, ensureCanvasForTask, globalRules, rulesForProject, transitionJob } from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
@@ -38,6 +46,8 @@ const ProfileBody = z.object({
   mcps: z.array(z.record(z.string(), z.unknown())).default([]),
   subagents: z.array(z.record(z.string(), z.unknown())).default([]),
   prompt_suffix: z.string().nullish(),
+  /** §6.2：绑定的 Provider Credential（与 env_keys 二选一；优先 Credential） */
+  credential_id: z.string().uuid().nullish(),
 });
 const ProfilePatchBody = ProfileBody.partial();
 
@@ -94,6 +104,15 @@ const TriggerTaskBody = z.object({
 });
 const PriorityBody = z.object({ priority: z.number().int() });
 const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
+
+/** Profile ↔ Credential 绑定（§6.2；purpose='llm'） */
+async function bindCredential(profileId: string, credentialId: string) {
+  const [cred] = await sql`SELECT id, status FROM credentials WHERE id = ${credentialId}`;
+  if (!cred) throw new Error("credential not found");
+  await sql`
+    INSERT INTO profile_credentials ${sql({ profile_id: profileId, credential_id: credentialId, purpose: "llm" })}
+    ON CONFLICT (profile_id, credential_id, purpose) DO NOTHING`;
+}
 
 export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DFH_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
@@ -405,7 +424,11 @@ export function registerRoutes(app: FastifyInstance) {
 
   // ---------- Agent profiles（§8.1 存储层 CRUD） ----------
   app.get("/agent-profiles", async () =>
-    sql`SELECT * FROM agent_profiles ORDER BY created_at DESC`);
+    sql`SELECT p.*, pc.credential_id, c.provider AS credential_provider
+        FROM agent_profiles p
+        LEFT JOIN profile_credentials pc ON pc.profile_id = p.id AND pc.purpose = 'llm'
+        LEFT JOIN credentials c ON c.id = pc.credential_id
+        ORDER BY p.created_at DESC`);
 
   app.post("/agent-profiles", async (req, reply) => {
     const body = ProfileBody.parse(req.body);
@@ -424,6 +447,9 @@ export function registerRoutes(app: FastifyInstance) {
           prompt_suffix: body.prompt_suffix ?? null,
         })}
         RETURNING *`;
+      if (body.credential_id) {
+        await bindCredential(row.id as string, body.credential_id);
+      }
       return reply.code(201).send(row);
     } catch (e) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
@@ -450,6 +476,10 @@ export function registerRoutes(app: FastifyInstance) {
     const [row] = await sql`
       UPDATE agent_profiles SET ${sql(sets as never)} WHERE id = ${id} RETURNING *`;
     if (!row) return reply.code(404).send({ error: "profile not found" });
+    if (body.credential_id !== undefined) {
+      await sql`DELETE FROM profile_credentials WHERE profile_id = ${id} AND purpose = 'llm'`;
+      if (body.credential_id) await bindCredential(id, body.credential_id);
+    }
     return row;
   });
 
@@ -883,6 +913,90 @@ export function registerRoutes(app: FastifyInstance) {
       RETURNING id, name, token_prefix, scopes, project_id, expires_at, created_at`;
     await sql`UPDATE api_tokens SET revoked_at = now() WHERE id = ${id}`;
     return reply.code(201).send({ ...row, token: plaintext, rotated_from: id });
+  });
+
+  // ---------- Provider Credential（§6.2/§6.4：加密存储，与 API Token 严格分离） ----------
+  // 列表/详情永不返回密文；明文只在创建/轮换请求体里进、运行时解密用
+  const CRED_SAFE = sql`id, name, kind, provider, project_id, key_version, public_metadata_json,
+                        fingerprint, last4, status, last_used_at, rotated_at, created_at, created_by`;
+
+  const CredentialBody = z.object({
+    name: z.string().trim().min(1).max(100),
+    kind: z.enum(["llm_provider", "plane", "git"]).default("llm_provider"),
+    provider: z.string().trim().min(1).max(50),
+    secret: z.string().min(1).max(4096),
+    project_id: z.string().uuid().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+  });
+
+  app.get("/credentials", async () =>
+    sql`SELECT ${CRED_SAFE} FROM credentials ORDER BY created_at DESC`);
+
+  app.post("/credentials", async (req, reply) => {
+    const body = CredentialBody.parse(req.body);
+    if (!isProviderKnown(body.provider)) {
+      return reply.code(400).send({ error: `未知 provider: ${body.provider}（固定映射表外的 provider 不允许登记）` });
+    }
+    let enc: Encrypted;
+    try {
+      enc = encryptSecret(body.secret);
+    } catch (e) {
+      return reply.code(503).send({ error: e instanceof Error ? e.message : String(e) });
+    }
+    const [row] = await sql`
+      INSERT INTO credentials ${sql({
+        name: body.name,
+        kind: body.kind,
+        provider: body.provider,
+        project_id: body.project_id ?? null,
+        ciphertext: enc.ciphertext,
+        nonce: enc.nonce,
+        auth_tag: enc.auth_tag,
+        public_metadata_json: body.metadata as never,
+        fingerprint: fingerprintOf(body.secret),
+        last4: last4Of(body.secret),
+        created_by: req.actor?.name ?? null,
+      })}
+      RETURNING ${CRED_SAFE}`;
+    return reply.code(201).send(row);
+  });
+
+  app.post("/credentials/:id/rotate", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ secret: z.string().min(1).max(4096) }).parse(req.body);
+    let enc: Encrypted;
+    try {
+      enc = encryptSecret(body.secret);
+    } catch (e) {
+      return reply.code(503).send({ error: e instanceof Error ? e.message : String(e) });
+    }
+    const [row] = await sql`
+      UPDATE credentials SET
+        ciphertext = ${enc.ciphertext}, nonce = ${enc.nonce}, auth_tag = ${enc.auth_tag},
+        fingerprint = ${fingerprintOf(body.secret)}, last4 = ${last4Of(body.secret)},
+        rotated_at = now(), status = 'active', key_version = key_version + 1
+      WHERE id = ${id}
+      RETURNING ${CRED_SAFE}`;
+    if (!row) return reply.code(404).send({ error: "credential not found" });
+    return row;
+  });
+
+  app.post("/credentials/:id/status", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ status: z.enum(["active", "disabled", "rotation_required"]) }).parse(req.body);
+    const [row] = await sql`
+      UPDATE credentials SET status = ${body.status} WHERE id = ${id} RETURNING ${CRED_SAFE}`;
+    if (!row) return reply.code(404).send({ error: "credential not found" });
+    return row;
+  });
+
+  // 连接测试：用解密后的凭据对 provider 做一次轻量调用（明文不出进程）
+  app.post("/credentials/:id/test", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
+    if (!cred) return reply.code(404).send({ error: "credential not found" });
+    const result = await testCredential(cred as never);
+    return result;
   });
 
   app.get("/health", async () => ({ ok: true, ts: Date.now() }));

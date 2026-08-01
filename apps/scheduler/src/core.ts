@@ -153,6 +153,9 @@ export interface AgentProfileSnapshot {
   agent_cli: string;
   model: string | null;
   env_keys: string[];
+  /** 绑定的 Provider Credential（§6.2）：快照只存 id/provider，密钥运行时解密，不进快照 */
+  credential_id: string | null;
+  credential_provider: string | null;
   /** 勾选的 Git 模块（["<source_id>:<module_id>"]，展示用；下发内容已展开进 skills/commands） */
   modules: string[];
   skills: unknown[];
@@ -193,11 +196,20 @@ export async function resolveProfileSnapshot(
     ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name)),
   ];
 
+  // Profile 绑定的 Provider Credential（§6.2；purpose='llm' 取其第一个）
+  const [cred] = await db`
+    SELECT c.id, c.provider FROM profile_credentials pc
+    JOIN credentials c ON c.id = pc.credential_id
+    WHERE pc.profile_id = ${row.id as string} AND pc.purpose = 'llm'
+    LIMIT 1`;
+
   return {
     name: row.name as string,
     agent_cli: row.agent_cli as string,
     model: (row.model as string) ?? null,
     env_keys: (row.env_keys as string[]) ?? [],
+    credential_id: (cred?.id as string) ?? null,
+    credential_provider: (cred?.provider as string) ?? null,
     modules,
     skills,
     commands,

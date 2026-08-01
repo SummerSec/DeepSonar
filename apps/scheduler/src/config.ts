@@ -47,6 +47,12 @@ export const config = {
     tokenEnv: str("DFH_TOKEN_ENV", "dev"),
   },
 
+  /** Provider Credential 主密钥（§6.2：与密文不同库；文件优先） */
+  credentials: {
+    masterKeyFile: str("DFH_MASTER_KEY_FILE"),
+    masterKey: str("DFH_MASTER_KEY"),
+  },
+
   plane: {
     baseUrl: str("PLANE_BASE_URL", "https://api.plane.so"),
     token: str("PLANE_API_TOKEN"),

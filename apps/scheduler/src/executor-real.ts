@@ -9,6 +9,7 @@ import { ingestEvent, rolesForProject, rulesForProject, type AgentProfileSnapsho
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseFactOutput, parseHubDecision } from "./graph.js";
 import { ingestCodeSource, type RepoEvidence, type RepoSpec } from "./repo-ingest.js";
+import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
 import { publishStream } from "./stream-bus.js";
 
 /**
@@ -195,16 +196,32 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const cliName = snapshot?.agent_cli ?? config.runtime.agentProvider;
   const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
   const model = snapshot?.model ?? config.runtime.agentModel ?? undefined;
-  // env_keys 只存变量名引用，值运行时从调度器 process.env 解析（密钥不落库，§9）
-  // P0 白名单门禁：暂停任意环境变量下发，只放行 DFH_ALLOWED_ENV_KEYS 匹配的变量名
+  // env 注入两条路径（§6.2）：
+  // 1. 目标路径——profile 绑定 Credential：运行时解密，按固定 Provider→env 映射注入（用户不能自由写变量名）
+  // 2. 过渡路径——profile env_keys（变量名引用调度器 process.env，有白名单门禁；逐步废弃）
   const env: Record<string, string> = { ...config.runtime.agentEnv };
-  for (const key of snapshot?.env_keys ?? []) {
-    if (!config.runtime.isEnvKeyAllowed(key)) {
-      console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
-      continue;
+  if (snapshot?.credential_id) {
+    const [cred] = await sql`SELECT * FROM credentials WHERE id = ${snapshot.credential_id}`;
+    if (!cred || (cred.status as string) !== "active") {
+      throw new Error(`profile 绑定的凭据不可用（${cred ? "status=" + String(cred.status) : "不存在"}）`);
     }
-    const v = process.env[key];
-    if (v) env[key] = v;
+    const mapping = PROVIDER_ENV_MAP[cred.provider as string];
+    if (!mapping) throw new Error(`未知 provider: ${String(cred.provider)}`);
+    const secret = decryptSecret(cred as never);
+    for (const k of mapping.secretKeys) env[k] = secret;
+    const meta = (cred.public_metadata_json ?? {}) as { base_url?: string };
+    const baseUrl = meta.base_url ?? mapping.defaultBaseUrl;
+    if (mapping.baseUrlKey && baseUrl) env[mapping.baseUrlKey] = baseUrl;
+    void sql`UPDATE credentials SET last_used_at = now() WHERE id = ${cred.id as string}`.catch(() => {});
+  } else {
+    for (const key of snapshot?.env_keys ?? []) {
+      if (!config.runtime.isEnvKeyAllowed(key)) {
+        console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
+        continue;
+      }
+      const v = process.env[key];
+      if (v) env[key] = v;
+    }
   }
 
   // prompt 按 job 类型分派；hub/角色 job 需要整张图（YAML）作上下文
