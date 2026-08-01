@@ -5,6 +5,7 @@ import {
   Folder,
   Gear,
   Queue,
+  Robot,
   ShieldCheck,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
@@ -15,6 +16,7 @@ const NAV: { to: string; end: boolean; label: string; icon: Icon }[] = [
   { to: "/projects", end: false, label: "项目", icon: Folder },
   { to: "/jobs", end: false, label: "调度队列", icon: Queue },
   { to: "/findings", end: false, label: "发现", icon: Bug },
+  { to: "/agents", end: false, label: "Agent 管理", icon: Robot },
 ];
 
 const PROJECT_TABS: { seg: string; label: string; icon: Icon }[] = [

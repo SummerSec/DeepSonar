@@ -137,7 +137,8 @@ export function SettingsPanel({
   onClose,
   variant = "drawer",
 }: {
-  projectId: string;
+  /** null = 全局 Agent 管理模式（无项目级绑定/规则/角色启用） */
+  projectId: string | null;
   onClose?: () => void;
   /** drawer=浮层侧栏；page=独立设置页 */
   variant?: "drawer" | "page";
@@ -158,15 +159,32 @@ export function SettingsPanel({
 
   const reload = () => {
     api.agentProfiles().then(setProfiles).catch(() => {});
-    api.projectRoles(projectId).then(setRoles).catch(() => {});
-    api
-      .settings(projectId)
-      .then((s) => {
-        setSettings(s);
-        setRules(s.effective_rules);
-        setBindings(s.profiles);
-      })
-      .catch(() => {});
+    if (projectId) {
+      // 项目模式：角色带启用态 + profile 绑定
+      api.projectRoles(projectId).then(setRoles).catch(() => {});
+      api
+        .settings(projectId)
+        .then((s) => {
+          setSettings(s);
+          setRules(s.effective_rules);
+          setBindings(s.profiles);
+        })
+        .catch(() => {});
+    } else {
+      // 全局模式：纯角色注册表（无启用态/绑定）+ 全局规则默认值
+      api
+        .agentRoles()
+        .then((list) =>
+          setRoles(
+            list.map((r) => ({ ...r, enabled: false, default_enabled: false, profile_id: null })),
+          ),
+        )
+        .catch(() => {});
+      api
+        .globalSettings()
+        .then((g) => setRules(g.effective_rules))
+        .catch(() => {});
+    }
     api
       .skillSources()
       .then(async (list) => {
@@ -222,26 +240,32 @@ export function SettingsPanel({
 
   const saveRules = async () => {
     if (!rules) return;
+    const ruleBody = {
+      autoVerifySeverities: rules.autoVerifySeverities,
+      maxFollowupsPerJob: rules.maxFollowupsPerJob,
+      maxFollowupDepth: rules.maxFollowupDepth,
+      maxAutoRetries: rules.maxAutoRetries,
+      auditTimeoutSec: rules.auditTimeoutSec,
+      verifyTimeoutSec: rules.verifyTimeoutSec,
+      hubEnabled: rules.hubEnabled,
+      maxHubRounds: rules.maxHubRounds,
+      maxIntentsPerDecision: rules.maxIntentsPerDecision,
+    };
     try {
-      await api.patchSettings(projectId, {
-        profiles: {
-          audit_module: bindings.audit_module || null,
-          verify_finding: bindings.verify_finding || null,
-          hub_reason: bindings.hub_reason || null,
-          default: bindings.default || null,
-        },
-        rules: {
-          autoVerifySeverities: rules.autoVerifySeverities,
-          maxFollowupsPerJob: rules.maxFollowupsPerJob,
-          maxFollowupDepth: rules.maxFollowupDepth,
-          maxAutoRetries: rules.maxAutoRetries,
-          auditTimeoutSec: rules.auditTimeoutSec,
-          verifyTimeoutSec: rules.verifyTimeoutSec,
-          hubEnabled: rules.hubEnabled,
-          maxHubRounds: rules.maxHubRounds,
-          maxIntentsPerDecision: rules.maxIntentsPerDecision,
-        },
-      });
+      if (projectId) {
+        await api.patchSettings(projectId, {
+          profiles: {
+            audit_module: bindings.audit_module || null,
+            verify_finding: bindings.verify_finding || null,
+            hub_reason: bindings.hub_reason || null,
+            default: bindings.default || null,
+          },
+          rules: ruleBody,
+        });
+      } else {
+        // 全局模式：写入 global_settings（项目未覆盖时的默认值）
+        await api.patchGlobalSettings({ rules: ruleBody });
+      }
       flash("规则已保存（下一 job 生效）");
       reload();
     } catch (e) {
@@ -253,6 +277,7 @@ export function SettingsPanel({
 
   /** 勾选启用：立即保存整个 enabled 清单（首次勾选后从默认模式转为显式清单） */
   const toggleRole = async (role: ProjectRole) => {
+    if (!projectId) return;
     const next = roles.filter((r) => (r.name === role.name ? !r.enabled : r.enabled)).filter((r) => r.enabled);
     try {
       await api.patchSettings(projectId, { roles: { enabled: next.map((r) => r.name) } });
@@ -264,6 +289,7 @@ export function SettingsPanel({
 
   /** 角色绑定 profile：立即保存（null = 解绑，回落 default 绑定） */
   const bindRoleProfile = async (roleName: string, profileId: string) => {
+    if (!projectId) return;
     try {
       await api.patchSettings(projectId, { profiles: { [roleName]: profileId || null } });
       flash("已绑定（下一 job 生效）");
@@ -402,6 +428,20 @@ export function SettingsPanel({
       ? "flex h-full w-full flex-col bg-ink-950"
       : "dfh-sidebar absolute inset-y-0 right-0 z-30 flex w-[440px] flex-col border-l border-ink-700 bg-ink-900/95 backdrop-blur";
 
+  // 全局模式：profiles / 角色注册表 / 模块源 / 全局规则；项目模式：规则（绑定+覆盖）/ 角色启用
+  const tabList: { key: Tab; label: string }[] = projectId
+    ? [
+        { key: "rules", label: "规则配置" },
+        { key: "roles", label: "角色启用" },
+      ]
+    : [
+        { key: "profiles", label: "Agent 配置" },
+        { key: "roles", label: "角色注册表" },
+        { key: "sources", label: "模块源" },
+        { key: "rules", label: "全局规则" },
+      ];
+  const activeTab = tabList.some((t) => t.key === tab) ? tab : tabList[0].key;
+
   return (
     <aside className={shellCls}>
       {variant === "drawer" && (
@@ -421,19 +461,12 @@ export function SettingsPanel({
       )}
 
       <div className={`flex gap-1 border-b border-ink-800 py-1.5 ${variant === "page" ? "px-6" : "px-3"}`}>
-        {(
-          [
-            { key: "profiles", label: "Agent 配置" },
-            { key: "rules", label: "规则配置" },
-            { key: "roles", label: "角色" },
-            { key: "sources", label: "模块源" },
-          ] as { key: Tab; label: string }[]
-        ).map((t) => (
+        {tabList.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
             className={`rounded-md px-2.5 py-1 text-[14px] transition-colors ${
-              tab === t.key ? "bg-ink-800 text-zinc-100" : "text-zinc-500 hover:bg-ink-850 hover:text-zinc-300"
+              activeTab === t.key ? "bg-ink-800 text-zinc-100" : "text-zinc-500 hover:bg-ink-850 hover:text-zinc-300"
             }`}
           >
             {t.label}
@@ -443,7 +476,7 @@ export function SettingsPanel({
       </div>
 
       <div className={`flex-1 overflow-y-auto py-3 ${variant === "page" ? "px-6 max-w-3xl" : "px-4"}`}>
-        {tab === "profiles" && (
+        {activeTab === "profiles" && (
           <>
             {/* 已有 profile 列表 */}
             <div className="mb-3 flex flex-col gap-1">
@@ -543,21 +576,23 @@ export function SettingsPanel({
           </>
         )}
 
-        {tab === "rules" && rules && settings && (
+        {activeTab === "rules" && rules && (!projectId || settings) && (
           <div className="flex flex-col gap-4">
-            <section>
-              <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-                profile 绑定（job 类型 → agent 配置）
-              </div>
-              <div className="flex flex-col gap-2">
-                {bindSelect("audit_module", "audit_module（审计）")}
-                {bindSelect("verify_finding", "verify_finding（验证）")}
-                {bindSelect("hub_reason", "hub_reason（决策中枢）")}
-                {bindSelect("default", "default（兜底）")}
-              </div>
-            </section>
+            {projectId && (
+              <section>
+                <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
+                  profile 绑定（job 类型 → agent 配置）
+                </div>
+                <div className="flex flex-col gap-2">
+                  {bindSelect("audit_module", "audit_module（审计）")}
+                  {bindSelect("verify_finding", "verify_finding（验证）")}
+                  {bindSelect("hub_reason", "hub_reason（决策中枢）")}
+                  {bindSelect("default", "default（兜底）")}
+                </div>
+              </section>
+            )}
 
-            <section className="border-t border-ink-800 pt-3">
+            <section className={projectId ? "border-t border-ink-800 pt-3" : ""}>
               <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                 hub 循环（图语义自驱，§8.3）
               </div>
@@ -575,7 +610,9 @@ export function SettingsPanel({
                 {numField("maxIntentsPerDecision", "单次派发意图上限")}
               </div>
               <div className="mt-1 text-[12px] text-zinc-600">
-                hub 可下发哪些角色、各角色用什么 agent 配置 → 「角色」tab
+                {projectId
+                  ? "hub 可下发哪些角色、各角色用什么 agent 配置 → 「角色启用」tab；未覆盖的规则继承全局默认值"
+                  : "全局默认值：项目规则未覆盖时生效（项目设置在项目页改）"}
               </div>
             </section>
 
@@ -612,16 +649,74 @@ export function SettingsPanel({
           </div>
         )}
 
-        {tab === "roles" && (
+        {activeTab === "roles" && (
           <div className="flex flex-col gap-3">
             <div className="text-[13px] leading-relaxed text-zinc-500">
-              角色 = hub 可下发的 agent 类型（job 完成 → hub 读图 → 按角色派发意图）。
-              勾选本项目启用，并为每个角色绑定 agent 配置（profile）；点角色名可编辑其 prompt 模板。
+              {projectId ? (
+                <>
+                  角色 = hub 可下发的 agent 类型（job 完成 → hub 读图 → 按角色派发意图）。
+                  这里只决定<strong className="text-zinc-300">本项目启用哪些角色、各角色绑定哪个 agent 配置</strong>；
+                  角色与 prompt 模板的新建/编辑在全局「Agent 管理」页。
+                </>
+              ) : (
+                <>
+                  角色与 prompt 模板全局维护：kind=role 的角色注册后，各项目在「项目设置 → 角色启用」里勾选；
+                  kind=system 的是调度内核 prompt（hub 决策 / 审计 / 验证）。点名称编辑模板。
+                </>
+              )}
             </div>
 
-            {/* 角色清单：启用勾选 + profile 绑定 */}
+            {/* 全局模式：系统 prompt 模板区（hub_reason/audit_module/verify_finding） */}
+            {!projectId && roles.some((r) => r.kind === "system") && (
+              <>
+                <div className="mt-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
+                  系统 prompt 模板（调度内核）
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {roles.filter((r) => r.kind === "system").map((r) => (
+                    <div
+                      key={r.id}
+                      className={`rounded-lg border px-3 py-2.5 transition-colors ${
+                        roleForm.id === r.id ? "border-acc-500/70 bg-ink-850" : "border-ink-700 bg-ink-850/60"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() =>
+                            setRoleForm({
+                              id: r.id,
+                              name: r.name,
+                              title: r.title,
+                              description: r.description,
+                              prompt_template: r.prompt_template,
+                              builtin: r.builtin,
+                            })
+                          }
+                          className="flex items-center gap-1.5 text-left"
+                        >
+                          <span className="font-mono text-[14px] font-medium text-zinc-100">{r.name}</span>
+                          <span className="text-[13px] text-zinc-500">{r.title}</span>
+                          <PencilSimple size={12} className="text-zinc-600" />
+                        </button>
+                        <span className="rounded border border-ink-700 px-1 font-mono text-[11px] text-zinc-500">系统</span>
+                      </div>
+                      {r.description && (
+                        <div className="mt-1 text-[12px] leading-relaxed text-zinc-600">{r.description}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* 角色清单：全局=注册表；项目=启用勾选 + profile 绑定 */}
+            {!projectId && (
+              <div className="mt-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
+                角色注册表（hub 可下发）
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
-              {roles.map((r) => (
+              {roles.filter((r) => (projectId ? true : r.kind !== "system")).map((r) => (
                 <div
                   key={r.id}
                   className={`rounded-lg border px-3 py-2.5 transition-colors ${
@@ -629,62 +724,74 @@ export function SettingsPanel({
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={r.enabled}
-                      onChange={() => toggleRole(r)}
-                      className="accent-emerald-500"
-                      title="启用后 hub 可下发此角色"
-                    />
-                    <button
-                      onClick={() =>
-                        setRoleForm({
-                          id: r.id,
-                          name: r.name,
-                          title: r.title,
-                          description: r.description,
-                          prompt_template: r.prompt_template,
-                          builtin: r.builtin,
-                        })
-                      }
-                      className="flex items-center gap-1.5 text-left"
-                    >
-                      <span className="font-mono text-[14px] font-medium text-zinc-100">{r.name}</span>
-                      <span className="text-[13px] text-zinc-500">{r.title}</span>
-                      <PencilSimple size={12} className="text-zinc-600" />
-                    </button>
+                    {projectId && (
+                      <input
+                        type="checkbox"
+                        checked={r.enabled}
+                        onChange={() => toggleRole(r)}
+                        className="accent-emerald-500"
+                        title="启用后 hub 可下发此角色"
+                      />
+                    )}
+                    {projectId ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="font-mono text-[14px] font-medium text-zinc-100">{r.name}</span>
+                        <span className="text-[13px] text-zinc-500">{r.title}</span>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() =>
+                          setRoleForm({
+                            id: r.id,
+                            name: r.name,
+                            title: r.title,
+                            description: r.description,
+                            prompt_template: r.prompt_template,
+                            builtin: r.builtin,
+                          })
+                        }
+                        className="flex items-center gap-1.5 text-left"
+                      >
+                        <span className="font-mono text-[14px] font-medium text-zinc-100">{r.name}</span>
+                        <span className="text-[13px] text-zinc-500">{r.title}</span>
+                        <PencilSimple size={12} className="text-zinc-600" />
+                      </button>
+                    )}
                     {r.builtin && (
                       <span className="rounded border border-ink-700 px-1 font-mono text-[11px] text-zinc-500">内置</span>
                     )}
-                    <select
-                      value={r.profile_id ?? ""}
-                      onChange={(e) => bindRoleProfile(r.name, e.target.value)}
-                      className="ml-auto rounded-md border border-ink-700 bg-ink-850 px-2 py-1 font-mono text-[12px] text-zinc-300 outline-none focus:border-acc-500"
-                      title="该角色 job 使用的 agent 配置（空 = 用 default 绑定）"
-                    >
-                      <option value="">（default 兜底）</option>
-                      {profiles.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                    {projectId && (
+                      <select
+                        value={r.profile_id ?? ""}
+                        onChange={(e) => bindRoleProfile(r.name, e.target.value)}
+                        className="ml-auto rounded-md border border-ink-700 bg-ink-850 px-2 py-1 font-mono text-[12px] text-zinc-300 outline-none focus:border-acc-500"
+                        title="该角色 job 使用的 agent 配置（空 = 用 default 绑定）"
+                      >
+                        <option value="">（default 兜底）</option>
+                        {profiles.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                   {r.description && (
-                    <div className="mt-1 pl-6 text-[12px] leading-relaxed text-zinc-600">{r.description}</div>
+                    <div className={`mt-1 text-[12px] leading-relaxed text-zinc-600 ${projectId ? "pl-6" : ""}`}>{r.description}</div>
                   )}
                 </div>
               ))}
-              {roles.length === 0 && (
+              {roles.filter((r) => (projectId ? true : r.kind !== "system")).length === 0 && (
                 <div className="py-2 font-mono text-[13px] text-zinc-600">暂无角色 —— 重启调度器应用迁移 0006 后出现内置五角色</div>
               )}
             </div>
 
-            {/* 角色编辑/新建表单 */}
+            {/* 角色/模板编辑表单：仅全局模式（项目设置只负责启用与绑定） */}
+            {!projectId && (
             <div className="flex flex-col gap-2.5 border-t border-ink-800 pt-3">
               <div className="flex items-center justify-between">
                 <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-                  {roleForm.id ? `编辑角色 ${roleForm.name}` : "新建自定义角色"}
+                  {roleForm.id ? `编辑 ${roleForm.name}` : "新建自定义角色"}
                 </span>
                 <button
                   onClick={() => setRoleForm(EMPTY_ROLE)}
@@ -725,7 +832,17 @@ export function SettingsPanel({
                 />
               </div>
               <div>
-                <label className={labelCls}>prompt 模板（占位符：{"{{graph}}"} 整图 / {"{{intent}}"} 意图 / {"{{role}}"} 角色名）</label>
+                <label className={labelCls}>
+                  prompt 模板（占位符：
+                  {roleForm.name === "hub_reason"
+                    ? "{{graph}} 整图 / {{roles}} 角色清单 / {{max_intents}} 意图上限"
+                    : roleForm.name === "audit_module"
+                      ? "{{module_path}} 审计模块"
+                      : roleForm.name === "verify_finding"
+                        ? "{{finding_title}} / {{finding_location}} / {{finding_summary}}"
+                        : "{{graph}} 整图 / {{intent}} 意图 / {{role}} 角色名"}
+                  ）
+                </label>
                 <textarea
                   value={roleForm.prompt_template}
                   onChange={(e) => setRoleForm({ ...roleForm, prompt_template: e.target.value })}
@@ -756,10 +873,11 @@ export function SettingsPanel({
                 )}
               </div>
             </div>
+            )}
           </div>
         )}
 
-        {tab === "sources" && (
+        {activeTab === "sources" && (
           <div className="flex flex-col gap-3">
             <div className="text-[13px] leading-relaxed text-zinc-500">
               Agent 的插件 / skill 集中托管在 Git 仓库（如{" "}

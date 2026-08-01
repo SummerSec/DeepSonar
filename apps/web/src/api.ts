@@ -169,7 +169,7 @@ export interface ProjectSettings {
   effective_rules: EffectiveRules;
 }
 
-/** 角色注册表条目（§8.3：hub 可下发的 agent 类型） */
+/** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='system' = hub/audit/verify 系统 prompt 模板 */
 export interface AgentRole {
   id: string;
   name: string;
@@ -177,6 +177,7 @@ export interface AgentRole {
   description: string;
   prompt_template: string;
   builtin: boolean;
+  kind: "role" | "system";
 }
 
 /** 项目视角的角色：启用状态 + 绑定的 profile */
@@ -192,6 +193,12 @@ export type RoleInput = {
   description: string;
   prompt_template: string;
 };
+
+/** 全局设置（所有配置落库：规则默认值 → global_settings 单例行） */
+export interface GlobalSettings {
+  rules: Record<string, unknown>;
+  effective_rules: EffectiveRules;
+}
 
 export type ProfileInput = {
   name: string;
@@ -233,6 +240,11 @@ function qs(params: Record<string, string | undefined | null>): string {
 
 export const api = {
   projects: () => get<Project[]>("/projects"),
+  /** Plane 连接信息（任务页下发指引；不含 token） */
+  planeInfo: () =>
+    get<{ enabled: boolean; web_url: string; workspace_slug: string; ready_state: string }>(
+      "/plane-info",
+    ),
   canvases: (projectId: string) => get<CanvasSummary[]>(`/projects/${projectId}/canvases`),
   canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
@@ -275,6 +287,9 @@ export const api = {
     send<AgentRole>("PATCH", `/agent-roles/${id}`, r),
   deleteRole: (id: string) => send<{ ok: boolean }>("DELETE", `/agent-roles/${id}`),
   projectRoles: (projectId: string) => get<ProjectRole[]>(`/projects/${projectId}/roles`),
+  globalSettings: () => get<GlobalSettings>("/global-settings"),
+  patchGlobalSettings: (body: { rules: Record<string, unknown> }) =>
+    send<GlobalSettings>("PATCH", "/global-settings", body),
   skillSources: () => get<SkillSource[]>("/skill-sources"),
   skillSource: (id: string) => get<SkillSourceDetail>(`/skill-sources/${id}`),
   createSkillSource: (s: { name: string; repo_url: string; branch: string }) =>

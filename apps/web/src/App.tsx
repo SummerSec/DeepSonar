@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
+import { AgentsPage } from "./pages/AgentsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { JobsPage } from "./pages/JobsPage";
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="findings" element={<FindingsPage scope="global" />} />
+        <Route path="agents" element={<AgentsPage />} />
 
         <Route path="projects/:projectId" element={<ProjectLayout />}>
           <Route index element={<Navigate to="tasks" replace />} />

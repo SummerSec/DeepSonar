@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "./config.js";
-import { createJob, ensureCanvasForTask, rulesForProject } from "./core.js";
+import { createJob, ensureCanvasForTask, globalRules, rulesForProject } from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce } from "./plane-sync.js";
 import { syncSkillSource } from "./skill-sources.js";
@@ -110,6 +110,14 @@ export function registerRoutes(app: FastifyInstance) {
   });
 
   app.get("/projects", async () => sql`SELECT * FROM projects ORDER BY created_at DESC`);
+
+  /** Plane 连接信息（任务页「去 Plane 下发任务」指引用；不含 token） */
+  app.get("/plane-info", async () => ({
+    enabled: config.plane.enabled,
+    web_url: config.plane.webUrl,
+    workspace_slug: config.plane.workspaceSlug,
+    ready_state: config.plane.readyState,
+  }));
 
   // ---------- Git 模块源（§8.2） ----------
   app.get("/skill-sources", async () =>
@@ -219,17 +227,18 @@ export function registerRoutes(app: FastifyInstance) {
   });
 
   // ---------- 角色注册表（§8.3：hub 可下发的 agent 类型，全局注册 + 项目级启用） ----------
+  // kind='role'：hub 可下发角色；kind='system'：hub/audit/verify 系统 prompt 模板（也在这里改）
   app.get("/agent-roles", async () =>
-    sql`SELECT id, name, title, description, prompt_template, builtin, created_at, updated_at
-        FROM agent_roles ORDER BY builtin DESC, name`,
+    sql`SELECT id, name, title, description, prompt_template, builtin, kind, created_at, updated_at
+        FROM agent_roles ORDER BY kind DESC, builtin DESC, name`,
   );
 
   app.post("/agent-roles", async (req, reply) => {
     const body = RoleBody.parse(req.body);
     try {
       const [row] = await sql`
-        INSERT INTO agent_roles ${sql({ ...body, builtin: false })}
-        RETURNING id, name, title, description, prompt_template, builtin`;
+        INSERT INTO agent_roles ${sql({ ...body, builtin: false, kind: "role" })}
+        RETURNING id, name, title, description, prompt_template, builtin, kind`;
       return row;
     } catch (e: unknown) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
@@ -245,7 +254,7 @@ export function registerRoutes(app: FastifyInstance) {
     const [row] = await sql`
       UPDATE agent_roles SET ${sql(body)}, updated_at = now()
       WHERE id = ${id}
-      RETURNING id, name, title, description, prompt_template, builtin`;
+      RETURNING id, name, title, description, prompt_template, builtin, kind`;
     if (!row) return reply.code(404).send({ error: "role not found" });
     return row;
   });
@@ -267,7 +276,7 @@ export function registerRoutes(app: FastifyInstance) {
     const bindings = (cfg.profiles ?? {}) as Record<string, string>;
     const all = await sql`
       SELECT id, name, title, description, prompt_template, builtin FROM agent_roles
-      ORDER BY builtin DESC, name`;
+      WHERE kind = 'role' ORDER BY builtin DESC, name`;
     const set = enabled == null ? null : new Set(enabled);
     return (all as unknown as { name: string; builtin: boolean }[]).map((r) => ({
       ...r,
@@ -275,6 +284,23 @@ export function registerRoutes(app: FastifyInstance) {
       default_enabled: enabled == null,
       profile_id: bindings[r.name] ?? null,
     }));
+  });
+
+  // ---------- 全局设置（§8.1 所有配置落库：规则默认值 → global_settings 单例行） ----------
+  app.get("/global-settings", async () => {
+    const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+    return {
+      rules: ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>,
+      effective_rules: await globalRules(sql),
+    };
+  });
+
+  app.patch("/global-settings", async (req) => {
+    const body = z.object({ rules: z.record(z.string(), z.unknown()) }).parse(req.body);
+    const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+    const merged = { ...(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>), ...body.rules };
+    await sql`UPDATE global_settings SET rules_json = ${sql.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
+    return { rules: merged, effective_rules: await globalRules(sql) };
   });
 
   // ---------- 项目设置（§8.1 决策层：profiles 绑定 + rules 覆盖） ----------

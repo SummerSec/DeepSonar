@@ -47,19 +47,60 @@ export interface ProjectRules {
   maxIntentsPerDecision: number;
 }
 
-export async function rulesForProject(db: typeof sql, projectId: string): Promise<ProjectRules> {
-  const [p] = await db`SELECT config_json FROM projects WHERE id = ${projectId}`;
-  const r = (((p?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
+/** env 兜底默认值（全局规则未配置时的最终回落） */
+function envDefaultRules(): ProjectRules {
   return {
-    autoVerifySeverities: (r.autoVerifySeverities as string[]) ?? config.rules.autoVerifySeverities,
-    maxFollowupsPerJob: (r.maxFollowupsPerJob as number) ?? config.limits.maxFollowupsPerJob,
-    maxFollowupDepth: (r.maxFollowupDepth as number) ?? config.limits.maxFollowupDepth,
-    maxAutoRetries: (r.maxAutoRetries as number) ?? 3,
-    auditTimeoutSec: (r.auditTimeoutSec as number) ?? config.timeouts.auditSec,
-    verifyTimeoutSec: (r.verifyTimeoutSec as number) ?? config.timeouts.verifySec,
-    hubEnabled: (r.hubEnabled as boolean) ?? config.hub.enabled,
-    maxHubRounds: (r.maxHubRounds as number) ?? config.hub.maxRounds,
-    maxIntentsPerDecision: (r.maxIntentsPerDecision as number) ?? config.hub.maxIntents,
+    autoVerifySeverities: config.rules.autoVerifySeverities,
+    maxFollowupsPerJob: config.limits.maxFollowupsPerJob,
+    maxFollowupDepth: config.limits.maxFollowupDepth,
+    maxAutoRetries: 3,
+    auditTimeoutSec: config.timeouts.auditSec,
+    verifyTimeoutSec: config.timeouts.verifySec,
+    hubEnabled: config.hub.enabled,
+    maxHubRounds: config.hub.maxRounds,
+    maxIntentsPerDecision: config.hub.maxIntents,
+  };
+}
+
+/** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */
+export async function globalRules(db: typeof sql): Promise<ProjectRules> {
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const gr = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+  const env = envDefaultRules();
+  return {
+    autoVerifySeverities: (gr.autoVerifySeverities as string[]) ?? env.autoVerifySeverities,
+    maxFollowupsPerJob: (gr.maxFollowupsPerJob as number) ?? env.maxFollowupsPerJob,
+    maxFollowupDepth: (gr.maxFollowupDepth as number) ?? env.maxFollowupDepth,
+    maxAutoRetries: (gr.maxAutoRetries as number) ?? env.maxAutoRetries,
+    auditTimeoutSec: (gr.auditTimeoutSec as number) ?? env.auditTimeoutSec,
+    verifyTimeoutSec: (gr.verifyTimeoutSec as number) ?? env.verifyTimeoutSec,
+    hubEnabled: (gr.hubEnabled as boolean) ?? env.hubEnabled,
+    maxHubRounds: (gr.maxHubRounds as number) ?? env.maxHubRounds,
+    maxIntentsPerDecision: (gr.maxIntentsPerDecision as number) ?? env.maxIntentsPerDecision,
+  };
+}
+
+/** 项目规则：项目 config_json.rules → 全局 global_settings → env 三级回落 */
+export async function rulesForProject(db: typeof sql, projectId: string): Promise<ProjectRules> {
+  const [p, g] = await Promise.all([
+    db`SELECT config_json FROM projects WHERE id = ${projectId}`,
+    db`SELECT rules_json FROM global_settings WHERE id = 'global'`,
+  ]);
+  const r = (((p[0]?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
+  const gr = ((g[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+  const env = envDefaultRules();
+  const pick = <T,>(key: keyof ProjectRules): T =>
+    (r[key] as T) ?? (gr[key] as T) ?? (env[key] as T);
+  return {
+    autoVerifySeverities: pick("autoVerifySeverities"),
+    maxFollowupsPerJob: pick("maxFollowupsPerJob"),
+    maxFollowupDepth: pick("maxFollowupDepth"),
+    maxAutoRetries: pick("maxAutoRetries"),
+    auditTimeoutSec: pick("auditTimeoutSec"),
+    verifyTimeoutSec: pick("verifyTimeoutSec"),
+    hubEnabled: pick("hubEnabled"),
+    maxHubRounds: pick("maxHubRounds"),
+    maxIntentsPerDecision: pick("maxIntentsPerDecision"),
   };
 }
 
@@ -80,7 +121,8 @@ export interface RoleDef {
  */
 export async function rolesForProject(db: typeof sql, projectId: string): Promise<RoleDef[]> {
   const [all, [p]] = await Promise.all([
-    db`SELECT id, name, title, description, prompt_template, builtin FROM agent_roles ORDER BY builtin DESC, name`,
+    db`SELECT id, name, title, description, prompt_template, builtin FROM agent_roles
+       WHERE kind = 'role' ORDER BY builtin DESC, name`,
     db`SELECT config_json FROM projects WHERE id = ${projectId}`,
   ]);
   const enabled = (((p?.config_json as Record<string, unknown>)?.roles as Record<string, unknown> | undefined)?.enabled ??

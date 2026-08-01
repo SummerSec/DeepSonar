@@ -1,6 +1,7 @@
+import { ArrowSquareOut, AirplaneTakeoff } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type CanvasSummary } from "../api";
+import { api, type CanvasSummary, type Project } from "../api";
 import { targetLine } from "../TaskList";
 import {
   DataTable,
@@ -16,14 +17,84 @@ import {
 
 type Filter = "" | "active" | "findings";
 
+interface PlaneInfo {
+  enabled: boolean;
+  web_url: string;
+  workspace_slug: string;
+  ready_state: string;
+}
+
+/** Plane 下发指引卡（任务由 Plane issue 驱动：描述写 key=value，移到 Ready 自动认领） */
+function PlaneGuide({ project, plane }: { project: Project | undefined; plane: PlaneInfo | null }) {
+  const [open, setOpen] = useState(false);
+  const projectUrl =
+    plane && project
+      ? `${plane.web_url}/${plane.workspace_slug}/projects/${project.plane_project_id}/issues/`
+      : null;
+
+  return (
+    <div className="mb-4 rounded-[10px] border border-ink-700 bg-ink-900/60">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[14px] text-zinc-300 transition-colors hover:text-zinc-100"
+      >
+        <AirplaneTakeoff size={16} className="text-acc-400" />
+        <span>
+          新任务请在 <span className="font-medium text-zinc-100">Plane</span> 下发：创建 issue → 描述写参数 →
+          移到「{plane?.ready_state ?? "Ready"}」自动认领
+        </span>
+        <span className="ml-auto font-mono text-[12px] text-zinc-600">{open ? "收起 ▴" : "展开 ▾"}</span>
+      </button>
+      {open && (
+        <div className="border-t border-ink-800 px-4 py-3 text-[13px] leading-relaxed text-zinc-400">
+          <ol className="list-decimal space-y-1.5 pl-4">
+            <li>
+              在 Plane 项目中新建 issue（标题即任务名）：
+              {projectUrl ? (
+                <a
+                  href={projectUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-1.5 inline-flex items-center gap-1 text-acc-400 hover:text-acc-300"
+                >
+                  打开 Plane 项目 <ArrowSquareOut size={12} />
+                </a>
+              ) : (
+                <span className="ml-1.5 font-mono text-zinc-600">（Plane 未配置，无法生成链接）</span>
+              )}
+            </li>
+            <li>
+              描述里按行写键值对（每行一个 <span className="font-mono text-zinc-300">key=value</span>）：
+              <pre className="mt-1.5 rounded-md border border-ink-800 bg-ink-950 px-3 py-2 font-mono text-[12px] text-zinc-300">{`type=audit_module
+module_path=src/auth
+goal=审计认证模块的注入与绕过`}</pre>
+              <div className="mt-1 text-zinc-600">
+                type 可选：audit_module（审计，默认）/ 任意已启用角色名；其余行（如 module_path、repo_path、goal）会进入任务目标与 prompt
+              </div>
+            </li>
+            <li>
+              把 issue 状态移到「<span className="text-zinc-200">{plane?.ready_state ?? "Ready"}</span>
+              」—— Plane webhook 事件触发调度器自动认领（事件驱动，无需等待轮询），几分钟后这里出现新任务画布
+            </li>
+          </ol>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TasksPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
+  const [project, setProject] = useState<Project | undefined>(undefined);
+  const [plane, setPlane] = useState<PlaneInfo | null>(null);
   const [filter, setFilter] = useState<Filter>("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
+    api.projects().then((list) => setProject(list.find((p) => p.id === projectId))).catch(() => {});
+    api.planeInfo().then(setPlane).catch(() => {});
     let stop = false;
     const tick = () => {
       api
@@ -78,10 +149,12 @@ export function TasksPage() {
         </div>
       )}
 
+      <PlaneGuide project={project} plane={plane} />
+
       {filtered.length === 0 ? (
         <EmptyState
           title={canvases.length === 0 ? "暂无任务画布" : "没有匹配的任务"}
-          hint="有 Job 跑起来后会出现在这里。也可从左侧「调度队列」点进某个 Job 直接打开画布。"
+          hint="在 Plane 创建 issue 并移到「Ready」后，调度器会自动认领并在这里出现任务画布（见上方指引）。"
         />
       ) : (
         <DataTable>

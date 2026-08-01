@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { runRealAgent } from "@dfh/runtime-sandbox";
 import { FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
-import { ingestEvent, rolesForProject, rulesForProject, type AgentProfileSnapshot, type RoleDef } from "./core.js";
+import { ingestEvent, rolesForProject, rulesForProject, type AgentProfileSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseFactOutput, parseHubDecision } from "./graph.js";
 import { publishStream } from "./stream-bus.js";
@@ -32,7 +32,25 @@ function seedFilesFromDir(dir: string, prefix = ""): Record<string, string> {
   return out;
 }
 
-const AUDIT_PROMPT = (modulePath?: string) => `你是一个白盒安全审计专家。代码在 /workspace/src${modulePath ? `（重点审计 ${modulePath}）` : ""}。
+/** 通用占位符渲染：{{key}} 全部替换 */
+function render(template: string, vars: Record<string, string>): string {
+  let out = template;
+  for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`{{${k}}}`, v);
+  return out;
+}
+
+/**
+ * prompt 模板一律从 agent_roles 表读（§8.3 所有配置落库，用户可在设置页改）；
+ * 库中缺行时退回代码兜底常量。
+ */
+async function templateFor(name: string, fallback: string): Promise<string> {
+  const [row] = await sql`SELECT prompt_template FROM agent_roles WHERE name = ${name}`;
+  return (row?.prompt_template as string) ?? fallback;
+}
+
+// ---------- 兜底模板（与 0007 迁移种子一致；库里有行时不会用到） ----------
+
+const FALLBACK_AUDIT = `你是一个白盒安全审计专家。代码在 /workspace/src（重点审计 {{module_path}}）。
 
 要求：
 1. 通读代码，找出真实可利用的安全漏洞（SQL 注入、XSS、路径穿越、任意文件上传、硬编码密钥、危险函数等）
@@ -43,11 +61,11 @@ const AUDIT_PROMPT = (modulePath?: string) => `你是一个白盒安全审计专
    必须是纯 JSON 文件，不要用 markdown 代码围栏包裹
 5. 不要修改源代码，不要输出 findings.jsonl 以外的漏洞报告`;
 
-const VERIFY_PROMPT = (finding: { title: string; location?: string; summary?: string }) => `你是一个漏洞验证专家。代码在 /workspace/src。请验证以下审计发现是否真实成立：
+const FALLBACK_VERIFY = `你是一个漏洞验证专家。代码在 /workspace/src。请验证以下审计发现是否真实成立：
 
-标题：${finding.title}
-位置：${finding.location ?? "未知"}
-描述：${finding.summary ?? "无"}
+标题：{{finding_title}}
+位置：{{finding_location}}
+描述：{{finding_summary}}
 
 要求：
 1. 阅读相关代码，静态分析该漏洞是否真实存在、是否可利用
@@ -56,25 +74,24 @@ const VERIFY_PROMPT = (finding: { title: string; location?: string; summary?: st
    - verdict 字段只能是这三个英文词之一，不要带任何括号注释；文件必须是纯 JSON，不要用 markdown 代码围栏包裹
 3. 不要修改源代码`;
 
-/** hub 决策 prompt（Cairn reason.md 改造，§8.3）：读整张图 → complete 或派发 intents */
-const HUB_PROMPT = (graphYaml: string, maxIntents: number, roles: RoleDef[]) => `你是安全审计的调度中枢（hub）。画布当前状态（YAML）：
+const FALLBACK_HUB = `你是安全审计的调度中枢（hub）。画布当前状态（YAML）：
 
-${graphYaml}
+{{graph}}
 
 可用角色（intents 的 role 字段只能从这里选）：
-${roles.map((r) => `- ${r.name}（${r.title}）：${r.description}`).join("\n")}
+{{roles}}
 
 要求：
 1. 判断 goal 是否已达成：
    - 已达成 → 写 /workspace/hub.json：{"complete":{"from":["<被引用事实的id>",...],"description":"总结论（中文，200 字内）"}}
    - 未达成 → 写 /workspace/hub.json：{"intents":[{"from":["<作为出发点的事实id>",...],"role":"<角色名>","description":"要做的事（具体、可执行）"}]}
-2. 最多 ${maxIntents} 个意图；意图必须高价值、互不重叠、可并行；from 只能引用上面 facts 里存在的 id
+2. 最多 {{max_intents}} 个意图；意图必须高价值、互不重叠、可并行；from 只能引用上面 facts 里存在的 id
 3. 不要提出与 open_intents / concluded_intents 语义重复的意图
 4. 若 open_intents 为空且目标未达成，必须提出新意图
 5. hub.json 必须是纯 JSON，不要用 markdown 代码围栏包裹`;
 
 /** 角色表缺行时的兜底模板（与 0006 迁移里 explore 种子一致） */
-const FALLBACK_ROLE_TEMPLATE = `你是{{role}} agent。代码在 /workspace/src。
+const FALLBACK_ROLE = `你是{{role}} agent。代码在 /workspace/src。
 
 当前意图：{{intent}}
 
@@ -87,14 +104,6 @@ const FALLBACK_ROLE_TEMPLATE = `你是{{role}} agent。代码在 /workspace/src�
    - 只写增量事实；必须是纯 JSON，不要用 markdown 代码围栏包裹
 3. 完成后写 /workspace/done.json：{"summary":"总结（中文，100 字内）"}
 4. 不要修改源代码`;
-
-/** 角色模板渲染：{{graph}} {{intent}} {{role}} 占位符替换 */
-function renderRolePrompt(template: string, role: string, graphYaml: string, intent: string): string {
-  return template
-    .replaceAll("{{graph}}", graphYaml)
-    .replaceAll("{{intent}}", intent)
-    .replaceAll("{{role}}", role);
-}
 
 export async function executeReal(jobId: string, type: string): Promise<void> {
   const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
@@ -131,21 +140,29 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     if (!graph) throw new Error("hub_reason job 缺 canvas_id，无法读图");
     const roles = await rolesForProject(sql, job.project_id as string);
     if (roles.length === 0) throw new Error("项目未启用任何角色，hub 无可下发对象");
-    basePrompt = HUB_PROMPT(graph.yaml, rules.maxIntentsPerDecision, roles);
+    basePrompt = render(await templateFor("hub_reason", FALLBACK_HUB), {
+      graph: graph.yaml,
+      roles: roles.map((r) => `- ${r.name}（${r.title}）：${r.description}`).join("\n"),
+      max_intents: String(rules.maxIntentsPerDecision),
+    });
   } else if (isRole) {
     if (!graph) throw new Error(`${type} job 缺 canvas_id，无法读图`);
-    // 角色 base prompt 来自角色注册表（用户可改模板）；缺行用兜底模板
-    const [roleRow] = await sql`SELECT prompt_template FROM agent_roles WHERE name = ${type}`;
-    basePrompt = renderRolePrompt(
-      (roleRow?.prompt_template as string) ?? FALLBACK_ROLE_TEMPLATE,
-      type,
-      graph.yaml,
-      intentDesc || "自由探索代码，收集安全相关事实",
-    );
+    basePrompt = render(await templateFor(type, FALLBACK_ROLE), {
+      graph: graph.yaml,
+      intent: intentDesc || "自由探索代码，收集安全相关事实",
+      role: type,
+    });
   } else if (isVerify) {
-    basePrompt = VERIFY_PROMPT((payload.finding ?? {}) as { title: string; location?: string; summary?: string });
+    const finding = (payload.finding ?? {}) as { title?: string; location?: string; summary?: string };
+    basePrompt = render(await templateFor("verify_finding", FALLBACK_VERIFY), {
+      finding_title: finding.title ?? "未知",
+      finding_location: finding.location ?? "未知",
+      finding_summary: finding.summary ?? "无",
+    });
   } else {
-    basePrompt = AUDIT_PROMPT(payload.module_path as string | undefined);
+    basePrompt = render(await templateFor("audit_module", FALLBACK_AUDIT), {
+      module_path: (payload.module_path as string) ?? "全部模块",
+    });
   }
   const prompt = snapshot?.prompt_suffix ? `${basePrompt}\n\n${snapshot.prompt_suffix}` : basePrompt;
 

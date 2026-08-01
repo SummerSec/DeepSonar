@@ -47,6 +47,14 @@ export const config = {
     get enabled() {
       return Boolean(this.token && this.workspaceSlug);
     },
+    /** Plane 前端地址（任务指引里给用户点的链接）；默认从 API 地址推导 */
+    get webUrl() {
+      const explicit = str("PLANE_WEB_URL");
+      if (explicit) return explicit;
+      return this.baseUrl.includes("api.plane.so")
+        ? this.baseUrl.replace("api.plane.so", "app.plane.so")
+        : this.baseUrl;
+    },
   },
 
   limits: {
