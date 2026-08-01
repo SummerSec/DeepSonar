@@ -51,25 +51,7 @@ const CreateJobBody = z.object({
   timeout_sec: z.number().int().positive().optional(),
 });
 
-// Agent profile（§8.1）：env_keys 只存变量名引用，密钥永不落库
 const ReasoningEffort = z.enum(["low", "medium", "high", "xhigh"]);
-const ProfileBody = z.object({
-  name: z.string().min(1),
-  agent_cli: z.enum(["claude-code", "open-code", "codex"]).default("claude-code"),
-  model: z.string().nullish(),
-  /** 思考强度（agentbox reasoning）；null/省略 = provider 默认 */
-  reasoning: ReasoningEffort.nullish(),
-  env_keys: z.array(z.string()).default([]),
-  modules: z.array(z.string()).default([]), // Git 模块源勾选（["<source_id>:<module_id>"]）
-  skills: z.array(z.record(z.string(), z.unknown())).default([]),
-  commands: z.array(z.record(z.string(), z.unknown())).default([]),
-  mcps: z.array(z.record(z.string(), z.unknown())).default([]),
-  subagents: z.array(z.record(z.string(), z.unknown())).default([]),
-  prompt_suffix: z.string().nullish(),
-  /** §6.2：绑定的 Provider Credential（与 env_keys 二选一；优先 Credential） */
-  credential_id: z.string().uuid().nullish(),
-});
-const ProfilePatchBody = ProfileBody.partial();
 
 // Git 模块源（§8.2）
 const SkillSourceBody = z.object({
@@ -78,20 +60,17 @@ const SkillSourceBody = z.object({
   branch: z.string().default("main"),
 });
 
-// 项目设置：profiles 绑定（job 类型 → profile id）+ rules 覆盖（§8.1 决策层）
 // roles.enabled：hub 可下发角色清单（name 数组；null = 恢复默认=全部内置）
 const SettingsPatchBody = z.object({
-  profiles: z.record(z.string(), z.string().nullable()).optional(),
   rules: z.record(z.string(), z.unknown()).optional(),
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
 });
 
-// 角色注册表（§8.3 Phase ②）：name 即 job.type；prompt_template 用 {{graph}} {{intent}} {{role}} 占位
+// 角色注册表：name 即 job.type，description 供 Hub 选角色时使用。
 const RoleBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
   title: z.string().default(""),
   description: z.string().default(""),
-  prompt_template: z.string().min(10),
 });
 const RolePatchBody = RoleBody.partial().omit({ name: true });
 
@@ -109,10 +88,8 @@ const PatchProjectBody = z.object({
 const CreateTaskBody = z.object({
   title: z.string().trim().min(1).max(200),
   content: z.string().trim().min(1).max(20_000),
-  // 代码来源（§10.1）：二选一，随画布 target_json 存档，执行时摄入进沙箱
-  repo_url: z.string().trim().max(500).optional(),
-  repo_path: z.string().trim().max(500).optional(),
-  ref: z.string().trim().max(200).optional(),
+  /** 省略则继承项目 allowEgress；创建画布时会冻结最终值。 */
+  allow_egress: z.boolean().optional(),
 });
 const TriggerTaskBody = z.object({
   event_id: z.string().trim().min(1).max(200),
@@ -124,15 +101,6 @@ const TriggerTaskBody = z.object({
 });
 const PriorityBody = z.object({ priority: z.number().int() });
 const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
-
-/** Profile ↔ Credential 绑定（§6.2；purpose='llm'） */
-async function bindCredential(profileId: string, credentialId: string) {
-  const [cred] = await sql`SELECT id, status FROM credentials WHERE id = ${credentialId}`;
-  if (!cred) throw new Error("credential not found");
-  await sql`
-    INSERT INTO profile_credentials ${sql({ profile_id: profileId, credential_id: credentialId, purpose: "llm" })}
-    ON CONFLICT (profile_id, credential_id, purpose) DO NOTHING`;
-}
 
 export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DFH_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
@@ -274,9 +242,9 @@ export function registerRoutes(app: FastifyInstance) {
         title: body.title,
         content: body.content,
         goal: body.content,
-        ...(body.repo_url ? { repo_url: body.repo_url } : {}),
-        ...(body.repo_path ? { repo_path: body.repo_path } : {}),
-        ...(body.ref ? { ref: body.ref } : {}),
+        ...(body.allow_egress !== undefined
+          ? { network_policy: { allow_egress: body.allow_egress } }
+          : {}),
       },
     });
     const { job, duplicated } = await createJob({
@@ -296,7 +264,11 @@ export function registerRoutes(app: FastifyInstance) {
       resourceType: "job",
       resourceId: job.id as string,
       projectId: id,
-      after: { title: body.title, canvas_id: canvasId, repo_url: body.repo_url ?? null, repo_path: body.repo_path ?? null },
+      after: {
+        title: body.title,
+        canvas_id: canvasId,
+        allow_egress: body.allow_egress ?? "project_default",
+      },
     });
     return reply.code(201).send({ canvas_id: canvasId, job });
   });
@@ -525,101 +497,6 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // ---------- Agent profiles（§8.1 存储层 CRUD） ----------
-  app.get("/agent-profiles", async () =>
-    sql`SELECT p.*, pc.credential_id, c.provider AS credential_provider
-        FROM agent_profiles p
-        LEFT JOIN profile_credentials pc ON pc.profile_id = p.id AND pc.purpose = 'llm'
-        LEFT JOIN credentials c ON c.id = pc.credential_id
-        ORDER BY p.created_at DESC`);
-
-  app.post("/agent-profiles", async (req, reply) => {
-    const body = ProfileBody.parse(req.body);
-    try {
-      const [row] = await sql`
-        INSERT INTO agent_profiles ${sql({
-          name: body.name,
-          agent_cli: body.agent_cli,
-          model: body.model ?? null,
-          reasoning: body.reasoning ?? null,
-          env_keys: body.env_keys as never,
-          modules_json: body.modules as never,
-          skills_json: body.skills as never,
-          commands_json: body.commands as never,
-          mcps_json: body.mcps as never,
-          subagents_json: body.subagents as never,
-          prompt_suffix: body.prompt_suffix ?? null,
-        })}
-        RETURNING *`;
-      if (body.credential_id) {
-        await bindCredential(row.id as string, body.credential_id);
-      }
-      await audit(req, {
-        action: "profile.create",
-        resourceType: "agent_profile",
-        resourceId: row.id as string,
-        after: { name: row.name, agent_cli: row.agent_cli, credential_id: body.credential_id ?? null },
-      });
-      return reply.code(201).send(row);
-    } catch (e) {
-      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
-        return reply.code(409).send({ error: "同名 profile 已存在" });
-      }
-      throw e;
-    }
-  });
-
-  app.patch("/agent-profiles/:id", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const body = ProfilePatchBody.parse(req.body);
-    const sets: Record<string, unknown> = { updated_at: sql`now()` };
-    if (body.name !== undefined) sets.name = body.name;
-    if (body.agent_cli !== undefined) sets.agent_cli = body.agent_cli;
-    if (body.model !== undefined) sets.model = body.model;
-    if (body.reasoning !== undefined) sets.reasoning = body.reasoning;
-    if (body.env_keys !== undefined) sets.env_keys = body.env_keys;
-    if (body.modules !== undefined) sets.modules_json = body.modules;
-    if (body.skills !== undefined) sets.skills_json = body.skills;
-    if (body.commands !== undefined) sets.commands_json = body.commands;
-    if (body.mcps !== undefined) sets.mcps_json = body.mcps;
-    if (body.subagents !== undefined) sets.subagents_json = body.subagents;
-    if (body.prompt_suffix !== undefined) sets.prompt_suffix = body.prompt_suffix;
-    const [row] = await sql`
-      UPDATE agent_profiles SET ${sql(sets as never)} WHERE id = ${id} RETURNING *`;
-    if (!row) return reply.code(404).send({ error: "profile not found" });
-    if (body.credential_id !== undefined) {
-      await sql`DELETE FROM profile_credentials WHERE profile_id = ${id} AND purpose = 'llm'`;
-      if (body.credential_id) await bindCredential(id, body.credential_id);
-      // Credential 绑定/解绑单独记一条（§7.2 必须记录项）
-      await audit(req, {
-        action: body.credential_id ? "credential.bind" : "credential.unbind",
-        resourceType: "agent_profile",
-        resourceId: id,
-        after: { credential_id: body.credential_id ?? null },
-      });
-    }
-    await audit(req, {
-      action: "profile.update",
-      resourceType: "agent_profile",
-      resourceId: id,
-      after: { changed: Object.keys(body).filter((k) => k !== "credential_id") },
-    });
-    return row;
-  });
-
-  app.delete("/agent-profiles/:id", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const [row] = await sql`DELETE FROM agent_profiles WHERE id = ${id} RETURNING id, name`;
-    if (!row) return reply.code(404).send({ error: "profile not found" });
-    await audit(req, {
-      action: "profile.delete",
-      resourceType: "agent_profile",
-      resourceId: id,
-      before: { name: row.name },
-    });
-    return { ok: true };
-  });
-
   // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
 
   const RoleConfigPutBody = z.object({
@@ -633,7 +510,7 @@ export function registerRoutes(app: FastifyInstance) {
     commands: z.array(z.record(z.string(), z.unknown())).default([]),
     mcps: z.array(z.record(z.string(), z.unknown())).default([]),
     subagents: z.array(z.record(z.string(), z.unknown())).default([]),
-    prompt_suffix: z.string().nullish(),
+    instructions_markdown: z.string().max(100_000).nullish(),
     runtime_image_key: z.string().nullish(),
     credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).default([]),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
@@ -696,7 +573,7 @@ export function registerRoutes(app: FastifyInstance) {
         commands_json: body.commands as never,
         mcps_json: body.mcps as never,
         subagents_json: body.subagents as never,
-        prompt_suffix: body.prompt_suffix ?? null,
+        instructions_markdown: body.instructions_markdown ?? null,
         runtime_image_key: body.runtime_image_key ?? null,
       };
       let configId: string;
@@ -837,10 +714,9 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // ---------- 角色注册表（§8.3：hub 可下发的 agent 类型，全局注册 + 项目级启用） ----------
-  // kind='role'：hub 可下发角色；kind='system'：hub/audit/verify 系统 prompt 模板（也在这里改）
+  // ---------- 角色注册表：hub 可下发的 agent 类型，全局注册 + 项目级启用 ----------
   app.get("/agent-roles", async () =>
-    sql`SELECT id, name, title, description, prompt_template, builtin, kind, created_at, updated_at
+    sql`SELECT id, name, title, description, builtin, kind, created_at, updated_at
         FROM agent_roles ORDER BY kind DESC, builtin DESC, name`,
   );
 
@@ -849,7 +725,7 @@ export function registerRoutes(app: FastifyInstance) {
     try {
       const [row] = await sql`
         INSERT INTO agent_roles ${sql({ ...body, builtin: false, kind: "role" })}
-        RETURNING id, name, title, description, prompt_template, builtin, kind`;
+        RETURNING id, name, title, description, builtin, kind`;
       await audit(req, {
         action: "role.create",
         resourceType: "agent_role",
@@ -871,9 +747,8 @@ export function registerRoutes(app: FastifyInstance) {
     const [row] = await sql`
       UPDATE agent_roles SET ${sql(body)}, updated_at = now()
       WHERE id = ${id}
-      RETURNING id, name, title, description, prompt_template, builtin, kind`;
+      RETURNING id, name, title, description, builtin, kind`;
     if (!row) return reply.code(404).send({ error: "role not found" });
-    // Prompt 模板属「规则/Prompt 修改」必记项；模板内容长，只记哈希
     await audit(req, {
       action: "role.update",
       resourceType: "agent_role",
@@ -881,7 +756,6 @@ export function registerRoutes(app: FastifyInstance) {
       after: {
         name: row.name,
         changed: Object.keys(body),
-        ...(body.prompt_template ? { prompt_sha256: createHash("sha256").update(body.prompt_template).digest("hex") } : {}),
       },
     });
     return row;
@@ -890,7 +764,7 @@ export function registerRoutes(app: FastifyInstance) {
   app.delete("/agent-roles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [row] = await sql`DELETE FROM agent_roles WHERE id = ${id} AND NOT builtin RETURNING id, name`;
-    if (!row) return reply.code(409).send({ error: "内置角色不可删除（可编辑模板/描述）或角色不存在" });
+    if (!row) return reply.code(409).send({ error: "内置角色不可删除或角色不存在" });
     await audit(req, {
       action: "role.delete",
       resourceType: "agent_role",
@@ -900,23 +774,21 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // 项目视角的角色清单：全部角色 + 本项目启用状态 + 绑定的 profile
+  // 项目视角的角色清单：全部角色 + 本项目启用状态
   app.get("/projects/:id/roles", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
     const enabled = ((cfg.roles as Record<string, unknown> | undefined)?.enabled ?? null) as string[] | null;
-    const bindings = (cfg.profiles ?? {}) as Record<string, string>;
     const all = await sql`
-      SELECT id, name, title, description, prompt_template, builtin FROM agent_roles
+      SELECT id, name, title, description, builtin, kind FROM agent_roles
       WHERE kind = 'role' ORDER BY builtin DESC, name`;
     const set = enabled == null ? null : new Set(enabled);
     return (all as unknown as { name: string; builtin: boolean }[]).map((r) => ({
       ...r,
       enabled: set == null ? r.builtin : set.has(r.name),
       default_enabled: enabled == null,
-      profile_id: bindings[r.name] ?? null,
     }));
   });
 
@@ -944,14 +816,13 @@ export function registerRoutes(app: FastifyInstance) {
     return { rules: merged, effective_rules: await globalRules(sql) };
   });
 
-  // ---------- 项目设置（§8.1 决策层：profiles 绑定 + rules 覆盖） ----------
+  // ---------- 项目设置：运行规则 + 角色启停 ----------
   app.get("/projects/:id/settings", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
     return {
-      profiles: (cfg.profiles ?? {}) as Record<string, string>,
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
@@ -964,14 +835,6 @@ export function registerRoutes(app: FastifyInstance) {
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
-    if (body.profiles) {
-      const bindings = { ...((cfg.profiles as Record<string, unknown>) ?? {}) };
-      for (const [k, v] of Object.entries(body.profiles)) {
-        if (v === null) delete bindings[k]; // null = 解除绑定
-        else bindings[k] = v;
-      }
-      cfg.profiles = bindings;
-    }
     if (body.rules) {
       cfg.rules = { ...((cfg.rules as Record<string, unknown>) ?? {}), ...body.rules };
     }
@@ -982,7 +845,7 @@ export function registerRoutes(app: FastifyInstance) {
       cfg.roles = roles;
     }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
-    // 项目级 profiles 绑定 / rules 覆盖 / roles 启停都属配置修改
+    // 项目级 rules 覆盖 / roles 启停都属配置修改
     await audit(req, {
       action: "settings.project_update",
       resourceType: "project",
@@ -991,7 +854,6 @@ export function registerRoutes(app: FastifyInstance) {
       after: { changed: Object.keys(body).filter((k) => (body as Record<string, unknown>)[k] !== undefined) },
     });
     return {
-      profiles: (cfg.profiles ?? {}) as Record<string, string>,
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),

@@ -118,28 +118,6 @@ export interface FindingSummary {
 /** 思考强度（与 agentbox AgentReasoningEffort 对齐） */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
-/** Agent profile（§8.1）：env_keys 只是变量名引用，密钥不落库 */
-export interface AgentProfile {
-  id: string;
-  name: string;
-  agent_cli: "claude-code" | "open-code" | "codex";
-  model: string | null;
-  /** 思考强度；null = provider 默认 */
-  reasoning: ReasoningEffort | null;
-  env_keys: string[];
-  /** §6.2：绑定的 Provider Credential（优先于 env_keys） */
-  credential_id?: string | null;
-  credential_provider?: string | null;
-  modules_json: string[];
-  skills_json: Record<string, unknown>[];
-  commands_json: Record<string, unknown>[];
-  mcps_json: Record<string, unknown>[];
-  subagents_json: Record<string, unknown>[];
-  prompt_suffix: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 /** Git 模块源（§8.2） */
 export type SkillTrustStatus = "quarantined" | "trusted" | "disabled";
 
@@ -186,10 +164,10 @@ export interface EffectiveRules {
   hubEnabled: boolean;
   maxHubRounds: number;
   maxIntentsPerDecision: number;
+  allowEgress: boolean;
 }
 
 export interface ProjectSettings {
-  profiles: Record<string, string>;
   rules: Record<string, unknown>;
   roles: { enabled: string[] | null };
   effective_rules: EffectiveRules;
@@ -201,23 +179,20 @@ export interface AgentRole {
   name: string;
   title: string;
   description: string;
-  prompt_template: string;
   builtin: boolean;
   kind: "hub" | "system" | "role";
 }
 
-/** 项目视角的角色：启用状态 + 绑定的 profile */
+/** 项目视角的角色启用状态。 */
 export interface ProjectRole extends AgentRole {
   enabled: boolean;
   default_enabled: boolean;
-  profile_id: string | null;
 }
 
 export type RoleInput = {
   name: string;
   title: string;
   description: string;
-  prompt_template: string;
 };
 
 /** 全局设置（所有配置落库：规则默认值 → global_settings 单例行） */
@@ -267,22 +242,6 @@ export interface ProviderCredential {
   created_by: string | null;
 }
 
-export type ProfileInput = {
-  name: string;
-  agent_cli: string;
-  model?: string | null;
-  reasoning?: ReasoningEffort | null;
-  env_keys: string[];
-  modules: string[];
-  skills: Record<string, unknown>[];
-  commands: Record<string, unknown>[];
-  mcps: Record<string, unknown>[];
-  subagents: Record<string, unknown>[];
-  prompt_suffix?: string | null;
-  /** §6.2：绑定的 Provider Credential（优先于 env_keys） */
-  credential_id?: string | null;
-};
-
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
 
 /** RoleConfig 保存体（全量声明式：每次 PUT 整体替换 Credential 绑定与配置文件） */
@@ -299,7 +258,7 @@ export type RoleConfigInput = {
   commands: Record<string, unknown>[];
   mcps: Record<string, unknown>[];
   subagents: Record<string, unknown>[];
-  prompt_suffix?: string | null;
+  instructions_markdown?: string | null;
   /** 只能引用服务端可信镜像目录，不是任意 OCI 地址 */
   runtime_image_key?: string | null;
   credentials: { credential_id: string; purpose: string }[];
@@ -322,7 +281,7 @@ export interface RoleConfigView {
   commands_json: Record<string, unknown>[];
   mcps_json: Record<string, unknown>[];
   subagents_json: Record<string, unknown>[];
-  prompt_suffix: string | null;
+  instructions_markdown: string | null;
   runtime_image_key: string | null;
   version: number;
   created_at: string;
@@ -454,6 +413,8 @@ export const api = {
     t: {
       title: string;
       content: string;
+      /** 省略则继承项目设置；服务端在任务创建时冻结。 */
+      allow_egress?: boolean;
     },
   ) => send<{ canvas_id: string; job: { id: string; status: string } }>("POST", `/projects/${projectId}/tasks`, t),
   retryTask: (canvasId: string) => send<{ id: string; status: string }>("POST", `/tasks/${canvasId}/retry`),
@@ -493,16 +454,10 @@ export const api = {
     ),
   cancelJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/cancel`),
   resumeJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/resume`),
-  agentProfiles: () => get<AgentProfile[]>("/agent-profiles"),
-  createProfile: (p: ProfileInput) => send<AgentProfile>("POST", "/agent-profiles", p),
-  updateProfile: (id: string, p: Partial<ProfileInput>) =>
-    send<AgentProfile>("PATCH", `/agent-profiles/${id}`, p),
-  deleteProfile: (id: string) => send<{ ok: boolean }>("DELETE", `/agent-profiles/${id}`),
   settings: (projectId: string) => get<ProjectSettings>(`/projects/${projectId}/settings`),
   patchSettings: (
     projectId: string,
     body: {
-      profiles?: Record<string, string | null>;
       rules?: Record<string, unknown>;
       roles?: { enabled: string[] | null };
     },

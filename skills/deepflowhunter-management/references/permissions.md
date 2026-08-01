@@ -16,7 +16,7 @@ tasks:read / tasks:write
 jobs:control
 findings:read
 skills:read / skills:write
-profiles:read / profiles:write    # 角色、RoleConfig、设置、凭据
+agents:read / agents:write        # 角色、RoleConfig、设置、凭据
 integrations:read / integrations:write
 tokens:manage
 admin
@@ -43,7 +43,7 @@ findings:read
 
 | 场景 | 追加 scope |
 | --- | --- |
-| 查看/改角色注册表、RoleConfig、全局/项目设置、凭据 | `profiles:read`、`profiles:write` |
+| 查看/改角色注册表、RoleConfig、全局/项目设置、凭据 | `agents:read`、`agents:write` |
 | 管理 Skill 模块源（同步/信任审批） | `skills:read`、`skills:write` |
 | 绑定/同步 Plane | `integrations:read`、`integrations:write` |
 
@@ -64,7 +64,7 @@ findings:read
 
 - `tokens:manage` —— Token 创建/吊销/轮换，留给人类管理员；
 - `admin` —— 隐式全部 scope，含 `/audit-logs`；
-- Credential **明文任何路径都读不到**；`profiles:write` 仅在确需自动化登记/轮换凭据时再给。
+- Credential **明文任何路径都读不到**；`agents:write` 仅在确需自动化登记/轮换凭据时再给。
 
 ## 其它约束
 
@@ -92,7 +92,7 @@ curl -X POST $DFH_BASE_URL/tokens \
   -H 'content-type: application/json' \
   -d '{
     "name": "role-config-bot",
-    "scopes": ["projects:read","profiles:read","profiles:write","skills:read"],
+    "scopes": ["projects:read","agents:read","agents:write","skills:read"],
     "expires_in_days": 30
   }'
 ```

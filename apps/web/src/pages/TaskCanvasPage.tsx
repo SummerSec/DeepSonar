@@ -174,7 +174,7 @@ export function TaskCanvasPage() {
         )}
       </div>
 
-      {/* 新任务只展示自然语言内容；历史任务兼容展示原 target_json。 */}
+      {/* 任务只展示自然语言内容。 */}
       {scopeEntries.length > 0 && (
         <div className="task-workbench-scope mx-3 mt-2 shrink-0 rounded-2xl bg-white/[.018] px-4 py-2.5 ring-1 ring-white/[.04]">
           <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">

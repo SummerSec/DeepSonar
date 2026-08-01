@@ -106,9 +106,7 @@ const OPS: Op[] = [
       properties: {
         title: { type: "string" },
         content: { type: "string" },
-        repo_url: { type: "string" },
-        repo_path: { type: "string" },
-        ref: { type: "string" },
+        allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
       },
     },
   },
@@ -210,21 +208,21 @@ const OPS: Op[] = [
   { method: "post", path: "/canvases/{id}/report/retry", summary: "失败报告重试", scope: "jobs:control", tags: ["Reports"] },
 
   // settings
-  { method: "get", path: "/global-settings", summary: "全局规则", scope: "profiles:read", tags: ["Settings"] },
+  { method: "get", path: "/global-settings", summary: "全局规则", scope: "agents:read", tags: ["Settings"] },
   {
     method: "patch",
     path: "/global-settings",
     summary: "合并更新全局规则",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["Settings"],
     body: { type: "object", required: ["rules"], properties: { rules: { type: "object", additionalProperties: true } } },
   },
-  { method: "get", path: "/projects/{id}/settings", summary: "项目规则与角色启用", scope: "profiles:read", tags: ["Settings"] },
+  { method: "get", path: "/projects/{id}/settings", summary: "项目规则与角色启用", scope: "agents:read", tags: ["Settings"] },
   {
     method: "patch",
     path: "/projects/{id}/settings",
     summary: "更新项目规则 / 角色启用清单",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["Settings"],
     body: {
       type: "object",
@@ -241,44 +239,43 @@ const OPS: Op[] = [
   },
 
   // roles
-  { method: "get", path: "/agent-roles", summary: "角色注册表", scope: "profiles:read", tags: ["Roles"] },
+  { method: "get", path: "/agent-roles", summary: "角色注册表", scope: "agents:read", tags: ["Roles"] },
   {
     method: "post",
     path: "/agent-roles",
     summary: "创建角色",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["Roles"],
     body: {
       type: "object",
-      required: ["name", "prompt_template"],
+      required: ["name"],
       properties: {
         name: { type: "string", description: "即 job.type" },
         title: { type: "string" },
         description: { type: "string" },
-        prompt_template: { type: "string" },
       },
     },
   },
-  { method: "patch", path: "/agent-roles/{id}", summary: "更新角色（name 不可改）", scope: "profiles:write", tags: ["Roles"] },
-  { method: "delete", path: "/agent-roles/{id}", summary: "删除角色（内置 409）", scope: "profiles:write", tags: ["Roles"] },
-  { method: "get", path: "/projects/{id}/roles", summary: "项目视角角色启用清单", scope: "profiles:read", tags: ["Roles"] },
+  { method: "patch", path: "/agent-roles/{id}", summary: "更新角色（name 不可改）", scope: "agents:write", tags: ["Roles"] },
+  { method: "delete", path: "/agent-roles/{id}", summary: "删除角色（内置 409）", scope: "agents:write", tags: ["Roles"] },
+  { method: "get", path: "/projects/{id}/roles", summary: "项目视角角色启用清单", scope: "agents:read", tags: ["Roles"] },
 
   // role-configs
-  { method: "get", path: "/role-configs/global", summary: "全局 RoleConfig 清单", scope: "profiles:read", tags: ["RoleConfig"] },
+  { method: "get", path: "/role-configs/global", summary: "全局 RoleConfig 清单", scope: "agents:read", tags: ["RoleConfig"] },
   {
     method: "put",
     path: "/role-configs/global/{roleId}",
     summary: "全局 RoleConfig upsert（声明式全量替换）",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
   },
-  { method: "get", path: "/projects/{id}/role-configs", summary: "项目 RoleConfig 来源清单", scope: "profiles:read", tags: ["RoleConfig"] },
+  { method: "get", path: "/projects/{id}/role-configs", summary: "项目 RoleConfig 来源清单", scope: "agents:read", tags: ["RoleConfig"] },
   {
     method: "put",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "项目 RoleConfig 覆盖 upsert",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
   },
@@ -286,7 +283,7 @@ const OPS: Op[] = [
     method: "delete",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "删除项目覆盖，回落全局",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["RoleConfig"],
   },
 
@@ -328,12 +325,12 @@ const OPS: Op[] = [
   { method: "delete", path: "/skill-sources/{id}", summary: "删除模块源", scope: "skills:write", tags: ["Skills"] },
 
   // credentials
-  { method: "get", path: "/credentials", summary: "凭据列表（无密文）", scope: "profiles:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials", summary: "凭据列表（无密文）", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "post",
     path: "/credentials",
     summary: "登记凭据（AES-GCM 加密）",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["Credentials"],
     body: {
       type: "object",
@@ -356,7 +353,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/credentials/{id}",
     summary: "更新非敏感字段（name / project_id / metadata）",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["Credentials"],
     body: {
       type: "object",
@@ -371,7 +368,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/credentials/{id}/rotate",
     summary: "轮换密钥",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["Credentials"],
     body: { type: "object", required: ["secret"], properties: { secret: { type: "string" } } },
   },
@@ -379,7 +376,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/credentials/{id}/status",
     summary: "启用/禁用凭据",
-    scope: "profiles:write",
+    scope: "agents:write",
     tags: ["Credentials"],
     body: {
       type: "object",
@@ -387,7 +384,7 @@ const OPS: Op[] = [
       properties: { status: { type: "string", enum: ["active", "disabled", "rotation_required"] } },
     },
   },
-  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "profiles:read", tags: ["Credentials"] },
+  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:read", tags: ["Credentials"] },
 
   // tokens
   { method: "get", path: "/tokens", summary: "API Token 列表", scope: "tokens:manage", tags: ["Tokens"] },
@@ -425,12 +422,8 @@ const OPS: Op[] = [
   { method: "get", path: "/plane-info", summary: "Plane 连接信息", scope: "integrations:read", tags: ["Plane"] },
   { method: "post", path: "/webhooks/plane", summary: "Plane webhook 入口", scope: null, tags: ["Plane"] },
 
-  // audit / profiles (legacy)
+  // audit
   { method: "get", path: "/audit-logs", summary: "审计日志", scope: "admin", tags: ["Admin"] },
-  { method: "get", path: "/agent-profiles", summary: "Agent Profile 列表（遗留）", scope: "profiles:read", tags: ["Profiles"] },
-  { method: "post", path: "/agent-profiles", summary: "创建 Profile（遗留）", scope: "profiles:write", tags: ["Profiles"] },
-  { method: "patch", path: "/agent-profiles/{id}", summary: "更新 Profile（遗留）", scope: "profiles:write", tags: ["Profiles"] },
-  { method: "delete", path: "/agent-profiles/{id}", summary: "删除 Profile（遗留）", scope: "profiles:write", tags: ["Profiles"] },
 ];
 
 function pathParams(p: string): Array<{ name: string; in: "path"; required: true; schema: { type: string; format?: string } }> {
@@ -555,7 +548,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             commands: { type: "array", items: { type: "object", additionalProperties: true } },
             mcps: { type: "array", items: { type: "object", additionalProperties: true } },
             subagents: { type: "array", items: { type: "object", additionalProperties: true } },
-            prompt_suffix: { type: "string", nullable: true },
+            instructions_markdown: { type: "string", nullable: true },
             runtime_image_key: { type: "string", nullable: true },
             credentials: {
               type: "array",

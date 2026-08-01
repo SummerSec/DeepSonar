@@ -112,6 +112,8 @@ export const config = {
   gateway: {
     /** 沙箱内可达的网关地址（容器→宿主；compose 内为服务名） */
     sandboxUrl: str("DFH_GATEWAY_SANDBOX_URL", "http://host.docker.internal:3100/gateway"),
+    /** 禁止出网 Worker 在 internal bridge 内访问的固定目标 sidecar URL。 */
+    restrictedSandboxUrl: str("DFH_GATEWAY_RESTRICTED_URL", "http://dfh-gateway-proxy:3100/gateway"),
     /** Job Token 默认请求上限 */
     maxRequests: int("DFH_JOB_TOKEN_MAX_REQUESTS", 500),
     /** Job Token 生命周期（秒），应 ≥ job timeout */
@@ -183,16 +185,9 @@ export const config = {
     payloadMaxKb: int("EVENT_PAYLOAD_MAX_KB", 256),
   },
 
-  /** 代码摄入限制（§10.2）；repo_url 仅 https，host/本地根可用列表收紧 */
-  repo: {
-    maxFiles: int("DFH_REPO_MAX_FILES", 2000),
-    maxTotalMb: int("DFH_REPO_MAX_TOTAL_MB", 20),
-    maxFileKb: int("DFH_REPO_MAX_FILE_KB", 512),
-    cloneTimeoutSec: int("DFH_GIT_CLONE_TIMEOUT_SEC", 120),
-    /** 逗号分隔 host 允许列表；空 = 任意 https host */
+  skillSources: {
+    /** 逗号分隔的 Git host 允许列表；空 = 任意 HTTPS host。 */
     allowedGitHosts: str("DFH_GIT_ALLOWED_HOSTS", ""),
-    /** 逗号分隔本地根目录；空 = 不限制 repo_path */
-    localRoots: str("DFH_REPO_LOCAL_ROOTS", ""),
   },
 
   /** 可信运行镜像目录（runtime_image_key 只能引用这里的 key；空 = 不允许自定义镜像） */

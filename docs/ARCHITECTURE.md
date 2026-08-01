@@ -212,7 +212,7 @@ projects
 canvases                              -- 0002 起：一任务一画布
   id, project_id, plane_issue_id, title, target_json, created_at
   -- 唯一约束: (plane_issue_id) WHERE plane_issue_id IS NOT NULL
-  -- 同一 issue 重试复用同一画布；target_json = 任务目标（type/repo_path/module_path/...）
+  -- 同一 issue 重试复用同一画布；target_json = 自然语言任务 + 冻结的 network_policy.allow_egress
 
 jobs
   id, project_id, canvas_id, plane_issue_id, parent_job_id, finding_id,
@@ -349,61 +349,44 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 
 ## 8. Agent 任务包与事件通道
 
-调度器通过 agentbox-sdk 在沙箱内以 server 进程方式拉起 Agent（claude-code provider，`approvalMode: "auto"`）。任务内容直接作为 input 注入，并在 `/workspace/task.json` 存档一份供 Agent 自查：
+调度器通过 agentbox-sdk 在一次性沙箱内以 server 进程方式拉起 Agent。每个 Job 都使用全新的 `/workspace`，任务内容只通过 Agent CLI 的 input 注入，不再生成 `task.json`，也不由 Scheduler 预下载或挂载代码。
 
-```json
-{
-  "job_id": "job_xxx",
-  "type": "audit_module",
-  "repo_path": "/workspace/src",
-  "module_path": "auth/",
-  "hints": []
-}
-```
+系统按 Job 冻结快照动态组装：
 
-验证任务额外带：
+- `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令
+- Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
+- 非敏感环境变量、白名单 `env_keys` 和按 Job 签发的短期模型凭据
+- Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
 
-```json
-{
-  "type": "verify_finding",
-  "finding": {
-    "fingerprint": "...",
-    "title": "...",
-    "location": "auth/login.php:42",
-    "summary": "..."
-  }
-}
-```
+Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结。Hub 不访问目标网络。
 
-**事件通道（v1.1 关键设计）**：事件**不经过沙箱网络**——审计沙箱默认断网，本就无法回调 HTTP API。事件经 agentbox-sdk 控制通道（provider 层 WebSocket/exec）回传调度器侧：
+**事件通道**：事件不经过沙箱网络，经 agentbox-sdk 控制通道回传调度器侧：
 
 - SDK normalized event stream → 文本/进度 → `progress` 事件
-- 白名单工具（`emit_finding` / `mark_job_done` / `request_human`）以 **Claude Code hooks / MCP** 形式由 SDK 注入，触发即由调度器落库（payload 过 schema 校验 + 大小上限）
-- **沙箱内不注入任何调度器凭据**（无 job token），伪造回调的威胁面随之消除
-- lease 由调度器根据控制通道存活状态维护，无需沙箱内心跳进程
-- SDK 通道中断 ≠ 立即失败：Reaper 按 lease 过期判定孤儿并回收（§3.3）
+- Agent 按角色契约写 `fact.json`、`findings.jsonl`、`hub.json`、`done.json`
+- 调度器读回结果后立即删除这些文件，随后销毁该 Job 的独立沙箱
+- 沙箱内不注入调度器数据库或 API 凭据；Provider Credential 只换成短期 Job Token
+- lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
 
-**agent-harness 收缩为**：自定义镜像（预装 claude CLI + 审计工具链）+ hooks/MCP 配置约定，不再是独立的沙箱内服务。
+### 8.1 Agent 配置体系（RoleConfig）
 
-### 8.1 Agent 配置体系（agent_profiles）
-
-三层结构，**下一 job 生效**（job 创建时冻结快照，改配置不影响已建 job，历史可复现）：
+配置按“全局缺省 → 项目覆盖 → Job 冻结快照”生效，不存在旧 Profile 回退：
 
 | 层 | 位置 | 内容 |
 |----|------|------|
-| 存储 | `agent_profiles` 表 | name / agent_cli（claude-code/open-code/codex）/ model / env_keys / modules / skills / commands / mcps / subagents / prompt_suffix |
-| 决策 | `projects.config_json` | `profiles`（job 类型 → profile id 绑定）+ `rules`（autoVerifySeverities / maxFollowupsPerJob / maxFollowupDepth / maxAutoRetries / auditTimeoutSec / verifyTimeoutSec 覆盖，缺省回落 env） |
-| 执行 | `jobs.agent_snapshot_json` | 建 job 时冻结的快照；executor 按快照决定 provider/model/env/prompt 后缀与下发内容 |
+| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、长期指令、env、模块、skill、command、MCP、subagent、可信镜像、Provider 配置文件与 Credential 引用 |
+| 决策 | 全局 RoleConfig + 项目 RoleConfig + `projects.config_json.rules` | 项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值 |
+| 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照；Executor 不读取旧配置或为缺失快照降级 |
 
-纪律（§9）：`env_keys` **只存变量名引用**，密钥值运行时从调度器 `process.env` 解析，永不落库。
+长期密钥不进入数据库明文字段、Job 快照或工作区文件。RoleConfig 的 `env_vars` 只能保存非敏感值；`env_keys` 经过服务端白名单；Credential 运行时换成短期 Job Token。
 
 ### 8.2 Git 模块源（skill_sources）
 
-Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个 profile 按需勾选：
+Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个 RoleConfig 按需勾选：
 
 - `POST /skill-sources/:id/sync`：浅克隆 → 扫描 `SKILL.md`（skill）与 `commands/*.md`（slash 命令）→ catalog（含文件内容）落库缓存
 - 模块归属按最近含 `.claude-plugin/plugin.json` 的祖先目录分组（= 插件）
-- profile 勾选 `["<source_id>:<module_id>"]`，快照时展开为 agentbox **embedded skills / commands** 与手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 差量上传进沙箱
+- RoleConfig 勾选 `["<source_id>:<module_id>"]`，快照时展开为 agentbox **embedded skills / commands** 与手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 下发到当次 Worker
 - 内容在 sync 时缓存，跑任务不再访问 Git —— 断网/私有网络也能跑
 
 ### 8.3 图语义与 hub 循环（Cairn 式自驱审计）
@@ -412,7 +395,7 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 
 - 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
-- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 整图 YAML（goal/target/root_id/facts/open_intents/concluded_intents/hints）→ 输出 `hub.json`：`{"complete":{from,description}}` 或 `{"intents":[{from,role,description}]}`；首次决策必须派发角色，不得在没有执行证据时直接完成
+- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 整图 YAML + 可用角色 → 输出 `hub.json`：`{"complete":{from,description}}` 或 `{"intents":[{from,role,description,prompt}]}`；`prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
 - **explore**（Phase ① 唯一角色）：输入 = 整图 YAML + 当前意图 → 输出 `fact.json`（增量事实，不重复图内容）→ `fact` 事件建 fact 节点 + to 边
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DFH_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
@@ -443,8 +426,8 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 | 单项目并发 | 1～2 |
 | 默认超时 | audit 30–60min；verify 15–30min |
 | Lease TTL | 120s，心跳 30s |
-| 网络 | 审计关外网（`networkMode: "none"`）；验证按需受限出网（白名单代理需自建，agentbox-sdk 无内置代理层） |
-| 代码挂载 | 审计只读；验证用可写 workspace **副本**（不动原仓库） |
+| 网络 | 项目默认 + 任务覆盖只得到一个 `allow_egress` 布尔值；Hub 不出网，禁止出网 Worker 使用 internal bridge，模型请求只能经固定目标 Gateway sidecar 到 `/gateway` |
+| 工作区 | 每个 Job 使用全新可写 `/workspace`；Worker 自行决定是否获取代码或其他材料 |
 | 密钥 | 仅调度器注入，不进画布正文 |
 | 审计日志 | 所有语义 event 落库；原始流进冷存储；均可导出 |
 | 敏感信息 | transcript 含客户源码、finding 可能含挖到的硬编码密钥 → 冷存储 at-rest 加密、访问走鉴权端点、finding 展示前密钥脱敏（gitleaks 规则） |

@@ -7,8 +7,10 @@ export interface ProvisionInput {
   jobId: string;
   image: string;
   env?: Record<string, string>;
-  /** 断网（审计默认）或受限出网（验证） */
-  network: "none" | "restricted";
+  /** none=完全断网；restricted=仅平台必要通道；egress=允许 Worker 自主访问外网。 */
+  network: "none" | "restricted" | "egress";
+  /** restricted 模式由固定目标 sidecar 代理的调度器模型 Gateway。 */
+  gatewayUpstreamUrl?: string;
   /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
   limits?: SandboxLimits;
 }

@@ -145,19 +145,14 @@ def _projects_create(_pos, f):
 
 
 def _tasks_create(pos, f):
-    # CreateTaskBody：title + content（必填）；repo_url/repo_path/ref 进画布 target_json。
-    # module_path 暂无独立字段，拼入 content 作为审计目标提示。
     title = need(f.get("title"), "--title")
     content = f.get("content") or title
-    if f.get("module-path"):
-        content += f"\n\n审计目标模块: {f['module-path']}"
     body = {"title": title, "content": content}
-    if f.get("repo-url"):
-        body["repo_url"] = f["repo-url"]
-    if f.get("repo-path"):
-        body["repo_path"] = f["repo-path"]
-    if f.get("ref"):
-        body["ref"] = f["ref"]
+    if f.get("allow-egress") is not None:
+        value = str(f["allow-egress"]).lower()
+        if value not in ("true", "false"):
+            raise ApiError("--allow-egress 必须是 true 或 false")
+        body["allow_egress"] = value == "true"
     return call("POST", f"/projects/{need(pos[0] if pos else None, 'projectId')}/tasks", body)
 
 
@@ -207,7 +202,6 @@ def _project_settings_update(pos, f):
 def _roles_create(_pos, f):
     body = {
         "name": need(f.get("name"), "--name（小写字母开头的标识符）"),
-        "prompt_template": need(f.get("prompt-template"), "--prompt-template（含 {{graph}} {{intent}} {{role}} 占位）"),
     }
     if f.get("title"):
         body["title"] = f["title"]

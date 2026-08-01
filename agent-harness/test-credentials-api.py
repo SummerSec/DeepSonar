@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CRED 工作包验收（§6.2）：Provider Credential 加密存储 + profile 绑定
-前置：调度器配置 DFH_MASTER_KEY_FILE 且已应用 0012 迁移
+"""Provider Credential 验收：加密存储 + RoleConfig 绑定。
+前置：调度器配置 DFH_MASTER_KEY_FILE 且使用当前 schema 基线。
 """
 import json
 import subprocess
@@ -55,15 +55,20 @@ def main():
     req("POST", "/credentials", {"name": "x", "provider": "evil-corp", "secret": "y"}, expect=400)
     print("未知 provider 拒绝 OK")
 
-    # 4. profile 绑定：创建带 credential_id 的 profile → 列表带绑定信息
-    p = req("POST", "/agent-profiles", {
-        "name": f"cred-prof-{tag}", "agent_cli": "claude-code",
-        "env_keys": [], "modules": [], "skills": [], "commands": [], "mcps": [], "subagents": [],
-        "credential_id": cid,
-    }, 201)
-    prof = next(x for x in req("GET", "/agent-profiles") if x["id"] == p["id"])
-    assert prof["credential_id"] == cid and prof["credential_provider"] == "kimi"
-    print("profile 绑定 OK:", prof["name"], "→", prof["credential_provider"])
+    # 4. RoleConfig 绑定：创建临时角色并绑定 Credential
+    role = req("POST", "/agent-roles", {
+        "name": f"cred_test_{tag}", "title": "Credential 测试", "description": "临时验收角色",
+    })
+    role_id = role["id"]
+    role_config = {
+        "agent_cli": "claude-code", "model": None, "reasoning": None,
+        "env_keys": [], "env_vars": {}, "modules": [], "skills": [], "commands": [],
+        "mcps": [], "subagents": [], "instructions_markdown": None, "runtime_image_key": None,
+        "credentials": [{"credential_id": cid, "purpose": "llm"}], "config_files": [],
+    }
+    cfg = req("PUT", f"/role-configs/global/{role_id}", role_config)
+    assert cfg["credentials"][0]["credential_id"] == cid
+    print("RoleConfig 绑定 OK:", role["name"], "→", cfg["credentials"][0]["provider"])
 
     # 5. 连接测试（假密钥 → 连接失败/401 均可，验证调用路径与无明文回显）
     t = req("POST", f"/credentials/{cid}/test")
@@ -84,14 +89,14 @@ def main():
     assert secret not in row and new_secret not in row
     print("轮换 OK: v2，指纹已变")
 
-    # 8. 解绑：PATCH credential_id=null
-    req("PATCH", f"/agent-profiles/{p['id']}", {"credential_id": None})
-    prof = next(x for x in req("GET", "/agent-profiles") if x["id"] == p["id"])
-    assert prof["credential_id"] is None
+    # 8. 解绑：RoleConfig 整体 PUT，credentials=[]
+    role_config["credentials"] = []
+    cfg = req("PUT", f"/role-configs/global/{role_id}", role_config)
+    assert cfg["credentials"] == []
     print("解绑 OK")
 
     # 清理
-    req("DELETE", f"/agent-profiles/{p['id']}")
+    req("DELETE", f"/agent-roles/{role_id}")
     psql(f"DELETE FROM credentials WHERE id='{cid}';")
     print("OK")
 

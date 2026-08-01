@@ -133,6 +133,8 @@ export interface HubIntent {
   from: string[];
   role: string;
   description: string;
+  /** 直接作为 Worker CLI 的本轮 input 注入。 */
+  prompt: string;
 }
 
 export interface HubDecision {
@@ -162,10 +164,12 @@ export function parseHubDecision(raw: string): HubDecision | null {
       if (!it || typeof it !== "object") continue;
       const i = it as Record<string, unknown>;
       if (typeof i.description !== "string" || !i.description.trim()) continue;
+      if (typeof i.prompt !== "string" || !i.prompt.trim()) continue;
       intents.push({
         from: strArray(i.from),
         role: typeof i.role === "string" && i.role.trim() ? i.role.trim() : "explore",
-        description: i.description,
+        description: i.description.slice(0, 2_000),
+        prompt: i.prompt.trim().slice(0, 20_000),
       });
     }
     return { intents };

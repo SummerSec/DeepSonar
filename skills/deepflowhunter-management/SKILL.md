@@ -45,8 +45,7 @@ python scripts/dfh-api.py projects update <projectId> --data '{"description":"..
 python scripts/dfh-api.py projects archive <projectId>
 
 # 任务（一次任务 = 一个画布；Hub 会自动跟进）
-python scripts/dfh-api.py tasks create <projectId> --title "审计 auth 模块" --module-path src/auth
-python scripts/dfh-api.py tasks create <projectId> --title "审计仓库" --repo-url https://github.com/org/repo [--ref main]
+python scripts/dfh-api.py tasks create <projectId> --title "审计 auth 模块" --content "目标是 https://github.com/org/repo 的 src/auth，自行决定如何获取材料" --allow-egress true
 python scripts/dfh-api.py tasks retry <canvasId>
 
 # Job
@@ -80,10 +79,10 @@ python scripts/dfh-api.py project-settings update <projectId> --rules '{"hubEnab
 python scripts/dfh-api.py project-settings update <projectId> --roles "explore,analyze,review"
 python scripts/dfh-api.py project-settings update <projectId> --roles null
 
-# 角色 + RoleConfig（含 model / reasoning；需 profiles:read|write）
+# 角色 + RoleConfig（含 model / reasoning；需 agents:read|write）
 python scripts/dfh-api.py roles list
 python scripts/dfh-api.py roles project <projectId>
-python scripts/dfh-api.py roles create --name security_review --prompt-template "..." [--title ...]
+python scripts/dfh-api.py roles create --name security_review --description "适合处理的任务与能力边界" [--title ...]
 python scripts/dfh-api.py roles update <roleId> --data '{"description":"..."}'
 python scripts/dfh-api.py roles delete <roleId>
 python scripts/dfh-api.py role-configs global

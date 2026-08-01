@@ -70,15 +70,6 @@ export const EventEnvelope = z.object({
 });
 export type EventEnvelope = z.infer<typeof EventEnvelope>;
 
-// ---------- 任务 payload（自由区，按 type 解释） ----------
-
-export const AuditModulePayload = z.object({
-  repo_path: z.string(),
-  module_path: z.string().optional(),
-  hints: z.array(z.string()).default([]),
-});
-export type AuditModulePayload = z.infer<typeof AuditModulePayload>;
-
 export const VerifyFindingPayload = z.object({
   finding: z.object({
     fingerprint: z.string(),
@@ -88,6 +79,26 @@ export const VerifyFindingPayload = z.object({
   }),
 });
 export type VerifyFindingPayload = z.infer<typeof VerifyFindingPayload>;
+
+// ---------- Hub 下发与任务网络策略 ----------
+
+/**
+ * 任务唯一需要声明的运行边界：Worker 是否可以访问模型网关之外的网络。
+ * 目标是什么、是否下载代码、使用 git/curl/浏览器或完全离线，均由 Agent 根据 prompt 决定。
+ */
+export const TaskNetworkPolicy = z.object({
+  allow_egress: z.boolean(),
+});
+export type TaskNetworkPolicy = z.infer<typeof TaskNetworkPolicy>;
+
+/** Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。 */
+export const HubIntentPayload = z.object({
+  from: z.array(z.string()).default([]),
+  role: z.string().min(1).max(64),
+  description: z.string().min(1).max(2_000),
+  prompt: z.string().min(1).max(20_000),
+});
+export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
 
 // fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位
 export async function computeFingerprint(

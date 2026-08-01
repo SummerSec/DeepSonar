@@ -35,10 +35,10 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
   const location = (n.body_json?.location as string) ?? null;
   // 「当前动作」（工具调用聚合，executor 直接写显示态）优先于 job 类型展示
   const lastAction = (n.body_json?.last_progress as { message?: string } | undefined)?.message ?? null;
-  // 任务 root：新任务显示自然语言内容，兼容历史任务字段
+  // 任务 root：显示自然语言内容
   const target = n.body_json?.target as Record<string, unknown> | undefined;
   const targetText = target
-    ? String(target.content ?? target.goal ?? target.module_path ?? target.repo_path ?? target.type ?? "")
+    ? String(target.content ?? "")
     : null;
 
   // 类型标签：hub job 单独标识为「中枢」

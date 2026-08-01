@@ -30,7 +30,6 @@ custom = req("POST", "/agent-roles", {
     "name": "threat_model",
     "title": "威胁建模",
     "description": "对攻击面做威胁建模，产出威胁清单事实",
-    "prompt_template": "你是威胁建模 agent。代码在 /workspace/src。\n\n当前意图：{{intent}}\n\n画布：\n{{graph}}\n\n写 /workspace/fact.json：{\"title\":\"...\",\"description\":\"...\"}（纯 JSON）",
 })
 print("新建角色:", custom["name"], custom["builtin"])
 
@@ -39,14 +38,14 @@ req("PATCH", f"/projects/{PROJECT}/settings", {"roles": {"enabled": ["explore", 
 proles = req("GET", f"/projects/{PROJECT}/roles")
 print("含自定义:", [(r["name"], r["enabled"]) for r in proles])
 
-# 6. 角色绑定 profile（audit-kimi-ponytail）
-profiles = req("GET", "/agent-profiles")
-pid = next((p["id"] for p in profiles if p["name"] == "audit-kimi-ponytail"), None)
-if pid:
-    req("PATCH", f"/projects/{PROJECT}/settings", {"profiles": {"threat_model": pid, "hub_reason": pid}})
-    proles = req("GET", f"/projects/{PROJECT}/roles")
-    tm = next(r for r in proles if r["name"] == "threat_model")
-    print("threat_model 绑定 profile:", tm["profile_id"] == pid)
+# 6. 角色运行配置直接写 RoleConfig
+cfg = req("PUT", f"/projects/{PROJECT}/role-configs/{custom['id']}", {
+    "agent_cli": "claude-code", "model": None, "reasoning": None,
+    "env_keys": [], "env_vars": {}, "modules": [], "skills": [], "commands": [],
+    "mcps": [], "subagents": [], "instructions_markdown": "输出必须包含威胁与证据的对应关系。",
+    "runtime_image_key": None, "credentials": [], "config_files": [],
+})
+print("RoleConfig 已保存:", cfg["role_id"] == custom["id"])
 
 # 7. 内置角色不可删
 try:
@@ -56,8 +55,9 @@ try:
 except urllib.error.HTTPError as e:
     print("内置删除被拒:", e.code)
 
-# 8. 恢复默认（null）+ 删自定义角色
-req("PATCH", f"/projects/{PROJECT}/settings", {"roles": {"enabled": None}, "profiles": {"threat_model": None, "hub_reason": None}})
+# 8. 删除项目 RoleConfig，恢复默认角色并删自定义角色
+req("DELETE", f"/projects/{PROJECT}/role-configs/{custom['id']}")
+req("PATCH", f"/projects/{PROJECT}/settings", {"roles": {"enabled": None}})
 req("DELETE", f"/agent-roles/{custom['id']}")
 proles = req("GET", f"/projects/{PROJECT}/roles")
 print("恢复默认:", [(r["name"], r["enabled"], r["default_enabled"]) for r in proles])

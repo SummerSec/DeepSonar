@@ -60,6 +60,8 @@ export interface ProjectRules {
   hubEnabled: boolean;
   maxHubRounds: number;
   maxIntentsPerDecision: number;
+  /** Worker 是否可访问模型网关之外的网络；任务创建时可覆盖并冻结。 */
+  allowEgress: boolean;
 }
 
 /** env 兜底默认值（全局规则未配置时的最终回落） */
@@ -74,6 +76,7 @@ function envDefaultRules(): ProjectRules {
     hubEnabled: config.hub.enabled,
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
+    allowEgress: false,
   };
 }
 
@@ -92,6 +95,7 @@ export async function globalRules(db: typeof sql): Promise<ProjectRules> {
     hubEnabled: (gr.hubEnabled as boolean) ?? env.hubEnabled,
     maxHubRounds: (gr.maxHubRounds as number) ?? env.maxHubRounds,
     maxIntentsPerDecision: (gr.maxIntentsPerDecision as number) ?? env.maxIntentsPerDecision,
+    allowEgress: (gr.allowEgress as boolean) ?? env.allowEgress,
   };
 }
 
@@ -116,6 +120,7 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
     hubEnabled: pick("hubEnabled"),
     maxHubRounds: pick("maxHubRounds"),
     maxIntentsPerDecision: pick("maxIntentsPerDecision"),
+    allowEgress: pick("allowEgress"),
   };
 }
 
@@ -126,7 +131,6 @@ export interface RoleDef {
   name: string; // 即 job.type
   title: string;
   description: string;
-  prompt_template: string;
   builtin: boolean;
 }
 
@@ -136,7 +140,7 @@ export interface RoleDef {
  */
 export async function rolesForProject(db: typeof sql, projectId: string): Promise<RoleDef[]> {
   const [all, [p]] = await Promise.all([
-    db`SELECT id, name, title, description, prompt_template, builtin FROM agent_roles
+    db`SELECT id, name, title, description, builtin FROM agent_roles
        WHERE kind = 'role' ORDER BY builtin DESC, name`,
     db`SELECT config_json FROM projects WHERE id = ${projectId}`,
   ]);
@@ -148,17 +152,19 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
   return rows.filter((r) => set.has(r.name));
 }
 
-// ---------- Agent profile（决策层）：项目绑定 → 冻结快照（下一 job 生效，历史可复现） ----------
+// ---------- 角色运行快照：RoleConfig / 平台缺省 → Job 创建时冻结 ----------
 
 /** 与 agentbox-sdk AgentReasoningEffort 对齐；null = provider 默认 */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
-export interface AgentProfileSnapshot {
+export interface AgentRuntimeSnapshot {
   name: string;
   agent_cli: string;
   model: string | null;
   /** 思考/推理强度（下一 job 生效，随快照冻结） */
   reasoning: ReasoningEffort | null;
+  /** RoleConfig 内声明的非敏感环境变量。 */
+  env_vars: Record<string, string>;
   env_keys: string[];
   /** 绑定的 Provider Credential（§6.2）：快照只存 id/provider，密钥运行时解密，不进快照 */
   credential_id: string | null;
@@ -171,69 +177,15 @@ export interface AgentProfileSnapshot {
   commands: unknown[];
   mcps: unknown[];
   subagents: unknown[];
-  prompt_suffix: string | null;
-}
-
-/** projects.config_json.profiles = { audit_module?: id, verify_finding?: id, default?: id } */
-export async function resolveProfileSnapshot(
-  db: typeof sql,
-  projectId: string,
-  jobType: string,
-): Promise<AgentProfileSnapshot | null> {
-  const [p] = await db`SELECT config_json FROM projects WHERE id = ${projectId}`;
-  const bindings = (((p?.config_json as Record<string, unknown>)?.profiles ?? {}) ?? {}) as Record<string, string>;
-  // audit 是 Hub 可派发角色，沿用历史 audit_module profile 绑定，避免用户重复配置。
-  const profileId = bindings[jobType] ?? (jobType === "audit" ? bindings.audit_module : undefined) ?? bindings.default;
-  if (!profileId) return null;
-  const [row] = await db`SELECT * FROM agent_profiles WHERE id = ${profileId}`;
-  if (!row) return null;
-
-  // Git 模块展开（§8.2）：勾选模块 → embedded skills/commands，与手写 JSON 合并（按 name 去重，手写优先）
-  const modules = (row.modules_json as string[]) ?? [];
-  const expanded = await expandModules(modules);
-  if (expanded.missing.length > 0) {
-    console.warn(`[profile] 模块未下发（不存在或来源未信任/已禁用）: ${expanded.missing.join(", ")}`);
-  }
-  const manualSkills = (row.skills_json as { name?: string }[]) ?? [];
-  const manualCommands = (row.commands_json as { name?: string }[]) ?? [];
-  const skills = [
-    ...manualSkills,
-    ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name)),
-  ];
-  const commands = [
-    ...manualCommands,
-    ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name)),
-  ];
-
-  // Profile 绑定的 Provider Credential（§6.2；purpose='llm' 取其第一个）
-  const [cred] = await db`
-    SELECT c.id, c.provider FROM profile_credentials pc
-    JOIN credentials c ON c.id = pc.credential_id
-    WHERE pc.profile_id = ${row.id as string} AND pc.purpose = 'llm'
-    LIMIT 1`;
-
-  const reasoningRaw = (row.reasoning as string | null) ?? null;
-  const reasoning: ReasoningEffort | null =
-    reasoningRaw === "low" || reasoningRaw === "medium" || reasoningRaw === "high" || reasoningRaw === "xhigh"
-      ? reasoningRaw
-      : null;
-
-  return {
-    name: row.name as string,
-    agent_cli: row.agent_cli as string,
-    model: (row.model as string) ?? null,
-    reasoning,
-    env_keys: (row.env_keys as string[]) ?? [],
-    credential_id: (cred?.id as string) ?? null,
-    credential_provider: (cred?.provider as string) ?? null,
-    modules,
-    skill_revisions: expanded.revisions,
-    skills,
-    commands,
-    mcps: (row.mcps_json as unknown[]) ?? [],
-    subagents: (row.subagents_json as unknown[]) ?? [],
-    prompt_suffix: (row.prompt_suffix as string) ?? null,
-  };
+  /** 角色长期职责，随 Job 冻结并渲染为 /workspace/AGENTS.md 与 CLAUDE.md。 */
+  role_description: string;
+  /** RoleConfig 自定义的长期指令；任务内容不得写入这里。 */
+  instructions_markdown: string | null;
+  /** Provider 项目配置文件，随 Job 冻结后写入 /workspace。 */
+  config_files: { path: string; content: string; content_sha256: string }[];
+  role_config_id: string | null;
+  role_config_version: number | null;
+  runtime_image_key: string | null;
 }
 
 // ---------- Job 创建（含 Plane issue 防双跑唯一约束） ----------
@@ -255,14 +207,14 @@ export interface CreateJobInput {
 
 export async function createJob(input: CreateJobInput) {
   try {
-    // 冻结 profile 快照：改 profile 只影响之后创建的 job（下一 job 生效，历史可复现）
+    // 冻结角色运行快照：配置变更只影响之后创建的 Job。
     const snapshot = await resolveAgentSnapshotForJob(sql, input.projectId, input.type);
     const [job] = await sql`
       INSERT INTO jobs ${sql({
         project_id: input.projectId,
         canvas_id: input.canvasId ?? null,
         plane_issue_id: input.planeIssueId ?? null,
-        agent_snapshot_json: (snapshot ?? null) as never,
+        agent_snapshot_json: snapshot as never,
         parent_job_id: input.parentJobId ?? null,
         finding_id: input.findingId ?? null,
         type: input.type,
@@ -303,6 +255,17 @@ export interface EnsureCanvasInput {
  */
 export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<string> {
   return sql.begin(async (tx) => {
+    const requestedPolicy = (input.target.network_policy ?? {}) as Record<string, unknown>;
+    const effectiveRules = await rulesForProject(tx as unknown as typeof sql, input.projectId);
+    const target = {
+      ...input.target,
+      network_policy: {
+        allow_egress:
+          typeof requestedPolicy.allow_egress === "boolean"
+            ? requestedPolicy.allow_egress
+            : effectiveRules.allowEgress,
+      },
+    };
     let canvasId: string | null = null;
     let created = false;
 
@@ -313,7 +276,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
           project_id: input.projectId,
           plane_issue_id: input.planeIssueId,
           title: input.title,
-          target_json: input.target as never,
+          target_json: target as never,
         })}
         ON CONFLICT (plane_issue_id) WHERE plane_issue_id IS NOT NULL DO NOTHING
         RETURNING id`;
@@ -331,7 +294,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
           project_id: input.projectId,
           plane_issue_id: null,
           title: input.title,
-          target_json: input.target as never,
+          target_json: target as never,
           trigger_source: input.triggerSource,
           trigger_event_id: input.triggerEventId,
           trigger_payload_json: (input.triggerPayload ?? {}) as never,
@@ -357,7 +320,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
           project_id: input.projectId,
           plane_issue_id: null,
           title: input.title,
-          target_json: input.target as never,
+          target_json: target as never,
         })}
         RETURNING id`;
       canvasId = row.id as string;
@@ -372,7 +335,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
           job_id: null,
           node_type: "root",
           title: input.title,
-          body_json: { type: (input.target.type as string) ?? null, target: input.target } as never,
+          body_json: { target } as never,
           x: 100,
           y: 100,
           status: "active",
@@ -558,7 +521,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     // hub 读图后的决策：complete=目标达成；intents=派发角色 job（§8.3）
     const p = payload as {
       complete?: { from?: string[]; description?: string };
-      intents?: { from?: string[]; role?: string; description?: string }[];
+      intents?: { from?: string[]; role?: string; description?: string; prompt?: string }[];
     };
     const canvasId = (job.canvas_id as string) ?? null;
     if (!canvasId) return;
@@ -587,7 +550,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     const enabledNames = new Set(roles.map((r) => r.name));
 
     for (const it of (p.intents ?? []).slice(0, rules.maxIntentsPerDecision)) {
-      if (!it.description?.trim()) continue;
+      if (!it.description?.trim() || !it.prompt?.trim()) continue;
       if (roles.length === 0) {
         console.warn(`[hub] 项目 ${job.project_id} 无启用角色，跳过意图派发`);
         break;
@@ -612,11 +575,15 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         INSERT INTO jobs ${tx({
           project_id: job.project_id as string,
           canvas_id: canvasId,
-          agent_snapshot_json: (snapshot ?? null) as never,
+          agent_snapshot_json: snapshot as never,
           type: role,
           priority: (job.priority as number) + 1,
           payload_json: {
-            intent: { description: it.description, from: it.from ?? [] },
+            intent: {
+              description: it.description,
+              prompt: it.prompt.trim(),
+              from: it.from ?? [],
+            },
             ...(hubFollowup ? { hub_followup: true } : {}),
           } as never,
           timeout_sec: rules.auditTimeoutSec,
@@ -703,11 +670,11 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
     return;
   }
 
-  // profile 快照：优先按 verify_finding 绑定重新解析；无绑定则继承父 job 快照（同一任务同一 agent）
-  const snapshot =
-    (await resolveAgentSnapshotForJob(tx as unknown as typeof sql, job.project_id as string, "verify_finding")) ??
-    (job.agent_snapshot_json as AgentProfileSnapshot | null) ??
-    null;
+  const snapshot = await resolveAgentSnapshotForJob(
+    tx as unknown as typeof sql,
+    job.project_id as string,
+    "verify_finding",
+  );
 
   const [verifyJob] = await tx`
     INSERT INTO jobs ${tx({
@@ -882,7 +849,7 @@ async function maybeTriggerHub(
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
       canvas_id: job.canvas_id as string,
-      agent_snapshot_json: (snapshot ?? null) as never,
+      agent_snapshot_json: snapshot as never,
       type: "hub_reason",
       priority: ((job.priority as number) ?? 0) + 2, // hub 优先于普通角色 job，尽快收敛图
       payload_json: { trigger: options.trigger ?? { kind: "graph_progress" } } as never,
@@ -1014,25 +981,25 @@ export function scanConfigContent(content: string): string | null {
   return null;
 }
 
-/** 历史 job 类型 → agent_roles.name */
-export function mapLegacyType(jobType: string): string {
+/** 系统 Job 类型对应的角色配置名。 */
+export function roleNameForJobType(jobType: string): string {
   if (jobType === "audit_module") return "audit";
   if (jobType === "verify_finding") return "verify";
   return jobType;
 }
 
 /**
- * 解析 RoleConfig 并适配为当前 executor 使用的 AgentProfileSnapshot 形状。
- * 项目级 → 全局；无配置返回 null（调用方再回落 profile / env）。
+ * 解析 RoleConfig 并冻结为 Executor 运行快照。
+ * 项目级 → 全局 → 平台缺省，无论哪一层都会产生完整快照。
  */
-export async function resolveRoleConfigAsProfileSnapshot(
+export async function resolveAgentSnapshotForJob(
   db: typeof sql,
   projectId: string,
   jobType: string,
-): Promise<AgentProfileSnapshot | null> {
-  const roleName = mapLegacyType(jobType);
-  const [role] = await db`SELECT id, name FROM agent_roles WHERE name = ${roleName}`;
-  if (!role) return null;
+): Promise<AgentRuntimeSnapshot> {
+  const roleName = roleNameForJobType(jobType);
+  const [role] = await db`SELECT id, name, description FROM agent_roles WHERE name = ${roleName}`;
+  if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);
 
   const [projectCfg] = await db`
     SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`;
@@ -1040,15 +1007,14 @@ export async function resolveRoleConfigAsProfileSnapshot(
     ? [undefined]
     : await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`;
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
-  if (!cfg) return null;
 
-  const modules = (cfg.modules_json as string[]) ?? [];
+  const modules = (cfg?.modules_json as string[]) ?? [];
   const expanded = await expandModules(modules);
   if (expanded.missing.length > 0) {
     console.warn(`[role-config] 模块未下发: ${expanded.missing.join(", ")}`);
   }
-  const manualSkills = (cfg.skills_json as { name?: string }[]) ?? [];
-  const manualCommands = (cfg.commands_json as { name?: string }[]) ?? [];
+  const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
+  const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
   const skills = [
     ...manualSkills,
     ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name)),
@@ -1058,26 +1024,33 @@ export async function resolveRoleConfigAsProfileSnapshot(
     ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name)),
   ];
 
-  const [llm] = await db`
-    SELECT c.id, c.provider, c.status, c.project_id AS cred_project_id
-    FROM role_credentials rc
-    JOIN credentials c ON c.id = rc.credential_id
-    WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
-    LIMIT 1`;
+  const [llm] = cfg
+    ? await db`
+        SELECT c.id, c.provider, c.status, c.project_id AS cred_project_id
+        FROM role_credentials rc
+        JOIN credentials c ON c.id = rc.credential_id
+        WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
+        LIMIT 1`
+    : [undefined];
   if (llm) {
     const credProject = (llm.cred_project_id as string | null) ?? null;
-    if (cfg.project_id != null && credProject && credProject !== projectId) {
+    if (cfg?.project_id != null && credProject && credProject !== projectId) {
       throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
     }
-    if (cfg.project_id == null && credProject) {
+    if (cfg?.project_id == null && credProject) {
       throw new Error(`全局 RoleConfig 只能绑定全局 Credential`);
     }
     if ((llm.status as string) !== "active") {
       throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
     }
   }
+  const configFiles = cfg
+    ? await db`
+        SELECT path, content, content_sha256 FROM role_config_files
+        WHERE role_config_id = ${cfg.id as string} ORDER BY path`
+    : [];
 
-  const reasoningRaw = (cfg.reasoning as string | null) ?? null;
+  const reasoningRaw = (cfg?.reasoning as string | null) ?? null;
   const reasoning: ReasoningEffort | null =
     reasoningRaw === "low" || reasoningRaw === "medium" || reasoningRaw === "high" || reasoningRaw === "xhigh"
       ? reasoningRaw
@@ -1085,29 +1058,24 @@ export async function resolveRoleConfigAsProfileSnapshot(
 
   return {
     name: roleName,
-    agent_cli: (cfg.agent_cli as string) ?? "claude-code",
-    model: (cfg.model as string) ?? null,
+    agent_cli: (cfg?.agent_cli as string) ?? config.runtime.agentProvider,
+    model: (cfg?.model as string) ?? config.runtime.agentModel ?? null,
     reasoning,
-    env_keys: (cfg.env_keys as string[]) ?? [],
+    env_vars: (cfg?.env_vars_json as Record<string, string>) ?? config.runtime.agentEnv,
+    env_keys: (cfg?.env_keys as string[]) ?? [],
     credential_id: (llm?.id as string) ?? null,
     credential_provider: (llm?.provider as string) ?? null,
     modules,
     skill_revisions: expanded.revisions,
     skills,
     commands,
-    mcps: (cfg.mcps_json as unknown[]) ?? [],
-    subagents: (cfg.subagents_json as unknown[]) ?? [],
-    prompt_suffix: (cfg.prompt_suffix as string) ?? null,
+    mcps: (cfg?.mcps_json as unknown[]) ?? [],
+    subagents: (cfg?.subagents_json as unknown[]) ?? [],
+    role_description: (role.description as string) ?? roleName,
+    instructions_markdown: (cfg?.instructions_markdown as string) ?? null,
+    config_files: configFiles as unknown as { path: string; content: string; content_sha256: string }[],
+    role_config_id: (cfg?.id as string) ?? null,
+    role_config_version: (cfg?.version as number) ?? null,
+    runtime_image_key: (cfg?.runtime_image_key as string) ?? null,
   };
-}
-
-/** job 创建时解析快照：优先 RoleConfig，回落旧 Profile 绑定 */
-export async function resolveAgentSnapshotForJob(
-  db: typeof sql,
-  projectId: string,
-  jobType: string,
-): Promise<AgentProfileSnapshot | null> {
-  const fromRole = await resolveRoleConfigAsProfileSnapshot(db, projectId, jobType);
-  if (fromRole) return fromRole;
-  return resolveProfileSnapshot(db, projectId, jobType);
 }

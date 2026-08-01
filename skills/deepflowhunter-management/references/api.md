@@ -12,7 +12,7 @@ Base URL：`DFH_BASE_URL`（默认 `http://localhost:3100`）
 
 Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出的写操作默认 `admin`，读操作只需已认证。
 
-**注意**：当前实现中「角色 / RoleConfig / 设置 / 凭据」均使用 `profiles:read` / `profiles:write`（**没有**独立的 `roles:*` scope）。
+**注意**：「角色 / RoleConfig / 设置 / 凭据」统一使用 `agents:read` / `agents:write`。
 
 ## 端点一览
 
@@ -40,7 +40,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, repo_url? \| repo_path?, ref?}`（content 必填）→ 幂等，返回 job/canvas |
+| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, allow_egress?}`；省略出网字段时继承项目默认值 |
 | POST | /tasks/:canvasId/retry | jobs:control | 同画布重试（复用同一 canvas） |
 | POST | /projects/:id/events | tasks:write | 外部事件 `{source, event_id, event_type, title?, content?, data?}`，`source+event_id` 幂等 |
 | GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布） |
@@ -73,20 +73,20 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /global-settings | profiles:read | `{rules, effective_rules}` |
-| PATCH | /global-settings | profiles:write | `{rules: {...}}` 合并 |
-| GET | /projects/:id/settings | profiles:read | 项目规则覆盖 + 角色启用 |
-| PATCH | /projects/:id/settings | profiles:write | `{rules?, roles?: {enabled: string[] \| null}}`；`enabled: null` 恢复默认 |
+| GET | /global-settings | agents:read | `{rules, effective_rules}` |
+| PATCH | /global-settings | agents:write | `{rules: {...}}` 合并 |
+| GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 |
+| PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}}`；`enabled: null` 恢复默认 |
 
 ### 角色注册表（agent_roles）
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /agent-roles | profiles:read | 全部角色（含 system prompt） |
-| POST | /agent-roles | profiles:write | `{name, prompt_template, title?, description?}`；name 即 job.type |
-| PATCH | /agent-roles/:id | profiles:write | 部分更新（name 不可改） |
-| DELETE | /agent-roles/:id | profiles:write | 内置角色 409 |
-| GET | /projects/:id/roles | profiles:read | 项目视角启用状态 |
+| GET | /agent-roles | agents:read | 全部角色及 Hub 可见职责描述 |
+| POST | /agent-roles | agents:write | `{name, title?, description?}`；name 即 job.type |
+| PATCH | /agent-roles/:id | agents:write | 部分更新（name 不可改） |
+| DELETE | /agent-roles/:id | agents:write | 内置角色 409 |
+| GET | /projects/:id/roles | agents:read | 项目视角启用状态 |
 
 ### RoleConfig（角色 → agent 配置；声明式全量替换）
 
@@ -104,7 +104,7 @@ PUT body：
   "commands": [],
   "mcps": [],
   "subagents": [],
-  "prompt_suffix": "string | null",
+  "instructions_markdown": "string | null",
   "runtime_image_key": "string | null",
   "credentials": [{ "credential_id": "uuid", "purpose": "llm" }],
   "config_files": [{ "path": ".claude/settings.json", "content": "{...}" }]
@@ -112,15 +112,15 @@ PUT body：
 ```
 
 保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。  
-Job 创建时快照**优先 RoleConfig**（项目 → 全局），再回落遗留 Profile。
+Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /role-configs/global | profiles:read | 全局缺省清单（含 credentials / config_files） |
-| PUT | /role-configs/global/:roleId | profiles:write | 全局 upsert（version +1） |
-| GET | /projects/:id/role-configs | profiles:read | 各角色来源 project / global / none |
-| PUT | /projects/:id/role-configs/:roleId | profiles:write | 项目覆盖；普通角色须已启用（409） |
-| DELETE | /projects/:id/role-configs/:roleId | profiles:write | 删除覆盖，回落全局 |
+| GET | /role-configs/global | agents:read | 全局缺省清单（含 credentials / config_files） |
+| PUT | /role-configs/global/:roleId | agents:write | 全局 upsert（version +1） |
+| GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none |
+| PUT | /projects/:id/role-configs/:roleId | agents:write | 项目覆盖；普通角色须已启用（409） |
+| DELETE | /projects/:id/role-configs/:roleId | agents:write | 删除覆盖，回落全局 |
 
 ### Skill 模块源
 
@@ -137,12 +137,12 @@ Job 创建时快照**优先 RoleConfig**（项目 → 全局），再回落遗�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /credentials | profiles:read | 列表（指纹 / last4 / metadata） |
-| POST | /credentials | profiles:write | `{name, provider, secret, kind?, project_id?, metadata?}` |
-| PATCH | /credentials/:id | profiles:write | 非敏感：`{name?, project_id?, metadata?}`（可改 base_url） |
-| POST | /credentials/:id/rotate | profiles:write | `{secret}` 轮换密钥 |
-| POST | /credentials/:id/status | profiles:write | `{status: active\|disabled\|rotation_required}` |
-| POST | /credentials/:id/test | profiles:read | 连接测试（无 body） |
+| GET | /credentials | agents:read | 列表（指纹 / last4 / metadata） |
+| POST | /credentials | agents:write | `{name, provider, secret, kind?, project_id?, metadata?}` |
+| PATCH | /credentials/:id | agents:write | 非敏感：`{name?, project_id?, metadata?}`（可改 base_url） |
+| POST | /credentials/:id/rotate | agents:write | `{secret}` 轮换密钥 |
+| POST | /credentials/:id/status | agents:write | `{status: active\|disabled\|rotation_required}` |
+| POST | /credentials/:id/test | agents:read | 连接测试（无 body） |
 
 ### Plane 集成（可选）
 
@@ -154,12 +154,11 @@ Job 创建时快照**优先 RoleConfig**（项目 → 全局），再回落遗�
 | GET | /plane-info | integrations:read | 连接信息 |
 | POST | /webhooks/plane | 豁免 | Webhook 入口（签名校验） |
 
-### 管理面 / 遗留（本 Skill 默认不使用）
+### 管理面
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | * | /tokens* | tokens:manage | API Token 管理 |
-| * | /agent-profiles* | profiles:* | 遗留 Profile 体系（优先用 RoleConfig） |
 | GET | /audit-logs | admin | 审计日志 |
 | GET | /ws | tasks:read | Job 实时流 WebSocket |
 

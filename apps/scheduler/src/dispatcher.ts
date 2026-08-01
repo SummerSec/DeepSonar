@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { ingestEvent, transitionJob } from "./core.js";
+import { ingestEvent, rulesForProject, transitionJob, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
@@ -78,13 +78,27 @@ async function runJob(jobId: string) {
     // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
     // provision 纳入同一异常保护 + 独立超时（§8.3：provision 异常不得让 job 永久卡住）
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
+    const [canvas] = job.canvas_id
+      ? await sql`SELECT target_json FROM canvases WHERE id = ${job.canvas_id as string}`
+      : [undefined];
+    const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
+    const networkPolicy = (target.network_policy ?? {}) as Record<string, unknown>;
+    const projectRules = await rulesForProject(sql, job.project_id as string);
+    const allowEgress =
+      useReal &&
+      job.type !== "hub_reason" &&
+      ((networkPolicy.allow_egress as boolean | undefined) ?? projectRules.allowEgress);
+    const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
+    if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+    const runtimeImage = snapshot.runtime_image_key ?? config.runtime.imageAudit;
     if (!(await transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
     handle = await withTimeout(
       runner.provision({
         jobId,
-        image: config.runtime.imageAudit,
-        env: useReal ? config.runtime.agentEnv : undefined,
-        network: useReal ? "restricted" : "none",
+        image: runtimeImage,
+        env: useReal ? { DFH_ALLOW_EGRESS: allowEgress ? "1" : "0" } : undefined,
+        network: useReal ? (allowEgress ? "egress" : "restricted") : "none",
+        gatewayUpstreamUrl: useReal && !allowEgress ? config.gateway.sandboxUrl : undefined,
         limits: config.runtime.sandboxLimits,
       }),
       config.timeouts.provisionSec * 1000,
@@ -210,6 +224,7 @@ async function executeFake(jobId: string, type: string) {
               from: refs.map((r) => r.id as string),
               role: "audit",
               description: "根据任务目标确定审计范围和方法，执行白盒安全审计并产出结构化 Finding",
+              prompt: "读取任务目标，自行决定是否以及如何获取目标材料，执行白盒安全审计并产出可验证 Finding。",
             },
           ],
         });
@@ -225,6 +240,7 @@ async function executeFake(jobId: string, type: string) {
               from: refs.map((r) => r.id as string),
               role: "test",
               description: "搭建最小运行环境并编写 PoC，动态复现已确认风险，记录利用条件与影响",
+              prompt: "针对画布中已确认的风险搭建最小运行环境并编写 PoC，动态复现后记录利用条件与影响。",
             },
           ],
         });
@@ -250,6 +266,7 @@ async function executeFake(jobId: string, type: string) {
               from: refs.map((r) => r.id as string),
               role: "explore",
               description: "假 hub：探索代码，收集与审计目标相关的事实",
+              prompt: "围绕画布任务目标探索可用材料，收集与审计目标直接相关的增量事实。",
             },
           ],
         });

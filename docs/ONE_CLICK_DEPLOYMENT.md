@@ -91,10 +91,10 @@ http://127.0.0.1:8080
 
 | 用途 | Scope |
 |------|-------|
-| 浏览控制台 | `projects:read,tasks:read,findings:read,profiles:read,skills:read,integrations:read` |
+| 浏览控制台 | `projects:read,tasks:read,findings:read,agents:read,skills:read,integrations:read` |
 | 创建任务或事件 | `tasks:write` |
 | 控制 Job | `jobs:control` |
-| 管理 Agent/Skill | `profiles:write,skills:write` |
+| 管理 Agent/Skill | `agents:write,skills:write` |
 | 管理 Token | `tokens:manage` |
 
 外部事件 Token 应绑定到单一项目，并只授予 `tasks:write`。

@@ -21,7 +21,6 @@ import { RoleConfigEditor } from "./RoleConfigEditor";
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
  * 角色注册表 + 角色运行配置（全局缺省 / 项目覆盖）+ 规则配置 + 模块源管理。
- * 旧 Profile 页面已移除；角色直接维护全局缺省配置，项目只保存覆盖项。
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
@@ -38,7 +37,6 @@ interface RoleForm {
   name: string;
   title: string;
   description: string;
-  prompt_template: string;
   builtin: boolean;
   kind: "hub" | "system" | "role";
 }
@@ -50,17 +48,6 @@ const EMPTY_ROLE: RoleForm = {
   description: "",
   builtin: false,
   kind: "role",
-  prompt_template: `你是{{role}} agent。代码在 /workspace/src。
-
-当前意图：{{intent}}
-
-画布已有内容（YAML，不要重复其中的事实）：
-{{graph}}
-
-要求：
-1. 围绕意图工作，产出新事实写 /workspace/fact.json：{"title":"...","description":"..."}
-2. 完成后写 /workspace/done.json：{"summary":"..."}
-3. 文件必须是纯 JSON，不要用 markdown 代码围栏包裹`,
 };
 
 export function SettingsPanel({
@@ -118,7 +105,7 @@ export function SettingsPanel({
         .agentRoles()
         .then((list) =>
           setRoles(
-            list.map((r) => ({ ...r, enabled: false, default_enabled: false, profile_id: null })),
+            list.map((r) => ({ ...r, enabled: false, default_enabled: false })),
           ),
         )
         .catch(() => {});
@@ -171,6 +158,7 @@ export function SettingsPanel({
       hubEnabled: rules.hubEnabled,
       maxHubRounds: rules.maxHubRounds,
       maxIntentsPerDecision: rules.maxIntentsPerDecision,
+      allowEgress: rules.allowEgress,
     };
     try {
       if (projectId) {
@@ -186,7 +174,7 @@ export function SettingsPanel({
     }
   };
 
-  // ---------- 角色（hub 可下发清单 + 模板编辑 + 运行配置） ----------
+  // ---------- 角色（hub 可下发清单 + 运行配置） ----------
 
   /** 勾选启用：立即保存整个 enabled 清单（首次勾选后从默认模式转为显式清单） */
   const toggleRole = async (role: ProjectRole) => {
@@ -233,7 +221,6 @@ export function SettingsPanel({
       const body = {
         title: roleForm.title.trim(),
         description: roleForm.description.trim(),
-        prompt_template: roleForm.prompt_template,
       };
       if (roleForm.id) {
         await api.updateRole(roleForm.id, body);
@@ -330,13 +317,12 @@ export function SettingsPanel({
                   name: r.name,
                   title: r.title,
                   description: r.description,
-                  prompt_template: r.prompt_template,
                   builtin: r.builtin,
                   kind: r.kind,
                 })
               }
               className="flex items-center gap-1.5 text-left"
-              title="编辑 prompt 模板"
+              title="编辑角色职责"
             >
               <span className="font-mono text-[13px] font-medium text-zinc-100">{r.name}</span>
               <span className="text-[11px] text-zinc-500">{r.title}</span>
@@ -476,6 +462,22 @@ export function SettingsPanel({
             )}
 
             <section className={projectId ? "border-t border-ink-800 pt-3" : ""}>
+              <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">网络边界</div>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={rules.allowEgress}
+                  onChange={(e) => setRules({ ...rules, allowEgress: e.target.checked })}
+                  className="accent-emerald-500"
+                />
+                <span className="text-[14px] text-zinc-200">允许 Worker 访问外部网络</span>
+              </label>
+              <div className="mt-1 text-[12px] text-zinc-600">
+                这是{projectId ? "项目" : "全局"}默认值；任务创建时可覆盖，最终值会冻结到画布。Hub 始终不代 Worker 访问目标。
+              </div>
+            </section>
+
+            <section className="border-t border-ink-800 pt-3">
               <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                 hub 循环（图语义自驱，§8.3）
               </div>
@@ -543,7 +545,7 @@ export function SettingsPanel({
               ) : (
                 <>
                   系统角色由调度器调用，工作角色由 Hub 按意图派发。先为需要使用的角色设置<strong className="text-zinc-300">可信的全局运行配置</strong>，
-                  再由各项目决定启用范围或少量覆盖。点击角色名称编辑职责与提示词。
+                  再由各项目决定启用范围或少量覆盖。点击角色名称编辑 Hub 可见的职责描述。
                 </>
               )}
             </div>
@@ -579,7 +581,7 @@ export function SettingsPanel({
                   {roleForm.id ? `编辑 ${roleForm.name}` : "新建自定义角色"}
                   {roleForm.id && roleForm.kind !== "role" && (
                     <span className="ml-2 rounded border border-ink-700 px-1 text-[11px] normal-case text-zinc-500">
-                      {roleForm.kind === "hub" ? "中枢" : "系统"}角色：仅可改 prompt / 描述
+                      {roleForm.kind === "hub" ? "中枢" : "系统"}角色：仅可改职责描述
                     </span>
                   )}
                 </span>
@@ -620,26 +622,6 @@ export function SettingsPanel({
                   rows={2}
                   className={`${inputCls} resize-y`}
                   placeholder="这个角色擅长什么、适合接什么意图"
-                />
-              </div>
-              <div>
-                <label className={labelCls}>
-                  prompt 模板（占位符：
-                  {roleForm.name === "hub_reason"
-                    ? "{{graph}} 整图 / {{roles}} 角色清单 / {{max_intents}} 意图上限"
-                    : roleForm.name === "audit_module"
-                      ? "{{module_path}} 审计模块"
-                      : roleForm.name === "verify" || roleForm.name === "verify_finding"
-                        ? "{{finding_title}} / {{finding_location}} / {{finding_summary}}"
-                        : "{{graph}} 整图 / {{intent}} 意图 / {{role}} 角色名"}
-                  ）
-                </label>
-                <textarea
-                  value={roleForm.prompt_template}
-                  onChange={(e) => setRoleForm({ ...roleForm, prompt_template: e.target.value })}
-                  rows={10}
-                  spellCheck={false}
-                  className={`${inputCls} resize-y leading-relaxed`}
                 />
               </div>
               <div className="mt-1 flex gap-2">

@@ -41,7 +41,7 @@ interface ConfigForm {
   credential_id: string; // "" = 不绑定（退回 env_keys 过渡路径）
   env_keys: string; // 逗号分隔
   env_pairs: EnvPair[]; // 非敏感环境变量键值对
-  prompt_suffix: string;
+  instructions_markdown: string;
   runtime_image_key: string;
   modules: string[]; // 勾选的 Git 模块（"<source_id>:<module_id>"）
   skills: string; // JSON 文本
@@ -58,7 +58,7 @@ const EMPTY: ConfigForm = {
   credential_id: "",
   env_keys: "",
   env_pairs: [],
-  prompt_suffix: "",
+  instructions_markdown: "",
   runtime_image_key: "",
   modules: [],
   skills: "[]",
@@ -79,7 +79,7 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
     env_keys: (cfg.env_keys ?? []).join(", "),
     env_pairs: Object.entries(cfg.env_vars_json ?? {}).map(([key, value]) => ({ key, value })),
-    prompt_suffix: cfg.prompt_suffix ?? "",
+    instructions_markdown: cfg.instructions_markdown ?? "",
     runtime_image_key: cfg.runtime_image_key ?? "",
     modules: cfg.modules_json ?? [],
     skills: JSON.stringify(cfg.skills_json ?? [], null, 2),
@@ -178,7 +178,7 @@ export function RoleConfigEditor({
         commands: parseJsonArray(form.commands),
         mcps: parseJsonArray(form.mcps),
         subagents: parseJsonArray(form.subagents),
-        prompt_suffix: form.prompt_suffix.trim() || null,
+        instructions_markdown: form.instructions_markdown.trim() || null,
         runtime_image_key: form.runtime_image_key.trim() || null,
         credentials: form.credential_id
           ? [{ credential_id: form.credential_id, purpose: "llm" }]
@@ -273,7 +273,7 @@ export function RoleConfigEditor({
             <CredentialPicker credentials={credentials} value={form.credential_id} onChange={(credential_id) => setForm({ ...form, credential_id })} />
             <p className="mt-1.5 text-[10px] leading-5 text-zinc-600">单次运行绑定一个 LLM 凭据；可按名称、Provider 或尾号搜索。</p>
           </div>
-          {form.credential_id === "" && <div><label className={labelCls}>env 引用（过渡路径）</label><input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} placeholder="逗号分隔变量名，值取调度器环境" /></div>}
+          {form.credential_id === "" && <div><label className={labelCls}>调度器环境变量引用</label><input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} placeholder="逗号分隔变量名，值取调度器环境" /></div>}
           <div>
             <label className={labelCls}>非敏感环境变量</label>
             <div className="flex flex-col gap-1.5">
@@ -282,7 +282,7 @@ export function RoleConfigEditor({
             </div>
             <div className="mt-1 text-[11px] leading-5 text-zinc-600">敏感值必须使用 Credential，疑似密钥名会被后端拒绝。</div>
           </div>
-          <div><label className={labelCls}>提示词后缀</label><textarea value={form.prompt_suffix} onChange={(e) => setForm({ ...form, prompt_suffix: e.target.value })} rows={3} className={`${inputCls} resize-y`} placeholder="例如：重点关注认证绕过与注入类漏洞" /></div>
+          <div><label className={labelCls}>Worker 长期指令</label><textarea value={form.instructions_markdown} onChange={(e) => setForm({ ...form, instructions_markdown: e.target.value })} rows={6} className={`${inputCls} resize-y`} placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。" /></div>
         </section>
 
         <section className="role-config-section role-config-modules">

@@ -1,7 +1,7 @@
 /**
  * Git 模块源（§8.2）：Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills）
  * - sync：浅克隆 → 扫描 SKILL.md / commands → 目录（含文件内容）落库
- * - 下发：profile 勾选模块，快照时展开为 agentbox embedded skills/commands
+ * - 下发：RoleConfig 勾选模块，快照时展开为 agentbox embedded skills/commands
  *   （内容在 sync 时缓存，运行 job 不再访问 Git —— 断网/私有网络也能跑）
  */
 import { execFile } from "node:child_process";
@@ -27,7 +27,7 @@ export function validateSourceUrl(url: string): void {
     throw new Error(`模块源仅允许 https:// Git URL（收到 ${parsed.protocol}）`);
   }
   if (parsed.username || parsed.password) throw new Error("repo_url 不允许内嵌凭据");
-  const allowed = config.repo.allowedGitHosts.split(",").map((s) => s.trim()).filter(Boolean);
+  const allowed = config.skillSources.allowedGitHosts.split(",").map((s) => s.trim()).filter(Boolean);
   if (allowed.length > 0 && !allowed.includes(parsed.host)) {
     throw new Error(`git host 不在允许列表: ${parsed.host}`);
   }
@@ -194,8 +194,8 @@ export interface SkillRevisionRef {
 }
 
 /**
- * 展开 profile 勾选的模块（["<source_id>:<module_id>", ...]）
- * → agentbox embedded skills / commands，与 profile 手写 JSON 合并去重（按 name）
+ * 展开 RoleConfig 勾选的模块（["<source_id>:<module_id>", ...]）
+ * → agentbox embedded skills / commands，与 RoleConfig 手写 JSON 合并去重（按 name）
  * 非 trusted 或已禁用来源的模块一律跳过（§5.1：quarantined 未经审批不得下发）
  */
 export async function expandModules(

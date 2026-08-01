@@ -15,6 +15,7 @@ import type {
   AgentSubAgentConfig,
 } from "agentbox-sdk";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ProvisionInput, RunHandle, SandboxRunner } from "./index.js";
@@ -41,6 +42,141 @@ if (process.platform === "win32") {
 
 /** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
+const RESTRICTED_NETWORK = "dfh-restricted";
+const GATEWAY_PROXY = "dfh-gateway-proxy";
+let restrictedNetworkReady: Promise<void> | null = null;
+let gatewayProxyReady: Promise<void> | null = null;
+
+const GATEWAY_PROXY_SCRIPT = String.raw`
+const http = require("node:http");
+const https = require("node:https");
+const upstream = new URL(process.env.DFH_GATEWAY_UPSTREAM);
+const prefix = upstream.pathname.replace(/\/$/, "");
+const client = upstream.protocol === "https:" ? https : http;
+const server = http.createServer((req, res) => {
+  const incoming = new URL(req.url || "/", "http://proxy.local");
+  if (incoming.pathname === "/_dfh_health") {
+    res.writeHead(200).end("ok");
+    return;
+  }
+  if (incoming.pathname !== prefix && !incoming.pathname.startsWith(prefix + "/")) {
+    res.writeHead(404).end("not found");
+    return;
+  }
+  const headers = { ...req.headers, host: upstream.host };
+  delete headers.connection;
+  delete headers["proxy-authorization"];
+  const target = client.request({
+    protocol: upstream.protocol,
+    hostname: upstream.hostname,
+    port: upstream.port || (upstream.protocol === "https:" ? 443 : 80),
+    method: req.method,
+    path: incoming.pathname + incoming.search,
+    headers,
+  }, (reply) => {
+    res.writeHead(reply.statusCode || 502, reply.headers);
+    reply.pipe(res);
+  });
+  target.on("error", () => res.writeHead(502).end("gateway unavailable"));
+  req.pipe(target);
+});
+server.on("connect", (_req, socket) => socket.destroy());
+server.listen(3100, "0.0.0.0");
+`;
+
+/**
+ * Docker internal bridge 不做外网 NAT；模型请求由另一个固定目标 sidecar 转发。
+ * 网络是宿主级共享资源，创建操作幂等，并发首次 provision 共用同一 Promise。
+ */
+async function ensureRestrictedNetwork(): Promise<void> {
+  restrictedNetworkReady ??= (async () => {
+    const validate = async () => {
+      const state = await docker(
+        "network", "inspect", "--format",
+        "{{.Internal}}|{{.Driver}}|{{index .Labels \"dfh.managed\"}}",
+        RESTRICTED_NETWORK,
+      );
+      if (state !== "true|bridge|true") {
+        throw new Error(`Docker 网络 ${RESTRICTED_NETWORK} 存在但不是 DFH 管理的 internal bridge`);
+      }
+    };
+    try {
+      await validate();
+      return;
+    } catch {
+      await docker(
+        "network", "create", "--driver", "bridge", "--internal",
+        "--label", "dfh.managed=true", RESTRICTED_NETWORK,
+      ).catch(async (e) => {
+        await validate().catch(() => { throw e; });
+      });
+      await validate();
+    }
+  })();
+  return restrictedNetworkReady;
+}
+
+/**
+ * internal bridge 不能直达 Docker Desktop 宿主。共享 sidecar 同时连普通 bridge 和
+ * internal bridge，但代码只允许把 /gateway 路径转发到唯一上游，不提供 CONNECT 或任意目标代理。
+ */
+async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<void> {
+  gatewayProxyReady ??= (async () => {
+    const parsed = new URL(upstreamUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(`Gateway sidecar 不支持上游协议: ${parsed.protocol}`);
+    }
+    if (!parsed.pathname.startsWith("/gateway")) {
+      throw new Error("Gateway sidecar 上游 URL 必须以 /gateway 为路径");
+    }
+    const upstreamHash = createHash("sha256").update(upstreamUrl).digest("hex").slice(0, 16);
+    let exists = true;
+    try {
+      const state = await docker(
+        "inspect", "--format",
+        "{{index .Config.Labels \"dfh.gateway-upstream\"}}|{{.State.Running}}",
+        GATEWAY_PROXY,
+      );
+      const [configuredHash, running] = state.split("|");
+      if (configuredHash !== upstreamHash) {
+        throw new Error(`${GATEWAY_PROXY} 已指向其他 Gateway，拒绝复用`);
+      }
+      if (running !== "true") await docker("start", GATEWAY_PROXY);
+    } catch (e) {
+      const listed = await docker("ps", "-a", "--filter", `name=^/${GATEWAY_PROXY}$`, "--format", "{{.ID}}");
+      exists = Boolean(listed);
+      if (exists) throw e;
+    }
+    if (!exists) {
+      await docker(
+        "run", "-d", "--name", GATEWAY_PROXY, "--restart", "unless-stopped",
+        "--network", "bridge", "--add-host", "host.docker.internal:host-gateway",
+        "--label", "dfh.managed=true", "--label", `dfh.gateway-upstream=${upstreamHash}`,
+        "-e", `DFH_GATEWAY_UPSTREAM=${upstreamUrl}`,
+        "--entrypoint", "node", image, "-e", GATEWAY_PROXY_SCRIPT,
+      );
+    }
+    const inspect = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<string, unknown>;
+    if (!(RESTRICTED_NETWORK in inspect)) {
+      await docker("network", "connect", RESTRICTED_NETWORK, GATEWAY_PROXY);
+    }
+    let ready = false;
+    for (let i = 0; i < 20; i++) {
+      try {
+        await docker(
+          "exec", GATEWAY_PROXY, "node", "-e",
+          "fetch('http://127.0.0.1:3100/_dfh_health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        );
+        ready = true;
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    if (!ready) throw new Error(`${GATEWAY_PROXY} 启动后未通过健康检查`);
+  })();
+  return gatewayProxyReady;
+}
 
 /** dockerode createContainer 调用签名（只需要我们注入 HostConfig 的部分） */
 interface CreateContainerOptions {
@@ -80,6 +216,11 @@ function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"
 
 export class AgentboxRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
+    if (input.network === "restricted") {
+      await ensureRestrictedNetwork();
+      if (!input.gatewayUpstreamUrl) throw new Error("restricted Worker 缺少 Gateway 上游 URL");
+      await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
+    }
     const sandbox = new Sandbox("local-docker", {
       image: input.image,
       workingDir: "/workspace",
@@ -92,9 +233,10 @@ export class AgentboxRunner implements SandboxRunner {
       },
       provider: {
         name: `dfh-${input.jobId.slice(0, 8)}`,
-        // none=彻底断网；restricted MVP 先给 bridge（agent 需访问 LLM 端点）
-        // TODO(Phase 3): restricted → squid 白名单代理（§9.2）
-        networkMode: input.network === "none" ? "none" : "bridge",
+        // restricted=无外网 NAT 的内部 bridge（仅保留 host-gateway 模型通道）；
+        // egress=普通 bridge，Worker 可按 prompt 自主取材。
+        networkMode:
+          input.network === "none" ? "none" : input.network === "restricted" ? RESTRICTED_NETWORK : "bridge",
         autoRemove: true,
       },
     });
@@ -192,14 +334,17 @@ export interface RealAgentSpec {
   /** 思考/推理强度；缺省由 provider 默认 */
   reasoning?: ReasoningEffort;
   env: Record<string, string>;
-  prompt: string;
-  /** Agent 配置下发（agentbox setup 差量上传，见 §8.1 agent_profiles） */
+  /** Hub 为本 Job 生成的本轮任务消息，等价于各 CLI 的非交互 prompt/input。 */
+  input: string;
+  /** 平台不可变安全边界；与 /workspace 下的角色说明文件分层。 */
+  systemPrompt?: string;
+  /** Agent 配置下发（agentbox setup 差量上传，内容来自冻结 RoleConfig） */
   skills?: AgentSkillConfig[];
   commands?: AgentCommandConfig[];
   mcps?: AgentMcpConfig[];
   subAgents?: AgentSubAgentConfig[];
-  /** 种子文件：沙箱绝对路径 → 内容（如 /workspace/src/auth/login.php） */
-  seedFiles?: Record<string, string>;
+  /** 本 Job 动态工作区：指令文件、Provider 配置等；只允许 /workspace 下的绝对路径。 */
+  workspaceFiles?: Record<string, string>;
   /** 运行后要读回的文件 */
   resultFiles?: string[];
   /** 流式进度回调（已节流） */
@@ -218,11 +363,21 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const sandbox = AgentboxRunner.sandboxOf(handle);
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
 
-  // 1. 种子文件上传
-  for (const [path, content] of Object.entries(spec.seedFiles ?? {})) {
-    const dir = path.split("/").slice(0, -1).join("/");
-    if (dir) await sandbox.run(`mkdir -p ${dir}`);
-    await sandbox.uploadFile(content, path);
+  // 1. 从冻结快照生成本 Job 的完整 /workspace。目标内容不由 Scheduler 预下载，
+  // Worker 根据 Hub prompt 与网络策略自行决定如何取材。
+  for (const [filePath, content] of Object.entries(spec.workspaceFiles ?? {})) {
+    const normalized = path.posix.normalize(filePath);
+    if (
+      !normalized.startsWith("/workspace/") ||
+      normalized !== filePath ||
+      normalized.includes("/../") ||
+      normalized.includes("\0")
+    ) {
+      throw new Error(`拒绝写入 workspace 之外的动态文件: ${filePath}`);
+    }
+    const dir = path.posix.dirname(normalized);
+    if (dir !== "/workspace") await sandbox.run(`mkdir -p -- ${JSON.stringify(dir)}`);
+    await sandbox.uploadFile(content, normalized);
   }
 
   // 2. 起 agent（server 进程模式，权限完全开放 §16）
@@ -243,14 +398,16 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   await agent.setup();
 
   const run = agent.stream({
-    input: spec.prompt,
+    input: spec.input,
     model: spec.model,
+    ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
     ...(spec.reasoning ? { reasoning: spec.reasoning } : {}),
   });
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
   let buffer = "";
+  let streamError: string | undefined;
   try {
     for await (const event of run) {
       const e = event as { type?: string; delta?: string };
@@ -264,13 +421,15 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       }
     }
   } catch (e) {
-    return { text: "", files: {}, error: e instanceof Error ? e.message : String(e) };
+    streamError = e instanceof Error ? e.message : String(e);
   }
 
-  const result = await run.finished.catch((e: unknown) => ({
-    text: "",
-    error: e instanceof Error ? e.message : String(e),
-  }));
+  const result = streamError
+    ? { text: "", error: streamError }
+    : await run.finished.catch((e: unknown) => ({
+        text: "",
+        error: e instanceof Error ? e.message : String(e),
+      }));
 
   // 4. 读回结果文件
   const files: Record<string, string> = {};
@@ -281,6 +440,12 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     } catch {
       // 文件不存在 = agent 没写，容忍
     }
+  }
+  // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
+  // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
+  const cleanupPaths = (spec.resultFiles ?? []).filter((p) => p.startsWith("/workspace/"));
+  if (cleanupPaths.length > 0) {
+    await sandbox.run(`rm -f -- ${cleanupPaths.map((p) => JSON.stringify(p)).join(" ")}`).catch(() => {});
   }
 
   return {

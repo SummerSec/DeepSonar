@@ -39,26 +39,28 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 | `core.ts` | 状态机 `transitionJob`、事件入库 `ingestEvent`、规则引擎派生、hub 触发（`finalizeJob`） |
 | `executor-real.ts` | 真实 agent 执行：按 `agent_snapshot_json` 冻结快照决定 provider/model/env/prompt |
 | `graph.ts` | fact-intent 二分图 → hub prompt 用 YAML；agent 输出结构化解析 |
-| `routes.ts` | 全部 HTTP API（项目/任务/job/画布/角色/profile/skill-source/配置/webhook） |
+| `routes.ts` | 全部 HTTP API（项目/任务/job/画布/角色/RoleConfig/skill-source/配置/webhook） |
 | `skill-sources.ts` | Git 托管 skill/command 仓库的浅克隆同步与 catalog 缓存 |
 | `stream-bus.ts` | WS 实时流（前端 `/api` 代理 ws） |
 
 ### Hub 循环（Cairn 式图语义，§8.3）
 
-画布升级为 **fact-intent 二分图**：角色 agent（explore/analyze/verify/test/code 等）只把发现写成 fact 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。**事件触发，无定时任务**，单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。默认关（`DFH_HUB_ENABLED=false` 或项目 `config_json.rules.hubEnabled`）。角色注册表在 `agent_roles` 表，角色 → agent 配置复用 `agent_profiles` 绑定。
+画布是 **fact-intent 二分图**：角色 agent（explore/analyze/verify/test/code 等）只把发现写成 fact 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。**事件触发，无定时任务**，单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
 
 ### 运行时（`packages/runtime-sandbox/`）
 
 - `SandboxRunner` 是调度器与沙箱之间唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（agentbox-sdk，可切 local-docker/e2b/daytona）。换 provider 只动这个包。
-- 事件**不经沙箱网络**（审计沙箱默认 `networkMode: "none"`），走 agentbox-sdk 控制通道回传；**沙箱内不注入任何调度器凭据**。
-- `env_keys` 白名单（`DFH_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 profile 下发变量；密钥只存 `process.env`，永不落库。
+- 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
+- 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `dfh-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
+- 事件**不经沙箱网络**，走 agentbox-sdk 控制通道回传；结果文件读回即删，随后销毁沙箱。
+- `env_keys` 白名单（`DFH_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 RoleConfig 下发变量；长期密钥不进快照或工作区。
 - 沙箱硬限制（cpu/memory/pids/cap-drop-all/no-new-privileges）在 config 的 `sandboxLimits`，0 仅限调试。
 
 ### 数据与迁移
 
-- **迁移**：`apps/scheduler/migrations/000N_*.sql` 顺序编号、启动自动 up、advisory lock 防并发、**禁止手改库**。破坏性变更走 expand → migrate → contract。
+- **Schema**：`database/schema.sql` 是唯一结构基线，Scheduler 只对空库执行；本阶段不保留历史 migration 回放或增量兼容，结构变更后重建数据库。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
-- **配置全落库**（migration 0007）：全局/项目分离，env 只是缺省回落；项目 `config_json.rules` 可覆盖超时/自动验证/并发等。Agent 配置三层：`agent_profiles` 表 → `projects.config_json.profiles` 绑定 → `jobs.agent_snapshot_json` 建 job 时冻结快照（改配置不影响已建 job）。
+- **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
 - **一任务一画布**（migration 0002）：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。
 - Finding schema 对齐 SARIF 2.1.0（§6.1）；events 表只放语义事件，原始事件流进冷存储 NDJSON。
 
