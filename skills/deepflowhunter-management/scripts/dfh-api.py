@@ -72,10 +72,14 @@ def parse_json_arg(value: str, name: str):
 
 
 def call(method: str, path: str, body=None):
-    headers = {"content-type": "application/json"}
+    # 无 body 时不带 application/json，避免 Fastify FST_ERR_CTP_EMPTY_JSON_BODY
+    headers = {}
     if TOKEN:
         headers["authorization"] = f"Bearer {TOKEN}"
-    data = None if body is None else json.dumps(body).encode("utf-8")
+    data = None
+    if body is not None:
+        headers["content-type"] = "application/json"
+        data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
     status = 200
     try:
@@ -230,6 +234,38 @@ def _skills_trust(pos, f):
     return call("POST", f"/skill-sources/{sid}/trust", body)
 
 
+def _credentials_create(_pos, f):
+    body = {
+        "name": need(f.get("name"), "--name"),
+        "provider": need(f.get("provider"), "--provider anthropic|kimi|openai|openrouter|plane|git"),
+        "secret": need(f.get("secret"), "--secret"),
+    }
+    if f.get("kind"):
+        body["kind"] = f["kind"]
+    if f.get("project-id"):
+        body["project_id"] = f["project-id"]
+    meta = {}
+    if f.get("base-url"):
+        meta["base_url"] = str(f["base-url"]).rstrip("/")
+    if f.get("metadata"):
+        meta.update(parse_json_arg(str(f["metadata"]), "--metadata"))
+    if meta:
+        body["metadata"] = meta
+    return call("POST", "/credentials", body)
+
+
+def _schema_cmd(pos, f):
+    """schema openapi|summary|markdown — 拉运行时契约（豁免鉴权）。"""
+    kind = (pos[0] if pos else f.get("format") or "summary").lower()
+    if kind in ("openapi", "open-api", "json"):
+        return call("GET", "/openapi.json")
+    if kind in ("summary", "sum"):
+        return call("GET", "/schema?format=summary")
+    if kind in ("markdown", "md"):
+        return call_text("GET", "/schema.md")
+    raise ApiError(f"未知 schema 格式: {kind}（openapi|summary|markdown）")
+
+
 def _p0(pos, name):
     return need(pos[0] if len(pos) > 0 else None, name)
 
@@ -240,6 +276,12 @@ def _p1(pos, name):
 
 COMMANDS = {
     "health": lambda pos, f: call("GET", "/health"),
+
+    # ---------- API Schema（豁免鉴权；以运行中调度器为准） ----------
+    "schema": _schema_cmd,
+    "schema.openapi": lambda pos, f: call("GET", "/openapi.json"),
+    "schema.summary": lambda pos, f: call("GET", "/schema?format=summary"),
+    "schema.markdown": lambda pos, f: call_text("GET", "/schema.md"),
 
     # ---------- 项目 ----------
     "projects.list": lambda pos, f: call("GET", "/projects"),
@@ -331,6 +373,20 @@ COMMANDS = {
     "plane.unbind": lambda pos, f: call("DELETE", f"/projects/{_p0(pos, 'projectId')}/integrations/plane"),
     "plane.sync": lambda pos, f: call("POST", f"/projects/{_p0(pos, 'projectId')}/integrations/plane/sync"),
     "plane.info": lambda pos, f: call("GET", "/plane-info"),
+
+    # ---------- Provider Credential（明文不可回读） ----------
+    "credentials.list": lambda pos, f: call("GET", "/credentials"),
+    "credentials.create": _credentials_create,
+    "credentials.update": lambda pos, f: call(
+        "PATCH", f"/credentials/{_p0(pos, 'credentialId')}",
+        parse_json_arg(need(f.get("data"), '--data \'{"metadata":{"base_url":"..."}}\''), "--data")),
+    "credentials.rotate": lambda pos, f: call(
+        "POST", f"/credentials/{_p0(pos, 'credentialId')}/rotate",
+        {"secret": need(f.get("secret"), "--secret")}),
+    "credentials.status": lambda pos, f: call(
+        "POST", f"/credentials/{_p0(pos, 'credentialId')}/status",
+        {"status": need(f.get("status"), "--status active|disabled|rotation_required")}),
+    "credentials.test": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/test"),
 }
 
 
@@ -341,10 +397,21 @@ def main() -> None:
     rest = argv[2:] if len(argv) > 2 else []
     if not resource:
         sys.stderr.write(
-            f"用法: dfh-api.py <资源> <动作> [args] [--flag value]\n可用: {', '.join(COMMANDS)}\n"
+            f"用法: dfh-api.py <资源> <动作> [args] [--flag value]\n"
+            f"先拉契约: schema openapi|summary|markdown\n"
+            f"可用: {', '.join(COMMANDS)}\n"
         )
         sys.exit(64)
-    key = f"{resource}.{action}" if action else resource
+    # schema openapi|summary|markdown → schema 单资源 + 位置参数
+    if resource == "schema" and action in (None, "openapi", "summary", "markdown", "md", "json"):
+        key = "schema"
+        if action:
+            rest = [action, *rest]
+            action = None
+        else:
+            key = "schema"
+    else:
+        key = f"{resource}.{action}" if action else resource
     fn = COMMANDS.get(key)
     if fn is None:
         sys.stderr.write(f"未知命令: {key}\n可用: {', '.join(COMMANDS)}\n")
