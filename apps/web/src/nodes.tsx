@@ -49,6 +49,8 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
   const sevColor = severity ? (SEVERITY_COLOR[severity] ?? "#71717a") : null;
   const jobType = (n.body_json?.type as string) ?? null;
   const location = (n.body_json?.location as string) ?? null;
+  // 「当前动作」（工具调用聚合，executor 直接写显示态）优先于 job 类型展示
+  const lastAction = (n.body_json?.last_progress as { message?: string } | undefined)?.message ?? null;
 
   return (
     <div className="dfh-node w-full rounded-[10px] border border-ink-700 bg-ink-850/95 px-3 py-2.5">
@@ -85,7 +87,11 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
         {location && (
           <span className="truncate font-mono text-[11px] text-zinc-500">{location}</span>
         )}
-        {jobType && <span className="truncate font-mono text-[11px] text-zinc-500">{jobType}</span>}
+        {!location && (
+          <span className="truncate font-mono text-[11px] text-zinc-500">
+            {lastAction ?? jobType ?? ""}
+          </span>
+        )}
         {severity && (
           <span
             className="ml-auto font-mono text-[10px] font-medium uppercase tracking-wider"

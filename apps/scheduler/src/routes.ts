@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { createJob } from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce } from "./plane-sync.js";
+import { streamBuffer, subscribeStream } from "./stream-bus.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -22,6 +23,22 @@ const CreateJobBody = z.object({
 });
 
 export function registerRoutes(app: FastifyInstance) {
+  // ---------- Agent 实时流（WS /ws?job_id=...） ----------
+  // 连接后先补发环形缓冲（晚加入也能看到上下文），随后实时推送
+  app.get("/ws", { websocket: true }, (socket, req) => {
+    const jobId = (req.query as { job_id?: string }).job_id;
+    if (!jobId) {
+      socket.close(4000, "missing job_id");
+      return;
+    }
+    for (const item of streamBuffer(jobId)) socket.send(JSON.stringify(item));
+    const unsub = subscribeStream(jobId, (item) => {
+      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(item));
+    });
+    socket.on("close", unsub);
+    socket.on("error", unsub);
+  });
+
   // ---------- 项目绑定（§7 POST /projects/sync） ----------
   app.post("/projects/sync", async (req, reply) => {
     const body = SyncProjectBody.parse(req.body);

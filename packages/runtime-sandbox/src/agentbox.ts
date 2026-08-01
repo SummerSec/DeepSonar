@@ -81,6 +81,8 @@ export interface RealAgentSpec {
   resultFiles?: string[];
   /** 流式进度回调（已节流） */
   onProgress?: (message: string) => void;
+  /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
+  onEvent?: (event: Record<string, unknown>) => void;
 }
 
 export interface RealAgentResult {
@@ -117,12 +119,13 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     model: spec.model,
   });
 
-  // 3. 事件流 → 节流进度回调（§6.2：原始流不进 events 表，由调度器合并）
+  // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
   let buffer = "";
   try {
     for await (const event of run) {
-      const e = event as { type?: string; delta?: string; message?: string };
+      const e = event as { type?: string; delta?: string };
+      spec.onEvent?.(event as unknown as Record<string, unknown>);
       if (e.type === "text.delta" && e.delta) buffer += e.delta;
       const now = Date.now();
       if (buffer.length > 0 && now - lastPush > 4000) {

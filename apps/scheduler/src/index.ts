@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import websocket from "@fastify/websocket";
 import { config } from "./config.js";
 import { migrate, sql } from "./db.js";
 import { startDispatcher } from "./dispatcher.js";
@@ -18,6 +19,7 @@ async function main() {
   if (applied.length > 0) console.log(`[boot] 已应用迁移: ${applied.join(", ")}`);
 
   const app = Fastify({ logger: { level: "info" } });
+  await app.register(websocket);
   registerRoutes(app);
 
   const stopDispatcher = startDispatcher();

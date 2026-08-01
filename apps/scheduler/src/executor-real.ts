@@ -7,6 +7,7 @@ import { FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
 import { ingestEvent } from "./core.js";
 import { sql } from "./db.js";
+import { publishStream } from "./stream-bus.js";
 
 /**
  * 真实 Agent 执行器（ARCHITECTURE §8）
@@ -69,6 +70,17 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
 
   await emit("progress", { message: `真实 agent 启动（${config.runtime.agentProvider}）` });
 
+  // 工具输入 → 一行动作描述（节点「当前动作」+ 实时流卡片共用）
+  const actionOf = (toolName: string, input: unknown): string => {
+    const o = (input ?? {}) as Record<string, unknown>;
+    const target =
+      (o.file_path as string) ?? (o.command as string) ?? (o.pattern as string) ??
+      (o.path as string) ?? (o.url as string) ?? "";
+    return `${toolName}${target ? ` ${String(target).slice(0, 80)}` : ""}`;
+  };
+  // 「当前动作」直接更新节点显示态（throttle 1.5s；非语义事件，不进 events 表）
+  let lastActionPush = 0;
+
   const result = await runRealAgent(
     { sandboxId: job.sandbox_id as string },
     {
@@ -84,6 +96,28 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       resultFiles: ["/workspace/findings.jsonl", "/workspace/done.json"],
       onProgress: (message) => {
         void emit("progress", { message }).catch(() => {});
+      },
+      onEvent: (e) => {
+        const type = String(e.type ?? "");
+        // 实时流：选择性字段转发（输入/输出可能很大，只取摘要）
+        if (type === "tool.call.started") {
+          const toolName = String(e.toolName ?? "tool");
+          const action = actionOf(toolName, e.input);
+          publishStream(jobId, { type, toolName, action });
+          const now = Date.now();
+          if (now - lastActionPush > 1500) {
+            lastActionPush = now;
+            void sql`
+              UPDATE canvas_nodes SET body_json = body_json || ${sql.json({ last_progress: { message: action, kind: "tool" } })}, updated_at = now()
+              WHERE job_id = ${jobId} AND node_type = 'job'`.catch(() => {});
+          }
+        } else if (type === "tool.call.completed") {
+          publishStream(jobId, { type, toolName: e.toolName, callId: e.callId });
+        } else if (type === "text.delta" || type === "reasoning.delta") {
+          publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) });
+        } else if (type.startsWith("run.") || type.startsWith("message.")) {
+          publishStream(jobId, { type, text: typeof e.text === "string" ? e.text.slice(0, 300) : undefined });
+        }
       },
     },
   );
