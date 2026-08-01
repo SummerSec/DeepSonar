@@ -5,13 +5,33 @@
  *   （内容在 sync 时缓存，运行 job 不再访问 Git —— 断网/私有网络也能跑）
  */
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { config } from "./config.js";
 import { sql } from "./db.js";
 
 const execFileP = promisify(execFile);
+
+/** 仓库 URL 校验（§5.1 安全要求）：仅 https（host 白名单复用 DFH_GIT_ALLOWED_HOSTS）；禁 file://、本地路径、内嵌凭据 */
+export function validateSourceUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`repo_url 非法: ${url}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`模块源仅允许 https:// Git URL（收到 ${parsed.protocol}）`);
+  }
+  if (parsed.username || parsed.password) throw new Error("repo_url 不允许内嵌凭据");
+  const allowed = config.repo.allowedGitHosts.split(",").map((s) => s.trim()).filter(Boolean);
+  if (allowed.length > 0 && !allowed.includes(parsed.host)) {
+    throw new Error(`git host 不在允许列表: ${parsed.host}`);
+  }
+}
 
 export interface SourceModule {
   /** 模块 id = 仓库内相对路径（skill 目录 / command 文件） */
@@ -81,11 +101,26 @@ function pluginOf(repoRoot: string, dir: string): string {
   return "(root)";
 }
 
+/** 目录内容哈希（§5.1：不使用不可复现的 branch HEAD 作执行版本——记录 commit + 内容哈希） */
+function contentHashOf(catalog: SourceModule[]): string {
+  const h = createHash("sha256");
+  for (const m of [...catalog].sort((a, b) => (a.id < b.id ? -1 : 1))) {
+    h.update(m.id).update("\0").update(m.kind).update("\0");
+    for (const k of Object.keys(m.files).sort()) {
+      h.update(k).update("\0").update(m.files[k]).update("\0");
+    }
+  }
+  return h.digest("hex");
+}
+
+const MODULE_COUNT_CAP = 200;
+
 function scanRepo(repoRoot: string): SourceModule[] {
   const modules: SourceModule[] = [];
   const seenSkills = new Set<string>();
 
   for (const full of walk(repoRoot)) {
+    if (modules.length >= MODULE_COUNT_CAP) break;
     const rel = path.relative(repoRoot, full).split(path.sep).join("/");
     const dir = path.dirname(full);
 
@@ -121,10 +156,11 @@ function scanRepo(repoRoot: string): SourceModule[] {
   return modules;
 }
 
-/** 同步一个模块源：浅克隆 → 扫描 → catalog 落库。返回模块数。 */
-export async function syncSkillSource(sourceId: string): Promise<{ modules: number }> {
+/** 同步一个模块源：浅克隆 → 扫描 → catalog + commit sha + 内容哈希落库。返回模块数。 */
+export async function syncSkillSource(sourceId: string, syncedBy?: string | null): Promise<{ modules: number }> {
   const [src] = await sql`SELECT * FROM skill_sources WHERE id = ${sourceId}`;
   if (!src) throw new Error(`skill source ${sourceId} 不存在`);
+  if ((src.trust_status as string) === "disabled") throw new Error("模块源已禁用，不能同步");
 
   const tmp = mkdtempSync(path.join(os.tmpdir(), "dfh-src-"));
   try {
@@ -134,9 +170,15 @@ export async function syncSkillSource(sourceId: string): Promise<{ modules: numb
       // 分支不存在等场景：退回默认分支
       await execFileP("git", ["clone", "--depth", "1", src.repo_url as string, tmp], { timeout: 120_000 });
     }
+    const { stdout: commitSha } = await execFileP("git", ["-C", tmp, "rev-parse", "HEAD"], { timeout: 15_000 });
     const catalog = scanRepo(tmp);
     await sql`
-      UPDATE skill_sources SET catalog_json = ${sql.json(catalog as never)}, synced_at = now()
+      UPDATE skill_sources SET
+        catalog_json = ${sql.json(catalog as never)},
+        synced_at = now(),
+        last_commit_sha = ${commitSha.trim()},
+        last_content_hash = ${contentHashOf(catalog)},
+        synced_by = ${syncedBy ?? null}
       WHERE id = ${sourceId}`;
     return { modules: catalog.length };
   } finally {
@@ -144,17 +186,31 @@ export async function syncSkillSource(sourceId: string): Promise<{ modules: numb
   }
 }
 
+/** 模块来源的版本证据（随 Job 快照冻结，§5.1：Job 历史只读快照不受后续同步覆盖） */
+export interface SkillRevisionRef {
+  source_id: string;
+  commit_sha: string | null;
+  content_hash: string | null;
+}
+
 /**
  * 展开 profile 勾选的模块（["<source_id>:<module_id>", ...]）
  * → agentbox embedded skills / commands，与 profile 手写 JSON 合并去重（按 name）
+ * 非 trusted 或已禁用来源的模块一律跳过（§5.1：quarantined 未经审批不得下发）
  */
 export async function expandModules(
   modules: string[],
-): Promise<{ skills: Record<string, unknown>[]; commands: Record<string, unknown>[]; missing: string[] }> {
+): Promise<{
+  skills: Record<string, unknown>[];
+  commands: Record<string, unknown>[];
+  missing: string[];
+  revisions: SkillRevisionRef[];
+}> {
   const skills: Record<string, unknown>[] = [];
   const commands: Record<string, unknown>[] = [];
   const missing: string[] = [];
-  if (modules.length === 0) return { skills, commands, missing };
+  const revisions: SkillRevisionRef[] = [];
+  if (modules.length === 0) return { skills, commands, missing, revisions };
 
   const bySource = new Map<string, string[]>();
   for (const m of modules) {
@@ -166,7 +222,19 @@ export async function expandModules(
   }
 
   for (const [sourceId, ids] of bySource) {
-    const [src] = await sql`SELECT catalog_json FROM skill_sources WHERE id = ${sourceId}`;
+    const [src] = await sql`
+      SELECT catalog_json, trust_status, enabled, last_commit_sha, last_content_hash
+      FROM skill_sources WHERE id = ${sourceId}`;
+    if (!src || (src.trust_status as string) !== "trusted" || !src.enabled) {
+      // 未信任/已禁用来源：整组拒绝下发
+      for (const id of ids) missing.push(`${sourceId}:${id}(source-not-trusted)`);
+      continue;
+    }
+    revisions.push({
+      source_id: sourceId,
+      commit_sha: (src.last_commit_sha as string) ?? null,
+      content_hash: (src.last_content_hash as string) ?? null,
+    });
     const catalog = ((src?.catalog_json as SourceModule[]) ?? []) as SourceModule[];
     for (const id of ids) {
       const mod = catalog.find((c) => c.id === id);
@@ -178,5 +246,5 @@ export async function expandModules(
       }
     }
   }
-  return { skills, commands, missing };
+  return { skills, commands, missing, revisions };
 }

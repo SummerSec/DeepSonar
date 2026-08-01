@@ -1,0 +1,34 @@
+# Management Skill 推荐权限（最小 Scope）
+
+在 Web「设置 → Token」或 `POST /tokens` 创建 Token，**只授予以下 scope**：
+
+```text
+projects:read
+projects:write
+jobs:read
+jobs:write
+findings:read
+```
+
+说明：
+
+- 绑定到**单个项目**（`project_id`）时，Token 只能操作该项目，是推荐做法；
+- 需要跨项目管理的 CI 可不绑项目，但 scope 仍应保持最小；
+- **不要**授予 `tokens:manage` / `credentials:manage` / `admin` —— 管理面操作（Token 创建吊销、Credential 轮换）留给人类管理员在 Web 上执行；
+- `jobs:write` 允许 cancel/resume/priority，但**不允许**绕过状态机直改状态（API 本身无此端点）；
+- Token 只在创建时展示一次；泄露立即吊销（`POST /tokens/:id/revoke`）并轮换；
+- 建议设置 `expires_in_days`（如 30/90 天）让 Token 自然过期。
+
+## 创建示例
+
+```bash
+curl -X POST $DFH_BASE_URL/tokens \
+  -H "Authorization: Bearer $DFH_ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "name": "ci-management",
+    "scopes": ["projects:read","projects:write","jobs:read","jobs:write","findings:read"],
+    "project_id": "<可选：绑定单项目>",
+    "expires_in_days": 90
+  }'
+```

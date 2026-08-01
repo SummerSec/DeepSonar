@@ -87,6 +87,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /skill-sources/:id": "skills:read",
   "POST /skill-sources": "skills:write",
   "POST /skill-sources/:id/sync": "skills:write",
+  "POST /skill-sources/:id/trust": "skills:write",
   "DELETE /skill-sources/:id": "skills:write",
   "GET /agent-profiles": "profiles:read",
   "POST /agent-profiles": "profiles:write",

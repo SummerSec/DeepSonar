@@ -1014,44 +1014,101 @@ export function SettingsPanel({
                 <div className="flex items-center gap-2">
                   <span className="text-[14px] font-medium text-zinc-100">{s.name}</span>
                   <span className="font-mono text-[12px] text-zinc-500">{s.branch}</span>
+                  {(() => {
+                    const trust = s.trust_status ?? "trusted";
+                    const badge =
+                      trust === "trusted" && s.enabled
+                        ? { text: "已信任", cls: "border-emerald-800/60 text-emerald-300" }
+                        : trust === "disabled"
+                          ? { text: "已禁用", cls: "border-red-900/60 text-red-300" }
+                          : { text: "待审批", cls: "border-amber-800/60 text-amber-300" };
+                    return (
+                      <span className={`rounded border px-1.5 py-px font-mono text-[11px] ${badge.cls}`}>
+                        {badge.text}
+                      </span>
+                    );
+                  })()}
                   <span className="ml-auto font-mono text-[12px] text-zinc-600">
                     {s.module_count ?? sourceDetails[s.id]?.catalog_json.length ?? 0} 模块
                   </span>
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[12px] text-zinc-600">{s.repo_url}</div>
+                <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-700">
+                  {s.last_commit_sha ? `commit ${s.last_commit_sha.slice(0, 10)}` : "无 commit 记录"}
+                  {s.last_content_hash ? ` · hash ${s.last_content_hash.slice(0, 10)}` : ""}
+                  {s.synced_by ? ` · by ${s.synced_by}` : ""}
+                </div>
                 <div className="mt-1.5 flex items-center gap-2">
                   <span className="font-mono text-[12px] text-zinc-600">
                     {s.synced_at ? `同步于 ${new Date(s.synced_at).toLocaleString()}` : "未同步"}
                   </span>
-                  <button
-                    onClick={async () => {
-                      setSyncing(s.id);
-                      try {
-                        const r = await api.syncSkillSource(s.id);
-                        flash(`同步完成：${r.modules} 个模块`);
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {s.trust_status !== "trusted" && (
+                      <button
+                        onClick={async () => {
+                          await api.trustSkillSource(s.id, "trusted").catch((e) => flash(String(e)));
+                          flash("已批准下发");
+                          reload();
+                        }}
+                        className="rounded-md border border-emerald-900/60 px-2 py-0.5 font-mono text-[12px] text-emerald-300 transition-colors hover:bg-emerald-950/40"
+                      >
+                        批准
+                      </button>
+                    )}
+                    {s.trust_status === "trusted" && (
+                      <button
+                        onClick={async () => {
+                          await api.trustSkillSource(s.id, "quarantined").catch((e) => flash(String(e)));
+                          flash("已撤回信任（回到隔离区）");
+                          reload();
+                        }}
+                        className="rounded-md border border-amber-900/60 px-2 py-0.5 font-mono text-[12px] text-amber-300 transition-colors hover:bg-amber-950/40"
+                      >
+                        隔离
+                      </button>
+                    )}
+                    {s.trust_status !== "disabled" && (
+                      <button
+                        onClick={async () => {
+                          await api.trustSkillSource(s.id, "disabled").catch((e) => flash(String(e)));
+                          flash("已禁用");
+                          reload();
+                        }}
+                        className="rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
+                      >
+                        禁用
+                      </button>
+                    )}
+                    <button
+                      onClick={async () => {
+                        setSyncing(s.id);
+                        try {
+                          const r = await api.syncSkillSource(s.id);
+                          flash(`同步完成：${r.modules} 个模块`);
+                          reload();
+                        } catch (e) {
+                          flash(`同步失败：${e instanceof Error ? e.message : e}`);
+                        } finally {
+                          setSyncing(null);
+                        }
+                      }}
+                      disabled={syncing === s.id}
+                      className="flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200 disabled:opacity-50"
+                    >
+                      <ArrowsClockwise size={11} className={syncing === s.id ? "animate-spin" : ""} />
+                      {syncing === s.id ? "同步中…" : "同步"}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await api.deleteSkillSource(s.id).catch(() => {});
+                        flash("已删除");
                         reload();
-                      } catch (e) {
-                        flash(`同步失败：${e instanceof Error ? e.message : e}`);
-                      } finally {
-                        setSyncing(null);
-                      }
-                    }}
-                    disabled={syncing === s.id}
-                    className="ml-auto flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200 disabled:opacity-50"
-                  >
-                    <ArrowsClockwise size={11} className={syncing === s.id ? "animate-spin" : ""} />
-                    {syncing === s.id ? "同步中…" : "同步"}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      await api.deleteSkillSource(s.id).catch(() => {});
-                      flash("已删除");
-                      reload();
-                    }}
-                    className="flex items-center gap-1 rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
-                  >
-                    <Trash size={11} />
-                  </button>
+                      }}
+                      className="flex items-center gap-1 rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
+                    >
+                      <Trash size={11} />
+                    </button>
+                  </span>
                 </div>
               </div>
             ))}

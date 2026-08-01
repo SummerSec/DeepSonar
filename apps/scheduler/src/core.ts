@@ -158,6 +158,8 @@ export interface AgentProfileSnapshot {
   credential_provider: string | null;
   /** 勾选的 Git 模块（["<source_id>:<module_id>"]，展示用；下发内容已展开进 skills/commands） */
   modules: string[];
+  /** §5.1：模块来源版本证据（commit + 内容哈希，随快照冻结） */
+  skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
   skills: unknown[];
   commands: unknown[];
   mcps: unknown[];
@@ -183,7 +185,7 @@ export async function resolveProfileSnapshot(
   const modules = (row.modules_json as string[]) ?? [];
   const expanded = await expandModules(modules);
   if (expanded.missing.length > 0) {
-    console.warn(`[profile] 模块未找到（源未同步？）: ${expanded.missing.join(", ")}`);
+    console.warn(`[profile] 模块未下发（不存在或来源未信任/已禁用）: ${expanded.missing.join(", ")}`);
   }
   const manualSkills = (row.skills_json as { name?: string }[]) ?? [];
   const manualCommands = (row.commands_json as { name?: string }[]) ?? [];
@@ -211,6 +213,7 @@ export async function resolveProfileSnapshot(
     credential_id: (cred?.id as string) ?? null,
     credential_provider: (cred?.provider as string) ?? null,
     modules,
+    skill_revisions: expanded.revisions,
     skills,
     commands,
     mcps: (row.mcps_json as unknown[]) ?? [],

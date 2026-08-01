@@ -134,6 +134,8 @@ export interface AgentProfile {
 }
 
 /** Git 模块源（§8.2） */
+export type SkillTrustStatus = "quarantined" | "trusted" | "disabled";
+
 export interface SkillSource {
   id: string;
   name: string;
@@ -142,6 +144,11 @@ export interface SkillSource {
   synced_at: string | null;
   created_at: string;
   module_count?: number;
+  trust_status?: SkillTrustStatus;
+  enabled?: boolean;
+  last_commit_sha?: string | null;
+  last_content_hash?: string | null;
+  synced_by?: string | null;
 }
 
 export interface SourceModuleEntry {
@@ -389,6 +396,8 @@ export const api = {
   syncSkillSource: (id: string) =>
     send<{ ok: boolean; modules: number }>("POST", `/skill-sources/${id}/sync`),
   deleteSkillSource: (id: string) => send<{ ok: boolean }>("DELETE", `/skill-sources/${id}`),
+  trustSkillSource: (id: string, trust_status: SkillTrustStatus) =>
+    send<SkillSource>("POST", `/skill-sources/${id}/trust`, { trust_status }),
   /** 平台 API Token 管理（§6.4，与 Provider Credential 分离） */
   tokens: () => get<ApiToken[]>("/tokens"),
   createToken: (t: { name: string; scopes: string[]; project_id?: string | null; expires_in_days?: number }) =>
