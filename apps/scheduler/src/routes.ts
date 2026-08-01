@@ -4,7 +4,7 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { createJob, ensureCanvasForTask, globalRules, rulesForProject } from "./core.js";
 import { sql } from "./db.js";
-import { planePollOnce } from "./plane-sync.js";
+import { planePollOnce, planePollProject } from "./plane-sync.js";
 import { syncSkillSource } from "./skill-sources.js";
 import { streamBuffer, subscribeStream } from "./stream-bus.js";
 
@@ -63,6 +63,27 @@ const RoleBody = z.object({
 });
 const RolePatchBody = RoleBody.partial().omit({ name: true });
 
+// 本地项目与任务管理（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md，阶段 A）
+const CreateProjectBody = z.object({
+  name: z.string().min(1),
+  description: z.string().default(""),
+  plane_project_id: z.string().nullish(), // 可选：创建时即绑定 Plane
+});
+const PatchProjectBody = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  status: z.enum(["active", "archived"]).optional(),
+});
+const CreateTaskBody = z.object({
+  title: z.string().min(1),
+  type: z.string().min(1).default("audit_module"),
+  priority: z.number().int().default(0),
+  timeout_sec: z.number().int().positive().optional(),
+  payload: z.record(z.string(), z.unknown()).default({}),
+});
+const PriorityBody = z.object({ priority: z.number().int() });
+const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
+
 export function registerRoutes(app: FastifyInstance) {
   // ---------- Agent 实时流（WS /ws?job_id=...） ----------
   // 连接后先补发环形缓冲（晚加入也能看到上下文），随后实时推送
@@ -110,6 +131,146 @@ export function registerRoutes(app: FastifyInstance) {
   });
 
   app.get("/projects", async () => sql`SELECT * FROM projects ORDER BY created_at DESC`);
+
+  // ---------- 本地项目 CRUD（阶段 A：Plane 可选化，本地库为唯一真相） ----------
+  // 创建不再生成历史项目级 root 画布（deprecated canvas_id 仅占位，任务创建时才铸任务画布）
+  app.post("/projects", async (req, reply) => {
+    const body = CreateProjectBody.parse(req.body);
+    try {
+      const [project] = await sql`
+        INSERT INTO projects ${sql({
+          plane_project_id: body.plane_project_id ?? null,
+          canvas_id: crypto.randomUUID(),
+          name: body.name,
+          description: body.description,
+          config_json: {} as never,
+        })}
+        RETURNING *`;
+      return reply.code(201).send(project);
+    } catch (e) {
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
+        return reply.code(409).send({ error: "该 Plane 项目已绑定到其它本地项目" });
+      }
+      throw e;
+    }
+  });
+
+  app.get("/projects/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [project] = await sql`SELECT * FROM projects WHERE id = ${id}`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    return project;
+  });
+
+  app.patch("/projects/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = PatchProjectBody.parse(req.body);
+    const sets: Record<string, unknown> = { updated_at: sql`now()` };
+    if (body.name !== undefined) sets.name = body.name;
+    if (body.description !== undefined) sets.description = body.description;
+    if (body.status !== undefined) {
+      sets.status = body.status;
+      sets.archived_at = body.status === "archived" ? sql`now()` : null;
+    }
+    const [project] = await sql`
+      UPDATE projects SET ${sql(sets as never)} WHERE id = ${id} RETURNING *`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    return project;
+  });
+
+  // 归档 = 软删除：历史任务/事件/Finding 全保留，仅不再允许新建任务与 Plane 同步
+  app.post("/projects/:id/archive", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [project] = await sql`
+      UPDATE projects SET status = 'archived', archived_at = now(), updated_at = now()
+      WHERE id = ${id} RETURNING id, status`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    return project;
+  });
+
+  // ---------- 语义化任务 API（一任务一画布：同事务建画布 + root + pending job） ----------
+  app.post("/projects/:id/tasks", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = CreateTaskBody.parse(req.body);
+    const [project] = await sql`SELECT id, status FROM projects WHERE id = ${id}`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    if (project.status !== "active") return reply.code(409).send({ error: "项目已归档，不能新建任务" });
+
+    const canvasId = await ensureCanvasForTask({
+      projectId: id,
+      title: body.title,
+      target: { type: body.type, ...body.payload },
+    });
+    const { job, duplicated } = await createJob({
+      projectId: id,
+      canvasId,
+      type: body.type,
+      payload: { ...body.payload, goal: body.payload.goal ?? body.title },
+      priority: body.priority,
+      timeoutSec: body.timeout_sec,
+    });
+    if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
+    return reply.code(201).send({ canvas_id: canvasId, job });
+  });
+
+  // 重试：新建 job 复用原画布（历史 job 保留；终态 job 永不被改回 pending）
+  app.post("/tasks/:canvasId/retry", async (req, reply) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const [last] = await sql`
+      SELECT * FROM jobs WHERE canvas_id = ${canvasId} ORDER BY created_at DESC LIMIT 1`;
+    if (!last) return reply.code(409).send({ error: "该任务还没有执行记录" });
+    const { job, duplicated } = await createJob({
+      projectId: canvas.project_id as string,
+      canvasId,
+      planeIssueId: (canvas.plane_issue_id as string) ?? undefined,
+      type: last.type as string,
+      payload: last.payload_json as Record<string, unknown>,
+      priority: last.priority as number,
+      timeoutSec: last.timeout_sec as number,
+    });
+    if (duplicated || !job) return reply.code(409).send({ error: "已有活动 job，不能重试" });
+    return reply.code(201).send(job);
+  });
+
+  // ---------- Plane 集成（按项目绑定；解绑不删除已导入任务） ----------
+  app.put("/projects/:id/integrations/plane", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = PlaneBindBody.parse(req.body);
+    try {
+      const [project] = await sql`
+        UPDATE projects SET plane_project_id = ${body.plane_project_id}, updated_at = now()
+        WHERE id = ${id} RETURNING id, name, plane_project_id`;
+      if (!project) return reply.code(404).send({ error: "project not found" });
+      return project;
+    } catch (e) {
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
+        return reply.code(409).send({ error: "该 Plane 项目已绑定到其它本地项目" });
+      }
+      throw e;
+    }
+  });
+
+  app.delete("/projects/:id/integrations/plane", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [project] = await sql`
+      UPDATE projects SET plane_project_id = NULL, updated_at = now()
+      WHERE id = ${id} RETURNING id, name, plane_project_id`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    return project;
+  });
+
+  // 手动触发一次该项目的 Ready issue 导入（事件驱动之外的补跑入口）
+  app.post("/projects/:id/integrations/plane/sync", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const created = await planePollProject(id);
+      return { ok: true, created };
+    } catch (e) {
+      return reply.code(502).send({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
 
   /** Plane 连接信息（任务页「去 Plane 下发任务」指引用；不含 token） */
   app.get("/plane-info", async () => ({
@@ -359,8 +520,15 @@ export function registerRoutes(app: FastifyInstance) {
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
            AND j.status IN ('claimed','provisioning','running','waiting_human')) AS active_count,
         (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding') AS finding_count,
-        (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding' AND n.status = 'confirmed') AS confirmed_count
-      FROM canvases c WHERE c.project_id = ${id}
+        (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding' AND n.status = 'confirmed') AS confirmed_count,
+        lj.last_job_id, lj.last_job_status, lj.last_job_priority, lj.last_job_at
+      FROM canvases c
+      LEFT JOIN LATERAL (
+        SELECT j.id AS last_job_id, j.status AS last_job_status,
+               j.priority AS last_job_priority, j.created_at AS last_job_at
+        FROM jobs j WHERE j.canvas_id = c.id ORDER BY j.created_at DESC LIMIT 1
+      ) lj ON true
+      WHERE c.project_id = ${id}
       ORDER BY c.created_at DESC`;
   });
 
@@ -503,6 +671,18 @@ export function registerRoutes(app: FastifyInstance) {
       sql`SELECT id, fingerprint, title, severity, location, verify_status FROM findings WHERE job_id = ${id}`,
     ]);
     return { job, events, findings };
+  });
+
+  // 只有 pending 可调整优先级（运行中/终态改优先级无意义）
+  app.patch("/jobs/:id/priority", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = PriorityBody.parse(req.body);
+    const [job] = await sql`
+      UPDATE jobs SET priority = ${body.priority}
+      WHERE id = ${id} AND status = 'pending'
+      RETURNING id, status, priority`;
+    if (!job) return reply.code(409).send({ error: "只有 pending 状态的 job 可调整优先级" });
+    return job;
   });
 
   app.post("/jobs/:id/cancel", async (req, reply) => {

@@ -30,7 +30,7 @@ export function TaskList({
           <div className="px-2 py-8 text-center font-mono text-[13px] leading-relaxed text-zinc-600">
             暂无任务画布
             <br />
-            等待 Plane 领取或 POST /jobs
+            在任务页点「新建任务」即可开始
           </div>
         )}
         <div className="flex flex-col gap-1.5">

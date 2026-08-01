@@ -23,7 +23,10 @@ export async function planePollOnce(): Promise<number> {
   const plane = client();
   if (!plane) return 0;
 
-  const projects = await sql`SELECT id, plane_project_id FROM projects`;
+  // 只同步绑定了 Plane 且未归档的项目（0008 起 plane_project_id 可空 = 纯本地项目）
+  const projects = await sql`
+    SELECT id, plane_project_id FROM projects
+    WHERE plane_project_id IS NOT NULL AND status = 'active'`;
   let created = 0;
 
   for (const p of projects) {
@@ -35,6 +38,18 @@ export async function planePollOnce(): Promise<number> {
     }
   }
   return created;
+}
+
+/** 单项目手动补跑（POST /projects/:id/integrations/plane/sync） */
+export async function planePollProject(projectId: string): Promise<number> {
+  const plane = client();
+  if (!plane) throw new Error("Plane 未配置（PLANE_API_TOKEN / PLANE_WORKSPACE_SLUG）");
+  const [project] = await sql`
+    SELECT id, plane_project_id, status FROM projects WHERE id = ${projectId}`;
+  if (!project) throw new Error("project not found");
+  if (!project.plane_project_id) throw new Error("项目未绑定 Plane");
+  if (project.status !== "active") throw new Error("项目已归档");
+  return pollProject(plane, project.id, project.plane_project_id as string);
 }
 
 async function pollProject(plane: PlaneClient, projectId: string, planeProjectId: string): Promise<number> {

@@ -34,7 +34,8 @@ export function ProjectLayout() {
             </div>
             {project && (
               <div className="truncate font-mono text-[12px] text-zinc-600">
-                {project.plane_project_id}
+                {project.plane_project_id ? `Plane · ${project.plane_project_id}` : "本地项目"}
+                {project.status === "archived" ? " · 已归档" : ""}
               </div>
             )}
           </div>

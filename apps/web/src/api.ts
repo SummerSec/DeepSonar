@@ -2,10 +2,15 @@
 
 export interface Project {
   id: string;
-  plane_project_id: string;
+  /** 可空：NULL = 纯本地项目（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md） */
+  plane_project_id: string | null;
   canvas_id: string;
   name: string;
+  description: string;
+  status: "active" | "archived";
   created_at?: string;
+  updated_at?: string;
+  archived_at?: string | null;
 }
 
 export interface CanvasNode {
@@ -36,7 +41,7 @@ export interface CanvasData {
   edges: CanvasEdge[];
 }
 
-/** 任务画布列表项（一任务一画布） */
+/** 任务画布列表项（一任务一画布；聚合最近一次 job 得任务状态） */
 export interface CanvasSummary {
   id: string;
   title: string;
@@ -47,6 +52,10 @@ export interface CanvasSummary {
   active_count: number;
   finding_count: number;
   confirmed_count: number;
+  last_job_id: string | null;
+  last_job_status: string | null;
+  last_job_priority: number | null;
+  last_job_at: string | null;
 }
 
 export interface JobEvent {
@@ -240,6 +249,33 @@ function qs(params: Record<string, string | undefined | null>): string {
 
 export const api = {
   projects: () => get<Project[]>("/projects"),
+  createProject: (p: { name: string; description?: string; plane_project_id?: string | null }) =>
+    send<Project>("POST", "/projects", p),
+  updateProject: (id: string, p: { name?: string; description?: string; status?: "active" | "archived" }) =>
+    send<Project>("PATCH", `/projects/${id}`, p),
+  archiveProject: (id: string) =>
+    send<{ id: string; status: string }>("POST", `/projects/${id}/archive`),
+  /** 语义化任务创建（同事务建画布 + root + pending job） */
+  createTask: (
+    projectId: string,
+    t: {
+      title: string;
+      type?: string;
+      priority?: number;
+      timeout_sec?: number;
+      payload?: Record<string, unknown>;
+    },
+  ) => send<{ canvas_id: string; job: { id: string; status: string } }>("POST", `/projects/${projectId}/tasks`, t),
+  retryTask: (canvasId: string) => send<{ id: string; status: string }>("POST", `/tasks/${canvasId}/retry`),
+  setJobPriority: (jobId: string, priority: number) =>
+    send<{ id: string; status: string; priority: number }>("PATCH", `/jobs/${jobId}/priority`, { priority }),
+  /** Plane 集成（按项目绑定；解绑不删已导入任务） */
+  bindPlane: (projectId: string, planeProjectId: string) =>
+    send<Project>("PUT", `/projects/${projectId}/integrations/plane`, { plane_project_id: planeProjectId }),
+  unbindPlane: (projectId: string) =>
+    send<Project>("DELETE", `/projects/${projectId}/integrations/plane`),
+  syncPlane: (projectId: string) =>
+    send<{ ok: boolean; created: number }>("POST", `/projects/${projectId}/integrations/plane/sync`),
   /** Plane 连接信息（任务页下发指引；不含 token） */
   planeInfo: () =>
     get<{ enabled: boolean; web_url: string; workspace_slug: string; ready_state: string }>(

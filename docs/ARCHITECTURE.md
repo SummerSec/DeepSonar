@@ -135,20 +135,23 @@ pending → claimed → provisioning → running → succeeded
 
 ### 4.1 项目初始化
 
-1. 人在 Plane 建 Project（例如「客户 X - 源码审计」）
-2. 系统创建绑定 Canvas，写 `root` 节点（仓库地址、范围、规则）
-3. 在 Plane 建 Work Item，例如 `审计 auth 模块`，描述里带：`type=audit_module`、`path=...`
+> 2026-08-01 起（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md）：**本地库为唯一真相，Plane 降级为可选集成**。
+> 默认路径是 Web 直接创建：`POST /projects`（plane_project_id 可空）→ `POST /projects/{id}/tasks`（同事务建任务画布 + root + pending job）。
+
+1. 默认：在 Web「项目」页新建本地项目（或 `POST /projects`）
+2. 可选：在项目「设置 → Plane 集成」绑定 Plane Project；绑定后 Ready 状态的 issue（描述带 `type=audit_module`、`path=...` 等键值对）会被自动认领为任务
+3. 创建任务：Web「新建任务」表单 或 `POST /projects/{id}/tasks`；Plane 下发的 issue 走同一 `ensureCanvasForTask + createJob` 路径
 
 ### 4.2 调度循环（MVP）
 
 ```text
 loop:
-  1. 从 Plane 拉取 state=Ready 且未被占用的 Work Item
-  2. 原子 claim（DB 唯一约束兜底）→ 写 jobs 表 → Plane 改为 In Progress
+  1. 任务入队：本地 POST /projects/{id}/tasks，或 Plane Ready issue（webhook 事件触发 planePollOnce）
+  2. 原子 claim（DB 唯一约束兜底）→ 写 jobs 表 → pg_notify('dfh_jobs') 事件唤醒 dispatcher
   3. Canvas：创建/更新 job 节点（running）
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
-  6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；Plane Done/Failed；Canvas 节点定格
+  6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
   7. finding 落入规则引擎 → 命中规则则派生 verify Job 入队
 ```
 
@@ -325,8 +328,14 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 
 **管理**
 
-- `POST /projects/sync`  绑定 Plane 项目（新项目不再预建画布，画布随任务认领铸造）
-- `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup 计数）
+- `POST /projects`  新建本地项目（plane_project_id 可空；不再预建项目级画布）
+- `GET/PATCH /projects/{id}`、`POST /projects/{id}/archive`  项目详情/改名/归档（归档=软删除，历史保留）
+- `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）
+- `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布，历史保留）
+- `PATCH /jobs/{id}/priority`（仅 pending 可改）
+- `PUT/DELETE /projects/{id}/integrations/plane`、`POST .../plane/sync`  Plane 绑定/解绑/手动补跑
+- `POST /projects/sync`  绑定 Plane 项目（兼容入口；画布随任务认领铸造）
+- `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup 计数 + 最近一次 job 状态/优先级）
 - `GET  /canvases/{id}`  单任务画布节点/边
 - `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
 - `POST /jobs/{id}/cancel`

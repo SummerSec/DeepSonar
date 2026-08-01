@@ -97,7 +97,7 @@ export function DashboardPage() {
             </Link>
           </div>
           {jobs.length === 0 ? (
-            <EmptyState title="暂无 Job" hint="等待 Plane 领取或 POST /jobs" />
+            <EmptyState title="暂无 Job" hint="创建任务后，调度器会自动开始执行" />
           ) : (
             <div className="flex flex-col gap-2">
               {jobs.slice(0, 8).map((j) => (
@@ -183,7 +183,7 @@ export function DashboardPage() {
         {projects.length === 0 ? (
           <EmptyState
             title="暂无项目"
-            hint="在 Plane 建项目后 POST /projects/sync，或等待调度器同步"
+            hint="到「项目」页创建第一个项目，随后创建任务即可自动执行"
           />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -204,7 +204,7 @@ export function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[15px] font-medium text-zinc-100">{p.name}</div>
                       <div className="mt-1 truncate font-mono text-[12px] text-zinc-600">
-                        {p.plane_project_id}
+                        {p.plane_project_id ? `Plane · ${p.plane_project_id}` : "本地项目"}
                       </div>
                     </div>
                     {pFailed > 0 && <Warning size={16} className="shrink-0 text-crit-500" />}
