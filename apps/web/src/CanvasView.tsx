@@ -21,9 +21,11 @@ const EDGE_STYLE: Record<string, { stroke: string; animated?: boolean }> = {
   produces: { stroke: "#d97706", animated: true },
   verifies: { stroke: "#10b981" },
   next: { stroke: "#38bdf8" },
+  from: { stroke: "#a78bfa" }, // 事实 → 意图（Cairn Intent.from）
+  to: { stroke: "#2dd4bf" }, // 意图 → 事实（Cairn Intent.to）
 };
 
-const NODE_W = 248;
+const NODE_W = 280;
 
 function toFlow(data: CanvasData): { nodes: Node[]; edges: Edge[] } {
   const pos = layoutNodes(data.nodes, data.edges);
@@ -57,6 +59,8 @@ function Legend() {
   const items = [
     { color: EDGE_STYLE.produces.stroke, label: "produces 产出" },
     { color: EDGE_STYLE.verifies.stroke, label: "verifies 验证" },
+    { color: EDGE_STYLE.from.stroke, label: "from 引用" },
+    { color: EDGE_STYLE.to.stroke, label: "to 结论" },
     { color: EDGE_STYLE.child.stroke, label: "child 包含" },
   ];
   return (
@@ -64,7 +68,7 @@ function Legend() {
       {items.map((it) => (
         <span key={it.label} className="flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 rounded" style={{ background: it.color }} />
-          <span className="font-mono text-[10px] text-zinc-400">{it.label}</span>
+          <span className="font-mono text-[12px] text-zinc-400">{it.label}</span>
         </span>
       ))}
     </div>

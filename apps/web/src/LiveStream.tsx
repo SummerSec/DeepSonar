@@ -94,13 +94,13 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         <span
           className={`inline-block size-1.5 rounded-full ${connected ? "dfh-live-dot bg-acc-500" : "bg-zinc-600"}`}
         />
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+        <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
           {connected ? "live" : "已断开"}
         </span>
         {!follow && (
           <button
             onClick={() => setFollow(true)}
-            className="ml-auto rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[10px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200"
+            className="ml-auto rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200"
           >
             回到底部
           </button>
@@ -115,18 +115,18 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         className="flex-1 overflow-y-auto px-3 py-2"
       >
         {blocks.length === 0 && (
-          <div className="py-8 text-center font-mono text-[11px] text-zinc-600">
+          <div className="py-8 text-center font-mono text-[13px] text-zinc-600">
             等待 agent 事件…（job 运行时这里会实时滚动）
           </div>
         )}
         {blocks.map((b) => {
           if (b.kind === "text") {
             return b.reasoning ? (
-              <p key={b.key} className="mb-2 whitespace-pre-wrap break-words font-mono text-[11px] italic leading-relaxed text-zinc-600">
+              <p key={b.key} className="mb-2 whitespace-pre-wrap break-words font-mono text-[13px] italic leading-relaxed text-zinc-600">
                 {b.text}
               </p>
             ) : (
-              <p key={b.key} className="mb-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-zinc-300">
+              <p key={b.key} className="mb-2 whitespace-pre-wrap break-words text-[14px] leading-relaxed text-zinc-300">
                 {b.text}
               </p>
             );
@@ -140,12 +140,12 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
                   <CircleNotch size={12} className="shrink-0 animate-spin text-run-400" />
                 )}
                 <Wrench size={11} className="shrink-0 text-zinc-600" />
-                <span className="truncate font-mono text-[11px] text-zinc-300">{b.action || b.name}</span>
+                <span className="truncate font-mono text-[13px] text-zinc-300">{b.action || b.name}</span>
               </div>
             );
           }
           return (
-            <div key={b.key} className="mb-2 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600">
+            <div key={b.key} className="mb-2 flex items-center gap-1.5 font-mono text-[12px] text-zinc-600">
               <TextAlignLeft size={11} />
               {b.text}
             </div>

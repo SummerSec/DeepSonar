@@ -132,11 +132,19 @@ export function startPlaneSync() {
     console.log("[plane] 未配置 PLANE_WORKSPACE_SLUG，Plane 同步停用（可手动 POST /jobs）");
     return () => {};
   }
-  const timer = setInterval(() => {
-    void planePollOnce().catch((e) => console.error("[plane]", e));
-  }, config.timeouts.pollIntervalSec * 1000);
+  // 事件驱动：Plane webhook → /webhooks/plane 触发 planePollOnce（routes.ts）
+  // 启动补跑一次（停机期间 Ready 的 issue 不会重发 webhook）
   void planePollOnce().catch((e) => console.error("[plane]", e));
-  return () => clearInterval(timer);
+  // 轮询仅在显式开启时启用（webhook 不可达的环境兜底；默认关闭）
+  if (config.timeouts.planePollSec > 0) {
+    const timer = setInterval(() => {
+      void planePollOnce().catch((e) => console.error("[plane]", e));
+    }, config.timeouts.planePollSec * 1000);
+    console.log(`[plane] 轮询兜底已开启：${config.timeouts.planePollSec}s（默认应走 webhook 事件）`);
+    return () => clearInterval(timer);
+  }
+  console.log("[plane] 事件驱动模式：等待 /webhooks/plane（未配 webhook 时设 PLANE_POLL_INTERVAL_SEC 兜底）");
+  return () => {};
 }
 
 export { transitionJob };

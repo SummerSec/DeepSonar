@@ -318,19 +318,76 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/jobs", async (req) => {
     const q = req.query as { project_id?: string; status?: string };
-    const conditions = [
-      q.project_id ? sql`project_id = ${q.project_id}` : null,
-      q.status ? sql`status = ${q.status}` : null,
-    ].filter((c): c is NonNullable<typeof c> => c !== null);
-    const where =
-      conditions.length === 0
-        ? sql``
-        : sql`WHERE ${conditions.reduce((acc, c) => sql`${acc} AND ${c}`)}`;
+    // 联表项目名 / 画布标题，前端列表页直接展示
+    if (q.project_id && q.status) {
+      return sql`
+        SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
+               j.started_at, j.finished_at, j.created_at,
+               p.name AS project_name, c.title AS canvas_title
+        FROM jobs j
+        JOIN projects p ON p.id = j.project_id
+        LEFT JOIN canvases c ON c.id = j.canvas_id
+        WHERE j.project_id = ${q.project_id} AND j.status = ${q.status}
+        ORDER BY j.created_at DESC LIMIT 200`;
+    }
+    if (q.project_id) {
+      return sql`
+        SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
+               j.started_at, j.finished_at, j.created_at,
+               p.name AS project_name, c.title AS canvas_title
+        FROM jobs j
+        JOIN projects p ON p.id = j.project_id
+        LEFT JOIN canvases c ON c.id = j.canvas_id
+        WHERE j.project_id = ${q.project_id}
+        ORDER BY j.created_at DESC LIMIT 200`;
+    }
+    if (q.status) {
+      return sql`
+        SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
+               j.started_at, j.finished_at, j.created_at,
+               p.name AS project_name, c.title AS canvas_title
+        FROM jobs j
+        JOIN projects p ON p.id = j.project_id
+        LEFT JOIN canvases c ON c.id = j.canvas_id
+        WHERE j.status = ${q.status}
+        ORDER BY j.created_at DESC LIMIT 200`;
+    }
     return sql`
-      SELECT id, project_id, canvas_id, plane_issue_id, type, status, priority, error,
-             started_at, finished_at, created_at
-      FROM jobs ${where}
-      ORDER BY created_at DESC LIMIT 200`;
+      SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
+             j.started_at, j.finished_at, j.created_at,
+             p.name AS project_name, c.title AS canvas_title
+      FROM jobs j
+      JOIN projects p ON p.id = j.project_id
+      LEFT JOIN canvases c ON c.id = j.canvas_id
+      ORDER BY j.created_at DESC LIMIT 200`;
+  });
+
+  // ---------- Findings 清单（可按项目 / 画布 / severity / 验证状态筛选） ----------
+  // canvas_id：只看「本次任务」产出，不混入同项目其它任务
+  app.get("/findings", async (req) => {
+    const q = req.query as {
+      project_id?: string;
+      severity?: string;
+      verify_status?: string;
+      canvas_id?: string;
+    };
+    const projectId = q.project_id || null;
+    const severity = q.severity || null;
+    const verifyStatus = q.verify_status || null;
+    const canvasId = q.canvas_id || null;
+    return sql`
+      SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
+             f.location, f.summary, f.verify_status, f.created_at,
+             p.name AS project_name, j.canvas_id
+      FROM findings f
+      JOIN projects p ON p.id = f.project_id
+      JOIN jobs j ON j.id = f.job_id
+      WHERE (${projectId}::uuid IS NULL OR f.project_id = ${projectId}::uuid)
+        AND (${severity}::text IS NULL OR f.severity = ${severity})
+        AND (${verifyStatus}::text IS NULL OR f.verify_status = ${verifyStatus})
+        AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId})
+      ORDER BY f.created_at DESC
+      LIMIT 500`;
   });
 
   app.get("/jobs/:id", async (req, reply) => {

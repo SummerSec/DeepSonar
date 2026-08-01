@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 import { runRealAgent } from "@dfh/runtime-sandbox";
 import { FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
-import { ingestEvent, type AgentProfileSnapshot } from "./core.js";
+import { ingestEvent, rulesForProject, type AgentProfileSnapshot } from "./core.js";
 import { sql } from "./db.js";
+import { buildGraphSnapshot, parseFactOutput, parseHubDecision } from "./graph.js";
 import { publishStream } from "./stream-bus.js";
 
 /**
@@ -55,15 +56,50 @@ const VERIFY_PROMPT = (finding: { title: string; location?: string; summary?: st
    - verdict 字段只能是这三个英文词之一，不要带任何括号注释；文件必须是纯 JSON，不要用 markdown 代码围栏包裹
 3. 不要修改源代码`;
 
+/** hub 决策 prompt（Cairn reason.md 改造，§8.3）：读整张图 → complete 或派发 intents */
+const HUB_PROMPT = (graphYaml: string, maxIntents: number) => `你是安全审计的调度中枢（hub）。画布当前状态（YAML）：
+
+${graphYaml}
+
+可用角色：explore（探索：通读 /workspace/src 代码，围绕意图收集新事实）
+
+要求：
+1. 判断 goal 是否已达成：
+   - 已达成 → 写 /workspace/hub.json：{"complete":{"from":["<被引用事实的id>",...],"description":"总结论（中文，200 字内）"}}
+   - 未达成 → 写 /workspace/hub.json：{"intents":[{"from":["<作为出发点的事实id>",...],"role":"explore","description":"要做的事（具体、可执行）"}]}
+2. 最多 ${maxIntents} 个意图；意图必须高价值、互不重叠、可并行；from 只能引用上面 facts 里存在的 id
+3. 不要提出与 open_intents / concluded_intents 语义重复的意图
+4. 若 open_intents 为空且目标未达成，必须提出新意图
+5. hub.json 必须是纯 JSON，不要用 markdown 代码围栏包裹`;
+
+/** 角色（explore）prompt（Cairn explore.md 改造）：围绕意图探索 → 增量事实 */
+const EXPLORE_PROMPT = (graphYaml: string, intentDescription: string) => `你是探索 agent。代码在 /workspace/src。
+
+当前意图：${intentDescription}
+
+画布已有内容（YAML，不要重复其中的事实）：
+${graphYaml}
+
+要求：
+1. 围绕意图阅读代码，收集与意图直接相关的新事实（疑似漏洞线索、关键数据流、危险调用点等）
+2. 写 /workspace/fact.json：{"title":"事实标题（20 字内）","description":"事实描述（中文，300 字内，含具体文件:行号）"}
+   - 只写增量事实，不要复述画布已有内容；事实要具体、可被后续验证
+   - 必须是纯 JSON，不要用 markdown 代码围栏包裹
+3. 完成后写 /workspace/done.json：{"summary":"探索过程总结（中文，100 字内）"}
+4. 不要修改源代码`;
+
 export async function executeReal(jobId: string, type: string): Promise<void> {
   const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job) throw new Error(`job ${jobId} 不存在`);
 
-  const emit = (t: "progress" | "finding" | "done", payload: unknown) =>
-    ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t, payload });
+  const emit = (t: string, payload: unknown) =>
+    ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t as never, payload });
 
   const isVerify = type === "verify_finding";
+  const isHub = type === "hub_reason";
+  const isRole = !isVerify && !isHub && type !== "audit_module"; // explore 等角色 job
   const payload = job.payload_json as Record<string, unknown>;
+  const canvasId = (job.canvas_id as string) ?? null;
 
   // Agent 配置：job 冻结的 profile 快照优先，无快照退回 env 全局配置（§8.1 下一 job 生效）
   const snapshot = (job.agent_snapshot_json as AgentProfileSnapshot | null) ?? null;
@@ -77,10 +113,33 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     if (v) env[key] = v;
   }
 
-  const basePrompt = isVerify
-    ? VERIFY_PROMPT((payload.finding ?? {}) as { title: string; location?: string; summary?: string })
-    : AUDIT_PROMPT(payload.module_path as string | undefined);
+  // prompt 按 job 类型分派；hub/角色 job 需要整张图（YAML）作上下文
+  const rules = await rulesForProject(sql, job.project_id as string);
+  const graph = canvasId && (isHub || isRole) ? await buildGraphSnapshot(canvasId) : null;
+  const intentDesc =
+    ((payload.intent as { description?: string } | undefined)?.description as string) ?? "";
+  let basePrompt: string;
+  if (isHub) {
+    if (!graph) throw new Error("hub_reason job 缺 canvas_id，无法读图");
+    basePrompt = HUB_PROMPT(graph.yaml, rules.maxIntentsPerDecision);
+  } else if (isRole) {
+    if (!graph) throw new Error(`${type} job 缺 canvas_id，无法读图`);
+    basePrompt = EXPLORE_PROMPT(graph.yaml, intentDesc || "自由探索代码，收集安全相关事实");
+  } else if (isVerify) {
+    basePrompt = VERIFY_PROMPT((payload.finding ?? {}) as { title: string; location?: string; summary?: string });
+  } else {
+    basePrompt = AUDIT_PROMPT(payload.module_path as string | undefined);
+  }
   const prompt = snapshot?.prompt_suffix ? `${basePrompt}\n\n${snapshot.prompt_suffix}` : basePrompt;
+
+  // 结果文件契约按类型：audit=findings+done；hub=hub.json；角色=fact.json+done
+  const resultFiles = isHub
+    ? ["/workspace/hub.json", "/workspace/done.json"]
+    : isRole
+      ? ["/workspace/fact.json", "/workspace/done.json"]
+      : isVerify
+        ? ["/workspace/done.json"]
+        : ["/workspace/findings.jsonl", "/workspace/done.json"];
 
   await emit("progress", {
     message: `真实 agent 启动（${provider}${snapshot ? ` / profile=${snapshot.name}` : " / env 全局配置"}）`,
@@ -109,9 +168,9 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       commands: snapshot?.commands as never,
       mcps: snapshot?.mcps as never,
       subAgents: snapshot?.subagents as never,
-      // 审计任务注入演示仓库；验证任务复用同一演示仓库（MVP：finding 上下文从种子代码来）
-      seedFiles: seedFilesFromDir(DEMO_REPO),
-      resultFiles: ["/workspace/findings.jsonl", "/workspace/done.json"],
+      // 审计任务注入演示仓库；验证/探索任务复用同一演示仓库；hub 只读图不需要代码
+      seedFiles: isHub ? {} : seedFilesFromDir(DEMO_REPO),
+      resultFiles,
       onProgress: (message) => {
         void emit("progress", { message }).catch(() => {});
       },
@@ -142,16 +201,58 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
 
   if (result.error) throw new Error(`agent 运行失败: ${result.error}`);
 
-  // findings 落库（schema 校验 + 上限 20 条/§4.3 护栏语义）
+  // findings 落库（schema 校验 + 上限 20 条/§4.3 护栏语义）——仅审计 job
   let findingCount = 0;
-  const lines = (result.files["/workspace/findings.jsonl"] ?? "").split("\n").filter((l) => l.trim());
-  for (const line of lines.slice(0, 20)) {
-    try {
-      const f = FindingPayload.parse(JSON.parse(line));
-      await emit("finding", f);
-      findingCount++;
-    } catch (e) {
-      console.warn(`[real-agent] 跳过非法 finding 行:`, e instanceof Error ? e.message.slice(0, 200) : e);
+  if (!isVerify && !isHub && !isRole) {
+    const lines = (result.files["/workspace/findings.jsonl"] ?? "").split("\n").filter((l) => l.trim());
+    for (const line of lines.slice(0, 20)) {
+      try {
+        const f = FindingPayload.parse(JSON.parse(line));
+        await emit("finding", f);
+        findingCount++;
+      } catch (e) {
+        console.warn(`[real-agent] 跳过非法 finding 行:`, e instanceof Error ? e.message.slice(0, 200) : e);
+      }
+    }
+  }
+
+  // hub 决策落地（§8.3）：hub.json → complete / intents → 派生角色 job
+  let hubNote = "";
+  if (isHub) {
+    const raw = result.files["/workspace/hub.json"] ?? "";
+    const decision = parseHubDecision(raw);
+    if (!decision) {
+      console.warn(`[real-agent] hub.json 解析失败，原文: ${raw.slice(0, 200)}`);
+      hubNote = "（hub.json 解析失败）";
+    } else if (decision.complete) {
+      await emit("hub_decision", { complete: decision.complete });
+      hubNote = `（结论：${decision.complete.description.slice(0, 80)}）`;
+    } else {
+      const intents = (decision.intents ?? []).slice(0, rules.maxIntentsPerDecision);
+      if (intents.length > 0) {
+        await emit("hub_decision", { intents });
+        hubNote = `（派发 ${intents.length} 个意图）`;
+      } else {
+        hubNote = "（无新意图）";
+      }
+    }
+  }
+
+  // 角色 job 事实落地：fact.json → fact 节点（agent 只负责把发现写入画布）
+  let factNote = "";
+  if (isRole) {
+    const raw = result.files["/workspace/fact.json"] ?? "";
+    const fact = parseFactOutput(raw);
+    if (!fact) {
+      console.warn(`[real-agent] fact.json 解析失败，原文: ${raw.slice(0, 200)}`);
+      factNote = "（fact.json 解析失败）";
+    } else {
+      await emit("fact", {
+        intent_node_id: (payload.intent_node_id as string) ?? null,
+        title: fact.title,
+        description: fact.description,
+      });
+      factNote = `（事实：${fact.title.slice(0, 60)}）`;
     }
   }
 
@@ -185,7 +286,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   }
 
   await emit("done", {
-    summary: `${summary}（结构化 finding: ${findingCount} 条）`,
+    summary: `${summary}${hubNote}${factNote}${findingCount > 0 ? `（结构化 finding: ${findingCount} 条）` : ""}`,
     ...(isVerify && verdict ? { verdict } : {}),
   });
 }

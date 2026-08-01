@@ -14,6 +14,9 @@ import { runner } from "./runtime.js";
 
 const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
 
+/** real 模式可执行的 job 类型（Phase ①：审计/验证/hub/探索角色；Phase ② 角色注册表放开） */
+const REAL_TYPES = new Set(["audit_module", "verify_finding", "hub_reason", "explore"]);
+
 export async function dispatchOnce(): Promise<number> {
   const [{ running }] = await sql<[{ running: number }]>`
     SELECT COUNT(*)::int AS running FROM jobs WHERE status IN ('claimed','provisioning','running')`;
@@ -48,8 +51,7 @@ async function runJob(jobId: string) {
   if (!job) return;
 
   // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
-  const useReal =
-    config.runtime.agentMode === "real" && (job.type === "audit_module" || job.type === "verify_finding");
+  const useReal = config.runtime.agentMode === "real" && REAL_TYPES.has(job.type as string);
   await transitionJob(jobId, "provisioning");
   const handle = await runner.provision({
     jobId,
@@ -94,20 +96,17 @@ async function runJob(jobId: string) {
 
 /** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */
 async function execute(jobId: string, type: string) {
-  if (
-    config.runtime.agentMode === "real" &&
-    (type === "audit_module" || type === "verify_finding")
-  ) {
+  if (config.runtime.agentMode === "real" && REAL_TYPES.has(type)) {
     await executeReal(jobId, type);
     return;
   }
   await executeFake(jobId, type);
 }
 
-/** Phase 0/1 执行器：noop 直发事件；audit/verify 由假 agent 脚本驱动（§10 Phase 1 验收用） */
+/** Phase 0/1 执行器：noop 直发事件；audit/verify/hub/explore 由假 agent 脚本驱动（联调/演示用） */
 async function executeFake(jobId: string, type: string) {
-  const emit = (t: "progress" | "finding" | "done" | "human", payload: unknown) =>
-    ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t, payload });
+  const emit = (t: string, payload: unknown) =>
+    ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t as never, payload });
 
   if (type === "noop") {
     await emit("progress", { message: "noop executor ok", percent: 100 });
@@ -147,6 +146,52 @@ async function executeFake(jobId: string, type: string) {
     });
     return;
   }
+
+  if (type === "hub_reason") {
+    // 假 hub：画布已有 fact → 收敛 complete；否则派发一个 explore 意图（最小循环可测）
+    const [job] = await sql`SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+    const canvasId = job?.canvas_id as string | null;
+    await emit("progress", { message: "假 hub：读图决策中", percent: 50 });
+    if (canvasId) {
+      const facts = await sql`
+        SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact' ORDER BY created_at`;
+      if (facts.length > 0) {
+        await emit("hub_decision", {
+          complete: {
+            from: facts.map((f) => f.id as string),
+            description: "假 hub：事实已足够，目标达成（演示结论）",
+          },
+        });
+      } else {
+        const refs = await sql`
+          SELECT id FROM canvas_nodes
+          WHERE canvas_id = ${canvasId} AND node_type = ANY(${["finding", "fact", "root"]})
+          ORDER BY created_at LIMIT 2`;
+        await emit("hub_decision", {
+          intents: [
+            {
+              from: refs.map((r) => r.id as string),
+              role: "explore",
+              description: "假 hub：探索代码，收集与审计目标相关的事实",
+            },
+          ],
+        });
+      }
+    }
+    return; // done 由 runJob 兜底
+  }
+
+  if (type === "explore") {
+    const [job] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
+    const payload = (job?.payload_json ?? {}) as Record<string, unknown>;
+    await emit("progress", { message: "假 agent：探索中", percent: 50 });
+    await emit("fact", {
+      intent_node_id: (payload.intent_node_id as string) ?? null,
+      title: "假 agent 探索事实",
+      description: "假 agent：auth/login.php:42 存在未参数化拼接，用户输入经 $_GET 直达 mysqli_query，属高危数据流（演示事实）。",
+    });
+    return; // done 由 runJob 兜底
+  }
   // 未知类型：保活等待外部通道（Phase 2 真实 agent）
 }
 
@@ -170,8 +215,14 @@ function stopLeaseRenewal(jobId: string) {
 }
 
 async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
-  const existing = await sql`SELECT 1 FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
-  if (existing.length > 0) return;
+  // intent 节点由 hub_decision 随角色 job 同事务创建（1:1）；已有节点则只同步运行态
+  const existing = await sql`SELECT id, node_type FROM canvas_nodes WHERE job_id = ${jobId}`;
+  if (existing.length > 0) {
+    await sql`
+      UPDATE canvas_nodes SET status = 'running', updated_at = now()
+      WHERE job_id = ${jobId} AND node_type = 'intent' AND status = 'pending'`;
+    return;
+  }
   // 一任务一画布：优先 job 自带的任务画布；历史 job（canvas_id 为空）兜底到项目旧画布
   let canvasId = job.canvas_id as string | null;
   if (!canvasId) {
@@ -207,10 +258,48 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
   }
 }
 
+/**
+ * 事件驱动的领取触发器（§4.2：全程事件触发，无轮询）：
+ * jobs 表触发器 pg_notify('dfh_jobs') → LISTEN 收到即跑一轮 dispatchOnce。
+ * 重入保护：运行中再来事件只标记补跑，不并发抢。
+ */
+let kickRunning = false;
+let kickAgain = false;
+
+export function kickDispatcher() {
+  if (kickRunning) {
+    kickAgain = true;
+    return;
+  }
+  kickRunning = true;
+  void (async () => {
+    try {
+      do {
+        kickAgain = false;
+        await dispatchOnce();
+      } while (kickAgain);
+    } catch (e) {
+      console.error("[dispatcher]", e);
+    } finally {
+      kickRunning = false;
+    }
+  })();
+}
+
 export function startDispatcher() {
-  const timer = setInterval(() => {
-    void dispatchOnce().catch((e) => console.error("[dispatcher]", e));
-  }, config.timeouts.pollIntervalSec * 1000);
-  void dispatchOnce().catch(() => {});
-  return () => clearInterval(timer);
+  // 事件源：DB LISTEN/NOTIFY（0005_job_events.sql；NOTIFY 提交后投递，与事务可见性一致）
+  const listenPromise = sql.listen("dfh_jobs", () => kickDispatcher());
+  // 启动补跑： scheduler 停机期间堆积的 pending job 不会产生新事件，先清一次
+  void listenPromise.then(() => kickDispatcher()).catch((e) => console.error("[dispatcher] LISTEN 失败:", e));
+
+  // 兜底轮询默认关闭；DFH_DISPATCH_POLL_SEC>0 显式开启（调试/极端场景用）
+  let timer: ReturnType<typeof setInterval> | null = null;
+  if (config.timeouts.dispatchPollSec > 0) {
+    timer = setInterval(() => kickDispatcher(), config.timeouts.dispatchPollSec * 1000);
+    console.log(`[dispatcher] 兜底轮询已开启：${config.timeouts.dispatchPollSec}s（默认应关闭，事件驱动）`);
+  }
+  return () => {
+    if (timer) clearInterval(timer);
+    void listenPromise.then((l) => l.unlisten()).catch(() => {});
+  };
 }

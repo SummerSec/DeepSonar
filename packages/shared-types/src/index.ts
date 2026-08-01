@@ -20,10 +20,12 @@ export const JobType = z.enum([
   "noop", // Phase 0 骨架验证用
   "audit_module",
   "verify_finding",
+  "hub_reason", // hub：读图 → 决策（complete / 派发 intents）
+  "explore", // 角色 agent：围绕意图探索 → 产出事实（Phase ② 角色注册后 type 可为用户自定义角色名）
 ]);
 export type JobType = z.infer<typeof JobType>;
 
-export const EventType = z.enum(["progress", "finding", "done", "human"]);
+export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision"]);
 export type EventType = z.infer<typeof EventType>;
 
 export const Severity = z.enum(["low", "medium", "high", "critical"]);
@@ -38,10 +40,10 @@ export const VerifyStatus = z.enum([
 ]);
 export type VerifyStatus = z.infer<typeof VerifyStatus>;
 
-export const NodeType = z.enum(["root", "job", "finding", "note", "human"]);
+export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact"]);
 export type NodeType = z.infer<typeof NodeType>;
 
-export const EdgeType = z.enum(["child", "produces", "verifies", "next"]);
+export const EdgeType = z.enum(["child", "produces", "verifies", "next", "from", "to"]);
 export type EdgeType = z.infer<typeof EdgeType>;
 
 // ---------- Finding payload（SARIF 2.1.0 子集，见 ARCHITECTURE §6.1） ----------

@@ -1,18 +1,28 @@
 @import "tailwindcss";
-@import "@fontsource/geist-sans/400.css";
-@import "@fontsource/geist-sans/500.css";
-@import "@fontsource/geist-sans/600.css";
-@import "@fontsource/geist-mono/400.css";
-@import "@fontsource/geist-mono/500.css";
+
+/* 界面：Noto Sans SC（思源黑体同源，简体中文可读性最佳） */
+@import "@fontsource/noto-sans-sc/chinese-simplified-400.css";
+@import "@fontsource/noto-sans-sc/chinese-simplified-500.css";
+@import "@fontsource/noto-sans-sc/chinese-simplified-600.css";
+@import "@fontsource/noto-sans-sc/latin-400.css";
+@import "@fontsource/noto-sans-sc/latin-500.css";
+@import "@fontsource/noto-sans-sc/latin-600.css";
+
+/* 等宽：代码 / ID / 状态；中文回退到 Noto Sans SC */
+@import "@fontsource/noto-sans-mono/latin-400.css";
+@import "@fontsource/noto-sans-mono/latin-500.css";
 
 /*
  * DeepFlowHunter 画布主题（dark tech 座舱）
+ * 字体：Noto Sans SC 优先简体中文；系统字体作回退
  * 圆角规则：卡片 10px / 控件 8px / 徽章全圆角
  * 品牌 accent：emerald；状态色仅作语义用途
  */
 @theme {
-  --font-sans: "Geist Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Source Han Sans SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-mono: "Noto Sans Mono", "Noto Sans SC", "JetBrains Mono", "Cascadia Code",
+    ui-monospace, monospace;
 
   --color-ink-950: #09090b;
   --color-ink-900: #101013;
@@ -36,7 +46,16 @@ body {
   background: var(--color-ink-950);
   color: #e4e4e7;
   font-family: var(--font-sans);
+  font-size: 15px;
+  /* 中文略增行高，避免笔画挤在一起 */
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 等宽区域：中英混排时中文走 SC，英文走 Mono */
+.font-mono {
+  font-feature-settings: "tnum" 1;
 }
 
 /* ---------- React Flow 深色化 ---------- */

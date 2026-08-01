@@ -1,9 +1,30 @@
-# @dfh/web — 画布前端（Phase 2 建设）
+# @dfh/web — DeepFlowHunter 控制台
 
-技术选型已定（ARCHITECTURE §5/§16）：**React + React Flow (@xyflow/react, MIT)**
+技术选型：React + React Router + React Flow（@xyflow/react）+ Tailwind
 
-- 数据源：`GET /projects/{id}/canvas`（nodes/edges 与 React Flow 1:1 映射）
-- 只读渲染：`nodesDraggable={false}`，坐标服务端分配（§3.2）
-- 自定义节点组件：root / job / finding / note / human（finding 卡片含 severity 徽章、verify 状态）
-- 更新方式：MVP 轮询；WS 只推引用 `{node_id, version}` 客户端再拉（§6.4）
-- 大画布：`onlyRenderVisibleElements` + 按 job 分组折叠（§6.4）
+## 信息架构
+
+| 路由 | 页面 | 说明 |
+|------|------|------|
+| `/` | 总览 | 跨项目活跃 Job、最近发现、项目卡片 |
+| `/projects` | 项目列表 | Plane 绑定项目 |
+| `/projects/:id/tasks` | 任务表 | 一任务一画布，可按活跃/有发现筛选 |
+| `/projects/:id/tasks/:canvasId` | 过程画布 | 只读 React Flow + 节点详情侧栏 |
+| `/projects/:id/findings` | 项目发现 | severity / 验证状态筛选 |
+| `/projects/:id/settings` | 项目设置 | Agent profile / 规则 / 模块源 |
+| `/jobs` | 调度队列 | 全局 Job，支持取消 / 恢复 |
+| `/findings` | 全局发现 | 跨项目 finding 清单 |
+
+## 数据源
+
+- `GET /projects`、`/projects/:id/canvases`、`/canvases/:id`
+- `GET /jobs`、`POST /jobs/:id/cancel|resume`
+- `GET /findings`（severity / verify_status / project_id 筛选）
+- 设置：`/agent-profiles`、`/skill-sources`、`/projects/:id/settings`
+- 画布：只读渲染，`nodesDraggable={false}`；MVP 5s 轮询；Job 实时流走 `/ws`
+
+## 开发
+
+```bash
+pnpm --filter @dfh/web dev   # :5173，代理 /api → :3100
+```

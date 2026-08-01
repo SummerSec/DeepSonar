@@ -36,6 +36,8 @@ const TYPE_LABEL: Record<string, string> = {
   finding: "发现",
   note: "说明",
   human: "需人工",
+  intent: "意图",
+  fact: "事实",
 };
 
 /** 运行中状态：状态点带呼吸脉冲 */
@@ -48,6 +50,7 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
   const severity = (n.body_json?.severity as string) ?? null;
   const sevColor = severity ? (SEVERITY_COLOR[severity] ?? "#71717a") : null;
   const jobType = (n.body_json?.type as string) ?? null;
+  const role = (n.body_json?.role as string) ?? null;
   const location = (n.body_json?.location as string) ?? null;
   // 「当前动作」（工具调用聚合，executor 直接写显示态）优先于 job 类型展示
   const lastAction = (n.body_json?.last_progress as { message?: string } | undefined)?.message ?? null;
@@ -58,21 +61,21 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
     : null;
 
   return (
-    <div className="dfh-node w-full rounded-[10px] border border-ink-700 bg-ink-850/95 px-3 py-2.5">
+    <div className="dfh-node w-full rounded-[10px] border border-ink-700 bg-ink-850/95 px-3.5 py-3">
       <Handle type="target" position={Position.Left} isConnectable={false} />
 
       {/* 头部：类型 + 状态 */}
       <div className="flex items-center gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+        <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
           {TYPE_LABEL[n.node_type] ?? n.node_type}
         </span>
         {status && (
           <span className="ml-auto flex items-center gap-1.5">
             <span
-              className={`inline-block size-1.5 rounded-full ${LIVE_STATUS.has(status) ? "dfh-live-dot" : ""}`}
+              className={`inline-block size-2 rounded-full ${LIVE_STATUS.has(status) ? "dfh-live-dot" : ""}`}
               style={{ background: statusColor }}
             />
-            <span className="font-mono text-[10px]" style={{ color: statusColor }}>
+            <span className="font-mono text-[12px]" style={{ color: statusColor }}>
               {status}
             </span>
           </span>
@@ -81,7 +84,7 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
 
       {/* 标题：最多两行 */}
       <div
-        className="mt-1.5 text-[13px] font-medium leading-snug text-zinc-100"
+        className="mt-1.5 text-[15px] font-medium leading-snug text-zinc-100"
         style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
       >
         {n.title}
@@ -90,16 +93,16 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
       {/* 底部元信息：位置 / job 类型 / severity */}
       <div className="mt-1.5 flex items-center gap-2">
         {location && (
-          <span className="truncate font-mono text-[11px] text-zinc-500">{location}</span>
+          <span className="truncate font-mono text-[13px] text-zinc-500">{location}</span>
         )}
         {!location && (
-          <span className="truncate font-mono text-[11px] text-zinc-500">
-            {lastAction ?? targetText ?? jobType ?? ""}
+          <span className="truncate font-mono text-[13px] text-zinc-500">
+            {lastAction ?? role ?? targetText ?? jobType ?? ""}
           </span>
         )}
         {severity && (
           <span
-            className="ml-auto font-mono text-[10px] font-medium uppercase tracking-wider"
+            className="ml-auto font-mono text-[12px] font-medium uppercase tracking-wider"
             style={{ color: sevColor ?? undefined }}
           >
             {severity}
@@ -112,11 +115,13 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
   );
 }
 
-// 每种 node_type 一个组件（§3.2 固定节点类型）
+// 每种 node_type 一个组件（§3.2 固定节点类型 + §8.3 图语义节点）
 export const nodeTypes = {
   root: BaseNode,
   job: BaseNode,
   finding: BaseNode,
   note: BaseNode,
   human: BaseNode,
+  intent: BaseNode,
+  fact: BaseNode,
 };

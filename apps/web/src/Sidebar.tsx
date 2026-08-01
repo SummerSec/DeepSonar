@@ -17,7 +17,7 @@ function StatusDot({ status }: { status: string }) {
   return (
     <span className="flex items-center gap-1.5">
       <span className="inline-block size-1.5 rounded-full" style={{ background: c }} />
-      <span className="font-mono text-[11px]" style={{ color: c }}>{status}</span>
+      <span className="font-mono text-[13px]" style={{ color: c }}>{status}</span>
     </span>
   );
 }
@@ -25,9 +25,9 @@ function StatusDot({ status }: { status: string }) {
 function Field({ k, v, mono = true }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="py-1.5">
-      <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">{k}</div>
+      <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">{k}</div>
       <div
-        className={`mt-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-zinc-300 ${mono ? "font-mono" : ""}`}
+        className={`mt-1 whitespace-pre-wrap break-words text-[14px] leading-relaxed text-zinc-300 ${mono ? "font-mono" : ""}`}
       >
         {v}
       </div>
@@ -63,17 +63,17 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
   );
 
   return (
-    <aside className="dfh-sidebar absolute inset-y-0 right-0 z-20 flex w-[380px] flex-col border-l border-ink-700 bg-ink-900/95 backdrop-blur">
+    <aside className="dfh-sidebar absolute inset-y-0 right-0 z-20 flex w-[420px] flex-col border-l border-ink-700 bg-ink-900/95 backdrop-blur">
       {/* 头部 */}
       <div className="flex items-start gap-3 border-b border-ink-800 px-4 py-3.5">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+            <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
               {node.node_type}
             </span>
             {node.status && <StatusDot status={node.status} />}
           </div>
-          <h2 className="mt-1 break-words text-[14px] font-semibold leading-snug text-zinc-100">
+          <h2 className="mt-1 break-words text-[16px] font-semibold leading-snug text-zinc-100">
             {node.title}
           </h2>
         </div>
@@ -92,7 +92,7 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`rounded-md px-2.5 py-1 text-[12px] transition-colors ${
+            className={`rounded-md px-2.5 py-1 text-[14px] transition-colors ${
               tab === t.key
                 ? "bg-ink-800 text-zinc-100"
                 : "text-zinc-500 hover:bg-ink-850 hover:text-zinc-300"
@@ -117,9 +117,9 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
             <>
               {Boolean(node.body_json?.severity) && (
                 <div className="mb-2 flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-850 px-3 py-2">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">severity</span>
+                  <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">severity</span>
                   <span
-                    className="ml-auto font-mono text-[12px] font-medium uppercase"
+                    className="ml-auto font-mono text-[14px] font-medium uppercase"
                     style={{ color: SEVERITY_COLOR[String(node.body_json.severity)] ?? "#71717a" }}
                   >
                     {String(node.body_json.severity)}
@@ -138,7 +138,7 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
                 </div>
               )}
               {job?.job.error && (
-                <div className="mt-3 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-red-300">
+                <div className="mt-3 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 font-mono text-[13px] leading-relaxed text-red-300">
                   {job.job.error}
                 </div>
               )}
@@ -155,22 +155,22 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
                       style={{ background: EVENT_COLOR[e.type] ?? "#71717a" }}
                     />
                     <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[10px] text-zinc-600">#{e.job_seq}</span>
+                      <span className="font-mono text-[12px] text-zinc-600">#{e.job_seq}</span>
                       <span
-                        className="font-mono text-[11px] font-medium"
+                        className="font-mono text-[13px] font-medium"
                         style={{ color: EVENT_COLOR[e.type] ?? "#a1a1aa" }}
                       >
                         {e.type}
                       </span>
                     </div>
-                    <div className="mt-0.5 break-words text-[12px] leading-relaxed text-zinc-400">
+                    <div className="mt-0.5 break-words text-[14px] leading-relaxed text-zinc-400">
                       {summarize(e.payload_json)}
                     </div>
                   </li>
                 ))}
               </ol>
             ) : (
-              <div className="py-8 text-center font-mono text-[11px] text-zinc-600">
+              <div className="py-8 text-center font-mono text-[13px] text-zinc-600">
                 {node.job_id ? "加载事件中…" : "该节点无关联 job 事件"}
               </div>
             ))}

@@ -5,11 +5,12 @@ export interface Project {
   plane_project_id: string;
   canvas_id: string;
   name: string;
+  created_at?: string;
 }
 
 export interface CanvasNode {
   id: string;
-  node_type: "root" | "job" | "finding" | "note" | "human";
+  node_type: "root" | "job" | "finding" | "note" | "human" | "intent" | "fact";
   title: string;
   body_json: Record<string, unknown>;
   x: number;
@@ -25,11 +26,11 @@ export interface CanvasEdge {
   id: string;
   from_node_id: string;
   to_node_id: string;
-  edge_type: "child" | "produces" | "verifies" | "next";
+  edge_type: "child" | "produces" | "verifies" | "next" | "from" | "to";
 }
 
 export interface CanvasData {
-  canvas?: { id: string; title: string; target_json: Record<string, unknown> };
+  canvas?: { id: string; title: string; target_json: Record<string, unknown>; project_id?: string };
   canvas_id: string;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
@@ -67,6 +68,40 @@ export interface JobDetail {
   };
   events: JobEvent[];
   findings: { id: string; severity: string; title: string; verify_status: string }[];
+}
+
+/** 全局 / 项目 Job 列表 */
+export interface JobSummary {
+  id: string;
+  project_id: string;
+  canvas_id: string | null;
+  plane_issue_id: string | null;
+  type: string;
+  status: string;
+  priority: number;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  project_name?: string;
+  canvas_title?: string;
+}
+
+/** 发现清单 */
+export interface FindingSummary {
+  id: string;
+  project_id: string;
+  job_id: string;
+  node_id: string | null;
+  fingerprint: string;
+  title: string;
+  severity: string;
+  location: string | null;
+  summary: string | null;
+  verify_status: string;
+  created_at: string;
+  project_name?: string;
+  canvas_id?: string | null;
 }
 
 /** Agent profile（§8.1）：env_keys 只是变量名引用，密钥不落库 */
@@ -159,23 +194,55 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
   return res.json() as Promise<T>;
 }
 
+function qs(params: Record<string, string | undefined | null>): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v) sp.set(k, v);
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
+
 export const api = {
   projects: () => get<Project[]>("/projects"),
   canvases: (projectId: string) => get<CanvasSummary[]>(`/projects/${projectId}/canvases`),
   canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
+  jobs: (opts?: { project_id?: string; status?: string }) =>
+    get<JobSummary[]>(`/jobs${qs({ project_id: opts?.project_id, status: opts?.status })}`),
+  findings: (opts?: {
+    project_id?: string;
+    severity?: string;
+    verify_status?: string;
+    /** 只拉某任务画布的发现，不混其它任务 */
+    canvas_id?: string;
+  }) =>
+    get<FindingSummary[]>(
+      `/findings${qs({
+        project_id: opts?.project_id,
+        severity: opts?.severity,
+        verify_status: opts?.verify_status,
+        canvas_id: opts?.canvas_id,
+      })}`,
+    ),
+  cancelJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/cancel`),
+  resumeJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/resume`),
   agentProfiles: () => get<AgentProfile[]>("/agent-profiles"),
   createProfile: (p: ProfileInput) => send<AgentProfile>("POST", "/agent-profiles", p),
   updateProfile: (id: string, p: Partial<ProfileInput>) =>
     send<AgentProfile>("PATCH", `/agent-profiles/${id}`, p),
   deleteProfile: (id: string) => send<{ ok: boolean }>("DELETE", `/agent-profiles/${id}`),
   settings: (projectId: string) => get<ProjectSettings>(`/projects/${projectId}/settings`),
-  patchSettings: (projectId: string, body: { profiles?: Record<string, string | null>; rules?: Record<string, unknown> }) =>
-    send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
+  patchSettings: (
+    projectId: string,
+    body: { profiles?: Record<string, string | null>; rules?: Record<string, unknown> },
+  ) => send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
   skillSources: () => get<SkillSource[]>("/skill-sources"),
   skillSource: (id: string) => get<SkillSourceDetail>(`/skill-sources/${id}`),
   createSkillSource: (s: { name: string; repo_url: string; branch: string }) =>
     send<SkillSource>("POST", "/skill-sources", s),
-  syncSkillSource: (id: string) => send<{ ok: boolean; modules: number }>("POST", `/skill-sources/${id}/sync`),
+  syncSkillSource: (id: string) =>
+    send<{ ok: boolean; modules: number }>("POST", `/skill-sources/${id}/sync`),
   deleteSkillSource: (id: string) => send<{ ok: boolean }>("DELETE", `/skill-sources/${id}`),
+  health: () => get<{ ok: boolean; ts: number }>("/health"),
 };

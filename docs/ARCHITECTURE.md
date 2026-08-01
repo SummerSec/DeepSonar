@@ -399,6 +399,18 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 - profile 勾选 `["<source_id>:<module_id>"]`，快照时展开为 agentbox **embedded skills / commands** 与手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 差量上传进沙箱
 - 内容在 sync 时缓存，跑任务不再访问 Git —— 断网/私有网络也能跑
 
+### 8.3 图语义与 hub 循环（Cairn 式自驱审计）
+
+画布升级为 **fact-intent 二分图**（参考 Cairn 的 blackboard 架构）：agent 不直接决定下一步，只把发现写进画布；**hub agent 读整张图做决策**。
+
+- 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）
+- 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
+- **hub_reason**（job 类型）：输入 = 整图 YAML（goal/target/facts/open_intents/concluded_intents/hints）→ 输出 `hub.json`：`{"complete":{from,description}}` 或 `{"intents":[{from,role,description}]}`；`hub_decision` 事件落地：complete → root 置 succeeded + 结论入 body；intents → 建 intent 节点 + 角色 job + from 边
+- **explore**（Phase ① 唯一角色）：输入 = 整图 YAML + 当前意图 → 输出 `fact.json`（增量事实，不重复图内容）→ `fact` 事件建 fact 节点 + to 边
+- **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
+- 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DFH_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
+- Phase ②：多角色（analyze/verify/test/code）+ 角色注册表（角色名 → prompt 模板 + profile 绑定），hub prompt 列出可用角色；Phase ③：elkjs 分层布局 + hint 注入
+
 ---
 
 ## 9. 安全与资源策略

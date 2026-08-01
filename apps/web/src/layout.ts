@@ -2,11 +2,12 @@ import type { CanvasEdge, CanvasNode } from "./api";
 
 /**
  * 语义分层布局（前端计算，覆盖 DB 里的粗放坐标）：
- *   列0 root → 列1 审计/普通 job → 列2 finding → 列3 verify job → 列4 其他（note/human）
+ *   列0 root → 列1 审计/普通 job（含 hub）→ 列2 finding → 列3 verify job / intent → 列4 fact → 列5 其他
  * 列内按输入序（= DB 创建序）垂直排布；verify 列按各自 finding 的行序对齐，减少跨线。
+ * （Phase ③ 换 elkjs 分层 DAG 自动布局，本文件是过渡实现）
  */
 
-const COL_X = [80, 460, 840, 1220, 1600];
+const COL_X = [80, 460, 840, 1220, 1600, 1980];
 const ROW_GAP = 132;
 const TOP = 90;
 
@@ -18,8 +19,12 @@ function columnOf(n: CanvasNode): number {
       return (n.body_json?.type as string) === "verify_finding" ? 3 : 1;
     case "finding":
       return 2;
-    default:
+    case "intent":
+      return 3;
+    case "fact":
       return 4;
+    default:
+      return 5;
   }
 }
 

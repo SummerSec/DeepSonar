@@ -26,6 +26,11 @@ function int(name: string, dflt: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
+function bool(name: string, dflt: boolean): boolean {
+  const v = process.env[name];
+  if (v === undefined || v === "") return dflt;
+  return ["1", "true", "yes", "on"].includes(v.toLowerCase());
+}
 
 export const config = {
   databaseUrl: str("DATABASE_URL", "postgres://dfh:dfh@localhost:5432/deepflowhunter"),
@@ -56,7 +61,10 @@ export const config = {
     verifySec: int("DEFAULT_VERIFY_TIMEOUT_SEC", 1800),
     leaseTtlSec: int("LEASE_TTL_SEC", 120),
     reaperIntervalSec: int("REAPER_INTERVAL_SEC", 30),
-    pollIntervalSec: int("POLL_INTERVAL_SEC", 15),
+    /** 任务领取的兜底轮询（默认 0=关闭，纯 LISTEN/NOTIFY 事件驱动） */
+    dispatchPollSec: int("DFH_DISPATCH_POLL_SEC", 0),
+    /** Plane 轮询（默认 0=关闭，走 /webhooks/plane 事件；未配 webhook 时须显式开启） */
+    planePollSec: int("PLANE_POLL_INTERVAL_SEC", 0),
   },
 
   rules: {
@@ -64,6 +72,13 @@ export const config = {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+  },
+
+  /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */
+  hub: {
+    enabled: bool("DFH_HUB_ENABLED", false),
+    maxRounds: int("DFH_HUB_MAX_ROUNDS", 10),
+    maxIntents: int("DFH_HUB_MAX_INTENTS", 3),
   },
 
   runtime: {

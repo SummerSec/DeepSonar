@@ -18,8 +18,8 @@ import {
 type Tab = "profiles" | "rules" | "sources";
 
 const inputCls =
-  "w-full rounded-md border border-ink-700 bg-ink-850 px-2 py-1 font-mono text-[12px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
-const labelCls = "mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
+  "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
+const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500";
 
 function JsonField({
   label,
@@ -43,7 +43,7 @@ function JsonField({
         placeholder="[]"
         className={`${inputCls} resize-y`}
       />
-      {hint && <div className="mt-0.5 text-[10px] text-zinc-600">{hint}</div>}
+      {hint && <div className="mt-0.5 text-[12px] text-zinc-600">{hint}</div>}
     </div>
   );
 }
@@ -103,9 +103,12 @@ function parseJsonArray(text: string): Record<string, unknown>[] {
 export function SettingsPanel({
   projectId,
   onClose,
+  variant = "drawer",
 }: {
   projectId: string;
-  onClose: () => void;
+  onClose?: () => void;
+  /** drawer=浮层侧栏；page=独立设置页 */
+  variant?: "drawer" | "page";
 }) {
   const [tab, setTab] = useState<Tab>("profiles");
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
@@ -238,7 +241,7 @@ export function SettingsPanel({
     <div>
       <label className={labelCls}>Git 模块（勾选下发到 agent；在「模块源」tab 管理仓库）</label>
       {sources.length === 0 && (
-        <div className="font-mono text-[11px] text-zinc-600">暂无模块源 —— 先到「模块源」tab 添加 Git 仓库并同步</div>
+        <div className="font-mono text-[13px] text-zinc-600">暂无模块源 —— 先到「模块源」tab 添加 Git 仓库并同步</div>
       )}
       <div className="flex max-h-56 flex-col gap-2 overflow-y-auto rounded-md border border-ink-800 bg-ink-900/60 p-2">
         {sources.map((s) => {
@@ -253,12 +256,12 @@ export function SettingsPanel({
           }
           return (
             <div key={s.id}>
-              <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+              <div className="mb-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                 {s.name}
               </div>
               {[...byPlugin.entries()].map(([plugin, list]) => (
                 <div key={plugin} className="mb-1.5">
-                  <div className="font-mono text-[10px] text-zinc-600">{plugin}</div>
+                  <div className="font-mono text-[12px] text-zinc-600">{plugin}</div>
                   {list.map((m) => {
                     const key = `${s.id}:${m.id}`;
                     const checked = form.modules.includes(key);
@@ -273,12 +276,12 @@ export function SettingsPanel({
                           onChange={() => toggleModule(key)}
                           className="accent-emerald-500"
                         />
-                        <span className="text-[12px] text-zinc-200">{m.name}</span>
-                        <span className={`font-mono text-[9px] uppercase ${m.kind === "skill" ? "text-acc-400" : "text-run-400"}`}>
+                        <span className="text-[14px] text-zinc-200">{m.name}</span>
+                        <span className={`font-mono text-[11px] uppercase ${m.kind === "skill" ? "text-acc-400" : "text-run-400"}`}>
                           {m.kind}
                         </span>
                         {m.description && (
-                          <span className="truncate text-[10px] text-zinc-600">{m.description}</span>
+                          <span className="truncate text-[12px] text-zinc-600">{m.description}</span>
                         )}
                       </label>
                     );
@@ -290,7 +293,7 @@ export function SettingsPanel({
         })}
       </div>
       {form.modules.length > 0 && (
-        <div className="mt-0.5 font-mono text-[10px] text-acc-400">已勾选 {form.modules.length} 个模块</div>
+        <div className="mt-0.5 font-mono text-[12px] text-acc-400">已勾选 {form.modules.length} 个模块</div>
       )}
     </div>
   );
@@ -309,21 +312,30 @@ export function SettingsPanel({
     </div>
   );
 
-  return (
-    <aside className="dfh-sidebar absolute inset-y-0 right-0 z-30 flex w-[400px] flex-col border-l border-ink-700 bg-ink-900/95 backdrop-blur">
-      <div className="flex items-center gap-2 border-b border-ink-800 px-4 py-3">
-        <span className="text-[13px] font-semibold text-zinc-100">设置</span>
-        <span className="font-mono text-[10px] text-zinc-600">下一 job 生效</span>
-        <button
-          onClick={onClose}
-          aria-label="关闭"
-          className="ml-auto rounded-md p-1 text-zinc-500 transition-colors hover:bg-ink-800 hover:text-zinc-200"
-        >
-          <X size={16} />
-        </button>
-      </div>
+  const shellCls =
+    variant === "page"
+      ? "flex h-full w-full flex-col bg-ink-950"
+      : "dfh-sidebar absolute inset-y-0 right-0 z-30 flex w-[440px] flex-col border-l border-ink-700 bg-ink-900/95 backdrop-blur";
 
-      <div className="flex gap-1 border-b border-ink-800 px-3 py-1.5">
+  return (
+    <aside className={shellCls}>
+      {variant === "drawer" && (
+        <div className="flex items-center gap-2 border-b border-ink-800 px-4 py-3">
+          <span className="text-[15px] font-semibold text-zinc-100">设置</span>
+          <span className="font-mono text-[12px] text-zinc-600">下一 job 生效</span>
+          {onClose && (
+            <button
+              onClick={onClose}
+              aria-label="关闭"
+              className="ml-auto rounded-md p-1 text-zinc-500 transition-colors hover:bg-ink-800 hover:text-zinc-200"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className={`flex gap-1 border-b border-ink-800 py-1.5 ${variant === "page" ? "px-6" : "px-3"}`}>
         {(
           [
             { key: "profiles", label: "Agent 配置" },
@@ -334,17 +346,17 @@ export function SettingsPanel({
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`rounded-md px-2.5 py-1 text-[12px] transition-colors ${
+            className={`rounded-md px-2.5 py-1 text-[14px] transition-colors ${
               tab === t.key ? "bg-ink-800 text-zinc-100" : "text-zinc-500 hover:bg-ink-850 hover:text-zinc-300"
             }`}
           >
             {t.label}
           </button>
         ))}
-        {msg && <span className="ml-auto self-center font-mono text-[10px] text-acc-400">{msg}</span>}
+        {msg && <span className="ml-auto self-center font-mono text-[12px] text-acc-400">{msg}</span>}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div className={`flex-1 overflow-y-auto py-3 ${variant === "page" ? "px-6 max-w-3xl" : "px-4"}`}>
         {tab === "profiles" && (
           <>
             {/* 已有 profile 列表 */}
@@ -359,18 +371,18 @@ export function SettingsPanel({
                       : "border-ink-700 bg-ink-850/60 hover:border-ink-600"
                   }`}
                 >
-                  <span className="text-[12px] font-medium text-zinc-100">{p.name}</span>
-                  <span className="font-mono text-[10px] text-zinc-500">
+                  <span className="text-[14px] font-medium text-zinc-100">{p.name}</span>
+                  <span className="font-mono text-[12px] text-zinc-500">
                     {p.agent_cli}
                     {p.model ? ` · ${p.model}` : ""}
                   </span>
-                  <span className="ml-auto font-mono text-[10px] text-zinc-600">
+                  <span className="ml-auto font-mono text-[12px] text-zinc-600">
                     模块×{(p.modules_json ?? []).length} env×{p.env_keys.length} skill×{p.skills_json.length} mcp×{p.mcps_json.length}
                   </span>
                 </button>
               ))}
               {profiles.length === 0 && (
-                <div className="py-2 font-mono text-[11px] text-zinc-600">
+                <div className="py-2 font-mono text-[13px] text-zinc-600">
                   暂无 profile —— 未绑定时所有 job 用 env 全局配置
                 </div>
               )}
@@ -379,12 +391,12 @@ export function SettingsPanel({
             {/* 编辑表单 */}
             <div className="flex flex-col gap-2.5 border-t border-ink-800 pt-3">
               <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                   {form.id ? `编辑 ${form.name}` : "新建 profile"}
                 </span>
                 <button
                   onClick={() => setForm(EMPTY_FORM)}
-                  className="flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[10px] text-zinc-400 hover:border-ink-600 hover:text-zinc-200"
+                  className="flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 hover:border-ink-600 hover:text-zinc-200"
                 >
                   <Plus size={11} /> 新建
                 </button>
@@ -423,7 +435,7 @@ export function SettingsPanel({
               <div className="mt-1 flex gap-2">
                 <button
                   onClick={saveProfile}
-                  className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[12px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
+                  className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
                 >
                   <FloppyDisk size={13} /> {form.id ? "保存" : "创建"}
                 </button>
@@ -435,7 +447,7 @@ export function SettingsPanel({
                       flash("已删除");
                       reload();
                     }}
-                    className="flex items-center gap-1.5 rounded-md border border-red-900/60 px-3 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
+                    className="flex items-center gap-1.5 rounded-md border border-red-900/60 px-3 py-1.5 text-[14px] text-red-300 transition-colors hover:bg-red-950/40"
                   >
                     <Trash size={13} /> 删除
                   </button>
@@ -448,7 +460,7 @@ export function SettingsPanel({
         {tab === "rules" && rules && settings && (
           <div className="flex flex-col gap-4">
             <section>
-              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+              <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                 profile 绑定（job 类型 → agent 配置）
               </div>
               <div className="flex flex-col gap-2">
@@ -459,7 +471,7 @@ export function SettingsPanel({
             </section>
 
             <section className="border-t border-ink-800 pt-3">
-              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+              <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                 派生与重试规则
               </div>
               <div>
@@ -484,7 +496,7 @@ export function SettingsPanel({
 
             <button
               onClick={saveRules}
-              className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[12px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
+              className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
             >
               <FloppyDisk size={13} /> 保存规则
             </button>
@@ -493,7 +505,7 @@ export function SettingsPanel({
 
         {tab === "sources" && (
           <div className="flex flex-col gap-3">
-            <div className="text-[11px] leading-relaxed text-zinc-500">
+            <div className="text-[13px] leading-relaxed text-zinc-500">
               Agent 的插件 / skill 集中托管在 Git 仓库（如{" "}
               <span className="font-mono text-zinc-400">SumSec-Skills</span>
               ）。同步后扫描出全部模块，在「Agent 配置」里按 profile 勾选下发；内容随同步缓存，跑任务不再访问 Git。
@@ -502,15 +514,15 @@ export function SettingsPanel({
             {sources.map((s) => (
               <div key={s.id} className="rounded-lg border border-ink-700 bg-ink-850/60 px-3 py-2.5">
                 <div className="flex items-center gap-2">
-                  <span className="text-[12px] font-medium text-zinc-100">{s.name}</span>
-                  <span className="font-mono text-[10px] text-zinc-500">{s.branch}</span>
-                  <span className="ml-auto font-mono text-[10px] text-zinc-600">
+                  <span className="text-[14px] font-medium text-zinc-100">{s.name}</span>
+                  <span className="font-mono text-[12px] text-zinc-500">{s.branch}</span>
+                  <span className="ml-auto font-mono text-[12px] text-zinc-600">
                     {s.module_count ?? sourceDetails[s.id]?.catalog_json.length ?? 0} 模块
                   </span>
                 </div>
-                <div className="mt-0.5 truncate font-mono text-[10px] text-zinc-600">{s.repo_url}</div>
+                <div className="mt-0.5 truncate font-mono text-[12px] text-zinc-600">{s.repo_url}</div>
                 <div className="mt-1.5 flex items-center gap-2">
-                  <span className="font-mono text-[10px] text-zinc-600">
+                  <span className="font-mono text-[12px] text-zinc-600">
                     {s.synced_at ? `同步于 ${new Date(s.synced_at).toLocaleString()}` : "未同步"}
                   </span>
                   <button
@@ -527,7 +539,7 @@ export function SettingsPanel({
                       }
                     }}
                     disabled={syncing === s.id}
-                    className="ml-auto flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[10px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200 disabled:opacity-50"
+                    className="ml-auto flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200 disabled:opacity-50"
                   >
                     <ArrowsClockwise size={11} className={syncing === s.id ? "animate-spin" : ""} />
                     {syncing === s.id ? "同步中…" : "同步"}
@@ -538,7 +550,7 @@ export function SettingsPanel({
                       flash("已删除");
                       reload();
                     }}
-                    className="flex items-center gap-1 rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[10px] text-red-300 transition-colors hover:bg-red-950/40"
+                    className="flex items-center gap-1 rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
                   >
                     <Trash size={11} />
                   </button>
@@ -547,7 +559,7 @@ export function SettingsPanel({
             ))}
 
             <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+              <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                 添加模块源
               </span>
               <input
@@ -584,7 +596,7 @@ export function SettingsPanel({
                     flash(`添加失败：${e instanceof Error ? e.message : e}`);
                   }
                 }}
-                className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[12px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
+                className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
               >
                 <Plus size={13} /> 添加
               </button>

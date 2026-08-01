@@ -41,6 +41,10 @@ export interface ProjectRules {
   maxAutoRetries: number;
   auditTimeoutSec: number;
   verifyTimeoutSec: number;
+  /** hub 循环：角色 job 成功后触发 hub_reason 读图决策（§8.3） */
+  hubEnabled: boolean;
+  maxHubRounds: number;
+  maxIntentsPerDecision: number;
 }
 
 export async function rulesForProject(db: typeof sql, projectId: string): Promise<ProjectRules> {
@@ -53,6 +57,9 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
     maxAutoRetries: (r.maxAutoRetries as number) ?? 3,
     auditTimeoutSec: (r.auditTimeoutSec as number) ?? config.timeouts.auditSec,
     verifyTimeoutSec: (r.verifyTimeoutSec as number) ?? config.timeouts.verifySec,
+    hubEnabled: (r.hubEnabled as boolean) ?? config.hub.enabled,
+    maxHubRounds: (r.maxHubRounds as number) ?? config.hub.maxRounds,
+    maxIntentsPerDecision: (r.maxIntentsPerDecision as number) ?? config.hub.maxIntents,
   };
 }
 
@@ -274,6 +281,22 @@ export async function ingestEvent(jobId: string, envelope: EventEnvelope): Promi
 
 type Tx = typeof sql;
 
+/** canvas_edges 无唯一约束：from/to 边幂等插入 */
+async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: string) {
+  const existing = await tx`
+    SELECT 1 FROM canvas_edges
+    WHERE canvas_id = ${canvasId} AND from_node_id = ${fromId} AND to_node_id = ${toId} AND edge_type = ${edgeType}
+    LIMIT 1`;
+  if (existing.length > 0) return;
+  await tx`
+    INSERT INTO canvas_edges ${tx({
+      canvas_id: canvasId,
+      from_node_id: fromId,
+      to_node_id: toId,
+      edge_type: edgeType,
+    })}`;
+}
+
 async function applySideEffects(tx: Tx, jobId: string, type: string, payload: unknown) {
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job) throw new Error(`job ${jobId} 不存在`);
@@ -282,7 +305,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     const p = payload as { message?: string; percent?: number };
     await tx`
       UPDATE canvas_nodes SET body_json = body_json || ${tx.json({ last_progress: p })}, updated_at = now()
-      WHERE job_id = ${jobId} AND node_type = 'job'`;
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
     await tx`UPDATE jobs SET heartbeat_at = now() WHERE id = ${jobId}`;
     return;
   }
@@ -338,6 +361,130 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 
     // 规则引擎：派生验证（§4.3 单一决策点）
     await evaluateFollowup(tx, job, finding);
+    return;
+  }
+
+  if (type === "fact") {
+    // 角色 agent 的发现 → fact 节点（§8.3：agent 只负责把发现写入画布）
+    const p = payload as { intent_node_id?: string; title?: string; description?: string };
+    if (!p.description) return;
+    let canvasId = (job.canvas_id as string) ?? null;
+    let intentNode: Record<string, unknown> | null = null;
+    if (p.intent_node_id) {
+      const [n] = await tx`SELECT * FROM canvas_nodes WHERE id = ${p.intent_node_id}`;
+      if (n) {
+        intentNode = n;
+        canvasId = (n.canvas_id as string) ?? canvasId;
+      }
+    }
+    if (!canvasId) {
+      const [jobNode] = await tx`
+        SELECT canvas_id FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
+      canvasId = (jobNode?.canvas_id as string) ?? null;
+    }
+    if (!canvasId) return;
+
+    const [{ count }] = await tx<[{ count: number }]>`
+      SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact'`;
+    const [node] = await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: jobId,
+        node_type: "fact",
+        title: (p.title ?? p.description.slice(0, 60)).slice(0, 200),
+        body_json: { description: p.description } as never,
+        x: ((intentNode?.x as number) ?? 100) + 340,
+        y: ((intentNode?.y as number) ?? 100) + count * 140,
+        status: "open",
+      })}
+      RETURNING id`;
+    // 'to' 边：意图 → 产出的事实（Cairn Intent.to）
+    if (intentNode) {
+      await insertEdgeIfAbsent(tx, canvasId, intentNode.id as string, node.id as string, "to");
+    }
+    return;
+  }
+
+  if (type === "hub_decision") {
+    // hub 读图后的决策：complete=目标达成；intents=派发角色 job（§8.3）
+    const p = payload as {
+      complete?: { from?: string[]; description?: string };
+      intents?: { from?: string[]; role?: string; description?: string }[];
+    };
+    const canvasId = (job.canvas_id as string) ?? null;
+    if (!canvasId) return;
+    const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
+
+    if (p.complete?.description) {
+      // 结论：引用 facts 收敛到 root；root 置 succeeded + 结论入 body
+      const [root] = await tx`
+        SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+      if (root) {
+        await tx`
+          UPDATE canvas_nodes SET status = 'succeeded',
+            body_json = body_json || ${tx.json({ conclusion: p.complete.description })}, updated_at = now()
+          WHERE id = ${root.id}`;
+        for (const fid of p.complete.from ?? []) {
+          const [src] = await tx`
+            SELECT id FROM canvas_nodes WHERE id = ${fid} AND canvas_id = ${canvasId}`;
+          if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, root.id as string, "to");
+        }
+      }
+      return;
+    }
+
+    for (const it of (p.intents ?? []).slice(0, rules.maxIntentsPerDecision)) {
+      if (!it.description?.trim()) continue;
+      const title = it.description.trim().slice(0, 120);
+      // 去重：同画布已有同标题的未结论 intent → 跳过（hub 重复派发护栏）
+      const dup = await tx`
+        SELECT 1 FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND node_type = 'intent' AND title = ${title}
+          AND status NOT IN ('succeeded', 'failed', 'cancelled')
+        LIMIT 1`;
+      if (dup.length > 0) continue;
+
+      // Phase ①：角色白名单只有 explore；Phase ② 角色注册表放开
+      const role = "explore";
+      const snapshot = await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, role);
+      const [roleJob] = await tx`
+        INSERT INTO jobs ${tx({
+          project_id: job.project_id as string,
+          canvas_id: canvasId,
+          agent_snapshot_json: (snapshot ?? null) as never,
+          type: role,
+          priority: (job.priority as number) + 1,
+          payload_json: { intent: { description: it.description, from: it.from ?? [] } } as never,
+          timeout_sec: rules.auditTimeoutSec,
+          followup_depth: 0,
+        })}
+        RETURNING id`;
+      // intent 节点与角色 job 1:1（节点即任务卡：pending=未认领 running=进行中 succeeded=已结论）
+      const [{ next_y }] = await tx<[{ next_y: number }]>`
+        SELECT COALESCE(MAX(y), 60) + 140 AS next_y FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND node_type = 'intent'`;
+      const [intentNode] = await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: canvasId,
+          job_id: roleJob.id as string,
+          node_type: "intent",
+          title,
+          body_json: { role, description: it.description } as never,
+          x: 1220,
+          y: next_y,
+          status: "pending",
+        })}
+        RETURNING id`;
+      await tx`
+        UPDATE jobs SET payload_json = payload_json || ${tx.json({ intent_node_id: intentNode.id })}
+        WHERE id = ${roleJob.id}`;
+      // 'from' 边：被引用事实 → 新意图（Cairn Intent.from）
+      for (const fid of it.from ?? []) {
+        const [src] = await tx`
+          SELECT id FROM canvas_nodes WHERE id = ${fid} AND canvas_id = ${canvasId}`;
+        if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, intentNode.id as string, "from");
+      }
+    }
     return;
   }
 
@@ -431,7 +578,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
     WHERE id = ${jobId}`;
   await tx`
     UPDATE canvas_nodes SET status = ${status}, body_json = body_json || ${tx.json({ summary: result?.summary ?? null })}, updated_at = now()
-    WHERE job_id = ${jobId} AND node_type = 'job'`;
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
 
   // verify_finding 闭环（§4.3 第 5 步）：结论写回 finding + verifies 边
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
@@ -453,4 +600,41 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
         UPDATE canvas_nodes SET status = ${verdict}, updated_at = now() WHERE id = ${finding.node_id}`;
     }
   }
+
+  // hub 循环（§8.3）：非 hub job 成功后触发 hub_reason 读图决策（单画布同一时间最多一个活跃 hub）
+  if (status === "succeeded") await maybeTriggerHub(tx, job);
+}
+
+async function maybeTriggerHub(tx: Tx, job: Record<string, unknown> | undefined) {
+  if (!job?.canvas_id || job.type === "hub_reason") return;
+  const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
+  if (!rules.hubEnabled) return;
+
+  const active = await tx`
+    SELECT 1 FROM jobs
+    WHERE canvas_id = ${job.canvas_id as string} AND type = 'hub_reason'
+      AND status IN ('pending', 'claimed', 'provisioning', 'running')
+    LIMIT 1`;
+  if (active.length > 0) return;
+
+  const [{ count }] = await tx<[{ count: number }]>`
+    SELECT COUNT(*)::int AS count FROM jobs
+    WHERE canvas_id = ${job.canvas_id as string} AND type = 'hub_reason'`;
+  if (count >= rules.maxHubRounds) {
+    console.warn(`[hub] 画布 ${job.canvas_id} 已达 hub 轮次上限 ${rules.maxHubRounds}，停止自驱`);
+    return;
+  }
+
+  const snapshot = await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, "hub_reason");
+  await tx`
+    INSERT INTO jobs ${tx({
+      project_id: job.project_id as string,
+      canvas_id: job.canvas_id as string,
+      agent_snapshot_json: (snapshot ?? null) as never,
+      type: "hub_reason",
+      priority: ((job.priority as number) ?? 0) + 2, // hub 优先于普通角色 job，尽快收敛图
+      payload_json: {} as never,
+      timeout_sec: rules.auditTimeoutSec,
+      followup_depth: 0,
+    })}`;
 }
