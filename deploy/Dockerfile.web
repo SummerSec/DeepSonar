@@ -1,0 +1,27 @@
+FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114 AS builder
+
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY packages/shared-types/package.json packages/shared-types/package.json
+
+RUN pnpm install --frozen-lockfile --filter @dfh/web...
+
+COPY apps/web apps/web
+COPY packages/shared-types packages/shared-types
+RUN pnpm --filter @dfh/web build
+
+FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
+WORKDIR /app
+COPY --from=builder /app/apps/web/dist /app/public
+COPY deploy/web-server.mjs /app/web-server.mjs
+
+ENV HOST=0.0.0.0 PORT=8080 SCHEDULER_URL=http://scheduler:3100
+USER node
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --retries=10 \
+  CMD node -e "fetch('http://127.0.0.1:8080/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+CMD ["node", "/app/web-server.mjs"]

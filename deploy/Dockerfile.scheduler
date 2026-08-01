@@ -1,0 +1,24 @@
+FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
+
+RUN apk add --no-cache ca-certificates git docker-cli \
+  && corepack enable
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/scheduler/package.json apps/scheduler/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/shared-types/package.json packages/shared-types/package.json
+COPY packages/plane-client/package.json packages/plane-client/package.json
+COPY packages/runtime-sandbox/package.json packages/runtime-sandbox/package.json
+
+RUN pnpm install --frozen-lockfile --filter @dfh/scheduler...
+
+COPY apps/scheduler apps/scheduler
+COPY packages packages
+COPY agent-harness/demo-repo agent-harness/demo-repo
+
+ENV NODE_ENV=production
+EXPOSE 3100
+
+CMD ["pnpm", "--filter", "@dfh/scheduler", "start"]

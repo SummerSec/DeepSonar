@@ -18,6 +18,7 @@
 ## 数据源
 
 - `GET /projects`、`/projects/:id/canvases`、`/canvases/:id`
+- `POST /projects/:id/tasks`（人工意图）与 `POST /projects/:id/events`（幂等事件）都由 Hub 接收
 - `GET /jobs`、`POST /jobs/:id/cancel|resume`
 - `GET /findings`（severity / verify_status / project_id 筛选）
 - 设置：`/agent-profiles`、`/skill-sources`、`/projects/:id/settings`

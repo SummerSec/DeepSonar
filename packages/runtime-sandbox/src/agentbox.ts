@@ -34,8 +34,10 @@ async function docker(...args: string[]): Promise<string> {
 // Windows 宿主路径只会以盘符或 \\ 开头，不会误判；SDK 的路径拼接全部发生在运行时。
 // TODO: 向上游提 issue，修复后移除此补丁。
 const origJoin = path.join.bind(path);
-path.join = ((...args: string[]) =>
-  args[0]?.startsWith("/") ? path.posix.join(...args) : origJoin(...args)) as typeof path.join;
+if (process.platform === "win32") {
+  path.join = ((...args: string[]) =>
+    args[0]?.startsWith("/") ? path.posix.join(...args) : origJoin(...args)) as typeof path.join;
+}
 
 /** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
