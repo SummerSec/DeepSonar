@@ -1,7 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { runRealAgent } from "@dfh/runtime-sandbox";
 import { FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
@@ -21,6 +23,18 @@ import { publishStream } from "./stream-bus.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const DEMO_REPO = path.join(REPO_ROOT, "agent-harness", "demo-repo");
+
+const execFileP = promisify(execFile);
+
+/** 本地镜像 digest（§10.3 证据链；镜像不存在/无 docker 时返回 null，不阻断执行） */
+async function imageDigestOf(image: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileP("docker", ["image", "inspect", "--format", "{{.Id}}", image], { timeout: 10_000 });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
 
 /** 读取演示仓库 → 种子文件映射（/workspace/src/<rel> → content） */
 function seedFilesFromDir(dir: string, prefix = ""): Record<string, string> {
@@ -230,7 +244,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const intentDesc =
     ((payload.intent as { description?: string } | undefined)?.description as string) ?? "";
   let basePrompt: string;
+  // §10.3 证据链：记录实际使用的模板名 + 最终 prompt 哈希
+  let templateName: string;
   if (isHub) {
+    templateName = "hub_reason";
     if (!graph) throw new Error("hub_reason job 缺 canvas_id，无法读图");
     const roles = await rolesForProject(sql, job.project_id as string);
     if (roles.length === 0) throw new Error("项目未启用任何角色，hub 无可下发对象");
@@ -251,6 +268,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       }
     }
   } else if (isRole) {
+    templateName = type;
     if (!graph) throw new Error(`${type} job 缺 canvas_id，无法读图`);
     basePrompt = render(await templateFor(type, FALLBACK_ROLE), {
       graph: graph.yaml,
@@ -258,6 +276,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       role: type,
     });
   } else if (isVerify) {
+    templateName = "verify_finding";
     const finding = (payload.finding ?? {}) as { title?: string; location?: string; summary?: string };
     basePrompt = render(await templateFor("verify_finding", FALLBACK_VERIFY), {
       finding_title: finding.title ?? "未知",
@@ -265,6 +284,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       finding_summary: finding.summary ?? "无",
     });
   } else {
+    templateName = type === "audit" ? "audit" : "audit_module";
     basePrompt = render(await templateFor(type === "audit" ? "audit" : "audit_module", FALLBACK_AUDIT), {
       module_path: (payload.module_path as string) ?? "全部模块",
       intent: intentDesc || String(payload.content ?? payload.goal ?? "执行安全审计"),
@@ -277,6 +297,23 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     }
   }
   const prompt = snapshot?.prompt_suffix ? `${basePrompt}\n\n${snapshot.prompt_suffix}` : basePrompt;
+
+  // ---------- 证据链（§10.3）：镜像 digest / provider / 模型 / prompt 版本随 job 冻结 ----------
+  const runtimeEvidence: Record<string, unknown> = {
+    image: config.runtime.imageAudit,
+    image_digest: await imageDigestOf(config.runtime.imageAudit),
+    agent_provider: provider,
+    model: model ?? null,
+    credential_id: snapshot?.credential_id ?? null,
+    credential_provider: snapshot?.credential_provider ?? null,
+    prompt_template: templateName,
+    prompt_sha256: createHash("sha256").update(prompt).digest("hex"),
+    skill_revisions: snapshot?.skill_revisions ?? [],
+    recorded_at: new Date().toISOString(),
+  };
+  await sql`
+    UPDATE jobs SET payload_json = payload_json || ${sql.json({ runtime_evidence: runtimeEvidence } as never)}
+    WHERE id = ${job.id as string}`;
 
   // 结果文件契约按类型：audit=findings+done；hub=hub.json；角色=fact.json+done
   const resultFiles = isHub
