@@ -219,7 +219,7 @@ export function TasksPage() {
     <div className="h-full overflow-y-auto p-6">
       <PageHeader
         title="任务"
-        subtitle="创建任务即入队执行 · 点「打开画布」进入单任务详情（只看该任务范围与发现）"
+        subtitle="标题和内容先交给 Hub 决策 · 同时支持 Plane 与 API 事件触发"
         actions={
           <div className="flex items-center gap-2">
             <FilterSelect

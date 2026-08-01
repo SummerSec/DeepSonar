@@ -233,6 +233,7 @@ POST   /projects/{id}/archive
 
 ```text
 POST /projects/{id}/tasks
+POST /projects/{id}/events
 GET  /projects/{id}/tasks
 POST /tasks/{canvas_id}/retry
 ```
@@ -242,15 +243,24 @@ POST /tasks/{canvas_id}/retry
 ```json
 {
   "title": "审计 auth 模块",
-  "type": "audit_module",
-  "priority": 10,
-  "timeout_sec": 3600,
-  "payload": {
-    "repo_path": "D:/repo/target",
-    "module_path": "src/auth"
-  }
+  "content": "检查认证模块中的注入和权限绕过问题"
 }
 ```
+
+服务端创建的第一个 Job 固定为 `hub_reason`。人只表达目标，Hub 决定是否派发 `audit`、`explore`、`test` 等角色。
+
+事件触发最小请求：
+
+```json
+{
+  "event_id": "alert-20260801-001",
+  "source": "ci",
+  "event_type": "security_scan_failed",
+  "data": { "repository": "demo", "branch": "main" }
+}
+```
+
+同一项目下相同的 `source + event_id` 幂等复用，不会重复创建任务。
 
 服务端在事务中完成：
 

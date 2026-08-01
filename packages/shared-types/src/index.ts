@@ -21,6 +21,7 @@ export const JobType = z.enum([
   "audit_module",
   "verify_finding",
   "hub_reason", // hub：读图 → 决策（complete / 派发 intents）
+  "audit", // Hub 可派发的审计角色：产出 Finding
   "explore", // 角色 agent：围绕意图探索 → 产出事实（Phase ② 角色注册后 type 可为用户自定义角色名）
 ]);
 export type JobType = z.infer<typeof JobType>;

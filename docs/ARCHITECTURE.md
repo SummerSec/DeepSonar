@@ -139,32 +139,30 @@ pending → claimed → provisioning → running → succeeded
 > 默认路径是 Web 直接创建：`POST /projects`（plane_project_id 可空）→ `POST /projects/{id}/tasks`（同事务建任务画布 + root + pending job）。
 
 1. 默认：在 Web「项目」页新建本地项目（或 `POST /projects`）
-2. 可选：在项目「设置 → Plane 集成」绑定 Plane Project；绑定后 Ready 状态的 issue（描述带 `type=audit_module`、`path=...` 等键值对）会被自动认领为任务
-3. 创建任务：Web「新建任务」表单 或 `POST /projects/{id}/tasks`；Plane 下发的 issue 走同一 `ensureCanvasForTask + createJob` 路径
+2. 可选：在项目「设置 → Plane 集成」绑定 Plane Project；绑定后 Ready 状态的 issue 只需标题和自然语言描述即可被认领
+3. 创建任务：Web 表单、`POST /projects/{id}/tasks`、Plane Ready issue，或 `POST /projects/{id}/events` 外部事件；所有入口都先创建 `hub_reason` Job
 
 ### 4.2 调度循环（MVP）
 
 ```text
 loop:
-  1. 任务入队：本地 POST /projects/{id}/tasks，或 Plane Ready issue（webhook 事件触发 planePollOnce）
+  1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
   2. 原子 claim（DB 唯一约束兜底）→ 写 jobs 表 → pg_notify('dfh_jobs') 事件唤醒 dispatcher
   3. Canvas：创建/更新 job 节点（running）
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
-  7. finding 落入规则引擎 → 命中规则则派生 verify Job 入队
+  7. Hub 派发 audit 等角色；Finding 一律派生 verify Job，confirmed 再强制进入 Hub 风险验收
 ```
 
 ### 4.3 审计 → 验证链（单一决策点）
 
-1. 审计 Worker 调用 `emit_finding`（可多条，可带 `suggest_verify` 建议）
-2. **规则引擎（调度器内）统一决定是否派生**，输入 = finding 的 severity/类型/建议字段 + 项目配置：
-   - high/critical → 自动派生验证
-   - medium → 自动或仅提案等人批（配置项）
-   - low → 只上画布，不自动验证
+1. `hub_reason` 根据目标派发 `audit` 等角色，审计角色输出结构化 Finding
+2. Finding 只是待证实假设，**所有严重级别都必须自动派生验证**，不由人或前端决定
 3. 派生前按 `fingerprint` 去重：同一 finding 已存在 verify Job（任何状态）→ 不重复派生
 4. 调度器创建 verify Job，输入 = finding 快照 + 源码位置
-5. 验证 Worker 结果：`confirmed` / `false_positive` / `needs_human`，边 `verifies` 连回 finding 节点
+5. 验证 Worker 结果：`confirmed` / `false_positive` / `needs_human`，边方向为 `Finding → Verify`
+6. `confirmed` 强制触发 Hub 风险验收；Hub 自主决定是否继续派发环境搭建、PoC、动态复现和影响分析，子 Agent 结果再次回到 Hub 收敛
 
 **护栏**（同时是防注入措施，见 §9）：
 
@@ -414,11 +412,12 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 
 - 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
-- **hub_reason**（job 类型）：输入 = 整图 YAML（goal/target/facts/open_intents/concluded_intents/hints）→ 输出 `hub.json`：`{"complete":{from,description}}` 或 `{"intents":[{from,role,description}]}`；`hub_decision` 事件落地：complete → root 置 succeeded + 结论入 body；intents → 建 intent 节点 + 角色 job + from 边
+- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 整图 YAML（goal/target/root_id/facts/open_intents/concluded_intents/hints）→ 输出 `hub.json`：`{"complete":{from,description}}` 或 `{"intents":[{from,role,description}]}`；首次决策必须派发角色，不得在没有执行证据时直接完成
 - **explore**（Phase ① 唯一角色）：输入 = 整图 YAML + 当前意图 → 输出 `fact.json`（增量事实，不重复图内容）→ `fact` 事件建 fact 节点 + to 边
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DFH_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
-- **角色注册表（Phase ② 已落地）**：`agent_roles` 表全局注册（name 即 job.type；prompt_template 用 `{{graph}}/{{intent}}/{{role}}` 占位），内置 explore/analyze/verify/test/code 五角色（可改模板、不可删）+ 用户自定义角色；项目级 `config_json.roles.enabled` 勾选 hub 可下发清单（null=全部内置），hub prompt 动态列启用角色，hub 指了未启用角色自动落到第一个启用角色；角色 → agent 配置复用 profiles 绑定（`profiles[角色名]`）；API：`/agent-roles` CRUD + `/projects/:id/roles`（启用态 + 绑定）；设置页「角色」tab（勾选 + 绑定 + 模板编辑 + 自定义角色）
+- **角色注册表（Phase ② 已落地）**：`agent_roles` 表全局注册，内置 `audit/explore/analyze/verify/test/code` 六角色 + 用户自定义角色；其中 `audit` 产出 Finding，其余角色产出 Fact。项目级启用清单决定 Hub 可派发范围
+- **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
 
 ---
