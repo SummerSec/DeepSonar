@@ -267,6 +267,53 @@ CREATE TABLE profile_credentials (
   PRIMARY KEY (profile_id, credential_id, purpose)
 );
 
+-- 角色运行配置（全局 project_id IS NULL + 项目级覆盖）
+CREATE TABLE role_configs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  role_id uuid NOT NULL REFERENCES agent_roles(id) ON DELETE CASCADE,
+  project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
+  agent_cli text NOT NULL DEFAULT 'claude-code',
+  model text,
+  reasoning text,
+  env_keys text[] NOT NULL DEFAULT '{}',
+  env_vars_json jsonb NOT NULL DEFAULT '{}',
+  modules_json jsonb NOT NULL DEFAULT '[]',
+  skills_json jsonb NOT NULL DEFAULT '[]',
+  commands_json jsonb NOT NULL DEFAULT '[]',
+  mcps_json jsonb NOT NULL DEFAULT '[]',
+  subagents_json jsonb NOT NULL DEFAULT '[]',
+  prompt_suffix text,
+  runtime_image_key text,
+  version int NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT role_configs_reasoning_check
+    CHECK (reasoning IS NULL OR reasoning IN ('low', 'medium', 'high', 'xhigh'))
+);
+CREATE UNIQUE INDEX role_configs_global_uniq
+  ON role_configs (role_id) WHERE project_id IS NULL;
+CREATE UNIQUE INDEX role_configs_project_uniq
+  ON role_configs (project_id, role_id) WHERE project_id IS NOT NULL;
+
+CREATE TABLE role_credentials (
+  role_config_id uuid NOT NULL REFERENCES role_configs(id) ON DELETE CASCADE,
+  credential_id uuid NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+  purpose text NOT NULL DEFAULT 'llm',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (role_config_id, credential_id, purpose)
+);
+
+CREATE TABLE role_config_files (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  role_config_id uuid NOT NULL REFERENCES role_configs(id) ON DELETE CASCADE,
+  path text NOT NULL,
+  content text NOT NULL,
+  content_sha256 text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (role_config_id, path)
+);
+
 CREATE OR REPLACE FUNCTION dfh_notify_job_event() RETURNS trigger AS $$
 BEGIN
   IF (TG_OP = 'INSERT' AND NEW.status = 'pending')
@@ -468,6 +515,8 @@ INSERT INTO _migrations (name) VALUES
   ('0011_api_tokens.sql'),
   ('0012_credentials.sql'),
   ('0013_skill_trust.sql'),
-  ('0014_drop_redundant_api_token_index.sql');
+  ('0014_drop_redundant_api_token_index.sql'),
+  ('0015_profile_reasoning.sql'),
+  ('0016_role_configs.sql');
 
 COMMIT;

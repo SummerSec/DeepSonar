@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import type { EventEnvelope, FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
 import { sql } from "./db.js";
@@ -255,7 +256,7 @@ export interface CreateJobInput {
 export async function createJob(input: CreateJobInput) {
   try {
     // 冻结 profile 快照：改 profile 只影响之后创建的 job（下一 job 生效，历史可复现）
-    const snapshot = await resolveProfileSnapshot(sql, input.projectId, input.type);
+    const snapshot = await resolveAgentSnapshotForJob(sql, input.projectId, input.type);
     const [job] = await sql`
       INSERT INTO jobs ${sql({
         project_id: input.projectId,
@@ -602,7 +603,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 
       // 角色白名单校验：hub 指了未启用的角色 → 落到第一个启用角色
       const role = enabledNames.has(it.role ?? "") ? (it.role as string) : roles[0].name;
-      const snapshot = await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, role);
+      const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, job.project_id as string, role);
       const trigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
         kind?: string;
       };
@@ -704,7 +705,7 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
 
   // profile 快照：优先按 verify_finding 绑定重新解析；无绑定则继承父 job 快照（同一任务同一 agent）
   const snapshot =
-    (await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, "verify_finding")) ??
+    (await resolveAgentSnapshotForJob(tx as unknown as typeof sql, job.project_id as string, "verify_finding")) ??
     (job.agent_snapshot_json as AgentProfileSnapshot | null) ??
     null;
 
@@ -876,7 +877,7 @@ async function maybeTriggerHub(
     return;
   }
 
-  const snapshot = await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, "hub_reason");
+  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, job.project_id as string, "hub_reason");
   const [hubJob] = await tx`
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
@@ -929,4 +930,184 @@ async function maybeTriggerHub(
       "next",
     );
   }
+}
+
+// ---------- RoleConfig 安全校验（§7.2/§7.3） ----------
+
+/** 系统保留环境变量：RoleConfig 与配置文件一律不得覆盖 */
+export const RESERVED_ENV_KEYS = new Set([
+  "DFH_JOB_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "OPENROUTER_API_KEY",
+  "PATH",
+  "HOME",
+  "NODE_OPTIONS",
+]);
+const RESERVED_ENV_PREFIXES = ["AGENTBOX_", "DFH_"];
+const SENSITIVE_ENV_NAME = /TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|COOKIE|CREDENTIAL/i;
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_MAX_COUNT = 50;
+const ENV_MAX_VALUE = 4096;
+const ENV_MAX_TOTAL = 64 * 1024;
+
+/** 校验非敏感 env_vars；返回错误消息或 null */
+export function validateEnvVars(env: Record<string, string>): string | null {
+  const entries = Object.entries(env);
+  if (entries.length > ENV_MAX_COUNT) return `环境变量数量超限（>${ENV_MAX_COUNT}）`;
+  let total = 0;
+  for (const [k, v] of entries) {
+    if (!ENV_NAME_RE.test(k)) return `非法环境变量名: ${k}`;
+    if (RESERVED_ENV_KEYS.has(k) || RESERVED_ENV_PREFIXES.some((p) => k.startsWith(p))) {
+      return `环境变量 ${k} 为系统保留，不允许配置`;
+    }
+    if (SENSITIVE_ENV_NAME.test(k)) return `环境变量 ${k} 疑似密钥，请改用 Credential`;
+    if (typeof v !== "string") return `环境变量 ${k} 的值必须是字符串`;
+    if (v.length > ENV_MAX_VALUE) return `环境变量 ${k} 值超长（>${ENV_MAX_VALUE}）`;
+    total += k.length + v.length;
+  }
+  if (total > ENV_MAX_TOTAL) return `环境变量总大小超限（>${ENV_MAX_TOTAL}B）`;
+  return null;
+}
+
+/** 各 CLI 允许上传的 Provider 配置文件固定相对路径 */
+export const CONFIG_FILE_PATHS: Record<string, string> = {
+  "claude-code": ".claude/settings.json",
+  codex: ".codex/config.toml",
+  "open-code": ".opencode/config.json",
+};
+
+export function validateConfigFilePath(agentCli: string, p: string): string | null {
+  if (!p || p.length > 200) return "路径为空或超长";
+  if (p.includes("\u0000")) return "路径含 NUL";
+  if (p.includes("\\")) return "路径不允许反斜杠";
+  if (p.startsWith("/") || /^[A-Za-z]:/.test(p)) return "不允许绝对路径";
+  const norm = path.posix.normalize(p);
+  if (norm !== p || norm.startsWith("..") || norm.includes("/../")) return "路径不允许 .. 或非规范形式";
+  const allowed = CONFIG_FILE_PATHS[agentCli];
+  if (!allowed) return `未知 agent_cli: ${agentCli}`;
+  if (norm !== allowed) return `该 CLI 首期只允许固定配置文件：${allowed}`;
+  return null;
+}
+
+export const CONFIG_FILE_MAX_COUNT = 5;
+export const CONFIG_FILE_MAX_BYTES = 64 * 1024;
+export const CONFIG_FILE_MAX_TOTAL = 256 * 1024;
+
+const SECRET_PATTERNS: { re: RegExp; label: string }[] = [
+  { re: /sk-[A-Za-z0-9_-]{20,}/, label: "疑似 API Key（sk-…）" },
+  { re: /AKIA[0-9A-Z]{16}/, label: "疑似 AWS Access Key" },
+  { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, label: "疑似私钥" },
+  {
+    re: /(api[_-]?key|token|secret)["']?\s*[:=]\s*["'][A-Za-z0-9_\-/.+]{20,}["']/i,
+    label: "疑似硬编码密钥字段",
+  },
+];
+
+export function scanConfigContent(content: string): string | null {
+  for (const { re, label } of SECRET_PATTERNS) {
+    if (re.test(content)) return label;
+  }
+  return null;
+}
+
+/** 历史 job 类型 → agent_roles.name */
+export function mapLegacyType(jobType: string): string {
+  if (jobType === "audit_module") return "audit";
+  if (jobType === "verify_finding") return "verify";
+  return jobType;
+}
+
+/**
+ * 解析 RoleConfig 并适配为当前 executor 使用的 AgentProfileSnapshot 形状。
+ * 项目级 → 全局；无配置返回 null（调用方再回落 profile / env）。
+ */
+export async function resolveRoleConfigAsProfileSnapshot(
+  db: typeof sql,
+  projectId: string,
+  jobType: string,
+): Promise<AgentProfileSnapshot | null> {
+  const roleName = mapLegacyType(jobType);
+  const [role] = await db`SELECT id, name FROM agent_roles WHERE name = ${roleName}`;
+  if (!role) return null;
+
+  const [projectCfg] = await db`
+    SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`;
+  const [globalCfg] = projectCfg
+    ? [undefined]
+    : await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`;
+  const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
+  if (!cfg) return null;
+
+  const modules = (cfg.modules_json as string[]) ?? [];
+  const expanded = await expandModules(modules);
+  if (expanded.missing.length > 0) {
+    console.warn(`[role-config] 模块未下发: ${expanded.missing.join(", ")}`);
+  }
+  const manualSkills = (cfg.skills_json as { name?: string }[]) ?? [];
+  const manualCommands = (cfg.commands_json as { name?: string }[]) ?? [];
+  const skills = [
+    ...manualSkills,
+    ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name)),
+  ];
+  const commands = [
+    ...manualCommands,
+    ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name)),
+  ];
+
+  const [llm] = await db`
+    SELECT c.id, c.provider, c.status, c.project_id AS cred_project_id
+    FROM role_credentials rc
+    JOIN credentials c ON c.id = rc.credential_id
+    WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
+    LIMIT 1`;
+  if (llm) {
+    const credProject = (llm.cred_project_id as string | null) ?? null;
+    if (cfg.project_id != null && credProject && credProject !== projectId) {
+      throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
+    }
+    if (cfg.project_id == null && credProject) {
+      throw new Error(`全局 RoleConfig 只能绑定全局 Credential`);
+    }
+    if ((llm.status as string) !== "active") {
+      throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
+    }
+  }
+
+  const reasoningRaw = (cfg.reasoning as string | null) ?? null;
+  const reasoning: ReasoningEffort | null =
+    reasoningRaw === "low" || reasoningRaw === "medium" || reasoningRaw === "high" || reasoningRaw === "xhigh"
+      ? reasoningRaw
+      : null;
+
+  return {
+    name: roleName,
+    agent_cli: (cfg.agent_cli as string) ?? "claude-code",
+    model: (cfg.model as string) ?? null,
+    reasoning,
+    env_keys: (cfg.env_keys as string[]) ?? [],
+    credential_id: (llm?.id as string) ?? null,
+    credential_provider: (llm?.provider as string) ?? null,
+    modules,
+    skill_revisions: expanded.revisions,
+    skills,
+    commands,
+    mcps: (cfg.mcps_json as unknown[]) ?? [],
+    subagents: (cfg.subagents_json as unknown[]) ?? [],
+    prompt_suffix: (cfg.prompt_suffix as string) ?? null,
+  };
+}
+
+/** job 创建时解析快照：优先 RoleConfig，回落旧 Profile 绑定 */
+export async function resolveAgentSnapshotForJob(
+  db: typeof sql,
+  projectId: string,
+  jobType: string,
+): Promise<AgentProfileSnapshot | null> {
+  const fromRole = await resolveRoleConfigAsProfileSnapshot(db, projectId, jobType);
+  if (fromRole) return fromRole;
+  return resolveProfileSnapshot(db, projectId, jobType);
 }

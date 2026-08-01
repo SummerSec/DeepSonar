@@ -194,4 +194,12 @@ export const config = {
     /** 逗号分隔本地根目录；空 = 不限制 repo_path */
     localRoots: str("DFH_REPO_LOCAL_ROOTS", ""),
   },
+
+  /** 可信运行镜像目录（runtime_image_key 只能引用这里的 key；空 = 不允许自定义镜像） */
+  images: {
+    trustedKeys: str("DFH_TRUSTED_IMAGE_KEYS", ""),
+    isTrusted(key: string): boolean {
+      return this.trustedKeys.split(",").map((s) => s.trim()).filter(Boolean).includes(key);
+    },
+  },
 } as const;

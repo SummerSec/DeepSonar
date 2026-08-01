@@ -13,7 +13,20 @@ import {
   type Encrypted,
 } from "./credentials.js";
 import { testCredential } from "./credential-test.js";
-import { createJob, ensureCanvasForTask, globalRules, rulesForProject, transitionJob } from "./core.js";
+import {
+  CONFIG_FILE_MAX_BYTES,
+  CONFIG_FILE_MAX_COUNT,
+  CONFIG_FILE_MAX_TOTAL,
+  createJob,
+  ensureCanvasForTask,
+  globalRules,
+  rolesForProject,
+  rulesForProject,
+  scanConfigContent,
+  transitionJob,
+  validateConfigFilePath,
+  validateEnvVars,
+} from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
 import { registerGateway } from "./gateway.js";
@@ -602,6 +615,223 @@ export function registerRoutes(app: FastifyInstance) {
       resourceType: "agent_profile",
       resourceId: id,
       before: { name: row.name },
+    });
+    return { ok: true };
+  });
+
+  // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
+
+  const RoleConfigPutBody = z.object({
+    agent_cli: z.enum(["claude-code", "open-code", "codex"]).default("claude-code"),
+    model: z.string().nullish(),
+    reasoning: ReasoningEffort.nullish(),
+    env_keys: z.array(z.string()).default([]),
+    env_vars: z.record(z.string(), z.string()).default({}),
+    modules: z.array(z.string()).default([]),
+    skills: z.array(z.record(z.string(), z.unknown())).default([]),
+    commands: z.array(z.record(z.string(), z.unknown())).default([]),
+    mcps: z.array(z.record(z.string(), z.unknown())).default([]),
+    subagents: z.array(z.record(z.string(), z.unknown())).default([]),
+    prompt_suffix: z.string().nullish(),
+    runtime_image_key: z.string().nullish(),
+    credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).default([]),
+    config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
+  });
+
+  async function validateRoleConfigBody(
+    body: z.infer<typeof RoleConfigPutBody>,
+    projectId: string | null,
+  ): Promise<string | null> {
+    const envErr = validateEnvVars(body.env_vars);
+    if (envErr) return envErr;
+    for (const key of body.env_keys) {
+      if (!config.runtime.isEnvKeyAllowed(key)) return `env_key 不在白名单: ${key}`;
+    }
+    if (body.runtime_image_key && !config.images.isTrusted(body.runtime_image_key)) {
+      return `runtime_image_key 不在服务端可信镜像目录: ${body.runtime_image_key}`;
+    }
+    for (const c of body.credentials) {
+      const [cred] = await sql`SELECT id, project_id, status FROM credentials WHERE id = ${c.credential_id}`;
+      if (!cred) return `Credential 不存在: ${c.credential_id}`;
+      if (projectId && cred.project_id && cred.project_id !== projectId) {
+        return `Credential ${c.credential_id} 属于其他项目，不能绑定`;
+      }
+      if (!projectId && cred.project_id) return `全局 RoleConfig 只能绑定全局 Credential`;
+    }
+    if (body.config_files.length > CONFIG_FILE_MAX_COUNT) return `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`;
+    let totalBytes = 0;
+    for (const f of body.config_files) {
+      const pathErr = validateConfigFilePath(body.agent_cli, f.path);
+      if (pathErr) return `配置文件 ${f.path}: ${pathErr}`;
+      const bytes = Buffer.byteLength(f.content, "utf8");
+      if (bytes > CONFIG_FILE_MAX_BYTES) return `配置文件 ${f.path} 超过单文件大小限制`;
+      totalBytes += bytes;
+      const secretHit = scanConfigContent(f.content);
+      if (secretHit) return `配置文件 ${f.path} 命中密钥特征（${secretHit}），请改用 Credential`;
+    }
+    if (totalBytes > CONFIG_FILE_MAX_TOTAL) return `配置文件总大小超限`;
+    return null;
+  }
+
+  async function upsertRoleConfig(
+    roleId: string,
+    projectId: string | null,
+    body: z.infer<typeof RoleConfigPutBody>,
+  ) {
+    return sql.begin(async (tx) => {
+      const [existing] = projectId
+        ? await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id = ${projectId}`
+        : await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id IS NULL`;
+      const row = {
+        role_id: roleId,
+        project_id: projectId,
+        agent_cli: body.agent_cli,
+        model: body.model ?? null,
+        reasoning: body.reasoning ?? null,
+        env_keys: body.env_keys as never,
+        env_vars_json: body.env_vars as never,
+        modules_json: body.modules as never,
+        skills_json: body.skills as never,
+        commands_json: body.commands as never,
+        mcps_json: body.mcps as never,
+        subagents_json: body.subagents as never,
+        prompt_suffix: body.prompt_suffix ?? null,
+        runtime_image_key: body.runtime_image_key ?? null,
+      };
+      let configId: string;
+      if (existing) {
+        configId = existing.id as string;
+        await tx`
+          UPDATE role_configs SET ${tx(row as never)}, version = version + 1, updated_at = now()
+          WHERE id = ${configId}`;
+      } else {
+        const [ins] = await tx`INSERT INTO role_configs ${tx(row as never)} RETURNING id`;
+        configId = ins.id as string;
+      }
+      await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId}`;
+      for (const c of body.credentials) {
+        await tx`
+          INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
+          ON CONFLICT DO NOTHING`;
+      }
+      await tx`DELETE FROM role_config_files WHERE role_config_id = ${configId}`;
+      for (const f of body.config_files) {
+        await tx`
+          INSERT INTO role_config_files ${tx({
+            role_config_id: configId,
+            path: f.path,
+            content: f.content,
+            content_sha256: createHash("sha256").update(f.content, "utf8").digest("hex"),
+          })}
+          ON CONFLICT (role_config_id, path) DO UPDATE SET
+            content = EXCLUDED.content, content_sha256 = EXCLUDED.content_sha256, updated_at = now()`;
+      }
+      return configId;
+    });
+  }
+
+  async function roleConfigView(configId: string): Promise<Record<string, unknown> | null> {
+    const [cfg] = await sql`SELECT * FROM role_configs WHERE id = ${configId}`;
+    if (!cfg) return null;
+    const creds = await sql`
+      SELECT rc.credential_id, rc.purpose, c.name, c.provider, c.status, c.project_id
+      FROM role_credentials rc JOIN credentials c ON c.id = rc.credential_id
+      WHERE rc.role_config_id = ${configId}`;
+    const files = await sql`
+      SELECT path, content, content_sha256 FROM role_config_files
+      WHERE role_config_id = ${configId} ORDER BY path`;
+    return { ...(cfg as Record<string, unknown>), credentials: creds, config_files: files };
+  }
+
+  app.get("/role-configs/global", async () => {
+    const rows = await sql`
+      SELECT rc.id, r.name AS role_name, r.title AS role_title, r.kind AS role_kind
+      FROM role_configs rc JOIN agent_roles r ON r.id = rc.role_id
+      WHERE rc.project_id IS NULL ORDER BY r.name`;
+    const out: Record<string, unknown>[] = [];
+    for (const row of rows) {
+      const view = await roleConfigView(row.id as string);
+      if (!view) continue;
+      out.push({
+        ...view,
+        role_name: row.role_name,
+        role_title: row.role_title,
+        role_kind: row.role_kind,
+      });
+    }
+    return out;
+  });
+
+  app.put("/role-configs/global/:roleId", async (req, reply) => {
+    const { roleId } = req.params as { roleId: string };
+    const body = RoleConfigPutBody.parse(req.body);
+    const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${roleId}`;
+    if (!role) return reply.code(404).send({ error: "role not found" });
+    const err = await validateRoleConfigBody(body, null);
+    if (err) return reply.code(400).send({ error: err });
+    const configId = await upsertRoleConfig(roleId, null, body);
+    await audit(req, {
+      action: "role_config.upsert",
+      resourceType: "role_config",
+      resourceId: configId,
+      after: { role: role.name, scope: "global", credentials: body.credentials.length, files: body.config_files.length },
+    });
+    return roleConfigView(configId);
+  });
+
+  app.get("/projects/:id/role-configs", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [p] = await sql`SELECT id FROM projects WHERE id = ${id}`;
+    if (!p) return reply.code(404).send({ error: "project not found" });
+    return sql`
+      SELECT r.id AS role_id, r.name, r.title, r.kind, r.builtin,
+             pc.id AS project_config_id, pc.version AS project_config_version,
+             gc.id AS global_config_id, gc.version AS global_config_version,
+             CASE WHEN pc.id IS NOT NULL THEN 'project'
+                  WHEN gc.id IS NOT NULL THEN 'global'
+                  ELSE 'none' END AS config_source
+      FROM agent_roles r
+      LEFT JOIN role_configs pc ON pc.role_id = r.id AND pc.project_id = ${id}
+      LEFT JOIN role_configs gc ON gc.role_id = r.id AND gc.project_id IS NULL
+      ORDER BY r.kind, r.builtin DESC, r.name`;
+  });
+
+  app.put("/projects/:id/role-configs/:roleId", async (req, reply) => {
+    const { id, roleId } = req.params as { id: string; roleId: string };
+    const body = RoleConfigPutBody.parse(req.body);
+    const [p] = await sql`SELECT id FROM projects WHERE id = ${id}`;
+    if (!p) return reply.code(404).send({ error: "project not found" });
+    const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${roleId}`;
+    if (!role) return reply.code(404).send({ error: "role not found" });
+    if (role.kind === "role") {
+      const enabled = await rolesForProject(sql, id);
+      if (!enabled.some((r) => r.name === role.name)) {
+        return reply.code(409).send({ error: `角色 ${role.name} 未在本项目启用` });
+      }
+    }
+    const err = await validateRoleConfigBody(body, id);
+    if (err) return reply.code(400).send({ error: err });
+    const configId = await upsertRoleConfig(roleId, id, body);
+    await audit(req, {
+      action: "role_config.upsert",
+      resourceType: "role_config",
+      resourceId: configId,
+      projectId: id,
+      after: { role: role.name, scope: "project", credentials: body.credentials.length, files: body.config_files.length },
+    });
+    return roleConfigView(configId);
+  });
+
+  app.delete("/projects/:id/role-configs/:roleId", async (req, reply) => {
+    const { id, roleId } = req.params as { id: string; roleId: string };
+    const [row] = await sql`
+      DELETE FROM role_configs WHERE role_id = ${roleId} AND project_id = ${id} RETURNING id`;
+    if (!row) return reply.code(404).send({ error: "该项目没有此角色的覆盖配置" });
+    await audit(req, {
+      action: "role_config.delete",
+      resourceType: "role_config",
+      resourceId: row.id as string,
+      projectId: id,
     });
     return { ok: true };
   });
