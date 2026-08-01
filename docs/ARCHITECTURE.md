@@ -409,7 +409,8 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 - **explore**（Phase ① 唯一角色）：输入 = 整图 YAML + 当前意图 → 输出 `fact.json`（增量事实，不重复图内容）→ `fact` 事件建 fact 节点 + to 边
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DFH_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
-- Phase ②：多角色（analyze/verify/test/code）+ 角色注册表（角色名 → prompt 模板 + profile 绑定），hub prompt 列出可用角色；Phase ③：elkjs 分层布局 + hint 注入
+- **角色注册表（Phase ② 已落地）**：`agent_roles` 表全局注册（name 即 job.type；prompt_template 用 `{{graph}}/{{intent}}/{{role}}` 占位），内置 explore/analyze/verify/test/code 五角色（可改模板、不可删）+ 用户自定义角色；项目级 `config_json.roles.enabled` 勾选 hub 可下发清单（null=全部内置），hub prompt 动态列启用角色，hub 指了未启用角色自动落到第一个启用角色；角色 → agent 配置复用 profiles 绑定（`profiles[角色名]`）；API：`/agent-roles` CRUD + `/projects/:id/roles`（启用态 + 绑定）；设置页「角色」tab（勾选 + 绑定 + 模板编辑 + 自定义角色）
+- Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
 
 ---
 

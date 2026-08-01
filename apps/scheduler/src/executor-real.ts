@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { runRealAgent } from "@dfh/runtime-sandbox";
 import { FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
-import { ingestEvent, rulesForProject, type AgentProfileSnapshot } from "./core.js";
+import { ingestEvent, rolesForProject, rulesForProject, type AgentProfileSnapshot, type RoleDef } from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseFactOutput, parseHubDecision } from "./graph.js";
 import { publishStream } from "./stream-bus.js";
@@ -57,36 +57,44 @@ const VERIFY_PROMPT = (finding: { title: string; location?: string; summary?: st
 3. 不要修改源代码`;
 
 /** hub 决策 prompt（Cairn reason.md 改造，§8.3）：读整张图 → complete 或派发 intents */
-const HUB_PROMPT = (graphYaml: string, maxIntents: number) => `你是安全审计的调度中枢（hub）。画布当前状态（YAML）：
+const HUB_PROMPT = (graphYaml: string, maxIntents: number, roles: RoleDef[]) => `你是安全审计的调度中枢（hub）。画布当前状态（YAML）：
 
 ${graphYaml}
 
-可用角色：explore（探索：通读 /workspace/src 代码，围绕意图收集新事实）
+可用角色（intents 的 role 字段只能从这里选）：
+${roles.map((r) => `- ${r.name}（${r.title}）：${r.description}`).join("\n")}
 
 要求：
 1. 判断 goal 是否已达成：
    - 已达成 → 写 /workspace/hub.json：{"complete":{"from":["<被引用事实的id>",...],"description":"总结论（中文，200 字内）"}}
-   - 未达成 → 写 /workspace/hub.json：{"intents":[{"from":["<作为出发点的事实id>",...],"role":"explore","description":"要做的事（具体、可执行）"}]}
+   - 未达成 → 写 /workspace/hub.json：{"intents":[{"from":["<作为出发点的事实id>",...],"role":"<角色名>","description":"要做的事（具体、可执行）"}]}
 2. 最多 ${maxIntents} 个意图；意图必须高价值、互不重叠、可并行；from 只能引用上面 facts 里存在的 id
 3. 不要提出与 open_intents / concluded_intents 语义重复的意图
 4. 若 open_intents 为空且目标未达成，必须提出新意图
 5. hub.json 必须是纯 JSON，不要用 markdown 代码围栏包裹`;
 
-/** 角色（explore）prompt（Cairn explore.md 改造）：围绕意图探索 → 增量事实 */
-const EXPLORE_PROMPT = (graphYaml: string, intentDescription: string) => `你是探索 agent。代码在 /workspace/src。
+/** 角色表缺行时的兜底模板（与 0006 迁移里 explore 种子一致） */
+const FALLBACK_ROLE_TEMPLATE = `你是{{role}} agent。代码在 /workspace/src。
 
-当前意图：${intentDescription}
+当前意图：{{intent}}
 
 画布已有内容（YAML，不要重复其中的事实）：
-${graphYaml}
+{{graph}}
 
 要求：
-1. 围绕意图阅读代码，收集与意图直接相关的新事实（疑似漏洞线索、关键数据流、危险调用点等）
+1. 围绕意图阅读代码，收集与意图直接相关的新事实
 2. 写 /workspace/fact.json：{"title":"事实标题（20 字内）","description":"事实描述（中文，300 字内，含具体文件:行号）"}
-   - 只写增量事实，不要复述画布已有内容；事实要具体、可被后续验证
-   - 必须是纯 JSON，不要用 markdown 代码围栏包裹
-3. 完成后写 /workspace/done.json：{"summary":"探索过程总结（中文，100 字内）"}
+   - 只写增量事实；必须是纯 JSON，不要用 markdown 代码围栏包裹
+3. 完成后写 /workspace/done.json：{"summary":"总结（中文，100 字内）"}
 4. 不要修改源代码`;
+
+/** 角色模板渲染：{{graph}} {{intent}} {{role}} 占位符替换 */
+function renderRolePrompt(template: string, role: string, graphYaml: string, intent: string): string {
+  return template
+    .replaceAll("{{graph}}", graphYaml)
+    .replaceAll("{{intent}}", intent)
+    .replaceAll("{{role}}", role);
+}
 
 export async function executeReal(jobId: string, type: string): Promise<void> {
   const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
@@ -121,10 +129,19 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   let basePrompt: string;
   if (isHub) {
     if (!graph) throw new Error("hub_reason job 缺 canvas_id，无法读图");
-    basePrompt = HUB_PROMPT(graph.yaml, rules.maxIntentsPerDecision);
+    const roles = await rolesForProject(sql, job.project_id as string);
+    if (roles.length === 0) throw new Error("项目未启用任何角色，hub 无可下发对象");
+    basePrompt = HUB_PROMPT(graph.yaml, rules.maxIntentsPerDecision, roles);
   } else if (isRole) {
     if (!graph) throw new Error(`${type} job 缺 canvas_id，无法读图`);
-    basePrompt = EXPLORE_PROMPT(graph.yaml, intentDesc || "自由探索代码，收集安全相关事实");
+    // 角色 base prompt 来自角色注册表（用户可改模板）；缺行用兜底模板
+    const [roleRow] = await sql`SELECT prompt_template FROM agent_roles WHERE name = ${type}`;
+    basePrompt = renderRolePrompt(
+      (roleRow?.prompt_template as string) ?? FALLBACK_ROLE_TEMPLATE,
+      type,
+      graph.yaml,
+      intentDesc || "自由探索代码，收集安全相关事实",
+    );
   } else if (isVerify) {
     basePrompt = VERIFY_PROMPT((payload.finding ?? {}) as { title: string; location?: string; summary?: string });
   } else {

@@ -157,13 +157,41 @@ export interface EffectiveRules {
   maxAutoRetries: number;
   auditTimeoutSec: number;
   verifyTimeoutSec: number;
+  hubEnabled: boolean;
+  maxHubRounds: number;
+  maxIntentsPerDecision: number;
 }
 
 export interface ProjectSettings {
   profiles: Record<string, string>;
   rules: Record<string, unknown>;
+  roles: { enabled: string[] | null };
   effective_rules: EffectiveRules;
 }
+
+/** 角色注册表条目（§8.3：hub 可下发的 agent 类型） */
+export interface AgentRole {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  prompt_template: string;
+  builtin: boolean;
+}
+
+/** 项目视角的角色：启用状态 + 绑定的 profile */
+export interface ProjectRole extends AgentRole {
+  enabled: boolean;
+  default_enabled: boolean;
+  profile_id: string | null;
+}
+
+export type RoleInput = {
+  name: string;
+  title: string;
+  description: string;
+  prompt_template: string;
+};
 
 export type ProfileInput = {
   name: string;
@@ -235,8 +263,18 @@ export const api = {
   settings: (projectId: string) => get<ProjectSettings>(`/projects/${projectId}/settings`),
   patchSettings: (
     projectId: string,
-    body: { profiles?: Record<string, string | null>; rules?: Record<string, unknown> },
+    body: {
+      profiles?: Record<string, string | null>;
+      rules?: Record<string, unknown>;
+      roles?: { enabled: string[] | null };
+    },
   ) => send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
+  agentRoles: () => get<AgentRole[]>("/agent-roles"),
+  createRole: (r: RoleInput) => send<AgentRole>("POST", "/agent-roles", r),
+  updateRole: (id: string, r: Partial<Omit<RoleInput, "name">>) =>
+    send<AgentRole>("PATCH", `/agent-roles/${id}`, r),
+  deleteRole: (id: string) => send<{ ok: boolean }>("DELETE", `/agent-roles/${id}`),
+  projectRoles: (projectId: string) => get<ProjectRole[]>(`/projects/${projectId}/roles`),
   skillSources: () => get<SkillSource[]>("/skill-sources"),
   skillSource: (id: string) => get<SkillSourceDetail>(`/skill-sources/${id}`),
   createSkillSource: (s: { name: string; repo_url: string; branch: string }) =>

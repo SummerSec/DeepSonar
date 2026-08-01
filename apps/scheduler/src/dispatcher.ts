@@ -14,8 +14,14 @@ import { runner } from "./runtime.js";
 
 const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
 
-/** real 模式可执行的 job 类型（Phase ①：审计/验证/hub/探索角色；Phase ② 角色注册表放开） */
-const REAL_TYPES = new Set(["audit_module", "verify_finding", "hub_reason", "explore"]);
+/** 内置 real 类型；其余 job.type 若在角色注册表（agent_roles）中也为 real（Phase ② 自定义角色） */
+const REAL_BASE_TYPES = new Set(["audit_module", "verify_finding", "hub_reason"]);
+
+async function isRealType(type: string): Promise<boolean> {
+  if (REAL_BASE_TYPES.has(type)) return true;
+  const [r] = await sql`SELECT 1 FROM agent_roles WHERE name = ${type}`;
+  return Boolean(r);
+}
 
 export async function dispatchOnce(): Promise<number> {
   const [{ running }] = await sql<[{ running: number }]>`
@@ -51,7 +57,7 @@ async function runJob(jobId: string) {
   if (!job) return;
 
   // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
-  const useReal = config.runtime.agentMode === "real" && REAL_TYPES.has(job.type as string);
+  const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
   await transitionJob(jobId, "provisioning");
   const handle = await runner.provision({
     jobId,
@@ -96,7 +102,7 @@ async function runJob(jobId: string) {
 
 /** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */
 async function execute(jobId: string, type: string) {
-  if (config.runtime.agentMode === "real" && REAL_TYPES.has(type)) {
+  if (config.runtime.agentMode === "real" && (await isRealType(type))) {
     await executeReal(jobId, type);
     return;
   }
@@ -181,18 +187,16 @@ async function executeFake(jobId: string, type: string) {
     return; // done 由 runJob 兜底
   }
 
-  if (type === "explore") {
-    const [job] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
-    const payload = (job?.payload_json ?? {}) as Record<string, unknown>;
-    await emit("progress", { message: "假 agent：探索中", percent: 50 });
-    await emit("fact", {
-      intent_node_id: (payload.intent_node_id as string) ?? null,
-      title: "假 agent 探索事实",
-      description: "假 agent：auth/login.php:42 存在未参数化拼接，用户输入经 $_GET 直达 mysqli_query，属高危数据流（演示事实）。",
-    });
-    return; // done 由 runJob 兜底
-  }
-  // 未知类型：保活等待外部通道（Phase 2 真实 agent）
+  // 角色 job（explore/analyze/verify/test/code/自定义）：假 agent 产出一条演示事实
+  const [roleJob] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
+  const rolePayload = (roleJob?.payload_json ?? {}) as Record<string, unknown>;
+  await emit("progress", { message: `假 agent（${type}）：执行中`, percent: 50 });
+  await emit("fact", {
+    intent_node_id: (rolePayload.intent_node_id as string) ?? null,
+    title: `假 agent ${type} 事实`,
+    description: `假 agent（${type}）：auth/login.php:42 存在未参数化拼接，用户输入经 $_GET 直达 mysqli_query，属高危数据流（演示事实）。`,
+  });
+  return; // done 由 runJob 兜底
 }
 
 // lease 续期：调度器侧维护（§3.3；接入 SDK 后改为控制通道探测驱动）

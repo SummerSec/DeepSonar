@@ -47,10 +47,21 @@ const SkillSourceBody = z.object({
 });
 
 // 项目设置：profiles 绑定（job 类型 → profile id）+ rules 覆盖（§8.1 决策层）
+// roles.enabled：hub 可下发角色清单（name 数组；null = 恢复默认=全部内置）
 const SettingsPatchBody = z.object({
   profiles: z.record(z.string(), z.string().nullable()).optional(),
   rules: z.record(z.string(), z.unknown()).optional(),
+  roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
 });
+
+// 角色注册表（§8.3 Phase ②）：name 即 job.type；prompt_template 用 {{graph}} {{intent}} {{role}} 占位
+const RoleBody = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
+  title: z.string().default(""),
+  description: z.string().default(""),
+  prompt_template: z.string().min(10),
+});
+const RolePatchBody = RoleBody.partial().omit({ name: true });
 
 export function registerRoutes(app: FastifyInstance) {
   // ---------- Agent 实时流（WS /ws?job_id=...） ----------
@@ -207,6 +218,65 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // ---------- 角色注册表（§8.3：hub 可下发的 agent 类型，全局注册 + 项目级启用） ----------
+  app.get("/agent-roles", async () =>
+    sql`SELECT id, name, title, description, prompt_template, builtin, created_at, updated_at
+        FROM agent_roles ORDER BY builtin DESC, name`,
+  );
+
+  app.post("/agent-roles", async (req, reply) => {
+    const body = RoleBody.parse(req.body);
+    try {
+      const [row] = await sql`
+        INSERT INTO agent_roles ${sql({ ...body, builtin: false })}
+        RETURNING id, name, title, description, prompt_template, builtin`;
+      return row;
+    } catch (e: unknown) {
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
+        return reply.code(409).send({ error: `角色 ${body.name} 已存在` });
+      }
+      throw e;
+    }
+  });
+
+  app.patch("/agent-roles/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = RolePatchBody.parse(req.body);
+    const [row] = await sql`
+      UPDATE agent_roles SET ${sql(body)}, updated_at = now()
+      WHERE id = ${id}
+      RETURNING id, name, title, description, prompt_template, builtin`;
+    if (!row) return reply.code(404).send({ error: "role not found" });
+    return row;
+  });
+
+  app.delete("/agent-roles/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [row] = await sql`DELETE FROM agent_roles WHERE id = ${id} AND NOT builtin RETURNING id`;
+    if (!row) return reply.code(409).send({ error: "内置角色不可删除（可编辑模板/描述）或角色不存在" });
+    return { ok: true };
+  });
+
+  // 项目视角的角色清单：全部角色 + 本项目启用状态 + 绑定的 profile
+  app.get("/projects/:id/roles", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
+    if (!p) return reply.code(404).send({ error: "project not found" });
+    const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    const enabled = ((cfg.roles as Record<string, unknown> | undefined)?.enabled ?? null) as string[] | null;
+    const bindings = (cfg.profiles ?? {}) as Record<string, string>;
+    const all = await sql`
+      SELECT id, name, title, description, prompt_template, builtin FROM agent_roles
+      ORDER BY builtin DESC, name`;
+    const set = enabled == null ? null : new Set(enabled);
+    return (all as unknown as { name: string; builtin: boolean }[]).map((r) => ({
+      ...r,
+      enabled: set == null ? r.builtin : set.has(r.name),
+      default_enabled: enabled == null,
+      profile_id: bindings[r.name] ?? null,
+    }));
+  });
+
   // ---------- 项目设置（§8.1 决策层：profiles 绑定 + rules 覆盖） ----------
   app.get("/projects/:id/settings", async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -216,6 +286,7 @@ export function registerRoutes(app: FastifyInstance) {
     return {
       profiles: (cfg.profiles ?? {}) as Record<string, string>,
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
+      roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
     };
   });
@@ -237,10 +308,17 @@ export function registerRoutes(app: FastifyInstance) {
     if (body.rules) {
       cfg.rules = { ...((cfg.rules as Record<string, unknown>) ?? {}), ...body.rules };
     }
+    if (body.roles) {
+      const roles = { ...((cfg.roles as Record<string, unknown>) ?? {}) };
+      if (body.roles.enabled === null) delete roles.enabled; // null = 恢复默认（全部内置）
+      else if (body.roles.enabled !== undefined) roles.enabled = body.roles.enabled;
+      cfg.roles = roles;
+    }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
     return {
       profiles: (cfg.profiles ?? {}) as Record<string, string>,
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
+      roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
     };
   });

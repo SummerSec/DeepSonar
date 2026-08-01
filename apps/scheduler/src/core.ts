@@ -63,6 +63,34 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
   };
 }
 
+// ---------- 角色注册表（§8.3 Phase ②）：全局 agent_roles + 项目级启用清单 ----------
+
+export interface RoleDef {
+  id: string;
+  name: string; // 即 job.type
+  title: string;
+  description: string;
+  prompt_template: string;
+  builtin: boolean;
+}
+
+/**
+ * 项目可用的角色清单（hub 可下发的 agent）：
+ * config_json.roles.enabled 为 null/缺省 = 全部内置角色；数组 = 按 name 白名单（含自定义角色）。
+ */
+export async function rolesForProject(db: typeof sql, projectId: string): Promise<RoleDef[]> {
+  const [all, [p]] = await Promise.all([
+    db`SELECT id, name, title, description, prompt_template, builtin FROM agent_roles ORDER BY builtin DESC, name`,
+    db`SELECT config_json FROM projects WHERE id = ${projectId}`,
+  ]);
+  const enabled = (((p?.config_json as Record<string, unknown>)?.roles as Record<string, unknown> | undefined)?.enabled ??
+    null) as string[] | null;
+  const rows = all as unknown as RoleDef[];
+  if (enabled == null) return rows.filter((r) => r.builtin);
+  const set = new Set(enabled);
+  return rows.filter((r) => set.has(r.name));
+}
+
 // ---------- Agent profile（决策层）：项目绑定 → 冻结快照（下一 job 生效，历史可复现） ----------
 
 export interface AgentProfileSnapshot {
@@ -433,8 +461,16 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
       return;
     }
 
+    // 项目启用的角色（hub 可下发清单）；一个都没启用则不再派生
+    const roles = await rolesForProject(tx as unknown as typeof sql, job.project_id as string);
+    const enabledNames = new Set(roles.map((r) => r.name));
+
     for (const it of (p.intents ?? []).slice(0, rules.maxIntentsPerDecision)) {
       if (!it.description?.trim()) continue;
+      if (roles.length === 0) {
+        console.warn(`[hub] 项目 ${job.project_id} 无启用角色，跳过意图派发`);
+        break;
+      }
       const title = it.description.trim().slice(0, 120);
       // 去重：同画布已有同标题的未结论 intent → 跳过（hub 重复派发护栏）
       const dup = await tx`
@@ -444,8 +480,8 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         LIMIT 1`;
       if (dup.length > 0) continue;
 
-      // Phase ①：角色白名单只有 explore；Phase ② 角色注册表放开
-      const role = "explore";
+      // 角色白名单校验：hub 指了未启用的角色 → 落到第一个启用角色
+      const role = enabledNames.has(it.role ?? "") ? (it.role as string) : roles[0].name;
       const snapshot = await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, role);
       const [roleJob] = await tx`
         INSERT INTO jobs ${tx({
