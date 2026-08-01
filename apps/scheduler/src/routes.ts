@@ -15,6 +15,7 @@ import { testCredential } from "./credential-test.js";
 import { createJob, ensureCanvasForTask, globalRules, rulesForProject, transitionJob } from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
+import { registerGateway } from "./gateway.js";
 import { runner } from "./runtime.js";
 import { syncSkillSource, validateSourceUrl } from "./skill-sources.js";
 import { streamBuffer, subscribeStream } from "./stream-bus.js";
@@ -118,6 +119,9 @@ async function bindCredential(profileId: string, credentialId: string) {
 export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DFH_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
   app.addHook("onRequest", authHook);
+
+  // Model Gateway（§6.3）：自身用 DFH_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
+  registerGateway(app);
 
   // ---------- Agent 实时流（WS /ws?job_id=...） ----------
   // 连接后先补发环形缓冲（晚加入也能看到上下文），随后实时推送
@@ -946,6 +950,9 @@ export function registerRoutes(app: FastifyInstance) {
         console.error(`[cancel] 沙箱回收失败 ${job.sandbox_id}:`, e);
       });
     }
+    // §6.3：取消即吊销短期模型 Token
+    const { revokeJobTokens } = await import("./gateway.js");
+    await revokeJobTokens(id, "cancelled").catch(() => {});
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent"]})`;

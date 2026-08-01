@@ -40,6 +40,9 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
         console.error(`[reaper] 沙箱回收失败 ${j.sandbox_id}:`, e);
       });
     }
+    // §6.3：终局判定即吊销短期模型 Token
+    const { revokeJobTokens } = await import("./gateway.js");
+    await revokeJobTokens(j.id, "reaper").catch(() => {});
     // 失败不能只改 jobs 表而留下 running 画布节点（§8.3：job/intent 节点同步终态）
     await sql`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()

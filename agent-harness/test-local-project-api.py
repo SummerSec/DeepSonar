@@ -84,8 +84,9 @@ def main():
     print("优先级:", code, "(200=改成功 / 409=已被认领，均合法)")
 
     # 7. 等整个 Hub 编排链收敛后重试：复用原画布，历史保留
+    # fake hub 每轮派多角色 + finding 必验 + followup 回收，链长已到 ~8 分钟，窗口放宽到 15 分钟
     final = None
-    for _ in range(40):
+    for _ in range(450):
         j = req("GET", f"/jobs/{job['id']}")["job"]
         graph = req("GET", f"/canvases/{cid}")
         root = next(n for n in graph["nodes"] if n["node_type"] == "root")
@@ -93,7 +94,7 @@ def main():
             final = j["status"]
             break
         time.sleep(2)
-    assert final, "Hub 编排链未在 80s 内收敛"
+    assert final, "Hub 编排链未在 15 分钟内收敛"
 
     nodes, edges = graph["nodes"], graph["edges"]
     roots = [n for n in nodes if n["node_type"] == "root"]

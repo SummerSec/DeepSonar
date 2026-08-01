@@ -11,7 +11,8 @@ import { ingestEvent, rolesForProject, rulesForProject, type AgentProfileSnapsho
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseFactOutput, parseHubDecision } from "./graph.js";
 import { ingestCodeSource, type RepoEvidence, type RepoSpec } from "./repo-ingest.js";
-import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
+import { PROVIDER_ENV_MAP } from "./credentials.js";
+import { mintJobToken } from "./gateway.js";
 import { publishStream } from "./stream-bus.js";
 
 /**
@@ -210,8 +211,9 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const cliName = snapshot?.agent_cli ?? config.runtime.agentProvider;
   const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
   const model = snapshot?.model ?? config.runtime.agentModel ?? undefined;
-  // env 注入两条路径（§6.2）：
-  // 1. 目标路径——profile 绑定 Credential：运行时解密，按固定 Provider→env 映射注入（用户不能自由写变量名）
+  // env 注入两条路径（§6.2/§6.3）：
+  // 1. 目标路径——profile 绑定 Credential：铸造短期 DFH_JOB_TOKEN 注入沙箱，
+  //    沙箱经 Model Gateway 调用模型（真实 Key 不出调度器进程；job 终态即吊销）
   // 2. 过渡路径——profile env_keys（变量名引用调度器 process.env，有白名单门禁；逐步废弃）
   const env: Record<string, string> = { ...config.runtime.agentEnv };
   if (snapshot?.credential_id) {
@@ -221,11 +223,15 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     }
     const mapping = PROVIDER_ENV_MAP[cred.provider as string];
     if (!mapping) throw new Error(`未知 provider: ${String(cred.provider)}`);
-    const secret = decryptSecret(cred as never);
-    for (const k of mapping.secretKeys) env[k] = secret;
-    const meta = (cred.public_metadata_json ?? {}) as { base_url?: string };
-    const baseUrl = meta.base_url ?? mapping.defaultBaseUrl;
-    if (mapping.baseUrlKey && baseUrl) env[mapping.baseUrlKey] = baseUrl;
+    const jt = await mintJobToken({
+      jobId: job.id as string,
+      projectId: job.project_id as string,
+      credentialId: cred.id as string,
+      allowedModels: model ? [model] : [],
+      ttlSec: Math.max((job.timeout_sec as number) ?? 3600, config.gateway.tokenTtlSec),
+    });
+    for (const k of mapping.secretKeys) env[k] = jt.plaintext;
+    if (mapping.baseUrlKey) env[mapping.baseUrlKey] = config.gateway.sandboxUrl;
     void sql`UPDATE credentials SET last_used_at = now() WHERE id = ${cred.id as string}`.catch(() => {});
   } else {
     for (const key of snapshot?.env_keys ?? []) {

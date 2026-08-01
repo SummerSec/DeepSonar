@@ -114,8 +114,8 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /ws": "tasks:read",
 };
 
-/** 豁免鉴权的路由（健康检查 + Plane webhook，各有自保护） */
-const EXEMPT = new Set(["/health", "/webhooks/plane"]);
+/** 豁免鉴权的路由（健康检查 + Plane webhook + Model Gateway，各有自保护） */
+const EXEMPT = new Set(["/health", "/webhooks/plane", "/gateway/*"]);
 
 function requiredScope(method: string, routeUrl: string): string | null {
   const key = `${method} ${routeUrl}`;

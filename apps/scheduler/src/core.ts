@@ -769,6 +769,10 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
     UPDATE canvas_nodes SET status = ${status}, body_json = body_json || ${tx.json({ summary: result?.summary ?? null })}, updated_at = now()
     WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
 
+  // §6.3：job 终态立即吊销短期模型 Token（容器残留也调不动模型；网关另按 job 状态逐请求兜底）
+  const { revokeJobTokens } = await import("./gateway.js");
+  await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
+
   // verify_finding 闭环：结论写回 finding；confirmed 强制交给 Hub 验收并决定后续 Agent。
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   let forceHubReview = false;
