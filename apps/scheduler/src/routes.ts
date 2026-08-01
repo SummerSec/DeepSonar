@@ -78,6 +78,10 @@ const PatchProjectBody = z.object({
 const CreateTaskBody = z.object({
   title: z.string().trim().min(1).max(200),
   content: z.string().trim().min(1).max(20_000),
+  // 代码来源（§10.1）：二选一，随画布 target_json 存档，执行时摄入进沙箱
+  repo_url: z.string().trim().max(500).optional(),
+  repo_path: z.string().trim().max(500).optional(),
+  ref: z.string().trim().max(200).optional(),
 });
 const TriggerTaskBody = z.object({
   event_id: z.string().trim().min(1).max(200),
@@ -205,7 +209,14 @@ export function registerRoutes(app: FastifyInstance) {
     const canvasId = await ensureCanvasForTask({
       projectId: id,
       title: body.title,
-      target: { title: body.title, content: body.content, goal: body.content },
+      target: {
+        title: body.title,
+        content: body.content,
+        goal: body.content,
+        ...(body.repo_url ? { repo_url: body.repo_url } : {}),
+        ...(body.repo_path ? { repo_path: body.repo_path } : {}),
+        ...(body.ref ? { ref: body.ref } : {}),
+      },
     });
     const { job, duplicated } = await createJob({
       projectId: id,
@@ -272,6 +283,10 @@ export function registerRoutes(app: FastifyInstance) {
     const { canvasId } = req.params as { canvasId: string };
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const active = await sql`
+      SELECT 1 FROM jobs WHERE canvas_id = ${canvasId}
+        AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
+    if (active.length > 0) return reply.code(409).send({ error: "该任务仍有活动 job，不能重试" });
     const [source] = await sql`
       SELECT * FROM jobs WHERE canvas_id = ${canvasId} ORDER BY created_at ASC LIMIT 1`;
     if (!source) return reply.code(409).send({ error: "该任务还没有执行记录" });

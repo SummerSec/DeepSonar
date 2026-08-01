@@ -33,6 +33,7 @@ export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapsho
 
   const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
   const goal = String(target.goal ?? canvas?.title ?? "");
+  const root = nodes.find((n) => n.node_type === "root");
 
   const facts = nodes.filter((n) => n.node_type === "fact" || n.node_type === "finding");
   const openIntents = nodes.filter(
@@ -55,6 +56,7 @@ export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapsho
   const lines: string[] = [];
   lines.push(kv("goal", goal));
   lines.push(kv("target", target));
+  lines.push(kv("root_id", root?.id ?? null));
   lines.push("facts:");
   for (const f of facts) {
     const body = (f.body_json ?? {}) as Record<string, unknown>;

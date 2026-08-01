@@ -79,8 +79,13 @@ async function pollProject(plane: PlaneClient, projectId: string, planeProjectId
       projectId,
       canvasId,
       planeIssueId: issue.id,
-      type: "audit_module",
-      payload: { title: issue.name, content, goal: content },
+      type: "hub_reason",
+      payload: {
+        title: issue.name,
+        content,
+        goal: content,
+        trigger: { kind: "plane_issue", issue_id: issue.id },
+      },
       timeoutSec: rules.auditTimeoutSec,
     });
     if (duplicated || !job) continue;

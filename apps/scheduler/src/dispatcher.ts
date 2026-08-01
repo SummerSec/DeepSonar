@@ -138,7 +138,7 @@ async function executeFake(jobId: string, type: string) {
     return;
   }
 
-  if (type === "audit_module") {
+  if (type === "audit_module" || type === "audit") {
     const [job] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
     const fake = (job?.payload_json?.fake_finding ?? null) as {
       title?: string;
@@ -179,6 +179,21 @@ async function executeFake(jobId: string, type: string) {
     const trigger = (job?.payload_json?.trigger ?? {}) as { kind?: string; finding_id?: string };
     await emit("progress", { message: "假 hub：读图决策中", percent: 50 });
     if (canvasId) {
+      if (["user_task", "plane_issue", "external_event"].includes(trigger.kind ?? "")) {
+        const refs = await sql`
+          SELECT id FROM canvas_nodes
+          WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+        await emit("hub_decision", {
+          intents: [
+            {
+              from: refs.map((r) => r.id as string),
+              role: "audit",
+              description: "根据任务目标确定审计范围和方法，执行白盒安全审计并产出结构化 Finding",
+            },
+          ],
+        });
+        return;
+      }
       if (trigger.kind === "confirmed_finding") {
         const refs = trigger.finding_id
           ? await sql`SELECT node_id AS id FROM findings WHERE id = ${trigger.finding_id} AND node_id IS NOT NULL`

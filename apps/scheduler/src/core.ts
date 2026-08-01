@@ -170,7 +170,8 @@ export async function resolveProfileSnapshot(
 ): Promise<AgentProfileSnapshot | null> {
   const [p] = await db`SELECT config_json FROM projects WHERE id = ${projectId}`;
   const bindings = (((p?.config_json as Record<string, unknown>)?.profiles ?? {}) ?? {}) as Record<string, string>;
-  const profileId = bindings[jobType] ?? bindings.default;
+  // audit 是 Hub 可派发角色，沿用历史 audit_module profile 绑定，避免用户重复配置。
+  const profileId = bindings[jobType] ?? (jobType === "audit" ? bindings.audit_module : undefined) ?? bindings.default;
   if (!profileId) return null;
   const [row] = await db`SELECT * FROM agent_profiles WHERE id = ${profileId}`;
   if (!row) return null;

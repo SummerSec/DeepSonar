@@ -53,6 +53,7 @@ def main():
     }, 201)
     cid, job = t["canvas_id"], t["job"]
     assert job["status"] == "pending" and job["priority"] == 0 and job["canvas_id"] == cid
+    assert job["type"] == "hub_reason", "所有任务必须先由 Hub 决策"
     canvas = req("GET", f"/canvases/{cid}")
     roots = [n for n in canvas["nodes"] if n["node_type"] == "root"]
     assert len(roots) == 1 and "认证模块" in roots[0]["body_json"]["target"]["content"]
@@ -82,15 +83,31 @@ def main():
     assert code in (200, 409), f"priority 改动返回 {code}"
     print("优先级:", code, "(200=改成功 / 409=已被认领，均合法)")
 
-    # 7. 等 job 终态后重试：复用原画布，历史保留
+    # 7. 等整个 Hub 编排链收敛后重试：复用原画布，历史保留
     final = None
     for _ in range(40):
         j = req("GET", f"/jobs/{job['id']}")["job"]
-        if j["status"] in ("succeeded", "failed", "timeout", "cancelled"):
+        graph = req("GET", f"/canvases/{cid}")
+        root = next(n for n in graph["nodes"] if n["node_type"] == "root")
+        if root["status"] == "succeeded":
             final = j["status"]
             break
         time.sleep(2)
-    assert final, "job 未在 80s 内到达终态"
+    assert final, "Hub 编排链未在 80s 内收敛"
+
+    nodes, edges = graph["nodes"], graph["edges"]
+    roots = [n for n in nodes if n["node_type"] == "root"]
+    hubs = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "hub_reason"]
+    audits = [n for n in nodes if n["node_type"] == "intent" and n["body_json"].get("role") == "audit"]
+    findings = [n for n in nodes if n["node_type"] == "finding"]
+    verifies = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "verify_finding"]
+    assert roots and len(hubs) >= 2 and audits and findings and verifies, "Hub→Audit→Finding→Verify→Hub 节点链不完整"
+    pairs = {(e["from_node_id"], e["to_node_id"], e["edge_type"]) for e in edges}
+    assert (roots[0]["id"], hubs[0]["id"], "child") in pairs
+    assert any((a["id"], f["id"], "produces") in pairs for a in audits for f in findings)
+    assert any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies)
+    assert any(e["from_node_id"] in {f["id"] for f in findings} and e["edge_type"] == "next" for e in edges)
+    print("Hub 编排链 OK: Root → Hub → Audit → Finding → Verify → Hub")
     before = next(r for r in req("GET", f"/projects/{pid}/canvases") if r["id"] == cid)["job_count"]
     retry = req("POST", f"/tasks/{cid}/retry", None, 201)
     assert retry["canvas_id"] == cid and retry["status"] == "pending"
@@ -100,14 +117,29 @@ def main():
     assert row["job_count"] >= before + 1, f"重试后应至少多 1 个 job，{before} → {row['job_count']}"
     print(f"重试 OK: 首跑 {final} → 新 job {retry['id'][:8]}，尝试次数 {row['job_count']}")
 
-    # 8. Plane 绑定/解绑（不依赖真实 Plane 服务）
+    # 8. 外部事件触发：进入 Hub，且 source + event_id 幂等
+    event_body = {
+        "event_id": f"evt-{tag}",
+        "source": "ci",
+        "event_type": "security_scan_failed",
+        "data": {"repository": "demo", "branch": "main", "alert_count": 2},
+    }
+    event_first = req("POST", f"/projects/{pid}/events", event_body, 201)
+    event_second = req("POST", f"/projects/{pid}/events", event_body, 200)
+    assert event_first["job"]["type"] == "hub_reason"
+    assert event_second["duplicated"] is True
+    assert event_second["canvas_id"] == event_first["canvas_id"]
+    assert event_second["job"]["id"] == event_first["job"]["id"]
+    print("事件触发 OK: 首次创建，重复事件幂等复用", event_first["canvas_id"][:8])
+
+    # 9. Plane 绑定/解绑（不依赖真实 Plane 服务）
     req("PUT", f"/projects/{pid}/integrations/plane", {"plane_project_id": f"plane-{tag}"})
     assert req("GET", f"/projects/{pid}")["plane_project_id"] == f"plane-{tag}"
     req("DELETE", f"/projects/{pid}/integrations/plane")
     assert req("GET", f"/projects/{pid}")["plane_project_id"] is None
     print("Plane 绑定/解绑 OK")
 
-    # 9. 归档：归档后不能新建任务；历史数据保留
+    # 10. 归档：归档后不能新建任务；历史数据保留
     req("POST", f"/projects/{pid}/archive", None)
     assert req("GET", f"/projects/{pid}")["status"] == "archived"
     req("POST", f"/projects/{pid}/tasks", {"title": "应被拒", "content": "项目已归档"}, expect=409)
