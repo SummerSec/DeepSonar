@@ -96,19 +96,42 @@ def main():
         time.sleep(2)
     assert final, "Hub 编排链未在 15 分钟内收敛"
 
-    nodes, edges = graph["nodes"], graph["edges"]
-    roots = [n for n in nodes if n["node_type"] == "root"]
-    hubs = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "hub_reason"]
-    audits = [n for n in nodes if n["node_type"] == "intent" and n["body_json"].get("role") == "audit"]
-    findings = [n for n in nodes if n["node_type"] == "finding"]
-    verifies = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "verify_finding"]
-    assert roots and len(hubs) >= 2 and audits and findings and verifies, "Hub→Audit→Finding→Verify→Hub 节点链不完整"
-    pairs = {(e["from_node_id"], e["to_node_id"], e["edge_type"]) for e in edges}
-    assert (roots[0]["id"], hubs[0]["id"], "child") in pairs
-    assert any((a["id"], f["id"], "produces") in pairs for a in audits for f in findings)
-    assert any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies)
-    assert any(e["from_node_id"] in {f["id"] for f in findings} and e["edge_type"] == "next" for e in edges)
+    # 边断言需轮询：root 可能先于后续验收轮的 next 边到达 succeeded（链仍在演进）
+    def hub_chain_ok():
+        g = req("GET", f"/canvases/{cid}")
+        nodes, edges = g["nodes"], g["edges"]
+        roots = [n for n in nodes if n["node_type"] == "root"]
+        hubs = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "hub_reason"]
+        audits = [n for n in nodes if n["node_type"] == "intent" and n["body_json"].get("role") == "audit"]
+        findings = [n for n in nodes if n["node_type"] == "finding"]
+        verifies = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "verify_finding"]
+        if not (roots and len(hubs) >= 2 and audits and findings and verifies):
+            return False
+        pairs = {(e["from_node_id"], e["to_node_id"], e["edge_type"]) for e in edges}
+        return (
+            (roots[0]["id"], hubs[0]["id"], "child") in pairs
+            and any((a["id"], f["id"], "produces") in pairs for a in audits for f in findings)
+            and any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies)
+            and any(e["from_node_id"] in {f["id"] for f in findings} and e["edge_type"] == "next" for e in edges)
+        )
+
+    chain_deadline = time.time() + 120
+    while not hub_chain_ok():
+        assert time.time() < chain_deadline, "Hub→Audit→Finding→Verify→Hub 节点/边链 120s 内未成形"
+        time.sleep(3)
     print("Hub 编排链 OK: Root → Hub → Audit → Finding → Verify → Hub")
+
+    # root succeeded ≠ 链上没有活动 job（验收轮可能仍在跑）；retry 要求画布无活动 job，等彻底收敛
+    ACTIVE = {"pending", "claimed", "provisioning", "running", "waiting_human"}
+    def active_jobs():
+        return [j for j in req("GET", f"/jobs?project_id={pid}")
+                if j.get("canvas_id") == cid and j["status"] in ACTIVE]
+
+    quiesce_deadline = time.time() + 600
+    while active_jobs():
+        assert time.time() < quiesce_deadline, "画布活动 job 10 分钟内未清空（无法安全重试）"
+        time.sleep(5)
+
     before = next(r for r in req("GET", f"/projects/{pid}/canvases") if r["id"] == cid)["job_count"]
     retry = req("POST", f"/tasks/{cid}/retry", None, 201)
     assert retry["canvas_id"] == cid and retry["status"] == "pending"
