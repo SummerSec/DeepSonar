@@ -7,6 +7,12 @@ import { registerRoutes } from "./routes.js";
 import { startPlaneSync } from "./plane-sync.js";
 
 async function main() {
+  // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
+  // 绝不能因此崩掉整个调度进程 —— 记日志即可，job 级错误由 runJob 的 try/catch 兜底
+  process.on("unhandledRejection", (reason) => {
+    console.error("[fatal-guard] unhandledRejection:", reason instanceof Error ? reason.message : reason);
+  });
+
   console.log("[boot] 运行数据库迁移…");
   const applied = await migrate();
   if (applied.length > 0) console.log(`[boot] 已应用迁移: ${applied.join(", ")}`);

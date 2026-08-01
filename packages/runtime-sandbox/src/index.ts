@@ -33,4 +33,5 @@ export class NoopRunner implements SandboxRunner {
   }
 }
 
-export { AgentboxRunner } from "./agentbox.js";
+export { AgentboxRunner, runRealAgent } from "./agentbox.js";
+export type { RealAgentResult, RealAgentSpec } from "./agentbox.js";

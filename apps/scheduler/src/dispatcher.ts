@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { NoopRunner, type SandboxRunner } from "@dfh/runtime-sandbox";
 import { config } from "./config.js";
 import { ingestEvent, transitionJob } from "./core.js";
 import { sql } from "./db.js";
+import { executeReal } from "./executor-real.js";
 import { planeWriteback } from "./plane-sync.js";
+import { runner } from "./runtime.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -11,7 +12,6 @@ import { planeWriteback } from "./plane-sync.js";
  * Phase 0 执行器为 noop：走通状态机 + 事件 + 画布 + lease，不碰真实沙箱。
  */
 
-const runner: SandboxRunner = new NoopRunner();
 const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
 
 export async function dispatchOnce(): Promise<number> {
@@ -47,12 +47,15 @@ async function runJob(jobId: string) {
   const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job) return;
 
-  // provisioning：起沙箱（Phase 0 = noop）
+  // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
+  const useReal =
+    config.runtime.agentMode === "real" && (job.type === "audit_module" || job.type === "verify_finding");
   await transitionJob(jobId, "provisioning");
   const handle = await runner.provision({
     jobId,
     image: config.runtime.imageAudit,
-    network: "none",
+    env: useReal ? config.runtime.agentEnv : undefined,
+    network: useReal ? "restricted" : "none",
   });
   await sql`UPDATE jobs SET sandbox_id = ${handle.sandboxId} WHERE id = ${jobId}`;
 
@@ -89,8 +92,20 @@ async function runJob(jobId: string) {
   }
 }
 
-/** Phase 0/1 执行器：noop 直发事件；audit/verify 由假 agent 脚本驱动（§10 Phase 1 验收用） */
+/** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */
 async function execute(jobId: string, type: string) {
+  if (
+    config.runtime.agentMode === "real" &&
+    (type === "audit_module" || type === "verify_finding")
+  ) {
+    await executeReal(jobId, type);
+    return;
+  }
+  await executeFake(jobId, type);
+}
+
+/** Phase 0/1 执行器：noop 直发事件；audit/verify 由假 agent 脚本驱动（§10 Phase 1 验收用） */
+async function executeFake(jobId: string, type: string) {
   const emit = (t: "progress" | "finding" | "done" | "human", payload: unknown) =>
     ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t, payload });
 

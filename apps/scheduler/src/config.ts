@@ -69,6 +69,8 @@ export const config = {
   runtime: {
     provider: str("SANDBOX_PROVIDER", "local-docker"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepflowhunter-agent:latest"),
+    /** fake=内置假 agent（联调用）；real=agentbox-sdk 真实 agent */
+    agentMode: str("AGENT_MODE", "fake"),
     /** agentbox-sdk agent provider：claude-code | opencode | codex（同一 API 可换） */
     agentProvider: str("AGENT_PROVIDER", "claude-code"),
     agentModel: str("AGENT_MODEL"),
@@ -84,6 +86,10 @@ export const config = {
       if (this.anthropicKey) env.ANTHROPIC_API_KEY = this.anthropicKey;
       if (this.anthropicBaseUrl) env.ANTHROPIC_BASE_URL = this.anthropicBaseUrl;
       if (this.anthropicAuthToken) env.ANTHROPIC_AUTH_TOKEN = this.anthropicAuthToken;
+      // 中转端点（如 Kimi for Coding）通常要求 AUTH_TOKEN；只配了 KEY 时镜像一份
+      if (this.anthropicBaseUrl && !this.anthropicAuthToken && this.anthropicKey) {
+        env.ANTHROPIC_AUTH_TOKEN = this.anthropicKey;
+      }
       if (this.openaiKey) env.OPENAI_API_KEY = this.openaiKey;
       if (this.openaiBaseUrl) env.OPENAI_BASE_URL = this.openaiBaseUrl;
       if (this.openrouterKey) env.OPENROUTER_API_KEY = this.openrouterKey;

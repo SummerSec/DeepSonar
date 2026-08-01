@@ -1,13 +1,12 @@
 import { config } from "./config.js";
 import { sql } from "./db.js";
-import { NoopRunner } from "@dfh/runtime-sandbox";
+import { runner } from "./runtime.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
  * - 超时：started_at + timeout_sec 到期 → timeout
  * - 孤儿：lease 过期 → orphan（沙箱可能已死/调度器崩溃后恢复）
  */
-const runner = new NoopRunner();
 
 export async function reapOnce(): Promise<{ timeouts: number; orphans: number }> {
   const timedOut = await sql`

@@ -89,19 +89,30 @@ export async function planeWriteback(jobId: string): Promise<void> {
   if (!doneId) return;
 
   const ok = job.status === "succeeded";
-  // 失败不置 Done：回 Ready 等人工（配合 waiting_human / resume）
+  // 失败重试上限：同一 issue 反复失败会成死循环（回 Ready → 再领取 → 再失败）
+  // 达到上限后留在 In Progress + 评论提示，交人工处理（resume 可手动复活）
+  const MAX_AUTO_RETRIES = 3;
+  let exhausted = false;
+  if (!ok) {
+    const [{ attempts }] = await sql<[{ attempts: number }]>`
+      SELECT COUNT(*)::int AS attempts FROM jobs WHERE plane_issue_id = ${job.plane_issue_id}`;
+    exhausted = attempts >= MAX_AUTO_RETRIES;
+  }
+  // 失败不置 Done：回 Ready 等重试；重试耗尽则留在 In Progress 等人工
   await plane
     .updateIssueState(
       job.plane_project_id,
       job.plane_issue_id,
-      ok ? doneId : (states.get(config.plane.readyState) ?? doneId),
+      ok ? doneId : exhausted
+        ? (states.get(config.plane.inProgressState) ?? doneId)
+        : (states.get(config.plane.readyState) ?? doneId),
     )
     .catch((e) => console.error("[plane] 回写失败:", e));
   await plane
     .addComment(
       job.plane_project_id,
       job.plane_issue_id,
-      `<p>🤖 job ${job.id} 结束：<b>${job.status}</b>${job.error ? ` — ${job.error}` : ""}</p>`,
+      `<p>🤖 job ${job.id} 结束：<b>${job.status}</b>${job.error ? ` — ${job.error}` : ""}${exhausted ? `（自动重试已达 ${MAX_AUTO_RETRIES} 次上限，请人工介入）` : ""}</p>`,
     )
     .catch(() => {});
 }
