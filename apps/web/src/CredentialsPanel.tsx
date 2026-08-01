@@ -1,5 +1,5 @@
-import { ArrowsClockwise, Key, Plugs, Prohibit } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { ArrowsClockwise, Check, Key, MagnifyingGlass, Plugs, Prohibit } from "@phosphor-icons/react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type Project, type ProviderCredential } from "./api";
 
 /**
@@ -27,6 +27,9 @@ export function CredentialsPanel() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
   const [name, setName] = useState("");
   const [provider, setProvider] = useState("anthropic");
@@ -39,7 +42,10 @@ export function CredentialsPanel() {
 
   const load = () => {
     setError("");
-    api.credentials().then(setCreds).catch((e) => setError(String(e)));
+    api.credentials().then((list) => {
+      setCreds(list);
+      setSelectedIds((current) => new Set([...current].filter((id) => list.some((credential) => credential.id === id))));
+    }).catch((e) => setError(String(e)));
     api.projects().then(setProjects).catch(() => {});
   };
   useEffect(load, []);
@@ -102,6 +108,45 @@ export function CredentialsPanel() {
   const projectName = (id: string | null) =>
     id ? (projects.find((p) => p.id === id)?.name ?? id.slice(0, 8)) : "全局";
 
+  const filteredCreds = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return creds.filter((credential) => {
+      if (statusFilter !== "all" && credential.status !== statusFilter) return false;
+      if (!needle) return true;
+      return `${credential.name} ${credential.provider} ${credential.last4} ${credential.fingerprint} ${projectName(credential.project_id)}`.toLowerCase().includes(needle);
+    });
+  }, [creds, projects, query, statusFilter]);
+  const visibleIds = filteredCreds.map((credential) => credential.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const toggleSelected = (id: string) => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAllVisible = () => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+    else visibleIds.forEach((id) => next.add(id));
+    return next;
+  });
+  const bulkSetStatus = async (status: "active" | "disabled") => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await Promise.all(ids.map((id) => api.setCredentialStatus(id, status)));
+      setNotice(`已${status === "active" ? "启用" : "禁用"} ${ids.length} 个凭据。`);
+      setSelectedIds(new Set());
+      load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const hint = PROVIDERS.find((p) => p.value === provider)?.baseUrlHint;
 
   return (
@@ -109,7 +154,7 @@ export function CredentialsPanel() {
       <div className="text-[13px] leading-relaxed text-zinc-500">
         上游服务密钥（LLM / Plane / Git）经 AES-256-GCM 加密落库，主密钥由调度器的{" "}
         <code className="font-mono text-zinc-400">DFH_MASTER_KEY_FILE</code> 持有。
-        绑定到 Agent 配置（profile）后，运行时解密注入沙箱——取代手填环境变量名。
+        绑定到角色运行配置后，运行时解密注入沙箱——取代手填环境变量名。
       </div>
 
       {/* 登记 */}
@@ -173,14 +218,27 @@ export function CredentialsPanel() {
 
       {/* 列表 */}
       <div className="flex flex-col gap-1.5">
+        <div className="credential-toolbar">
+          <div className="selector-search min-w-0 flex-1">
+            <MagnifyingGlass size={14} weight="light" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、Provider、尾号或指纹" aria-label="搜索凭据" />
+          </div>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="凭据状态">
+            <option value="all">全部状态</option><option value="active">启用</option><option value="disabled">已禁用</option><option value="rotation_required">待轮换</option>
+          </select>
+          <button type="button" onClick={toggleAllVisible} disabled={visibleIds.length === 0}>{allVisibleSelected ? "取消当前" : "全选当前"}</button>
+        </div>
+        {selectedIds.size > 0 && <div className="credential-selection-bar"><span><strong>{selectedIds.size}</strong> 个凭据已选</span><div><button type="button" onClick={() => bulkSetStatus("active")} disabled={busy}><Key size={13} />批量启用</button><button type="button" onClick={() => bulkSetStatus("disabled")} disabled={busy}><Prohibit size={13} />批量禁用</button><button type="button" onClick={() => setSelectedIds(new Set())}>清空选择</button></div></div>}
         {creds.length === 0 && (
           <div className="py-6 text-center font-mono text-[12px] text-zinc-600">暂无 Credential</div>
         )}
-        {creds.map((c) => {
+        {creds.length > 0 && filteredCreds.length === 0 && <div className="py-6 text-center font-mono text-[12px] text-zinc-600">没有匹配的凭据</div>}
+        {filteredCreds.map((c) => {
           const st = STATUS_LABEL[c.status] ?? STATUS_LABEL.active;
           return (
-            <div key={c.id} className="rounded-[10px] border border-ink-700 bg-ink-850/60 px-3 py-2">
+            <div key={c.id} className={`credential-row ${selectedIds.has(c.id) ? "is-selected" : ""}`}>
               <div className="flex items-center gap-2">
+                <button type="button" className="credential-check" onClick={() => toggleSelected(c.id)} aria-label={`${selectedIds.has(c.id) ? "取消选择" : "选择"} ${c.name}`} aria-pressed={selectedIds.has(c.id)}>{selectedIds.has(c.id) && <Check size={12} weight="bold" />}</button>
                 <span className="text-[13px] font-medium text-zinc-100">{c.name}</span>
                 <span className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-400">
                   {c.provider}

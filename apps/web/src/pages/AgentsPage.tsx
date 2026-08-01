@@ -1,14 +1,15 @@
 import { SettingsPanel } from "../SettingsPanel";
 import { PageHeader } from "../ui";
 
-/** 全局 Agent 管理：profile / 角色注册表（含系统 prompt 模板）/ 模块源 / 全局规则（§8.1 所有配置落库） */
+/** 全局 Agent 管理：角色注册表（含全局缺省运行配置与系统 prompt 模板）/ 模块源 / 全局规则（§8.1 所有配置落库） */
 export function AgentsPage() {
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-ink-800 px-6 pt-5 pb-0">
+    <div className="agents-page flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="agents-page-header shrink-0 px-5 pt-7 sm:px-9 sm:pt-9">
         <PageHeader
           title="Agent 管理"
-          subtitle="全局维护 Agent 配置、角色与 prompt 模板、Git 模块源与全局规则；项目设置只负责启用与绑定"
+          eyebrow="AGENT GOVERNANCE"
+          subtitle="在全局定义角色能力、可信运行配置与模块来源；项目只选择启用哪些角色，并在必要时覆盖缺省值。"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">

@@ -1,225 +1,97 @@
-import { ArrowRight, Warning } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { ArrowRight, ArrowUpRight, Pulse, Warning, Waveform } from "@phosphor-icons/react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type FindingSummary, type JobSummary, type Project } from "../api";
-import {
-  EmptyState,
-  PageHeader,
-  SeverityBadge,
-  StatCard,
-  StatusBadge,
-  formatTime,
-  relativeTime,
-} from "../ui";
+import { EmptyState, PageHeader, PageSkeleton, SectionHeading, SeverityBadge, StatCard, StatusBadge, formatTime, relativeTime } from "../ui";
 
 const ACTIVE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
+const FAILURE = new Set(["failed", "timeout", "orphan"]);
+
+function SectionLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return <Link to={to} className="group inline-flex items-center gap-2 text-[11px] text-zinc-500 transition-colors hover:text-acc-300">{children}<ArrowRight size={13} weight="light" className="transition-transform group-hover:translate-x-1" /></Link>;
+}
 
 export function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [findings, setFindings] = useState<FindingSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let stop = false;
-    const tick = () => {
-      Promise.all([api.projects(), api.jobs(), api.findings()])
-        .then(([ps, js, fs]) => {
-          if (stop) return;
-          setProjects(ps);
-          setJobs(js);
-          setFindings(fs);
-          setError(null);
-        })
-        .catch((e) => {
-          if (!stop) setError(String(e));
-        });
-    };
+    const tick = () => Promise.all([api.projects(), api.jobs(), api.findings()])
+      .then(([ps, js, fs]) => { if (!stop) { setProjects(ps); setJobs(js); setFindings(fs); setError(null); setLoading(false); } })
+      .catch((e) => { if (!stop) { setError(String(e)); setLoading(false); } });
     tick();
-    const t = setInterval(tick, 5000);
-    return () => {
-      stop = true;
-      clearInterval(t);
-    };
+    const timer = setInterval(tick, 5000);
+    return () => { stop = true; clearInterval(timer); };
   }, []);
 
-  const activeJobs = jobs.filter((j) => ACTIVE.has(j.status));
-  const failedJobs = jobs.filter((j) =>
-    ["failed", "timeout", "orphan"].includes(j.status),
-  );
-  const criticalFindings = findings.filter((f) =>
-    ["critical", "high"].includes(f.severity),
-  );
+  const activeJobs = jobs.filter((job) => ACTIVE.has(job.status));
+  const failedJobs = jobs.filter((job) => FAILURE.has(job.status));
+  const criticalFindings = findings.filter((finding) => ["critical", "high"].includes(finding.severity));
+  const humanJobs = jobs.filter((job) => job.status === "waiting_human");
+  const attentionCount = humanJobs.length + failedJobs.length + criticalFindings.filter((f) => f.verify_status !== "confirmed").length;
+  const focusItems = useMemo(() => [
+    ...humanJobs.map((j) => ({ id: j.id, type: "人工介入", title: j.canvas_title ?? j.type, meta: j.project_name ?? "未知项目", tone: "#e8bd70", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : "/jobs" })),
+    ...failedJobs.map((j) => ({ id: j.id, type: "运行异常", title: j.canvas_title ?? j.type, meta: `${j.project_name ?? "未知项目"} · ${j.status}`, tone: "#ed6a7f", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : "/jobs" })),
+    ...criticalFindings.filter((f) => f.verify_status !== "confirmed").map((f) => ({ id: f.id, type: "高风险待验证", title: f.title, meta: f.project_name ?? "未知项目", tone: "#ec8c5d", to: f.canvas_id ? `/projects/${f.project_id}/tasks/${f.canvas_id}` : `/projects/${f.project_id}/findings` })),
+  ].slice(0, 5), [humanJobs, failedJobs, criticalFindings]);
 
-  if (error) {
-    return (
-      <div className="flex flex-1 items-center justify-center p-8">
-        <div className="rounded-[10px] border border-red-900/60 bg-red-950/40 px-6 py-4 text-[15px] text-red-300">
-          调度器连接失败：{error}（确认 :3100 已启动）
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <PageSkeleton />;
+  if (error) return (
+    <div className="page-scroll flex items-center justify-center">
+      <div className="surface-shell max-w-xl"><div className="surface-core p-7"><div className="eyebrow"><span style={{ background: "#ed6a7f" }} />CONNECTION</div><h1 className="mt-5 text-2xl font-medium text-zinc-100">调度器暂时不可达</h1><p className="mt-2 text-[13px] leading-6 text-zinc-500">请确认本地服务已在 3100 端口启动。界面会在连接恢复后自动同步。</p><code className="mt-5 block rounded-xl bg-black/20 px-4 py-3 text-[11px] text-red-300">{error}</code></div></div>
+    </div>
+  );
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <PageHeader
-        title="总览"
-        subtitle="点下方 Job / 项目可进任务；过程画布在「项目 → 任务 → 打开画布」"
-      />
+    <div className="page-scroll">
+      <PageHeader title="运行态势" eyebrow="CONTROL PLANE / LIVE" subtitle="先处理需要你决策的事项，再查看系统吞吐。任务的执行、证据与报告始终归档在同一工作台。" actions={
+        <Link to="/projects" className="primary-button group"><span>{projects.length ? "进入项目" : "创建首个项目"}</span><span className="button-orb"><ArrowUpRight size={15} weight="light" /></span></Link>
+      } />
 
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="项目" value={projects.length} />
-        <StatCard label="活跃任务" value={activeJobs.length} accent="#38bdf8" hint="pending → running" />
-        <StatCard
-          label="高危发现"
-          value={criticalFindings.length}
-          accent="#f97316"
-          hint={`共 ${findings.length} 条发现`}
-        />
-        <StatCard
-          label="异常 Job"
-          value={failedJobs.length}
-          accent={failedJobs.length ? "#f87171" : undefined}
-          hint="failed / timeout / orphan"
-        />
+      <div className="metrics-strip">
+        <StatCard index={0} label="进行中的运行" value={activeJobs.length} accent="#6fbbe8" hint="含等待、准备与执行中" />
+        <StatCard index={1} label="高风险发现" value={criticalFindings.length} accent="#ec8c5d" hint={`全部 ${findings.length} 条`} />
+        <StatCard index={2} label="需要关注" value={attentionCount} accent={attentionCount ? "#e8bd70" : undefined} hint="人工、异常与待验证" />
+        <StatCard index={3} label="活跃项目" value={projects.filter((p) => p.status === "active").length} hint={`${projects.length} 个项目空间`} />
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-[15px] font-medium text-zinc-200">活跃 / 最近 Job</h2>
-            <Link
-              to="/jobs"
-              className="flex items-center gap-1 font-mono text-[13px] text-acc-400 hover:text-acc-300"
-            >
-              全部队列 <ArrowRight size={14} />
-            </Link>
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
+        <section className="surface-shell dfh-reveal xl:col-span-7" style={{ animationDelay: "180ms" }}>
+          <div className="surface-core min-h-[350px] p-5 sm:p-6">
+            <div className="flex items-start justify-between gap-4"><div><div className="eyebrow"><span style={{ background: attentionCount ? "#e8bd70" : "#65e6b4" }} />ATTENTION QUEUE</div><h2 className="mt-4 text-xl font-medium tracking-[-0.03em] text-zinc-100">{attentionCount ? "优先处理这些事项" : "当前没有阻塞项"}</h2><p className="mt-1 text-[12px] text-zinc-500">只展示会影响风险闭环或任务推进的事件</p></div><SectionLink to="/jobs">打开运行队列</SectionLink></div>
+            {focusItems.length ? (
+              <div className="mt-6 flex flex-col gap-2">
+                {focusItems.map((item, index) => <Link key={`${item.type}-${item.id}`} to={item.to} className="group flex items-center gap-4 rounded-2xl bg-white/[.025] px-4 py-3.5 transition-all hover:bg-white/[.05]" style={{ animationDelay: `${240 + index * 55}ms` }}><span className="grid size-9 shrink-0 place-items-center rounded-full" style={{ color: item.tone, background: `color-mix(in srgb, ${item.tone} 10%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${item.tone} 18%, transparent)` }}><Warning size={15} weight="light" /></span><span className="min-w-0 flex-1"><strong className="block truncate text-[13px] font-medium text-zinc-200">{item.title}</strong><small className="mt-0.5 block truncate text-[10px] text-zinc-600">{item.type} · {item.meta}</small></span><ArrowUpRight size={15} weight="light" className="text-zinc-700 transition-transform group-hover:translate-x-1 group-hover:-translate-y-0.5 group-hover:text-zinc-300" /></Link>)}
+              </div>
+            ) : <div className="flex min-h-[210px] items-center justify-center"><div className="text-center"><div className="mx-auto grid size-14 place-items-center rounded-full bg-acc-500/[.07] text-acc-300 ring-1 ring-acc-300/10"><Pulse size={23} weight="light" /></div><p className="mt-4 text-[13px] text-zinc-300">系统运行平稳</p><p className="mt-1 text-[11px] text-zinc-600">异常或人工决策会自动汇总到这里</p></div></div>}
           </div>
-          {jobs.length === 0 ? (
-            <EmptyState title="暂无 Job" hint="创建任务后，调度器会自动开始执行" />
-          ) : (
-            <div className="flex flex-col gap-2">
-              {jobs.slice(0, 8).map((j) => (
-                <Link
-                  key={j.id}
-                  to={
-                    j.canvas_id
-                      ? `/projects/${j.project_id}/tasks/${j.canvas_id}`
-                      : `/projects/${j.project_id}/tasks`
-                  }
-                  className="flex items-center gap-3 rounded-[10px] border border-ink-700 bg-ink-900/50 px-3.5 py-3 transition-colors hover:border-ink-600 hover:bg-ink-850"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[14px] text-zinc-100">
-                      {j.canvas_title ?? j.type}
-                    </div>
-                    <div className="mt-0.5 truncate font-mono text-[12px] text-zinc-600">
-                      {j.project_name} · {j.type}
-                    </div>
-                  </div>
-                  <StatusBadge status={j.status} />
-                  <span className="shrink-0 font-mono text-[12px] text-zinc-600">
-                    {relativeTime(j.created_at)}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          )}
         </section>
 
-        <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-[15px] font-medium text-zinc-200">最近发现</h2>
-            <Link
-              to="/findings"
-              className="flex items-center gap-1 font-mono text-[13px] text-acc-400 hover:text-acc-300"
-            >
-              全部发现 <ArrowRight size={14} />
-            </Link>
+        <section className="surface-shell dfh-reveal xl:col-span-5" style={{ animationDelay: "240ms" }}>
+          <div className="surface-core min-h-[350px] p-5 sm:p-6">
+            <div className="flex items-start justify-between"><div><div className="eyebrow"><span style={{ background: "#6fbbe8" }} />EXECUTION STREAM</div><h2 className="mt-4 text-xl font-medium tracking-[-0.03em] text-zinc-100">最近运行</h2></div><Waveform size={21} weight="light" className="text-run-400" /></div>
+            {jobs.length ? <div className="mt-5 flex flex-col">{jobs.slice(0, 6).map((job) => <Link key={job.id} to={job.canvas_id ? `/projects/${job.project_id}/tasks/${job.canvas_id}` : `/projects/${job.project_id}/tasks`} className="group flex items-center gap-3 border-b border-white/[.045] py-3 last:border-0"><span className="min-w-0 flex-1"><strong className="block truncate text-[12px] font-medium text-zinc-300 transition-colors group-hover:text-white">{job.canvas_title ?? job.type}</strong><small className="block truncate font-mono text-[9px] text-zinc-600">{job.project_name} · {relativeTime(job.created_at)}</small></span><StatusBadge status={job.status} /></Link>)}</div> : <div className="flex min-h-[230px] items-center justify-center text-[12px] text-zinc-600">创建任务后，运行会实时出现在这里</div>}
           </div>
-          {findings.length === 0 ? (
-            <EmptyState title="暂无发现" hint="审计 Job 产出 finding 后会出现在这里" />
-          ) : (
-            <div className="flex flex-col gap-2">
-              {findings.slice(0, 8).map((f) => (
-                <Link
-                  key={f.id}
-                  to={
-                    f.canvas_id
-                      ? `/projects/${f.project_id}/tasks/${f.canvas_id}`
-                      : `/projects/${f.project_id}/findings`
-                  }
-                  className="flex items-start gap-3 rounded-[10px] border border-ink-700 bg-ink-900/50 px-3.5 py-3 transition-colors hover:border-ink-600 hover:bg-ink-850"
-                >
-                  <SeverityBadge severity={f.severity} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[14px] text-zinc-100">{f.title}</div>
-                    <div className="mt-0.5 truncate font-mono text-[12px] text-zinc-600">
-                      {f.project_name}
-                      {f.location ? ` · ${f.location}` : ""}
-                    </div>
-                  </div>
-                  <span className="shrink-0 font-mono text-[12px] text-zinc-600">
-                    {f.verify_status}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          )}
         </section>
       </div>
 
-      <section className="mt-6">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-[15px] font-medium text-zinc-200">项目</h2>
-          <Link
-            to="/projects"
-            className="flex items-center gap-1 font-mono text-[13px] text-acc-400 hover:text-acc-300"
-          >
-            管理项目 <ArrowRight size={14} />
-          </Link>
-        </div>
-        {projects.length === 0 ? (
-          <EmptyState
-            title="暂无项目"
-            hint="到「项目」页创建第一个项目，随后创建任务即可自动执行"
-          />
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {projects.map((p) => {
-              const pJobs = jobs.filter((j) => j.project_id === p.id);
-              const pActive = pJobs.filter((j) => ACTIVE.has(j.status)).length;
-              const pFindings = findings.filter((f) => f.project_id === p.id).length;
-              const pFailed = pJobs.filter((j) =>
-                ["failed", "timeout", "orphan"].includes(j.status),
-              ).length;
-              return (
-                <Link
-                  key={p.id}
-                  to={`/projects/${p.id}/tasks`}
-                  className="rounded-[10px] border border-ink-700 bg-ink-900/50 px-4 py-4 transition-colors hover:border-acc-500/50 hover:bg-ink-850"
-                >
-                  <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[15px] font-medium text-zinc-100">{p.name}</div>
-                      <div className="mt-1 truncate font-mono text-[12px] text-zinc-600">
-                        {p.plane_project_id ? `Plane · ${p.plane_project_id}` : "本地项目"}
-                      </div>
-                    </div>
-                    {pFailed > 0 && <Warning size={16} className="shrink-0 text-crit-500" />}
-                  </div>
-                  <div className="mt-3 flex gap-3 font-mono text-[12px] text-zinc-500">
-                    <span className={pActive ? "text-run-400" : ""}>{pActive} 活跃</span>
-                    <span>{pFindings} 发现</span>
-                    <span className="ml-auto text-zinc-600">{formatTime(p.created_at)}</span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
+      <SectionHeading title="风险证据" meta="按最近产出排序" action={<SectionLink to="/findings">查看全部发现</SectionLink>} />
+      {findings.length ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{findings.slice(0, 6).map((finding, index) => <Link key={finding.id} to={finding.canvas_id ? `/projects/${finding.project_id}/tasks/${finding.canvas_id}` : `/projects/${finding.project_id}/findings`} className="surface-shell group dfh-reveal" style={{ animationDelay: `${index * 55}ms` }}><article className="surface-core flex min-h-[154px] flex-col p-4"><div className="flex items-start justify-between gap-3"><SeverityBadge severity={finding.severity} /><span className="font-mono text-[9px] text-zinc-700">{relativeTime(finding.created_at)}</span></div><h3 className="mt-4 line-clamp-2 text-[13px] font-medium leading-6 text-zinc-200 transition-colors group-hover:text-white">{finding.title}</h3><div className="mt-auto flex items-center gap-2 pt-4 text-[10px] text-zinc-600"><span className="truncate">{finding.project_name}</span><span>·</span><span className="truncate font-mono">{finding.location || finding.verify_status}</span></div></article></Link>)}</div> : <EmptyState title="还没有风险证据" hint="审计 Agent 产出的发现会先进入验证闭环，再沉淀为可追踪证据。" />}
+
+      <SectionHeading title="项目空间" meta="任务与证据的长期归属" action={<SectionLink to="/projects">管理全部项目</SectionLink>} />
+      {projects.length ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{projects.slice(0, 6).map((project) => {
+        const projectJobs = jobs.filter((job) => job.project_id === project.id);
+        const active = projectJobs.filter((job) => ACTIVE.has(job.status)).length;
+        const projectFindings = findings.filter((finding) => finding.project_id === project.id).length;
+        const failed = projectJobs.filter((job) => FAILURE.has(job.status)).length;
+        return <Link key={project.id} to={`/projects/${project.id}/tasks`} className="surface-shell group"><article className="surface-core p-4"><div className="flex items-start gap-4"><div className="grid size-10 shrink-0 place-items-center rounded-[14px] bg-white/[.035] text-zinc-400 ring-1 ring-white/[.06]"><FolderGlyph /></div><div className="min-w-0 flex-1"><h3 className="truncate text-[13px] font-medium text-zinc-200 transition-colors group-hover:text-white">{project.name}</h3><p className="mt-1 truncate font-mono text-[9px] text-zinc-600">{project.plane_project_id ? "PLANE CONNECTED" : "LOCAL SOURCE"} · {formatTime(project.created_at)}</p></div>{failed > 0 && <Warning size={15} className="text-crit-500" />}</div><div className="mt-5 flex gap-5 font-mono text-[10px] text-zinc-600"><span className={active ? "text-run-400" : ""}>{active} 运行中</span><span>{projectFindings} 发现</span><ArrowUpRight size={13} className="ml-auto transition-transform group-hover:translate-x-1 group-hover:-translate-y-0.5" /></div></article></Link>;
+      })}</div> : <EmptyState title="从一个项目空间开始" hint="项目负责长期边界，任务负责一次明确意图。创建项目后即可直接下达第一项审计任务。" />}
     </div>
   );
 }
+
+function FolderGlyph() { return <span className="relative block h-4 w-5 rounded-[3px] border border-current before:absolute before:-top-1 before:left-0 before:h-1 before:w-2 before:rounded-t-[2px] before:bg-current" />; }

@@ -15,7 +15,7 @@ export interface Project {
 
 export interface CanvasNode {
   id: string;
-  node_type: "root" | "job" | "finding" | "note" | "human" | "intent" | "fact";
+  node_type: "root" | "job" | "finding" | "note" | "human" | "intent" | "fact" | "report";
   title: string;
   body_json: Record<string, unknown>;
   x: number;
@@ -23,6 +23,8 @@ export interface CanvasNode {
   w: number;
   h: number;
   status: string | null;
+  /** fact 节点的可信状态（独立于 status 执行状态）：unverified/verifying/verified/rejected/needs_human */
+  verification_status: string | null;
   job_id: string | null;
   updated_at: string;
 }
@@ -188,7 +190,7 @@ export interface ProjectSettings {
   effective_rules: EffectiveRules;
 }
 
-/** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='system' = hub/audit/verify 系统 prompt 模板 */
+/** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='hub' = 唯一决策中枢；kind='system' = 系统角色（verify/report 等） */
 export interface AgentRole {
   id: string;
   name: string;
@@ -196,7 +198,7 @@ export interface AgentRole {
   description: string;
   prompt_template: string;
   builtin: boolean;
-  kind: "role" | "system";
+  kind: "hub" | "system" | "role";
 }
 
 /** 项目视角的角色：启用状态 + 绑定的 profile */
@@ -275,6 +277,105 @@ export type ProfileInput = {
   credential_id?: string | null;
 };
 
+// ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
+
+/** RoleConfig 保存体（全量声明式：每次 PUT 整体替换 Credential 绑定与配置文件） */
+export type RoleConfigInput = {
+  agent_cli: "claude-code" | "open-code" | "codex";
+  model?: string | null;
+  env_keys: string[];
+  /** 非敏感环境变量（疑似密钥名会被后端拒绝，引导改用 Credential） */
+  env_vars: Record<string, string>;
+  modules: string[];
+  skills: Record<string, unknown>[];
+  commands: Record<string, unknown>[];
+  mcps: Record<string, unknown>[];
+  subagents: Record<string, unknown>[];
+  prompt_suffix?: string | null;
+  /** 只能引用服务端可信镜像目录，不是任意 OCI 地址 */
+  runtime_image_key?: string | null;
+  credentials: { credential_id: string; purpose: string }[];
+  /** Provider 配置文件：路径按 CLI 固定白名单（首期每角色最多 1 个） */
+  config_files: { path: string; content: string }[];
+};
+
+/** RoleConfig 视图 = role_configs 行 + Credential 绑定 + 配置文件（含 sha256） */
+export interface RoleConfigView {
+  id: string;
+  role_id: string;
+  project_id: string | null;
+  agent_cli: "claude-code" | "open-code" | "codex";
+  model: string | null;
+  env_keys: string[];
+  env_vars_json: Record<string, string>;
+  modules_json: string[];
+  skills_json: Record<string, unknown>[];
+  commands_json: Record<string, unknown>[];
+  mcps_json: Record<string, unknown>[];
+  subagents_json: Record<string, unknown>[];
+  prompt_suffix: string | null;
+  runtime_image_key: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  credentials: {
+    credential_id: string;
+    purpose: string;
+    name: string;
+    provider: string;
+    status: string;
+    project_id: string | null;
+  }[];
+  config_files: { path: string; content: string; content_sha256: string }[];
+}
+
+/** 全局缺省配置清单项（GET /role-configs/global 附带角色名/标题/kind） */
+export interface GlobalRoleConfigEntry extends RoleConfigView {
+  role_name: string;
+  role_title: string;
+  role_kind: "hub" | "system" | "role";
+}
+
+/** 项目视角的角色配置清单项（GET /projects/:id/role-configs） */
+export interface ProjectRoleConfigEntry {
+  role_id: string;
+  name: string;
+  title: string;
+  kind: "hub" | "system" | "role";
+  builtin: boolean;
+  project_config_id: string | null;
+  project_config_version: number | null;
+  global_config_id: string | null;
+  global_config_version: number | null;
+  /** project=项目覆盖 / global=全局缺省 / none=未配置 */
+  config_source: "project" | "global" | "none";
+}
+
+// ---------- 任务报告（migration 0017，§8） ----------
+
+export interface TaskReport {
+  id: string;
+  canvas_id: string;
+  project_id: string;
+  report_job_id: string | null;
+  status: "pending" | "generating" | "succeeded" | "failed";
+  /** 结构化摘要：confirmed_count / excluded_count / findings_total / confirmed_by_severity / generated_at */
+  summary_json: {
+    confirmed_count?: number;
+    excluded_count?: number;
+    findings_total?: number;
+    confirmed_by_severity?: Record<string, number>;
+    generated_at?: string;
+  };
+  markdown_uri: string | null;
+  markdown_sha256: string | null;
+  sarif_uri: string | null;
+  sarif_sha256: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`${path} -> ${res.status}`);
@@ -295,12 +396,29 @@ function authHeaders(): Record<string, string> {
 }
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers: { "content-type": "application/json", ...authHeaders() },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
+  // 无 body 时不要带 application/json，否则 Fastify 会因空 JSON body 直接 400
+  // （FST_ERR_CTP_EMPTY_JSON_BODY）—— 同步/取消/归档等无参 POST 都会踩中
+  const headers: Record<string, string> = { ...authHeaders() };
+  let payload: string | undefined;
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+  const res = await fetch(`/api${path}`, { method, headers, body: payload });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const err = (await res.json()) as { error?: string; message?: string };
+      detail = err.error ?? err.message ?? "";
+    } catch {
+      /* ignore non-JSON error body */
+    }
+    throw new Error(
+      detail
+        ? `${method} ${path} -> ${res.status}: ${detail}`
+        : `${method} ${path} -> ${res.status}`,
+    );
+  }
   return res.json() as Promise<T>;
 }
 
@@ -385,6 +503,33 @@ export const api = {
   updateRole: (id: string, r: Partial<Omit<RoleInput, "name">>) =>
     send<AgentRole>("PATCH", `/agent-roles/${id}`, r),
   deleteRole: (id: string) => send<{ ok: boolean }>("DELETE", `/agent-roles/${id}`),
+  /** 角色即配置（§4.2）：全局缺省 / 项目覆盖，全量声明式 PUT */
+  globalRoleConfigs: () => get<GlobalRoleConfigEntry[]>("/role-configs/global"),
+  putGlobalRoleConfig: (roleId: string, body: RoleConfigInput) =>
+    send<RoleConfigView>("PUT", `/role-configs/global/${roleId}`, body),
+  projectRoleConfigs: (projectId: string) =>
+    get<ProjectRoleConfigEntry[]>(`/projects/${projectId}/role-configs`),
+  putProjectRoleConfig: (projectId: string, roleId: string, body: RoleConfigInput) =>
+    send<RoleConfigView>("PUT", `/projects/${projectId}/role-configs/${roleId}`, body),
+  deleteProjectRoleConfig: (projectId: string, roleId: string) =>
+    send<{ ok: boolean }>("DELETE", `/projects/${projectId}/role-configs/${roleId}`),
+  /** 任务报告（§8）：404 = 还没有报告（Hub 宣布分析完成后自动生成） */
+  canvasReport: (canvasId: string) => get<TaskReport>(`/canvases/${canvasId}/report`),
+  retryReport: (canvasId: string) =>
+    send<{ ok: boolean; report_id: string }>("POST", `/canvases/${canvasId}/report/retry`),
+  /** 报告 Markdown 正文（text/markdown；SARIF/下载直接用 /api/reports/:id/{markdown,sarif} 链接） */
+  reportMarkdown: async (reportId: string): Promise<string> => {
+    const res = await fetch(`/api/reports/${reportId}/markdown`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`markdown -> ${res.status}`);
+    return res.text();
+  },
+  /** 人工处理 Fact 验证状态（needs_human 的人工确认/明确排除） */
+  setFactVerification: (nodeId: string, status: "verified" | "rejected" | "needs_human", note?: string) =>
+    send<{ id: string; canvas_id: string; title: string }>(
+      "PATCH",
+      `/canvas-nodes/${nodeId}/verification`,
+      { status, note },
+    ),
   projectRoles: (projectId: string) => get<ProjectRole[]>(`/projects/${projectId}/roles`),
   globalSettings: () => get<GlobalSettings>("/global-settings"),
   patchGlobalSettings: (body: { rules: Record<string, unknown> }) =>

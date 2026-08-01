@@ -18,12 +18,12 @@ import { Sidebar } from "./Sidebar";
 
 /** 边语义色与流速；颜色表达关系，动画表达方向。 */
 const EDGE_STYLE: Record<string, { stroke: string; speed: string }> = {
-  child: { stroke: "#64748b", speed: "4.8s" },
-  produces: { stroke: "#f59e0b", speed: "2.8s" },
-  verifies: { stroke: "#22d3ee", speed: "1.8s" },
-  next: { stroke: "#a78bfa", speed: "2.2s" },
-  from: { stroke: "#f472b6", speed: "3.2s" }, // 事实 → 意图（Cairn Intent.from）
-  to: { stroke: "#34d399", speed: "2.5s" }, // 意图 → 事实（Cairn Intent.to）
+  child: { stroke: "#59656b", speed: "4.8s" },
+  produces: { stroke: "#91a0a7", speed: "2.8s" },
+  verifies: { stroke: "#6fbbe8", speed: "1.8s" },
+  next: { stroke: "#748087", speed: "2.2s" },
+  from: { stroke: "#657279", speed: "3.2s" }, // 事实 → 意图（Cairn Intent.from）
+  to: { stroke: "var(--color-acc-400)", speed: "2.5s" }, // 意图 → 事实（Cairn Intent.to）
 };
 
 function toFlow(
@@ -74,13 +74,15 @@ function Legend() {
     { color: EDGE_STYLE.child.stroke, label: "child 包含" },
   ];
   return (
-    <div className="absolute bottom-4 left-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-ink-700 bg-ink-900/90 px-3 py-2 backdrop-blur">
-      {items.map((it) => (
-        <span key={it.label} className="flex items-center gap-1.5">
-          <span className="inline-block h-0.5 w-4 rounded" style={{ background: it.color }} />
-          <span className="font-mono text-[12px] text-zinc-400">{it.label}</span>
-        </span>
-      ))}
+    <div className="surface-shell absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] rounded-[17px] p-1">
+      <div className="surface-core flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[13px] px-3 py-2">
+        {items.map((it) => (
+          <span key={it.label} className="flex items-center gap-1.5">
+            <span className="inline-block h-px w-3 rounded" style={{ background: it.color }} />
+            <span className="font-mono text-[9px] text-zinc-500">{it.label}</span>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -181,7 +183,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         minZoom={0.2}
         proOptions={{ hideAttribution: false }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={26} size={1.5} color="#222228" />
+          <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} color="#263037" />
         <Controls showInteractive={false} position="bottom-right" />
         <MiniMap
           pannable

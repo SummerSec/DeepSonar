@@ -48,10 +48,10 @@ importers:
 
   apps/web:
     dependencies:
-      '@fontsource/noto-sans-mono':
+      '@fontsource-variable/noto-sans-sc':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource/noto-sans-sc':
+      '@fontsource/noto-sans-mono':
         specifier: ^5.3.0
         version: 5.3.0
       '@phosphor-icons/react':
@@ -696,11 +696,11 @@ packages:
   '@fastify/websocket@11.3.0':
     resolution: {integrity: sha512-g89ag4BCcD9YP5wBZXixzoLnuf5j89p/sXFcfpCiv2pdEkYYukBEoK3heVzqsp0EAtszVDc2BBZG0KZqeAShIA==}
 
+  '@fontsource-variable/noto-sans-sc@5.3.0':
+    resolution: {integrity: sha512-lNar1dF7Ik/lHNPo/7JWG0TolXY29LtsqYgMvEysooZ5bsO9uH4shJmRrwyJ3PjyTPljhpMJEK0jDuLSU4vJ1w==}
+
   '@fontsource/noto-sans-mono@5.3.0':
     resolution: {integrity: sha512-DPZ+/Ng9HP5UKiALCKtoeGfA7zJzEjHFB/18OU/c3+4I9zZ3eMVAuFZb0SqzT89Yj7KNhJFYnYjyDaVKhdRuUg==}
-
-  '@fontsource/noto-sans-sc@5.3.0':
-    resolution: {integrity: sha512-HeqIlGm0+ohOKxZLuHj1qW6r6avHH0OWdKERAcSDI0RQ+MXrteuLKA+M+5eOA8rYy0MFvOR5AT0fQo2rUkye0Q==}
 
   '@grpc/grpc-js@1.14.4':
     resolution: {integrity: sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ==}
@@ -3030,9 +3030,9 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@fontsource/noto-sans-mono@5.3.0': {}
+  '@fontsource-variable/noto-sans-sc@5.3.0': {}
 
-  '@fontsource/noto-sans-sc@5.3.0': {}
+  '@fontsource/noto-sans-mono@5.3.0': {}
 
   '@grpc/grpc-js@1.14.4':
     dependencies:

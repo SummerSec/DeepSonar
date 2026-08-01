@@ -1,8 +1,8 @@
-import { X } from "@phosphor-icons/react";
+import { Prohibit, SealCheck, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api, type CanvasNode, type JobDetail } from "./api";
 import { LiveStream } from "./LiveStream";
-import { SEVERITY_COLOR, STATUS_COLOR } from "./nodes";
+import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
 const EVENT_COLOR: Record<string, string> = {
   progress: "#38bdf8",
@@ -45,6 +45,7 @@ const TABS: { key: Tab; label: string }[] = [
 /** 节点详情侧栏：概览 / 实时流（WS）/ 事件时间线 */
 export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => void }) {
   const [job, setJob] = useState<JobDetail | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
   // running 的 job 节点默认落到实时流 tab，其余落概览
   const [tab, setTab] = useState<Tab>(
     node.job_id && node.status === "running" ? "stream" : "overview",
@@ -62,16 +63,46 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
     ([k]) => !["last_progress", "severity"].includes(k),
   );
 
+  // fact 节点验证状态（needs_human 时提供人工确认 / 明确排除）
+  const verification =
+    node.node_type === "fact" && node.verification_status
+      ? (VERIFICATION_META[node.verification_status] ?? {
+          label: node.verification_status,
+          color: "#71717a",
+        })
+      : null;
+
+  /** 人工处理事实：确认 / 排除后关闭侧栏（画布轮询会反映新状态并推进报告） */
+  const setVerification = async (status: "verified" | "rejected") => {
+    setVerifyBusy(true);
+    try {
+      await api.setFactVerification(node.id, status);
+      onClose();
+    } catch {
+      // 失败由画布轮询呈现
+    } finally {
+      setVerifyBusy(false);
+    }
+  };
+
   return (
-    <aside className="dfh-sidebar absolute inset-y-0 right-0 z-20 flex w-[420px] flex-col border-l border-ink-700 bg-ink-900/95 backdrop-blur">
+    <aside className="dfh-sidebar absolute inset-y-2 right-2 z-20 flex w-[420px] flex-col overflow-hidden rounded-[22px] bg-[#111619] shadow-[0_24px_70px_rgba(0,0,0,.28)] ring-1 ring-white/[.09]">
       {/* 头部 */}
-      <div className="flex items-start gap-3 border-b border-ink-800 px-4 py-3.5">
+      <div className="flex items-start gap-3 border-b border-white/[.05] px-5 py-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
               {node.node_type}
             </span>
             {node.status && <StatusDot status={node.status} />}
+            {verification && (
+              <span
+                className="rounded border px-1 font-mono text-[11px]"
+                style={{ color: verification.color, borderColor: `${verification.color}66` }}
+              >
+                {verification.label}
+              </span>
+            )}
           </div>
           <h2 className="mt-1 break-words text-[16px] font-semibold leading-snug text-zinc-100">
             {node.title}
@@ -87,15 +118,15 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
       </div>
 
       {/* tab 栏（实时流只对 job 节点有意义） */}
-      <div className="flex gap-1 border-b border-ink-800 px-3 py-1.5">
+      <div className="flex gap-1 border-b border-white/[.05] px-4 py-2">
         {TABS.filter((t) => t.key !== "stream" || node.job_id).map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`rounded-md px-2.5 py-1 text-[14px] transition-colors ${
+            className={`rounded-full px-3 py-1.5 text-[11px] transition-colors ${
               tab === t.key
-                ? "bg-ink-800 text-zinc-100"
-                : "text-zinc-500 hover:bg-ink-850 hover:text-zinc-300"
+                ? "bg-white/[.08] text-zinc-100"
+                : "text-zinc-600 hover:bg-white/[.04] hover:text-zinc-300"
             }`}
           >
             {t.label}
@@ -115,6 +146,30 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {tab === "overview" && (
             <>
+              {/* 待人工处理事实：人工确认 / 明确排除（§5.2-6；处理后调度器会尝试推进报告） */}
+              {node.node_type === "fact" && node.verification_status === "needs_human" && (
+                <div className="mb-3 rounded-lg border border-amber-800/50 bg-amber-950/20 px-3 py-2.5">
+                  <div className="text-[13px] leading-relaxed text-amber-200/90">
+                    该事实无法自动裁决，需要人工确认或明确排除。
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={() => setVerification("verified")}
+                      disabled={verifyBusy}
+                      className="flex items-center gap-1 rounded-md border border-emerald-900/60 px-2.5 py-1 font-mono text-[12px] text-emerald-300 transition-colors hover:bg-emerald-950/40 disabled:opacity-50"
+                    >
+                      <SealCheck size={12} /> 标记已验证
+                    </button>
+                    <button
+                      onClick={() => setVerification("rejected")}
+                      disabled={verifyBusy}
+                      className="flex items-center gap-1 rounded-md border border-red-900/60 px-2.5 py-1 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40 disabled:opacity-50"
+                    >
+                      <Prohibit size={12} /> 排除
+                    </button>
+                  </div>
+                </div>
+              )}
               {Boolean(node.body_json?.severity) && (
                 <div className="mb-2 flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-850 px-3 py-2">
                   <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">severity</span>
