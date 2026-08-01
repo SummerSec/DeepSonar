@@ -60,14 +60,32 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
     ? String(target.module_path ?? target.repo_path ?? target.type ?? "")
     : null;
 
+  // 类型标签：hub job 单独标识为「中枢」
+  const typeLabel =
+    n.node_type === "job" && jobType === "hub_reason"
+      ? "中枢"
+      : (TYPE_LABEL[n.node_type] ?? n.node_type);
+
+  // intent 三态样式（§8.3）：pending=虚线未认领 / running=呼吸描边 / succeeded=实线已结论
+  const intentBorder =
+    n.node_type === "intent"
+      ? status === "pending"
+        ? "border-dashed border-zinc-600"
+        : LIVE_STATUS.has(status)
+          ? "border-sky-500/70 shadow-[0_0_14px_rgba(56,189,248,0.18)]"
+          : status === "succeeded"
+            ? "border-emerald-800/80"
+            : "border-red-900/70"
+      : "";
+
   return (
-    <div className="dfh-node w-full rounded-[10px] border border-ink-700 bg-ink-850/95 px-3.5 py-3">
+    <div className={`dfh-node w-full rounded-[10px] border border-ink-700 bg-ink-850/95 px-3.5 py-3 ${intentBorder}`}>
       <Handle type="target" position={Position.Left} isConnectable={false} />
 
       {/* 头部：类型 + 状态 */}
       <div className="flex items-center gap-2">
         <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-          {TYPE_LABEL[n.node_type] ?? n.node_type}
+          {typeLabel}
         </span>
         {status && (
           <span className="ml-auto flex items-center gap-1.5">

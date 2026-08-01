@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -8,10 +8,11 @@ import {
   ReactFlow,
   type Edge,
   type Node,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
-import { layoutNodes } from "./layout";
+import { elkLayout, layoutNodes, NODE_W } from "./layout";
 import { nodeTypes } from "./nodes";
 import { Sidebar } from "./Sidebar";
 
@@ -25,15 +26,17 @@ const EDGE_STYLE: Record<string, { stroke: string; animated?: boolean }> = {
   to: { stroke: "#2dd4bf" }, // 意图 → 事实（Cairn Intent.to）
 };
 
-const NODE_W = 280;
-
-function toFlow(data: CanvasData): { nodes: Node[]; edges: Edge[] } {
-  const pos = layoutNodes(data.nodes, data.edges);
+function toFlow(
+  data: CanvasData,
+  elkPos: Map<string, { x: number; y: number }> | null,
+): { nodes: Node[]; edges: Edge[] } {
+  // elk 分层 DAG 布局优先；未算完/失败时退回固定列占位（§8.3 Phase ③）
+  const fallback = elkPos ? null : layoutNodes(data.nodes, data.edges);
   return {
     nodes: data.nodes.map((n) => ({
       id: n.id,
       type: n.node_type,
-      position: pos.get(n.id) ?? { x: n.x, y: n.y },
+      position: elkPos?.get(n.id) ?? fallback?.get(n.id) ?? { x: n.x, y: n.y },
       width: NODE_W,
       data: { canvas: n },
       draggable: false,
@@ -79,6 +82,8 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elkPos, setElkPos] = useState<Map<string, { x: number; y: number }> | null>(null);
+  const rf = useRef<ReactFlowInstance | null>(null);
 
   // §6.4：MVP 轮询刷新（5s）；WS 二期
   useEffect(() => {
@@ -90,6 +95,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         .catch((e) => alive && setError(String(e)));
     setData(null);
     setSelected(null);
+    setElkPos(null);
     load();
     const t = setInterval(load, 5000);
     return () => {
@@ -98,7 +104,33 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     };
   }, [canvasId]);
 
-  const { nodes, edges } = useMemo(() => (data ? toFlow(data) : { nodes: [], edges: [] }), [data]);
+  // elkjs 分层 DAG 布局：数据变更 → 异步重算（§8.3 Phase ③，图从 root 自由生长）
+  useEffect(() => {
+    if (!data) return;
+    let alive = true;
+    elkLayout(data.nodes, data.edges)
+      .then((m) => alive && setElkPos(m))
+      .catch(() => {}); // 失败保留固定列占位
+    return () => {
+      alive = false;
+    };
+  }, [data]);
+
+  const { nodes, edges } = useMemo(
+    () => (data ? toFlow(data, elkPos) : { nodes: [], edges: [] }),
+    [data, elkPos],
+  );
+
+  // 图生长（节点数变化）时自动 fitView；普通轮询不打扰用户视角
+  const nodeCount = nodes.length;
+  const prevCount = useRef(0);
+  useEffect(() => {
+    if (nodeCount > 0 && nodeCount !== prevCount.current) {
+      prevCount.current = nodeCount;
+      const t = setTimeout(() => rf.current?.fitView({ padding: 0.15, maxZoom: 1, duration: 300 }), 50);
+      return () => clearTimeout(t);
+    }
+  }, [nodeCount]);
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
@@ -133,6 +165,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         edges={edges}
         nodeTypes={nodeTypes}
         onNodeClick={onNodeClick}
+        onInit={(i) => (rf.current = i)}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
