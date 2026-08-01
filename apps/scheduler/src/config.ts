@@ -108,6 +108,26 @@ export const config = {
     maxIntents: int("DFH_HUB_MAX_INTENTS", 3),
   },
 
+  /** Model Gateway（§6.3）：沙箱持短期 DFH_JOB_TOKEN 经网关调用模型，不持有长期 Key */
+  gateway: {
+    /** 沙箱内可达的网关地址（容器→宿主；compose 内为服务名） */
+    sandboxUrl: str("DFH_GATEWAY_SANDBOX_URL", "http://host.docker.internal:3100/gateway"),
+    /** Job Token 默认请求上限 */
+    maxRequests: int("DFH_JOB_TOKEN_MAX_REQUESTS", 500),
+    /** Job Token 生命周期（秒），应 ≥ job timeout */
+    tokenTtlSec: int("DFH_JOB_TOKEN_TTL_SEC", 4 * 3600),
+    /** 转发上游超时（毫秒；流式为首字节超时） */
+    upstreamTimeoutMs: int("DFH_GATEWAY_UPSTREAM_TIMEOUT_MS", 120_000),
+  },
+
+  /** 数据库连接治理（§12.3）：池上限、语句/空闲超时 */
+  db: {
+    poolMax: int("DFH_DB_POOL_MAX", 10),
+    statementTimeoutMs: int("DFH_DB_STATEMENT_TIMEOUT_MS", 60_000),
+    idleTimeoutSec: int("DFH_DB_IDLE_TIMEOUT_SEC", 30),
+    connectTimeoutSec: int("DFH_DB_CONNECT_TIMEOUT_SEC", 10),
+  },
+
   runtime: {
     provider: str("SANDBOX_PROVIDER", "local-docker"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepflowhunter-agent:latest"),

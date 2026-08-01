@@ -18,6 +18,9 @@ COPY apps/scheduler apps/scheduler
 COPY packages packages
 COPY agent-harness/demo-repo agent-harness/demo-repo
 
+# 生产制品（§12.1）：workspace 包 main/exports 指向 dist，scheduler 跑 node dist/index.js（不用 tsx）
+RUN pnpm -r --filter @dfh/shared-types --filter @dfh/plane-client --filter @dfh/runtime-sandbox --filter @dfh/scheduler build
+
 ENV NODE_ENV=production
 EXPOSE 3100
 

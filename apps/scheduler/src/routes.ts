@@ -1,7 +1,9 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { audit } from "./audit.js";
 import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
+import { renderMetrics } from "./metrics.js";
 import { config } from "./config.js";
 import {
   encryptSecret,
@@ -14,6 +16,7 @@ import { testCredential } from "./credential-test.js";
 import { createJob, ensureCanvasForTask, globalRules, rulesForProject, transitionJob } from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
+import { registerGateway } from "./gateway.js";
 import { runner } from "./runtime.js";
 import { syncSkillSource, validateSourceUrl } from "./skill-sources.js";
 import { streamBuffer, subscribeStream } from "./stream-bus.js";
@@ -118,6 +121,9 @@ export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DFH_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
   app.addHook("onRequest", authHook);
 
+  // Model Gateway（§6.3）：自身用 DFH_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
+  registerGateway(app);
+
   // ---------- Agent 实时流（WS /ws?job_id=...） ----------
   // 连接后先补发环形缓冲（晚加入也能看到上下文），随后实时推送
   app.get("/ws", { websocket: true }, (socket, req) => {
@@ -179,6 +185,13 @@ export function registerRoutes(app: FastifyInstance) {
           config_json: {} as never,
         })}
         RETURNING *`;
+      await audit(req, {
+        action: "project.create",
+        resourceType: "project",
+        resourceId: project.id as string,
+        projectId: project.id as string,
+        after: { name: project.name },
+      });
       return reply.code(201).send(project);
     } catch (e) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
@@ -208,6 +221,13 @@ export function registerRoutes(app: FastifyInstance) {
     const [project] = await sql`
       UPDATE projects SET ${sql(sets as never)} WHERE id = ${id} RETURNING *`;
     if (!project) return reply.code(404).send({ error: "project not found" });
+    await audit(req, {
+      action: "project.update",
+      resourceType: "project",
+      resourceId: id,
+      projectId: id,
+      after: body as unknown,
+    });
     return project;
   });
 
@@ -218,6 +238,7 @@ export function registerRoutes(app: FastifyInstance) {
       UPDATE projects SET status = 'archived', archived_at = now(), updated_at = now()
       WHERE id = ${id} RETURNING id, status`;
     if (!project) return reply.code(404).send({ error: "project not found" });
+    await audit(req, { action: "project.archive", resourceType: "project", resourceId: id, projectId: id });
     return project;
   });
 
@@ -253,6 +274,13 @@ export function registerRoutes(app: FastifyInstance) {
       },
     });
     if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
+    await audit(req, {
+      action: "task.create",
+      resourceType: "job",
+      resourceId: job.id as string,
+      projectId: id,
+      after: { title: body.title, canvas_id: canvasId, repo_url: body.repo_url ?? null, repo_path: body.repo_path ?? null },
+    });
     return reply.code(201).send({ canvas_id: canvasId, job });
   });
 
@@ -323,6 +351,13 @@ export function registerRoutes(app: FastifyInstance) {
       timeoutSec: source.timeout_sec as number,
     });
     if (duplicated || !job) return reply.code(409).send({ error: "已有活动 job，不能重试" });
+    await audit(req, {
+      action: "job.retry",
+      resourceType: "job",
+      resourceId: job.id as string,
+      projectId: canvas.project_id as string,
+      after: { canvas_id: canvasId, retried_from: source.id },
+    });
     return reply.code(201).send(job);
   });
 
@@ -335,6 +370,13 @@ export function registerRoutes(app: FastifyInstance) {
         UPDATE projects SET plane_project_id = ${body.plane_project_id}, updated_at = now()
         WHERE id = ${id} RETURNING id, name, plane_project_id`;
       if (!project) return reply.code(404).send({ error: "project not found" });
+      await audit(req, {
+        action: "plane.bind",
+        resourceType: "project",
+        resourceId: id,
+        projectId: id,
+        after: { plane_project_id: body.plane_project_id },
+      });
       return project;
     } catch (e) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
@@ -350,6 +392,7 @@ export function registerRoutes(app: FastifyInstance) {
       UPDATE projects SET plane_project_id = NULL, updated_at = now()
       WHERE id = ${id} RETURNING id, name, plane_project_id`;
     if (!project) return reply.code(404).send({ error: "project not found" });
+    await audit(req, { action: "plane.unbind", resourceType: "project", resourceId: id, projectId: id });
     return project;
   });
 
@@ -403,6 +446,12 @@ export function registerRoutes(app: FastifyInstance) {
       const [row] = await sql`
         INSERT INTO skill_sources ${sql({ name: body.name, repo_url: body.repo_url, branch: body.branch })}
         RETURNING id, name, repo_url, branch, synced_at, created_at, trust_status, enabled`;
+      await audit(req, {
+        action: "skill_source.create",
+        resourceType: "skill_source",
+        resourceId: row.id as string,
+        after: { name: row.name, repo_url: row.repo_url, branch: row.branch },
+      });
       return reply.code(201).send(row);
     } catch (e) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
@@ -417,6 +466,7 @@ export function registerRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     try {
       const r = await syncSkillSource(id, req.actor?.name ?? null);
+      await audit(req, { action: "skill_source.sync", resourceType: "skill_source", resourceId: id, after: r });
       return { ok: true, ...r };
     } catch (e) {
       return reply.code(502).send({ error: e instanceof Error ? e.message : String(e) });
@@ -436,13 +486,25 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE id = ${id}
       RETURNING id, name, trust_status, enabled, last_commit_sha, last_content_hash`;
     if (!row) return reply.code(404).send({ error: "source not found" });
+    await audit(req, {
+      action: "skill_source.trust",
+      resourceType: "skill_source",
+      resourceId: id,
+      after: { name: row.name, trust_status: row.trust_status, enabled: row.enabled, commit: row.last_commit_sha },
+    });
     return row;
   });
 
   app.delete("/skill-sources/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [row] = await sql`DELETE FROM skill_sources WHERE id = ${id} RETURNING id`;
+    const [row] = await sql`DELETE FROM skill_sources WHERE id = ${id} RETURNING id, name`;
     if (!row) return reply.code(404).send({ error: "source not found" });
+    await audit(req, {
+      action: "skill_source.delete",
+      resourceType: "skill_source",
+      resourceId: id,
+      before: { name: row.name },
+    });
     return { ok: true };
   });
 
@@ -474,6 +536,12 @@ export function registerRoutes(app: FastifyInstance) {
       if (body.credential_id) {
         await bindCredential(row.id as string, body.credential_id);
       }
+      await audit(req, {
+        action: "profile.create",
+        resourceType: "agent_profile",
+        resourceId: row.id as string,
+        after: { name: row.name, agent_cli: row.agent_cli, credential_id: body.credential_id ?? null },
+      });
       return reply.code(201).send(row);
     } catch (e) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
@@ -503,14 +571,33 @@ export function registerRoutes(app: FastifyInstance) {
     if (body.credential_id !== undefined) {
       await sql`DELETE FROM profile_credentials WHERE profile_id = ${id} AND purpose = 'llm'`;
       if (body.credential_id) await bindCredential(id, body.credential_id);
+      // Credential 绑定/解绑单独记一条（§7.2 必须记录项）
+      await audit(req, {
+        action: body.credential_id ? "credential.bind" : "credential.unbind",
+        resourceType: "agent_profile",
+        resourceId: id,
+        after: { credential_id: body.credential_id ?? null },
+      });
     }
+    await audit(req, {
+      action: "profile.update",
+      resourceType: "agent_profile",
+      resourceId: id,
+      after: { changed: Object.keys(body).filter((k) => k !== "credential_id") },
+    });
     return row;
   });
 
   app.delete("/agent-profiles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [row] = await sql`DELETE FROM agent_profiles WHERE id = ${id} RETURNING id`;
+    const [row] = await sql`DELETE FROM agent_profiles WHERE id = ${id} RETURNING id, name`;
     if (!row) return reply.code(404).send({ error: "profile not found" });
+    await audit(req, {
+      action: "profile.delete",
+      resourceType: "agent_profile",
+      resourceId: id,
+      before: { name: row.name },
+    });
     return { ok: true };
   });
 
@@ -527,6 +614,12 @@ export function registerRoutes(app: FastifyInstance) {
       const [row] = await sql`
         INSERT INTO agent_roles ${sql({ ...body, builtin: false, kind: "role" })}
         RETURNING id, name, title, description, prompt_template, builtin, kind`;
+      await audit(req, {
+        action: "role.create",
+        resourceType: "agent_role",
+        resourceId: row.id as string,
+        after: { name: row.name, title: row.title },
+      });
       return row;
     } catch (e: unknown) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
@@ -544,13 +637,30 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE id = ${id}
       RETURNING id, name, title, description, prompt_template, builtin, kind`;
     if (!row) return reply.code(404).send({ error: "role not found" });
+    // Prompt 模板属「规则/Prompt 修改」必记项；模板内容长，只记哈希
+    await audit(req, {
+      action: "role.update",
+      resourceType: "agent_role",
+      resourceId: id,
+      after: {
+        name: row.name,
+        changed: Object.keys(body),
+        ...(body.prompt_template ? { prompt_sha256: createHash("sha256").update(body.prompt_template).digest("hex") } : {}),
+      },
+    });
     return row;
   });
 
   app.delete("/agent-roles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [row] = await sql`DELETE FROM agent_roles WHERE id = ${id} AND NOT builtin RETURNING id`;
+    const [row] = await sql`DELETE FROM agent_roles WHERE id = ${id} AND NOT builtin RETURNING id, name`;
     if (!row) return reply.code(409).send({ error: "内置角色不可删除（可编辑模板/描述）或角色不存在" });
+    await audit(req, {
+      action: "role.delete",
+      resourceType: "agent_role",
+      resourceId: id,
+      before: { name: row.name },
+    });
     return { ok: true };
   });
 
@@ -588,6 +698,13 @@ export function registerRoutes(app: FastifyInstance) {
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const merged = { ...(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>), ...body.rules };
     await sql`UPDATE global_settings SET rules_json = ${sql.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
+    // 全局规则修改是「全局规则修改」必记项
+    await audit(req, {
+      action: "settings.global_update",
+      resourceType: "global_settings",
+      resourceId: "global",
+      after: { changed_keys: Object.keys(body.rules) },
+    });
     return { rules: merged, effective_rules: await globalRules(sql) };
   });
 
@@ -629,6 +746,14 @@ export function registerRoutes(app: FastifyInstance) {
       cfg.roles = roles;
     }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+    // 项目级 profiles 绑定 / rules 覆盖 / roles 启停都属配置修改
+    await audit(req, {
+      action: "settings.project_update",
+      resourceType: "project",
+      resourceId: id,
+      projectId: id,
+      after: { changed: Object.keys(body).filter((k) => (body as Record<string, unknown>)[k] !== undefined) },
+    });
     return {
       profiles: (cfg.profiles ?? {}) as Record<string, string>,
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
@@ -809,6 +934,7 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE id = ${id} AND status = 'pending'
       RETURNING id, status, priority`;
     if (!job) return reply.code(409).send({ error: "只有 pending 状态的 job 可调整优先级" });
+    await audit(req, { action: "job.priority", resourceType: "job", resourceId: id, after: { priority: body.priority } });
     return job;
   });
 
@@ -818,17 +944,26 @@ export function registerRoutes(app: FastifyInstance) {
     const [job] = await sql`
       UPDATE jobs SET status = 'cancelled', finished_at = now()
       WHERE id = ${id} AND status IN ('pending','claimed','provisioning','running','waiting_human')
-      RETURNING id, status, sandbox_id`;
+      RETURNING id, status, sandbox_id, project_id`;
     if (!job) return reply.code(409).send({ error: "job 不在可取消状态" });
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch((e) => {
         console.error(`[cancel] 沙箱回收失败 ${job.sandbox_id}:`, e);
       });
     }
+    // §6.3：取消即吊销短期模型 Token
+    const { revokeJobTokens } = await import("./gateway.js");
+    await revokeJobTokens(id, "cancelled").catch(() => {});
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent"]})`;
     await planeWriteback(id).catch(() => {});
+    await audit(req, {
+      action: "job.cancel",
+      resourceType: "job",
+      resourceId: id,
+      projectId: (job.project_id as string) ?? null,
+    });
     return { id: job.id, status: job.status };
   });
 
@@ -848,6 +983,12 @@ export function registerRoutes(app: FastifyInstance) {
     await sql`
       UPDATE canvas_nodes SET status = 'pending', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent"]})`;
+    await audit(req, {
+      action: "job.resume",
+      resourceType: "job",
+      resourceId: id,
+      projectId: (row.project_id as string) ?? null,
+    });
     return row;
   });
 
@@ -903,7 +1044,14 @@ export function registerRoutes(app: FastifyInstance) {
         created_by: req.actor?.name ?? null,
       })}
       RETURNING id, name, token_prefix, scopes, project_id, expires_at, created_at`;
-    // 明文只在这里出现一次（§6.1）；不落日志
+    // 明文只在这里出现一次（§6.1）；不落日志、不进审计
+    await audit(req, {
+      action: "token.create",
+      resourceType: "api_token",
+      resourceId: row.id as string,
+      projectId: (row.project_id as string) ?? null,
+      after: { name: row.name, scopes: row.scopes, expires_at: row.expires_at },
+    });
     return reply.code(201).send({ ...row, token: plaintext });
   });
 
@@ -914,6 +1062,7 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE id = ${id} AND revoked_at IS NULL
       RETURNING id, name, token_prefix, revoked_at`;
     if (!row) return reply.code(404).send({ error: "token 不存在或已吊销" });
+    await audit(req, { action: "token.revoke", resourceType: "api_token", resourceId: id, after: { name: row.name } });
     return row;
   });
 
@@ -936,6 +1085,13 @@ export function registerRoutes(app: FastifyInstance) {
       })}
       RETURNING id, name, token_prefix, scopes, project_id, expires_at, created_at`;
     await sql`UPDATE api_tokens SET revoked_at = now() WHERE id = ${id}`;
+    await audit(req, {
+      action: "token.rotate",
+      resourceType: "api_token",
+      resourceId: row.id as string,
+      before: { id, name: old.name },
+      after: { name: row.name, scopes: row.scopes },
+    });
     return reply.code(201).send({ ...row, token: plaintext, rotated_from: id });
   });
 
@@ -982,6 +1138,14 @@ export function registerRoutes(app: FastifyInstance) {
         created_by: req.actor?.name ?? null,
       })}
       RETURNING ${CRED_SAFE}`;
+    // §7.2 红线：只记指纹/last4/元数据，密文与明文都不进审计
+    await audit(req, {
+      action: "credential.create",
+      resourceType: "credential",
+      resourceId: row.id as string,
+      projectId: body.project_id ?? null,
+      after: { name: row.name, provider: row.provider, fingerprint: row.fingerprint, last4: row.last4 },
+    });
     return reply.code(201).send(row);
   });
 
@@ -1002,6 +1166,12 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE id = ${id}
       RETURNING ${CRED_SAFE}`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
+    await audit(req, {
+      action: "credential.rotate",
+      resourceType: "credential",
+      resourceId: id,
+      after: { name: row.name, provider: row.provider, key_version: row.key_version, fingerprint: row.fingerprint },
+    });
     return row;
   });
 
@@ -1011,6 +1181,12 @@ export function registerRoutes(app: FastifyInstance) {
     const [row] = await sql`
       UPDATE credentials SET status = ${body.status} WHERE id = ${id} RETURNING ${CRED_SAFE}`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
+    await audit(req, {
+      action: "credential.status",
+      resourceType: "credential",
+      resourceId: id,
+      after: { name: row.name, status: row.status },
+    });
     return row;
   });
 
@@ -1020,8 +1196,33 @@ export function registerRoutes(app: FastifyInstance) {
     const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     const result = await testCredential(cred as never);
+    await audit(req, {
+      action: "credential.test",
+      resourceType: "credential",
+      resourceId: id,
+      result: result.ok ? "ok" : "error",
+      after: { ok: result.ok },
+    });
     return result;
   });
+
+  // ---------- 审计日志（§7.2：只读查询；写入由各管理动作触发，append-only） ----------
+  app.get("/audit-logs", async (req) => {
+    const q = req.query as { project_id?: string; action?: string; limit?: string };
+    const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500);
+    return sql`
+      SELECT id, at, actor_type, actor_id, action, project_id, resource_type, resource_id,
+             request_id, ip, result, error_code, before_json, after_json
+      FROM audit_logs
+      WHERE (${q.project_id ?? null}::uuid IS NULL OR project_id = ${q.project_id ?? null}::uuid)
+        AND (${q.action ?? null}::text IS NULL OR action = ${q.action ?? null})
+      ORDER BY at DESC, id DESC
+      LIMIT ${limit}`;
+  });
+
+  // ---------- 指标（§13.1：Prometheus 文本；内部网络抓取，走普通认证） ----------
+  app.get("/metrics", async (_req, reply) =>
+    reply.type("text/plain; version=0.0.4").send(await renderMetrics()));
 
   app.get("/health", async () => ({ ok: true, ts: Date.now() }));
 }

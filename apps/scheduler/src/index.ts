@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { config } from "./config.js";
 import { migrate, sql } from "./db.js";
-import { startDispatcher } from "./dispatcher.js";
+import { drainInFlight, startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
@@ -34,6 +34,8 @@ async function main() {
     stopDispatcher();
     stopReaper();
     stopPlane();
+    // 优雅退出（§12.2）：先等在执行的 job 收尾，再关 HTTP 与 DB
+    await drainInFlight(15_000);
     await app.close();
     await sql.end();
     process.exit(0);

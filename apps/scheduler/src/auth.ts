@@ -1,7 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { audit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import { inc } from "./metrics.js";
 
 /**
  * 平台 API Token 鉴权（§6.1/SEC-01）
@@ -105,6 +107,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /tokens/:id/revoke": "tokens:manage",
   "POST /tokens/:id/rotate": "tokens:manage",
   "GET /credentials": "profiles:read",
+  "GET /audit-logs": "admin",
   "POST /credentials": "profiles:write",
   "POST /credentials/:id/rotate": "profiles:write",
   "POST /credentials/:id/status": "profiles:write",
@@ -112,8 +115,8 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /ws": "tasks:read",
 };
 
-/** 豁免鉴权的路由（健康检查 + Plane webhook，各有自保护） */
-const EXEMPT = new Set(["/health", "/webhooks/plane"]);
+/** 豁免鉴权的路由（健康检查 + Plane webhook + Model Gateway，各有自保护） */
+const EXEMPT = new Set(["/health", "/webhooks/plane", "/gateway/*"]);
 
 function requiredScope(method: string, routeUrl: string): string | null {
   const key = `${method} ${routeUrl}`;
@@ -134,6 +137,19 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
   const routeUrl = req.routeOptions?.url ?? req.url.split("?")[0];
   if (EXEMPT.has(routeUrl)) return;
 
+  // §7.2：认证失败与越权必须进审计（不写 Authorization 头/Token 本体）
+  const denyAudited = (code: number, error: string, errorCode: string) => {
+    inc("dfh_api_auth_failed_total", { reason: errorCode });
+    void audit(req, {
+      action: code === 401 ? "auth.failed" : "auth.denied",
+      resourceType: "route",
+      resourceId: `${req.method} ${routeUrl}`,
+      result: "denied",
+      errorCode,
+    });
+    return deny(reply, code, error);
+  };
+
   // Level A 回环部署可关闭；一旦跨出回环必须 DFH_AUTH_REQUIRED=true（.env.example 有警示）
   if (!config.auth.required) {
     req.actor = INTERNAL;
@@ -142,7 +158,7 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
 
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (!token) return deny(reply, 401, "缺少 Authorization: Bearer <token>");
+  if (!token) return denyAudited(401, "缺少 Authorization: Bearer <token>", "missing_token");
 
   let actor: Actor | null = null;
 
@@ -151,17 +167,17 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
     actor = { type: "bootstrap_admin", id: null, name: "bootstrap_admin", projectId: null, scopes: ["admin"] };
   } else {
     const m = token.match(/^dfh_[a-z0-9]+_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/);
-    if (!m) return deny(reply, 401, "token 格式非法");
+    if (!m) return denyAudited(401, "token 格式非法", "bad_format");
     const [row] = await sql`
       SELECT id, name, project_id, token_hash, scopes, expires_at, revoked_at
       FROM api_tokens WHERE token_prefix = ${m[1]}`;
-    if (!row) return deny(reply, 401, "token 不存在或已吊销");
+    if (!row) return denyAudited(401, "token 不存在或已吊销", "unknown_token");
     const a = Buffer.from(row.token_hash as string, "utf8");
     const b = Buffer.from(hashToken(token), "utf8");
-    if (a.length !== b.length || !timingSafeEqual(a, b)) return deny(reply, 401, "token 校验失败");
-    if (row.revoked_at) return deny(reply, 401, "token 已吊销");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return denyAudited(401, "token 校验失败", "hash_mismatch");
+    if (row.revoked_at) return denyAudited(401, "token 已吊销", "revoked");
     if (row.expires_at && new Date(row.expires_at as string).getTime() < Date.now()) {
-      return deny(reply, 401, "token 已过期");
+      return denyAudited(401, "token 已过期", "expired");
     }
     actor = {
       type: "api_token",
@@ -176,14 +192,14 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
 
   const scope = requiredScope(req.method, routeUrl);
   if (!hasScope(actor, scope)) {
-    return deny(reply, 403, `scope 不足：需要 ${scope ?? "认证"}`);
+    return denyAudited(403, `scope 不足：需要 ${scope ?? "认证"}`, "insufficient_scope");
   }
 
   // 项目限定 token：项目路由的 :id 必须匹配（列表类路由在 handler 侧各自过滤，Level A 从简）
   if (actor.projectId && routeUrl.startsWith("/projects/:id")) {
     const pid = (req.params as { id?: string } | undefined)?.id;
     if (pid && pid !== actor.projectId) {
-      return deny(reply, 403, "token 仅限项目 " + actor.projectId);
+      return denyAudited(403, "token 仅限项目 " + actor.projectId, "project_mismatch");
     }
   }
 

@@ -1,3 +1,4 @@
+import { CaretRight } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useMatch, useParams } from "react-router-dom";
 import { api, type Project } from "../api";
@@ -8,7 +9,7 @@ const TABS = [
   { to: "settings", label: "设置" },
 ];
 
-/** 项目工作区：顶栏项目名 + 子导航；画布详情页隐藏顶栏以省空间 */
+/** 项目工作区：提供轻量上下文与项目级分区；任务工作台保留最大画布空间。 */
 export function ProjectLayout() {
   const { projectId } = useParams<{ projectId: string }>();
   const onCanvas = Boolean(useMatch("/projects/:projectId/tasks/:canvasId"));
@@ -27,28 +28,25 @@ export function ProjectLayout() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!onCanvas && (
-        <header className="flex h-14 shrink-0 items-center gap-4 border-b border-ink-800 px-5">
-          <div className="min-w-0">
-            <div className="truncate text-[15px] font-medium text-zinc-100">
+        <header className="mx-3 mt-3 flex min-h-14 shrink-0 items-center gap-3 rounded-[20px] bg-white/[.025] px-4 py-2 ring-1 ring-white/[.055]">
+          <div className="min-w-0 flex items-center gap-2">
+            <span className="hidden font-mono text-[9px] tracking-[.16em] text-zinc-700 sm:inline">PROJECT</span>
+            <CaretRight size={11} className="hidden text-zinc-700 sm:block" />
+            <div className="truncate text-[12px] font-medium text-zinc-200">
               {project?.name ?? "加载中…"}
             </div>
-            {project && (
-              <div className="truncate font-mono text-[12px] text-zinc-600">
-                {project.plane_project_id ? `Plane · ${project.plane_project_id}` : "本地项目"}
-                {project.status === "archived" ? " · 已归档" : ""}
-              </div>
-            )}
           </div>
-          <nav className="ml-4 flex items-center gap-1">
+          {project && <span className="hidden rounded-full bg-white/[.03] px-2 py-1 font-mono text-[8px] text-zinc-600 md:inline">{project.plane_project_id ? "PLANE CONNECTED" : "LOCAL"}{project.status === "archived" ? " · ARCHIVED" : ""}</span>}
+          <nav className="ml-auto flex items-center gap-1 rounded-full bg-black/20 p-1">
             {TABS.map((t) => (
               <NavLink
                 key={t.to}
                 to={`/projects/${projectId}/${t.to}`}
                 className={({ isActive }) =>
-                  `rounded-md px-3.5 py-2 text-[14px] transition-colors ${
+                  `rounded-full px-3 py-1.5 text-[11px] transition-colors ${
                     isActive
-                      ? "bg-ink-800 text-zinc-100"
-                      : "text-zinc-500 hover:bg-ink-850 hover:text-zinc-300"
+                      ? "bg-white/[.08] text-zinc-100"
+                      : "text-zinc-600 hover:bg-white/[.04] hover:text-zinc-300"
                   }`
                 }
               >

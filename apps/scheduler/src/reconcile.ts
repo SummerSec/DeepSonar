@@ -49,6 +49,9 @@ export async function reconcileOnBoot(): Promise<void> {
     await sql`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
       WHERE job_id = ${j.id} AND node_type = ANY(${["job", "intent"]})`;
+    // §6.3：orphan 即吊销短期模型 Token
+    const { revokeJobTokens } = await import("./gateway.js");
+    await revokeJobTokens(j.id as string, "orphan_reconcile").catch(() => {});
     await planeWriteback(j.id as string).catch(() => {});
   }
   if (orphaned.length > 0) {

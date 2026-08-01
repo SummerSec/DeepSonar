@@ -1,35 +1,37 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
-import { AgentsPage } from "./pages/AgentsPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { FindingsPage } from "./pages/FindingsPage";
-import { JobsPage } from "./pages/JobsPage";
-import { ProjectLayout } from "./pages/ProjectLayout";
-import { ProjectsPage } from "./pages/ProjectsPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { TaskCanvasPage } from "./pages/TaskCanvasPage";
-import { TasksPage } from "./pages/TasksPage";
+import { PageSkeleton } from "./ui";
+
+const AgentsPage = lazy(() => import("./pages/AgentsPage").then((module) => ({ default: module.AgentsPage })));
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
+const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
+const JobsPage = lazy(() => import("./pages/JobsPage").then((module) => ({ default: module.JobsPage })));
+const ProjectLayout = lazy(() => import("./pages/ProjectLayout").then((module) => ({ default: module.ProjectLayout })));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const TaskCanvasPage = lazy(() => import("./pages/TaskCanvasPage").then((module) => ({ default: module.TaskCanvasPage })));
+const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })));
+const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
+
+function Deferred({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
+}
 
 export default function App() {
-  return (
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<DashboardPage />} />
-        <Route path="projects" element={<ProjectsPage />} />
-        <Route path="jobs" element={<JobsPage />} />
-        <Route path="findings" element={<FindingsPage scope="global" />} />
-        <Route path="agents" element={<AgentsPage />} />
-
-        <Route path="projects/:projectId" element={<ProjectLayout />}>
-          <Route index element={<Navigate to="tasks" replace />} />
-          <Route path="tasks" element={<TasksPage />} />
-          <Route path="tasks/:canvasId" element={<TaskCanvasPage />} />
-          <Route path="findings" element={<FindingsPage scope="project" />} />
-          <Route path="settings" element={<SettingsPage />} />
-        </Route>
-
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
-  );
+  return <Routes><Route element={<AppShell />}>
+    <Route index element={<Deferred><DashboardPage /></Deferred>} />
+    <Route path="projects" element={<Deferred><ProjectsPage /></Deferred>} />
+    <Route path="jobs" element={<Deferred><JobsPage /></Deferred>} />
+    <Route path="findings" element={<Deferred><FindingsPage scope="global" /></Deferred>} />
+    <Route path="agents" element={<Deferred><AgentsPage /></Deferred>} />
+    <Route path="projects/:projectId" element={<Deferred><ProjectLayout /></Deferred>}>
+      <Route index element={<Navigate to="tasks" replace />} />
+      <Route path="tasks" element={<Deferred><TasksPage /></Deferred>} />
+      <Route path="tasks/:canvasId" element={<Deferred><TaskCanvasPage /></Deferred>} />
+      <Route path="findings" element={<Deferred><FindingsPage scope="project" /></Deferred>} />
+      <Route path="settings" element={<Deferred><SettingsPage /></Deferred>} />
+    </Route>
+    <Route path="*" element={<Deferred><NotFoundPage /></Deferred>} />
+  </Route></Routes>;
 }

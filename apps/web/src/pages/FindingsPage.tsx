@@ -6,6 +6,7 @@ import {
   EmptyState,
   FilterSelect,
   PageHeader,
+  PageSkeleton,
   SeverityBadge,
   formatTime,
   relativeTime,
@@ -38,6 +39,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
 
   const [rows, setRows] = useState<FindingSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let stop = false;
@@ -52,10 +54,11 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
           if (!stop) {
             setRows(list);
             setError(null);
+            setLoading(false);
           }
         })
         .catch((e) => {
-          if (!stop) setError(String(e));
+          if (!stop) { setError(String(e)); setLoading(false); }
         });
     };
     tick();
@@ -78,23 +81,27 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     return `/projects/${f.project_id}/findings`;
   };
 
+  if (loading) return <PageSkeleton rows={5} />;
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div className="page-scroll">
       <PageHeader
         title={scope === "global" ? "发现" : "项目发现"}
-        subtitle="按 severity / 验证状态筛选；点击跳转过程画布"
+        eyebrow="EVIDENCE REGISTER"
+        subtitle="发现不是结论，而是等待验证的风险假设。打开对应任务可以查看来源、验证路径与最终报告。"
         actions={
           <>
             <FilterSelect
               value={severity}
               onChange={(v) => setFilter("severity", v)}
               placeholder="全部 severity"
+              label="SEVERITY"
               options={SEVERITIES}
             />
             <FilterSelect
               value={verify}
               onChange={(v) => setFilter("verify", v)}
               placeholder="全部验证状态"
+              label="VERIFY"
               options={VERIFY}
             />
           </>
@@ -110,7 +117,11 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       {rows.length === 0 ? (
         <EmptyState title="暂无发现" hint="审计产出 finding 后会汇总到这里" />
       ) : (
-        <DataTable>
+        <>
+        <div className="grid gap-3 md:hidden">
+          {rows.map((finding) => <Link key={finding.id} to={linkTo(finding)} className="surface-shell group"><article className="surface-core p-4"><div className="flex items-center justify-between gap-3"><SeverityBadge severity={finding.severity} /><span className="font-mono text-[8px] text-zinc-700">{relativeTime(finding.created_at)}</span></div><h2 className="mt-4 text-[14px] font-medium leading-6 text-zinc-100">{finding.title}</h2>{finding.summary && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">{finding.summary}</p>}<div className="mt-4 flex items-center gap-2 border-t border-white/[.045] pt-3 text-[9px] text-zinc-600"><span className="truncate">{finding.project_name}</span><span>·</span><span className="truncate font-mono">{finding.location || "无位置"}</span><span className="ml-auto font-mono text-zinc-500">{finding.verify_status}</span></div></article></Link>)}
+        </div>
+        <div className="hidden md:block"><DataTable>
           <table className="w-full min-w-[880px]">
             <thead>
               <tr>
@@ -160,7 +171,8 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
               ))}
             </tbody>
           </table>
-        </DataTable>
+        </DataTable></div>
+        </>
       )}
     </div>
   );

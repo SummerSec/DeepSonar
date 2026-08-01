@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import { inc } from "./metrics.js";
 import { runner } from "./runtime.js";
 
 /**
@@ -37,9 +38,17 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
   for (const j of [...timedOut, ...provisionStuck, ...orphaned]) {
     if (j.sandbox_id) {
       await runner.destroy({ sandboxId: j.sandbox_id }).catch((e) => {
+        inc("dfh_sandbox_cleanup_failed_total");
         console.error(`[reaper] 沙箱回收失败 ${j.sandbox_id}:`, e);
       });
     }
+    // §13.1 指标：终局原因计数
+    if (timedOut.includes(j)) inc("dfh_jobs_failed_total", { reason: "timeout" });
+    else if (provisionStuck.includes(j)) inc("dfh_jobs_failed_total", { reason: "provision_stuck" });
+    else inc("dfh_jobs_orphan_total");
+    // §6.3：终局判定即吊销短期模型 Token
+    const { revokeJobTokens } = await import("./gateway.js");
+    await revokeJobTokens(j.id, "reaper").catch(() => {});
     // 失败不能只改 jobs 表而留下 running 画布节点（§8.3：job/intent 节点同步终态）
     await sql`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()

@@ -1,4 +1,3 @@
-import ELK from "elkjs/lib/elk.bundled.js";
 import type { CanvasEdge, CanvasNode } from "./api";
 
 /**
@@ -7,8 +6,6 @@ import type { CanvasEdge, CanvasNode } from "./api";
  * 环（fact → root 的收敛边）由 ELK cycle-breaking 处理。
  * layoutNodes（固定列）保留为首帧占位，elk 算完即替换。
  */
-
-const elk = new ELK();
 
 export const NODE_W = 280;
 /** 高度估算（BaseNode 内容决定实际高度；elk 只需要近似值排间距） */
@@ -24,6 +21,9 @@ export async function elkLayout(
   nodes: CanvasNode[],
   edges: CanvasEdge[],
 ): Promise<Map<string, { x: number; y: number }>> {
+  // ELK 约 1.5 MB，仅在真正打开过程画布后异步加载，避免拖慢总览/项目/配置首屏。
+  const { default: ELK } = await import("elkjs/lib/elk.bundled.js");
+  const elk = new ELK();
   const res = await elk.layout({
     id: "canvas",
     layoutOptions: {

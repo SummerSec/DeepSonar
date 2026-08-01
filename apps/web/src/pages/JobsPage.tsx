@@ -6,6 +6,7 @@ import {
   EmptyState,
   FilterSelect,
   PageHeader,
+  PageSkeleton,
   StatusBadge,
   formatTime,
   relativeTime,
@@ -41,6 +42,7 @@ export function JobsPage() {
   const [rows, setRows] = useState<JobSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const reload = () =>
     api
@@ -48,8 +50,9 @@ export function JobsPage() {
       .then((list) => {
         setRows(list);
         setError(null);
+        setLoading(false);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => { setError(String(e)); setLoading(false); });
 
   useEffect(() => {
     let stop = false;
@@ -60,10 +63,11 @@ export function JobsPage() {
           if (!stop) {
             setRows(list);
             setError(null);
+            setLoading(false);
           }
         })
         .catch((e) => {
-          if (!stop) setError(String(e));
+          if (!stop) { setError(String(e)); setLoading(false); }
         });
     };
     tick();
@@ -87,11 +91,13 @@ export function JobsPage() {
     }
   };
 
+  if (loading) return <PageSkeleton rows={6} />;
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div className="page-scroll">
       <PageHeader
         title="调度队列"
-        subtitle="点「任务画布」列进入过程图；也可取消活动任务或恢复失败 / 待人工任务"
+        eyebrow="EXECUTION LEDGER"
+        subtitle="调度器是唯一执行副作用的角色。这里用于定位异常、取消活动运行，或恢复失败与待人工任务。"
         actions={
           <FilterSelect
             value={status}
@@ -101,7 +107,8 @@ export function JobsPage() {
               else next.delete("status");
               setSearchParams(next, { replace: true });
             }}
-            placeholder="全部状态"
+              placeholder="全部状态"
+              label="STATUS"
             options={STATUSES}
           />
         }
@@ -116,7 +123,11 @@ export function JobsPage() {
       {rows.length === 0 ? (
         <EmptyState title="队列为空" hint="没有匹配的 Job" />
       ) : (
-        <DataTable>
+        <>
+        <div className="grid gap-3 md:hidden">
+          {rows.map((j) => <article key={j.id} className="surface-shell"><div className="surface-core p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><span className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">{j.type}</span><Link to={j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : `/projects/${j.project_id}/tasks`} className="mt-2 block truncate text-[14px] font-medium text-zinc-100">{j.canvas_title ?? j.project_name ?? j.id.slice(0, 8)}</Link><p className="mt-1 text-[10px] text-zinc-600">{j.project_name} · {relativeTime(j.created_at)}</p></div><StatusBadge status={j.status} /></div>{j.error && <p className="mt-3 line-clamp-2 rounded-xl bg-red-400/[.05] px-3 py-2 font-mono text-[9px] leading-4 text-red-300">{j.error}</p>}<div className="mt-4 flex items-center gap-2 border-t border-white/[.045] pt-3">{CANCELLABLE.has(j.status) && <button disabled={busy === j.id} onClick={() => act(j.id, "cancel")} className="secondary-button min-h-8 px-3 py-1 text-[10px]">取消</button>}{RESUMABLE.has(j.status) && <button disabled={busy === j.id} onClick={() => act(j.id, "resume")} className="secondary-button min-h-8 px-3 py-1 text-[10px]">恢复</button>}<span className="ml-auto font-mono text-[8px] text-zinc-700">{formatTime(j.started_at)}</span></div></div></article>)}
+        </div>
+        <div className="hidden md:block"><DataTable>
           <table className="w-full min-w-[960px]">
             <thead>
               <tr>
@@ -131,7 +142,7 @@ export function JobsPage() {
             </thead>
             <tbody>
               {rows.map((j) => (
-                <tr key={j.id} className="transition-colors hover:bg-ink-850/80">
+                <tr key={j.id} className="table-row-hover">
                   <td className={tdCls}>
                     <StatusBadge status={j.status} />
                     {j.error && (
@@ -199,7 +210,8 @@ export function JobsPage() {
               ))}
             </tbody>
           </table>
-        </DataTable>
+        </DataTable></div>
+        </>
       )}
     </div>
   );
