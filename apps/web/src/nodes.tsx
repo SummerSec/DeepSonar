@@ -31,7 +31,7 @@ export const SEVERITY_COLOR: Record<string, string> = {
 };
 
 const TYPE_LABEL: Record<string, string> = {
-  root: "项目根",
+  root: "任务",
   job: "运行",
   finding: "发现",
   note: "说明",
@@ -51,6 +51,11 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
   const location = (n.body_json?.location as string) ?? null;
   // 「当前动作」（工具调用聚合，executor 直接写显示态）优先于 job 类型展示
   const lastAction = (n.body_json?.last_progress as { message?: string } | undefined)?.message ?? null;
+  // 任务 root：显示目标（module_path > repo_path > type）
+  const target = n.body_json?.target as Record<string, unknown> | undefined;
+  const targetText = target
+    ? String(target.module_path ?? target.repo_path ?? target.type ?? "")
+    : null;
 
   return (
     <div className="dfh-node w-full rounded-[10px] border border-ink-700 bg-ink-850/95 px-3 py-2.5">
@@ -89,7 +94,7 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
         )}
         {!location && (
           <span className="truncate font-mono text-[11px] text-zinc-500">
-            {lastAction ?? jobType ?? ""}
+            {lastAction ?? targetText ?? jobType ?? ""}
           </span>
         )}
         {severity && (

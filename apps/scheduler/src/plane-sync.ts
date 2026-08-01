@@ -1,6 +1,6 @@
 import { PlaneClient, parseIssueTask } from "@dfh/plane-client";
 import { config } from "./config.js";
-import { createJob, transitionJob } from "./core.js";
+import { createJob, ensureCanvasForTask, transitionJob } from "./core.js";
 import { sql } from "./db.js";
 
 /**
@@ -52,8 +52,17 @@ async function pollProject(plane: PlaneClient, projectId: string, planeProjectId
     const { type, params } = parseIssueTask(issue);
     if (!type) continue; // 无 type= 标记的 issue 不领取
 
+    // 一任务一画布：同一 issue 重试复用同一画布（root 节点带任务目标）
+    const canvasId = await ensureCanvasForTask({
+      projectId,
+      planeIssueId: issue.id,
+      title: issue.name,
+      target: { type, ...params },
+    });
+
     const { job, duplicated } = await createJob({
       projectId,
+      canvasId,
       planeIssueId: issue.id,
       type,
       payload: params,

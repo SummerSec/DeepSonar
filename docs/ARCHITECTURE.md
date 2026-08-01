@@ -206,14 +206,21 @@ loop:
 ```text
 projects
   id, plane_project_id, canvas_id, name, config_json, created_at
+  -- canvas_id 为历史遗留（旧项目级画布），新项目画布按任务铸造（见 canvases）
+
+canvases                              -- 0002 起：一任务一画布
+  id, project_id, plane_issue_id, title, target_json, created_at
+  -- 唯一约束: (plane_issue_id) WHERE plane_issue_id IS NOT NULL
+  -- 同一 issue 重试复用同一画布；target_json = 任务目标（type/repo_path/module_path/...）
 
 jobs
-  id, project_id, plane_issue_id, parent_job_id, finding_id,
+  id, project_id, canvas_id, plane_issue_id, parent_job_id, finding_id,
   type, status, priority, payload_json, sandbox_id,
   lease_expires_at, heartbeat_at, timeout_sec,
   followup_depth, transcript_uri,
   error, started_at, finished_at, created_at
   -- 唯一约束: (plane_issue_id) WHERE status IN ('claimed','provisioning','running')
+  -- canvas_id: 任务画布；verify job 继承父审计 job 的画布
 
 events
   id, job_id, event_id, job_seq, type, payload_json, created_at
@@ -230,9 +237,11 @@ findings
 canvas_nodes
   id, canvas_id, job_id, node_type, title, body_json,
   x, y, w, h, status, created_at, updated_at
+  -- 唯一约束: (canvas_id) WHERE node_type='root'  -- 每画布一个 root（任务根，body_json.target 为目标）
 
 canvas_edges
   id, canvas_id, from_node_id, to_node_id, edge_type, created_at
+  -- edge_type: child（任务 root→job）/ produces（job→finding）/ verifies（verify→finding）
 ```
 
 要点：
@@ -316,8 +325,10 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 
 **管理**
 
-- `POST /projects/sync`  绑定 Plane 项目并建画布
-- `GET  /projects/{id}/canvas`
+- `POST /projects/sync`  绑定 Plane 项目（新项目不再预建画布，画布随任务认领铸造）
+- `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup 计数）
+- `GET  /canvases/{id}`  单任务画布节点/边
+- `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
 - `POST /jobs/{id}/cancel`
 - `POST /jobs/{id}/resume`  人工处理后恢复
 - `POST /reconcile/run`（或定时）以 jobs 表为准修正 Plane 状态

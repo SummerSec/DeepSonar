@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "./config.js";
-import { createJob } from "./core.js";
+import { createJob, ensureCanvasForTask } from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce } from "./plane-sync.js";
 import { streamBuffer, subscribeStream } from "./stream-bus.js";
@@ -16,6 +16,7 @@ const SyncProjectBody = z.object({
 const CreateJobBody = z.object({
   project_id: z.string().uuid(),
   plane_issue_id: z.string().optional(),
+  title: z.string().optional(),
   type: z.string().min(1),
   payload: z.record(z.string(), z.unknown()).default({}),
   priority: z.number().int().default(0),
@@ -70,7 +71,39 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/projects", async () => sql`SELECT * FROM projects ORDER BY created_at DESC`);
 
+  // ---------- 任务画布（§3.2：一任务一画布） ----------
+  // 列表：项目下所有任务画布 + rollup 计数
+  app.get("/projects/:id/canvases", async (req) => {
+    const { id } = req.params as { id: string };
+    return sql`
+      SELECT c.id, c.title, c.plane_issue_id, c.target_json, c.created_at,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+           AND j.status IN ('claimed','provisioning','running','waiting_human')) AS active_count,
+        (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding') AS finding_count,
+        (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding' AND n.status = 'confirmed') AS confirmed_count
+      FROM canvases c WHERE c.project_id = ${id}
+      ORDER BY c.created_at DESC`;
+  });
+
+  // 详情：单任务画布的节点与边
+  app.get("/canvases/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const [nodes, edges] = await Promise.all([
+      sql`
+        SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, updated_at
+        FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
+      sql`
+        SELECT id, from_node_id, to_node_id, edge_type
+        FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
+    ]);
+    return { canvas, canvas_id: id, nodes, edges };
+  });
+
   // ---------- 画布（§7 GET /projects/{id}/canvas；§6.4 列表不含大字段） ----------
+  // @deprecated 旧的项目级画布，仅为兼容历史数据保留；新代码用 /canvases/:id
   app.get("/projects/:id/canvas", async (req) => {
     const { id } = req.params as { id: string };
     const [project] = await sql`SELECT * FROM projects WHERE id = ${id}`;
@@ -89,8 +122,16 @@ export function registerRoutes(app: FastifyInstance) {
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
     const body = CreateJobBody.parse(req.body);
+    // 一任务一画布：有 issue 复用（重试），无 issue 每次新建 ad-hoc 画布
+    const canvasId = await ensureCanvasForTask({
+      projectId: body.project_id,
+      planeIssueId: body.plane_issue_id,
+      title: body.title ?? `${body.type} 任务`,
+      target: { type: body.type, ...body.payload },
+    });
     const { job, duplicated } = await createJob({
       projectId: body.project_id,
+      canvasId,
       planeIssueId: body.plane_issue_id,
       type: body.type,
       payload: body.payload,
@@ -112,7 +153,7 @@ export function registerRoutes(app: FastifyInstance) {
         ? sql``
         : sql`WHERE ${conditions.reduce((acc, c) => sql`${acc} AND ${c}`)}`;
     return sql`
-      SELECT id, project_id, plane_issue_id, type, status, priority, error,
+      SELECT id, project_id, canvas_id, plane_issue_id, type, status, priority, error,
              started_at, finished_at, created_at
       FROM jobs ${where}
       ORDER BY created_at DESC LIMIT 200`;

@@ -29,9 +29,23 @@ export interface CanvasEdge {
 }
 
 export interface CanvasData {
+  canvas?: { id: string; title: string; target_json: Record<string, unknown> };
   canvas_id: string;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
+}
+
+/** 任务画布列表项（一任务一画布） */
+export interface CanvasSummary {
+  id: string;
+  title: string;
+  plane_issue_id: string | null;
+  target_json: Record<string, unknown>;
+  created_at: string;
+  job_count: number;
+  active_count: number;
+  finding_count: number;
+  confirmed_count: number;
 }
 
 export interface JobEvent {
@@ -63,6 +77,7 @@ async function get<T>(path: string): Promise<T> {
 
 export const api = {
   projects: () => get<Project[]>("/projects"),
-  canvas: (projectId: string) => get<CanvasData>(`/projects/${projectId}/canvas`),
+  canvases: (projectId: string) => get<CanvasSummary[]>(`/projects/${projectId}/canvases`),
+  canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
 };

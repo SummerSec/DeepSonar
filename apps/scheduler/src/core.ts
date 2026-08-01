@@ -35,6 +35,7 @@ export function sha16(s: string): string {
 
 export interface CreateJobInput {
   projectId: string;
+  canvasId?: string;
   planeIssueId?: string;
   parentJobId?: string;
   findingId?: string;
@@ -50,6 +51,7 @@ export async function createJob(input: CreateJobInput) {
     const [job] = await sql`
       INSERT INTO jobs ${sql({
         project_id: input.projectId,
+        canvas_id: input.canvasId ?? null,
         plane_issue_id: input.planeIssueId ?? null,
         parent_job_id: input.parentJobId ?? null,
         finding_id: input.findingId ?? null,
@@ -68,6 +70,77 @@ export async function createJob(input: CreateJobInput) {
     }
     throw e;
   }
+}
+
+// ---------- 任务画布（一任务一画布，§3.2）：认领时铸造 canvas_id ----------
+
+export interface EnsureCanvasInput {
+  projectId: string;
+  planeIssueId?: string;
+  title: string;
+  target: Record<string, unknown>;
+}
+
+/**
+ * 为任务确保一个画布：同一 plane_issue_id 复用（重试算同一任务的历史），
+ * 否则新建；新建时同事物写 root 节点（body_json 带目标）。
+ * 返回 canvas_id。
+ */
+export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<string> {
+  return sql.begin(async (tx) => {
+    let canvasId: string | null = null;
+    let created = false;
+
+    if (input.planeIssueId) {
+      // 部分唯一索引 canvases_issue_uniq：ON CONFLICT 需带相同谓词
+      const inserted = await tx`
+        INSERT INTO canvases ${tx({
+          project_id: input.projectId,
+          plane_issue_id: input.planeIssueId,
+          title: input.title,
+          target_json: input.target as never,
+        })}
+        ON CONFLICT (plane_issue_id) WHERE plane_issue_id IS NOT NULL DO NOTHING
+        RETURNING id`;
+      if (inserted.length > 0) {
+        canvasId = inserted[0].id as string;
+        created = true;
+      } else {
+        const [existing] = await tx`
+          SELECT id FROM canvases WHERE plane_issue_id = ${input.planeIssueId}`;
+        canvasId = existing.id as string;
+      }
+    } else {
+      // ad-hoc 任务（手动 POST /jobs 无 issue）：每次一个新画布
+      const [row] = await tx`
+        INSERT INTO canvases ${tx({
+          project_id: input.projectId,
+          plane_issue_id: null,
+          title: input.title,
+          target_json: input.target as never,
+        })}
+        RETURNING id`;
+      canvasId = row.id as string;
+      created = true;
+    }
+
+    if (created) {
+      // root 节点：任务目标挂在 body_json.target；canvas_nodes_root_uniq 保证并发安全
+      await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: canvasId,
+          job_id: null,
+          node_type: "root",
+          title: input.title,
+          body_json: { type: (input.target.type as string) ?? null, target: input.target } as never,
+          x: 100,
+          y: 100,
+          status: "active",
+        })}
+        ON CONFLICT DO NOTHING`;
+    }
+    return canvasId;
+  });
 }
 
 // ---------- 事件摄入（幂等 + job_seq + 按类型落地副作用） ----------
@@ -234,6 +307,7 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
   await tx`
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
+      canvas_id: (job.canvas_id as string) ?? null, // 继承父审计 job 的任务画布
       plane_issue_id: null,
       parent_job_id: job.id as string,
       finding_id: finding.id as string,

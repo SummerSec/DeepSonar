@@ -172,13 +172,18 @@ function stopLeaseRenewal(jobId: string) {
 async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
   const existing = await sql`SELECT 1 FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
   if (existing.length > 0) return;
-  const [project] = await sql`SELECT canvas_id FROM projects WHERE id = ${job.project_id as string}`;
-  if (!project) return;
+  // 一任务一画布：优先 job 自带的任务画布；历史 job（canvas_id 为空）兜底到项目旧画布
+  let canvasId = job.canvas_id as string | null;
+  if (!canvasId) {
+    const [project] = await sql`SELECT canvas_id FROM projects WHERE id = ${job.project_id as string}`;
+    canvasId = (project?.canvas_id as string) ?? null;
+  }
+  if (!canvasId) return;
   const [{ next_x }] = await sql<[{ next_x: number }]>`
-    SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${project.canvas_id}`;
-  await sql`
+    SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+  const [node] = await sql`
     INSERT INTO canvas_nodes ${sql({
-      canvas_id: project.canvas_id,
+      canvas_id: canvasId,
       job_id: jobId,
       node_type: "job",
       title: `${job.type} #${(jobId as string).slice(0, 8)}`,
@@ -186,7 +191,20 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
       x: next_x,
       y: 300,
       status: "running",
-    })}`;
+    })}
+    RETURNING id`;
+  // child 边：任务 root → job（早退保证不重复）
+  const [root] = await sql`
+    SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+  if (root) {
+    await sql`
+      INSERT INTO canvas_edges ${sql({
+        canvas_id: canvasId,
+        from_node_id: root.id,
+        to_node_id: node.id,
+        edge_type: "child",
+      })}`;
+  }
 }
 
 export function startDispatcher() {

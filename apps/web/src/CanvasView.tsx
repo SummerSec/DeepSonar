@@ -71,7 +71,7 @@ function Legend() {
   );
 }
 
-export function CanvasView({ projectId }: { projectId: string }) {
+export function CanvasView({ canvasId }: { canvasId: string }) {
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,17 +81,18 @@ export function CanvasView({ projectId }: { projectId: string }) {
     let alive = true;
     const load = () =>
       api
-        .canvas(projectId)
+        .canvas(canvasId)
         .then((d) => alive && (setData(d), setError(null)))
         .catch((e) => alive && setError(String(e)));
     setData(null);
+    setSelected(null);
     load();
     const t = setInterval(load, 5000);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, [projectId]);
+  }, [canvasId]);
 
   const { nodes, edges } = useMemo(() => (data ? toFlow(data) : { nodes: [], edges: [] }), [data]);
 
