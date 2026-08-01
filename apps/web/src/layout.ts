@@ -91,12 +91,12 @@ export function layoutNodes(nodes: CanvasNode[], edges: CanvasEdge[]): Map<strin
   const findingRow = new Map<string, number>();
   (cols.get(2) ?? []).forEach((f, i) => findingRow.set(f.id, i));
 
-  // verify 节点 → 目标 finding 行号（verifies 边：from=verify, to=finding）
+  // verify 节点 → 来源 finding 行号（verifies 边：from=finding, to=verify）
   const verifyToFinding = new Map<string, number>();
   for (const e of edges) {
     if (e.edge_type !== "verifies") continue;
-    const row = findingRow.get(e.to_node_id);
-    if (row !== undefined) verifyToFinding.set(e.from_node_id, row);
+    const row = findingRow.get(e.from_node_id);
+    if (row !== undefined) verifyToFinding.set(e.to_node_id, row);
   }
   cols.get(3)?.sort((a, b) => (verifyToFinding.get(a.id) ?? 999) - (verifyToFinding.get(b.id) ?? 999));
 

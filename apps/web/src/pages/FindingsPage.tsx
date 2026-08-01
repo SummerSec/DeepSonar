@@ -23,9 +23,10 @@ const SEVERITIES = [
 
 const VERIFY = [
   { value: "pending", label: "pending" },
+  { value: "verifying", label: "verifying" },
   { value: "confirmed", label: "confirmed" },
   { value: "false_positive", label: "false_positive" },
-  { value: "running", label: "running" },
+  { value: "needs_human", label: "needs_human" },
 ];
 
 /** 全局或项目级发现清单 */

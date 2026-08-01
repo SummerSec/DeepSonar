@@ -37,8 +37,8 @@ async function main() {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  await app.listen({ port: config.port, host: "0.0.0.0" });
-  console.log(`[boot] scheduler 已启动: http://localhost:${config.port}`);
+  await app.listen({ port: config.port, host: config.host });
+  console.log(`[boot] scheduler 已启动: http://${config.host}:${config.port}`);
 }
 
 main().catch((e) => {

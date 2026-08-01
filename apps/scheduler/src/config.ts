@@ -35,6 +35,8 @@ function bool(name: string, dflt: boolean): boolean {
 export const config = {
   databaseUrl: str("DATABASE_URL", "postgres://dfh:dfh@localhost:5432/deepflowhunter"),
   port: int("SCHEDULER_PORT", 3100),
+  /** 监听地址：默认只绑回环（P0 可信网络）；容器部署显式设 0.0.0.0 */
+  host: str("SCHEDULER_HOST", "127.0.0.1"),
 
   plane: {
     baseUrl: str("PLANE_BASE_URL", "https://api.plane.so"),
@@ -67,6 +69,8 @@ export const config = {
   timeouts: {
     auditSec: int("DEFAULT_AUDIT_TIMEOUT_SEC", 3600),
     verifySec: int("DEFAULT_VERIFY_TIMEOUT_SEC", 1800),
+    /** provision（起沙箱）独立超时（§8.3）；claimed/provisioning 超过该时长由 reaper 判 failed */
+    provisionSec: int("PROVISION_TIMEOUT_SEC", 300),
     leaseTtlSec: int("LEASE_TTL_SEC", 120),
     reaperIntervalSec: int("REAPER_INTERVAL_SEC", 30),
     /** 任务领取的兜底轮询（默认 0=关闭，纯 LISTEN/NOTIFY 事件驱动） */
@@ -103,6 +107,18 @@ export const config = {
     openaiKey: str("OPENAI_API_KEY"),
     openaiBaseUrl: str("OPENAI_BASE_URL"),
     openrouterKey: str("OPENROUTER_API_KEY"),
+    /**
+     * profile env_keys 白名单（P0：暂停任意环境变量下发，SEC 方案 §6.2 过渡措施）。
+     * 逗号分隔，支持前缀通配（如 ANTHROPIC_*）；profile 里不在白名单的变量名会被拒绝注入。
+     */
+    allowedEnvKeys: str("DFH_ALLOWED_ENV_KEYS", "ANTHROPIC_*,OPENAI_*,OPENROUTER_*"),
+    isEnvKeyAllowed(key: string): boolean {
+      return this.allowedEnvKeys
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .some((p) => (p.endsWith("*") ? key.startsWith(p.slice(0, -1)) : key === p));
+    },
     /** 注入沙箱的 Agent 环境变量（只放非空项，密钥仅调度器持有，§9） */
     get agentEnv(): Record<string, string> {
       const env: Record<string, string> = {};

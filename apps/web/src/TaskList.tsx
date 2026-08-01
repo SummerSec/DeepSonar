@@ -1,10 +1,10 @@
 import { Crosshair } from "@phosphor-icons/react";
 import type { CanvasSummary } from "./api";
 
-/** 画布目标的单行展示：module_path > repo_path > type */
+/** 画布目标的单行展示：新任务优先显示自然语言内容，兼容历史任务字段。 */
 export function targetLine(target: Record<string, unknown> | undefined): string {
   if (!target) return "";
-  return String(target.module_path ?? target.repo_path ?? target.type ?? "");
+  return String(target.content ?? target.goal ?? target.module_path ?? target.repo_path ?? target.type ?? "");
 }
 
 /** 左侧任务列表：一任务一画布（§3.2） */

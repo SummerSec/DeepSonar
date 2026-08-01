@@ -260,10 +260,7 @@ export const api = {
     projectId: string,
     t: {
       title: string;
-      type?: string;
-      priority?: number;
-      timeout_sec?: number;
-      payload?: Record<string, unknown>;
+      content: string;
     },
   ) => send<{ canvas_id: string; job: { id: string; status: string } }>("POST", `/projects/${projectId}/tasks`, t),
   retryTask: (canvasId: string) => send<{ id: string; status: string }>("POST", `/tasks/${canvasId}/retry`),

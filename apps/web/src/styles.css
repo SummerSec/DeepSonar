@@ -89,6 +89,19 @@ body {
 .react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
 .react-flow__handle { opacity: 0; } /* 只读画布：连接点不可见 */
 
+/* 边按语义使用不同节奏的方向流；路径本身仍保持清晰可读。 */
+@keyframes dfh-edge-flow { to { stroke-dashoffset: -36; } }
+.react-flow__edge.dfh-edge .react-flow__edge-path {
+  animation: dfh-edge-flow var(--dfh-edge-speed, 2.8s) linear infinite;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 35%, transparent));
+}
+.react-flow__edge.dfh-edge-child .react-flow__edge-path { stroke-dasharray: 4 10; }
+.react-flow__edge.dfh-edge-produces .react-flow__edge-path { stroke-dasharray: 12 7; }
+.react-flow__edge.dfh-edge-verifies .react-flow__edge-path { stroke-dasharray: 3 6; }
+.react-flow__edge.dfh-edge-next .react-flow__edge-path { stroke-dasharray: 16 8; }
+.react-flow__edge.dfh-edge-from .react-flow__edge-path { stroke-dasharray: 2 7; }
+.react-flow__edge.dfh-edge-to .react-flow__edge-path { stroke-dasharray: 9 6; }
+
 /* ---------- 节点选中态 ---------- */
 .react-flow__node.selected .dfh-node {
   border-color: var(--color-acc-500);
@@ -111,5 +124,6 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .dfh-sidebar { animation: none; }
   .dfh-live-dot { animation: none; }
-  .react-flow__edge.animated .react-flow__edge-path { animation: none !important; }
+  .react-flow__edge.animated .react-flow__edge-path,
+  .react-flow__edge.dfh-edge .react-flow__edge-path { animation: none !important; }
 }

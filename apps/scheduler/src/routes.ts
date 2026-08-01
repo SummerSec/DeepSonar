@@ -2,9 +2,10 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "./config.js";
-import { createJob, ensureCanvasForTask, globalRules, rulesForProject } from "./core.js";
+import { createJob, ensureCanvasForTask, globalRules, rulesForProject, transitionJob } from "./core.js";
 import { sql } from "./db.js";
-import { planePollOnce, planePollProject } from "./plane-sync.js";
+import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
+import { runner } from "./runtime.js";
 import { syncSkillSource } from "./skill-sources.js";
 import { streamBuffer, subscribeStream } from "./stream-bus.js";
 
@@ -75,12 +76,9 @@ const PatchProjectBody = z.object({
   status: z.enum(["active", "archived"]).optional(),
 });
 const CreateTaskBody = z.object({
-  title: z.string().min(1),
-  type: z.string().min(1).default("audit_module"),
-  priority: z.number().int().default(0),
-  timeout_sec: z.number().int().positive().optional(),
-  payload: z.record(z.string(), z.unknown()).default({}),
-});
+  title: z.string().trim().min(1).max(200),
+  content: z.string().trim().min(1).max(20_000),
+}).strict();
 const PriorityBody = z.object({ priority: z.number().int() });
 const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
 
@@ -199,15 +197,13 @@ export function registerRoutes(app: FastifyInstance) {
     const canvasId = await ensureCanvasForTask({
       projectId: id,
       title: body.title,
-      target: { type: body.type, ...body.payload },
+      target: { title: body.title, content: body.content, goal: body.content },
     });
     const { job, duplicated } = await createJob({
       projectId: id,
       canvasId,
-      type: body.type,
-      payload: { ...body.payload, goal: body.payload.goal ?? body.title },
-      priority: body.priority,
-      timeoutSec: body.timeout_sec,
+      type: "audit_module",
+      payload: { title: body.title, content: body.content, goal: body.content },
     });
     if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
     return reply.code(201).send({ canvas_id: canvasId, job });
@@ -685,25 +681,43 @@ export function registerRoutes(app: FastifyInstance) {
     return job;
   });
 
+  // 取消（§8.3）：置 cancel 终态 + 立即停容器 + 画布节点同步；迟到 done 由 finalizeJob 守卫忽略
   app.post("/jobs/:id/cancel", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [job] = await sql`
       UPDATE jobs SET status = 'cancelled', finished_at = now()
       WHERE id = ${id} AND status IN ('pending','claimed','provisioning','running','waiting_human')
-      RETURNING id, status`;
+      RETURNING id, status, sandbox_id`;
     if (!job) return reply.code(409).send({ error: "job 不在可取消状态" });
-    return job;
+    if (job.sandbox_id) {
+      await runner.destroy({ sandboxId: job.sandbox_id as string }).catch((e) => {
+        console.error(`[cancel] 沙箱回收失败 ${job.sandbox_id}:`, e);
+      });
+    }
+    await sql`
+      UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent"]})`;
+    await planeWriteback(id).catch(() => {});
+    return { id: job.id, status: job.status };
   });
 
-  // 人工处理后恢复（§4.4）：waiting_human → pending 重入队
+  // 人工处理后恢复（§4.4/§8.3）：waiting_human/orphan/failed/timeout → pending 重入队
+  // 走原子状态机；清空上一轮执行痕迹；画布节点回到 pending 等再运行
   app.post("/jobs/:id/resume", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [job] = await sql`
-      UPDATE jobs SET status = 'pending', error = NULL, lease_expires_at = NULL
-      WHERE id = ${id} AND status IN ('waiting_human','orphan','failed','timeout')
-      RETURNING id, status`;
-    if (!job) return reply.code(409).send({ error: "job 不在可恢复状态" });
-    return job;
+    const row = await transitionJob(id, "pending", {
+      error: null,
+      lease_expires_at: null,
+      claimed_at: null,
+      started_at: null,
+      finished_at: null,
+      heartbeat_at: null,
+    });
+    if (!row) return reply.code(409).send({ error: "job 不在可恢复状态（succeeded/cancelled 不可恢复，重跑请用 retry）" });
+    await sql`
+      UPDATE canvas_nodes SET status = 'pending', updated_at = now()
+      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent"]})`;
+    return row;
   });
 
   // ---------- Plane webhook（§7；HMAC-SHA256 校验） ----------

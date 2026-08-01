@@ -124,8 +124,13 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
   const model = snapshot?.model ?? config.runtime.agentModel ?? undefined;
   // env_keys 只存变量名引用，值运行时从调度器 process.env 解析（密钥不落库，§9）
+  // P0 白名单门禁：暂停任意环境变量下发，只放行 DFH_ALLOWED_ENV_KEYS 匹配的变量名
   const env: Record<string, string> = { ...config.runtime.agentEnv };
   for (const key of snapshot?.env_keys ?? []) {
+    if (!config.runtime.isEnvKeyAllowed(key)) {
+      console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
+      continue;
+    }
     const v = process.env[key];
     if (v) env[key] = v;
   }
@@ -145,6 +150,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       roles: roles.map((r) => `- ${r.name}（${r.title}）：${r.description}`).join("\n"),
       max_intents: String(rules.maxIntentsPerDecision),
     });
+    const trigger = payload.trigger as { kind?: string; finding_id?: string } | undefined;
+    if (trigger?.kind === "confirmed_finding") {
+      basePrompt = `${basePrompt}\n\n本轮由已确认风险触发。请对该 Finding 做验收，并自行决定后续工作；优先考虑运行/模型环境搭建、最小 PoC、动态复现、影响确认等，可派发 test、verify、analyze、code 等已启用角色。不要仅因静态验证已 confirmed 就直接宣布目标完成。`;
+    }
   } else if (isRole) {
     if (!graph) throw new Error(`${type} job 缺 canvas_id，无法读图`);
     basePrompt = render(await templateFor(type, FALLBACK_ROLE), {
@@ -163,6 +172,11 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     basePrompt = render(await templateFor("audit_module", FALLBACK_AUDIT), {
       module_path: (payload.module_path as string) ?? "全部模块",
     });
+    const taskTitle = String(payload.title ?? "").trim();
+    const taskContent = String(payload.content ?? payload.goal ?? "").trim();
+    if (taskTitle || taskContent) {
+      basePrompt = `${basePrompt}\n\n用户任务：\n标题：${taskTitle || "未命名任务"}\n内容：${taskContent || taskTitle}\n\n请把用户内容作为目标，自行决定审计范围、顺序与方法；不要要求用户补充内部调度参数。`;
+    }
   }
   const prompt = snapshot?.prompt_suffix ? `${basePrompt}\n\n${snapshot.prompt_suffix}` : basePrompt;
 

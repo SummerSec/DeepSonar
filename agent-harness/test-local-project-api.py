@@ -49,15 +49,13 @@ def main():
     # 4. 创建任务：同事务建画布 + root 节点 + pending job
     t = req("POST", f"/projects/{pid}/tasks", {
         "title": "审计 auth 模块",
-        "type": "audit_module",
-        "priority": 10,
-        "payload": {"module_path": "src/auth"},
+        "content": "重点检查认证模块中的注入和权限绕过问题",
     }, 201)
     cid, job = t["canvas_id"], t["job"]
-    assert job["status"] == "pending" and job["priority"] == 10 and job["canvas_id"] == cid
+    assert job["status"] == "pending" and job["priority"] == 0 and job["canvas_id"] == cid
     canvas = req("GET", f"/canvases/{cid}")
     roots = [n for n in canvas["nodes"] if n["node_type"] == "root"]
-    assert len(roots) == 1 and roots[0]["body_json"]["target"]["module_path"] == "src/auth"
+    assert len(roots) == 1 and "认证模块" in roots[0]["body_json"]["target"]["content"]
     print("任务创建 OK: canvas", cid[:8], "job", job["id"][:8], job["status"])
 
     # 5. 任务列表聚合：最近一次 job 状态/优先级/尝试次数
@@ -67,7 +65,7 @@ def main():
     assert row["job_count"] >= 1 and row["last_job_status"] in (
         "pending", "claimed", "provisioning", "running", "succeeded", "waiting_human",
     ), row
-    assert row["last_job_priority"] >= 10
+    assert row["last_job_priority"] >= 0
     print("任务聚合 OK:", row["last_job_status"], "priority", row["last_job_priority"])
 
     # 6. 优先级：pending 可改（job 可能已被 fake 调度跑掉，两种结果都合法）
@@ -111,7 +109,7 @@ def main():
     # 9. 归档：归档后不能新建任务；历史数据保留
     req("POST", f"/projects/{pid}/archive", None)
     assert req("GET", f"/projects/{pid}")["status"] == "archived"
-    req("POST", f"/projects/{pid}/tasks", {"title": "应被拒"}, expect=409)
+    req("POST", f"/projects/{pid}/tasks", {"title": "应被拒", "content": "项目已归档"}, expect=409)
     assert req("GET", f"/canvases/{cid}")["nodes"], "归档后历史画布必须保留"
     # 恢复
     req("PATCH", f"/projects/{pid}", {"status": "active"})

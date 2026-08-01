@@ -1,7 +1,7 @@
 import { AirplaneTakeoff, ArrowSquareOut, Plus } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type AgentProfile, type CanvasSummary, type Project, type ProjectRole, type ProjectSettings } from "../api";
+import { api, type CanvasSummary, type Project } from "../api";
 import { targetLine } from "../TaskList";
 import {
   DataTable,
@@ -71,10 +71,7 @@ function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | n
               )}
             </li>
             <li>
-              描述里按行写键值对（每行一个 <span className="font-mono text-zinc-300">key=value</span>）：
-              <pre className="mt-1.5 rounded-md border border-ink-800 bg-ink-950 px-3 py-2 font-mono text-[12px] text-zinc-300">{`type=audit_module
-module_path=src/auth
-goal=审计认证模块的注入与绕过`}</pre>
+              在描述中直接写清楚希望完成的事情，例如“检查认证流程中的注入和权限绕过”。不需要填写任务类型、模块或调度参数。
             </li>
             <li>
               把 issue 状态移到「<span className="text-zinc-200">{plane?.ready_state ?? "Ready"}</span>
@@ -87,155 +84,85 @@ goal=审计认证模块的注入与绕过`}</pre>
   );
 }
 
-/** 新建任务表单（§LOCAL_PROJECT_MANAGEMENT §8.2：标题/类型/目标/优先级/超时 + 生效 profile 摘要） */
+/** 新建任务：人只表达意图，执行方式由 Agent 决定。 */
 function NewTaskForm({
   projectId,
-  roles,
-  settings,
-  profiles,
   onDone,
   flash,
 }: {
   projectId: string;
-  roles: ProjectRole[];
-  settings: ProjectSettings | null;
-  profiles: AgentProfile[];
   onDone: () => void;
   flash: (m: string) => void;
 }) {
-  const [form, setForm] = useState({
-    title: "",
-    type: "audit_module",
-    module_path: "",
-    repo_path: "",
-    goal: "",
-    priority: 0,
-    timeout_sec: 3600,
-  });
-  const typeOptions = ["audit_module", ...roles.filter((r) => r.enabled).map((r) => r.name)];
-  // 生效 profile 摘要：类型绑定 → default 绑定 → env 全局
-  const boundId = settings?.profiles?.[form.type] ?? settings?.profiles?.default;
-  const boundProfile = profiles.find((p) => p.id === boundId);
+  const [form, setForm] = useState({ title: "", content: "" });
+  const [submitting, setSubmitting] = useState(false);
 
   return (
-    <div className="mb-4 flex flex-col gap-2.5 rounded-[10px] border border-ink-700 bg-ink-900/60 p-4">
-      <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-        新建任务（创建即入队，调度器自动执行）
+    <form
+      className="mb-4 flex max-w-3xl flex-col gap-4 rounded-[10px] border border-ink-700 bg-ink-900/60 p-5"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!form.title.trim()) return flash("请填写任务标题");
+        if (!form.content.trim()) return flash("请填写任务内容");
+        setSubmitting(true);
+        try {
+          await api.createTask(projectId, {
+            title: form.title.trim(),
+            content: form.content.trim(),
+          });
+          flash("任务已创建，Agent 正在决定执行方式");
+          onDone();
+        } catch (error) {
+          flash(`创建失败：${error instanceof Error ? error.message : error}`);
+        } finally {
+          setSubmitting(false);
+        }
+      }}
+    >
+      <div>
+        <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-acc-400">告诉 Agent 要完成什么</div>
+        <p className="mt-1 text-[13px] text-zinc-500">只需描述意图。范围、步骤、角色、优先级和超时由系统与 Agent 决定。</p>
       </div>
       <div>
-        <label className={labelCls}>任务标题</label>
+        <label className={labelCls} htmlFor="task-title">标题</label>
         <input
+          id="task-title"
           value={form.title}
           onChange={(e) => setForm({ ...form, title: e.target.value })}
           className={inputCls}
-          placeholder="如 审计 auth 模块"
+          placeholder="例如：检查登录与权限控制"
+          autoFocus
+          maxLength={200}
         />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className={labelCls}>任务类型</label>
-          <select
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}
-            className={inputCls}
-          >
-            {typeOptions.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={labelCls}>生效 agent 配置</label>
-          <div className="rounded-md border border-ink-800 bg-ink-900/60 px-3 py-2 font-mono text-[13px] text-zinc-400">
-            {boundProfile ? `${boundProfile.name}（${boundProfile.agent_cli}）` : "env 全局配置（未绑定 profile）"}
-          </div>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className={labelCls}>模块范围（module_path）</label>
-          <input
-            value={form.module_path}
-            onChange={(e) => setForm({ ...form, module_path: e.target.value })}
-            className={inputCls}
-            placeholder="如 src/auth（空=全部）"
-          />
-        </div>
-        <div>
-          <label className={labelCls}>仓库路径（repo_path，可选）</label>
-          <input
-            value={form.repo_path}
-            onChange={(e) => setForm({ ...form, repo_path: e.target.value })}
-            className={inputCls}
-            placeholder="如 D:/repo/target"
-          />
-        </div>
       </div>
       <div>
-        <label className={labelCls}>目标描述（goal，进入 prompt 与画布目标）</label>
-        <input
-          value={form.goal}
-          onChange={(e) => setForm({ ...form, goal: e.target.value })}
-          className={inputCls}
-          placeholder="如 审计认证模块的注入与绕过（空=用标题）"
+        <label className={labelCls} htmlFor="task-content">内容</label>
+        <textarea
+          id="task-content"
+          value={form.content}
+          onChange={(e) => setForm({ ...form, content: e.target.value })}
+          className={`${inputCls} min-h-36 resize-y font-sans leading-6`}
+          placeholder="描述期望结果、关注点或必要背景。可以使用自然语言，不需要写参数。"
+          maxLength={20_000}
         />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className={labelCls}>优先级（越大越先跑）</label>
-          <input
-            type="number"
-            value={String(form.priority)}
-            onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
-            className={inputCls}
-          />
-        </div>
-        <div>
-          <label className={labelCls}>超时（秒）</label>
-          <input
-            type="number"
-            value={String(form.timeout_sec)}
-            onChange={(e) => setForm({ ...form, timeout_sec: Number(e.target.value) })}
-            className={inputCls}
-          />
-        </div>
       </div>
       <div className="flex gap-2">
         <button
-          onClick={async () => {
-            if (!form.title.trim()) return flash("任务标题必填");
-            try {
-              const payload: Record<string, unknown> = {};
-              if (form.module_path.trim()) payload.module_path = form.module_path.trim();
-              if (form.repo_path.trim()) payload.repo_path = form.repo_path.trim();
-              if (form.goal.trim()) payload.goal = form.goal.trim();
-              await api.createTask(projectId, {
-                title: form.title.trim(),
-                type: form.type,
-                priority: form.priority,
-                timeout_sec: form.timeout_sec,
-                payload,
-              });
-              flash("任务已创建并入队");
-              onDone();
-            } catch (e) {
-              flash(`创建失败：${e instanceof Error ? e.message : e}`);
-            }
-          }}
+          type="submit"
+          disabled={submitting}
           className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
         >
-          <Plus size={13} /> 创建任务
+          <Plus size={13} /> {submitting ? "正在创建…" : "交给 Agent"}
         </button>
         <button
+          type="button"
           onClick={onDone}
           className="rounded-md border border-ink-700 px-3 py-1.5 text-[14px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200"
         >
           取消
         </button>
       </div>
-    </div>
+    </form>
   );
 }
 
@@ -244,9 +171,6 @@ export function TasksPage() {
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const [project, setProject] = useState<Project | undefined>(undefined);
   const [plane, setPlane] = useState<PlaneInfo | null>(null);
-  const [roles, setRoles] = useState<ProjectRole[]>([]);
-  const [settings, setSettings] = useState<ProjectSettings | null>(null);
-  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [filter, setFilter] = useState<Filter>("");
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -261,9 +185,6 @@ export function TasksPage() {
     if (!projectId) return;
     api.projects().then((list) => setProject(list.find((p) => p.id === projectId))).catch(() => {});
     api.planeInfo().then(setPlane).catch(() => {});
-    api.projectRoles(projectId).then(setRoles).catch(() => {});
-    api.settings(projectId).then(setSettings).catch(() => {});
-    api.agentProfiles().then(setProfiles).catch(() => {});
     let stop = false;
     const tick = () => {
       api
@@ -336,9 +257,6 @@ export function TasksPage() {
       {creating && (
         <NewTaskForm
           projectId={projectId}
-          roles={roles}
-          settings={settings}
-          profiles={profiles}
           flash={flash}
           onDone={() => setCreating(false)}
         />

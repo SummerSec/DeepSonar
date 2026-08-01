@@ -1,4 +1,4 @@
-import { PlaneClient, parseIssueTask } from "@dfh/plane-client";
+import { issueContent, PlaneClient } from "@dfh/plane-client";
 import { config } from "./config.js";
 import { createJob, ensureCanvasForTask, rulesForProject, transitionJob } from "./core.js";
 import { sql } from "./db.js";
@@ -65,24 +65,23 @@ async function pollProject(plane: PlaneClient, projectId: string, planeProjectId
   const rules = await rulesForProject(sql, projectId);
   for (const issue of issues) {
     if (issue.state !== readyId) continue;
-    const { type, params } = parseIssueTask(issue);
-    if (!type) continue; // 无 type= 标记的 issue 不领取
+    const content = issueContent(issue) || issue.name;
 
     // 一任务一画布：同一 issue 重试复用同一画布（root 节点带任务目标）
     const canvasId = await ensureCanvasForTask({
       projectId,
       planeIssueId: issue.id,
       title: issue.name,
-      target: { type, ...params },
+      target: { title: issue.name, content, goal: content },
     });
 
     const { job, duplicated } = await createJob({
       projectId,
       canvasId,
       planeIssueId: issue.id,
-      type,
-      payload: params,
-      timeoutSec: type === "verify_finding" ? rules.verifyTimeoutSec : rules.auditTimeoutSec,
+      type: "audit_module",
+      payload: { title: issue.name, content, goal: content },
+      timeoutSec: rules.auditTimeoutSec,
     });
     if (duplicated || !job) continue;
 
@@ -114,21 +113,23 @@ export async function planeWriteback(jobId: string): Promise<void> {
   if (!doneId) return;
 
   const ok = job.status === "succeeded";
+  // 取消 = 人工意图：不回 Ready（否则会被重新认领形成取消→重跑循环），留 In Progress 交人工
+  const cancelled = job.status === "cancelled";
   // 失败重试上限：同一 issue 反复失败会成死循环（回 Ready → 再领取 → 再失败）
   // 达到上限后留在 In Progress + 评论提示，交人工处理（resume 可手动复活）
   const rules = await rulesForProject(sql, job.project_id);
   let exhausted = false;
-  if (!ok) {
+  if (!ok && !cancelled) {
     const [{ attempts }] = await sql<[{ attempts: number }]>`
       SELECT COUNT(*)::int AS attempts FROM jobs WHERE plane_issue_id = ${job.plane_issue_id}`;
     exhausted = attempts >= rules.maxAutoRetries;
   }
-  // 失败不置 Done：回 Ready 等重试；重试耗尽则留在 In Progress 等人工
+  // 失败不置 Done：回 Ready 等重试；重试耗尽/人工取消则留在 In Progress 等人工
   await plane
     .updateIssueState(
       job.plane_project_id,
       job.plane_issue_id,
-      ok ? doneId : exhausted
+      ok ? doneId : exhausted || cancelled
         ? (states.get(config.plane.inProgressState) ?? doneId)
         : (states.get(config.plane.readyState) ?? doneId),
     )

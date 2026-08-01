@@ -12,18 +12,31 @@ const TRANSITIONS: Record<string, string[]> = {
   provisioning: ["running", "failed", "cancelled"],
   running: ["succeeded", "failed", "timeout", "orphan", "cancelled", "waiting_human"],
   waiting_human: ["pending", "cancelled", "failed"], // resume → pending 重入队
-  // 终态：succeeded / failed / timeout / cancelled / orphan
+  // 终态失败可经人工 resume 复活（原执行恢复，区别于 retry 新建 job）；
+  // cancelled 是最终人工意图不可复活（要重跑用 /tasks/:id/retry）
+  failed: ["pending"],
+  timeout: ["pending"],
+  orphan: ["pending"],
+  // 绝对终态：succeeded / cancelled
 };
 
 export function canTransition(from: string, to: string): boolean {
   return (TRANSITIONS[from] ?? []).includes(to);
 }
 
+/**
+ * 原子状态迁移（§8.1）：WHERE 显式限定合法源状态。
+ * 返回 null = 竞态或非法迁移，调用方不得继续 provision/执行/写完成事件。
+ */
 export async function transitionJob(jobId: string, to: string, patch: Record<string, unknown> = {}) {
+  const allowedFrom = Object.entries(TRANSITIONS)
+    .filter(([, tos]) => tos.includes(to))
+    .map(([from]) => from);
+  if (allowedFrom.length === 0) throw new Error(`非法目标状态: ${to}`);
   const sets = { status: to, ...patch };
   const [row] = await sql`
     UPDATE jobs SET ${sql(sets)}
-    WHERE id = ${jobId} AND status = ANY(${Object.keys(TRANSITIONS)})
+    WHERE id = ${jobId} AND status = ANY(${allowedFrom})
     RETURNING id, status`;
   return row ?? null;
 }
@@ -322,6 +335,9 @@ export async function ingestEvent(jobId: string, envelope: EventEnvelope): Promi
   }
 
   return sql.begin(async (tx) => {
+    // 0. 锁 job 行：串行化同一 job 的事件摄入，job_seq 的 MAX()+1 才有并发安全（§8.5）
+    await tx`SELECT id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+
     // 1. 幂等闸：event_dedup 撞不上即为重放
     const dedup = await tx`
       INSERT INTO event_dedup (event_id, job_id) VALUES (${envelope.event_id}, ${jobId})
@@ -624,7 +640,7 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
     (job.agent_snapshot_json as AgentProfileSnapshot | null) ??
     null;
 
-  await tx`
+  const [verifyJob] = await tx`
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
       canvas_id: (job.canvas_id as string) ?? null, // 继承父审计 job 的任务画布
@@ -644,22 +660,66 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
       } as never,
       timeout_sec: rules.verifyTimeoutSec,
       followup_depth: (job.followup_depth as number) + 1,
-    })}`;
+    })}
+    RETURNING id`;
   await tx`UPDATE findings SET verify_status = 'verifying' WHERE id = ${finding.id as string}`;
+
+  // 验证任务创建时立即上图：finding → verify，画布先展示待执行链路，而不是结束后补边。
+  const [findingNode] = await tx`
+    SELECT node_id FROM findings WHERE id = ${finding.id as string}`;
+  if (findingNode?.node_id) {
+    const [source] = await tx`
+      SELECT id, canvas_id, x, y FROM canvas_nodes WHERE id = ${findingNode.node_id}`;
+    if (source) {
+      const [verifyNode] = await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: source.canvas_id as string,
+          job_id: verifyJob.id as string,
+          node_type: "job",
+          title: `验证：${String(finding.title).slice(0, 100)}`,
+          body_json: { type: "verify_finding", finding_id: finding.id } as never,
+          x: (source.x as number) + 340,
+          y: source.y as number,
+          status: "pending",
+        })}
+        RETURNING id`;
+      await insertEdgeIfAbsent(
+        tx,
+        source.canvas_id as string,
+        source.id as string,
+        verifyNode.id as string,
+        "verifies",
+      );
+      await tx`UPDATE canvas_nodes SET status = 'verifying', updated_at = now() WHERE id = ${source.id}`;
+    }
+  }
 }
 
 // ---------- 结束处理 ----------
 
+/**
+ * 结束处理（§8.2）：done/failed 只能把 running 改为终态。
+ * 迟到事件（job 已 cancelled/timeout/orphan）记录进 events 表但副作用返回 false，
+ * 终态永不被迟到事件覆盖。
+ */
 export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "failed", result?: { summary?: string; error?: string; verdict?: string }) {
-  await tx`
+  const [updated] = await tx`
     UPDATE jobs SET status = ${status}, finished_at = now(), error = ${result?.error ?? null}
-    WHERE id = ${jobId}`;
+    WHERE id = ${jobId} AND status = 'running'
+    RETURNING id`;
+  if (!updated) {
+    console.warn(`[finalize] job ${jobId} 已不在 running，忽略迟到 ${status} 事件副作用`);
+    return false;
+  }
   await tx`
     UPDATE canvas_nodes SET status = ${status}, body_json = body_json || ${tx.json({ summary: result?.summary ?? null })}, updated_at = now()
     WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
 
-  // verify_finding 闭环（§4.3 第 5 步）：结论写回 finding + verifies 边
+  // verify_finding 闭环：结论写回 finding；confirmed 强制交给 Hub 验收并决定后续 Agent。
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+  let forceHubReview = false;
+  let hubSourceNodeIds: string[] = [];
+  let hubTrigger: Record<string, unknown> | undefined;
   if (job?.type === "verify_finding" && job.finding_id && status === "succeeded") {
     const verdict = result?.verdict ?? "needs_human";
     await tx`UPDATE findings SET verify_status = ${verdict} WHERE id = ${job.finding_id}`;
@@ -667,26 +727,43 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
       SELECT id, canvas_id FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
     const [finding] = await tx`SELECT node_id FROM findings WHERE id = ${job.finding_id}`;
     if (verifyNode && finding?.node_id) {
-      await tx`
-        INSERT INTO canvas_edges ${tx({
-          canvas_id: verifyNode.canvas_id,
-          from_node_id: verifyNode.id,
-          to_node_id: finding.node_id,
-          edge_type: "verifies",
-        })}`;
+      // 兼容验证任务创建前的历史数据：缺边时补成 finding → verify 的过程方向。
+      await insertEdgeIfAbsent(
+        tx,
+        verifyNode.canvas_id as string,
+        finding.node_id as string,
+        verifyNode.id as string,
+        "verifies",
+      );
       await tx`
         UPDATE canvas_nodes SET status = ${verdict}, updated_at = now() WHERE id = ${finding.node_id}`;
+      if (verdict === "confirmed") {
+        forceHubReview = true;
+        hubSourceNodeIds = [finding.node_id as string];
+        hubTrigger = { kind: "confirmed_finding", finding_id: job.finding_id };
+      }
     }
   }
 
   // hub 循环（§8.3）：非 hub job 成功后触发 hub_reason 读图决策（单画布同一时间最多一个活跃 hub）
-  if (status === "succeeded") await maybeTriggerHub(tx, job);
+  if (status === "succeeded") {
+    await maybeTriggerHub(tx, job, {
+      force: forceHubReview,
+      sourceNodeIds: hubSourceNodeIds,
+      trigger: hubTrigger,
+    });
+  }
+  return true;
 }
 
-async function maybeTriggerHub(tx: Tx, job: Record<string, unknown> | undefined) {
+async function maybeTriggerHub(
+  tx: Tx,
+  job: Record<string, unknown> | undefined,
+  options: { force?: boolean; sourceNodeIds?: string[]; trigger?: Record<string, unknown> } = {},
+) {
   if (!job?.canvas_id || job.type === "hub_reason") return;
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
-  if (!rules.hubEnabled) return;
+  if (!rules.hubEnabled && !options.force) return;
 
   const active = await tx`
     SELECT 1 FROM jobs
@@ -704,15 +781,56 @@ async function maybeTriggerHub(tx: Tx, job: Record<string, unknown> | undefined)
   }
 
   const snapshot = await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, "hub_reason");
-  await tx`
+  const [hubJob] = await tx`
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
       canvas_id: job.canvas_id as string,
       agent_snapshot_json: (snapshot ?? null) as never,
       type: "hub_reason",
       priority: ((job.priority as number) ?? 0) + 2, // hub 优先于普通角色 job，尽快收敛图
-      payload_json: {} as never,
+      payload_json: { trigger: options.trigger ?? { kind: "graph_progress" } } as never,
       timeout_sec: rules.auditTimeoutSec,
       followup_depth: 0,
-    })}`;
+    })}
+    RETURNING id`;
+
+  // Hub 任务入队时立即上图；next 边表达“这些结论触发了下一轮 Agent 决策”。
+  const [{ next_x }] = await tx<[{ next_x: number }]>`
+    SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes
+    WHERE canvas_id = ${job.canvas_id as string}`;
+  const [hubNode] = await tx`
+    INSERT INTO canvas_nodes ${tx({
+      canvas_id: job.canvas_id as string,
+      job_id: hubJob.id as string,
+      node_type: "job",
+      title: options.force ? "Hub 风险验收" : "Hub 决策",
+      body_json: { type: "hub_reason", trigger: options.trigger ?? { kind: "graph_progress" } } as never,
+      x: next_x,
+      y: 300,
+      status: "pending",
+    })}
+    RETURNING id`;
+
+  let sourceNodeIds = options.sourceNodeIds ?? [];
+  if (sourceNodeIds.length === 0) {
+    const sources = await tx`
+      SELECT id FROM canvas_nodes
+      WHERE canvas_id = ${job.canvas_id as string} AND job_id = ${job.id as string}
+        AND node_type = ANY(${["fact", "finding", "intent", "job"]})`;
+    sourceNodeIds = sources.map((source) => source.id as string);
+  }
+  if (sourceNodeIds.length === 0) {
+    const [root] = await tx`
+      SELECT id FROM canvas_nodes WHERE canvas_id = ${job.canvas_id as string} AND node_type = 'root' LIMIT 1`;
+    if (root) sourceNodeIds = [root.id as string];
+  }
+  for (const sourceNodeId of sourceNodeIds) {
+    await insertEdgeIfAbsent(
+      tx,
+      job.canvas_id as string,
+      sourceNodeId,
+      hubNode.id as string,
+      "next",
+    );
+  }
 }

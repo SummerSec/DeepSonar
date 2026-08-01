@@ -92,24 +92,18 @@ export class PlaneClient {
   }
 }
 
-/**
- * 从 issue 描述中解析任务参数。
- * 约定（见 ARCHITECTURE §4.1）：描述内含 `type=audit_module`、`path=auth/` 等键值对。
- * description_html 先去标签再按行解析 key=value。
- */
-export function parseIssueTask(issue: PlaneIssue): { type?: string; params: Record<string, string> } {
-  const text = (issue.description_html ?? "")
+/** Plane issue 描述转纯文本。人只写标题和内容，调度参数由系统与 Agent 决定。 */
+export function issueContent(issue: PlaneIssue): string {
+  return (issue.description_html ?? "")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]+>/g, "");
-  const params: Record<string, string> = {};
-  let type: string | undefined;
-  for (const line of text.split("\n")) {
-    const m = line.trim().match(/^([a-z_]+)\s*=\s*(.+)$/i);
-    if (!m) continue;
-    const [, key, value] = m;
-    if (key.toLowerCase() === "type") type = value.trim();
-    else params[key.toLowerCase()] = value.trim();
-  }
-  return { type, params };
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

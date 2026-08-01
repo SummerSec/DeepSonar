@@ -43,8 +43,8 @@ export async function dispatchOnce(): Promise<number> {
       WHERE project_id = ${job.project_id} AND status IN ('claimed','provisioning','running')`;
     if (cnt >= config.limits.maxJobsPerProject) continue;
 
-    // 原子 claim：并发下只有一个实例能改成功
-    const row = await transitionJob(job.id, "claimed");
+    // 原子 claim：并发下只有一个实例能改成功；claimed_at 供 provision 超时判定
+    const row = await transitionJob(job.id, "claimed", { claimed_at: new Date() });
     if (!row) continue;
     claimed++;
     void runJob(job.id).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));
@@ -53,34 +53,40 @@ export async function dispatchOnce(): Promise<number> {
 }
 
 async function runJob(jobId: string) {
-  const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
-  if (!job) return;
-
-  // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
-  const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
-  await transitionJob(jobId, "provisioning");
-  const handle = await runner.provision({
-    jobId,
-    image: config.runtime.imageAudit,
-    env: useReal ? config.runtime.agentEnv : undefined,
-    network: useReal ? "restricted" : "none",
-  });
-  await sql`UPDATE jobs SET sandbox_id = ${handle.sandboxId} WHERE id = ${jobId}`;
-
-  // running：开 lease
-  const lease = new Date(Date.now() + config.timeouts.leaseTtlSec * 1000);
-  await transitionJob(jobId, "running", {
-    started_at: new Date(),
-    lease_expires_at: lease,
-  });
-  startLeaseRenewal(jobId, handle);
-
-  // 画布：job 节点（如不存在）——claim 时由 routes/planeSync 建 root 之外的 job 节点
-  await ensureJobNode(jobId, job);
-
+  let handle: { sandboxId: string } | null = null;
   try {
+    const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
+    if (!job) return;
+
+    // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
+    // provision 纳入同一异常保护 + 独立超时（§8.3：provision 异常不得让 job 永久卡住）
+    const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
+    if (!(await transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
+    handle = await withTimeout(
+      runner.provision({
+        jobId,
+        image: config.runtime.imageAudit,
+        env: useReal ? config.runtime.agentEnv : undefined,
+        network: useReal ? "restricted" : "none",
+      }),
+      config.timeouts.provisionSec * 1000,
+      `provision 超时（${config.timeouts.provisionSec}s）`,
+    );
+    await sql`UPDATE jobs SET sandbox_id = ${handle.sandboxId} WHERE id = ${jobId}`;
+
+    // running：开 lease（竞态守卫：此时被 cancel 则放弃执行，直接走 finally 回收）
+    const lease = new Date(Date.now() + config.timeouts.leaseTtlSec * 1000);
+    if (!(await transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
+      return;
+    }
+    startLeaseRenewal(jobId, handle);
+
+    // 画布：job 节点（如不存在）——claim 时由 routes/planeSync 建 root 之外的 job 节点
+    await ensureJobNode(jobId, job);
+
     await execute(jobId, job.type);
     // execute 内部通过 done 事件 finalize；若 type 无 done（noop 直发），这里兜底
+    // finalizeJob 有 running 守卫：执行期间被 cancel 时这个兜底 done 会被安全忽略
     const [cur] = await sql`SELECT status FROM jobs WHERE id = ${jobId}`;
     if (cur?.status === "running") {
       await ingestEvent(jobId, {
@@ -92,12 +98,24 @@ async function runJob(jobId: string) {
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
     await sql`UPDATE jobs SET status = 'failed', finished_at = now(), error = ${msg} WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')`;
+    await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'running'`;
   } finally {
     stopLeaseRenewal(jobId);
-    await runner.destroy(handle).catch(() => {});
+    if (handle) {
+      const h = handle;
+      await runner.destroy(h).catch((e) => console.error(`[dispatcher] 沙箱回收失败 ${h.sandboxId}:`, e));
+    }
     await planeWriteback(jobId).catch((e) => console.error("[plane] 回写异常:", e));
   }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
 }
 
 /** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */
@@ -154,11 +172,27 @@ async function executeFake(jobId: string, type: string) {
   }
 
   if (type === "hub_reason") {
-    // 假 hub：画布已有 fact → 收敛 complete；否则派发一个 explore 意图（最小循环可测）
-    const [job] = await sql`SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+    // 假 hub：confirmed 风险优先派发环境/PoC 验收；普通轮次按事实是否充足决定收敛。
+    const [job] = await sql`SELECT canvas_id, payload_json FROM jobs WHERE id = ${jobId}`;
     const canvasId = job?.canvas_id as string | null;
+    const trigger = (job?.payload_json?.trigger ?? {}) as { kind?: string; finding_id?: string };
     await emit("progress", { message: "假 hub：读图决策中", percent: 50 });
     if (canvasId) {
+      if (trigger.kind === "confirmed_finding") {
+        const refs = trigger.finding_id
+          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${trigger.finding_id} AND node_id IS NOT NULL`
+          : [];
+        await emit("hub_decision", {
+          intents: [
+            {
+              from: refs.map((r) => r.id as string),
+              role: "test",
+              description: "搭建最小运行环境并编写 PoC，动态复现已确认风险，记录利用条件与影响",
+            },
+          ],
+        });
+        return;
+      }
       const facts = await sql`
         SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact' ORDER BY created_at`;
       if (facts.length > 0) {
@@ -222,9 +256,10 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
   // intent 节点由 hub_decision 随角色 job 同事务创建（1:1）；已有节点则只同步运行态
   const existing = await sql`SELECT id, node_type FROM canvas_nodes WHERE job_id = ${jobId}`;
   if (existing.length > 0) {
+    // resume 重跑的 job：节点已在（上一轮终态），同步回 running
     await sql`
       UPDATE canvas_nodes SET status = 'running', updated_at = now()
-      WHERE job_id = ${jobId} AND node_type = 'intent' AND status = 'pending'`;
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'pending'`;
     return;
   }
   // 一任务一画布：优先 job 自带的任务画布；历史 job（canvas_id 为空）兜底到项目旧画布
