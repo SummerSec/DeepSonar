@@ -9,6 +9,21 @@ export interface ProvisionInput {
   env?: Record<string, string>;
   /** 断网（审计默认）或受限出网（验证） */
   network: "none" | "restricted";
+  /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
+  limits?: SandboxLimits;
+}
+
+export interface SandboxLimits {
+  /** CPU 核数（NanoCpus） */
+  cpu?: number;
+  /** 内存上限 MiB */
+  memoryMiB?: number;
+  /** PID 数上限（防 fork 炸弹） */
+  pidsLimit?: number;
+  /** 去掉全部 Linux capability（默认 true） */
+  capDropAll?: boolean;
+  /** no-new-privileges（默认 true） */
+  noNewPrivileges?: boolean;
 }
 
 export interface RunHandle {
@@ -33,5 +48,5 @@ export class NoopRunner implements SandboxRunner {
   }
 }
 
-export { AgentboxRunner, runRealAgent } from "./agentbox.js";
-export type { RealAgentResult, RealAgentSpec } from "./agentbox.js";
+export { AgentboxRunner, forceRemoveContainer, listDfhContainers, runRealAgent } from "./agentbox.js";
+export type { DfhContainer, RealAgentResult, RealAgentSpec } from "./agentbox.js";

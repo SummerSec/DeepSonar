@@ -107,6 +107,14 @@ export const config = {
     openaiKey: str("OPENAI_API_KEY"),
     openaiBaseUrl: str("OPENAI_BASE_URL"),
     openrouterKey: str("OPENROUTER_API_KEY"),
+    /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
+    sandboxLimits: {
+      cpu: int("DFH_SANDBOX_CPU", 2),
+      memoryMiB: int("DFH_SANDBOX_MEMORY_MIB", 2048),
+      pidsLimit: int("DFH_SANDBOX_PIDS", 512),
+      capDropAll: bool("DFH_SANDBOX_CAP_DROP_ALL", true),
+      noNewPrivileges: bool("DFH_SANDBOX_NO_NEW_PRIVILEGES", true),
+    },
     /**
      * profile env_keys 白名单（P0：暂停任意环境变量下发，SEC 方案 §6.2 过渡措施）。
      * 逗号分隔，支持前缀通配（如 ANTHROPIC_*）；profile 里不在白名单的变量名会被拒绝注入。

@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { migrate, sql } from "./db.js";
 import { startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
+import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
 import { startPlaneSync } from "./plane-sync.js";
 
@@ -21,6 +22,9 @@ async function main() {
   const app = Fastify({ logger: { level: "info" } });
   await app.register(websocket);
   registerRoutes(app);
+
+  // 重启 reconcile（JOB-04）：先对齐 DB↔docker，再放行调度
+  await reconcileOnBoot();
 
   const stopDispatcher = startDispatcher();
   const stopReaper = startReaper();

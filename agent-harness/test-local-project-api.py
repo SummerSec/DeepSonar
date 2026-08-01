@@ -96,7 +96,8 @@ def main():
     assert retry["canvas_id"] == cid and retry["status"] == "pending"
     rows = req("GET", f"/projects/{pid}/canvases")
     row = next(r for r in rows if r["id"] == cid)
-    assert row["job_count"] == before + 1, f"重试后应多 1 个 job，{before} → {row['job_count']}"
+    # fake 执行器跑完 audit 会立刻派生 verify followup，期间可能再多 1 个 job，故只断言至少 +1
+    assert row["job_count"] >= before + 1, f"重试后应至少多 1 个 job，{before} → {row['job_count']}"
     print(f"重试 OK: 首跑 {final} → 新 job {retry['id'][:8]}，尝试次数 {row['job_count']}")
 
     # 8. Plane 绑定/解绑（不依赖真实 Plane 服务）

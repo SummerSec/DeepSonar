@@ -68,6 +68,7 @@ async function runJob(jobId: string) {
         image: config.runtime.imageAudit,
         env: useReal ? config.runtime.agentEnv : undefined,
         network: useReal ? "restricted" : "none",
+        limits: config.runtime.sandboxLimits,
       }),
       config.timeouts.provisionSec * 1000,
       `provision 超时（${config.timeouts.provisionSec}s）`,
