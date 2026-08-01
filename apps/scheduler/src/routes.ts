@@ -30,6 +30,7 @@ import {
 import { sql } from "./db.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
 import { registerGateway } from "./gateway.js";
+import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "./openapi.js";
 import { runner } from "./runtime.js";
 import { syncSkillSource, validateSourceUrl } from "./skill-sources.js";
 import { streamBuffer, subscribeStream } from "./stream-bus.js";
@@ -1501,6 +1502,43 @@ export function registerRoutes(app: FastifyInstance) {
   // ---------- 指标（§13.1：Prometheus 文本；内部网络抓取，走普通认证） ----------
   app.get("/metrics", async (_req, reply) =>
     reply.type("text/plain; version=0.0.4").send(await renderMetrics()));
+
+  // ---------- API Schema 文档（豁免鉴权，供前端/Skill/外部工具发现契约） ----------
+  // GET /openapi.json —— OpenAPI 3.0 JSON（标准机器可读）
+  // GET /schema       —— ?format=openapi|summary|markdown（默认 openapi）
+  // GET /schema.md    —— Markdown 契约（优先读 skills/.../api.md）
+  app.get("/openapi.json", async (_req, reply) =>
+    reply.type("application/json; charset=utf-8").send(buildOpenApiDocument()));
+
+  app.get("/schema", async (req, reply) => {
+    const format = String((req.query as { format?: string }).format ?? "openapi").toLowerCase();
+    if (format === "summary") {
+      return reply.type("application/json; charset=utf-8").send(buildSchemaSummary());
+    }
+    if (format === "markdown" || format === "md") {
+      const md = loadApiMarkdown();
+      if (md) return reply.type("text/markdown; charset=utf-8").send(md);
+      // 无仓库 md 时回落为摘要 JSON 的简易文本
+      const summary = buildSchemaSummary() as { title: string; endpoints: { method: string; path: string; summary: string; scope: string }[] };
+      const lines = [
+        `# ${summary.title}`,
+        "",
+        "（未找到 skills/.../api.md，以下为运行时生成的端点摘要）",
+        "",
+        ...summary.endpoints.map((e) => `- \`${e.method} ${e.path}\` — ${e.summary} _(scope: ${e.scope})_`),
+        "",
+      ];
+      return reply.type("text/markdown; charset=utf-8").send(lines.join("\n"));
+    }
+    // 默认：完整 OpenAPI
+    return reply.type("application/json; charset=utf-8").send(buildOpenApiDocument());
+  });
+
+  app.get("/schema.md", async (_req, reply) => {
+    const md = loadApiMarkdown();
+    if (md) return reply.type("text/markdown; charset=utf-8").send(md);
+    return reply.code(404).send({ error: "api.md not found in workspace" });
+  });
 
   app.get("/health", async () => ({ ok: true, ts: Date.now() }));
 }

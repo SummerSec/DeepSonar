@@ -584,4 +584,9 @@ export const api = {
   testCredential: (id: string) =>
     send<{ ok: boolean; detail: string }>("POST", `/credentials/${id}/test`),
   health: () => get<{ ok: boolean; ts: number }>("/health"),
+  /** API schema 文档（OpenAPI 3 JSON；调度器豁免鉴权） */
+  openApi: () => get<Record<string, unknown>>("/openapi.json"),
+  /** schema 入口：format=openapi|summary|markdown */
+  apiSchema: (format: "openapi" | "summary" | "markdown" = "openapi") =>
+    get<Record<string, unknown>>(`/schema?format=${format}`),
 };
