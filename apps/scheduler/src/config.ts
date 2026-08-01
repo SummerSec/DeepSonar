@@ -147,4 +147,16 @@ export const config = {
   events: {
     payloadMaxKb: int("EVENT_PAYLOAD_MAX_KB", 256),
   },
+
+  /** 代码摄入限制（§10.2）；repo_url 仅 https，host/本地根可用列表收紧 */
+  repo: {
+    maxFiles: int("DFH_REPO_MAX_FILES", 2000),
+    maxTotalMb: int("DFH_REPO_MAX_TOTAL_MB", 20),
+    maxFileKb: int("DFH_REPO_MAX_FILE_KB", 512),
+    cloneTimeoutSec: int("DFH_GIT_CLONE_TIMEOUT_SEC", 120),
+    /** 逗号分隔 host 允许列表；空 = 任意 https host */
+    allowedGitHosts: str("DFH_GIT_ALLOWED_HOSTS", ""),
+    /** 逗号分隔本地根目录；空 = 不限制 repo_path */
+    localRoots: str("DFH_REPO_LOCAL_ROOTS", ""),
+  },
 } as const;

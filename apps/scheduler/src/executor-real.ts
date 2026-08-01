@@ -8,6 +8,7 @@ import { config } from "./config.js";
 import { ingestEvent, rolesForProject, rulesForProject, type AgentProfileSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseFactOutput, parseHubDecision } from "./graph.js";
+import { ingestCodeSource, type RepoEvidence, type RepoSpec } from "./repo-ingest.js";
 import { publishStream } from "./stream-bus.js";
 
 /**
@@ -30,6 +31,76 @@ function seedFilesFromDir(dir: string, prefix = ""): Record<string, string> {
     else out[`/workspace/src/${rel}`] = readFileSync(full, "utf8");
   }
   return out;
+}
+
+function repoLimits() {
+  return {
+    maxFiles: config.repo.maxFiles,
+    maxTotalBytes: config.repo.maxTotalMb * 1024 * 1024,
+    maxFileBytes: config.repo.maxFileKb * 1024,
+    cloneTimeoutSec: config.repo.cloneTimeoutSec,
+    allowedGitHosts: config.repo.allowedGitHosts.split(",").map((s) => s.trim()).filter(Boolean),
+    localRoots: config.repo.localRoots.split(",").map((s) => s.trim()).filter(Boolean),
+  };
+}
+
+function extractRepoSpec(o: Record<string, unknown> | null | undefined): RepoSpec | null {
+  if (!o) return null;
+  const repoUrl = typeof o.repo_url === "string" && o.repo_url.trim() ? o.repo_url.trim() : undefined;
+  const repoPath = typeof o.repo_path === "string" && o.repo_path.trim() ? o.repo_path.trim() : undefined;
+  const ref = typeof o.ref === "string" && o.ref.trim() ? o.ref.trim() : undefined;
+  if (!repoUrl && !repoPath) return null;
+  return { repoUrl, repoPath, ref };
+}
+
+/**
+ * 解析本 job 的代码来源（RUN-01）：job.payload → 画布 target_json → demo-repo 兜底。
+ * 摄入证据（§10.1 任务记录）写回 job.payload_json.repo_evidence 并发 progress 事件。
+ */
+async function resolveSeedFiles(
+  job: Record<string, unknown>,
+  emit: (t: string, p: unknown) => Promise<unknown>,
+): Promise<Record<string, string>> {
+  const payload = (job.payload_json ?? {}) as Record<string, unknown>;
+  // 已摄入过（重试链上的后续 job 复用同画布时每个 job 各自摄入，保证 commit 固定到当次执行）
+  let spec = extractRepoSpec(payload);
+  if (!spec && job.canvas_id) {
+    const [canvas] = await sql`SELECT target_json FROM canvases WHERE id = ${job.canvas_id as string}`;
+    spec = extractRepoSpec((canvas?.target_json ?? null) as Record<string, unknown> | null);
+  }
+
+  let files: Record<string, string>;
+  let evidence: RepoEvidence;
+  if (!spec) {
+    // 未指定代码源：回退演示仓库（仅联调/演示；生产任务应在任务里带 repo_path/repo_url）
+    console.warn(`[real-agent] job ${job.id} 未指定代码源，回退 demo-repo`);
+    files = seedFilesFromDir(DEMO_REPO);
+    const total = Object.values(files).reduce((s, c) => s + Buffer.byteLength(c, "utf8"), 0);
+    evidence = {
+      source: "demo",
+      file_count: Object.keys(files).length,
+      total_bytes: total,
+      skipped_files: 0,
+      manifest_sha256: "",
+      ingested_at: new Date().toISOString(),
+    };
+  } else {
+    const result = await ingestCodeSource(spec, repoLimits());
+    files = result.files;
+    evidence = result.evidence;
+  }
+
+  await sql`
+    UPDATE jobs SET payload_json = payload_json || ${sql.json({ repo_evidence: evidence } as never)}
+    WHERE id = ${job.id as string}`;
+  await emit("progress", {
+    message:
+      `代码摄入完成：${evidence.file_count} 个文件 / ${(evidence.total_bytes / 1024).toFixed(0)}KB` +
+      (evidence.resolved_commit_sha ? ` @ ${evidence.resolved_commit_sha.slice(0, 12)}` : "") +
+      (evidence.skipped_files > 0 ? `（跳过 ${evidence.skipped_files}）` : "") +
+      (evidence.source === "demo" ? "（演示仓库）" : ""),
+  });
+  return files;
 }
 
 /** 通用占位符渲染：{{key}} 全部替换 */
@@ -203,6 +274,9 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     message: `真实 agent 启动（${provider}${snapshot ? ` / profile=${snapshot.name}` : " / env 全局配置"}）`,
   });
 
+  // 代码摄入（RUN-01/§10）：hub 只读图不需要代码；其余按任务 repo_path/repo_url 摄入
+  const seedFiles = isHub ? {} : await resolveSeedFiles(job, emit);
+
   // 工具输入 → 一行动作描述（节点「当前动作」+ 实时流卡片共用）
   const actionOf = (toolName: string, input: unknown): string => {
     const o = (input ?? {}) as Record<string, unknown>;
@@ -226,8 +300,8 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       commands: snapshot?.commands as never,
       mcps: snapshot?.mcps as never,
       subAgents: snapshot?.subagents as never,
-      // 审计任务注入演示仓库；验证/探索任务复用同一演示仓库；hub 只读图不需要代码
-      seedFiles: isHub ? {} : seedFilesFromDir(DEMO_REPO),
+      // 审计/验证/角色任务注入摄入的真实代码（未指定时回退演示仓库）；hub 只读图不需要代码
+      seedFiles,
       resultFiles,
       onProgress: (message) => {
         void emit("progress", { message }).catch(() => {});
