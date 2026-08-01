@@ -209,6 +209,29 @@ export interface GlobalSettings {
   effective_rules: EffectiveRules;
 }
 
+/** 平台 API Token（§6.1）：列表永不返回哈希/明文；明文仅创建/轮换响应里出现一次 */
+export interface ApiToken {
+  id: string;
+  name: string;
+  subject_type: string;
+  subject_id: string | null;
+  project_id: string | null;
+  token_prefix: string;
+  scopes: string[];
+  expires_at: string | null;
+  last_used_at: string | null;
+  last_ip: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
+export interface ApiTokenCreated extends ApiToken {
+  /** 仅此一次可见，请立即复制保存 */
+  token: string;
+  rotated_from?: string;
+}
+
 export type ProfileInput = {
   name: string;
   agent_cli: string;
@@ -223,15 +246,28 @@ export type ProfileInput = {
 };
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`/api${path}`);
+  const res = await fetch(`/api${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`${path} -> ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+/** DFH_AUTH_REQUIRED 开启后，Web 端用本地保存的 API Token 调后端（§6.4） */
+export function getLocalToken(): string {
+  return localStorage.getItem("dfh_token") ?? "";
+}
+export function setLocalToken(token: string) {
+  if (token) localStorage.setItem("dfh_token", token);
+  else localStorage.removeItem("dfh_token");
+}
+function authHeaders(): Record<string, string> {
+  const t = getLocalToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders() },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
@@ -330,5 +366,11 @@ export const api = {
   syncSkillSource: (id: string) =>
     send<{ ok: boolean; modules: number }>("POST", `/skill-sources/${id}/sync`),
   deleteSkillSource: (id: string) => send<{ ok: boolean }>("DELETE", `/skill-sources/${id}`),
+  /** 平台 API Token 管理（§6.4，与 Provider Credential 分离） */
+  tokens: () => get<ApiToken[]>("/tokens"),
+  createToken: (t: { name: string; scopes: string[]; project_id?: string | null; expires_in_days?: number }) =>
+    send<ApiTokenCreated>("POST", "/tokens", t),
+  revokeToken: (id: string) => send<ApiToken>("POST", `/tokens/${id}/revoke`),
+  rotateToken: (id: string) => send<ApiTokenCreated>("POST", `/tokens/${id}/rotate`),
   health: () => get<{ ok: boolean; ts: number }>("/health"),
 };

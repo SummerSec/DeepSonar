@@ -11,13 +11,15 @@ import {
   type SkillSourceDetail,
 } from "./api";
 
+import { TokensPanel } from "./TokensPanel";
+
 /**
  * 设置面板（§8.1/§8.2/§8.3）：Agent 配置（profile CRUD + Git 模块勾选）+ 规则配置
  * + 角色（hub 可下发的 agent：启用勾选 + profile 绑定 + prompt 模板编辑）+ 模块源管理
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "profiles" | "rules" | "roles" | "sources" | "plane";
+type Tab = "profiles" | "rules" | "roles" | "sources" | "plane" | "tokens";
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
@@ -447,6 +449,7 @@ export function SettingsPanel({
         { key: "roles", label: "角色注册表" },
         { key: "sources", label: "模块源" },
         { key: "rules", label: "全局规则" },
+        { key: "tokens", label: "API Token" },
       ];
   const activeTab = tabList.some((t) => t.key === tab) ? tab : tabList[0].key;
 
@@ -962,6 +965,8 @@ export function SettingsPanel({
             </div>
           </div>
         )}
+
+        {activeTab === "tokens" && !projectId && <TokensPanel />}
 
         {activeTab === "sources" && (
           <div className="flex flex-col gap-3">

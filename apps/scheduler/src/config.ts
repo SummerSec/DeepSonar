@@ -38,6 +38,15 @@ export const config = {
   /** 监听地址：默认只绑回环（P0 可信网络）；容器部署显式设 0.0.0.0 */
   host: str("SCHEDULER_HOST", "127.0.0.1"),
 
+  /** 平台 API Token 鉴权（SEC-01/§6.1）；跨出回环部署必须 DFH_AUTH_REQUIRED=true */
+  auth: {
+    required: bool("DFH_AUTH_REQUIRED", false),
+    /** 引导管理员 token（不落库）；用于首次创建 DB token 与应急 */
+    adminToken: str("DFH_ADMIN_TOKEN"),
+    /** token 格式中的环境段：dfh_<env>_<prefix>_<secret> */
+    tokenEnv: str("DFH_TOKEN_ENV", "dev"),
+  },
+
   plane: {
     baseUrl: str("PLANE_BASE_URL", "https://api.plane.so"),
     token: str("PLANE_API_TOKEN"),
