@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { runRealAgent } from "@dfh/runtime-sandbox";
 import { FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
-import { ingestEvent } from "./core.js";
+import { ingestEvent, type AgentProfileSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { publishStream } from "./stream-bus.js";
 
@@ -64,11 +64,27 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
 
   const isVerify = type === "verify_finding";
   const payload = job.payload_json as Record<string, unknown>;
-  const prompt = isVerify
+
+  // Agent 配置：job 冻结的 profile 快照优先，无快照退回 env 全局配置（§8.1 下一 job 生效）
+  const snapshot = (job.agent_snapshot_json as AgentProfileSnapshot | null) ?? null;
+  const cliName = snapshot?.agent_cli ?? config.runtime.agentProvider;
+  const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
+  const model = snapshot?.model ?? config.runtime.agentModel ?? undefined;
+  // env_keys 只存变量名引用，值运行时从调度器 process.env 解析（密钥不落库，§9）
+  const env: Record<string, string> = { ...config.runtime.agentEnv };
+  for (const key of snapshot?.env_keys ?? []) {
+    const v = process.env[key];
+    if (v) env[key] = v;
+  }
+
+  const basePrompt = isVerify
     ? VERIFY_PROMPT((payload.finding ?? {}) as { title: string; location?: string; summary?: string })
     : AUDIT_PROMPT(payload.module_path as string | undefined);
+  const prompt = snapshot?.prompt_suffix ? `${basePrompt}\n\n${snapshot.prompt_suffix}` : basePrompt;
 
-  await emit("progress", { message: `真实 agent 启动（${config.runtime.agentProvider}）` });
+  await emit("progress", {
+    message: `真实 agent 启动（${provider}${snapshot ? ` / profile=${snapshot.name}` : " / env 全局配置"}）`,
+  });
 
   // 工具输入 → 一行动作描述（节点「当前动作」+ 实时流卡片共用）
   const actionOf = (toolName: string, input: unknown): string => {
@@ -84,13 +100,15 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const result = await runRealAgent(
     { sandboxId: job.sandbox_id as string },
     {
-      provider: (config.runtime.agentProvider === "opencode" ? "open-code" : config.runtime.agentProvider) as
-        | "claude-code"
-        | "open-code"
-        | "codex",
-      model: config.runtime.agentModel || undefined,
-      env: config.runtime.agentEnv,
+      provider,
+      model,
+      env,
       prompt,
+      // Agent 配置下发（skills/commands/mcps/subAgents 随 setup 差量上传）
+      skills: snapshot?.skills as never,
+      commands: snapshot?.commands as never,
+      mcps: snapshot?.mcps as never,
+      subAgents: snapshot?.subagents as never,
       // 审计任务注入演示仓库；验证任务复用同一演示仓库（MVP：finding 上下文从种子代码来）
       seedFiles: seedFilesFromDir(DEMO_REPO),
       resultFiles: ["/workspace/findings.jsonl", "/workspace/done.json"],

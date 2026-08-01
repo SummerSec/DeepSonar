@@ -2,9 +2,10 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "./config.js";
-import { createJob, ensureCanvasForTask } from "./core.js";
+import { createJob, ensureCanvasForTask, rulesForProject } from "./core.js";
 import { sql } from "./db.js";
 import { planePollOnce } from "./plane-sync.js";
+import { syncSkillSource } from "./skill-sources.js";
 import { streamBuffer, subscribeStream } from "./stream-bus.js";
 
 const SyncProjectBody = z.object({
@@ -21,6 +22,34 @@ const CreateJobBody = z.object({
   payload: z.record(z.string(), z.unknown()).default({}),
   priority: z.number().int().default(0),
   timeout_sec: z.number().int().positive().optional(),
+});
+
+// Agent profile（§8.1）：env_keys 只存变量名引用，密钥永不落库
+const ProfileBody = z.object({
+  name: z.string().min(1),
+  agent_cli: z.enum(["claude-code", "open-code", "codex"]).default("claude-code"),
+  model: z.string().nullish(),
+  env_keys: z.array(z.string()).default([]),
+  modules: z.array(z.string()).default([]), // Git 模块源勾选（["<source_id>:<module_id>"]）
+  skills: z.array(z.record(z.string(), z.unknown())).default([]),
+  commands: z.array(z.record(z.string(), z.unknown())).default([]),
+  mcps: z.array(z.record(z.string(), z.unknown())).default([]),
+  subagents: z.array(z.record(z.string(), z.unknown())).default([]),
+  prompt_suffix: z.string().nullish(),
+});
+const ProfilePatchBody = ProfileBody.partial();
+
+// Git 模块源（§8.2）
+const SkillSourceBody = z.object({
+  name: z.string().min(1),
+  repo_url: z.string().min(1),
+  branch: z.string().default("main"),
+});
+
+// 项目设置：profiles 绑定（job 类型 → profile id）+ rules 覆盖（§8.1 决策层）
+const SettingsPatchBody = z.object({
+  profiles: z.record(z.string(), z.string().nullable()).optional(),
+  rules: z.record(z.string(), z.unknown()).optional(),
 });
 
 export function registerRoutes(app: FastifyInstance) {
@@ -70,6 +99,151 @@ export function registerRoutes(app: FastifyInstance) {
   });
 
   app.get("/projects", async () => sql`SELECT * FROM projects ORDER BY created_at DESC`);
+
+  // ---------- Git 模块源（§8.2） ----------
+  app.get("/skill-sources", async () =>
+    sql`SELECT id, name, repo_url, branch, synced_at, created_at,
+               jsonb_array_length(catalog_json) AS module_count
+        FROM skill_sources ORDER BY created_at DESC`);
+
+  // 目录详情（模块列表；文件内容不下发，太大了）
+  app.get("/skill-sources/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [src] = await sql`SELECT * FROM skill_sources WHERE id = ${id}`;
+    if (!src) return reply.code(404).send({ error: "source not found" });
+    const catalog = ((src.catalog_json as { files?: Record<string, string> }[]) ?? []).map(
+      ({ files, ...rest }) => ({ ...rest, file_count: Object.keys(files ?? {}).length }),
+    );
+    return { ...src, catalog_json: catalog };
+  });
+
+  app.post("/skill-sources", async (req, reply) => {
+    const body = SkillSourceBody.parse(req.body);
+    try {
+      const [row] = await sql`
+        INSERT INTO skill_sources ${sql({ name: body.name, repo_url: body.repo_url, branch: body.branch })}
+        RETURNING id, name, repo_url, branch, synced_at, created_at`;
+      return reply.code(201).send(row);
+    } catch (e) {
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
+        return reply.code(409).send({ error: "同名模块源已存在" });
+      }
+      throw e;
+    }
+  });
+
+  // 同步：浅克隆 → 扫描 SKILL.md/commands → catalog 落库（内容缓存，运行不再访问 Git）
+  app.post("/skill-sources/:id/sync", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const r = await syncSkillSource(id);
+      return { ok: true, ...r };
+    } catch (e) {
+      return reply.code(502).send({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  app.delete("/skill-sources/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [row] = await sql`DELETE FROM skill_sources WHERE id = ${id} RETURNING id`;
+    if (!row) return reply.code(404).send({ error: "source not found" });
+    return { ok: true };
+  });
+
+  // ---------- Agent profiles（§8.1 存储层 CRUD） ----------
+  app.get("/agent-profiles", async () =>
+    sql`SELECT * FROM agent_profiles ORDER BY created_at DESC`);
+
+  app.post("/agent-profiles", async (req, reply) => {
+    const body = ProfileBody.parse(req.body);
+    try {
+      const [row] = await sql`
+        INSERT INTO agent_profiles ${sql({
+          name: body.name,
+          agent_cli: body.agent_cli,
+          model: body.model ?? null,
+          env_keys: body.env_keys as never,
+          modules_json: body.modules as never,
+          skills_json: body.skills as never,
+          commands_json: body.commands as never,
+          mcps_json: body.mcps as never,
+          subagents_json: body.subagents as never,
+          prompt_suffix: body.prompt_suffix ?? null,
+        })}
+        RETURNING *`;
+      return reply.code(201).send(row);
+    } catch (e) {
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
+        return reply.code(409).send({ error: "同名 profile 已存在" });
+      }
+      throw e;
+    }
+  });
+
+  app.patch("/agent-profiles/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = ProfilePatchBody.parse(req.body);
+    const sets: Record<string, unknown> = { updated_at: sql`now()` };
+    if (body.name !== undefined) sets.name = body.name;
+    if (body.agent_cli !== undefined) sets.agent_cli = body.agent_cli;
+    if (body.model !== undefined) sets.model = body.model;
+    if (body.env_keys !== undefined) sets.env_keys = body.env_keys;
+    if (body.modules !== undefined) sets.modules_json = body.modules;
+    if (body.skills !== undefined) sets.skills_json = body.skills;
+    if (body.commands !== undefined) sets.commands_json = body.commands;
+    if (body.mcps !== undefined) sets.mcps_json = body.mcps;
+    if (body.subagents !== undefined) sets.subagents_json = body.subagents;
+    if (body.prompt_suffix !== undefined) sets.prompt_suffix = body.prompt_suffix;
+    const [row] = await sql`
+      UPDATE agent_profiles SET ${sql(sets as never)} WHERE id = ${id} RETURNING *`;
+    if (!row) return reply.code(404).send({ error: "profile not found" });
+    return row;
+  });
+
+  app.delete("/agent-profiles/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [row] = await sql`DELETE FROM agent_profiles WHERE id = ${id} RETURNING id`;
+    if (!row) return reply.code(404).send({ error: "profile not found" });
+    return { ok: true };
+  });
+
+  // ---------- 项目设置（§8.1 决策层：profiles 绑定 + rules 覆盖） ----------
+  app.get("/projects/:id/settings", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
+    if (!p) return reply.code(404).send({ error: "project not found" });
+    const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    return {
+      profiles: (cfg.profiles ?? {}) as Record<string, string>,
+      rules: (cfg.rules ?? {}) as Record<string, unknown>,
+      effective_rules: await rulesForProject(sql, id),
+    };
+  });
+
+  app.patch("/projects/:id/settings", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = SettingsPatchBody.parse(req.body);
+    const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
+    if (!p) return reply.code(404).send({ error: "project not found" });
+    const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    if (body.profiles) {
+      const bindings = { ...((cfg.profiles as Record<string, unknown>) ?? {}) };
+      for (const [k, v] of Object.entries(body.profiles)) {
+        if (v === null) delete bindings[k]; // null = 解除绑定
+        else bindings[k] = v;
+      }
+      cfg.profiles = bindings;
+    }
+    if (body.rules) {
+      cfg.rules = { ...((cfg.rules as Record<string, unknown>) ?? {}), ...body.rules };
+    }
+    await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+    return {
+      profiles: (cfg.profiles ?? {}) as Record<string, string>,
+      rules: (cfg.rules ?? {}) as Record<string, unknown>,
+      effective_rules: await rulesForProject(sql, id),
+    };
+  });
 
   // ---------- 任务画布（§3.2：一任务一画布） ----------
   // 列表：项目下所有任务画布 + rollup 计数

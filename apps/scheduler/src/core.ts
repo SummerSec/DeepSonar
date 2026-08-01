@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { EventEnvelope, FindingPayload } from "@dfh/shared-types";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import { expandModules } from "./skill-sources.js";
 
 // ---------- 状态机（§3.3）：允许的状态迁移 ----------
 
@@ -31,6 +32,90 @@ export function sha16(s: string): string {
   return createHash("sha256").update(s).digest("hex").slice(0, 16);
 }
 
+// ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
+
+export interface ProjectRules {
+  autoVerifySeverities: string[];
+  maxFollowupsPerJob: number;
+  maxFollowupDepth: number;
+  maxAutoRetries: number;
+  auditTimeoutSec: number;
+  verifyTimeoutSec: number;
+}
+
+export async function rulesForProject(db: typeof sql, projectId: string): Promise<ProjectRules> {
+  const [p] = await db`SELECT config_json FROM projects WHERE id = ${projectId}`;
+  const r = (((p?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
+  return {
+    autoVerifySeverities: (r.autoVerifySeverities as string[]) ?? config.rules.autoVerifySeverities,
+    maxFollowupsPerJob: (r.maxFollowupsPerJob as number) ?? config.limits.maxFollowupsPerJob,
+    maxFollowupDepth: (r.maxFollowupDepth as number) ?? config.limits.maxFollowupDepth,
+    maxAutoRetries: (r.maxAutoRetries as number) ?? 3,
+    auditTimeoutSec: (r.auditTimeoutSec as number) ?? config.timeouts.auditSec,
+    verifyTimeoutSec: (r.verifyTimeoutSec as number) ?? config.timeouts.verifySec,
+  };
+}
+
+// ---------- Agent profile（决策层）：项目绑定 → 冻结快照（下一 job 生效，历史可复现） ----------
+
+export interface AgentProfileSnapshot {
+  name: string;
+  agent_cli: string;
+  model: string | null;
+  env_keys: string[];
+  /** 勾选的 Git 模块（["<source_id>:<module_id>"]，展示用；下发内容已展开进 skills/commands） */
+  modules: string[];
+  skills: unknown[];
+  commands: unknown[];
+  mcps: unknown[];
+  subagents: unknown[];
+  prompt_suffix: string | null;
+}
+
+/** projects.config_json.profiles = { audit_module?: id, verify_finding?: id, default?: id } */
+export async function resolveProfileSnapshot(
+  db: typeof sql,
+  projectId: string,
+  jobType: string,
+): Promise<AgentProfileSnapshot | null> {
+  const [p] = await db`SELECT config_json FROM projects WHERE id = ${projectId}`;
+  const bindings = (((p?.config_json as Record<string, unknown>)?.profiles ?? {}) ?? {}) as Record<string, string>;
+  const profileId = bindings[jobType] ?? bindings.default;
+  if (!profileId) return null;
+  const [row] = await db`SELECT * FROM agent_profiles WHERE id = ${profileId}`;
+  if (!row) return null;
+
+  // Git 模块展开（§8.2）：勾选模块 → embedded skills/commands，与手写 JSON 合并（按 name 去重，手写优先）
+  const modules = (row.modules_json as string[]) ?? [];
+  const expanded = await expandModules(modules);
+  if (expanded.missing.length > 0) {
+    console.warn(`[profile] 模块未找到（源未同步？）: ${expanded.missing.join(", ")}`);
+  }
+  const manualSkills = (row.skills_json as { name?: string }[]) ?? [];
+  const manualCommands = (row.commands_json as { name?: string }[]) ?? [];
+  const skills = [
+    ...manualSkills,
+    ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name)),
+  ];
+  const commands = [
+    ...manualCommands,
+    ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name)),
+  ];
+
+  return {
+    name: row.name as string,
+    agent_cli: row.agent_cli as string,
+    model: (row.model as string) ?? null,
+    env_keys: (row.env_keys as string[]) ?? [],
+    modules,
+    skills,
+    commands,
+    mcps: (row.mcps_json as unknown[]) ?? [],
+    subagents: (row.subagents_json as unknown[]) ?? [],
+    prompt_suffix: (row.prompt_suffix as string) ?? null,
+  };
+}
+
 // ---------- Job 创建（含 Plane issue 防双跑唯一约束） ----------
 
 export interface CreateJobInput {
@@ -48,11 +133,14 @@ export interface CreateJobInput {
 
 export async function createJob(input: CreateJobInput) {
   try {
+    // 冻结 profile 快照：改 profile 只影响之后创建的 job（下一 job 生效，历史可复现）
+    const snapshot = await resolveProfileSnapshot(sql, input.projectId, input.type);
     const [job] = await sql`
       INSERT INTO jobs ${sql({
         project_id: input.projectId,
         canvas_id: input.canvasId ?? null,
         plane_issue_id: input.planeIssueId ?? null,
+        agent_snapshot_json: (snapshot ?? null) as never,
         parent_job_id: input.parentJobId ?? null,
         finding_id: input.findingId ?? null,
         type: input.type,
@@ -284,9 +372,10 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 // ---------- 规则引擎：finding → verify 派生（§4.3） ----------
 
 async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: Record<string, unknown>) {
+  const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   const severity = finding.severity as string;
-  if (!config.rules.autoVerifySeverities.includes(severity)) return;
-  if ((job.followup_depth as number) >= config.limits.maxFollowupDepth) return;
+  if (!rules.autoVerifySeverities.includes(severity)) return;
+  if ((job.followup_depth as number) >= rules.maxFollowupDepth) return;
 
   // 同一 finding 已有 verify job → 不重复派生
   const existing = await tx`
@@ -296,18 +385,25 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
   // 每 job followup 上限（§4.3 护栏）
   const [{ count }] = await tx<[{ count: number }]>`
     SELECT COUNT(*)::int AS count FROM jobs WHERE parent_job_id = ${job.id as string}`;
-  if (count >= config.limits.maxFollowupsPerJob) {
+  if (count >= rules.maxFollowupsPerJob) {
     // 超限转人工
     await applySideEffects(tx, job.id as string, "human", {
-      reason: `followup 数超过上限 ${config.limits.maxFollowupsPerJob}，请人工确认`,
+      reason: `followup 数超过上限 ${rules.maxFollowupsPerJob}，请人工确认`,
     });
     return;
   }
+
+  // profile 快照：优先按 verify_finding 绑定重新解析；无绑定则继承父 job 快照（同一任务同一 agent）
+  const snapshot =
+    (await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, "verify_finding")) ??
+    (job.agent_snapshot_json as AgentProfileSnapshot | null) ??
+    null;
 
   await tx`
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
       canvas_id: (job.canvas_id as string) ?? null, // 继承父审计 job 的任务画布
+      agent_snapshot_json: snapshot as never,
       plane_issue_id: null,
       parent_job_id: job.id as string,
       finding_id: finding.id as string,
@@ -321,7 +417,7 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
           summary: finding.summary,
         },
       } as never,
-      timeout_sec: config.timeouts.verifySec,
+      timeout_sec: rules.verifyTimeoutSec,
       followup_depth: (job.followup_depth as number) + 1,
     })}`;
   await tx`UPDATE findings SET verify_status = 'verifying' WHERE id = ${finding.id as string}`;

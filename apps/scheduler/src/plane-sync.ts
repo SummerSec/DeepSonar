@@ -1,6 +1,6 @@
 import { PlaneClient, parseIssueTask } from "@dfh/plane-client";
 import { config } from "./config.js";
-import { createJob, ensureCanvasForTask, transitionJob } from "./core.js";
+import { createJob, ensureCanvasForTask, rulesForProject, transitionJob } from "./core.js";
 import { sql } from "./db.js";
 
 /**
@@ -47,6 +47,7 @@ async function pollProject(plane: PlaneClient, projectId: string, planeProjectId
   if (!readyId) return 0;
 
   let created = 0;
+  const rules = await rulesForProject(sql, projectId);
   for (const issue of issues) {
     if (issue.state !== readyId) continue;
     const { type, params } = parseIssueTask(issue);
@@ -66,7 +67,7 @@ async function pollProject(plane: PlaneClient, projectId: string, planeProjectId
       planeIssueId: issue.id,
       type,
       payload: params,
-      timeoutSec: type === "verify_finding" ? config.timeouts.verifySec : config.timeouts.auditSec,
+      timeoutSec: type === "verify_finding" ? rules.verifyTimeoutSec : rules.auditTimeoutSec,
     });
     if (duplicated || !job) continue;
 
@@ -100,12 +101,12 @@ export async function planeWriteback(jobId: string): Promise<void> {
   const ok = job.status === "succeeded";
   // 失败重试上限：同一 issue 反复失败会成死循环（回 Ready → 再领取 → 再失败）
   // 达到上限后留在 In Progress + 评论提示，交人工处理（resume 可手动复活）
-  const MAX_AUTO_RETRIES = 3;
+  const rules = await rulesForProject(sql, job.project_id);
   let exhausted = false;
   if (!ok) {
     const [{ attempts }] = await sql<[{ attempts: number }]>`
       SELECT COUNT(*)::int AS attempts FROM jobs WHERE plane_issue_id = ${job.plane_issue_id}`;
-    exhausted = attempts >= MAX_AUTO_RETRIES;
+    exhausted = attempts >= rules.maxAutoRetries;
   }
   // 失败不置 Done：回 Ready 等重试；重试耗尽则留在 In Progress 等人工
   await plane
@@ -121,7 +122,7 @@ export async function planeWriteback(jobId: string): Promise<void> {
     .addComment(
       job.plane_project_id,
       job.plane_issue_id,
-      `<p>🤖 job ${job.id} 结束：<b>${job.status}</b>${job.error ? ` — ${job.error}` : ""}${exhausted ? `（自动重试已达 ${MAX_AUTO_RETRIES} 次上限，请人工介入）` : ""}</p>`,
+      `<p>🤖 job ${job.id} 结束：<b>${job.status}</b>${job.error ? ` — ${job.error}` : ""}${exhausted ? `（自动重试已达 ${rules.maxAutoRetries} 次上限，请人工介入）` : ""}</p>`,
     )
     .catch(() => {});
 }

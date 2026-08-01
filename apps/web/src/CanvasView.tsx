@@ -123,7 +123,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     );
 
   return (
-    <div className="relative flex-1">
+    <div className="relative h-full w-full">
       <ReactFlow
         nodes={nodes}
         edges={edges}

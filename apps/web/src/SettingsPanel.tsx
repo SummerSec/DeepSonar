@@ -1,0 +1,597 @@
+import { ArrowsClockwise, FloppyDisk, Plus, Trash, X } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import {
+  api,
+  type AgentProfile,
+  type EffectiveRules,
+  type ProfileInput,
+  type ProjectSettings,
+  type SkillSource,
+  type SkillSourceDetail,
+} from "./api";
+
+/**
+ * 设置面板（§8.1/§8.2）：Agent 配置（profile CRUD + Git 模块勾选）+ 规则配置 + 模块源管理
+ * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
+ */
+
+type Tab = "profiles" | "rules" | "sources";
+
+const inputCls =
+  "w-full rounded-md border border-ink-700 bg-ink-850 px-2 py-1 font-mono text-[12px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
+const labelCls = "mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
+
+function JsonField({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <label className={labelCls}>{label}</label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={2}
+        spellCheck={false}
+        placeholder="[]"
+        className={`${inputCls} resize-y`}
+      />
+      {hint && <div className="mt-0.5 text-[10px] text-zinc-600">{hint}</div>}
+    </div>
+  );
+}
+
+// ---------- profile 表单状态 ----------
+
+interface ProfileForm {
+  id: string | null;
+  name: string;
+  agent_cli: string;
+  model: string;
+  env_keys: string; // 逗号分隔
+  prompt_suffix: string;
+  modules: string[]; // 勾选的 Git 模块（"<source_id>:<module_id>"）
+  skills: string; // JSON 文本
+  commands: string;
+  mcps: string;
+  subagents: string;
+}
+
+const EMPTY_FORM: ProfileForm = {
+  id: null,
+  name: "",
+  agent_cli: "claude-code",
+  model: "",
+  env_keys: "ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN",
+  prompt_suffix: "",
+  modules: [],
+  skills: "[]",
+  commands: "[]",
+  mcps: "[]",
+  subagents: "[]",
+};
+
+function formOf(p: AgentProfile): ProfileForm {
+  return {
+    id: p.id,
+    name: p.name,
+    agent_cli: p.agent_cli,
+    model: p.model ?? "",
+    env_keys: p.env_keys.join(", "),
+    prompt_suffix: p.prompt_suffix ?? "",
+    modules: p.modules_json ?? [],
+    skills: JSON.stringify(p.skills_json, null, 2),
+    commands: JSON.stringify(p.commands_json, null, 2),
+    mcps: JSON.stringify(p.mcps_json, null, 2),
+    subagents: JSON.stringify(p.subagents_json, null, 2),
+  };
+}
+
+function parseJsonArray(text: string): Record<string, unknown>[] {
+  const v = JSON.parse(text || "[]") as unknown;
+  if (!Array.isArray(v)) throw new Error("必须是 JSON 数组");
+  return v as Record<string, unknown>[];
+}
+
+export function SettingsPanel({
+  projectId,
+  onClose,
+}: {
+  projectId: string;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<Tab>("profiles");
+  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
+  const [form, setForm] = useState<ProfileForm>(EMPTY_FORM);
+  const [settings, setSettings] = useState<ProjectSettings | null>(null);
+  const [rules, setRules] = useState<EffectiveRules | null>(null);
+  const [bindings, setBindings] = useState<Record<string, string>>({});
+  const [sources, setSources] = useState<SkillSource[]>([]);
+  const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
+  const [newSource, setNewSource] = useState({ name: "", repo_url: "", branch: "main" });
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const reload = () => {
+    api.agentProfiles().then(setProfiles).catch(() => {});
+    api
+      .settings(projectId)
+      .then((s) => {
+        setSettings(s);
+        setRules(s.effective_rules);
+        setBindings(s.profiles);
+      })
+      .catch(() => {});
+    api
+      .skillSources()
+      .then(async (list) => {
+        setSources(list);
+        // 拉各源目录（模块勾选列表用）
+        const details: Record<string, SkillSourceDetail> = {};
+        await Promise.all(
+          list.map((s) =>
+            api
+              .skillSource(s.id)
+              .then((d) => {
+                details[s.id] = d;
+              })
+              .catch(() => {}),
+          ),
+        );
+        setSourceDetails(details);
+      })
+      .catch(() => {});
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(reload, [projectId]);
+
+  const flash = (m: string) => {
+    setMsg(m);
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const saveProfile = async () => {
+    try {
+      const body: ProfileInput = {
+        name: form.name.trim(),
+        agent_cli: form.agent_cli,
+        model: form.model.trim() || null,
+        env_keys: form.env_keys.split(",").map((s) => s.trim()).filter(Boolean),
+        prompt_suffix: form.prompt_suffix.trim() || null,
+        modules: form.modules,
+        skills: parseJsonArray(form.skills),
+        commands: parseJsonArray(form.commands),
+        mcps: parseJsonArray(form.mcps),
+        subagents: parseJsonArray(form.subagents),
+      };
+      if (!body.name) return flash("名称必填");
+      if (form.id) await api.updateProfile(form.id, body);
+      else await api.createProfile(body);
+      flash(form.id ? "已保存（下一 job 生效）" : "已创建");
+      setForm(EMPTY_FORM);
+      reload();
+    } catch (e) {
+      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const saveRules = async () => {
+    if (!rules) return;
+    try {
+      await api.patchSettings(projectId, {
+        profiles: {
+          audit_module: bindings.audit_module || null,
+          verify_finding: bindings.verify_finding || null,
+          default: bindings.default || null,
+        },
+        rules: {
+          autoVerifySeverities: rules.autoVerifySeverities,
+          maxFollowupsPerJob: rules.maxFollowupsPerJob,
+          maxFollowupDepth: rules.maxFollowupDepth,
+          maxAutoRetries: rules.maxAutoRetries,
+          auditTimeoutSec: rules.auditTimeoutSec,
+          verifyTimeoutSec: rules.verifyTimeoutSec,
+        },
+      });
+      flash("规则已保存（下一 job 生效）");
+      reload();
+    } catch (e) {
+      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const bindSelect = (key: string, label: string) => (
+    <div key={key}>
+      <label className={labelCls}>{label}</label>
+      <select
+        value={bindings[key] ?? ""}
+        onChange={(e) => setBindings((b) => ({ ...b, [key]: e.target.value }))}
+        className={inputCls}
+      >
+        <option value="">（不绑定）</option>
+        {profiles.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
+  const toggleModule = (moduleKey: string) =>
+    setForm((f) => ({
+      ...f,
+      modules: f.modules.includes(moduleKey)
+        ? f.modules.filter((m) => m !== moduleKey)
+        : [...f.modules, moduleKey],
+    }));
+
+  /** 模块勾选列表：按源 → 插件分组 */
+  const modulePicker = (
+    <div>
+      <label className={labelCls}>Git 模块（勾选下发到 agent；在「模块源」tab 管理仓库）</label>
+      {sources.length === 0 && (
+        <div className="font-mono text-[11px] text-zinc-600">暂无模块源 —— 先到「模块源」tab 添加 Git 仓库并同步</div>
+      )}
+      <div className="flex max-h-56 flex-col gap-2 overflow-y-auto rounded-md border border-ink-800 bg-ink-900/60 p-2">
+        {sources.map((s) => {
+          const detail = sourceDetails[s.id];
+          const mods = detail?.catalog_json ?? [];
+          if (mods.length === 0) return null;
+          const byPlugin = new Map<string, typeof mods>();
+          for (const m of mods) {
+            const list = byPlugin.get(m.plugin) ?? [];
+            list.push(m);
+            byPlugin.set(m.plugin, list);
+          }
+          return (
+            <div key={s.id}>
+              <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                {s.name}
+              </div>
+              {[...byPlugin.entries()].map(([plugin, list]) => (
+                <div key={plugin} className="mb-1.5">
+                  <div className="font-mono text-[10px] text-zinc-600">{plugin}</div>
+                  {list.map((m) => {
+                    const key = `${s.id}:${m.id}`;
+                    const checked = form.modules.includes(key);
+                    return (
+                      <label
+                        key={key}
+                        className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 transition-colors hover:bg-ink-850"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleModule(key)}
+                          className="accent-emerald-500"
+                        />
+                        <span className="text-[12px] text-zinc-200">{m.name}</span>
+                        <span className={`font-mono text-[9px] uppercase ${m.kind === "skill" ? "text-acc-400" : "text-run-400"}`}>
+                          {m.kind}
+                        </span>
+                        {m.description && (
+                          <span className="truncate text-[10px] text-zinc-600">{m.description}</span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+      {form.modules.length > 0 && (
+        <div className="mt-0.5 font-mono text-[10px] text-acc-400">已勾选 {form.modules.length} 个模块</div>
+      )}
+    </div>
+  );
+
+  const numField = (key: keyof EffectiveRules, label: string) => (
+    <div key={key}>
+      <label className={labelCls}>{label}</label>
+      <input
+        type="number"
+        value={String(rules?.[key] ?? "")}
+        onChange={(e) =>
+          setRules((r) => (r ? { ...r, [key]: Number(e.target.value) } : r))
+        }
+        className={inputCls}
+      />
+    </div>
+  );
+
+  return (
+    <aside className="dfh-sidebar absolute inset-y-0 right-0 z-30 flex w-[400px] flex-col border-l border-ink-700 bg-ink-900/95 backdrop-blur">
+      <div className="flex items-center gap-2 border-b border-ink-800 px-4 py-3">
+        <span className="text-[13px] font-semibold text-zinc-100">设置</span>
+        <span className="font-mono text-[10px] text-zinc-600">下一 job 生效</span>
+        <button
+          onClick={onClose}
+          aria-label="关闭"
+          className="ml-auto rounded-md p-1 text-zinc-500 transition-colors hover:bg-ink-800 hover:text-zinc-200"
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex gap-1 border-b border-ink-800 px-3 py-1.5">
+        {(
+          [
+            { key: "profiles", label: "Agent 配置" },
+            { key: "rules", label: "规则配置" },
+            { key: "sources", label: "模块源" },
+          ] as { key: Tab; label: string }[]
+        ).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`rounded-md px-2.5 py-1 text-[12px] transition-colors ${
+              tab === t.key ? "bg-ink-800 text-zinc-100" : "text-zinc-500 hover:bg-ink-850 hover:text-zinc-300"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+        {msg && <span className="ml-auto self-center font-mono text-[10px] text-acc-400">{msg}</span>}
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3">
+        {tab === "profiles" && (
+          <>
+            {/* 已有 profile 列表 */}
+            <div className="mb-3 flex flex-col gap-1">
+              {profiles.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setForm(formOf(p))}
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
+                    form.id === p.id
+                      ? "border-acc-500/70 bg-ink-850"
+                      : "border-ink-700 bg-ink-850/60 hover:border-ink-600"
+                  }`}
+                >
+                  <span className="text-[12px] font-medium text-zinc-100">{p.name}</span>
+                  <span className="font-mono text-[10px] text-zinc-500">
+                    {p.agent_cli}
+                    {p.model ? ` · ${p.model}` : ""}
+                  </span>
+                  <span className="ml-auto font-mono text-[10px] text-zinc-600">
+                    模块×{(p.modules_json ?? []).length} env×{p.env_keys.length} skill×{p.skills_json.length} mcp×{p.mcps_json.length}
+                  </span>
+                </button>
+              ))}
+              {profiles.length === 0 && (
+                <div className="py-2 font-mono text-[11px] text-zinc-600">
+                  暂无 profile —— 未绑定时所有 job 用 env 全局配置
+                </div>
+              )}
+            </div>
+
+            {/* 编辑表单 */}
+            <div className="flex flex-col gap-2.5 border-t border-ink-800 pt-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                  {form.id ? `编辑 ${form.name}` : "新建 profile"}
+                </span>
+                <button
+                  onClick={() => setForm(EMPTY_FORM)}
+                  className="flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[10px] text-zinc-400 hover:border-ink-600 hover:text-zinc-200"
+                >
+                  <Plus size={11} /> 新建
+                </button>
+              </div>
+              <div>
+                <label className={labelCls}>名称</label>
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} placeholder="audit-kimi" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelCls}>Agent CLI</label>
+                  <select value={form.agent_cli} onChange={(e) => setForm({ ...form, agent_cli: e.target.value })} className={inputCls}>
+                    <option value="claude-code">claude-code</option>
+                    <option value="open-code">open-code</option>
+                    <option value="codex">codex</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>模型（空=默认）</label>
+                  <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls} placeholder="k3" />
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>env 引用（逗号分隔，只存变量名，值取调度器环境）</label>
+                <input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>提示词后缀（追加到任务 prompt）</label>
+                <textarea value={form.prompt_suffix} onChange={(e) => setForm({ ...form, prompt_suffix: e.target.value })} rows={2} className={`${inputCls} resize-y`} placeholder="例如：重点关注认证绕过与注入类漏洞" />
+              </div>
+              {modulePicker}
+              <JsonField label="skills（手写 JSON，高级；模块勾选优先用上面）" value={form.skills} onChange={(v) => setForm({ ...form, skills: v })} hint='[{"name":"x","repo":"https://…"}] 或 {"source":"embedded","name":"x","files":{…}}' />
+              <JsonField label="commands（JSON slash 命令）" value={form.commands} onChange={(v) => setForm({ ...form, commands: v })} />
+              <JsonField label="mcps（JSON MCP server）" value={form.mcps} onChange={(v) => setForm({ ...form, mcps: v })} hint='[{"name":"fs","type":"local","command":"npx","args":[…]}]' />
+              <JsonField label="subagents（JSON 子 agent）" value={form.subagents} onChange={(v) => setForm({ ...form, subagents: v })} />
+              <div className="mt-1 flex gap-2">
+                <button
+                  onClick={saveProfile}
+                  className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[12px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
+                >
+                  <FloppyDisk size={13} /> {form.id ? "保存" : "创建"}
+                </button>
+                {form.id && (
+                  <button
+                    onClick={async () => {
+                      await api.deleteProfile(form.id!).catch(() => {});
+                      setForm(EMPTY_FORM);
+                      flash("已删除");
+                      reload();
+                    }}
+                    className="flex items-center gap-1.5 rounded-md border border-red-900/60 px-3 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
+                  >
+                    <Trash size={13} /> 删除
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {tab === "rules" && rules && settings && (
+          <div className="flex flex-col gap-4">
+            <section>
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                profile 绑定（job 类型 → agent 配置）
+              </div>
+              <div className="flex flex-col gap-2">
+                {bindSelect("audit_module", "audit_module（审计）")}
+                {bindSelect("verify_finding", "verify_finding（验证）")}
+                {bindSelect("default", "default（兜底）")}
+              </div>
+            </section>
+
+            <section className="border-t border-ink-800 pt-3">
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                派生与重试规则
+              </div>
+              <div>
+                <label className={labelCls}>自动验证 severity（逗号分隔）</label>
+                <input
+                  value={rules.autoVerifySeverities.join(",")}
+                  onChange={(e) =>
+                    setRules({ ...rules, autoVerifySeverities: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })
+                  }
+                  className={inputCls}
+                />
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {numField("maxFollowupsPerJob", "每 job followup 上限")}
+                {numField("maxFollowupDepth", "followup 最大深度")}
+                {numField("maxAutoRetries", "失败自动重试上限")}
+                <div />
+                {numField("auditTimeoutSec", "审计超时（秒）")}
+                {numField("verifyTimeoutSec", "验证超时（秒）")}
+              </div>
+            </section>
+
+            <button
+              onClick={saveRules}
+              className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[12px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
+            >
+              <FloppyDisk size={13} /> 保存规则
+            </button>
+          </div>
+        )}
+
+        {tab === "sources" && (
+          <div className="flex flex-col gap-3">
+            <div className="text-[11px] leading-relaxed text-zinc-500">
+              Agent 的插件 / skill 集中托管在 Git 仓库（如{" "}
+              <span className="font-mono text-zinc-400">SumSec-Skills</span>
+              ）。同步后扫描出全部模块，在「Agent 配置」里按 profile 勾选下发；内容随同步缓存，跑任务不再访问 Git。
+            </div>
+
+            {sources.map((s) => (
+              <div key={s.id} className="rounded-lg border border-ink-700 bg-ink-850/60 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[12px] font-medium text-zinc-100">{s.name}</span>
+                  <span className="font-mono text-[10px] text-zinc-500">{s.branch}</span>
+                  <span className="ml-auto font-mono text-[10px] text-zinc-600">
+                    {s.module_count ?? sourceDetails[s.id]?.catalog_json.length ?? 0} 模块
+                  </span>
+                </div>
+                <div className="mt-0.5 truncate font-mono text-[10px] text-zinc-600">{s.repo_url}</div>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <span className="font-mono text-[10px] text-zinc-600">
+                    {s.synced_at ? `同步于 ${new Date(s.synced_at).toLocaleString()}` : "未同步"}
+                  </span>
+                  <button
+                    onClick={async () => {
+                      setSyncing(s.id);
+                      try {
+                        const r = await api.syncSkillSource(s.id);
+                        flash(`同步完成：${r.modules} 个模块`);
+                        reload();
+                      } catch (e) {
+                        flash(`同步失败：${e instanceof Error ? e.message : e}`);
+                      } finally {
+                        setSyncing(null);
+                      }
+                    }}
+                    disabled={syncing === s.id}
+                    className="ml-auto flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[10px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200 disabled:opacity-50"
+                  >
+                    <ArrowsClockwise size={11} className={syncing === s.id ? "animate-spin" : ""} />
+                    {syncing === s.id ? "同步中…" : "同步"}
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await api.deleteSkillSource(s.id).catch(() => {});
+                      flash("已删除");
+                      reload();
+                    }}
+                    className="flex items-center gap-1 rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[10px] text-red-300 transition-colors hover:bg-red-950/40"
+                  >
+                    <Trash size={11} />
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                添加模块源
+              </span>
+              <input
+                value={newSource.name}
+                onChange={(e) => setNewSource({ ...newSource, name: e.target.value })}
+                className={inputCls}
+                placeholder="名称（如 sumsec-skills）"
+              />
+              <input
+                value={newSource.repo_url}
+                onChange={(e) => setNewSource({ ...newSource, repo_url: e.target.value })}
+                className={inputCls}
+                placeholder="https://github.com/SummerSec/SumSec-Skills"
+              />
+              <input
+                value={newSource.branch}
+                onChange={(e) => setNewSource({ ...newSource, branch: e.target.value })}
+                className={inputCls}
+                placeholder="分支（默认 main）"
+              />
+              <button
+                onClick={async () => {
+                  if (!newSource.name.trim() || !newSource.repo_url.trim()) return flash("名称与仓库地址必填");
+                  try {
+                    await api.createSkillSource({
+                      name: newSource.name.trim(),
+                      repo_url: newSource.repo_url.trim(),
+                      branch: newSource.branch.trim() || "main",
+                    });
+                    setNewSource({ name: "", repo_url: "", branch: "main" });
+                    flash("已添加，点「同步」扫描模块");
+                    reload();
+                  } catch (e) {
+                    flash(`添加失败：${e instanceof Error ? e.message : e}`);
+                  }
+                }}
+                className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[12px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
+              >
+                <Plus size={13} /> 添加
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}

@@ -378,6 +378,27 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 
 **agent-harness 收缩为**：自定义镜像（预装 claude CLI + 审计工具链）+ hooks/MCP 配置约定，不再是独立的沙箱内服务。
 
+### 8.1 Agent 配置体系（agent_profiles）
+
+三层结构，**下一 job 生效**（job 创建时冻结快照，改配置不影响已建 job，历史可复现）：
+
+| 层 | 位置 | 内容 |
+|----|------|------|
+| 存储 | `agent_profiles` 表 | name / agent_cli（claude-code/open-code/codex）/ model / env_keys / modules / skills / commands / mcps / subagents / prompt_suffix |
+| 决策 | `projects.config_json` | `profiles`（job 类型 → profile id 绑定）+ `rules`（autoVerifySeverities / maxFollowupsPerJob / maxFollowupDepth / maxAutoRetries / auditTimeoutSec / verifyTimeoutSec 覆盖，缺省回落 env） |
+| 执行 | `jobs.agent_snapshot_json` | 建 job 时冻结的快照；executor 按快照决定 provider/model/env/prompt 后缀与下发内容 |
+
+纪律（§9）：`env_keys` **只存变量名引用**，密钥值运行时从调度器 `process.env` 解析，永不落库。
+
+### 8.2 Git 模块源（skill_sources）
+
+Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个 profile 按需勾选：
+
+- `POST /skill-sources/:id/sync`：浅克隆 → 扫描 `SKILL.md`（skill）与 `commands/*.md`（slash 命令）→ catalog（含文件内容）落库缓存
+- 模块归属按最近含 `.claude-plugin/plugin.json` 的祖先目录分组（= 插件）
+- profile 勾选 `["<source_id>:<module_id>"]`，快照时展开为 agentbox **embedded skills / commands** 与手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 差量上传进沙箱
+- 内容在 sync 时缓存，跑任务不再访问 Git —— 断网/私有网络也能跑
+
 ---
 
 ## 9. 安全与资源策略

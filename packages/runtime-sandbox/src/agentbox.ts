@@ -8,6 +8,12 @@
  *   （MVP 用文件契约代替 MCP 注入：断网/中转环境下最稳；MCP 化留作 Phase 3 优化）
  */
 import { Agent, Sandbox } from "agentbox-sdk";
+import type {
+  AgentCommandConfig,
+  AgentMcpConfig,
+  AgentSkillConfig,
+  AgentSubAgentConfig,
+} from "agentbox-sdk";
 import path from "node:path";
 import type { ProvisionInput, RunHandle, SandboxRunner } from "./index.js";
 
@@ -75,6 +81,11 @@ export interface RealAgentSpec {
   model?: string;
   env: Record<string, string>;
   prompt: string;
+  /** Agent 配置下发（agentbox setup 差量上传，见 §8.1 agent_profiles） */
+  skills?: AgentSkillConfig[];
+  commands?: AgentCommandConfig[];
+  mcps?: AgentMcpConfig[];
+  subAgents?: AgentSubAgentConfig[];
   /** 种子文件：沙箱绝对路径 → 内容（如 /workspace/src/auth/login.php） */
   seedFiles?: Record<string, string>;
   /** 运行后要读回的文件 */
@@ -103,11 +114,16 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   }
 
   // 2. 起 agent（server 进程模式，权限完全开放 §16）
+  // skills/commands/mcps/subAgents 随 setup() 差量上传进沙箱（动态下发，§8.1）
   const agent = new Agent(spec.provider, {
     sandbox,
     cwd: "/workspace",
     env: spec.env,
     approvalMode: "auto",
+    ...(spec.skills?.length ? { skills: spec.skills } : {}),
+    ...(spec.commands?.length ? { commands: spec.commands } : {}),
+    ...(spec.mcps?.length ? { mcps: spec.mcps } : {}),
+    ...(spec.subAgents?.length ? { subAgents: spec.subAgents } : {}),
   });
 
   // setup() 必须显式调用：上传 agent 配置 + 启动沙箱内 relay/server

@@ -1,7 +1,8 @@
-import { ShieldCheck } from "@phosphor-icons/react";
+import { Gear, ShieldCheck } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api, type CanvasSummary, type Project } from "./api";
 import { CanvasView } from "./CanvasView";
+import { SettingsPanel } from "./SettingsPanel";
 import { TaskList, targetLine } from "./TaskList";
 
 const POLL_MS = 5000;
@@ -11,6 +12,7 @@ export default function App() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const [selectedCanvasId, setSelectedCanvasId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 项目列表：启动时加载一次
@@ -90,6 +92,15 @@ export default function App() {
           <span className="dfh-live-dot inline-block size-1.5 rounded-full bg-acc-500" />
           只读画布 / 5s 轮询
         </span>
+        <button
+          onClick={() => setShowSettings((s) => !s)}
+          aria-label="设置"
+          className={`rounded-md p-1.5 transition-colors ${
+            showSettings ? "bg-ink-800 text-zinc-100" : "text-zinc-500 hover:bg-ink-800 hover:text-zinc-200"
+          }`}
+        >
+          <Gear size={16} />
+        </button>
       </header>
 
       {error && (
@@ -103,13 +114,18 @@ export default function App() {
         (currentProjectId ? (
           <div className="flex min-h-0 flex-1">
             <TaskList canvases={canvases} selectedId={selectedCanvasId} onSelect={setSelectedCanvasId} />
-            {selectedCanvasId ? (
-              <CanvasView canvasId={selectedCanvasId} />
-            ) : (
-              <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
-                暂无任务画布，等待 Plane 领取或 POST /jobs
-              </div>
-            )}
+            <div className="relative min-w-0 flex-1">
+              {selectedCanvasId ? (
+                <CanvasView canvasId={selectedCanvasId} />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                  暂无任务画布，等待 Plane 领取或 POST /jobs
+                </div>
+              )}
+              {showSettings && (
+                <SettingsPanel projectId={currentProjectId} onClose={() => setShowSettings(false)} />
+              )}
+            </div>
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
