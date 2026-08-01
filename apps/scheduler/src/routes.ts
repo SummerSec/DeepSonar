@@ -78,7 +78,15 @@ const PatchProjectBody = z.object({
 const CreateTaskBody = z.object({
   title: z.string().trim().min(1).max(200),
   content: z.string().trim().min(1).max(20_000),
-}).strict();
+});
+const TriggerTaskBody = z.object({
+  event_id: z.string().trim().min(1).max(200),
+  source: z.string().trim().min(1).max(100),
+  event_type: z.string().trim().min(1).max(100),
+  title: z.string().trim().min(1).max(200).optional(),
+  content: z.string().trim().min(1).max(20_000).optional(),
+  data: z.record(z.string(), z.unknown()).default({}),
+});
 const PriorityBody = z.object({ priority: z.number().int() });
 const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
 
@@ -202,11 +210,61 @@ export function registerRoutes(app: FastifyInstance) {
     const { job, duplicated } = await createJob({
       projectId: id,
       canvasId,
-      type: "audit_module",
-      payload: { title: body.title, content: body.content, goal: body.content },
+      type: "hub_reason",
+      payload: {
+        title: body.title,
+        content: body.content,
+        goal: body.content,
+        trigger: { kind: "user_task" },
+      },
     });
     if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
     return reply.code(201).send({ canvas_id: canvasId, job });
+  });
+
+  // 事件入口：监控、Webhook、CI 等机器事件与人工任务共用 Hub 决策链路。
+  app.post("/projects/:id/events", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = TriggerTaskBody.parse(req.body);
+    const [project] = await sql`SELECT id, status FROM projects WHERE id = ${id}`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    if (project.status !== "active") return reply.code(409).send({ error: "项目已归档，不能接收事件" });
+
+    const serialized = JSON.stringify(body.data);
+    const content = body.content ?? `收到 ${body.source} 的 ${body.event_type} 事件：\n${serialized}`;
+    if (Buffer.byteLength(content, "utf8") > 20_000) {
+      return reply.code(413).send({ error: "事件内容超过 20000 字节，请只发送决策所需信息" });
+    }
+    const title = body.title ?? `[${body.source}] ${body.event_type}`;
+    const trigger = {
+      kind: "external_event",
+      source: body.source,
+      event_type: body.event_type,
+      event_id: body.event_id,
+      data: body.data,
+    };
+    const ingressKey = `event:${body.source}:${body.event_id}`;
+    const canvasId = await ensureCanvasForTask({
+      projectId: id,
+      title,
+      target: { title, content, goal: content, trigger },
+      triggerSource: body.source,
+      triggerEventId: body.event_id,
+      triggerPayload: body.data,
+    });
+    const { job, duplicated } = await createJob({
+      projectId: id,
+      canvasId,
+      type: "hub_reason",
+      ingressKey,
+      payload: { title, content, goal: content, trigger },
+    });
+    if (duplicated || !job) {
+      const [existing] = await sql`
+        SELECT * FROM jobs WHERE project_id = ${id} AND ingress_key = ${ingressKey} LIMIT 1`;
+      return reply.code(200).send({ canvas_id: canvasId, job: existing ?? null, duplicated: true });
+    }
+    return reply.code(201).send({ canvas_id: canvasId, job, duplicated: false });
   });
 
   // 重试：新建 job 复用原画布（历史 job 保留；终态 job 永不被改回 pending）
@@ -214,17 +272,17 @@ export function registerRoutes(app: FastifyInstance) {
     const { canvasId } = req.params as { canvasId: string };
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
-    const [last] = await sql`
-      SELECT * FROM jobs WHERE canvas_id = ${canvasId} ORDER BY created_at DESC LIMIT 1`;
-    if (!last) return reply.code(409).send({ error: "该任务还没有执行记录" });
+    const [source] = await sql`
+      SELECT * FROM jobs WHERE canvas_id = ${canvasId} ORDER BY created_at ASC LIMIT 1`;
+    if (!source) return reply.code(409).send({ error: "该任务还没有执行记录" });
     const { job, duplicated } = await createJob({
       projectId: canvas.project_id as string,
       canvasId,
       planeIssueId: (canvas.plane_issue_id as string) ?? undefined,
-      type: last.type as string,
-      payload: last.payload_json as Record<string, unknown>,
-      priority: last.priority as number,
-      timeoutSec: last.timeout_sec as number,
+      type: source.type as string,
+      payload: source.payload_json as Record<string, unknown>,
+      priority: source.priority as number,
+      timeoutSec: source.timeout_sec as number,
     });
     if (duplicated || !job) return reply.code(409).send({ error: "已有活动 job，不能重试" });
     return reply.code(201).send(job);

@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CanvasData, type FindingSummary, type JobSummary } from "../api";
 import { CanvasView } from "../CanvasView";
-import { targetLine } from "../TaskList";
 import {
   DataTable,
   EmptyState,
@@ -59,6 +58,9 @@ export function TaskCanvasPage() {
 
   const scopeEntries = useMemo(() => {
     const t = meta?.target_json ?? {};
+    if (typeof t.content === "string" && t.content.trim()) {
+      return [["内容", t.content]] as [string, unknown][];
+    }
     return Object.entries(t).filter(
       ([, v]) => v !== null && v !== undefined && String(v).length > 0,
     );
@@ -94,23 +96,18 @@ export function TaskCanvasPage() {
           <span className="truncate text-[15px] font-medium text-zinc-200">
             {meta?.title ?? "加载任务…"}
           </span>
-          {meta && targetLine(meta.target_json) && (
-            <span className="ml-2 truncate font-mono text-[13px] text-zinc-600">
-              {targetLine(meta.target_json)}
-            </span>
-          )}
         </div>
         <span className="hidden font-mono text-[12px] text-zinc-600 sm:inline">
           仅本任务 · {findings.length} 发现 · {jobs.length} 运行
         </span>
       </div>
 
-      {/* 本次任务范围（target_json），不展示其它任务 */}
+      {/* 新任务只展示自然语言内容；历史任务兼容展示原 target_json。 */}
       {scopeEntries.length > 0 && (
         <div className="shrink-0 border-b border-ink-800 bg-ink-900/50 px-4 py-2.5">
           <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[12px] uppercase tracking-[0.12em] text-zinc-500">
             <Target size={13} className="text-acc-500" />
-            本次审计范围
+            {typeof meta?.target_json?.content === "string" ? "任务内容" : "本次审计范围"}
           </div>
           <div className="flex flex-wrap gap-2">
             {scopeEntries.map(([k, v]) => (

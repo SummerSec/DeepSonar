@@ -219,6 +219,8 @@ export interface CreateJobInput {
   payload?: Record<string, unknown>;
   timeoutSec?: number;
   followupDepth?: number;
+  /** 外部入口幂等键；仅入口 job 使用。 */
+  ingressKey?: string;
 }
 
 export async function createJob(input: CreateJobInput) {
@@ -238,6 +240,7 @@ export async function createJob(input: CreateJobInput) {
         payload_json: (input.payload ?? {}) as never,
         timeout_sec: input.timeoutSec ?? config.timeouts.auditSec,
         followup_depth: input.followupDepth ?? 0,
+        ingress_key: input.ingressKey ?? null,
       })}
       RETURNING *`;
     return { job, duplicated: false };
@@ -257,6 +260,9 @@ export interface EnsureCanvasInput {
   planeIssueId?: string;
   title: string;
   target: Record<string, unknown>;
+  triggerSource?: string;
+  triggerEventId?: string;
+  triggerPayload?: Record<string, unknown>;
 }
 
 /**
@@ -286,6 +292,31 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
       } else {
         const [existing] = await tx`
           SELECT id FROM canvases WHERE plane_issue_id = ${input.planeIssueId}`;
+        canvasId = existing.id as string;
+      }
+    } else if (input.triggerSource && input.triggerEventId) {
+      const inserted = await tx`
+        INSERT INTO canvases ${tx({
+          project_id: input.projectId,
+          plane_issue_id: null,
+          title: input.title,
+          target_json: input.target as never,
+          trigger_source: input.triggerSource,
+          trigger_event_id: input.triggerEventId,
+          trigger_payload_json: (input.triggerPayload ?? {}) as never,
+        })}
+        ON CONFLICT (project_id, trigger_source, trigger_event_id)
+          WHERE trigger_event_id IS NOT NULL DO NOTHING
+        RETURNING id`;
+      if (inserted.length > 0) {
+        canvasId = inserted[0].id as string;
+        created = true;
+      } else {
+        const [existing] = await tx`
+          SELECT id FROM canvases
+          WHERE project_id = ${input.projectId}
+            AND trigger_source = ${input.triggerSource}
+            AND trigger_event_id = ${input.triggerEventId}`;
         canvasId = existing.id as string;
       }
     } else {
@@ -419,7 +450,8 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 
     // 画布：finding 节点挂在 job 节点下，坐标服务端分配（§3.2）
     const [jobNode] = await tx`
-      SELECT id, canvas_id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
+      SELECT id, canvas_id, x, y FROM canvas_nodes
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
     if (jobNode) {
       const [{ count }] = await tx<[{ count: number }]>`
         SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'finding'`;
@@ -541,6 +573,10 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
       // 角色白名单校验：hub 指了未启用的角色 → 落到第一个启用角色
       const role = enabledNames.has(it.role ?? "") ? (it.role as string) : roles[0].name;
       const snapshot = await resolveProfileSnapshot(tx as unknown as typeof sql, job.project_id as string, role);
+      const trigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
+        kind?: string;
+      };
+      const hubFollowup = ["confirmed_finding", "risk_acceptance_followup"].includes(trigger.kind ?? "");
       const [roleJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: job.project_id as string,
@@ -548,7 +584,10 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           agent_snapshot_json: (snapshot ?? null) as never,
           type: role,
           priority: (job.priority as number) + 1,
-          payload_json: { intent: { description: it.description, from: it.from ?? [] } } as never,
+          payload_json: {
+            intent: { description: it.description, from: it.from ?? [] },
+            ...(hubFollowup ? { hub_followup: true } : {}),
+          } as never,
           timeout_sec: rules.auditTimeoutSec,
           followup_depth: 0,
         })}
@@ -614,8 +653,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 
 async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: Record<string, unknown>) {
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
-  const severity = finding.severity as string;
-  if (!rules.autoVerifySeverities.includes(severity)) return;
+  // Finding 必须经过验证后才能进入后续决策，不再让人或 severity 配置决定是否验证。
   if ((job.followup_depth as number) >= rules.maxFollowupDepth) return;
 
   // 同一 finding 已有 verify job → 不重复派生
@@ -720,6 +758,11 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   let forceHubReview = false;
   let hubSourceNodeIds: string[] = [];
   let hubTrigger: Record<string, unknown> | undefined;
+  const completedPayload = (job?.payload_json ?? {}) as Record<string, unknown>;
+  if (completedPayload.hub_followup === true) {
+    forceHubReview = true;
+    hubTrigger = { kind: "risk_acceptance_followup" };
+  }
   if (job?.type === "verify_finding" && job.finding_id && status === "succeeded") {
     const verdict = result?.verdict ?? "needs_human";
     await tx`UPDATE findings SET verify_status = ${verdict} WHERE id = ${job.finding_id}`;
@@ -764,6 +807,16 @@ async function maybeTriggerHub(
   if (!job?.canvas_id || job.type === "hub_reason") return;
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   if (!rules.hubEnabled && !options.force) return;
+
+  // 自动验证尚未结束时不让普通 Hub 提前收敛；confirmed 会以 force 路径立即进入风险验收。
+  if (!options.force) {
+    const activeVerifications = await tx`
+      SELECT 1 FROM jobs
+      WHERE canvas_id = ${job.canvas_id as string} AND type = 'verify_finding'
+        AND status IN ('pending','claimed','provisioning','running')
+      LIMIT 1`;
+    if (activeVerifications.length > 0) return;
+  }
 
   const active = await tx`
     SELECT 1 FROM jobs

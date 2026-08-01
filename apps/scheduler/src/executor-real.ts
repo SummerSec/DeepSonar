@@ -114,7 +114,8 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
 
   const isVerify = type === "verify_finding";
   const isHub = type === "hub_reason";
-  const isRole = !isVerify && !isHub && type !== "audit_module"; // explore 等角色 job
+  const isAudit = type === "audit_module" || type === "audit";
+  const isRole = !isVerify && !isHub && !isAudit; // explore 等产出 fact 的角色 job
   const payload = job.payload_json as Record<string, unknown>;
   const canvasId = (job.canvas_id as string) ?? null;
 
@@ -137,7 +138,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
 
   // prompt 按 job 类型分派；hub/角色 job 需要整张图（YAML）作上下文
   const rules = await rulesForProject(sql, job.project_id as string);
-  const graph = canvasId && (isHub || isRole) ? await buildGraphSnapshot(canvasId) : null;
+  const graph = canvasId && (isHub || isRole || type === "audit") ? await buildGraphSnapshot(canvasId) : null;
   const intentDesc =
     ((payload.intent as { description?: string } | undefined)?.description as string) ?? "";
   let basePrompt: string;
@@ -153,6 +154,13 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     const trigger = payload.trigger as { kind?: string; finding_id?: string } | undefined;
     if (trigger?.kind === "confirmed_finding") {
       basePrompt = `${basePrompt}\n\n本轮由已确认风险触发。请对该 Finding 做验收，并自行决定后续工作；优先考虑运行/模型环境搭建、最小 PoC、动态复现、影响确认等，可派发 test、verify、analyze、code 等已启用角色。不要仅因静态验证已 confirmed 就直接宣布目标完成。`;
+    } else if (trigger?.kind === "risk_acceptance_followup") {
+      basePrompt = `${basePrompt}\n\n这是已确认风险的回收验收轮次。请审查环境搭建、PoC、动态复现或影响分析 Agent 新产出的事实：证据足够则给出 complete 结论；证据不足则只派发必要的下一步，不要重复已有工作。`;
+    } else if (["user_task", "plane_issue", "external_event"].includes(trigger?.kind ?? "")) {
+      basePrompt = `${basePrompt}\n\n这是任务的首次决策轮次。你是入口决策者，不要在尚未派发任何意图时直接 complete。请根据目标选择 audit、explore、analyze、verify、test、code 等最合适的已启用角色；安全审计类目标应优先派发 audit。初始意图的 from 可以引用 graph 中的 root_id。`;
+      if (trigger?.kind === "external_event") {
+        basePrompt = `${basePrompt}\n这是外部事件触发的任务；先判断事件表达的风险和所需动作，再决定派发范围，不要把事件字段机械当成人工指令。`;
+      }
     }
   } else if (isRole) {
     if (!graph) throw new Error(`${type} job 缺 canvas_id，无法读图`);
@@ -169,8 +177,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
       finding_summary: finding.summary ?? "无",
     });
   } else {
-    basePrompt = render(await templateFor("audit_module", FALLBACK_AUDIT), {
+    basePrompt = render(await templateFor(type === "audit" ? "audit" : "audit_module", FALLBACK_AUDIT), {
       module_path: (payload.module_path as string) ?? "全部模块",
+      intent: intentDesc || String(payload.content ?? payload.goal ?? "执行安全审计"),
+      graph: graph?.yaml ?? "无",
     });
     const taskTitle = String(payload.title ?? "").trim();
     const taskContent = String(payload.content ?? payload.goal ?? "").trim();
