@@ -18,8 +18,12 @@ DeepSonar Management API CLI（Management Skill 的脚本入口）
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+from pathlib import Path
+import re
 import sys
+from typing import Dict
 import urllib.error
 import urllib.request
 
@@ -306,6 +310,98 @@ def _schema_cmd(pos, f):
     raise ApiError(f"未知 schema 格式: {kind}（openapi|summary|markdown）")
 
 
+def _builtin_prompt_templates(schema_path: Path) -> Dict[str, str]:
+    """从空库基线提取内置 RoleConfig Prompt，避免线上同步维护第二份模板。"""
+    if not schema_path.is_file():
+        raise ApiError(f"schema 文件不存在: {schema_path}")
+    # newline="" 保留 Windows CRLF；Scheduler 基线执行时同样保留文件原字节。
+    with schema_path.open("r", encoding="utf-8", newline="") as fh:
+        text = fh.read()
+    pairs = re.findall(
+        r"\('([a-z][a-z0-9_]*)',\s*\$instructions\$(.*?)\$instructions\$\)",
+        text,
+        flags=re.DOTALL,
+    )
+    # 保留 dollar-quoted 文本的原始换行，使全新数据库与线上同步得到完全相同的 Prompt 哈希。
+    templates = {name: prompt for name, prompt in pairs}
+    expected = {"explore", "analyze", "review", "test", "code", "audit", "hub_reason", "verify", "report"}
+    missing = sorted(expected - templates.keys())
+    if missing:
+        raise ApiError(f"schema 缺少内置 Prompt: {', '.join(missing)}")
+    return templates
+
+
+def _role_config_put_body(cfg: dict, instructions: str, disable_human: bool) -> dict:
+    """把 GET view 转成声明式 PUT body；保留所有用户运行配置，只替换 Prompt。"""
+    tools = dict(cfg.get("platform_tools_json") or {})
+    if disable_human:
+        # 兼容尚未部署新工具矩阵的实例；新版服务端会拒绝该键，调用方随后无键重试。
+        tools["request_human"] = False
+    return {
+        "agent_cli": cfg.get("agent_cli") or "claude-code",
+        "model": cfg.get("model"),
+        "reasoning": cfg.get("reasoning"),
+        "env_keys": cfg.get("env_keys") or [],
+        "env_vars": cfg.get("env_vars_json") or {},
+        "modules": cfg.get("modules_json") or [],
+        "skills": cfg.get("skills_json") or [],
+        "commands": cfg.get("commands_json") or [],
+        "mcps": cfg.get("mcps_json") or [],
+        "subagents": cfg.get("subagents_json") or [],
+        "platform_tools": tools,
+        "instructions_markdown": instructions,
+        "runtime_image_key": cfg.get("runtime_image_key"),
+        "credentials": [
+            {"credential_id": item["credential_id"], "purpose": item["purpose"]}
+            for item in (cfg.get("credentials") or [])
+        ],
+        "config_files": [
+            {"path": item["path"], "content": item["content"]}
+            for item in (cfg.get("config_files") or [])
+        ],
+    }
+
+
+def _role_configs_sync_builtin_prompts(_pos, f):
+    """从 database/schema.sql 同步全局内置 Prompt；不覆盖其它 RoleConfig 字段。"""
+    default_schema = Path(__file__).resolve().parents[3] / "database" / "schema.sql"
+    schema_path = Path(str(f.get("schema") or default_schema)).resolve()
+    templates = _builtin_prompt_templates(schema_path)
+    configs = call("GET", "/role-configs/global") or []
+    by_name = {str(cfg.get("role_name")): cfg for cfg in configs}
+    missing_online = sorted(set(templates) - set(by_name))
+    if missing_online:
+        raise ApiError(f"线上缺少全局内置 RoleConfig: {', '.join(missing_online)}")
+
+    dry_run = bool(f.get("dry-run"))
+    results = []
+    for role_name, instructions in templates.items():
+        cfg = by_name[role_name]
+        before = str(cfg.get("instructions_markdown") or "")
+        changed = before != instructions
+        disable_human = role_name in {"verify", "report"}
+        body = _role_config_put_body(cfg, instructions, disable_human=disable_human)
+        if not dry_run and (changed or disable_human):
+            role_id = need(cfg.get("role_id"), f"线上 {role_name}.role_id")
+            try:
+                call("PUT", f"/role-configs/global/{role_id}", body)
+            except ApiError as error:
+                # 新版服务端已从 verify/report 合法工具集中移除 request_human；去掉兼容键重试。
+                if disable_human and error.status == 400 and "request_human" in str(error):
+                    body["platform_tools"].pop("request_human", None)
+                    call("PUT", f"/role-configs/global/{role_id}", body)
+                else:
+                    raise
+        results.append({
+            "role": role_name,
+            "changed": changed,
+            "current_prompt_sha256": hashlib.sha256(before.encode("utf-8")).hexdigest(),
+            "prompt_sha256": hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
+            "request_human_disabled": disable_human,
+        })
+    return {"ok": True, "dry_run": dry_run, "schema": str(schema_path), "roles": results}
+
+
 def _p0(pos, name):
     return need(pos[0] if len(pos) > 0 else None, name)
 
@@ -392,6 +488,7 @@ COMMANDS = {
     "role-configs.global-put": lambda pos, f: call(
         "PUT", f"/role-configs/global/{_p0(pos, 'roleId')}",
         parse_json_arg(need(f.get("data"), "--data '{...}' 或 @file.json"), "--data")),
+    "role-configs.sync-builtin-prompts": _role_configs_sync_builtin_prompts,
     "role-configs.list": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}/role-configs"),
     "role-configs.put": lambda pos, f: call(
         "PUT", f"/projects/{_p0(pos, 'projectId')}/role-configs/{_p1(pos, 'roleId')}",
