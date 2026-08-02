@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { sql } from "./db.js";
-import { canvasFindingsConverged, type FindingStatusProblem } from "./verify.js";
+import type { FindingStatusProblem } from "./verify.js";
 
 type Tx = typeof sql;
 
