@@ -123,6 +123,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /runtime-images": "images:read",
   "GET /runtime-images/:id": "images:read",
   "POST /runtime-images/import": "images:manage",
+  "POST /runtime-images/:id/official-digest": "images:approve",
   "POST /runtime-image-versions/:id/rescan": "images:manage",
   "POST /runtime-image-versions/:id/status": "images:approve",
   "GET /runtime-image-versions/:id/usage": "images:read",

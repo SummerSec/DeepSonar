@@ -149,6 +149,11 @@ const RuntimeImageStatusBody = z.object({
   status: z.enum(["trusted", "rejected", "disabled", "revoked"]),
   reason: z.string().trim().min(1).max(2_000).optional(),
 });
+/** 官方 catalog 条目登记不可变 digest 为 trusted（等价启动时 bootstrapOfficialRuntimeImages） */
+const OfficialRuntimeImageDigestBody = z.object({
+  image_ref: z.string().trim().min(3).max(500),
+  version: z.string().trim().min(1).max(100).optional(),
+});
 const ProjectRuntimeImageBody = z.object({
   enabled: z.boolean().default(true),
   version_id: z.string().uuid().nullish(),
@@ -815,6 +820,74 @@ export function registerRoutes(app: FastifyInstance) {
       FROM runtime_image_versions v WHERE v.runtime_image_id = ${id}
       ORDER BY v.promoted_at DESC NULLS LAST, v.created_at DESC`;
     return { image, versions };
+  });
+
+  /**
+   * 官方镜像登记可信 digest。
+   * 官方条目不能走第三方 import；本地/运维常缺 DEEPSONAR_OFFICIAL_*_IMAGE，
+   * 此接口与启动 bootstrap 相同：只接受 @sha256 不可变引用，直接 trusted。
+   */
+  app.post("/runtime-images/:id/official-digest", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = OfficialRuntimeImageDigestBody.parse(req.body);
+    const [image] = await sql`SELECT * FROM runtime_images WHERE id = ${id}`;
+    if (!image) return reply.code(404).send({ error: "runtime image not found" });
+    if (!image.official) {
+      return reply.code(400).send({ error: "仅官方镜像可通过此接口登记 digest；第三方请走导入 + 准入扫描 + 批准" });
+    }
+    const digest = immutableDigest(body.image_ref);
+    if (!digest) {
+      return reply.code(400).send({
+        error: "必须使用不可变引用 name@sha256:…；可移动 tag 不会被信任",
+      });
+    }
+    if (!config.images.isRegistryAllowed(body.image_ref)) {
+      return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
+    }
+    const versionName = body.version ?? `configured-${digest.slice(7, 19)}`;
+    const now = new Date();
+    const [version] = await sql`
+      INSERT INTO runtime_image_versions ${sql({
+        runtime_image_id: image.id,
+        version: versionName,
+        image_ref: body.image_ref,
+        resolved_ref: body.image_ref,
+        digest,
+        contract_version: "deepsonar.runtime.contract/v1",
+        platforms_json: ["linux/amd64", "linux/arm64"] as never,
+        scan_summary_json: {
+          source: "operator-registered-official",
+          contract: "declared",
+          registered_by: req.actor?.name ?? "internal",
+        } as never,
+        trust_status: "trusted",
+        approved_by: req.actor?.name ?? "internal",
+        scanned_at: now,
+        approved_at: now,
+        promoted_at: now,
+      } as never)}
+      ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
+        image_ref = EXCLUDED.image_ref,
+        resolved_ref = EXCLUDED.resolved_ref,
+        trust_status = 'trusted',
+        approved_by = EXCLUDED.approved_by,
+        approved_at = EXCLUDED.approved_at,
+        promoted_at = EXCLUDED.promoted_at,
+        status_reason = NULL,
+        updated_at = now()
+      RETURNING *`;
+    await audit(req, {
+      action: "runtime_image.official_digest",
+      resourceType: "runtime_image_version",
+      resourceId: version.id as string,
+      after: {
+        image_key: image.image_key,
+        image_ref: body.image_ref,
+        digest,
+        trust_status: "trusted",
+      },
+    });
+    return reply.code(201).send({ image, version });
   });
 
   app.post("/runtime-images/import", async (req, reply) => {

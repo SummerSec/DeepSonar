@@ -1041,6 +1041,13 @@ export const api = {
   }) => send<{ image: RuntimeImageSummary; version: RuntimeImageVersion; scan: RuntimeImageScan }>(
     "POST", "/runtime-images/import", body,
   ),
+  /** 官方镜像登记 @sha256 digest 为 trusted（无版本时可用；等价 env bootstrap） */
+  registerOfficialRuntimeDigest: (
+    imageId: string,
+    body: { image_ref: string; version?: string },
+  ) => send<{ image: RuntimeImageSummary; version: RuntimeImageVersion }>(
+    "POST", `/runtime-images/${imageId}/official-digest`, body,
+  ),
   setRuntimeImageVersionStatus: (
     id: string,
     status: "trusted" | "rejected" | "disabled" | "revoked",
