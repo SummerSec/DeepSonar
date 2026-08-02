@@ -85,7 +85,7 @@ export function PageHeader({
 export function PrimaryButton({ children, busy, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean }) {
   return (
     <button {...props} disabled={busy || props.disabled} className={`primary-button group ${className}`}>
-      <span>{busy ? "处理中…" : children}</span>
+      <span className="primary-button-label">{busy ? "处理中…" : children}</span>
       <span className="button-orb" aria-hidden="true">
         {busy ? <CircleNotch size={15} className="animate-spin" /> : <ArrowUpRight size={15} weight="light" />}
       </span>
@@ -94,7 +94,7 @@ export function PrimaryButton({ children, busy, className = "", ...props }: Butt
 }
 
 export function SecondaryButton({ children, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button {...props} className={`secondary-button ${className}`}>{children}</button>;
+  return <button {...props} className={`secondary-button ${className}`}><span className="button-label">{children}</span></button>;
 }
 
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {

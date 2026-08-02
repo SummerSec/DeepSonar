@@ -439,7 +439,7 @@ export function SettingsPanel({
   const shellCls =
     variant === "page"
       ? "settings-panel flex h-full w-full flex-col bg-transparent"
-      : "deepsonar-sidebar absolute inset-y-2 right-2 z-30 flex w-[440px] flex-col overflow-hidden rounded-[22px] bg-[#111619] shadow-[0_24px_70px_rgba(0,0,0,.28)] ring-1 ring-white/[.09]";
+      : "theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-30 flex w-[440px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]";
 
   // 全局模式：角色注册表（含运行配置）/ 模块源 / 全局规则；项目模式：规则覆盖 / 角色启用与覆盖 / Plane 集成
   // 项目数据包在项目模块「数据」页；此处项目设置只做策略。平台包仅在全局 Agent 管理。
@@ -709,7 +709,7 @@ export function SettingsPanel({
                   onClick={() => setRoleForm(EMPTY_ROLE)}
                   className="flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 hover:border-ink-600 hover:text-zinc-200"
                 >
-                  <Plus size={11} /> 新建
+                  <Plus size={12} weight="bold" className="block" />新建
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -1006,7 +1006,7 @@ export function SettingsPanel({
                 }}
                 className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
               >
-                <Plus size={13} /> 添加
+                <Plus size={13} weight="bold" className="block" />添加
               </button>
             </div>
           </div>

@@ -250,7 +250,7 @@ export function TaskCanvasPage() {
   ];
 
   return (
-    <div className="task-workbench flex h-full min-h-0 flex-col bg-[#080b0d]">
+    <div className="task-workbench flex h-full min-h-0 flex-col bg-[var(--bg)]">
       {/* 工作台上下文：返回、任务标题与状态 */}
       <div className="task-workbench-header mx-3 mt-3 flex min-h-14 shrink-0 flex-wrap items-center gap-3 rounded-[20px] bg-white/[.03] px-3 py-2 ring-1 ring-white/[.06]">
         <Link
@@ -305,7 +305,7 @@ export function TaskCanvasPage() {
               <DotsThree size={16} weight="bold" />
             </button>
             {moreOpen && (
-              <div className="absolute right-0 top-full z-20 mt-1 min-w-[11rem] overflow-hidden rounded-xl bg-[#12161a] py-1 shadow-xl ring-1 ring-white/[.1]">
+              <div className="theme-drawer absolute right-0 top-full z-20 mt-1 min-w-[11rem] overflow-hidden rounded-xl py-1 shadow-xl ring-1 ring-[var(--line-strong)]">
                 <button
                   type="button"
                   disabled={convBusy}
@@ -377,7 +377,7 @@ export function TaskCanvasPage() {
         </div>
       )}
 
-      <div className="task-workbench-content relative mx-3 mb-3 min-h-0 flex-1 overflow-hidden rounded-[22px] bg-[#090c0e] ring-1 ring-white/[.055]">
+      <div className="task-workbench-content theme-drawer relative mx-3 mb-3 min-h-0 flex-1 overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
         {tab === "canvas" && <CanvasView canvasId={canvasId} />}
 
         {tab === "report" && <ReportPanel canvasId={canvasId} />}

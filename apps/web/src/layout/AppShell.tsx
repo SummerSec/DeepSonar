@@ -1,4 +1,4 @@
-import { Bug, ChartBar, Check, Crosshair, Folder, Gear, MagnifyingGlass, Moon, Palette, Queue, Robot, SidebarSimple, SignOut, Sun, User, X } from "@phosphor-icons/react";
+import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Folder, Gear, MagnifyingGlass, Moon, Palette, Queue, Robot, SignOut, Sun, User, X } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
@@ -24,7 +24,8 @@ const ACCENT_THEMES = [
   { id: "arctic", label: "极地蓝", caption: "冷静深色技术界面", color: "#78bfff", surface: "#0b0e10", scheme: "dark" },
   { id: "lime", label: "荧光青柠", caption: "高对比深色作业台", color: "#b8df68", surface: "#0b0e10", scheme: "dark" },
   { id: "titanium", label: "钛金属", caption: "低彩度深色专注模式", color: "#c6d0d5", surface: "#0b0e10", scheme: "dark" },
-  { id: "porcelain", label: "瓷白日光", caption: "清晰克制的亮色工作台", color: "#087a63", surface: "#f4f1ea", scheme: "light" },
+  { id: "porcelain", label: "瓷白日光", caption: "暖白亮色工作台", color: "#087a63", surface: "#f3f1ec", scheme: "light" },
+  { id: "mist", label: "雾白纸台", caption: "略沉冷白 · 比瓷白更收敛", color: "#3d6b8a", surface: "#e4e7ec", scheme: "light" },
 ] as const;
 type AccentTheme = (typeof ACCENT_THEMES)[number]["id"];
 
@@ -65,13 +66,43 @@ export function AppShell() {
 
   return <div className="app-frame">
     <a href="#main-content" className="skip-link">跳到主要内容</a><div className="ambient-field" aria-hidden="true" />
-    <aside className={`desktop-rail surface-shell ${collapsed ? "is-collapsed" : ""}`}><div className="rail-core surface-core"><div className="brand-lockup"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>LOOP GRAPH ENGINEERING</span></div><button className="rail-collapse" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? "展开导航" : "收起导航"} title={collapsed ? "展开导航" : "收起导航"}><SidebarSimple size={15} weight="light" /></button></div>
-      <ThemePicker value={accentTheme} collapsed={collapsed} onChange={setAccentTheme} />
-      <button className="command-trigger" onClick={() => setCommandOpen(true)} title="打开命令菜单"><MagnifyingGlass size={15} weight="light" /><span>搜索与跳转</span><kbd>⌘ K</kbd></button>
-      <MainNav projectId={projectId} />
-      <UserRailFooter />
-      <div className="rail-status"><span className="deepsonar-live-dot" /><div><strong>Scheduler online</strong><small>状态每 5 秒同步</small></div></div>
-    </div></aside>
+    <aside className={`desktop-rail surface-shell ${collapsed ? "is-collapsed" : ""}`}>
+      <div className="rail-core surface-core">
+        <div className="brand-lockup">
+          <div className="brand-mark"><DeepSonarMark /></div>
+          <div className="brand-copy">
+            <strong>DeepSonar</strong>
+            <span>LOOP GRAPH ENGINEERING</span>
+          </div>
+        </div>
+        <ThemePicker value={accentTheme} collapsed={collapsed} onChange={setAccentTheme} />
+        <button className="command-trigger" onClick={() => setCommandOpen(true)} title="打开命令菜单">
+          <MagnifyingGlass size={15} weight="light" />
+          <span>搜索与跳转</span>
+          <kbd>⌘ K</kbd>
+        </button>
+        <MainNav projectId={projectId} />
+        <UserRailFooter collapsed={collapsed} />
+        <div className="rail-status">
+          <span className="deepsonar-live-dot" />
+          <div>
+            <strong>Scheduler online</strong>
+            <small>状态每 5 秒同步</small>
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        className="rail-collapse"
+        onClick={() => setCollapsed((value) => !value)}
+        aria-label={collapsed ? "展开导航" : "收起导航"}
+        aria-expanded={!collapsed}
+        title={collapsed ? "展开导航" : "收起导航"}
+      >
+        {collapsed ? <CaretRight size={18} weight="bold" /> : <CaretLeft size={18} weight="bold" />}
+        <span className="rail-collapse-label">{collapsed ? "展开" : "收起"}</span>
+      </button>
+    </aside>
 
     <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>深流循迹</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
     <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><div className="mobile-menu-foot"><span className="deepsonar-live-dot" /> 调度器在线</div></div>
@@ -80,29 +111,32 @@ export function AppShell() {
   </div>;
 }
 
-function UserRailFooter() {
+function UserRailFooter({ collapsed }: { collapsed: boolean }) {
   const { user, me, status, logout } = useAuth();
   const navigate = useNavigate();
   if (!status?.auth_required) {
     return (
-      <div className="mx-2 mb-2 rounded-xl bg-white/[.03] px-3 py-2 text-[10px] text-zinc-600 ring-1 ring-white/[.05]">
-        开发模式 · 鉴权关闭
+      <div className="rail-user is-dev" title="开发模式 · 鉴权关闭">
+        {!collapsed && <span>开发模式 · 鉴权关闭</span>}
+        {collapsed && <span className="rail-user-dot" aria-hidden />}
       </div>
     );
   }
   const label = user?.display_name || user?.username || me?.actor?.name || "已登录";
   const role = user?.role || me?.actor?.role || me?.actor?.type || "";
   return (
-    <div className="mx-2 mb-2 flex items-center gap-2 rounded-xl bg-white/[.03] px-3 py-2 ring-1 ring-white/[.05]">
+    <div className={`rail-user ${collapsed ? "is-collapsed" : ""}`}>
       <User size={14} className="shrink-0 text-zinc-500" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[11px] font-medium text-zinc-300">{label}</div>
-        <div className="truncate font-mono text-[9px] text-zinc-600">{role}</div>
-      </div>
+      {!collapsed && (
+        <div className="rail-user-meta">
+          <div className="truncate text-[11px] font-medium text-zinc-300">{label}</div>
+          <div className="truncate font-mono text-[9px] text-zinc-600">{role}</div>
+        </div>
+      )}
       <button
         type="button"
         title="退出登录"
-        className="rounded-md p-1 text-zinc-500 hover:bg-white/[.06] hover:text-zinc-200"
+        className="rail-user-logout"
         onClick={async () => {
           await logout();
           navigate("/login");

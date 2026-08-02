@@ -311,7 +311,7 @@ export function RoleConfigEditor({
             <label className={labelCls}>非敏感环境变量</label>
             <div className="flex flex-col gap-1.5">
               {form.env_pairs.map((p, i) => <div key={i} className="flex items-center gap-1.5"><input value={p.key} onChange={(e) => setPair(i, { key: e.target.value })} className={`${inputCls} flex-1`} placeholder="变量名（如 LOG_LEVEL）" spellCheck={false} /><input value={p.value} onChange={(e) => setPair(i, { value: e.target.value })} className={`${inputCls} flex-[1.4]`} placeholder="值" spellCheck={false} /><button onClick={() => setForm((f) => ({ ...f, env_pairs: f.env_pairs.filter((_, idx) => idx !== i) }))} aria-label="删除该行" className="shrink-0 rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-red-950/40 hover:text-red-300"><Trash size={13} /></button></div>)}
-              <button onClick={() => setForm((f) => ({ ...f, env_pairs: [...f.env_pairs, { key: "", value: "" }] }))} className="flex w-fit items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 hover:border-ink-600 hover:text-zinc-200"><Plus size={11} /> 添加变量</button>
+              <button onClick={() => setForm((f) => ({ ...f, env_pairs: [...f.env_pairs, { key: "", value: "" }] }))} className="inline-flex w-fit items-center gap-1.5 rounded-md border border-ink-700 px-2 py-1 font-mono text-[12px] leading-none text-zinc-400 hover:border-ink-600 hover:text-zinc-200"><Plus size={12} weight="bold" className="block" />添加变量</button>
             </div>
             <div className="mt-1 text-[11px] leading-5 text-zinc-600">敏感值必须使用 Credential，疑似密钥名会被后端拒绝。</div>
           </div>

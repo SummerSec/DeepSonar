@@ -35,7 +35,7 @@ function shortId(id: string) {
 
 function SidebarField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="border-b border-white/[.05] py-3 last:border-0">
+    <div className="theme-divider border-b py-3 last:border-0">
       <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[.14em] text-zinc-600">{label}</div>
       <div className="text-[13px] leading-5 text-zinc-300">{children}</div>
     </div>
@@ -154,15 +154,15 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-[2px]"
+      className="theme-overlay fixed inset-0 z-50 flex justify-end backdrop-blur-[2px]"
       role="dialog"
       aria-modal="true"
       aria-label="Finding 详情"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <aside className="flex h-full w-full max-w-[1040px] flex-col border-l border-white/[.08] bg-[#0b0f12] shadow-2xl">
+      <aside className="theme-drawer flex h-full w-full max-w-[1040px] flex-col border-l">
         {/* Issue header */}
-        <header className="shrink-0 border-b border-white/[.06] px-5 py-4 sm:px-6">
+        <header className="theme-drawer-header theme-divider shrink-0 border-b px-5 py-4 sm:px-6">
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-zinc-500">
@@ -193,7 +193,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
               type="button"
               onClick={onClose}
               aria-label="关闭"
-              className="flex size-9 shrink-0 items-center justify-center rounded-full text-zinc-500 ring-1 ring-white/[.08] hover:bg-white/[.05] hover:text-white"
+              className="theme-surface flex size-9 shrink-0 items-center justify-center rounded-full text-zinc-500 ring-1 hover:opacity-90"
             >
               <X size={16} />
             </button>
@@ -214,11 +214,11 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_280px]">
               {/* ── Main: body + activity ── */}
-              <div className="min-w-0 border-white/[.05] px-5 py-5 sm:px-6 lg:border-r">
+              <div className="theme-divider min-w-0 px-5 py-5 sm:px-6 lg:border-r">
                 {/* Description */}
-                <section className="rounded-xl ring-1 ring-white/[.07]">
-                  <div className="flex items-center gap-2 border-b border-white/[.05] px-4 py-2.5">
-                    <span className="flex size-7 items-center justify-center rounded-full bg-white/[.06] font-mono text-[10px] text-zinc-400">
+                <section className="theme-surface rounded-xl ring-1">
+                  <div className="theme-divider flex items-center gap-2 border-b px-4 py-2.5">
+                    <span className="theme-chip flex size-7 items-center justify-center rounded-full font-mono text-[10px] text-zinc-400">
                       AI
                     </span>
                     <span className="text-[13px] text-zinc-300">描述</span>
@@ -233,7 +233,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       <p className="text-[13px] text-zinc-600">无描述内容。</p>
                     )}
                     {f.location && (
-                      <div className="mt-4 rounded-lg bg-black/25 px-3 py-2 font-mono text-[11px] text-zinc-400 ring-1 ring-white/[.05]">
+                      <div className="theme-input-surface mt-4 rounded-lg border px-3 py-2 font-mono text-[11px] text-zinc-400">
                         <span className="text-zinc-600">location </span>
                         {f.location}
                       </div>
@@ -276,8 +276,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                         <span className="relative z-[1] flex size-7 shrink-0 items-center justify-center rounded-full bg-white/[.07] font-mono text-[10px] uppercase text-zinc-400 ring-1 ring-white/[.06]">
                           {(c.author_name || "?").slice(0, 1)}
                         </span>
-                        <div className="min-w-0 flex-1 rounded-xl ring-1 ring-white/[.07]">
-                          <div className="flex flex-wrap items-center gap-2 border-b border-white/[.05] bg-white/[.02] px-3 py-2">
+                        <div className="theme-surface min-w-0 flex-1 rounded-xl ring-1">
+                          <div className="theme-divider theme-surface flex flex-wrap items-center gap-2 border-b px-3 py-2">
                             <span className="text-[13px] font-medium text-zinc-200">
                               {c.author_name || "anonymous"}
                             </span>
@@ -315,8 +315,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                     <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-acc-500/15 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/20">
                       me
                     </span>
-                    <div className="min-w-0 flex-1 rounded-xl ring-1 ring-white/[.08]">
-                      <div className="border-b border-white/[.05] px-3 py-2 font-mono text-[10px] uppercase tracking-[.12em] text-zinc-600">
+                    <div className="theme-surface min-w-0 flex-1 rounded-xl ring-1">
+                      <div className="theme-divider border-b px-3 py-2 font-mono text-[10px] uppercase tracking-[.12em] text-zinc-600">
                         写评论
                       </div>
                       <textarea
@@ -326,7 +326,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                         rows={4}
                         className="w-full resize-y bg-transparent px-3 py-3 text-[13px] leading-6 text-zinc-200 outline-none placeholder:text-zinc-600"
                       />
-                      <div className="flex items-center justify-end gap-2 border-t border-white/[.05] px-3 py-2">
+                      <div className="theme-divider flex items-center justify-end gap-2 border-t px-3 py-2">
                         <button
                           type="button"
                           disabled={busy || !comment.trim()}
@@ -341,12 +341,12 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                 </section>
 
                 {/* Collapsed technical */}
-                <details className="mt-8 rounded-xl ring-1 ring-white/[.05]">
+                <details className="theme-surface mt-8 rounded-xl ring-1">
                   <summary className="cursor-pointer px-4 py-3 font-mono text-[11px] text-zinc-500 hover:text-zinc-300">
                     技术细节 · 验证运行 ({detail.verification_jobs.length}) · 原始 JSON · 语义事件 (
                     {detail.source_events.length})
                   </summary>
-                  <div className="space-y-4 border-t border-white/[.05] px-4 py-4">
+                  <div className="theme-divider space-y-4 border-t px-4 py-4">
                     <div>
                       <div className="mb-2 font-mono text-[10px] uppercase tracking-[.14em] text-zinc-600">
                         验证运行
@@ -356,7 +356,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                           {detail.verification_jobs.map((job) => (
                             <div
                               key={job.id}
-                              className="flex flex-wrap items-center gap-3 rounded-lg bg-black/20 px-3 py-2 ring-1 ring-white/[.04]"
+                              className="theme-input-surface flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2"
                             >
                               <StatusBadge status={job.status} />
                               <span className="font-mono text-[11px] text-zinc-400">{job.type}</span>
@@ -377,7 +377,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       <div className="mb-2 font-mono text-[10px] uppercase tracking-[.14em] text-zinc-600">
                         原始 Finding JSON
                       </div>
-                      <pre className="max-h-64 overflow-auto rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-5 text-zinc-500">
+                      <pre className="theme-input-surface max-h-64 overflow-auto rounded-lg border p-3 font-mono text-[11px] leading-5 text-zinc-500">
                         {JSON.stringify(f.raw_json, null, 2)}
                       </pre>
                     </div>
@@ -385,7 +385,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       <div className="mb-2 font-mono text-[10px] uppercase tracking-[.14em] text-zinc-600">
                         来源语义事件
                       </div>
-                      <pre className="max-h-64 overflow-auto rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-5 text-zinc-500">
+                      <pre className="theme-input-surface max-h-64 overflow-auto rounded-lg border p-3 font-mono text-[11px] leading-5 text-zinc-500">
                         {detail.source_events.length
                           ? detail.source_events.map((event) => JSON.stringify(event)).join("\n")
                           : "无"}
@@ -409,8 +409,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                           onClick={() => setDisposition(opt.value as FindingDisposition)}
                           className={`rounded-lg px-2.5 py-1.5 text-left text-[12px] ring-1 transition-colors disabled:opacity-50 ${
                             active
-                              ? "bg-acc-500/15 text-acc-200 ring-acc-400/30"
-                              : "bg-transparent text-zinc-500 ring-transparent hover:bg-white/[.04] hover:text-zinc-300 hover:ring-white/[.06]"
+                              ? "bg-acc-500/15 text-acc-300 ring-acc-400/30"
+                              : "theme-surface text-zinc-500 hover:opacity-90"
                           }`}
                         >
                           {opt.label}
@@ -423,7 +423,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                     onChange={(e) => setNote(e.target.value)}
                     placeholder="状态备注（切换时一并保存）"
                     rows={2}
-                    className="mt-2 w-full rounded-lg border border-ink-700 bg-ink-900/80 px-2.5 py-1.5 text-[12px] text-zinc-300 outline-none focus:border-acc-500"
+                    className="theme-input-surface mt-2 w-full rounded-lg border px-2.5 py-1.5 text-[12px] outline-none focus:border-acc-500"
                   />
                 </SidebarField>
 
@@ -478,7 +478,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                     {links.map((l) => (
                       <div
                         key={l.id}
-                        className="group flex items-start gap-1.5 rounded-lg bg-white/[.02] px-2 py-1.5 ring-1 ring-white/[.05]"
+                        className="theme-surface group flex items-start gap-1.5 rounded-lg px-2 py-1.5 ring-1"
                       >
                         <LinkIcon size={12} className="mt-0.5 shrink-0 text-zinc-600" />
                         <div className="min-w-0 flex-1">
@@ -523,23 +523,23 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                         + 添加链接
                       </button>
                     ) : (
-                      <div className="space-y-1.5 rounded-lg bg-black/20 p-2 ring-1 ring-white/[.06]">
+                      <div className="theme-input-surface space-y-1.5 rounded-lg border p-2">
                         <input
                           value={linkUrl}
                           onChange={(e) => setLinkUrl(e.target.value)}
                           placeholder="https://…"
-                          className="w-full rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 font-mono text-[11px] text-zinc-200 outline-none focus:border-acc-500"
+                          className="theme-input-surface w-full rounded-md border px-2 py-1.5 font-mono text-[11px] outline-none focus:border-acc-500"
                         />
                         <input
                           value={linkTitle}
                           onChange={(e) => setLinkTitle(e.target.value)}
                           placeholder="标题（可选）"
-                          className="w-full rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-acc-500"
+                          className="theme-input-surface w-full rounded-md border px-2 py-1.5 text-[11px] outline-none focus:border-acc-500"
                         />
                         <select
                           value={linkType}
                           onChange={(e) => setLinkType(e.target.value as FindingLink["link_type"])}
-                          className="w-full rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 text-[11px] text-zinc-300 outline-none"
+                          className="theme-input-surface w-full rounded-md border px-2 py-1.5 text-[11px] outline-none"
                         >
                           {LINK_TYPES.map((t) => (
                             <option key={t.value} value={t.value}>

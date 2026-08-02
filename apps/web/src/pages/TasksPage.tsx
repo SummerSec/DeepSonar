@@ -65,7 +65,7 @@ export function TasksPage() {
 
   return (
     <div className="page-scroll">
-      <PageHeader title="任务工作台" eyebrow="INTENT PIPELINE" subtitle="每个任务是一个完整闭环：意图进入 Hub，角色 Agent 产出事实，系统验证后生成可交付报告。" actions={<><FilterSelect value={filter} onChange={(value) => setFilter(value as Filter)} placeholder="全部任务" options={[{ value: "active", label: "正在推进" }, { value: "findings", label: "已有发现" }]} />{project?.status === "active" && <PrimaryButton onClick={() => setCreating(true)}><Plus size={14} weight="light" />下达任务</PrimaryButton>}</>} />
+      <PageHeader title="任务工作台" eyebrow="INTENT PIPELINE" subtitle="每个任务是一个完整闭环：意图进入 Hub，角色 Agent 产出事实，系统验证后生成可交付报告。" actions={<><FilterSelect value={filter} onChange={(value) => setFilter(value as Filter)} placeholder="全部任务" options={[{ value: "active", label: "正在推进" }, { value: "findings", label: "已有发现" }]} />{project?.status === "active" && <PrimaryButton onClick={() => setCreating(true)}><Plus size={15} weight="bold" />下达任务</PrimaryButton>}</>} />
 
       <div className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{canvases.length}</strong>全部任务</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>
       {error && <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">{error}</div>}

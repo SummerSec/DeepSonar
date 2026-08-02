@@ -23,7 +23,7 @@ export function LoginPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#080b0d] text-zinc-500">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] text-zinc-500">
         加载中…
       </div>
     );
@@ -60,8 +60,8 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#080b0d] px-4">
-      <div className="w-full max-w-md rounded-[24px] bg-white/[.03] p-8 ring-1 ring-white/[.08]">
+    <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] px-4">
+      <div className="theme-drawer w-full max-w-md rounded-[24px] p-8 ring-1 ring-[var(--line-strong)]">
         <div className="mb-8 flex items-center gap-3">
           <div className="brand-mark">
             <DeepSonarMark />

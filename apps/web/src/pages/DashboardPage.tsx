@@ -49,7 +49,7 @@ export function DashboardPage() {
   return (
     <div className="page-scroll">
       <PageHeader title="运行态势" eyebrow="CONTROL PLANE / LIVE" subtitle="先处理需要你决策的事项，再查看系统吞吐。任务的执行、证据与报告始终归档在同一工作台。" actions={
-        <Link to="/projects" className="primary-button group"><span>{projects.length ? "进入项目" : "创建首个项目"}</span><span className="button-orb"><ArrowUpRight size={15} weight="light" /></span></Link>
+        <Link to="/projects" className="primary-button group"><span className="primary-button-label">{projects.length ? "进入项目" : "创建首个项目"}</span><span className="button-orb" aria-hidden="true"><ArrowUpRight size={15} weight="light" /></span></Link>
       } />
 
       <div className="metrics-strip">

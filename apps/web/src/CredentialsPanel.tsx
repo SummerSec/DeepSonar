@@ -481,7 +481,7 @@ export function CredentialsPanel() {
                             value={editMaxConcurrent}
                             onChange={(e) => setEditMaxConcurrent(e.target.value)}
                             placeholder="不限"
-                            className="w-full rounded-lg bg-[#080b0d] px-3 py-2.5 font-mono text-[13px] text-zinc-100 ring-1 ring-white/[.08] outline-none focus:ring-acc-400/40"
+                            className="theme-input-surface w-full rounded-lg border px-3 py-2.5 font-mono text-[13px] outline-none focus:border-acc-400/40"
                           />
                           <p className="mt-2 text-[10px] leading-4 text-zinc-600">
                             留空不限；0 暂停该凭据新 claim。只影响后续调度。
@@ -540,7 +540,7 @@ export function CredentialsPanel() {
                                 }}
                                 placeholder="手动填写模型 ID"
                                 spellCheck={false}
-                                className="min-w-0 flex-1 rounded-lg bg-[#080b0d] px-3 py-2 font-mono text-[12px] text-zinc-200 ring-1 ring-white/[.08] outline-none focus:ring-acc-400/40"
+                                className="theme-input-surface min-w-0 flex-1 rounded-lg border px-3 py-2 font-mono text-[12px] outline-none focus:border-acc-400/40"
                               />
                               <button
                                 type="button"
