@@ -209,8 +209,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.brand-mark .deep-flow-mark__arrow,
-.brand-mark .deep-flow-mark__core { fill: currentColor; stroke: none; }
+.brand-mark .deep-sonar-mark__arrow,
+.brand-mark .deep-sonar-mark__core { fill: currentColor; stroke: none; }
 .brand-lockup strong { display: block; color: #f2f4f5; font: 600 14px/1.1 var(--font-mono); letter-spacing: -.04em; text-transform: uppercase; }
 .brand-lockup span { display: block; margin-top: 5px; color: #636c71; font: 500 8px/1 var(--font-mono); letter-spacing: .2em; }
 .rail-collapse {

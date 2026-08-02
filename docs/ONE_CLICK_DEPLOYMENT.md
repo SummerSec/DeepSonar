@@ -1,4 +1,4 @@
-# DeepFlowHunter 一键部署教程
+# DeepSonar 一键部署教程
 
 本文说明如何使用仓库内脚本一次启动 PostgreSQL、Scheduler 和 Web 控制台。部署采用 Docker Compose，数据库数据和 Blob 数据写入具名 volume，普通停止或升级不会删除。
 

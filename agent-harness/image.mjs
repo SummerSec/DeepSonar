@@ -1,4 +1,4 @@
-// DeepFlowHunter 沙箱镜像（agentbox-sdk 自定义镜像格式）
+// DeepSonar 沙箱镜像（agentbox-sdk 自定义镜像格式）
 // 本地构建：npx agentbox image build --provider local-docker --file ./agent-harness/image.mjs
 // 注意：npm 上裸名 agentbox 是 0.0.1-security 占位包！真实 CLI 是 @madarco/agentbox：
 //   npx -y @madarco/agentbox image build --provider local-docker --file ./agent-harness/image.mjs

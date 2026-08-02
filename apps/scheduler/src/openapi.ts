@@ -1,5 +1,5 @@
 /**
- * DeepFlowHunter HTTP API OpenAPI 3 文档（机器可读 schema）。
+ * DeepSonar HTTP API OpenAPI 3 文档（机器可读 schema）。
  * 端点：GET /openapi.json、GET /schema（同源）、GET /schema.md（人类可读摘要）。
  * 与 skills/deepflowhunter-management/references/api.md 对齐；改路由时请同步更新本文件与该 md。
  */
@@ -493,7 +493,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
   return {
     openapi: "3.0.3",
     info: {
-      title: "DeepFlowHunter Scheduler API",
+      title: "DeepSonar Scheduler API",
       version: "0.0.1",
       description:
         "多项目代码审计调度平台 HTTP API。Agent 只提案，调度器是唯一有副作用的执行者。" +
@@ -589,7 +589,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
 /** 端点摘要（给 /schema?format=summary 用） */
 export function buildSchemaSummary(): Record<string, unknown> {
   return {
-    title: "DeepFlowHunter Scheduler API",
+    title: "DeepSonar Scheduler API",
     version: "0.0.1",
     base_url: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
     auth: {

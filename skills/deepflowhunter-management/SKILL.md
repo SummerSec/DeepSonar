@@ -1,11 +1,11 @@
 ---
 name: deepflowhunter-management
-description: 通过 DeepFlowHunter API 管理调度平台：先拉 OpenAPI/schema 再操作；项目/任务/Job 生命周期，画布/Finding/报告，RoleConfig（模型 ID/思考强度）、Skill 模块源、凭据、Plane。当需要以程序化方式操作 DeepFlowHunter 时使用。
+description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目/任务/Job 生命周期，画布/Finding/报告，RoleConfig（模型 ID/思考强度）、Skill 模块源、凭据、Plane。当需要以程序化方式操作 DeepSonar 时使用。
 ---
 
-# DeepFlowHunter Management
+# DeepSonar Management
 
-让外部 Agent（Codex / Claude Code / CI）通过最小权限 API Token 管理 DeepFlowHunter，
+让外部 Agent（Codex / Claude Code / CI）通过最小权限 API Token 管理 DeepSonar，
 不依赖浏览器。除报告下载与 Markdown schema 外，动作输出结构化 JSON（stdout）。
 
 ## 使用方式

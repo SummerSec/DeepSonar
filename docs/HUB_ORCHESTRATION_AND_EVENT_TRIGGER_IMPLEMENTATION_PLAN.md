@@ -2,7 +2,7 @@
 
 > 状态：实施基线（2026-08-01）
 >
-> 适用范围：DeepFlowHunter 任务创建、Agent 编排、Finding 验证、风险验收和任务画布
+> 适用范围：DeepSonar 任务创建、Agent 编排、Finding 验证、风险验收和任务画布
 > 核心结论：`hub_reason` 是唯一决策入口；Audit/Verify/Test 等 Agent 都是 Hub 下发的执行角色。
 
 ## 1. 为什么要这样改
@@ -660,4 +660,4 @@ fact → root               to
 - 外部事件重复投递不会重复创建任务；
 - 类型检查、构建、API 测试和图断言全部通过。
 
-达到以上条件后，DeepFlowHunter 的任务模型才真正成为“人表达目标、事件提供事实、Hub 负责决策、Agent 负责执行、调度器负责可信落地”。
+达到以上条件后，DeepSonar 的任务模型才真正成为“人表达目标、事件提供事实、Hub 负责决策、Agent 负责执行、调度器负责可信落地”。

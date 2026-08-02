@@ -282,7 +282,13 @@ export function RoleConfigEditor({
             </div>
             <div className="mt-1 text-[11px] leading-5 text-zinc-600">敏感值必须使用 Credential，疑似密钥名会被后端拒绝。</div>
           </div>
-          <div><label className={labelCls}>Worker 长期指令</label><textarea value={form.instructions_markdown} onChange={(e) => setForm({ ...form, instructions_markdown: e.target.value })} rows={6} className={`${inputCls} resize-y`} placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。" /></div>
+          <div>
+            <label className={labelCls}>Worker 长期指令</label>
+            <textarea value={form.instructions_markdown} onChange={(e) => setForm({ ...form, instructions_markdown: e.target.value })} rows={10} className={`${inputCls} resize-y`} placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。" />
+            <p className="mt-1 text-[10px] leading-5 text-zinc-600">
+              平台会自动补充工作区、prompt 输入、runtime-manifest、动态 skill / command / MCP / sub-agent、环境变量名称、网络边界、不可用内部接口和增量结果工具；这里仅维护该角色长期稳定的职责与方法。
+            </p>
+          </div>
         </section>
 
         <section className="role-config-section role-config-modules">

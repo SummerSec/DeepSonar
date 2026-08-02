@@ -1,4 +1,4 @@
-# DeepFlowHunter 项目方案（优化版）
+# DeepSonar 项目方案（优化版）
 
 > 版本：v1.1（在 v1.0 评审基础上合入崩溃恢复、幂等性、威胁建模、单一决策点等修正）
 > 日期：2026-07-31
@@ -119,9 +119,11 @@ pending → claimed → provisioning → running → succeeded
 | 工具名 | 谁可调用 | 调度器落地动作 |
 |--------|----------|----------------|
 | `emit_progress` | Worker | 更新 job 节点文案/进度 |
-| `emit_finding` | Worker | 建 finding 节点 + 落库（可带 `suggest_verify` 建议字段） |
+| `emit_fact` | Hub 可下发的非审计工作角色 | 增量建立 fact 节点与意图边 |
+| `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库（可带 `suggest_verify` 建议字段） |
+| `submit_hub_decision` | hub_reason | 提交 complete 或 intents 提案 |
 | `mark_job_done` | Worker | 结束节点 + 摘要 |
-| `request_human` | Worker | Plane 标阻塞 + 画布 human 节点 |
+| `request_human` | Worker | Job 转人工等待 + 画布 human 节点 |
 
 **明确不在 Agent 权限内**（v1.1 收紧）：
 
@@ -166,8 +168,8 @@ loop:
 
 **护栏**（同时是防注入措施，见 §9）：
 
-- 每 Job 最大 followup 数 `MAX_FOLLOWUPS_PER_JOB`（默认 10）
-- 派生深度上限 `MAX_FOLLOWUP_DEPTH`（默认 2，即 verify 的结果不再自动派生）
+- 每 Job 最大 followup 数 `MAX_FOLLOWUPS_PER_JOB`（默认 20）
+- 派生深度上限 `MAX_FOLLOWUP_DEPTH`（默认 4；verify 的结果仍由规则引擎约束，不由 Agent 自行派生）
 - 超出上限 → 自动转 `request_human`
 
 ### 4.4 人工介入与恢复
@@ -363,8 +365,10 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 **事件通道**：事件不经过沙箱网络，经 agentbox-sdk 控制通道回传调度器侧：
 
 - SDK normalized event stream → 文本/进度 → `progress` 事件
-- Agent 按角色契约写 `fact.json`、`findings.jsonl`、`hub.json`、`done.json`
-- 调度器读回结果后立即删除这些文件，随后销毁该 Job 的独立沙箱
+- 系统按 Job 动态注入本地 `deepflowhunter-control` MCP；Agent 在执行中可多次调用 `emit_fact` / `emit_finding`，每条事件立即进入本地控制队列
+- 调度器通过 agentbox 文件控制通道增量读取并校验队列；Hub 决策、人工请求与 done 同样通过动态工具提交，不使用固定结果文件契约
+- 数据库在新 Fact/Finding 节点提交后发出 `dfh_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
+- 终态后立即删除控制队列，随后销毁该 Job 的独立沙箱
 - 沙箱内不注入调度器数据库或 API 凭据；Provider Credential 只换成短期 Job Token
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
 
@@ -395,11 +399,11 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 
 - 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
-- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 整图 YAML + 可用角色 → 输出 `hub.json`：`{"complete":{from,description}}` 或 `{"intents":[{from,role,description,prompt}]}`；`prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
-- **explore**（Phase ① 唯一角色）：输入 = 整图 YAML + 当前意图 → 输出 `fact.json`（增量事实，不重复图内容）→ `fact` 事件建 fact 节点 + to 边
+- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 整图 YAML + 数据库实时可用角色 → 通过动态系统工具提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
+- Hub 可下发工作角色输入 = 整图 YAML + 当前意图；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DFH_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
-- **角色注册表（Phase ② 已落地）**：`agent_roles` 表全局注册，内置 `audit/explore/analyze/verify/test/code` 六角色 + 用户自定义角色；其中 `audit` 产出 Finding，其余角色产出 Fact。项目级启用清单决定 Hub 可派发范围
+- **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 每次从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不维护代码侧固定角色枚举。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单。其中 `audit` 产出 Finding，其余工作角色产出 Fact
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
 
@@ -512,15 +516,20 @@ PLANE_READY_STATE=Ready
 MAX_GLOBAL_JOBS=6
 MAX_JOBS_PER_PROJECT=2
 
-DEFAULT_AUDIT_TIMEOUT_SEC=3600
-DEFAULT_VERIFY_TIMEOUT_SEC=1800
+DEFAULT_AUDIT_TIMEOUT_SEC=7200
+DEFAULT_VERIFY_TIMEOUT_SEC=3600
 LEASE_TTL_SEC=120
 HEARTBEAT_INTERVAL_SEC=30
 REAPER_INTERVAL_SEC=30
 
-AUTO_VERIFY_SEVERITIES=high,critical
-MAX_FOLLOWUPS_PER_JOB=10
-MAX_FOLLOWUP_DEPTH=2
+AUTO_VERIFY_SEVERITIES=low,medium,high,critical
+MAX_FOLLOWUPS_PER_JOB=20
+MAX_FOLLOWUP_DEPTH=4
+MAX_AUTO_RETRIES=6
+
+DFH_HUB_ENABLED=false
+DFH_HUB_MAX_ROUNDS=20
+DFH_HUB_MAX_INTENTS=6
 
 SANDBOX_PROVIDER=local-docker
 DOCKER_IMAGE_AUDIT=deepflowhunter-agent:latest

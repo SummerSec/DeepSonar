@@ -478,7 +478,7 @@ Scheduler 先从数据库构建 `report-input.json`：
 
 最终产物：
 
-- `report.json`：DeepFlowHunter 结构化任务报告；
+- `report.json`：DeepSonar 结构化任务报告；
 - `report.md`：面向人的总报告；
 - `report.sarif.json`：由 Scheduler 从 `report.json` 确定性导出并校验 SARIF 2.1.0。
 

@@ -99,7 +99,7 @@ async function pollProject(plane: PlaneClient, projectId: string, planeProjectId
         .catch((e) => { inc("dfh_plane_sync_errors_total"); console.error("[plane] 状态回写失败:", e); });
     }
     await plane
-      .addComment(planeProjectId, issue.id, `<p>🤖 DeepFlowHunter 已领取，job=${job.id}</p>`)
+      .addComment(planeProjectId, issue.id, `<p>🤖 DeepSonar 已领取，job=${job.id}</p>`)
       .catch(() => {});
   }
   return created;

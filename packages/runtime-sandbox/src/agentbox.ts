@@ -4,8 +4,8 @@
  * 要点：
  * - Agent 以 server 进程模式跑在沙箱内（claude-code provider，approvalMode "auto"）
  * - 事件经 SDK 控制通道回传（stream），不经沙箱网络
- * - 文件契约（harness v1）：findings → /workspace/findings.jsonl；总结 → /workspace/done.json
- *   （MVP 用文件契约代替 MCP 注入：断网/中转环境下最稳；MCP 化留作 Phase 3 优化）
+ * - 语义事件由每 Job 动态注入的本地 MCP 写入控制队列，宿主通过 SDK 文件控制通道增量读取；
+ *   不经过沙箱目标网络，也不向 Worker 暴露 Scheduler 地址或凭据。
  */
 import { Agent, Sandbox } from "agentbox-sdk";
 import type {
@@ -322,7 +322,7 @@ export async function forceRemoveContainer(containerId: string): Promise<void> {
   await docker("rm", "-f", containerId);
 }
 
-// ---------- 真实 Agent 运行（§8 事件通道 + 文件契约） ----------
+// ---------- 真实 Agent 运行（§8 事件通道 + 动态控制 MCP） ----------
 
 /** 与 agentbox-sdk AgentReasoningEffort 对齐 */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
@@ -347,6 +347,13 @@ export interface RealAgentSpec {
   workspaceFiles?: Record<string, string>;
   /** 运行后要读回的文件 */
   resultFiles?: string[];
+  /** 本地控制 MCP 的 NDJSON 队列；通过 SDK 控制通道增量读取，不属于 Agent 结果文件。 */
+  semanticEventFile?: string;
+  /** 每条完整语义事件到达时串行调用。 */
+  onSemanticEvent?: (event: Record<string, unknown>) => void | Promise<void>;
+  /** Run 建立后注册外部增量消息源；消息通过 Agent.attach(...).sendMessage(...) 注入同一会话。 */
+  onRunReady?: (control: { sendMessage(content: string): Promise<void> }) =>
+    void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
   /** 流式进度回调（已节流） */
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
@@ -403,6 +410,51 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
     ...(spec.reasoning ? { reasoning: spec.reasoning } : {}),
   });
+  const disposeMessageSource = await spec.onRunReady?.({
+    sendMessage: async (content) => {
+      const sessionId = await run.sessionIdReady;
+      const attached = await Agent.attach({
+        provider: spec.provider,
+        sandbox,
+        runId: run.id,
+        sessionId,
+      });
+      await attached.sendMessage(content);
+    },
+  });
+
+  // 本地 MCP 只写沙箱内队列。宿主在 Agent 运行期间通过 agentbox 文件控制通道增量读取，
+  // 因而 fact/finding/progress 可以实时入库，且与 Worker 的目标出网策略完全解耦。
+  let pollSemanticEvents = Boolean(spec.semanticEventFile && spec.onSemanticEvent);
+  let semanticLineCount = 0;
+  let semanticError: string | undefined;
+  const drainSemanticEvents = async () => {
+    if (!spec.semanticEventFile || !spec.onSemanticEvent || semanticError) return;
+    try {
+      const buf = await sandbox.downloadFile(spec.semanticEventFile);
+      if (buf.byteLength > 2 * 1024 * 1024) throw new Error("语义事件队列超过 2 MiB 上限");
+      const text = buf.toString("utf8");
+      const lines = text.split("\n");
+      const completeCount = text.endsWith("\n") ? lines.length - 1 : lines.length - 1;
+      for (let i = semanticLineCount; i < completeCount; i++) {
+        const line = lines[i]?.trim();
+        semanticLineCount = i + 1;
+        if (!line) continue;
+        const event = JSON.parse(line) as Record<string, unknown>;
+        await spec.onSemanticEvent(event);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // 文件尚未由 MCP 首次创建属于正常状态；其他解析/处理错误会终止本 Job。
+      if (!/not found|no such file|does not exist/i.test(message)) semanticError = message;
+    }
+  };
+  const semanticPoller = (async () => {
+    while (pollSemanticEvents) {
+      await drainSemanticEvents();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  })();
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
@@ -422,10 +474,15 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     }
   } catch (e) {
     streamError = e instanceof Error ? e.message : String(e);
+  } finally {
+    pollSemanticEvents = false;
+    await semanticPoller;
+    await drainSemanticEvents();
+    if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
 
-  const result = streamError
-    ? { text: "", error: streamError }
+  const result = streamError || semanticError
+    ? { text: "", error: streamError ?? `语义事件处理失败: ${semanticError}` }
     : await run.finished.catch((e: unknown) => ({
         text: "",
         error: e instanceof Error ? e.message : String(e),
@@ -443,7 +500,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   }
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
-  const cleanupPaths = (spec.resultFiles ?? []).filter((p) => p.startsWith("/workspace/"));
+  const cleanupPaths = [...(spec.resultFiles ?? []), ...(spec.semanticEventFile ? [spec.semanticEventFile] : [])]
+    .filter((p) => p.startsWith("/workspace/"));
   if (cleanupPaths.length > 0) {
     await sandbox.run(`rm -f -- ${cleanupPaths.map((p) => JSON.stringify(p)).join(" ")}`).catch(() => {});
   }

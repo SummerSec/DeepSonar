@@ -146,7 +146,7 @@ function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-/** hub.json → 决策；只认 complete 或 intents 之一，字段非法即丢弃 */
+/** 动态系统工具提交的 Hub 决策；只认 complete 或 intents 之一，字段非法即丢弃。 */
 export function parseHubDecision(raw: string): HubDecision | null {
   const v = parseJsonLoose(raw);
   if (!v || typeof v !== "object") return null;
@@ -175,21 +175,4 @@ export function parseHubDecision(raw: string): HubDecision | null {
     return { intents };
   }
   return null;
-}
-
-export interface FactOutput {
-  title: string;
-  description: string;
-}
-
-/** fact.json → 事实；description 必填，title 缺省取 description 前缀 */
-export function parseFactOutput(raw: string): FactOutput | null {
-  const v = parseJsonLoose(raw);
-  if (!v || typeof v !== "object") return null;
-  const o = v as Record<string, unknown>;
-  const description = typeof o.description === "string" ? o.description.trim() : "";
-  if (!description) return null;
-  const title =
-    typeof o.title === "string" && o.title.trim() ? o.title.trim() : description.slice(0, 60);
-  return { title: title.slice(0, 200), description };
 }

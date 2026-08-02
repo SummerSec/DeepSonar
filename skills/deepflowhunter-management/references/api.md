@@ -1,4 +1,4 @@
-# DeepFlowHunter Management API 契约
+# DeepSonar Management API 契约
 
 > **权威机器可读 schema（运行时）**：调度器提供以下豁免鉴权端点，优先以此为准。  
 > - `GET /openapi.json` — OpenAPI 3.0.3 完整 JSON  

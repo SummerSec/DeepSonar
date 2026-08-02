@@ -77,13 +77,14 @@ export const config = {
   limits: {
     maxGlobalJobs: int("MAX_GLOBAL_JOBS", 6),
     maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 2),
-    maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 10),
-    maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 2),
+    maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 20),
+    maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 4),
+    maxAutoRetries: int("MAX_AUTO_RETRIES", 6),
   },
 
   timeouts: {
-    auditSec: int("DEFAULT_AUDIT_TIMEOUT_SEC", 3600),
-    verifySec: int("DEFAULT_VERIFY_TIMEOUT_SEC", 1800),
+    auditSec: int("DEFAULT_AUDIT_TIMEOUT_SEC", 7200),
+    verifySec: int("DEFAULT_VERIFY_TIMEOUT_SEC", 3600),
     /** provision（起沙箱）独立超时（§8.3）；claimed/provisioning 超过该时长由 reaper 判 failed */
     provisionSec: int("PROVISION_TIMEOUT_SEC", 300),
     leaseTtlSec: int("LEASE_TTL_SEC", 120),
@@ -95,7 +96,7 @@ export const config = {
   },
 
   rules: {
-    autoVerifySeverities: str("AUTO_VERIFY_SEVERITIES", "high,critical")
+    autoVerifySeverities: str("AUTO_VERIFY_SEVERITIES", "low,medium,high,critical")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
@@ -104,8 +105,8 @@ export const config = {
   /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */
   hub: {
     enabled: bool("DFH_HUB_ENABLED", false),
-    maxRounds: int("DFH_HUB_MAX_ROUNDS", 10),
-    maxIntents: int("DFH_HUB_MAX_INTENTS", 3),
+    maxRounds: int("DFH_HUB_MAX_ROUNDS", 20),
+    maxIntents: int("DFH_HUB_MAX_INTENTS", 6),
   },
 
   /** Model Gateway（§6.3）：沙箱持短期 DFH_JOB_TOKEN 经网关调用模型，不持有长期 Key */

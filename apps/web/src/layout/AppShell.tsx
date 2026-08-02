@@ -2,7 +2,7 @@ import { Bug, ChartBar, Check, Crosshair, Folder, Gear, MagnifyingGlass, Moon, P
 import type { Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
-import { DeepFlowMark } from "../components/DeepFlowMark";
+import { DeepSonarMark } from "../components/DeepSonarMark";
 
 const NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
   { to: "/", end: true, label: "态势", caption: "全局风险与运行", icon: ChartBar },
@@ -63,14 +63,14 @@ export function AppShell() {
 
   return <div className="app-frame">
     <a href="#main-content" className="skip-link">跳到主要内容</a><div className="ambient-field" aria-hidden="true" />
-    <aside className={`desktop-rail surface-shell ${collapsed ? "is-collapsed" : ""}`}><div className="rail-core surface-core"><div className="brand-lockup"><div className="brand-mark"><DeepFlowMark /></div><div className="brand-copy"><strong>DeepFlowHunter</strong><span>LOOP GRAPH ENGINEERING</span></div><button className="rail-collapse" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? "展开导航" : "收起导航"} title={collapsed ? "展开导航" : "收起导航"}><SidebarSimple size={15} weight="light" /></button></div>
+    <aside className={`desktop-rail surface-shell ${collapsed ? "is-collapsed" : ""}`}><div className="rail-core surface-core"><div className="brand-lockup"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>LOOP GRAPH ENGINEERING</span></div><button className="rail-collapse" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? "展开导航" : "收起导航"} title={collapsed ? "展开导航" : "收起导航"}><SidebarSimple size={15} weight="light" /></button></div>
       <ThemePicker value={accentTheme} collapsed={collapsed} onChange={setAccentTheme} />
       <button className="command-trigger" onClick={() => setCommandOpen(true)} title="打开命令菜单"><MagnifyingGlass size={15} weight="light" /><span>搜索与跳转</span><kbd>⌘ K</kbd></button>
       <MainNav projectId={projectId} />
       <div className="rail-status"><span className="dfh-live-dot" /><div><strong>Scheduler online</strong><small>状态每 5 秒同步</small></div></div>
     </div></aside>
 
-    <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepFlowMark /></div><div className="brand-copy"><strong>DeepFlowHunter</strong><span>深度流式猎手</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
+    <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>深流循迹</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
     <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><div className="mobile-menu-foot"><span className="dfh-live-dot" /> 调度器在线</div></div>
     {commandOpen && <CommandMenu projectId={projectId} onClose={() => setCommandOpen(false)} onNavigate={(to) => { navigate(to); setCommandOpen(false); }} />}
     <main id="main-content" className="app-stage"><Outlet /></main>

@@ -70,7 +70,7 @@ function envDefaultRules(): ProjectRules {
     autoVerifySeverities: config.rules.autoVerifySeverities,
     maxFollowupsPerJob: config.limits.maxFollowupsPerJob,
     maxFollowupDepth: config.limits.maxFollowupDepth,
-    maxAutoRetries: 3,
+    maxAutoRetries: config.limits.maxAutoRetries,
     auditTimeoutSec: config.timeouts.auditSec,
     verifyTimeoutSec: config.timeouts.verifySec,
     hubEnabled: config.hub.enabled,
@@ -136,6 +136,7 @@ export interface RoleDef {
 
 /**
  * 项目可用的角色清单（hub 可下发的 agent）：
+ * 每次调用都实时查询 agent_roles；schema 中的内置模板不是运行时固定清单。
  * config_json.roles.enabled 为 null/缺省 = 全部内置角色；数组 = 按 name 白名单（含自定义角色）。
  */
 export async function rolesForProject(db: typeof sql, projectId: string): Promise<RoleDef[]> {
@@ -159,6 +160,8 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export interface AgentRuntimeSnapshot {
   name: string;
+  /** 角色类别随 Job 冻结；决定 Hub/可下发角色/系统角色的运行契约。 */
+  role_kind: "role" | "hub" | "system";
   agent_cli: string;
   model: string | null;
   /** 思考/推理强度（下一 job 生效，随快照冻结） */
@@ -781,14 +784,6 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
       SELECT id, canvas_id FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
     const [finding] = await tx`SELECT node_id FROM findings WHERE id = ${job.finding_id}`;
     if (verifyNode && finding?.node_id) {
-      // 兼容验证任务创建前的历史数据：缺边时补成 finding → verify 的过程方向。
-      await insertEdgeIfAbsent(
-        tx,
-        verifyNode.canvas_id as string,
-        finding.node_id as string,
-        verifyNode.id as string,
-        "verifies",
-      );
       await tx`
         UPDATE canvas_nodes SET status = ${verdict}, updated_at = now() WHERE id = ${finding.node_id}`;
       if (verdict === "confirmed") {
@@ -998,7 +993,7 @@ export async function resolveAgentSnapshotForJob(
   jobType: string,
 ): Promise<AgentRuntimeSnapshot> {
   const roleName = roleNameForJobType(jobType);
-  const [role] = await db`SELECT id, name, description FROM agent_roles WHERE name = ${roleName}`;
+  const [role] = await db`SELECT id, name, description, kind FROM agent_roles WHERE name = ${roleName}`;
   if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);
 
   const [projectCfg] = await db`
@@ -1058,6 +1053,7 @@ export async function resolveAgentSnapshotForJob(
 
   return {
     name: roleName,
+    role_kind: role.kind as "role" | "hub" | "system",
     agent_cli: (cfg?.agent_cli as string) ?? config.runtime.agentProvider,
     model: (cfg?.model as string) ?? config.runtime.agentModel ?? null,
     reasoning,

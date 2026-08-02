@@ -1,6 +1,10 @@
-# DeepFlowHunter
+# DeepSonar
 
-DeepFlowHunter 是一个面向代码安全审计的多项目 Agent 调度平台。人只需要提供任务标题和自然语言内容，`hub_reason` 读取任务画布后决定调用 Audit、Explore、Analyze、Verify、Test 或 Code Agent；调度器负责状态机、幂等、沙箱、Finding 验证和过程记账。
+> 深流循迹 · 让复杂执行持续收敛
+>
+> Every loop converges.
+
+DeepSonar 是一套完整的 Loop Graph 工程平台。人只需要提供任务标题和自然语言内容，`hub_reason` 读取任务画布后决定调用 Audit、Explore、Analyze、Review、Test 或 Code Agent；调度器负责状态机、幂等、沙箱、验证和过程记账，让多项目 Agent 的编排、执行、反馈与收敛形成可信闭环。
 
 ## 核心流程
 

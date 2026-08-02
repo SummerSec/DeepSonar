@@ -114,7 +114,7 @@ try {
         throw "Services did not become healthy within 120 seconds: $health"
       }
 
-      Write-Host "[deploy] DeepFlowHunter is ready: http://127.0.0.1:$port" -ForegroundColor Green
+      Write-Host "[deploy] DeepSonar is ready: http://127.0.0.1:$port" -ForegroundColor Green
       Write-Host "[deploy] The bootstrap admin token is stored as DFH_ADMIN_TOKEN in deploy/.env."
       if ($Mode -eq "fake") {
         Write-Host "[deploy] Running in fake mode. Configure credentials and use -Mode real for real agents." -ForegroundColor Yellow

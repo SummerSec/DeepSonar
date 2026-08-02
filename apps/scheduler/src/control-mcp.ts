@@ -1,0 +1,92 @@
+/**
+ * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络，只把 Agent 的语义提案
+ * 追加到 /workspace/.dfh/control-events.jsonl；宿主经 agentbox 控制通道增量读取。
+ */
+export const CONTROL_MCP_NAME = "deepflowhunter-control";
+export const CONTROL_EVENT_FILE = "/workspace/.dfh/control-events.jsonl";
+
+export const CONTROL_MCP_SERVER = String.raw`import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import readline from "node:readline";
+
+const outputFile = process.env.DFH_CONTROL_EVENT_FILE;
+const allowed = new Set(JSON.parse(process.env.DFH_CONTROL_TOOL_NAMES || "[]"));
+if (!outputFile) throw new Error("DFH_CONTROL_EVENT_FILE is required");
+mkdirSync(dirname(outputFile), { recursive: true });
+
+const definitions = {
+  emit_progress: {
+    description: "增量上报当前动作或阶段进展。可在执行中多次调用。",
+    inputSchema: { type: "object", properties: { message: { type: "string", minLength: 1, maxLength: 2000 }, percent: { type: "number", minimum: 0, maximum: 100 } }, required: ["message"], additionalProperties: false }
+  },
+  emit_fact: {
+    description: "把一个新的、可验证的增量事实实时写入任务画布。可多次调用。",
+    inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: 200 }, description: { type: "string", minLength: 1, maxLength: 10000 } }, required: ["title", "description"], additionalProperties: false }
+  },
+  emit_finding: {
+    description: "实时提交一个有证据的安全 Finding；调度器负责去重和决定是否验证。可多次调用。",
+    inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: 500 }, severity: { type: "string", enum: ["low", "medium", "high", "critical"] }, location: { type: "string", maxLength: 1000 }, summary: { type: "string", maxLength: 10000 }, rule_id: { type: "string", maxLength: 200 }, suggest_verify: { type: "boolean" } }, required: ["title", "severity"], additionalProperties: false }
+  },
+  submit_hub_decision: {
+    description: "提交本轮 Hub 的 complete 或 intents 决策，二者必须且只能提供一个。",
+    inputSchema: { type: "object", properties: { complete: { type: "object", properties: { from: { type: "array", items: { type: "string" } }, description: { type: "string", minLength: 1, maxLength: 10000 } }, required: ["from", "description"], additionalProperties: false }, intents: { type: "array", items: { type: "object", properties: { from: { type: "array", items: { type: "string" } }, role: { type: "string", minLength: 1, maxLength: 64 }, description: { type: "string", minLength: 1, maxLength: 2000 }, prompt: { type: "string", minLength: 1, maxLength: 20000 } }, required: ["from", "role", "description", "prompt"], additionalProperties: false } } }, additionalProperties: false }
+  },
+  mark_job_done: {
+    description: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict。每个 Job 最后调用一次。",
+    inputSchema: { type: "object", properties: { summary: { type: "string", minLength: 1, maxLength: 10000 }, verdict: { type: "string", enum: ["confirmed", "false_positive", "needs_human"] } }, required: ["summary"], additionalProperties: false }
+  },
+  request_human: {
+    description: "只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
+    inputSchema: { type: "object", properties: { reason: { type: "string", minLength: 1, maxLength: 2000 } }, required: ["reason"], additionalProperties: false }
+  }
+};
+
+const eventType = {
+  emit_progress: "progress",
+  emit_fact: "fact",
+  emit_finding: "finding",
+  submit_hub_decision: "hub_decision",
+  mark_job_done: "done",
+  request_human: "human"
+};
+
+function reply(message) {
+  process.stdout.write(JSON.stringify(message) + "\n");
+}
+
+function append(name, args) {
+  if (!allowed.has(name) || !definitions[name]) throw new Error("tool not allowed for this Job: " + name);
+  const event = { v: 1, event_id: randomUUID(), type: eventType[name], payload: args || {} };
+  appendFileSync(outputFile, JSON.stringify(event) + "\n", { encoding: "utf8", mode: 0o600 });
+  return event.event_id;
+}
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+  let request;
+  try { request = JSON.parse(line); } catch { return; }
+  if (request.id == null) return;
+  try {
+    if (request.method === "initialize") {
+      reply({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2024-11-05", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "deepflowhunter-control", version: "1" } } });
+    } else if (request.method === "ping") {
+      reply({ jsonrpc: "2.0", id: request.id, result: {} });
+    } else if (request.method === "tools/list") {
+      const tools = [...allowed].filter((name) => definitions[name]).map((name) => ({ name, ...definitions[name] }));
+      reply({ jsonrpc: "2.0", id: request.id, result: { tools } });
+    } else if (request.method === "tools/call") {
+      const id = append(request.params?.name, request.params?.arguments);
+      reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "accepted event " + id }] } });
+    } else if (request.method === "resources/list") {
+      reply({ jsonrpc: "2.0", id: request.id, result: { resources: [] } });
+    } else if (request.method === "prompts/list") {
+      reply({ jsonrpc: "2.0", id: request.id, result: { prompts: [] } });
+    } else {
+      reply({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } });
+    }
+  } catch (error) {
+    reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: String(error?.message || error) }], isError: true } });
+  }
+});
+`;

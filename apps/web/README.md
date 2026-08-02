@@ -1,4 +1,4 @@
-# @dfh/web — DeepFlowHunter 控制台
+# @dfh/web — DeepSonar 控制台
 
 技术选型：React + React Router + React Flow（@xyflow/react）+ Tailwind
 

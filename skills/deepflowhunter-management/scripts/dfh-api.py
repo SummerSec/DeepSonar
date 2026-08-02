@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DeepFlowHunter Management API CLI（Management Skill 的脚本入口）
+DeepSonar Management API CLI（Management Skill 的脚本入口）
 
 环境变量：
   DFH_BASE_URL   调度器地址（默认 http://localhost:3100）

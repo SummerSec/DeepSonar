@@ -1,17 +1,17 @@
-# DeepFlowHunter 本地项目与任务管理改造方案
+# DeepSonar 本地项目与任务管理改造方案
 
 > 状态：已实施（阶段 A/B/C，2026-08-01，commit b6a1480；阶段 D 为观察后清理，按需启动）
 > 日期：2026-08-01
-> 决策目标：由 DeepFlowHunter 自身前端管理项目与任务，Plane 从必选管理入口降级为可选集成。
+> 决策目标：由 DeepSonar 自身前端管理项目与任务，Plane 从必选管理入口降级为可选集成。
 
 ## 1. 结论
 
-DeepFlowHunter 应将自己的 PostgreSQL 数据库设为项目、任务和执行状态的唯一真相，前端直接通过 Scheduler API 创建和管理项目、任务。Plane 不再是启动项目和任务的前置条件，仅在确实需要通用团队协作时作为可选适配器使用。
+DeepSonar 应将自己的 PostgreSQL 数据库设为项目、任务和执行状态的唯一真相，前端直接通过 Scheduler API 创建和管理项目、任务。Plane 不再是启动项目和任务的前置条件，仅在确实需要通用团队协作时作为可选适配器使用。
 
 目标关系如下：
 
 ```text
-DeepFlowHunter Web
+DeepSonar Web
         │
         ▼
 Scheduler API ─────► PostgreSQL（唯一状态真相）
@@ -22,7 +22,7 @@ Scheduler API ─────► PostgreSQL（唯一状态真相）
 Plane（可选）◄──── plane-adapter ────► 本地项目与任务
 ```
 
-这不是简单地把 Plane 的页面复制到本项目，而是把 DeepFlowHunter 已经拥有的调度能力补上本地创建入口。项目不需要同时维护两套同等权威的状态。
+这不是简单地把 Plane 的页面复制到本项目，而是把 DeepSonar 已经拥有的调度能力补上本地创建入口。项目不需要同时维护两套同等权威的状态。
 
 ## 2. 为什么要改
 
@@ -41,7 +41,7 @@ Plane（可选）◄──── plane-adapter ────► 本地项目与�
 
 继续把 Plane 设为必选入口，会让产品定义落后于真实使用方式。
 
-### 2.3 DeepFlowHunter 的任务不是普通待办事项
+### 2.3 DeepSonar 的任务不是普通待办事项
 
 本项目中的任务天然关联：
 
@@ -52,7 +52,7 @@ Plane（可选）◄──── plane-adapter ────► 本地项目与�
 - 超时、重试、人工恢复与派生任务；
 - 项目级规则、角色和 Hub 配置。
 
-这些信息在 DeepFlowHunter 前端中可以原生表达，在 Plane 中只能塞进描述文本或依赖跳转链接。继续把 Plane 作为主要入口，反而会把一个领域任务拆成“Plane 上的待办”和“DeepFlowHunter 中的真实运行”两个割裂界面。
+这些信息在 DeepSonar 前端中可以原生表达，在 Plane 中只能塞进描述文本或依赖跳转链接。继续把 Plane 作为主要入口，反而会把一个领域任务拆成“Plane 上的待办”和“DeepSonar 中的真实运行”两个割裂界面。
 
 ### 2.4 双向同步会制造不必要的不一致
 
@@ -135,7 +135,7 @@ Job     1 ── * Event / Finding
 ### 5.1 本地项目与任务
 
 ```text
-1. 用户在 DeepFlowHunter 前端创建项目
+1. 用户在 DeepSonar 前端创建项目
 2. 用户进入项目，设置 Agent Profile、角色与规则
 3. 用户创建任务，填写任务类型、目标、优先级和超时
 4. API 在同一事务中创建任务画布和 pending Job
@@ -496,7 +496,7 @@ Plane → 本地：
 满足以下条件后，才算完成“Plane 可选化”：
 
 1. 清空 Plane 相关环境变量后，系统仍能从 Web 完成完整审计闭环。
-2. 项目与任务都能在 DeepFlowHunter 前端创建和管理。
+2. 项目与任务都能在 DeepSonar 前端创建和管理。
 3. PostgreSQL 中的 Job 状态是唯一执行真相，不依赖 Plane 状态判断是否继续运行。
 4. 现有 Plane 绑定可以继续使用，Plane 故障不会阻塞本地任务。
 5. 前端不再把 Plane 描述为必选前置步骤。
@@ -506,7 +506,7 @@ Plane → 本地：
 
 建议批准以下产品边界：
 
-- DeepFlowHunter 是审计任务的创建、执行和结果查看入口；
+- DeepSonar 是审计任务的创建、执行和结果查看入口；
 - 本地数据库是项目、任务和运行状态的唯一真相；
 - Plane 是按项目启用的协作镜像，不是系统控制面；
 - 第一阶段只补齐本地创建、归档、优先级和合法状态操作；

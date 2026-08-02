@@ -1,10 +1,10 @@
-# DeepFlowHunter Icon Brandkit Prompt
+# DeepSonar Icon Brandkit Prompt
 
 Use case: logo-brand
 
 Asset type: premium brand-kit overview and implementation reference for a developer platform icon
 
-Create one premium 16:10 brand-kit overview image for "DeepFlowHunter".
+Create one premium 16:10 brand-kit overview image for "DeepSonar".
 
 Brand strategy:
 
@@ -33,10 +33,22 @@ Visual mode: dark developer / operator, premium identity studio case study.
 
 Palette: carbon black `#090C0D`, graphite `#14191A`, signal mint `#78E6B8`, cool bone `#E7ECE9`, restrained warning coral `#E56B62` used very sparingly.
 
-Typography: modern grotesk wordmark paired with precise mono labels. Exact visible text only: "DeepFlowHunter", "LOOP GRAPH ENGINEERING", "Every loop converges." Keep all other text to tiny abstract labels or omit it.
+Typography: modern grotesk wordmark paired with precise mono labels. Exact visible text only: "DeepSonar", "深流循迹", "LOOP GRAPH ENGINEERING", "Every loop converges.", and "让复杂执行持续收敛". Keep all other text to tiny abstract labels or omit it.
 
 Logo rendering: flat vector geometry, no gradient inside the logo, no glow needed for recognition, consistent mark across every panel, balanced stroke/solid relationship, works in monochrome.
 
 Atmosphere: subtle grid, restrained scanline texture, precision registration marks, matte materials, low-key cinematic lighting.
 
 Avoid: generic circular-arrow icon, recycling symbol, infinity symbol, shield, radar screen, eye, crosshair, target reticle, random node network, hexagon badge, chain link, lightning bolt, animal mascot, glossy 3D logo, purple-blue AI gradient, cheap neon, clutter, stock dashboard, inconsistent logo variants, unreadable fake paragraphs, copied real-world logos, watermark.
+
+## Final Brand-Rename Edit Prompt
+
+Update the existing brand-kit board without redesigning it:
+
+- Replace every visible legacy English brand wordmark with exactly "DeepSonar".
+- Replace the legacy application domain with exactly "app.deepsonar.dev".
+- Add the exact Chinese brand name "深流循迹" below the main wordmark.
+- Keep "LOOP GRAPH ENGINEERING" and "Every loop converges." exactly as written.
+- Add the exact Chinese tagline "让复杂执行持续收敛" below the English tagline.
+- Preserve the D-shaped loop-graph logo, node positions, inward arrow, 3 x 3 grid, colors, textures, mockups, construction diagram, scale tests, UI states, lighting, and proportions.
+- Do not introduce any remaining old brand text, misspellings, logo variants, layout drift, or watermark.

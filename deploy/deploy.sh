@@ -94,7 +94,7 @@ case "$ACTION" in
       echo "服务未在 120 秒内通过健康检查：$health" >&2
       exit 1
     fi
-    echo "[deploy] DeepFlowHunter 已启动：http://127.0.0.1:$port"
+    echo "[deploy] DeepSonar 已启动：http://127.0.0.1:$port"
     echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DFH_ADMIN_TOKEN，请勿提交该文件。"
     if [ "$MODE" = "fake" ]; then
       echo "[deploy] 当前为 fake 模式；真实 Agent 请使用：./deploy/deploy.sh up real"

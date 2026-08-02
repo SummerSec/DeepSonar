@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { ingestEvent, rulesForProject, transitionJob, type AgentRuntimeSnapshot } from "./core.js";
+import { ingestEvent, rolesForProject, transitionJob, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
@@ -10,7 +10,7 @@ import { runner } from "./runtime.js";
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
  * 从 pending 领取 job（遵守全局/每项目并发上限）→ claimed → provisioning → running
- * Phase 0 执行器为 noop：走通状态机 + 事件 + 画布 + lease，不碰真实沙箱。
+ * fake 模式走通状态机 + 事件 + 画布 + lease，不启动真实 Agent。
  */
 
 const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
@@ -83,11 +83,13 @@ async function runJob(jobId: string) {
       : [undefined];
     const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
     const networkPolicy = (target.network_policy ?? {}) as Record<string, unknown>;
-    const projectRules = await rulesForProject(sql, job.project_id as string);
+    if (typeof networkPolicy.allow_egress !== "boolean") {
+      throw new Error(`job ${jobId} 的任务画布缺少冻结的 network_policy.allow_egress`);
+    }
     const allowEgress =
       useReal &&
       job.type !== "hub_reason" &&
-      ((networkPolicy.allow_egress as boolean | undefined) ?? projectRules.allowEgress);
+      networkPolicy.allow_egress;
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
     const runtimeImage = snapshot.runtime_image_key ?? config.runtime.imageAudit;
@@ -117,7 +119,7 @@ async function runJob(jobId: string) {
     await ensureJobNode(jobId, job);
 
     await execute(jobId, job.type);
-    // execute 内部通过 done 事件 finalize；若 type 无 done（noop 直发），这里兜底
+    // execute 内部通过 done 事件 finalize；若 type 未主动发送 done，这里兜底
     // finalizeJob 有 running 守卫：执行期间被 cancel 时这个兜底 done 会被安全忽略
     const [cur] = await sql`SELECT status FROM jobs WHERE id = ${jobId}`;
     if (cur?.status === "running") {
@@ -163,15 +165,10 @@ async function execute(jobId: string, type: string) {
   await executeFake(jobId, type);
 }
 
-/** Phase 0/1 执行器：noop 直发事件；audit/verify/hub/explore 由假 agent 脚本驱动（联调/演示用） */
+/** fake 执行器：audit/verify/hub/角色任务由内置脚本驱动（联调/演示用） */
 async function executeFake(jobId: string, type: string) {
   const emit = (t: string, payload: unknown) =>
     ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t as never, payload });
-
-  if (type === "noop") {
-    await emit("progress", { message: "noop executor ok", percent: 100 });
-    return;
-  }
 
   if (type === "audit_module" || type === "audit") {
     const [job] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
@@ -208,13 +205,17 @@ async function executeFake(jobId: string, type: string) {
   }
 
   if (type === "hub_reason") {
-    // 假 hub：confirmed 风险优先派发环境/PoC 验收；普通轮次按事实是否充足决定收敛。
-    const [job] = await sql`SELECT canvas_id, payload_json FROM jobs WHERE id = ${jobId}`;
+    // 假 Hub 也实时读取数据库角色注册表；只模拟状态机，不维护第二份角色白名单。
+    const [job] = await sql`SELECT canvas_id, project_id, payload_json FROM jobs WHERE id = ${jobId}`;
     const canvasId = job?.canvas_id as string | null;
     const trigger = (job?.payload_json?.trigger ?? {}) as { kind?: string; finding_id?: string };
+    const roles = job ? await rolesForProject(sql, job.project_id as string) : [];
+    const chooseRole = (preferred: string) => roles.find((role) => role.name === preferred) ?? roles[0];
     await emit("progress", { message: "假 hub：读图决策中", percent: 50 });
     if (canvasId) {
       if (["user_task", "plane_issue", "external_event"].includes(trigger.kind ?? "")) {
+        const selected = chooseRole("audit");
+        if (!selected) return;
         const refs = await sql`
           SELECT id FROM canvas_nodes
           WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
@@ -222,15 +223,17 @@ async function executeFake(jobId: string, type: string) {
           intents: [
             {
               from: refs.map((r) => r.id as string),
-              role: "audit",
-              description: "根据任务目标确定审计范围和方法，执行白盒安全审计并产出结构化 Finding",
-              prompt: "读取任务目标，自行决定是否以及如何获取目标材料，执行白盒安全审计并产出可验证 Finding。",
+              role: selected.name,
+              description: `由 ${selected.title} 角色执行首次取证：${selected.description}`,
+              prompt: `读取任务目标和画布，按 ${selected.name} 角色职责执行，并提交可验证的增量结果。`,
             },
           ],
         });
         return;
       }
       if (trigger.kind === "confirmed_finding") {
+        const selected = chooseRole("test");
+        if (!selected) return;
         const refs = trigger.finding_id
           ? await sql`SELECT node_id AS id FROM findings WHERE id = ${trigger.finding_id} AND node_id IS NOT NULL`
           : [];
@@ -238,9 +241,9 @@ async function executeFake(jobId: string, type: string) {
           intents: [
             {
               from: refs.map((r) => r.id as string),
-              role: "test",
-              description: "搭建最小运行环境并编写 PoC，动态复现已确认风险，记录利用条件与影响",
-              prompt: "针对画布中已确认的风险搭建最小运行环境并编写 PoC，动态复现后记录利用条件与影响。",
+              role: selected.name,
+              description: `由 ${selected.title} 角色验收已确认风险：${selected.description}`,
+              prompt: `针对画布中已确认的风险，按 ${selected.name} 角色职责补充验收证据。`,
             },
           ],
         });
@@ -256,6 +259,8 @@ async function executeFake(jobId: string, type: string) {
           },
         });
       } else {
+        const selected = chooseRole("explore");
+        if (!selected) return;
         const refs = await sql`
           SELECT id FROM canvas_nodes
           WHERE canvas_id = ${canvasId} AND node_type = ANY(${["finding", "fact", "root"]})
@@ -264,9 +269,9 @@ async function executeFake(jobId: string, type: string) {
           intents: [
             {
               from: refs.map((r) => r.id as string),
-              role: "explore",
-              description: "假 hub：探索代码，收集与审计目标相关的事实",
-              prompt: "围绕画布任务目标探索可用材料，收集与审计目标直接相关的增量事实。",
+              role: selected.name,
+              description: `假 Hub：由 ${selected.title} 角色补充事实`,
+              prompt: `围绕画布目标，按 ${selected.name} 角色职责补充尚缺的可验证事实。`,
             },
           ],
         });
@@ -275,7 +280,7 @@ async function executeFake(jobId: string, type: string) {
     return; // done 由 runJob 兜底
   }
 
-  // 角色 job（explore/analyze/verify/test/code/自定义）：假 agent 产出一条演示事实
+  // 角色 job（explore/analyze/review/test/code/自定义）：假 agent 产出一条演示事实
   const [roleJob] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
   const rolePayload = (roleJob?.payload_json ?? {}) as Record<string, unknown>;
   await emit("progress", { message: `假 agent（${type}）：执行中`, percent: 50 });

@@ -1,8 +1,8 @@
-type DeepFlowMarkProps = {
+type DeepSonarMarkProps = {
   className?: string;
 };
 
-export function DeepFlowMark({ className }: DeepFlowMarkProps) {
+export function DeepSonarMark({ className }: DeepSonarMarkProps) {
   return (
     <svg
       aria-hidden="true"
@@ -16,8 +16,8 @@ export function DeepFlowMark({ className }: DeepFlowMarkProps) {
       <circle cx="7" cy="5.5" r="2.25" />
       <circle cx="27" cy="16" r="2.25" />
       <circle cx="7" cy="26.5" r="2.25" />
-      <path d="m12 11.75 7 4.25-7 4.25Z" className="deep-flow-mark__arrow" />
-      <circle cx="22.5" cy="16" r="1.75" className="deep-flow-mark__core" />
+      <path d="m12 11.75 7 4.25-7 4.25Z" className="deep-sonar-mark__arrow" />
+      <circle cx="22.5" cy="16" r="1.75" className="deep-sonar-mark__core" />
     </svg>
   );
 }

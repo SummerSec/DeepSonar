@@ -23,11 +23,18 @@ export default {
 
 ## 白名单工具注入（§3.4）
 
-经 agentbox-sdk 的 claude-code provider 配置注入 hooks/MCP：
+每个 Job 经 agentbox-sdk 动态注入本地 `deepflowhunter-control` MCP；工具按角色裁剪：
 
 - `emit_progress` → 调度器 `progress` 事件
+- `emit_fact` → 调度器 `fact` 事件（运行中可多次调用）
 - `emit_finding`（payload = SARIF 子集，见 shared-types FindingPayload）→ `finding` 事件
+- `submit_hub_decision` → 调度器 `hub_decision` 事件
 - `mark_job_done` → `done` 事件
 - `request_human` → `human` 事件
 
-沙箱内权限完全开放（`approvalMode: "auto"`），安全边界 = 沙箱（`networkMode: "none"` 断网 + 一次性容器）。
+MCP 只写本地控制队列，调度器通过 agentbox 控制通道增量读取，不需要 Scheduler API/数据库凭据，也不受 Worker 目标出网策略影响。沙箱内权限完全开放（`approvalMode: "auto"`），安全边界 = 网络策略 + 一次性容器。
+
+同一画布产生新 Fact/Finding 时，数据库 `NOTIFY` 唤醒调度器；调度器使用 `Agent.attach(...).sendMessage(...)` 给仍在运行的其他 Agent CLI 追加一条增量通知。首次 prompt 仍是完整任务，追加消息只携带提交后的新画布数据。
+
+本地 MCP 协议冒烟：`pnpm --filter @dfh/scheduler exec tsx ../../agent-harness/test-control-mcp.ts`。
+画布增量消息冒烟（需本地 PostgreSQL）：`pnpm --filter @dfh/scheduler exec tsx ../../agent-harness/test-canvas-updates.ts`。

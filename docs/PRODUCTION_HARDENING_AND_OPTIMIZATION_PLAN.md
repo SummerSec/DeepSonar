@@ -1,13 +1,13 @@
-# DeepFlowHunter 生产化实施、改进与优化方案
+# DeepSonar 生产化实施、改进与优化方案
 
 > 状态：实施提案
 > 日期：2026-08-01
-> 适用范围：DeepFlowHunter Scheduler、Web、Runtime Sandbox、Plane Adapter、Skill 与 API Token 管理
+> 适用范围：DeepSonar Scheduler、Web、Runtime Sandbox、Plane Adapter、Skill 与 API Token 管理
 > 首要目标：先达到“可信用户、单节点、可审计、可恢复”的内部生产标准，再评估公网多用户与多租户。
 
 ## 1. 执行结论
 
-DeepFlowHunter 已经具备项目、任务画布、Job 状态机、Agent Profile、Skill Source、Finding、验证链和 Plane Adapter 的原型闭环，但当前仍属于工程原型，不能直接处理真实客户的不可信代码，也不应暴露到生产网络。
+DeepSonar 已经具备项目、任务画布、Job 状态机、Agent Profile、Skill Source、Finding、验证链和 Plane Adapter 的原型闭环，但当前仍属于工程原型，不能直接处理真实客户的不可信代码，也不应暴露到生产网络。
 
 生产化不应继续以增加页面和 Agent 角色为主，而应优先完成五件事：
 
@@ -20,8 +20,8 @@ DeepFlowHunter 已经具备项目、任务画布、Job 状态机、Agent Profile
 Skill 与 API Token 必须成为本项目的一等能力：
 
 - Web 中能够管理 Skill 来源、版本、信任状态和项目绑定；
-- 外部 Codex、Claude Code 或自动化系统可以安装 DeepFlowHunter Management Skill，通过最小权限 API Token 管理项目和任务；
-- 模型 Provider Credential 与调用 DeepFlowHunter API 的 Access Token 分开管理；
+- 外部 Codex、Claude Code 或自动化系统可以安装 DeepSonar Management Skill，通过最小权限 API Token 管理项目和任务；
+- 模型 Provider Credential 与调用 DeepSonar API 的 Access Token 分开管理；
 - 沙箱不得直接持有长期上游 API Key。
 
 ## 2. 生产目标分级
@@ -126,7 +126,7 @@ Skill 与 API Token 必须成为本项目的一等能力：
 - Sandbox：不可信执行区，不持有平台长期密钥；
 - Plane：可选协作镜像；
 - Secret Store：Provider Credential 密文与密钥元数据；
-- API Token：调用 DeepFlowHunter 的身份凭据，不等于 Provider Credential。
+- API Token：调用 DeepSonar 的身份凭据，不等于 Provider Credential。
 
 ## 5. Skill 管理方案
 
@@ -195,9 +195,9 @@ project_skills
 - 哪些 Job 使用了某个 Revision；
 - 扫描告警和审批记录。
 
-### 5.2 DeepFlowHunter Management Skill：让外部 Agent 管理本项目
+### 5.2 DeepSonar Management Skill：让外部 Agent 管理本项目
 
-提供一个独立的管理 Skill，使 Codex、Claude Code 或其他 Agent 可以通过 DeepFlowHunter API 管理项目，而不依赖浏览器手工操作。
+提供一个独立的管理 Skill，使 Codex、Claude Code 或其他 Agent 可以通过 DeepSonar API 管理项目，而不依赖浏览器手工操作。
 
 建议目录：
 
@@ -246,7 +246,7 @@ Skill 必须通过 `DFH_API_TOKEN` 调用平台 API。归档项目、取消任�
 
 ### 6.1 Platform API Token
 
-用途：用户、CI 或 Management Skill 调用 DeepFlowHunter API。
+用途：用户、CI 或 Management Skill 调用 DeepSonar API。
 
 建议格式：
 
@@ -333,7 +333,7 @@ Authorization: Bearer dfh_prod_xxx_secret
 
 用途：Anthropic、OpenAI、OpenRouter、Kimi、Plane、Git 等外部服务认证。
 
-它不是平台 API Token，不能用于调用 DeepFlowHunter API。
+它不是平台 API Token，不能用于调用 DeepSonar API。
 
 建议数据模型：
 
@@ -1036,6 +1036,6 @@ AUTH + CRED + SKILL ──────► FE
   → CI、性能和扩展
 ```
 
-不要先把当前控制台包装成公网产品，也不要通过在容器里继续注入长期 Provider Key 来换取短期功能完整。DeepFlowHunter 的价值是安全地运行安全审计 Agent；如果安全边界、状态真相和证据链不可信，增加更多 Agent、Skill 或项目管理页面只会扩大风险面。
+不要先把当前控制台包装成公网产品，也不要通过在容器里继续注入长期 Provider Key 来换取短期功能完整。DeepSonar 的价值是安全地运行安全审计 Agent；如果安全边界、状态真相和证据链不可信，增加更多 Agent、Skill 或项目管理页面只会扩大风险面。
 
 完成 P0–P2 后，可评估内部单节点生产上线。公网、多用户或处理未知恶意代码，需要在 Level A 稳定运行和完成故障演练后再进入下一阶段。

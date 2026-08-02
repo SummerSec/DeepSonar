@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-DeepFlowHunter：多项目代码审计调度平台。沙箱调度层安全执行多类 Agent（审计 → 验证 → …），Agent 只提「提案」，系统负责真正下发与记账。设计文档与所有架构决策见 `docs/ARCHITECTURE.md`（v1.1），改架构前先读它。
+DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度层安全执行多类 Agent（探索 → 分析 → 验证 → 反馈），Agent 只提「提案」，系统负责真正下发与记账，让复杂执行持续收敛。设计文档与所有架构决策见 `docs/ARCHITECTURE.md`（v1.1），改架构前先读它。
 
 ## 常用命令
 
@@ -25,7 +25,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 自 2026-08 起降级为可选集成（`docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md`），默认路径是 Web 直接建项目/任务。
 
-- **Agent 只提案，不决策**：白名单工具仅 `emit_progress / emit_finding / mark_job_done / request_human`。`emit_finding` 只能带 `suggest_verify` 建议，是否派生 verify job 由调度器规则引擎（`core.ts`）唯一决定，有深度（`MAX_FOLLOWUP_DEPTH=2`）与频次护栏。
+- **Agent 只提案，不决策**：系统按 Job 动态注入本地控制 MCP，工具为 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集。Fact/Finding 在执行中增量回传；`emit_finding` 只能带 `suggest_verify` 建议，是否派生 verify job 由调度器规则引擎（`core.ts`）唯一决定，有深度（`MAX_FOLLOWUP_DEPTH=4`）与频次护栏。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
 - **调度唤醒是事件驱动**：建 job 后 `pg_notify('dfh_jobs')` 唤醒 dispatcher；`DFH_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
@@ -45,14 +45,14 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 ### Hub 循环（Cairn 式图语义，§8.3）
 
-画布是 **fact-intent 二分图**：角色 agent（explore/analyze/verify/test/code 等）只把发现写成 fact 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。**事件触发，无定时任务**，单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
+画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify` 与 `report` 是调度器专用系统角色，Hub 不可下发。**事件触发，无定时任务**，单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
 
 ### 运行时（`packages/runtime-sandbox/`）
 
 - `SandboxRunner` 是调度器与沙箱之间唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（agentbox-sdk，可切 local-docker/e2b/daytona）。换 provider 只动这个包。
 - 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
 - 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `dfh-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
-- 事件**不经沙箱网络**，走 agentbox-sdk 控制通道回传；结果文件读回即删，随后销毁沙箱。
+- 语义事件由本地 MCP 写入控制队列，再经 agentbox-sdk 控制通道增量回传，**不经沙箱目标网络**；同一画布的新 Fact/Finding 通过 `Agent.attach(...).sendMessage(...)` 追加给仍在运行的 Agent CLI。终态后删除队列并销毁沙箱。
 - `env_keys` 白名单（`DFH_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 RoleConfig 下发变量；长期密钥不进快照或工作区。
 - 沙箱硬限制（cpu/memory/pids/cap-drop-all/no-new-privileges）在 config 的 `sandboxLimits`，0 仅限调试。
 
