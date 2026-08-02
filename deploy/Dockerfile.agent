@@ -1,6 +1,6 @@
 # DeepSonar official Agent runtime. Build with TOOLSET=base or TOOLSET=audit.
 ARG BASE_IMAGE=node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} AS runtime-rootfs
 
 ARG TOOLSET=base
 ARG GIT_VERSION=1:2.39.5-0+deb12u3
@@ -23,15 +23,6 @@ ARG GITLEAKS_AMD64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca
 ARG GITLEAKS_ARM64_SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
 ARG SHELLCHECK_AMD64_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
 ARG SHELLCHECK_ARM64_SHA256=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
-
-LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
-      io.deepsonar.toolset="${TOOLSET}" \
-      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar"
-
-ENV IS_SANDBOX=1 \
-    SEMGREP_SEND_METRICS=off \
-    SEMGREP_ENABLE_VERSION_CHECK=0
 
 RUN set -eu; \
   test "$TOOLSET" = base -o "$TOOLSET" = audit; \
@@ -73,5 +64,20 @@ COPY agent-harness/write-tool-manifest.mjs /opt/deepsonar/write-tool-manifest.mj
 RUN node /opt/deepsonar/write-tool-manifest.mjs /opt/deepsonar/runtime-images.json "$TOOLSET" /opt/deepsonar/tool-manifest.json \
   && rm /opt/deepsonar/runtime-images.json /opt/deepsonar/write-tool-manifest.mjs
 
+WORKDIR /workspace
+
+# Collapse the finished rootfs into one runtime layer. This removes bytes hidden
+# behind package upgrades/deletions in earlier layers, so the enforced size
+# budget reflects what users actually pull and store.
+FROM scratch
+ARG TOOLSET=base
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="${TOOLSET}" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar"
+ENV IS_SANDBOX=1 \
+    SEMGREP_SEND_METRICS=off \
+    SEMGREP_ENABLE_VERSION_CHECK=0
+COPY --from=runtime-rootfs / /
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

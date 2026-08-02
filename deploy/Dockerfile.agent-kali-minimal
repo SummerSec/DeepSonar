@@ -2,7 +2,7 @@
 # already a minimal rootfs; deliberately do not install any kali-linux-* or
 # kali-tools-* metapackage.
 ARG BASE_IMAGE=kalilinux/kali-last-release@sha256:01a402ec78a2b3bd86394f34f8c3d6adefe3c593ae259ac0779c4d1f971c8ff5
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} AS runtime-rootfs
 
 ARG CLAUDE_CODE_VERSION=2.1.220
 ARG NODE_VERSION=22.23.2
@@ -18,16 +18,7 @@ ARG SHELLCHECK_ARM64_SHA256=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261
 ARG NODE_AMD64_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
 ARG NODE_ARM64_SHA256=fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8
 
-LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
-      io.deepsonar.toolset="kali-minimal" \
-      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
-      org.opencontainers.image.base.name="docker.io/kalilinux/kali-last-release"
-
-ENV DEBIAN_FRONTEND=noninteractive \
-    IS_SANDBOX=1 \
-    SEMGREP_SEND_METRICS=off \
-    SEMGREP_ENABLE_VERSION_CHECK=0
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN set -eu; \
   packages="ca-certificates curl git ripgrep jq file unzip xz-utils python3 python3-venv binutils"; \
@@ -77,5 +68,19 @@ RUN node /opt/deepsonar/write-tool-manifest.mjs /opt/deepsonar/runtime-images.js
   && rm /opt/deepsonar/runtime-images.json /opt/deepsonar/write-tool-manifest.mjs \
   && find /var/log -type f -exec truncate -s 0 {} \;
 
+WORKDIR /workspace
+
+# Keep the specialist runtime small by exporting only the finished filesystem,
+# not superseded bytes from package-manager and tool-install layers.
+FROM scratch
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="kali-minimal" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.base.name="docker.io/kalilinux/kali-last-release"
+ENV IS_SANDBOX=1 \
+    SEMGREP_SEND_METRICS=off \
+    SEMGREP_ENABLE_VERSION_CHECK=0
+COPY --from=runtime-rootfs / /
 WORKDIR /workspace
 CMD ["sleep", "infinity"]
