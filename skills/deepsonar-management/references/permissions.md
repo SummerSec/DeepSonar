@@ -91,13 +91,29 @@ curl -X POST $DEEPSONAR_BASE_URL/tokens \
     "expires_in_days": 90
   }'
 
-# 需要改 RoleConfig / 规则
+# 需要改 RoleConfig / 规则 / 凭据模型目录
 curl -X POST $DEEPSONAR_BASE_URL/tokens \
   -H "Authorization: Bearer $DEEPSONAR_ADMIN_TOKEN" \
   -H 'content-type: application/json' \
   -d '{
     "name": "role-config-bot",
-    "scopes": ["projects:read","agents:read","agents:write","skills:read"],
+    "scopes": ["projects:read","agents:read","agents:write","skills:read","images:read"],
+    "expires_in_days": 30
+  }'
+
+# 镜像市场运维（不含 approve）
+curl -X POST $DEEPSONAR_BASE_URL/tokens \
+  -H "Authorization: Bearer $DEEPSONAR_ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "name": "image-ops",
+    "scopes": ["images:read","images:manage","projects:read"],
     "expires_in_days": 30
   }'
 ```
+
+## 应急引导
+
+- `DEEPSONAR_ADMIN_TOKEN`：环境变量引导管理员（不落库，`scopes=admin`），用于首次建 Token / 本地脚本；**不要**写进仓库或长期脚本日志。
+- 用户会话：`POST /auth/login` → `deepsonar_user_*`；无用户时 `POST /auth/bootstrap`。
+- `DEEPSONAR_AUTH_REQUIRED=false` 时本机无 Bearer 以 `internal` 全权运行——仅限回环开发。

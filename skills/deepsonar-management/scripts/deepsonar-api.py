@@ -71,6 +71,19 @@ def parse_json_arg(value: str, name: str):
         raise ApiError(f"{name} 不是合法 JSON（可用 @文件路径 传入）")
 
 
+def _decode_json_text(text: str):
+    """解析 JSON；容忍 Windows curl/部分代理带来的 UTF-8 BOM。"""
+    if text is None:
+        return None
+    cleaned = text.lstrip("﻿").strip()
+    if not cleaned:
+        return None
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {"raw": text}
+
+
 def call(method: str, path: str, body=None):
     # 无 body 时不带 application/json，避免 Fastify FST_ERR_CTP_EMPTY_JSON_BODY
     headers = {}
@@ -79,20 +92,17 @@ def call(method: str, path: str, body=None):
     data = None
     if body is not None:
         headers["content-type"] = "application/json"
-        data = json.dumps(body).encode("utf-8")
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
     status = 200
     try:
         with urllib.request.urlopen(req) as res:
             status = res.status
-            text = res.read().decode("utf-8")
+            text = res.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         status = e.code
         text = e.read().decode("utf-8", errors="replace")
-    try:
-        parsed = json.loads(text) if text else None
-    except json.JSONDecodeError:
-        parsed = {"raw": text}
+    parsed = _decode_json_text(text)
     if status >= 400:
         msg = (parsed or {}).get("error") or (parsed or {}).get("message") or f"HTTP {status}"
         if not isinstance(msg, str):
@@ -109,13 +119,13 @@ def call_text(method: str, path: str) -> str:
     req = urllib.request.Request(BASE + path, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req) as res:
-            return res.read().decode("utf-8")
+            return res.read().decode("utf-8", errors="replace").lstrip("﻿")
     except urllib.error.HTTPError as e:
         text = e.read().decode("utf-8", errors="replace")
         msg = f"HTTP {e.code}"
         try:
-            msg = json.loads(text).get("error") or msg
-        except json.JSONDecodeError:
+            msg = _decode_json_text(text).get("error") or msg
+        except Exception:
             pass
         raise ApiError(msg, status=e.code, body={"raw": text[:500]})
 
@@ -231,7 +241,10 @@ def _skills_trust(pos, f):
 def _credentials_create(_pos, f):
     body = {
         "name": need(f.get("name"), "--name"),
-        "provider": need(f.get("provider"), "--provider anthropic|kimi|openai|openrouter|plane|git"),
+        "provider": need(
+            f.get("provider"),
+            "--provider anthropic|kimi|openai|openrouter|plane|git|<oci-registry-host>",
+        ),
         "secret": need(f.get("secret"), "--secret"),
     }
     if f.get("kind"):
@@ -246,6 +259,39 @@ def _credentials_create(_pos, f):
     if meta:
         body["metadata"] = meta
     return call("POST", "/credentials", body)
+
+
+def _runtime_images_list(_pos, f):
+    qs = []
+    if f.get("search"):
+        qs.append("search=" + urllib.request.quote(str(f["search"])))
+    if f.get("project"):
+        qs.append("project_id=" + urllib.request.quote(str(f["project"])))
+    path = "/runtime-images" + (("?" + "&".join(qs)) if qs else "")
+    return call("GET", path)
+
+
+def _runtime_images_project_enable(pos, f):
+    body = {
+        "enabled": str(need(f.get("enabled"), "--enabled true|false")).lower() == "true",
+    }
+    if f.get("version-id"):
+        body["version_id"] = f["version-id"]
+    return call(
+        "PUT",
+        f"/projects/{_p0(pos, 'projectId')}/runtime-images/{_p1(pos, 'imageId')}",
+        body,
+    )
+
+
+def _findings_list(_pos, f):
+    qs = []
+    if f.get("project"):
+        qs.append("project_id=" + urllib.request.quote(str(f["project"])))
+    if f.get("canvas"):
+        qs.append("canvas_id=" + urllib.request.quote(str(f["canvas"])))
+    path = "/findings" + (("?" + "&".join(qs)) if qs else "")
+    return call("GET", path)
 
 
 def _schema_cmd(pos, f):
@@ -306,8 +352,8 @@ COMMANDS = {
     "jobs.resume": lambda pos, f: call("POST", f"/jobs/{_p0(pos, 'jobId')}/resume"),
 
     # ---------- 结果 ----------
-    "findings.list": lambda pos, f: call(
-        "GET", f"/findings?project_id={f['project']}" if f.get("project") else "/findings"),
+    "findings.list": _findings_list,
+    "findings.get": lambda pos, f: call("GET", f"/findings/{_p0(pos, 'findingId')}"),
     "canvases.list": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}/canvases"),
     "canvases.get": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}"),
 
@@ -341,6 +387,7 @@ COMMANDS = {
     "roles.delete": lambda pos, f: call("DELETE", f"/agent-roles/{_p0(pos, 'roleId')}"),
 
     # ---------- RoleConfig（角色 → agent 配置；全局缺省 + 项目级覆盖，声明式全量替换） ----------
+    # PUT body 须含 runtime_image_key（须已有 trusted 版本），credentials[].purpose 用 llm
     "role-configs.global": lambda pos, f: call("GET", "/role-configs/global"),
     "role-configs.global-put": lambda pos, f: call(
         "PUT", f"/role-configs/global/{_p0(pos, 'roleId')}",
@@ -351,6 +398,22 @@ COMMANDS = {
         parse_json_arg(need(f.get("data"), "--data '{...}' 或 @file.json"), "--data")),
     "role-configs.delete": lambda pos, f: call(
         "DELETE", f"/projects/{_p0(pos, 'projectId')}/role-configs/{_p1(pos, 'roleId')}"),
+
+    # ---------- 运行时镜像市场（tag 不可信；Job 只冻结 digest） ----------
+    "runtime-images.list": _runtime_images_list,
+    "runtime-images.get": lambda pos, f: call("GET", f"/runtime-images/{_p0(pos, 'imageId')}"),
+    "runtime-images.import": lambda pos, f: call(
+        "POST", "/runtime-images/import",
+        parse_json_arg(need(f.get("data"), "--data '{image_key,name,publisher,image_ref,...}'"), "--data")),
+    "runtime-images.rescan": lambda pos, f: call(
+        "POST", f"/runtime-image-versions/{_p0(pos, 'versionId')}/rescan"),
+    "runtime-images.status": lambda pos, f: call(
+        "POST", f"/runtime-image-versions/{_p0(pos, 'versionId')}/status",
+        {"status": need(f.get("status"), "--status trusted|rejected|disabled|revoked"),
+         **({"reason": f["reason"]} if f.get("reason") else {})}),
+    "runtime-images.usage": lambda pos, f: call(
+        "GET", f"/runtime-image-versions/{_p0(pos, 'versionId')}/usage"),
+    "runtime-images.project-enable": _runtime_images_project_enable,
 
     # ---------- Skill 模块源（Git 托管；新源默认 quarantined，需 trust 后才下发） ----------
     "skills.list": lambda pos, f: call("GET", "/skill-sources"),
@@ -368,7 +431,7 @@ COMMANDS = {
     "plane.sync": lambda pos, f: call("POST", f"/projects/{_p0(pos, 'projectId')}/integrations/plane/sync"),
     "plane.info": lambda pos, f: call("GET", "/plane-info"),
 
-    # ---------- Provider Credential（明文不可回读） ----------
+    # ---------- Provider / OCI Credential（明文不可回读） ----------
     "credentials.list": lambda pos, f: call("GET", "/credentials"),
     "credentials.create": _credentials_create,
     "credentials.update": lambda pos, f: call(
@@ -381,6 +444,8 @@ COMMANDS = {
         "POST", f"/credentials/{_p0(pos, 'credentialId')}/status",
         {"status": need(f.get("status"), "--status active|disabled|rotation_required")}),
     "credentials.test": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/test"),
+    # 无 body；用于 RoleConfig 选 model 前发现 Provider 真实目录
+    "credentials.models": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/models"),
 }
 
 
