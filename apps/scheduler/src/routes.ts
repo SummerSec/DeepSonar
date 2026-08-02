@@ -4,17 +4,29 @@ import { PlatformToolName, allowedPlatformTools, requiredPlatformTools } from "@
 import { z } from "zod";
 import { audit } from "./audit.js";
 import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
+import {
+  countUsers,
+  createUser,
+  listUsers,
+  loginUser,
+  revokeSession,
+  setUserPassword,
+  toPublicUser,
+  updateUser,
+  type UserRole,
+} from "./users.js";
 import { renderMetrics } from "./metrics.js";
 import { config } from "./config.js";
 import {
   allowedModelIds,
+  credentialConcurrencyPolicy,
   encryptSecret,
   fingerprintOf,
   isProviderKnown,
   last4Of,
   type Encrypted,
 } from "./credentials.js";
-import { testCredential } from "./credential-test.js";
+import { listCredentialModels, testCredential } from "./credential-test.js";
 import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
@@ -31,6 +43,7 @@ import {
   rolesForProject,
   rulesForProject,
   scanConfigContent,
+  triggerHubFromHumanComment,
   transitionJob,
   validateConfigFilePath,
   validateEnvVars,
@@ -127,6 +140,230 @@ export function registerRoutes(app: FastifyInstance) {
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
   registerGateway(app);
+
+  // ---------- 用户认证（人机登录；与 api_tokens 服务账号分离） ----------
+  app.get("/auth/status", async () => {
+    const n = await countUsers();
+    return {
+      auth_required: config.auth.required,
+      has_users: n > 0,
+      bootstrap_available: n === 0,
+      session_ttl_days: 7,
+    };
+  });
+
+  app.post("/auth/bootstrap", async (req, reply) => {
+    const n = await countUsers();
+    if (n > 0) return reply.code(409).send({ error: "已有用户，无法 bootstrap", error_code: "ALREADY_BOOTSTRAPPED" });
+    const body = z
+      .object({
+        username: z.string().min(2).max(64),
+        password: z.string().min(8).max(200),
+        display_name: z.string().max(100).optional(),
+      })
+      .parse(req.body);
+    try {
+      const user = await createUser({
+        username: body.username,
+        password: body.password,
+        display_name: body.display_name,
+        role: "admin",
+        created_by: "bootstrap",
+      });
+      const session = await loginUser(body.username, body.password, {
+        ip: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
+      await audit(req, {
+        action: "auth.bootstrap",
+        resourceType: "user",
+        resourceId: user.id,
+        after: { username: user.username, role: user.role },
+      });
+      return reply.code(201).send({
+        user: session.user,
+        token: session.token,
+        expires_at: session.expires_at,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : "BOOTSTRAP_FAILED";
+      return reply.code(400).send({ error: msg, error_code: code });
+    }
+  });
+
+  app.post("/auth/login", async (req, reply) => {
+    const body = z
+      .object({
+        username: z.string().min(1).max(64),
+        password: z.string().min(1).max(200),
+      })
+      .parse(req.body);
+    try {
+      const session = await loginUser(body.username, body.password, {
+        ip: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
+      await audit(req, {
+        action: "auth.login",
+        resourceType: "user",
+        resourceId: session.user.id,
+        after: { username: session.user.username },
+      });
+      return session;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : "LOGIN_FAILED";
+      await audit(req, {
+        action: "auth.login_failed",
+        resourceType: "user",
+        resourceId: body.username,
+        result: "denied",
+        errorCode: code,
+      });
+      return reply.code(401).send({ error: msg, error_code: code });
+    }
+  });
+
+  app.post("/auth/logout", async (req, reply) => {
+    const header = req.headers.authorization ?? "";
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    if (token.startsWith("deepsonar_user_")) {
+      await revokeSession(token);
+    }
+    await audit(req, {
+      action: "auth.logout",
+      resourceType: "user",
+      resourceId: req.actor?.id ?? null,
+    });
+    return { ok: true };
+  });
+
+  app.get("/auth/me", async (req) => {
+    const actor = req.actor;
+    if (!actor || actor.type === "internal") {
+      return {
+        auth_required: config.auth.required,
+        authenticated: !config.auth.required,
+        actor: actor
+          ? { type: actor.type, name: actor.name, role: actor.role ?? null, scopes: actor.scopes }
+          : null,
+        user: null,
+      };
+    }
+    if (actor.type === "user" && actor.id) {
+      const [row] = await sql`SELECT * FROM users WHERE id = ${actor.id}`;
+      return {
+        auth_required: config.auth.required,
+        authenticated: true,
+        actor: { type: actor.type, name: actor.name, role: actor.role ?? null, scopes: actor.scopes },
+        user: row ? toPublicUser(row as Record<string, unknown>) : null,
+      };
+    }
+    return {
+      auth_required: config.auth.required,
+      authenticated: true,
+      actor: { type: actor.type, name: actor.name, role: null, scopes: actor.scopes },
+      user: null,
+    };
+  });
+
+  app.post("/auth/change-password", async (req, reply) => {
+    if (req.actor?.type !== "user" || !req.actor.id) {
+      return reply.code(403).send({ error: "仅登录用户可修改自己的密码" });
+    }
+    const body = z
+      .object({
+        current_password: z.string().min(1),
+        new_password: z.string().min(8).max(200),
+      })
+      .parse(req.body);
+    const [row] = await sql`SELECT * FROM users WHERE id = ${req.actor.id}`;
+    if (!row) return reply.code(404).send({ error: "user not found" });
+    const { verifyPassword } = await import("./users.js");
+    if (!verifyPassword(body.current_password, row.password_salt as string, row.password_hash as string)) {
+      return reply.code(401).send({ error: "当前密码错误" });
+    }
+    await setUserPassword(req.actor.id, body.new_password);
+    // 重新登录
+    const session = await loginUser(row.username as string, body.new_password, {
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+    await audit(req, {
+      action: "auth.change_password",
+      resourceType: "user",
+      resourceId: req.actor.id,
+    });
+    return { ok: true, token: session.token, expires_at: session.expires_at, user: session.user };
+  });
+
+  app.get("/users", async () => listUsers());
+
+  app.post("/users", async (req, reply) => {
+    const body = z
+      .object({
+        username: z.string().min(2).max(64),
+        password: z.string().min(8).max(200),
+        display_name: z.string().max(100).optional(),
+        role: z.enum(["admin", "operator", "viewer"]).default("operator"),
+      })
+      .parse(req.body);
+    try {
+      const user = await createUser({
+        username: body.username,
+        password: body.password,
+        display_name: body.display_name,
+        role: body.role as UserRole,
+        created_by: req.actor?.name ?? null,
+      });
+      await audit(req, {
+        action: "user.create",
+        resourceType: "user",
+        resourceId: user.id,
+        after: { username: user.username, role: user.role },
+      });
+      return reply.code(201).send(user);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : "CREATE_FAILED";
+      return reply.code(400).send({ error: msg, error_code: code });
+    }
+  });
+
+  app.patch("/users/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        display_name: z.string().max(100).optional(),
+        role: z.enum(["admin", "operator", "viewer"]).optional(),
+        status: z.enum(["active", "disabled"]).optional(),
+      })
+      .parse(req.body ?? {});
+    const user = await updateUser(id, body);
+    if (!user) return reply.code(404).send({ error: "not found" });
+    await audit(req, {
+      action: "user.update",
+      resourceType: "user",
+      resourceId: id,
+      after: body,
+    });
+    return user;
+  });
+
+  app.post("/users/:id/password", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ password: z.string().min(8).max(200) }).parse(req.body);
+    const [row] = await sql`SELECT id FROM users WHERE id = ${id}`;
+    if (!row) return reply.code(404).send({ error: "not found" });
+    await setUserPassword(id, body.password);
+    await audit(req, {
+      action: "user.reset_password",
+      resourceType: "user",
+      resourceId: id,
+    });
+    return { ok: true };
+  });
 
   // ---------- Agent 实时流（WS /ws?job_id=...） ----------
   // 连接后先补发环形缓冲（晚加入也能看到上下文），随后实时推送
@@ -846,16 +1083,27 @@ export function registerRoutes(app: FastifyInstance) {
   });
 
   // ---------- 全局设置（§8.1 所有配置落库：规则默认值 → global_settings 单例行） ----------
+  const aggregateActive = (rows: Record<string, unknown>[], key: "agent_cli" | "provider") => {
+    const out: Record<string, number> = {};
+    for (const row of rows) {
+      const name = String(row[key] ?? "");
+      if (name) out[name] = (out[name] ?? 0) + Number(row.count);
+    }
+    return out;
+  };
+
   app.get("/global-settings", async () => {
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const activeRows = await sql`
       SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${config.runtime.agentProvider}) AS agent_cli,
+             agent_snapshot_json->>'credential_provider' AS provider,
              COUNT(*)::int AS count
-      FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1`;
+      FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1, 2`;
     return {
       rules: ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>,
       effective_rules: await globalRules(sql),
-      active_by_agent_cli: Object.fromEntries(activeRows.map((row) => [String(row.agent_cli), Number(row.count)])),
+      active_by_agent_cli: aggregateActive(activeRows, "agent_cli"),
+      active_by_provider: aggregateActive(activeRows, "provider"),
     };
   });
 
@@ -873,12 +1121,14 @@ export function registerRoutes(app: FastifyInstance) {
     });
     const activeRows = await sql`
       SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${config.runtime.agentProvider}) AS agent_cli,
+             agent_snapshot_json->>'credential_provider' AS provider,
              COUNT(*)::int AS count
-      FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1`;
+      FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1, 2`;
     return {
       rules: merged,
       effective_rules: await globalRules(sql),
-      active_by_agent_cli: Object.fromEntries(activeRows.map((row) => [String(row.agent_cli), Number(row.count)])),
+      active_by_agent_cli: aggregateActive(activeRows, "agent_cli"),
+      active_by_provider: aggregateActive(activeRows, "provider"),
     };
   });
 
@@ -1211,15 +1461,18 @@ export function registerRoutes(app: FastifyInstance) {
       project_id?: string;
       severity?: string;
       verify_status?: string;
+      disposition?: string;
       canvas_id?: string;
     };
     const projectId = q.project_id || null;
     const severity = q.severity || null;
     const verifyStatus = q.verify_status || null;
     const canvasId = q.canvas_id || null;
+    const disposition = q.disposition || null;
     return sql`
       SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
-             f.location, f.summary, f.verify_status, f.created_at,
+             f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
+             f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
              p.name AS project_name, j.canvas_id
       FROM findings f
       JOIN projects p ON p.id = f.project_id
@@ -1227,10 +1480,13 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE (${projectId}::uuid IS NULL OR f.project_id = ${projectId}::uuid)
         AND (${severity}::text IS NULL OR f.severity = ${severity})
         AND (${verifyStatus}::text IS NULL OR f.verify_status = ${verifyStatus})
+        AND (${disposition}::text IS NULL OR f.disposition = ${disposition})
         AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId})
       ORDER BY f.created_at DESC
       LIMIT 500`;
   });
+
+  const DISPOSITIONS = ["open", "accepted", "confirmed_vuln", "rejected_fp", "resolved", "archived"] as const;
 
   app.get("/findings/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -1243,13 +1499,175 @@ export function registerRoutes(app: FastifyInstance) {
       LEFT JOIN canvases c ON c.id = j.canvas_id
       WHERE f.id = ${id}`;
     if (!finding) return reply.code(404).send({ error: "finding not found" });
-    const [verification_jobs, source_events] = await Promise.all([
+    const [verification_jobs, source_events, comments, links] = await Promise.all([
       sql`SELECT id, type, status, error, started_at, finished_at, created_at
           FROM jobs WHERE finding_id = ${id} ORDER BY created_at`,
       sql`SELECT id, job_seq, type, payload_json, created_at
           FROM events WHERE job_id = ${finding.job_id as string} ORDER BY id LIMIT 1000`,
+      sql`SELECT id, finding_id, body, author_type, author_id, author_name, created_at
+          FROM finding_comments WHERE finding_id = ${id} ORDER BY created_at`,
+      sql`SELECT id, finding_id, url, title, link_type, created_by, created_at
+          FROM finding_links WHERE finding_id = ${id} ORDER BY created_at`,
     ]);
-    return { finding, verification_jobs, source_events };
+    return { finding, verification_jobs, source_events, comments, links };
+  });
+
+  app.patch("/findings/:id/disposition", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        disposition: z.enum(DISPOSITIONS),
+        note: z.string().max(2000).optional(),
+      })
+      .parse(req.body);
+    const [cur] = await sql`SELECT id, disposition FROM findings WHERE id = ${id}`;
+    if (!cur) return reply.code(404).send({ error: "finding not found" });
+    const actorName = req.actor?.name ?? "unknown";
+    const [row] = await sql`
+      UPDATE findings SET
+        disposition = ${body.disposition},
+        disposition_note = ${body.note ?? null},
+        disposition_by = ${actorName},
+        disposition_at = now(),
+        updated_at = now()
+      WHERE id = ${id}
+      RETURNING *`;
+    // rejected_fp 时同步技术验证态，便于旧列表筛选
+    if (body.disposition === "rejected_fp" && row.verify_status !== "false_positive") {
+      await sql`UPDATE findings SET verify_status = 'false_positive', updated_at = now() WHERE id = ${id}`;
+      row.verify_status = "false_positive";
+    }
+    if (body.disposition === "confirmed_vuln" && row.verify_status === "pending") {
+      await sql`UPDATE findings SET verify_status = 'confirmed', updated_at = now() WHERE id = ${id}`;
+      row.verify_status = "confirmed";
+    }
+    await audit(req, {
+      action: "finding.disposition",
+      resourceType: "finding",
+      resourceId: id,
+      projectId: row.project_id as string,
+      before: { disposition: cur.disposition },
+      after: { disposition: body.disposition, note: body.note ?? null },
+    });
+    return row;
+  });
+
+  app.post("/findings/:id/comments", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        body: z.string().trim().min(1).max(8000),
+        /** 默认 true：对 confirmed Finding 评论后唤醒 Hub 再决策 */
+        request_hub: z.boolean().optional().default(true),
+      })
+      .parse(req.body);
+    const [f] = await sql`
+      SELECT id, project_id, verify_status, disposition FROM findings WHERE id = ${id}`;
+    if (!f) return reply.code(404).send({ error: "finding not found" });
+    const authorName = req.actor?.name ?? "unknown";
+    const [row] = await sql`
+      INSERT INTO finding_comments ${sql({
+        finding_id: id,
+        body: body.body,
+        author_type: req.actor?.type ?? "user",
+        author_id: req.actor?.id ?? null,
+        author_name: authorName,
+      })}
+      RETURNING *`;
+    await sql`UPDATE findings SET updated_at = now() WHERE id = ${id}`;
+
+    let hub: { hub_queued: boolean; reason?: string; canvas_id?: string; hub_job_id?: string } | null =
+      null;
+    const isConfirmed =
+      f.verify_status === "confirmed" || f.disposition === "confirmed_vuln";
+    if (body.request_hub !== false && isConfirmed) {
+      hub = await triggerHubFromHumanComment({
+        findingId: id,
+        commentId: row.id as string,
+        commentBody: body.body,
+        authorName,
+      });
+    }
+
+    await audit(req, {
+      action: "finding.comment",
+      resourceType: "finding",
+      resourceId: id,
+      projectId: f.project_id as string,
+      after: {
+        comment_id: row.id,
+        verified: f.verify_status,
+        hub_queued: hub?.hub_queued ?? false,
+        hub_reason: hub?.reason ?? null,
+        hub_job_id: hub?.hub_job_id ?? null,
+      },
+    });
+    return reply.code(201).send({
+      ...row,
+      hub: hub ?? {
+        hub_queued: false,
+        reason: isConfirmed ? "request_hub_false" : "not_confirmed",
+      },
+    });
+  });
+
+  app.delete("/findings/:id/comments/:commentId", async (req, reply) => {
+    const { id, commentId } = req.params as { id: string; commentId: string };
+    const [row] = await sql`
+      DELETE FROM finding_comments
+      WHERE id = ${commentId} AND finding_id = ${id}
+      RETURNING id, finding_id`;
+    if (!row) return reply.code(404).send({ error: "comment not found" });
+    await audit(req, {
+      action: "finding.comment_delete",
+      resourceType: "finding_comment",
+      resourceId: commentId,
+    });
+    return { ok: true };
+  });
+
+  app.post("/findings/:id/links", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        url: z.string().trim().url().max(2000),
+        title: z.string().trim().max(200).optional(),
+        link_type: z.enum(["related", "ticket", "pr", "doc", "evidence"]).default("related"),
+      })
+      .parse(req.body);
+    const [f] = await sql`SELECT id, project_id FROM findings WHERE id = ${id}`;
+    if (!f) return reply.code(404).send({ error: "finding not found" });
+    const [row] = await sql`
+      INSERT INTO finding_links ${sql({
+        finding_id: id,
+        url: body.url,
+        title: body.title ?? "",
+        link_type: body.link_type,
+        created_by: req.actor?.name ?? null,
+      })}
+      RETURNING *`;
+    await sql`UPDATE findings SET updated_at = now() WHERE id = ${id}`;
+    await audit(req, {
+      action: "finding.link",
+      resourceType: "finding",
+      resourceId: id,
+      projectId: f.project_id as string,
+      after: { link_id: row.id, url: body.url },
+    });
+    return reply.code(201).send(row);
+  });
+
+  app.delete("/findings/:id/links/:linkId", async (req, reply) => {
+    const { id, linkId } = req.params as { id: string; linkId: string };
+    const [row] = await sql`
+      DELETE FROM finding_links WHERE id = ${linkId} AND finding_id = ${id} RETURNING id`;
+    if (!row) return reply.code(404).send({ error: "link not found" });
+    await audit(req, {
+      action: "finding.link_delete",
+      resourceType: "finding_link",
+      resourceId: linkId,
+    });
+    return { ok: true };
   });
 
   app.get("/jobs/:id", async (req, reply) => {
@@ -1486,8 +1904,26 @@ export function registerRoutes(app: FastifyInstance) {
     metadata: z.record(z.string(), z.unknown()).default({}),
   });
 
-  app.get("/credentials", async () =>
-    sql`SELECT ${CRED_SAFE} FROM credentials ORDER BY created_at DESC`);
+  app.get("/credentials", async () => {
+    const [rows, usage] = await Promise.all([
+      sql`SELECT ${CRED_SAFE} FROM credentials ORDER BY created_at DESC`,
+      sql`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
+                 agent_snapshot_json->>'model' AS model,
+                 COUNT(*)::int AS count
+          FROM jobs
+          WHERE status IN ('claimed','provisioning','running')
+            AND agent_snapshot_json->>'credential_id' IS NOT NULL
+          GROUP BY 1, 2`,
+    ]);
+    return rows.map((row) => {
+      const own = usage.filter((item) => item.credential_id === row.id);
+      return {
+        ...row,
+        active_count: own.reduce((total, item) => total + Number(item.count), 0),
+        active_by_model: Object.fromEntries(own.filter((item) => item.model).map((item) => [String(item.model), Number(item.count)])),
+      };
+    });
+  });
 
   /** 规范化 public metadata：base_url 去尾斜杠，空串删除 key */
   function normalizeCredentialMeta(raw: Record<string, unknown>): Record<string, unknown> {
@@ -1501,6 +1937,23 @@ export function registerRoutes(app: FastifyInstance) {
       const parsed = z.array(z.string().trim().min(1).max(200)).max(200).parse(meta.allowed_model_ids);
       meta.allowed_model_ids = [...new Set(parsed)];
     }
+    if (meta.max_concurrent !== undefined && meta.max_concurrent !== null && meta.max_concurrent !== "") {
+      meta.max_concurrent = z.coerce.number().int().min(0).max(1000).parse(meta.max_concurrent);
+    } else {
+      delete meta.max_concurrent;
+    }
+    const allowed = allowedModelIds(meta);
+    if (allowed.length > 0) {
+      const rawLimits = meta.model_concurrency && typeof meta.model_concurrency === "object" && !Array.isArray(meta.model_concurrency)
+        ? meta.model_concurrency as Record<string, unknown>
+        : {};
+      meta.model_concurrency = Object.fromEntries(allowed.map((model) => [
+        model,
+        z.coerce.number().int().min(0).max(1000).parse(rawLimits[model] ?? 1),
+      ]));
+    } else {
+      delete meta.model_concurrency;
+    }
     return meta;
   }
 
@@ -1509,8 +1962,8 @@ export function registerRoutes(app: FastifyInstance) {
     if (!isProviderKnown(body.provider)) {
       return reply.code(400).send({ error: `未知 provider: ${body.provider}（固定映射表外的 provider 不允许登记）` });
     }
-    if (body.kind !== "llm_provider" && allowedModelIds(body.metadata).length > 0) {
-      return reply.code(400).send({ error: "只有 llm_provider Credential 可设置 allowed_model_ids" });
+    if (body.kind !== "llm_provider" && (allowedModelIds(body.metadata).length > 0 || credentialConcurrencyPolicy(body.metadata).maxConcurrent !== null)) {
+      return reply.code(400).send({ error: "只有 llm_provider Credential 可设置模型或运行并发" });
     }
     let enc: Encrypted;
     try {
@@ -1567,8 +2020,8 @@ export function registerRoutes(app: FastifyInstance) {
       const [existing] = await sql`SELECT kind FROM credentials WHERE id = ${id}`;
       if (!existing) return reply.code(404).send({ error: "credential not found" });
       const normalized = normalizeCredentialMeta(body.metadata);
-      if (existing.kind !== "llm_provider" && allowedModelIds(normalized).length > 0) {
-        return reply.code(400).send({ error: "只有 llm_provider Credential 可设置 allowed_model_ids" });
+      if (existing.kind !== "llm_provider" && (allowedModelIds(normalized).length > 0 || credentialConcurrencyPolicy(normalized).maxConcurrent !== null)) {
+        return reply.code(400).send({ error: "只有 llm_provider Credential 可设置模型或运行并发" });
       }
       sets.public_metadata_json = normalized;
     }
@@ -1637,6 +2090,34 @@ export function registerRoutes(app: FastifyInstance) {
       after: { ok: result.ok },
     });
     return result;
+  });
+
+  app.post("/credentials/:id/models", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
+    if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
+    try {
+      const result = await listCredentialModels(cred as never);
+      await audit(req, {
+        action: "credential.models_discover",
+        resourceType: "credential",
+        resourceId: id,
+        result: "ok",
+        after: { model_count: result.models.length },
+      });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await audit(req, {
+        action: "credential.models_discover",
+        resourceType: "credential",
+        resourceId: id,
+        result: "error",
+        errorCode: "MODEL_DISCOVERY_FAILED",
+      });
+      return reply.code(502).send({ error: message });
+    }
   });
 
   // ---------- 审计日志（§7.2：只读查询；写入由各管理动作触发，append-only） ----------

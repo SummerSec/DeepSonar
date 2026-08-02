@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { RequireAuth } from "./auth";
 import { AppShell } from "./layout/AppShell";
 import { PageSkeleton } from "./ui";
 
@@ -14,26 +15,129 @@ const ProjectDataPage = lazy(() => import("./pages/ProjectDataPage").then((modul
 const TaskCanvasPage = lazy(() => import("./pages/TaskCanvasPage").then((module) => ({ default: module.TaskCanvasPage })));
 const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
+const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ default: module.LoginPage })));
 
 function Deferred({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
 }
 
 export default function App() {
-  return <Routes><Route element={<AppShell />}>
-    <Route index element={<Deferred><DashboardPage /></Deferred>} />
-    <Route path="projects" element={<Deferred><ProjectsPage /></Deferred>} />
-    <Route path="jobs" element={<Deferred><JobsPage /></Deferred>} />
-    <Route path="findings" element={<Deferred><FindingsPage scope="global" /></Deferred>} />
-    <Route path="agents" element={<Deferred><AgentsPage /></Deferred>} />
-    <Route path="projects/:projectId" element={<Deferred><ProjectLayout /></Deferred>}>
-      <Route index element={<Navigate to="tasks" replace />} />
-      <Route path="tasks" element={<Deferred><TasksPage /></Deferred>} />
-      <Route path="tasks/:canvasId" element={<Deferred><TaskCanvasPage /></Deferred>} />
-      <Route path="findings" element={<Deferred><FindingsPage scope="project" /></Deferred>} />
-      <Route path="data" element={<Deferred><ProjectDataPage /></Deferred>} />
-      <Route path="settings" element={<Deferred><SettingsPage /></Deferred>} />
-    </Route>
-    <Route path="*" element={<Deferred><NotFoundPage /></Deferred>} />
-  </Route></Routes>;
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          <Deferred>
+            <LoginPage />
+          </Deferred>
+        }
+      />
+      <Route
+        element={
+          <RequireAuth>
+            <AppShell />
+          </RequireAuth>
+        }
+      >
+        <Route
+          index
+          element={
+            <Deferred>
+              <DashboardPage />
+            </Deferred>
+          }
+        />
+        <Route
+          path="projects"
+          element={
+            <Deferred>
+              <ProjectsPage />
+            </Deferred>
+          }
+        />
+        <Route
+          path="jobs"
+          element={
+            <Deferred>
+              <JobsPage />
+            </Deferred>
+          }
+        />
+        <Route
+          path="findings"
+          element={
+            <Deferred>
+              <FindingsPage scope="global" />
+            </Deferred>
+          }
+        />
+        <Route
+          path="agents"
+          element={
+            <Deferred>
+              <AgentsPage />
+            </Deferred>
+          }
+        />
+        <Route
+          path="projects/:projectId"
+          element={
+            <Deferred>
+              <ProjectLayout />
+            </Deferred>
+          }
+        >
+          <Route index element={<Navigate to="tasks" replace />} />
+          <Route
+            path="tasks"
+            element={
+              <Deferred>
+                <TasksPage />
+              </Deferred>
+            }
+          />
+          <Route
+            path="tasks/:canvasId"
+            element={
+              <Deferred>
+                <TaskCanvasPage />
+              </Deferred>
+            }
+          />
+          <Route
+            path="findings"
+            element={
+              <Deferred>
+                <FindingsPage scope="project" />
+              </Deferred>
+            }
+          />
+          <Route
+            path="data"
+            element={
+              <Deferred>
+                <ProjectDataPage />
+              </Deferred>
+            }
+          />
+          <Route
+            path="settings"
+            element={
+              <Deferred>
+                <SettingsPage />
+              </Deferred>
+            }
+          />
+        </Route>
+        <Route
+          path="*"
+          element={
+            <Deferred>
+              <NotFoundPage />
+            </Deferred>
+          }
+        />
+      </Route>
+    </Routes>
+  );
 }

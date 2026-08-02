@@ -20,6 +20,7 @@ export const ALL_SCOPES = [
   "tasks:write",
   "jobs:control",
   "findings:read",
+  "findings:write",
   "skills:read",
   "skills:write",
   "agents:read",
@@ -35,11 +36,13 @@ export const ALL_SCOPES = [
 ] as const;
 
 export interface Actor {
-  type: "bootstrap_admin" | "api_token" | "internal";
+  type: "bootstrap_admin" | "api_token" | "user" | "internal";
   id: string | null;
   name: string;
   projectId: string | null;
   scopes: string[];
+  /** 用户角色（仅 type=user） */
+  role?: "admin" | "operator" | "viewer";
 }
 
 declare module "fastify" {
@@ -94,6 +97,11 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /jobs/:id/resume": "jobs:control",
   "GET /findings": "findings:read",
   "GET /findings/:id": "findings:read",
+  "PATCH /findings/:id/disposition": "findings:write",
+  "POST /findings/:id/comments": "findings:write",
+  "DELETE /findings/:id/comments/:commentId": "findings:write",
+  "POST /findings/:id/links": "findings:write",
+  "DELETE /findings/:id/links/:linkId": "findings:write",
   "GET /skill-sources": "skills:read",
   "GET /skill-sources/:id": "skills:read",
   "POST /skill-sources": "skills:write",
@@ -116,6 +124,12 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /tokens": "tokens:manage",
   "POST /tokens/:id/revoke": "tokens:manage",
   "POST /tokens/:id/rotate": "tokens:manage",
+  // /auth/me / logout：任意已认证主体（user / api_token / bootstrap）
+  "POST /auth/change-password": "projects:read",
+  "GET /users": "admin",
+  "POST /users": "admin",
+  "PATCH /users/:id": "admin",
+  "POST /users/:id/password": "admin",
   "GET /credentials": "agents:read",
   "GET /audit-logs": "admin",
   "POST /credentials": "agents:write",
@@ -123,6 +137,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /credentials/:id/rotate": "agents:write",
   "POST /credentials/:id/status": "agents:write",
   "POST /credentials/:id/test": "agents:read",
+  "POST /credentials/:id/models": "agents:read",
   "GET /ws": "tasks:read",
   "POST /projects/:id/exports": "exports:write",
   "GET /projects/:id/exports": "exports:read",
@@ -140,15 +155,25 @@ const ROUTE_SCOPES: Record<string, string> = {
   "DELETE /imports/:id": "imports:write",
 };
 
-/** 豁免鉴权的路由（健康检查 + schema 文档 + Plane webhook + Model Gateway，各有自保护） */
+/** 精确豁免路径（健康检查 + 登录引导 + schema 文档 + Plane webhook） */
 const EXEMPT = new Set([
   "/health",
   "/openapi.json",
   "/schema",
   "/schema.md",
   "/webhooks/plane",
-  "/gateway/*",
+  "/auth/status",
+  "/auth/login",
+  "/auth/bootstrap",
 ]);
+
+/** 前缀豁免：Model Gateway 用 Job Token 自鉴权，不走平台 Bearer */
+const EXEMPT_PREFIXES = ["/gateway"];
+
+function isExempt(routeUrl: string, rawPath: string): boolean {
+  if (EXEMPT.has(routeUrl) || EXEMPT.has(rawPath)) return true;
+  return EXEMPT_PREFIXES.some((p) => rawPath === p || rawPath.startsWith(p + "/"));
+}
 
 function requiredScope(method: string, routeUrl: string): string | null {
   const key = `${method} ${routeUrl}`;
@@ -166,8 +191,9 @@ function deny(reply: FastifyReply, code: number, error: string) {
 }
 
 export async function authHook(req: FastifyRequest, reply: FastifyReply): Promise<unknown> {
-  const routeUrl = req.routeOptions?.url ?? req.url.split("?")[0];
-  if (EXEMPT.has(routeUrl)) return;
+  const rawPath = (req.url ?? "").split("?")[0];
+  const routeUrl = req.routeOptions?.url ?? rawPath;
+  if (isExempt(routeUrl, rawPath)) return;
 
   // §7.2：认证失败与越权必须进审计（不写 Authorization 头/Token 本体）
   const denyAudited = (code: number, error: string, errorCode: string) => {
@@ -182,14 +208,15 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
     return deny(reply, code, error);
   };
 
-  // Level A 回环部署可关闭；一旦跨出回环必须 DEEPSONAR_AUTH_REQUIRED=true（.env.example 有警示）
-  if (!config.auth.required) {
+  const header = req.headers.authorization ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+
+  // Level A 回环：未强制鉴权时无 internal；若带了 Bearer 仍解析真实主体（便于本地调试用户登录）
+  if (!config.auth.required && !token) {
     req.actor = INTERNAL;
     return;
   }
 
-  const header = req.headers.authorization ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!token) return denyAudited(401, "缺少 Authorization: Bearer <token>", "missing_token");
 
   let actor: Actor | null = null;
@@ -197,16 +224,53 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
   // 引导管理员（环境变量，不落库；用于首次创建 DB token / 应急）
   if (config.auth.adminToken && token === config.auth.adminToken) {
     actor = { type: "bootstrap_admin", id: null, name: "bootstrap_admin", projectId: null, scopes: ["admin"] };
+  } else if (token.startsWith("deepsonar_user_")) {
+    // 用户会话
+    const { resolveSessionToken } = await import("./users.js");
+    const sess = await resolveSessionToken(token);
+    if (!sess) {
+      if (!config.auth.required) {
+        req.actor = INTERNAL;
+        return;
+      }
+      return denyAudited(401, "会话无效或已过期", "bad_session");
+    }
+    actor = {
+      type: "user",
+      id: sess.user.id,
+      name: sess.user.username,
+      projectId: null,
+      scopes: sess.scopes,
+      role: sess.user.role,
+    };
   } else {
     const m = token.match(/^deepsonar_[a-z0-9]+_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/);
-    if (!m) return denyAudited(401, "token 格式非法", "bad_format");
+    if (!m) {
+      if (!config.auth.required) {
+        req.actor = INTERNAL;
+        return;
+      }
+      return denyAudited(401, "token 格式非法", "bad_format");
+    }
     const [row] = await sql`
       SELECT id, name, project_id, token_hash, scopes, expires_at, revoked_at
       FROM api_tokens WHERE token_prefix = ${m[1]}`;
-    if (!row) return denyAudited(401, "token 不存在或已吊销", "unknown_token");
+    if (!row) {
+      if (!config.auth.required) {
+        req.actor = INTERNAL;
+        return;
+      }
+      return denyAudited(401, "token 不存在或已吊销", "unknown_token");
+    }
     const a = Buffer.from(row.token_hash as string, "utf8");
     const b = Buffer.from(hashToken(token), "utf8");
-    if (a.length !== b.length || !timingSafeEqual(a, b)) return denyAudited(401, "token 校验失败", "hash_mismatch");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      if (!config.auth.required) {
+        req.actor = INTERNAL;
+        return;
+      }
+      return denyAudited(401, "token 校验失败", "hash_mismatch");
+    }
     if (row.revoked_at) return denyAudited(401, "token 已吊销", "revoked");
     if (row.expires_at && new Date(row.expires_at as string).getTime() < Date.now()) {
       return denyAudited(401, "token 已过期", "expired");
@@ -223,7 +287,7 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
   }
 
   const scope = requiredScope(req.method, routeUrl);
-  if (!hasScope(actor, scope)) {
+  if (config.auth.required && !hasScope(actor, scope)) {
     return denyAudited(403, `scope 不足：需要 ${scope ?? "认证"}`, "insufficient_scope");
   }
 

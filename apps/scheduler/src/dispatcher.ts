@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { globalRules, ingestEvent, rolesForProject, transitionJob, type AgentRuntimeSnapshot } from "./core.js";
+import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
@@ -39,31 +40,60 @@ async function isRealType(type: string): Promise<boolean> {
 }
 
 export async function dispatchOnce(): Promise<number> {
-  // 单次 claim 在 advisory xact lock 内同时核对全局 / 项目 / Agent CLI 三层配额。
+  // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
+  // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
   // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
   const claimedJobs = await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext('deepsonar_dispatch_claim'))`;
     const active = await tx`
-      SELECT project_id, agent_snapshot_json->>'agent_cli' AS agent_cli, COUNT(*)::int AS count
+      SELECT project_id,
+             agent_snapshot_json->>'agent_cli' AS agent_cli,
+             agent_snapshot_json->>'credential_id' AS credential_id,
+             agent_snapshot_json->>'credential_provider' AS credential_provider,
+             agent_snapshot_json->>'model' AS model,
+             COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running')
-      GROUP BY project_id, agent_snapshot_json->>'agent_cli'`;
+      GROUP BY project_id,
+               agent_snapshot_json->>'agent_cli',
+               agent_snapshot_json->>'credential_id',
+               agent_snapshot_json->>'credential_provider',
+               agent_snapshot_json->>'model'`;
     const totalActive = active.reduce((n, row) => n + Number(row.count), 0);
     const slots = config.limits.maxGlobalJobs - totalActive;
     if (slots <= 0) return [] as { id: string }[];
 
     const projectCounts = new Map<string, number>();
+    const providerCounts = new Map<string, number>();
+    const credentialCounts = new Map<string, number>();
+    const modelCounts = new Map<string, number>();
     const cliCounts = new Map<string, number>();
+    const modelKey = (credentialId: string, model: string) => `${credentialId}\u0000${model}`;
     for (const row of active) {
       const projectId = row.project_id as string;
       const cli = String(row.agent_cli ?? config.runtime.agentProvider);
+      const provider = String(row.credential_provider ?? "");
+      const credentialId = String(row.credential_id ?? "");
+      const model = String(row.model ?? "");
       projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + Number(row.count));
+      if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + Number(row.count));
+      if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + Number(row.count));
+      if (credentialId && model) modelCounts.set(modelKey(credentialId, model), (modelCounts.get(modelKey(credentialId, model)) ?? 0) + Number(row.count));
       cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + Number(row.count));
     }
-    const cliLimits = (await globalRules(tx as unknown as typeof sql)).maxConcurrentByAgentCli;
+    const rules = await globalRules(tx as unknown as typeof sql);
+    const providerLimits = rules.maxConcurrentByProvider;
+    const cliLimits = rules.maxConcurrentByAgentCli;
     const pending = await tx`
-      SELECT id, project_id, agent_snapshot_json->>'agent_cli' AS agent_cli
-      FROM jobs WHERE status = 'pending'
-      ORDER BY priority DESC, created_at
+      SELECT j.id, j.project_id,
+             j.agent_snapshot_json->>'agent_cli' AS agent_cli,
+             j.agent_snapshot_json->>'credential_id' AS credential_id,
+             j.agent_snapshot_json->>'credential_provider' AS credential_provider,
+             j.agent_snapshot_json->>'model' AS model,
+             c.public_metadata_json AS credential_metadata
+      FROM jobs j
+      LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
+      WHERE j.status = 'pending'
+      ORDER BY j.priority DESC, j.created_at
       LIMIT 500
       FOR UPDATE SKIP LOCKED`;
 
@@ -72,7 +102,16 @@ export async function dispatchOnce(): Promise<number> {
       if (claimed.length >= slots) break;
       const projectId = job.project_id as string;
       const cli = String(job.agent_cli ?? config.runtime.agentProvider);
+      const provider = String(job.credential_provider ?? "");
+      const credentialId = String(job.credential_id ?? "");
+      const model = String(job.model ?? "");
       if ((projectCounts.get(projectId) ?? 0) >= config.limits.maxJobsPerProject) continue;
+      const providerLimit = provider ? providerLimits[provider] : undefined;
+      if (providerLimit !== undefined && (providerCounts.get(provider) ?? 0) >= providerLimit) continue;
+      const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
+      if (credentialId && credentialPolicy.maxConcurrent !== null && (credentialCounts.get(credentialId) ?? 0) >= credentialPolicy.maxConcurrent) continue;
+      const modelLimit = model ? credentialPolicy.modelConcurrency[model] : undefined;
+      if (credentialId && model && modelLimit !== undefined && (modelCounts.get(modelKey(credentialId, model)) ?? 0) >= modelLimit) continue;
       const cliLimit = cliLimits[cli];
       if (cliLimit !== undefined && (cliCounts.get(cli) ?? 0) >= cliLimit) continue;
       const [row] = await tx`
@@ -82,6 +121,9 @@ export async function dispatchOnce(): Promise<number> {
       if (!row) continue;
       claimed.push({ id: row.id as string });
       projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
+      if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
+      if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + 1);
+      if (credentialId && model) modelCounts.set(modelKey(credentialId, model), (modelCounts.get(modelKey(credentialId, model)) ?? 0) + 1);
       cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + 1);
     }
     return claimed;

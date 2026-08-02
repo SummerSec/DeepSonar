@@ -101,6 +101,15 @@ export interface JobSummary {
   canvas_title?: string;
 }
 
+/** 人工处置态（验证完成后的业务闭环） */
+export type FindingDisposition =
+  | "open"
+  | "accepted"
+  | "confirmed_vuln"
+  | "rejected_fp"
+  | "resolved"
+  | "archived";
+
 /** 发现清单 */
 export interface FindingSummary {
   id: string;
@@ -113,9 +122,34 @@ export interface FindingSummary {
   location: string | null;
   summary: string | null;
   verify_status: string;
+  disposition?: FindingDisposition | string;
+  disposition_note?: string | null;
+  disposition_by?: string | null;
+  disposition_at?: string | null;
   created_at: string;
+  updated_at?: string;
   project_name?: string;
   canvas_id?: string | null;
+}
+
+export interface FindingComment {
+  id: string;
+  finding_id: string;
+  body: string;
+  author_type: string;
+  author_id: string | null;
+  author_name: string;
+  created_at: string;
+}
+
+export interface FindingLink {
+  id: string;
+  finding_id: string;
+  url: string;
+  title: string;
+  link_type: "related" | "ticket" | "pr" | "doc" | "evidence" | string;
+  created_by: string | null;
+  created_at: string;
 }
 
 /** 思考强度（与 agentbox AgentReasoningEffort 对齐） */
@@ -169,6 +203,8 @@ export interface EffectiveRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** Provider 总并发；优先级高于 Credential / Model / Agent CLI。 */
+  maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层只读继承。 */
   maxConcurrentByAgentCli: Record<string, number>;
 }
@@ -213,6 +249,8 @@ export interface FindingDetail {
     created_at: string;
   }>;
   source_events: JobEvent[];
+  comments?: FindingComment[];
+  links?: FindingLink[];
 }
 
 export interface CanvasConvergence {
@@ -256,6 +294,7 @@ export interface GlobalSettings {
   rules: Record<string, unknown>;
   effective_rules: EffectiveRules;
   active_by_agent_cli: Record<string, number>;
+  active_by_provider: Record<string, number>;
 }
 
 export interface DataExportRow {
@@ -314,6 +353,12 @@ export interface ApiToken {
   created_by: string | null;
 }
 
+export interface CredentialModels {
+  models: string[];
+  source_url: string;
+  fetched_at: string;
+}
+
 export interface ApiTokenCreated extends ApiToken {
   /** 仅此一次可见，请立即复制保存 */
   token: string;
@@ -336,6 +381,8 @@ export interface ProviderCredential {
   rotated_at: string | null;
   created_at: string;
   created_by: string | null;
+  active_count: number;
+  active_by_model: Record<string, number>;
 }
 
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
@@ -462,6 +509,41 @@ export function setLocalToken(token: string) {
 function authHeaders(): Record<string, string> {
   const t = getLocalToken();
   return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+export interface AuthStatus {
+  auth_required: boolean;
+  has_users: boolean;
+  bootstrap_available: boolean;
+  session_ttl_days: number;
+}
+
+export interface PublicUser {
+  id: string;
+  username: string;
+  display_name: string;
+  role: "admin" | "operator" | "viewer";
+  status: "active" | "disabled";
+  last_login_at: string | null;
+  created_at: string;
+}
+
+export interface AuthMe {
+  auth_required: boolean;
+  authenticated: boolean;
+  actor: {
+    type: string;
+    name: string;
+    role: string | null;
+    scopes: string[];
+  } | null;
+  user: PublicUser | null;
+}
+
+export interface LoginResult {
+  user: PublicUser;
+  token: string;
+  expires_at: string;
 }
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -592,6 +674,7 @@ export const api = {
     project_id?: string;
     severity?: string;
     verify_status?: string;
+    disposition?: string;
     /** 只拉某任务画布的发现，不混其它任务 */
     canvas_id?: string;
   }) =>
@@ -600,10 +683,29 @@ export const api = {
         project_id: opts?.project_id,
         severity: opts?.severity,
         verify_status: opts?.verify_status,
+        disposition: opts?.disposition,
         canvas_id: opts?.canvas_id,
       })}`,
     ),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
+  setFindingDisposition: (
+    id: string,
+    body: { disposition: FindingDisposition; note?: string },
+  ) => send<FindingSummary>("PATCH", `/findings/${id}/disposition`, body),
+  addFindingComment: (id: string, body: string, request_hub = true) =>
+    send<
+      FindingComment & {
+        hub?: { hub_queued: boolean; reason?: string; canvas_id?: string; hub_job_id?: string };
+      }
+    >("POST", `/findings/${id}/comments`, { body, request_hub }),
+  deleteFindingComment: (id: string, commentId: string) =>
+    send<{ ok: boolean }>("DELETE", `/findings/${id}/comments/${commentId}`),
+  addFindingLink: (
+    id: string,
+    body: { url: string; title?: string; link_type?: FindingLink["link_type"] },
+  ) => send<FindingLink>("POST", `/findings/${id}/links`, body),
+  deleteFindingLink: (id: string, linkId: string) =>
+    send<{ ok: boolean }>("DELETE", `/findings/${id}/links/${linkId}`),
   cancelJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/cancel`),
   resumeJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/resume`),
   settings: (projectId: string) => get<ProjectSettings>(`/projects/${projectId}/settings`),
@@ -726,6 +828,30 @@ export const api = {
   deleteSkillSource: (id: string) => send<{ ok: boolean }>("DELETE", `/skill-sources/${id}`),
   trustSkillSource: (id: string, trust_status: SkillTrustStatus) =>
     send<SkillSource>("POST", `/skill-sources/${id}/trust`, { trust_status }),
+  /** 用户认证 */
+  authStatus: () => get<AuthStatus>("/auth/status"),
+  authMe: () => get<AuthMe>("/auth/me"),
+  login: (body: { username: string; password: string }) =>
+    send<LoginResult>("POST", "/auth/login", body),
+  bootstrap: (body: { username: string; password: string; display_name?: string }) =>
+    send<LoginResult>("POST", "/auth/bootstrap", body),
+  logout: () => send<{ ok: boolean }>("POST", "/auth/logout"),
+  changePassword: (body: { current_password: string; new_password: string }) =>
+    send<LoginResult & { ok: boolean }>("POST", "/auth/change-password", body),
+  listUsers: () => get<PublicUser[]>("/users"),
+  createUser: (body: {
+    username: string;
+    password: string;
+    display_name?: string;
+    role?: "admin" | "operator" | "viewer";
+  }) => send<PublicUser>("POST", "/users", body),
+  updateUser: (
+    id: string,
+    body: { display_name?: string; role?: "admin" | "operator" | "viewer"; status?: "active" | "disabled" },
+  ) => send<PublicUser>("PATCH", `/users/${id}`, body),
+  resetUserPassword: (id: string, password: string) =>
+    send<{ ok: boolean }>("POST", `/users/${id}/password`, { password }),
+
   /** 平台 API Token 管理（§6.4，与 Provider Credential 分离） */
   tokens: () => get<ApiToken[]>("/tokens"),
   createToken: (t: { name: string; scopes: string[]; project_id?: string | null; expires_in_days?: number }) =>
@@ -757,6 +883,8 @@ export const api = {
     send<ProviderCredential>("POST", `/credentials/${id}/status`, { status }),
   testCredential: (id: string) =>
     send<{ ok: boolean; detail: string }>("POST", `/credentials/${id}/test`),
+  credentialModels: (id: string) =>
+    send<CredentialModels>("POST", `/credentials/${id}/models`),
   health: () => get<{ ok: boolean; ts: number }>("/health"),
   /** API schema 文档（OpenAPI 3 JSON；调度器豁免鉴权） */
   openApi: () => get<Record<string, unknown>>("/openapi.json"),

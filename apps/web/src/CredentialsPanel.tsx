@@ -1,6 +1,6 @@
 import { ArrowsClockwise, Check, Key, MagnifyingGlass, PencilSimple, Plugs, Prohibit } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type Project, type ProviderCredential } from "./api";
+import { api, type CredentialModels, type Project, type ProviderCredential } from "./api";
 
 /**
  * Provider Credential 管理（§6.2/§6.4）：LLM/Plane/Git 上游密钥的加密登记。
@@ -36,14 +36,16 @@ export function CredentialsPanel() {
   const [provider, setProvider] = useState("anthropic");
   const [secret, setSecret] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
-  const [allowedModels, setAllowedModels] = useState("");
   const [projectId, setProjectId] = useState("");
   const [rotatingId, setRotatingId] = useState<string | null>(null);
   const [rotateSecret, setRotateSecret] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
-  const [editAllowedModels, setEditAllowedModels] = useState("");
+  const [editMaxConcurrent, setEditMaxConcurrent] = useState("");
+  const [editModelLimits, setEditModelLimits] = useState<Record<string, string>>({});
+  const [discoveredModels, setDiscoveredModels] = useState<Record<string, CredentialModels>>({});
+  const [modelsLoading, setModelsLoading] = useState<string | null>(null);
   const [editProjectId, setEditProjectId] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -55,7 +57,14 @@ export function CredentialsPanel() {
     const value = c.public_metadata_json?.allowed_model_ids;
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
   };
-  const parseModels = (value: string) => [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))];
+  const metaModelLimits = (c: ProviderCredential): Record<string, number> => {
+    const value = c.public_metadata_json?.model_concurrency;
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, number> : {};
+  };
+  const metaMaxConcurrent = (c: ProviderCredential): number | null => {
+    const value = Number(c.public_metadata_json?.max_concurrent);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+  };
 
   const load = () => {
     setError("");
@@ -74,19 +83,18 @@ export function CredentialsPanel() {
     try {
       await api.createCredential({
         name: name.trim(),
+        kind: provider === "plane" || provider === "git" ? provider : "llm_provider",
         provider,
         secret: secret.trim(),
         project_id: projectId || null,
         metadata: {
           ...(baseUrl.trim() ? { base_url: baseUrl.trim().replace(/\/+$/, "") } : {}),
-          ...(parseModels(allowedModels).length ? { allowed_model_ids: parseModels(allowedModels) } : {}),
         },
       });
       setName("");
       setSecret("");
       setBaseUrl("");
-      setAllowedModels("");
-      setNotice("已加密登记。密钥不可再查看（只能轮换）；名称与 base_url 可随时编辑。");
+      setNotice("已加密登记。请在凭据编辑区从 Provider 获取模型列表，并配置 Credential / Model 并发。");
       load();
     } catch (e) {
       setError(String(e));
@@ -120,8 +128,33 @@ export function CredentialsPanel() {
     setEditingId(c.id);
     setEditName(c.name);
     setEditBaseUrl(metaBaseUrl(c));
-    setEditAllowedModels(metaAllowedModels(c).join(", "));
+    setEditMaxConcurrent(metaMaxConcurrent(c)?.toString() ?? "");
+    const limits = metaModelLimits(c);
+    setEditModelLimits(Object.fromEntries(metaAllowedModels(c).map((model) => [model, String(limits[model] ?? 1)])));
     setEditProjectId(c.project_id ?? "");
+  };
+
+  const refreshModels = async (credentialId: string) => {
+    setModelsLoading(credentialId);
+    setError("");
+    try {
+      const result = await api.credentialModels(credentialId);
+      setDiscoveredModels((current) => ({ ...current, [credentialId]: result }));
+      setNotice(`已从 Provider 获取 ${result.models.length} 个模型。选择启用项并设置各自并发后保存。`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setModelsLoading(null);
+    }
+  };
+
+  const toggleModel = (model: string) => {
+    setEditModelLimits((current) => {
+      const next = { ...current };
+      if (model in next) delete next[model];
+      else next[model] = "1";
+      return next;
+    });
   };
 
   const saveEdit = async (id: string) => {
@@ -134,16 +167,23 @@ export function CredentialsPanel() {
       const url = editBaseUrl.trim().replace(/\/+$/, "");
       if (url) nextMeta.base_url = url;
       else delete nextMeta.base_url;
-      const models = parseModels(editAllowedModels);
-      if (models.length) nextMeta.allowed_model_ids = models;
-      else delete nextMeta.allowed_model_ids;
+      const models = Object.keys(editModelLimits).sort();
+      if (models.length) {
+        nextMeta.allowed_model_ids = models;
+        nextMeta.model_concurrency = Object.fromEntries(models.map((model) => [model, Math.max(0, Number(editModelLimits[model]) || 0)]));
+      } else {
+        delete nextMeta.allowed_model_ids;
+        delete nextMeta.model_concurrency;
+      }
+      if (editMaxConcurrent === "") delete nextMeta.max_concurrent;
+      else nextMeta.max_concurrent = Math.max(0, Number(editMaxConcurrent));
       await api.updateCredential(id, {
         name: editName.trim(),
         project_id: editProjectId || null,
         metadata: nextMeta,
       });
       setEditingId(null);
-      setNotice("已更新名称 / base_url / 项目归属（下一 job 生效；密钥未改）。");
+      setNotice("已更新 Credential 总并发与模型策略；只影响后续 claim，不终止已运行 Job。");
       load();
     } catch (e) {
       setError(String(e));
@@ -242,13 +282,6 @@ export function CredentialsPanel() {
             ))}
           </select>
         </div>
-        <input
-          value={allowedModels}
-          onChange={(e) => setAllowedModels(e.target.value)}
-          placeholder="允许的模型 ID（逗号分隔；留空=不额外限制）"
-          className="mb-2 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
-          spellCheck={false}
-        />
         <input
           value={secret}
           onChange={(e) => setSecret(e.target.value)}
@@ -368,8 +401,9 @@ export function CredentialsPanel() {
                 </span>
                 <span>指纹 {c.fingerprint.slice(0, 8)}</span>
                 <span title={metaAllowedModels(c).join(", ") || "不额外限制"}>
-                  模型 {metaAllowedModels(c).length ? metaAllowedModels(c).join(", ") : "全部"}
+                  模型 {metaAllowedModels(c).length ? `${metaAllowedModels(c).length} 个已启用` : "未限制"}
                 </span>
+                <span>Credential 并发 {c.active_count ?? 0}/{metaMaxConcurrent(c) ?? "∞"}</span>
                 <span>v{c.key_version}</span>
                 {c.last_used_at && <span>最近用 {new Date(c.last_used_at).toLocaleString()}</span>}
                 {c.rotated_at && <span>轮换于 {new Date(c.rotated_at).toLocaleDateString()}</span>}
@@ -394,13 +428,47 @@ export function CredentialsPanel() {
                     className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
                     spellCheck={false}
                   />
-                  <input
-                    value={editAllowedModels}
-                    onChange={(e) => setEditAllowedModels(e.target.value)}
-                    placeholder="允许的模型 ID（逗号分隔；留空=不额外限制）"
-                    className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
-                    spellCheck={false}
-                  />
+                  {c.kind === "llm_provider" && (
+                    <div className="overflow-hidden rounded-xl bg-black/20 ring-1 ring-white/[.06]">
+                      <div className="flex flex-wrap items-end gap-2 border-b border-white/[.05] p-3">
+                        <label className="min-w-40 flex-1">
+                          <span className="mb-1 block font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">02 · Credential 总并发</span>
+                          <input type="number" min={0} max={1000} value={editMaxConcurrent} onChange={(e) => setEditMaxConcurrent(e.target.value)} placeholder="不限" className="w-full rounded-lg bg-[#080b0d] px-3 py-2 font-mono text-[12px] text-zinc-200 ring-1 ring-white/[.08] outline-none focus:ring-acc-400/40" />
+                        </label>
+                        <button type="button" onClick={() => refreshModels(c.id)} disabled={modelsLoading === c.id} className="secondary-button min-h-9 px-3 py-2 text-[10px]">
+                          <ArrowsClockwise size={13} className={modelsLoading === c.id ? "animate-spin" : ""} />
+                          {modelsLoading === c.id ? "正在获取" : "从接口获取模型"}
+                        </button>
+                      </div>
+                      <div className="p-3">
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <span className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">03 · 启用模型与单模型并发</span>
+                          <span className="font-mono text-[9px] text-zinc-700">已启用 {Object.keys(editModelLimits).length}</span>
+                        </div>
+                        {(() => {
+                          const catalog = [...new Set([...(discoveredModels[c.id]?.models ?? []), ...metaAllowedModels(c)])];
+                          return catalog.length ? (
+                            <div className="grid max-h-72 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                              {catalog.map((model) => {
+                                const enabled = model in editModelLimits;
+                                return (
+                                  <div key={model} className={`flex items-center gap-2 rounded-lg px-2.5 py-2 ring-1 ${enabled ? "bg-acc-500/[.055] ring-acc-400/20" : "bg-white/[.018] ring-white/[.05]"}`}>
+                                    <input type="checkbox" checked={enabled} onChange={() => toggleModel(model)} className="size-4 accent-emerald-500" aria-label={`启用 ${model}`} />
+                                    <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-300" title={model}>{model}</span>
+                                    <span className="font-mono text-[9px] text-zinc-700">{c.active_by_model?.[model] ?? 0}/</span>
+                                    <input type="number" min={0} max={1000} disabled={!enabled} value={enabled ? editModelLimits[model] : ""} onChange={(e) => setEditModelLimits((current) => ({ ...current, [model]: e.target.value }))} className="w-16 rounded-md bg-black/30 px-2 py-1 font-mono text-[10px] text-zinc-200 ring-1 ring-white/[.08] outline-none disabled:opacity-30" aria-label={`${model} 并发`} />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="rounded-lg border border-dashed border-white/[.08] px-4 py-5 text-center text-[11px] leading-5 text-zinc-600">点击“从接口获取模型”，平台会使用该 Credential 调用 Provider 的 models 接口。模型 ID 不再手工录入。</div>
+                          );
+                        })()}
+                        {discoveredModels[c.id] && <div className="mt-2 truncate font-mono text-[9px] text-zinc-700" title={discoveredModels[c.id].source_url}>来源 {discoveredModels[c.id].source_url} · {new Date(discoveredModels[c.id].fetched_at).toLocaleString()}</div>}
+                      </div>
+                    </div>
+                  )}
                   <select
                     value={editProjectId}
                     onChange={(e) => setEditProjectId(e.target.value)}

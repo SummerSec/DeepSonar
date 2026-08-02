@@ -172,6 +172,10 @@ export function RoleConfigEditor({
 }) {
   const [form, setForm] = useState<ConfigForm>(() => formOf(initial));
   const [error, setError] = useState<string | null>(null);
+  const selectedCredential = credentials.find((credential) => credential.id === form.credential_id) ?? null;
+  const enabledModels = Array.isArray(selectedCredential?.public_metadata_json?.allowed_model_ids)
+    ? selectedCredential.public_metadata_json.allowed_model_ids.filter((model): model is string => typeof model === "string")
+    : [];
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
 
@@ -266,16 +270,6 @@ export function RoleConfigEditor({
                 <option value="claude-code">claude-code</option><option value="open-code">open-code</option><option value="codex">codex</option>
               </select>
             </div>
-            <div>
-              <label className={labelCls}>模型 ID（空=默认）</label>
-              <input
-                value={form.model}
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
-                className={inputCls}
-                placeholder="如 claude-sonnet-4-5 / gpt-5 / k3"
-                spellCheck={false}
-              />
-            </div>
           </div>
           <div>
             <label className={labelCls}>思考强度（reasoning effort）</label>
@@ -296,8 +290,20 @@ export function RoleConfigEditor({
           </div>
           <div>
             <label className={labelCls}>LLM Credential</label>
-            <CredentialPicker credentials={credentials} value={form.credential_id} onChange={(credential_id) => setForm({ ...form, credential_id })} />
+            <CredentialPicker credentials={credentials} value={form.credential_id} onChange={(credential_id) => setForm({ ...form, credential_id, model: "" })} />
             <p className="mt-1.5 text-[10px] leading-5 text-zinc-600">单次运行绑定一个 LLM 凭据；可按名称、Provider 或尾号搜索。</p>
+          </div>
+          <div>
+            <label className={labelCls}>模型 ID（由 Credential 启用列表约束）</label>
+            {enabledModels.length > 0 ? (
+              <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls}>
+                <option value="">选择模型</option>
+                {enabledModels.map((model) => <option key={model} value={model}>{model}</option>)}
+              </select>
+            ) : (
+              <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls} placeholder={selectedCredential ? "该凭据尚未配置模型白名单" : "如 claude-sonnet-4-5 / gpt-5 / k3"} spellCheck={false} />
+            )}
+            {selectedCredential && <p className="mt-1 text-[10px] leading-5 text-zinc-600">{enabledModels.length ? `仅可选择凭据已启用的 ${enabledModels.length} 个模型。` : "请先在凭据页从 Provider 获取模型并启用；当前仍兼容手工 ID。"}</p>}
           </div>
           {form.credential_id === "" && <div><label className={labelCls}>调度器环境变量引用</label><input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} placeholder="逗号分隔变量名，值取调度器环境" /></div>}
           <div>

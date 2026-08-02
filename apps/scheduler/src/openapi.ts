@@ -390,6 +390,7 @@ const OPS: Op[] = [
     },
   },
   { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:read", tags: ["Credentials"] },
+  { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:read", tags: ["Credentials"] },
 
   // tokens
   { method: "get", path: "/tokens", summary: "API Token 列表", scope: "tokens:manage", tags: ["Tokens"] },

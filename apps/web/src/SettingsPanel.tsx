@@ -18,6 +18,7 @@ import { TokensPanel } from "./TokensPanel";
 import { CredentialsPanel } from "./CredentialsPanel";
 import { RoleConfigEditor } from "./RoleConfigEditor";
 import { TransferPanel } from "./TransferPanel";
+import { UsersPanel } from "./UsersPanel";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -25,7 +26,7 @@ import { TransferPanel } from "./TransferPanel";
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer";
+type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users";
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
@@ -66,6 +67,7 @@ export function SettingsPanel({
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
   const [rules, setRules] = useState<EffectiveRules | null>(null);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
+  const [providerActive, setProviderActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
@@ -119,7 +121,11 @@ export function SettingsPanel({
         .catch((error) => showAgentLoadError("内置 Agent", error));
       api
         .globalSettings()
-        .then((g) => { setRules(g.effective_rules); setCliActive(g.active_by_agent_cli ?? {}); })
+        .then((g) => {
+          setRules(g.effective_rules);
+          setCliActive(g.active_by_agent_cli ?? {});
+          setProviderActive(g.active_by_provider ?? {});
+        })
         .catch(() => {});
     }
     api
@@ -267,6 +273,16 @@ export function SettingsPanel({
       if (raw === "") delete next[cli];
       else next[cli] = Math.max(0, Number(raw));
       return { ...current, maxConcurrentByAgentCli: next };
+    });
+  };
+
+  const setProviderLimit = (provider: "anthropic" | "kimi" | "openai" | "openrouter", raw: string) => {
+    setRules((current) => {
+      if (!current) return current;
+      const next = { ...(current.maxConcurrentByProvider ?? {}) };
+      if (raw === "") delete next[provider];
+      else next[provider] = Math.max(0, Number(raw));
+      return { ...current, maxConcurrentByProvider: next };
     });
   };
 
@@ -433,6 +449,7 @@ export function SettingsPanel({
         { key: "roles", label: "角色注册表" },
         { key: "sources", label: "模块源" },
         { key: "rules", label: "全局规则" },
+        { key: "users", label: "用户" },
         { key: "transfer", label: "平台导入导出" },
         { key: "credentials", label: "凭据" },
         { key: "tokens", label: "API Token" },
@@ -495,9 +512,27 @@ export function SettingsPanel({
             )}
 
             {!projectId && (
-              <section className="border-t border-ink-800 pt-3">
-                <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-                  Agent CLI 全局并发
+              <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+                <div className="border-b border-white/[.055] px-4 py-3">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">Quota ladder</div>
+                  <div className="mt-1 text-[13px] text-zinc-300">Provider → Credential → Model ID → Agent CLI</div>
+                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">调度按此顺序检查硬上限。Credential 与 Model 在“凭据”页配置；CLI 是最后一层，不会覆盖上游配额。</p>
+                </div>
+                <div className="border-b border-white/[.05] px-4 py-4">
+                  <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">01 · Provider 总并发</div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    {(["anthropic", "kimi", "openai", "openrouter"] as const).map((provider) => (
+                      <div key={provider}>
+                        <label className={labelCls}>{provider}</label>
+                        <input type="number" min={0} placeholder="不限" value={rules.maxConcurrentByProvider?.[provider] ?? ""} onChange={(event) => setProviderLimit(provider, event.target.value)} className={inputCls} />
+                        <div className="mt-1 font-mono text-[10px] text-zinc-600">当前运行 {providerActive[provider] ?? 0}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="px-4 py-4">
+                <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+                  04 · Agent CLI 全局并发
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   {(["claude-code", "codex", "open-code"] as const).map((cli) => (
@@ -518,6 +553,7 @@ export function SettingsPanel({
                 <p className="mt-2 text-[11px] leading-5 text-zinc-600">
                   留空只受全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
                 </p>
+                </div>
               </section>
             )}
 
@@ -727,6 +763,7 @@ export function SettingsPanel({
           </div>
         )}
 
+        {activeTab === "users" && !projectId && <UsersPanel />}
         {activeTab === "transfer" && !projectId && <TransferPanel projectId={null} scope="platform" />}
 
         {activeTab === "plane" && projectId && (

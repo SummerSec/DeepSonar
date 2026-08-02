@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { Check, Copy, Eye, FileCode } from "@phosphor-icons/react";
+import { useState, type ReactNode } from "react";
 
 /**
  * 极简 Markdown 渲染（报告专用）：
@@ -61,7 +62,17 @@ const HEADING_CLS: Record<number, string> = {
   4: "mt-3 mb-1 text-[14px] font-semibold text-zinc-200",
 };
 
-export function MarkdownView({ markdown }: { markdown: string }) {
+export function MarkdownView({
+  markdown,
+  controls = true,
+  className = "",
+}: {
+  markdown: string;
+  controls?: boolean;
+  className?: string;
+}) {
+  const [mode, setMode] = useState<"rendered" | "source">("rendered");
+  const [copied, setCopied] = useState(false);
   const lines = markdown.split(/\r?\n/);
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -186,5 +197,33 @@ export function MarkdownView({ markdown }: { markdown: string }) {
     );
   }
 
-  return <div className="min-w-0">{blocks}</div>;
+  const copySource = async () => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(markdown);
+    } else {
+      const area = document.createElement("textarea");
+      area.value = markdown;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+
+  return (
+    <div className={`markdown-view min-w-0 ${className}`}>
+      {controls && (
+        <div className="mb-3 flex items-center gap-1 border-b border-white/[.055] pb-2">
+          <button type="button" onClick={() => setMode("rendered")} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] ${mode === "rendered" ? "bg-white/[.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-300"}`}><Eye size={12} /> 渲染</button>
+          <button type="button" onClick={() => setMode("source")} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] ${mode === "source" ? "bg-white/[.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-300"}`}><FileCode size={12} /> 原文</button>
+          <button type="button" onClick={() => void copySource().catch(() => setCopied(false))} className="ml-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.07] hover:text-zinc-200">{copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}{copied ? "已复制" : "复制"}</button>
+        </div>
+      )}
+      {mode === "rendered" ? <div>{blocks}</div> : <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]">{markdown}</pre>}
+    </div>
+  );
 }

@@ -81,6 +81,39 @@ export function allowedModelIds(metadata: unknown): string[] {
   return [...new Set(raw.filter((v): v is string => typeof v === "string").map((v) => v.trim()).filter(Boolean))];
 }
 
+export interface CredentialConcurrencyPolicy {
+  /** Credential 下所有模型共享的总并发；null 表示不单独限制。 */
+  maxConcurrent: number | null;
+  /** Credential 内单个已启用模型的并发；缺省模型按 1 处理。 */
+  modelConcurrency: Record<string, number>;
+}
+
+function concurrencyLimit(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : null;
+}
+
+/**
+ * Credential 运行配额。allowed_model_ids 一旦存在，每个模型都必须有独立上限；
+ * 为兼容旧元数据，缺失的 model_concurrency 项按 1 处理。
+ */
+export function credentialConcurrencyPolicy(metadata: unknown): CredentialConcurrencyPolicy {
+  const meta = (metadata ?? {}) as Record<string, unknown>;
+  const allowed = allowedModelIds(meta);
+  const rawModels = meta.model_concurrency;
+  const configured = rawModels && typeof rawModels === "object" && !Array.isArray(rawModels)
+    ? rawModels as Record<string, unknown>
+    : {};
+  const modelConcurrency: Record<string, number> = {};
+  for (const model of allowed) {
+    modelConcurrency[model] = concurrencyLimit(configured[model]) ?? 1;
+  }
+  return {
+    maxConcurrent: concurrencyLimit(meta.max_concurrent),
+    modelConcurrency,
+  };
+}
+
 /**
  * 固定 Provider → 环境变量映射（§6.2：用户不能自由填写变量名，取代 env_keys）。
  * 值来自 Credential 解密结果；base_url 等非密钥项走 public_metadata_json。

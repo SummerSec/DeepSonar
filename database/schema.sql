@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 7);
+INSERT INTO schema_meta (id, version) VALUES ('global', 9);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -122,19 +122,59 @@ CREATE TABLE findings (
   location text,
   summary text,
   suggest_verify boolean NOT NULL DEFAULT false,
+  -- 技术验证态（Agent/调度器）
   verify_status text NOT NULL DEFAULT 'pending',
+  -- 人工处置态（验证完成后的业务闭环）
+  disposition text NOT NULL DEFAULT 'open',
+  disposition_note text,
+  disposition_by text,
+  disposition_at timestamptz,
   raw_json jsonb NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT findings_project_id_fingerprint_key UNIQUE (project_id, fingerprint),
   CONSTRAINT findings_severity_check CHECK (severity IN ('low', 'medium', 'high', 'critical')),
   CONSTRAINT findings_verify_status_check CHECK (
     verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human')
+  ),
+  CONSTRAINT findings_disposition_check CHECK (
+    disposition IN ('open', 'accepted', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
   )
 );
 CREATE INDEX findings_filter_idx ON findings (project_id, severity, verify_status);
+CREATE INDEX findings_disposition_idx ON findings (project_id, disposition, updated_at DESC);
 CREATE INDEX findings_title_trgm ON findings USING gin (title gin_trgm_ops);
 CREATE INDEX findings_location_trgm ON findings USING gin (location gin_trgm_ops);
 CREATE INDEX findings_summary_trgm ON findings USING gin (summary gin_trgm_ops);
+
+-- Finding 人工评论（处置过程协作）
+CREATE TABLE finding_comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  body text NOT NULL,
+  author_type text NOT NULL DEFAULT 'user',
+  author_id text,
+  author_name text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT finding_comments_body_len CHECK (char_length(body) BETWEEN 1 AND 8000)
+);
+CREATE INDEX finding_comments_finding_idx ON finding_comments (finding_id, created_at);
+
+-- Finding 关联链接（工单 / PR / 文档 / 外部证据）
+CREATE TABLE finding_links (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  url text NOT NULL,
+  title text NOT NULL DEFAULT '',
+  link_type text NOT NULL DEFAULT 'related',
+  created_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT finding_links_type_check CHECK (
+    link_type IN ('related', 'ticket', 'pr', 'doc', 'evidence')
+  ),
+  CONSTRAINT finding_links_url_len CHECK (char_length(url) BETWEEN 1 AND 2000)
+);
+CREATE INDEX finding_links_finding_idx ON finding_links (finding_id, created_at);
 
 CREATE TABLE canvas_nodes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -682,5 +722,38 @@ CREATE TABLE data_imports (
 CREATE INDEX data_imports_status_idx ON data_imports (status, created_at DESC);
 CREATE INDEX data_imports_sha_idx ON data_imports (source_sha256);
 CREATE INDEX data_imports_scope_idx ON data_imports (scope, created_at DESC);
+
+-- 平台用户（人机登录；与 api_tokens 服务账号分离）
+CREATE TABLE users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  username text NOT NULL UNIQUE,
+  display_name text NOT NULL DEFAULT '',
+  password_hash text NOT NULL,
+  password_salt text NOT NULL,
+  role text NOT NULL DEFAULT 'operator',
+  status text NOT NULL DEFAULT 'active',
+  last_login_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  created_by text,
+  CONSTRAINT users_role_check CHECK (role IN ('admin', 'operator', 'viewer')),
+  CONSTRAINT users_status_check CHECK (status IN ('active', 'disabled')),
+  CONSTRAINT users_username_len CHECK (char_length(username) BETWEEN 2 AND 64)
+);
+
+CREATE TABLE user_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_prefix text NOT NULL UNIQUE,
+  token_hash text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  last_used_at timestamptz,
+  last_ip text,
+  user_agent text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX user_sessions_user_idx ON user_sessions (user_id, created_at DESC);
+CREATE INDEX user_sessions_active_idx ON user_sessions (token_prefix) WHERE revoked_at IS NULL;
 
 COMMIT;

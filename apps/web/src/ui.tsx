@@ -17,7 +17,23 @@ const STATUS_LABEL: Record<string, string> = {
   verifying: "验证中",
   false_positive: "已排除",
   needs_human: "待人工",
+  // Finding 人工处置
+  open: "待处置",
+  accepted: "已接受",
+  confirmed_vuln: "漏洞存在",
+  rejected_fp: "拒绝误报",
+  resolved: "处理完成",
+  archived: "已归档",
 };
+
+export const DISPOSITION_OPTIONS: { value: string; label: string }[] = [
+  { value: "open", label: "待处置" },
+  { value: "accepted", label: "接受" },
+  { value: "confirmed_vuln", label: "漏洞存在" },
+  { value: "rejected_fp", label: "拒绝误报" },
+  { value: "resolved", label: "处理完成" },
+  { value: "archived", label: "归档" },
+];
 
 export function StatusBadge({ status, compact = false }: { status: string; compact?: boolean }) {
   const c = STATUS_COLOR[status] ?? "#7f8796";

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { CaretDown, CaretUp, Funnel, X } from "@phosphor-icons/react";
 import {
   Background,
   BackgroundVariant,
@@ -105,6 +106,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   const [statusFilter, setStatusFilter] = useState("");
   const [query, setQuery] = useState("");
   const [showContext, setShowContext] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(true);
   const rf = useRef<ReactFlowInstance | null>(null);
 
   // §6.4：MVP 轮询刷新（5s）；WS 二期
@@ -155,7 +157,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     const matched = new Set(data.nodes.filter((n) => {
       const role = String(n.body_json?.role ?? (n.node_type === "job" ? n.body_json?.type ?? "" : ""));
       const severity = String(n.body_json?.severity ?? "");
-      const searchable = `${n.title} ${n.node_type} ${role} ${severity} ${n.status ?? ""}`.toLowerCase();
+      const searchable = `${n.title} ${n.node_type} ${role} ${severity} ${n.status ?? ""} ${JSON.stringify(n.body_json ?? {})}`.toLowerCase();
       return (!kindFilter || semanticNodeKind(n) === kindFilter) && (!severityFilter || severity === severityFilter) && (!roleFilter || role === roleFilter) && (!statusFilter || n.status === statusFilter) && (!needle || searchable.includes(needle));
     }).map((n) => n.id));
     const visible = new Set(matched);
@@ -242,16 +244,28 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
           style={{ width: 140, height: 90 }}
         />
       </ReactFlow>
-      <div className="surface-shell absolute left-3 top-3 z-10 max-w-[calc(100%-12rem)] rounded-[18px] p-1" style={{ position: "absolute" }}>
-        <div className="surface-core flex flex-wrap items-end gap-2 rounded-[14px] px-3 py-2">
-          <label className="flex min-w-32 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">节点类型<select aria-label="节点类型" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部类型</option>{Object.entries(SEMANTIC_STYLE).map(([value, meta]) => <option key={value} value={value}>{meta.label}</option>)}</select></label>
-          <label className="flex min-w-28 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">Severity<select aria-label="画布 Severity" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部级别</option>{["critical", "high", "medium", "low"].map((v) => <option key={v}>{v}</option>)}</select></label>
-          <label className="flex min-w-28 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">角色<select aria-label="画布角色" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部角色</option>{roleOptions.map((v) => <option key={v}>{v}</option>)}</select></label>
-          <label className="flex min-w-28 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">状态<select aria-label="画布状态" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部状态</option>{statusOptions.map((v) => <option key={v}>{v}</option>)}</select></label>
-          <label className="flex min-w-36 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">搜索<input aria-label="搜索画布节点" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="标题 / 角色" className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700" /></label>
-          <label className="flex items-center gap-1.5 pb-1 font-mono text-[9px] text-zinc-500"><input type="checkbox" checked={showContext} onChange={(e) => setShowContext(e.target.checked)} /> 保留一跳上下文</label>
-          {filterActive && <button type="button" onClick={() => { setKindFilter(""); setSeverityFilter(""); setRoleFilter(""); setStatusFilter(""); setQuery(""); }} className="mb-0.5 rounded-full px-2 py-1 font-mono text-[9px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white">清除 · 命中 {matchedCount}</button>}
-        </div>
+      <div className="surface-shell absolute left-4 top-4 z-10 w-[calc(100%-2rem)] max-w-[980px] rounded-[20px] p-1 xl:w-[calc(100%-13rem)]" style={{ position: "absolute" }}>
+        {filtersOpen ? (
+          <div className="surface-core rounded-[16px] px-4 py-3">
+            <div className="mb-3 flex items-center gap-2 border-b border-white/[.055] pb-2.5">
+              <Funnel size={15} className="text-acc-400" />
+              <span className="text-[12px] font-medium text-zinc-200">筛选过程节点</span>
+              <span className="font-mono text-[10px] text-zinc-600">{filterActive ? `命中 ${matchedCount} / ${nodes.length}` : `${nodes.length} 个节点`}</span>
+              {filterActive && <button type="button" onClick={() => { setKindFilter(""); setSeverityFilter(""); setRoleFilter(""); setStatusFilter(""); setQuery(""); }} className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white"><X size={11} /> 清除</button>}
+              <button type="button" onClick={() => setFiltersOpen(false)} className={`${filterActive ? "" : "ml-auto"} inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white`}><CaretUp size={11} /> 收起</button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">节点类型<select aria-label="节点类型" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)} className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部类型</option>{Object.entries(SEMANTIC_STYLE).map(([value, meta]) => <option key={value} value={value}>{meta.label}</option>)}</select></label>
+              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">Severity<select aria-label="画布 Severity" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)} className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部级别</option>{["critical", "high", "medium", "low"].map((v) => <option key={v}>{v}</option>)}</select></label>
+              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">角色<select aria-label="画布角色" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部角色</option>{roleOptions.map((v) => <option key={v}>{v}</option>)}</select></label>
+              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">状态<select aria-label="画布状态" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部状态</option>{statusOptions.map((v) => <option key={v}>{v}</option>)}</select></label>
+              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">搜索<input aria-label="搜索画布节点" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="标题 / 角色 / 内容" className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700" /></label>
+            </div>
+            <label className="mt-3 flex w-fit items-center gap-2 font-mono text-[10px] text-zinc-500"><input type="checkbox" checked={showContext} onChange={(e) => setShowContext(e.target.checked)} className="size-4 accent-emerald-500" /> 保留命中节点的一跳上下文与任务根</label>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setFiltersOpen(true)} className="surface-core flex w-full items-center gap-2 rounded-[16px] px-4 py-3 text-left text-[12px] text-zinc-300 hover:bg-white/[.045]"><Funnel size={15} className="text-acc-400" /><span>展开筛选</span>{filterActive && <span className="font-mono text-[10px] text-acc-400">命中 {matchedCount} / {nodes.length}</span>}<CaretDown size={12} className="ml-auto text-zinc-600" /></button>
+        )}
       </div>
       <Legend />
       {selected && <Sidebar node={selected} onClose={() => setSelected(null)} />}

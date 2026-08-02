@@ -1,7 +1,8 @@
-import { Bug, ChartBar, Check, Crosshair, Folder, Gear, MagnifyingGlass, Moon, Palette, Queue, Robot, SidebarSimple, Sun, X } from "@phosphor-icons/react";
+import { Bug, ChartBar, Check, Crosshair, Folder, Gear, MagnifyingGlass, Moon, Palette, Queue, Robot, SidebarSimple, SignOut, Sun, User, X } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth";
 import { DeepSonarMark } from "../components/DeepSonarMark";
 
 const NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
@@ -68,6 +69,7 @@ export function AppShell() {
       <ThemePicker value={accentTheme} collapsed={collapsed} onChange={setAccentTheme} />
       <button className="command-trigger" onClick={() => setCommandOpen(true)} title="打开命令菜单"><MagnifyingGlass size={15} weight="light" /><span>搜索与跳转</span><kbd>⌘ K</kbd></button>
       <MainNav projectId={projectId} />
+      <UserRailFooter />
       <div className="rail-status"><span className="deepsonar-live-dot" /><div><strong>Scheduler online</strong><small>状态每 5 秒同步</small></div></div>
     </div></aside>
 
@@ -76,6 +78,40 @@ export function AppShell() {
     {commandOpen && <CommandMenu projectId={projectId} onClose={() => setCommandOpen(false)} onNavigate={(to) => { navigate(to); setCommandOpen(false); }} />}
     <main id="main-content" className="app-stage"><Outlet /></main>
   </div>;
+}
+
+function UserRailFooter() {
+  const { user, me, status, logout } = useAuth();
+  const navigate = useNavigate();
+  if (!status?.auth_required) {
+    return (
+      <div className="mx-2 mb-2 rounded-xl bg-white/[.03] px-3 py-2 text-[10px] text-zinc-600 ring-1 ring-white/[.05]">
+        开发模式 · 鉴权关闭
+      </div>
+    );
+  }
+  const label = user?.display_name || user?.username || me?.actor?.name || "已登录";
+  const role = user?.role || me?.actor?.role || me?.actor?.type || "";
+  return (
+    <div className="mx-2 mb-2 flex items-center gap-2 rounded-xl bg-white/[.03] px-3 py-2 ring-1 ring-white/[.05]">
+      <User size={14} className="shrink-0 text-zinc-500" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[11px] font-medium text-zinc-300">{label}</div>
+        <div className="truncate font-mono text-[9px] text-zinc-600">{role}</div>
+      </div>
+      <button
+        type="button"
+        title="退出登录"
+        className="rounded-md p-1 text-zinc-500 hover:bg-white/[.06] hover:text-zinc-200"
+        onClick={async () => {
+          await logout();
+          navigate("/login");
+        }}
+      >
+        <SignOut size={14} />
+      </button>
+    </div>
+  );
 }
 
 function ThemePicker({ value, collapsed, onChange }: { value: AccentTheme; collapsed: boolean; onChange: (theme: AccentTheme) => void }) {

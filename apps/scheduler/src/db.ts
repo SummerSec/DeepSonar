@@ -16,9 +16,9 @@ export const sql = postgres(config.databaseUrl, {
 });
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-/** 空库基线：database/schema.sql（当前 schema v7）。 */
+/** 空库基线：database/schema.sql（当前 schema v9）。 */
 const SCHEMA_FILE = path.resolve(HERE, "../../../database/schema.sql");
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 9;
 
 /** 启动时校验/建立唯一 Schema 基线；advisory lock 防多实例并发建库。 */
 const MIGRATE_LOCK_ID = 726868001;

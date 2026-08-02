@@ -8,7 +8,7 @@ import {
   type PlatformToolName,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
-import { allowedModelIds } from "./credentials.js";
+import { allowedModelIds, isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { expandModules } from "./skill-sources.js";
@@ -82,6 +82,8 @@ export interface ProjectRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** 全局 Provider 总并发；优先于 Credential / 模型 / Agent CLI 配额。 */
+  maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层不得覆盖。 */
   maxConcurrentByAgentCli: Record<string, number>;
 }
@@ -114,6 +116,16 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
     const n = Number(value);
     if (["claude-code", "codex", "open-code"].includes(key) && Number.isInteger(n) && n >= 0 && n <= 1000) out[key] = n;
+  }
+  return out;
+}
+
+function asProviderLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return fallback;
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    const n = Number(value);
+    if (isProviderKnown(key) && Number.isInteger(n) && n >= 0 && n <= 1000) out[key] = n;
   }
   return out;
 }
@@ -162,6 +174,7 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
+    maxConcurrentByProvider: {},
     maxConcurrentByAgentCli: {},
   };
 }
@@ -184,6 +197,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
+    maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
     maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
   };
 }
@@ -204,7 +218,11 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
   const r = (((p[0]?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
   const gr = ((g[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
   const global = mergeRulesLayer(gr, envDefaultRules());
-  return { ...mergeRulesLayer(r, global), maxConcurrentByAgentCli: global.maxConcurrentByAgentCli };
+  return {
+    ...mergeRulesLayer(r, global),
+    maxConcurrentByProvider: global.maxConcurrentByProvider,
+    maxConcurrentByAgentCli: global.maxConcurrentByAgentCli,
+  };
 }
 
 export function parseCanvasConvergence(targetJson: unknown): CanvasConvergence {
@@ -713,7 +731,9 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
       const trigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
         kind?: string;
       };
-      const hubFollowup = ["confirmed_finding", "risk_acceptance_followup"].includes(trigger.kind ?? "");
+      const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
+        trigger.kind ?? "",
+      );
       const [roleJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: job.project_id as string,
@@ -1113,6 +1133,126 @@ export async function maybeTriggerHub(
       "next",
     );
   }
+}
+
+/**
+ * 人类对已确认 Finding 发表评论后：上图画布 + 唤醒 Hub 决策是否开新一轮。
+ * - 仅 verify_status=confirmed（或 disposition=confirmed_vuln）触发
+ * - 清除 auto_stopped，使自驱可继续
+ * - 仍尊重 hub_paused（人工暂停时不抢跑）
+ */
+export async function triggerHubFromHumanComment(input: {
+  findingId: string;
+  commentId: string;
+  commentBody: string;
+  authorName: string;
+}): Promise<{ hub_queued: boolean; reason?: string; canvas_id?: string; hub_job_id?: string }> {
+  const [finding] = await sql`
+    SELECT f.id, f.project_id, f.verify_status, f.disposition, f.title, f.node_id, f.job_id,
+           j.canvas_id, j.priority
+    FROM findings f
+    JOIN jobs j ON j.id = f.job_id
+    WHERE f.id = ${input.findingId}`;
+  if (!finding) return { hub_queued: false, reason: "finding_not_found" };
+
+  const confirmed =
+    finding.verify_status === "confirmed" || finding.disposition === "confirmed_vuln";
+  if (!confirmed) {
+    return { hub_queued: false, reason: "not_confirmed", canvas_id: finding.canvas_id as string };
+  }
+  if (!finding.canvas_id) {
+    return { hub_queued: false, reason: "no_canvas" };
+  }
+
+  const canvasId = finding.canvas_id as string;
+  const projectId = finding.project_id as string;
+  const preview = input.commentBody.trim().slice(0, 500);
+
+  let hubJobId: string | undefined;
+  await sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as Tx;
+
+    // 画布 human 节点：进入 Hub 读图 hints，供决策参考
+    const [findingNode] = finding.node_id
+      ? await tx`SELECT id, x, y FROM canvas_nodes WHERE id = ${finding.node_id as string}`
+      : [null];
+    const x = findingNode ? (findingNode.x as number) + 40 : 200;
+    const y = findingNode ? (findingNode.y as number) + 160 : 400;
+    const [humanNode] = await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: null,
+        node_type: "human",
+        title: `人工评论：${String(finding.title).slice(0, 80)}`,
+        body_json: {
+          reason: preview,
+          kind: "finding_comment",
+          finding_id: input.findingId,
+          comment_id: input.commentId,
+          author: input.authorName,
+        } as never,
+        x,
+        y,
+        status: "open",
+      })}
+      RETURNING id`;
+    if (findingNode) {
+      await insertEdgeIfAbsent(tx, canvasId, findingNode.id as string, humanNode.id as string, "next");
+    }
+
+    // 允许在「关注级别已收敛」后因人工反馈再决策
+    await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
+      auto_stopped: false,
+      paused_reason: undefined,
+      paused_at: undefined,
+    });
+
+    const before = await tx`
+      SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
+        AND status IN ('pending','claimed','provisioning','running') LIMIT 1`;
+
+    await maybeTriggerHub(
+      tx,
+      {
+        id: finding.job_id,
+        project_id: projectId,
+        canvas_id: canvasId,
+        type: "human_comment",
+        priority: (finding.priority as number) ?? 0,
+      },
+      {
+        force: true,
+        sourceNodeIds: [humanNode.id as string, ...(findingNode ? [findingNode.id as string] : [])],
+        trigger: {
+          kind: "human_comment",
+          finding_id: input.findingId,
+          comment_id: input.commentId,
+          author: input.authorName,
+          comment_preview: preview,
+          finding_title: finding.title,
+        },
+      },
+    );
+
+    const after = await tx`
+      SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
+        AND status IN ('pending','claimed','provisioning','running')
+      ORDER BY created_at DESC LIMIT 1`;
+    if (after[0] && (!before[0] || before[0].id !== after[0].id)) {
+      hubJobId = after[0].id as string;
+      await tx`
+        UPDATE canvas_nodes SET title = 'Hub 人工反馈决策', updated_at = now()
+        WHERE job_id = ${hubJobId} AND node_type = 'job'`;
+    }
+  });
+
+  if (!hubJobId) {
+    // 可能因 hub_paused / 已有活跃 hub / 轮次上限 未入队
+    const conv = await readCanvasConvergence(sql, canvasId);
+    if (conv.hub_paused) return { hub_queued: false, reason: "hub_paused", canvas_id: canvasId };
+    return { hub_queued: false, reason: "hub_not_queued", canvas_id: canvasId };
+  }
+  return { hub_queued: true, canvas_id: canvasId, hub_job_id: hubJobId };
 }
 
 /** 取消画布上非门控 severity 的 pending verify（drain-priority） */
