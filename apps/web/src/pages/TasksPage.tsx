@@ -7,11 +7,17 @@ import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, Seco
 
 type Filter = "" | "active" | "findings";
 interface PlaneInfo { enabled: boolean; web_url: string; workspace_slug: string; ready_state: string; }
-const inputCls = "w-full border bg-transparent px-4 py-3 text-[13px] text-zinc-200 outline-none placeholder:text-zinc-700";
-const labelCls = "mb-1.5 block font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600";
+const inputCls =
+  "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
+const labelCls = "mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
 const ACTIVE_STATUS = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 const RESUMABLE_STATUS = new Set(["waiting_human", "orphan", "failed", "timeout"]);
 const TERMINAL_STATUS = new Set(["succeeded", "failed", "timeout", "cancelled", "orphan"]);
+const NETWORK_OPTIONS = [
+  { value: "project" as const, label: "继承项目设置" },
+  { value: "allow" as const, label: "允许出网" },
+  { value: "deny" as const, label: "禁止出网" },
+];
 
 function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | null }) {
   const [open, setOpen] = useState(false);
@@ -24,11 +30,104 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
   const [submitting, setSubmitting] = useState(false);
   return (
     <div className="surface-shell mb-5 deepsonar-reveal">
-      <form className="surface-core p-5 sm:p-6" onSubmit={async (e) => { e.preventDefault(); if (!form.title.trim()) return flash("请写明希望得到的结果"); if (!form.content.trim()) return flash("请补充必要背景或边界"); setSubmitting(true); try { const result = await api.createTask(projectId, { title: form.title.trim(), content: form.content.trim(), ...(form.network === "project" ? {} : { allow_egress: form.network === "allow" }) }); flash("任务已入队，Hub 正在决定执行路径"); onDone(result.canvas_id); } catch (error) { flash(`创建失败：${error instanceof Error ? error.message : error}`); } finally { setSubmitting(false); } }}>
-        <div className="flex items-start justify-between gap-4"><div><div className="eyebrow"><span />NEW INTENT</div><h2 className="mt-4 text-xl font-medium tracking-[-.035em] text-zinc-100">描述结果，而不是编排步骤</h2><p className="mt-1 max-w-2xl text-[11px] leading-6 text-zinc-500">系统会从意图推导范围、角色和执行顺序。你只需要提供判断完成与否所必需的信息。</p></div><button type="button" onClick={onCancel} className="rounded-full p-2 text-zinc-600 hover:bg-white/5 hover:text-zinc-200" aria-label="关闭"><X size={15} /></button></div>
-        <div className="mt-6 grid gap-4 lg:grid-cols-[.8fr_1.2fr]"><label><span className={labelCls}>希望得到什么结果 *</span><input id="task-title" autoFocus value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className={inputCls} placeholder="例如：确认登录与权限链路是否存在可利用绕过" maxLength={200} /></label><label><span className={labelCls}>必要背景、边界与完成标准 *</span><textarea id="task-content" value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} className={`${inputCls} min-h-28 resize-y leading-6`} placeholder="代码位置、关注的业务场景、已知限制，以及你期望看到的证据。无需指定 Agent 或执行步骤。" maxLength={20_000} /></label></div>
-        <label className="mt-4 block max-w-sm"><span className={labelCls}>外部网络</span><select value={form.network} onChange={(e) => setForm({ ...form, network: e.target.value as "project" | "allow" | "deny" })} className={inputCls}><option value="project">继承项目设置</option><option value="allow">允许 Worker 出网</option><option value="deny">禁止 Worker 出网</option></select></label>
-        <div className="mt-5 flex flex-col gap-3 border-t border-white/[.045] pt-4 sm:flex-row sm:items-center"><div className="flex items-center gap-2 text-[10px] text-zinc-600"><Sparkle size={13} className="text-acc-400" />提交后立即进入任务工作台，执行过程可实时追踪</div><div className="flex gap-2 sm:ml-auto"><SecondaryButton type="button" onClick={onCancel}>稍后再说</SecondaryButton><PrimaryButton type="submit" busy={submitting}>交给系统</PrimaryButton></div></div>
+      <form
+        className="surface-core p-5 sm:p-6"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!form.title.trim()) return flash("请写明希望得到的结果");
+          if (!form.content.trim()) return flash("请补充必要背景或边界");
+          setSubmitting(true);
+          try {
+            const result = await api.createTask(projectId, {
+              title: form.title.trim(),
+              content: form.content.trim(),
+              ...(form.network === "project" ? {} : { allow_egress: form.network === "allow" }),
+            });
+            flash("任务已入队，Hub 正在决定执行路径");
+            onDone(result.canvas_id);
+          } catch (error) {
+            flash(`创建失败：${error instanceof Error ? error.message : error}`);
+          } finally {
+            setSubmitting(false);
+          }
+        }}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="eyebrow"><span />NEW INTENT</div>
+            <h2 className="mt-3 text-xl font-medium tracking-[-.035em] text-zinc-100">描述结果，而不是编排步骤</h2>
+            <p className="mt-1.5 max-w-2xl text-[12px] leading-6 text-zinc-500">
+              系统会从意图推导范围、角色和执行顺序。你只需要提供判断完成与否所必需的信息。
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} className="shrink-0 rounded-full p-2 text-zinc-600 hover:bg-white/5 hover:text-zinc-200" aria-label="关闭">
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="mt-6 space-y-4">
+          <label className="block">
+            <span className={labelCls}>希望得到什么结果 *</span>
+            <input
+              id="task-title"
+              autoFocus
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              className={inputCls}
+              placeholder="例如：确认登录与权限链路是否存在可利用绕过"
+              maxLength={200}
+            />
+          </label>
+
+          <label className="block">
+            <span className={labelCls}>必要背景、边界与完成标准 *</span>
+            <textarea
+              id="task-content"
+              value={form.content}
+              onChange={(e) => setForm({ ...form, content: e.target.value })}
+              className={`${inputCls} min-h-36 resize-y`}
+              placeholder="代码位置、关注的业务场景、已知限制，以及你期望看到的证据。无需指定 Agent 或执行步骤。"
+              maxLength={20_000}
+              rows={5}
+            />
+          </label>
+
+          <fieldset className="m-0 min-w-0 border-0 p-0">
+            <legend className={`${labelCls} px-0`}>外部网络</legend>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="外部网络">
+              {NETWORK_OPTIONS.map((option) => {
+                const active = form.network === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setForm({ ...form, network: option.value })}
+                    className={`rounded-lg border px-3.5 py-2.5 text-left text-[13px] leading-6 transition-colors ${
+                      active
+                        ? "border-acc-400/35 bg-acc-500/[.08] text-zinc-100"
+                        : "theme-input-surface text-zinc-400 hover:border-white/[.12] hover:text-zinc-200"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+        </div>
+
+        <div className="mt-6 flex flex-col gap-3 border-t border-white/[.045] pt-4 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-2 text-[11px] text-zinc-600">
+            <Sparkle size={13} className="shrink-0 text-acc-400" />
+            提交后立即进入任务工作台，执行过程可实时追踪
+          </div>
+          <div className="flex gap-2 sm:ml-auto">
+            <SecondaryButton type="button" onClick={onCancel}>稍后再说</SecondaryButton>
+            <PrimaryButton type="submit" busy={submitting}>交给系统</PrimaryButton>
+          </div>
+        </div>
       </form>
     </div>
   );
