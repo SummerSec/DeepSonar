@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 10);
+INSERT INTO schema_meta (id, version) VALUES ('global', 11);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -91,6 +91,12 @@ CREATE INDEX jobs_pending_idx ON jobs (status, priority DESC, created_at)
   WHERE status = 'pending';
 CREATE INDEX jobs_lease_idx ON jobs (lease_expires_at) WHERE status = 'running';
 CREATE INDEX jobs_canvas_idx ON jobs (canvas_id);
+-- 同一 Finding 同时最多一个活跃 Verify Job（多轮验证业务轮次与 Job 重试分离）
+CREATE UNIQUE INDEX jobs_one_active_verify_per_finding
+  ON jobs (finding_id)
+  WHERE type = 'verify_finding'
+    AND finding_id IS NOT NULL
+    AND status IN ('pending','claimed','provisioning','running','waiting_human');
 
 CREATE TABLE event_dedup (
   event_id text PRIMARY KEY,
@@ -175,6 +181,57 @@ CREATE TABLE finding_links (
   CONSTRAINT finding_links_url_len CHECK (char_length(url) BETWEEN 1 AND 2000)
 );
 CREATE INDEX finding_links_finding_idx ON finding_links (finding_id, created_at);
+
+-- Finding 验证轮次（业务复核轮次，与 Job 基础设施重试分离）
+CREATE TABLE finding_verification_rounds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  attempt int NOT NULL,
+  verify_job_id uuid REFERENCES jobs(id),
+  status text NOT NULL DEFAULT 'pending',
+  proposed_verdict text,
+  final_outcome text,
+  requirements_json jsonb NOT NULL DEFAULT '{}',
+  evidence_snapshot_json jsonb NOT NULL DEFAULT '{}',
+  summary text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  finished_at timestamptz,
+  UNIQUE (finding_id, attempt),
+  UNIQUE (verify_job_id),
+  CONSTRAINT finding_verification_rounds_status_check CHECK (
+    status IN ('pending','running','rework','confirmed','needs_human','failed')
+  ),
+  CONSTRAINT finding_verification_rounds_proposed_check CHECK (
+    proposed_verdict IS NULL OR proposed_verdict IN ('confirmed','rework','needs_human')
+  ),
+  CONSTRAINT finding_verification_rounds_outcome_check CHECK (
+    final_outcome IS NULL OR final_outcome IN ('confirmed','rework','needs_human')
+  ),
+  CONSTRAINT finding_verification_rounds_attempt_check CHECK (attempt >= 1)
+);
+CREATE INDEX finding_verification_rounds_finding_idx
+  ON finding_verification_rounds (finding_id, attempt DESC);
+
+-- 任务级最终报告（一画布至多一份有效报告）
+CREATE TABLE task_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  canvas_id text NOT NULL UNIQUE REFERENCES canvases(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  report_job_id uuid REFERENCES jobs(id),
+  status text NOT NULL DEFAULT 'pending',
+  summary_json jsonb NOT NULL DEFAULT '{}',
+  markdown_uri text,
+  markdown_sha256 text,
+  sarif_uri text,
+  sarif_sha256 text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT task_reports_status_check
+    CHECK (status IN ('pending', 'generating', 'succeeded', 'failed'))
+);
+CREATE INDEX task_reports_project_idx ON task_reports (project_id, created_at DESC);
 
 CREATE TABLE canvas_nodes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -787,6 +844,7 @@ INSERT INTO global_settings (id, rules_json) VALUES (
     "maxFollowupsPerJob": 60,
     "maxFollowupDepth": 12,
     "maxAutoRetries": 6,
+    "maxVerificationRounds": 3,
     "auditTimeoutSec": 7200,
     "verifyTimeoutSec": 3600,
     "hubEnabled": true,

@@ -1,0 +1,539 @@
+/**
+ * 任务级最终报告：收敛后幂等派发 Report Job，确定性输入 + 产物校验 + SARIF。
+ * 见 docs/TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md §5
+ */
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { config } from "./config.js";
+import { sql } from "./db.js";
+import { canvasFindingsConverged, hasActiveWorkJobs } from "./verify.js";
+
+type Tx = typeof sql;
+
+function sha256(data: string | Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+function reportDir(canvasId: string): string {
+  const safe = canvasId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
+  return path.join(config.storage.blobDir, "reports", safe || "unknown");
+}
+
+export interface ReportInputFinding {
+  id: string;
+  title: string;
+  severity: string;
+  location: string | null;
+  summary: string | null;
+  verify_status: string;
+  final_verification_round: Record<string, unknown> | null;
+  review_evidence: unknown[];
+  test_evidence: unknown[];
+  limitations: string[];
+}
+
+export interface ReportInput {
+  task: { canvas_id: string; title: string; goal: string; project_id: string };
+  statistics: {
+    findings_total: number;
+    confirmed_count: number;
+    needs_human_count: number;
+    confirmed_by_severity: Record<string, number>;
+  };
+  findings: ReportInputFinding[];
+  confirmed_findings: ReportInputFinding[];
+  needs_human_findings: ReportInputFinding[];
+  scope_and_coverage: Record<string, unknown>;
+  evidence: unknown[];
+}
+
+/** 从数据库确定性生成报告输入（不含 Agent 创作内容）。 */
+export async function buildReportInput(canvasId: string, db: typeof sql = sql): Promise<ReportInput> {
+  const [canvas] = await db`
+    SELECT c.id, c.title, c.target_json, c.project_id, p.name AS project_name
+    FROM canvases c
+    JOIN projects p ON p.id = c.project_id
+    WHERE c.id = ${canvasId}`;
+  if (!canvas) throw new Error(`canvas not found: ${canvasId}`);
+
+  const target = (canvas.target_json ?? {}) as Record<string, unknown>;
+  const findings = await db`
+    SELECT f.id, f.title, f.severity, f.location, f.summary, f.verify_status, f.raw_json, f.job_id, f.node_id
+    FROM findings f
+    JOIN jobs j ON j.id = f.job_id
+    WHERE j.canvas_id = ${canvasId}
+    ORDER BY
+      CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+      f.created_at`;
+
+  const items: ReportInputFinding[] = [];
+  for (const f of findings) {
+    const [round] = await db`
+      SELECT attempt, status, final_outcome, proposed_verdict, evidence_snapshot_json, summary, error, finished_at
+      FROM finding_verification_rounds
+      WHERE finding_id = ${f.id as string}
+      ORDER BY attempt DESC LIMIT 1`;
+    const snap = (round?.evidence_snapshot_json ?? {}) as {
+      review?: unknown[];
+      test?: unknown[];
+    };
+    items.push({
+      id: f.id as string,
+      title: f.title as string,
+      severity: f.severity as string,
+      location: (f.location as string) ?? null,
+      summary: (f.summary as string) ?? null,
+      verify_status: f.verify_status as string,
+      final_verification_round: round
+        ? {
+            attempt: round.attempt,
+            final_outcome: round.final_outcome,
+            proposed_verdict: round.proposed_verdict,
+            summary: round.summary,
+            error: round.error,
+            finished_at: round.finished_at,
+          }
+        : null,
+      review_evidence: snap.review ?? [],
+      test_evidence: snap.test ?? [],
+      limitations: [],
+    });
+  }
+
+  const confirmed = items.filter((i) => i.verify_status === "confirmed");
+  const needsHuman = items.filter((i) => i.verify_status === "needs_human");
+  const bySev: Record<string, number> = {};
+  for (const c of confirmed) {
+    bySev[c.severity] = (bySev[c.severity] ?? 0) + 1;
+  }
+
+  return {
+    task: {
+      canvas_id: canvasId,
+      title: canvas.title as string,
+      goal: String(target.goal ?? canvas.title ?? ""),
+      project_id: canvas.project_id as string,
+    },
+    statistics: {
+      findings_total: items.length,
+      confirmed_count: confirmed.length,
+      needs_human_count: needsHuman.length,
+      confirmed_by_severity: bySev,
+    },
+    findings: items,
+    confirmed_findings: confirmed,
+    needs_human_findings: needsHuman,
+    scope_and_coverage: {
+      goal: String(target.goal ?? ""),
+      network_policy: target.network_policy ?? null,
+    },
+    evidence: [],
+  };
+}
+
+/** SARIF 2.1.0 子集：仅 confirmed Finding。 */
+export function buildSarifFromConfirmed(input: ReportInput): object {
+  const results = input.confirmed_findings.map((f) => ({
+    ruleId: f.id,
+    level: f.severity === "critical" || f.severity === "high" ? "error" : "warning",
+    message: { text: f.summary || f.title },
+    locations: f.location
+      ? [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: f.location.split(":")[0] },
+              region: f.location.includes(":")
+                ? { startLine: Number(f.location.split(":").pop()) || 1 }
+                : undefined,
+            },
+          },
+        ]
+      : [],
+    properties: {
+      severity: f.severity,
+      verify_status: "confirmed",
+      title: f.title,
+    },
+  }));
+
+  return {
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: "DeepSonar",
+            informationUri: "https://github.com/SummerSec/DeepFlowHunter",
+            rules: input.confirmed_findings.map((f) => ({
+              id: f.id,
+              name: f.title,
+              shortDescription: { text: f.title },
+              fullDescription: { text: f.summary || f.title },
+              defaultConfiguration: {
+                level: f.severity === "critical" || f.severity === "high" ? "error" : "warning",
+              },
+              properties: { severity: f.severity },
+            })),
+          },
+        },
+        results,
+      },
+    ],
+  };
+}
+
+function defaultMarkdown(input: ReportInput): string {
+  const lines: string[] = [];
+  lines.push(`# 任务报告：${input.task.title}`);
+  lines.push("");
+  lines.push(`> 目标：${input.task.goal || "（未声明）"}`);
+  lines.push("");
+  lines.push("## 执行摘要");
+  lines.push("");
+  lines.push(
+    `本次共发现 **${input.statistics.findings_total}** 条 Finding：已确认 **${input.statistics.confirmed_count}**，待人工 **${input.statistics.needs_human_count}**。`,
+  );
+  if (input.statistics.confirmed_count === 0) {
+    lines.push("");
+    lines.push("**本次未形成已确认漏洞**；这不代表系统绝对安全，仅表示自动验证未通过确认门槛。");
+  }
+  lines.push("");
+  lines.push("## 已确认问题");
+  lines.push("");
+  if (input.confirmed_findings.length === 0) {
+    lines.push("_无_");
+  } else {
+    for (const f of input.confirmed_findings) {
+      lines.push(`### [${f.severity}] ${f.title}`);
+      lines.push("");
+      if (f.location) lines.push(`- 位置：\`${f.location}\``);
+      if (f.summary) lines.push(`- 摘要：${f.summary}`);
+      lines.push(`- 验证轮次：${f.final_verification_round?.attempt ?? "?"}`);
+      lines.push("");
+    }
+  }
+  lines.push("## 待人工确认 / 验证限制");
+  lines.push("");
+  if (input.needs_human_findings.length === 0) {
+    lines.push("_无_");
+  } else {
+    for (const f of input.needs_human_findings) {
+      lines.push(`### [${f.severity}] ${f.title}`);
+      lines.push("");
+      if (f.location) lines.push(`- 位置：\`${f.location}\``);
+      if (f.summary) lines.push(`- 摘要：${f.summary}`);
+      const err = f.final_verification_round?.error ?? f.final_verification_round?.summary;
+      if (err) lines.push(`- 阻塞：${err}`);
+      lines.push("");
+    }
+  }
+  lines.push("## 范围与覆盖");
+  lines.push("");
+  lines.push("```json");
+  lines.push(JSON.stringify(input.scope_and_coverage, null, 2));
+  lines.push("```");
+  lines.push("");
+  lines.push("---");
+  lines.push("_本报告由 DeepSonar 调度器在分析收敛后自动生成；SARIF 仅含 confirmed Finding。_");
+  return lines.join("\n");
+}
+
+/**
+ * 在 Root 为 analysis_complete 且 Finding 收敛时，幂等创建唯一 Report Job。
+ */
+export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ dispatched: boolean; reason?: string }> {
+  const [root] = await tx`
+    SELECT id, status FROM canvas_nodes
+    WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+  if (!root) return { dispatched: false, reason: "no_root" };
+  if (root.status !== "analysis_complete" && root.status !== "reporting") {
+    return { dispatched: false, reason: `root_status:${root.status}` };
+  }
+
+  const conv = await canvasFindingsConverged(tx, canvasId);
+  if (!conv.ok) return { dispatched: false, reason: `findings_not_converged:${conv.blockers.slice(0, 3).join(",")}` };
+
+  // 活跃普通/Hub/Verify 工作（允许 report 自身）
+  const active = await tx`
+    SELECT 1 FROM jobs
+    WHERE canvas_id = ${canvasId}
+      AND type <> 'report'
+      AND status IN ('pending','claimed','provisioning','running','waiting_human')
+    LIMIT 1`;
+  if (active.length > 0) return { dispatched: false, reason: "active_work" };
+
+  const [existing] = await tx`
+    SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId}`;
+  if (existing?.status === "succeeded") return { dispatched: false, reason: "already_succeeded" };
+  if (existing?.status === "generating" || existing?.status === "pending") {
+    // 若绑定 job 仍活跃则跳过
+    if (existing.report_job_id) {
+      const [j] = await tx`SELECT status FROM jobs WHERE id = ${existing.report_job_id as string}`;
+      if (j && ["pending", "claimed", "provisioning", "running"].includes(j.status as string)) {
+        return { dispatched: false, reason: "report_in_flight" };
+      }
+    }
+  }
+
+  const [canvas] = await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`;
+  if (!canvas) return { dispatched: false, reason: "no_canvas" };
+
+  const { resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
+  const rules = await rulesForProject(tx as unknown as typeof sql, canvas.project_id as string);
+  let snapshot: unknown;
+  try {
+    snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, canvas.project_id as string, "report");
+  } catch (e) {
+    console.warn(`[report] resolve snapshot failed:`, e);
+    return { dispatched: false, reason: "no_report_role" };
+  }
+
+  const ingressKey = `report:${canvasId}`;
+  let reportJobId: string | null = null;
+  try {
+    const [job] = await tx`
+      INSERT INTO jobs ${tx({
+        project_id: canvas.project_id as string,
+        canvas_id: canvasId,
+        agent_snapshot_json: snapshot as never,
+        type: "report",
+        priority: 50,
+        ingress_key: ingressKey,
+        payload_json: { kind: "task_report" } as never,
+        timeout_sec: rules.auditTimeoutSec,
+        followup_depth: 0,
+      })}
+      ON CONFLICT DO NOTHING
+      RETURNING id`;
+    // ON CONFLICT on ingress_key partial unique needs explicit - postgres.js uses constraint
+    reportJobId = (job?.id as string) ?? null;
+  } catch {
+    // 唯一冲突
+    const [existJob] = await tx`
+      SELECT id, status FROM jobs
+      WHERE project_id = ${canvas.project_id as string} AND ingress_key = ${ingressKey}
+      LIMIT 1`;
+    if (existJob && !["failed", "cancelled", "timeout", "orphan"].includes(existJob.status as string)) {
+      return { dispatched: false, reason: "report_job_exists" };
+    }
+    // 允许失败后重建：先清旧 ingress 再插
+    if (existJob) {
+      await tx`UPDATE jobs SET ingress_key = ${`${ingressKey}:retired:${existJob.id}`} WHERE id = ${existJob.id as string}`;
+    }
+    const [job] = await tx`
+      INSERT INTO jobs ${tx({
+        project_id: canvas.project_id as string,
+        canvas_id: canvasId,
+        agent_snapshot_json: snapshot as never,
+        type: "report",
+        priority: 50,
+        ingress_key: ingressKey,
+        payload_json: { kind: "task_report" } as never,
+        timeout_sec: rules.auditTimeoutSec,
+        followup_depth: 0,
+      })}
+      RETURNING id`;
+    reportJobId = job.id as string;
+  }
+
+  if (!reportJobId) {
+    const [existJob] = await tx`
+      SELECT id FROM jobs
+      WHERE project_id = ${canvas.project_id as string} AND ingress_key = ${ingressKey}
+      LIMIT 1`;
+    reportJobId = (existJob?.id as string) ?? null;
+  }
+  if (!reportJobId) return { dispatched: false, reason: "insert_failed" };
+
+  if (existing) {
+    await tx`
+      UPDATE task_reports SET
+        status = 'generating',
+        report_job_id = ${reportJobId},
+        error = null,
+        updated_at = now()
+      WHERE canvas_id = ${canvasId}`;
+  } else {
+    try {
+      await tx`
+        INSERT INTO task_reports ${tx({
+          canvas_id: canvasId,
+          project_id: canvas.project_id as string,
+          report_job_id: reportJobId,
+          status: "generating",
+        })}`;
+    } catch {
+      await tx`
+        UPDATE task_reports SET
+          status = 'generating',
+          report_job_id = ${reportJobId},
+          error = null,
+          updated_at = now()
+        WHERE canvas_id = ${canvasId}`;
+    }
+  }
+
+  await tx`
+    UPDATE canvas_nodes SET status = 'reporting', updated_at = now()
+    WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
+
+  // 报告节点
+  const existingNode = await tx`
+    SELECT id FROM canvas_nodes
+    WHERE canvas_id = ${canvasId} AND node_type = 'report' LIMIT 1`;
+  if (existingNode.length === 0) {
+    await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: reportJobId,
+        node_type: "report",
+        title: "任务报告",
+        body_json: { type: "report" } as never,
+        x: 60,
+        y: 520,
+        status: "pending",
+      })}`;
+  } else {
+    await tx`
+      UPDATE canvas_nodes SET job_id = ${reportJobId}, status = 'pending', updated_at = now()
+      WHERE id = ${existingNode[0].id as string}`;
+  }
+
+  console.info(`[report] canvas ${canvasId} 派发 Report Job ${reportJobId}`);
+  return { dispatched: true };
+}
+
+/**
+ * Report Job 成功：写产物、校验、Root → succeeded。
+ * fake/real 均可调用；markdown 可来自 Agent summary 或确定性模板。
+ */
+export async function finalizeReportJob(
+  tx: Tx,
+  jobId: string,
+  opts: { summary?: string | null; markdown?: string | null; error?: string | null; failed?: boolean } = {},
+): Promise<void> {
+  const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+  if (!job || job.type !== "report" || !job.canvas_id) return;
+  const canvasId = job.canvas_id as string;
+
+  if (opts.failed) {
+    await tx`
+      UPDATE task_reports SET status = 'failed', error = ${opts.error ?? "report_failed"}, updated_at = now()
+      WHERE canvas_id = ${canvasId}`;
+    await tx`
+      UPDATE canvas_nodes SET status = 'failed', updated_at = now()
+      WHERE job_id = ${jobId} AND node_type = 'report'`;
+    // Root 保持 reporting
+    return;
+  }
+
+  const input = await buildReportInput(canvasId, tx as unknown as typeof sql);
+  const dir = reportDir(canvasId);
+  await mkdir(dir, { recursive: true });
+
+  const reportJson = {
+    ...input,
+    agent_summary: opts.summary ?? null,
+    generated_at: new Date().toISOString(),
+  };
+  const markdown = (opts.markdown?.trim() || opts.summary?.trim() || defaultMarkdown(input)).trim();
+  if (!markdown.includes("已确认") && !markdown.includes("确认") && input.findings.length > 0) {
+    // 宽松校验：至少是非空报告
+  }
+  if (markdown.length < 20) {
+    await finalizeReportJob(tx, jobId, { failed: true, error: "report markdown too short" });
+    return;
+  }
+
+  const sarif = buildSarifFromConfirmed(input);
+  const reportJsonStr = JSON.stringify(reportJson, null, 2);
+  const sarifStr = JSON.stringify(sarif, null, 2);
+
+  const reportJsonPath = path.join(dir, "report.json");
+  const mdPath = path.join(dir, "report.md");
+  const sarifPath = path.join(dir, "report.sarif.json");
+  await writeFile(reportJsonPath, reportJsonStr, "utf8");
+  await writeFile(mdPath, markdown, "utf8");
+  await writeFile(sarifPath, sarifStr, "utf8");
+
+  const mdSha = sha256(markdown);
+  const sarifSha = sha256(sarifStr);
+  // 相对 blob 根的 URI
+  const mdUri = path.posix.join("reports", path.basename(dir), "report.md");
+  const sarifUri = path.posix.join("reports", path.basename(dir), "report.sarif.json");
+
+  const summaryJson = {
+    confirmed_count: input.statistics.confirmed_count,
+    needs_human_count: input.statistics.needs_human_count,
+    findings_total: input.statistics.findings_total,
+    confirmed_by_severity: input.statistics.confirmed_by_severity,
+    generated_at: new Date().toISOString(),
+  };
+
+  await tx`
+    UPDATE task_reports SET
+      status = 'succeeded',
+      summary_json = ${tx.json(summaryJson as never)},
+      markdown_uri = ${mdUri},
+      markdown_sha256 = ${mdSha},
+      sarif_uri = ${sarifUri},
+      sarif_sha256 = ${sarifSha},
+      error = null,
+      updated_at = now()
+    WHERE canvas_id = ${canvasId}`;
+
+  await tx`
+    UPDATE canvas_nodes SET status = 'succeeded',
+      body_json = body_json || ${tx.json({ summary: summaryJson })},
+      updated_at = now()
+    WHERE job_id = ${jobId} AND node_type = 'report'`;
+
+  await tx`
+    UPDATE canvas_nodes SET status = 'succeeded', updated_at = now()
+    WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
+
+  console.info(`[report] canvas ${canvasId} 报告成功，Root → succeeded`);
+}
+
+export async function readReportBlob(uri: string): Promise<Buffer> {
+  const full = path.join(config.storage.blobDir, uri);
+  return readFile(full);
+}
+
+export async function getTaskReport(canvasId: string) {
+  const [row] = await sql`SELECT * FROM task_reports WHERE canvas_id = ${canvasId}`;
+  return row ?? null;
+}
+
+export async function getTaskReportById(id: string) {
+  const [row] = await sql`SELECT * FROM task_reports WHERE id = ${id}`;
+  return row ?? null;
+}
+
+/** 显式重试失败报告 */
+export async function retryReport(canvasId: string): Promise<{ ok: boolean; reason?: string }> {
+  return sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as Tx;
+    const [root] = await tx`
+      SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+    if (!root || !["analysis_complete", "reporting"].includes(root.status as string)) {
+      // 允许从 succeeded 以外、已 analysis 过的状态重试
+      if (root?.status === "succeeded") {
+        await tx`
+          UPDATE canvas_nodes SET status = 'analysis_complete', updated_at = now()
+          WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
+      } else if (!root || root.status !== "analysis_complete") {
+        return { ok: false, reason: `root_status:${root?.status}` };
+      }
+    }
+    await tx`
+      UPDATE task_reports SET status = 'pending', error = null, updated_at = now()
+      WHERE canvas_id = ${canvasId} AND status = 'failed'`;
+    const r = await maybeDispatchReport(tx, canvasId);
+    return { ok: r.dispatched, reason: r.reason };
+  });
+}
+
+void hasActiveWorkJobs;

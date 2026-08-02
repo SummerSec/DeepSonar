@@ -545,9 +545,10 @@ export interface TaskReport {
   project_id: string;
   report_job_id: string | null;
   status: "pending" | "generating" | "succeeded" | "failed";
-  /** 结构化摘要：confirmed_count / excluded_count / findings_total / confirmed_by_severity / generated_at */
+  /** 结构化摘要：confirmed / needs_human 分栏，SARIF 只含 confirmed */
   summary_json: {
     confirmed_count?: number;
+    needs_human_count?: number;
     excluded_count?: number;
     findings_total?: number;
     confirmed_by_severity?: Record<string, number>;

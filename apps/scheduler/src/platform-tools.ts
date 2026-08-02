@@ -14,9 +14,11 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   emit_fact: [
     "### `emit_fact` — 增量提交可验证事实",
-    "- 参数：`title`（必填，1-200 字符）；`description`（必填，1-10000 字符）。",
+    "- 参数：`title`（必填，1-200 字符）；`description`（必填，1-10000 字符）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。",
+    "- `verification` 字段：`finding_id`、`evidence_kind`（review|test）、`outcome`（supports|refutes|inconclusive）、`subject_revision` 必填；test 还应含 `steps`、`expected`、`actual`（或 artifact_refs）。",
     "- 时机：每得到一个不在画布中的原子事实立即调用；单 Job 最多 100 条。description 写明证据、来源、推理边界和仍未知内容。",
-    '- 示例：`{"title":"登录接口使用独立限流键","description":"证据：apps/api/login.ts:42 以 IP 生成键；来源：本地源码；未知：反向代理是否覆盖客户端 IP。"}`',
+    '- 普通示例：`{"title":"登录接口使用独立限流键","description":"证据：apps/api/login.ts:42 以 IP 生成键；来源：本地源码；未知：反向代理是否覆盖客户端 IP。"}`',
+    '- 补证示例：`{"title":"实测复现未授权读取","description":"步骤与响应见 verification","verification":{"finding_id":"<uuid>","evidence_kind":"test","outcome":"supports","subject_revision":"app@abc123","steps":["构造请求","观察响应"],"expected":"拒绝","actual":"返回其他租户数据"}}`',
   ].join("\n"),
   emit_finding: [
     "### `emit_finding` — 增量提交安全 Finding",
@@ -34,10 +36,13 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   mark_job_done: [
     "### `mark_job_done` — 正常结束 Job",
     "- 普通 Worker 参数：`summary`（必填，1-10000 字符）；不得传 `verdict`。",
-    "- verify 参数：`summary` 与 `verdict` 均必填；verdict 只能是 `confirmed|false_positive|needs_human`。",
+    "- verify 参数：`summary` 与 `verdict` 均必填；verdict 只能是 `confirmed|rework|needs_human`（兼容 `false_positive`，服务端映射为 rework）。",
+    "- `confirmed` 仍须通过 Scheduler 证据硬门（独立 review + 完整 test）；不满足时会记为 rework 并回弹 Hub。",
+    "- `rework` 时建议在 summary 中写明缺失证据；可选 `missing_evidence` 字符串数组。",
     "- 时机：所有增量 fact/finding 已提交且任务确实收尾后只调用一次。Hub 必须先调用 `submit_hub_decision`。",
     '- 普通示例：`{"summary":"完成入口梳理并提交 3 条新增事实；未覆盖移动端客户端。"}`',
     '- verify 示例：`{"summary":"在受影响版本复现未授权读取，响应包含其他租户记录。","verdict":"confirmed"}`',
+    '- rework 示例：`{"summary":"缺少运行时复现；仅有同源静态描述。","verdict":"rework","missing_evidence":["runtime_test"]}`',
   ].join("\n"),
   request_human: [
     "### `request_human` — 请求人工介入并结束本轮",

@@ -53,20 +53,54 @@ export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapsho
     intentFrom.set(e.to_node_id as string, list);
   }
 
+  // Finding 表：验证状态与轮次（Hub 回弹决策用）
+  const findingRows = await sql`
+    SELECT f.id, f.node_id, f.verify_status
+    FROM findings f
+    JOIN jobs j ON j.id = f.job_id
+    WHERE j.canvas_id = ${canvasId}`;
+  const findingByNode = new Map(findingRows.map((r) => [r.node_id as string, r]));
+
   const lines: string[] = [];
   lines.push(kv("goal", goal));
   lines.push(kv("target", target));
   lines.push(kv("root_id", root?.id ?? null));
+  lines.push(kv("root_status", root?.status ?? null));
   lines.push("facts:");
   for (const f of facts) {
     const body = (f.body_json ?? {}) as Record<string, unknown>;
     lines.push(`  - ${kv("id", f.id)}`);
     lines.push(`    ${kv("kind", f.node_type)}`);
     lines.push(`    ${kv("title", f.title)}`);
+    lines.push(`    ${kv("status", f.status)}`);
     if (body.description) lines.push(`    ${kv("description", String(body.description).slice(0, 600))}`);
     if (body.severity) lines.push(`    ${kv("severity", body.severity)}`);
     if (body.location) lines.push(`    ${kv("location", body.location)}`);
     if (body.summary) lines.push(`    ${kv("summary", String(body.summary).slice(0, 400))}`);
+    // 验证证据节点摘要
+    const ver = body.verification as Record<string, unknown> | undefined;
+    if (ver) {
+      lines.push(`    ${kv("finding_id", ver.finding_id)}`);
+      lines.push(`    ${kv("evidence_kind", ver.evidence_kind)}`);
+      lines.push(`    ${kv("outcome", ver.outcome)}`);
+      if (ver.subject_revision) lines.push(`    ${kv("subject_revision", ver.subject_revision)}`);
+      if (ver.limitations) lines.push(`    ${kv("limitations", ver.limitations)}`);
+    }
+    // Finding 节点：输出验证轮次与缺口
+    if (f.node_type === "finding") {
+      const fr = findingByNode.get(f.id as string);
+      if (fr) {
+        const { findingVerificationSummary } = await import("./verify.js");
+        const summary = await findingVerificationSummary(sql, fr.id as string);
+        lines.push(`    ${kv("verify_status", summary.verify_status)}`);
+        lines.push(`    ${kv("verification_attempt", summary.verification_attempt)}`);
+        lines.push(`    ${kv("latest_outcome", summary.latest_outcome)}`);
+        lines.push(`    ${kv("missing_evidence", summary.missing_evidence)}`);
+        lines.push(`    ${kv("review_evidence_ids", summary.review_evidence_ids)}`);
+        lines.push(`    ${kv("test_evidence_ids", summary.test_evidence_ids)}`);
+        lines.push(`    ${kv("conflicting_evidence_ids", summary.conflicting_evidence_ids)}`);
+      }
+    }
   }
   if (facts.length === 0) lines.push("  []");
   lines.push("open_intents:");

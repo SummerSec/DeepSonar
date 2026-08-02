@@ -26,8 +26,8 @@ const definitions = {
     inputSchema: { type: "object", properties: { message: { type: "string", minLength: 1, maxLength: 2000 }, percent: { type: "number", minimum: 0, maximum: 100 } }, required: ["message"], additionalProperties: false }
   },
   emit_fact: {
-    description: "把一个新的、可验证的增量事实实时写入任务画布。可多次调用。",
-    inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: 200 }, description: { type: "string", minLength: 1, maxLength: 10000 } }, required: ["title", "description"], additionalProperties: false }
+    description: "把一个新的、可验证的增量事实实时写入任务画布。Hub 回弹补证 Job 可附带 verification 结构化证据。可多次调用。",
+    inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: 200 }, description: { type: "string", minLength: 1, maxLength: 10000 }, verification: { type: "object", properties: { finding_id: { type: "string" }, evidence_kind: { type: "string", enum: ["review", "test"] }, outcome: { type: "string", enum: ["supports", "refutes", "inconclusive"] }, subject_revision: { type: "string", minLength: 1, maxLength: 500 }, environment: { type: "string", maxLength: 1000 }, steps: { type: "array", items: { type: "string" }, maxItems: 50 }, expected: { type: "string", maxLength: 5000 }, actual: { type: "string", maxLength: 5000 }, artifact_refs: { type: "array", items: { type: "object", properties: { uri: { type: "string" }, sha256: { type: "string" } }, required: ["uri"] }, maxItems: 20 }, limitations: { type: "array", items: { type: "string" }, maxItems: 20 } }, required: ["finding_id", "evidence_kind", "outcome", "subject_revision"], additionalProperties: false } }, required: ["title", "description"], additionalProperties: false }
   },
   emit_finding: {
     description: "实时提交一个有证据的安全 Finding；调度器负责去重和决定是否验证。可多次调用。",
@@ -38,8 +38,8 @@ const definitions = {
     inputSchema: { type: "object", properties: { complete: { type: "object", properties: { from: { type: "array", items: { type: "string" } }, description: { type: "string", minLength: 1, maxLength: 10000 } }, required: ["from", "description"], additionalProperties: false }, intents: { type: "array", items: { type: "object", properties: { from: { type: "array", items: { type: "string" } }, role: { type: "string", minLength: 1, maxLength: 64 }, description: { type: "string", minLength: 1, maxLength: 2000 }, prompt: { type: "string", minLength: 1, maxLength: 20000 } }, required: ["from", "role", "description", "prompt"], additionalProperties: false } } }, additionalProperties: false }
   },
   mark_job_done: {
-    description: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict。每个 Job 最后调用一次。",
-    inputSchema: { type: "object", properties: { summary: { type: "string", minLength: 1, maxLength: 10000 }, verdict: { type: "string", enum: ["confirmed", "false_positive", "needs_human"] } }, required: ["summary"], additionalProperties: false }
+    description: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
+    inputSchema: { type: "object", properties: { summary: { type: "string", minLength: 1, maxLength: 10000 }, verdict: { type: "string", enum: ["confirmed", "rework", "needs_human", "false_positive"] }, missing_evidence: { type: "array", items: { type: "string" } } }, required: ["summary"], additionalProperties: false }
   },
   request_human: {
     description: "只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",

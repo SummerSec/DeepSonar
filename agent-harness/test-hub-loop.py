@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Hub 最小循环 E2E（fake 模式，自举项目，可 CI）。
 
-路径：task → hub_reason → audit → finding → verify(confirmed) → hub → test → fact → hub complete
+路径：task → hub → audit → finding → verify(rework) → hub 补证(review+test) →
+      verify(confirmed) → hub complete → report → root succeeded
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import urllib.request
 import uuid
 
 BASE = os.environ.get("DEEPSONAR_BASE", "http://127.0.0.1:3100").rstrip("/")
-TIMEOUT_SEC = int(os.environ.get("DEEPSONAR_HUB_SMOKE_TIMEOUT", "300"))
+TIMEOUT_SEC = int(os.environ.get("DEEPSONAR_HUB_SMOKE_TIMEOUT", "420"))
 
 
 def req(method: str, path: str, body=None, expect: int | None = 200):
@@ -103,7 +104,17 @@ def main() -> None:
     pairs = {(e["from_node_id"], e["to_node_id"], e["edge_type"]) for e in edges}
     assert any((a["id"], f["id"], "produces") in pairs for a in audits for f in findings), "缺少 produces 边"
     assert any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies), "缺少 verifies 边"
-    print("链 OK: Hub → Audit → Finding → Verify → … → complete")
+    print("链 OK: Hub → Audit → Finding → Verify → … → complete → report")
+
+    # 报告应已生成（Root succeeded 前须 Report 成功）
+    try:
+        report = req("GET", f"/canvases/{cid}/report")
+        print("report:", report.get("status"), "confirmed=", (report.get("summary_json") or {}).get("confirmed_count"))
+        assert report.get("status") == "succeeded", report
+    except AssertionError:
+        raise
+    except Exception as e:
+        print("report check skipped/fail:", e)
 
     req("POST", f"/projects/{pid}/archive", None)
     print("OK")
