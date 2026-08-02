@@ -505,6 +505,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       onRunReady: canvasId
         ? ({ sendMessage }) => subscribeCanvasUpdates(canvasId, jobId, sendMessage)
         : undefined,
+      // 协议完成门禁：mark_job_done 未到时由驱动层催促同一会话补齐（最多 3 次）
+      completionGate: () => Boolean(semanticState.done),
+      nudgeMessage: isHub
+        ? "你还没有通过平台工具提交本轮决策，只输出文本不算完成。请立即调用 submit_hub_decision（complete 或 intents 二选一），然后调用 mark_job_done 提交本轮摘要。"
+        : isVerify
+          ? "你还没有通过平台工具提交最终结论，只输出文本不算完成。请立即调用 mark_job_done，带上 summary 和 verdict（confirmed/false_positive/needs_human）。"
+          : "你还没有通过平台工具提交最终结果，只输出文本不算完成。请通过 emit_fact/emit_finding 提交发现（如有），然后调用 mark_job_done 提交最终摘要。",
       onProgress: (message) => {
         void emit("progress", { message }).catch(() => {});
       },

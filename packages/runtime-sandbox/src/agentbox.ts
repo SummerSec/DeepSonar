@@ -353,6 +353,13 @@ export interface RealAgentSpec {
   /** Run 建立后注册外部增量消息源；消息经 stdin stream-json 注入同一会话。 */
   onRunReady?: (control: { sendMessage(content: string): Promise<void> }) =>
     void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
+  /**
+   * 完成门禁：result 事件到达时调用。返回 false 表示协议要求的语义事件（如
+   * mark_job_done）还没齐，驱动层会用 nudgeMessage 催促同一会话继续，最多 3 次。
+   */
+  completionGate?: () => boolean;
+  /** 门禁未过时的催促消息（executor 按角色协议给出） */
+  nudgeMessage?: string;
   /** 流式进度回调（已节流） */
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
@@ -587,6 +594,13 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let exitCode = 0;
   let finalText = "";
   let runError: string | undefined;
+  let nudgesLeft = 3;
+  // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
+  const closeStdin = () => {
+    const raw = exec.raw as { stream?: { end?: () => void } } | undefined;
+    if (raw?.stream?.end) raw.stream.end();
+    else void exec.kill().catch(() => {});
+  };
   try {
     for await (const chunk of exec) {
       if (chunk.type === "stderr") {
@@ -616,7 +630,20 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             progressBuffer += e.delta as string;
           }
         });
-        if (outcome.finalText !== undefined) finalText = outcome.finalText;
+        if (outcome.finalText !== undefined) {
+          finalText = outcome.finalText;
+          // agent 常在调用 mark_job_done 后立即结束回合：先补一轮 drain 再查门禁
+          await drainSemanticEvents();
+          if (spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
+            nudgesLeft--;
+            await writeUserMessage(
+              spec.nudgeMessage ??
+                "协议要求的系统工具调用还没有完成。请立即通过平台 MCP 工具提交（不要只用文本描述），然后结束本轮。",
+            );
+          } else {
+            closeStdin();
+          }
+        }
         if (outcome.isError) runError = outcome.errorDetail ?? "claude 执行失败";
         const now = Date.now();
         if (progressBuffer.length > 0 && now - lastPush > 4000) {
@@ -635,7 +662,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
 
-  if (!runError && exitCode !== 0) {
+  // 结果事件已拿到后，exitCode 只反映我们主动关 stdin/杀进程，不再视为错误
+  if (!runError && exitCode !== 0 && finalText === "") {
     runError = `claude CLI 退出码 ${exitCode}${stderrTail.trim() ? `: ${stderrTail.trim().slice(-300)}` : ""}`;
   }
 
