@@ -255,6 +255,7 @@ CREATE TABLE role_configs (
   commands_json jsonb NOT NULL DEFAULT '[]',
   mcps_json jsonb NOT NULL DEFAULT '[]',
   subagents_json jsonb NOT NULL DEFAULT '[]',
+  platform_tools_json jsonb NOT NULL DEFAULT '{}',
   instructions_markdown text,
   runtime_image_key text,
   version int NOT NULL DEFAULT 1,

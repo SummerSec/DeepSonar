@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTROL_MCP_SERVER } from "../apps/scheduler/src/control-mcp.js";
 import { platformToolGuide } from "../apps/scheduler/src/platform-tools.js";
+import { resolvePlatformTools } from "../packages/shared-types/src/index.js";
 
 const workerGuide = platformToolGuide(["emit_progress", "emit_fact", "mark_job_done", "request_human"]);
 for (const expected of [
@@ -19,6 +20,19 @@ for (const expected of [
   "不要同时调用",
 ]) {
   if (!workerGuide.includes(expected)) throw new Error(`platform tool guide missing: ${expected}`);
+}
+
+const restrictedTools = resolvePlatformTools("explore", "role", {
+  emit_progress: false,
+  request_human: false,
+  mark_job_done: false,
+});
+if (restrictedTools.join(",") !== "emit_fact,mark_job_done") {
+  throw new Error(`unexpected restricted platform tools: ${restrictedTools.join(",")}`);
+}
+const restrictedGuide = platformToolGuide(restrictedTools);
+for (const disabled of ["emit_progress", "request_human"]) {
+  if (restrictedGuide.includes(disabled)) throw new Error(`disabled tool leaked into guide: ${disabled}`);
 }
 
 const eventFile = join(tmpdir(), `deepsonar-control-mcp-${randomUUID()}.jsonl`);

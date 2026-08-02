@@ -104,6 +104,12 @@ PUT body：
   "commands": [],
   "mcps": [],
   "subagents": [],
+  "platform_tools": {
+    "emit_progress": true,
+    "emit_fact": true,
+    "mark_job_done": true,
+    "request_human": false
+  },
   "instructions_markdown": "string | null",
   "runtime_image_key": "string | null",
   "credentials": [{ "credential_id": "uuid", "purpose": "llm" }],
@@ -112,13 +118,16 @@ PUT body：
 ```
 
 保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。
+
+`platform_tools` 只接受该角色合法的工具名；未声明的合法工具默认启用。所有角色的 `mark_job_done` 与 Hub 的 `submit_hub_decision` 是形成合法终态所必需的工具，不可关闭。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
+
 Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /role-configs/global | agents:read | 全局缺省清单（含 credentials / config_files） |
 | PUT | /role-configs/global/:roleId | agents:write | 全局 upsert（version +1） |
-| GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none |
+| GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none；`project_config` 返回实时完整项目覆盖 |
 | PUT | /projects/:id/role-configs/:roleId | agents:write | 项目覆盖；普通角色须已启用（409） |
 | DELETE | /projects/:id/role-configs/:roleId | agents:write | 删除覆盖，回落全局 |
 

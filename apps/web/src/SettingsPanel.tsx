@@ -375,7 +375,9 @@ export function SettingsPanel({
           <div className="mt-4 border-t border-white/[.05] pt-4">
             <RoleConfigEditor
               title={`${projectId ? "项目覆盖" : "全局缺省配置"} · ${r.name}`}
-              initial={globalCfg}
+              roleName={r.name}
+              roleKind={r.kind}
+              initial={projectId ? (projEntry?.project_config ?? globalCfg) : globalCfg}
               credentials={
                 projectId
                   ? credentials.filter((c) => c.project_id === null || c.project_id === projectId)
@@ -389,7 +391,7 @@ export function SettingsPanel({
             />
             {projectId && projEntry?.project_config_id && (
               <div className="mt-1 font-mono text-[12px] text-zinc-600">
-                已有项目覆盖（v{projEntry.project_config_version}）：表单以全局缺省预填，保存将整体替换现有覆盖。
+                已有项目覆盖（v{projEntry.project_config_version}）：表单已载入项目实时配置，保存将整体替换现有覆盖。
               </div>
             )}
           </div>
@@ -595,7 +597,7 @@ export function SettingsPanel({
                   {roleForm.id ? `编辑 ${roleForm.name}` : "新建自定义角色"}
                   {roleForm.id && roleForm.kind !== "role" && (
                     <span className="ml-2 rounded border border-ink-700 px-1 text-[11px] normal-case text-zinc-500">
-                      {roleForm.kind === "hub" ? "中枢" : "系统"}角色：仅可改职责描述
+                      {roleForm.kind === "hub" ? "中枢" : "系统"}角色：可改展示名、职责与运行配置，不可删除或修改 kind
                     </span>
                   )}
                 </span>
@@ -622,7 +624,6 @@ export function SettingsPanel({
                   <input
                     value={roleForm.title}
                     onChange={(e) => setRoleForm({ ...roleForm, title: e.target.value })}
-                    disabled={roleForm.id !== null && roleForm.kind !== "role"}
                     className={`${inputCls} disabled:opacity-50`}
                     placeholder="如 威胁建模"
                   />

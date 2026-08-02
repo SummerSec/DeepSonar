@@ -378,11 +378,13 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 | 层 | 位置 | 内容 |
 |----|------|------|
-| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、长期指令、env、模块、skill、command、MCP、subagent、可信镜像、Provider 配置文件与 Credential 引用 |
+| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关、可信镜像、Provider 配置文件与 Credential 引用 |
 | 决策 | 全局 RoleConfig + 项目 RoleConfig + `projects.config_json.rules` | 项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照；Executor 不读取旧配置或为缺失快照降级 |
 
 长期密钥不进入数据库明文字段、Job 快照或工作区文件。RoleConfig 的 `env_vars` 只能保存非敏感值；`env_keys` 经过服务端白名单；Credential 运行时换成短期 Job Token。
+
+平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权。`mark_job_done` 对所有角色、`submit_hub_decision` 对 Hub 是不可关闭的终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。
 
 ### 8.2 Git 模块源（skill_sources）
 

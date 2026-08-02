@@ -1,5 +1,7 @@
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
+import type { PlatformToolConfig } from "@deepsonar/shared-types";
+
 export interface Project {
   id: string;
   /** 可空：NULL = 纯本地项目（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md） */
@@ -258,6 +260,8 @@ export type RoleConfigInput = {
   commands: Record<string, unknown>[];
   mcps: Record<string, unknown>[];
   subagents: Record<string, unknown>[];
+  /** 本角色平台工具开关；未声明的合法工具默认启用。 */
+  platform_tools: PlatformToolConfig;
   instructions_markdown?: string | null;
   /** 只能引用服务端可信镜像目录，不是任意 OCI 地址 */
   runtime_image_key?: string | null;
@@ -281,6 +285,7 @@ export interface RoleConfigView {
   commands_json: Record<string, unknown>[];
   mcps_json: Record<string, unknown>[];
   subagents_json: Record<string, unknown>[];
+  platform_tools_json: PlatformToolConfig;
   instructions_markdown: string | null;
   runtime_image_key: string | null;
   version: number;
@@ -317,6 +322,8 @@ export interface ProjectRoleConfigEntry {
   global_config_version: number | null;
   /** project=项目覆盖 / global=全局缺省 / none=未配置 */
   config_source: "project" | "global" | "none";
+  /** 当前项目覆盖的实时完整配置；没有覆盖时为 null。 */
+  project_config: RoleConfigView | null;
 }
 
 // ---------- 任务报告（migration 0017，§8） ----------

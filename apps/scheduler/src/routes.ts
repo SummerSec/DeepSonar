@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import { PlatformToolName, allowedPlatformTools, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "./audit.js";
 import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
@@ -510,6 +511,7 @@ export function registerRoutes(app: FastifyInstance) {
     commands: z.array(z.record(z.string(), z.unknown())).default([]),
     mcps: z.array(z.record(z.string(), z.unknown())).default([]),
     subagents: z.array(z.record(z.string(), z.unknown())).default([]),
+    platform_tools: z.partialRecord(PlatformToolName, z.boolean()).default({}),
     instructions_markdown: z.string().max(100_000).nullish(),
     runtime_image_key: z.string().nullish(),
     credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).default([]),
@@ -519,6 +521,7 @@ export function registerRoutes(app: FastifyInstance) {
   async function validateRoleConfigBody(
     body: z.infer<typeof RoleConfigPutBody>,
     projectId: string | null,
+    role: { name: string; kind: "role" | "hub" | "system" },
   ): Promise<string | null> {
     const envErr = validateEnvVars(body.env_vars);
     if (envErr) return envErr;
@@ -527,6 +530,13 @@ export function registerRoutes(app: FastifyInstance) {
     }
     if (body.runtime_image_key && !config.images.isTrusted(body.runtime_image_key)) {
       return `runtime_image_key 不在服务端可信镜像目录: ${body.runtime_image_key}`;
+    }
+    const allowedTools = new Set<string>(allowedPlatformTools(role.name, role.kind));
+    for (const tool of Object.keys(body.platform_tools)) {
+      if (!allowedTools.has(tool)) return `角色 ${role.name} 不支持平台工具: ${tool}`;
+    }
+    for (const tool of requiredPlatformTools(role.kind)) {
+      if (body.platform_tools[tool] === false) return `终态必需平台工具不可关闭: ${tool}`;
     }
     for (const c of body.credentials) {
       const [cred] = await sql`SELECT id, project_id, status FROM credentials WHERE id = ${c.credential_id}`;
@@ -573,6 +583,7 @@ export function registerRoutes(app: FastifyInstance) {
         commands_json: body.commands as never,
         mcps_json: body.mcps as never,
         subagents_json: body.subagents as never,
+        platform_tools_json: body.platform_tools as never,
         instructions_markdown: body.instructions_markdown ?? null,
         runtime_image_key: body.runtime_image_key ?? null,
       };
@@ -645,7 +656,10 @@ export function registerRoutes(app: FastifyInstance) {
     const body = RoleConfigPutBody.parse(req.body);
     const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${roleId}`;
     if (!role) return reply.code(404).send({ error: "role not found" });
-    const err = await validateRoleConfigBody(body, null);
+    const err = await validateRoleConfigBody(body, null, {
+      name: role.name as string,
+      kind: role.kind as "role" | "hub" | "system",
+    });
     if (err) return reply.code(400).send({ error: err });
     const configId = await upsertRoleConfig(roleId, null, body);
     await audit(req, {
@@ -661,7 +675,7 @@ export function registerRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const [p] = await sql`SELECT id FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
-    return sql`
+    const rows = await sql`
       SELECT r.id AS role_id, r.name, r.title, r.kind, r.builtin,
              pc.id AS project_config_id, pc.version AS project_config_version,
              gc.id AS global_config_id, gc.version AS global_config_version,
@@ -672,6 +686,12 @@ export function registerRoutes(app: FastifyInstance) {
       LEFT JOIN role_configs pc ON pc.role_id = r.id AND pc.project_id = ${id}
       LEFT JOIN role_configs gc ON gc.role_id = r.id AND gc.project_id IS NULL
       ORDER BY r.kind, r.builtin DESC, r.name`;
+    return Promise.all(rows.map(async (row) => ({
+      ...row,
+      project_config: row.project_config_id
+        ? await roleConfigView(row.project_config_id as string)
+        : null,
+    })));
   });
 
   app.put("/projects/:id/role-configs/:roleId", async (req, reply) => {
@@ -687,7 +707,10 @@ export function registerRoutes(app: FastifyInstance) {
         return reply.code(409).send({ error: `角色 ${role.name} 未在本项目启用` });
       }
     }
-    const err = await validateRoleConfigBody(body, id);
+    const err = await validateRoleConfigBody(body, id, {
+      name: role.name as string,
+      kind: role.kind as "role" | "hub" | "system",
+    });
     if (err) return reply.code(400).send({ error: err });
     const configId = await upsertRoleConfig(roleId, id, body);
     await audit(req, {

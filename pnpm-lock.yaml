@@ -48,6 +48,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@deepsonar/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       '@fontsource-variable/noto-sans-sc':
         specifier: ^5.3.0
         version: 5.3.0
@@ -1082,7 +1085,7 @@ packages:
     os: [linux]
 
   '@rollup/rollup-openbsd-x64@4.62.3':
-    resolution: {integrity: sha512-ABVf3Q0RCu7NcyCCOZQI0pJ3GuSdfSl8EXcy88QtdceIMIoCUdeepsonarsJChZ64L9zVM2aJHjde1Bhn5uqSRcX9ySA==}
+    resolution: {integrity: sha512-ABVf3Q0RCu7NcyCCOZQI0pJ3GuSdfSl8EXcy88QtdceIMIoCUdfhsJChZ64L9zVM2aJHjde1Bhn5uqSRcX9ySA==}
     cpu: [x64]
     os: [openbsd]
 

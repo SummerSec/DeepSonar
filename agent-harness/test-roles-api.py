@@ -63,6 +63,7 @@ def main() -> None:
     assert all("mark_job_done" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
     assert all("request_human" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
     assert all("accepted event" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
+    assert all(c.get("platform_tools_json") == {} for c in global_configs), global_configs
     by_role = {c["role_name"]: c.get("instructions_markdown") or "" for c in global_configs}
     for role in ("explore", "analyze", "review", "test", "code"):
         assert "emit_fact" in by_role[role], role
@@ -111,28 +112,42 @@ def main() -> None:
     print("含自定义:", [(r["name"], r["enabled"]) for r in proles if r["enabled"]])
 
     # 6. 角色运行配置直接写 RoleConfig
+    config_body = {
+        "agent_cli": "claude-code",
+        "model": None,
+        "reasoning": None,
+        "env_keys": [],
+        "env_vars": {},
+        "modules": [],
+        "skills": [],
+        "commands": [],
+        "mcps": [],
+        "subagents": [],
+        "platform_tools": {
+            "emit_progress": False,
+            "emit_fact": True,
+            "mark_job_done": True,
+            "request_human": False,
+        },
+        "instructions_markdown": "输出必须包含威胁与证据的对应关系。",
+        "runtime_image_key": None,
+        "credentials": [],
+        "config_files": [],
+    }
     cfg = req(
         "PUT",
         f"/projects/{pid}/role-configs/{custom['id']}",
-        {
-            "agent_cli": "claude-code",
-            "model": None,
-            "reasoning": None,
-            "env_keys": [],
-            "env_vars": {},
-            "modules": [],
-            "skills": [],
-            "commands": [],
-            "mcps": [],
-            "subagents": [],
-            "instructions_markdown": "输出必须包含威胁与证据的对应关系。",
-            "runtime_image_key": None,
-            "credentials": [],
-            "config_files": [],
-        },
+        config_body,
     )
     assert cfg["role_id"] == custom["id"]
-    print("RoleConfig 已保存")
+    assert cfg["platform_tools_json"] == config_body["platform_tools"]
+    project_configs = req("GET", f"/projects/{pid}/role-configs")
+    custom_entry = next(c for c in project_configs if c["role_id"] == custom["id"])
+    assert custom_entry["project_config"]["platform_tools_json"] == config_body["platform_tools"]
+    invalid_body = {**config_body, "platform_tools": {**config_body["platform_tools"], "mark_job_done": False}}
+    code, _ = req("PUT", f"/projects/{pid}/role-configs/{custom['id']}", invalid_body, expect=None)
+    assert code == 400, f"关闭终态工具应被拒，得到 {code}"
+    print("RoleConfig 平台工具开关已保存，终态工具不可关闭:", code)
 
     # 7. 系统角色可修改职责但不可删除；kind=role 的角色（包括内置模板）走统一可删除策略
     verify = next(r for r in roles if r["name"] == "verify")

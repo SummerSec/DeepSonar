@@ -94,6 +94,49 @@ export const HubIntentPayload = z.object({
 });
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
 
+// ---------- DeepSonar 平台工具（RoleConfig 可按 Job 开关） ----------
+
+export const PlatformToolName = z.enum([
+  "emit_progress",
+  "emit_fact",
+  "emit_finding",
+  "submit_hub_decision",
+  "mark_job_done",
+  "request_human",
+]);
+export type PlatformToolName = z.infer<typeof PlatformToolName>;
+export type PlatformToolConfig = Partial<Record<PlatformToolName, boolean>>;
+
+/** 一个角色有资格启用的工具；未列出的工具即使配置为 true 也必须拒绝。 */
+export function allowedPlatformTools(
+  roleName: string,
+  roleKind: "role" | "hub" | "system",
+): PlatformToolName[] {
+  return [
+    "emit_progress",
+    ...(roleKind === "role" && roleName !== "audit" ? (["emit_fact"] as PlatformToolName[]) : []),
+    ...(roleName === "audit" ? (["emit_finding"] as PlatformToolName[]) : []),
+    ...(roleKind === "hub" ? (["submit_hub_decision"] as PlatformToolName[]) : []),
+    "mark_job_done",
+    "request_human",
+  ];
+}
+
+/** 关闭后 Job 无法形成合法终态的工具，配置层不可禁用。 */
+export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): PlatformToolName[] {
+  return roleKind === "hub" ? ["submit_hub_decision", "mark_job_done"] : ["mark_job_done"];
+}
+
+/** 空配置代表启用该角色全部合法工具；显式 false 才关闭可选工具。 */
+export function resolvePlatformTools(
+  roleName: string,
+  roleKind: "role" | "hub" | "system",
+  config: PlatformToolConfig,
+): PlatformToolName[] {
+  const required = new Set(requiredPlatformTools(roleKind));
+  return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name) || config[name] !== false);
+}
+
 // fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位
 export async function computeFingerprint(
   input: { title: string; location?: string; rule_id?: string },

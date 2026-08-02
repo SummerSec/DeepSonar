@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { EventEnvelope, FindingPayload } from "@deepsonar/shared-types";
+import {
+  resolvePlatformTools,
+  type EventEnvelope,
+  type FindingPayload,
+  type PlatformToolConfig,
+  type PlatformToolName,
+} from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
@@ -184,6 +190,8 @@ export interface AgentRuntimeSnapshot {
   role_description: string;
   /** RoleConfig 自定义的长期指令；任务内容不得写入这里。 */
   instructions_markdown: string | null;
+  /** 本 Job 实际授权的平台工具；由 RoleConfig 在创建 Job 时冻结。 */
+  platform_tools: PlatformToolName[];
   /** Provider 项目配置文件，随 Job 冻结后写入 /workspace。 */
   config_files: { path: string; content: string; content_sha256: string }[];
   role_config_id: string | null;
@@ -1050,10 +1058,16 @@ export async function resolveAgentSnapshotForJob(
     reasoningRaw === "low" || reasoningRaw === "medium" || reasoningRaw === "high" || reasoningRaw === "xhigh"
       ? reasoningRaw
       : null;
+  const roleKind = role.kind as "role" | "hub" | "system";
+  const platformTools = resolvePlatformTools(
+    roleName,
+    roleKind,
+    (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {},
+  );
 
   return {
     name: roleName,
-    role_kind: role.kind as "role" | "hub" | "system",
+    role_kind: roleKind,
     agent_cli: (cfg?.agent_cli as string) ?? config.runtime.agentProvider,
     model: (cfg?.model as string) ?? config.runtime.agentModel ?? null,
     reasoning,
@@ -1069,6 +1083,7 @@ export async function resolveAgentSnapshotForJob(
     subagents: (cfg?.subagents_json as unknown[]) ?? [],
     role_description: (role.description as string) ?? roleName,
     instructions_markdown: (cfg?.instructions_markdown as string) ?? null,
+    platform_tools: platformTools,
     config_files: configFiles as unknown as { path: string; content: string; content_sha256: string }[],
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,

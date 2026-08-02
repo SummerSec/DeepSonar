@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { runRealAgent } from "@deepsonar/runtime-sandbox";
-import { EventEnvelope, FindingPayload } from "@deepsonar/shared-types";
+import { EventEnvelope, FindingPayload, allowedPlatformTools, type PlatformToolName } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { ingestEvent, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
@@ -49,7 +49,14 @@ function jsonHash(value: unknown): string {
   return sha256(JSON.stringify(value ?? null));
 }
 
-function resultContract(isHub: boolean, isRole: boolean, isVerify: boolean, isAudit: boolean): string {
+function resultContract(
+  toolNames: PlatformToolName[],
+  isHub: boolean,
+  isRole: boolean,
+  isVerify: boolean,
+  isAudit: boolean,
+): string {
+  const enabled = new Set(toolNames);
   if (isHub) {
     return `调用 submit_hub_decision，参数只允许 complete 或 intents 二选一；随后调用 mark_job_done 提交本轮摘要。`;
   }
@@ -57,10 +64,14 @@ function resultContract(isHub: boolean, isRole: boolean, isVerify: boolean, isAu
     return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、false_positive、needs_human。`;
   }
   if (isRole) {
-    return `每得到一个新的、可验证事实就调用 emit_fact，可调用多次；执行结束后调用 mark_job_done。不要等到最后才批量上报事实。`;
+    return enabled.has("emit_fact")
+      ? `每得到一个新的、可验证事实就调用 emit_fact，可调用多次；执行结束后调用 mark_job_done。不要等到最后才批量上报事实。`
+      : `本 Job 已关闭 emit_fact；不要尝试提交事实。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。`;
   }
   if (isAudit) {
-    return `每确认一个有证据的安全问题就调用 emit_finding，可调用多次；执行结束后调用 mark_job_done。不要等到最后才批量上报 Finding。`;
+    return enabled.has("emit_finding")
+      ? `每确认一个有证据的安全问题就调用 emit_finding，可调用多次；执行结束后调用 mark_job_done。不要等到最后才批量上报 Finding。`
+      : `本 Job 已关闭 emit_finding；不要尝试提交 Finding。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。`;
   }
   return `执行结束后调用 mark_job_done 提交最终摘要。`;
 }
@@ -82,6 +93,8 @@ function instructionDocument(input: {
   allowEgress: boolean;
   contract: string;
   toolGuide: string;
+  enabledTools: string[];
+  disabledTools: string[];
 }): string {
   const custom = input.customInstructions?.trim();
   return `# DeepSonar Worker
@@ -123,14 +136,21 @@ function instructionDocument(input: {
 
 ${input.allowEgress ? "本任务允许访问外部网络；只访问完成任务必要的目标。" : "本任务禁止访问模型网关之外的网络；不得尝试 git clone、curl、浏览器访问或任何其他外部连接。"}
 
-## 动态系统工具与结果契约
+${custom ? `## 角色长期指令
+
+${custom}
+
+` : ""}## 动态系统工具与结果契约（本 Job 最终授权）
+
+- 已启用：${input.enabledTools.join(", ")}
+- 已关闭：${input.disabledTools.length > 0 ? input.disabledTools.join(", ") : "无"}
+- 只有“已启用”列表和 Agent CLI 实际显示的同名工具可以调用；长期指令中的工具示例不构成授权。
 
 ${input.contract}
 
 ${input.toolGuide}
 
 系统工具只提交提案和证据，真正的派生、记账与终态由调度器决定。不要依赖跨 Job 状态，每个 Worker 都是全新的独立沙箱。
-${custom ? `\n## 角色长期指令\n\n${custom}` : ""}
 `;
 }
 
@@ -150,15 +170,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const isHub = snapshot.role_kind === "hub";
   const isAudit = snapshot.name === "audit";
   const isRole = snapshot.role_kind === "role" && !isAudit;
-  const controlToolNames = [
-    "emit_progress",
-    ...(isRole ? ["emit_fact"] : []),
-    ...(isAudit ? ["emit_finding"] : []),
-    ...(isHub ? ["submit_hub_decision"] : []),
-    "mark_job_done",
-    "request_human",
-  ];
-  const contract = resultContract(isHub, isRole, isVerify, isAudit);
+  const controlToolNames = snapshot.platform_tools;
+  const allowedControlToolNames = allowedPlatformTools(snapshot.name, snapshot.role_kind);
+  const disabledControlToolNames = allowedControlToolNames.filter((name) => !controlToolNames.includes(name));
+  const contract = resultContract(controlToolNames, isHub, isRole, isVerify, isAudit);
   const toolGuide = platformToolGuide(controlToolNames);
   const cliName = snapshot.agent_cli;
   const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
@@ -279,6 +294,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     allowEgress,
     contract,
     toolGuide,
+    enabledTools: controlToolNames,
+    disabledTools: disabledControlToolNames,
   });
   const controlMcp = {
     name: CONTROL_MCP_NAME,
@@ -305,6 +322,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     subagents: { names: componentNames(snapshot.subagents), count: snapshot.subagents.length, sha256: jsonHash(snapshot.subagents) },
     provider_files: snapshot.config_files.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
     system_tools: controlToolNames,
+    disabled_system_tools: disabledControlToolNames,
     system_tool_guide: toolGuide,
     system_mcp: { name: CONTROL_MCP_NAME, script_sha256: sha256(CONTROL_MCP_SERVER) },
     result_contract: contract,
@@ -371,6 +389,18 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const onSemanticEvent = async (raw: Record<string, unknown>) => {
     const event = EventEnvelope.parse(raw);
     const eventId = event.event_id;
+    const toolForEvent: Record<string, PlatformToolName> = {
+      progress: "emit_progress",
+      fact: "emit_fact",
+      finding: "emit_finding",
+      hub_decision: "submit_hub_decision",
+      done: "mark_job_done",
+      human: "request_human",
+    };
+    const requiredTool = toolForEvent[event.type];
+    if (!controlToolNames.includes(requiredTool)) {
+      throw new Error(`本 Job 未启用平台工具 ${requiredTool}`);
+    }
     if (event.type === "progress") {
       const p = event.payload as { message?: unknown; percent?: unknown };
       if (typeof p.message !== "string" || !p.message.trim() || p.message.length > 2_000) {

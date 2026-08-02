@@ -1,4 +1,10 @@
 import { CaretDown, Check, FloppyDisk, Key, MagnifyingGlass, Plus, Trash, X } from "@phosphor-icons/react";
+import {
+  allowedPlatformTools,
+  requiredPlatformTools,
+  type PlatformToolConfig,
+  type PlatformToolName,
+} from "@deepsonar/shared-types";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type ProviderCredential,
@@ -25,6 +31,15 @@ const CONFIG_FILE_PATHS: Record<string, string> = {
   "open-code": ".opencode/config.json",
 };
 
+const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
+  emit_progress: { title: "过程进度", description: "允许 Worker 增量上报当前动作和完成百分比。" },
+  emit_fact: { title: "事实提交", description: "允许工作角色把新证据写成画布 Fact。" },
+  emit_finding: { title: "漏洞提交", description: "允许审计角色提交带严重级别的 Finding。" },
+  submit_hub_decision: { title: "Hub 决策", description: "允许 Hub 提交完成结论或下一批派发意图。" },
+  mark_job_done: { title: "正常完成", description: "提交 Job 最终摘要并形成合法终态。" },
+  request_human: { title: "请求人工", description: "遇到授权或高风险阻塞时结束本轮并请求人工介入。" },
+};
+
 // ---------- 表单状态 ----------
 
 interface EnvPair {
@@ -48,6 +63,7 @@ interface ConfigForm {
   commands: string;
   mcps: string;
   subagents: string;
+  platform_tools: PlatformToolConfig;
   config_content: string; // Provider 配置文件内容（路径按 agent_cli 固定）
 }
 
@@ -65,6 +81,7 @@ const EMPTY: ConfigForm = {
   commands: "[]",
   mcps: "[]",
   subagents: "[]",
+  platform_tools: {},
   config_content: "",
 };
 
@@ -86,6 +103,7 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     commands: JSON.stringify(cfg.commands_json ?? [], null, 2),
     mcps: JSON.stringify(cfg.mcps_json ?? [], null, 2),
     subagents: JSON.stringify(cfg.subagents_json ?? [], null, 2),
+    platform_tools: cfg.platform_tools_json ?? {},
     config_content: cfg.config_files[0]?.content ?? "",
   };
 }
@@ -126,6 +144,8 @@ function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources:
 
 export function RoleConfigEditor({
   title,
+  roleName,
+  roleKind,
   initial,
   credentials,
   sources,
@@ -136,6 +156,8 @@ export function RoleConfigEditor({
 }: {
   /** 表单标题（如「全局缺省配置 · explore」「项目覆盖 · verify」） */
   title: string;
+  roleName: string;
+  roleKind: "role" | "hub" | "system";
   /** 预填配置：项目覆盖时传全局配置做底，全局编辑时传现有全局配置 */
   initial: RoleConfigView | null | undefined;
   /** 可选 Credential（调用方已按项目边界过滤：全局=null 或本项目） */
@@ -149,6 +171,8 @@ export function RoleConfigEditor({
 }) {
   const [form, setForm] = useState<ConfigForm>(() => formOf(initial));
   const [error, setError] = useState<string | null>(null);
+  const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
+  const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
 
   const setPair = (i: number, patch: Partial<EnvPair>) =>
     setForm((f) => ({
@@ -178,6 +202,7 @@ export function RoleConfigEditor({
         commands: parseJsonArray(form.commands),
         mcps: parseJsonArray(form.mcps),
         subagents: parseJsonArray(form.subagents),
+        platform_tools: form.platform_tools,
         instructions_markdown: form.instructions_markdown.trim() || null,
         runtime_image_key: form.runtime_image_key.trim() || null,
         credentials: form.credential_id
@@ -287,6 +312,44 @@ export function RoleConfigEditor({
             <textarea value={form.instructions_markdown} onChange={(e) => setForm({ ...form, instructions_markdown: e.target.value })} rows={10} className={`${inputCls} resize-y`} placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。" />
             <p className="mt-1 text-[10px] leading-5 text-zinc-600">
               平台会自动补充工作区、prompt 输入、runtime-manifest、动态 skill / command / MCP / sub-agent、环境变量名称、网络边界、不可用内部接口和增量结果工具；这里仅维护该角色长期稳定的职责与方法。
+            </p>
+          </div>
+          <div>
+            <label className={labelCls}>平台工具</label>
+            <div className="flex flex-col gap-1.5">
+              {availablePlatformTools.map((tool) => {
+                const required = requiredPlatformToolSet.has(tool);
+                const enabled = required || form.platform_tools[tool] !== false;
+                const meta = PLATFORM_TOOL_META[tool];
+                return (
+                  <label
+                    key={tool}
+                    className="flex cursor-pointer items-start gap-2.5 rounded-md border border-ink-700 bg-ink-850/70 px-3 py-2.5 transition-colors hover:border-ink-600"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      disabled={required}
+                      onChange={(event) => setForm((current) => ({
+                        ...current,
+                        platform_tools: { ...current.platform_tools, [tool]: event.target.checked },
+                      }))}
+                      className="mt-1 accent-acc-500"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2 text-[13px] text-zinc-200">
+                        <code className="font-mono text-acc-300">{tool}</code>
+                        <span>{meta.title}</span>
+                        {required && <em className="rounded bg-acc-500/10 px-1.5 py-0.5 font-mono text-[9px] not-italic text-acc-300">终态必需</em>}
+                      </span>
+                      <small className="mt-0.5 block text-[11px] leading-5 text-zinc-600">{meta.description}</small>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-[10px] leading-5 text-zinc-600">
+              保存后从下一 Job 起生效并冻结到快照；关闭的工具不会注入 MCP，也不会出现在动态 AGENTS.md、CLAUDE.md 和运行清单的可用列表中。
             </p>
           </div>
         </section>

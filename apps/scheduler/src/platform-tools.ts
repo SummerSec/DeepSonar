@@ -42,9 +42,11 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
 export function platformToolGuide(toolNames: string[]): string {
+  const enabled = new Set(toolNames);
+  const incremental = ["emit_progress", "emit_fact", "emit_finding"].filter((name) => enabled.has(name));
   return [
     "调用规则：直接调用当前 Agent CLI 工具列表中的同名 MCP 工具，并传入 JSON 对象；不要用 shell、curl 或手写 `.deepsonar/control-events.jsonl` 代替工具调用。成功响应会返回 `accepted event <id>`；收到 `isError` 时修正参数后重试，不得把失败调用当作已上报。",
-    "生命周期：`emit_progress` 和角色语义工具可增量调用；正常完成以一次 `mark_job_done` 结束，人工阻塞以一次 `request_human` 结束，二者不要同时调用。平台收到事件后负责实时入库、画布更新、派生与终态处理。",
+    `生命周期：${incremental.length > 0 ? `${incremental.map((name) => `\`${name}\``).join("、")} 可增量调用；` : ""}正常完成以一次 \`mark_job_done\` 结束${enabled.has("request_human") ? "，人工阻塞以一次 `request_human` 结束，二者不要同时调用" : ""}。平台收到事件后负责实时入库、画布更新、派生与终态处理。`,
     ...toolNames.map((name) => PLATFORM_TOOL_USAGE[name]).filter((entry): entry is string => Boolean(entry)),
   ].join("\n\n");
 }
