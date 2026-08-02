@@ -74,7 +74,7 @@ COPY --from=jdk17 /opt/java/openjdk /opt/deepsonar/jdks/17
 COPY --from=jdk21 /opt/java/openjdk /opt/deepsonar/jdks/21
 
 RUN set -eu; \
-    test "$(uv --version)" = "uv ${UV_VERSION}"; \
+    uv --version | grep -Eq "^uv ${UV_VERSION}([[:space:]]|$)"; \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install 3.10.20 3.11.15 3.12.13 3.13.14; \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install --default 3.14.6; \
     uv cache clean; \
