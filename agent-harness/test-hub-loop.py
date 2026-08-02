@@ -106,15 +106,10 @@ def main() -> None:
     assert any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies), "缺少 verifies 边"
     print("链 OK: Hub → Audit → Finding → Verify → … → complete → report")
 
-    # 报告应已生成（Root succeeded 前须 Report 成功）
-    try:
-        report = req("GET", f"/canvases/{cid}/report")
-        print("report:", report.get("status"), "confirmed=", (report.get("summary_json") or {}).get("confirmed_count"))
-        assert report.get("status") == "succeeded", report
-    except AssertionError:
-        raise
-    except Exception as e:
-        print("report check skipped/fail:", e)
+    # 报告应已生成（Root succeeded 前须 Report 成功）；任何失败直接 smoke fail
+    report = req("GET", f"/canvases/{cid}/report")
+    print("report:", report.get("status"), "confirmed=", (report.get("summary_json") or {}).get("confirmed_count"))
+    assert report.get("status") == "succeeded", report
 
     req("POST", f"/projects/{pid}/archive", None)
     print("OK")

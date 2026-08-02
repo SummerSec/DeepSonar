@@ -389,7 +389,6 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
     SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId}`;
   if (existing?.status === "succeeded") return { dispatched: false, reason: "already_succeeded" };
   if (existing?.status === "generating" || existing?.status === "pending") {
-    // 若绑定 job 仍活跃则跳过
     if (existing.report_job_id) {
       const [j] = await tx`SELECT status FROM jobs WHERE id = ${existing.report_job_id as string}`;
       if (j && ["pending", "claimed", "provisioning", "running"].includes(j.status as string)) {
@@ -408,61 +407,50 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
     return { dispatched: false, reason: "no_report_role" };
   }
 
+  // 显式创建可运行 Report Job：持有 ingress 的旧终态 Job 先 retire，再 INSERT（不用 ON CONFLICT DO NOTHING 绑回 failed Job）
   const ingressKey = `report:${canvasId}`;
-  let reportJobId: string | null = null;
-  try {
-    const [job] = await tx`
-      INSERT INTO jobs ${tx({
-        project_id: projectId,
-        canvas_id: canvasId,
-        agent_snapshot_json: snapshot as never,
-        type: "report",
-        priority: 50,
-        ingress_key: ingressKey,
-        payload_json: { kind: "task_report" } as never,
-        timeout_sec: rules.auditTimeoutSec,
-        followup_depth: 0,
-      })}
-      ON CONFLICT DO NOTHING
-      RETURNING id`;
-    // ON CONFLICT on ingress_key partial unique needs explicit - postgres.js uses constraint
-    reportJobId = (job?.id as string) ?? null;
-  } catch {
-    // 唯一冲突
-    const [existJob] = await tx`
-      SELECT id, status FROM jobs
-      WHERE project_id = ${projectId} AND ingress_key = ${ingressKey}
-      LIMIT 1`;
-    if (existJob && !["failed", "cancelled", "timeout", "orphan"].includes(existJob.status as string)) {
+  const [held] = await tx`
+    SELECT id, status FROM jobs
+    WHERE project_id = ${projectId} AND ingress_key = ${ingressKey}
+    LIMIT 1`;
+  if (held) {
+    if (["pending", "claimed", "provisioning", "running"].includes(held.status as string)) {
       return { dispatched: false, reason: "report_job_exists" };
     }
-    // 允许失败后重建：先清旧 ingress 再插
-    if (existJob) {
-      await tx`UPDATE jobs SET ingress_key = ${`${ingressKey}:retired:${existJob.id}`} WHERE id = ${existJob.id as string}`;
-    }
-    const [job] = await tx`
-      INSERT INTO jobs ${tx({
-        project_id: projectId,
-        canvas_id: canvasId,
-        agent_snapshot_json: snapshot as never,
-        type: "report",
-        priority: 50,
-        ingress_key: ingressKey,
-        payload_json: { kind: "task_report" } as never,
-        timeout_sec: rules.auditTimeoutSec,
-        followup_depth: 0,
-      })}
-      RETURNING id`;
-    reportJobId = job.id as string;
+    // failed/timeout/cancelled/orphan/succeeded 残留键：释放后重建
+    await tx`
+      UPDATE jobs SET ingress_key = ${`${ingressKey}:retired:${held.id}`}
+      WHERE id = ${held.id as string}`;
   }
 
-  if (!reportJobId) {
-    const [existJob] = await tx`
-      SELECT id FROM jobs
-      WHERE project_id = ${projectId} AND ingress_key = ${ingressKey}
-      LIMIT 1`;
-    reportJobId = (existJob?.id as string) ?? null;
-  }
+  // 派发前冻结确定性输入，供 Report Agent 消费
+  const reportInput = await buildReportInput(canvasId, tx as unknown as typeof sql);
+  const dir = reportDir(canvasId);
+  await mkdir(dir, { recursive: true });
+  const inputPath = path.join(dir, "report-input.json");
+  await writeFile(inputPath, JSON.stringify(reportInput, null, 2), "utf8");
+  const inputUri = path.posix.join("reports", path.basename(dir), "report-input.json");
+
+  const [job] = await tx`
+    INSERT INTO jobs ${tx({
+      project_id: projectId,
+      canvas_id: canvasId,
+      agent_snapshot_json: snapshot as never,
+      type: "report",
+      priority: 50,
+      ingress_key: ingressKey,
+      payload_json: {
+        kind: "task_report",
+        report_input_uri: inputUri,
+        findings_total: reportInput.statistics.findings_total,
+        confirmed_count: reportInput.statistics.confirmed_count,
+        needs_human_count: reportInput.statistics.needs_human_count,
+      } as never,
+      timeout_sec: rules.auditTimeoutSec,
+      followup_depth: 0,
+    })}
+    RETURNING id`;
+  const reportJobId = job?.id as string | undefined;
   if (!reportJobId) return { dispatched: false, reason: "insert_failed" };
 
   if (existing) {
@@ -556,13 +544,22 @@ export async function finalizeReportJob(
     agent_summary: opts.summary ?? null,
     generated_at: new Date().toISOString(),
   };
-  const markdown = (opts.markdown?.trim() || opts.summary?.trim() || defaultMarkdown(input)).trim();
-  if (!markdown.includes("已确认") && !markdown.includes("确认") && input.findings.length > 0) {
-    // 宽松校验：至少是非空报告
-  }
-  if (markdown.length < 20) {
-    await finalizeReportJob(tx, jobId, { failed: true, error: "report markdown too short" });
-    return;
+  // Agent summary 作 Markdown；覆盖不全或过短时回退确定性模板（不因文笔失败而丢报告）
+  let markdown = (opts.markdown?.trim() || opts.summary?.trim() || "").trim();
+  const coverageOk =
+    input.findings.length === 0 ||
+    input.findings.every(
+      (f) =>
+        markdown.includes(f.id) ||
+        markdown.includes(f.title) ||
+        (f.verify_status === "confirmed" && markdown.includes("已确认")) ||
+        (f.verify_status === "needs_human" && (markdown.includes("人工") || markdown.includes("待"))),
+    );
+  if (markdown.length < 20 || !coverageOk) {
+    console.warn(
+      `[report] job ${jobId} markdown 覆盖不足或过短，回退确定性模板 (len=${markdown.length}, coverageOk=${coverageOk})`,
+    );
+    markdown = defaultMarkdown(input);
   }
 
   const sarif = buildSarifFromConfirmed(input);
@@ -630,25 +627,67 @@ export async function getTaskReportById(id: string) {
   return row ?? null;
 }
 
-/** 显式重试失败报告 */
+/**
+ * 显式重试失败报告。
+ * - 已 succeeded：幂等拒绝，**绝不**降级 Root
+ * - 仅 failed（或 generating 但 Job 已死）可重试：retire 旧 ingress 后由 maybeDispatchReport 新建 Job
+ */
 export async function retryReport(canvasId: string): Promise<{ ok: boolean; reason?: string }> {
   return sql.begin(async (txRaw) => {
     const tx = txRaw as unknown as Tx;
+    const [report] = await tx`
+      SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId} FOR UPDATE`;
+    if (!report) return { ok: false, reason: "no_report" };
+    if (report.status === "succeeded") {
+      return { ok: false, reason: "already_succeeded" };
+    }
+
     const [root] = await tx`
       SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
-    if (!root || !["analysis_complete", "reporting"].includes(root.status as string)) {
-      // 允许从 succeeded 以外、已 analysis 过的状态重试
-      if (root?.status === "succeeded") {
-        await tx`
-          UPDATE canvas_nodes SET status = 'analysis_complete', updated_at = now()
-          WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
-      } else if (!root || root.status !== "analysis_complete") {
-        return { ok: false, reason: `root_status:${root?.status}` };
-      }
+    if (!root) return { ok: false, reason: "no_root" };
+    // 成功任务禁止因 retry 降级
+    if (root.status === "succeeded") {
+      return { ok: false, reason: "root_already_succeeded" };
     }
+    if (!["analysis_complete", "reporting"].includes(root.status as string)) {
+      return { ok: false, reason: `root_status:${root.status}` };
+    }
+
+    // 仅 failed，或 generating 但绑定 Job 已终态失败，才允许重试
+    if (report.status === "generating" || report.status === "pending") {
+      if (report.report_job_id) {
+        const [j] = await tx`SELECT status FROM jobs WHERE id = ${report.report_job_id as string}`;
+        if (j && ["pending", "claimed", "provisioning", "running"].includes(j.status as string)) {
+          return { ok: false, reason: "report_in_flight" };
+        }
+      }
+    } else if (report.status !== "failed") {
+      return { ok: false, reason: `report_status:${report.status}` };
+    }
+
+    // 释放旧 report job 的 ingress，确保后续 INSERT 能建新 pending Job
+    const ingressKey = `report:${canvasId}`;
+    const [held] = await tx`
+      SELECT id, status FROM jobs
+      WHERE ingress_key = ${ingressKey}
+      LIMIT 1`;
+    if (held && !["pending", "claimed", "provisioning", "running"].includes(held.status as string)) {
+      await tx`
+        UPDATE jobs SET ingress_key = ${`${ingressKey}:retired:${held.id}`}
+        WHERE id = ${held.id as string}`;
+    }
+
     await tx`
       UPDATE task_reports SET status = 'pending', error = null, updated_at = now()
-      WHERE canvas_id = ${canvasId} AND status = 'failed'`;
+      WHERE canvas_id = ${canvasId}`;
+
+    // Root 保持 analysis_complete，便于 maybeDispatchReport 入队
+    if (root.status === "reporting") {
+      await tx`
+        UPDATE canvas_nodes SET status = 'analysis_complete', updated_at = now()
+        WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
+    }
+
     const r = await maybeDispatchReport(tx, canvasId);
     return { ok: r.dispatched, reason: r.reason };
   });

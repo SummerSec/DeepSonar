@@ -801,15 +801,15 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         finding_id?: string;
         missing_evidence?: string[];
       };
-      const hubFollowup = [
-        "confirmed_finding",
-        "risk_acceptance_followup",
-        "human_comment",
-        "verify_rework",
-        "verify_failed",
-      ].includes(trigger.kind ?? "");
+      // verify_rework/verify_failed 补证不得 hub_followup：否则每个补证成功都会 force Hub，
+      // 与「全部补证终态后 maybeReverifyAfterFollowup」冲突。
+      const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
+        trigger.kind ?? "",
+      );
       const { buildVerificationFollowupPayload } = await import("./verify.js");
       const verificationFollowup = buildVerificationFollowupPayload(trigger, it.from);
+      // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
+      const applyHubFollowup = hubFollowup && !verificationFollowup;
       const [roleJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: job.project_id as string,
@@ -823,7 +823,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
               prompt: it.prompt.trim(),
               from: it.from ?? [],
             },
-            ...(hubFollowup ? { hub_followup: true } : {}),
+            ...(applyHubFollowup ? { hub_followup: true } : {}),
             ...(verificationFollowup ? { verification_followup: verificationFollowup } : {}),
           } as never,
           timeout_sec: rules.auditTimeoutSec,
@@ -937,7 +937,15 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   let hubSourceNodeIds: string[] = [];
   let hubTrigger: Record<string, unknown> | undefined;
   const completedPayload = (job?.payload_json ?? {}) as Record<string, unknown>;
-  if (completedPayload.hub_followup === true && job?.type !== "verify_finding") {
+  const isVerificationFollowup = Boolean(
+    (completedPayload.verification_followup as { finding_id?: string } | undefined)?.finding_id,
+  );
+  // 补证 Job 禁止 hub_followup force；由 maybeReverifyAfterFollowup 统一收口
+  if (
+    completedPayload.hub_followup === true &&
+    job?.type !== "verify_finding" &&
+    !isVerificationFollowup
+  ) {
     forceHubReview = true;
     hubTrigger = { kind: "risk_acceptance_followup" };
   }
@@ -956,8 +964,8 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
       hubTrigger = closed.hubTrigger;
       hubSourceNodeIds = closed.sourceNodeIds ?? [];
     }
-  } else if (status === "succeeded" && job) {
-    // 补证 followup 结束后自动再验
+  } else if (job && isVerificationFollowup) {
+    // 补证成功或失败：等同组全部终态后再验 / 再回弹（不 force Hub）
     const { maybeReverifyAfterFollowup } = await import("./verify.js");
     await maybeReverifyAfterFollowup(tx, job);
   }
@@ -1199,6 +1207,11 @@ export async function maybeTriggerHub(
     WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
   if (count >= rules.maxHubRounds) {
     console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
+    // 护栏耗尽：收口未完成 Finding，禁止永久 pending 堵死 Report
+    const { settleCanvasFindingsAtGuardrail } = await import("./verify.js");
+    await settleCanvasFindingsAtGuardrail(tx, canvasId, "max_hub_rounds").catch((e) =>
+      console.error(`[hub] settle findings at maxHubRounds failed:`, e),
+    );
     return;
   }
 

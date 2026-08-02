@@ -4,7 +4,7 @@
  *
  * 注意：通过动态 import("./core.js") 访问 core，避免与 core → verify 形成静态环。
  */
-import type { VerificationEvidence } from "@deepsonar/shared-types";
+import { VerificationEvidence, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
 
 type Tx = typeof sql;
@@ -36,58 +36,75 @@ export interface EvidenceSnapshot {
   reason?: string;
 }
 
-/** 收集绑定到 Finding 的合格 review/test 证据节点（排除原始 Finding Job）。 */
+const VALID_OUTCOMES = new Set(["supports", "refutes", "inconclusive"]);
+
+/**
+ * 收集绑定到 Finding 的合格 review/test 证据节点。
+ * - 排除原始 Finding Job 与自证
+ * - **仅计来源 Job status=succeeded**（失败/timeout 半成品不计）
+ * - outcome 必须是 supports|refutes|inconclusive
+ */
 export async function collectEvidenceSnapshot(
   tx: Tx,
   findingId: string,
   originJobId: string | null,
 ): Promise<EvidenceSnapshot> {
   const nodes = await tx`
-    SELECT n.id, n.job_id, n.body_json, n.title, j.type AS job_type
+    SELECT n.id, n.job_id, n.body_json, n.title, j.type AS job_type, j.status AS job_status
     FROM canvas_nodes n
-    LEFT JOIN jobs j ON j.id = n.job_id
+    JOIN jobs j ON j.id = n.job_id
     WHERE n.node_type = 'fact'
       AND n.body_json ? 'verification'
-      AND n.body_json->'verification'->>'finding_id' = ${findingId}`;
+      AND n.body_json->'verification'->>'finding_id' = ${findingId}
+      AND j.status = 'succeeded'`;
 
   const review: Array<Record<string, unknown>> = [];
   const test: Array<Record<string, unknown>> = [];
   const conflicting: string[] = [];
 
   for (const n of nodes) {
-    const ver = ((n.body_json as Record<string, unknown>)?.verification ?? {}) as Record<string, unknown>;
-    const kind = String(ver.evidence_kind ?? "");
-    const outcome = String(ver.outcome ?? "");
+    const verRaw = ((n.body_json as Record<string, unknown>)?.verification ?? {}) as Record<string, unknown>;
+    const kind = String(verRaw.evidence_kind ?? "");
+    const outcome = String(verRaw.outcome ?? "");
     const jobId = (n.job_id as string | null) ?? null;
     // 同一 Job 自证 / 原始 Finding Job 产出不计
     if (!jobId || (originJobId && jobId === originJobId)) continue;
+    // 非法 outcome 不计（不再用 !== inconclusive 放宽）
+    if (!VALID_OUTCOMES.has(outcome)) continue;
 
     const base = {
       node_id: n.id as string,
       job_id: jobId,
       job_type: n.job_type as string | null,
+      job_status: n.job_status as string,
       outcome,
-      subject_revision: ver.subject_revision ?? null,
-      steps: ver.steps ?? null,
-      expected: ver.expected ?? null,
-      actual: ver.actual ?? null,
-      artifact_refs: ver.artifact_refs ?? null,
+      subject_revision: verRaw.subject_revision ?? null,
+      steps: verRaw.steps ?? null,
+      expected: verRaw.expected ?? null,
+      actual: verRaw.actual ?? null,
+      artifact_refs: verRaw.artifact_refs ?? null,
+      limitations: verRaw.limitations ?? null,
+      environment: verRaw.environment ?? null,
       title: n.title as string,
+      description: ((n.body_json as Record<string, unknown>)?.description as string) ?? null,
     };
 
-    if (kind === "review" && outcome !== "inconclusive") {
+    if (kind === "review") {
+      // review：仅 supports/refutes 计入确认门槛；inconclusive 忽略
+      if (outcome === "inconclusive") continue;
       if (outcome === "refutes") conflicting.push(n.id as string);
-      review.push(base);
+      if (outcome === "supports" || outcome === "refutes") review.push(base);
     } else if (kind === "test") {
-      const steps = Array.isArray(ver.steps) ? ver.steps : [];
-      const hasRevision = typeof ver.subject_revision === "string" && ver.subject_revision.trim().length > 0;
+      const steps = Array.isArray(verRaw.steps) ? verRaw.steps : [];
+      const hasRevision = typeof verRaw.subject_revision === "string" && verRaw.subject_revision.trim().length > 0;
       const hasActual =
-        (typeof ver.actual === "string" && ver.actual.trim().length > 0) ||
-        (Array.isArray(ver.artifact_refs) && ver.artifact_refs.length > 0);
+        (typeof verRaw.actual === "string" && verRaw.actual.trim().length > 0) ||
+        (Array.isArray(verRaw.artifact_refs) && verRaw.artifact_refs.length > 0);
       const hasSteps = steps.length > 0;
-      const hasExpected = typeof ver.expected === "string" && ver.expected.trim().length > 0;
-      // test 必须字段完整才计为合格
+      const hasExpected = typeof verRaw.expected === "string" && verRaw.expected.trim().length > 0;
+      // test 必须字段完整才计为合格（subject_revision 仅要求非空可审计，不强绑任务冻结 commit）
       if (!hasRevision || !hasSteps || !hasExpected || !hasActual) continue;
+      if (outcome === "inconclusive") continue;
       if (outcome === "refutes") conflicting.push(n.id as string);
       if (outcome === "supports" || outcome === "refutes") test.push(base);
     }
@@ -266,24 +283,60 @@ export async function evaluateFollowup(
 ): Promise<void> {
   const { rulesForProject } = await core();
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
-  if ((job.followup_depth as number) >= rules.maxFollowupDepth) return;
+  const canvasId = (job.canvas_id as string) ?? null;
+  const findingId = finding.id as string;
+
+  if ((job.followup_depth as number) >= rules.maxFollowupDepth) {
+    await markFindingNeedsHuman(tx, findingId, "max_followup_depth", canvasId);
+    return;
+  }
 
   const [{ count }] = await tx<[{ count: number }]>`
     SELECT COUNT(*)::int AS count FROM jobs WHERE parent_job_id = ${job.id as string}`;
   if (count >= rules.maxFollowupsPerJob) {
     console.warn(`[verify] job ${job.id} followup 超过上限 ${rules.maxFollowupsPerJob}`);
+    await markFindingNeedsHuman(tx, findingId, "max_followups_per_job", canvasId);
     return;
   }
 
   await createVerifyRound(tx, {
     projectId: job.project_id as string,
-    canvasId: (job.canvas_id as string) ?? null,
+    canvasId,
     finding,
     parentJobId: job.id as string,
     followupDepth: (job.followup_depth as number) + 1,
     priorityBase: (job.priority as number) ?? 0,
     reason: "finding_created",
   });
+}
+
+/**
+ * 护栏耗尽（maxHubRounds 等）：把画布上仍 pending/verifying 的 Finding 统一收口为 needs_human，
+ * 避免永久 pending 堵死 complete/report。
+ */
+export async function settleCanvasFindingsAtGuardrail(
+  tx: Tx,
+  canvasId: string,
+  reason: string,
+): Promise<{ settled: number }> {
+  const rows = await tx`
+    SELECT f.id, f.node_id, f.verify_status
+    FROM findings f
+    JOIN jobs j ON j.id = f.job_id
+    WHERE j.canvas_id = ${canvasId}
+      AND f.verify_status IN ('pending', 'verifying', 'false_positive')`;
+  for (const f of rows) {
+    // 关闭未结束的 round
+    await tx`
+      UPDATE finding_verification_rounds SET
+        status = 'needs_human',
+        final_outcome = 'needs_human',
+        error = ${reason},
+        finished_at = COALESCE(finished_at, now())
+      WHERE finding_id = ${f.id as string} AND status IN ('pending', 'running')`;
+    await markFindingNeedsHuman(tx, f.id as string, reason, canvasId);
+  }
+  return { settled: rows.length };
 }
 
 export interface CloseVerifyResult {
@@ -535,7 +588,16 @@ export async function maybeReverifyAfterFollowup(
     JSON.stringify(evidence.review.map((r) => r.node_id).sort()) +
     JSON.stringify(evidence.test.map((t) => t.node_id).sort());
 
+  const { rulesForProject } = await core();
+  const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
+  const attempt = Number(prev?.attempt ?? 0);
+
+  // 无增量证据：若已达验证轮次上限 → needs_human；否则 force Hub 说明无新证据
   if (prev && prevSnap === curSnap && evidence.missing.length > 0) {
+    if (attempt >= rules.maxVerificationRounds) {
+      await markFindingNeedsHuman(tx, findingId, "max_verification_rounds_no_new_evidence", canvasId);
+      return;
+    }
     await clearAutoStopped(tx, canvasId);
     const { maybeTriggerHub } = await core();
     await maybeTriggerHub(
@@ -563,7 +625,7 @@ export async function maybeReverifyAfterFollowup(
     return;
   }
 
-  await createVerifyRound(tx, {
+  const created = await createVerifyRound(tx, {
     projectId: job.project_id as string,
     canvasId,
     finding,
@@ -572,6 +634,8 @@ export async function maybeReverifyAfterFollowup(
     priorityBase: (job.priority as number) ?? 0,
     reason: "followup_evidence_ready",
   });
+  // createVerifyRound 在达上限时已 mark needs_human
+  void created;
 }
 
 /** Hub 派发的补证 intent：冻结 verification_followup 绑定。 */
@@ -597,23 +661,33 @@ export function buildVerificationFollowupPayload(
   };
 }
 
-/** 接受结构化验证证据 fact：校验绑定后写入 body_json 与边。 */
+/**
+ * 接受结构化验证证据 fact：Zod 校验 + 绑定校验后写入 body_json 与边。
+ * 非法 verification 字段被忽略（仍保留普通 fact description）。
+ */
 export async function attachVerificationEvidence(
   tx: Tx,
   job: Record<string, unknown>,
   nodeId: string,
   canvasId: string,
-  verification: VerificationEvidence,
+  verification: unknown,
 ): Promise<boolean> {
+  const parsed = VerificationEvidence.safeParse(verification);
+  if (!parsed.success) {
+    console.warn(`[verify] ignore invalid verification on job ${String(job.id)}:`, parsed.error.flatten());
+    return false;
+  }
+  const ver: VerificationEvidenceType = parsed.data;
+
   const payload = (job.payload_json ?? {}) as Record<string, unknown>;
   const vf = payload.verification_followup as { finding_id?: string } | undefined;
-  if (!vf?.finding_id || vf.finding_id !== verification.finding_id) {
+  if (!vf?.finding_id || vf.finding_id !== ver.finding_id) {
     // 无绑定或 finding 不匹配：忽略验证字段，当作普通 fact
     return false;
   }
 
   const [finding] = await tx`
-    SELECT id, node_id, project_id FROM findings WHERE id = ${verification.finding_id}`;
+    SELECT id, node_id, project_id FROM findings WHERE id = ${ver.finding_id}`;
   if (!finding?.node_id) return false;
 
   // 确认 finding 属于当前画布
@@ -621,21 +695,21 @@ export async function attachVerificationEvidence(
     SELECT canvas_id FROM canvas_nodes WHERE id = ${finding.node_id as string}`;
   if (!fn || fn.canvas_id !== canvasId) return false;
 
-  const edgeType = verification.evidence_kind === "review" ? "reviewed_by" : "tested_by";
+  const edgeType = ver.evidence_kind === "review" ? "reviewed_by" : "tested_by";
   await tx`
     UPDATE canvas_nodes
     SET body_json = body_json || ${tx.json({
       verification: {
-        finding_id: verification.finding_id,
-        evidence_kind: verification.evidence_kind,
-        outcome: verification.outcome,
-        subject_revision: verification.subject_revision,
-        environment: verification.environment ?? null,
-        steps: verification.steps ?? [],
-        expected: verification.expected ?? null,
-        actual: verification.actual ?? null,
-        artifact_refs: verification.artifact_refs ?? [],
-        limitations: verification.limitations ?? [],
+        finding_id: ver.finding_id,
+        evidence_kind: ver.evidence_kind,
+        outcome: ver.outcome,
+        subject_revision: ver.subject_revision,
+        environment: ver.environment ?? null,
+        steps: ver.steps ?? [],
+        expected: ver.expected ?? null,
+        actual: ver.actual ?? null,
+        artifact_refs: ver.artifact_refs ?? [],
+        limitations: ver.limitations ?? [],
         source_job_id: String(job.id),
         source_role: String(job.type),
       },

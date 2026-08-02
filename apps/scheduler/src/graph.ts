@@ -77,13 +77,18 @@ export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapsho
     if (body.severity) lines.push(`    ${kv("severity", body.severity)}`);
     if (body.location) lines.push(`    ${kv("location", body.location)}`);
     if (body.summary) lines.push(`    ${kv("summary", String(body.summary).slice(0, 400))}`);
-    // 验证证据节点摘要
+    // 验证证据节点：输出硬门相关完整字段（steps/expected/actual），便于 Hub/Verify 读图
     const ver = body.verification as Record<string, unknown> | undefined;
     if (ver) {
       lines.push(`    ${kv("finding_id", ver.finding_id)}`);
       lines.push(`    ${kv("evidence_kind", ver.evidence_kind)}`);
       lines.push(`    ${kv("outcome", ver.outcome)}`);
       if (ver.subject_revision) lines.push(`    ${kv("subject_revision", ver.subject_revision)}`);
+      if (ver.environment) lines.push(`    ${kv("environment", ver.environment)}`);
+      if (ver.steps) lines.push(`    ${kv("steps", ver.steps)}`);
+      if (ver.expected) lines.push(`    ${kv("expected", String(ver.expected).slice(0, 800))}`);
+      if (ver.actual) lines.push(`    ${kv("actual", String(ver.actual).slice(0, 800))}`);
+      if (ver.artifact_refs) lines.push(`    ${kv("artifact_refs", ver.artifact_refs)}`);
       if (ver.limitations) lines.push(`    ${kv("limitations", ver.limitations)}`);
     }
     // Finding 节点：输出验证轮次与缺口

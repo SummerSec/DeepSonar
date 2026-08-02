@@ -361,6 +361,24 @@ ${graph.yaml}`;
   } else if (isVerify) {
     const finding = (payload.finding ?? {}) as { title?: string; location?: string; summary?: string; severity?: string };
     const attempt = payload.verification_attempt ?? 1;
+    const findingId = (job.finding_id as string | null) ?? null;
+    let evidenceBlock = "（无绑定 Finding 或尚无合格证据快照）";
+    if (findingId) {
+      const { collectEvidenceSnapshot } = await import("./verify.js");
+      const [frow] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
+      const snap = await collectEvidenceSnapshot(sql, findingId, (frow?.job_id as string) ?? null);
+      evidenceBlock = JSON.stringify(
+        {
+          qualified: snap.qualified,
+          missing: snap.missing,
+          conflicting_node_ids: snap.conflicting_node_ids,
+          review: snap.review,
+          test: snap.test,
+        },
+        null,
+        2,
+      );
+    }
     initialInput = `验证以下 Finding 是否真实成立并可利用（第 ${attempt} 轮）。
 
 标题：${finding.title ?? "未知"}
@@ -369,19 +387,40 @@ ${graph.yaml}`;
 描述：${finding.summary ?? "无"}
 任务目标：${taskGoal || "未提供"}
 
-请阅读任务画布中绑定到该 Finding 的 review/test 证据节点（evidence_kind、outcome、subject_revision、steps、expected、actual）。
-- 证据充分且无未解释冲突 → verdict=confirmed（Scheduler 仍会做硬门校验）
+## 本轮冻结证据快照（与 Scheduler 硬门同源；含 steps/expected/actual/artifact_refs）
+\`\`\`json
+${evidenceBlock}
+\`\`\`
+
+请基于上述完整证据与画布判断：
+- 证据充分且无未解释冲突 → verdict=confirmed（Scheduler 仍会再跑硬门；失败 Job 证据不会过门）
 - 证据不足、冲突或假设需改写 → verdict=rework，并在 summary 写明缺失项
 - 仅当权限/安全/环境阻塞无法自动闭环 → verdict=needs_human
 
-${graph ? `任务画布（YAML）：\n${graph.yaml}` : "（无画布快照）"}`;
+${graph ? `任务画布（YAML 摘要）：\n${graph.yaml}` : "（无画布快照）"}`;
   } else if (isReport) {
+    const inputUri = typeof payload.report_input_uri === "string" ? payload.report_input_uri : null;
+    let inputBlock = "";
+    if (inputUri) {
+      try {
+        const { readReportBlob } = await import("./report.js");
+        const buf = await readReportBlob(inputUri);
+        inputBlock = buf.toString("utf8").slice(0, 80_000);
+      } catch {
+        inputBlock = "";
+      }
+    }
     initialInput = `根据调度器提供的确定性任务数据撰写最终报告。不要创建新 Finding，不要改变验证结论。
 
 任务目标：${taskGoal || "未提供"}
+统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} total=${payload.findings_total ?? "?"}
+
+## 确定性报告输入（report-input.json）
+${inputBlock ? `\`\`\`json\n${inputBlock}\n\`\`\`` : "（输入不可用时按画布撰写，仍须分栏 confirmed / needs_human）"}
+
 ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : ""}
 
-在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」与「待人工确认」，即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并列出覆盖范围与限制。`;
+在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」与「待人工确认」，即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。`;
   } else {
     initialInput = `执行 Hub 下发的安全审计任务：
 ${workerPrompt}
