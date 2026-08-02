@@ -163,7 +163,7 @@ export function SettingsPanel({
 
   const saveRules = async () => {
     if (!rules) return;
-    const ruleBody = {
+    const ruleBody: Record<string, unknown> = {
       minVerifySeverity: rules.minVerifySeverity,
       maxFollowupsPerJob: rules.maxFollowupsPerJob,
       maxFollowupDepth: rules.maxFollowupDepth,
@@ -175,6 +175,11 @@ export function SettingsPanel({
       maxIntentsPerDecision: rules.maxIntentsPerDecision,
       allowEgress: rules.allowEgress,
     };
+    // CLI 并发仅全局可写；项目设置不覆盖
+    if (!projectId) {
+      ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
+      ruleBody.maxConcurrentByProvider = rules.maxConcurrentByProvider ?? {};
+    }
     try {
       if (projectId) {
         await api.patchSettings(projectId, { rules: ruleBody });
@@ -287,8 +292,6 @@ export function SettingsPanel({
     });
   };
 
-
-
   // ---------- 角色行（运行配置入口 + 配置来源徽标） ----------
 
   const globalConfigOf = (roleId: string): RoleConfigView | null =>
@@ -327,7 +330,7 @@ export function SettingsPanel({
     return (
       <div
         key={r.id}
-        className={`role-card rounded-[22px] p-4 ring-1 transition-all ${editing ? "lg:col-span-2" : ""} ${
+        className={`role-card rounded-[22px] p-4 ring-1 transition-all ${editing ? "sm:col-span-2 xl:col-span-3" : ""} ${
           roleForm.id === r.id || editing ? "bg-acc-500/[.045] ring-acc-400/25" : "bg-white/[.022] ring-white/[.055] hover:bg-white/[.038] hover:ring-white/[.09]"
         }`}
       >
@@ -517,7 +520,9 @@ export function SettingsPanel({
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">Quota ladder</div>
                   <div className="mt-1 text-[13px] text-zinc-300">Provider → Credential → Model ID → Agent CLI</div>
-                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">调度按此顺序检查硬上限。Credential 与 Model 在“凭据”页配置；CLI 是最后一层，不会覆盖上游配额。</p>
+                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">
+                    调度按此顺序检查硬上限。Credential 与 Model ID 在“凭据”页配置；Agent CLI 是最后一层，不会覆盖上游配额。
+                  </p>
                 </div>
                 <div className="border-b border-white/[.05] px-4 py-4">
                   <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">01 · Provider 总并发</div>
@@ -532,28 +537,28 @@ export function SettingsPanel({
                   </div>
                 </div>
                 <div className="px-4 py-4">
-                <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">
-                  04 · Agent CLI 全局并发
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  {(["claude-code", "codex", "open-code"] as const).map((cli) => (
-                    <div key={cli}>
-                      <label className={labelCls}>{cli}</label>
-                      <input
-                        type="number"
-                        min={0}
-                        placeholder="不限"
-                        value={rules.maxConcurrentByAgentCli?.[cli] ?? ""}
-                        onChange={(event) => setCliLimit(cli, event.target.value)}
-                        className={inputCls}
-                      />
-                      <div className="mt-1 font-mono text-[10px] text-zinc-600">当前运行 {cliActive[cli] ?? 0}</div>
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-2 text-[11px] leading-5 text-zinc-600">
-                  留空只受全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
-                </p>
+                  <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">04 · Agent CLI 全局并发</div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    {(["claude-code", "codex", "open-code"] as const).map((cli) => (
+                      <div key={cli}>
+                        <label className={labelCls}>{cli}</label>
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="不限"
+                          value={rules.maxConcurrentByAgentCli?.[cli] ?? ""}
+                          onChange={(event) => setCliLimit(cli, event.target.value)}
+                          className={inputCls}
+                        />
+                        <div className="mt-1 font-mono text-[10px] text-zinc-600">
+                          当前运行 {cliActive[cli] ?? 0}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[11px] leading-5 text-zinc-600">
+                    留空只受上游与全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
+                  </p>
                 </div>
               </section>
             )}
@@ -671,7 +676,7 @@ export function SettingsPanel({
                 <div className="mt-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                   系统角色（调度内核）
                 </div>
-                <div className="grid gap-3 lg:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   {roles.filter((r) => r.kind !== "role").map(renderRoleRow)}
                 </div>
               </>
@@ -681,10 +686,10 @@ export function SettingsPanel({
             <div className="mt-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
               {projectId ? "项目角色（hub 可下发）" : "角色注册表（hub 可下发）"}
             </div>
-            <div className="grid gap-3 lg:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {roles.filter((r) => r.kind === "role").map(renderRoleRow)}
               {!agentLoadError && roles.filter((r) => r.kind === "role").length === 0 && (
-                <div className="py-2 font-mono text-[13px] text-zinc-600">角色注册表为空，请检查当前 schema 基线数据</div>
+                <div className="py-2 font-mono text-[13px] text-zinc-600 sm:col-span-2 xl:col-span-3">角色注册表为空，请检查当前 schema 基线数据</div>
               )}
             </div>
 

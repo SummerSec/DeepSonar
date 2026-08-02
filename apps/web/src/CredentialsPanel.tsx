@@ -46,6 +46,8 @@ export function CredentialsPanel() {
   const [editModelLimits, setEditModelLimits] = useState<Record<string, string>>({});
   const [discoveredModels, setDiscoveredModels] = useState<Record<string, CredentialModels>>({});
   const [modelsLoading, setModelsLoading] = useState<string | null>(null);
+  const [modelQuery, setModelQuery] = useState("");
+  const [manualModel, setManualModel] = useState("");
   const [editProjectId, setEditProjectId] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -94,7 +96,7 @@ export function CredentialsPanel() {
       setName("");
       setSecret("");
       setBaseUrl("");
-      setNotice("已加密登记。请在凭据编辑区从 Provider 获取模型列表，并配置 Credential / Model 并发。");
+      setNotice("已加密登记。请在凭据编辑区获取模型或手动填写模型 ID，并配置 Credential / Model 并发。");
       load();
     } catch (e) {
       setError(String(e));
@@ -132,6 +134,8 @@ export function CredentialsPanel() {
     const limits = metaModelLimits(c);
     setEditModelLimits(Object.fromEntries(metaAllowedModels(c).map((model) => [model, String(limits[model] ?? 1)])));
     setEditProjectId(c.project_id ?? "");
+    setModelQuery("");
+    setManualModel("");
   };
 
   const refreshModels = async (credentialId: string) => {
@@ -140,7 +144,7 @@ export function CredentialsPanel() {
     try {
       const result = await api.credentialModels(credentialId);
       setDiscoveredModels((current) => ({ ...current, [credentialId]: result }));
-      setNotice(`已从 Provider 获取 ${result.models.length} 个模型。选择启用项并设置各自并发后保存。`);
+      setNotice(`已获取 ${result.models.length} 个模型。可搜索筛选、勾选启用，或手动填写未列出的模型 ID。`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -156,6 +160,22 @@ export function CredentialsPanel() {
       return next;
     });
   };
+
+  const addManualModel = () => {
+    const model = manualModel.trim();
+    if (!model) return;
+    setEditModelLimits((current) => ({ ...current, [model]: current[model] ?? "1" }));
+    setManualModel("");
+    setModelQuery("");
+    setNotice(`已添加模型 ${model}，保存后生效。`);
+  };
+
+  const modelCatalog = (credentialId: string, allowed: string[]) =>
+    [...new Set([
+      ...(discoveredModels[credentialId]?.models ?? []),
+      ...allowed,
+      ...Object.keys(editModelLimits),
+    ])].sort((a, b) => a.localeCompare(b));
 
   const saveEdit = async (id: string) => {
     setBusy(true);
@@ -319,8 +339,8 @@ export function CredentialsPanel() {
       {notice && <div className="break-all text-[12px] text-run-400">{notice}</div>}
       {error && <div className="text-[12px] text-red-400">{error}</div>}
 
-      {/* 列表 */}
-      <div className="flex flex-col gap-1.5">
+      {/* 列表：与角色注册表一致，宽屏三列卡片 */}
+      <div className="flex flex-col gap-3">
         <div className="credential-toolbar">
           <div className="selector-search min-w-0 flex-1">
             <MagnifyingGlass size={14} weight="light" />
@@ -336,19 +356,26 @@ export function CredentialsPanel() {
           <div className="py-6 text-center font-mono text-[12px] text-zinc-600">暂无 Credential</div>
         )}
         {creds.length > 0 && filteredCreds.length === 0 && <div className="py-6 text-center font-mono text-[12px] text-zinc-600">没有匹配的凭据</div>}
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {filteredCreds.map((c) => {
           const st = STATUS_LABEL[c.status] ?? STATUS_LABEL.active;
+          const expanded = editingId === c.id || rotatingId === c.id;
           return (
-            <div key={c.id} className={`credential-row ${selectedIds.has(c.id) ? "is-selected" : ""}`}>
-              <div className="flex items-center gap-2">
+            <div
+              key={c.id}
+              className={`credential-row ${selectedIds.has(c.id) ? "is-selected" : ""} ${
+                expanded ? "sm:col-span-2 xl:col-span-3" : ""
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
                 <button type="button" className="credential-check" onClick={() => toggleSelected(c.id)} aria-label={`${selectedIds.has(c.id) ? "取消选择" : "选择"} ${c.name}`} aria-pressed={selectedIds.has(c.id)}>{selectedIds.has(c.id) && <Check size={12} weight="bold" />}</button>
-                <span className="text-[13px] font-medium text-zinc-100">{c.name}</span>
+                <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100" title={c.name}>{c.name}</span>
                 <span className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-400">
                   {c.provider}
                 </span>
                 <code className="font-mono text-[12px] text-zinc-500">…{c.last4}</code>
                 <span className={`font-mono text-[11px] ${st.cls}`}>{st.text}</span>
-                <span className="ml-auto flex gap-1">
+                <span className="ml-auto flex shrink-0 gap-1">
                   <button
                     onClick={() => act(() => api.testCredential(c.id))}
                     title="连接测试"
@@ -394,19 +421,18 @@ export function CredentialsPanel() {
                   )}
                 </span>
               </div>
-              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[11px] text-zinc-500">
-                <span>{projectName(c.project_id)}</span>
-                <span className="max-w-full truncate" title={metaBaseUrl(c) || "未设置 base_url"}>
-                  base_url {metaBaseUrl(c) || "（默认）"}
+              <div className="mt-2 flex flex-col gap-0.5 font-mono text-[11px] leading-5 text-zinc-500">
+                <span className="truncate">{projectName(c.project_id)} · base_url {metaBaseUrl(c) || "（默认）"}</span>
+                <span className="truncate" title={metaAllowedModels(c).join(", ") || "不额外限制"}>
+                  指纹 {c.fingerprint.slice(0, 8)} · 模型 {metaAllowedModels(c).length ? `${metaAllowedModels(c).length} 个已启用` : "未限制"} · 并发 {c.active_count ?? 0}/{metaMaxConcurrent(c) ?? "∞"} · v{c.key_version}
                 </span>
-                <span>指纹 {c.fingerprint.slice(0, 8)}</span>
-                <span title={metaAllowedModels(c).join(", ") || "不额外限制"}>
-                  模型 {metaAllowedModels(c).length ? `${metaAllowedModels(c).length} 个已启用` : "未限制"}
-                </span>
-                <span>Credential 并发 {c.active_count ?? 0}/{metaMaxConcurrent(c) ?? "∞"}</span>
-                <span>v{c.key_version}</span>
-                {c.last_used_at && <span>最近用 {new Date(c.last_used_at).toLocaleString()}</span>}
-                {c.rotated_at && <span>轮换于 {new Date(c.rotated_at).toLocaleDateString()}</span>}
+                {(c.last_used_at || c.rotated_at) && (
+                  <span className="truncate">
+                    {c.last_used_at && <>最近用 {new Date(c.last_used_at).toLocaleString()}</>}
+                    {c.last_used_at && c.rotated_at && " · "}
+                    {c.rotated_at && <>轮换于 {new Date(c.rotated_at).toLocaleDateString()}</>}
+                  </span>
+                )}
               </div>
               {editingId === c.id && (
                 <div className="mt-2 flex flex-col gap-2 rounded-md border border-ink-700 bg-ink-900/50 p-2">
@@ -428,47 +454,190 @@ export function CredentialsPanel() {
                     className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
                     spellCheck={false}
                   />
-                  {c.kind === "llm_provider" && (
-                    <div className="overflow-hidden rounded-xl bg-black/20 ring-1 ring-white/[.06]">
-                      <div className="flex flex-wrap items-end gap-2 border-b border-white/[.05] p-3">
-                        <label className="min-w-40 flex-1">
-                          <span className="mb-1 block font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">02 · Credential 总并发</span>
-                          <input type="number" min={0} max={1000} value={editMaxConcurrent} onChange={(e) => setEditMaxConcurrent(e.target.value)} placeholder="不限" className="w-full rounded-lg bg-[#080b0d] px-3 py-2 font-mono text-[12px] text-zinc-200 ring-1 ring-white/[.08] outline-none focus:ring-acc-400/40" />
-                        </label>
-                        <button type="button" onClick={() => refreshModels(c.id)} disabled={modelsLoading === c.id} className="secondary-button min-h-9 px-3 py-2 text-[10px]">
-                          <ArrowsClockwise size={13} className={modelsLoading === c.id ? "animate-spin" : ""} />
-                          {modelsLoading === c.id ? "正在获取" : "从接口获取模型"}
-                        </button>
-                      </div>
-                      <div className="p-3">
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <span className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">03 · 启用模型与单模型并发</span>
-                          <span className="font-mono text-[9px] text-zinc-700">已启用 {Object.keys(editModelLimits).length}</span>
+                  {c.kind === "llm_provider" && (() => {
+                    const catalog = modelCatalog(c.id, metaAllowedModels(c));
+                    const needle = modelQuery.trim().toLowerCase();
+                    const visibleModels = needle
+                      ? catalog.filter((model) => model.toLowerCase().includes(needle))
+                      : catalog;
+                    const enabledCount = Object.keys(editModelLimits).length;
+                    const discovered = discoveredModels[c.id];
+                    return (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {/* Credential 总并发卡片 */}
+                        <div className="rounded-xl bg-black/25 p-3 ring-1 ring-white/[.06] sm:col-span-1">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-500">
+                              Credential 总并发
+                            </span>
+                            <span className="font-mono text-[9px] text-zinc-600">
+                              运行中 {c.active_count ?? 0}
+                            </span>
+                          </div>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1000}
+                            value={editMaxConcurrent}
+                            onChange={(e) => setEditMaxConcurrent(e.target.value)}
+                            placeholder="不限"
+                            className="w-full rounded-lg bg-[#080b0d] px-3 py-2.5 font-mono text-[13px] text-zinc-100 ring-1 ring-white/[.08] outline-none focus:ring-acc-400/40"
+                          />
+                          <p className="mt-2 text-[10px] leading-4 text-zinc-600">
+                            留空不限；0 暂停该凭据新 claim。只影响后续调度。
+                          </p>
                         </div>
-                        {(() => {
-                          const catalog = [...new Set([...(discoveredModels[c.id]?.models ?? []), ...metaAllowedModels(c)])];
-                          return catalog.length ? (
-                            <div className="grid max-h-72 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
-                              {catalog.map((model) => {
+
+                        {/* 模型策略卡片 */}
+                        <div className="rounded-xl bg-black/25 p-3 ring-1 ring-white/[.06] sm:col-span-2">
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-500">
+                                模型与单模型并发
+                              </div>
+                              <p className="mt-1 text-[10px] leading-4 text-zinc-600">
+                                获取列表后可搜索筛选；也可手动填写模型 ID。未启用任何模型 = 不额外限制。
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[10px] text-zinc-500">
+                                已启用 {enabledCount}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => refreshModels(c.id)}
+                                disabled={modelsLoading === c.id}
+                                className="secondary-button inline-flex min-h-9 items-center gap-1.5 px-3 py-2 text-[11px]"
+                              >
+                                <ArrowsClockwise
+                                  size={13}
+                                  className={modelsLoading === c.id ? "animate-spin" : ""}
+                                />
+                                {modelsLoading === c.id ? "获取中…" : "获取模型"}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="mb-3 flex flex-col gap-2 sm:flex-row">
+                            <div className="selector-search min-w-0 flex-1">
+                              <MagnifyingGlass size={14} weight="light" />
+                              <input
+                                value={modelQuery}
+                                onChange={(e) => setModelQuery(e.target.value)}
+                                placeholder={catalog.length ? `搜索 ${catalog.length} 个模型` : "先获取模型，或在右侧手动添加"}
+                                aria-label="搜索模型"
+                              />
+                            </div>
+                            <div className="flex min-w-0 flex-1 gap-2">
+                              <input
+                                value={manualModel}
+                                onChange={(e) => setManualModel(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    addManualModel();
+                                  }
+                                }}
+                                placeholder="手动填写模型 ID"
+                                spellCheck={false}
+                                className="min-w-0 flex-1 rounded-lg bg-[#080b0d] px-3 py-2 font-mono text-[12px] text-zinc-200 ring-1 ring-white/[.08] outline-none focus:ring-acc-400/40"
+                              />
+                              <button
+                                type="button"
+                                onClick={addManualModel}
+                                disabled={!manualModel.trim()}
+                                className="secondary-button shrink-0 px-3 py-2 text-[11px] disabled:opacity-40"
+                              >
+                                添加
+                              </button>
+                            </div>
+                          </div>
+
+                          {catalog.length === 0 ? (
+                            <div className="rounded-lg border border-dashed border-white/[.08] px-4 py-6 text-center text-[11px] leading-5 text-zinc-600">
+                              点击「获取模型」从 Provider 拉取列表，或在上方手动填写模型 ID。
+                            </div>
+                          ) : visibleModels.length === 0 ? (
+                            <div className="rounded-lg border border-dashed border-white/[.08] px-4 py-5 text-center text-[11px] text-zinc-600">
+                              没有匹配「{modelQuery.trim()}」的模型，可改关键词或手动添加。
+                            </div>
+                          ) : (
+                            <div className="grid max-h-80 gap-1.5 overflow-y-auto pr-0.5 sm:grid-cols-2 xl:grid-cols-3">
+                              {visibleModels.map((model) => {
                                 const enabled = model in editModelLimits;
+                                const active = c.active_by_model?.[model] ?? 0;
                                 return (
-                                  <div key={model} className={`flex items-center gap-2 rounded-lg px-2.5 py-2 ring-1 ${enabled ? "bg-acc-500/[.055] ring-acc-400/20" : "bg-white/[.018] ring-white/[.05]"}`}>
-                                    <input type="checkbox" checked={enabled} onChange={() => toggleModel(model)} className="size-4 accent-emerald-500" aria-label={`启用 ${model}`} />
-                                    <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-300" title={model}>{model}</span>
-                                    <span className="font-mono text-[9px] text-zinc-700">{c.active_by_model?.[model] ?? 0}/</span>
-                                    <input type="number" min={0} max={1000} disabled={!enabled} value={enabled ? editModelLimits[model] : ""} onChange={(e) => setEditModelLimits((current) => ({ ...current, [model]: e.target.value }))} className="w-16 rounded-md bg-black/30 px-2 py-1 font-mono text-[10px] text-zinc-200 ring-1 ring-white/[.08] outline-none disabled:opacity-30" aria-label={`${model} 并发`} />
+                                  <div
+                                    key={model}
+                                    className={`flex min-h-10 items-center gap-2 rounded-lg px-2.5 py-2 ring-1 transition-colors ${
+                                      enabled
+                                        ? "bg-acc-500/[.07] ring-acc-400/25"
+                                        : "bg-white/[.02] ring-white/[.06]"
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleModel(model)}
+                                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                      aria-pressed={enabled}
+                                      aria-label={`${enabled ? "停用" : "启用"} ${model}`}
+                                    >
+                                      <span
+                                        className={`flex size-4 shrink-0 items-center justify-center rounded border ${
+                                          enabled
+                                            ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-300"
+                                            : "border-white/15 bg-black/20 text-transparent"
+                                        }`}
+                                        aria-hidden
+                                      >
+                                        <Check size={10} weight="bold" />
+                                      </span>
+                                      <span
+                                        className="min-w-0 truncate font-mono text-[11px] leading-4 text-zinc-200"
+                                        title={model}
+                                      >
+                                        {model}
+                                      </span>
+                                    </button>
+                                    <span className="shrink-0 font-mono text-[9px] text-zinc-600" title="当前运行">
+                                      {active}
+                                    </span>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={1000}
+                                      disabled={!enabled}
+                                      value={enabled ? editModelLimits[model] : ""}
+                                      onChange={(e) =>
+                                        setEditModelLimits((current) => ({
+                                          ...current,
+                                          [model]: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="∞"
+                                      title="单模型并发"
+                                      className="w-12 shrink-0 rounded-md bg-black/35 px-1.5 py-1 font-mono text-[11px] text-zinc-100 ring-1 ring-white/[.08] outline-none focus:ring-acc-400/40 disabled:opacity-30"
+                                      aria-label={`${model} 并发`}
+                                    />
                                   </div>
                                 );
                               })}
                             </div>
-                          ) : (
-                            <div className="rounded-lg border border-dashed border-white/[.08] px-4 py-5 text-center text-[11px] leading-5 text-zinc-600">点击“从接口获取模型”，平台会使用该 Credential 调用 Provider 的 models 接口。模型 ID 不再手工录入。</div>
-                          );
-                        })()}
-                        {discoveredModels[c.id] && <div className="mt-2 truncate font-mono text-[9px] text-zinc-700" title={discoveredModels[c.id].source_url}>来源 {discoveredModels[c.id].source_url} · {new Date(discoveredModels[c.id].fetched_at).toLocaleString()}</div>}
+                          )}
+
+                          {discovered && (
+                            <div
+                              className="mt-3 truncate font-mono text-[9px] text-zinc-600"
+                              title={discovered.source_url}
+                            >
+                              来源 {discovered.source_url} · {new Date(discovered.fetched_at).toLocaleString()}
+                              {needle ? ` · 显示 ${visibleModels.length}/${catalog.length}` : ` · 共 ${catalog.length} 个`}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                   <select
                     value={editProjectId}
                     onChange={(e) => setEditProjectId(e.target.value)}
@@ -517,6 +686,7 @@ export function CredentialsPanel() {
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );
