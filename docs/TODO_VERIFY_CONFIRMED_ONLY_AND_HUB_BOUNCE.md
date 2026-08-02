@@ -1,8 +1,8 @@
 # TODO：Finding 自动多轮 Verify、Hub 回弹与收敛后 Report
 
-> 状态：**核心已落地**（worktree 分支 `feat/verify-confirmed-hub-bounce`，路径 `../DeepFlowHunter-verify-confirmed-hub-bounce`，2026-08-02）  
-> 已实现：schema v11、多轮 Verify + 证据硬门、Hub 回弹、自动 Report、去掉人工 confirmed 旁路；fake 路径覆盖 rework→补证→confirmed→report。  
-> 待补：前端 Finding 轮次 UI 细化、ARCHITECTURE 文档同步、DB 重建后冒烟。  
+> 状态：**核心已落地**（分支 `feat/verify-confirmed-hub-bounce`，2026-08-02）  
+> 已实现：schema v11、多轮 Verify + 证据硬门、Hub 回弹、自动 Report、去掉人工 confirmed 旁路。  
+> **收敛门（与 §0.3 一致）**：全部 Finding ∈ `{confirmed, needs_human}` 即可 Hub complete / Report；`minVerifySeverity` 只影响优先级与等待，**不**要求 care 级必须 confirmed。`needs_human` 进报告待人工章，SARIF 仅 confirmed。护栏耗尽收口为 needs_human 后可自动 Report。  
 > **第一性原理**：任何 Finding 想成为技术 `confirmed`，唯一入口都是 Scheduler 自动创建的系统 `verify_finding`。Verify 负责基于多节点复核与实际测试证据判断能否确认；Verify 只提交 verdict 提案，Scheduler 校验证据门槛后才有权写入 `confirmed`。  
 > **闭环目标**：Finding 自动验证；证据不足或验证未通过时强制回弹 Hub 补审、补测；所有 Finding 最终进入 `confirmed` 或 `needs_human`，且画布无活跃工作后，自动创建唯一 Report Job，整合本次全部 Finding 输出结论报告。  
 > 相关：`apps/scheduler/src/core.ts`、`dispatcher.ts`、`reaper.ts`、`graph.ts`、`executor-real.ts`、`report.ts`、`routes.ts`、`database/schema.sql`、`apps/web`。  

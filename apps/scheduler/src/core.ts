@@ -705,12 +705,10 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
     if (p.complete?.description) {
-      // Hub complete 只是提案：Scheduler 硬门检查后 Root → analysis_complete，再派发 Report
+      // Hub complete 只是提案：全部 Finding ∈ {confirmed, needs_human} 后 Root → analysis_complete → Report
+      // severity / minVerifySeverity 只影响优先级与等待，不改变收敛集合（TODO §0.3）
       const { canvasFindingsConverged, hasActiveWorkJobs } = await import("./verify.js");
-      const conv = await canvasFindingsConverged(tx, canvasId, {
-        projectId: job.project_id as string,
-        requireCareConfirmed: true,
-      });
+      const conv = await canvasFindingsConverged(tx, canvasId);
       if (!conv.ok) {
         const detail =
           conv.problems.length > 0
@@ -723,7 +721,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
                 .join("; ")
             : conv.blockers.slice(0, 5).join("; ");
         throw new Error(
-          `Hub complete 被拒绝：关注级别 Finding 须全部 confirmed，或仍有未收敛 Finding。问题：${detail}`,
+          `Hub complete 被拒绝：仍有未收敛 Finding（须全部为 confirmed 或 needs_human）。问题：${detail}`,
         );
       }
       if (await hasActiveWorkJobs(tx, canvasId)) {
@@ -1207,11 +1205,28 @@ export async function maybeTriggerHub(
     WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
   if (count >= rules.maxHubRounds) {
     console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
-    // 护栏耗尽：收口未完成 Finding，禁止永久 pending 堵死 Report
-    const { settleCanvasFindingsAtGuardrail } = await import("./verify.js");
+    // 护栏耗尽：pending/verifying → needs_human；若已全量收敛则直接 analysis_complete → Report
+    const { settleCanvasFindingsAtGuardrail, canvasFindingsConverged } = await import("./verify.js");
     await settleCanvasFindingsAtGuardrail(tx, canvasId, "max_hub_rounds").catch((e) =>
       console.error(`[hub] settle findings at maxHubRounds failed:`, e),
     );
+    const conv = await canvasFindingsConverged(tx, canvasId);
+    if (conv.ok && !(await hasActiveRunnableJobs(tx, canvasId, (job.id as string) ?? null))) {
+      await tx`
+        UPDATE canvas_nodes SET status = 'analysis_complete',
+          body_json = body_json || ${tx.json({
+            conclusion: `Hub 决策轮次达上限 ${rules.maxHubRounds}；未完成 Finding 已收口为 needs_human，自动进入报告。`,
+            guardrail: "max_hub_rounds",
+          })},
+          updated_at = now()
+        WHERE canvas_id = ${canvasId} AND node_type = 'root'
+          AND status IS DISTINCT FROM 'succeeded'
+          AND status IS DISTINCT FROM 'reporting'`;
+      const { maybeDispatchReport } = await import("./report.js");
+      await maybeDispatchReport(tx, canvasId).catch((e) =>
+        console.error(`[hub] auto report after maxHubRounds failed:`, e),
+      );
+    }
     return;
   }
 

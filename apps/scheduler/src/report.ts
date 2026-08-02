@@ -7,11 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { sql } from "./db.js";
-import {
-  canvasFindingsConverged,
-  checkCareFindingsConfirmed,
-  type FindingStatusProblem,
-} from "./verify.js";
+import { canvasFindingsConverged, type FindingStatusProblem } from "./verify.js";
 
 type Tx = typeof sql;
 
@@ -315,7 +311,7 @@ async function bounceReportGateToHub(
         problem_count: problems.length,
         problems: problemsJson,
         summary:
-          `Report 被拒绝：项目关注级别（≥${extra?.minVerifySeverity ?? "?"}）内的 Finding 必须全部为 confirmed。\n` +
+          `Report 被拒绝：全部 Finding 须为 confirmed 或 needs_human（severity 不影响收敛集合）。\n` +
           problemSummary,
       },
     },
@@ -333,8 +329,9 @@ async function bounceReportGateToHub(
 }
 
 /**
- * 在 Root 为 analysis_complete 且「关注级别 Finding 全部 confirmed」时，幂等创建唯一 Report Job。
- * 否则回弹 Hub，并在 trigger 中列出状态异常的 Finding。
+ * 在 Root 为 analysis_complete 且全部 Finding ∈ {confirmed, needs_human} 时，幂等创建唯一 Report Job。
+ * severity 只影响优先级，不改变收敛集合；needs_human 进报告待人工章节，SARIF 仅 confirmed。
+ * 未收敛则回弹 Hub 并列出问题 Finding。
  */
 export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
   dispatched: boolean;
@@ -354,24 +351,14 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
   if (!canvas) return { dispatched: false, reason: "no_canvas" };
   const projectId = canvas.project_id as string;
 
-  // 硬门：项目 minVerifySeverity 及以上的 Finding 必须全部 confirmed
-  const care = await checkCareFindingsConfirmed(tx, canvasId, projectId);
-  if (!care.ok) {
-    return bounceReportGateToHub(tx, canvasId, projectId, care.problems, {
-      minVerifySeverity: care.minVerifySeverity,
-      careSeverities: care.careSeverities,
-      reason: "care_findings_not_confirmed",
-    });
-  }
-
-  const conv = await canvasFindingsConverged(tx, canvasId, {
-    projectId,
-    requireCareConfirmed: true,
-  });
+  // 统一收敛门：全部 Finding confirmed | needs_human（与 TODO §0.3 / §5 一致）
+  const { careSeverityMeta } = await import("./verify.js");
+  const careMeta = await careSeverityMeta(tx, projectId);
+  const conv = await canvasFindingsConverged(tx, canvasId);
   if (!conv.ok) {
     return bounceReportGateToHub(tx, canvasId, projectId, conv.problems, {
-      minVerifySeverity: care.minVerifySeverity,
-      careSeverities: care.careSeverities,
+      minVerifySeverity: careMeta.minVerifySeverity,
+      careSeverities: careMeta.careSeverities,
       reason: "findings_not_converged",
     });
   }

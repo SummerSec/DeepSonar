@@ -731,78 +731,62 @@ export interface FindingStatusProblem {
 }
 
 /**
- * 项目配置关注级别（minVerifySeverity 及以上）内的 Finding 是否全部为 confirmed。
- * Report / Hub complete 硬门：care 范围内不得为 pending/verifying/needs_human/false_positive。
+ * 关注级别元数据（minVerifySeverity 及以上 severity 列表）。
+ * **severity 只影响 Verify 优先级 / Hub 等待门，不改变收敛集合。**
+ * 收敛门：全部 Finding ∈ {confirmed, needs_human}（见 canvasFindingsConverged）。
+ */
+export async function careSeverityMeta(
+  tx: Tx,
+  projectId: string,
+): Promise<{ careSeverities: string[]; minVerifySeverity: string }> {
+  const { rulesForProject, careSeverities } = await core();
+  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
+  return {
+    careSeverities: careSeverities(rules.minVerifySeverity).map((s) => s.toLowerCase()),
+    minVerifySeverity: rules.minVerifySeverity,
+  };
+}
+
+/**
+ * @deprecated 名称易误解。历史上曾要求 care 必须 confirmed；现与全量收敛一致。
+ * 请用 canvasFindingsConverged。保留别名以免外部误用旧语义。
  */
 export async function checkCareFindingsConfirmed(
   tx: Tx,
   canvasId: string,
-  projectId: string,
+  _projectId: string,
 ): Promise<{
   ok: boolean;
   careSeverities: string[];
   minVerifySeverity: string;
   problems: FindingStatusProblem[];
 }> {
-  const { rulesForProject, careSeverities } = await core();
-  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
-  const care = careSeverities(rules.minVerifySeverity).map((s) => s.toLowerCase());
-  const careSet = new Set(care);
-
-  const findings = await tx`
-    SELECT f.id, f.title, f.severity, f.verify_status
-    FROM findings f
-    JOIN jobs j ON j.id = f.job_id
-    WHERE j.canvas_id = ${canvasId}
-    ORDER BY f.created_at`;
-
-  const problems: FindingStatusProblem[] = [];
-  for (const f of findings) {
-    const sev = String(f.severity ?? "").toLowerCase();
-    if (!careSet.has(sev)) continue;
-
-    const st = String(f.verify_status ?? "pending");
-    if (st !== "confirmed") {
-      problems.push({
-        finding_id: f.id as string,
-        title: String(f.title ?? ""),
-        severity: sev,
-        verify_status: st,
-        issue: `关注级别 Finding 须为 confirmed，当前为 ${st}`,
-        in_care_scope: true,
-      });
-      continue;
-    }
-    const [round] = await tx`
-      SELECT id FROM finding_verification_rounds
-      WHERE finding_id = ${f.id as string} AND final_outcome = 'confirmed'
-      LIMIT 1`;
-    if (!round) {
-      problems.push({
-        finding_id: f.id as string,
-        title: String(f.title ?? ""),
-        severity: sev,
-        verify_status: st,
-        issue: "verify_status=confirmed 但无可追溯的通过硬门 verification round",
-        in_care_scope: true,
-      });
-    }
-  }
-
+  const conv = await canvasFindingsConverged(tx, canvasId);
+  const meta = _projectId
+    ? await careSeverityMeta(tx, _projectId)
+    : { careSeverities: [] as string[], minVerifySeverity: "high" };
   return {
-    ok: problems.length === 0,
-    careSeverities: care,
-    minVerifySeverity: rules.minVerifySeverity,
-    problems,
+    ok: conv.ok,
+    careSeverities: meta.careSeverities,
+    minVerifySeverity: meta.minVerifySeverity,
+    problems: conv.problems,
   };
 }
 
-/** Hub complete 前：非关注级 Finding 须收敛；关注级由 checkCareFindingsConfirmed 单独要求 confirmed。 */
+/**
+ * Hub complete / Report 统一收敛门（TODO §0.3 / §4.2 / §5）：
+ * 每条 Finding 的 verify_status ∈ {confirmed, needs_human}；
+ * confirmed 须有可追溯 verification round；无未关闭 round。
+ * severity / minVerifySeverity **不**收窄该集合。
+ */
 export async function canvasFindingsConverged(
   tx: Tx,
   canvasId: string,
-  opts?: { projectId?: string; requireCareConfirmed?: boolean },
+  _opts?: { projectId?: string; requireCareConfirmed?: boolean },
 ): Promise<{ ok: boolean; blockers: string[]; problems: FindingStatusProblem[] }> {
+  // requireCareConfirmed 已废弃：忽略，避免 care needs_human 堵死 Report 活性
+  void _opts;
+
   const findings = await tx`
     SELECT f.id, f.verify_status, f.title, f.severity
     FROM findings f
@@ -812,23 +796,9 @@ export async function canvasFindingsConverged(
   const blockers: string[] = [];
   const problems: FindingStatusProblem[] = [];
 
-  let careSet: Set<string> | null = null;
-  if (opts?.requireCareConfirmed && opts.projectId) {
-    const care = await checkCareFindingsConfirmed(tx, canvasId, opts.projectId);
-    if (!care.ok) {
-      for (const p of care.problems) {
-        problems.push(p);
-        blockers.push(`care:${p.finding_id}:${p.verify_status}`);
-      }
-    }
-    careSet = new Set(care.careSeverities);
-  }
-
   for (const f of findings) {
     const st = f.verify_status as string;
     const sev = String(f.severity ?? "").toLowerCase();
-    // 关注级已在 care 检查中处理
-    if (careSet?.has(sev)) continue;
 
     if (st !== "confirmed" && st !== "needs_human") {
       blockers.push(`finding:${f.id}:${st}`);
@@ -837,7 +807,7 @@ export async function canvasFindingsConverged(
         title: String(f.title ?? ""),
         severity: sev,
         verify_status: st,
-        issue: `Finding 未收敛（须 confirmed 或 needs_human）`,
+        issue: `Finding 未收敛（须 confirmed 或 needs_human，当前 ${st}）`,
         in_care_scope: false,
       });
       continue;
@@ -859,6 +829,7 @@ export async function canvasFindingsConverged(
         });
       }
     }
+    // needs_human：允许进 Report（待人工章节）；不要求 confirmed round
   }
 
   const openRounds = await tx`
@@ -869,7 +840,7 @@ export async function canvasFindingsConverged(
     LIMIT 5`;
   for (const r of openRounds) blockers.push(`open_round:${r.id}`);
 
-  return { ok: blockers.length === 0, blockers, problems };
+  return { ok: blockers.length === 0 && problems.length === 0, blockers, problems };
 }
 
 export async function hasActiveWorkJobs(tx: Tx, canvasId: string): Promise<boolean> {
