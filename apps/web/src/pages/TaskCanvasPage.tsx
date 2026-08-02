@@ -40,6 +40,8 @@ import {
 
 type Tab = "canvas" | "findings" | "jobs" | "report";
 
+const ACTIVE_JOB = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
+
 /** 任务状态 chip（root 节点状态 → 中文；§8.1 报告成功才是任务最终完成） */
 const TASK_STATUS: Record<string, { label: string; color: string }> = {
   analysis_complete: { label: "分析完成", color: "#34d399" },
@@ -185,6 +187,47 @@ export function TaskCanvasPage() {
     }
   };
 
+  const hasActiveJob = jobs.some((j) => ACTIVE_JOB.has(j.status));
+  const canResumeSession = !hasActiveJob && jobs.length > 0;
+  const canHardRetry = !hasActiveJob && jobs.length > 0;
+
+  /** 恢复会话 = 继续执行（恢复失败 Job / 解除暂停 / 空闲唤醒 Hub），不删历史 */
+  const resumeSession = async () => {
+    if (!canvasId) return;
+    setConvBusy(true);
+    setMoreOpen(false);
+    try {
+      const r = await api.resumeTaskSession(canvasId);
+      if (r.action === "already_running") flash(r.message ?? "任务已在执行");
+      else if (r.action === "resume_job") flash("已恢复会话，继续执行中断的 Job");
+      else flash("已恢复会话，Hub 继续决策");
+    } catch (e) {
+      flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+
+  /** 重试任务 = 清空本画布历史后从意图重新执行 */
+  const retryTaskHard = async () => {
+    if (!canvasId) return;
+    const ok = window.confirm(
+      "将删除本任务的全部运行历史（Job、画布节点、Finding、报告），并按原意图从零重新执行。此操作不可撤销，确定？",
+    );
+    if (!ok) return;
+    setConvBusy(true);
+    setMoreOpen(false);
+    try {
+      await api.retryTask(canvasId);
+      flash("已清空历史并重新开始执行");
+      setScopeOpen(false);
+    } catch (e) {
+      flash(`重试失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (!moreOpen) return;
     const onDoc = (e: MouseEvent) => {
@@ -308,7 +351,22 @@ export function TaskCanvasPage() {
               <DotsThree size={16} weight="bold" />
             </button>
             {moreOpen && (
-              <div className="theme-drawer absolute right-0 top-full z-20 mt-1 min-w-[11rem] overflow-hidden rounded-xl py-1 shadow-xl ring-1 ring-[var(--line-strong)]">
+              <div className="theme-drawer absolute right-0 top-full z-20 mt-1 min-w-[13rem] overflow-hidden rounded-xl py-1 shadow-xl ring-1 ring-[var(--line-strong)]">
+                <button
+                  type="button"
+                  disabled={convBusy || (!canResumeSession && !hasActiveJob)}
+                  title={
+                    hasActiveJob
+                      ? "任务已在执行"
+                      : canResumeSession
+                        ? "继续执行：恢复中断 Job 或唤醒 Hub（保留历史）"
+                        : "还没有执行记录"
+                  }
+                  onClick={() => void resumeSession()}
+                  className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  恢复会话
+                </button>
                 <button
                   type="button"
                   disabled={convBusy}
@@ -316,6 +374,21 @@ export function TaskCanvasPage() {
                   className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05]"
                 >
                   立即跑一轮 Hub
+                </button>
+                <button
+                  type="button"
+                  disabled={convBusy || !canHardRetry}
+                  title={
+                    hasActiveJob
+                      ? "仍有活动 Job，请先取消"
+                      : jobs.length === 0
+                        ? "还没有执行记录"
+                        : "清空本任务全部历史后从意图重跑"
+                  }
+                  onClick={() => void retryTaskHard()}
+                  className="block w-full px-3 py-2 text-left text-[12px] text-red-300/90 hover:bg-red-500/[.08] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  重试任务
                 </button>
                 <button
                   type="button"

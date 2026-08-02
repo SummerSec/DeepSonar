@@ -39,6 +39,7 @@ import {
   parseCanvasConvergence,
   patchCanvasConvergence,
   readCanvasConvergence,
+  resolveAgentSnapshotForJob,
   resolveHubWaitSeverities,
   rolesForProject,
   rulesForProject,
@@ -599,35 +600,241 @@ export function registerRoutes(app: FastifyInstance) {
     return reply.code(201).send({ canvas_id: canvasId, job, duplicated: false });
   });
 
-  // 重试：新建 job 复用原画布（历史 job 保留；终态 job 永不被改回 pending）
+  /**
+   * 恢复会话 = 继续执行任务（不删历史）。
+   * 优先级：解除 hub_paused → 恢复最近可恢复 Job → 空闲时强制唤醒 Hub。
+   */
+  app.post("/tasks/:canvasId/resume-session", async (req, reply) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const projectId = canvas.project_id as string;
+
+    const active = await sql`
+      SELECT id, type, status FROM jobs WHERE canvas_id = ${canvasId}
+        AND status IN ('pending','claimed','provisioning','running','waiting_human')
+      ORDER BY created_at DESC LIMIT 5`;
+    if (active.length > 0) {
+      return {
+        canvas_id: canvasId,
+        action: "already_running" as const,
+        jobs: active,
+        message: "任务已有活动 Job，无需恢复",
+      };
+    }
+
+    // 清暂停 / auto_stopped，允许继续自驱
+    const convergence = await patchCanvasConvergence(sql, canvasId, {
+      hub_paused: false,
+      auto_stopped: false,
+      paused_reason: undefined,
+      paused_at: undefined,
+    });
+
+    // 优先恢复最近 failed/timeout/orphan（waiting_human 也算可继续）
+    const [resumable] = await sql`
+      SELECT id, type, status FROM jobs
+      WHERE canvas_id = ${canvasId}
+        AND status IN ('failed','timeout','orphan','waiting_human')
+      ORDER BY created_at DESC LIMIT 1`;
+    if (resumable) {
+      const row = await transitionJob(resumable.id as string, "pending", {
+        error: null,
+        lease_expires_at: null,
+        claimed_at: null,
+        started_at: null,
+        finished_at: null,
+        heartbeat_at: null,
+      });
+      if (row) {
+        await sql`
+          UPDATE canvas_nodes SET status = 'pending', updated_at = now()
+          WHERE job_id = ${resumable.id as string} AND node_type = ANY(${["job", "intent"]})`;
+        await audit(req, {
+          action: "task.resume_session",
+          resourceType: "job",
+          resourceId: resumable.id as string,
+          projectId,
+          after: { canvas_id: canvasId, mode: "resume_job", from_status: resumable.status },
+        });
+        await sql`SELECT pg_notify('deepsonar_jobs', 'resume_session')`;
+        return reply.code(200).send({
+          canvas_id: canvasId,
+          action: "resume_job" as const,
+          job: row,
+          convergence,
+        });
+      }
+    }
+
+    // 无可恢复 Job：强制唤醒一轮 Hub 继续决策
+    await sql.begin(async (tx) => {
+      await maybeTriggerHub(
+        tx as unknown as typeof sql,
+        {
+          id: null,
+          project_id: projectId,
+          canvas_id: canvasId,
+          type: "manual",
+          priority: 0,
+        },
+        { manual: true, force: true, trigger: { kind: "resume_session" } },
+      );
+    });
+    const [hub] = await sql`
+      SELECT id, type, status, created_at FROM jobs
+      WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
+      ORDER BY created_at DESC LIMIT 1`;
+    await audit(req, {
+      action: "task.resume_session",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId,
+      after: { mode: "wake_hub", hub_job_id: hub?.id ?? null },
+    });
+    await sql`SELECT pg_notify('deepsonar_jobs', 'resume_session')`;
+    return reply.code(200).send({
+      canvas_id: canvasId,
+      action: "wake_hub" as const,
+      job: hub ?? null,
+      convergence,
+    });
+  });
+
+  /**
+   * 重试任务 = 清空本画布历史后从意图重新执行。
+   * 保留 canvas 行与 target_json（任务意图）；删除 jobs/nodes/edges/findings/events/reports。
+   */
   app.post("/tasks/:canvasId/retry", async (req, reply) => {
     const { canvasId } = req.params as { canvasId: string };
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const projectId = canvas.project_id as string;
+
     const active = await sql`
       SELECT 1 FROM jobs WHERE canvas_id = ${canvasId}
         AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
-    if (active.length > 0) return reply.code(409).send({ error: "该任务仍有活动 job，不能重试" });
-    const [source] = await sql`
-      SELECT * FROM jobs WHERE canvas_id = ${canvasId} ORDER BY created_at ASC LIMIT 1`;
-    if (!source) return reply.code(409).send({ error: "该任务还没有执行记录" });
-    const { job, duplicated } = await createJob({
-      projectId: canvas.project_id as string,
-      canvasId,
-      planeIssueId: (canvas.plane_issue_id as string) ?? undefined,
-      type: source.type as string,
-      payload: source.payload_json as Record<string, unknown>,
-      priority: source.priority as number,
-      timeoutSec: source.timeout_sec as number,
+    if (active.length > 0) return reply.code(409).send({ error: "该任务仍有活动 job，请先取消后再重试" });
+
+    const target = { ...((canvas.target_json ?? {}) as Record<string, unknown>) };
+    delete target.convergence;
+    const title = (canvas.title as string) || "任务";
+    const content =
+      (typeof target.content === "string" && target.content.trim()) ||
+      (typeof target.goal === "string" && target.goal.trim()) ||
+      title;
+    const payload: Record<string, unknown> = {
+      title,
+      content,
+      goal: content,
+      trigger: { kind: "user_task", restart: true },
+    };
+    if (target.network_policy && typeof target.network_policy === "object") {
+      payload.network_policy = target.network_policy;
+    }
+
+    const job = await sql.begin(async (tx) => {
+      // 解除图节点 → job 引用，再按依赖删业务数据
+      await tx`UPDATE canvas_nodes SET job_id = NULL WHERE canvas_id = ${canvasId}`;
+      await tx`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
+      await tx`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+
+      await tx`
+        DELETE FROM finding_verification_rounds
+        WHERE finding_id IN (
+          SELECT f.id FROM findings f
+          JOIN jobs j ON j.id = f.job_id
+          WHERE j.canvas_id = ${canvasId}
+        )
+        OR verify_job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
+      await tx`DELETE FROM task_reports WHERE canvas_id = ${canvasId}`;
+      await tx`
+        DELETE FROM findings WHERE job_id IN (
+          SELECT id FROM jobs WHERE canvas_id = ${canvasId}
+        )`;
+      await tx`
+        DELETE FROM events WHERE job_id IN (
+          SELECT id FROM jobs WHERE canvas_id = ${canvasId}
+        )`;
+      await tx`
+        DELETE FROM event_dedup WHERE job_id IN (
+          SELECT id FROM jobs WHERE canvas_id = ${canvasId}
+        )`;
+      await tx`
+        UPDATE jobs SET parent_job_id = NULL, finding_id = NULL
+        WHERE canvas_id = ${canvasId}`;
+      await tx`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
+
+      // 重置意图上的收敛态，保留用户任务内容
+      await tx`
+        UPDATE canvases SET target_json = ${tx.json(target as never)}
+        WHERE id = ${canvasId}`;
+
+      await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: canvasId,
+          job_id: null,
+          node_type: "root",
+          title,
+          body_json: { target } as never,
+          x: 100,
+          y: 100,
+          status: "active",
+        })}`;
+
+      // 同事务内插入入口 Hub，避免 createJob 另开连接看不到未提交删除
+      const snapshot = await resolveAgentSnapshotForJob(sql, projectId, "hub_reason");
+      const [hubJob] = await tx`
+        INSERT INTO jobs ${tx({
+          project_id: projectId,
+          canvas_id: canvasId,
+          plane_issue_id: (canvas.plane_issue_id as string) ?? null,
+          agent_snapshot_json: snapshot as never,
+          type: "hub_reason",
+          priority: 0,
+          payload_json: payload as never,
+          timeout_sec: config.timeouts.auditSec,
+          followup_depth: 0,
+        })}
+        RETURNING *`;
+
+      const [{ next_x }] = await tx<[{ next_x: number }]>`
+        SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes
+        WHERE canvas_id = ${canvasId}`;
+      const [hubNode] = await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: canvasId,
+          job_id: hubJob.id as string,
+          node_type: "job",
+          title: "Hub 决策",
+          body_json: { type: "hub_reason", trigger: payload.trigger } as never,
+          x: next_x,
+          y: 300,
+          status: "pending",
+        })}
+        RETURNING id`;
+      const [root] = await tx`
+        SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+      if (root) {
+        await tx`
+          INSERT INTO canvas_edges ${tx({
+            canvas_id: canvasId,
+            from_node_id: root.id,
+            to_node_id: hubNode.id,
+            edge_type: "child",
+          })}`;
+      }
+      return hubJob;
     });
-    if (duplicated || !job) return reply.code(409).send({ error: "已有活动 job，不能重试" });
+
     await audit(req, {
-      action: "job.retry",
-      resourceType: "job",
-      resourceId: job.id as string,
-      projectId: canvas.project_id as string,
-      after: { canvas_id: canvasId, retried_from: source.id },
+      action: "task.retry_hard",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId,
+      after: { canvas_id: canvasId, job_id: job.id, mode: "wipe_and_rerun" },
     });
+    await sql`SELECT pg_notify('deepsonar_jobs', 'task_retry')`;
     return reply.code(201).send(job);
   });
 

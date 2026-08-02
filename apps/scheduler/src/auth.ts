@@ -88,6 +88,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /projects/:id/integrations/plane/sync": "integrations:write",
   "GET /canvases/:id": "tasks:read",
   "POST /tasks/:canvasId/retry": "jobs:control",
+  "POST /tasks/:canvasId/resume-session": "jobs:control",
   "POST /jobs": "tasks:write",
   "GET /jobs": "tasks:read",
   "GET /jobs/:id": "tasks:read",

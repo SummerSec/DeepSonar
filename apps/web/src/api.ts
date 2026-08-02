@@ -775,6 +775,15 @@ export const api = {
       allow_egress?: boolean;
     },
   ) => send<{ canvas_id: string; job: { id: string; status: string } }>("POST", `/projects/${projectId}/tasks`, t),
+  /** 恢复会话：继续执行（恢复 Job / 唤醒 Hub），不删历史 */
+  resumeTaskSession: (canvasId: string) =>
+    send<{
+      canvas_id: string;
+      action: "already_running" | "resume_job" | "wake_hub";
+      job?: { id: string; status: string } | null;
+      message?: string;
+    }>("POST", `/tasks/${canvasId}/resume-session`),
+  /** 重试任务：清空本画布历史后从意图重新执行 */
   retryTask: (canvasId: string) => send<{ id: string; status: string }>("POST", `/tasks/${canvasId}/retry`),
   setJobPriority: (jobId: string, priority: number) =>
     send<{ id: string; status: string; priority: number }>("PATCH", `/jobs/${jobId}/priority`, { priority }),

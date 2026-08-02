@@ -22,8 +22,8 @@ const TRANSITIONS: Record<string, string[]> = {
   provisioning: ["running", "failed", "cancelled"],
   running: ["succeeded", "failed", "timeout", "orphan", "cancelled", "waiting_human"],
   waiting_human: ["pending", "cancelled", "failed"], // resume → pending 重入队
-  // 终态失败可经人工 resume 复活（原执行恢复，区别于 retry 新建 job）；
-  // cancelled 是最终人工意图不可复活（要重跑用 /tasks/:id/retry）
+  // 终态失败可经 resume-session / resume 复活（继续执行，保留历史）；
+  // cancelled 不可复活；全部重来用 /tasks/:id/retry（清空画布历史后重跑）
   failed: ["pending"],
   timeout: ["pending"],
   orphan: ["pending"],

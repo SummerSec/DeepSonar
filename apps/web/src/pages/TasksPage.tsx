@@ -11,8 +11,6 @@ const inputCls =
   "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
 const labelCls = "mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
 const ACTIVE_STATUS = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
-const RESUMABLE_STATUS = new Set(["waiting_human", "orphan", "failed", "timeout"]);
-const TERMINAL_STATUS = new Set(["succeeded", "failed", "timeout", "cancelled", "orphan"]);
 const NETWORK_OPTIONS = [
   { value: "project" as const, label: "继承项目设置" },
   { value: "allow" as const, label: "允许出网" },
@@ -178,7 +176,82 @@ export function TasksPage() {
             const isActive = canvas.active_count > 0;
             return <article key={canvas.id} className="surface-shell deepsonar-reveal" style={{ animationDelay: `${index * 55}ms` }}><div className="surface-core flex min-h-[225px] flex-col p-5"><div className="flex items-start gap-4"><div className={`relative mt-0.5 grid size-10 shrink-0 place-items-center rounded-[14px] ring-1 ${isActive ? "bg-run-400/[.08] text-run-400 ring-run-400/15" : "bg-white/[.03] text-zinc-500 ring-white/[.055]"}`}>{isActive ? <span className="deepsonar-live-dot size-2 rounded-full bg-current" /> : <span className="size-2 rounded-full bg-current" />}</div><div className="min-w-0 flex-1"><Link to={`/projects/${projectId}/tasks/${canvas.id}`} className="line-clamp-2 text-[15px] font-medium leading-6 tracking-[-.02em] text-zinc-100 hover:text-acc-300">{canvas.title}</Link><p className="mt-2 line-clamp-2 text-[11px] leading-5 text-zinc-600">{targetLine(canvas.target_json) || "任务正在等待范围解析"}</p></div>{canvas.last_job_status && <StatusBadge status={canvas.last_job_status} />}</div>
               <div className="mt-6 grid grid-cols-3 gap-2"><Metric label="运行" value={canvas.job_count} /><Metric label="发现" value={canvas.finding_count} tone={canvas.finding_count ? "#ec8c5d" : undefined} /><Metric label="已确认" value={canvas.confirmed_count} tone={canvas.confirmed_count ? "#65e6b4" : undefined} /></div>
-              <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-white/[.045] pt-4"><span className="font-mono text-[9px] text-zinc-700" title={formatTime(canvas.created_at)}>{relativeTime(canvas.created_at)} · PRIORITY {canvas.last_job_priority ?? "—"}</span><div className="ml-auto flex items-center gap-1">{canvas.last_job_id && canvas.last_job_status && ACTIVE_STATUS.has(canvas.last_job_status) && <button onClick={async () => { try { await api.cancelJob(canvas.last_job_id!); flash("已提交取消请求"); } catch (e) { flash(`取消失败：${e instanceof Error ? e.message : e}`); } }} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"><Pause size={12} />取消</button>}{canvas.last_job_id && canvas.last_job_status && RESUMABLE_STATUS.has(canvas.last_job_status) && <button onClick={async () => { try { await api.resumeJob(canvas.last_job_id!); flash("任务已恢复入队"); } catch (e) { flash(`恢复失败：${e instanceof Error ? e.message : e}`); } }} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"><ArrowClockwise size={12} />恢复</button>}{canvas.last_job_status && TERMINAL_STATUS.has(canvas.last_job_status) && <button onClick={async () => { try { await api.retryTask(canvas.id); flash("已创建新的运行，历史记录保持不变"); } catch (e) { flash(`重试失败：${e instanceof Error ? e.message : e}`); } }} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"><ArrowClockwise size={12} />重试</button>}<Link to={`/projects/${projectId}/tasks/${canvas.id}`} className="group ml-1 inline-flex items-center gap-2 rounded-full bg-white/[.045] px-3 py-2 text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-all hover:bg-white/[.075] hover:text-white">打开工作台<ArrowUpRight size={13} className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" /></Link></div></div>
+              <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-white/[.045] pt-4">
+                <span className="font-mono text-[9px] text-zinc-700" title={formatTime(canvas.created_at)}>
+                  {relativeTime(canvas.created_at)} · PRIORITY {canvas.last_job_priority ?? "—"}
+                </span>
+                <div className="ml-auto flex items-center gap-1">
+                  {canvas.last_job_id && canvas.last_job_status && ACTIVE_STATUS.has(canvas.last_job_status) && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.cancelJob(canvas.last_job_id!);
+                          flash("已提交取消请求");
+                        } catch (e) {
+                          flash(`取消失败：${e instanceof Error ? e.message : e}`);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
+                    >
+                      <Pause size={12} />
+                      取消
+                    </button>
+                  )}
+                  {!isActive && canvas.job_count > 0 && (
+                    <button
+                      title="继续执行：恢复中断 Job 或唤醒 Hub（保留历史）"
+                      onClick={async () => {
+                        try {
+                          const r = await api.resumeTaskSession(canvas.id);
+                          if (r.action === "already_running") flash(r.message ?? "任务已在执行");
+                          else if (r.action === "resume_job") flash("已恢复会话，继续执行");
+                          else flash("已恢复会话，Hub 继续决策");
+                        } catch (e) {
+                          flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                    >
+                      <ArrowClockwise size={12} />
+                      恢复会话
+                    </button>
+                  )}
+                  {!isActive && canvas.job_count > 0 && (
+                    <button
+                      title="清空历史后从意图重新执行"
+                      onClick={async () => {
+                        if (
+                          !window.confirm(
+                            "将删除本任务的全部运行历史并按原意图从零重跑。此操作不可撤销，确定？",
+                          )
+                        ) {
+                          return;
+                        }
+                        try {
+                          await api.retryTask(canvas.id);
+                          flash("已清空历史并重新开始执行");
+                        } catch (e) {
+                          flash(`重试失败：${e instanceof Error ? e.message : e}`);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
+                    >
+                      <ArrowClockwise size={12} />
+                      重试
+                    </button>
+                  )}
+                  <Link
+                    to={`/projects/${projectId}/tasks/${canvas.id}`}
+                    className="group ml-1 inline-flex items-center gap-2 rounded-full bg-white/[.045] px-3 py-2 text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-all hover:bg-white/[.075] hover:text-white"
+                  >
+                    打开工作台
+                    <ArrowUpRight
+                      size={13}
+                      className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                    />
+                  </Link>
+                </div>
+              </div>
             </div></article>;
           })}
         </div>

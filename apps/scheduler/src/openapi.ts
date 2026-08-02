@@ -132,7 +132,8 @@ const OPS: Op[] = [
   { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", scope: "tasks:read", tags: ["Tasks"] },
   { method: "get", path: "/projects/{id}/canvas", summary: "项目当前画布（兼容）", scope: "tasks:read", tags: ["Tasks"] },
   { method: "get", path: "/canvases/{id}", summary: "画布节点与边", scope: "tasks:read", tags: ["Tasks"] },
-  { method: "post", path: "/tasks/{canvasId}/retry", summary: "同画布重试", scope: "jobs:control", tags: ["Tasks"] },
+  { method: "post", path: "/tasks/{canvasId}/resume-session", summary: "恢复会话（继续执行，不删历史）", scope: "jobs:control", tags: ["Tasks"] },
+  { method: "post", path: "/tasks/{canvasId}/retry", summary: "重试任务（清空历史后从意图重跑）", scope: "jobs:control", tags: ["Tasks"] },
   {
     method: "patch",
     path: "/canvas-nodes/{id}/verification",
