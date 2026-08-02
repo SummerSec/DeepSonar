@@ -6,6 +6,8 @@
 - 已有且 `schema_meta.version` 与当前版本一致：不重放 DDL
 - 其他结构：拒绝启动并要求重建数据库
 
+当前基线版本为 v3。它会为每个内置角色建立原生的全局 `RoleConfig`，因此全新部署后内置 Agent 可直接看到并配置。
+
 当前阶段不维护历史 migration、增量升级或基线迁移登记；结构变化直接更新 `schema.sql` 和 `schema_meta.version`。不要手工修改运行中的数据库。
 
 全新外部 PostgreSQL 可以执行：

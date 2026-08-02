@@ -16,8 +16,9 @@ export const sql = postgres(config.databaseUrl, {
 });
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-/** 空库基线：database/schema.sql。 */
+/** 空库基线：database/schema.sql（当前 schema v3）。 */
 const SCHEMA_FILE = path.resolve(HERE, "../../../database/schema.sql");
+const SCHEMA_VERSION = 3;
 
 /** 启动时校验/建立唯一 Schema 基线；advisory lock 防多实例并发建库。 */
 const MIGRATE_LOCK_ID = 726868001;
@@ -40,8 +41,10 @@ async function applySchemaBaseline(db: ReservedConnection): Promise<string[]> {
     ) AS exists`;
   if (row?.exists) {
     const [meta] = await db`SELECT version FROM schema_meta WHERE id = 'global'`.catch(() => []);
-    if (meta?.version !== 2) {
-      throw new Error("当前数据库不是 schema v2；本版本不提供旧结构兼容或增量迁移，请重建数据库。");
+    if (meta?.version !== SCHEMA_VERSION) {
+      throw new Error(
+        `当前数据库不是 schema v${SCHEMA_VERSION}；本版本不提供旧结构兼容或增量迁移，请重建数据库。`,
+      );
     }
     return [];
   }

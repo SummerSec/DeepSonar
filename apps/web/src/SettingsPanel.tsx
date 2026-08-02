@@ -80,14 +80,20 @@ export function SettingsPanel({
   const [planeBusy, setPlaneBusy] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
   const reload = () => {
+    setAgentLoadError(null);
+    const showAgentLoadError = (label: string, error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      setAgentLoadError(`${label}加载失败：${detail}`);
+    };
     // 全局缺省配置清单两种模式都要：全局模式直接编辑，项目模式用来预填覆盖表单
-    api.globalRoleConfigs().then(setGlobalConfigs).catch(() => {});
+    api.globalRoleConfigs().then(setGlobalConfigs).catch((error) => showAgentLoadError("全局 Agent 配置", error));
     if (projectId) {
       // 项目模式：角色带启用态 + 角色配置来源（项目覆盖/全局缺省/未配置）
-      api.projectRoles(projectId).then(setRoles).catch(() => {});
-      api.projectRoleConfigs(projectId).then(setProjConfigs).catch(() => {});
+      api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error));
+      api.projectRoleConfigs(projectId).then(setProjConfigs).catch((error) => showAgentLoadError("项目 Agent 配置", error));
       api
         .projects()
         .then((list) => setPlaneBind(list.find((p) => p.id === projectId)?.plane_project_id ?? null))
@@ -108,7 +114,7 @@ export function SettingsPanel({
             list.map((r) => ({ ...r, enabled: false, default_enabled: false })),
           ),
         )
-        .catch(() => {});
+        .catch((error) => showAgentLoadError("内置 Agent", error));
       api
         .globalSettings()
         .then((g) => setRules(g.effective_rules))
@@ -449,6 +455,14 @@ export function SettingsPanel({
       </div>
 
       <div className={`settings-content flex-1 overflow-y-auto py-5 ${variant === "page" ? "w-full px-5 sm:px-9" : "px-4"}`}>
+        {agentLoadError && (
+          <div role="alert" className="mb-4 flex items-start gap-3 rounded-[10px] border border-red-400/20 bg-red-400/[.06] px-4 py-3 text-[12px] leading-relaxed text-red-200">
+            <span className="min-w-0 flex-1">{agentLoadError}</span>
+            <button onClick={reload} className="shrink-0 font-mono text-[10px] text-red-300 underline underline-offset-2 hover:text-red-100">
+              重试
+            </button>
+          </div>
+        )}
         {activeTab === "rules" && rules && (!projectId || settings) && (
           <div className="flex flex-col gap-4">
             {projectId && (
@@ -568,8 +582,8 @@ export function SettingsPanel({
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
               {roles.filter((r) => r.kind === "role").map(renderRoleRow)}
-              {roles.filter((r) => r.kind === "role").length === 0 && (
-                <div className="py-2 font-mono text-[13px] text-zinc-600">暂无角色 —— 重启调度器应用迁移后出现内置角色</div>
+              {!agentLoadError && roles.filter((r) => r.kind === "role").length === 0 && (
+                <div className="py-2 font-mono text-[13px] text-zinc-600">角色注册表为空，请检查当前 schema 基线数据</div>
               )}
             </div>
 

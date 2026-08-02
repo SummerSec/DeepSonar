@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 2);
+INSERT INTO schema_meta (id, version) VALUES ('global', 3);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -312,6 +312,13 @@ INSERT INTO agent_roles (name, title, description, builtin, kind) VALUES
   ('hub_reason', '决策中枢', '读取任务画布并判断完成度；未完成时选择角色并编写完整 Worker prompt', true, 'hub'),
   ('noop', '空转', '只用于验证调度状态机，不启动真实 Agent', true, 'system')
 ON CONFLICT (name) DO NOTHING;
+
+-- 每个内置角色都是开箱即用的 Agent。这里只写入当前模型的原生全局
+-- RoleConfig，不恢复已删除的 agent_profiles 或任何兼容映射。
+INSERT INTO role_configs (role_id, agent_cli)
+SELECT id, 'claude-code'
+FROM agent_roles
+WHERE builtin = true;
 
 INSERT INTO global_settings (id) VALUES ('global') ON CONFLICT DO NOTHING;
 
