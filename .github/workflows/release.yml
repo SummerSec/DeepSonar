@@ -1,6 +1,7 @@
 name: release
 
-# 可发布制品（§12.1）：tag v* 触发 —— 镜像固定版本推到 GHCR + Management Skill Release 附件
+# 可发布制品（§12.1）：tag v* 触发 —— 全量镜像推到 GHCR，三类精简 agent 镜像同时推到 Docker Hub。
+# Docker Hub 单仓库使用 base-* / audit-* / kali-minimal-* 标签区分运行时，不发布含义模糊的 latest。
 # 制品：deepsonar-scheduler / deepsonar-web / deepsonar-image-admission / 三类精简 agent 镜像（digest 固定）
 on:
   push:
@@ -16,15 +17,18 @@ env:
 jobs:
   images:
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     strategy:
       matrix:
         include:
-          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", build_args: "" }
-          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", build_args: "" }
-          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", build_args: "" }
-          - { name: base, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=base" }
-          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=audit" }
-          - { name: kali-minimal, dockerfile: deploy/Dockerfile.agent-kali-minimal, platforms: "linux/amd64,linux/arm64", build_args: "" }
+          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", build_args: "", dockerhub_tag: "" }
+          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", build_args: "", dockerhub_tag: "" }
+          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", build_args: "", dockerhub_tag: "" }
+          - { name: base, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=base", dockerhub_tag: "base" }
+          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=audit", dockerhub_tag: "audit" }
+          - { name: kali-minimal, dockerfile: deploy/Dockerfile.agent-kali-minimal, platforms: "linux/amd64,linux/arm64", build_args: "", dockerhub_tag: "kali-minimal" }
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +48,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Docker Hub 凭据未配置
+        if: ${{ matrix.dockerhub_tag != '' && (env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '') }}
+        run: echo "Docker Hub publish skipped; configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 登录 Docker Hub
+        if: ${{ matrix.dockerhub_tag != '' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -52,12 +68,24 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,prefix=
 
+      - id: dockerhub_meta
+        if: ${{ matrix.dockerhub_tag != '' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/sumsec/deepsonar
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.dockerhub_tag }}-{{version}}
+            type=sha,prefix=${{ matrix.dockerhub_tag }}-sha-
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.dockerhub_meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: ${{ matrix.platforms }}
           build-args: ${{ matrix.build_args }}

@@ -145,6 +145,16 @@ AGENT_PROVIDER=claude-code
 ANTHROPIC_API_KEY=your-key
 ```
 
+正式 `v*` Release 还会把三类运行时发布到同一个 Docker Hub 仓库 `docker.io/sumsec/deepsonar`：
+
+```text
+sumsec/deepsonar:base-<version>
+sumsec/deepsonar:audit-<version>
+sumsec/deepsonar:kali-minimal-<version>
+```
+
+在 GitHub 仓库 `Settings → Secrets and variables → Actions` 中配置 `DOCKERHUB_USERNAME=sumsec` 与具有 Read & Write 权限的 `DOCKERHUB_TOKEN`。未配置时 Release 仍发布 GHCR，但会跳过 Docker Hub。部署配置最终仍应使用发布后解析出的 `docker.io/sumsec/deepsonar@sha256:<digest>`，不能把可变 tag 冻结进 Job。
+
 3. 若要从独立的“镜像市场”页导入第三方镜像，还要将 Cosign、Syft、Trivy、ClamAV 扫描器引用配成 `name@sha256:digest`，并校对 `DEEPSONAR_ALLOWED_IMAGE_REGISTRIES`。扫描器未固定时 Worker 会拒绝准入，不会退回 tag。
 
 也可以使用 Codex/OpenAI 兼容端点：
