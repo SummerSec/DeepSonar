@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  CaretDown,
   DotsThree,
   FileText,
   Graph,
@@ -116,6 +117,8 @@ export function TaskCanvasPage() {
   const [convBusy, setConvBusy] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  /** 任务内容 / 审计范围：默认折叠，避免挤占画布 */
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -328,20 +331,54 @@ export function TaskCanvasPage() {
         </div>
       </div>
 
-      {/* 任务只展示自然语言内容。 */}
+      {/* 任务只展示自然语言内容；默认可折叠，避免挤占工作台。 */}
       {scopeEntries.length > 0 && (
-        <div className="task-workbench-scope mx-3 mt-2 shrink-0 rounded-2xl bg-white/[.018] px-4 py-2.5 ring-1 ring-white/[.04]">
-          <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">
-            <Target size={13} className="text-acc-500" />
-            {typeof meta?.target_json?.content === "string" ? "任务内容" : "本次审计范围"}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {scopeEntries.map(([k, v]) => typeof v === "string" && k === "内容" ? (
-              <div key={k} className="w-full rounded-xl bg-black/20 px-4 py-3 ring-1 ring-white/[.045]"><MarkdownView markdown={v} /></div>
-            ) : (
-              <span key={k} className="inline-flex max-w-full items-baseline gap-1.5 rounded-full bg-black/20 px-2.5 py-1 ring-1 ring-white/[.045]"><span className="shrink-0 font-mono text-[9px] text-zinc-600">{k}</span><span className="truncate text-[10px] text-zinc-300">{typeof v === "string" ? v : JSON.stringify(v)}</span></span>
-            ))}
-          </div>
+        <div className="task-workbench-scope mx-3 mt-2 shrink-0 rounded-2xl bg-white/[.018] ring-1 ring-white/[.04]">
+          <button
+            type="button"
+            onClick={() => setScopeOpen((v) => !v)}
+            aria-expanded={scopeOpen}
+            className="flex w-full items-center gap-1.5 px-4 py-2.5 text-left transition-colors hover:bg-white/[.02]"
+          >
+            <Target size={13} className="shrink-0 text-acc-500" />
+            <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">
+              {typeof meta?.target_json?.content === "string" ? "任务内容" : "本次审计范围"}
+            </span>
+            {!scopeOpen && (
+              <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">
+                {scopeEntries
+                  .map(([, v]) => (typeof v === "string" ? v : JSON.stringify(v)))
+                  .join(" · ")
+                  .replace(/\s+/g, " ")}
+              </span>
+            )}
+            {scopeOpen && <span className="flex-1" />}
+            <CaretDown
+              size={14}
+              className={`shrink-0 text-zinc-600 transition-transform ${scopeOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          {scopeOpen && (
+            <div className="flex flex-wrap gap-2 border-t border-white/[.04] px-4 py-2.5">
+              {scopeEntries.map(([k, v]) =>
+                typeof v === "string" && k === "内容" ? (
+                  <div key={k} className="w-full rounded-xl bg-black/20 px-4 py-3 ring-1 ring-white/[.045]">
+                    <MarkdownView markdown={v} />
+                  </div>
+                ) : (
+                  <span
+                    key={k}
+                    className="inline-flex max-w-full items-baseline gap-1.5 rounded-full bg-black/20 px-2.5 py-1 ring-1 ring-white/[.045]"
+                  >
+                    <span className="shrink-0 font-mono text-[9px] text-zinc-600">{k}</span>
+                    <span className="truncate text-[10px] text-zinc-300">
+                      {typeof v === "string" ? v : JSON.stringify(v)}
+                    </span>
+                  </span>
+                ),
+              )}
+            </div>
+          )}
         </div>
       )}
 
