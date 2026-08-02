@@ -83,6 +83,7 @@ export async function dispatchOnce(): Promise<number> {
     const rules = await globalRules(tx as unknown as typeof sql);
     const providerLimits = rules.maxConcurrentByProvider;
     const cliLimits = rules.maxConcurrentByAgentCli;
+    // FOR UPDATE 不能锁 outer join 的可空侧；只锁 jobs 行。
     const pending = await tx`
       SELECT j.id, j.project_id,
              j.agent_snapshot_json->>'agent_cli' AS agent_cli,
@@ -95,7 +96,7 @@ export async function dispatchOnce(): Promise<number> {
       WHERE j.status = 'pending'
       ORDER BY j.priority DESC, j.created_at
       LIMIT 500
-      FOR UPDATE SKIP LOCKED`;
+      FOR UPDATE OF j SKIP LOCKED`;
 
     const claimed: { id: string }[] = [];
     for (const job of pending) {

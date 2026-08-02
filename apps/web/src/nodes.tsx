@@ -1,11 +1,47 @@
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
-import { Brain, Bug, CheckCircle, Compass, Database, FileText, FileX, Note, Robot, SealCheck, UserCircle } from "@phosphor-icons/react";
+import {
+  Brain,
+  Bug,
+  CaretDown,
+  CaretUp,
+  CheckCircle,
+  Compass,
+  Database,
+  FileText,
+  FileX,
+  Note,
+  Robot,
+  SealCheck,
+  UserCircle,
+} from "@phosphor-icons/react";
 import type { CanvasNode } from "./api";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
-export type DEEPSONARNodeData = { canvas: CanvasNode };
+export type DEEPSONARNodeData = {
+  canvas: CanvasNode;
+  /** 从 root 起算的图深度（root=1） */
+  depth?: number;
+  /** 被折叠的直接后继数量 */
+  collapsedChildCount?: number;
+  /** 用户是否已手动展开本节点 */
+  isExpanded?: boolean;
+  /** 展开本节点的直接后继 */
+  onExpandNode?: () => void;
+  /** 收起本节点（撤销手动展开） */
+  onCollapseNode?: () => void;
+};
 export type DEEPSONARNode = Node<DEEPSONARNodeData, string>;
-export type SemanticNodeKind = "task" | "intent" | "hub" | "finding" | "subagent" | "verify" | "fact" | "report" | "human" | "note";
+export type SemanticNodeKind =
+  | "task"
+  | "intent"
+  | "hub"
+  | "finding"
+  | "subagent"
+  | "verify"
+  | "fact"
+  | "report"
+  | "human"
+  | "note";
 
 export function semanticNodeKind(n: CanvasNode): SemanticNodeKind {
   const jobType = String(n.body_json?.type ?? "");
@@ -34,8 +70,6 @@ export const SEMANTIC_STYLE: Record<SemanticNodeKind, { label: string; color: st
   note: { label: "说明", color: "#94a3b8" },
 };
 
-/** 语义状态色（与侧栏/图例共用同一套） */
-
 const TYPE_LABEL: Record<string, string> = {
   root: "任务",
   job: "运行",
@@ -46,8 +80,6 @@ const TYPE_LABEL: Record<string, string> = {
   fact: "事实",
   report: "报告",
 };
-
-/** fact 节点验证状态徽标（独立于执行状态 status） */
 
 /** 运行中状态：状态点带呼吸脉冲 */
 const LIVE_STATUS = new Set(["running", "claimed", "provisioning", "active", "generating"]);
@@ -63,29 +95,36 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const jobType = (n.body_json?.type as string) ?? null;
   const role = (n.body_json?.role as string) ?? null;
   const location = (n.body_json?.location as string) ?? null;
-  // 「当前动作」（工具调用聚合，executor 直接写显示态）优先于 job 类型展示
-  const lastAction = (n.body_json?.last_progress as { message?: string } | undefined)?.message ?? null;
-  // 任务 root：显示自然语言内容
+  const lastAction =
+    (n.body_json?.last_progress as { message?: string } | undefined)?.message ?? null;
   const target = n.body_json?.target as Record<string, unknown> | undefined;
-  const targetText = target
-    ? String(target.content ?? "")
-    : null;
+  const targetText = target ? String(target.content ?? "") : null;
 
-  // 类型标签：hub job 单独标识为「中枢」
   const typeLabel = semanticStyle.label ?? TYPE_LABEL[n.node_type] ?? n.node_type;
+  const collapsedChildCount = data.collapsedChildCount ?? 0;
+  const isExpanded = Boolean(data.isExpanded);
 
   const semanticIcon =
-    semantic === "task" ? <Compass size={15} /> :
-    semantic === "intent" ? <Compass size={15} /> :
-    semantic === "hub" ? <Brain size={15} weight="fill" /> :
-    semantic === "finding" ? <Bug size={15} weight="fill" /> :
-    semantic === "subagent" ? <Robot size={15} /> :
-    semantic === "verify" ? <SealCheck size={15} /> :
-    semantic === "fact" ? <Database size={15} /> :
-    semantic === "human" ? <UserCircle size={15} /> :
-    semantic === "note" ? <Note size={15} /> : null;
+    semantic === "task" ? (
+      <Compass size={15} />
+    ) : semantic === "intent" ? (
+      <Compass size={15} />
+    ) : semantic === "hub" ? (
+      <Brain size={15} weight="fill" />
+    ) : semantic === "finding" ? (
+      <Bug size={15} weight="fill" />
+    ) : semantic === "subagent" ? (
+      <Robot size={15} />
+    ) : semantic === "verify" ? (
+      <SealCheck size={15} />
+    ) : semantic === "fact" ? (
+      <Database size={15} />
+    ) : semantic === "human" ? (
+      <UserCircle size={15} />
+    ) : semantic === "note" ? (
+      <Note size={15} />
+    ) : null;
 
-  // 报告节点：图标随状态变化（生成中 / 成功 / 失败）
   const reportIcon =
     n.node_type === "report" ? (
       status === "succeeded" ? (
@@ -97,7 +136,6 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
       )
     ) : null;
 
-  // fact 节点：验证状态徽标（独立于执行状态）
   const verification =
     n.node_type === "fact" && n.verification_status
       ? (VERIFICATION_META[n.verification_status] ?? {
@@ -106,7 +144,6 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
         })
       : null;
 
-  // 报告节点描边：成功=实线结论，失败=红，生成中=呼吸
   const reportBorder =
     n.node_type === "report"
       ? status === "succeeded"
@@ -116,7 +153,6 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
           : "border-sky-500/70 shadow-[0_0_14px_rgba(56,189,248,0.18)]"
       : "";
 
-  // intent 三态样式（§8.3）：pending=虚线未认领 / running=呼吸描边 / succeeded=实线已结论
   const intentBorder =
     n.node_type === "intent"
       ? status === "pending"
@@ -128,68 +164,117 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
             : "border-red-900/70"
       : "";
 
+  const showExpand = collapsedChildCount > 0 && data.onExpandNode;
+  const showCollapse = isExpanded && data.onCollapseNode;
+
   return (
-    <div className={`deepsonar-node w-full rounded-[18px] p-1 ring-1 ${intentBorder} ${reportBorder}`} style={{ background: `color-mix(in srgb, ${semanticStyle.color} 13%, transparent)`, boxShadow: `0 0 0 1px color-mix(in srgb, ${semanticStyle.color} 32%, transparent)` }}>
+    <div
+      className={`deepsonar-node w-full rounded-[18px] p-1 ring-1 ${intentBorder} ${reportBorder}`}
+      style={{
+        background: `color-mix(in srgb, ${semanticStyle.color} 13%, transparent)`,
+        boxShadow: `0 0 0 1px color-mix(in srgb, ${semanticStyle.color} 32%, transparent)`,
+      }}
+    >
       <Handle type="target" position={Position.Left} isConnectable={false} />
 
       <div className="rounded-[14px] bg-[#12171a] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.045)]">
-
-      {/* 头部：类型 + 状态 */}
-      <div className="flex items-center gap-2">
-        {reportIcon}
-        {!reportIcon && <span style={{ color: semanticStyle.color }}>{semanticIcon}</span>}
-        <span className="font-mono text-[12px] uppercase tracking-[0.14em]" style={{ color: semanticStyle.color }}>
-          {typeLabel}
-        </span>
-        {verification && (
+        {/* 头部：类型 + 状态 */}
+        <div className="flex items-center gap-2">
+          {reportIcon}
+          {!reportIcon && <span style={{ color: semanticStyle.color }}>{semanticIcon}</span>}
           <span
-            className="rounded border px-1 font-mono text-[11px]"
-            style={{ color: verification.color, borderColor: `${verification.color}66` }}
+            className="font-mono text-[12px] uppercase tracking-[0.14em]"
+            style={{ color: semanticStyle.color }}
           >
-            {verification.label}
+            {typeLabel}
           </span>
-        )}
-        {status && (
-          <span className="ml-auto flex items-center gap-1.5">
+          {verification && (
             <span
-              className={`inline-block size-2 rounded-full ${LIVE_STATUS.has(status) ? "deepsonar-live-dot" : ""}`}
-              style={{ background: statusColor }}
-            />
-            <span className="font-mono text-[12px]" style={{ color: statusColor }}>
-              {status}
+              className="rounded border px-1 font-mono text-[11px]"
+              style={{ color: verification.color, borderColor: `${verification.color}66` }}
+            >
+              {verification.label}
             </span>
-          </span>
-        )}
-      </div>
+          )}
+          {status && (
+            <span className="ml-auto flex items-center gap-1.5">
+              <span
+                className={`inline-block size-2 rounded-full ${LIVE_STATUS.has(status) ? "deepsonar-live-dot" : ""}`}
+                style={{ background: statusColor }}
+              />
+              <span className="font-mono text-[12px]" style={{ color: statusColor }}>
+                {status}
+              </span>
+            </span>
+          )}
+        </div>
 
-      {/* 标题：最多两行 */}
-      <div
-        className="mt-1.5 text-[15px] font-medium leading-snug text-zinc-100"
-        style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-      >
-        {n.title}
-      </div>
+        {/* 标题：最多两行 */}
+        <div
+          className="mt-1.5 text-[15px] font-medium leading-snug text-zinc-100"
+          style={{
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {n.title}
+        </div>
 
-      {/* 底部元信息：位置 / job 类型 / severity */}
-      <div className="mt-1.5 flex items-center gap-2">
-        {location && (
-          <span className="truncate font-mono text-[13px] text-zinc-500">{location}</span>
-        )}
-        {!location && (
-          <span className="truncate font-mono text-[13px] text-zinc-500">
-            {lastAction ?? role ?? targetText ?? jobType ?? ""}
-          </span>
-        )}
-        {severity && (
-          <span
-            className="ml-auto font-mono text-[12px] font-medium uppercase tracking-wider"
-            style={{ color: sevColor ?? undefined }}
-          >
-            {severity}
-          </span>
-        )}
-      </div>
+        {/* 底部元信息：位置 / job 类型 / severity */}
+        <div className="mt-1.5 flex items-center gap-2">
+          {location && (
+            <span className="truncate font-mono text-[13px] text-zinc-500">{location}</span>
+          )}
+          {!location && (
+            <span className="truncate font-mono text-[13px] text-zinc-500">
+              {lastAction ?? role ?? targetText ?? jobType ?? ""}
+            </span>
+          )}
+          {severity && (
+            <span
+              className="ml-auto font-mono text-[12px] font-medium uppercase tracking-wider"
+              style={{ color: sevColor ?? undefined }}
+            >
+              {severity}
+            </span>
+          )}
+        </div>
 
+        {/* 按节点手动展开 / 收起后继 */}
+        {(showExpand || showCollapse) && (
+          <div className="mt-2 flex gap-1.5">
+            {showExpand && (
+              <button
+                type="button"
+                className="flex flex-1 items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] text-acc-400/90 ring-1 ring-acc-400/20 transition-colors hover:bg-acc-400/[.08] hover:text-acc-300"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  data.onExpandNode?.();
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <CaretDown size={11} /> 展开 · {collapsedChildCount}
+              </button>
+            )}
+            {showCollapse && (
+              <button
+                type="button"
+                className="flex flex-1 items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.04] hover:text-zinc-300"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  data.onCollapseNode?.();
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <CaretUp size={11} /> 收起
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <Handle type="source" position={Position.Right} isConnectable={false} />

@@ -5,16 +5,26 @@ import type { CanvasEdge, CanvasNode } from "./api";
  * 从 root 向右自由生长，层级由图的拓扑决定（不再是固定语义列）。
  * 环（fact → root 的收敛边）由 ELK cycle-breaking 处理。
  * layoutNodes（固定列）保留为首帧占位，elk 算完即替换。
+ *
+ * 高度按实际卡片估算；间距必须覆盖渲染高度，否则会视觉重合。
+ * 深度折叠只影响可见集合，布局仍对全图计算，展开时坐标稳定。
  */
 
 export const NODE_W = 280;
-/** 高度估算（BaseNode 内容决定实际高度；elk 只需要近似值排间距） */
-const NODE_H: Record<string, number> = {
-  root: 96,
-  job: 96,
-  intent: 112, // 标题两行 + role 行
-  fact: 92,
-  finding: 96,
+
+/**
+ * 节点高度估算（含边界「展开更深」按钮余量）。
+ * BaseNode ≈ 外框 8 + 内边距 24 + 头 20 + 标题两行 42 + 元信息 20 + 可选按钮 ≈ 140。
+ */
+export const NODE_H: Record<string, number> = {
+  root: 148,
+  job: 148,
+  intent: 156,
+  fact: 148,
+  finding: 148,
+  human: 148,
+  note: 140,
+  report: 148,
 };
 
 export async function elkLayout(
@@ -29,8 +39,10 @@ export async function elkLayout(
     layoutOptions: {
       "elk.algorithm": "layered",
       "elk.direction": "RIGHT",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "90",
-      "elk.spacing.nodeNode": "36",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "110",
+      // 同层节点间距：必须 > 0 且能覆盖高度低估误差，避免卡片视觉重叠
+      "elk.spacing.nodeNode": "56",
+      "elk.layered.spacing.edgeNodeBetweenLayers": "40",
       "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
       "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
       "elk.layered.cycleBreaking.strategy": "GREEDY",
@@ -40,7 +52,7 @@ export async function elkLayout(
     children: nodes.map((n) => ({
       id: n.id,
       width: NODE_W,
-      height: NODE_H[n.node_type] ?? 92,
+      height: NODE_H[n.node_type] ?? 148,
     })),
     edges: edges.map((e) => ({
       id: e.id,
@@ -59,7 +71,8 @@ export async function elkLayout(
  */
 
 const COL_X = [80, 460, 840, 1220, 1600, 1980];
-const ROW_GAP = 132;
+/** 行距 = 节点高度 + 间隙，避免固定列兜底时重叠 */
+const ROW_GAP = 200;
 const TOP = 90;
 
 function columnOf(n: CanvasNode): number {

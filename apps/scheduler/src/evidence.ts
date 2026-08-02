@@ -82,7 +82,8 @@ export class JobEvidenceWriter {
   appendNormalized(event: Record<string, unknown>): void {
     const line = JSON.stringify({ at: Date.now(), ...event }) + "\n";
     this.queue = this.queue.then(async () => {
-      await mkdir(this.root, { recursive: true });
+      // stream.ndjson 在 attempts/<id>/ 下，必须建 attempt 目录而不是仅 job 根目录
+      await mkdir(this.attemptRoot, { recursive: true });
       await appendFile(this.streamPath, line, "utf8");
     });
   }
