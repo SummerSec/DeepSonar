@@ -384,11 +384,11 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 长期密钥不进入数据库明文字段、Job 快照或工作区文件。RoleConfig 的 `env_vars` 只能保存非敏感值；`env_keys` 经过服务端白名单；Credential 运行时换成短期 Job Token。
 
-平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权。`mark_job_done` 对所有角色、`submit_hub_decision` 对 Hub 是不可关闭的终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。
+平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权。`mark_job_done` 对所有角色，以及 `list_available_roles`、`submit_hub_decision` 对 Hub 是不可关闭的决策/终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。
 
 ### 8.2 Git 模块源（skill_sources）
 
-Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个 RoleConfig 按需勾选：
+Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
 
 - `POST /skill-sources/:id/sync`：浅克隆 → 扫描 `SKILL.md`（skill）与 `commands/*.md`（slash 命令）→ catalog（含文件内容）落库缓存
 - 模块归属按最近含 `.claude-plugin/plugin.json` 的祖先目录分组（= 插件）
@@ -404,7 +404,7 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 - **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 整图 YAML；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
 - Hub 可下发工作角色输入 = 整图 YAML + 当前意图；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
-- 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
+- 规则：`hubEnabled`（默认 true，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED` 可覆盖关闭）、`maxHubRounds`、`maxIntentsPerDecision`；`allowEgress` 同样默认 true，任务创建时可覆盖并冻结到画布
 - **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 需要派发时主动调用 `list_available_roles` 平台工具；工具从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不把角色清单预埋进 prompt，也不维护代码侧固定角色枚举。`submit_hub_decision` 落地时调度器用同一数据库边界再次校验，缺失、停用或 system/hub 角色会令整次决策失败，不做默认回退。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；所有 `kind='role'` 条目（包括内置模板）都可删除或新增。`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单且不可删除，但职责描述和 RoleConfig 均可修改。其中 `audit` 产出 Finding，其余工作角色产出 Fact
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
@@ -529,7 +529,7 @@ MAX_FOLLOWUPS_PER_JOB=20
 MAX_FOLLOWUP_DEPTH=4
 MAX_AUTO_RETRIES=6
 
-DEEPSONAR_HUB_ENABLED=false
+DEEPSONAR_HUB_ENABLED=true
 DEEPSONAR_HUB_MAX_ROUNDS=20
 DEEPSONAR_HUB_MAX_INTENTS=6
 

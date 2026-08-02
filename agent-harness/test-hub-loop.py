@@ -44,8 +44,10 @@ def main() -> None:
     pid = project["id"]
     print("project:", pid)
 
-    # 开启 hub（加速 graph_progress 收敛；confirmed 路径本身 force）
-    settings = req("PATCH", f"/projects/{pid}/settings", {"rules": {"hubEnabled": True}})
+    # Hub 与 Worker 出网均为全局默认开启；项目仍可覆盖关闭。
+    settings = req("GET", f"/projects/{pid}/settings")
+    assert settings["effective_rules"]["hubEnabled"] is True
+    assert settings["effective_rules"]["allowEgress"] is True
     print("effective_rules:", json.dumps(settings.get("effective_rules", {}), ensure_ascii=False))
 
     task = req(

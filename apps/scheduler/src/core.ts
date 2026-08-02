@@ -82,7 +82,7 @@ function envDefaultRules(): ProjectRules {
     hubEnabled: config.hub.enabled,
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
-    allowEgress: false,
+    allowEgress: true,
   };
 }
 

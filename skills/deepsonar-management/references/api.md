@@ -133,6 +133,8 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 
 ### Skill 模块源
 
+数据库基线内置 `DeepSonar-Skills`：稳定 source id 为 `f150e774-d237-57e4-847c-4800722f88ee`，仓库为 `https://github.com/SummerSec/DeepSonar-Skills.git`，分支 `main`，默认 trusted + enabled。catalog 不嵌入 schema，需经同步接口获取当前仓库内容。
+
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /skill-sources | skills:read | 源列表 |

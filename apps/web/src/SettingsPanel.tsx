@@ -750,8 +750,8 @@ export function SettingsPanel({
         {activeTab === "sources" && (
           <div className="flex flex-col gap-3">
             <div className="text-[13px] leading-relaxed text-zinc-500">
-              Agent 的插件 / skill 集中托管在 Git 仓库（如{" "}
-              <span className="font-mono text-zinc-400">SumSec-Skills</span>
+              Agent 的插件 / skill 集中托管在 Git 仓库（默认内置{" "}
+              <span className="font-mono text-zinc-400">DeepSonar-Skills</span>
               ）。同步后扫描出全部模块，在「角色配置」里按角色勾选下发；内容随同步缓存，跑任务不再访问 Git。
             </div>
 
@@ -867,13 +867,13 @@ export function SettingsPanel({
                 value={newSource.name}
                 onChange={(e) => setNewSource({ ...newSource, name: e.target.value })}
                 className={inputCls}
-                placeholder="名称（如 sumsec-skills）"
+                placeholder="名称（如 team-agent-skills）"
               />
               <input
                 value={newSource.repo_url}
                 onChange={(e) => setNewSource({ ...newSource, repo_url: e.target.value })}
                 className={inputCls}
-                placeholder="https://github.com/SummerSec/SumSec-Skills"
+                placeholder="https://github.com/example/team-agent-skills"
               />
               <input
                 value={newSource.branch}

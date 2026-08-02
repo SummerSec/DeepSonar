@@ -104,7 +104,7 @@ export const config = {
 
   /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */
   hub: {
-    enabled: bool("DEEPSONAR_HUB_ENABLED", false),
+    enabled: bool("DEEPSONAR_HUB_ENABLED", true),
     maxRounds: int("DEEPSONAR_HUB_MAX_ROUNDS", 20),
     maxIntents: int("DEEPSONAR_HUB_MAX_INTENTS", 6),
   },

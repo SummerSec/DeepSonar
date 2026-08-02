@@ -326,6 +326,12 @@ CREATE TRIGGER canvas_nodes_notify_semantic_event
   WHEN (NEW.node_type IN ('fact', 'finding'))
   EXECUTE FUNCTION deepsonar_notify_canvas_event();
 
+-- 官方模块源使用基于仓库 URL 的稳定 UUID，确保跨环境导入的 RoleConfig 模块引用可复现。
+-- catalog 不写入基线；首次部署或仓库更新时仍通过受控 sync 接口浅克隆并缓存内容。
+INSERT INTO skill_sources (id, name, repo_url, branch, trust_status, enabled) VALUES
+  ('f150e774-d237-57e4-847c-4800722f88ee', 'DeepSonar-Skills', 'https://github.com/SummerSec/DeepSonar-Skills.git', 'main', 'trusted', true)
+ON CONFLICT (name) DO NOTHING;
+
 INSERT INTO agent_roles (name, title, description, builtin, kind) VALUES
   ('explore', '探索', '围绕任务意图收集新的、可验证的事实与证据', true, 'role'),
   ('analyze', '分析', '关联已有事实，追踪数据流、评估影响并形成有证据的分析结论', true, 'role'),
@@ -545,10 +551,10 @@ INSERT INTO global_settings (id, rules_json) VALUES (
     "maxAutoRetries": 6,
     "auditTimeoutSec": 7200,
     "verifyTimeoutSec": 3600,
-    "hubEnabled": false,
+    "hubEnabled": true,
     "maxHubRounds": 20,
     "maxIntentsPerDecision": 6,
-    "allowEgress": false
+    "allowEgress": true
   }'::jsonb
 ) ON CONFLICT DO NOTHING;
 

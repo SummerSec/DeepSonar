@@ -80,6 +80,17 @@ def main() -> None:
     )
     assert code == 400, f"关闭 Hub 角色查询工具应被拒，得到 {code}"
 
+    # 数据库基线内置官方模块源；catalog 是否已有内容取决于部署后是否执行过同步。
+    sources = req("GET", "/skill-sources")
+    official = next(s for s in sources if s["id"] == "f150e774-d237-57e4-847c-4800722f88ee")
+    assert official["name"] == "DeepSonar-Skills"
+    assert official["repo_url"] == "https://github.com/SummerSec/DeepSonar-Skills.git"
+    assert official["branch"] == "main"
+    assert official["trust_status"] == "trusted" and official["enabled"] is True
+    global_settings = req("GET", "/global-settings")
+    assert global_settings["effective_rules"]["hubEnabled"] is True
+    assert global_settings["effective_rules"]["allowEgress"] is True
+
     # 2. 项目视角：默认全部内置工作角色启用（库中可能残留历史自定义角色，不纳入集合相等）
     proles = req("GET", f"/projects/{pid}/roles")
     print("默认启用:", [(r["name"], r["enabled"], r["default_enabled"]) for r in proles])
