@@ -774,7 +774,8 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .react-flow__edge.deepsonar-edge-next .react-flow__edge-path { stroke-dasharray: 16 8; }
 .react-flow__edge.deepsonar-edge-from .react-flow__edge-path { stroke-dasharray: 2 7; }
 .react-flow__edge.deepsonar-edge-to .react-flow__edge-path { stroke-dasharray: 9 6; }
-.react-flow__node.selected .deepsonar-node { border-color: var(--red-bright); box-shadow: inset 3px 0 0 var(--red); }
+.deepsonar-node { position: relative; }
+.react-flow__node.selected .deepsonar-node { border-color: var(--red-bright) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--red-bright) 45%, transparent) !important; }
 
 @media (max-width: 767px) {
   body { overflow: hidden; }

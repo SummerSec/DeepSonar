@@ -1673,48 +1673,26 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/jobs", async (req) => {
     const q = req.query as { project_id?: string; status?: string };
-    // 联表项目名 / 画布标题，前端列表页直接展示
-    if (q.project_id && q.status) {
-      return sql`
-        SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
-               j.started_at, j.finished_at, j.created_at,
-               p.name AS project_name, c.title AS canvas_title
-        FROM jobs j
-        JOIN projects p ON p.id = j.project_id
-        LEFT JOIN canvases c ON c.id = j.canvas_id
-        WHERE j.project_id = ${q.project_id} AND j.status = ${q.status}
-        ORDER BY j.created_at DESC LIMIT 200`;
-    }
-    if (q.project_id) {
-      return sql`
-        SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
-               j.started_at, j.finished_at, j.created_at,
-               p.name AS project_name, c.title AS canvas_title
-        FROM jobs j
-        JOIN projects p ON p.id = j.project_id
-        LEFT JOIN canvases c ON c.id = j.canvas_id
-        WHERE j.project_id = ${q.project_id}
-        ORDER BY j.created_at DESC LIMIT 200`;
-    }
-    if (q.status) {
-      return sql`
-        SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
-               j.started_at, j.finished_at, j.created_at,
-               p.name AS project_name, c.title AS canvas_title
-        FROM jobs j
-        JOIN projects p ON p.id = j.project_id
-        LEFT JOIN canvases c ON c.id = j.canvas_id
-        WHERE j.status = ${q.status}
-        ORDER BY j.created_at DESC LIMIT 200`;
-    }
+    // 联表项目名 / 画布标题；从冻结快照抽出 CLI / 模型 / 角色，列表实时展示
+    // agent_snapshot_json 在 createJob 时冻结，列表侧不二次解析 RoleConfig
+    const projectId = q.project_id?.trim() || null;
+    const status = q.status?.trim() || null;
     return sql`
       SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
-             p.name AS project_name, c.title AS canvas_title
+             p.name AS project_name, c.title AS canvas_title,
+             j.agent_snapshot_json->>'agent_cli' AS agent_cli,
+             j.agent_snapshot_json->>'model' AS model,
+             j.agent_snapshot_json->>'name' AS role_name,
+             j.agent_snapshot_json->>'credential_provider' AS credential_provider,
+             NULLIF(j.agent_snapshot_json->>'role_config_version', '')::int AS role_config_version
       FROM jobs j
       JOIN projects p ON p.id = j.project_id
       LEFT JOIN canvases c ON c.id = j.canvas_id
-      ORDER BY j.created_at DESC LIMIT 200`;
+      WHERE (${projectId}::uuid IS NULL OR j.project_id = ${projectId}::uuid)
+        AND (${status}::text IS NULL OR j.status = ${status})
+      ORDER BY j.created_at DESC
+      LIMIT 200`;
   });
 
   // ---------- Findings 清单（可按项目 / 画布 / severity / 验证状态筛选） ----------

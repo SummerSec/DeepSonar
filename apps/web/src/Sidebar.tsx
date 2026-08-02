@@ -58,8 +58,14 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
     }
   }, [node.id, node.job_id, node.status]);
 
-  const bodyEntries = Object.entries(node.body_json ?? {}).filter(
-    ([k]) => !["last_progress", "severity"].includes(k),
+  // 正文优先字段（fact.description / finding.summary 等）置顶；其余 body 字段跟后
+  const PRIMARY_BODY_KEYS = ["description", "summary", "reason", "content"] as const;
+  const body = node.body_json ?? {};
+  const primaryEntries = PRIMARY_BODY_KEYS
+    .filter((k) => body[k] != null && String(body[k]).trim() !== "")
+    .map((k) => [k, body[k]] as const);
+  const bodyEntries = Object.entries(body).filter(
+    ([k]) => !["last_progress", "severity", ...PRIMARY_BODY_KEYS].includes(k),
   );
   const runtimeImage = (job?.job.agent_snapshot_json?.runtime_image ?? null) as Record<string, unknown> | null;
   const runtimeEvidence = (job?.job.payload_json?.runtime_evidence ?? null) as Record<string, unknown> | null;
@@ -182,11 +188,24 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
                   </span>
                 </div>
               )}
+              {/* 正文优先：fact.description / finding.summary 等 */}
+              {primaryEntries.length > 0 && (
+                <div className="mb-3 divide-y divide-ink-800/70 rounded-lg border border-ink-800/80 bg-ink-900/40 px-3">
+                  {primaryEntries.map(([k, v]) => (
+                    <Field key={k} k={k} v={typeof v === "string" ? v : JSON.stringify(v, null, 2)} />
+                  ))}
+                </div>
+              )}
               <div className="divide-y divide-ink-800/70">
                 {bodyEntries.map(([k, v]) => (
                   <Field key={k} k={k} v={typeof v === "string" ? v : JSON.stringify(v, null, 2)} />
                 ))}
               </div>
+              {primaryEntries.length === 0 && bodyEntries.length === 0 && (
+                <div className="py-6 text-center font-mono text-[13px] text-zinc-600">
+                  该节点暂无正文内容
+                </div>
+              )}
               {job && (
                 <div className="mt-3 divide-y divide-ink-800/70 border-t border-ink-800 pt-1">
                   {runtimeImage && <Field k="runtime image" v={String(runtimeImage.image_key ?? runtimeImage.image_ref ?? "unknown")} markdown={false} />}

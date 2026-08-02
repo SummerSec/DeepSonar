@@ -8,12 +8,10 @@ import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 
 /**
  * 运行详情（画布节点 / 运行列表共用）：
- * - 执行过程：持久化过程流（可筛选）
- * - 实时流：WS 原始流（运行中）
- * - 事件：调度器 events 表语义事件（可筛选）
- * - 原始 Session / 产出发现：与调度器证据/finding 接口一致
+ * - 结果：下发 prompt + 运行摘要 + 产出（已结束默认）
+ * - 执行过程 / 实时流 / 事件 / 原始 Session / 产出发现 / 运行配置
  */
-type DetailTab = "process" | "live" | "events" | "session" | "findings";
+type DetailTab = "result" | "process" | "live" | "events" | "session" | "findings" | "config";
 const ACTIVE = new Set(["claimed", "provisioning", "running", "waiting_human"]);
 
 const EVENT_COLOR: Record<string, string> = {
@@ -32,6 +30,28 @@ function summarizePayload(p: Record<string, unknown>): string {
     (p.text as string) ??
     JSON.stringify(p);
   return s.length > 400 ? `${s.slice(0, 400)}…` : s;
+}
+
+function snapStr(snap: Record<string, unknown> | null | undefined, key: string): string {
+  const v = snap?.[key];
+  if (v == null || v === "") return "—";
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function ConfigField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="theme-surface min-w-0 rounded-xl px-3 py-2.5 ring-1">
+      <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">{label}</div>
+      <div className="mt-1 break-all font-mono text-[12px] text-zinc-200" title={value}>
+        {value}
+      </div>
+    </div>
+  );
 }
 
 export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
@@ -64,8 +84,8 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           if (!alive) return;
           setDetail(v);
           setError(null);
-          // 运行中默认实时流，已结束默认执行过程（与调度器账本一致）
-          setTab(ACTIVE.has(v.job.status) ? "live" : "process");
+          // 运行中默认实时流；已结束默认「结果」（prompt + 摘要 + 产出）
+          setTab(ACTIVE.has(v.job.status) ? "live" : "result");
         })
         .catch((e) => alive && setError(String(e)));
 
@@ -123,7 +143,61 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     });
   }, [detail, eventQuery, eventTypeFilter]);
 
+  const snapshot = (detail?.job.agent_snapshot_json ?? null) as Record<string, unknown> | null;
+  const agentCli = snapStr(snapshot, "agent_cli");
+  const model = snapStr(snapshot, "model");
+  const roleName = snapStr(snapshot, "name");
+
+  /** 下发 prompt / 运行摘要：来自 payload.intent 与 done 事件 */
+  const dispatchPrompt = useMemo(() => {
+    if (!detail) return "";
+    const payload = (detail.job.payload_json ?? {}) as Record<string, unknown>;
+    const intent = (payload.intent ?? null) as Record<string, unknown> | null;
+    const fromIntent = typeof intent?.prompt === "string" ? intent.prompt.trim() : "";
+    if (fromIntent) return fromIntent;
+    // hub / 其它类型可能把目标写在 task / goal / content
+    for (const key of ["prompt", "task_prompt", "worker_prompt", "content", "goal"] as const) {
+      const v = payload[key];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    const target = payload.target as Record<string, unknown> | undefined;
+    if (target && typeof target.content === "string" && target.content.trim()) return target.content.trim();
+    return "";
+  }, [detail]);
+
+  const intentDescription = useMemo(() => {
+    if (!detail) return "";
+    const payload = (detail.job.payload_json ?? {}) as Record<string, unknown>;
+    const intent = (payload.intent ?? null) as Record<string, unknown> | null;
+    return typeof intent?.description === "string" ? intent.description.trim() : "";
+  }, [detail]);
+
+  const runSummary = useMemo(() => {
+    if (!detail) return "";
+    // done 事件 summary 优先
+    for (let i = detail.events.length - 1; i >= 0; i--) {
+      const e = detail.events[i];
+      if (e.type !== "done" && e.type !== "mark_job_done") continue;
+      const p = e.payload_json ?? {};
+      const s = typeof p.summary === "string" ? p.summary.trim() : "";
+      if (s) return s;
+    }
+    // progress 最后一条有时也带结论
+    for (let i = detail.events.length - 1; i >= 0; i--) {
+      const e = detail.events[i];
+      if (e.type !== "progress") continue;
+      const p = e.payload_json ?? {};
+      const s =
+        (typeof p.summary === "string" && p.summary.trim()) ||
+        (typeof p.message === "string" && p.message.trim()) ||
+        "";
+      if (s && s.length > 40) return s; // 避免过短的心跳
+    }
+    return "";
+  }, [detail]);
+
   const tabs: Array<[DetailTab, string, number | null, boolean]> = [
+    ["result", "结果", runSummary || detail?.findings.length ? 1 : 0, true],
     ["process", "执行过程", stream.length, true],
     ["live", "实时流", null, true],
     ["events", "事件", detail?.events.length ?? null, true],
@@ -134,6 +208,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
       true,
     ],
     ["findings", "产出发现", detail?.findings.length ?? null, true],
+    ["config", "运行配置", snapshot ? 1 : 0, true],
   ];
 
   return (
@@ -162,6 +237,21 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                 </span>
               )}
             </div>
+            {detail && (
+              <div className="mt-2 flex flex-wrap gap-1.5 font-mono text-[10px]">
+                <span className="rounded-full bg-acc-500/10 px-2 py-0.5 text-acc-300 ring-1 ring-acc-400/20">
+                  CLI {agentCli}
+                </span>
+                <span className="rounded-full bg-white/[.06] px-2 py-0.5 text-zinc-300 ring-1 ring-white/[.08]">
+                  模型 {model}
+                </span>
+                {roleName !== "—" && (
+                  <span className="rounded-full bg-white/[.04] px-2 py-0.5 text-zinc-500 ring-1 ring-white/[.06]">
+                    角色 {roleName}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -174,10 +264,12 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
         </header>
 
         {detail && (
-          <div className="theme-divider grid shrink-0 grid-cols-2 gap-px border-b bg-[var(--line)] sm:grid-cols-4">
+          <div className="theme-divider grid shrink-0 grid-cols-2 gap-px border-b bg-[var(--line)] sm:grid-cols-3 lg:grid-cols-6">
             {(
               [
                 ["JOB ID", jobId],
+                ["CLI 工具", agentCli],
+                ["模型", model],
                 ["开始", formatTime(detail.job.started_at)],
                 ["结束", formatTime(detail.job.finished_at)],
                 [
@@ -233,6 +325,149 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           {detail?.job.error && (
             <div className="m-4 rounded-xl bg-red-950/20 px-4 py-3 text-red-300 ring-1 ring-red-400/15">
               <MarkdownView markdown={detail.job.error} />
+            </div>
+          )}
+
+          {/* 结果：下发 prompt + 已运行输出摘要 + 产出发现 */}
+          {detail && tab === "result" && (
+            <div className="h-full min-h-0 space-y-4 overflow-y-auto p-4">
+              {detail.job.error && (
+                <div className="rounded-xl bg-red-950/25 px-4 py-3 text-red-300 ring-1 ring-red-400/20">
+                  <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">
+                    错误
+                  </div>
+                  <MarkdownView markdown={detail.job.error} />
+                </div>
+              )}
+
+              <section className="theme-surface rounded-2xl p-4 ring-1">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400/90">
+                    下发 Prompt
+                  </div>
+                  {dispatchPrompt && (
+                    <button
+                      type="button"
+                      className="font-mono text-[10px] text-zinc-500 hover:text-zinc-300"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(dispatchPrompt);
+                      }}
+                    >
+                      复制
+                    </button>
+                  )}
+                </div>
+                {intentDescription && (
+                  <p className="mb-2 text-[12px] leading-relaxed text-zinc-500">{intentDescription}</p>
+                )}
+                {dispatchPrompt ? (
+                  <div className="max-h-[40vh] overflow-y-auto rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
+                    <MarkdownView markdown={dispatchPrompt} />
+                  </div>
+                ) : (
+                  <p className="font-mono text-[12px] text-zinc-600">
+                    未找到冻结的下发 prompt（Hub 即时拼装的系统消息可能不在 payload；Worker 任务见 payload.intent.prompt）。
+                  </p>
+                )}
+              </section>
+
+              <section className="theme-surface rounded-2xl p-4 ring-1">
+                <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-400/90">
+                  运行输出摘要
+                </div>
+                {runSummary ? (
+                  <div className="max-h-[40vh] overflow-y-auto rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
+                    <MarkdownView markdown={runSummary} />
+                  </div>
+                ) : active ? (
+                  <p className="font-mono text-[12px] text-zinc-600">
+                    仍在运行，尚无终态摘要。可切到「实时流」查看输出。
+                  </p>
+                ) : (
+                  <p className="font-mono text-[12px] text-zinc-600">
+                    没有 mark_job_done 摘要。可查看「执行过程」归档流或「事件」时间线。
+                  </p>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTab("process")}
+                    className="rounded-full px-3 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] hover:text-zinc-200"
+                  >
+                    查看完整执行过程{stream.length ? ` · ${stream.length}` : ""}
+                  </button>
+                  {detail.events.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setTab("events")}
+                      className="rounded-full px-3 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] hover:text-zinc-200"
+                    >
+                      查看事件 · {detail.events.length}
+                    </button>
+                  )}
+                </div>
+              </section>
+
+              <section className="theme-surface rounded-2xl p-4 ring-1">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                    产出发现
+                  </div>
+                  {detail.findings.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setTab("findings")}
+                      className="font-mono text-[10px] text-acc-400 hover:text-acc-300"
+                    >
+                      全部 {detail.findings.length} →
+                    </button>
+                  )}
+                </div>
+                {detail.findings.length === 0 ? (
+                  <p className="font-mono text-[12px] text-zinc-600">该运行没有产出 Finding。</p>
+                ) : (
+                  <div className="space-y-2">
+                    {detail.findings.slice(0, 8).map((f) => (
+                      <div
+                        key={f.id}
+                        className="flex items-center gap-3 rounded-xl bg-black/20 px-3 py-2.5 ring-1 ring-white/[.05]"
+                      >
+                        <SeverityBadge severity={f.severity} />
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">{f.title}</span>
+                        <StatusBadge status={f.verify_status} />
+                      </div>
+                    ))}
+                    {detail.findings.length > 8 && (
+                      <p className="font-mono text-[10px] text-zinc-600">
+                        另有 {detail.findings.length - 8} 条，见「产出发现」
+                      </p>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {stream.length > 0 && (
+                <section className="theme-surface overflow-hidden rounded-2xl ring-1">
+                  <div className="flex items-center justify-between border-b border-white/[.06] px-4 py-2.5">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                      过程流预览
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTab("process")}
+                      className="font-mono text-[10px] text-acc-400 hover:text-acc-300"
+                    >
+                      展开完整过程 →
+                    </button>
+                  </div>
+                  <div className="max-h-[280px] overflow-hidden">
+                    <ProcessStreamView
+                      blocks={archivedBlocks.slice(-40)}
+                      emptyHint="无过程流"
+                    />
+                  </div>
+                </section>
+              )}
             </div>
           )}
 
@@ -408,6 +643,131 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                 ))
               ) : (
                 <div className="p-8 text-center text-[13px] text-zinc-600">该运行没有产出 Finding。</div>
+              )}
+            </div>
+          )}
+
+          {/* 运行配置：createJob 时冻结的 agent_snapshot_json */}
+          {detail && tab === "config" && (
+            <div className="h-full min-h-0 space-y-4 overflow-y-auto p-4">
+              {!snapshot || Object.keys(snapshot).length === 0 ? (
+                <div className="p-8 text-center text-[13px] text-zinc-600">
+                  该 Job 没有冻结运行快照（旧数据或创建时未写入 agent_snapshot_json）。
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                      运行时身份
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <ConfigField label="CLI 工具 (agent_cli)" value={agentCli} />
+                      <ConfigField label="模型 (model)" value={model} />
+                      <ConfigField label="角色 (name)" value={roleName} />
+                      <ConfigField label="角色类型 (role_kind)" value={snapStr(snapshot, "role_kind")} />
+                      <ConfigField
+                        label="凭据 Provider"
+                        value={snapStr(snapshot, "credential_provider")}
+                      />
+                      <ConfigField
+                        label="Credential ID"
+                        value={snapStr(snapshot, "credential_id")}
+                      />
+                      <ConfigField
+                        label="RoleConfig 版本"
+                        value={snapStr(snapshot, "role_config_version")}
+                      />
+                      <ConfigField
+                        label="RoleConfig ID"
+                        value={snapStr(snapshot, "role_config_id")}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                      运行镜像与推理
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <ConfigField
+                        label="运行镜像 key"
+                        value={snapStr(snapshot, "runtime_image_key")}
+                      />
+                      <ConfigField label="推理 (reasoning)" value={snapStr(snapshot, "reasoning")} />
+                      <ConfigField
+                        label="镜像 digest"
+                        value={
+                          snapshot.runtime_image &&
+                          typeof snapshot.runtime_image === "object" &&
+                          snapshot.runtime_image !== null
+                            ? String(
+                                (snapshot.runtime_image as Record<string, unknown>).image_digest ??
+                                  (snapshot.runtime_image as Record<string, unknown>).image_ref ??
+                                  "—",
+                              )
+                            : "—"
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                      工具与扩展
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <ConfigField
+                        label="Skills"
+                        value={
+                          Array.isArray(snapshot.skills)
+                            ? `${snapshot.skills.length} 项`
+                            : snapStr(snapshot, "skills")
+                        }
+                      />
+                      <ConfigField
+                        label="Commands"
+                        value={
+                          Array.isArray(snapshot.commands)
+                            ? `${snapshot.commands.length} 项`
+                            : snapStr(snapshot, "commands")
+                        }
+                      />
+                      <ConfigField
+                        label="MCP"
+                        value={
+                          Array.isArray(snapshot.mcps)
+                            ? `${snapshot.mcps.length} 项`
+                            : snapStr(snapshot, "mcps")
+                        }
+                      />
+                      <ConfigField
+                        label="Subagents"
+                        value={
+                          Array.isArray(snapshot.subagents)
+                            ? `${snapshot.subagents.length} 项`
+                            : snapStr(snapshot, "subagents")
+                        }
+                      />
+                    </div>
+                  </div>
+                  {typeof snapshot.instructions_markdown === "string" &&
+                    snapshot.instructions_markdown.trim() && (
+                      <div>
+                        <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                          角色指令
+                        </div>
+                        <div className="theme-surface rounded-xl p-4 ring-1">
+                          <MarkdownView markdown={snapshot.instructions_markdown} />
+                        </div>
+                      </div>
+                    )}
+                  <div>
+                    <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                      完整冻结快照 (agent_snapshot_json)
+                    </div>
+                    <pre className="theme-input-surface max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-2xl border p-4 font-mono text-[11px] leading-5 text-zinc-400">
+                      {JSON.stringify(snapshot, null, 2)}
+                    </pre>
+                  </div>
+                </>
               )}
             </div>
           )}
