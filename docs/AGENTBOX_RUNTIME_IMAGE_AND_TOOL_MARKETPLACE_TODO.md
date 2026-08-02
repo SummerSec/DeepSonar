@@ -87,9 +87,8 @@ Agent 可以在已分配镜像中自主选择工具，但不能：
 | 镜像键 | 用途 | 初始内容 | 优先级 |
 |---|---|---|---|
 | `deepsonar-base` | Explore、Analyze、Code、Hub | git、rg、jq、file、unzip、Python、Node、ca-certificates | P0 |
-| `deepsonar-audit` | Audit、Verify | `deepsonar-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
-| `deepsonar-kali-minimal` | 需要 Kali 用户态的专项 Audit、Verify | Kali 最小 rootfs + 明确列出的 base/audit CLI；无 metapackage/GUI | P0，项目显式启用 |
-| `deepsonar-build` | 需要编译或最小 PoC 的 Test | 编译器、构建工具、常见语言运行时 | P1，按需创建 |
+| `deepsonar-audit` | Audit | `deepsonar-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
+| `deepsonar-kali-minimal`（Kali Test） | Test、Verify 默认 | Kali 最小 rootfs + base/audit CLI + Python 3.10–3.14 + JDK 8/11/17/21 + Go/Rust；无 Kali metapackage/GUI | P0 |
 | `deepsonar-language-*` | Java、Go、PHP、Rust 等专项审计 | 对应语言工具链与静态分析器 | P2，按真实任务增加 |
 | 第三方市场镜像 | 社区或合作方专项环境 | 必须满足 DEEPSONAR 镜像契约 | P2 |
 
@@ -234,7 +233,7 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 
 ### P0：官方工具镜像基线
 
-- [x] 为 `deepsonar-base`、`deepsonar-audit` 和 opt-in 的 `deepsonar-kali-minimal` 确定首批工具及可追溯版本。
+- [x] 为 `deepsonar-base`、`deepsonar-audit` 和 Test/Verify 默认的 `deepsonar-kali-minimal` 确定首批工具及可追溯版本。
 - [x] 为下载型二进制记录来源 URL、SHA256 和许可证。
 - [x] 在镜像中生成 `/opt/deepsonar/tool-manifest.json`。
 - [x] 为镜像添加 OCI 来源、revision、contract 和 toolset 标签。
@@ -244,7 +243,7 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 - [x] 以 `maxSizeMiB` 建立压缩镜像包大小门禁并报告解压大小；base 使用 slim，Kali 禁止 metapackage/GUI。
 - [x] 在断网、资源限制和 cap-drop 条件下跑工具冒烟测试。
 
-验收：官方镜像可以离线执行 `rg`、`jq`、`file`、Semgrep、Gitleaks 和 ShellCheck，并输出确定版本。
+验收：官方镜像可以离线执行 `rg`、`jq`、`file`、Semgrep、Gitleaks 和 ShellCheck；Kali Test 还能运行全部预装 Python/JDK 版本并实际编译 Java、Go、Rust 最小程序。
 
 ### P1：可信镜像目录与角色绑定
 
@@ -310,7 +309,7 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 - 独立页面：`/images`（全局市场）与 `/projects/:projectId/images`（项目启用/版本固定）。
 - 定义门禁：`pnpm ci:images`；市场/API/Job 冻结冒烟：`pnpm ci:smoke:images`。
 - 官方镜像 CI 使用 base/audit/kali-minimal matrix 分别构建，再以 `network=none` + `cap-drop=ALL` + `no-new-privileges` + CPU/内存/PIDs 限制运行工具冒烟并校验大小预算。Release 以 amd64/arm64 多架构发布并生成 SBOM/provenance attestations。
-- 真实部署必须给 `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE` 配置 digest 引用；需要精简 Kali 时另配 `DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE`，并在项目市场显式启用。第三方准入还必须给 Cosign/Syft/Trivy/ClamAV 扫描器自身配置 digest。
+- 真实部署必须给 `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE` / `DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE` 配置 digest 引用；最后一项是 Test/Verify 默认运行时。第三方准入还必须给 Cosign/Syft/Trivy/ClamAV 扫描器自身配置 digest。
 
 ## 10. 安全红线
 

@@ -36,6 +36,12 @@ for (const [name, entry] of Object.entries(kaliConfig.downloads)) {
   expect(kaliDockerfile.includes(`ARG ${name.toUpperCase()}_VERSION=${entry.version}`), `Kali minimal ${name} version drift`);
   for (const asset of Object.values(entry.assets)) expect(kaliDockerfile.includes(asset.sha256), `Kali minimal ${name} checksum missing: ${asset.sha256}`);
 }
+for (const version of kaliConfig.managed.python.versions) {
+  expect(kaliDockerfile.includes(version), `Kali minimal managed Python version drift: ${version}`);
+}
+for (const jdk of kaliConfig.managed.jdk.versions) {
+  expect(kaliDockerfile.includes(jdk.image), `Kali minimal JDK ${jdk.major} image digest drift`);
+}
 for (const forbidden of ["kali-linux-core", "kali-linux-headless", "kali-linux-default", "kali-linux-large", "kali-linux-everything", "kali-tools-"]) {
   expect(!kaliDockerfile.match(new RegExp(`apt-get install[^;]*${forbidden}`, "s")), `Kali minimal must not install metapackage ${forbidden}`);
 }

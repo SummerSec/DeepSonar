@@ -545,8 +545,8 @@ ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO runtime_images (image_key, name, description, publisher, source_url, source_kind, official, project_opt_in, enabled) VALUES
   ('deepsonar-base', 'DeepSonar Base', 'Explore、Analyze、Code 与 Hub 的官方最小运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
-  ('deepsonar-audit', 'DeepSonar Audit', 'Audit 与 Verify 的官方审计运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
-  ('deepsonar-kali-minimal', 'DeepSonar Kali Minimal', '按项目启用的精简 Kali 专项运行时；不安装 Kali metapackage 或 GUI', 'SummerSec + Kali Linux', 'https://www.kali.org/docs/containers/using-kali-docker-images/', 'official', true, true, true)
+  ('deepsonar-audit', 'DeepSonar Audit', 'Audit 的官方审计运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
+  ('deepsonar-kali-minimal', 'DeepSonar Kali Test', 'Test 与 Verify 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI', 'SummerSec + Kali Linux', 'https://www.kali.org/docs/containers/using-kali-docker-images/', 'official', true, false, true)
 ON CONFLICT (image_key) DO NOTHING;
 
 INSERT INTO runtime_data_layers (layer_key, name, tool_name, description, enabled) VALUES
@@ -558,11 +558,11 @@ INSERT INTO agent_roles (name, title, description, builtin, kind) VALUES
   ('explore', '探索', '围绕任务意图收集新的、可验证的事实与证据', true, 'role'),
   ('analyze', '分析', '关联已有事实，追踪数据流、评估影响并形成有证据的分析结论', true, 'role'),
   ('review', '复核', '复核图中疑似风险是否成立、是否可利用，产出带证据的复核事实', true, 'role'),
-  ('test', '测试', '按需搭建最小环境、设计测试或 PoC，记录复现条件与结果', true, 'role'),
+  ('test', '测试', '默认在精简 Kali 多语言环境中搭建测试或 PoC，记录复现条件与结果', true, 'role'),
   ('code', '代码', '在任务明确要求时修改代码，并提供变更与验证证据', true, 'role'),
   ('audit', '审计', '根据任务目标自行确定材料获取方式和审计范围，产出结构化 Finding', true, 'role'),
   ('hub_reason', '决策中枢', '读取任务画布并判断完成度；未完成时选择角色并编写完整 Worker prompt', true, 'hub'),
-  ('verify', '验证', '系统角色：由调度器验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；Hub 不可下发', true, 'system'),
+  ('verify', '验证', '系统角色：默认在精简 Kali 多语言环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；Hub 不可下发', true, 'system'),
   ('report', '报告', '系统角色：根据调度器提供的确定性输入撰写任务总报告；Hub 不可下发', true, 'system')
 ON CONFLICT (name) DO NOTHING;
 
@@ -571,7 +571,11 @@ ON CONFLICT (name) DO NOTHING;
 -- 运行时不读取代码中的固定角色清单，Hub 始终从数据库查询当前可下发角色。
 INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)
 SELECT r.id, 'claude-code', templates.instructions,
-       CASE WHEN r.name IN ('audit', 'verify') THEN 'deepsonar-audit' ELSE 'deepsonar-base' END
+       CASE
+         WHEN r.name IN ('test', 'verify') THEN 'deepsonar-kali-minimal'
+         WHEN r.name = 'audit' THEN 'deepsonar-audit'
+         ELSE 'deepsonar-base'
+       END
 FROM agent_roles r
 JOIN (VALUES
   ('explore', $instructions$

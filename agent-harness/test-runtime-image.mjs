@@ -10,6 +10,18 @@ if (!image || !["base", "audit", "kali-minimal"].includes(toolset)) {
 }
 const commands = ["git --version", "rg --version", "jq --version", "file --version", "python3 --version", "node --version", "claude --version"];
 if (toolset !== "base") commands.push("semgrep --version", "gitleaks version", "shellcheck --version", "objdump --version");
+if (toolset === "kali-minimal") commands.push(
+  "uv --version",
+  "python3.10 --version", "python3.11 --version", "python3.12 --version", "python3.13 --version", "python3.14 --version",
+  "test \"$(python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')\" = 3.14",
+  "java8 -version", "javac8 -version", "java11 -version", "javac11 -version",
+  "java17 -version", "javac17 -version", "java21 -version", "javac21 -version",
+  "test \"$JAVA_HOME\" = /opt/deepsonar/jdks/21", "java -version", "javac -version",
+  "go version", "rustc --version", "cargo --version", "cc --version",
+  "cd /tmp && printf 'public class Smoke { public static void main(String[] args) { System.out.print(\"java-ok\"); } }\\n' > Smoke.java && javac Smoke.java && test \"$(java Smoke)\" = java-ok",
+  "printf 'fn main(){print!(\"rust-ok\");}\\n' > /tmp/smoke.rs && rustc /tmp/smoke.rs -o /tmp/rust-smoke && test \"$(/tmp/rust-smoke)\" = rust-ok",
+  "mkdir -p /tmp/go-smoke && printf 'package main\\nimport \"fmt\"\\nfunc main(){fmt.Print(\"go-ok\")}\\n' > /tmp/go-smoke/main.go && test \"$(go run /tmp/go-smoke/main.go)\" = go-ok",
+);
 commands.push("test -s /opt/deepsonar/tool-manifest.json", "jq -e '.contract == \"deepsonar.runtime.contract/v1\"' /opt/deepsonar/tool-manifest.json");
 execFileSync("docker", [
   "run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",

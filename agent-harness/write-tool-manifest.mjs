@@ -24,12 +24,15 @@ for (const [name, entry] of Object.entries(config.npm)) {
 for (const [name, entry] of Object.entries(config.downloads)) {
   if (enabled(entry)) tools.push({
     name,
-    source: "download",
+    source: entry.source ?? "download",
     version: entry.version,
     license: entry.license,
     capabilities: entry.capabilities,
     assets: entry.assets,
   });
+}
+for (const [name, entry] of Object.entries(config.managed ?? {})) {
+  if (enabled(entry)) tools.push({ name, ...entry, toolsets: undefined });
 }
 const manifest = {
   contract: config.contract,

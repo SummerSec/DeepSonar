@@ -14,7 +14,12 @@
     "xz-utils": { "version": "dpkg", "license": "0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later", "capabilities": ["archive"] },
     "python3": { "version": "dpkg", "license": "PSF-2.0", "capabilities": ["python-runtime"] },
     "python3-venv": { "version": "dpkg", "license": "PSF-2.0", "capabilities": ["python-runtime"] },
-    "binutils": { "version": "dpkg", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"] }
+    "binutils": { "version": "dpkg", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"] },
+    "build-essential": { "version": "dpkg", "license": "GPL-2.0-or-later", "capabilities": ["native-build"] },
+    "pkg-config": { "version": "dpkg", "license": "GPL-2.0-or-later", "capabilities": ["native-build"] },
+    "golang-go": { "version": "dpkg", "license": "BSD-3-Clause", "capabilities": ["go-runtime", "go-compiler"] },
+    "rustc": { "version": "dpkg", "license": "Apache-2.0 OR MIT", "capabilities": ["rust-compiler"] },
+    "cargo": { "version": "dpkg", "license": "Apache-2.0 OR MIT", "capabilities": ["rust-package-manager"] }
   },
   "npm": {
     "@anthropic-ai/claude-code": { "version": "2.1.220", "license": "Commercial", "capabilities": ["agent-runtime"] }
@@ -27,6 +32,16 @@
       "assets": {
         "amd64": { "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz", "sha256": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307" },
         "arm64": { "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.xz", "sha256": "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8" }
+      }
+    },
+    "uv": {
+      "version": "0.11.32",
+      "source": "github-release",
+      "license": "Apache-2.0 OR MIT",
+      "capabilities": ["python-version-manager", "python-package-manager"],
+      "assets": {
+        "amd64": { "url": "https://github.com/astral-sh/uv/releases/download/0.11.32/uv-x86_64-unknown-linux-gnu.tar.gz", "sha256": "aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967" },
+        "arm64": { "url": "https://github.com/astral-sh/uv/releases/download/0.11.32/uv-aarch64-unknown-linux-gnu.tar.gz", "sha256": "4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31" }
       }
     },
     "semgrep": {
@@ -57,7 +72,29 @@
       }
     }
   },
+  "managed": {
+    "python": {
+      "source": "astral/python-build-standalone",
+      "manager": "uv@0.11.32",
+      "versions": ["3.10.20", "3.11.15", "3.12.13", "3.13.14", "3.14.6"],
+      "default": "3.14.6",
+      "license": "PSF-2.0",
+      "capabilities": ["python-runtime", "python-multi-version"]
+    },
+    "jdk": {
+      "source": "Eclipse Temurin OCI",
+      "versions": [
+        { "major": "8", "version": "8u492-b09", "image": "eclipse-temurin:8-jdk@sha256:9fd5233e39b963aad25dae3ca002c5a1b435c378f6d484c24f0c68be34b54b72" },
+        { "major": "11", "version": "11.0.31+11", "image": "eclipse-temurin:11-jdk@sha256:51cad80517b1e18e289460e0a48657374d17711c83270263054a4a22cc1a992a" },
+        { "major": "17", "version": "17.0.19+10", "image": "eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a" },
+        { "major": "21", "version": "21.0.11+10", "image": "eclipse-temurin:21-jdk@sha256:da9d3a4f7650db39b918fc5a2c3da76556fb8cc8e5f3767cdea0bb409286951a" }
+      ],
+      "default": "21",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "capabilities": ["java-runtime", "java-compiler", "java-multi-version"]
+    }
+  },
   "toolsets": {
-    "kali-minimal": { "imageKey": "deepsonar-kali-minimal", "description": "Minimal Kali specialist runtime without Kali metapackages or GUI", "maxSizeMiB": 450 }
+    "kali-minimal": { "imageKey": "deepsonar-kali-minimal", "description": "Kali test and verification runtime with common language toolchains, without Kali metapackages or GUI", "maxSizeMiB": 1100 }
   }
 }
