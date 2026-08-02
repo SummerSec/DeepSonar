@@ -1,4 +1,4 @@
-# DeepSonar default Test/Verify runtime. Keep Kali itself minimal: no
+# DeepSonar default Test runtime. Keep Kali itself minimal: no
 # kali-linux-*, kali-tools-*, GUI or desktop metapackage.
 ARG BASE_IMAGE=kalilinux/kali-last-release@sha256:01a402ec78a2b3bd86394f34f8c3d6adefe3c593ae259ac0779c4d1f971c8ff5
 ARG JDK8_IMAGE=eclipse-temurin:8-jdk@sha256:9fd5233e39b963aad25dae3ca002c5a1b435c378f6d484c24f0c68be34b54b72

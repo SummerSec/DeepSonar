@@ -88,7 +88,7 @@ Agent 可以在已分配镜像中自主选择工具，但不能：
 |---|---|---|---|
 | `deepsonar-base` | Explore、Analyze、Code、Hub | git、rg、jq、file、unzip、Python、Node、ca-certificates | P0 |
 | `deepsonar-audit` | Audit | `deepsonar-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
-| `deepsonar-kali-minimal`（Kali Test） | Test、Verify 默认 | Kali 最小 rootfs + base/audit CLI + Python 3.10–3.14 + JDK 8/11/17/21 + Go/Rust；无 Kali metapackage/GUI | P0 |
+| `deepsonar-kali-minimal`（Kali Test） | Test 默认 | Kali 最小 rootfs + base/audit CLI + Python 3.10–3.14 + JDK 8/11/17/21 + Go/Rust；无 Kali metapackage/GUI | P0 |
 | `deepsonar-language-*` | Java、Go、PHP、Rust 等专项审计 | 对应语言工具链与静态分析器 | P2，按真实任务增加 |
 | 第三方市场镜像 | 社区或合作方专项环境 | 必须满足 DEEPSONAR 镜像契约 | P2 |
 
@@ -233,7 +233,7 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 
 ### P0：官方工具镜像基线
 
-- [x] 为 `deepsonar-base`、`deepsonar-audit` 和 Test/Verify 默认的 `deepsonar-kali-minimal` 确定首批工具及可追溯版本。
+- [x] 为 `deepsonar-base`、`deepsonar-audit` 和 Test 默认的 `deepsonar-kali-minimal` 确定首批工具及可追溯版本；Verify 默认使用 Base。
 - [x] 为下载型二进制记录来源 URL、SHA256 和许可证。
 - [x] 在镜像中生成 `/opt/deepsonar/tool-manifest.json`。
 - [x] 为镜像添加 OCI 来源、revision、contract 和 toolset 标签。
@@ -309,7 +309,7 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 - 独立页面：`/images`（全局市场）与 `/projects/:projectId/images`（项目启用/版本固定）。
 - 定义门禁：`pnpm ci:images`；市场/API/Job 冻结冒烟：`pnpm ci:smoke:images`。
 - 官方镜像 CI 使用 base/audit/kali-minimal matrix 分别构建，再以 `network=none` + `cap-drop=ALL` + `no-new-privileges` + CPU/内存/PIDs 限制运行工具冒烟并校验大小预算。Release 以 amd64/arm64 多架构发布并生成 SBOM/provenance attestations。
-- 真实部署必须给 `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE` / `DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE` 配置 digest 引用；最后一项是 Test/Verify 默认运行时。第三方准入还必须给 Cosign/Syft/Trivy/ClamAV 扫描器自身配置 digest。
+- 真实部署必须给 `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE` / `DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE` 配置 digest 引用；最后一项仅是 Test 默认运行时，Verify 默认使用 Base。第三方准入还必须给 Cosign/Syft/Trivy/ClamAV 扫描器自身配置 digest。
 
 ## 10. 安全红线
 

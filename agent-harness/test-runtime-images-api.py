@@ -90,7 +90,7 @@ def main() -> None:
     test_role = next(item for item in role_configs if item["role_name"] == "test")
     verify_role = next(item for item in role_configs if item["role_name"] == "verify")
     assert test_role["runtime_image_key"] == "deepsonar-kali-minimal", test_role
-    assert verify_role["runtime_image_key"] == "deepsonar-kali-minimal", verify_role
+    assert verify_role["runtime_image_key"] == "deepsonar-base", verify_role
     invalid = {
         "agent_cli": explore["agent_cli"],
         "model": explore["model"],
@@ -131,11 +131,21 @@ def main() -> None:
     assert test_snapshot["image_key"] == "deepsonar-kali-minimal", test_snapshot
     assert test_snapshot["image_ref"].startswith("fake://deepsonar-kali-minimal@sha256:"), test_snapshot
 
+    verify_job = req(
+        "POST",
+        "/jobs",
+        {"project_id": project_id, "type": "verify", "title": "Base verify runtime default smoke"},
+        201,
+    )
+    verify_snapshot = verify_job["agent_snapshot_json"]["runtime_image"]
+    assert verify_snapshot["image_key"] == "deepsonar-base", verify_snapshot
+    assert verify_snapshot["image_ref"].startswith("fake://deepsonar-base@sha256:"), verify_snapshot
+
     usage = req("GET", f"/runtime-image-versions/{version_id}/usage")
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}
     req("POST", f"/runtime-image-versions/{version_id}/status", {"status": "rejected", "reason": "CI cleanup"})
     req("POST", f"/projects/{project_id}/archive")
-    print("OK: standalone market, Kali Test/Verify defaults, quarantine gate, project binding gate, immutable Job snapshot")
+    print("OK: standalone market, Kali Test and Base Verify defaults, quarantine gate, project binding gate, immutable Job snapshot")
 
 
 if __name__ == "__main__":
