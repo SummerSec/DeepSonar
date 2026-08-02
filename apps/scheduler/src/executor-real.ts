@@ -7,7 +7,8 @@ import { config } from "./config.js";
 import { ingestEvent, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecision } from "./graph.js";
-import { PROVIDER_ENV_MAP } from "./credentials.js";
+import { PROVIDER_ENV_MAP, allowedModelIds } from "./credentials.js";
+import { JobEvidenceWriter } from "./evidence.js";
 import { mintJobToken } from "./gateway.js";
 import { publishStream } from "./stream-bus.js";
 import { CONTROL_EVENT_FILE, CONTROL_MCP_NAME, CONTROL_MCP_SERVER } from "./control-mcp.js";
@@ -222,11 +223,15 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     }
     const mapping = PROVIDER_ENV_MAP[cred.provider as string];
     if (!mapping) throw new Error(`未知 provider: ${String(cred.provider)}`);
+    const credentialModels = allowedModelIds(cred.public_metadata_json);
+    if (model && credentialModels.length > 0 && !credentialModels.includes(model)) {
+      throw new Error(`模型 ${model} 不在 Credential ${cred.id} 的 allowed_model_ids 白名单`);
+    }
     const jt = await mintJobToken({
       jobId: job.id as string,
       projectId: job.project_id as string,
       credentialId: cred.id as string,
-      allowedModels: model ? [model] : [],
+      allowedModels: model ? [model] : credentialModels,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
     });
     for (const k of mapping.secretKeys) env[k] = jt.plaintext;
@@ -487,6 +492,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
   // 「当前动作」直接更新节点显示态（throttle 1.5s；非语义事件，不进 events 表）
   let lastActionPush = 0;
+  const evidenceWriter = new JobEvidenceWriter(jobId, provider);
 
   const result = await runRealAgent(
     { sandboxId: job.sandbox_id as string },
@@ -519,6 +525,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         void emit("progress", { message }).catch(() => {});
       },
       onEvent: (e) => {
+        evidenceWriter.appendNormalized(e);
         const type = String(e.type ?? "");
         // 实时流：选择性字段转发（输入/输出可能很大，只取摘要）
         if (type === "tool.call.started") {
@@ -542,6 +549,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       },
     },
   );
+
+  evidenceWriter.setSession(result.session);
+  const evidence = await evidenceWriter.finalize(result.error);
+  await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
 
   if (result.error) throw new Error(`agent 运行失败: ${result.error}`);
 

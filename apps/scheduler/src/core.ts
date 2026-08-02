@@ -8,6 +8,7 @@ import {
   type PlatformToolName,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import { allowedModelIds } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { expandModules } from "./skill-sources.js";
@@ -81,6 +82,8 @@ export interface ProjectRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** 全局按 Agent CLI 的并发配额；项目层不得覆盖。 */
+  maxConcurrentByAgentCli: Record<string, number>;
 }
 
 /** 画布收敛控制态（落在 canvases.target_json.convergence，免 schema 迁移） */
@@ -103,6 +106,16 @@ const SEVERITY_PRIORITY_DELTA: Record<string, number> = {
 function asSeverityRank(v: unknown, fallback: SeverityRank): SeverityRank {
   const s = String(v ?? "").trim().toLowerCase();
   return (SEVERITY_RANK as readonly string[]).includes(s) ? (s as SeverityRank) : fallback;
+}
+
+function asCliLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return fallback;
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    const n = Number(value);
+    if (["claude-code", "codex", "open-code"].includes(key) && Number.isInteger(n) && n >= 0 && n <= 1000) out[key] = n;
+  }
+  return out;
 }
 
 /** env / 旧 autoVerifySeverities 列表 → 最低关注级别（取列表中最「松」的一档） */
@@ -149,6 +162,7 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
+    maxConcurrentByAgentCli: {},
   };
 }
 
@@ -170,6 +184,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
+    maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
   };
 }
 
@@ -188,7 +203,8 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
   ]);
   const r = (((p[0]?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
   const gr = ((g[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
-  return mergeRulesLayer(r, mergeRulesLayer(gr, envDefaultRules()));
+  const global = mergeRulesLayer(gr, envDefaultRules());
+  return { ...mergeRulesLayer(r, global), maxConcurrentByAgentCli: global.maxConcurrentByAgentCli };
 }
 
 export function parseCanvasConvergence(targetJson: unknown): CanvasConvergence {
@@ -1260,7 +1276,7 @@ export async function resolveAgentSnapshotForJob(
 
   const [llm] = cfg
     ? await db`
-        SELECT c.id, c.provider, c.status, c.project_id AS cred_project_id
+        SELECT c.id, c.provider, c.status, c.project_id AS cred_project_id, c.public_metadata_json
         FROM role_credentials rc
         JOIN credentials c ON c.id = rc.credential_id
         WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
@@ -1276,6 +1292,11 @@ export async function resolveAgentSnapshotForJob(
     }
     if ((llm.status as string) !== "active") {
       throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
+    }
+    const configuredModel = (cfg?.model as string) ?? config.runtime.agentModel ?? null;
+    const allowed = allowedModelIds(llm.public_metadata_json);
+    if (configuredModel && allowed.length > 0 && !allowed.includes(configuredModel)) {
+      throw new Error(`模型 ${configuredModel} 不在 Credential ${llm.id} 的 allowed_model_ids 白名单`);
     }
   }
   const configFiles = cfg

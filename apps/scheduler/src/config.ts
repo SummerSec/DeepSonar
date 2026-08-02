@@ -187,6 +187,12 @@ export const config = {
     payloadMaxKb: int("EVENT_PAYLOAD_MAX_KB", 256),
   },
 
+  /** Job 原始 Session、normalized stream 与 OTLP 冷存储。 */
+  storage: {
+    blobDir: path.resolve(process.cwd(), str("BLOB_DIR", "./data/blobs")),
+    transcriptRetentionDays: int("TRANSCRIPT_RETENTION_DAYS", 90),
+  },
+
   skillSources: {
     /** 逗号分隔的 Git host 允许列表；空 = 任意 HTTPS host。 */
     allowedGitHosts: str("DEEPSONAR_GIT_ALLOWED_HOSTS", ""),

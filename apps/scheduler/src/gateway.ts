@@ -183,7 +183,10 @@ export function registerGateway(app: FastifyInstance): void {
       const allowed = (jt.allowed_models as string[]) ?? [];
       if (rawBody && typeof rawBody === "object" && allowed.length > 0) {
         const model = (rawBody as { model?: string }).model;
-        if (model && !allowed.includes(model)) {
+        if (!model) {
+          return deny(reply, 403, "请求缺少 model，无法执行 Credential 模型白名单", "model_required");
+        }
+        if (!allowed.includes(model)) {
           void auditGateway(req, {
             action: "gateway.denied",
             projectId: jt.project_id as string,

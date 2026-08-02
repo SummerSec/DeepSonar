@@ -10,6 +10,7 @@ const JobsPage = lazy(() => import("./pages/JobsPage").then((module) => ({ defau
 const ProjectLayout = lazy(() => import("./pages/ProjectLayout").then((module) => ({ default: module.ProjectLayout })));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const ProjectDataPage = lazy(() => import("./pages/ProjectDataPage").then((module) => ({ default: module.ProjectDataPage })));
 const TaskCanvasPage = lazy(() => import("./pages/TaskCanvasPage").then((module) => ({ default: module.TaskCanvasPage })));
 const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
@@ -30,6 +31,7 @@ export default function App() {
       <Route path="tasks" element={<Deferred><TasksPage /></Deferred>} />
       <Route path="tasks/:canvasId" element={<Deferred><TaskCanvasPage /></Deferred>} />
       <Route path="findings" element={<Deferred><FindingsPage scope="project" /></Deferred>} />
+      <Route path="data" element={<Deferred><ProjectDataPage /></Deferred>} />
       <Route path="settings" element={<Deferred><SettingsPage /></Deferred>} />
     </Route>
     <Route path="*" element={<Deferred><NotFoundPage /></Deferred>} />

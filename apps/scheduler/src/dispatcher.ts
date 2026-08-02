@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { ingestEvent, rolesForProject, transitionJob, type AgentRuntimeSnapshot } from "./core.js";
+import { globalRules, ingestEvent, rolesForProject, transitionJob, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
@@ -39,34 +39,60 @@ async function isRealType(type: string): Promise<boolean> {
 }
 
 export async function dispatchOnce(): Promise<number> {
-  const [{ running }] = await sql<[{ running: number }]>`
-    SELECT COUNT(*)::int AS running FROM jobs WHERE status IN ('claimed','provisioning','running')`;
-  let slots = config.limits.maxGlobalJobs - running;
-  if (slots <= 0) return 0;
+  // 单次 claim 在 advisory xact lock 内同时核对全局 / 项目 / Agent CLI 三层配额。
+  // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
+  const claimedJobs = await sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext('deepsonar_dispatch_claim'))`;
+    const active = await tx`
+      SELECT project_id, agent_snapshot_json->>'agent_cli' AS agent_cli, COUNT(*)::int AS count
+      FROM jobs WHERE status IN ('claimed','provisioning','running')
+      GROUP BY project_id, agent_snapshot_json->>'agent_cli'`;
+    const totalActive = active.reduce((n, row) => n + Number(row.count), 0);
+    const slots = config.limits.maxGlobalJobs - totalActive;
+    if (slots <= 0) return [] as { id: string }[];
 
-  const pending = await sql`
-    SELECT id, project_id, type FROM jobs
-    WHERE status = 'pending'
-    ORDER BY priority DESC, created_at
-    LIMIT ${slots * 2}`;
+    const projectCounts = new Map<string, number>();
+    const cliCounts = new Map<string, number>();
+    for (const row of active) {
+      const projectId = row.project_id as string;
+      const cli = String(row.agent_cli ?? config.runtime.agentProvider);
+      projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + Number(row.count));
+      cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + Number(row.count));
+    }
+    const cliLimits = (await globalRules(tx as unknown as typeof sql)).maxConcurrentByAgentCli;
+    const pending = await tx`
+      SELECT id, project_id, agent_snapshot_json->>'agent_cli' AS agent_cli
+      FROM jobs WHERE status = 'pending'
+      ORDER BY priority DESC, created_at
+      LIMIT 500
+      FOR UPDATE SKIP LOCKED`;
 
-  let claimed = 0;
-  for (const job of pending) {
-    if (claimed >= slots) break;
-    const [{ cnt }] = await sql<[{ cnt: number }]>`
-      SELECT COUNT(*)::int AS cnt FROM jobs
-      WHERE project_id = ${job.project_id} AND status IN ('claimed','provisioning','running')`;
-    if (cnt >= config.limits.maxJobsPerProject) continue;
+    const claimed: { id: string }[] = [];
+    for (const job of pending) {
+      if (claimed.length >= slots) break;
+      const projectId = job.project_id as string;
+      const cli = String(job.agent_cli ?? config.runtime.agentProvider);
+      if ((projectCounts.get(projectId) ?? 0) >= config.limits.maxJobsPerProject) continue;
+      const cliLimit = cliLimits[cli];
+      if (cliLimit !== undefined && (cliCounts.get(cli) ?? 0) >= cliLimit) continue;
+      const [row] = await tx`
+        UPDATE jobs SET status = 'claimed', claimed_at = now()
+        WHERE id = ${job.id as string} AND status = 'pending'
+        RETURNING id`;
+      if (!row) continue;
+      claimed.push({ id: row.id as string });
+      projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
+      cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + 1);
+    }
+    return claimed;
+  });
 
-    // 原子 claim：并发下只有一个实例能改成功；claimed_at 供 provision 超时判定
-    const row = await transitionJob(job.id, "claimed", { claimed_at: new Date() });
-    if (!row) continue;
-    claimed++;
+  for (const job of claimedJobs) {
     const p = runJob(job.id).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));
     inFlight.add(p);
     void p.finally(() => inFlight.delete(p));
   }
-  return claimed;
+  return claimedJobs.length;
 }
 
 async function runJob(jobId: string) {

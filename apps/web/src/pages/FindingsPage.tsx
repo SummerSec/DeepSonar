@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type FindingSummary } from "../api";
+import { FindingDetailPanel } from "../FindingDetailPanel";
 import {
   DataTable,
   EmptyState,
@@ -36,6 +37,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const severity = searchParams.get("severity") ?? "";
   const verify = searchParams.get("verify") ?? "";
+  const selectedFinding = searchParams.get("finding");
 
   const [rows, setRows] = useState<FindingSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -75,10 +77,11 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     else next.delete(key);
     setSearchParams(next, { replace: true });
   };
-
-  const linkTo = (f: FindingSummary) => {
-    if (f.canvas_id) return `/projects/${f.project_id}/tasks/${f.canvas_id}`;
-    return `/projects/${f.project_id}/findings`;
+  const openFinding = (id: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (id) next.set("finding", id);
+    else next.delete("finding");
+    setSearchParams(next, { replace: true });
   };
 
   if (loading) return <PageSkeleton rows={5} />;
@@ -87,7 +90,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       <PageHeader
         title={scope === "global" ? "发现" : "项目发现"}
         eyebrow="EVIDENCE REGISTER"
-        subtitle="发现不是结论，而是等待验证的风险假设。打开对应任务可以查看来源、验证路径与最终报告。"
+        subtitle={`当前筛选 ${rows.length} 条。点开任一发现可查看完整内容、原始 JSON、来源事件与验证路径。`}
         actions={
           <>
             <FilterSelect
@@ -119,7 +122,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       ) : (
         <>
         <div className="grid gap-3 md:hidden">
-          {rows.map((finding) => <Link key={finding.id} to={linkTo(finding)} className="surface-shell group"><article className="surface-core p-4"><div className="flex items-center justify-between gap-3"><SeverityBadge severity={finding.severity} /><span className="font-mono text-[8px] text-zinc-700">{relativeTime(finding.created_at)}</span></div><h2 className="mt-4 text-[14px] font-medium leading-6 text-zinc-100">{finding.title}</h2>{finding.summary && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">{finding.summary}</p>}<div className="mt-4 flex items-center gap-2 border-t border-white/[.045] pt-3 text-[9px] text-zinc-600"><span className="truncate">{finding.project_name}</span><span>·</span><span className="truncate font-mono">{finding.location || "无位置"}</span><span className="ml-auto font-mono text-zinc-500">{finding.verify_status}</span></div></article></Link>)}
+          {rows.map((finding) => <button type="button" key={finding.id} onClick={() => openFinding(finding.id)} className="surface-shell group text-left"><article className="surface-core p-4"><div className="flex items-center justify-between gap-3"><SeverityBadge severity={finding.severity} /><span className="font-mono text-[8px] text-zinc-700">{relativeTime(finding.created_at)}</span></div><h2 className="mt-4 text-[14px] font-medium leading-6 text-zinc-100">{finding.title}</h2>{finding.summary && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">{finding.summary}</p>}<div className="mt-4 flex items-center gap-2 border-t border-white/[.045] pt-3 text-[9px] text-zinc-600"><span className="truncate">{finding.project_name}</span><span>·</span><span className="truncate font-mono">{finding.location || "无位置"}</span><span className="ml-auto font-mono text-zinc-500">{finding.verify_status}</span></div></article></button>)}
         </div>
         <div className="hidden md:block"><DataTable>
           <table className="w-full min-w-[880px]">
@@ -135,14 +138,14 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
             </thead>
             <tbody>
               {rows.map((f) => (
-                <tr key={f.id} className={trHover}>
+                <tr key={f.id} className={trHover} onClick={() => openFinding(f.id)}>
                   <td className={tdCls}>
                     <SeverityBadge severity={f.severity} />
                   </td>
                   <td className={tdCls}>
-                    <Link to={linkTo(f)} className="font-medium text-zinc-100 hover:text-acc-400">
+                    <button type="button" className="text-left font-medium text-zinc-100 hover:text-acc-400">
                       {f.title}
-                    </Link>
+                    </button>
                     {f.summary && (
                       <div className="mt-0.5 line-clamp-1 text-[13px] text-zinc-600">{f.summary}</div>
                     )}
@@ -152,6 +155,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                       <Link
                         to={`/projects/${f.project_id}/findings`}
                         className="hover:text-acc-400"
+                        onClick={(e) => e.stopPropagation()}
                       >
                         {f.project_name}
                       </Link>
@@ -174,6 +178,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
         </DataTable></div>
         </>
       )}
+      {selectedFinding && <FindingDetailPanel findingId={selectedFinding} onClose={() => openFinding(null)} />}
     </div>
   );
 }

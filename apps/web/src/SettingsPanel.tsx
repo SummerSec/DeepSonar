@@ -17,6 +17,7 @@ import {
 import { TokensPanel } from "./TokensPanel";
 import { CredentialsPanel } from "./CredentialsPanel";
 import { RoleConfigEditor } from "./RoleConfigEditor";
+import { TransferPanel } from "./TransferPanel";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -24,7 +25,7 @@ import { RoleConfigEditor } from "./RoleConfigEditor";
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials";
+type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer";
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
@@ -258,6 +259,16 @@ export function SettingsPanel({
     </div>
   );
 
+  const setCliLimit = (cli: "claude-code" | "codex" | "open-code", raw: string) => {
+    setRules((current) => {
+      if (!current) return current;
+      const next = { ...(current.maxConcurrentByAgentCli ?? {}) };
+      if (raw === "") delete next[cli];
+      else next[cli] = Math.max(0, Number(raw));
+      return { ...current, maxConcurrentByAgentCli: next };
+    });
+  };
+
 
 
   // ---------- 角色行（运行配置入口 + 配置来源徽标） ----------
@@ -410,6 +421,7 @@ export function SettingsPanel({
       : "deepsonar-sidebar absolute inset-y-2 right-2 z-30 flex w-[440px] flex-col overflow-hidden rounded-[22px] bg-[#111619] shadow-[0_24px_70px_rgba(0,0,0,.28)] ring-1 ring-white/[.09]";
 
   // 全局模式：角色注册表（含运行配置）/ 模块源 / 全局规则；项目模式：规则覆盖 / 角色启用与覆盖 / Plane 集成
+  // 项目数据包在项目模块「数据」页；此处项目设置只做策略。平台包仅在全局 Agent 管理。
   const tabList: { key: Tab; label: string }[] = projectId
     ? [
         { key: "rules", label: "规则配置" },
@@ -420,6 +432,7 @@ export function SettingsPanel({
         { key: "roles", label: "角色注册表" },
         { key: "sources", label: "模块源" },
         { key: "rules", label: "全局规则" },
+        { key: "transfer", label: "平台导入导出" },
         { key: "credentials", label: "凭据" },
         { key: "tokens", label: "API Token" },
       ];
@@ -477,6 +490,32 @@ export function SettingsPanel({
                   <strong className="text-zinc-200">「角色配置」tab 的项目覆盖</strong>；
                   未覆盖的角色使用全局缺省（在「Agent 管理 → 角色注册表」维护）。
                 </div>
+              </section>
+            )}
+
+            {!projectId && (
+              <section className="border-t border-ink-800 pt-3">
+                <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
+                  Agent CLI 全局并发
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {(["claude-code", "codex", "open-code"] as const).map((cli) => (
+                    <div key={cli}>
+                      <label className={labelCls}>{cli}</label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="不限"
+                        value={rules.maxConcurrentByAgentCli?.[cli] ?? ""}
+                        onChange={(event) => setCliLimit(cli, event.target.value)}
+                        className={inputCls}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] leading-5 text-zinc-600">
+                  留空只受全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
+                </p>
               </section>
             )}
 
@@ -685,6 +724,8 @@ export function SettingsPanel({
             )}
           </div>
         )}
+
+        {activeTab === "transfer" && !projectId && <TransferPanel projectId={null} scope="platform" />}
 
         {activeTab === "plane" && projectId && (
           <div className="flex flex-col gap-3">

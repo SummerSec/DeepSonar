@@ -178,6 +178,10 @@ const OPS: Op[] = [
     query: { project_id: { type: "string", format: "uuid" }, status: { type: "string" } },
   },
   { method: "get", path: "/jobs/{id}", summary: "Job 详情（含事件）", scope: "tasks:read", tags: ["Jobs"] },
+  { method: "get", path: "/jobs/{id}/evidence", summary: "Job 原始证据 manifest", scope: "tasks:read", tags: ["Jobs"] },
+  { method: "get", path: "/jobs/{id}/evidence/session", summary: "查看 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
+  { method: "get", path: "/jobs/{id}/evidence/session/download", summary: "下载 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
+  { method: "get", path: "/jobs/{id}/evidence/stream", summary: "读取历史 normalized stream", scope: "tasks:read", tags: ["Jobs"] },
   {
     method: "patch",
     path: "/jobs/{id}/priority",
@@ -202,6 +206,7 @@ const OPS: Op[] = [
       verify_status: { type: "string" },
     },
   },
+  { method: "get", path: "/findings/{id}", summary: "Finding 完整详情与验证链", scope: "findings:read", tags: ["Findings"] },
   { method: "get", path: "/canvases/{id}/report", summary: "画布任务报告元数据", scope: "tasks:read", tags: ["Reports"] },
   { method: "get", path: "/reports/{id}/markdown", summary: "下载 Markdown 报告", scope: "tasks:read", tags: ["Reports"] },
   { method: "get", path: "/reports/{id}/sarif", summary: "下载 SARIF 报告", scope: "tasks:read", tags: ["Reports"] },

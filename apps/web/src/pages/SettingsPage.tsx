@@ -13,7 +13,7 @@ export function SettingsPage() {
         <PageHeader
           title="项目策略"
           eyebrow="PROJECT POLICY"
-          subtitle="这里只定义本项目与全局缺省的差异：启用角色、覆盖运行配置、调整规则与可选集成。"
+          subtitle="本项目相对全局的策略差异：角色启用、运行配置覆盖、规则与集成。项目数据包请到「数据」页导入导出。"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">

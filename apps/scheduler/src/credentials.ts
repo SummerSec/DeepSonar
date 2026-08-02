@@ -74,6 +74,13 @@ export function last4Of(plaintext: string): string {
   return plaintext.slice(-4);
 }
 
+/** Credential 公共元数据中的模型白名单；空数组表示不额外限制。 */
+export function allowedModelIds(metadata: unknown): string[] {
+  const raw = (metadata as { allowed_model_ids?: unknown } | null)?.allowed_model_ids;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((v): v is string => typeof v === "string").map((v) => v.trim()).filter(Boolean))];
+}
+
 /**
  * 固定 Provider → 环境变量映射（§6.2：用户不能自由填写变量名，取代 env_keys）。
  * 值来自 Credential 解密结果；base_url 等非密钥项走 public_metadata_json。

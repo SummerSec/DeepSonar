@@ -52,3 +52,10 @@ export class NoopRunner implements SandboxRunner {
 
 export { AgentboxRunner, forceRemoveContainer, listDeepSonarContainers, runRealAgent } from "./agentbox.js";
 export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort } from "./agentbox.js";
+export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+export type {
+  AgentCliSessionAdapter,
+  SessionArtifact,
+  SessionBundle,
+  SupportedAgentCli,
+} from "./cli-session-adapters.js";

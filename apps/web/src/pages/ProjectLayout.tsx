@@ -6,6 +6,7 @@ import { api, type Project } from "../api";
 const TABS = [
   { to: "tasks", label: "任务" },
   { to: "findings", label: "发现" },
+  { to: "data", label: "数据" },
   { to: "settings", label: "设置" },
 ];
 

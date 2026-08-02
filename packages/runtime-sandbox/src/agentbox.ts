@@ -18,6 +18,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
+import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
 import type { ProvisionInput, RunHandle, SandboxRunner } from "./index.js";
 
 const execFileP = promisify(execFile);
@@ -369,6 +370,8 @@ export interface RealAgentSpec {
 export interface RealAgentResult {
   text: string;
   files: Record<string, string>;
+  /** CLI 原始 Session；由 provider 专属 Adapter 在沙箱销毁前读回。 */
+  session?: SessionBundle;
   error?: string;
 }
 
@@ -465,11 +468,11 @@ async function materializeAgentFiles(sandbox: Sandbox, spec: RealAgentSpec): Pro
 function mapCliEvent(
   line: Record<string, unknown>,
   emit: (e: Record<string, unknown>) => void,
-): { finalText?: string; isError?: boolean; errorDetail?: string } {
+): { finalText?: string; isError?: boolean; errorDetail?: string; sessionId?: string } {
   const type = line.type as string;
   if (type === "system" && line.subtype === "init") {
     emit({ type: "run.started", sessionId: line.session_id });
-    return {};
+    return { sessionId: typeof line.session_id === "string" ? line.session_id : undefined };
   }
   if (type === "assistant") {
     const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
@@ -593,6 +596,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let stderrTail = "";
   let exitCode = 0;
   let finalText = "";
+  let sessionId = "";
   let runError: string | undefined;
   let nudgesLeft = 3;
   // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
@@ -630,6 +634,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             progressBuffer += e.delta as string;
           }
         });
+        if (outcome.sessionId) sessionId = outcome.sessionId;
         if (outcome.finalText !== undefined) {
           finalText = outcome.finalText;
           // agent 常在调用 mark_job_done 后立即结束回合：先补一轮 drain 再查门禁
@@ -677,6 +682,21 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       // 文件不存在 = agent 没写，容忍
     }
   }
+  // 在沙箱销毁前按 CLI 专属规则归档原始 Session。捕获失败不覆盖 Agent 的主运行结果。
+  const session = sessionId
+    ? await CLI_SESSION_ADAPTERS[spec.provider].exportSession(
+        {
+          run: (command) => sandbox.run(command, { timeoutMs: 20_000 }),
+          readText: (filePath) => readSandboxFileText(sandbox, filePath),
+        },
+        sessionId,
+      ).catch((error) => ({
+        cli: spec.provider,
+        sessionId,
+        artifacts: [],
+        captureError: error instanceof Error ? error.message : String(error),
+      }))
+    : undefined;
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
   const cleanupPaths = [...(spec.resultFiles ?? []), ...(spec.semanticEventFile ? [spec.semanticEventFile] : [])]
@@ -688,6 +708,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   return {
     text: finalText,
     files,
+    session,
     ...(semanticError
       ? { error: `语义事件处理失败: ${semanticError}` }
       : runError

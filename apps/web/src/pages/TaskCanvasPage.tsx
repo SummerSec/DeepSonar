@@ -21,10 +21,13 @@ import {
   type JobSummary,
 } from "../api";
 import { CanvasView } from "../CanvasView";
+import { FindingDetailPanel } from "../FindingDetailPanel";
+import { JobDetailPanel } from "../JobDetailPanel";
 import { ReportPanel } from "../ReportPanel";
 import {
   DataTable,
   EmptyState,
+  FilterSelect,
   SeverityBadge,
   StatusBadge,
   formatTime,
@@ -99,6 +102,10 @@ export function TaskCanvasPage() {
   const { projectId, canvasId } = useParams<{ projectId: string; canvasId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as Tab) || "canvas";
+  const severity = searchParams.get("severity") ?? "";
+  const verify = searchParams.get("verify") ?? "";
+  const selectedFinding = searchParams.get("finding");
+  const selectedJob = searchParams.get("job");
 
   const [meta, setMeta] = useState<CanvasData["canvas"] | null>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
@@ -212,6 +219,13 @@ export function TaskCanvasPage() {
     setSearchParams(sp, { replace: true });
   };
 
+  const setQuery = (key: "severity" | "verify" | "finding" | "job", value: string | null) => {
+    const sp = new URLSearchParams(searchParams);
+    if (value) sp.set(key, value);
+    else sp.delete(key);
+    setSearchParams(sp, { replace: true });
+  };
+
   if (!projectId || !canvasId) return null;
 
   // 任务状态 chip：root 节点状态优先映射中文（分析完成/生成报告/已完成）
@@ -222,6 +236,9 @@ export function TaskCanvasPage() {
   // 待人工处理事实（needs_human 的 fact 节点）
   const humanFacts = nodes.filter(
     (n) => n.node_type === "fact" && n.verification_status === "needs_human",
+  );
+  const visibleFindings = findings.filter(
+    (finding) => (!severity || finding.severity === severity) && (!verify || finding.verify_status === verify),
   );
 
   const tabs: { key: Tab; label: string; count?: number; icon: typeof Graph }[] = [
@@ -372,9 +389,7 @@ export function TaskCanvasPage() {
 
         {tab === "findings" && (
           <div className="h-full overflow-y-auto p-4 sm:p-6">
-            <p className="mb-5 text-[11px] leading-5 text-zinc-600">
-              只列出本任务（当前画布）产出的发现，不含项目内其它任务。
-            </p>
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p><div className="flex flex-wrap gap-2"><FilterSelect label="SEVERITY" value={severity} onChange={(v) => setQuery("severity", v || null)} placeholder="全部 severity" options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))} /><FilterSelect label="VERIFY" value={verify} onChange={(v) => setQuery("verify", v || null)} placeholder="全部验证状态" options={["pending", "verifying", "confirmed", "false_positive", "needs_human"].map((value) => ({ value, label: value }))} /></div></div>
 
             {/* 待人工处理事实：hub 无法自动裁决的 fact，人工确认/排除后才会推进报告 */}
             {humanFacts.length > 0 && (
@@ -397,7 +412,7 @@ export function TaskCanvasPage() {
               </div>
             )}
 
-            {findings.length === 0 ? (
+            {visibleFindings.length === 0 ? (
               <EmptyState title="本任务暂无发现" hint="审计 Job 产出 finding 后会出现在这里" />
             ) : (
               <DataTable>
@@ -412,13 +427,13 @@ export function TaskCanvasPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {findings.map((f) => (
-                      <tr key={f.id} className="transition-colors hover:bg-ink-850/80">
+                    {visibleFindings.map((f) => (
+                      <tr key={f.id} onClick={() => setQuery("finding", f.id)} className="cursor-pointer transition-colors hover:bg-ink-850/80">
                         <td className={tdCls}>
                           <SeverityBadge severity={f.severity} />
                         </td>
                         <td className={tdCls}>
-                          <div className="font-medium text-zinc-100">{f.title}</div>
+                          <button type="button" className="text-left font-medium text-zinc-100 hover:text-acc-400">{f.title}</button>
                           {f.summary && (
                             <div className="mt-0.5 line-clamp-2 text-[13px] text-zinc-600">
                               {f.summary}
@@ -464,7 +479,7 @@ export function TaskCanvasPage() {
                   </thead>
                   <tbody>
                     {jobs.map((j) => (
-                      <tr key={j.id} className="transition-colors hover:bg-ink-850/80">
+                      <tr key={j.id} onClick={() => setQuery("job", j.id)} className="cursor-pointer transition-colors hover:bg-ink-850/80">
                         <td className={tdCls}>
                           <StatusBadge status={j.status} />
                           {j.error && (
@@ -495,6 +510,8 @@ export function TaskCanvasPage() {
           </div>
         )}
       </div>
+      {selectedFinding && <FindingDetailPanel findingId={selectedFinding} onClose={() => setQuery("finding", null)} />}
+      {selectedJob && <JobDetailPanel jobId={selectedJob} onClose={() => setQuery("job", null)} />}
     </div>
   );
 }

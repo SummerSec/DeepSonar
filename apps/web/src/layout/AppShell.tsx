@@ -14,6 +14,7 @@ const NAV: { to: string; end: boolean; label: string; caption: string; icon: Ico
 const PROJECT_TABS: { seg: string; label: string; caption: string; icon: Icon }[] = [
   { seg: "tasks", label: "任务工作台", caption: "意图与交付闭环", icon: Crosshair },
   { seg: "findings", label: "项目发现", caption: "风险证据", icon: Bug },
+  { seg: "data", label: "项目数据", caption: "导入与导出", icon: Folder },
   { seg: "settings", label: "项目策略", caption: "角色与规则覆盖", icon: Gear },
 ];
 

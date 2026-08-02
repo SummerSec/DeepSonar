@@ -36,12 +36,14 @@ export function CredentialsPanel() {
   const [provider, setProvider] = useState("anthropic");
   const [secret, setSecret] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [allowedModels, setAllowedModels] = useState("");
   const [projectId, setProjectId] = useState("");
   const [rotatingId, setRotatingId] = useState<string | null>(null);
   const [rotateSecret, setRotateSecret] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editAllowedModels, setEditAllowedModels] = useState("");
   const [editProjectId, setEditProjectId] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -49,6 +51,11 @@ export function CredentialsPanel() {
     const v = c.public_metadata_json?.base_url;
     return typeof v === "string" ? v : "";
   };
+  const metaAllowedModels = (c: ProviderCredential): string[] => {
+    const value = c.public_metadata_json?.allowed_model_ids;
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  };
+  const parseModels = (value: string) => [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))];
 
   const load = () => {
     setError("");
@@ -70,11 +77,15 @@ export function CredentialsPanel() {
         provider,
         secret: secret.trim(),
         project_id: projectId || null,
-        metadata: baseUrl.trim() ? { base_url: baseUrl.trim().replace(/\/+$/, "") } : {},
+        metadata: {
+          ...(baseUrl.trim() ? { base_url: baseUrl.trim().replace(/\/+$/, "") } : {}),
+          ...(parseModels(allowedModels).length ? { allowed_model_ids: parseModels(allowedModels) } : {}),
+        },
       });
       setName("");
       setSecret("");
       setBaseUrl("");
+      setAllowedModels("");
       setNotice("已加密登记。密钥不可再查看（只能轮换）；名称与 base_url 可随时编辑。");
       load();
     } catch (e) {
@@ -109,6 +120,7 @@ export function CredentialsPanel() {
     setEditingId(c.id);
     setEditName(c.name);
     setEditBaseUrl(metaBaseUrl(c));
+    setEditAllowedModels(metaAllowedModels(c).join(", "));
     setEditProjectId(c.project_id ?? "");
   };
 
@@ -122,6 +134,9 @@ export function CredentialsPanel() {
       const url = editBaseUrl.trim().replace(/\/+$/, "");
       if (url) nextMeta.base_url = url;
       else delete nextMeta.base_url;
+      const models = parseModels(editAllowedModels);
+      if (models.length) nextMeta.allowed_model_ids = models;
+      else delete nextMeta.allowed_model_ids;
       await api.updateCredential(id, {
         name: editName.trim(),
         project_id: editProjectId || null,
@@ -227,6 +242,13 @@ export function CredentialsPanel() {
             ))}
           </select>
         </div>
+        <input
+          value={allowedModels}
+          onChange={(e) => setAllowedModels(e.target.value)}
+          placeholder="允许的模型 ID（逗号分隔；留空=不额外限制）"
+          className="mb-2 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
+          spellCheck={false}
+        />
         <input
           value={secret}
           onChange={(e) => setSecret(e.target.value)}
@@ -345,6 +367,9 @@ export function CredentialsPanel() {
                   base_url {metaBaseUrl(c) || "（默认）"}
                 </span>
                 <span>指纹 {c.fingerprint.slice(0, 8)}</span>
+                <span title={metaAllowedModels(c).join(", ") || "不额外限制"}>
+                  模型 {metaAllowedModels(c).length ? metaAllowedModels(c).join(", ") : "全部"}
+                </span>
                 <span>v{c.key_version}</span>
                 {c.last_used_at && <span>最近用 {new Date(c.last_used_at).toLocaleString()}</span>}
                 {c.rotated_at && <span>轮换于 {new Date(c.rotated_at).toLocaleDateString()}</span>}
@@ -366,6 +391,13 @@ export function CredentialsPanel() {
                     placeholder={PROVIDERS.find((p) => p.value === c.provider)?.baseUrlHint
                       ? `base_url：${PROVIDERS.find((p) => p.value === c.provider)?.baseUrlHint}`
                       : "base_url（留空=用 provider 默认）"}
+                    className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
+                    spellCheck={false}
+                  />
+                  <input
+                    value={editAllowedModels}
+                    onChange={(e) => setEditAllowedModels(e.target.value)}
+                    placeholder="允许的模型 ID（逗号分隔；留空=不额外限制）"
                     className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
                     spellCheck={false}
                   />

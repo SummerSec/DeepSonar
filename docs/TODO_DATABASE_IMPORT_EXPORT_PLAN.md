@@ -2,9 +2,18 @@
 
 > 日期：2026-08-01
 >
-> 状态：待实施
+> 状态：**P0 + 部分 P1 已实现**（2026-08）
 >
 > 范围：项目完整迁移、配置模板迁移、环境配置迁移、证据与报告归档、Credential 安全迁移
+>
+> 已实现：`data_exports`/`data_imports`（schema v7）、`.deepsonarpack` v1、配置/完整/证据预设、
+> create_new + merge_configuration、预览与审计、任务/Finding/事件导入（活动 Job 归档 cancelled）、
+> Credential 仅元数据、项目设置「导入导出」页。
+>
+> **平台配置包**（`deepsonar-platform-export`）：全局规则、agent_roles、全局 RoleConfig、skill_sources、
+> 全局 Credential 元数据；API `POST/GET /platform/exports`；全局 Agent 管理页「平台导入导出」。
+>
+> 未做：便携 Secret 加密包、签名、reports 表、Blob 实体复制。
 
 ## 1. 目标
 
@@ -755,23 +764,23 @@ DELETE /imports/{id}
 
 ### P0：配置导入导出
 
-- [ ] 定义 `.deepsonarpack` v1、Manifest、模块和 checksums；
-- [ ] 建立 `data_exports` / `data_imports`；
-- [ ] 实现 project、rules、roles、skills、environment、integrations metadata；
-- [ ] 实现 create_new 和 merge_configuration；
-- [ ] Credential 只导出元数据；
-- [ ] 实现预览、ID Map、冲突处理和审计；
-- [ ] 前端增加配置导入导出页面。
+- [x] 定义 `.deepsonarpack` v1、Manifest、模块和 checksums；
+- [x] 建立 `data_exports` / `data_imports`；
+- [x] 实现 project、rules、roles、skills、environment、integrations metadata；
+- [x] 实现 create_new 和 merge_configuration；
+- [x] Credential 只导出元数据；
+- [x] 实现预览、ID Map、冲突处理和审计；
+- [x] 前端增加配置导入导出页面。
 
 验收：能够把一个项目的角色、规则、Skill 和非敏感环境配置迁移到另一套实例，不泄露 Secret。
 
 ### P1：完整项目与证据
 
-- [ ] 增加 tasks、events、findings、reports、artifacts；
-- [ ] 实现 DB 一致性快照和活动 Job 阻断；
-- [ ] 实现 Job 状态清理和两阶段引用写入；
+- [x] 增加 tasks、events、findings（artifacts URI 引用；reports 表尚未落地故跳过）；
+- [x] 实现活动 Job 阻断（完整导出）与 allow_active_jobs 选项；
+- [x] 实现 Job 状态清理和两阶段引用写入；
 - [ ] 实现 Blob 流式复制、哈希和缺失处理；
-- [ ] 来源审计日志作为只读归档；
+- [x] 来源审计日志作为只读归档文件（不写入目标 audit_logs 正文）；
 - [ ] 增加完整项目导入回归测试。
 
 验收：完整项目迁移后任务、画布、Finding、报告和证据可查看，但不会自动恢复执行历史 Job。

@@ -169,6 +169,50 @@ export interface EffectiveRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** 全局按 Agent CLI 的并发配额；项目层只读继承。 */
+  maxConcurrentByAgentCli: Record<string, number>;
+}
+
+export interface EvidenceFileMeta {
+  name: string;
+  path: string;
+  kind: "main" | "subagent" | "vendor_export" | "stream" | "otlp";
+  bytes: number;
+  sha256: string;
+}
+
+export interface JobEvidence {
+  transcript_uri: string | null;
+  manifest: {
+    v: 1;
+    job_id: string;
+    cli: string;
+    session_id: string | null;
+    created_at: string;
+    finalized_at: string;
+    files: EvidenceFileMeta[];
+    capture_error?: string;
+  };
+}
+
+export interface FindingDetail {
+  finding: FindingSummary & {
+    raw_json: Record<string, unknown>;
+    suggest_verify: boolean;
+    source_job_type: string;
+    source_job_status: string;
+    canvas_title?: string | null;
+  };
+  verification_jobs: Array<{
+    id: string;
+    type: string;
+    status: string;
+    error: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+    created_at: string;
+  }>;
+  source_events: JobEvent[];
 }
 
 export interface CanvasConvergence {
@@ -211,6 +255,45 @@ export type RoleInput = {
 export interface GlobalSettings {
   rules: Record<string, unknown>;
   effective_rules: EffectiveRules;
+}
+
+export interface DataExportRow {
+  id: string;
+  project_id: string;
+  preset: string;
+  modules_json: string[];
+  status: string;
+  artifact_sha256?: string | null;
+  artifact_size?: number | null;
+  expires_at?: string | null;
+  error?: string | null;
+  error_code?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+}
+
+export interface DataImportRow {
+  id: string;
+  source_sha256: string;
+  source_manifest_json?: Record<string, unknown> | null;
+  target_project_id?: string | null;
+  mode?: string | null;
+  preview_json?: ImportPreview | null;
+  status: string;
+  error?: string | null;
+  created_at: string;
+}
+
+export interface ImportPreview {
+  compatible: boolean;
+  kind?: "platform" | string;
+  source: { project_name?: string; project_id?: string; app_version?: string };
+  selected_modules: string[];
+  counts: Record<string, number>;
+  conflicts: { module: string; key: string; message: string }[];
+  warnings: string[];
+  credential_mappings_required: { source_id: string; name: string; provider: string }[];
+  environment_keys_required?: string[];
 }
 
 /** 平台 API Token（§6.1）：列表永不返回哈希/明文；明文仅创建/轮换响应里出现一次 */
@@ -486,6 +569,22 @@ export const api = {
       `/canvases/${canvasId}/convergence/run-hub-now`,
     ),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
+  jobEvidence: (jobId: string) => get<JobEvidence>(`/jobs/${jobId}/evidence`),
+  jobStream: (jobId: string) => get<{ events: Array<Record<string, unknown>> }>(`/jobs/${jobId}/evidence/stream`),
+  jobSession: (jobId: string) => get<{ meta: EvidenceFileMeta; text: string; truncated: boolean }>(`/jobs/${jobId}/evidence/session`),
+  downloadJobSession: async (jobId: string): Promise<void> => {
+    const res = await fetch(`/api/jobs/${jobId}/evidence/session/download`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`session download -> ${res.status}`);
+    const blob = await res.blob();
+    const disposition = res.headers.get("content-disposition") ?? "";
+    const name = disposition.match(/filename="([^"]+)"/)?.[1] ?? `${jobId}.jsonl`;
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
   jobs: (opts?: { project_id?: string; status?: string }) =>
     get<JobSummary[]>(`/jobs${qs({ project_id: opts?.project_id, status: opts?.status })}`),
   findings: (opts?: {
@@ -503,6 +602,7 @@ export const api = {
         canvas_id: opts?.canvas_id,
       })}`,
     ),
+  finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
   cancelJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/cancel`),
   resumeJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/resume`),
   settings: (projectId: string) => get<ProjectSettings>(`/projects/${projectId}/settings`),
@@ -546,6 +646,73 @@ export const api = {
       { status, note },
     ),
   projectRoles: (projectId: string) => get<ProjectRole[]>(`/projects/${projectId}/roles`),
+  /** 项目数据包导出 */
+  createExport: (
+    projectId: string,
+    body: {
+      preset: "configuration" | "project_full" | "evidence_archive" | "custom";
+      modules?: string[];
+      allow_active_jobs?: boolean;
+      credentials?: { mode?: "excluded" | "metadata" };
+    },
+  ) => send<DataExportRow>("POST", `/projects/${projectId}/exports`, body),
+  listExports: (projectId: string) => get<DataExportRow[]>(`/projects/${projectId}/exports`),
+  /** 平台配置导出（全局规则 / 角色 / Skill 源等） */
+  createPlatformExport: (body?: {
+    preset?: "platform_full" | "custom";
+    modules?: string[];
+    credentials?: { mode?: "excluded" | "metadata" };
+  }) => send<DataExportRow>("POST", `/platform/exports`, body ?? { preset: "platform_full" }),
+  listPlatformExports: () => get<DataExportRow[]>(`/platform/exports`),
+  getExport: (id: string) => get<DataExportRow>(`/exports/${id}`),
+  downloadExport: async (id: string): Promise<Blob> => {
+    const res = await fetch(`/api/exports/${id}/download`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`download -> ${res.status}`);
+    return res.blob();
+  },
+  cancelExport: (id: string) => send<DataExportRow>("POST", `/exports/${id}/cancel`),
+  deleteExport: (id: string) => send<{ ok: boolean }>("DELETE", `/exports/${id}`),
+  /** 上传 .deepsonarpack（raw body） */
+  uploadImport: async (file: Blob): Promise<DataImportRow> => {
+    const res = await fetch(`/api/imports`, {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "content-type": "application/x-deepsonarpack",
+      },
+      body: file,
+    });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const err = (await res.json()) as { error?: string };
+        detail = err.error ?? "";
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail || `upload -> ${res.status}`);
+    }
+    return res.json() as Promise<DataImportRow>;
+  },
+  getImport: (id: string) => get<DataImportRow>(`/imports/${id}`),
+  previewImport: (id: string) => send<ImportPreview>("POST", `/imports/${id}/preview`),
+  applyImport: (
+    id: string,
+    body: {
+      mode?: "create_new" | "merge_configuration" | "merge_platform";
+      project_name?: string;
+      target_project_id?: string;
+      conflict_policy?: "rename" | "keep_target" | "use_source";
+      credential_mappings?: Record<string, string>;
+    },
+  ) =>
+    send<{ project_id?: string; id_map?: Record<string, unknown>; ok?: boolean; summary?: Record<string, number> }>(
+      "POST",
+      `/imports/${id}/apply`,
+      body,
+    ),
+  cancelImport: (id: string) => send<DataImportRow>("POST", `/imports/${id}/cancel`),
+  deleteImport: (id: string) => send<{ ok: boolean }>("DELETE", `/imports/${id}`),
   globalSettings: () => get<GlobalSettings>("/global-settings"),
   patchGlobalSettings: (body: { rules: Record<string, unknown> }) =>
     send<GlobalSettings>("PATCH", "/global-settings", body),

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type JobSummary } from "../api";
+import { JobDetailPanel } from "../JobDetailPanel";
 import {
   DataTable,
   EmptyState,
@@ -39,6 +40,7 @@ const RESUMABLE = new Set(["waiting_human", "orphan", "failed", "timeout"]);
 export function JobsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const status = searchParams.get("status") ?? "";
+  const selectedJob = searchParams.get("job");
   const [rows, setRows] = useState<JobSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -91,6 +93,13 @@ export function JobsPage() {
     }
   };
 
+  const openJob = (id: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (id) next.set("job", id);
+    else next.delete("job");
+    setSearchParams(next, { replace: true });
+  };
+
   if (loading) return <PageSkeleton rows={6} />;
   return (
     <div className="page-scroll">
@@ -125,7 +134,7 @@ export function JobsPage() {
       ) : (
         <>
         <div className="grid gap-3 md:hidden">
-          {rows.map((j) => <article key={j.id} className="surface-shell"><div className="surface-core p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><span className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">{j.type}</span><Link to={j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : `/projects/${j.project_id}/tasks`} className="mt-2 block truncate text-[14px] font-medium text-zinc-100">{j.canvas_title ?? j.project_name ?? j.id.slice(0, 8)}</Link><p className="mt-1 text-[10px] text-zinc-600">{j.project_name} · {relativeTime(j.created_at)}</p></div><StatusBadge status={j.status} /></div>{j.error && <p className="mt-3 line-clamp-2 rounded-xl bg-red-400/[.05] px-3 py-2 font-mono text-[9px] leading-4 text-red-300">{j.error}</p>}<div className="mt-4 flex items-center gap-2 border-t border-white/[.045] pt-3">{CANCELLABLE.has(j.status) && <button disabled={busy === j.id} onClick={() => act(j.id, "cancel")} className="secondary-button min-h-8 px-3 py-1 text-[10px]">取消</button>}{RESUMABLE.has(j.status) && <button disabled={busy === j.id} onClick={() => act(j.id, "resume")} className="secondary-button min-h-8 px-3 py-1 text-[10px]">恢复</button>}<span className="ml-auto font-mono text-[8px] text-zinc-700">{formatTime(j.started_at)}</span></div></div></article>)}
+          {rows.map((j) => <article key={j.id} className="surface-shell"><div className="surface-core p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><span className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">{j.type}</span><button type="button" onClick={() => openJob(j.id)} className="mt-2 block truncate text-left text-[14px] font-medium text-zinc-100 hover:text-acc-400">{j.canvas_title ?? j.project_name ?? j.id.slice(0, 8)}</button><p className="mt-1 text-[10px] text-zinc-600">{j.project_name} · {relativeTime(j.created_at)}</p></div><StatusBadge status={j.status} /></div>{j.error && <p className="mt-3 line-clamp-2 rounded-xl bg-red-400/[.05] px-3 py-2 font-mono text-[9px] leading-4 text-red-300">{j.error}</p>}<div className="mt-4 flex items-center gap-2 border-t border-white/[.045] pt-3"><button type="button" onClick={() => openJob(j.id)} className="secondary-button min-h-8 px-3 py-1 text-[10px]">详情</button>{CANCELLABLE.has(j.status) && <button disabled={busy === j.id} onClick={() => act(j.id, "cancel")} className="secondary-button min-h-8 px-3 py-1 text-[10px]">取消</button>}{RESUMABLE.has(j.status) && <button disabled={busy === j.id} onClick={() => act(j.id, "resume")} className="secondary-button min-h-8 px-3 py-1 text-[10px]">恢复</button>}<span className="ml-auto font-mono text-[8px] text-zinc-700">{formatTime(j.started_at)}</span></div></div></article>)}
         </div>
         <div className="hidden md:block"><DataTable>
           <table className="w-full min-w-[960px]">
@@ -142,7 +151,7 @@ export function JobsPage() {
             </thead>
             <tbody>
               {rows.map((j) => (
-                <tr key={j.id} className="table-row-hover">
+                <tr key={j.id} className="table-row-hover cursor-pointer" onClick={() => openJob(j.id)}>
                   <td className={tdCls}>
                     <StatusBadge status={j.status} />
                     {j.error && (
@@ -159,6 +168,7 @@ export function JobsPage() {
                     <Link
                       to={`/projects/${j.project_id}/tasks`}
                       className="text-zinc-300 hover:text-acc-400"
+                      onClick={(e) => e.stopPropagation()}
                     >
                       {j.project_name ?? j.project_id.slice(0, 8)}
                     </Link>
@@ -168,6 +178,7 @@ export function JobsPage() {
                       <Link
                         to={`/projects/${j.project_id}/tasks/${j.canvas_id}`}
                         className="block truncate text-zinc-300 hover:text-acc-400"
+                        onClick={(e) => e.stopPropagation()}
                       >
                         {j.canvas_title ?? j.canvas_id.slice(0, 8)}
                       </Link>
@@ -185,7 +196,7 @@ export function JobsPage() {
                     {relativeTime(j.created_at)}
                   </td>
                   <td className={tdCls}>
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
                       {CANCELLABLE.has(j.status) && (
                         <button
                           disabled={busy === j.id}
@@ -213,6 +224,7 @@ export function JobsPage() {
         </DataTable></div>
         </>
       )}
+      {selectedJob && <JobDetailPanel jobId={selectedJob} onClose={() => openJob(null)} />}
     </div>
   );
 }
