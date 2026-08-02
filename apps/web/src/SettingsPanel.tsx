@@ -68,7 +68,6 @@ export function SettingsPanel({
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
   const [rules, setRules] = useState<EffectiveRules | null>(null);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
-  const [providerActive, setProviderActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
@@ -125,7 +124,6 @@ export function SettingsPanel({
         .then((g) => {
           setRules(g.effective_rules);
           setCliActive(g.active_by_agent_cli ?? {});
-          setProviderActive(g.active_by_provider ?? {});
         })
         .catch(() => {});
     }
@@ -175,10 +173,9 @@ export function SettingsPanel({
       maxIntentsPerDecision: rules.maxIntentsPerDecision,
       allowEgress: rules.allowEgress,
     };
-    // CLI 并发仅全局可写；项目设置不覆盖
+    // CLI 并发仅全局可写；Provider 并发在凭据页配置，此处不写
     if (!projectId) {
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
-      ruleBody.maxConcurrentByProvider = rules.maxConcurrentByProvider ?? {};
     }
     try {
       if (projectId) {
@@ -279,16 +276,6 @@ export function SettingsPanel({
       if (raw === "") delete next[cli];
       else next[cli] = Math.max(0, Number(raw));
       return { ...current, maxConcurrentByAgentCli: next };
-    });
-  };
-
-  const setProviderLimit = (provider: "anthropic" | "kimi" | "openai" | "openrouter", raw: string) => {
-    setRules((current) => {
-      if (!current) return current;
-      const next = { ...(current.maxConcurrentByProvider ?? {}) };
-      if (raw === "") delete next[provider];
-      else next[provider] = Math.max(0, Number(raw));
-      return { ...current, maxConcurrentByProvider: next };
     });
   };
 
@@ -518,26 +505,15 @@ export function SettingsPanel({
             {!projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
-                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">Quota ladder</div>
-                  <div className="mt-1 text-[13px] text-zinc-300">Provider → Credential → Model ID → Agent CLI</div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                    Agent CLI 全局并发
+                  </div>
                   <p className="mt-1 text-[11px] leading-5 text-zinc-600">
-                    调度按此顺序检查硬上限。Credential 与 Model ID 在“凭据”页配置；Agent CLI 是最后一层，不会覆盖上游配额。
+                    按 Agent CLI 限制全局并发。Provider / Credential / Model 并发请在「凭据」页配置。
+                    留空只受全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
                   </p>
                 </div>
-                <div className="border-b border-white/[.05] px-4 py-4">
-                  <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">01 · Provider 总并发</div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    {(["anthropic", "kimi", "openai", "openrouter"] as const).map((provider) => (
-                      <div key={provider}>
-                        <label className={labelCls}>{provider}</label>
-                        <input type="number" min={0} placeholder="不限" value={rules.maxConcurrentByProvider?.[provider] ?? ""} onChange={(event) => setProviderLimit(provider, event.target.value)} className={inputCls} />
-                        <div className="mt-1 font-mono text-[10px] text-zinc-600">当前运行 {providerActive[provider] ?? 0}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
                 <div className="px-4 py-4">
-                  <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">04 · Agent CLI 全局并发</div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {(["claude-code", "codex", "open-code"] as const).map((cli) => (
                       <div key={cli}>
@@ -556,9 +532,6 @@ export function SettingsPanel({
                       </div>
                     ))}
                   </div>
-                  <p className="mt-2 text-[11px] leading-5 text-zinc-600">
-                    留空只受上游与全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
-                  </p>
                 </div>
               </section>
             )}

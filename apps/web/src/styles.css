@@ -567,37 +567,47 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
 .data-table { overflow: hidden; }
 .data-table table { border-collapse: collapse; }
 .data-table thead { background: #0d1012; }
-/* 表头筛选/搜索：列内居中，控件同高对齐 */
+/* 表头筛选/搜索：上下两行，列宽更紧凑，避免横向撑爆 */
 .table-head-cell {
-  padding: 12px 10px !important;
+  padding: 10px 8px !important;
   text-align: center;
   vertical-align: middle;
   font: 500 10px/1 var(--font-mono);
-  letter-spacing: .16em;
+  letter-spacing: .12em;
   text-transform: uppercase;
   color: #7a848a;
+  white-space: normal;
+}
+.table-head-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 .table-head-label {
-  display: block;
-  margin-bottom: 8px;
-  line-height: 1;
+  flex: none;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 .table-head-control,
 .table-head-search {
   display: block;
   width: 100%;
-  max-width: 148px;
-  height: 30px;
-  margin: 0 auto;
+  max-width: 120px;
+  min-width: 0;
+  height: 28px;
   box-sizing: border-box;
 }
 .table-head-control {
-  padding: 0 8px;
+  padding: 0 6px;
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   color: var(--text);
   background: var(--bg);
-  font: 400 11px/30px var(--font-mono);
+  font: 400 10px/28px var(--font-mono);
   letter-spacing: 0;
   text-transform: none;
   text-align: center;
@@ -609,26 +619,26 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
 }
 .table-head-search {
   position: relative;
+  max-width: 140px;
 }
 .table-head-search input {
   display: block;
   width: 100%;
-  height: 30px;
+  height: 28px;
   margin: 0;
-  padding: 0 26px;
+  padding: 0 22px 0 24px;
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   color: var(--text);
   background: var(--bg);
-  font: 400 11px/30px var(--font-sans);
+  font: 400 11px/28px var(--font-sans);
   letter-spacing: 0;
   text-transform: none;
-  text-align: center;
+  text-align: left;
   outline: none;
 }
 .table-head-search input::placeholder {
   color: var(--muted);
-  text-align: center;
 }
 .table-head-search input:focus {
   border-color: rgb(var(--accent-rgb) / .45);
@@ -636,7 +646,7 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
 .table-head-search > svg {
   position: absolute;
   top: 50%;
-  left: 8px;
+  left: 7px;
   z-index: 1;
   color: var(--muted);
   transform: translateY(-50%);
@@ -645,12 +655,12 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
 .table-head-search > button {
   position: absolute;
   top: 50%;
-  right: 6px;
+  right: 4px;
   z-index: 1;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -660,6 +670,16 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
   transform: translateY(-50%);
 }
 .table-head-search > button:hover { color: var(--text); }
+/* 发现/运行表：占满容器，允许横向滚动但不被 min-width 硬撑破布局 */
+.data-table-adaptive {
+  width: 100%;
+  table-layout: fixed;
+}
+.data-table-adaptive th,
+.data-table-adaptive td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .data-table th { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line-strong); }
 .data-table td { border-right: 1px solid rgba(219,231,235,.055); border-bottom: 1px solid rgba(219,231,235,.075); }

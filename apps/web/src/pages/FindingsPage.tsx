@@ -1,7 +1,7 @@
 import { MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, type FindingSummary } from "../api";
+import { api, type FindingSummary, type Project } from "../api";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import {
   DataTable,
@@ -24,10 +24,12 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const severity = searchParams.get("severity") ?? "";
   const verify = searchParams.get("verify") ?? "";
+  const projectFilter = searchParams.get("project") ?? "";
   const q = searchParams.get("q") ?? "";
   const selectedFinding = searchParams.get("finding");
 
   const [rows, setRows] = useState<FindingSummary[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchDraft, setSearchDraft] = useState(q);
@@ -37,11 +39,19 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   }, [q]);
 
   useEffect(() => {
+    if (scope !== "global") return;
+    api.projects().then(setProjects).catch(() => {});
+  }, [scope]);
+
+  useEffect(() => {
     let stop = false;
     const tick = () => {
       api
         .findings({
-          project_id: scope === "project" ? projectId : undefined,
+          project_id:
+            scope === "project"
+              ? projectId
+              : projectFilter || undefined,
           severity: severity || undefined,
           verify_status: verify || undefined,
         })
@@ -65,9 +75,9 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       stop = true;
       clearInterval(t);
     };
-  }, [scope, projectId, severity, verify]);
+  }, [scope, projectId, severity, verify, projectFilter]);
 
-  const setParam = (key: "severity" | "verify" | "q", value: string) => {
+  const setParam = (key: "severity" | "verify" | "q" | "project", value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -80,6 +90,22 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     else next.delete("finding");
     setSearchParams(next, { replace: true });
   };
+
+  const projectOptions = useMemo(() => {
+    if (projects.length) {
+      return projects
+        .map((p) => ({ id: p.id, name: p.name }))
+        .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+    }
+    // 回退：从当前结果集里抽项目
+    const map = new Map<string, string>();
+    for (const f of rows) {
+      if (f.project_id) map.set(f.project_id, f.project_name ?? f.project_id.slice(0, 8));
+    }
+    return [...map.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  }, [projects, rows]);
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -111,70 +137,103 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       )}
 
       {/* 桌面：筛选/搜索在表头列内（不在页头、不在表外独立条） */}
-      <div className="hidden md:block">
+      <div className="hidden min-w-0 md:block">
         <DataTable>
-          <table className="w-full min-w-[880px]">
+          <table className="data-table-adaptive w-full">
+            <colgroup>
+              <col style={{ width: scope === "global" ? "11%" : "12%" }} />
+              <col style={{ width: scope === "global" ? "28%" : "36%" }} />
+              {scope === "global" && <col style={{ width: "14%" }} />}
+              <col style={{ width: scope === "global" ? "20%" : "24%" }} />
+              <col style={{ width: scope === "global" ? "14%" : "16%" }} />
+              <col style={{ width: scope === "global" ? "13%" : "12%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th className="table-head-cell">
-                  <span className="table-head-label">Severity</span>
-                  <select
-                    value={severity}
-                    onChange={(e) => setParam("severity", e.target.value)}
-                    className="table-head-control"
-                    aria-label="按 severity 筛选"
-                  >
-                    <option value="">全部</option>
-                    {SEVERITIES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </th>
-                <th className="table-head-cell">
-                  <span className="table-head-label">标题</span>
-                  <div className="table-head-search">
-                    <MagnifyingGlass size={12} />
-                    <input
-                      value={searchDraft}
-                      onChange={(e) => setSearchDraft(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && commitSearch()}
-                      onBlur={commitSearch}
-                      placeholder="搜索…"
-                      aria-label="搜索发现"
-                    />
-                    {(searchDraft || q) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSearchDraft("");
-                          setParam("q", "");
-                        }}
-                        aria-label="清除搜索"
-                      >
-                        <X size={11} />
-                      </button>
-                    )}
+                  <div className="table-head-stack">
+                    <span className="table-head-label">风险等级</span>
+                    <select
+                      value={severity}
+                      onChange={(e) => setParam("severity", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按风险等级筛选"
+                    >
+                      <option value="">全部</option>
+                      {SEVERITIES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </th>
-                {scope === "global" && <th className="table-head-cell">项目</th>}
+                <th className="table-head-cell">
+                  <div className="table-head-stack">
+                    <span className="table-head-label">标题</span>
+                    <div className="table-head-search">
+                      <MagnifyingGlass size={12} />
+                      <input
+                        value={searchDraft}
+                        onChange={(e) => setSearchDraft(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && commitSearch()}
+                        onBlur={commitSearch}
+                        placeholder="搜索…"
+                        aria-label="搜索发现"
+                      />
+                      {(searchDraft || q) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchDraft("");
+                            setParam("q", "");
+                          }}
+                          aria-label="清除搜索"
+                        >
+                          <X size={11} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </th>
+                {scope === "global" && (
+                  <th className="table-head-cell">
+                    <div className="table-head-stack">
+                      <span className="table-head-label">项目</span>
+                      <select
+                        value={projectFilter}
+                        onChange={(e) => setParam("project", e.target.value)}
+                        className="table-head-control"
+                        aria-label="按项目筛选"
+                      >
+                        <option value="">全部</option>
+                        {projectOptions.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </th>
+                )}
                 <th className="table-head-cell">位置</th>
                 <th className="table-head-cell">
-                  <span className="table-head-label">验证</span>
-                  <select
-                    value={verify}
-                    onChange={(e) => setParam("verify", e.target.value)}
-                    className="table-head-control"
-                    aria-label="按验证状态筛选"
-                  >
-                    <option value="">全部</option>
-                    {VERIFY.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="table-head-stack">
+                    <span className="table-head-label">验证</span>
+                    <select
+                      value={verify}
+                      onChange={(e) => setParam("verify", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按验证状态筛选"
+                    >
+                      <option value="">全部</option>
+                      {VERIFY.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </th>
                 <th className="table-head-cell">时间</th>
               </tr>
@@ -272,7 +331,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 </button>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className={`grid gap-2 ${scope === "global" ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-2"}`}>
               <select
                 value={severity}
                 onChange={(e) => setParam("severity", e.target.value)}
@@ -286,6 +345,21 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                   </option>
                 ))}
               </select>
+              {scope === "global" && (
+                <select
+                  value={projectFilter}
+                  onChange={(e) => setParam("project", e.target.value)}
+                  className="table-head-control max-w-none"
+                  aria-label="项目"
+                >
+                  <option value="">全部项目</option>
+                  {projectOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <select
                 value={verify}
                 onChange={(e) => setParam("verify", e.target.value)}

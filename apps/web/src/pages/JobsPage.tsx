@@ -1,7 +1,6 @@
-import { MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type JobSummary } from "../api";
+import { api, type JobSummary, type Project } from "../api";
 import { JobDetailPanel } from "../JobDetailPanel";
 import {
   DataTable,
@@ -39,21 +38,22 @@ const RESUMABLE = new Set(["waiting_human", "orphan", "failed", "timeout"]);
 export function JobsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const status = searchParams.get("status") ?? "";
-  const q = searchParams.get("q") ?? "";
+  const typeFilter = searchParams.get("type") ?? "";
+  const projectFilter = searchParams.get("project") ?? "";
+  const canvasFilter = searchParams.get("canvas") ?? "";
   const selectedJob = searchParams.get("job");
   const [rows, setRows] = useState<JobSummary[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [searchDraft, setSearchDraft] = useState(q);
-
-  useEffect(() => {
-    setSearchDraft(q);
-  }, [q]);
 
   const reload = () =>
     api
-      .jobs({ status: status || undefined })
+      .jobs({
+        status: status || undefined,
+        project_id: projectFilter || undefined,
+      })
       .then((list) => {
         setRows(list);
         setError(null);
@@ -65,10 +65,17 @@ export function JobsPage() {
       });
 
   useEffect(() => {
+    api.projects().then(setProjects).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     let stop = false;
     const tick = () => {
       api
-        .jobs({ status: status || undefined })
+        .jobs({
+          status: status || undefined,
+          project_id: projectFilter || undefined,
+        })
         .then((list) => {
           if (!stop) {
             setRows(list);
@@ -89,37 +96,57 @@ export function JobsPage() {
       stop = true;
       clearInterval(t);
     };
-  }, [status]);
+  }, [status, projectFilter]);
 
-  const setParam = (key: "status" | "q", value: string) => {
+  const setParam = (key: "status" | "type" | "project" | "canvas", value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
+    // 切换项目时清空画布筛选，避免跨项目残留
+    if (key === "project") next.delete("canvas");
     setSearchParams(next, { replace: true });
   };
 
-  const commitSearch = () => setParam("q", searchDraft.trim());
+  const typeOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const j of rows) if (j.type) set.add(j.type);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+
+  const projectOptions = useMemo(() => {
+    if (projects.length) {
+      return projects
+        .map((p) => ({ id: p.id, name: p.name }))
+        .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+    }
+    const map = new Map<string, string>();
+    for (const j of rows) {
+      if (j.project_id) map.set(j.project_id, j.project_name ?? j.project_id.slice(0, 8));
+    }
+    return [...map.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  }, [projects, rows]);
+
+  const canvasOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const j of rows) {
+      if (!j.canvas_id) continue;
+      if (projectFilter && j.project_id !== projectFilter) continue;
+      map.set(j.canvas_id, j.canvas_title ?? j.canvas_id.slice(0, 8));
+    }
+    return [...map.entries()]
+      .map(([id, title]) => ({ id, title }))
+      .sort((a, b) => a.title.localeCompare(b.title, "zh"));
+  }, [rows, projectFilter]);
 
   const visible = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
     return rows.filter((j) => {
-      const hay = [
-        j.type,
-        j.status,
-        j.project_name,
-        j.project_id,
-        j.canvas_title,
-        j.canvas_id,
-        j.error,
-        j.id,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(needle);
+      if (typeFilter && j.type !== typeFilter) return false;
+      if (canvasFilter && j.canvas_id !== canvasFilter) return false;
+      return true;
     });
-  }, [rows, q]);
+  }, [rows, typeFilter, canvasFilter]);
 
   const act = async (id: string, kind: "cancel" | "resume") => {
     setBusy(id);
@@ -157,56 +184,93 @@ export function JobsPage() {
         </div>
       )}
 
-      {/* 桌面：状态筛选 + 搜索在表头列内 */}
-      <div className="hidden md:block">
+      {/* 桌面：状态 / 类型 / 项目 / 画布 均在表头筛选 */}
+      <div className="hidden min-w-0 md:block">
         <DataTable>
-          <table className="w-full min-w-[960px]">
+          <table className="data-table-adaptive w-full">
+            <colgroup>
+              <col style={{ width: "13%" }} />
+              <col style={{ width: "13%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "20%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "16%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th className="table-head-cell">
-                  <span className="table-head-label">状态</span>
-                  <select
-                    value={status}
-                    onChange={(e) => setParam("status", e.target.value)}
-                    className="table-head-control"
-                    aria-label="按状态筛选"
-                  >
-                    <option value="">全部</option>
-                    {STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </th>
-                <th className="table-head-cell">
-                  <span className="table-head-label">类型</span>
-                  <div className="table-head-search">
-                    <MagnifyingGlass size={12} />
-                    <input
-                      value={searchDraft}
-                      onChange={(e) => setSearchDraft(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && commitSearch()}
-                      onBlur={commitSearch}
-                      placeholder="搜索…"
-                      aria-label="搜索运行"
-                    />
-                    {(searchDraft || q) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSearchDraft("");
-                          setParam("q", "");
-                        }}
-                        aria-label="清除搜索"
-                      >
-                        <X size={11} />
-                      </button>
-                    )}
+                  <div className="table-head-stack">
+                    <span className="table-head-label">状态</span>
+                    <select
+                      value={status}
+                      onChange={(e) => setParam("status", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按状态筛选"
+                    >
+                      <option value="">全部</option>
+                      {STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </th>
-                <th className="table-head-cell">项目</th>
-                <th className="table-head-cell">任务画布</th>
+                <th className="table-head-cell">
+                  <div className="table-head-stack">
+                    <span className="table-head-label">类型</span>
+                    <select
+                      value={typeFilter}
+                      onChange={(e) => setParam("type", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按类型筛选"
+                    >
+                      <option value="">全部</option>
+                      {typeOptions.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </th>
+                <th className="table-head-cell">
+                  <div className="table-head-stack">
+                    <span className="table-head-label">项目</span>
+                    <select
+                      value={projectFilter}
+                      onChange={(e) => setParam("project", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按项目筛选"
+                    >
+                      <option value="">全部</option>
+                      {projectOptions.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </th>
+                <th className="table-head-cell">
+                  <div className="table-head-stack">
+                    <span className="table-head-label">任务画布</span>
+                    <select
+                      value={canvasFilter}
+                      onChange={(e) => setParam("canvas", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按任务画布筛选"
+                    >
+                      <option value="">全部</option>
+                      {canvasOptions.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </th>
                 <th className="table-head-cell">开始</th>
                 <th className="table-head-cell">创建</th>
                 <th className="table-head-cell">操作</th>
@@ -232,7 +296,7 @@ export function JobsPage() {
                       <StatusBadge status={j.status} />
                       {j.error && (
                         <div
-                          className="mt-0.5 max-w-[180px] truncate font-mono text-[12px] text-red-400"
+                          className="mt-0.5 max-w-full truncate font-mono text-[12px] text-red-400"
                           title={j.error}
                         >
                           {j.error}
@@ -301,37 +365,10 @@ export function JobsPage() {
         </DataTable>
       </div>
 
-      {/* 移动端：筛选并入列表容器，不进页头 */}
+      {/* 移动端：四维筛选 */}
       <div className="md:hidden">
         <div className="surface-shell mb-3">
-          <div className="surface-core space-y-2 p-3">
-            <div className="relative">
-              <MagnifyingGlass
-                size={13}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600"
-              />
-              <input
-                value={searchDraft}
-                onChange={(e) => setSearchDraft(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && commitSearch()}
-                onBlur={commitSearch}
-                placeholder="搜索类型、项目、画布、错误…"
-                className="w-full rounded-md border border-white/[.08] bg-black/25 py-2 pl-8 pr-8 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600"
-              />
-              {(searchDraft || q) && (
-                <button
-                  type="button"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-600"
-                  onClick={() => {
-                    setSearchDraft("");
-                    setParam("q", "");
-                  }}
-                  aria-label="清除搜索"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
+          <div className="surface-core grid grid-cols-2 gap-2 p-3">
             <select
               value={status}
               onChange={(e) => setParam("status", e.target.value)}
@@ -342,6 +379,45 @@ export function JobsPage() {
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {s}
+                </option>
+              ))}
+            </select>
+            <select
+              value={typeFilter}
+              onChange={(e) => setParam("type", e.target.value)}
+              className="table-head-control max-w-none"
+              aria-label="类型"
+            >
+              <option value="">全部类型</option>
+              {typeOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <select
+              value={projectFilter}
+              onChange={(e) => setParam("project", e.target.value)}
+              className="table-head-control max-w-none"
+              aria-label="项目"
+            >
+              <option value="">全部项目</option>
+              {projectOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={canvasFilter}
+              onChange={(e) => setParam("canvas", e.target.value)}
+              className="table-head-control max-w-none"
+              aria-label="任务画布"
+            >
+              <option value="">全部画布</option>
+              {canvasOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title}
                 </option>
               ))}
             </select>
