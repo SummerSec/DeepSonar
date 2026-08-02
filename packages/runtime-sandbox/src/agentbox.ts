@@ -439,6 +439,21 @@ export interface RealAgentResult {
   error?: string;
 }
 
+/**
+ * 读沙箱内文本文件。SDK 的 downloadFile 直接返回 docker getArchive 的原始 tar 字节
+ * （首行是 tar 头里的文件名），不能当文件内容用；这里走 exec cat。
+ * 文件不存在返回 null（调用方区分「尚未创建」与「读失败」）。
+ */
+async function readSandboxFileText(sandbox: Sandbox, filePath: string): Promise<string | null> {
+  const q = `'${filePath.replace(/'/g, `'\\''`)}'`;
+  const res = await sandbox.run(`if [ -f ${q} ]; then cat ${q}; else exit 44; fi`, { timeoutMs: 15000 });
+  if (res.exitCode === 44) return null;
+  if (res.exitCode !== 0) {
+    throw new Error(`读取沙箱文件失败(exit=${res.exitCode}): ${res.stderr.slice(0, 200)}`);
+  }
+  return res.stdout;
+}
+
 export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
   const sandbox = AgentboxRunner.sandboxOf(handle);
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
@@ -504,11 +519,12 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const drainSemanticEvents = async () => {
     if (!spec.semanticEventFile || !spec.onSemanticEvent || semanticError) return;
     try {
-      const buf = await sandbox.downloadFile(spec.semanticEventFile);
-      if (buf.byteLength > 2 * 1024 * 1024) throw new Error("语义事件队列超过 2 MiB 上限");
-      const text = buf.toString("utf8");
+      const text = await readSandboxFileText(sandbox, spec.semanticEventFile);
+      if (text === null) return; // 文件尚未由 MCP 首次创建属于正常状态
+      if (text.length > 2 * 1024 * 1024) throw new Error("语义事件队列超过 2 MiB 上限");
       const lines = text.split("\n");
-      const completeCount = text.endsWith("\n") ? lines.length - 1 : lines.length - 1;
+      // 最后一行永远跳过：以 \n 结尾时是空串，否则是写了一半的行（下轮重读）
+      const completeCount = lines.length - 1;
       for (let i = semanticLineCount; i < completeCount; i++) {
         const line = lines[i]?.trim();
         semanticLineCount = i + 1;
@@ -565,8 +581,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const files: Record<string, string> = {};
   for (const path of spec.resultFiles ?? []) {
     try {
-      const buf = await sandbox.downloadFile(path);
-      files[path] = buf.toString("utf8");
+      const text = await readSandboxFileText(sandbox, path);
+      if (text !== null) files[path] = text;
     } catch {
       // 文件不存在 = agent 没写，容忍
     }
