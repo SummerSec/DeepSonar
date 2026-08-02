@@ -212,6 +212,8 @@ export function parseHubDecision(raw: string, allowedRoles: ReadonlySet<string>)
         prompt: i.prompt.trim().slice(0, 20_000),
       });
     }
+    // 空 intents 不是合法决策：应 complete 或派发至少一个 intent，避免 Hub 空转烧 maxHubRounds
+    if (intents.length === 0) return null;
     return { intents };
   }
   return null;

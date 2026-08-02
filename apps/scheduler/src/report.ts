@@ -351,15 +351,19 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
   if (!canvas) return { dispatched: false, reason: "no_canvas" };
   const projectId = canvas.project_id as string;
 
-  // 统一收敛门：全部 Finding confirmed | needs_human（与 TODO §0.3 / §5 一致）
-  const { careSeverityMeta } = await import("./verify.js");
+  // 统一完成门子集：Finding 收敛 + 至少一次角色工作（与 Hub complete 一致，防空图报告）
+  const { careSeverityMeta, evaluateAnalysisCompleteGate } = await import("./verify.js");
   const careMeta = await careSeverityMeta(tx, projectId);
-  const conv = await canvasFindingsConverged(tx, canvasId);
-  if (!conv.ok) {
-    return bounceReportGateToHub(tx, canvasId, projectId, conv.problems, {
+  const gate = await evaluateAnalysisCompleteGate(tx, canvasId);
+  if (!gate.ok) {
+    // 仅 Finding 未收敛时回弹 Hub；no_role_work 不应回弹空转，直接拒绝
+    if (gate.blockers.includes("no_role_work")) {
+      return { dispatched: false, reason: "no_role_work", problems: gate.problems };
+    }
+    return bounceReportGateToHub(tx, canvasId, projectId, gate.problems, {
       minVerifySeverity: careMeta.minVerifySeverity,
       careSeverities: careMeta.careSeverities,
-      reason: "findings_not_converged",
+      reason: "analysis_complete_gate_failed",
     });
   }
 

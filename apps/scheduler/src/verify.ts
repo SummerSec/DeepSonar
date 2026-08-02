@@ -829,7 +829,25 @@ export async function canvasFindingsConverged(
         });
       }
     }
-    // needs_human：允许进 Report（待人工章节）；不要求 confirmed round
+    // needs_human：须有绑定 finding_id 的 human 节点可审计（TODO §4.2）
+    if (st === "needs_human") {
+      const hasHuman = await tx`
+        SELECT 1 FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND node_type = 'human'
+          AND body_json->>'finding_id' = ${f.id as string}
+        LIMIT 1`;
+      if (hasHuman.length === 0) {
+        blockers.push(`finding:${f.id}:needs_human_without_blocker`);
+        problems.push({
+          finding_id: f.id as string,
+          title: String(f.title ?? ""),
+          severity: sev,
+          verify_status: st,
+          issue: "needs_human 缺少 human/blocker 节点（无可审计阻塞原因）",
+          in_care_scope: false,
+        });
+      }
+    }
   }
 
   const openRounds = await tx`
@@ -843,7 +861,21 @@ export async function canvasFindingsConverged(
   return { ok: blockers.length === 0 && problems.length === 0, blockers, problems };
 }
 
-export async function hasActiveWorkJobs(tx: Tx, canvasId: string): Promise<boolean> {
+export async function hasActiveWorkJobs(
+  tx: Tx,
+  canvasId: string,
+  excludeJobId?: string | null,
+): Promise<boolean> {
+  if (excludeJobId) {
+    const rows = await tx`
+      SELECT 1 FROM jobs
+      WHERE canvas_id = ${canvasId}
+        AND id <> ${excludeJobId}
+        AND type NOT IN ('report')
+        AND status = ANY(${ACTIVE_JOB as unknown as string[]})
+      LIMIT 1`;
+    return rows.length > 0;
+  }
   const rows = await tx`
     SELECT 1 FROM jobs
     WHERE canvas_id = ${canvasId}
@@ -851,6 +883,60 @@ export async function hasActiveWorkJobs(tx: Tx, canvasId: string): Promise<boole
       AND status = ANY(${ACTIVE_JOB as unknown as string[]})
     LIMIT 1`;
   return rows.length > 0;
+}
+
+/** 至少成功执行过一次非 Hub/Verify/Report 的普通角色 Job（TODO §4.2 空图护栏）。 */
+export async function hasSucceededRoleWork(tx: Tx, canvasId: string): Promise<boolean> {
+  const rows = await tx`
+    SELECT 1 FROM jobs
+    WHERE canvas_id = ${canvasId}
+      AND type NOT IN ('hub_reason', 'verify_finding', 'report')
+      AND status = 'succeeded'
+    LIMIT 1`;
+  return rows.length > 0;
+}
+
+/**
+ * 统一分析完成门（Hub complete 与 maxHubRounds 护栏共用）。
+ * - 全部 Finding ∈ {confirmed, needs_human}（含 human blocker 校验）
+ * - 无未关闭 verification round
+ * - 无活跃工作（可排除当前 job）
+ * - 至少一次普通角色成功 Job（防空图成功报告）
+ */
+export async function evaluateAnalysisCompleteGate(
+  tx: Tx,
+  canvasId: string,
+  opts?: { excludeJobId?: string | null },
+): Promise<{ ok: boolean; blockers: string[]; problems: FindingStatusProblem[] }> {
+  const conv = await canvasFindingsConverged(tx, canvasId);
+  const blockers = [...conv.blockers];
+  const problems = [...conv.problems];
+
+  if (await hasActiveWorkJobs(tx, canvasId, opts?.excludeJobId)) {
+    blockers.push("active_work");
+    problems.push({
+      finding_id: "",
+      title: "",
+      severity: "",
+      verify_status: "",
+      issue: "仍有活跃工作 Job（角色/Hub/Verify）",
+      in_care_scope: false,
+    });
+  }
+
+  if (!(await hasSucceededRoleWork(tx, canvasId))) {
+    blockers.push("no_role_work");
+    problems.push({
+      finding_id: "",
+      title: "",
+      severity: "",
+      verify_status: "",
+      issue: "尚未执行任何普通角色 Job（空图不可 complete/Report）",
+      in_care_scope: false,
+    });
+  }
+
+  return { ok: blockers.length === 0, blockers, problems };
 }
 
 // ---------- internals ----------

@@ -705,47 +705,22 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
     if (p.complete?.description) {
-      // Hub complete 只是提案：全部 Finding ∈ {confirmed, needs_human} 后 Root → analysis_complete → Report
-      // severity / minVerifySeverity 只影响优先级与等待，不改变收敛集合（TODO §0.3）
-      const { canvasFindingsConverged, hasActiveWorkJobs } = await import("./verify.js");
-      const conv = await canvasFindingsConverged(tx, canvasId);
-      if (!conv.ok) {
+      // Hub complete 只是提案：统一完成门（与 maxHubRounds 护栏共用 evaluateAnalysisCompleteGate）
+      const { evaluateAnalysisCompleteGate } = await import("./verify.js");
+      const gate = await evaluateAnalysisCompleteGate(tx, canvasId, { excludeJobId: jobId });
+      if (!gate.ok) {
         const detail =
-          conv.problems.length > 0
-            ? conv.problems
+          gate.problems.length > 0
+            ? gate.problems
                 .slice(0, 8)
-                .map(
-                  (x) =>
-                    `[${x.severity}] ${x.title || x.finding_id}: ${x.verify_status}（${x.issue}）`,
+                .map((x) =>
+                  x.finding_id
+                    ? `[${x.severity}] ${x.title || x.finding_id}: ${x.verify_status}（${x.issue}）`
+                    : x.issue,
                 )
                 .join("; ")
-            : conv.blockers.slice(0, 5).join("; ");
-        throw new Error(
-          `Hub complete 被拒绝：仍有未收敛 Finding（须全部为 confirmed 或 needs_human）。问题：${detail}`,
-        );
-      }
-      if (await hasActiveWorkJobs(tx, canvasId)) {
-        // complete 事件处理时当前 hub job 仍 running，排除自身
-        const others = await tx`
-          SELECT 1 FROM jobs
-          WHERE canvas_id = ${canvasId}
-            AND id <> ${jobId}
-            AND type <> 'report'
-            AND status IN ('pending','claimed','provisioning','running','waiting_human')
-          LIMIT 1`;
-        if (others.length > 0) {
-          throw new Error("Hub complete 被拒绝：仍有活跃工作 Job");
-        }
-      }
-      // 至少执行过一次非 Hub 角色 Job，防止空图直接完成
-      const roleDone = await tx`
-        SELECT 1 FROM jobs
-        WHERE canvas_id = ${canvasId}
-          AND type NOT IN ('hub_reason', 'verify_finding', 'report')
-          AND status = 'succeeded'
-        LIMIT 1`;
-      if (roleDone.length === 0) {
-        throw new Error("Hub complete 被拒绝：尚未执行任何角色工作");
+            : gate.blockers.slice(0, 5).join("; ");
+        throw new Error(`Hub complete 被拒绝：${detail}`);
       }
 
       const [root] = await tx`
@@ -1205,13 +1180,19 @@ export async function maybeTriggerHub(
     WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
   if (count >= rules.maxHubRounds) {
     console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
-    // 护栏耗尽：pending/verifying → needs_human；若已全量收敛则直接 analysis_complete → Report
-    const { settleCanvasFindingsAtGuardrail, canvasFindingsConverged } = await import("./verify.js");
+    // 护栏耗尽：pending/verifying → needs_human；仅当与 Hub complete 相同的统一完成门通过时才 Report
+    const {
+      settleCanvasFindingsAtGuardrail,
+      evaluateAnalysisCompleteGate,
+      hasSucceededRoleWork,
+    } = await import("./verify.js");
     await settleCanvasFindingsAtGuardrail(tx, canvasId, "max_hub_rounds").catch((e) =>
       console.error(`[hub] settle findings at maxHubRounds failed:`, e),
     );
-    const conv = await canvasFindingsConverged(tx, canvasId);
-    if (conv.ok && !(await hasActiveRunnableJobs(tx, canvasId, (job.id as string) ?? null))) {
+    const gate = await evaluateAnalysisCompleteGate(tx, canvasId, {
+      excludeJobId: (job.id as string) ?? null,
+    });
+    if (gate.ok) {
       await tx`
         UPDATE canvas_nodes SET status = 'analysis_complete',
           body_json = body_json || ${tx.json({
@@ -1225,6 +1206,19 @@ export async function maybeTriggerHub(
       const { maybeDispatchReport } = await import("./report.js");
       await maybeDispatchReport(tx, canvasId).catch((e) =>
         console.error(`[hub] auto report after maxHubRounds failed:`, e),
+      );
+    } else {
+      // 无角色工作 / 仍未收敛：停自驱并标人工，绝不空图成功报告
+      const noRole = !(await hasSucceededRoleWork(tx, canvasId));
+      await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
+        auto_stopped: true,
+        paused_reason: noRole
+          ? `max_hub_rounds_no_role_work:${rules.maxHubRounds}`
+          : `max_hub_rounds_incomplete:${rules.maxHubRounds}`,
+        paused_at: new Date().toISOString(),
+      });
+      console.warn(
+        `[hub] maxHubRounds 后未过完成门 (${gate.blockers.join(",")})，auto_stopped，不派发 Report`,
       );
     }
     return;
