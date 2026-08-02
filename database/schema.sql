@@ -545,6 +545,7 @@ $instructions$),
 3. intent.prompt 必须包含目标、范围、已有证据、期望新增事实、约束和验收标准，使全新 Worker 无需隐含上下文即可执行。
 4. 不重复开放或已完成意图；优先派发能最大幅度缩小关键不确定性的最少任务，并遵守本轮意图数量上限。
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
+6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认工具调用；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回 `accepted event`。
 
 ### 平台工具使用
 
