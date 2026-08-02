@@ -42,11 +42,15 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 | `reconcile.ts` | 重启对账 DB↔docker：孤儿容器强删、死在 provision 途中的 job 重置回 pending、running → orphan |
 | `graph.ts` | fact-intent 二分图 → hub prompt 用 YAML；agent 输出结构化解析 |
 | `routes.ts` | 全部 HTTP API（项目/任务/job/画布/角色/RoleConfig/skill-source/配置/webhook） |
-| `auth.ts` / `credentials.ts` / `audit.ts` | 平台 API Token 鉴权（库中只存 sha256，跨回环部署须 `DEEPSONAR_AUTH_REQUIRED=true`）/ Provider 凭据库 / append-only 审计（凭据明文永不入审计） |
+| `auth.ts` / `users.ts` | 双轨鉴权：服务/自动化用 API Token（库中只存 sha256），人用用户名密码 + 会话 Token（scrypt，角色 admin/operator/viewer，无用户时 `/auth/bootstrap` 引导）；跨回环部署须 `DEEPSONAR_AUTH_REQUIRED=true` |
+| `credentials.ts` / `audit.ts` / `credential-test.ts` | Provider 凭据库 / append-only 审计（凭据明文永不入审计）/ 凭据连通性测试 |
 | `gateway.ts` | Model Gateway（§6.3）：沙箱持短期单 Job token 经 `/gateway` 访问上游 LLM，不持长期 Provider Key |
 | `control-mcp.ts` | 按 Job 动态注入的本地控制 MCP（`emit_*`/`mark_job_done` 等提案工具的服务端实现） |
 | `skill-sources.ts` | Git 托管 skill/command 仓库的浅克隆同步与 catalog 缓存 |
 | `stream-bus.ts` | WS 实时流（前端 `/api` 代理 ws） |
+| `evidence.ts` | 运行证据冷存储：OTLP/NDJSON 按 job 队列化写盘 + gzip |
+| `platform-tools.ts` | 注入 Hub/Worker 的平台工具 usage 文本（`list_available_roles` 等，工具说明的单源） |
+| `transfer/` | `.deepsonarpack` 项目数据导入导出：ZIP + manifest + checksums.sha256，按模块/预设选择，worker 异步执行，导入前 sanitize |
 | `openapi.ts` / `metrics.ts` | OpenAPI 文档 / Prometheus 指标 |
 
 ### Hub 循环（Cairn 式图语义，§8.3）
@@ -73,7 +77,8 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 ### 前端（`apps/web/`，React 19 + @xyflow/react + elkjs + Tailwind 4）
 
 - 只读渲染（`nodesDraggable=false`）；节点坐标由服务端 elkjs 布局算好落库，Agent 不能提案坐标。
-- 页面：Projects/Tasks/TaskCanvas/Jobs/Findings/Agents/Settings/Dashboard，经 `/api` 代理访问调度器。
+- 页面（`src/pages/`）：Projects/Tasks/TaskCanvas/Jobs/Findings/Agents/Settings/Dashboard/Login/ProjectData（导入导出），经 `/api` 代理访问调度器。
+- Findings 按 GitHub Issues 范式管理：disposition 状态流转 + 评论，评论可触发 hub 继续分析。
 
 ## 开发时的注意事项
 
@@ -81,3 +86,4 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - 新增 job 类型 = 字符串新值 +（如需真实执行）在 `agent_roles` 注册，无需迁移；dispatcher 的 `isRealType` 自动识别。
 - 改表 = 改 `database/schema.sql` 并同步 bump `db.ts` 的 `SCHEMA_VERSION`；无增量迁移，版本不符调度器拒绝启动，直接清库重建验证。
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
+- 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
