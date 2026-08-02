@@ -601,7 +601,7 @@ INSERT INTO skill_sources (id, name, repo_url, branch, trust_status, enabled) VA
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO runtime_images (image_key, name, description, publisher, source_url, source_kind, official, project_opt_in, enabled) VALUES
-  ('deepsonar-base', 'DeepSonar Base', 'Explore、Analyze、Code 与 Hub 的官方最小运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
+  ('deepsonar-base', 'DeepSonar Base', 'Explore、Analyze、Code、Hub 与 Verify 的官方最小运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
   ('deepsonar-audit', 'DeepSonar Audit', 'Audit 的官方审计运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
   ('deepsonar-kali-minimal', 'DeepSonar Kali Test', 'Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI', 'SummerSec + Kali Linux', 'https://www.kali.org/docs/containers/using-kali-docker-images/', 'official', true, false, true)
 ON CONFLICT (image_key) DO NOTHING;

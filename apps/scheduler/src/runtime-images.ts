@@ -55,12 +55,26 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
       AND ((rc.version = 1 AND rc.runtime_image_key IN ('deepsonar-audit', 'deepsonar-kali-minimal'))
         OR (rc.version = 2 AND rc.runtime_image_key = 'deepsonar-kali-minimal'))`;
   await sql`
-    UPDATE runtime_images SET
-      name = 'DeepSonar Kali Test',
-      description = 'Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI',
+    UPDATE agent_roles SET
+      description = '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发',
+      updated_at = now()
+    WHERE name = 'verify' AND builtin = true AND kind = 'system'
+      AND description = '系统角色：默认在精简 Kali 多语言环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；Hub 不可下发'`;
+  // 官方产品元数据由代码维护；同步全部条目，修复已有数据库里遗留的旧角色描述。
+  await sql`
+    UPDATE runtime_images ri SET
+      name = canonical.name,
+      description = canonical.description,
       project_opt_in = false,
       updated_at = now()
-    WHERE image_key = 'deepsonar-kali-minimal' AND official = true`;
+    FROM (VALUES
+      ('deepsonar-base', 'DeepSonar Base', 'Explore、Analyze、Code、Hub 与 Verify 的官方最小运行时'),
+      ('deepsonar-audit', 'DeepSonar Audit', 'Audit 的官方审计运行时'),
+      ('deepsonar-kali-minimal', 'DeepSonar Kali Test', 'Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI')
+    ) AS canonical(image_key, name, description)
+    WHERE ri.image_key = canonical.image_key AND ri.official = true
+      AND (ri.name, ri.description, ri.project_opt_in)
+          IS DISTINCT FROM (canonical.name, canonical.description, false)`;
 
   const configured = [
     { key: "deepsonar-base", ref: config.images.officialBaseRef },
