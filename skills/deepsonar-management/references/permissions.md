@@ -17,12 +17,13 @@ jobs:control
 findings:read
 skills:read / skills:write
 agents:read / agents:write        # 角色、RoleConfig、设置、凭据
+images:read / images:manage / images:approve
 integrations:read / integrations:write
 tokens:manage
 admin
 ```
 
-**没有**独立的 `roles:*` / `credentials:*` scope；角色与凭据都走 `profiles:*`。
+**没有**独立的 `roles:*` / `credentials:*` scope；角色与凭据都走 `agents:*`。镜像市场独立使用 `images:*`。
 
 按用途选以下组合，**不要全给**：
 
@@ -45,6 +46,9 @@ findings:read
 | --- | --- |
 | 查看/改角色注册表、RoleConfig、全局/项目设置、凭据 | `agents:read`、`agents:write` |
 | 管理 Skill 模块源（同步/信任审批） | `skills:read`、`skills:write` |
+| 查看镜像市场 | `images:read` |
+| 导入镜像、重扫、项目启停/固定版本 | `images:manage` |
+| 批准、拒绝、禁用或撤销镜像版本 | `images:approve`（只给平台管理员） |
 | 绑定/同步 Plane | `integrations:read`、`integrations:write` |
 
 ## 豁免鉴权（无需 Token）
@@ -65,6 +69,7 @@ findings:read
 - `tokens:manage` —— Token 创建/吊销/轮换，留给人类管理员；
 - `admin` —— 隐式全部 scope，含 `/audit-logs`；
 - Credential **明文任何路径都读不到**；`agents:write` 仅在确需自动化登记/轮换凭据时再给。
+- `images:approve` 可把第三方代码变成可执行环境，与 `admin` 同样只给人类平台管理员。
 
 ## 其它约束
 

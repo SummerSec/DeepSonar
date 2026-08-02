@@ -359,6 +359,7 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 - Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
 - 非敏感环境变量、白名单 `env_keys` 和按 Job 签发的短期模型凭据
 - Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
+- 已准入的不可变运行镜像快照：产品/版本 ID、`name@sha256:digest`、工具清单哈希和准入扫描 ID
 
 Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结。Hub 不访问目标网络。
 
@@ -388,7 +389,22 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权。`mark_job_done` 对所有角色，以及 `list_available_roles`、`submit_hub_decision` 对 Hub 是不可关闭的决策/终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。
 
-### 8.2 Git 模块源（skill_sources）
+### 8.2 可信运行镜像与独立市场
+
+镜像市场是受治理的 OCI 目录，不是任意容器执行入口。`runtime_images` 表示产品身份，`runtime_image_versions` 表示不可变版本，`project_runtime_images` 表示项目显式启用/固定版本，`runtime_image_scans` 保留每次准入或复扫证据。
+
+- 官方 `deepsonar-base` 供 explore/analyze/review/test/code/hub/report，`deepsonar-audit` 供 audit/verify；两者以固定 digest 的 `node:22-bookworm-slim` 为底（满足当前 Claude Code 的 Node 版本要求），共用 `agent-harness/runtime-images.json` 版本/来源/摘要单一定义，本地 image DSL 与生产 Dockerfile 均消费该约束并由 CI 检测漂移。
+- **镜像体积是准入硬门槛**：按角色拆包、`--no-install-recommends`、不安装重复 Agent SDK/CLI、构建后清理包缓存，并在断网冒烟中检查 `maxSizeMiB`。重型扫描器只进入专项镜像，不允许为了“可能用到”扩张默认 base。
+- `deepsonar-kali-minimal` 是项目显式 opt-in 的 Kali 专项镜像：固定官方 `kali-last-release` digest，只装清单列出的 CLI 和审计工具，不安装 `kali-linux-*` / `kali-tools-*` metapackage、GUI、桌面或默认工具全集；未在项目市场启用时不能被 RoleConfig 选择，也不参与官方 base 默认回退。
+- Job 创建于 `core.ts` 时按项目 RoleConfig → 全局 RoleConfig → 官方 base 解析可信版本，并立即冻结 digest；Dispatcher/Executor 只消费快照，不在执行期重新解析 tag。
+- `image-admission` 是与 Scheduler 进程隔离的 Worker。它对 allowlist registry 的导入执行 digest 解析、Cosign 验签、Syft SBOM、Trivy 漏洞/凭据扫描、ClamAV 恶意文件检查、setuid 枚举和断网硬化自检。扫描通过后仍保持 quarantined，只有 `images:approve` 管理员能提升 trusted。
+- 复扫失败的 trusted 版本自动 revoked，调度器/准入 Worker 会取消尚未完成的相关 Job 并精确回收它们的 sandbox ID。历史 Job 快照、Finding 和扫描记录不删除；新 digest 只进入 quarantined，不自动替换生产版本。
+- 私有 registry 使用 `oci_registry` Credential，准入 Worker 仅在 `docker login --password-stdin` 时解密，不进入 Job Snapshot、Docker 参数、日志或 Agent 工作区。
+- `runtime_data_layers` / `runtime_data_layer_versions` 为 Trivy/OSV 等离线库预留可版本化、只读、digest 准入模型；尚未准入的数据层不得挂载进运行沙箱。
+
+Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
+
+### 8.3 Git 模块源（skill_sources）
 
 Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
 
@@ -397,7 +413,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - RoleConfig 勾选 `["<source_id>:<module_id>"]`，快照时展开为 agentbox **embedded skills / commands** 与手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 下发到当次 Worker
 - 内容在 sync 时缓存，跑任务不再访问 Git —— 断网/私有网络也能跑
 
-### 8.3 图语义与 hub 循环（Cairn 式自驱审计）
+### 8.4 图语义与 hub 循环（Cairn 式自驱审计）
 
 画布升级为 **fact-intent 二分图**（参考 Cairn 的 blackboard 架构）：agent 不直接决定下一步，只把发现写进画布；**hub agent 读整张图做决策**。
 
@@ -425,6 +441,8 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 | **PoC 由 Agent 生成**，验证 = 在沙箱执行半不可信代码 | verify 沙箱独立隔离、一次性、跑完即毁；出网白名单 |
 | finding 内容含恶意 HTML/JS | finding 一律当纯数据存储；画布前端渲染防 XSS（不渲染 raw HTML） |
 | 事件通道被滥用（伪造 finding、刷事件） | 事件不经沙箱网络，只走 SDK 控制通道；沙箱内无调度器凭据；payload schema 校验 + 大小上限 + 每 job 事件速率限制 |
+| 任务内容诱导 Agent 指定恶意镜像 | Hub 不输出镜像 ID；Scheduler 只从可信目录和 RoleConfig 解析并冻结 digest；未准入/未项目启用版本无法建 Job |
+| 第三方镜像供应链投毒 | 独立准入 Worker + 固定 digest 扫描器 + 验签/SBOM/漏洞/凭据/恶意文件检查 + 管理员提升 + 周期复扫自动撤销 |
 
 ### 9.2 资源配置（MVP 默认）
 

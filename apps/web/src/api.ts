@@ -79,6 +79,8 @@ export interface JobDetail {
     error: string | null;
     started_at: string | null;
     finished_at: string | null;
+    payload_json: Record<string, unknown>;
+    agent_snapshot_json: Record<string, unknown>;
   };
   events: JobEvent[];
   findings: { id: string; severity: string; title: string; verify_status: string }[];
@@ -369,7 +371,7 @@ export interface ApiTokenCreated extends ApiToken {
 export interface ProviderCredential {
   id: string;
   name: string;
-  kind: "llm_provider" | "plane" | "git";
+  kind: "llm_provider" | "plane" | "git" | "oci_registry";
   provider: string;
   project_id: string | null;
   key_version: number;
@@ -383,6 +385,74 @@ export interface ProviderCredential {
   created_by: string | null;
   active_count: number;
   active_by_model: Record<string, number>;
+}
+
+export type RuntimeImageTrustStatus = "quarantined" | "scanning" | "trusted" | "disabled" | "rejected" | "revoked";
+
+export interface RuntimeImageSummary {
+  id: string;
+  image_key: string;
+  name: string;
+  description: string;
+  publisher: string;
+  source_url: string | null;
+  source_kind: "official" | "third_party";
+  official: boolean;
+  project_opt_in: boolean;
+  enabled: boolean;
+  project_enabled: boolean | null;
+  selected_version_id: string | null;
+  latest_version_id: string | null;
+  latest_version: string | null;
+  digest: string | null;
+  resolved_ref: string | null;
+  platforms_json: string[] | null;
+  tools_json: Array<{ name: string; version: string; capabilities?: string[] }> | null;
+  tools_manifest_sha256: string | null;
+  trust_status: RuntimeImageTrustStatus | null;
+  scan_summary_json: Record<string, unknown> | null;
+  size_bytes: number | null;
+  scanned_at: string | null;
+  approved_at: string | null;
+  promoted_at: string | null;
+}
+
+export interface RuntimeImageScan {
+  id: string;
+  status: "queued" | "claimed" | "running" | "succeeded" | "failed";
+  worker_id: string | null;
+  result_json: Record<string, unknown>;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface RuntimeImageVersion {
+  id: string;
+  version: string;
+  image_ref: string;
+  resolved_ref: string | null;
+  digest: string | null;
+  contract_version: string;
+  platforms_json: string[];
+  tools_json: Array<{ name: string; version: string; capabilities?: string[] }>;
+  tools_manifest_sha256: string | null;
+  sbom_json: Record<string, unknown> | null;
+  signature_json: Record<string, unknown> | null;
+  scan_summary_json: Record<string, unknown>;
+  size_bytes: number | null;
+  trust_status: RuntimeImageTrustStatus;
+  status_reason: string | null;
+  scanned_at: string | null;
+  approved_at: string | null;
+  promoted_at: string | null;
+  created_at: string;
+  scans: RuntimeImageScan[];
+}
+
+export interface RuntimeImageDetail {
+  image: RuntimeImageSummary;
+  versions: RuntimeImageVersion[];
 }
 
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
@@ -851,7 +921,36 @@ export const api = {
   ) => send<PublicUser>("PATCH", `/users/${id}`, body),
   resetUserPassword: (id: string, password: string) =>
     send<{ ok: boolean }>("POST", `/users/${id}/password`, { password }),
-
+  runtimeImages: (projectId?: string, search?: string) =>
+    get<RuntimeImageSummary[]>(`/runtime-images${qs({ project_id: projectId, search })}`),
+  runtimeImage: (id: string) => get<RuntimeImageDetail>(`/runtime-images/${id}`),
+  importRuntimeImage: (body: {
+    image_key: string;
+    name: string;
+    description?: string;
+    publisher: string;
+    source_url?: string;
+    image_ref: string;
+    version?: string;
+    registry_credential_id?: string;
+  }) => send<{ image: RuntimeImageSummary; version: RuntimeImageVersion; scan: RuntimeImageScan }>(
+    "POST", "/runtime-images/import", body,
+  ),
+  setRuntimeImageVersionStatus: (
+    id: string,
+    status: "trusted" | "rejected" | "disabled" | "revoked",
+    reason?: string,
+  ) => send<RuntimeImageVersion>("POST", `/runtime-image-versions/${id}/status`, { status, reason }),
+  rescanRuntimeImageVersion: (id: string) =>
+    send<RuntimeImageScan>("POST", `/runtime-image-versions/${id}/rescan`),
+  bindProjectRuntimeImage: (
+    projectId: string,
+    imageId: string,
+    enabled: boolean,
+    versionId?: string | null,
+  ) => send<{ project_id: string; runtime_image_id: string; enabled: boolean; selected_version_id: string | null }>(
+    "PUT", `/projects/${projectId}/runtime-images/${imageId}`, { enabled, version_id: versionId ?? null },
+  ),
   /** 平台 API Token 管理（§6.4，与 Provider Credential 分离） */
   tokens: () => get<ApiToken[]>("/tokens"),
   createToken: (t: { name: string; scopes: string[]; project_id?: string | null; expires_in_days?: number }) =>

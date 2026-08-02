@@ -4,7 +4,7 @@ import path from "node:path";
 
 const host = process.env.HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? 8080);
-const publicRoot = path.resolve("/app/public");
+const publicRoot = path.resolve(process.env.PUBLIC_ROOT ?? "/app/public");
 const scheduler = new URL(process.env.SCHEDULER_URL ?? "http://scheduler:3100");
 
 const mime = new Map([

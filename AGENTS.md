@@ -14,11 +14,11 @@ pnpm build            # 全 workspace tsc 构建
 pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试框架）
 ```
 
-- **测试**：无 test runner。`agent-harness/test-*` 是手工 API 冒烟脚本（需调度器运行中），快捷方式 `pnpm ci:smoke:projects`（项目/任务）、`ci:smoke:roles`（角色）、`ci:smoke:hub`（hub 循环）、`ci:smoke:auth`（API Token）、`ci:smoke:mcp`（控制 MCP）；另有 `test-credentials-api.py`、`test-gateway.py`（Model Gateway）、`test-sandbox-hardening.mts`（沙箱硬限制）。
-- **沙箱镜像**：`npx agentbox image build --provider local-docker --file agent-harness/image.mjs`（预装三家 CLI）。
+- **测试**：无 test runner。`agent-harness/test-*` 是手工 API 冒烟脚本（需调度器运行中），快捷方式 `pnpm ci:smoke:projects`（项目/任务）、`ci:smoke:roles`（角色）、`ci:smoke:hub`（hub 循环）、`ci:smoke:auth`（API Token）、`ci:smoke:images`（镜像市场）、`ci:smoke:mcp`（控制 MCP）；另有 `test-credentials-api.py`、`test-gateway.py`（Model Gateway）、`test-sandbox-hardening.mts`（沙箱硬限制）。
+- **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI、仅项目显式启用。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
 - **联调不开沙箱**：`.env` 设 `AGENT_MODE=fake`（默认），dispatcher 走 NoopRunner 只跑状态机；`AGENT_MODE=real` 才经 agentbox-sdk 起真实容器。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
-- **生产部署**：`deploy/` 含 scheduler/web/agent 三个 Dockerfile、`docker-compose.prod.yml`（含备份 sidecar）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。CI 在 `.github/workflows/ci.yml`，GHCR 制品发布在 `release.yml`。
+- **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission 四个 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。CI 在 `.github/workflows/ci.yml`，GHCR 制品发布在 `release.yml`。
 
 ## 架构要点（跨文件才能看懂的部分）
 
@@ -41,7 +41,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 | `executor-real.ts` | 真实 agent 执行：按 `agent_snapshot_json` 冻结快照决定 provider/model/env/prompt |
 | `reconcile.ts` | 重启对账 DB↔docker：孤儿容器强删、死在 provision 途中的 job 重置回 pending、running → orphan |
 | `graph.ts` | fact-intent 二分图 → hub prompt 用 YAML；agent 输出结构化解析 |
-| `routes.ts` | 全部 HTTP API（项目/任务/job/画布/角色/RoleConfig/skill-source/配置/webhook） |
+| `routes.ts` | 全部 HTTP API（项目/任务/job/画布/角色/RoleConfig/skill-source/镜像市场/配置/webhook） |
 | `auth.ts` / `users.ts` | 双轨鉴权：服务/自动化用 API Token（库中只存 sha256），人用用户名密码 + 会话 Token（scrypt，角色 admin/operator/viewer，无用户时 `/auth/bootstrap` 引导）；跨回环部署须 `DEEPSONAR_AUTH_REQUIRED=true` |
 | `credentials.ts` / `audit.ts` / `credential-test.ts` | Provider 凭据库 / append-only 审计（凭据明文永不入审计）/ 凭据连通性测试 |
 | `gateway.ts` | Model Gateway（§6.3）：沙箱持短期单 Job token 经 `/gateway` 访问上游 LLM，不持长期 Provider Key |
@@ -61,6 +61,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 - `SandboxRunner` 是调度器与沙箱之间唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（agentbox-sdk，可切 local-docker/e2b/daytona）。换 provider 只动这个包。
 - 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
+- 运行镜像由 RoleConfig 的市场 key 选择，Job 创建时冻结已准入的 `name@sha256:digest`、工具清单哈希和扫描 ID；Dispatcher 不重新解析 tag。第三方镜像只能经 `apps/image-admission` 扫描、管理员批准、项目启用后执行，Agent/Hub/任务内容都不能指定镜像引用。
 - 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `deepsonar-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
 - 语义事件由本地 MCP 写入控制队列，再经 agentbox-sdk 控制通道增量回传，**不经沙箱目标网络**；同一画布的新 Fact/Finding 通过 `Agent.attach(...).sendMessage(...)` 追加给仍在运行的 Agent CLI。终态后删除队列并销毁沙箱。
 - `env_keys` 白名单（`DEEPSONAR_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 RoleConfig 下发变量；长期密钥不进快照或工作区。
@@ -77,7 +78,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 ### 前端（`apps/web/`，React 19 + @xyflow/react + elkjs + Tailwind 4）
 
 - 只读渲染（`nodesDraggable=false`）；节点坐标由服务端 elkjs 布局算好落库，Agent 不能提案坐标。
-- 页面（`src/pages/`）：Projects/Tasks/TaskCanvas/Jobs/Findings/Agents/Settings/Dashboard/Login/ProjectData（导入导出），经 `/api` 代理访问调度器。
+- 页面（`src/pages/`）：Projects/Tasks/TaskCanvas/Jobs/Findings/Agents/Settings/Dashboard/Login/ProjectData（导入导出）/RuntimeImages（独立镜像市场），经 `/api` 代理访问调度器。
 - Findings 按 GitHub Issues 范式管理：disposition 状态流转 + 评论，评论可触发 hub 继续分析。
 
 ## 开发时的注意事项

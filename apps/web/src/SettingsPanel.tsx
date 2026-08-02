@@ -399,6 +399,7 @@ export function SettingsPanel({
               title={`${projectId ? "项目覆盖" : "全局缺省配置"} · ${r.name}`}
               roleName={r.name}
               roleKind={r.kind}
+              projectId={projectId ?? undefined}
               initial={projectId ? (projEntry?.project_config ?? globalCfg) : globalCfg}
               credentials={
                 projectId

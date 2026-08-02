@@ -6,7 +6,7 @@
 - 已有且 `schema_meta.version` 与当前版本一致：不重放 DDL
 - 其他结构：拒绝启动并要求重建数据库
 
-当前基线版本为 v5。它会为每个内置角色模板建立原生的全局 `RoleConfig`，写入可通过 API 修改的全局规则模板，并登记受信任且启用的 `DeepSonar-Skills` 官方模块源。默认模板中，`hub_reason` 是唯一中枢，`verify`、`report` 是调度器专用系统角色，`review` 等普通角色可由 Hub 下发；运行时角色、模块目录与项目数据均以数据库/API 为准。
+当前基线版本为 v7。除角色、RoleConfig 与官方 Skill 源外，它还包含 `runtime_images`、不可变 `runtime_image_versions`、准入扫描、项目启用关系以及可版本化的离线漏洞数据层。基线会登记 `deepsonar-base` / `deepsonar-audit` 产品身份；可执行版本由 Scheduler 根据运维人员配置的 digest 引导，或经独立准入 Worker 扫描、管理员审批后产生。
 
 当前阶段不维护历史 migration、增量升级或基线迁移登记；结构变化直接更新 `schema.sql` 和 `schema_meta.version`。不要手工修改运行中的数据库。
 

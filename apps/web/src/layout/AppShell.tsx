@@ -1,4 +1,4 @@
-import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Folder, Gear, MagnifyingGlass, Moon, Palette, Queue, Robot, SignOut, Sun, User, X } from "@phosphor-icons/react";
+import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Cube, Folder, Gear, MagnifyingGlass, Moon, Palette, Queue, Robot, SignOut, Sun, User, X } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
@@ -11,12 +11,14 @@ const NAV: { to: string; end: boolean; label: string; caption: string; icon: Ico
   { to: "/findings", end: false, label: "发现", caption: "跨项目证据", icon: Bug },
   { to: "/jobs", end: false, label: "运行", caption: "调度与恢复", icon: Queue },
   { to: "/agents", end: false, label: "Agent", caption: "角色与能力", icon: Robot },
+  { to: "/images", end: false, label: "镜像", caption: "可信运行环境", icon: Cube },
 ];
 const PROJECT_TABS: { seg: string; label: string; caption: string; icon: Icon }[] = [
   { seg: "tasks", label: "任务工作台", caption: "意图与交付闭环", icon: Crosshair },
   { seg: "findings", label: "项目发现", caption: "风险证据", icon: Bug },
   { seg: "data", label: "项目数据", caption: "导入与导出", icon: Folder },
   { seg: "settings", label: "项目策略", caption: "角色与规则覆盖", icon: Gear },
+  { seg: "images", label: "项目镜像", caption: "启用与版本固定", icon: Cube },
 ];
 
 const ACCENT_THEMES = [

@@ -95,11 +95,12 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173
 ```
 
-默认 `AGENT_MODE=fake`，不需要构建 Agent 镜像。基本验证：
+默认 `AGENT_MODE=fake`，不需要构建 Agent 镜像。Web 的 `/images` 是独立镜像市场页；项目内的 `/projects/:projectId/images` 用于启用已准入镜像和固定版本。官方运行时坚持最小镜像：base 基于 Node 22 Debian slim，重型审计工具独立打包；`deepsonar-kali-minimal` 使用精简 Kali rootfs、无 Kali metapackage/GUI，且只能由项目显式启用。基本验证：
 
 ```bash
 pnpm typecheck
 pnpm build
+pnpm ci:images
 python agent-harness/test-local-project-api.py
 ```
 
@@ -107,9 +108,9 @@ python agent-harness/test-local-project-api.py
 
 - 当前完整建库入口：[database/schema.sql](database/schema.sql)
 - Schema 使用说明：[database/README.md](database/README.md)
-- 增量迁移：`apps/scheduler/migrations/0001_*.sql` 至最新版本
-- 正常启动不需要手动导入 schema；Scheduler 会使用 advisory lock 自动执行缺失 migration
-- `database/schema.sql` 用于全新外部数据库初始化、审阅和 CI 校验
+- 不维护增量 migration；Scheduler 持有 advisory lock，仅对空库套用完整基线
+- 已有库的 `schema_meta.version` 与程序不一致时会拒绝启动，升级前必须备份并按项目策略重建
+- `database/schema.sql` 是全新外部数据库初始化、审阅和 CI 校验的唯一结构基线
 
 手工初始化全新数据库：
 
@@ -139,7 +140,8 @@ curl -X POST "http://127.0.0.1:8080/api/projects/<project-id>/events" \
 
 ```text
 apps/
-  scheduler/        Fastify 调度器、状态机、Hub、迁移
+  scheduler/        Fastify 调度器、状态机、Hub、建库基线
+  image-admission/  第三方 OCI 镜像独立准入/持续复扫 Worker
   web/              React 控制台和任务画布
 packages/
   shared-types/     前后端共享 Zod schema
@@ -157,6 +159,7 @@ docs/               架构与实施文档
 - Agent 只提交 Finding、Fact 或决策提案，调度器是唯一副作用执行者；
 - 被审计代码和外部事件都属于不可信输入；
 - API Token 与模型/Plane 凭据严格分离；
+- Agent 只能运行 Job 创建时冻结的已准入 digest，不能从任务内容指定 OCI 引用；
 - real 模式挂载 Docker Socket，等价于较高宿主权限，只能部署在受控主机。
 
 ## 文档

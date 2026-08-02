@@ -16,6 +16,7 @@ const TaskCanvasPage = lazy(() => import("./pages/TaskCanvasPage").then((module)
 const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
 const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ default: module.LoginPage })));
+const RuntimeImagesPage = lazy(() => import("./pages/RuntimeImagesPage").then((module) => ({ default: module.RuntimeImagesPage })));
 
 function Deferred({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
@@ -80,6 +81,14 @@ export default function App() {
           }
         />
         <Route
+          path="images"
+          element={
+            <Deferred>
+              <RuntimeImagesPage />
+            </Deferred>
+          }
+        />
+        <Route
           path="projects/:projectId"
           element={
             <Deferred>
@@ -125,6 +134,14 @@ export default function App() {
             element={
               <Deferred>
                 <SettingsPage />
+              </Deferred>
+            }
+          />
+          <Route
+            path="images"
+            element={
+              <Deferred>
+                <RuntimeImagesPage />
               </Deferred>
             }
           />

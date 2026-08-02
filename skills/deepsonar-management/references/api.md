@@ -12,7 +12,7 @@ Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
 
 Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出的写操作默认 `admin`，读操作只需已认证。
 
-**注意**：「角色 / RoleConfig / 设置 / 凭据」统一使用 `agents:read` / `agents:write`。
+**注意**：「角色 / RoleConfig / 设置 / 凭据」统一使用 `agents:read` / `agents:write`；运行时镜像市场使用独立的 `images:*` scopes。
 
 ## 端点一览
 
@@ -131,6 +131,22 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | PUT | /projects/:id/role-configs/:roleId | agents:write | 项目覆盖；普通角色须已启用（409） |
 | DELETE | /projects/:id/role-configs/:roleId | agents:write | 删除覆盖，回落全局 |
 
+### 运行时镜像市场
+
+市场只接受受治理 OCI 目录。第三方导入首先进入 `quarantined`，由独立 Image Admission Worker 解析不可变 digest 并完成验签、SBOM、漏洞/凭据/恶意文件扫描和断网自检。扫描通过也不会自动 trusted；必须由 `images:approve` 管理员提升，第三方版本还需要项目显式启用。
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET | /runtime-images | images:read | 市场列表；`?search=` / `?project_id=` |
+| GET | /runtime-images/:id | images:read | 产品、不可变版本、工具清单、SBOM/签名和扫描历史 |
+| POST | /runtime-images/import | images:manage | `{image_key,name,publisher,image_ref,description?,source_url?,version?,registry_credential_id?}`；返回 202 |
+| POST | /runtime-image-versions/:id/rescan | images:manage | 重新入队；revoked 版本不可恢复 |
+| POST | /runtime-image-versions/:id/status | images:approve | `{status: trusted\|rejected\|disabled\|revoked, reason?}`；rejected/revoked 必填 reason |
+| GET | /runtime-image-versions/:id/usage | images:read | 反向查询历史 Job、项目和 Finding |
+| PUT | /projects/:id/runtime-images/:imageId | images:manage | `{enabled, version_id?}`；只能启用 trusted 版本，`version_id` 用于固定/回滚 |
+
+Job 创建时冻结 `agent_snapshot_json.runtime_image`，至少包含产品/版本 ID、`image_ref=name@sha256:digest`、`image_digest`、工具清单哈希与准入扫描 ID。任务、Hub、Skill 和外部事件都不能提供任意镜像引用。
+
 ### Skill 模块源
 
 数据库基线内置 `DeepSonar-Skills`：稳定 source id 为 `f150e774-d237-57e4-847c-4800722f88ee`，仓库为 `https://github.com/SummerSec/DeepSonar-Skills.git`，分支 `main`，默认 trusted + enabled。catalog 不嵌入 schema，需经同步接口获取当前仓库内容。
@@ -144,12 +160,12 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | POST | /skill-sources/:id/trust | skills:write | `{trust_status, enabled?}` |
 | DELETE | /skill-sources/:id | skills:write | 删除 |
 
-### Provider Credential（密钥加密；明文不回显）
+### Provider / OCI Registry Credential（密钥加密；明文不回显）
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /credentials | agents:read | 列表（指纹 / last4 / metadata） |
-| POST | /credentials | agents:write | `{name, provider, secret, kind?, project_id?, metadata?}` |
+| POST | /credentials | agents:write | `{name, provider, secret, kind?, project_id?, metadata?}`；OCI 使用 `kind=oci_registry`、`provider=<registry-host>`、`metadata={registry,username}` |
 | PATCH | /credentials/:id | agents:write | 非敏感：`{name?, project_id?, metadata?}`（可改 base_url） |
 | POST | /credentials/:id/rotate | agents:write | `{secret}` 轮换密钥 |
 | POST | /credentials/:id/status | agents:write | `{status: active\|disabled\|rotation_required}` |
