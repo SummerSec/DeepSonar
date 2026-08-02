@@ -14,13 +14,16 @@ import {
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
 import {
+  buildOutgoing,
   computeNodeDepths,
   computeVisibleIds,
-  countCollapsedChildren,
+  countDirectChildren,
   DEFAULT_MAX_DEPTH,
+  isEffectivelyExpanded,
   maxDepthOf,
 } from "./graph-depth";
 import { elkLayout, layoutNodes, NODE_W } from "./layout";
+import { JobDetailPanel } from "./JobDetailPanel";
 import { nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
 import { Sidebar } from "./Sidebar";
 
@@ -42,33 +45,32 @@ type ExpandHandlers = {
 function toFlow(
   data: CanvasData,
   elkPos: Map<string, { x: number; y: number }> | null,
+  fallbackPos: Map<string, { x: number; y: number }> | null,
   depths: Map<string, number>,
-  depthVisible: Set<string>,
+  maxDepth: number,
   expandedIds: ReadonlySet<string>,
+  collapsedIds: ReadonlySet<string>,
+  outgoing: Map<string, string[]>,
   handlers: ExpandHandlers,
 ): { nodes: Node[]; edges: Edge[] } {
-  // elk 分层 DAG 布局优先；未算完/失败时退回固定列占位（§8.3 Phase ③）
-  const fallback = elkPos ? null : layoutNodes(data.nodes, data.edges);
   return {
     nodes: data.nodes.map((n) => {
       const depth = depths.get(n.id) ?? 1;
-      const isExpanded = expandedIds.has(n.id);
-      // 仅对当前深度门控下可见的节点计算折叠后继，避免给隐藏节点挂按钮
-      const collapsedChildCount = depthVisible.has(n.id)
-        ? countCollapsedChildren(n.id, data.edges, depthVisible)
-        : 0;
+      const childCount = countDirectChildren(n.id, outgoing);
+      const expanded = isEffectivelyExpanded(n.id, depth, maxDepth, expandedIds, collapsedIds);
       return {
         id: n.id,
         type: n.node_type,
-        position: elkPos?.get(n.id) ?? fallback?.get(n.id) ?? { x: n.x, y: n.y },
+        // 布局只对当前可见子图计算，展开/收起后自适应重排
+        position: elkPos?.get(n.id) ?? fallbackPos?.get(n.id) ?? { x: n.x, y: n.y },
         width: NODE_W,
         data: {
           canvas: n,
           depth,
-          collapsedChildCount,
-          isExpanded,
-          onExpandNode: collapsedChildCount > 0 ? () => handlers.expandNode(n.id) : undefined,
-          onCollapseNode: isExpanded ? () => handlers.collapseNode(n.id) : undefined,
+          childCount,
+          isExpanded: expanded,
+          onExpandNode: childCount > 0 ? () => handlers.expandNode(n.id) : undefined,
+          onCollapseNode: childCount > 0 ? () => handlers.collapseNode(n.id) : undefined,
         },
         draggable: false,
         connectable: false,
@@ -138,10 +140,12 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   const [query, setQuery] = useState("");
   const [showContext, setShowContext] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(true);
-  /** 全局深度上限；默认前 3 层。全开 = graphMax；隐藏 = 回到 3 并清空手动展开 */
+  /** 全局深度上限；默认前 3 层。全开 = graphMax；隐藏 = 回到 3 并清空手动覆盖 */
   const [maxDepth, setMaxDepth] = useState(DEFAULT_MAX_DEPTH);
-  /** 用户手动展开的节点 id（揭开其直接后继，可层层点开） */
+  /** 用户强制展开（覆盖默认 depth 折叠） */
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  /** 用户强制收起（覆盖默认 depth 展开） */
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const rf = useRef<ReactFlowInstance | null>(null);
 
   // §6.4：MVP 轮询刷新（5s）；WS 二期
@@ -157,6 +161,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     setElkPos(null);
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
+    setCollapsedIds(new Set());
     load();
     const t = setInterval(load, 5000);
     return () => {
@@ -165,23 +170,11 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     };
   }, [canvasId]);
 
-  // elkjs 分层 DAG 布局：数据变更 → 异步重算（§8.3 Phase ③，图从 root 自由生长）
-  useEffect(() => {
-    if (!data) return;
-    let alive = true;
-    elkLayout(data.nodes, data.edges)
-      .then((m) => alive && setElkPos(m))
-      .catch(() => {}); // 失败保留固定列占位
-    return () => {
-      alive = false;
-    };
-  }, [data]);
-
-  // 节点消失时清理 expandedIds，避免悬空 id 堆积
+  // 节点消失时清理手动覆盖，避免悬空 id 堆积
   useEffect(() => {
     if (!data) return;
     const alive = new Set(data.nodes.map((n) => n.id));
-    setExpandedIds((prev) => {
+    const prune = (prev: Set<string>) => {
       let changed = false;
       const next = new Set<string>();
       for (const id of prev) {
@@ -189,11 +182,17 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         else changed = true;
       }
       return changed ? next : prev;
-    });
+    };
+    setExpandedIds(prune);
+    setCollapsedIds(prune);
   }, [data]);
 
   const depths = useMemo(
     () => (data ? computeNodeDepths(data.nodes, data.edges) : new Map<string, number>()),
+    [data],
+  );
+  const outgoing = useMemo(
+    () => (data ? buildOutgoing(data.edges) : new Map<string, string[]>()),
     [data],
   );
   const graphMaxDepth = useMemo(() => maxDepthOf(depths), [depths]);
@@ -206,9 +205,21 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
       next.add(id);
       return next;
     });
+    setCollapsedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }, []);
 
   const collapseNode = useCallback((id: string) => {
+    setCollapsedIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
     setExpandedIds((prev) => {
       if (!prev.has(id)) return prev;
       const next = new Set(prev);
@@ -220,18 +231,85 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   const expandAll = useCallback(() => {
     setMaxDepth(graphMaxDepth);
     setExpandedIds(new Set());
+    setCollapsedIds(new Set());
   }, [graphMaxDepth]);
 
-  /** 隐藏深层：回到默认前 3 层，并清掉所有手动展开 */
+  /** 隐藏深层：回到默认前 3 层，并清掉所有手动展开/收起 */
   const collapseToDefault = useCallback(() => {
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
+    setCollapsedIds(new Set());
   }, []);
 
   const depthVisible = useMemo(() => {
     if (!data) return new Set<string>();
-    return computeVisibleIds(data.nodes, data.edges, depths, effectiveMaxDepth, expandedIds);
-  }, [data, depths, effectiveMaxDepth, expandedIds]);
+    return computeVisibleIds(
+      data.nodes,
+      data.edges,
+      depths,
+      effectiveMaxDepth,
+      expandedIds,
+      collapsedIds,
+    );
+  }, [collapsedIds, data, depths, effectiveMaxDepth, expandedIds]);
+
+  // 稳定签名：仅当可见节点/边集合变化时重算布局（轮询同集合不抖动）
+  const visibleLayoutKey = useMemo(() => {
+    if (!data) return "";
+    const nids = data.nodes
+      .filter((n) => depthVisible.has(n.id))
+      .map((n) => n.id)
+      .sort()
+      .join(",");
+    const eids = data.edges
+      .filter((e) => depthVisible.has(e.from_node_id) && depthVisible.has(e.to_node_id))
+      .map((e) => e.id)
+      .sort()
+      .join(",");
+    return `${nids}|${eids}`;
+  }, [data, depthVisible]);
+
+  /** 可见子图：展开/收起或改深度后只对这部分做布局，避免留下空洞 */
+  const visibleSubgraph = useMemo(() => {
+    if (!data || !visibleLayoutKey) return { nodes: [] as CanvasNode[], edges: [] as CanvasData["edges"] };
+    const nodes = data.nodes.filter((n) => depthVisible.has(n.id));
+    const edges = data.edges.filter(
+      (e) => depthVisible.has(e.from_node_id) && depthVisible.has(e.to_node_id),
+    );
+    return { nodes, edges };
+    // depthVisible 与 key 同步变化；用 key 保证同集合时引用稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, visibleLayoutKey]);
+
+  // elkjs：对当前可见子图重算布局（展开/收起/深度调整时自适应）
+  // 仅当可见集合签名变化时重跑；轮询刷新同集合不重排，避免布局抖动
+  useEffect(() => {
+    if (visibleSubgraph.nodes.length === 0) {
+      setElkPos(null);
+      return;
+    }
+    // 先清空，立刻走 fallback 可见子图排布，避免沿用上一帧全图坐标留下空洞
+    setElkPos(null);
+    let alive = true;
+    const { nodes: layoutN, edges: layoutE } = visibleSubgraph;
+    elkLayout(layoutN, layoutE)
+      .then((m) => {
+        if (alive) setElkPos(m);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 故意只跟 visibleLayoutKey
+  }, [visibleLayoutKey]);
+
+  const fallbackPos = useMemo(
+    () =>
+      visibleSubgraph.nodes.length > 0
+        ? layoutNodes(visibleSubgraph.nodes, visibleSubgraph.edges)
+        : null,
+    [visibleSubgraph],
+  );
 
   const handlers = useMemo(
     () => ({ expandNode, collapseNode }),
@@ -241,9 +319,29 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   const { nodes, edges } = useMemo(
     () =>
       data
-        ? toFlow(data, elkPos, depths, depthVisible, expandedIds, handlers)
+        ? toFlow(
+            data,
+            elkPos,
+            fallbackPos,
+            depths,
+            effectiveMaxDepth,
+            expandedIds,
+            collapsedIds,
+            outgoing,
+            handlers,
+          )
         : { nodes: [], edges: [] },
-    [data, depthVisible, depths, elkPos, expandedIds, handlers],
+    [
+      collapsedIds,
+      data,
+      depths,
+      effectiveMaxDepth,
+      elkPos,
+      expandedIds,
+      fallbackPos,
+      handlers,
+      outgoing,
+    ],
   );
 
   const roleOptions = useMemo(() => {
@@ -267,11 +365,11 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     return data.nodes.length - depthVisible.size;
   }, [data, depthVisible]);
 
-  const isFullyOpen = effectiveMaxDepth >= graphMaxDepth && expandedIds.size === 0;
+  const manualOverrideCount = expandedIds.size + collapsedIds.size;
+  const isFullyOpen =
+    effectiveMaxDepth >= graphMaxDepth && expandedIds.size === 0 && collapsedIds.size === 0;
   const isDefaultCollapsed =
-    effectiveMaxDepth <= DEFAULT_MAX_DEPTH &&
-    maxDepth <= DEFAULT_MAX_DEPTH &&
-    expandedIds.size === 0;
+    maxDepth === DEFAULT_MAX_DEPTH && expandedIds.size === 0 && collapsedIds.size === 0;
 
   const { visibleNodes, visibleEdges, matchedCount } = useMemo(() => {
     if (!data) return { visibleNodes: nodes, visibleEdges: edges, matchedCount: 0 };
@@ -336,16 +434,17 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     statusFilter,
   ]);
 
-  // 图生长 / 深度切换导致可见节点数变化时 fitView；普通轮询不打扰
+  // 可见集合或布局重算后 fitView，让展开/收起后的自适应排布落入视野
   const nodeCount = visibleNodes.length;
-  const prevCount = useRef(0);
+  const prevLayoutSig = useRef("");
   useEffect(() => {
-    if (nodeCount > 0 && nodeCount !== prevCount.current) {
-      prevCount.current = nodeCount;
-      const t = setTimeout(() => rf.current?.fitView({ padding: 0.15, maxZoom: 1, duration: 300 }), 50);
+    const sig = `${visibleLayoutKey}#${elkPos ? "elk" : "fb"}#${nodeCount}`;
+    if (nodeCount > 0 && sig !== prevLayoutSig.current) {
+      prevLayoutSig.current = sig;
+      const t = setTimeout(() => rf.current?.fitView({ padding: 0.15, maxZoom: 1, duration: 280 }), 60);
       return () => clearTimeout(t);
     }
-  }, [nodeCount]);
+  }, [elkPos, nodeCount, visibleLayoutKey]);
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
@@ -377,7 +476,8 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     depthHiddenCount > 0
       ? `深度 ≤${effectiveMaxDepth} · 藏 ${depthHiddenCount}`
       : `深度 ≤${effectiveMaxDepth}`;
-  const manualExpandHint = expandedIds.size > 0 ? ` · 手展 ${expandedIds.size}` : "";
+  const manualOverrideHint =
+    manualOverrideCount > 0 ? ` · 手调 ${manualOverrideCount}` : "";
 
   return (
     <div className="relative h-full w-full">
@@ -424,7 +524,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
                   ? `命中 ${matchedCount} / ${nodes.length}`
                   : `显示 ${visibleNodes.length} / ${nodes.length}`}
                 {depthHiddenCount > 0 ? ` · 藏 ${depthHiddenCount}` : ""}
-                {manualExpandHint}
+                {manualOverrideHint}
               </span>
               {filterActive && (
                 <button
@@ -450,18 +550,43 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
               </button>
             </div>
 
-            {/* 深度：全开 / 隐藏（前 3 层）；单节点展开在卡片上操作 */}
+            {/* 深度：可手动输入上限（默认 3）；全开 / 隐藏；单节点展开在卡片上操作 */}
             <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-black/20 px-3 py-2.5 ring-1 ring-white/[.05]">
               <TreeStructure size={14} className="shrink-0 text-acc-400" />
-              <span className="font-mono text-[10px] text-zinc-500">深度</span>
-              <span className="font-mono text-[11px] tabular-nums text-zinc-300">
-                ≤ {effectiveMaxDepth}
-                <span className="text-zinc-600"> / {graphMaxDepth}</span>
-              </span>
+              <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500">
+                深度 ≤
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={graphMaxDepth}
+                  step={1}
+                  value={maxDepth}
+                  aria-label="显示深度上限"
+                  title={`显示 depth ≤ N 的节点，范围 1–${graphMaxDepth}，默认 ${DEFAULT_MAX_DEPTH}`}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === "") return;
+                    const n = Number.parseInt(raw, 10);
+                    if (!Number.isFinite(n)) return;
+                    // 输入时夹到 [1, graphMaxDepth]；清空后不写，避免受控框被锁死
+                    setMaxDepth(Math.max(1, Math.min(graphMaxDepth, Math.trunc(n))));
+                  }}
+                  onBlur={() => {
+                    // 失焦兜底：非法/空 → 默认 3；超出图深 → 夹到图深
+                    setMaxDepth((d) => {
+                      if (!Number.isFinite(d) || d < 1) return DEFAULT_MAX_DEPTH;
+                      return Math.max(1, Math.min(graphMaxDepth, Math.trunc(d)));
+                    });
+                  }}
+                  className="h-7 w-12 rounded-md bg-black/40 px-1.5 text-center font-mono text-[12px] tabular-nums text-zinc-200 ring-1 ring-white/[.1] outline-none focus:ring-acc-400/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+                <span className="tabular-nums text-zinc-600">/ {graphMaxDepth}</span>
+              </label>
               <span className="mx-0.5 h-3 w-px bg-white/[.08]" />
               <button
                 type="button"
-                disabled={isFullyOpen || graphMaxDepth <= DEFAULT_MAX_DEPTH}
+                disabled={isFullyOpen || graphMaxDepth <= 1}
                 onClick={expandAll}
                 className="rounded-full px-2.5 py-1 font-mono text-[10px] text-acc-400 ring-1 ring-acc-400/25 transition-colors hover:bg-acc-400/[.08] disabled:opacity-35"
                 title="展开全部深度"
@@ -473,20 +598,22 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
                 disabled={isDefaultCollapsed}
                 onClick={collapseToDefault}
                 className="rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.05] hover:text-zinc-200 disabled:opacity-35"
-                title="隐藏深层：只保留前 3 层，并清除手动展开"
+                title={`隐藏深层：只保留前 ${DEFAULT_MAX_DEPTH} 层，并清除手动展开`}
               >
                 隐藏
               </button>
               {depthHiddenCount > 0 && (
                 <span className="font-mono text-[10px] text-zinc-600">藏 {depthHiddenCount} 个节点</span>
               )}
-              {expandedIds.size > 0 && (
+              {manualOverrideCount > 0 && (
                 <span className="font-mono text-[10px] text-zinc-500">
-                  已手展 {expandedIds.size} 个节点
+                  手调 {manualOverrideCount}
+                  {expandedIds.size > 0 ? ` · 展 ${expandedIds.size}` : ""}
+                  {collapsedIds.size > 0 ? ` · 收 ${collapsedIds.size}` : ""}
                 </span>
               )}
-              <span className="w-full font-mono text-[9px] leading-relaxed text-zinc-600 sm:w-auto sm:ml-auto">
-                默认前 3 层；点节点卡片「展开」可只打开该节点后继
+              <span className="w-full font-mono text-[9px] leading-relaxed text-zinc-600 sm:ml-auto sm:w-auto">
+                默认 {DEFAULT_MAX_DEPTH}；每个有后继的节点都可「展开 / 收起」
               </span>
             </div>
 
@@ -585,14 +712,19 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
             )}
             <span className="font-mono text-[10px] text-zinc-500">
               {depthSummary}
-              {manualExpandHint}
+              {manualOverrideHint}
             </span>
             <CaretDown size={12} className="ml-auto text-zinc-600" />
           </button>
         )}
       </div>
       <Legend />
-      {selected && <Sidebar node={selected} onClose={() => setSelected(null)} />}
+      {/* 关联 job 的节点：与「运行」页同一套详情（执行过程 / 筛选 / 事件 / session） */}
+      {selected?.job_id ? (
+        <JobDetailPanel jobId={selected.job_id} onClose={() => setSelected(null)} />
+      ) : selected ? (
+        <Sidebar node={selected} onClose={() => setSelected(null)} />
+      ) : null}
     </div>
   );
 }

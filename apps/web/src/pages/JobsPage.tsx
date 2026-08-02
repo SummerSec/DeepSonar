@@ -5,6 +5,7 @@ import { JobDetailPanel } from "../JobDetailPanel";
 import {
   DataTable,
   EmptyState,
+  FilterCountBar,
   PageHeader,
   PageSkeleton,
   StatusBadge,
@@ -48,12 +49,10 @@ export function JobsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // 拉全量队列，筛选在前端做，才能同时展示「筛选后 / 全量」
   const reload = () =>
     api
-      .jobs({
-        status: status || undefined,
-        project_id: projectFilter || undefined,
-      })
+      .jobs({})
       .then((list) => {
         setRows(list);
         setError(null);
@@ -72,10 +71,7 @@ export function JobsPage() {
     let stop = false;
     const tick = () => {
       api
-        .jobs({
-          status: status || undefined,
-          project_id: projectFilter || undefined,
-        })
+        .jobs({})
         .then((list) => {
           if (!stop) {
             setRows(list);
@@ -96,7 +92,7 @@ export function JobsPage() {
       stop = true;
       clearInterval(t);
     };
-  }, [status, projectFilter]);
+  }, []);
 
   const setParam = (key: "status" | "type" | "project" | "canvas", value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -142,11 +138,34 @@ export function JobsPage() {
 
   const visible = useMemo(() => {
     return rows.filter((j) => {
+      if (status && j.status !== status) return false;
       if (typeFilter && j.type !== typeFilter) return false;
+      if (projectFilter && j.project_id !== projectFilter) return false;
       if (canvasFilter && j.canvas_id !== canvasFilter) return false;
       return true;
     });
-  }, [rows, typeFilter, canvasFilter]);
+  }, [rows, status, typeFilter, projectFilter, canvasFilter]);
+
+  const filterActive = Boolean(status || typeFilter || projectFilter || canvasFilter);
+  const totalCount = rows.length;
+  const filteredCount = visible.length;
+  const filterChips = [
+    status && `状态 ${status}`,
+    typeFilter && `类型 ${typeFilter}`,
+    projectFilter &&
+      `项目 ${projectOptions.find((p) => p.id === projectFilter)?.name ?? projectFilter.slice(0, 8)}`,
+    canvasFilter &&
+      `画布 ${canvasOptions.find((c) => c.id === canvasFilter)?.title ?? canvasFilter.slice(0, 8)}`,
+  ].filter((v): v is string => Boolean(v));
+
+  const clearFilters = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("status");
+    next.delete("type");
+    next.delete("project");
+    next.delete("canvas");
+    setSearchParams(next, { replace: true });
+  };
 
   const act = async (id: string, kind: "cancel" | "resume") => {
     setBusy(id);
@@ -175,7 +194,16 @@ export function JobsPage() {
       <PageHeader
         title="调度队列"
         eyebrow="EXECUTION LEDGER"
-        subtitle={`${visible.length} 条运行。用于定位异常、取消活动任务，或恢复失败与待人工任务。`}
+        subtitle="用于定位异常、取消活动任务，或恢复失败与待人工任务。筛选结果与全量对比见下方计数条。"
+      />
+
+      <FilterCountBar
+        filtered={filteredCount}
+        total={totalCount}
+        unit="条运行"
+        active={filterActive}
+        filters={filterChips}
+        onClear={clearFilters}
       />
 
       {error && (
@@ -281,7 +309,7 @@ export function JobsPage() {
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-[13px] text-zinc-600">
                     {rows.length
-                      ? "没有匹配当前筛选的运行，可在表头调整条件"
+                      ? `没有匹配当前筛选的运行（0 / 全量 ${totalCount}），可在表头调整条件`
                       : "队列为空 · 没有匹配的 Job"}
                   </td>
                 </tr>
@@ -425,8 +453,8 @@ export function JobsPage() {
         </div>
         {visible.length === 0 ? (
           <EmptyState
-            title={rows.length ? "没有匹配当前筛选的运行" : "队列为空"}
-            hint={rows.length ? "调整上方筛选条件" : "没有匹配的 Job"}
+            title={rows.length ? `没有匹配当前筛选的运行（0 / 全量 ${totalCount}）` : "队列为空"}
+            hint={rows.length ? "调整上方筛选条件，或清除筛选查看全量" : "没有 Job"}
           />
         ) : (
           <div className="grid gap-3">

@@ -21,13 +21,13 @@ export type DEEPSONARNodeData = {
   canvas: CanvasNode;
   /** 从 root 起算的图深度（root=1） */
   depth?: number;
-  /** 被折叠的直接后继数量 */
-  collapsedChildCount?: number;
-  /** 用户是否已手动展开本节点 */
+  /** 直接后继数量（>0 时显示展开/收起） */
+  childCount?: number;
+  /** 当前是否有效展开（后继可见） */
   isExpanded?: boolean;
   /** 展开本节点的直接后继 */
   onExpandNode?: () => void;
-  /** 收起本节点（撤销手动展开） */
+  /** 收起本节点后继 */
   onCollapseNode?: () => void;
 };
 export type DEEPSONARNode = Node<DEEPSONARNodeData, string>;
@@ -101,8 +101,9 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const targetText = target ? String(target.content ?? "") : null;
 
   const typeLabel = semanticStyle.label ?? TYPE_LABEL[n.node_type] ?? n.node_type;
-  const collapsedChildCount = data.collapsedChildCount ?? 0;
+  const childCount = data.childCount ?? 0;
   const isExpanded = Boolean(data.isExpanded);
+  const hasChildren = childCount > 0;
 
   const semanticIcon =
     semantic === "task" ? (
@@ -163,9 +164,6 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
             ? "border-emerald-800/80"
             : "border-red-900/70"
       : "";
-
-  const showExpand = collapsedChildCount > 0 && data.onExpandNode;
-  const showCollapse = isExpanded && data.onCollapseNode;
 
   return (
     <div
@@ -242,38 +240,34 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
           )}
         </div>
 
-        {/* 按节点手动展开 / 收起后继 */}
-        {(showExpand || showCollapse) && (
-          <div className="mt-2 flex gap-1.5">
-            {showExpand && (
-              <button
-                type="button"
-                className="flex flex-1 items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] text-acc-400/90 ring-1 ring-acc-400/20 transition-colors hover:bg-acc-400/[.08] hover:text-acc-300"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  data.onExpandNode?.();
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-              >
-                <CaretDown size={11} /> 展开 · {collapsedChildCount}
-              </button>
+        {/* 凡有后继的节点都可展开 / 收起 */}
+        {hasChildren && (
+          <button
+            type="button"
+            className={`mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] transition-colors ${
+              isExpanded
+                ? "text-zinc-500 ring-1 ring-white/[.08] hover:bg-white/[.04] hover:text-zinc-300"
+                : "text-acc-400/90 ring-1 ring-acc-400/20 hover:bg-acc-400/[.08] hover:text-acc-300"
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (isExpanded) data.onCollapseNode?.();
+              else data.onExpandNode?.();
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            aria-expanded={isExpanded}
+          >
+            {isExpanded ? (
+              <>
+                <CaretUp size={11} /> 收起 · {childCount}
+              </>
+            ) : (
+              <>
+                <CaretDown size={11} /> 展开 · {childCount}
+              </>
             )}
-            {showCollapse && (
-              <button
-                type="button"
-                className="flex flex-1 items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.04] hover:text-zinc-300"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  data.onCollapseNode?.();
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-              >
-                <CaretUp size={11} /> 收起
-              </button>
-            )}
-          </div>
+          </button>
         )}
       </div>
 

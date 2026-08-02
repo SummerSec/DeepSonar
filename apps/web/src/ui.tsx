@@ -82,6 +82,119 @@ export function PageHeader({
   );
 }
 
+/**
+ * 列表筛选结果计数条：大号数字对比「当前显示 / 全量」，筛选时高亮强调。
+ */
+export function FilterCountBar({
+  filtered,
+  total,
+  unit = "条",
+  active,
+  filters,
+  onClear,
+}: {
+  filtered: number;
+  total: number;
+  unit?: string;
+  active: boolean;
+  filters?: string[];
+  onClear?: () => void;
+}) {
+  const chips = (filters ?? []).filter(Boolean);
+  return (
+    <div
+      className={`filter-count-bar mb-4 rounded-2xl px-4 py-3.5 ring-1 sm:px-5 sm:py-4 ${
+        active
+          ? "bg-acc-500/[.09] ring-acc-400/35 shadow-[0_0_0_1px_rgb(var(--accent-rgb)/.12)]"
+          : "bg-white/[.035] ring-white/[.08]"
+      }`}
+      role="status"
+      aria-live="polite"
+      aria-label={
+        active
+          ? `筛选后显示 ${filtered} ${unit}，全量 ${total} ${unit}`
+          : `全量 ${total} ${unit}`
+      }
+    >
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        {active ? (
+          <>
+            <div className="flex min-w-0 items-end gap-2.5">
+              <div className="flex flex-col gap-0.5">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-acc-400/90">
+                  筛选后
+                </span>
+                <span className="font-mono text-[32px] font-semibold leading-none tabular-nums tracking-tight text-acc-300 sm:text-[36px]">
+                  {filtered}
+                </span>
+              </div>
+              <span className="mb-1 font-mono text-[18px] text-zinc-600" aria-hidden>
+                /
+              </span>
+              <div className="flex flex-col gap-0.5">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-zinc-500">
+                  全量
+                </span>
+                <span className="font-mono text-[32px] font-semibold leading-none tabular-nums tracking-tight text-zinc-100 sm:text-[36px]">
+                  {total}
+                </span>
+              </div>
+              <span className="mb-1.5 font-mono text-[12px] text-zinc-500">{unit}</span>
+            </div>
+            {filtered === 0 && total > 0 && (
+              <span className="rounded-full bg-amber-400/10 px-2.5 py-1 font-mono text-[11px] text-amber-200 ring-1 ring-amber-400/25">
+                无匹配结果
+              </span>
+            )}
+            {filtered > 0 && filtered < total && (
+              <span className="rounded-full bg-white/[.06] px-2.5 py-1 font-mono text-[11px] text-zinc-400 ring-1 ring-white/[.08]">
+                已隐藏 {total - filtered} {unit}
+              </span>
+            )}
+          </>
+        ) : (
+          <div className="flex min-w-0 items-end gap-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-zinc-500">
+                全量
+              </span>
+              <span className="font-mono text-[32px] font-semibold leading-none tabular-nums tracking-tight text-zinc-100 sm:text-[36px]">
+                {total}
+              </span>
+            </div>
+            <span className="mb-1.5 font-mono text-[12px] text-zinc-500">{unit}</span>
+          </div>
+        )}
+
+        <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-initial">
+          {active && chips.length > 0 && (
+            <div className="flex max-w-full flex-wrap justify-end gap-1.5">
+              {chips.map((chip) => (
+                <span
+                  key={chip}
+                  className="max-w-[14rem] truncate rounded-full bg-black/30 px-2.5 py-1 font-mono text-[10px] text-zinc-300 ring-1 ring-white/[.1]"
+                  title={chip}
+                >
+                  {chip}
+                </span>
+              ))}
+            </div>
+          )}
+          {active && onClear && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="shrink-0 rounded-full bg-white/[.08] px-3 py-1.5 font-mono text-[11px] font-medium text-zinc-100 ring-1 ring-white/[.14] transition-colors hover:bg-white/[.14]"
+            >
+              清除筛选
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PrimaryButton({ children, busy, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean }) {
   return (
     <button {...props} disabled={busy || props.disabled} className={`primary-button group ${className}`}>

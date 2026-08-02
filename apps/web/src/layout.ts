@@ -7,7 +7,7 @@ import type { CanvasEdge, CanvasNode } from "./api";
  * layoutNodes（固定列）保留为首帧占位，elk 算完即替换。
  *
  * 高度按实际卡片估算；间距必须覆盖渲染高度，否则会视觉重合。
- * 深度折叠只影响可见集合，布局仍对全图计算，展开时坐标稳定。
+ * 调用方应只传入当前可见子图：展开/收起后重算，自适应填补空隙。
  */
 
 export const NODE_W = 280;
@@ -17,14 +17,14 @@ export const NODE_W = 280;
  * BaseNode ≈ 外框 8 + 内边距 24 + 头 20 + 标题两行 42 + 元信息 20 + 可选按钮 ≈ 140。
  */
 export const NODE_H: Record<string, number> = {
-  root: 148,
-  job: 148,
-  intent: 156,
-  fact: 148,
-  finding: 148,
-  human: 148,
-  note: 140,
-  report: 148,
+  root: 168,
+  job: 168,
+  intent: 176,
+  fact: 168,
+  finding: 168,
+  human: 168,
+  note: 160,
+  report: 168,
 };
 
 export async function elkLayout(
@@ -72,7 +72,7 @@ export async function elkLayout(
 
 const COL_X = [80, 460, 840, 1220, 1600, 1980];
 /** 行距 = 节点高度 + 间隙，避免固定列兜底时重叠 */
-const ROW_GAP = 200;
+const ROW_GAP = 220;
 const TOP = 90;
 
 function columnOf(n: CanvasNode): number {

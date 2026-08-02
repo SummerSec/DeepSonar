@@ -9,13 +9,7 @@ export function computeNodeDepths(
   nodes: CanvasNode[],
   edges: CanvasEdge[],
 ): Map<string, number> {
-  const outgoing = new Map<string, string[]>();
-  for (const e of edges) {
-    const list = outgoing.get(e.from_node_id);
-    if (list) list.push(e.to_node_id);
-    else outgoing.set(e.from_node_id, [e.to_node_id]);
-  }
-
+  const outgoing = buildOutgoing(edges);
   const depth = new Map<string, number>();
   const queue: string[] = [];
 
@@ -69,13 +63,33 @@ export function buildOutgoing(edges: CanvasEdge[]): Map<string, string[]> {
   return outgoing;
 }
 
+export function countDirectChildren(nodeId: string, outgoing: Map<string, string[]>): number {
+  return outgoing.get(nodeId)?.length ?? 0;
+}
+
 /**
- * 可见性：
- * - depth ≤ maxDepth → 始终可见
- * - depth > maxDepth → 仅当存在「可见父节点」且该父节点在 expandedIds 中
+ * 节点是否「有效展开」（其后继是否可被揭开）：
+ * - 用户强制收起 → false
+ * - 用户强制展开 → true
+ * - 否则 depth < maxDepth 时默认展开（保证默认可见到 depth=maxDepth）
  *
- * 用户点某节点「展开」后，其直接后继可显示；再点后继可继续往下。
- * 全开：maxDepth = graphMax；隐藏（收回到默认）：maxDepth = 3 且清空 expandedIds。
+ * 例：maxDepth=3 → depth 1、2 默认展开，depth 3 默认收起（后继 depth≥4 隐藏）。
+ */
+export function isEffectivelyExpanded(
+  id: string,
+  depth: number,
+  maxDepth: number,
+  expandedIds: ReadonlySet<string>,
+  collapsedIds: ReadonlySet<string>,
+): boolean {
+  if (collapsedIds.has(id)) return false;
+  if (expandedIds.has(id)) return true;
+  return depth < maxDepth;
+}
+
+/**
+ * 从 root 出发：仅当父节点有效展开时揭开直接后继。
+ * 任意有后继的节点都可被用户展开/收起，覆盖默认深度行为。
  */
 export function computeVisibleIds(
   nodes: CanvasNode[],
@@ -83,23 +97,34 @@ export function computeVisibleIds(
   depths: Map<string, number>,
   maxDepth: number,
   expandedIds: ReadonlySet<string>,
+  collapsedIds: ReadonlySet<string>,
 ): Set<string> {
   const outgoing = buildOutgoing(edges);
   const visible = new Set<string>();
   const queue: string[] = [];
 
-  for (const n of nodes) {
-    const d = depths.get(n.id) ?? 1;
-    if (d <= maxDepth) {
+  const seeds = nodes.filter((n) => n.node_type === "root");
+  if (seeds.length === 0) {
+    // 无 root：露出 depth 最小的一层作为入口
+    let minD = Infinity;
+    for (const n of nodes) minD = Math.min(minD, depths.get(n.id) ?? 1);
+    for (const n of nodes) {
+      if ((depths.get(n.id) ?? 1) === minD) {
+        visible.add(n.id);
+        queue.push(n.id);
+      }
+    }
+  } else {
+    for (const n of seeds) {
       visible.add(n.id);
       queue.push(n.id);
     }
   }
 
-  // 从已可见节点出发，仅穿过 expanded 父节点揭开更深后继
   while (queue.length > 0) {
     const id = queue.shift()!;
-    if (!expandedIds.has(id)) continue;
+    const d = depths.get(id) ?? 1;
+    if (!isEffectivelyExpanded(id, d, maxDepth, expandedIds, collapsedIds)) continue;
     for (const to of outgoing.get(id) ?? []) {
       if (visible.has(to)) continue;
       visible.add(to);
@@ -108,18 +133,4 @@ export function computeVisibleIds(
   }
 
   return visible;
-}
-
-/** 相对「当前可见集合」仍被折叠的直接后继数（用于节点上「展开此节点」） */
-export function countCollapsedChildren(
-  nodeId: string,
-  edges: CanvasEdge[],
-  visibleIds: ReadonlySet<string>,
-): number {
-  let n = 0;
-  for (const e of edges) {
-    if (e.from_node_id !== nodeId) continue;
-    if (!visibleIds.has(e.to_node_id)) n += 1;
-  }
-  return n;
 }

@@ -1,11 +1,12 @@
-import { CircleNotch, Check, Wrench, TextAlignLeft } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { CircleNotch, Check, Funnel, Wrench, TextAlignLeft, X } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownView } from "./MarkdownView";
 
 /**
  * Agent 实时流视图（§6.2：原始流只过 WS 过手，不落 DB）
  * - 连接 /api/ws?job_id=...，先收环形缓冲补发，随后实时推送
  * - text.delta 合并为流式段落；tool.call.* 渲染为动作卡片；reasoning 暗色斜体
+ * - 支持按类型筛选 + 关键词过滤（与运行详情过程视图一致）
  */
 
 export interface StreamItem {
@@ -19,12 +20,14 @@ export interface StreamItem {
 }
 
 /** 渲染单元：text 段落会随 delta 追加增长；tool 卡片 started→completed 置完成态 */
-type Block =
+export type StreamBlock =
   | { kind: "text"; key: string; text: string; reasoning: boolean }
   | { kind: "tool"; key: string; name: string; action: string; done: boolean }
   | { kind: "meta"; key: string; text: string };
 
-function reduceItem(blocks: Block[], item: StreamItem): Block[] {
+export type StreamKindFilter = "all" | "text" | "tool" | "meta";
+
+export function reduceStreamItem(blocks: StreamBlock[], item: StreamItem): StreamBlock[] {
   const key = String(item.seq);
   if (item.type === "text.delta" || item.type === "reasoning.delta") {
     const reasoning = item.type === "reasoning.delta";
@@ -41,7 +44,6 @@ function reduceItem(blocks: Block[], item: StreamItem): Block[] {
     ];
   }
   if (item.type === "tool.call.completed") {
-    // 标记最近一个未完成卡片
     for (let i = blocks.length - 1; i >= 0; i--) {
       const b = blocks[i];
       if (b.kind === "tool" && !b.done) {
@@ -56,52 +58,153 @@ function reduceItem(blocks: Block[], item: StreamItem): Block[] {
   return blocks;
 }
 
-export function LiveStream({ jobId, active }: { jobId: string; active: boolean }) {
-  const [blocks, setBlocks] = useState<Block[]>([]);
-  const [connected, setConnected] = useState(false);
+/** 将持久化 stream 记录还原为与实时流相同的 block 列表 */
+export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): StreamBlock[] {
+  let blocks: StreamBlock[] = [];
+  for (const record of records) {
+    const payload =
+      record.payload_json && typeof record.payload_json === "object"
+        ? (record.payload_json as Record<string, unknown>)
+        : record;
+    const type = String(record.type ?? payload.type ?? "");
+    const item: StreamItem = {
+      type,
+      seq: Number(record.seq ?? record.job_seq ?? blocks.length + 1),
+      at: Number(record.at ?? record.ts ?? Date.now()),
+      delta: typeof payload.delta === "string" ? payload.delta : undefined,
+      toolName: typeof payload.toolName === "string" ? payload.toolName : typeof payload.tool_name === "string" ? payload.tool_name : undefined,
+      action: typeof payload.action === "string" ? payload.action : typeof payload.message === "string" ? payload.message : undefined,
+      text:
+        typeof payload.text === "string"
+          ? payload.text
+          : typeof payload.message === "string"
+            ? payload.message
+            : undefined,
+    };
+    // 非标准帧：尽量落到 text/meta
+    if (
+      !type.includes("delta") &&
+      !type.startsWith("tool.") &&
+      !type.startsWith("run.") &&
+      !type.startsWith("text") &&
+      !type.startsWith("reasoning")
+    ) {
+      const text =
+        [payload.message, payload.text, payload.summary, payload.title]
+          .find((v): v is string => typeof v === "string" && v.trim().length > 0) ??
+        JSON.stringify(payload);
+      blocks = [...blocks, { kind: "meta", key: String(item.seq), text: `${type}: ${text}` }];
+      continue;
+    }
+    blocks = reduceStreamItem(blocks, item);
+  }
+  return blocks;
+}
+
+export function filterStreamBlocks(
+  blocks: StreamBlock[],
+  kind: StreamKindFilter,
+  query: string,
+): StreamBlock[] {
+  const needle = query.trim().toLowerCase();
+  return blocks.filter((b) => {
+    if (kind !== "all" && b.kind !== kind) return false;
+    if (!needle) return true;
+    if (b.kind === "text") return b.text.toLowerCase().includes(needle);
+    if (b.kind === "tool") return `${b.name} ${b.action}`.toLowerCase().includes(needle);
+    return b.text.toLowerCase().includes(needle);
+  });
+}
+
+const KIND_OPTIONS: { value: StreamKindFilter; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "text", label: "文本" },
+  { value: "tool", label: "工具" },
+  { value: "meta", label: "系统" },
+];
+
+/** 过程流筛选条 + 列表（实时 / 归档共用） */
+export function ProcessStreamView({
+  blocks,
+  live,
+  connected,
+  emptyHint,
+}: {
+  blocks: StreamBlock[];
+  live?: boolean;
+  connected?: boolean;
+  emptyHint?: string;
+}) {
+  const [kind, setKind] = useState<StreamKindFilter>("all");
+  const [query, setQuery] = useState("");
   const [follow, setFollow] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!active) return;
-    setBlocks([]);
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/api/ws?job_id=${jobId}`);
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
-    ws.onmessage = (ev) => {
-      try {
-        const item = JSON.parse(String(ev.data)) as StreamItem;
-        setBlocks((bs) => reduceItem(bs, item));
-      } catch {
-        // 非 JSON 帧忽略
-      }
-    };
-    return () => ws.close();
-  }, [jobId, active]);
+  const visible = useMemo(() => filterStreamBlocks(blocks, kind, query), [blocks, kind, query]);
 
-  // 跟随滚动（用户上翻则暂停跟随）
   useEffect(() => {
     const el = scrollRef.current;
     if (el && follow) el.scrollTop = el.scrollHeight;
-  }, [blocks, follow, active]);
-
-  if (!active) return null;
+  }, [visible, follow]);
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-ink-800 px-3 py-1.5">
-        <span
-          className={`inline-block size-1.5 rounded-full ${connected ? "deepsonar-live-dot bg-acc-500" : "bg-zinc-600"}`}
+    <div className="flex h-full min-h-[320px] flex-col">
+      <div className="flex flex-wrap items-center gap-2 border-b border-white/[.06] px-3 py-2">
+        {live && (
+          <>
+            <span
+              className={`inline-block size-1.5 rounded-full ${connected ? "deepsonar-live-dot bg-acc-500" : "bg-zinc-600"}`}
+            />
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+              {connected ? "live" : "已断开"}
+            </span>
+            <span className="mx-0.5 h-3 w-px bg-white/[.08]" />
+          </>
+        )}
+        <Funnel size={12} className="shrink-0 text-zinc-600" />
+        <div className="flex flex-wrap gap-1">
+          {KIND_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setKind(opt.value)}
+              className={`rounded-full px-2.5 py-1 font-mono text-[10px] transition-colors ${
+                kind === opt.value
+                  ? "bg-white/[.1] text-zinc-100"
+                  : "text-zinc-500 hover:bg-white/[.04] hover:text-zinc-300"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <input
+          aria-label="搜索执行过程"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索文本 / 工具…"
+          className="min-h-8 min-w-[8rem] flex-1 rounded-lg bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700"
         />
-        <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-          {connected ? "live" : "已断开"}
+        {(kind !== "all" || query) && (
+          <button
+            type="button"
+            onClick={() => {
+              setKind("all");
+              setQuery("");
+            }}
+            className="inline-flex items-center gap-1 rounded-full px-2 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-zinc-200"
+          >
+            <X size={10} /> 清除
+          </button>
+        )}
+        <span className="font-mono text-[10px] text-zinc-600">
+          {visible.length}/{blocks.length}
         </span>
         {!follow && (
           <button
+            type="button"
             onClick={() => setFollow(true)}
-            className="ml-auto rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200"
+            className="rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[11px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200"
           >
             回到底部
           </button>
@@ -117,20 +220,31 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
       >
         {blocks.length === 0 && (
           <div className="py-8 text-center font-mono text-[13px] text-zinc-600">
-            等待 agent 事件…（job 运行时这里会实时滚动）
+            {emptyHint ?? "等待 agent 事件…"}
           </div>
         )}
-        {blocks.map((b) => {
+        {blocks.length > 0 && visible.length === 0 && (
+          <div className="py-8 text-center font-mono text-[13px] text-zinc-600">没有匹配当前筛选的过程</div>
+        )}
+        {visible.map((b) => {
           if (b.kind === "text") {
             return b.reasoning ? (
-              <MarkdownView key={b.key} markdown={b.text} controls={false} className="mb-2 font-mono italic text-zinc-600" />
+              <MarkdownView
+                key={b.key}
+                markdown={b.text}
+                controls={false}
+                className="mb-2 font-mono italic text-zinc-600"
+              />
             ) : (
               <MarkdownView key={b.key} markdown={b.text} controls={false} className="mb-2" />
             );
           }
           if (b.kind === "tool") {
             return (
-              <div key={b.key} className="mb-1.5 flex items-center gap-2 rounded-md border border-ink-800 bg-ink-850 px-2.5 py-1.5">
+              <div
+                key={b.key}
+                className="mb-1.5 flex items-center gap-2 rounded-md border border-ink-800 bg-ink-850 px-2.5 py-1.5"
+              >
                 {b.done ? (
                   <Check size={12} className="shrink-0 text-acc-400" />
                 ) : (
@@ -148,10 +262,45 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
             </div>
           );
         })}
-        {blocks.length > 0 && blocks[blocks.length - 1]?.kind === "text" && (
+        {live && blocks.length > 0 && blocks[blocks.length - 1]?.kind === "text" && (
           <span className="inline-block h-3 w-1.5 animate-pulse bg-acc-500/70" />
         )}
       </div>
     </div>
+  );
+}
+
+export function LiveStream({ jobId, active }: { jobId: string; active: boolean }) {
+  const [blocks, setBlocks] = useState<StreamBlock[]>([]);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    if (!active) return;
+    setBlocks([]);
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/api/ws?job_id=${jobId}`);
+    ws.onopen = () => setConnected(true);
+    ws.onclose = () => setConnected(false);
+    ws.onerror = () => setConnected(false);
+    ws.onmessage = (ev) => {
+      try {
+        const item = JSON.parse(String(ev.data)) as StreamItem;
+        setBlocks((bs) => reduceStreamItem(bs, item));
+      } catch {
+        // 非 JSON 帧忽略
+      }
+    };
+    return () => ws.close();
+  }, [jobId, active]);
+
+  if (!active) return null;
+
+  return (
+    <ProcessStreamView
+      blocks={blocks}
+      live
+      connected={connected}
+      emptyHint="等待 agent 事件…（job 运行时这里会实时滚动）"
+    />
   );
 }

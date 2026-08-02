@@ -6,6 +6,7 @@ import { FindingDetailPanel } from "../FindingDetailPanel";
 import {
   DataTable,
   EmptyState,
+  FilterCountBar,
   PageHeader,
   PageSkeleton,
   SeverityBadge,
@@ -43,17 +44,14 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     api.projects().then(setProjects).catch(() => {});
   }, [scope]);
 
+  // 拉当前作用域全量发现，severity/verify/项目/搜索在前端筛，才能展示「筛选后 / 全量」
   useEffect(() => {
     let stop = false;
     const tick = () => {
       api
         .findings({
-          project_id:
-            scope === "project"
-              ? projectId
-              : projectFilter || undefined,
-          severity: severity || undefined,
-          verify_status: verify || undefined,
+          // 项目页只限定本项目；全局页不过滤，便于统计全量
+          project_id: scope === "project" ? projectId : undefined,
         })
         .then((list) => {
           if (!stop) {
@@ -75,7 +73,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       stop = true;
       clearInterval(t);
     };
-  }, [scope, projectId, severity, verify, projectFilter]);
+  }, [scope, projectId]);
 
   const setParam = (key: "severity" | "verify" | "q" | "project", value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -109,12 +107,40 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
     return rows.filter((f) => {
-      const hay = `${f.title} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.fingerprint ?? ""}`.toLowerCase();
+      if (severity && f.severity !== severity) return false;
+      if (verify && f.verify_status !== verify) return false;
+      if (scope === "global" && projectFilter && f.project_id !== projectFilter) return false;
+      if (!needle) return true;
+      const hay =
+        `${f.title} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.fingerprint ?? ""}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [rows, q]);
+  }, [rows, severity, verify, projectFilter, q, scope]);
+
+  const filterActive = Boolean(
+    severity || verify || q.trim() || (scope === "global" && projectFilter),
+  );
+  const totalCount = rows.length;
+  const filteredCount = visible.length;
+  const filterChips = [
+    severity && `风险 ${severity}`,
+    verify && `验证 ${verify}`,
+    scope === "global" &&
+      projectFilter &&
+      `项目 ${projectOptions.find((p) => p.id === projectFilter)?.name ?? projectFilter.slice(0, 8)}`,
+    q.trim() && `搜索 “${q.trim()}”`,
+  ].filter((v): v is string => Boolean(v));
+
+  const clearFilters = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("severity");
+    next.delete("verify");
+    next.delete("q");
+    next.delete("project");
+    setSearchDraft("");
+    setSearchParams(next, { replace: true });
+  };
 
   const commitSearch = () => {
     setParam("q", searchDraft.trim());
@@ -127,7 +153,16 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       <PageHeader
         title={scope === "global" ? "发现" : "项目发现"}
         eyebrow="EVIDENCE REGISTER"
-        subtitle={`${visible.length} 条记录。点开任一发现可查看完整内容、验证路径与人工处置。`}
+        subtitle="点开任一发现可查看完整内容、验证路径与人工处置。筛选结果与全量对比见下方计数条。"
+      />
+
+      <FilterCountBar
+        filtered={filteredCount}
+        total={totalCount}
+        unit="条发现"
+        active={filterActive}
+        filters={filterChips}
+        onClear={clearFilters}
       />
 
       {error && (
@@ -248,7 +283,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                     {error
                       ? error
                       : rows.length
-                        ? "没有匹配当前筛选的发现，可在表头调整条件"
+                        ? `没有匹配当前筛选的发现（0 / 全量 ${totalCount}），可在表头调整条件`
                         : "暂无发现 · 审计产出 finding 后会汇总到这里"}
                   </td>
                 </tr>
@@ -378,8 +413,8 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
         </div>
         {visible.length === 0 ? (
           <EmptyState
-            title={rows.length ? "没有匹配当前筛选的发现" : "暂无发现"}
-            hint={rows.length ? "调整上方筛选条件" : "审计产出 finding 后会汇总到这里"}
+            title={rows.length ? `没有匹配当前筛选的发现（0 / 全量 ${totalCount}）` : "暂无发现"}
+            hint={rows.length ? "调整上方筛选条件，或清除筛选查看全量" : "审计产出 finding 后会汇总到这里"}
           />
         ) : (
           <div className="grid gap-3">
