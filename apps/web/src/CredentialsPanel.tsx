@@ -15,6 +15,7 @@ const PROVIDERS: { value: string; label: string; baseUrlHint?: string }[] = [
   { value: "openrouter", label: "OpenRouter" },
   { value: "plane", label: "Plane" },
   { value: "git", label: "Git（私有仓库）" },
+  { value: "docker-registry", label: "OCI Registry", baseUrlHint: "registry host，如 ghcr.io" },
 ];
 
 const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
@@ -36,6 +37,7 @@ export function CredentialsPanel() {
   const [provider, setProvider] = useState("anthropic");
   const [secret, setSecret] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [registryUsername, setRegistryUsername] = useState("");
   const [projectId, setProjectId] = useState("");
   const [rotatingId, setRotatingId] = useState<string | null>(null);
   const [rotateSecret, setRotateSecret] = useState("");
@@ -85,18 +87,21 @@ export function CredentialsPanel() {
     try {
       await api.createCredential({
         name: name.trim(),
-        kind: provider === "plane" || provider === "git" ? provider : "llm_provider",
-        provider,
+        kind: provider === "docker-registry" ? "oci_registry" : provider === "plane" ? "plane" : provider === "git" ? "git" : "llm_provider",
+        provider: provider === "docker-registry" ? "docker" : provider,
         secret: secret.trim(),
         project_id: projectId || null,
-        metadata: {
-          ...(baseUrl.trim() ? { base_url: baseUrl.trim().replace(/\/+$/, "") } : {}),
-        },
+        metadata: provider === "docker-registry"
+          ? { registry: baseUrl.trim().replace(/^https?:\/\//, "").replace(/\/+$/, ""), username: registryUsername.trim() }
+          : baseUrl.trim() ? { base_url: baseUrl.trim().replace(/\/+$/, "") } : {},
       });
       setName("");
       setSecret("");
       setBaseUrl("");
-      setNotice("已加密登记。请在凭据编辑区获取模型或手动填写模型 ID，并配置 Credential / Model 并发。");
+      setRegistryUsername("");
+      setNotice(provider === "docker-registry"
+        ? "OCI Registry 凭据已加密登记；密钥不可回显，只能轮换。"
+        : "已加密登记。请在凭据编辑区获取模型或手动填写模型 ID，并配置 Credential / Model 并发。");
       load();
     } catch (e) {
       setError(String(e));
@@ -313,7 +318,7 @@ export function CredentialsPanel() {
           <input
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={hint ? `base_url：${hint}` : "base_url（可选，非密钥元数据）"}
+            placeholder={provider === "docker-registry" ? `registry：${hint}` : hint ? `base_url：${hint}` : "base_url（可选，非密钥元数据）"}
             className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none"
           />
           <select
@@ -327,9 +332,10 @@ export function CredentialsPanel() {
             ))}
           </select>
         </div>
+        {provider === "docker-registry" && <input value={registryUsername} onChange={(event) => setRegistryUsername(event.target.value)} placeholder="Registry 用户名（非敏感元数据）" className="mb-2 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500" />}
         <button
           onClick={create}
-          disabled={busy || !name.trim() || !secret.trim()}
+          disabled={busy || !name.trim() || !secret.trim() || (provider === "docker-registry" && (!baseUrl.trim() || !registryUsername.trim()))}
           className="rounded-md bg-acc-500 px-3 py-1.5 font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:opacity-40"
         >
           加密登记

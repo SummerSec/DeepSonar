@@ -11,6 +11,7 @@ import { config } from "./config.js";
 import { allowedModelIds, isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
+import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
 import { expandModules } from "./skill-sources.js";
 
 // ---------- 状态机（§3.3）：允许的状态迁移 ----------
@@ -341,6 +342,8 @@ export interface AgentRuntimeSnapshot {
   role_config_id: string | null;
   role_config_version: number | null;
   runtime_image_key: string | null;
+  /** 已在 Job 创建时冻结的不可变可信镜像；Executor 只能使用 image_ref。 */
+  runtime_image: RuntimeImageSnapshot;
 }
 
 // ---------- Job 创建（含 Plane issue 防双跑唯一约束） ----------
@@ -1459,6 +1462,8 @@ export async function resolveAgentSnapshotForJob(
     roleKind,
     (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {},
   );
+  const runtimeImageKey = (cfg?.runtime_image_key as string) ?? null;
+  const runtimeImage = await resolveRuntimeImageForJob(db, projectId, roleName, runtimeImageKey);
 
   return {
     name: roleName,
@@ -1482,6 +1487,7 @@ export async function resolveAgentSnapshotForJob(
     config_files: configFiles as unknown as { path: string; content: string; content_sha256: string }[],
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,
-    runtime_image_key: (cfg?.runtime_image_key as string) ?? null,
+    runtime_image_key: runtimeImage.image_key,
+    runtime_image: runtimeImage,
   };
 }

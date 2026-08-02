@@ -1,0 +1,63 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "kalilinux/kali-last-release@sha256:01a402ec78a2b3bd86394f34f8c3d6adefe3c593ae259ac0779c4d1f971c8ff5",
+  "aptSource": "kali:2026.2-last-release",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "apt": {
+    "ca-certificates": { "version": "dpkg", "license": "MPL-2.0", "capabilities": ["tls"] },
+    "curl": { "version": "dpkg", "license": "curl", "capabilities": ["http-client"] },
+    "git": { "version": "dpkg", "license": "GPL-2.0-only", "capabilities": ["source-control"] },
+    "ripgrep": { "version": "dpkg", "license": "MIT OR Unlicense", "capabilities": ["search"] },
+    "jq": { "version": "dpkg", "license": "MIT", "capabilities": ["json"] },
+    "file": { "version": "dpkg", "license": "BSD-2-Clause", "capabilities": ["file-identification"] },
+    "unzip": { "version": "dpkg", "license": "Info-ZIP", "capabilities": ["archive"] },
+    "xz-utils": { "version": "dpkg", "license": "0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later", "capabilities": ["archive"] },
+    "python3": { "version": "dpkg", "license": "PSF-2.0", "capabilities": ["python-runtime"] },
+    "python3-venv": { "version": "dpkg", "license": "PSF-2.0", "capabilities": ["python-runtime"] },
+    "binutils": { "version": "dpkg", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"] }
+  },
+  "npm": {
+    "@anthropic-ai/claude-code": { "version": "2.1.220", "license": "Commercial", "capabilities": ["agent-runtime"] }
+  },
+  "downloads": {
+    "node": {
+      "version": "22.23.2",
+      "license": "MIT",
+      "capabilities": ["node-runtime", "node-package-manager"],
+      "assets": {
+        "amd64": { "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz", "sha256": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307" },
+        "arm64": { "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.xz", "sha256": "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8" }
+      }
+    },
+    "semgrep": {
+      "version": "1.172.0",
+      "license": "LGPL-2.1-only",
+      "capabilities": ["sast"],
+      "assets": {
+        "amd64": { "url": "https://files.pythonhosted.org/packages/84/a5/21624510b65271a673961a894af7511b5123d662e84c74c765560ea28b27/semgrep-1.172.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl", "sha256": "d8b94af4266a575287ad2cd844573743ab4fe58f6bfb6d9229327807937eade3" },
+        "arm64": { "url": "https://files.pythonhosted.org/packages/1b/45/35488f2f609db23eed350ada093722484a6f8cb3b1eaf8ecfd54e2338521/semgrep-1.172.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_aarch64.whl", "sha256": "c881a305b965e594b88b15c2c6419b398e76e438ec61e60916c8b2effe927240" }
+      }
+    },
+    "gitleaks": {
+      "version": "8.30.1",
+      "license": "MIT",
+      "capabilities": ["secret-scan"],
+      "assets": {
+        "amd64": { "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz", "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" },
+        "arm64": { "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz", "sha256": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080" }
+      }
+    },
+    "shellcheck": {
+      "version": "0.11.0",
+      "license": "GPL-3.0-or-later",
+      "capabilities": ["shell-analysis"],
+      "assets": {
+        "amd64": { "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz", "sha256": "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198" },
+        "arm64": { "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz", "sha256": "12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588" }
+      }
+    }
+  },
+  "toolsets": {
+    "kali-minimal": { "imageKey": "deepsonar-kali-minimal", "description": "Minimal Kali specialist runtime without Kali metapackages or GUI", "maxSizeMiB": 450 }
+  }
+}

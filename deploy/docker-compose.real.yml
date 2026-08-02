@@ -5,3 +5,6 @@ services:
     volumes:
       - blob_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+  image-admission:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

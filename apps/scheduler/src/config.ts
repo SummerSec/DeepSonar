@@ -198,11 +198,16 @@ export const config = {
     allowedGitHosts: str("DEEPSONAR_GIT_ALLOWED_HOSTS", ""),
   },
 
-  /** 可信运行镜像目录（runtime_image_key 只能引用这里的 key；空 = 不允许自定义镜像） */
+  /** 可信运行镜像目录由数据库管理；环境变量只负责引导官方 digest 与 registry 边界。 */
   images: {
-    trustedKeys: str("DEEPSONAR_TRUSTED_IMAGE_KEYS", ""),
-    isTrusted(key: string): boolean {
-      return this.trustedKeys.split(",").map((s) => s.trim()).filter(Boolean).includes(key);
+    officialBaseRef: str("DEEPSONAR_OFFICIAL_BASE_IMAGE"),
+    officialAuditRef: str("DEEPSONAR_OFFICIAL_AUDIT_IMAGE"),
+    officialKaliMinimalRef: str("DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE"),
+    allowedRegistries: str("DEEPSONAR_ALLOWED_IMAGE_REGISTRIES", "ghcr.io,docker.io,registry-1.docker.io"),
+    isRegistryAllowed(imageRef: string): boolean {
+      const first = imageRef.split("/")[0]?.toLowerCase() ?? "";
+      const registry = first.includes(".") || first.includes(":") ? first : "docker.io";
+      return this.allowedRegistries.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(registry);
     },
   },
 } as const;

@@ -292,6 +292,70 @@ const OPS: Op[] = [
     tags: ["RoleConfig"],
   },
 
+  // trusted runtime image catalog / marketplace
+  {
+    method: "get",
+    path: "/runtime-images",
+    summary: "镜像市场列表（可按项目和关键字过滤）",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    query: { project_id: { type: "string", format: "uuid" }, search: { type: "string" } },
+  },
+  { method: "get", path: "/runtime-images/{id}", summary: "镜像、不可变版本与准入扫描证据", scope: "images:read", tags: ["Runtime Images"] },
+  {
+    method: "post",
+    path: "/runtime-images/import",
+    summary: "导入第三方 OCI 镜像到隔离区",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_key", "name", "publisher", "image_ref"],
+      properties: {
+        image_key: { type: "string" },
+        name: { type: "string" },
+        description: { type: "string" },
+        publisher: { type: "string" },
+        source_url: { type: "string", format: "uri" },
+        image_ref: { type: "string", description: "受 registry allowlist 限制；tag 将由准入 Worker 解析为 digest" },
+        version: { type: "string" },
+        registry_credential_id: { type: "string", format: "uuid" },
+      },
+    },
+  },
+  { method: "post", path: "/runtime-image-versions/{id}/rescan", summary: "将镜像版本重新送入准入扫描", scope: "images:manage", tags: ["Runtime Images"] },
+  {
+    method: "post",
+    path: "/runtime-image-versions/{id}/status",
+    summary: "批准、拒绝、禁用或撤销镜像版本",
+    scope: "images:approve",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["status"],
+      properties: {
+        status: { type: "string", enum: ["trusted", "rejected", "disabled", "revoked"] },
+        reason: { type: "string" },
+      },
+    },
+  },
+  { method: "get", path: "/runtime-image-versions/{id}/usage", summary: "反向查询使用该镜像版本的 Job、项目与 Finding 数量", scope: "images:read", tags: ["Runtime Images"] },
+  {
+    method: "put",
+    path: "/projects/{id}/runtime-images/{imageId}",
+    summary: "项目启用/停用可信镜像并固定版本",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["enabled"],
+      properties: {
+        enabled: { type: "boolean" },
+        version_id: { type: "string", format: "uuid", nullable: true },
+      },
+    },
+  },
+
   // skill sources
   { method: "get", path: "/skill-sources", summary: "模块源列表", scope: "skills:read", tags: ["Skills"] },
   { method: "get", path: "/skill-sources/{id}", summary: "模块源目录详情", scope: "skills:read", tags: ["Skills"] },
@@ -342,8 +406,8 @@ const OPS: Op[] = [
       required: ["name", "provider", "secret"],
       properties: {
         name: { type: "string" },
-        kind: { type: "string", enum: ["llm_provider", "plane", "git"] },
-        provider: { type: "string", enum: ["anthropic", "kimi", "openai", "openrouter", "plane", "git"] },
+        kind: { type: "string", enum: ["llm_provider", "plane", "git", "oci_registry"] },
+        provider: { type: "string", description: "OCI registry 凭据时使用 registry host，其余类型使用平台固定 provider" },
         secret: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
         metadata: {
@@ -521,6 +585,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       { name: "Settings" },
       { name: "Roles" },
       { name: "RoleConfig" },
+      { name: "Runtime Images" },
       { name: "Skills" },
       { name: "Credentials" },
       { name: "Tokens" },

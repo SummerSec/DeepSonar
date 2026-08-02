@@ -61,6 +61,8 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
   const bodyEntries = Object.entries(node.body_json ?? {}).filter(
     ([k]) => !["last_progress", "severity"].includes(k),
   );
+  const runtimeImage = (job?.job.agent_snapshot_json?.runtime_image ?? null) as Record<string, unknown> | null;
+  const runtimeEvidence = (job?.job.payload_json?.runtime_evidence ?? null) as Record<string, unknown> | null;
 
   // fact 节点验证状态（needs_human 时提供人工确认 / 明确排除）
   const verification =
@@ -187,6 +189,10 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
               </div>
               {job && (
                 <div className="mt-3 divide-y divide-ink-800/70 border-t border-ink-800 pt-1">
+                  {runtimeImage && <Field k="runtime image" v={String(runtimeImage.image_key ?? runtimeImage.image_ref ?? "unknown")} markdown={false} />}
+                  {Boolean(runtimeImage?.image_digest) && <Field k="image digest" v={String(runtimeImage?.image_digest)} markdown={false} />}
+                  {Boolean(runtimeImage?.tools_manifest_sha256) && <Field k="tools manifest" v={String(runtimeImage?.tools_manifest_sha256)} markdown={false} />}
+                  {Boolean(runtimeEvidence?.admission_scan_id) && <Field k="admission scan" v={String(runtimeEvidence?.admission_scan_id)} markdown={false} />}
                   {job.job.started_at && <Field k="started" v={new Date(job.job.started_at).toLocaleString()} markdown={false} />}
                   {job.job.finished_at && <Field k="finished" v={new Date(job.job.finished_at).toLocaleString()} markdown={false} />}
                 </div>

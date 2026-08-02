@@ -90,7 +90,7 @@ case "$ACTION" in
     done
     if [ "$ready" -ne 1 ]; then
       "$@" ps
-      "$@" logs --tail 100 scheduler web
+      "$@" logs --tail 100 scheduler image-admission web
       echo "服务未在 120 秒内通过健康检查：$health" >&2
       exit 1
     fi

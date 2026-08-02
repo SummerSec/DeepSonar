@@ -1,0 +1,11 @@
+FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
+
+RUN apk add --no-cache ca-certificates docker-cli && corepack enable
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/image-admission/package.json apps/image-admission/package.json
+RUN pnpm install --frozen-lockfile --filter @deepsonar/image-admission...
+COPY apps/image-admission apps/image-admission
+RUN pnpm --filter @deepsonar/image-admission build
+ENV NODE_ENV=production
+CMD ["pnpm", "--filter", "@deepsonar/image-admission", "start"]

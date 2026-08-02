@@ -12,6 +12,19 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  apps/image-admission:
+    dependencies:
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.2
+        version: 26.1.2
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
   apps/scheduler:
     dependencies:
       '@deepsonar/plane-client':

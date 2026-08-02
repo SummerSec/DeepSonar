@@ -45,29 +45,34 @@ def req(method: str, path: str, body=None, token=None, expect: int = 200):
 
 def expire_token(token_id: str) -> bool:
     """把 token 标为已过期。优先 psql(DATABASE_URL)，否则尝试 docker 容器。"""
-    sql = f"UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = '{token_id}';"
+    sql = f"UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = '{token_id}' RETURNING id;"
     if shutil.which("psql"):
         r = subprocess.run(
             ["psql", DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c", sql],
             capture_output=True,
             text=True,
         )
-        if r.returncode == 0:
+        if r.returncode == 0 and token_id in r.stdout:
             return True
         print("psql expire 失败:", r.stderr.strip(), file=sys.stderr)
 
     if shutil.which("docker"):
-        for container, user, db in (
+        configured = os.environ.get("DEEPSONAR_TEST_POSTGRES_CONTAINER")
+        candidates = []
+        if configured:
+            candidates.append((configured, "deepsonar", "deepsonar"))
+        candidates.extend((
             ("deepsonar-postgres", "deepsonar", "deepsonar"),
             ("dfh-postgres", "deepsonar", "deepsonar"),
             ("dfh-postgres", "dfh", "deepflowhunter"),
-        ):
+        ))
+        for container, user, db in candidates:
             r = subprocess.run(
                 ["docker", "exec", container, "psql", "-U", user, "-d", db, "-c", sql],
                 capture_output=True,
                 text=True,
             )
-            if r.returncode == 0:
+            if r.returncode == 0 and token_id in r.stdout:
                 return True
     return False
 
@@ -109,6 +114,29 @@ def main() -> None:
     req("GET", "/tokens", token=plaintext, expect=403)
     req("POST", "/jobs/" + uuid.uuid4().hex + "/cancel", None, plaintext, 403)
     print("scope 判定 OK（读放行/写 403）")
+
+    image_reader = req(
+        "POST",
+        "/tokens",
+        {"name": f"images-read-{uuid.uuid4().hex[:6]}", "scopes": ["images:read"]},
+        ADMIN,
+        201,
+    )
+    req("GET", "/runtime-images", token=image_reader["token"])
+    req(
+        "POST",
+        "/runtime-images/import",
+        {
+            "image_key": "scope-must-block",
+            "name": "Scope must block",
+            "publisher": "CI",
+            "image_ref": "ghcr.io/example/scope-must-block:1",
+        },
+        image_reader["token"],
+        403,
+    )
+    req("POST", f"/tokens/{image_reader['id']}/revoke", None, ADMIN)
+    print("镜像市场 scope 判定 OK（images:read 不可导入）")
 
     # 6. 项目限定 token
     if projects:

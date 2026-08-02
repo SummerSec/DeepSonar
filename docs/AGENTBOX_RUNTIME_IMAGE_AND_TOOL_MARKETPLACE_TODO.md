@@ -1,6 +1,6 @@
 # Agentbox 内置工具与运行时镜像市场 TODO 方案
 
-> 状态：待实施
+> 状态：已实施（2026-08-02）
 >
 > 范围：Agentbox 运行时镜像、二进制工具、第三方镜像导入、角色绑定、供应链治理
 >
@@ -82,12 +82,13 @@ Agent 可以在已分配镜像中自主选择工具，但不能：
 
 ## 4. 镜像分层
 
-第一阶段只维护少量官方镜像，避免形成一个巨大且更新困难的万能镜像。
+第一阶段只维护少量官方镜像，避免形成一个巨大且更新困难的万能镜像。**镜像体积是设计约束和 CI 硬门槛，不是发布后的优化项**：默认使用 slim 基础层，关闭 recommends，按角色拆包，禁止重复 SDK/CLI，并为每个 toolset 设置最大 MiB 预算。
 
 | 镜像键 | 用途 | 初始内容 | 优先级 |
 |---|---|---|---|
 | `deepsonar-base` | Explore、Analyze、Code、Hub | git、rg、jq、file、unzip、Python、Node、ca-certificates | P0 |
 | `deepsonar-audit` | Audit、Verify | `deepsonar-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
+| `deepsonar-kali-minimal` | 需要 Kali 用户态的专项 Audit、Verify | Kali 最小 rootfs + 明确列出的 base/audit CLI；无 metapackage/GUI | P0，项目显式启用 |
 | `deepsonar-build` | 需要编译或最小 PoC 的 Test | 编译器、构建工具、常见语言运行时 | P1，按需创建 |
 | `deepsonar-language-*` | Java、Go、PHP、Rust 等专项审计 | 对应语言工具链与静态分析器 | P2，按真实任务增加 |
 | 第三方市场镜像 | 社区或合作方专项环境 | 必须满足 DEEPSONAR 镜像契约 | P2 |
@@ -117,6 +118,7 @@ Trivy、OSV-Scanner 等依赖漏洞数据库的工具不能简单安装完成即
 - 支持 `sleep infinity` 或等价的长驻命令，由 Agentbox 接管执行。
 - 工具版本固定，不使用 `latest` 安装方式。
 - 提供 SBOM、许可证信息和工具清单。
+- 构建后的解压镜像大小不得超过 toolset 的 `maxSizeMiB`，超限直接阻断 CI/发布。
 
 建议 OCI 标签：
 
@@ -232,59 +234,60 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 
 ### P0：官方工具镜像基线
 
-- [ ] 为 `deepsonar-base` 和 `deepsonar-audit` 确定首批工具及固定版本。
-- [ ] 为下载型二进制记录来源 URL、SHA256 和许可证。
-- [ ] 在镜像中生成 `/opt/deepsonar/tool-manifest.json`。
-- [ ] 为镜像添加 OCI 来源、revision、contract 和 toolset 标签。
-- [ ] 保持 `agent-harness/image.mjs` 与 `deploy/Dockerfile.agent` 工具和版本一致。
-- [ ] 增加 CI 一致性检查，发现两份镜像定义漂移时失败。
-- [ ] 构建 `linux/amd64`，验证环境允许后增加 `linux/arm64`。
-- [ ] 在断网、资源限制和 cap-drop 条件下跑工具冒烟测试。
+- [x] 为 `deepsonar-base`、`deepsonar-audit` 和 opt-in 的 `deepsonar-kali-minimal` 确定首批工具及可追溯版本。
+- [x] 为下载型二进制记录来源 URL、SHA256 和许可证。
+- [x] 在镜像中生成 `/opt/deepsonar/tool-manifest.json`。
+- [x] 为镜像添加 OCI 来源、revision、contract 和 toolset 标签。
+- [x] 保持 `agent-harness/image.mjs` 与 `deploy/Dockerfile.agent` 工具和版本一致。
+- [x] 增加 CI 一致性检查，发现两份镜像定义漂移时失败。
+- [x] 构建 `linux/amd64`，验证环境允许后增加 `linux/arm64`。
+- [x] 以 `maxSizeMiB` 建立解压镜像大小门禁；base 使用 slim，Kali 禁止 metapackage/GUI。
+- [x] 在断网、资源限制和 cap-drop 条件下跑工具冒烟测试。
 
 验收：官方镜像可以离线执行 `rg`、`jq`、`file`、Semgrep、Gitleaks 和 ShellCheck，并输出确定版本。
 
 ### P1：可信镜像目录与角色绑定
 
-- [ ] 新增 runtime image 及 immutable version 数据模型和 migration。
-- [ ] 增加角色默认镜像键，项目只允许从可信且已启用目录中选择。
-- [ ] 把镜像版本和 digest 在 Job 创建时写入 `agent_snapshot_json`。
-- [ ] Agentbox provision 使用 `name@sha256:digest`，禁止只使用 tag。
-- [ ] 保留 `DOCKER_IMAGE_AUDIT` 作为升级期默认值，完成迁移后降级为兜底。
-- [ ] 未知、禁用、拒绝或撤销的镜像在创建 Job 时直接失败。
+- [x] 新增 runtime image 及 immutable version 数据模型；本项目按基线策略升级 `database/schema.sql` v7，不维护增量 migration。
+- [x] 增加角色默认镜像键，项目只允许从可信且已启用目录中选择。
+- [x] 把镜像版本和 digest 在 Job 创建时写入 `agent_snapshot_json`。
+- [x] Agentbox provision 使用 `name@sha256:digest`，禁止只使用 tag。
+- [x] 保留 `DOCKER_IMAGE_AUDIT` 作为升级期兼容值，真实 Job 无市场可信 digest 时显式失败。
+- [x] 未知、禁用、拒绝或撤销的镜像在创建 Job 时直接失败。
 
 验收：同一 Job 等待期间即使镜像 tag 被覆盖，实际执行镜像仍不改变。
 
 ### P2：镜像市场与第三方导入
 
-- [ ] 提供只读市场 API：镜像、版本、发布者、工具、平台、信任和扫描摘要。
-- [ ] 提供管理员导入 API，导入后固定进入 `quarantined`。
-- [ ] 建立独立准入扫描 Worker，不让 Scheduler 直接执行未知镜像。
-- [ ] 集成签名、SBOM、漏洞、恶意文件、凭据和许可证检查。
-- [ ] 实现批准、拒绝、禁用、撤销和版本回滚。
-- [ ] 私有 registry 凭据接入 Credential 管理，禁止进入 Job Snapshot 明文字段。
-- [ ] 所有市场管理动作写入 append-only 审计日志。
+- [x] 提供只读市场 API：镜像、版本、发布者、工具、平台、信任和扫描摘要。
+- [x] 提供管理员导入 API，导入后固定进入 `quarantined`。
+- [x] 建立独立准入扫描 Worker，不让 Scheduler 直接执行未知镜像。
+- [x] 集成签名、SBOM、漏洞、恶意文件、凭据和许可证检查。
+- [x] 实现批准、拒绝、禁用、撤销和版本回滚。
+- [x] 私有 registry 凭据接入 Credential 管理，禁止进入 Job Snapshot 明文字段。
+- [x] 所有市场管理动作写入 append-only 审计日志。
 
 验收：第三方镜像未经扫描和管理员批准时，即使知道完整 digest 也不能创建沙箱。
 
 ### P3：前端管理
 
-- [ ] 增加“镜像市场”页面：搜索、发布者、工具能力、架构、版本、大小、信任徽章和扫描时间。
-- [ ] 增加镜像详情页：digest、签名、SBOM、漏洞摘要、许可证、工具清单和变更记录。
-- [ ] 管理员可以导入、审批、禁用和撤销；普通用户只能查看允许内容。
-- [ ] 项目设置允许启用可信镜像，并为角色选择已启用镜像。
-- [ ] 新建任务页面不展示任何镜像或工具字段。
-- [ ] Job 和画布详情展示实际镜像、digest、工具版本和扫描证据。
+- [x] 增加独立“镜像市场”页面：搜索、发布者、工具能力、架构、版本、大小、信任徽章和扫描时间。
+- [x] 镜像详情以市场页右侧独立证据抽屉呈现：digest、签名、SBOM、漏洞摘要、许可证、工具清单和变更记录。
+- [x] 管理员可以导入、审批、禁用和撤销；普通用户只能查看允许内容。
+- [x] 项目独立镜像市场视图允许启用可信镜像，RoleConfig 只能选择已启用镜像。
+- [x] 新建任务页面不展示任何镜像或工具字段。
+- [x] Job 和画布详情展示实际镜像、digest、工具版本和扫描证据。
 
 验收：用户只输入任务内容，仍能从 Job 证据中追溯系统为什么选择某个环境。
 
 ### P4：漏洞库与持续运营
 
-- [ ] 为需要漏洞数据库的工具设计独立、可版本化的只读数据层。
-- [ ] 定时检查官方和第三方镜像的新 digest，但不自动替换生产版本。
-- [ ] 新版本重新走完整准入，管理员批准后灰度切换。
-- [ ] 发现严重 CVE、恶意发布或签名撤销时自动标记 `revoked`。
-- [ ] 提供受影响 Job、项目和 Finding 的反向查询。
-- [ ] 建立镜像保留与垃圾回收策略，仍被历史 Job 引用的 digest 不删除证据记录。
+- [x] 为需要漏洞数据库的工具设计独立、可版本化的只读数据层。
+- [x] 定时检查官方和第三方镜像的新 digest，但不自动替换生产版本。
+- [x] 新版本重新走完整准入，管理员批准后通过项目版本固定切换。
+- [x] 可信版本周期复扫失败（含严重 CVE、恶意内容或签名验证失败）时自动标记 `revoked`。
+- [x] 提供受影响 Job、项目和 Finding 的反向查询。
+- [x] 建立保留策略：市场无删除版本 API，历史 Job 快照、扫描和 Finding 证据不因停用/撤销删除；宿主镜像层 GC 必须保留数据库证据。
 
 ## 9. 需要修改的主要位置
 
@@ -292,15 +295,22 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 |---|---|
 | `agent-harness/image.mjs` | 本地官方镜像、工具清单和固定版本 |
 | `deploy/Dockerfile.agent` | 生产官方镜像、OCI 标签、固定 digest 和工具安装 |
-| `apps/scheduler/migrations/` | 镜像目录、版本、项目启用和角色绑定结构 |
+| `database/schema.sql` | 镜像目录、版本、项目启用、数据层和角色绑定结构（v7 唯一基线） |
 | `apps/scheduler/src/config.ts` | 官方镜像兜底和允许 registry 配置 |
 | `apps/scheduler/src/core.ts` / `routes.ts` | Job 创建期解析角色绑定并冻结镜像版本 |
 | `apps/scheduler/src/dispatcher.ts` / `executor-real.ts` | 按 digest provision、契约复核和运行证据 |
 | `packages/runtime-sandbox/` | 镜像契约自检和错误分类 |
-| `packages/shared-types/` | 市场、版本、信任、扫描和绑定 API schema |
+| `apps/scheduler/src/openapi.ts` / `apps/web/src/api.ts` | 市场、版本、信任、扫描和绑定 API 契约 |
 | `apps/scheduler/src/routes.ts` | 市场查询、导入、审批、启用、撤销 API |
 | `apps/web/` | 镜像市场、详情、审批和项目角色绑定界面 |
 | `deploy/` | registry 凭据、准入 Worker、构建与多架构发布 |
+
+## 12. 实施落点与验证
+
+- 独立页面：`/images`（全局市场）与 `/projects/:projectId/images`（项目启用/版本固定）。
+- 定义门禁：`pnpm ci:images`；市场/API/Job 冻结冒烟：`pnpm ci:smoke:images`。
+- 官方镜像 CI 使用 base/audit/kali-minimal matrix 分别构建，再以 `network=none` + `cap-drop=ALL` + `no-new-privileges` + CPU/内存/PIDs 限制运行工具冒烟并校验大小预算。Release 以 amd64/arm64 多架构发布并生成 SBOM/provenance attestations。
+- 真实部署必须给 `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE` 配置 digest 引用；需要精简 Kali 时另配 `DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE`，并在项目市场显式启用。第三方准入还必须给 Cosign/Syft/Trivy/ClamAV 扫描器自身配置 digest。
 
 ## 10. 安全红线
 
