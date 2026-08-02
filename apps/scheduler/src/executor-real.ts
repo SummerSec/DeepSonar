@@ -285,8 +285,31 @@ Hub 不下载材料。Worker 收到 prompt 后在 /workspace 内自行决定是�
       comment_preview?: string;
       finding_title?: string;
     } | undefined;
-    if (trigger?.kind === "confirmed_finding") {
-      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。全部 Finding 为 confirmed/needs_human 且无活跃工作时才可 complete。";
+    if (trigger?.kind === "report_gate_failed") {
+      const problems = Array.isArray((trigger as { problems?: unknown[] }).problems)
+        ? (trigger as { problems: Array<Record<string, unknown>> }).problems
+        : [];
+      const lines = problems
+        .slice(0, 20)
+        .map(
+          (p) =>
+            `- [${p.severity ?? "?"}] ${p.title || p.finding_id}: status=${p.verify_status} — ${p.issue ?? ""}`,
+        )
+        .join("\n");
+      initialInput += `
+
+本轮由 **Report 门禁失败** 回弹触发。
+项目关注级别：≥${(trigger as { minVerifySeverity?: string }).minVerifySeverity ?? "?"}（care=${JSON.stringify((trigger as { careSeverities?: string[] }).careSeverities ?? [])}）
+**关注级别内的 Finding 必须全部为 confirmed 才能生成报告**；以下 Finding 状态有问题：
+
+${lines || (trigger as { summary?: string }).summary || "（见画布 root.report_gate_rejected）"}
+
+你必须：
+1. 针对上述 Finding 派发 review/test 等补证或推动其完成系统 Verify 至 confirmed；
+2. 不得在 care 级 Finding 仍为 pending/verifying/needs_human 时 complete；
+3. 不能下发 verify/report 系统角色，也不能直接写 confirmed。`;
+    } else if (trigger?.kind === "confirmed_finding") {
+      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。项目关注级别内 Finding 须全部 confirmed 且无活跃工作时才可 complete。";
     } else if (trigger?.kind === "verify_rework" || trigger?.kind === "verify_failed") {
       initialInput += `
 
@@ -318,8 +341,8 @@ Finding：${trigger.finding_id ?? "未知"}
 
 本轮由**画布空闲 / 图进度**触发：当前没有待跑的 Worker/Verify 节点。
 请读整图决策：
-1. 若目标已覆盖且全部 Finding 为 confirmed/needs_human → complete；
-2. 若仍有缺口 → 派发 intents（不要重复已开放或已完成工作）；
+1. 若目标已覆盖、**项目关注级别（minVerifySeverity）内 Finding 全部 confirmed**、其余 Finding 为 confirmed/needs_human → complete；
+2. 若 care 级 Finding 仍非 confirmed → 派发补证/推动验证，不得 complete；
 3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并 request_human。`;
     } else if (["user_task", "plane_issue", "external_event"].includes(trigger?.kind ?? "")) {
       initialInput += "\n\n这是首次决策轮次；没有执行证据时不得直接 complete，初始 intent 可从 root_id 出发。";

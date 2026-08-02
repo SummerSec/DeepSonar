@@ -7,7 +7,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { sql } from "./db.js";
-import { canvasFindingsConverged, hasActiveWorkJobs } from "./verify.js";
+import {
+  canvasFindingsConverged,
+  checkCareFindingsConfirmed,
+  type FindingStatusProblem,
+} from "./verify.js";
 
 type Tx = typeof sql;
 
@@ -241,9 +245,103 @@ function defaultMarkdown(input: ReportInput): string {
 }
 
 /**
- * 在 Root 为 analysis_complete 且 Finding 收敛时，幂等创建唯一 Report Job。
+ * Report 门禁失败：Root 退出 analysis_complete/reporting，force 回弹 Hub 并列出有问题的 Finding。
  */
-export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ dispatched: boolean; reason?: string }> {
+async function bounceReportGateToHub(
+  tx: Tx,
+  canvasId: string,
+  projectId: string,
+  problems: FindingStatusProblem[],
+  extra?: { minVerifySeverity?: string; careSeverities?: string[]; reason?: string },
+): Promise<{ dispatched: false; reason: string; bounced: true; problems: FindingStatusProblem[] }> {
+  const problemsJson = problems.slice(0, 50).map((p) => ({
+    finding_id: p.finding_id,
+    title: p.title,
+    severity: p.severity,
+    verify_status: p.verify_status,
+    issue: p.issue,
+    in_care_scope: p.in_care_scope,
+  }));
+  await tx`
+    UPDATE canvas_nodes SET
+      status = 'running',
+      body_json = body_json || ${tx.json({
+        report_gate_rejected: {
+          at: new Date().toISOString(),
+          reason: extra?.reason ?? "care_findings_not_confirmed",
+          minVerifySeverity: extra?.minVerifySeverity ?? null,
+          careSeverities: extra?.careSeverities ?? [],
+          problems: problemsJson,
+        },
+      })},
+      updated_at = now()
+    WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
+
+  // 失败中的 report 元数据标 failed，避免卡在 generating
+  await tx`
+    UPDATE task_reports SET
+      status = 'failed',
+      error = ${`report_gate: ${problems.length} care finding(s) not confirmed`},
+      updated_at = now()
+    WHERE canvas_id = ${canvasId} AND status IN ('pending', 'generating')`;
+
+  const { maybeTriggerHub, patchCanvasConvergence } = await import("./core.js");
+  await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
+    auto_stopped: false,
+    paused_reason: undefined,
+    paused_at: undefined,
+  });
+
+  const problemSummary = problems
+    .slice(0, 12)
+    .map((p) => `[${p.severity}] ${p.title || p.finding_id}: status=${p.verify_status} — ${p.issue}`)
+    .join("\n");
+
+  await maybeTriggerHub(
+    tx,
+    {
+      id: null,
+      project_id: projectId,
+      canvas_id: canvasId,
+      type: "report_gate",
+      priority: 40,
+    },
+    {
+      force: true,
+      trigger: {
+        kind: "report_gate_failed",
+        minVerifySeverity: extra?.minVerifySeverity,
+        careSeverities: extra?.careSeverities,
+        problem_count: problems.length,
+        problems: problemsJson,
+        summary:
+          `Report 被拒绝：项目关注级别（≥${extra?.minVerifySeverity ?? "?"}）内的 Finding 必须全部为 confirmed。\n` +
+          problemSummary,
+      },
+    },
+  );
+
+  console.warn(
+    `[report] canvas ${canvasId} 门禁失败，回弹 Hub：${problems.length} 个问题 Finding`,
+  );
+  return {
+    dispatched: false,
+    reason: "report_gate_failed_bounced_hub",
+    bounced: true,
+    problems,
+  };
+}
+
+/**
+ * 在 Root 为 analysis_complete 且「关注级别 Finding 全部 confirmed」时，幂等创建唯一 Report Job。
+ * 否则回弹 Hub，并在 trigger 中列出状态异常的 Finding。
+ */
+export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
+  dispatched: boolean;
+  reason?: string;
+  bounced?: boolean;
+  problems?: FindingStatusProblem[];
+}> {
   const [root] = await tx`
     SELECT id, status FROM canvas_nodes
     WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
@@ -252,8 +350,31 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ d
     return { dispatched: false, reason: `root_status:${root.status}` };
   }
 
-  const conv = await canvasFindingsConverged(tx, canvasId);
-  if (!conv.ok) return { dispatched: false, reason: `findings_not_converged:${conv.blockers.slice(0, 3).join(",")}` };
+  const [canvas] = await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`;
+  if (!canvas) return { dispatched: false, reason: "no_canvas" };
+  const projectId = canvas.project_id as string;
+
+  // 硬门：项目 minVerifySeverity 及以上的 Finding 必须全部 confirmed
+  const care = await checkCareFindingsConfirmed(tx, canvasId, projectId);
+  if (!care.ok) {
+    return bounceReportGateToHub(tx, canvasId, projectId, care.problems, {
+      minVerifySeverity: care.minVerifySeverity,
+      careSeverities: care.careSeverities,
+      reason: "care_findings_not_confirmed",
+    });
+  }
+
+  const conv = await canvasFindingsConverged(tx, canvasId, {
+    projectId,
+    requireCareConfirmed: true,
+  });
+  if (!conv.ok) {
+    return bounceReportGateToHub(tx, canvasId, projectId, conv.problems, {
+      minVerifySeverity: care.minVerifySeverity,
+      careSeverities: care.careSeverities,
+      reason: "findings_not_converged",
+    });
+  }
 
   // 活跃普通/Hub/Verify 工作（允许 report 自身）
   const active = await tx`
@@ -277,14 +398,11 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ d
     }
   }
 
-  const [canvas] = await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`;
-  if (!canvas) return { dispatched: false, reason: "no_canvas" };
-
   const { resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
-  const rules = await rulesForProject(tx as unknown as typeof sql, canvas.project_id as string);
+  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   let snapshot: unknown;
   try {
-    snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, canvas.project_id as string, "report");
+    snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
   } catch (e) {
     console.warn(`[report] resolve snapshot failed:`, e);
     return { dispatched: false, reason: "no_report_role" };
@@ -295,7 +413,7 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ d
   try {
     const [job] = await tx`
       INSERT INTO jobs ${tx({
-        project_id: canvas.project_id as string,
+        project_id: projectId,
         canvas_id: canvasId,
         agent_snapshot_json: snapshot as never,
         type: "report",
@@ -313,7 +431,7 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ d
     // 唯一冲突
     const [existJob] = await tx`
       SELECT id, status FROM jobs
-      WHERE project_id = ${canvas.project_id as string} AND ingress_key = ${ingressKey}
+      WHERE project_id = ${projectId} AND ingress_key = ${ingressKey}
       LIMIT 1`;
     if (existJob && !["failed", "cancelled", "timeout", "orphan"].includes(existJob.status as string)) {
       return { dispatched: false, reason: "report_job_exists" };
@@ -324,7 +442,7 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ d
     }
     const [job] = await tx`
       INSERT INTO jobs ${tx({
-        project_id: canvas.project_id as string,
+        project_id: projectId,
         canvas_id: canvasId,
         agent_snapshot_json: snapshot as never,
         type: "report",
@@ -341,7 +459,7 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ d
   if (!reportJobId) {
     const [existJob] = await tx`
       SELECT id FROM jobs
-      WHERE project_id = ${canvas.project_id as string} AND ingress_key = ${ingressKey}
+      WHERE project_id = ${projectId} AND ingress_key = ${ingressKey}
       LIMIT 1`;
     reportJobId = (existJob?.id as string) ?? null;
   }
@@ -360,7 +478,7 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{ d
       await tx`
         INSERT INTO task_reports ${tx({
           canvas_id: canvasId,
-          project_id: canvas.project_id as string,
+          project_id: projectId,
           report_job_id: reportJobId,
           status: "generating",
         })}`;
@@ -536,4 +654,4 @@ export async function retryReport(canvasId: string): Promise<{ ok: boolean; reas
   });
 }
 
-void hasActiveWorkJobs;
+

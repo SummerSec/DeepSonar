@@ -707,10 +707,23 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     if (p.complete?.description) {
       // Hub complete 只是提案：Scheduler 硬门检查后 Root → analysis_complete，再派发 Report
       const { canvasFindingsConverged, hasActiveWorkJobs } = await import("./verify.js");
-      const conv = await canvasFindingsConverged(tx, canvasId);
+      const conv = await canvasFindingsConverged(tx, canvasId, {
+        projectId: job.project_id as string,
+        requireCareConfirmed: true,
+      });
       if (!conv.ok) {
+        const detail =
+          conv.problems.length > 0
+            ? conv.problems
+                .slice(0, 8)
+                .map(
+                  (x) =>
+                    `[${x.severity}] ${x.title || x.finding_id}: ${x.verify_status}（${x.issue}）`,
+                )
+                .join("; ")
+            : conv.blockers.slice(0, 5).join("; ");
         throw new Error(
-          `Hub complete 被拒绝：Finding 未全部收敛（${conv.blockers.slice(0, 5).join("; ")}）`,
+          `Hub complete 被拒绝：关注级别 Finding 须全部 confirmed，或仍有未收敛 Finding。问题：${detail}`,
         );
       }
       if (await hasActiveWorkJobs(tx, canvasId)) {

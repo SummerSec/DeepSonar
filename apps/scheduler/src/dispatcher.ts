@@ -411,15 +411,34 @@ async function executeFake(jobId: string, type: string) {
           return;
         }
       }
+      if (trigger.kind === "report_gate_failed") {
+        // Report 打回：按 problems 派 test/review 补证
+        const problems = Array.isArray((trigger as { problems?: Array<{ finding_id?: string }> }).problems)
+          ? (trigger as { problems: Array<{ finding_id?: string }> }).problems
+          : [];
+        const findingId = problems[0]?.finding_id ?? (trigger as { finding_id?: string }).finding_id;
+        const selected = chooseRole("test") ?? chooseRole("review");
+        if (!selected) return;
+        const refs = findingId
+          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${findingId} AND node_id IS NOT NULL`
+          : [];
+        await emit("hub_decision", {
+          intents: [
+            {
+              from: refs.map((r) => r.id as string),
+              role: selected.name,
+              description: `Report 门禁失败：补证使关注级 Finding 达到 confirmed`,
+              prompt: `针对 report_gate_failed 列出的 Finding 补充独立复核/实测证据（emit_fact.verification）。finding_id=${findingId ?? "见 trigger.problems"}`,
+            },
+          ],
+        });
+        return;
+      }
       if (trigger.kind === "confirmed_finding") {
-        // 已确认后：若全部 Finding 收敛且无活跃补证，直接 complete；否则派 test 验收
-        const pending = await sql`
-          SELECT 1 FROM findings f
-          JOIN jobs j ON j.id = f.job_id
-          WHERE j.canvas_id = ${canvasId}
-            AND f.verify_status NOT IN ('confirmed','needs_human')
-          LIMIT 1`;
-        if (pending.length === 0) {
+        // 已确认后：care 级全部 confirmed 才 complete；否则派 test 验收
+        const { checkCareFindingsConfirmed } = await import("./verify.js");
+        const care = await checkCareFindingsConfirmed(sql, canvasId, job!.project_id as string);
+        if (care.ok) {
           const refs = await sql`
             SELECT id FROM canvas_nodes
             WHERE canvas_id = ${canvasId} AND node_type = ANY(${["finding", "fact", "root"]})
@@ -427,35 +446,35 @@ async function executeFake(jobId: string, type: string) {
           await emit("hub_decision", {
             complete: {
               from: refs.map((r) => r.id as string),
-              description: "假 hub：全部 Finding 已收敛（confirmed/needs_human），分析完成，可生成报告。",
+              description: "假 hub：关注级别 Finding 全部 confirmed，分析完成，可生成报告。",
             },
           });
           return;
         }
+        const pending = care.problems;
         const selected = chooseRole("test");
         if (!selected) return;
-        const refs = trigger.finding_id
-          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${trigger.finding_id} AND node_id IS NOT NULL`
-          : [];
+        const badId = pending[0]?.finding_id ?? trigger.finding_id;
+        const refs = badId
+          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${badId} AND node_id IS NOT NULL`
+          : trigger.finding_id
+            ? await sql`SELECT node_id AS id FROM findings WHERE id = ${trigger.finding_id} AND node_id IS NOT NULL`
+            : [];
         await emit("hub_decision", {
           intents: [
             {
               from: refs.map((r) => r.id as string),
               role: selected.name,
-              description: `由 ${selected.title} 角色验收已确认风险：${selected.description}`,
-              prompt: `针对画布中已确认的风险，按 ${selected.name} 角色职责补充验收证据。`,
+              description: `由 ${selected.title} 角色补证使关注级 Finding 达到 confirmed`,
+              prompt: `针对尚未 confirmed 的关注级 Finding 补充实测证据。finding_id=${badId ?? "见画布"}`,
             },
           ],
         });
         return;
       }
-      // 默认 / canvas_idle：Finding 已收敛则 complete，否则 explore 补事实
-      const unconverged = await sql`
-        SELECT 1 FROM findings f
-        JOIN jobs j ON j.id = f.job_id
-        WHERE j.canvas_id = ${canvasId}
-          AND f.verify_status NOT IN ('confirmed','needs_human')
-        LIMIT 1`;
+      // 默认 / canvas_idle：care 级全部 confirmed 则 complete，否则 explore/补证
+      const { checkCareFindingsConfirmed } = await import("./verify.js");
+      const careGate = await checkCareFindingsConfirmed(sql, canvasId, job!.project_id as string);
       const facts = await sql`
         SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact' ORDER BY created_at`;
       // 尚无任何角色工作：空闲唤醒也要先派 audit/explore，不能直接 complete
@@ -465,14 +484,14 @@ async function executeFake(jobId: string, type: string) {
           AND type NOT IN ('hub_reason', 'verify_finding', 'report')
           AND status = 'succeeded'
         LIMIT 1`;
-      if (unconverged.length === 0 && roleDone.length > 0 && facts.length > 0) {
+      if (careGate.ok && roleDone.length > 0 && facts.length > 0) {
         await emit("hub_decision", {
           complete: {
             from: facts.map((f) => f.id as string),
-            description: "假 hub：事实已足够且 Finding 已收敛，目标达成。",
+            description: "假 hub：事实已足够且关注级 Finding 全部 confirmed，目标达成。",
           },
         });
-      } else if (unconverged.length === 0 && roleDone.length > 0) {
+      } else if (careGate.ok && roleDone.length > 0) {
         const refs = await sql`
           SELECT id FROM canvas_nodes
           WHERE canvas_id = ${canvasId} AND node_type = ANY(${["finding", "root"]})
@@ -480,7 +499,7 @@ async function executeFake(jobId: string, type: string) {
         await emit("hub_decision", {
           complete: {
             from: refs.map((r) => r.id as string),
-            description: "假 hub：Finding 已收敛，分析完成。",
+            description: "假 hub：关注级 Finding 全部 confirmed，分析完成。",
           },
         });
       } else {

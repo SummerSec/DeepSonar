@@ -783,13 +783,15 @@ $instructions$),
 4. 不重复开放或已完成意图；优先派发能最大幅度缩小关键不确定性的最少任务，并遵守本轮意图数量上限。
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
 6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认工具调用；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回 `accepted event`。
-7. **complete 硬门槛（Scheduler 会再校验）**：
-   - 每条 Finding 的 `verify_status` 必须是 `confirmed` 或 `needs_human`（不得仍是 pending/verifying）；
+7. **complete / Report 硬门槛（Scheduler 会再校验）**：
+   - **项目配置关注级别**（`minVerifySeverity` 及以上，如 high → critical+high）内的每条 Finding 必须是 `confirmed`（`needs_human` / pending 不够）；
+   - 关注级别之外的 Finding 须为 `confirmed` 或 `needs_human`；
    - 画布无活跃普通角色 / Hub / Verify 工作；
    - 不得静默丢弃任何 Finding。
 8. **触发类型处理**：
    - `verify_rework` / `verify_failed`：只能派发 review/test（或必要的 audit/explore）补独立复核与实测证据；每个 intent 的 prompt 必须写明 `finding_id` 与证据目标（review 或 test）；不要原样重复上一轮。
-   - `confirmed_finding`：可做影响验收或相关跟进；全部 Finding 已收敛则可 complete。
+   - `report_gate_failed`：Report 因 care 级 Finding 非 confirmed 被打回；trigger.problems 列出 id/title/severity/verify_status/issue，必须针对这些问题派发补证，不得再次空 complete。
+   - `confirmed_finding`：可做影响验收或相关跟进；care 级全部 confirmed 后才可 complete。
    - `canvas_idle` / `graph_progress`：画布当前无待跑节点，读整图决定 complete 或最小增量 intents；禁止空转。
 9. 补证 intent 应要求 Worker 用 `emit_fact.verification` 提交结构化证据；缺 review 派 review，缺 runtime_test 派 test，二者尽量不同角色、不同 Job。
 

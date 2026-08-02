@@ -646,22 +646,126 @@ export async function attachVerificationEvidence(
   return true;
 }
 
-/** Hub complete 前：Finding 是否全部收敛。 */
+export interface FindingStatusProblem {
+  finding_id: string;
+  title: string;
+  severity: string;
+  verify_status: string;
+  /** 为何阻塞 complete/report */
+  issue: string;
+  in_care_scope: boolean;
+}
+
+/**
+ * 项目配置关注级别（minVerifySeverity 及以上）内的 Finding 是否全部为 confirmed。
+ * Report / Hub complete 硬门：care 范围内不得为 pending/verifying/needs_human/false_positive。
+ */
+export async function checkCareFindingsConfirmed(
+  tx: Tx,
+  canvasId: string,
+  projectId: string,
+): Promise<{
+  ok: boolean;
+  careSeverities: string[];
+  minVerifySeverity: string;
+  problems: FindingStatusProblem[];
+}> {
+  const { rulesForProject, careSeverities } = await core();
+  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
+  const care = careSeverities(rules.minVerifySeverity).map((s) => s.toLowerCase());
+  const careSet = new Set(care);
+
+  const findings = await tx`
+    SELECT f.id, f.title, f.severity, f.verify_status
+    FROM findings f
+    JOIN jobs j ON j.id = f.job_id
+    WHERE j.canvas_id = ${canvasId}
+    ORDER BY f.created_at`;
+
+  const problems: FindingStatusProblem[] = [];
+  for (const f of findings) {
+    const sev = String(f.severity ?? "").toLowerCase();
+    if (!careSet.has(sev)) continue;
+
+    const st = String(f.verify_status ?? "pending");
+    if (st !== "confirmed") {
+      problems.push({
+        finding_id: f.id as string,
+        title: String(f.title ?? ""),
+        severity: sev,
+        verify_status: st,
+        issue: `关注级别 Finding 须为 confirmed，当前为 ${st}`,
+        in_care_scope: true,
+      });
+      continue;
+    }
+    const [round] = await tx`
+      SELECT id FROM finding_verification_rounds
+      WHERE finding_id = ${f.id as string} AND final_outcome = 'confirmed'
+      LIMIT 1`;
+    if (!round) {
+      problems.push({
+        finding_id: f.id as string,
+        title: String(f.title ?? ""),
+        severity: sev,
+        verify_status: st,
+        issue: "verify_status=confirmed 但无可追溯的通过硬门 verification round",
+        in_care_scope: true,
+      });
+    }
+  }
+
+  return {
+    ok: problems.length === 0,
+    careSeverities: care,
+    minVerifySeverity: rules.minVerifySeverity,
+    problems,
+  };
+}
+
+/** Hub complete 前：非关注级 Finding 须收敛；关注级由 checkCareFindingsConfirmed 单独要求 confirmed。 */
 export async function canvasFindingsConverged(
   tx: Tx,
   canvasId: string,
-): Promise<{ ok: boolean; blockers: string[] }> {
+  opts?: { projectId?: string; requireCareConfirmed?: boolean },
+): Promise<{ ok: boolean; blockers: string[]; problems: FindingStatusProblem[] }> {
   const findings = await tx`
-    SELECT f.id, f.verify_status, f.title
+    SELECT f.id, f.verify_status, f.title, f.severity
     FROM findings f
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId}`;
 
   const blockers: string[] = [];
+  const problems: FindingStatusProblem[] = [];
+
+  let careSet: Set<string> | null = null;
+  if (opts?.requireCareConfirmed && opts.projectId) {
+    const care = await checkCareFindingsConfirmed(tx, canvasId, opts.projectId);
+    if (!care.ok) {
+      for (const p of care.problems) {
+        problems.push(p);
+        blockers.push(`care:${p.finding_id}:${p.verify_status}`);
+      }
+    }
+    careSet = new Set(care.careSeverities);
+  }
+
   for (const f of findings) {
     const st = f.verify_status as string;
+    const sev = String(f.severity ?? "").toLowerCase();
+    // 关注级已在 care 检查中处理
+    if (careSet?.has(sev)) continue;
+
     if (st !== "confirmed" && st !== "needs_human") {
       blockers.push(`finding:${f.id}:${st}`);
+      problems.push({
+        finding_id: f.id as string,
+        title: String(f.title ?? ""),
+        severity: sev,
+        verify_status: st,
+        issue: `Finding 未收敛（须 confirmed 或 needs_human）`,
+        in_care_scope: false,
+      });
       continue;
     }
     if (st === "confirmed") {
@@ -669,19 +773,29 @@ export async function canvasFindingsConverged(
         SELECT id FROM finding_verification_rounds
         WHERE finding_id = ${f.id as string} AND final_outcome = 'confirmed'
         LIMIT 1`;
-      if (!round) blockers.push(`finding:${f.id}:confirmed_without_round`);
+      if (!round) {
+        blockers.push(`finding:${f.id}:confirmed_without_round`);
+        problems.push({
+          finding_id: f.id as string,
+          title: String(f.title ?? ""),
+          severity: sev,
+          verify_status: st,
+          issue: "confirmed 缺少可追溯 verification round",
+          in_care_scope: false,
+        });
+      }
     }
   }
 
   const openRounds = await tx`
-    SELECT r.id FROM finding_verification_rounds r
+    SELECT r.id, r.finding_id FROM finding_verification_rounds r
     JOIN findings f ON f.id = r.finding_id
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId} AND r.status IN ('pending','running')
     LIMIT 5`;
   for (const r of openRounds) blockers.push(`open_round:${r.id}`);
 
-  return { ok: blockers.length === 0, blockers };
+  return { ok: blockers.length === 0, blockers, problems };
 }
 
 export async function hasActiveWorkJobs(tx: Tx, canvasId: string): Promise<boolean> {
