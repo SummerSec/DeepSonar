@@ -348,7 +348,7 @@ CREATE OR REPLACE FUNCTION deepsonar_notify_job_event() RETURNS trigger AS $$
 BEGIN
   IF (TG_OP = 'INSERT' AND NEW.status = 'pending')
      OR (TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status
-         AND NEW.status IN ('succeeded', 'failed', 'timeout', 'cancelled', 'orphan')) THEN
+         AND NEW.status IN ('pending', 'succeeded', 'failed', 'timeout', 'cancelled', 'orphan')) THEN
     PERFORM pg_notify('deepsonar_jobs', NEW.id::text);
   END IF;
   RETURN NEW;
