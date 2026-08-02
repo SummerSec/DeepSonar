@@ -2,12 +2,12 @@
  * agentbox-sdk（TwillAI, MIT）真实实现 —— ARCHITECTURE §5/§8
  *
  * 要点：
- * - Agent 以 server 进程模式跑在沙箱内（claude-code provider，approvalMode "auto"）
- * - 事件经 SDK 控制通道回传（stream），不经沙箱网络
- * - 语义事件由每 Job 动态注入的本地 MCP 写入控制队列，宿主通过 SDK 文件控制通道增量读取；
+ * - agentbox 只作沙箱（容器生命周期 + exec + 文件上下行）；Agent 由 claude CLI
+ *   以 stream-json 模式直接在沙箱内驱动，不走 SDK daemon/relay。
+ * - 语义事件由每 Job 动态注入的本地 MCP 写入控制队列，宿主通过 exec 增量读取；
  *   不经过沙箱目标网络，也不向 Worker 暴露 Scheduler 地址或凭据。
  */
-import { Agent, Sandbox } from "agentbox-sdk";
+import { Sandbox } from "agentbox-sdk";
 import type {
   AgentCommandConfig,
   AgentMcpConfig,
@@ -29,8 +29,7 @@ async function docker(...args: string[]): Promise<string> {
 }
 
 // --- agentbox-sdk 0.1.501 Windows 宿主兼容性补丁 ---
-// SDK 用宿主 path.join 拼沙箱内的 POSIX 路径（如 /tmp/agentbox/claude-code/.claude），
-// Windows 上产出反斜杠，传进容器后路径全毁（Claude Code 报 settings.json not found）。
+// SDK 用宿主 path.join 拼沙箱内的 POSIX 路径，Windows 上产出反斜杠，传进容器后路径全毁。
 // 运行时补丁：join 的首参数是 POSIX 绝对路径（"/" 开头）时改用 posix.join。
 // Windows 宿主路径只会以盘符或 \\ 开头，不会误判；SDK 的路径拼接全部发生在运行时。
 // TODO: 向上游提 issue，修复后移除此补丁。
@@ -42,12 +41,8 @@ if (process.platform === "win32") {
 
 /** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
-/** sandboxId → 受限网络 relay 容器名（destroy 时一并回收） */
-const relayContainers = new Map<string, string>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
 const GATEWAY_PROXY = "deepsonar-gateway-proxy";
-/** agentbox 各 provider 的 in-sandbox daemon 端口（SDK AGENT_RESERVED_PORTS，宿主必须能 TCP 直连） */
-const AGENT_DAEMON_PORTS = [43180, 43181, 4096];
 let restrictedNetworkReady: Promise<void> | null = null;
 let gatewayProxyReady: Promise<void> | null = null;
 
@@ -87,55 +82,6 @@ const server = http.createServer((req, res) => {
 server.on("connect", (_req, socket) => socket.destroy());
 server.listen(3100, "0.0.0.0");
 `;
-
-/**
- * 受限网络 relay：internal bridge 上 Docker 会静默丢弃端口发布（NetworkSettings.Ports 为空），
- * 宿主无法直连沙箱内的 agent daemon（claude-code 43180 等），SDK getPreviewLink 直接抛错。
- * 与 gateway sidecar 同构：relay 容器同时连普通 bridge（仅 127.0.0.1 发布 daemon 端口）和
- * internal bridge（按容器名 TCP 转发到 Worker）。relay 只跑固定端口转发，不执行不可信代码。
- */
-const RESTRICTED_RELAY_SCRIPT = String.raw`
-const net = require("node:net");
-const target = process.env.DEEPSONAR_RELAY_TARGET;
-const ports = (process.env.DEEPSONAR_RELAY_PORTS || "43180").split(",").map((p) => Number(p.trim()));
-for (const port of ports) {
-  net.createServer((client) => {
-    const upstream = net.connect(port, target);
-    client.on("error", () => upstream.destroy());
-    upstream.on("error", () => client.destroy());
-    client.pipe(upstream);
-    upstream.pipe(client);
-  }).listen(port, "0.0.0.0");
-}
-`;
-
-/** 每 Job 一个 relay 容器：bridge 发布 daemon 端口 + internal 转发到 Worker 容器名 */
-async function startRestrictedRelay(jobId: string, image: string): Promise<{ name: string; hostPorts: Map<number, number> }> {
-  const suffix = jobId.slice(0, 8);
-  const name = `deepsonar-relay-${suffix}`;
-  const workerHost = `deepsonar-${suffix}`; // provision 的 provider.name 约定
-  await docker("rm", "-f", name).catch(() => {});
-  const publishArgs = AGENT_DAEMON_PORTS.flatMap((p) => ["-p", `127.0.0.1::${p}`]);
-  await docker(
-    "run", "-d", "--name", name,
-    "--network", "bridge", ...publishArgs,
-    "--label", "deepsonar.managed=true", "--label", `deepsonar.job=${jobId}`,
-    "-e", `DEEPSONAR_RELAY_TARGET=${workerHost}`,
-    "-e", `DEEPSONAR_RELAY_PORTS=${AGENT_DAEMON_PORTS.join(",")}`,
-    "--entrypoint", "node", image, "-e", RESTRICTED_RELAY_SCRIPT,
-  );
-  await docker("network", "connect", RESTRICTED_NETWORK, name);
-  const hostPorts = new Map<number, number>();
-  for (const p of AGENT_DAEMON_PORTS) {
-    const out = await docker(
-      "inspect", "--format",
-      `{{(index (index .NetworkSettings.Ports "${p}/tcp") 0).HostPort}}`,
-      name,
-    );
-    hostPorts.set(p, Number(out));
-  }
-  return { name, hostPorts };
-}
 
 /**
  * Docker internal bridge 不做外网 NAT；模型请求由另一个固定目标 sidecar 转发。
@@ -269,13 +215,10 @@ function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"
 
 export class AgentboxRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
-    let relay: { name: string; hostPorts: Map<number, number> } | null = null;
     if (input.network === "restricted") {
       await ensureRestrictedNetwork();
       if (!input.gatewayUpstreamUrl) throw new Error("restricted Worker 缺少 Gateway 上游 URL");
       await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
-      // internal bridge 丢端口发布，宿主→沙箱 daemon 走 per-job relay（见 startRestrictedRelay）
-      relay = await startRestrictedRelay(input.jobId, input.image);
     }
     const sandbox = new Sandbox("local-docker", {
       image: input.image,
@@ -297,21 +240,8 @@ export class AgentboxRunner implements SandboxRunner {
       },
     });
     hardenCreateContainer(sandbox, input.limits);
-    try {
-      await sandbox.findOrProvision();
-    } catch (e) {
-      if (relay) await docker("rm", "-f", relay.name).catch(() => {});
-      throw e;
-    }
+    await sandbox.findOrProvision();
     const id = sandbox.id ?? `unknown-${input.jobId}`;
-    if (relay) {
-      // SDK 的 daemon 拨号走 getPreviewLink；受限网络下重定向到 relay 的宿主发布端口
-      const hostPorts = relay.hostPorts;
-      const original = sandbox.getPreviewLink.bind(sandbox);
-      sandbox.getPreviewLink = (port: number) =>
-        hostPorts.has(port) ? Promise.resolve(`http://127.0.0.1:${hostPorts.get(port)}`) : original(port);
-      relayContainers.set(id, relay.name);
-    }
     sandboxes.set(id, sandbox);
     return { sandboxId: id };
   }
@@ -322,10 +252,6 @@ export class AgentboxRunner implements SandboxRunner {
     await s?.delete().catch(() => {});
     // 兜底：内存注册表没有（进程重启后）或 SDK 删除失败，按持久化 sandboxId 强删
     await docker("rm", "-f", handle.sandboxId).catch(() => {});
-    // 受限网络的 per-job relay 一并回收（内存映射丢失时按标签兜底）
-    const relayName = relayContainers.get(handle.sandboxId);
-    relayContainers.delete(handle.sandboxId);
-    if (relayName) await docker("rm", "-f", relayName).catch(() => {});
   }
 
   async isAlive(handle: RunHandle): Promise<boolean> {
@@ -411,7 +337,7 @@ export interface RealAgentSpec {
   input: string;
   /** 平台不可变安全边界；与 /workspace 下的角色说明文件分层。 */
   systemPrompt?: string;
-  /** Agent 配置下发（agentbox setup 差量上传，内容来自冻结 RoleConfig） */
+  /** Agent 配置下发（claude CLI 本地组件文件，内容来自冻结 RoleConfig） */
   skills?: AgentSkillConfig[];
   commands?: AgentCommandConfig[];
   mcps?: AgentMcpConfig[];
@@ -420,11 +346,11 @@ export interface RealAgentSpec {
   workspaceFiles?: Record<string, string>;
   /** 运行后要读回的文件 */
   resultFiles?: string[];
-  /** 本地控制 MCP 的 NDJSON 队列；通过 SDK 控制通道增量读取，不属于 Agent 结果文件。 */
+  /** 本地控制 MCP 的 NDJSON 队列；宿主通过 exec 增量读取，不属于 Agent 结果文件。 */
   semanticEventFile?: string;
   /** 每条完整语义事件到达时串行调用。 */
   onSemanticEvent?: (event: Record<string, unknown>) => void | Promise<void>;
-  /** Run 建立后注册外部增量消息源；消息通过 Agent.attach(...).sendMessage(...) 注入同一会话。 */
+  /** Run 建立后注册外部增量消息源；消息经 stdin stream-json 注入同一会话。 */
   onRunReady?: (control: { sendMessage(content: string): Promise<void> }) =>
     void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
   /** 流式进度回调（已节流） */
@@ -454,9 +380,127 @@ async function readSandboxFileText(sandbox: Sandbox, filePath: string): Promise<
   return res.stdout;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+const RUNTIME_DIR = "/workspace/.deepsonar";
+const CLAUDE_DIR = "/workspace/.claude";
+
+/** claude CLI --mcp-config 格式（与 SDK buildClaudeMcpConfig 等价） */
+function buildMcpConfigJson(mcps: AgentMcpConfig[]): string {
+  const mcpServers = Object.fromEntries(
+    mcps.filter((m) => (m as { enabled?: boolean }).enabled !== false).map((m) => {
+      if (m.type === "remote") {
+        return [m.name, { type: "http", url: m.url, ...(m.headers ? { headers: m.headers } : {}) }];
+      }
+      return [
+        m.name,
+        {
+          type: "stdio",
+          command: m.command,
+          ...(m.args?.length ? { args: m.args } : {}),
+          ...(m.env ? { env: m.env } : {}),
+        },
+      ];
+    }),
+  );
+  return JSON.stringify({ mcpServers }, null, 2);
+}
+
+function yamlScalar(value: string): string {
+  return JSON.stringify(value);
+}
+
+/**
+ * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
+ * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
+ * embedded skills → .claude/skills/<name>/<files>；repo skills 需出网安装，尽力而为。
+ */
+async function materializeAgentFiles(sandbox: Sandbox, spec: RealAgentSpec): Promise<void> {
+  const writes: Array<[string, string]> = [];
+  for (const command of spec.commands ?? []) {
+    const frontmatter = command.description ? `---\ndescription: ${yamlScalar(command.description)}\n---\n\n` : "";
+    writes.push([`${CLAUDE_DIR}/commands/${command.name}.md`, frontmatter + command.template]);
+  }
+  for (const sub of spec.subAgents ?? []) {
+    const lines = [
+      `name: ${yamlScalar(sub.name)}`,
+      `description: ${yamlScalar(sub.description)}`,
+      ...(sub.model ? [`model: ${yamlScalar(sub.model)}`] : []),
+      ...(sub.tools?.length ? [`tools: ${sub.tools.join(", ")}`] : []),
+    ];
+    writes.push([`${CLAUDE_DIR}/agents/${sub.name}.md`, `---\n${lines.join("\n")}\n---\n\n${sub.instructions.trim()}\n`]);
+  }
+  for (const skill of spec.skills ?? []) {
+    if (!("files" in skill)) continue; // repo skill 走下方安装命令
+    for (const [rel, content] of Object.entries(skill.files)) {
+      writes.push([`${CLAUDE_DIR}/skills/${skill.name}/${rel}`, content]);
+    }
+  }
+  for (const [filePath, content] of writes) {
+    const dir = path.posix.dirname(filePath);
+    await sandbox.run(`mkdir -p -- ${shellQuote(dir)}`);
+    await sandbox.uploadFile(content, filePath);
+  }
+  // repo 形式 skill：需要出网，失败只告警不阻断
+  for (const skill of spec.skills ?? []) {
+    if ("files" in skill || !skill.repo) continue;
+    const res = await sandbox.run(
+      `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent claude -y`,
+      { timeoutMs: 120_000 },
+    ).catch(() => null);
+    if (!res || res.exitCode !== 0) console.warn(`[real-agent] repo skill 安装失败: ${skill.name}`);
+  }
+}
+
+/** claude stream-json 一行 → 规范化事件（保持 executor/前端既有形状） */
+function mapCliEvent(
+  line: Record<string, unknown>,
+  emit: (e: Record<string, unknown>) => void,
+): { finalText?: string; isError?: boolean; errorDetail?: string } {
+  const type = line.type as string;
+  if (type === "system" && line.subtype === "init") {
+    emit({ type: "run.started", sessionId: line.session_id });
+    return {};
+  }
+  if (type === "assistant") {
+    const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
+    for (const block of content as Record<string, unknown>[]) {
+      if (block.type === "text" && typeof block.text === "string" && block.text) {
+        emit({ type: "text.delta", delta: block.text });
+      } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+        emit({ type: "reasoning.delta", delta: block.thinking });
+      } else if (block.type === "tool_use") {
+        emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
+      }
+    }
+    return {};
+  }
+  if (type === "user") {
+    const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
+    for (const block of content as Record<string, unknown>[]) {
+      if (block.type === "tool_result") {
+        emit({ type: "tool.call.completed", callId: block.tool_use_id });
+      }
+    }
+    return {};
+  }
+  if (type === "result") {
+    const text = typeof line.result === "string" ? line.result : "";
+    const isError = line.is_error === true || (line.subtype as string) !== "success";
+    emit({ type: "run.completed", text: text || (line.subtype as string) });
+    return { finalText: text, isError, errorDetail: isError ? text || `claude result: ${String(line.subtype)}` : undefined };
+  }
+  return {};
+}
+
 export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
   const sandbox = AgentboxRunner.sandboxOf(handle);
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
+  if (spec.provider !== "claude-code") {
+    throw new Error(`CLI 驱动模式暂只支持 claude-code，收到: ${spec.provider}`);
+  }
 
   // 1. 从冻结快照生成本 Job 的完整 /workspace。目标内容不由 Scheduler 预下载，
   // Worker 根据 Hub prompt 与网络策略自行决定如何取材。
@@ -471,47 +515,37 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       throw new Error(`拒绝写入 workspace 之外的动态文件: ${filePath}`);
     }
     const dir = path.posix.dirname(normalized);
-    if (dir !== "/workspace") await sandbox.run(`mkdir -p -- ${JSON.stringify(dir)}`);
+    if (dir !== "/workspace") await sandbox.run(`mkdir -p -- ${shellQuote(dir)}`);
     await sandbox.uploadFile(content, normalized);
   }
 
-  // 2. 起 agent（server 进程模式，权限完全开放 §16）
-  // skills/commands/mcps/subAgents 随 setup() 差量上传进沙箱（动态下发，§8.1）
-  const agent = new Agent(spec.provider, {
-    sandbox,
-    cwd: "/workspace",
-    env: spec.env,
-    approvalMode: "auto",
-    ...(spec.skills?.length ? { skills: spec.skills } : {}),
-    ...(spec.commands?.length ? { commands: spec.commands } : {}),
-    ...(spec.mcps?.length ? { mcps: spec.mcps } : {}),
-    ...(spec.subAgents?.length ? { subAgents: spec.subAgents } : {}),
-  });
+  // 2. agentbox 只当沙箱用：直接驱动 claude CLI（stream-json），不走 SDK daemon/relay。
+  //    该路径已在容器内验证：--mcp-config 注册本地控制 MCP，权限模式完全开放（§16）。
+  await materializeAgentFiles(sandbox, spec);
+  const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;
+  await sandbox.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
+  let systemPromptPath: string | null = null;
+  if (spec.systemPrompt) {
+    systemPromptPath = `${RUNTIME_DIR}/system-prompt.txt`;
+    await sandbox.uploadFile(spec.systemPrompt, systemPromptPath);
+  }
 
-  // setup() 必须显式调用：上传 agent 配置 + 启动沙箱内 relay/server
-  // （缺了会在 stream 时报 daemon-token missing）；幂等，重复调用 ≈ 一次探活
-  await agent.setup();
+  let command =
+    `claude -p --input-format stream-json --output-format stream-json --verbose` +
+    ` --mcp-config ${shellQuote(mcpConfigPath)} --permission-mode bypassPermissions`;
+  if (spec.model) command += ` --model ${shellQuote(spec.model)}`;
+  if (spec.reasoning) command += ` --effort ${shellQuote(spec.reasoning)}`;
+  if (systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(systemPromptPath)})"`;
 
-  const run = agent.stream({
-    input: spec.input,
-    model: spec.model,
-    ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
-    ...(spec.reasoning ? { reasoning: spec.reasoning } : {}),
-  });
-  const disposeMessageSource = await spec.onRunReady?.({
-    sendMessage: async (content) => {
-      const sessionId = await run.sessionIdReady;
-      const attached = await Agent.attach({
-        provider: spec.provider,
-        sandbox,
-        runId: run.id,
-        sessionId,
-      });
-      await attached.sendMessage(content);
-    },
-  });
+  const exec = await sandbox.runAsync(command, { cwd: "/workspace", env: spec.env });
+  const writeUserMessage = async (content: string) => {
+    if (!exec.write) throw new Error("沙箱 exec 不支持 stdin 写入");
+    await exec.write(JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n");
+  };
+  await writeUserMessage(spec.input);
+  const disposeMessageSource = await spec.onRunReady?.({ sendMessage: writeUserMessage });
 
-  // 本地 MCP 只写沙箱内队列。宿主在 Agent 运行期间通过 agentbox 文件控制通道增量读取，
+  // 本地 MCP 只写沙箱内队列。宿主在 Agent 运行期间增量读取，
   // 因而 fact/finding/progress 可以实时入库，且与 Worker 的目标出网策略完全解耦。
   let pollSemanticEvents = Boolean(spec.semanticEventFile && spec.onSemanticEvent);
   let semanticLineCount = 0;
@@ -547,22 +581,53 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
-  let buffer = "";
-  let streamError: string | undefined;
+  let progressBuffer = "";
+  let stdoutBuffer = "";
+  let stderrTail = "";
+  let exitCode = 0;
+  let finalText = "";
+  let runError: string | undefined;
   try {
-    for await (const event of run) {
-      const e = event as { type?: string; delta?: string };
-      spec.onEvent?.(event as unknown as Record<string, unknown>);
-      if (e.type === "text.delta" && e.delta) buffer += e.delta;
-      const now = Date.now();
-      if (buffer.length > 0 && now - lastPush > 4000) {
-        lastPush = now;
-        spec.onProgress?.(buffer.slice(-200));
-        buffer = "";
+    for await (const chunk of exec) {
+      if (chunk.type === "stderr") {
+        stderrTail = (stderrTail + chunk.chunk).slice(-2000);
+        continue;
+      }
+      if (chunk.type === "exit") {
+        exitCode = chunk.exitCode ?? 0;
+        continue;
+      }
+      stdoutBuffer += chunk.chunk;
+      // stream-json 按行解析，未完成的行留给下一个 chunk
+      let idx: number;
+      while ((idx = stdoutBuffer.indexOf("\n")) >= 0) {
+        const line = stdoutBuffer.slice(0, idx).trim();
+        stdoutBuffer = stdoutBuffer.slice(idx + 1);
+        if (!line) continue;
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue; // CLI 的非 JSON 噪音行
+        }
+        const outcome = mapCliEvent(parsed, (e) => {
+          spec.onEvent?.(e);
+          if (e.type === "text.delta" && typeof e.delta === "string") {
+            progressBuffer += e.delta as string;
+          }
+        });
+        if (outcome.finalText !== undefined) finalText = outcome.finalText;
+        if (outcome.isError) runError = outcome.errorDetail ?? "claude 执行失败";
+        const now = Date.now();
+        if (progressBuffer.length > 0 && now - lastPush > 4000) {
+          lastPush = now;
+          spec.onProgress?.(progressBuffer.slice(-200));
+          progressBuffer = "";
+        }
       }
     }
   } catch (e) {
-    streamError = e instanceof Error ? e.message : String(e);
+    if (!runError) runError = e instanceof Error ? e.message : String(e);
   } finally {
     pollSemanticEvents = false;
     await semanticPoller;
@@ -570,12 +635,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
 
-  const result = streamError || semanticError
-    ? { text: "", error: streamError ?? `语义事件处理失败: ${semanticError}` }
-    : await run.finished.catch((e: unknown) => ({
-        text: "",
-        error: e instanceof Error ? e.message : String(e),
-      }));
+  if (!runError && exitCode !== 0) {
+    runError = `claude CLI 退出码 ${exitCode}${stderrTail.trim() ? `: ${stderrTail.trim().slice(-300)}` : ""}`;
+  }
 
   // 4. 读回结果文件
   const files: Record<string, string> = {};
@@ -592,12 +654,16 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const cleanupPaths = [...(spec.resultFiles ?? []), ...(spec.semanticEventFile ? [spec.semanticEventFile] : [])]
     .filter((p) => p.startsWith("/workspace/"));
   if (cleanupPaths.length > 0) {
-    await sandbox.run(`rm -f -- ${cleanupPaths.map((p) => JSON.stringify(p)).join(" ")}`).catch(() => {});
+    await sandbox.run(`rm -f -- ${cleanupPaths.map((p) => shellQuote(p)).join(" ")}`).catch(() => {});
   }
 
   return {
-    text: (result as { text?: string }).text ?? "",
+    text: finalText,
     files,
-    error: (result as { error?: string }).error,
+    ...(semanticError
+      ? { error: `语义事件处理失败: ${semanticError}` }
+      : runError
+        ? { error: runError }
+        : {}),
   };
 }
