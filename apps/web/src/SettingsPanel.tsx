@@ -645,7 +645,7 @@ export function SettingsPanel({
                 >
                   <FloppyDisk size={13} /> {roleForm.id ? "保存" : "创建"}
                 </button>
-                {roleForm.id && !roleForm.builtin && roleForm.kind === "role" && (
+                {roleForm.id && roleForm.kind === "role" && (
                   <button
                     onClick={async () => {
                       await api.deleteRole(roleForm.id!).catch((e) => flash(`删除失败：${e instanceof Error ? e.message : e}`));

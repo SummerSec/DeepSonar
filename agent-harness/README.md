@@ -38,3 +38,18 @@ MCP 只写本地控制队列，调度器通过 agentbox 控制通道增量读取
 
 本地 MCP 协议冒烟：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts`。
 画布增量消息冒烟（需本地 PostgreSQL）：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-canvas-updates.ts`。
+
+## CI P0 门禁（`.github/workflows/ci.yml`）
+
+在 `AGENT_MODE=fake` 下串跑：
+
+| 脚本 | 覆盖 |
+|---|---|
+| `test-control-mcp.ts` | 控制 MCP 协议 + 工具说明 |
+| `test-roles-api.py` | 角色注册表 / RoleConfig |
+| `test-hub-loop.py` | Hub→Audit→Finding→Verify→complete |
+| `test-local-project-api.py` | 项目/任务/事件/重试/归档 |
+| `test-auth-api.py` | API Token 鉴权（独立 3101 + `DEEPSONAR_AUTH_REQUIRED`） |
+
+环境变量：`DEEPSONAR_BASE`（默认 `http://127.0.0.1:3100`）、`DEEPSONAR_ADMIN_TOKEN`、`DEEPSONAR_HUB_SMOKE_TIMEOUT`。
+本地快捷：`pnpm ci:smoke:mcp` / `ci:smoke:roles` / `ci:smoke:hub` / `ci:smoke:projects` / `ci:smoke:auth`。

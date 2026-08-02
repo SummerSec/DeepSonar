@@ -1,6 +1,9 @@
 name: ci
 
-# QA 门禁（§14）+ 生产制品构建验证（§12.1：dist 产物可启动、迁移可应用）
+# P0 门禁：typecheck + build + dist 启动 + fake 模式业务冒烟
+# - control MCP 协议（无服务）
+# - roles / hub-loop / local-project API
+# - auth（独立 3101 进程，AUTH_REQUIRED=true）
 on:
   push:
     branches: [main, "feat/**"]
@@ -8,10 +11,14 @@ on:
 
 env:
   DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/deepsonar
+  DEEPSONAR_BASE: http://127.0.0.1:3100
+  AGENT_MODE: fake
+  DEEPSONAR_HUB_ENABLED: "false"
 
 jobs:
   gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:16-alpine
@@ -33,22 +40,75 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm -r typecheck
 
       - run: pnpm -r build
 
-      # 生产制品冒烟：node dist 启动（非 tsx）+ 迁移自动应用 + /health 可达
-      - name: dist boot smoke
+      - name: Control MCP protocol smoke
+        run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts
+
+      - name: Start scheduler (fake, no auth)
         env:
           AGENT_MODE: fake
           SCHEDULER_PORT: "3100"
+          SCHEDULER_HOST: "127.0.0.1"
           DEEPSONAR_HUB_ENABLED: "false"
         run: |
-          node apps/scheduler/dist/index.js &
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:3100/health && break
+          node apps/scheduler/dist/index.js > /tmp/scheduler-3100.log 2>&1 &
+          echo $! > /tmp/scheduler-3100.pid
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3100/health && exit 0
             sleep 1
           done
-          curl -sf http://127.0.0.1:3100/health
+          echo "scheduler failed to become healthy" >&2
+          cat /tmp/scheduler-3100.log >&2
+          exit 1
+
+      - name: Roles API smoke
+        run: python agent-harness/test-roles-api.py
+
+      - name: Hub loop smoke
+        env:
+          DEEPSONAR_HUB_SMOKE_TIMEOUT: "300"
+        run: python agent-harness/test-hub-loop.py
+
+      - name: Local project / task API smoke
+        run: python agent-harness/test-local-project-api.py
+
+      - name: Start scheduler (auth required)
+        env:
+          AGENT_MODE: fake
+          SCHEDULER_PORT: "3101"
+          SCHEDULER_HOST: "127.0.0.1"
+          DEEPSONAR_AUTH_REQUIRED: "true"
+          DEEPSONAR_ADMIN_TOKEN: boot-secret
+          DEEPSONAR_HUB_ENABLED: "false"
+        run: |
+          node apps/scheduler/dist/index.js > /tmp/scheduler-3101.log 2>&1 &
+          echo $! > /tmp/scheduler-3101.pid
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3101/health && exit 0
+            sleep 1
+          done
+          echo "auth scheduler failed to become healthy" >&2
+          cat /tmp/scheduler-3101.log >&2
+          exit 1
+
+      - name: Auth API smoke
+        env:
+          DEEPSONAR_BASE: http://127.0.0.1:3101
+          DEEPSONAR_ADMIN_TOKEN: boot-secret
+        run: python agent-harness/test-auth-api.py
+
+      - name: Dump scheduler logs on failure
+        if: failure()
+        run: |
+          echo "===== scheduler :3100 ====="
+          cat /tmp/scheduler-3100.log 2>/dev/null || true
+          echo "===== scheduler :3101 ====="
+          cat /tmp/scheduler-3101.log 2>/dev/null || true

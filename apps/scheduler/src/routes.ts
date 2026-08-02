@@ -763,13 +763,19 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.delete("/agent-roles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [row] = await sql`DELETE FROM agent_roles WHERE id = ${id} AND NOT builtin RETURNING id, name`;
-    if (!row) return reply.code(409).send({ error: "内置角色不可删除或角色不存在" });
+    const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${id}`;
+    if (!role) return reply.code(404).send({ error: "role not found" });
+    if (role.kind !== "role") {
+      return reply.code(409).send({ error: "系统角色与 Hub 中枢不可删除，只能修改职责和运行配置" });
+    }
+    const [row] = await sql`
+      DELETE FROM agent_roles WHERE id = ${id} AND kind = 'role' RETURNING id, name`;
+    if (!row) return reply.code(409).send({ error: "角色状态已变化，请刷新后重试" });
     await audit(req, {
       action: "role.delete",
       resourceType: "agent_role",
       resourceId: id,
-      before: { name: row.name },
+      before: { name: row.name, kind: role.kind },
     });
     return { ok: true };
   });

@@ -85,7 +85,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /agent-roles | agents:read | 全部角色及 Hub 可见职责描述 |
 | POST | /agent-roles | agents:write | `{name, title?, description?}`；name 即 job.type |
 | PATCH | /agent-roles/:id | agents:write | 部分更新（name 不可改） |
-| DELETE | /agent-roles/:id | agents:write | 内置角色 409 |
+| DELETE | /agent-roles/:id | agents:write | `kind=role` 均可删除；system/hub 返回 409 |
 | GET | /projects/:id/roles | agents:read | 项目视角启用状态 |
 
 ### RoleConfig（角色 → agent 配置；声明式全量替换）

@@ -12,6 +12,7 @@ import { mintJobToken } from "./gateway.js";
 import { publishStream } from "./stream-bus.js";
 import { CONTROL_EVENT_FILE, CONTROL_MCP_NAME, CONTROL_MCP_SERVER } from "./control-mcp.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
+import { platformToolGuide } from "./platform-tools.js";
 
 /**
  * 真实 Agent 执行器（ARCHITECTURE §8）
@@ -80,6 +81,7 @@ function instructionDocument(input: {
   customInstructions?: string | null;
   allowEgress: boolean;
   contract: string;
+  toolGuide: string;
 }): string {
   const custom = input.customInstructions?.trim();
   return `# DeepSonar Worker
@@ -125,7 +127,9 @@ ${input.allowEgress ? "本任务允许访问外部网络；只访问完成任务
 
 ${input.contract}
 
-emit_progress 可在任何阶段调用；缺少必要授权、凭据或必须执行高风险动作时调用 request_human。系统工具只提交提案和证据，真正的派生、记账与终态由调度器决定。不要依赖跨 Job 状态，每个 Worker 都是全新的独立沙箱。
+${input.toolGuide}
+
+系统工具只提交提案和证据，真正的派生、记账与终态由调度器决定。不要依赖跨 Job 状态，每个 Worker 都是全新的独立沙箱。
 ${custom ? `\n## 角色长期指令\n\n${custom}` : ""}
 `;
 }
@@ -155,6 +159,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     "request_human",
   ];
   const contract = resultContract(isHub, isRole, isVerify, isAudit);
+  const toolGuide = platformToolGuide(controlToolNames);
   const cliName = snapshot.agent_cli;
   const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
   const model = snapshot.model ?? undefined;
@@ -264,7 +269,7 @@ ${graph.yaml}`;
 ${workerPrompt}
 ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目标：${taskGoal}` : ""}`;
   }
-  initialInput += `\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。`;
+  initialInput += `\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
 
   const roleDescription = snapshot.role_description;
   const instructions = instructionDocument({
@@ -273,6 +278,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     customInstructions: snapshot.instructions_markdown,
     allowEgress,
     contract,
+    toolGuide,
   });
   const controlMcp = {
     name: CONTROL_MCP_NAME,
@@ -299,6 +305,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     subagents: { names: componentNames(snapshot.subagents), count: snapshot.subagents.length, sha256: jsonHash(snapshot.subagents) },
     provider_files: snapshot.config_files.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
     system_tools: controlToolNames,
+    system_tool_guide: toolGuide,
     system_mcp: { name: CONTROL_MCP_NAME, script_sha256: sha256(CONTROL_MCP_SERVER) },
     result_contract: contract,
     semantic_event_transport: "local_mcp_over_agentbox_control_channel",

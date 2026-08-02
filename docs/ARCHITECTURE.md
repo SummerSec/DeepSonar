@@ -403,7 +403,7 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 - Hub 可下发工作角色输入 = 整图 YAML + 当前意图；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
-- **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 每次从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不维护代码侧固定角色枚举。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单。其中 `audit` 产出 Finding，其余工作角色产出 Fact
+- **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 每次从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不维护代码侧固定角色枚举。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；所有 `kind='role'` 条目（包括内置模板）都可删除或新增。`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单且不可删除，但职责描述和 RoleConfig 均可修改。其中 `audit` 产出 Finding，其余工作角色产出 Fact
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
 

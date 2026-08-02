@@ -257,7 +257,7 @@ const OPS: Op[] = [
     },
   },
   { method: "patch", path: "/agent-roles/{id}", summary: "更新角色（name 不可改）", scope: "agents:write", tags: ["Roles"] },
-  { method: "delete", path: "/agent-roles/{id}", summary: "删除角色（内置 409）", scope: "agents:write", tags: ["Roles"] },
+  { method: "delete", path: "/agent-roles/{id}", summary: "删除 Hub 可下发角色（系统/Hub 角色 409）", scope: "agents:write", tags: ["Roles"] },
   { method: "get", path: "/projects/{id}/roles", summary: "项目视角角色启用清单", scope: "agents:read", tags: ["Roles"] },
 
   // role-configs

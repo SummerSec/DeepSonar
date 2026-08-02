@@ -3,11 +3,14 @@
 覆盖：本地项目 CRUD/归档、任务创建（画布+root+pending job）、优先级、重试、Plane 绑定/解绑
 """
 import json
+import os
+import sys
 import time
+import urllib.error
 import urllib.request
 import uuid
 
-BASE = "http://localhost:3100"
+BASE = os.environ.get("DEEPSONAR_BASE", "http://127.0.0.1:3100").rstrip("/")
 
 
 def req(method, path, body=None, expect=200):
@@ -15,10 +18,12 @@ def req(method, path, body=None, expect=200):
     headers = {"content-type": "application/json"} if data is not None else {}
     r = urllib.request.Request(BASE + path, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(r) as resp:
+        with urllib.request.urlopen(r, timeout=30) as resp:
             code, payload = resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         code, payload = e.code, json.loads(e.read().decode("utf-8") or "{}")
+    if expect is None:
+        return code, payload
     assert code == expect, f"{method} {path} -> {code}（期望 {expect}）: {payload}"
     return payload
 
@@ -181,4 +186,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("FAIL:", e, file=sys.stderr)
+        sys.exit(1)

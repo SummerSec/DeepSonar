@@ -1,73 +1,115 @@
-"""Phase① hub 最小循环 E2E（fake 模式）：
-1. 项目开启 rules.hubEnabled
-2. POST /jobs 造一个审计任务
-3. 轮询画布，期待：audit done → hub → intent → explore → fact → hub → complete(root succeeded)
+# -*- coding: utf-8 -*-
+"""Hub 最小循环 E2E（fake 模式，自举项目，可 CI）。
+
+路径：task → hub_reason → audit → finding → verify(confirmed) → hub → test → fact → hub complete
 """
-import json, time, urllib.request
+from __future__ import annotations
 
-BASE = "http://localhost:3100"
-PROJECT = "e93a57a1-fe76-4c08-820a-6c9735b83c3d"
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
 
-def req(method, path, body=None):
+BASE = os.environ.get("DEEPSONAR_BASE", "http://127.0.0.1:3100").rstrip("/")
+TIMEOUT_SEC = int(os.environ.get("DEEPSONAR_HUB_SMOKE_TIMEOUT", "300"))
+
+
+def req(method: str, path: str, body=None, expect: int | None = 200):
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    r = urllib.request.Request(BASE + path, data=data, method=method)
-    if data is not None:
-        r.add_header("content-type", "application/json")
-    with urllib.request.urlopen(r, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    headers = {"content-type": "application/json"} if data is not None else {}
+    r = urllib.request.Request(BASE + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            code, payload = resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        code = e.code
+        try:
+            payload = json.loads(e.read().decode("utf-8") or "{}")
+        except Exception:
+            payload = {}
+        if expect is None:
+            return code, payload
+        raise AssertionError(f"{method} {path} -> {code}: {payload}") from None
+    if expect is not None and code != expect:
+        raise AssertionError(f"{method} {path} -> {code}（期望 {expect}）: {payload}")
+    return payload
 
-# 1. 开启 hub（per-project rules 覆盖）
-settings = req("PATCH", f"/projects/{PROJECT}/settings", {"rules": {"hubEnabled": True}})
-print("effective_rules:", json.dumps(settings.get("effective_rules", {}), ensure_ascii=False))
 
-# 2. 造任务（带 goal 的 target）
-job = req("POST", "/jobs", {
-    "project_id": PROJECT,
-    "type": "audit_module",
-    "title": "hub循环演示：demo-repo 审计",
-    "payload": {"module_path": "src", "goal": "找出 demo-repo 中的可利用漏洞并确认"},
-})
-job_id = job.get("id") or job.get("job", {}).get("id")
-print("job:", json.dumps(job, ensure_ascii=False)[:300])
+def main() -> None:
+    tag = uuid.uuid4().hex[:6]
+    project = req("POST", "/projects", {"name": f"hub-ci-{tag}"}, 201)
+    pid = project["id"]
+    print("project:", pid)
 
-# 找到 canvas_id
-canvas_id = job.get("canvas_id")
-if not canvas_id:
-    jobs = req("GET", f"/jobs?project_id={PROJECT}")
-    for j in jobs:
-        if j["id"] == job_id:
-            canvas_id = j.get("canvas_id")
-print("canvas_id:", canvas_id)
+    # 开启 hub（加速 graph_progress 收敛；confirmed 路径本身 force）
+    settings = req("PATCH", f"/projects/{pid}/settings", {"rules": {"hubEnabled": True}})
+    print("effective_rules:", json.dumps(settings.get("effective_rules", {}), ensure_ascii=False))
 
-# 3. 轮询画布直至 root succeeded（或超时）
-deadline = time.time() + 120
-seen_types = []
-while time.time() < deadline:
-    data = req("GET", f"/canvases/{canvas_id}")
-    nodes = data["nodes"]
-    edges = data["edges"]
-    types = [(n["node_type"], n["status"]) for n in nodes]
-    root = next((n for n in nodes if n["node_type"] == "root"), None)
-    summary = {}
-    for t, s in types:
-        summary[f"{t}:{s}"] = summary.get(f"{t}:{s}", 0) + 1
-    print(f"[{int(deadline - time.time())}s 剩] nodes={summary} edges={[e['edge_type'] for e in edges]}")
-    if root and root["status"] == "succeeded":
-        print("== hub 循环收敛：root succeeded ==")
-        print("conclusion:", (root["body_json"] or {}).get("conclusion"))
+    task = req(
+        "POST",
+        f"/projects/{pid}/tasks",
+        {
+            "title": f"hub循环演示-{tag}",
+            "content": "找出可利用漏洞并确认（CI fake 路径）",
+        },
+        201,
+    )
+    cid = task["canvas_id"]
+    job = task["job"]
+    assert job["type"] == "hub_reason", job
+    print("canvas:", cid[:8], "entry_job:", job["id"][:8])
+
+    deadline = time.time() + TIMEOUT_SEC
+    root_succeeded = False
+    while time.time() < deadline:
+        data = req("GET", f"/canvases/{cid}")
+        nodes, edges = data["nodes"], data["edges"]
+        root = next((n for n in nodes if n["node_type"] == "root"), None)
+        summary: dict[str, int] = {}
         for n in nodes:
-            print(f"  {n['node_type']:8s} {n['status']:10s} {n['title'][:60]}")
-        for e in edges:
-            print(f"  edge {e['edge_type']}: {e['from_node_id'][:8]} -> {e['to_node_id'][:8]}")
-        break
-    time.sleep(4)
-else:
-    print("!! 超时未收敛")
-    jobs = req("GET", f"/jobs?project_id={PROJECT}")
-    for j in jobs:
-        if j.get("canvas_id") == canvas_id:
-            print(f"  job {j['type']:14s} {j['status']:12s} {str(j.get('error'))[:80]}")
+            key = f"{n['node_type']}:{n['status']}"
+            summary[key] = summary.get(key, 0) + 1
+        print(f"[{int(deadline - time.time())}s] nodes={summary} edges={[e['edge_type'] for e in edges]}")
+        if root and root["status"] == "succeeded":
+            root_succeeded = True
+            print("== hub 循环收敛：root succeeded ==")
+            print("conclusion:", (root.get("body_json") or {}).get("conclusion"))
+            break
+        time.sleep(2)
 
-# 收尾：关掉 hub（避免影响后续测试）
-req("PATCH", f"/projects/{PROJECT}/settings", {"rules": {"hubEnabled": False}})
-print("hubEnabled 已还原为 false")
+    if not root_succeeded:
+        jobs = req("GET", f"/jobs?project_id={pid}")
+        for j in jobs:
+            if j.get("canvas_id") == cid:
+                print(f"  job {j['type']:14s} {j['status']:12s} {str(j.get('error'))[:80]}")
+        raise AssertionError(f"hub 循环 {TIMEOUT_SEC}s 内未收敛")
+
+    # 边断言：至少形成 Hub→Audit→Finding→Verify 链
+    data = req("GET", f"/canvases/{cid}")
+    nodes, edges = data["nodes"], data["edges"]
+    hubs = [n for n in nodes if n["node_type"] == "job" and (n.get("body_json") or {}).get("type") == "hub_reason"]
+    audits = [n for n in nodes if n["node_type"] == "intent" and (n.get("body_json") or {}).get("role") == "audit"]
+    findings = [n for n in nodes if n["node_type"] == "finding"]
+    verifies = [n for n in nodes if n["node_type"] == "job" and (n.get("body_json") or {}).get("type") == "verify_finding"]
+    assert hubs, "缺少 hub 节点"
+    assert audits, "缺少 audit intent"
+    assert findings, "缺少 finding"
+    assert verifies, "缺少 verify job"
+    pairs = {(e["from_node_id"], e["to_node_id"], e["edge_type"]) for e in edges}
+    assert any((a["id"], f["id"], "produces") in pairs for a in audits for f in findings), "缺少 produces 边"
+    assert any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies), "缺少 verifies 边"
+    print("链 OK: Hub → Audit → Finding → Verify → … → complete")
+
+    req("POST", f"/projects/{pid}/archive", None)
+    print("OK")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print("FAIL:", e, file=sys.stderr)
+        sys.exit(1)
