@@ -19,8 +19,14 @@ import {
   CONFIG_FILE_MAX_COUNT,
   CONFIG_FILE_MAX_TOTAL,
   createJob,
+  drainNonGateVerifies,
   ensureCanvasForTask,
   globalRules,
+  maybeTriggerHub,
+  parseCanvasConvergence,
+  patchCanvasConvergence,
+  readCanvasConvergence,
+  resolveHubWaitSeverities,
   rolesForProject,
   rulesForProject,
   scanConfigContent,
@@ -924,7 +930,161 @@ export function registerRoutes(app: FastifyInstance) {
         SELECT id, from_node_id, to_node_id, edge_type
         FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
     ]);
-    return { canvas, canvas_id: id, nodes, edges };
+    return {
+      canvas,
+      canvas_id: id,
+      nodes,
+      edges,
+      convergence: parseCanvasConvergence(canvas.target_json),
+    };
+  });
+
+  // ---------- 画布收敛控制（暂停/恢复决策、门控停、清理低优先级 verify） ----------
+  app.get("/canvases/:id/convergence", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT id, project_id, target_json FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const rules = await rulesForProject(sql, canvas.project_id as string);
+    return {
+      canvas_id: id,
+      convergence: parseCanvasConvergence(canvas.target_json),
+      hubWaitSeverities: resolveHubWaitSeverities(rules),
+      confirmedHubMode: rules.confirmedHubMode,
+      autoStopMode: rules.autoStopMode,
+      autoVerifySeverities: rules.autoVerifySeverities,
+    };
+  });
+
+  app.post("/canvases/:id/convergence/pause", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ reason: z.string().optional() }).parse(req.body ?? {});
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const convergence = await patchCanvasConvergence(sql, id, {
+      hub_paused: true,
+      paused_reason: body.reason ?? "manual_pause",
+      paused_at: new Date().toISOString(),
+    });
+    await audit(req, {
+      action: "canvas.convergence_pause",
+      resourceType: "canvas",
+      resourceId: id,
+      projectId: canvas.project_id as string,
+      after: convergence,
+    });
+    return { canvas_id: id, convergence };
+  });
+
+  app.post("/canvases/:id/convergence/resume", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ force_hub: z.boolean().optional() }).parse(req.body ?? {});
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const convergence = await patchCanvasConvergence(sql, id, {
+      hub_paused: false,
+      auto_stopped: false,
+      paused_reason: undefined,
+      paused_at: undefined,
+    });
+    let hubTriggered = false;
+    if (body.force_hub) {
+      await sql.begin(async (tx) => {
+        await maybeTriggerHub(
+          tx as unknown as typeof sql,
+          {
+            id: null,
+            project_id: canvas.project_id,
+            canvas_id: id,
+            type: "manual",
+            priority: 0,
+          },
+          { manual: true, force: true, trigger: { kind: "manual_resume" } },
+        );
+      });
+      hubTriggered = true;
+    }
+    await audit(req, {
+      action: "canvas.convergence_resume",
+      resourceType: "canvas",
+      resourceId: id,
+      projectId: canvas.project_id as string,
+      after: { ...convergence, force_hub: body.force_hub ?? false },
+    });
+    return { canvas_id: id, convergence, hub_triggered: hubTriggered };
+  });
+
+  app.post("/canvases/:id/convergence/stop-after-gate", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    // 画布级：打开 pause 标记说明「门控后由 autoStop 接管」；同时写 reason
+    const convergence = await patchCanvasConvergence(sql, id, {
+      hub_paused: false,
+      auto_stopped: false,
+      paused_reason: "stop_after_gate",
+      paused_at: new Date().toISOString(),
+    });
+    // 项目规则写入 after_wait_gate（若项目尚未覆盖则写项目 rules）
+    const [p] = await sql`SELECT config_json FROM projects WHERE id = ${canvas.project_id as string}`;
+    const cfg = { ...((p?.config_json ?? {}) as Record<string, unknown>) };
+    const rules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
+    rules.autoStopMode = "after_wait_gate";
+    if (!rules.hubWaitSeverities) rules.hubWaitSeverities = ["critical", "high"];
+    if (!rules.confirmedHubMode) rules.confirmedHubMode = "gated";
+    cfg.rules = rules;
+    await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${canvas.project_id as string}`;
+    await audit(req, {
+      action: "canvas.convergence_stop_after_gate",
+      resourceType: "canvas",
+      resourceId: id,
+      projectId: canvas.project_id as string,
+      after: { convergence, rules: { autoStopMode: "after_wait_gate" } },
+    });
+    return { canvas_id: id, convergence, project_rules: rules };
+  });
+
+  app.post("/canvases/:id/convergence/drain-priority", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const rules = await rulesForProject(sql, canvas.project_id as string);
+    const wait = resolveHubWaitSeverities(rules);
+    const result = await drainNonGateVerifies(sql, id, wait);
+    await audit(req, {
+      action: "canvas.convergence_drain_priority",
+      resourceType: "canvas",
+      resourceId: id,
+      projectId: canvas.project_id as string,
+      after: { ...result, hubWaitSeverities: wait },
+    });
+    return { canvas_id: id, hubWaitSeverities: wait, ...result };
+  });
+
+  app.post("/canvases/:id/convergence/run-hub-now", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    await sql.begin(async (tx) => {
+      await maybeTriggerHub(
+        tx as unknown as typeof sql,
+        {
+          id: null,
+          project_id: canvas.project_id,
+          canvas_id: id,
+          type: "manual",
+          priority: 0,
+        },
+        { manual: true, force: true, trigger: { kind: "manual_run_hub_now" } },
+      );
+    });
+    await audit(req, {
+      action: "canvas.convergence_run_hub_now",
+      resourceType: "canvas",
+      resourceId: id,
+      projectId: canvas.project_id as string,
+    });
+    const convergence = await readCanvasConvergence(sql, id);
+    return { canvas_id: id, ok: true, convergence };
   });
 
   // ---------- 画布（§7 GET /projects/{id}/canvas；§6.4 列表不含大字段） ----------

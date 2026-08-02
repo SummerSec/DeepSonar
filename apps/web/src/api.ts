@@ -43,6 +43,7 @@ export interface CanvasData {
   canvas_id: string;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
+  convergence?: CanvasConvergence;
 }
 
 /** 任务画布列表项（一任务一画布；聚合最近一次 job 得任务状态） */
@@ -167,6 +168,23 @@ export interface EffectiveRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** claim 时按 severity 抬升 verify 优先级 */
+  verifySeverityPriority: boolean;
+  /** confirmed 后 Hub：immediate | gated | batch | off */
+  confirmedHubMode: "immediate" | "gated" | "batch" | "off";
+  /** 阻塞 Hub 的 verify severity 门控 */
+  hubWaitSeverities: string[];
+  /** 门控/全量 verify 终态后是否自动停自驱 */
+  autoStopMode: "never" | "after_wait_gate" | "after_all_auto_verify";
+  confirmedHubBatchSec: number;
+}
+
+export interface CanvasConvergence {
+  hub_paused: boolean;
+  paused_reason?: string;
+  paused_at?: string;
+  auto_stopped: boolean;
+  pending_confirmed_ids?: string[];
 }
 
 export interface ProjectSettings {
@@ -441,6 +459,42 @@ export const api = {
     ),
   canvases: (projectId: string) => get<CanvasSummary[]>(`/projects/${projectId}/canvases`),
   canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
+  canvasConvergence: (canvasId: string) =>
+    get<{
+      canvas_id: string;
+      convergence: CanvasConvergence;
+      hubWaitSeverities: string[];
+      confirmedHubMode: string;
+      autoStopMode: string;
+      autoVerifySeverities: string[];
+    }>(`/canvases/${canvasId}/convergence`),
+  pauseCanvasDecision: (canvasId: string, reason?: string) =>
+    send<{ canvas_id: string; convergence: CanvasConvergence }>(
+      "POST",
+      `/canvases/${canvasId}/convergence/pause`,
+      { reason },
+    ),
+  resumeCanvasDecision: (canvasId: string, force_hub?: boolean) =>
+    send<{ canvas_id: string; convergence: CanvasConvergence; hub_triggered: boolean }>(
+      "POST",
+      `/canvases/${canvasId}/convergence/resume`,
+      { force_hub },
+    ),
+  stopCanvasAfterGate: (canvasId: string) =>
+    send<{ canvas_id: string; convergence: CanvasConvergence }>(
+      "POST",
+      `/canvases/${canvasId}/convergence/stop-after-gate`,
+    ),
+  drainCanvasPriority: (canvasId: string) =>
+    send<{ canvas_id: string; cancelled: number; hubWaitSeverities: string[] }>(
+      "POST",
+      `/canvases/${canvasId}/convergence/drain-priority`,
+    ),
+  runCanvasHubNow: (canvasId: string) =>
+    send<{ canvas_id: string; ok: boolean; convergence: CanvasConvergence }>(
+      "POST",
+      `/canvases/${canvasId}/convergence/run-hub-now`,
+    ),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
   jobs: (opts?: { project_id?: string; status?: string }) =>
     get<JobSummary[]>(`/jobs${qs({ project_id: opts?.project_id, status: opts?.status })}`),

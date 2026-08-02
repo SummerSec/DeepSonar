@@ -165,6 +165,11 @@ export function SettingsPanel({
       maxHubRounds: rules.maxHubRounds,
       maxIntentsPerDecision: rules.maxIntentsPerDecision,
       allowEgress: rules.allowEgress,
+      verifySeverityPriority: rules.verifySeverityPriority,
+      confirmedHubMode: rules.confirmedHubMode,
+      hubWaitSeverities: rules.hubWaitSeverities,
+      autoStopMode: rules.autoStopMode,
+      confirmedHubBatchSec: rules.confirmedHubBatchSec,
     };
     try {
       if (projectId) {
@@ -243,7 +248,7 @@ export function SettingsPanel({
     }
   };
 
-  const numField = (key: keyof EffectiveRules, label: string) => (
+  const numField = (key: keyof EffectiveRules, label: string, help?: string) => (
     <div key={key}>
       <label className={labelCls}>{label}</label>
       <input
@@ -254,8 +259,18 @@ export function SettingsPanel({
         }
         className={inputCls}
       />
+      {help && <p className="mt-1.5 text-[11px] leading-5 text-zinc-600">{help}</p>}
     </div>
   );
+
+  const toggleSeverity = (field: "autoVerifySeverities" | "hubWaitSeverities", sev: string) => {
+    if (!rules) return;
+    const cur = new Set((rules[field] ?? []).map((s) => s.toLowerCase()));
+    if (cur.has(sev)) cur.delete(sev);
+    else cur.add(sev);
+    const order = ["critical", "high", "medium", "low", "info"];
+    setRules({ ...rules, [field]: order.filter((s) => cur.has(s)) });
+  };
 
   // ---------- 角色行（运行配置入口 + 配置来源徽标） ----------
 
@@ -507,12 +522,47 @@ export function SettingsPanel({
                 <span className="text-[14px] text-zinc-200">启用 hub 自驱循环（job 完成 → hub 读图决策 → 派发角色）</span>
               </label>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                {numField("maxHubRounds", "hub 轮次上限")}
+                {numField("maxHubRounds", "hub 轮次上限", "仅统计 succeeded 的 hub 决策轮次；失败/orphan 不计入预算。")}
                 {numField("maxIntentsPerDecision", "单次派发意图上限")}
+              </div>
+              <div className="mt-3">
+                <label className={labelCls}>confirmed 后 Hub 模式</label>
+                <select
+                  value={rules.confirmedHubMode ?? "gated"}
+                  onChange={(e) =>
+                    setRules({
+                      ...rules,
+                      confirmedHubMode: e.target.value as EffectiveRules["confirmedHubMode"],
+                    })
+                  }
+                  className={inputCls}
+                >
+                  <option value="gated">gated（等门控 severity 的 verify 跑完再 Hub，推荐）</option>
+                  <option value="immediate">immediate（每条 confirmed 立刻 force Hub，旧行为）</option>
+                  <option value="off">off（confirmed 不单独触发 Hub）</option>
+                  <option value="batch">batch（一期按 gated 处理）</option>
+                </select>
+              </div>
+              <div className="mt-3">
+                <label className={labelCls}>自驱停止策略</label>
+                <select
+                  value={rules.autoStopMode ?? "after_wait_gate"}
+                  onChange={(e) =>
+                    setRules({
+                      ...rules,
+                      autoStopMode: e.target.value as EffectiveRules["autoStopMode"],
+                    })
+                  }
+                  className={inputCls}
+                >
+                  <option value="after_wait_gate">门控 severity 验完且无活跃角色 job → 停自驱</option>
+                  <option value="after_all_auto_verify">全部 auto-verify severity 验完 → 停自驱</option>
+                  <option value="never">永不自动停（仅 maxHubRounds / 人工暂停）</option>
+                </select>
               </div>
               <div className="mt-1 text-[12px] text-zinc-600">
                 {projectId
-                  ? "hub 可下发哪些角色、各角色用什么运行配置 → 「角色配置」tab；未覆盖的规则继承全局默认值"
+                  ? "hub 可下发哪些角色、各角色用什么运行配置 → 「角色配置」tab；未覆盖的规则继承全局默认值。任务画布可随时「暂停决策」。"
                   : "全局默认值：项目规则未覆盖时生效（项目设置在项目页改）"}
               </div>
             </section>
@@ -522,20 +572,77 @@ export function SettingsPanel({
                 派生与重试规则
               </div>
               <div>
-                <label className={labelCls}>自动验证 severity（逗号分隔）</label>
-                <input
-                  value={rules.autoVerifySeverities.join(",")}
-                  onChange={(e) =>
-                    setRules({ ...rules, autoVerifySeverities: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })
-                  }
-                  className={inputCls}
-                />
+                <label className={labelCls}>自动验证 severity</label>
+                <div className="flex flex-wrap gap-2">
+                  {["critical", "high", "medium", "low", "info"].map((sev) => {
+                    const on = (rules.autoVerifySeverities ?? []).map((s) => s.toLowerCase()).includes(sev);
+                    return (
+                      <button
+                        key={sev}
+                        type="button"
+                        onClick={() => toggleSeverity("autoVerifySeverities", sev)}
+                        className={`rounded-full px-2.5 py-1 font-mono text-[11px] ring-1 transition-colors ${
+                          on
+                            ? "bg-acc-500/15 text-acc-300 ring-acc-400/30"
+                            : "bg-white/[.03] text-zinc-600 ring-white/[.06] hover:text-zinc-300"
+                        }`}
+                      >
+                        {sev}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] leading-5 text-zinc-600">
+                  仅勾选的 severity 会在 Finding 上报后自动派生 verify。默认 critical+high，避免 low/medium 打爆队列。
+                </p>
               </div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {numField("maxFollowupsPerJob", "每 job followup 上限")}
-                {numField("maxFollowupDepth", "followup 最大深度")}
+              <div className="mt-3">
+                <label className={labelCls}>Hub 等待门 severity</label>
+                <div className="flex flex-wrap gap-2">
+                  {["critical", "high", "medium", "low", "info"].map((sev) => {
+                    const on = (rules.hubWaitSeverities ?? []).map((s) => s.toLowerCase()).includes(sev);
+                    return (
+                      <button
+                        key={sev}
+                        type="button"
+                        onClick={() => toggleSeverity("hubWaitSeverities", sev)}
+                        className={`rounded-full px-2.5 py-1 font-mono text-[11px] ring-1 transition-colors ${
+                          on
+                            ? "bg-violet-400/15 text-violet-300 ring-violet-300/30"
+                            : "bg-white/[.03] text-zinc-600 ring-white/[.06] hover:text-zinc-300"
+                        }`}
+                      >
+                        {sev}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] leading-5 text-zinc-600">
+                  这些 severity 的 verify 未完成时，gated/普通路径不触发 Hub。例如只勾 critical+high 表示「高危验完即可放行」。
+                </p>
+              </div>
+              <label className="mt-3 flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={rules.verifySeverityPriority ?? true}
+                  onChange={(e) => setRules({ ...rules, verifySeverityPriority: e.target.checked })}
+                  className="accent-emerald-500"
+                />
+                <span className="text-[14px] text-zinc-200">verify 按 severity 优先调度（critical &gt; high &gt; …）</span>
+              </label>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {numField(
+                  "maxFollowupsPerJob",
+                  "每 job followup 上限",
+                  "单个父 job（如一次 audit）最多自动派生多少个子任务（当前主要是 verify）。超限转人工，防止单次审计打爆队列。",
+                )}
+                {numField(
+                  "maxFollowupDepth",
+                  "followup 最大深度",
+                  "派生链允许嵌套几层。深度 0 是直接下发的 job；它派生的 verify 为深度 1。到顶后不再自动派生。",
+                )}
                 {numField("maxAutoRetries", "失败自动重试上限")}
-                <div />
+                <div className="hidden sm:block" />
                 {numField("auditTimeoutSec", "审计超时（秒）")}
                 {numField("verifyTimeoutSec", "验证超时（秒）")}
               </div>

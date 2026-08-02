@@ -55,6 +55,11 @@ export function sha16(s: string): string {
 
 // ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
 
+/** confirmed 后如何触发 Hub（见 docs/TODO_VERIFY_PRIORITY_AND_CONVERGENCE_PLAN.md） */
+export type ConfirmedHubMode = "immediate" | "gated" | "batch" | "off";
+/** 自驱自动停止策略 */
+export type AutoStopMode = "never" | "after_wait_gate" | "after_all_auto_verify";
+
 export interface ProjectRules {
   autoVerifySeverities: string[];
   maxFollowupsPerJob: number;
@@ -68,6 +73,54 @@ export interface ProjectRules {
   maxIntentsPerDecision: number;
   /** Worker 是否可访问模型网关之外的网络；任务创建时可覆盖并冻结。 */
   allowEgress: boolean;
+  /** claim 时是否按 severity 抬升 verify job 优先级 */
+  verifySeverityPriority: boolean;
+  /** confirmed 后 Hub 触发模式 */
+  confirmedHubMode: ConfirmedHubMode;
+  /**
+   * Hub 等待门：这些 severity 的活跃 verify 会阻塞非 immediate Hub。
+   * 空数组时回落到 autoVerifySeverities。
+   */
+  hubWaitSeverities: string[];
+  /** 门控/全量 auto-verify 终态后是否停止自动 maybeTriggerHub */
+  autoStopMode: AutoStopMode;
+  /** batch 模式 debounce 秒数（Phase 3；当前 batch 按 gated 处理） */
+  confirmedHubBatchSec: number;
+}
+
+/** 画布收敛控制态（落在 canvases.target_json.convergence，免 schema 迁移） */
+export interface CanvasConvergence {
+  hub_paused: boolean;
+  paused_reason?: string;
+  paused_at?: string;
+  auto_stopped: boolean;
+  pending_confirmed_ids?: string[];
+}
+
+const CONFIRMED_HUB_MODES = new Set<ConfirmedHubMode>(["immediate", "gated", "batch", "off"]);
+const AUTO_STOP_MODES = new Set<AutoStopMode>(["never", "after_wait_gate", "after_all_auto_verify"]);
+
+const SEVERITY_PRIORITY_DELTA: Record<string, number> = {
+  critical: 40,
+  high: 30,
+  medium: 10,
+  low: 0,
+  info: -5,
+};
+
+function asStringArray(v: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(v)) return fallback;
+  return v.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+}
+
+function asConfirmedHubMode(v: unknown, fallback: ConfirmedHubMode): ConfirmedHubMode {
+  const s = String(v ?? "").trim().toLowerCase() as ConfirmedHubMode;
+  return CONFIRMED_HUB_MODES.has(s) ? s : fallback;
+}
+
+function asAutoStopMode(v: unknown, fallback: AutoStopMode): AutoStopMode {
+  const s = String(v ?? "").trim().toLowerCase() as AutoStopMode;
+  return AUTO_STOP_MODES.has(s) ? s : fallback;
 }
 
 /** env 兜底默认值（全局规则未配置时的最终回落） */
@@ -83,26 +136,50 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
+    verifySeverityPriority: true,
+    confirmedHubMode: "gated",
+    hubWaitSeverities: ["critical", "high"],
+    autoStopMode: "after_wait_gate",
+    confirmedHubBatchSec: 60,
   };
+}
+
+function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): ProjectRules {
+  return {
+    autoVerifySeverities: asStringArray(raw.autoVerifySeverities, base.autoVerifySeverities),
+    maxFollowupsPerJob: (raw.maxFollowupsPerJob as number) ?? base.maxFollowupsPerJob,
+    maxFollowupDepth: (raw.maxFollowupDepth as number) ?? base.maxFollowupDepth,
+    maxAutoRetries: (raw.maxAutoRetries as number) ?? base.maxAutoRetries,
+    auditTimeoutSec: (raw.auditTimeoutSec as number) ?? base.auditTimeoutSec,
+    verifyTimeoutSec: (raw.verifyTimeoutSec as number) ?? base.verifyTimeoutSec,
+    hubEnabled: (raw.hubEnabled as boolean) ?? base.hubEnabled,
+    maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
+    maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
+    allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
+    verifySeverityPriority: (raw.verifySeverityPriority as boolean) ?? base.verifySeverityPriority,
+    confirmedHubMode: asConfirmedHubMode(raw.confirmedHubMode, base.confirmedHubMode),
+    hubWaitSeverities: asStringArray(raw.hubWaitSeverities, base.hubWaitSeverities),
+    autoStopMode: asAutoStopMode(raw.autoStopMode, base.autoStopMode),
+    confirmedHubBatchSec: (raw.confirmedHubBatchSec as number) ?? base.confirmedHubBatchSec,
+  };
+}
+
+/** 解析 Hub 等待门 severity；未配置时回落 autoVerifySeverities */
+export function resolveHubWaitSeverities(rules: ProjectRules): string[] {
+  const wait = rules.hubWaitSeverities.map((s) => s.toLowerCase()).filter(Boolean);
+  if (wait.length > 0) return wait;
+  return rules.autoVerifySeverities.map((s) => s.toLowerCase()).filter(Boolean);
+}
+
+export function severityPriorityDelta(severity: string | null | undefined): number {
+  return SEVERITY_PRIORITY_DELTA[String(severity ?? "").toLowerCase()] ?? 0;
 }
 
 /** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */
 export async function globalRules(db: typeof sql): Promise<ProjectRules> {
   const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
   const gr = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
-  const env = envDefaultRules();
-  return {
-    autoVerifySeverities: (gr.autoVerifySeverities as string[]) ?? env.autoVerifySeverities,
-    maxFollowupsPerJob: (gr.maxFollowupsPerJob as number) ?? env.maxFollowupsPerJob,
-    maxFollowupDepth: (gr.maxFollowupDepth as number) ?? env.maxFollowupDepth,
-    maxAutoRetries: (gr.maxAutoRetries as number) ?? env.maxAutoRetries,
-    auditTimeoutSec: (gr.auditTimeoutSec as number) ?? env.auditTimeoutSec,
-    verifyTimeoutSec: (gr.verifyTimeoutSec as number) ?? env.verifyTimeoutSec,
-    hubEnabled: (gr.hubEnabled as boolean) ?? env.hubEnabled,
-    maxHubRounds: (gr.maxHubRounds as number) ?? env.maxHubRounds,
-    maxIntentsPerDecision: (gr.maxIntentsPerDecision as number) ?? env.maxIntentsPerDecision,
-    allowEgress: (gr.allowEgress as boolean) ?? env.allowEgress,
-  };
+  return mergeRulesLayer(gr, envDefaultRules());
 }
 
 /** 项目规则：项目 config_json.rules → 全局 global_settings → env 三级回落 */
@@ -113,21 +190,56 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
   ]);
   const r = (((p[0]?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
   const gr = ((g[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
-  const env = envDefaultRules();
-  const pick = <T,>(key: keyof ProjectRules): T =>
-    (r[key] as T) ?? (gr[key] as T) ?? (env[key] as T);
+  return mergeRulesLayer(r, mergeRulesLayer(gr, envDefaultRules()));
+}
+
+export function parseCanvasConvergence(targetJson: unknown): CanvasConvergence {
+  const tj = (targetJson ?? {}) as Record<string, unknown>;
+  const conv = (tj.convergence ?? {}) as Record<string, unknown>;
   return {
-    autoVerifySeverities: pick("autoVerifySeverities"),
-    maxFollowupsPerJob: pick("maxFollowupsPerJob"),
-    maxFollowupDepth: pick("maxFollowupDepth"),
-    maxAutoRetries: pick("maxAutoRetries"),
-    auditTimeoutSec: pick("auditTimeoutSec"),
-    verifyTimeoutSec: pick("verifyTimeoutSec"),
-    hubEnabled: pick("hubEnabled"),
-    maxHubRounds: pick("maxHubRounds"),
-    maxIntentsPerDecision: pick("maxIntentsPerDecision"),
-    allowEgress: pick("allowEgress"),
+    hub_paused: Boolean(conv.hub_paused),
+    paused_reason: typeof conv.paused_reason === "string" ? conv.paused_reason : undefined,
+    paused_at: typeof conv.paused_at === "string" ? conv.paused_at : undefined,
+    auto_stopped: Boolean(conv.auto_stopped),
+    pending_confirmed_ids: Array.isArray(conv.pending_confirmed_ids)
+      ? conv.pending_confirmed_ids.map(String)
+      : undefined,
   };
+}
+
+export async function readCanvasConvergence(db: typeof sql, canvasId: string): Promise<CanvasConvergence> {
+  const [c] = await db`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+  return parseCanvasConvergence(c?.target_json);
+}
+
+export async function patchCanvasConvergence(
+  db: typeof sql,
+  canvasId: string,
+  patch: Partial<CanvasConvergence>,
+): Promise<CanvasConvergence> {
+  const [c] = await db`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+  if (!c) throw new Error(`canvas not found: ${canvasId}`);
+  const tj = { ...((c.target_json ?? {}) as Record<string, unknown>) };
+  const prev = parseCanvasConvergence(tj);
+  const next: CanvasConvergence = {
+    hub_paused: patch.hub_paused ?? prev.hub_paused,
+    paused_reason: "paused_reason" in patch ? patch.paused_reason : prev.paused_reason,
+    paused_at: "paused_at" in patch ? patch.paused_at : prev.paused_at,
+    auto_stopped: patch.auto_stopped ?? prev.auto_stopped,
+    pending_confirmed_ids:
+      "pending_confirmed_ids" in patch ? patch.pending_confirmed_ids : prev.pending_confirmed_ids,
+  };
+  // 清理 undefined 键，避免 jsonb 噪音
+  const stored: Record<string, unknown> = {
+    hub_paused: next.hub_paused,
+    auto_stopped: next.auto_stopped,
+  };
+  if (next.paused_reason) stored.paused_reason = next.paused_reason;
+  if (next.paused_at) stored.paused_at = next.paused_at;
+  if (next.pending_confirmed_ids?.length) stored.pending_confirmed_ids = next.pending_confirmed_ids;
+  tj.convergence = stored;
+  await db`UPDATE canvases SET target_json = ${db.json(tj as never)} WHERE id = ${canvasId}`;
+  return next;
 }
 
 // ---------- 角色注册表（§8.3 Phase ②）：全局 agent_roles + 项目级启用清单 ----------
@@ -668,8 +780,12 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 
 async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: Record<string, unknown>) {
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
-  // Finding 必须经过验证后才能进入后续决策，不再让人或 severity 配置决定是否验证。
   if ((job.followup_depth as number) >= rules.maxFollowupDepth) return;
+
+  // severity 门控：仅 autoVerifySeverities 内的 finding 自动派生 verify（人工点验另走 API）
+  const severity = String(finding.severity ?? "").toLowerCase();
+  const allowed = new Set(rules.autoVerifySeverities.map((s) => s.toLowerCase()));
+  if (!allowed.has(severity)) return;
 
   // 同一 finding 已有 verify job → 不重复派生
   const existing = await tx`
@@ -693,6 +809,11 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
     "verify_finding",
   );
 
+  const basePriority = (job.priority as number) + 1;
+  const priority = rules.verifySeverityPriority
+    ? basePriority + severityPriorityDelta(severity)
+    : basePriority;
+
   const [verifyJob] = await tx`
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
@@ -702,13 +823,14 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
       parent_job_id: job.id as string,
       finding_id: finding.id as string,
       type: "verify_finding",
-      priority: (job.priority as number) + 1,
+      priority,
       payload_json: {
         finding: {
           fingerprint: finding.fingerprint,
           title: finding.title,
           location: finding.location,
           summary: finding.summary,
+          severity,
         },
       } as never,
       timeout_sec: rules.verifyTimeoutSec,
@@ -772,7 +894,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   const { revokeJobTokens } = await import("./gateway.js");
   await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
 
-  // verify_finding 闭环：结论写回 finding；confirmed 强制交给 Hub 验收并决定后续 Agent。
+  // verify_finding 闭环：结论写回 finding；confirmed 按 confirmedHubMode 触发 Hub。
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // §13.1 指标：终态计数 + 时长
   if (status === "failed") inc("deepsonar_jobs_failed_total", { reason: "failed" });
@@ -801,9 +923,14 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
       await tx`
         UPDATE canvas_nodes SET status = ${verdict}, updated_at = now() WHERE id = ${finding.node_id}`;
       if (verdict === "confirmed") {
-        forceHubReview = true;
-        hubSourceNodeIds = [finding.node_id as string];
-        hubTrigger = { kind: "confirmed_finding", finding_id: job.finding_id };
+        const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
+        // batch 一期按 gated 处理；off = 不因 confirmed 单独 force
+        const mode = rules.confirmedHubMode === "batch" ? "gated" : rules.confirmedHubMode;
+        if (mode !== "off") {
+          forceHubReview = true;
+          hubSourceNodeIds = [finding.node_id as string];
+          hubTrigger = { kind: "confirmed_finding", finding_id: job.finding_id, mode };
+        }
       }
     }
   }
@@ -819,28 +946,105 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   return true;
 }
 
-async function maybeTriggerHub(
+/**
+ * 是否存在阻塞 Hub 的活跃 verify。
+ * severities 非空时只统计这些 severity；空数组 = 任意 severity 的活跃 verify 都阻塞。
+ */
+async function hasActiveBlockingVerify(
   tx: Tx,
-  job: Record<string, unknown> | undefined,
-  options: { force?: boolean; sourceNodeIds?: string[]; trigger?: Record<string, unknown> } = {},
-) {
-  if (!job?.canvas_id || job.type === "hub_reason") return;
-  const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
-  if (!rules.hubEnabled && !options.force) return;
-
-  // 自动验证尚未结束时不让普通 Hub 提前收敛；confirmed 会以 force 路径立即进入风险验收。
-  if (!options.force) {
-    const activeVerifications = await tx`
+  canvasId: string,
+  severities: string[],
+): Promise<boolean> {
+  if (severities.length === 0) {
+    const rows = await tx`
       SELECT 1 FROM jobs
-      WHERE canvas_id = ${job.canvas_id as string} AND type = 'verify_finding'
+      WHERE canvas_id = ${canvasId} AND type = 'verify_finding'
         AND status IN ('pending','claimed','provisioning','running')
       LIMIT 1`;
-    if (activeVerifications.length > 0) return;
+    return rows.length > 0;
+  }
+  const rows = await tx`
+    SELECT 1 FROM jobs j
+    JOIN findings f ON f.id = j.finding_id
+    WHERE j.canvas_id = ${canvasId} AND j.type = 'verify_finding'
+      AND j.status IN ('pending','claimed','provisioning','running')
+      AND lower(f.severity) = ANY(${severities})
+    LIMIT 1`;
+  return rows.length > 0;
+}
+
+/** 门控 severity 的 verify 是否均已终态（无 pending/running 等） */
+async function gateVerifiesSettled(tx: Tx, canvasId: string, severities: string[]): Promise<boolean> {
+  if (severities.length === 0) return !(await hasActiveBlockingVerify(tx, canvasId, []));
+  return !(await hasActiveBlockingVerify(tx, canvasId, severities));
+}
+
+async function hasActiveRoleJobs(tx: Tx, canvasId: string): Promise<boolean> {
+  const rows = await tx`
+    SELECT 1 FROM jobs
+    WHERE canvas_id = ${canvasId}
+      AND type NOT IN ('hub_reason', 'verify_finding')
+      AND status IN ('pending','claimed','provisioning','running','waiting_human')
+    LIMIT 1`;
+  return rows.length > 0;
+}
+
+export async function maybeTriggerHub(
+  tx: Tx,
+  job: Record<string, unknown> | undefined,
+  options: {
+    force?: boolean;
+    sourceNodeIds?: string[];
+    trigger?: Record<string, unknown>;
+    /** 人工 run-hub-now：忽略 hub_paused / auto_stopped */
+    manual?: boolean;
+  } = {},
+) {
+  if (!job?.canvas_id || job.type === "hub_reason") return;
+  const canvasId = job.canvas_id as string;
+  const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
+  if (!rules.hubEnabled && !options.force && !options.manual) return;
+
+  const convergence = await readCanvasConvergence(tx, canvasId);
+  if (!options.manual) {
+    if (convergence.hub_paused) {
+      console.info(`[hub] 画布 ${canvasId} 已暂停决策（hub_paused），跳过`);
+      return;
+    }
+    if (convergence.auto_stopped) {
+      console.info(`[hub] 画布 ${canvasId} 已自动停止自驱（auto_stopped），跳过`);
+      return;
+    }
+  }
+
+  const waitSeverities = resolveHubWaitSeverities(rules);
+  const mode = rules.confirmedHubMode === "batch" ? "gated" : rules.confirmedHubMode;
+  // immediate force 才完全绕过等待门；gated force / 普通路径都要等门控 severity
+  const bypassWait = Boolean(options.force && mode === "immediate") || Boolean(options.manual);
+  if (!bypassWait) {
+    if (await hasActiveBlockingVerify(tx, canvasId, waitSeverities)) return;
+  }
+
+  // 自动停止：门控（或全部 auto-verify）验完且无活跃角色 job 时标记并停自驱
+  if (!options.manual && !options.force && rules.autoStopMode !== "never") {
+    const stopSeverities =
+      rules.autoStopMode === "after_all_auto_verify"
+        ? rules.autoVerifySeverities.map((s) => s.toLowerCase())
+        : waitSeverities;
+    if ((await gateVerifiesSettled(tx, canvasId, stopSeverities)) && !(await hasActiveRoleJobs(tx, canvasId))) {
+      await patchCanvasConvergence(tx, canvasId, {
+        auto_stopped: true,
+        paused_reason: `autoStopMode=${rules.autoStopMode}`,
+        paused_at: new Date().toISOString(),
+      });
+      console.info(`[hub] 画布 ${canvasId} 触发 ${rules.autoStopMode}，标记 auto_stopped`);
+      return;
+    }
   }
 
   const active = await tx`
     SELECT 1 FROM jobs
-    WHERE canvas_id = ${job.canvas_id as string} AND type = 'hub_reason'
+    WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
       AND status IN ('pending', 'claimed', 'provisioning', 'running')
     LIMIT 1`;
   if (active.length > 0) return;
@@ -849,9 +1053,9 @@ async function maybeTriggerHub(
   // 计入预算会让排障/运维期的失败把 maxHubRounds 烧光，画布在仍有 verify 验收需求时提前停止自驱。
   const [{ count }] = await tx<[{ count: number }]>`
     SELECT COUNT(*)::int AS count FROM jobs
-    WHERE canvas_id = ${job.canvas_id as string} AND type = 'hub_reason' AND status = 'succeeded'`;
+    WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
   if (count >= rules.maxHubRounds) {
-    console.warn(`[hub] 画布 ${job.canvas_id} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
+    console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
     return;
   }
 
@@ -859,7 +1063,7 @@ async function maybeTriggerHub(
   const [hubJob] = await tx`
     INSERT INTO jobs ${tx({
       project_id: job.project_id as string,
-      canvas_id: job.canvas_id as string,
+      canvas_id: canvasId,
       agent_snapshot_json: snapshot as never,
       type: "hub_reason",
       priority: ((job.priority as number) ?? 0) + 2, // hub 优先于普通角色 job，尽快收敛图
@@ -872,13 +1076,13 @@ async function maybeTriggerHub(
   // Hub 任务入队时立即上图；next 边表达“这些结论触发了下一轮 Agent 决策”。
   const [{ next_x }] = await tx<[{ next_x: number }]>`
     SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes
-    WHERE canvas_id = ${job.canvas_id as string}`;
+    WHERE canvas_id = ${canvasId}`;
   const [hubNode] = await tx`
     INSERT INTO canvas_nodes ${tx({
-      canvas_id: job.canvas_id as string,
+      canvas_id: canvasId,
       job_id: hubJob.id as string,
       node_type: "job",
-      title: options.force ? "Hub 风险验收" : "Hub 决策",
+      title: options.force || options.manual ? "Hub 风险验收" : "Hub 决策",
       body_json: { type: "hub_reason", trigger: options.trigger ?? { kind: "graph_progress" } } as never,
       x: next_x,
       y: 300,
@@ -890,24 +1094,58 @@ async function maybeTriggerHub(
   if (sourceNodeIds.length === 0) {
     const sources = await tx`
       SELECT id FROM canvas_nodes
-      WHERE canvas_id = ${job.canvas_id as string} AND job_id = ${job.id as string}
+      WHERE canvas_id = ${canvasId} AND job_id = ${job.id as string}
         AND node_type = ANY(${["fact", "finding", "intent", "job"]})`;
     sourceNodeIds = sources.map((source) => source.id as string);
   }
   if (sourceNodeIds.length === 0) {
     const [root] = await tx`
-      SELECT id FROM canvas_nodes WHERE canvas_id = ${job.canvas_id as string} AND node_type = 'root' LIMIT 1`;
+      SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
     if (root) sourceNodeIds = [root.id as string];
   }
   for (const sourceNodeId of sourceNodeIds) {
     await insertEdgeIfAbsent(
       tx,
-      job.canvas_id as string,
+      canvasId,
       sourceNodeId,
       hubNode.id as string,
       "next",
     );
   }
+}
+
+/** 取消画布上非门控 severity 的 pending verify（drain-priority） */
+export async function drainNonGateVerifies(
+  db: typeof sql,
+  canvasId: string,
+  waitSeverities: string[],
+): Promise<{ cancelled: number }> {
+  const gate = waitSeverities.map((s) => s.toLowerCase());
+  const rows = await db`
+    UPDATE jobs j SET status = 'cancelled', finished_at = now(),
+      error = 'drain-priority: 非门控 severity，人工清理'
+    FROM findings f
+    WHERE j.canvas_id = ${canvasId}
+      AND j.type = 'verify_finding'
+      AND j.status = 'pending'
+      AND f.id = j.finding_id
+      AND NOT (lower(f.severity) = ANY(${gate}))
+    RETURNING j.id, j.finding_id`;
+  for (const row of rows) {
+    await db`
+      UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+      WHERE job_id = ${row.id as string} AND node_type = ANY(${["job", "intent"]})`;
+    if (row.finding_id) {
+      await db`
+        UPDATE findings SET verify_status = 'pending' WHERE id = ${row.finding_id as string}
+          AND verify_status = 'verifying'`;
+      await db`
+        UPDATE canvas_nodes n SET status = 'open', updated_at = now()
+        FROM findings f
+        WHERE f.id = ${row.finding_id as string} AND n.id = f.node_id AND n.status = 'verifying'`;
+    }
+  }
+  return { cancelled: rows.length };
 }
 
 // ---------- RoleConfig 安全校验（§7.2/§7.3） ----------
