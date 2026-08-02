@@ -705,7 +705,9 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
     if (p.complete?.description) {
-      // Hub complete 只是提案：统一完成门（与 maxHubRounds 护栏共用 evaluateAnalysisCompleteGate）
+      // Hub complete 只是提案：统一完成门（排除当前仍 running 的 Hub 做门检）
+      // **不在此处派 Report**：当前 Hub 尚未 mark_job_done；由 finalizeJob 在 Hub succeeded 后派发，
+      // 避免 exclude 后抢跑 Report，也避免 Hub 崩溃时报告先于 Hub 终态。
       const { evaluateAnalysisCompleteGate } = await import("./verify.js");
       const gate = await evaluateAnalysisCompleteGate(tx, canvasId, { excludeJobId: jobId });
       if (!gate.ok) {
@@ -736,9 +738,6 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, root.id as string, "to");
         }
       }
-      // 同事务内当前 Hub 仍 running：exclude 后若仍有 active 则等待，finalize 时再派 Report
-      const { maybeDispatchReport } = await import("./report.js");
-      await maybeDispatchReport(tx, canvasId, { excludeJobId: jobId });
       return;
     }
 

@@ -534,7 +534,12 @@ export async function closeVerifyRound(
   };
 }
 
-/** 补证 Job 全部终态后：有新增合格证据则再验，否则回弹 Hub。 */
+/**
+ * 补证 Job 全部终态后：有新增合格证据则再验，否则回弹 Hub。
+ *
+ * 并发安全：必须先 `SELECT findings ... FOR UPDATE` 串行化「最后一个完成者」判定，
+ * 否则 review/test 同时 finalize 时双方都看到对方仍 active，都会 return，导致无人创建下一轮 Verify。
+ */
 export async function maybeReverifyAfterFollowup(
   tx: Tx,
   job: Record<string, unknown>,
@@ -548,11 +553,19 @@ export async function maybeReverifyAfterFollowup(
   const findingId = vf.finding_id;
   const canvasId = job.canvas_id as string | null;
   if (!canvasId) return;
+  const selfJobId = String(job.id ?? "");
 
-  // 同画布、同 finding 的活跃补证 job 是否都结束
+  // 串行化同一 Finding 的补证收口（关键：拿锁后再看 active）
+  const [finding] = await tx`
+    SELECT * FROM findings WHERE id = ${findingId} FOR UPDATE`;
+  if (!finding) return;
+  if (finding.verify_status === "confirmed" || finding.verify_status === "needs_human") return;
+
+  // 同画布、同 finding 的其它活跃补证 job 是否都结束（排除本 Job）
   const activeFollowups = await tx`
     SELECT 1 FROM jobs
     WHERE canvas_id = ${canvasId}
+      AND id <> ${selfJobId}
       AND status = ANY(${ACTIVE_JOB as unknown as string[]})
       AND payload_json->'verification_followup'->>'finding_id' = ${findingId}
     LIMIT 1`;
@@ -565,10 +578,6 @@ export async function maybeReverifyAfterFollowup(
       AND status = ANY(${ACTIVE_JOB as unknown as string[]})
     LIMIT 1`;
   if (activeVerify.length > 0) return;
-
-  const [finding] = await tx`SELECT * FROM findings WHERE id = ${findingId}`;
-  if (!finding) return;
-  if (finding.verify_status === "confirmed" || finding.verify_status === "needs_human") return;
 
   const originJobId = (finding.job_id as string) ?? null;
   const evidence = await collectEvidenceSnapshot(tx, findingId, originJobId);
