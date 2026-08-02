@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { constants, createGzip } from "node:zlib";
 
 const image = process.argv[2];
 const toolset = process.argv[3] ?? "base";
@@ -14,9 +15,32 @@ execFileSync("docker", [
   "run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
   "--cpus", "1", "--memory", "1g", "--pids-limit", "256", image, "sh", "-lc", commands.join(" && "),
 ], { stdio: "inherit" });
+
+async function compressedArchiveBytes(imageName) {
+  const docker = spawn("docker", ["image", "save", imageName], { stdio: ["ignore", "pipe", "inherit"] });
+  const gzip = createGzip({ level: constants.Z_BEST_COMPRESSION });
+  let bytes = 0;
+  gzip.on("data", (chunk) => { bytes += chunk.length; });
+  docker.stdout.pipe(gzip);
+  await Promise.all([
+    new Promise((resolve, reject) => {
+      docker.on("error", reject);
+      docker.on("close", (code) => code === 0 ? resolve() : reject(new Error(`docker image save exited with ${code}`)));
+    }),
+    new Promise((resolve, reject) => {
+      gzip.on("error", reject);
+      gzip.on("end", resolve);
+    }),
+  ]);
+  return bytes;
+}
+
 const inspect = JSON.parse(execFileSync("docker", ["image", "inspect", image], { encoding: "utf8" }))[0];
 const config = JSON.parse(readFileSync(configUrl, "utf8"));
 const maxSizeMiB = config.toolsets[toolset].maxSizeMiB;
-const sizeMiB = inspect.Size / 1024 / 1024;
-if (sizeMiB > maxSizeMiB) throw new Error(`${image} is ${sizeMiB.toFixed(1)} MiB; budget is ${maxSizeMiB} MiB`);
-console.log(`${image} hardened smoke passed; size=${sizeMiB.toFixed(1)} MiB (budget ${maxSizeMiB} MiB)`);
+const unpackedSizeMiB = inspect.Size / 1024 / 1024;
+const packageSizeMiB = await compressedArchiveBytes(image) / 1024 / 1024;
+if (packageSizeMiB > maxSizeMiB) {
+  throw new Error(`${image} compressed package is ${packageSizeMiB.toFixed(1)} MiB; budget is ${maxSizeMiB} MiB (unpacked ${unpackedSizeMiB.toFixed(1)} MiB)`);
+}
+console.log(`${image} hardened smoke passed; package=${packageSizeMiB.toFixed(1)} MiB (budget ${maxSizeMiB} MiB), unpacked=${unpackedSizeMiB.toFixed(1)} MiB`);

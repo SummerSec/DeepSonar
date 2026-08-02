@@ -124,7 +124,7 @@ fake 不调用模型、不启动审计沙箱，但会真实运行数据库状态
 
 real 模式会把 `/var/run/docker.sock` 挂载给 Scheduler。Docker Socket 基本等价于宿主机 Docker 管理权限，因此只能在受控主机运行。
 
-1. 构建官方 base/audit 镜像，并运行一致性检查。镜像体积是 CI 硬门槛；默认 base 使用 Node 22 Debian slim（满足 Claude Code 运行要求），审计工具只进入 audit：
+1. 构建官方 base/audit 镜像，并运行一致性检查。gzip 压缩后的可分发镜像包体积是 CI 硬门槛，并同时输出解压层大小；默认 base 使用 Node 22 Debian slim（满足 Claude Code 运行要求），审计工具只进入 audit：
 
 ```bash
 DEEPSONAR_IMAGE_TOOLSET=base npx agentbox image build --provider local-docker --file agent-harness/image.mjs

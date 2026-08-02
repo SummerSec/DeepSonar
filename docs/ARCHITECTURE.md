@@ -394,7 +394,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 镜像市场是受治理的 OCI 目录，不是任意容器执行入口。`runtime_images` 表示产品身份，`runtime_image_versions` 表示不可变版本，`project_runtime_images` 表示项目显式启用/固定版本，`runtime_image_scans` 保留每次准入或复扫证据。
 
 - 官方 `deepsonar-base` 供 explore/analyze/review/test/code/hub/report，`deepsonar-audit` 供 audit/verify；两者以固定 digest 的 `node:22-bookworm-slim` 为底（满足当前 Claude Code 的 Node 版本要求），共用 `agent-harness/runtime-images.json` 版本/来源/摘要单一定义，本地 image DSL 与生产 Dockerfile 均消费该约束并由 CI 检测漂移。
-- **镜像体积是准入硬门槛**：按角色拆包、`--no-install-recommends`、不安装重复 Agent SDK/CLI、构建后清理包缓存，并在断网冒烟中检查 `maxSizeMiB`。重型扫描器只进入专项镜像，不允许为了“可能用到”扩张默认 base。
+- **镜像体积是准入硬门槛**：按角色拆包、`--no-install-recommends`、不安装重复 Agent SDK/CLI、构建后清理包缓存，并在断网冒烟中以 gzip 压缩分发包检查 `maxSizeMiB`、同时报告解压层大小。重型扫描器只进入专项镜像，不允许为了“可能用到”扩张默认 base。
 - `deepsonar-kali-minimal` 是项目显式 opt-in 的 Kali 专项镜像：固定官方 `kali-last-release` digest，只装清单列出的 CLI 和审计工具，不安装 `kali-linux-*` / `kali-tools-*` metapackage、GUI、桌面或默认工具全集；未在项目市场启用时不能被 RoleConfig 选择，也不参与官方 base 默认回退。
 - Job 创建于 `core.ts` 时按项目 RoleConfig → 全局 RoleConfig → 官方 base 解析可信版本，并立即冻结 digest；Dispatcher/Executor 只消费快照，不在执行期重新解析 tag。
 - `image-admission` 是与 Scheduler 进程隔离的 Worker。它对 allowlist registry 的导入执行 digest 解析、Cosign 验签、Syft SBOM、Trivy 漏洞/凭据扫描、ClamAV 恶意文件检查、setuid 枚举和断网硬化自检。扫描通过后仍保持 quarantined，只有 `images:approve` 管理员能提升 trusted。

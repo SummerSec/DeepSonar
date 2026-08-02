@@ -8,7 +8,7 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工�
 - `deepsonar-audit`：在 base 清单上增加 Semgrep、Gitleaks、ShellCheck、binutils。
 - `deepsonar-kali-minimal`：固定官方 Kali last-release digest，只安装明确列出的 CLI；不安装 `kali-linux-*`、`kali-tools-*`、GUI 或桌面。它是项目 opt-in 专项环境，不参与默认选择。
 
-`runtime-images.json` 与 `kali-minimal-runtime.json` 记录工具、来源、校验和、平台与 `maxSizeMiB`。镜像大小超预算、定义漂移或断网硬化冒烟失败都会阻断 CI。
+`runtime-images.json` 与 `kali-minimal-runtime.json` 记录工具、来源、校验和、平台与 `maxSizeMiB`。`maxSizeMiB` 约束 `docker save` 后 gzip 压缩的可分发镜像包；CI 同时报告解压层大小。压缩包超预算、定义漂移或断网硬化冒烟失败都会阻断 CI。
 
 构建 base/audit：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`。Kali 使用 `deploy/Dockerfile.agent-kali-minimal`。
 

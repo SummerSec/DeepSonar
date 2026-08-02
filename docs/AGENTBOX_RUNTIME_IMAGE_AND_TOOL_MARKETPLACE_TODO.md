@@ -118,7 +118,7 @@ Trivy、OSV-Scanner 等依赖漏洞数据库的工具不能简单安装完成即
 - 支持 `sleep infinity` 或等价的长驻命令，由 Agentbox 接管执行。
 - 工具版本固定，不使用 `latest` 安装方式。
 - 提供 SBOM、许可证信息和工具清单。
-- 构建后的解压镜像大小不得超过 toolset 的 `maxSizeMiB`，超限直接阻断 CI/发布。
+- 构建后的 gzip 压缩镜像包大小不得超过 toolset 的 `maxSizeMiB`，超限直接阻断 CI/发布；同时报告解压层大小，避免混淆传输预算与运行磁盘占用。
 
 建议 OCI 标签：
 
@@ -241,7 +241,7 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 - [x] 保持 `agent-harness/image.mjs` 与 `deploy/Dockerfile.agent` 工具和版本一致。
 - [x] 增加 CI 一致性检查，发现两份镜像定义漂移时失败。
 - [x] 构建 `linux/amd64`，验证环境允许后增加 `linux/arm64`。
-- [x] 以 `maxSizeMiB` 建立解压镜像大小门禁；base 使用 slim，Kali 禁止 metapackage/GUI。
+- [x] 以 `maxSizeMiB` 建立压缩镜像包大小门禁并报告解压大小；base 使用 slim，Kali 禁止 metapackage/GUI。
 - [x] 在断网、资源限制和 cap-drop 条件下跑工具冒烟测试。
 
 验收：官方镜像可以离线执行 `rg`、`jq`、`file`、Semgrep、Gitleaks 和 ShellCheck，并输出确定版本。
