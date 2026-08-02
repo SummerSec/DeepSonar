@@ -2,10 +2,23 @@ import { DownloadSimple, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api, type JobDetail, type JobEvidence } from "./api";
 import { LiveStream } from "./LiveStream";
+import { MarkdownView } from "./MarkdownView";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 
 type DetailTab = "process" | "events" | "session" | "findings";
 const ACTIVE = new Set(["claimed", "provisioning", "running", "waiting_human"]);
+
+function recordsAsMarkdown(records: Array<Record<string, unknown>>): string {
+  return records.map((record) => {
+    const payload = record.payload_json && typeof record.payload_json === "object"
+      ? record.payload_json as Record<string, unknown>
+      : record;
+    const text = [payload.message, payload.text, payload.delta, payload.summary, payload.title]
+      .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+    const type = String(record.type ?? payload.type ?? "event");
+    return `### ${type}\n\n${text ?? `\`\`\`json\n${JSON.stringify(record, null, 2)}\n\`\`\``}`;
+  }).join("\n\n---\n\n");
+}
 
 export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -49,11 +62,11 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {error && <div className="m-5 rounded-xl bg-red-950/30 px-4 py-3 text-sm text-red-300 ring-1 ring-red-400/20">{error}</div>}
           {!error && !detail && <div className="p-8 font-mono text-sm text-zinc-600">正在读取运行账本…</div>}
-          {detail?.job.error && <div className="m-4 rounded-xl bg-red-950/20 px-4 py-3 font-mono text-[11px] text-red-300 ring-1 ring-red-400/15">{detail.job.error}</div>}
+          {detail?.job.error && <div className="m-4 rounded-xl bg-red-950/20 px-4 py-3 text-red-300 ring-1 ring-red-400/15"><MarkdownView markdown={detail.job.error} /></div>}
 
-          {detail && tab === "process" && <div className="h-full min-h-[420px]">{active ? <LiveStream jobId={jobId} active /> : stream.length ? <pre className="m-4 overflow-auto whitespace-pre-wrap rounded-2xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]">{stream.map((event) => JSON.stringify(event)).join("\n")}</pre> : <div className="p-8 text-center text-[13px] text-zinc-600">此运行没有持久化过程流。旧运行在本功能上线前只保存在内存中，无法追溯。</div>}</div>}
+          {detail && tab === "process" && <div className="h-full min-h-[420px]">{active ? <LiveStream jobId={jobId} active /> : stream.length ? <div className="m-4 rounded-2xl bg-black/20 p-4 ring-1 ring-white/[.06]"><MarkdownView markdown={recordsAsMarkdown(stream)} /></div> : <div className="p-8 text-center text-[13px] text-zinc-600">此运行没有持久化过程流。旧运行在本功能上线前只保存在内存中，无法追溯。</div>}</div>}
 
-          {detail && tab === "events" && <pre className="m-4 overflow-auto whitespace-pre-wrap rounded-2xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]">{detail.events.length ? detail.events.map((event) => JSON.stringify(event)).join("\n") : "没有语义事件"}</pre>}
+          {detail && tab === "events" && <div className="m-4 rounded-2xl bg-black/20 p-4 ring-1 ring-white/[.06]"><MarkdownView markdown={detail.events.length ? recordsAsMarkdown(detail.events as unknown as Array<Record<string, unknown>>) : "没有语义事件"} /></div>}
 
           {detail && tab === "session" && <div className="p-4"><div className="mb-3 flex flex-wrap items-center gap-2"><span className="text-[12px] text-zinc-500">{evidence ? `${evidence.manifest.cli} · session ${evidence.manifest.session_id ?? "unknown"}` : active ? "Session 将在运行终态前归档" : "没有 Session 归档"}</span>{evidence && session && <button type="button" onClick={() => api.downloadJobSession(jobId).catch((e) => setDownloadError(String(e)))} className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-white/[.04] px-3 py-2 text-[11px] text-zinc-300 ring-1 ring-white/[.08] hover:bg-white/[.08]"><DownloadSimple size={13} /> 下载原始文件</button>}</div>{downloadError && <p className="mb-3 text-[11px] text-red-300">{downloadError}</p>}{session ? <><pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-2xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]">{session.text}</pre>{session.truncated && <p className="mt-2 text-[10px] text-amber-300">页面预览已截断，请下载完整原始文件。</p>}</> : <div className="rounded-2xl bg-white/[.02] p-8 text-center text-[13px] text-zinc-600 ring-1 ring-white/[.05]">该 CLI 未生成可归档的独立 Session，或此运行发生在归档功能上线前。</div>}</div>}
 

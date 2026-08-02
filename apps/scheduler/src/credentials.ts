@@ -119,13 +119,17 @@ export function credentialConcurrencyPolicy(metadata: unknown): CredentialConcur
  * 值来自 Credential 解密结果；base_url 等非密钥项走 public_metadata_json。
  */
 export const PROVIDER_ENV_MAP: Record<string, { secretKeys: string[]; baseUrlKey?: string; defaultBaseUrl?: string }> = {
-  anthropic: { secretKeys: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], baseUrlKey: "ANTHROPIC_BASE_URL" },
+  anthropic: {
+    secretKeys: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+    baseUrlKey: "ANTHROPIC_BASE_URL",
+    defaultBaseUrl: "https://api.anthropic.com",
+  },
   kimi: {
     secretKeys: ["ANTHROPIC_AUTH_TOKEN"],
     baseUrlKey: "ANTHROPIC_BASE_URL",
     defaultBaseUrl: "https://api.kimi.com/coding",
   },
-  openai: { secretKeys: ["OPENAI_API_KEY"], baseUrlKey: "OPENAI_BASE_URL" },
+  openai: { secretKeys: ["OPENAI_API_KEY"], baseUrlKey: "OPENAI_BASE_URL", defaultBaseUrl: "https://api.openai.com" },
   openrouter: { secretKeys: ["OPENROUTER_API_KEY"] },
   plane: { secretKeys: ["PLANE_API_TOKEN"] },
   git: { secretKeys: ["GIT_TOKEN"] },

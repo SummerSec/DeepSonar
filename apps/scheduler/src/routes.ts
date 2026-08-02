@@ -806,6 +806,9 @@ export function registerRoutes(app: FastifyInstance) {
           return `模型 ${body.model} 不在 Credential ${c.credential_id} 的 allowed_model_ids 白名单`;
         }
       }
+      if (c.purpose === "llm" && !body.model && allowedModelIds(cred.public_metadata_json).length > 0) {
+        return `Credential ${c.credential_id} 已启用模型白名单，请显式选择模型`;
+      }
     }
     if (body.config_files.length > CONFIG_FILE_MAX_COUNT) return `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`;
     let totalBytes = 0;

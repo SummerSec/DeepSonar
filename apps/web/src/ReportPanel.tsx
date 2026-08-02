@@ -109,9 +109,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
             <FileText size={16} /> 报告生成失败
           </div>
           {report.error && (
-            <div className="mt-2 whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-red-200/80">
-              {report.error}
-            </div>
+            <div className="mt-3 text-red-200/80"><MarkdownView markdown={report.error} /></div>
           )}
           <div className="mt-3 flex items-center gap-3">
             <button

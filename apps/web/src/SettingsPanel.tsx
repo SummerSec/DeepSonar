@@ -19,6 +19,7 @@ import { CredentialsPanel } from "./CredentialsPanel";
 import { RoleConfigEditor } from "./RoleConfigEditor";
 import { TransferPanel } from "./TransferPanel";
 import { UsersPanel } from "./UsersPanel";
+import { MarkdownView } from "./MarkdownView";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -399,7 +400,7 @@ export function SettingsPanel({
         </div>
         {r.description && (
           <div className={`mt-3 text-[11px] leading-5 text-zinc-600 ${projectId && r.kind === "role" ? "pl-6" : ""}`}>
-            {r.description}
+            <MarkdownView markdown={r.description} controls={false} />
           </div>
         )}
         {editing && (

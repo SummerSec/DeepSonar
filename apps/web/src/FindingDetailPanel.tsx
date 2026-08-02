@@ -8,6 +8,7 @@ import {
   type FindingDisposition,
   type FindingLink,
 } from "./api";
+import { MarkdownView } from "./MarkdownView";
 import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
 
 export function FindingDetailPanel({ findingId, onClose }: { findingId: string; onClose: () => void }) {
@@ -163,9 +164,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                 <span className="ml-auto font-mono text-[10px] text-zinc-600">{formatTime(f.created_at)}</span>
               </div>
               <h2 className="mt-4 text-xl font-medium leading-8 text-zinc-100">{f.title}</h2>
-              {f.summary && (
-                <p className="mt-3 whitespace-pre-wrap text-[14px] leading-7 text-zinc-400">{f.summary}</p>
-              )}
+              {f.summary && <MarkdownView markdown={f.summary} className="mt-4" />}
               {f.disposition_by && (
                 <p className="mt-3 font-mono text-[11px] text-zinc-600">
                   处置：{f.disposition} · {f.disposition_by}
@@ -326,7 +325,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                         <Trash size={12} />
                       </button>
                     </div>
-                    <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-6 text-zinc-300">{c.body}</p>
+                    <MarkdownView markdown={c.body} className="mt-2" />
                   </div>
                 ))}
               </div>
@@ -387,7 +386,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                         {formatTime(job.started_at ?? job.created_at)}
                       </span>
                       {job.error && (
-                        <div className="w-full font-mono text-[11px] text-red-300">{job.error}</div>
+                        <MarkdownView markdown={job.error} className="w-full text-red-300" />
                       )}
                     </div>
                   ))}

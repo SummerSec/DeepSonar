@@ -1435,6 +1435,9 @@ export async function resolveAgentSnapshotForJob(
     }
     const configuredModel = (cfg?.model as string) ?? config.runtime.agentModel ?? null;
     const allowed = allowedModelIds(llm.public_metadata_json);
+    if (allowed.length > 0 && !configuredModel) {
+      throw new Error(`Credential ${llm.id} 已启用模型白名单，RoleConfig 必须显式选择模型`);
+    }
     if (configuredModel && allowed.length > 0 && !allowed.includes(configuredModel)) {
       throw new Error(`模型 ${configuredModel} 不在 Credential ${llm.id} 的 allowed_model_ids 白名单`);
     }

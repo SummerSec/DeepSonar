@@ -1,5 +1,6 @@
 import { CircleNotch, Check, Wrench, TextAlignLeft } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
+import { MarkdownView } from "./MarkdownView";
 
 /**
  * Agent 实时流视图（§6.2：原始流只过 WS 过手，不落 DB）
@@ -122,13 +123,9 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         {blocks.map((b) => {
           if (b.kind === "text") {
             return b.reasoning ? (
-              <p key={b.key} className="mb-2 whitespace-pre-wrap break-words font-mono text-[13px] italic leading-relaxed text-zinc-600">
-                {b.text}
-              </p>
+              <MarkdownView key={b.key} markdown={b.text} controls={false} className="mb-2 font-mono italic text-zinc-600" />
             ) : (
-              <p key={b.key} className="mb-2 whitespace-pre-wrap break-words text-[14px] leading-relaxed text-zinc-300">
-                {b.text}
-              </p>
+              <MarkdownView key={b.key} markdown={b.text} controls={false} className="mb-2" />
             );
           }
           if (b.kind === "tool") {

@@ -2,6 +2,7 @@ import { Prohibit, SealCheck, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api, type CanvasNode, type JobDetail } from "./api";
 import { LiveStream } from "./LiveStream";
+import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
 const EVENT_COLOR: Record<string, string> = {
@@ -22,14 +23,12 @@ function StatusDot({ status }: { status: string }) {
   );
 }
 
-function Field({ k, v, mono = true }: { k: string; v: string; mono?: boolean }) {
+function Field({ k, v, markdown = true }: { k: string; v: string; markdown?: boolean }) {
   return (
     <div className="py-1.5">
       <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">{k}</div>
-      <div
-        className={`mt-1 whitespace-pre-wrap break-words text-[14px] leading-relaxed text-zinc-300 ${mono ? "font-mono" : ""}`}
-      >
-        {v}
+      <div className="mt-1 break-words text-[14px] leading-relaxed text-zinc-300">
+        {markdown ? <MarkdownView markdown={v} /> : <span className="font-mono">{v}</span>}
       </div>
     </div>
   );
@@ -188,14 +187,12 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
               </div>
               {job && (
                 <div className="mt-3 divide-y divide-ink-800/70 border-t border-ink-800 pt-1">
-                  {job.job.started_at && <Field k="started" v={new Date(job.job.started_at).toLocaleString()} />}
-                  {job.job.finished_at && <Field k="finished" v={new Date(job.job.finished_at).toLocaleString()} />}
+                  {job.job.started_at && <Field k="started" v={new Date(job.job.started_at).toLocaleString()} markdown={false} />}
+                  {job.job.finished_at && <Field k="finished" v={new Date(job.job.finished_at).toLocaleString()} markdown={false} />}
                 </div>
               )}
               {job?.job.error && (
-                <div className="mt-3 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 font-mono text-[13px] leading-relaxed text-red-300">
-                  {job.job.error}
-                </div>
+                <div className="mt-3 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-red-300"><MarkdownView markdown={job.job.error} /></div>
               )}
             </>
           )}
@@ -218,9 +215,7 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
                         {e.type}
                       </span>
                     </div>
-                    <div className="mt-0.5 break-words text-[14px] leading-relaxed text-zinc-400">
-                      {summarize(e.payload_json)}
-                    </div>
+                    <MarkdownView markdown={summarize(e.payload_json)} controls={false} className="mt-0.5 text-zinc-400" />
                   </li>
                 ))}
               </ol>

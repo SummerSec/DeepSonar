@@ -23,6 +23,7 @@ import {
 import { CanvasView } from "../CanvasView";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { JobDetailPanel } from "../JobDetailPanel";
+import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
 import {
   DataTable,
@@ -77,7 +78,7 @@ function HumanFactCard({ node, onDone }: { node: CanvasNode; onDone: (msg: strin
     <div className="flex flex-col gap-3 rounded-2xl bg-amber-400/[.045] px-4 py-3 ring-1 ring-amber-300/15 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
         <div className="text-[14px] font-medium text-zinc-100">{node.title}</div>
-        {desc && <div className="mt-0.5 line-clamp-2 text-[13px] text-zinc-500">{desc}</div>}
+        {desc && <MarkdownView markdown={desc} className="mt-2" />}
       </div>
       <button
         onClick={() => act("verified")}
@@ -335,16 +336,10 @@ export function TaskCanvasPage() {
             {typeof meta?.target_json?.content === "string" ? "任务内容" : "本次审计范围"}
           </div>
           <div className="flex flex-wrap gap-2">
-            {scopeEntries.map(([k, v]) => (
-              <span
-                key={k}
-                className="inline-flex max-w-full items-baseline gap-1.5 rounded-full bg-black/20 px-2.5 py-1 ring-1 ring-white/[.045]"
-              >
-                <span className="shrink-0 font-mono text-[9px] text-zinc-600">{k}</span>
-                <span className="truncate text-[10px] text-zinc-300">
-                  {typeof v === "string" ? v : JSON.stringify(v)}
-                </span>
-              </span>
+            {scopeEntries.map(([k, v]) => typeof v === "string" && k === "内容" ? (
+              <div key={k} className="w-full rounded-xl bg-black/20 px-4 py-3 ring-1 ring-white/[.045]"><MarkdownView markdown={v} /></div>
+            ) : (
+              <span key={k} className="inline-flex max-w-full items-baseline gap-1.5 rounded-full bg-black/20 px-2.5 py-1 ring-1 ring-white/[.045]"><span className="shrink-0 font-mono text-[9px] text-zinc-600">{k}</span><span className="truncate text-[10px] text-zinc-300">{typeof v === "string" ? v : JSON.stringify(v)}</span></span>
             ))}
           </div>
         </div>
