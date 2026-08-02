@@ -1,4 +1,11 @@
 const PLATFORM_TOOL_USAGE: Record<string, string> = {
+  list_available_roles: [
+    "### `list_available_roles` — 查询 Hub 当前可派发角色",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 判断需要派发 Worker 时先调用；返回本 Job 从数据库冻结的角色 name、title、description。只允许原样使用返回的 name。",
+    "- 边界：结果只含 `kind=role` 且当前项目启用的角色，不含 verify、report、hub_reason 或其他 system/hub 角色。不得用记忆补充角色名。",
+    "- 示例：`{}`",
+  ].join("\n"),
   emit_progress: [
     "### `emit_progress` — 上报过程进度",
     "- 参数：`message`（必填，当前动作或阶段结论，1-2000 字符）；`percent`（可选，0-100）。",
@@ -20,7 +27,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   submit_hub_decision: [
     "### `submit_hub_decision` — 提交 Hub 决策",
     "- 参数只能二选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`；每个 Hub Job 只调用一次。",
-    "- `from` 只能填写本轮画布中的 root/fact/finding id；`role` 只能选择本轮 prompt 的数据库角色；`prompt` 必须让全新 Worker 可独立执行。",
+    "- `from` 只能填写本轮画布中的 root/fact/finding id；`role` 只能原样选择本轮 `list_available_roles` 的返回值；`prompt` 必须让全新 Worker 可独立执行。",
     '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',
     '- 派发示例：`{"intents":[{"from":["<root-id>"],"role":"explore","description":"确认目标材料与版本","prompt":"定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。"}]}`',
   ].join("\n"),

@@ -5,6 +5,7 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTROL_MCP_SERVER } from "../apps/scheduler/src/control-mcp.js";
+import { parseHubDecision } from "../apps/scheduler/src/graph.js";
 import { platformToolGuide } from "../apps/scheduler/src/platform-tools.js";
 import { resolvePlatformTools } from "../packages/shared-types/src/index.js";
 
@@ -34,13 +35,34 @@ const restrictedGuide = platformToolGuide(restrictedTools);
 for (const disabled of ["emit_progress", "request_human"]) {
   if (restrictedGuide.includes(disabled)) throw new Error(`disabled tool leaked into guide: ${disabled}`);
 }
+const hubTools = resolvePlatformTools("hub_reason", "hub", { list_available_roles: false });
+for (const required of ["list_available_roles", "submit_hub_decision", "mark_job_done"]) {
+  if (!hubTools.some((name) => name === required)) throw new Error(`required Hub tool was disabled: ${required}`);
+}
+
+const availableRoles = new Set(["review"]);
+if (!parseHubDecision(JSON.stringify({ intents: [{ from: [], role: "review", description: "复核", prompt: "执行复核" }] }), availableRoles)) {
+  throw new Error("valid dynamic Hub role was rejected");
+}
+for (const invalid of [
+  { intents: [{ from: [], description: "缺角色", prompt: "执行" }] },
+  { intents: [{ from: [], role: "explore", description: "固定默认", prompt: "执行" }] },
+  { intents: [{ from: [], role: "report", description: "系统角色", prompt: "执行" }] },
+]) {
+  if (parseHubDecision(JSON.stringify(invalid), availableRoles)) {
+    throw new Error(`invalid Hub role accepted: ${JSON.stringify(invalid)}`);
+  }
+}
 
 const eventFile = join(tmpdir(), `deepsonar-control-mcp-${randomUUID()}.jsonl`);
 const child = spawn(process.execPath, ["--input-type=module", "-e", CONTROL_MCP_SERVER], {
   env: {
     ...process.env,
     DEEPSONAR_CONTROL_EVENT_FILE: eventFile,
-    DEEPSONAR_CONTROL_TOOL_NAMES: JSON.stringify(["emit_fact", "mark_job_done"]),
+    DEEPSONAR_CONTROL_TOOL_NAMES: JSON.stringify(["list_available_roles", "emit_fact", "mark_job_done"]),
+    DEEPSONAR_AVAILABLE_ROLES_JSON: JSON.stringify([
+      { name: "review", title: "复核", description: "独立复核证据" },
+    ]),
   },
   stdio: ["pipe", "pipe", "inherit"],
 });
@@ -56,10 +78,14 @@ const send = (id: number, method: string, params: Record<string, unknown> = {}) 
 send(1, "initialize", { protocolVersion: "2024-11-05" });
 send(2, "tools/list");
 send(3, "tools/call", {
+  name: "list_available_roles",
+  arguments: {},
+});
+send(4, "tools/call", {
   name: "emit_fact",
   arguments: { title: "实时事实", description: "增量证据" },
 });
-send(4, "tools/call", {
+send(5, "tools/call", {
   name: "mark_job_done",
   arguments: { summary: "完成" },
 });
@@ -67,7 +93,7 @@ send(4, "tools/call", {
 await new Promise<void>((resolve, reject) => {
   const deadline = setTimeout(() => reject(new Error("MCP response timeout")), 5_000);
   const timer = setInterval(() => {
-    if (replies.trim().split("\n").length >= 4) {
+    if (replies.trim().split("\n").length >= 5) {
       clearTimeout(deadline);
       clearInterval(timer);
       resolve();
@@ -77,6 +103,12 @@ await new Promise<void>((resolve, reject) => {
 child.kill();
 
 try {
+  const rpcReplies = replies.trim().split("\n").map((line) => JSON.parse(line));
+  const roleReply = rpcReplies.find((reply) => reply.id === 3);
+  const rolePayload = JSON.parse(roleReply?.result?.content?.[0]?.text ?? "null");
+  if (rolePayload?.roles?.[0]?.name !== "review") {
+    throw new Error(`unexpected available roles response: ${JSON.stringify(rolePayload)}`);
+  }
   const events = readFileSync(eventFile, "utf8")
     .trim()
     .split("\n")

@@ -58,7 +58,7 @@ function resultContract(
 ): string {
   const enabled = new Set(toolNames);
   if (isHub) {
-    return `调用 submit_hub_decision，参数只允许 complete 或 intents 二选一；随后调用 mark_job_done 提交本轮摘要。`;
+    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete 或 intents 二选一，role 必须原样命中工具结果；随后调用 mark_job_done 提交本轮摘要。`;
   }
   if (isVerify) {
     return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、false_positive、needs_human。`;
@@ -180,6 +180,16 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const model = snapshot.model ?? undefined;
   const reasoning = snapshot.reasoning ?? undefined;
   const rules = await rulesForProject(sql, job.project_id as string);
+  const availableHubRoles = isHub ? await rolesForProject(sql, job.project_id as string) : [];
+  if (isHub && availableHubRoles.length === 0) {
+    throw new Error("项目未启用任何角色，hub 无可下发对象");
+  }
+  const availableHubRoleCatalog = availableHubRoles.map(({ name, title, description }) => ({
+    name,
+    title,
+    description,
+  }));
+  const availableHubRoleNames = new Set(availableHubRoleCatalog.map((role) => role.name));
   const [canvas] = canvasId
     ? await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`
     : [undefined];
@@ -227,6 +237,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_EVENT_FILE = CONTROL_EVENT_FILE;
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
+  if (isHub) env.DEEPSONAR_AVAILABLE_ROLES_JSON = JSON.stringify(availableHubRoleCatalog);
 
   // Hub 与角色任务通过 input 注入动态任务；长期角色规则进入 AGENTS.md / CLAUDE.md。
   const graph = canvasId && (isHub || isRole || isAudit) ? await buildGraphSnapshot(canvasId) : null;
@@ -236,20 +247,16 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   let initialInput: string;
   if (isHub) {
     if (!graph) throw new Error("hub_reason job 缺 canvas_id，无法读图");
-    const roles = await rolesForProject(sql, job.project_id as string);
-    if (roles.length === 0) throw new Error("项目未启用任何角色，hub 无可下发对象");
     initialInput = `任务内容：
 ${taskGoal}
 
-读取下面的任务画布，判断目标是否达成；未达成时自行选择角色并为每个 Worker 编写完整、自包含的 prompt。
+读取下面的任务画布，判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。
 
 画布（YAML）：
 ${graph.yaml}
 
-可用角色：
-${roles.map((r) => `- ${r.name}（${r.title}）：${r.description}`).join("\n")}
-
 约束：最多 ${rules.maxIntentsPerDecision} 个意图；不要重复开放或已完成意图；from 只能引用图中 root/fact/finding id。
+role 只能原样使用 list_available_roles 本轮返回的 name；不得使用记忆、固定清单或猜测的角色，不得派发 system/hub 角色。
 任务出网策略：${networkPolicy.allow_egress ? "Worker 允许访问外部网络" : "Worker 禁止访问模型网关之外的网络"}。
 Hub 不下载材料。Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
     const trigger = payload.trigger as { kind?: string; finding_id?: string } | undefined;
@@ -542,7 +549,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   // Hub 决策在 Agent 结束后落地：避免工具调用后 Agent 尚未收尾时提前派生下一轮。
   let hubNote = "";
   if (isHub) {
-    const decision = semanticState.hub ? parseHubDecision(JSON.stringify(semanticState.hub.payload)) : null;
+    const decision = semanticState.hub
+      ? parseHubDecision(JSON.stringify(semanticState.hub.payload), availableHubRoleNames)
+      : null;
     if (!decision) {
       throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
     } else if (decision.complete) {

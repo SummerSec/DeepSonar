@@ -559,8 +559,14 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     // 项目启用的角色（hub 可下发清单）；一个都没启用则不再派生
     const roles = await rolesForProject(tx as unknown as typeof sql, job.project_id as string);
     const enabledNames = new Set(roles.map((r) => r.name));
+    const intents = (p.intents ?? []).slice(0, rules.maxIntentsPerDecision);
+    for (const it of intents) {
+      if (!it.role || !enabledNames.has(it.role)) {
+        throw new Error(`Hub 派发了不可用角色: ${it.role ?? "<missing>"}`);
+      }
+    }
 
-    for (const it of (p.intents ?? []).slice(0, rules.maxIntentsPerDecision)) {
+    for (const it of intents) {
       if (!it.description?.trim() || !it.prompt?.trim()) continue;
       if (roles.length === 0) {
         console.warn(`[hub] 项目 ${job.project_id} 无启用角色，跳过意图派发`);
@@ -575,8 +581,8 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         LIMIT 1`;
       if (dup.length > 0) continue;
 
-      // 角色白名单校验：hub 指了未启用的角色 → 落到第一个启用角色
-      const role = enabledNames.has(it.role ?? "") ? (it.role as string) : roles[0].name;
+      // 服务端硬边界：只接受数据库实时查询出的项目可用工作角色，不做默认或回退。
+      const role = it.role!;
       const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, job.project_id as string, role);
       const trigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
         kind?: string;

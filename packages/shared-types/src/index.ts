@@ -97,6 +97,7 @@ export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
 // ---------- DeepSonar 平台工具（RoleConfig 可按 Job 开关） ----------
 
 export const PlatformToolName = z.enum([
+  "list_available_roles",
   "emit_progress",
   "emit_fact",
   "emit_finding",
@@ -113,6 +114,7 @@ export function allowedPlatformTools(
   roleKind: "role" | "hub" | "system",
 ): PlatformToolName[] {
   return [
+    ...(roleKind === "hub" ? (["list_available_roles"] as PlatformToolName[]) : []),
     "emit_progress",
     ...(roleKind === "role" && roleName !== "audit" ? (["emit_fact"] as PlatformToolName[]) : []),
     ...(roleName === "audit" ? (["emit_finding"] as PlatformToolName[]) : []),
@@ -124,7 +126,9 @@ export function allowedPlatformTools(
 
 /** 关闭后 Job 无法形成合法终态的工具，配置层不可禁用。 */
 export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): PlatformToolName[] {
-  return roleKind === "hub" ? ["submit_hub_decision", "mark_job_done"] : ["mark_job_done"];
+  return roleKind === "hub"
+    ? ["list_available_roles", "submit_hub_decision", "mark_job_done"]
+    : ["mark_job_done"];
 }
 
 /** 空配置代表启用该角色全部合法工具；显式 false 才关闭可选工具。 */

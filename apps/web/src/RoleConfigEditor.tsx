@@ -32,6 +32,7 @@ const CONFIG_FILE_PATHS: Record<string, string> = {
 };
 
 const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
+  list_available_roles: { title: "查询可用角色", description: "让 Hub 按需获取当前项目可派发的数据库角色。" },
   emit_progress: { title: "过程进度", description: "允许 Worker 增量上报当前动作和完成百分比。" },
   emit_fact: { title: "事实提交", description: "允许工作角色把新证据写成画布 Fact。" },
   emit_finding: { title: "漏洞提交", description: "允许审计角色提交带严重级别的 Finding。" },

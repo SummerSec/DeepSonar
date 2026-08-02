@@ -119,7 +119,7 @@ PUT body：
 
 保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。
 
-`platform_tools` 只接受该角色合法的工具名；未声明的合法工具默认启用。所有角色的 `mark_job_done` 与 Hub 的 `submit_hub_decision` 是形成合法终态所必需的工具，不可关闭。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
+`platform_tools` 只接受该角色合法的工具名；未声明的合法工具默认启用。所有角色的 `mark_job_done`，以及 Hub 的 `list_available_roles`、`submit_hub_decision` 是形成合法决策/终态所必需的工具，不可关闭。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
 
 Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。
 

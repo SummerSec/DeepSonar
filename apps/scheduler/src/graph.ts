@@ -146,8 +146,8 @@ function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-/** 动态系统工具提交的 Hub 决策；只认 complete 或 intents 之一，字段非法即丢弃。 */
-export function parseHubDecision(raw: string): HubDecision | null {
+/** 动态系统工具提交的 Hub 决策；role 必须来自本 Job 的可用角色工具结果。 */
+export function parseHubDecision(raw: string, allowedRoles: ReadonlySet<string>): HubDecision | null {
   const v = parseJsonLoose(raw);
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
@@ -165,9 +165,10 @@ export function parseHubDecision(raw: string): HubDecision | null {
       const i = it as Record<string, unknown>;
       if (typeof i.description !== "string" || !i.description.trim()) continue;
       if (typeof i.prompt !== "string" || !i.prompt.trim()) continue;
+      if (typeof i.role !== "string" || !allowedRoles.has(i.role.trim())) return null;
       intents.push({
         from: strArray(i.from),
-        role: typeof i.role === "string" && i.role.trim() ? i.role.trim() : "explore",
+        role: i.role.trim(),
         description: i.description.slice(0, 2_000),
         prompt: i.prompt.trim().slice(0, 20_000),
       });

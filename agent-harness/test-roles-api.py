@@ -68,8 +68,17 @@ def main() -> None:
     for role in ("explore", "analyze", "review", "test", "code"):
         assert "emit_fact" in by_role[role], role
     assert "emit_finding" in by_role["audit"]
+    assert "list_available_roles" in by_role["hub_reason"]
     assert "submit_hub_decision" in by_role["hub_reason"]
     assert "confirmed|false_positive|needs_human" in by_role["verify"]
+    hub_cfg = next(c for c in global_configs if c["role_name"] == "hub_reason")
+    code, _ = req(
+        "PUT",
+        f"/role-configs/global/{hub_cfg['role_id']}",
+        {"platform_tools": {"list_available_roles": False}},
+        expect=None,
+    )
+    assert code == 400, f"关闭 Hub 角色查询工具应被拒，得到 {code}"
 
     # 2. 项目视角：默认全部内置工作角色启用（库中可能残留历史自定义角色，不纳入集合相等）
     proles = req("GET", f"/projects/{pid}/roles")

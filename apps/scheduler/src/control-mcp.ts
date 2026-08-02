@@ -1,6 +1,6 @@
 /**
- * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络，只把 Agent 的语义提案
- * 追加到 /workspace/.deepsonar/control-events.jsonl；宿主经 agentbox 控制通道增量读取。
+ * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络：只读查询返回调度器在启动
+ * 本 Job 时动态下发的数据；语义提案追加到 control-events.jsonl，由宿主经控制通道增量读取。
  */
 export const CONTROL_MCP_NAME = "deepsonar-control";
 export const CONTROL_EVENT_FILE = "/workspace/.deepsonar/control-events.jsonl";
@@ -12,10 +12,15 @@ import readline from "node:readline";
 
 const outputFile = process.env.DEEPSONAR_CONTROL_EVENT_FILE;
 const allowed = new Set(JSON.parse(process.env.DEEPSONAR_CONTROL_TOOL_NAMES || "[]"));
+const availableRoles = JSON.parse(process.env.DEEPSONAR_AVAILABLE_ROLES_JSON || "[]");
 if (!outputFile) throw new Error("DEEPSONAR_CONTROL_EVENT_FILE is required");
 mkdirSync(dirname(outputFile), { recursive: true });
 
 const definitions = {
+  list_available_roles: {
+    description: "返回当前 Hub Job 可派发的数据库角色。只使用返回的 name，不得猜测或使用固定角色清单。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
   emit_progress: {
     description: "增量上报当前动作或阶段进展。可在执行中多次调用。",
     inputSchema: { type: "object", properties: { message: { type: "string", minLength: 1, maxLength: 2000 }, percent: { type: "number", minimum: 0, maximum: 100 } }, required: ["message"], additionalProperties: false }
@@ -76,8 +81,14 @@ rl.on("line", (line) => {
       const tools = [...allowed].filter((name) => definitions[name]).map((name) => ({ name, ...definitions[name] }));
       reply({ jsonrpc: "2.0", id: request.id, result: { tools } });
     } else if (request.method === "tools/call") {
-      const id = append(request.params?.name, request.params?.arguments);
-      reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "accepted event " + id }] } });
+      const name = request.params?.name;
+      if (!allowed.has(name) || !definitions[name]) throw new Error("tool not allowed for this Job: " + name);
+      if (name === "list_available_roles") {
+        reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: JSON.stringify({ roles: availableRoles }) }] } });
+      } else {
+        const id = append(name, request.params?.arguments);
+        reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "accepted event " + id }] } });
+      }
     } else if (request.method === "resources/list") {
       reply({ jsonrpc: "2.0", id: request.id, result: { resources: [] } });
     } else if (request.method === "prompts/list") {
