@@ -101,6 +101,16 @@ export interface JobSummary {
   created_at: string;
   project_name?: string;
   canvas_title?: string;
+  /** 冻结快照：所用 Agent CLI（claude-code / open-code / codex…） */
+  agent_cli?: string | null;
+  /** 冻结快照：所用模型 ID */
+  model?: string | null;
+  /** 冻结快照：角色名 */
+  role_name?: string | null;
+  /** 冻结快照：凭据 Provider */
+  credential_provider?: string | null;
+  /** 冻结快照：RoleConfig 版本号 */
+  role_config_version?: number | null;
 }
 
 /** 人工处置态（验证完成后的业务闭环） */

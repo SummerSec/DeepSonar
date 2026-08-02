@@ -175,7 +175,7 @@ OPENAI_BASE_URL=
 ./deploy/deploy.sh up real
 ```
 
-5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本和 opt-in 的 `deepsonar-kali-minimal`，“角色配置”再从已启用目录选择镜像 key。Kali 镜像不安装任何 `kali-linux-*` / `kali-tools-*` metapackage，也不会成为项目默认镜像。
+5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。`test` 与系统 `verify` 默认使用 `deepsonar-kali-minimal`（Kali Test）；它预装 Python 3.10–3.14、JDK 8/11/17/21、Go 与 Rust，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
 
 ## 6. 数据库 schema 基线
 
@@ -312,7 +312,7 @@ docker images
 - [ ] 外部事件 Token 绑定单项目且只有 `tasks:write`；
 - [ ] real 模式模型凭据可用；
 - [ ] Agent 镜像存在；
-- [ ] 官方 base/audit（以及需要时的 kali-minimal）引用均为 digest，并通过断网硬化冒烟与大小预算；
+- [ ] 官方 base/audit/kali-minimal 引用均为 digest，并通过断网硬化冒烟与大小预算；其中 kali-minimal 是 Test/Verify 默认环境；
 - [ ] 第三方准入需要的四个扫描器均以 digest 固定；
 - [ ] PostgreSQL、Scheduler、Image Admission、Web 状态正常；
 - [ ] `pnpm typecheck` 和 `pnpm build` 通过；

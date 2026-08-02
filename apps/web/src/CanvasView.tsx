@@ -97,32 +97,63 @@ function toFlow(
   };
 }
 
-/** 边语义图例（替代旧的边上文字 label） */
+/** 节点类型 + 边语义图例 */
 function Legend() {
-  const items = [
-    { color: EDGE_STYLE.produces.stroke, label: "produces 产出" },
-    { color: EDGE_STYLE.verifies.stroke, label: "verifies 验证" },
-    { color: EDGE_STYLE.next.stroke, label: "next 决策" },
-    { color: EDGE_STYLE.from.stroke, label: "from 引用" },
-    { color: EDGE_STYLE.to.stroke, label: "to 结论" },
-    { color: EDGE_STYLE.child.stroke, label: "child 包含" },
+  const nodeKinds: SemanticNodeKind[] = [
+    "task",
+    "hub",
+    "intent",
+    "subagent",
+    "verify",
+    "finding",
+    "fact",
+    "report",
+    "human",
+  ];
+  const edgeItems = [
+    { color: EDGE_STYLE.produces.stroke, label: "produces" },
+    { color: EDGE_STYLE.verifies.stroke, label: "verifies" },
+    { color: EDGE_STYLE.next.stroke, label: "next" },
+    { color: EDGE_STYLE.from.stroke, label: "from" },
+    { color: EDGE_STYLE.to.stroke, label: "to" },
+    { color: EDGE_STYLE.child.stroke, label: "child" },
   ];
   return (
-    <div className="surface-shell absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] rounded-[17px] p-1" style={{ position: "absolute" }}>
-      <div className="surface-core flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[13px] px-3 py-2">
-        {(["intent", "hub", "finding", "subagent", "verify"] as SemanticNodeKind[]).map((kind) => (
-          <span key={kind} className="flex items-center gap-1.5">
-            <span className="inline-block size-2 rounded-full" style={{ background: SEMANTIC_STYLE[kind].color }} />
-            <span className="font-mono text-[9px] text-zinc-500">{SEMANTIC_STYLE[kind].label}</span>
-          </span>
-        ))}
-        <span className="mx-1 h-3 w-px bg-white/[.08]" />
-        {items.map((it) => (
-          <span key={it.label} className="flex items-center gap-1.5">
-            <span className="inline-block h-px w-3 rounded" style={{ background: it.color }} />
-            <span className="font-mono text-[9px] text-zinc-500">{it.label}</span>
-          </span>
-        ))}
+    <div
+      className="surface-shell absolute bottom-3 left-3 z-10 max-w-[min(720px,calc(100%-1.5rem))] rounded-[17px] p-1"
+      style={{ position: "absolute" }}
+    >
+      <div className="surface-core flex flex-col gap-2 rounded-[13px] px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">节点</span>
+          {nodeKinds.map((kind) => {
+            const meta = SEMANTIC_STYLE[kind];
+            return (
+              <span
+                key={kind}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium"
+                style={{
+                  color: meta.color,
+                  background: `color-mix(in srgb, ${meta.color} 14%, transparent)`,
+                  boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${meta.color} 40%, transparent)`,
+                }}
+                title={meta.hint}
+              >
+                <span className="inline-block size-1.5 rounded-full" style={{ background: meta.color }} />
+                {meta.label}
+              </span>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/[.05] pt-1.5">
+          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">边</span>
+          {edgeItems.map((it) => (
+            <span key={it.label} className="flex items-center gap-1.5">
+              <span className="inline-block h-px w-3 rounded" style={{ background: it.color }} />
+              <span className="font-mono text-[9px] text-zinc-500">{it.label}</span>
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -253,133 +284,17 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     );
   }, [collapsedIds, data, depths, effectiveMaxDepth, expandedIds]);
 
-  // 稳定签名：仅当可见节点/边集合变化时重算布局（轮询同集合不抖动）
-  const visibleLayoutKey = useMemo(() => {
-    if (!data) return "";
-    const nids = data.nodes
-      .filter((n) => depthVisible.has(n.id))
-      .map((n) => n.id)
-      .sort()
-      .join(",");
-    const eids = data.edges
-      .filter((e) => depthVisible.has(e.from_node_id) && depthVisible.has(e.to_node_id))
-      .map((e) => e.id)
-      .sort()
-      .join(",");
-    return `${nids}|${eids}`;
-  }, [data, depthVisible]);
-
-  /** 可见子图：展开/收起或改深度后只对这部分做布局，避免留下空洞 */
-  const visibleSubgraph = useMemo(() => {
-    if (!data || !visibleLayoutKey) return { nodes: [] as CanvasNode[], edges: [] as CanvasData["edges"] };
-    const nodes = data.nodes.filter((n) => depthVisible.has(n.id));
-    const edges = data.edges.filter(
-      (e) => depthVisible.has(e.from_node_id) && depthVisible.has(e.to_node_id),
-    );
-    return { nodes, edges };
-    // depthVisible 与 key 同步变化；用 key 保证同集合时引用稳定
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, visibleLayoutKey]);
-
-  // elkjs：对当前可见子图重算布局（展开/收起/深度调整时自适应）
-  // 仅当可见集合签名变化时重跑；轮询刷新同集合不重排，避免布局抖动
-  useEffect(() => {
-    if (visibleSubgraph.nodes.length === 0) {
-      setElkPos(null);
-      return;
-    }
-    // 先清空，立刻走 fallback 可见子图排布，避免沿用上一帧全图坐标留下空洞
-    setElkPos(null);
-    let alive = true;
-    const { nodes: layoutN, edges: layoutE } = visibleSubgraph;
-    elkLayout(layoutN, layoutE)
-      .then((m) => {
-        if (alive) setElkPos(m);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 故意只跟 visibleLayoutKey
-  }, [visibleLayoutKey]);
-
-  const fallbackPos = useMemo(
-    () =>
-      visibleSubgraph.nodes.length > 0
-        ? layoutNodes(visibleSubgraph.nodes, visibleSubgraph.edges)
-        : null,
-    [visibleSubgraph],
-  );
-
-  const handlers = useMemo(
-    () => ({ expandNode, collapseNode }),
-    [expandNode, collapseNode],
-  );
-
-  const { nodes, edges } = useMemo(
-    () =>
-      data
-        ? toFlow(
-            data,
-            elkPos,
-            fallbackPos,
-            depths,
-            effectiveMaxDepth,
-            expandedIds,
-            collapsedIds,
-            outgoing,
-            handlers,
-          )
-        : { nodes: [], edges: [] },
-    [
-      collapsedIds,
-      data,
-      depths,
-      effectiveMaxDepth,
-      elkPos,
-      expandedIds,
-      fallbackPos,
-      handlers,
-      outgoing,
-    ],
-  );
-
-  const roleOptions = useMemo(() => {
-    if (!data) return [];
-    return Array.from(
-      new Set(
-        data.nodes
-          .map((n) => String(n.body_json?.role ?? (n.node_type === "job" ? n.body_json?.type ?? "" : "")))
-          .filter(Boolean),
-      ),
-    ).sort();
-  }, [data]);
-  const statusOptions = useMemo(
-    () => (data ? Array.from(new Set(data.nodes.map((n) => n.status ?? "").filter(Boolean))).sort() : []),
-    [data],
-  );
   const filterActive = Boolean(kindFilter || severityFilter || roleFilter || statusFilter || query.trim());
 
-  const depthHiddenCount = useMemo(() => {
-    if (!data) return 0;
-    return data.nodes.length - depthVisible.size;
-  }, [data, depthVisible]);
-
-  const manualOverrideCount = expandedIds.size + collapsedIds.size;
-  const isFullyOpen =
-    effectiveMaxDepth >= graphMaxDepth && expandedIds.size === 0 && collapsedIds.size === 0;
-  const isDefaultCollapsed =
-    maxDepth === DEFAULT_MAX_DEPTH && expandedIds.size === 0 && collapsedIds.size === 0;
-
-  const { visibleNodes, visibleEdges, matchedCount } = useMemo(() => {
-    if (!data) return { visibleNodes: nodes, visibleEdges: edges, matchedCount: 0 };
+  /**
+   * 最终展示集合 = 深度门控 ∩ 属性筛选（可含一跳上下文）。
+   * 布局只对这批节点算，筛选/展开/画布增删都会触发重排。
+   */
+  const { displayIds, matchedCount } = useMemo(() => {
+    if (!data) return { displayIds: new Set<string>(), matchedCount: 0 };
 
     if (!filterActive) {
-      return {
-        visibleNodes: nodes.filter((n) => depthVisible.has(n.id)),
-        visibleEdges: edges.filter((e) => depthVisible.has(e.source) && depthVisible.has(e.target)),
-        matchedCount: depthVisible.size,
-      };
+      return { displayIds: new Set(depthVisible), matchedCount: depthVisible.size };
     }
 
     const needle = query.trim().toLowerCase();
@@ -414,19 +329,12 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         if (depthVisible.has(root.id)) visible.add(root.id);
       }
     }
-
-    return {
-      visibleNodes: nodes.filter((n) => visible.has(n.id)),
-      visibleEdges: edges.filter((e) => visible.has(e.source) && visible.has(e.target)),
-      matchedCount: matched.size,
-    };
+    return { displayIds: visible, matchedCount: matched.size };
   }, [
     data,
     depthVisible,
-    edges,
     filterActive,
     kindFilter,
-    nodes,
     query,
     roleFilter,
     severityFilter,
@@ -434,17 +342,139 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     statusFilter,
   ]);
 
-  // 可见集合或布局重算后 fitView，让展开/收起后的自适应排布落入视野
-  const nodeCount = visibleNodes.length;
+  // 布局签名：展示节点/边集合变化 → 重算（含筛选、深度、展开收起、图生长）
+  const layoutKey = useMemo(() => {
+    if (!data || displayIds.size === 0) return "";
+    const nids = [...displayIds].sort().join(",");
+    const eids = data.edges
+      .filter((e) => displayIds.has(e.from_node_id) && displayIds.has(e.to_node_id))
+      .map((e) => e.id)
+      .sort()
+      .join(",");
+    return `${nids}|${eids}`;
+  }, [data, displayIds]);
+
+  const layoutSubgraph = useMemo(() => {
+    if (!data || !layoutKey) return { nodes: [] as CanvasNode[], edges: [] as CanvasData["edges"] };
+    return {
+      nodes: data.nodes.filter((n) => displayIds.has(n.id)),
+      edges: data.edges.filter(
+        (e) => displayIds.has(e.from_node_id) && displayIds.has(e.to_node_id),
+      ),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
+  }, [data, layoutKey]);
+
+  // elkjs：对当前展示子图重算最优分层布局
+  useEffect(() => {
+    if (layoutSubgraph.nodes.length === 0) {
+      setElkPos(null);
+      return;
+    }
+    // 立刻清空 → fallback 占位，避免旧坐标留下空洞
+    setElkPos(null);
+    let alive = true;
+    const { nodes: layoutN, edges: layoutE } = layoutSubgraph;
+    elkLayout(layoutN, layoutE)
+      .then((m) => {
+        if (alive) setElkPos(m);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 layoutKey 驱动
+  }, [layoutKey]);
+
+  const fallbackPos = useMemo(
+    () =>
+      layoutSubgraph.nodes.length > 0
+        ? layoutNodes(layoutSubgraph.nodes, layoutSubgraph.edges)
+        : null,
+    [layoutSubgraph],
+  );
+
+  const handlers = useMemo(
+    () => ({ expandNode, collapseNode }),
+    [expandNode, collapseNode],
+  );
+
+  // 只物化当前展示子图的 flow 节点，坐标来自最新布局
+  const { visibleNodes, visibleEdges } = useMemo(() => {
+    if (!data || displayIds.size === 0) return { visibleNodes: [] as Node[], visibleEdges: [] as Edge[] };
+    const subset: CanvasData = {
+      ...data,
+      nodes: data.nodes.filter((n) => displayIds.has(n.id)),
+      edges: data.edges.filter(
+        (e) => displayIds.has(e.from_node_id) && displayIds.has(e.to_node_id),
+      ),
+    };
+    const flow = toFlow(
+      subset,
+      elkPos,
+      fallbackPos,
+      depths,
+      effectiveMaxDepth,
+      expandedIds,
+      collapsedIds,
+      outgoing,
+      handlers,
+    );
+    return { visibleNodes: flow.nodes, visibleEdges: flow.edges };
+  }, [
+    collapsedIds,
+    data,
+    depths,
+    displayIds,
+    effectiveMaxDepth,
+    elkPos,
+    expandedIds,
+    fallbackPos,
+    handlers,
+    outgoing,
+  ]);
+
+  const totalNodeCount = data?.nodes.length ?? 0;
+
+  const roleOptions = useMemo(() => {
+    if (!data) return [];
+    return Array.from(
+      new Set(
+        data.nodes
+          .map((n) => String(n.body_json?.role ?? (n.node_type === "job" ? n.body_json?.type ?? "" : "")))
+          .filter(Boolean),
+      ),
+    ).sort();
+  }, [data]);
+  const statusOptions = useMemo(
+    () => (data ? Array.from(new Set(data.nodes.map((n) => n.status ?? "").filter(Boolean))).sort() : []),
+    [data],
+  );
+
+  const depthHiddenCount = useMemo(() => {
+    if (!data) return 0;
+    return data.nodes.length - depthVisible.size;
+  }, [data, depthVisible]);
+
+  const manualOverrideCount = expandedIds.size + collapsedIds.size;
+  const isFullyOpen =
+    effectiveMaxDepth >= graphMaxDepth && expandedIds.size === 0 && collapsedIds.size === 0;
+  const isDefaultCollapsed =
+    maxDepth === DEFAULT_MAX_DEPTH && expandedIds.size === 0 && collapsedIds.size === 0;
+
+  // 布局签名变化或 elk 算完后 fitView
   const prevLayoutSig = useRef("");
   useEffect(() => {
-    const sig = `${visibleLayoutKey}#${elkPos ? "elk" : "fb"}#${nodeCount}`;
-    if (nodeCount > 0 && sig !== prevLayoutSig.current) {
+    const sig = `${layoutKey}#${elkPos ? "elk" : "fb"}#${visibleNodes.length}`;
+    if (visibleNodes.length > 0 && sig !== prevLayoutSig.current) {
       prevLayoutSig.current = sig;
-      const t = setTimeout(() => rf.current?.fitView({ padding: 0.15, maxZoom: 1, duration: 280 }), 60);
+      const t = setTimeout(
+        () => rf.current?.fitView({ padding: 0.18, maxZoom: 1.05, duration: 320 }),
+        80,
+      );
       return () => clearTimeout(t);
     }
-  }, [elkPos, nodeCount, visibleLayoutKey]);
+  }, [elkPos, layoutKey, visibleNodes.length]);
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
@@ -521,8 +551,8 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
               <span className="text-[12px] font-medium text-zinc-200">筛选过程节点</span>
               <span className="font-mono text-[10px] text-zinc-600">
                 {filterActive
-                  ? `命中 ${matchedCount} / ${nodes.length}`
-                  : `显示 ${visibleNodes.length} / ${nodes.length}`}
+                  ? `命中 ${matchedCount} / ${totalNodeCount}`
+                  : `显示 ${visibleNodes.length} / ${totalNodeCount}`}
                 {depthHiddenCount > 0 ? ` · 藏 ${depthHiddenCount}` : ""}
                 {manualOverrideHint}
               </span>
@@ -707,7 +737,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
             <span>展开筛选</span>
             {filterActive && (
               <span className="font-mono text-[10px] text-acc-400">
-                命中 {matchedCount} / {nodes.length}
+                命中 {matchedCount} / {totalNodeCount}
               </span>
             )}
             <span className="font-mono text-[10px] text-zinc-500">
@@ -719,12 +749,17 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         )}
       </div>
       <Legend />
-      {/* 关联 job 的节点：与「运行」页同一套详情（执行过程 / 筛选 / 事件 / session） */}
-      {selected?.job_id ? (
-        <JobDetailPanel jobId={selected.job_id} onClose={() => setSelected(null)} />
-      ) : selected ? (
-        <Sidebar node={selected} onClose={() => setSelected(null)} />
-      ) : null}
+      {/*
+        节点详情分流：
+        - fact/finding/root/note/human/report：优先看节点 body（description/summary 等）
+        - intent/job（含 hub、verify）：与「运行」页同一套 Job 过程详情
+      */}
+      {selected &&
+        (selected.job_id && ["intent", "job"].includes(selected.node_type) ? (
+          <JobDetailPanel jobId={selected.job_id} onClose={() => setSelected(null)} />
+        ) : (
+          <Sidebar node={selected} onClose={() => setSelected(null)} />
+        ))}
     </div>
   );
 }

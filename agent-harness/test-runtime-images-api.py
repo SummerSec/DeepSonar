@@ -40,7 +40,7 @@ def main() -> None:
     assert all(by_key[key]["official"] for key in official_keys)
     assert not by_key["deepsonar-base"]["project_opt_in"]
     assert not by_key["deepsonar-audit"]["project_opt_in"]
-    assert by_key["deepsonar-kali-minimal"]["project_opt_in"]
+    assert not by_key["deepsonar-kali-minimal"]["project_opt_in"]
 
     req(
         "POST",
@@ -87,6 +87,10 @@ def main() -> None:
 
     role_configs = req("GET", "/role-configs/global")
     explore = next(item for item in role_configs if item["role_name"] == "explore")
+    test_role = next(item for item in role_configs if item["role_name"] == "test")
+    verify_role = next(item for item in role_configs if item["role_name"] == "verify")
+    assert test_role["runtime_image_key"] == "deepsonar-kali-minimal", test_role
+    assert verify_role["runtime_image_key"] == "deepsonar-kali-minimal", verify_role
     invalid = {
         "agent_cli": explore["agent_cli"],
         "model": explore["model"],
@@ -117,11 +121,21 @@ def main() -> None:
     assert snapshot["image_ref"].startswith("fake://deepsonar-base@sha256:"), snapshot
     assert snapshot["image_digest"].startswith("sha256:"), snapshot
 
+    test_job = req(
+        "POST",
+        "/jobs",
+        {"project_id": project_id, "type": "test", "title": "Kali test runtime default smoke"},
+        201,
+    )
+    test_snapshot = test_job["agent_snapshot_json"]["runtime_image"]
+    assert test_snapshot["image_key"] == "deepsonar-kali-minimal", test_snapshot
+    assert test_snapshot["image_ref"].startswith("fake://deepsonar-kali-minimal@sha256:"), test_snapshot
+
     usage = req("GET", f"/runtime-image-versions/{version_id}/usage")
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}
     req("POST", f"/runtime-image-versions/{version_id}/status", {"status": "rejected", "reason": "CI cleanup"})
     req("POST", f"/projects/{project_id}/archive")
-    print("OK: standalone market, quarantine gate, project binding gate, immutable Job snapshot")
+    print("OK: standalone market, Kali Test/Verify defaults, quarantine gate, project binding gate, immutable Job snapshot")
 
 
 if __name__ == "__main__":

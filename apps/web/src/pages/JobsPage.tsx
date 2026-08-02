@@ -42,6 +42,8 @@ export function JobsPage() {
   const typeFilter = searchParams.get("type") ?? "";
   const projectFilter = searchParams.get("project") ?? "";
   const canvasFilter = searchParams.get("canvas") ?? "";
+  const cliFilter = searchParams.get("cli") ?? "";
+  const modelFilter = searchParams.get("model") ?? "";
   const selectedJob = searchParams.get("job");
   const [rows, setRows] = useState<JobSummary[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -94,7 +96,7 @@ export function JobsPage() {
     };
   }, []);
 
-  const setParam = (key: "status" | "type" | "project" | "canvas", value: string) => {
+  const setParam = (key: "status" | "type" | "project" | "canvas" | "cli" | "model", value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -106,6 +108,18 @@ export function JobsPage() {
   const typeOptions = useMemo(() => {
     const set = new Set<string>();
     for (const j of rows) if (j.type) set.add(j.type);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+
+  const cliOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const j of rows) if (j.agent_cli) set.add(j.agent_cli);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+
+  const modelOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const j of rows) if (j.model) set.add(j.model);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
@@ -142,16 +156,22 @@ export function JobsPage() {
       if (typeFilter && j.type !== typeFilter) return false;
       if (projectFilter && j.project_id !== projectFilter) return false;
       if (canvasFilter && j.canvas_id !== canvasFilter) return false;
+      if (cliFilter && (j.agent_cli ?? "") !== cliFilter) return false;
+      if (modelFilter && (j.model ?? "") !== modelFilter) return false;
       return true;
     });
-  }, [rows, status, typeFilter, projectFilter, canvasFilter]);
+  }, [rows, status, typeFilter, projectFilter, canvasFilter, cliFilter, modelFilter]);
 
-  const filterActive = Boolean(status || typeFilter || projectFilter || canvasFilter);
+  const filterActive = Boolean(
+    status || typeFilter || projectFilter || canvasFilter || cliFilter || modelFilter,
+  );
   const totalCount = rows.length;
   const filteredCount = visible.length;
   const filterChips = [
     status && `状态 ${status}`,
     typeFilter && `类型 ${typeFilter}`,
+    cliFilter && `CLI ${cliFilter}`,
+    modelFilter && `模型 ${modelFilter}`,
     projectFilter &&
       `项目 ${projectOptions.find((p) => p.id === projectFilter)?.name ?? projectFilter.slice(0, 8)}`,
     canvasFilter &&
@@ -164,6 +184,8 @@ export function JobsPage() {
     next.delete("type");
     next.delete("project");
     next.delete("canvas");
+    next.delete("cli");
+    next.delete("model");
     setSearchParams(next, { replace: true });
   };
 
@@ -212,18 +234,20 @@ export function JobsPage() {
         </div>
       )}
 
-      {/* 桌面：状态 / 类型 / 项目 / 画布 均在表头筛选 */}
+      {/* 桌面：状态 / 类型 / CLI / 模型 / 项目 / 画布 表头筛选 */}
       <div className="hidden min-w-0 md:block">
         <DataTable>
-          <table className="data-table-adaptive w-full">
+          <table className="data-table-adaptive w-full min-w-[1100px]">
             <colgroup>
-              <col style={{ width: "13%" }} />
-              <col style={{ width: "13%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "11%" }} />
               <col style={{ width: "14%" }} />
-              <col style={{ width: "20%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "16%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "11%" }} />
             </colgroup>
             <thead>
               <tr>
@@ -258,6 +282,42 @@ export function JobsPage() {
                       {typeOptions.map((t) => (
                         <option key={t} value={t}>
                           {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </th>
+                <th className="table-head-cell">
+                  <div className="table-head-stack">
+                    <span className="table-head-label">CLI 工具</span>
+                    <select
+                      value={cliFilter}
+                      onChange={(e) => setParam("cli", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按 CLI 工具筛选"
+                    >
+                      <option value="">全部</option>
+                      {cliOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </th>
+                <th className="table-head-cell">
+                  <div className="table-head-stack">
+                    <span className="table-head-label">模型</span>
+                    <select
+                      value={modelFilter}
+                      onChange={(e) => setParam("model", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按模型筛选"
+                    >
+                      <option value="">全部</option>
+                      {modelOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
                         </option>
                       ))}
                     </select>
@@ -307,7 +367,7 @@ export function JobsPage() {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-[13px] text-zinc-600">
+                  <td colSpan={9} className="px-4 py-12 text-center text-[13px] text-zinc-600">
                     {rows.length
                       ? `没有匹配当前筛选的运行（0 / 全量 ${totalCount}），可在表头调整条件`
                       : "队列为空 · 没有匹配的 Job"}
@@ -331,7 +391,37 @@ export function JobsPage() {
                         </div>
                       )}
                     </td>
-                    <td className={`${tdCls} font-mono text-[13px]`}>{j.type}</td>
+                    <td className={`${tdCls} font-mono text-[13px]`}>
+                      <div>{j.type}</div>
+                      {j.role_name && (
+                        <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-600" title={j.role_name}>
+                          {j.role_name}
+                        </div>
+                      )}
+                    </td>
+                    <td className={`${tdCls} font-mono text-[12px] text-zinc-300`}>
+                      {j.agent_cli ? (
+                        <span className="rounded-md bg-acc-500/10 px-1.5 py-0.5 text-acc-300 ring-1 ring-acc-400/20">
+                          {j.agent_cli}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-600">—</span>
+                      )}
+                    </td>
+                    <td className={`${tdCls} max-w-[160px] font-mono text-[12px] text-zinc-300`}>
+                      {j.model ? (
+                        <span className="block truncate" title={j.model}>
+                          {j.model}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-600">—</span>
+                      )}
+                      {j.credential_provider && (
+                        <div className="mt-0.5 truncate text-[10px] text-zinc-600" title={j.credential_provider}>
+                          via {j.credential_provider}
+                        </div>
+                      )}
+                    </td>
                     <td className={tdCls}>
                       <Link
                         to={`/projects/${j.project_id}/tasks`}
@@ -341,7 +431,7 @@ export function JobsPage() {
                         {j.project_name ?? j.project_id.slice(0, 8)}
                       </Link>
                     </td>
-                    <td className={`${tdCls} max-w-[200px]`}>
+                    <td className={`${tdCls} max-w-[180px]`}>
                       {j.canvas_id ? (
                         <Link
                           to={`/projects/${j.project_id}/tasks/${j.canvas_id}`}
@@ -393,7 +483,7 @@ export function JobsPage() {
         </DataTable>
       </div>
 
-      {/* 移动端：四维筛选 */}
+      {/* 移动端筛选 */}
       <div className="md:hidden">
         <div className="surface-shell mb-3">
           <div className="surface-core grid grid-cols-2 gap-2 p-3">
@@ -420,6 +510,32 @@ export function JobsPage() {
               {typeOptions.map((t) => (
                 <option key={t} value={t}>
                   {t}
+                </option>
+              ))}
+            </select>
+            <select
+              value={cliFilter}
+              onChange={(e) => setParam("cli", e.target.value)}
+              className="table-head-control max-w-none"
+              aria-label="CLI 工具"
+            >
+              <option value="">全部 CLI</option>
+              {cliOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <select
+              value={modelFilter}
+              onChange={(e) => setParam("model", e.target.value)}
+              className="table-head-control max-w-none"
+              aria-label="模型"
+            >
+              <option value="">全部模型</option>
+              {modelOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
                 </option>
               ))}
             </select>
@@ -465,6 +581,7 @@ export function JobsPage() {
                     <div className="min-w-0">
                       <span className="font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
                         {j.type}
+                        {j.role_name ? ` · ${j.role_name}` : ""}
                       </span>
                       <button
                         type="button"
@@ -473,6 +590,11 @@ export function JobsPage() {
                       >
                         {j.canvas_title ?? j.project_name ?? j.id.slice(0, 8)}
                       </button>
+                      <p className="mt-1 font-mono text-[10px] text-zinc-500">
+                        {[j.agent_cli ?? "CLI 未冻结", j.model ?? "模型未冻结"]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
                       <p className="mt-1 text-[10px] text-zinc-600">
                         {j.project_name} · {relativeTime(j.created_at)}
                       </p>

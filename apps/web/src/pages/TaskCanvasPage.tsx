@@ -463,11 +463,13 @@ export function TaskCanvasPage() {
               <EmptyState title="本任务暂无运行记录" hint="调度领取后会出现在这里" />
             ) : (
               <DataTable>
-                <table className="w-full min-w-[640px]">
+                <table className="w-full min-w-[800px]">
                   <thead>
                     <tr>
                       <th className={thCls}>状态</th>
                       <th className={thCls}>类型</th>
+                      <th className={thCls}>CLI 工具</th>
+                      <th className={thCls}>模型</th>
                       <th className={thCls}>开始</th>
                       <th className={thCls}>创建</th>
                     </tr>
@@ -486,7 +488,24 @@ export function TaskCanvasPage() {
                             </div>
                           )}
                         </td>
-                        <td className={`${tdCls} font-mono text-[13px]`}>{j.type}</td>
+                        <td className={`${tdCls} font-mono text-[13px]`}>
+                          <div>{j.type}</div>
+                          {j.role_name && (
+                            <div className="mt-0.5 font-mono text-[11px] text-zinc-600">{j.role_name}</div>
+                          )}
+                        </td>
+                        <td className={`${tdCls} font-mono text-[12px]`}>
+                          {j.agent_cli ? (
+                            <span className="rounded-md bg-acc-500/10 px-1.5 py-0.5 text-acc-300 ring-1 ring-acc-400/20">
+                              {j.agent_cli}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-600">—</span>
+                          )}
+                        </td>
+                        <td className={`${tdCls} max-w-[180px] truncate font-mono text-[12px] text-zinc-300`} title={j.model ?? undefined}>
+                          {j.model ?? "—"}
+                        </td>
                         <td className={`${tdCls} font-mono text-[13px] text-zinc-500`}>
                           {formatTime(j.started_at)}
                         </td>

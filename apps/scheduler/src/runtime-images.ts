@@ -40,6 +40,21 @@ function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
 
 /** 启动时只接纳管理员显式配置的不可变官方引用；tag 不会被静默信任。 */
 export async function bootstrapOfficialRuntimeImages(): Promise<void> {
+  // 只迁移从未编辑过的旧内置默认值；用户改过（version > 1）的配置保持不动。
+  await sql`
+    UPDATE role_configs rc SET runtime_image_key = 'deepsonar-kali-minimal', version = version + 1, updated_at = now()
+    FROM agent_roles r
+    WHERE rc.role_id = r.id AND rc.project_id IS NULL AND rc.version = 1
+      AND ((r.name = 'test' AND rc.runtime_image_key = 'deepsonar-base')
+        OR (r.name = 'verify' AND rc.runtime_image_key = 'deepsonar-audit'))`;
+  await sql`
+    UPDATE runtime_images SET
+      name = 'DeepSonar Kali Test',
+      description = 'Test 与 Verify 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI',
+      project_opt_in = false,
+      updated_at = now()
+    WHERE image_key = 'deepsonar-kali-minimal' AND official = true`;
+
   const configured = [
     { key: "deepsonar-base", ref: config.images.officialBaseRef },
     { key: "deepsonar-audit", ref: config.images.officialAuditRef || (immutableDigest(config.runtime.imageAudit) ? config.runtime.imageAudit : "") },
@@ -85,7 +100,11 @@ export async function resolveRuntimeImageForJob(
   roleName: string,
   configuredKey: string | null,
 ): Promise<RuntimeImageSnapshot> {
-  const imageKey = configuredKey || (roleName === "audit" || roleName === "verify" ? "deepsonar-audit" : "deepsonar-base");
+  const imageKey = configuredKey || (
+    roleName === "test" || roleName === "verify"
+      ? "deepsonar-kali-minimal"
+      : roleName === "audit" ? "deepsonar-audit" : "deepsonar-base"
+  );
   const [row] = await db`
     SELECT ri.id AS runtime_image_id, ri.image_key, ri.source_kind, ri.official,
            riv.id AS runtime_image_version_id, riv.resolved_ref, riv.digest,
