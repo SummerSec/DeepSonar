@@ -38,7 +38,7 @@ export async function reconcileOnBoot(): Promise<void> {
     UPDATE jobs SET status = 'orphan', finished_at = now(),
                     error = COALESCE(error, '') || '调度器重启（执行中断）'
     WHERE status = 'running'
-    RETURNING id, sandbox_id`;
+    RETURNING id, sandbox_id, type, canvas_id, project_id, priority, error`;
   const containerByJob = new Map(containers.map((c) => [c.jobId, c.containerId]));
   for (const j of orphaned) {
     const cid = (j.sandbox_id as string | null) ?? containerByJob.get(j.id as string);
@@ -48,10 +48,43 @@ export async function reconcileOnBoot(): Promise<void> {
     }
     await sql`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
-      WHERE job_id = ${j.id} AND node_type = ANY(${["job", "intent"]})`;
+      WHERE job_id = ${j.id} AND node_type = ANY(${["job", "intent", "report"]})`;
     // §6.3：orphan 即吊销短期模型 Token
     const { revokeJobTokens } = await import("./gateway.js");
     await revokeJobTokens(j.id as string, "orphan_reconcile").catch(() => {});
+
+    // 启动恢复也必须执行与实时终态入口相同的业务收口，不能只改 jobs 表。
+    if (j.type === "verify_finding") {
+      const { recoverVerifyJobTerminal } = await import("./core.js");
+      await recoverVerifyJobTerminal(j.id as string, "orphan", (j.error as string) ?? null).catch((e) =>
+        console.error(`[reconcile] verify recovery failed:`, e),
+      );
+    } else if (j.type === "report") {
+      const { finalizeReportJob } = await import("./report.js");
+      await sql.begin(async (tx) => {
+        await finalizeReportJob(tx as unknown as typeof sql, j.id as string, {
+          failed: true,
+          error: (j.error as string) ?? "orphan_reconcile",
+        });
+      }).catch((e) => console.error(`[reconcile] report recovery failed:`, e));
+    }
+
+    if (j.canvas_id && j.type !== "report") {
+      const { advanceCanvasAfterTerminalJob } = await import("./core.js");
+      await sql.begin(async (tx) => {
+        await advanceCanvasAfterTerminalJob(
+          tx as unknown as typeof sql,
+          {
+            id: j.id,
+            project_id: j.project_id,
+            canvas_id: j.canvas_id,
+            type: j.type,
+            priority: j.priority ?? 0,
+          },
+          "orphan",
+        );
+      }).catch((e) => console.error(`[reconcile] terminal canvas advance failed:`, e));
+    }
     await planeWriteback(j.id as string).catch(() => {});
   }
   if (orphaned.length > 0) {

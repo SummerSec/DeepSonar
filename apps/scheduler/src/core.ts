@@ -953,29 +953,14 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
       trigger: hubTrigger,
     });
   }
-  // 无论成功失败：若画布已空闲且分析未完成，再尝试 idle 唤醒（幂等：有活跃 hub/工作则内部跳过）
+  // 无论成功失败：统一推进画布终态。
+  // Root 已 analysis_complete 时优先派 Report；否则按 canvas_idle 规则唤醒 Hub。
+  // 这也覆盖 Hub 已提交 complete、但随后 failed 的窗口，避免 Root 永久卡住。
   if (job?.canvas_id) {
-    await maybeTriggerHub(tx, job, {
-      force: false,
+    await advanceCanvasAfterTerminalJob(tx, job, status, {
       sourceNodeIds: hubSourceNodeIds,
-      trigger: hubTrigger ?? {
-        kind: "canvas_idle",
-        after_job_id: jobId,
-        after_job_type: job.type,
-        after_job_status: status,
-      },
-      idleWake: true,
+      trigger: hubTrigger,
     });
-  }
-
-  // 收敛检查：若 Root 已 analysis_complete 可尝试报告
-  if (job?.canvas_id && status === "succeeded") {
-    const [root] = await tx`
-      SELECT status FROM canvas_nodes WHERE canvas_id = ${job.canvas_id as string} AND node_type = 'root' LIMIT 1`;
-    if (root?.status === "analysis_complete" || root?.status === "reporting") {
-      const { maybeDispatchReport } = await import("./report.js");
-      await maybeDispatchReport(tx, job.canvas_id as string);
-    }
   }
   return true;
 }
@@ -1017,6 +1002,55 @@ export async function recoverVerifyJobTerminal(
       );
     }
   });
+}
+
+export type CanvasJobTerminalStatus =
+  | "succeeded"
+  | "failed"
+  | "timeout"
+  | "orphan"
+  | "cancelled";
+
+/**
+ * 任意非 Report Job 进入终态后的统一画布推进。
+ *
+ * Hub 的 complete 提案与 mark_job_done 是两条独立事件：如果两者之间执行失败、
+ * Reaper 收口或调度器重启，Root 已是 analysis_complete，但不会经过 succeeded finalize。
+ * 因此所有终态入口都必须先尝试 Report，再回落到普通 canvas_idle Hub 唤醒。
+ */
+export async function advanceCanvasAfterTerminalJob(
+  tx: Tx,
+  job: Record<string, unknown>,
+  terminalStatus: CanvasJobTerminalStatus,
+  opts: {
+    sourceNodeIds?: string[];
+    trigger?: Record<string, unknown>;
+  } = {},
+): Promise<"report" | "hub" | "noop"> {
+  const canvasId = job.canvas_id as string | null;
+  if (!canvasId || job.type === "report") return "noop";
+
+  const [root] = await tx`
+    SELECT status FROM canvas_nodes
+    WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+  if (root?.status === "analysis_complete" || root?.status === "reporting") {
+    const { maybeDispatchReport } = await import("./report.js");
+    await maybeDispatchReport(tx, canvasId);
+    return "report";
+  }
+
+  await maybeTriggerHub(tx, job, {
+    force: false,
+    sourceNodeIds: opts.sourceNodeIds ?? [],
+    trigger: opts.trigger ?? {
+      kind: "canvas_idle",
+      after_job_id: job.id,
+      after_job_type: job.type,
+      after_job_status: terminalStatus,
+    },
+    idleWake: true,
+  });
+  return "hub";
 }
 
 /**

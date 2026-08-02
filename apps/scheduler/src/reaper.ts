@@ -74,12 +74,12 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
         });
       }).catch(() => {});
     }
-    // 任意 job 被 reaper 收口后：若画布已无待跑节点，空闲唤醒 Hub
+    // 任意非 Report job 被 reaper 收口后统一推进：analysis_complete → Report，否则空闲唤醒 Hub。
     if (meta?.canvas_id && meta.type !== "report") {
-      const { maybeTriggerHub } = await import("./core.js");
+      const { advanceCanvasAfterTerminalJob } = await import("./core.js");
       await sql.begin(async (txRaw) => {
         const tx = txRaw as unknown as typeof sql;
-        await maybeTriggerHub(
+        await advanceCanvasAfterTerminalJob(
           tx,
           {
             id: meta.id,
@@ -88,17 +88,9 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
             type: meta.type,
             priority: meta.priority ?? 0,
           },
-          {
-            idleWake: true,
-            trigger: {
-              kind: "canvas_idle",
-              after_job_id: meta.id,
-              after_job_type: meta.type,
-              after_job_status: isTimeout ? "timeout" : isProvision ? "failed" : "orphan",
-            },
-          },
+          isTimeout ? "timeout" : isProvision ? "failed" : "orphan",
         );
-      }).catch((e) => console.error(`[reaper] idle hub wake failed:`, e));
+      }).catch((e) => console.error(`[reaper] terminal canvas advance failed:`, e));
     }
 
     const { planeWriteback } = await import("./plane-sync.js");

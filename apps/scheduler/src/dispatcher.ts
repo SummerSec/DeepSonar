@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import {
+  advanceCanvasAfterTerminalJob,
   globalRules,
   ingestEvent,
   recoverVerifyJobTerminal,
@@ -229,26 +230,17 @@ async function runJob(jobId: string) {
         await finalizeReportJob(tx as unknown as typeof sql, jobId, { failed: true, error: msg });
       }).catch(() => {});
     }
-    // 异常失败后：画布无待跑节点则空闲唤醒 Hub
+    // 异常失败后统一推进画布：analysis_complete → Report，否则空闲唤醒 Hub。
     if (failed[0] && failed[0].type !== "report") {
       const [meta] = await sql`SELECT id, type, canvas_id, project_id, priority FROM jobs WHERE id = ${jobId}`;
       if (meta?.canvas_id) {
-        const { maybeTriggerHub } = await import("./core.js");
         await sql.begin(async (txRaw) => {
-          await maybeTriggerHub(
+          await advanceCanvasAfterTerminalJob(
             txRaw as unknown as typeof sql,
             meta as Record<string, unknown>,
-            {
-              idleWake: true,
-              trigger: {
-                kind: "canvas_idle",
-                after_job_id: jobId,
-                after_job_type: meta.type,
-                after_job_status: "failed",
-              },
-            },
+            "failed",
           );
-        }).catch((err) => console.error(`[dispatcher] idle hub wake failed:`, err));
+        }).catch((err) => console.error(`[dispatcher] terminal canvas advance failed:`, err));
       }
     }
   } finally {
