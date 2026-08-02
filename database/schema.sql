@@ -547,6 +547,7 @@ $instructions$),
 4. 不重复开放或已完成意图；优先派发能最大幅度缩小关键不确定性的最少任务，并遵守本轮意图数量上限。
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
 6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认工具调用；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回 `accepted event`。
+7. complete 的硬门槛：画布上每条 Finding 都必须已有验证结论，且判定成立的 Finding 必须具备真实可复现证据与复现流程 SOP（环境/版本、前置条件、逐步操作、成功判据），能在他处照单复现；仅凭静态分析、推断或无法复核的描述不算成立，更不得伪造复现过程。缺复现证据时派发 test 等角色做真实复现并产出 SOP，而不是直接 complete。
 
 ### 平台工具使用
 
@@ -617,10 +618,12 @@ INSERT INTO global_settings (id, rules_json) VALUES (
   }'::jsonb
 ) ON CONFLICT DO NOTHING;
 
--- 项目数据包导入导出（应用级 .deepsonarpack，非 pg_dump）
+-- 项目 / 平台数据包导入导出（应用级 .deepsonarpack，非 pg_dump）
+-- project_id NULL = 平台级导出（全局规则、角色、Skill 源等）
 CREATE TABLE data_exports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
+  scope text NOT NULL DEFAULT 'project',
   preset text NOT NULL,
   modules_json jsonb NOT NULL DEFAULT '[]',
   options_json jsonb NOT NULL DEFAULT '{}',
@@ -640,10 +643,14 @@ CREATE TABLE data_exports (
   started_at timestamptz,
   finished_at timestamptz,
   CONSTRAINT data_exports_status_check
-    CHECK (status IN ('pending','collecting','packaging','succeeded','failed','cancelled','expired'))
+    CHECK (status IN ('pending','collecting','packaging','succeeded','failed','cancelled','expired')),
+  CONSTRAINT data_exports_scope_check CHECK (scope IN ('project', 'platform')),
+  CONSTRAINT data_exports_project_scope_check
+    CHECK ((scope = 'platform' AND project_id IS NULL) OR (scope = 'project' AND project_id IS NOT NULL))
 );
 CREATE INDEX data_exports_project_idx ON data_exports (project_id, created_at DESC);
 CREATE INDEX data_exports_status_idx ON data_exports (status, created_at DESC);
+CREATE INDEX data_exports_scope_idx ON data_exports (scope, created_at DESC);
 
 CREATE TABLE data_imports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -651,6 +658,7 @@ CREATE TABLE data_imports (
   source_sha256 text NOT NULL,
   source_manifest_json jsonb,
   target_project_id uuid REFERENCES projects(id),
+  scope text NOT NULL DEFAULT 'project',
   mode text,
   selected_modules_json jsonb NOT NULL DEFAULT '[]',
   options_json jsonb NOT NULL DEFAULT '{}',
@@ -668,9 +676,11 @@ CREATE TABLE data_imports (
   started_at timestamptz,
   finished_at timestamptz,
   CONSTRAINT data_imports_status_check
-    CHECK (status IN ('uploaded','validating','preview_ready','applying','succeeded','failed','cancelled'))
+    CHECK (status IN ('uploaded','validating','preview_ready','applying','succeeded','failed','cancelled')),
+  CONSTRAINT data_imports_scope_check CHECK (scope IN ('project', 'platform'))
 );
 CREATE INDEX data_imports_status_idx ON data_imports (status, created_at DESC);
 CREATE INDEX data_imports_sha_idx ON data_imports (source_sha256);
+CREATE INDEX data_imports_scope_idx ON data_imports (scope, created_at DESC);
 
 COMMIT;
