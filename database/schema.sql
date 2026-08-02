@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 5);
+INSERT INTO schema_meta (id, version) VALUES ('global', 6);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -239,6 +239,30 @@ CREATE TABLE credentials (
   CONSTRAINT credentials_status_check
     CHECK (status IN ('active', 'disabled', 'rotation_required'))
 );
+
+-- 短期 Job Token（§6.3 Model Gateway：沙箱不持有长期 Provider Key，明文只注入本 Job 沙箱 env）
+CREATE TABLE job_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  credential_id uuid NOT NULL REFERENCES credentials(id),
+  token_prefix text NOT NULL UNIQUE,
+  token_hash text NOT NULL,
+  allowed_models text[] NOT NULL DEFAULT '{}',
+  max_requests int NOT NULL,
+  max_tokens bigint,
+  used_requests int NOT NULL DEFAULT 0,
+  used_tokens bigint NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'active',
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  revoke_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_tokens_status_check
+    CHECK (status IN ('active', 'expired', 'exhausted', 'revoked'))
+);
+
+CREATE INDEX job_tokens_job_idx ON job_tokens (job_id);
 
 -- 角色运行配置（全局 project_id IS NULL + 项目级覆盖）
 CREATE TABLE role_configs (
