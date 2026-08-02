@@ -331,9 +331,16 @@ async function bounceReportGateToHub(
 /**
  * 在 Root 为 analysis_complete 且全部 Finding ∈ {confirmed, needs_human} 时，幂等创建唯一 Report Job。
  * severity 只影响优先级，不改变收敛集合；needs_human 进报告待人工章节，SARIF 仅 confirmed。
- * 未收敛则回弹 Hub 并列出问题 Finding。
+ *
+ * 时序：Hub complete 同事务内当前 Hub 可能仍 running —— 此时只 **等待**，保持 analysis_complete，
+ * **禁止** bounceReportGateToHub（否则 Root 被打回 running，空转烧 maxHubRounds）。
+ * Hub finalize 后 finalizeJob 会再次调用本函数。
  */
-export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
+export async function maybeDispatchReport(
+  tx: Tx,
+  canvasId: string,
+  opts?: { excludeJobId?: string | null },
+): Promise<{
   dispatched: boolean;
   reason?: string;
   bounced?: boolean;
@@ -351,30 +358,28 @@ export async function maybeDispatchReport(tx: Tx, canvasId: string): Promise<{
   if (!canvas) return { dispatched: false, reason: "no_canvas" };
   const projectId = canvas.project_id as string;
 
-  // 统一完成门子集：Finding 收敛 + 至少一次角色工作（与 Hub complete 一致，防空图报告）
+  // 统一完成门：Finding 收敛 + 角色工作 + 无活跃 Job（可排除当前 Hub）
   const { careSeverityMeta, evaluateAnalysisCompleteGate } = await import("./verify.js");
   const careMeta = await careSeverityMeta(tx, projectId);
-  const gate = await evaluateAnalysisCompleteGate(tx, canvasId);
+  const gate = await evaluateAnalysisCompleteGate(tx, canvasId, {
+    excludeJobId: opts?.excludeJobId ?? null,
+  });
   if (!gate.ok) {
-    // 仅 Finding 未收敛时回弹 Hub；no_role_work 不应回弹空转，直接拒绝
+    // active_work：保持 analysis_complete，等当前 Job 终态后再派（不 bounce）
+    if (gate.blockers.includes("active_work")) {
+      return { dispatched: false, reason: "active_work", problems: gate.problems };
+    }
+    // 空图：不回弹空转
     if (gate.blockers.includes("no_role_work")) {
       return { dispatched: false, reason: "no_role_work", problems: gate.problems };
     }
+    // Finding 真正未收敛：回弹 Hub
     return bounceReportGateToHub(tx, canvasId, projectId, gate.problems, {
       minVerifySeverity: careMeta.minVerifySeverity,
       careSeverities: careMeta.careSeverities,
-      reason: "analysis_complete_gate_failed",
+      reason: "findings_not_converged",
     });
   }
-
-  // 活跃普通/Hub/Verify 工作（允许 report 自身）
-  const active = await tx`
-    SELECT 1 FROM jobs
-    WHERE canvas_id = ${canvasId}
-      AND type <> 'report'
-      AND status IN ('pending','claimed','provisioning','running','waiting_human')
-    LIMIT 1`;
-  if (active.length > 0) return { dispatched: false, reason: "active_work" };
 
   const [existing] = await tx`
     SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId}`;

@@ -736,8 +736,9 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, root.id as string, "to");
         }
       }
+      // 同事务内当前 Hub 仍 running：exclude 后若仍有 active 则等待，finalize 时再派 Report
       const { maybeDispatchReport } = await import("./report.js");
-      await maybeDispatchReport(tx, canvasId);
+      await maybeDispatchReport(tx, canvasId, { excludeJobId: jobId });
       return;
     }
 
