@@ -92,7 +92,7 @@ export function TokensPanel() {
 
   return (
     <div className="flex flex-col gap-4 p-4 text-[13px]">
-      {/* 本机调用令牌（DFH_AUTH_REQUIRED 开启后 Web 自身也需要） */}
+      {/* 本机调用令牌（DEEPSONAR_AUTH_REQUIRED 开启后 Web 自身也需要） */}
       <div className="rounded-[10px] border border-ink-700 bg-ink-850/60 p-3">
         <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[12px] uppercase tracking-[0.12em] text-zinc-500">
           <Key size={13} /> 本机访问令牌
@@ -101,7 +101,7 @@ export function TokensPanel() {
           <input
             value={localToken}
             onChange={(e) => setLocalTokenInput(e.target.value)}
-            placeholder="dfh_dev_xxxxxxxx_...（开启鉴权后 Web 访问 API 用）"
+            placeholder="deepsonar_dev_xxxxxxxx_...（开启鉴权后 Web 访问 API 用）"
             className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
           />
           <button
@@ -214,7 +214,7 @@ export function TokensPanel() {
             >
               <div className="flex items-center gap-2">
                 <span className="text-[13px] font-medium text-zinc-100">{t.name}</span>
-                <code className="font-mono text-[12px] text-zinc-500">dfh_*_{t.token_prefix}_…</code>
+                <code className="font-mono text-[12px] text-zinc-500">deepsonar_*_{t.token_prefix}_…</code>
                 {revoked && <span className="font-mono text-[11px] text-red-400">已吊销</span>}
                 <span className="ml-auto flex gap-1">
                   {!revoked && (

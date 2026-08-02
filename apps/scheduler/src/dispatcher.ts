@@ -98,7 +98,7 @@ async function runJob(jobId: string) {
       runner.provision({
         jobId,
         image: runtimeImage,
-        env: useReal ? { DFH_ALLOW_EGRESS: allowEgress ? "1" : "0" } : undefined,
+        env: useReal ? { DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0" } : undefined,
         network: useReal ? (allowEgress ? "egress" : "restricted") : "none",
         gatewayUpstreamUrl: useReal && !allowEgress ? config.gateway.sandboxUrl : undefined,
         limits: config.runtime.sandboxLimits,
@@ -132,7 +132,7 @@ async function runJob(jobId: string) {
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    inc("dfh_jobs_failed_total", { reason: "exception" });
+    inc("deepsonar_jobs_failed_total", { reason: "exception" });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
     await sql`UPDATE jobs SET status = 'failed', finished_at = now(), error = ${msg} WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')`;
     await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'running'`;
@@ -141,7 +141,7 @@ async function runJob(jobId: string) {
     if (handle) {
       const h = handle;
       await runner.destroy(h).catch((e) => {
-        inc("dfh_sandbox_cleanup_failed_total");
+        inc("deepsonar_sandbox_cleanup_failed_total");
         console.error(`[dispatcher] 沙箱回收失败 ${h.sandboxId}:`, e);
       });
     }
@@ -358,7 +358,7 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
 
 /**
  * 事件驱动的领取触发器（§4.2：全程事件触发，无轮询）：
- * jobs 表触发器 pg_notify('dfh_jobs') → LISTEN 收到即跑一轮 dispatchOnce。
+ * jobs 表触发器 pg_notify('deepsonar_jobs') → LISTEN 收到即跑一轮 dispatchOnce。
  * 重入保护：运行中再来事件只标记补跑，不并发抢。
  */
 let kickRunning = false;
@@ -386,11 +386,11 @@ export function kickDispatcher() {
 
 export function startDispatcher() {
   // 事件源：DB LISTEN/NOTIFY（0005_job_events.sql；NOTIFY 提交后投递，与事务可见性一致）
-  const listenPromise = sql.listen("dfh_jobs", () => kickDispatcher());
+  const listenPromise = sql.listen("deepsonar_jobs", () => kickDispatcher());
   // 启动补跑： scheduler 停机期间堆积的 pending job 不会产生新事件，先清一次
   void listenPromise.then(() => kickDispatcher()).catch((e) => console.error("[dispatcher] LISTEN 失败:", e));
 
-  // 兜底轮询默认关闭；DFH_DISPATCH_POLL_SEC>0 显式开启（调试/极端场景用）
+  // 兜底轮询默认关闭；DEEPSONAR_DISPATCH_POLL_SEC>0 显式开启（调试/极端场景用）
   let timer: ReturnType<typeof setInterval> | null = null;
   if (config.timeouts.dispatchPollSec > 0) {
     timer = setInterval(() => kickDispatcher(), config.timeouts.dispatchPollSec * 1000);

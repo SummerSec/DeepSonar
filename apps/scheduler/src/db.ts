@@ -10,7 +10,7 @@ export const sql = postgres(config.databaseUrl, {
   idle_timeout: config.db.idleTimeoutSec,
   connect_timeout: config.db.connectTimeoutSec,
   connection: {
-    application_name: "dfh-scheduler",
+    application_name: "deepsonar-scheduler",
     statement_timeout: config.db.statementTimeoutMs,
   },
 });

@@ -15,7 +15,7 @@ import { sql } from "./db.js";
 
 const execFileP = promisify(execFile);
 
-/** 仓库 URL 校验（§5.1 安全要求）：仅 https（host 白名单复用 DFH_GIT_ALLOWED_HOSTS）；禁 file://、本地路径、内嵌凭据 */
+/** 仓库 URL 校验（§5.1 安全要求）：仅 https（host 白名单复用 DEEPSONAR_GIT_ALLOWED_HOSTS）；禁 file://、本地路径、内嵌凭据 */
 export function validateSourceUrl(url: string): void {
   let parsed: URL;
   try {
@@ -162,7 +162,7 @@ export async function syncSkillSource(sourceId: string, syncedBy?: string | null
   if (!src) throw new Error(`skill source ${sourceId} 不存在`);
   if ((src.trust_status as string) === "disabled") throw new Error("模块源已禁用，不能同步");
 
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "dfh-src-"));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-src-"));
   try {
     try {
       await execFileP("git", ["clone", "--depth", "1", "--branch", src.branch as string, src.repo_url as string, tmp], { timeout: 120_000 });

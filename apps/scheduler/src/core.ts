@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { EventEnvelope, FindingPayload } from "@dfh/shared-types";
+import type { EventEnvelope, FindingPayload } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
@@ -228,7 +228,7 @@ export async function createJob(input: CreateJobInput) {
         ingress_key: input.ingressKey ?? null,
       })}
       RETURNING *`;
-    inc("dfh_jobs_created_total", { type: input.type });
+    inc("deepsonar_jobs_created_total", { type: input.type });
     return { job, duplicated: false };
   } catch (e: unknown) {
     // jobs_active_issue_uniq：已有活动 job 占用同一 issue
@@ -761,12 +761,12 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   // verify_finding 闭环：结论写回 finding；confirmed 强制交给 Hub 验收并决定后续 Agent。
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // §13.1 指标：终态计数 + 时长
-  if (status === "failed") inc("dfh_jobs_failed_total", { reason: "failed" });
+  if (status === "failed") inc("deepsonar_jobs_failed_total", { reason: "failed" });
   if (job?.started_at) {
     const dur = (Date.now() - new Date(job.started_at as string).getTime()) / 1000;
     if (dur > 0) {
-      inc("dfh_job_duration_seconds_sum", undefined, Math.round(dur));
-      inc("dfh_job_duration_seconds_count");
+      inc("deepsonar_job_duration_seconds_sum", undefined, Math.round(dur));
+      inc("deepsonar_job_duration_seconds_count");
     }
   }
   let forceHubReview = false;
@@ -898,7 +898,7 @@ async function maybeTriggerHub(
 
 /** 系统保留环境变量：RoleConfig 与配置文件一律不得覆盖 */
 export const RESERVED_ENV_KEYS = new Set([
-  "DFH_JOB_TOKEN",
+  "DEEPSONAR_JOB_TOKEN",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
@@ -909,7 +909,7 @@ export const RESERVED_ENV_KEYS = new Set([
   "HOME",
   "NODE_OPTIONS",
 ]);
-const RESERVED_ENV_PREFIXES = ["AGENTBOX_", "DFH_"];
+const RESERVED_ENV_PREFIXES = ["AGENTBOX_", "DEEPSONAR_"];
 const SENSITIVE_ENV_NAME = /TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|COOKIE|CREDENTIAL/i;
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_MAX_COUNT = 50;

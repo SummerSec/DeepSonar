@@ -7,4 +7,4 @@ data/
 .playwright-cli/
 deploy/.env
 deploy/master.key
-.dfh-master-key
+.deepsonar-master-key

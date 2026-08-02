@@ -1,18 +1,18 @@
 /**
  * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络，只把 Agent 的语义提案
- * 追加到 /workspace/.dfh/control-events.jsonl；宿主经 agentbox 控制通道增量读取。
+ * 追加到 /workspace/.deepsonar/control-events.jsonl；宿主经 agentbox 控制通道增量读取。
  */
-export const CONTROL_MCP_NAME = "deepflowhunter-control";
-export const CONTROL_EVENT_FILE = "/workspace/.dfh/control-events.jsonl";
+export const CONTROL_MCP_NAME = "deepsonar-control";
+export const CONTROL_EVENT_FILE = "/workspace/.deepsonar/control-events.jsonl";
 
 export const CONTROL_MCP_SERVER = String.raw`import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import readline from "node:readline";
 
-const outputFile = process.env.DFH_CONTROL_EVENT_FILE;
-const allowed = new Set(JSON.parse(process.env.DFH_CONTROL_TOOL_NAMES || "[]"));
-if (!outputFile) throw new Error("DFH_CONTROL_EVENT_FILE is required");
+const outputFile = process.env.DEEPSONAR_CONTROL_EVENT_FILE;
+const allowed = new Set(JSON.parse(process.env.DEEPSONAR_CONTROL_TOOL_NAMES || "[]"));
+if (!outputFile) throw new Error("DEEPSONAR_CONTROL_EVENT_FILE is required");
 mkdirSync(dirname(outputFile), { recursive: true });
 
 const definitions = {
@@ -69,7 +69,7 @@ rl.on("line", (line) => {
   if (request.id == null) return;
   try {
     if (request.method === "initialize") {
-      reply({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2024-11-05", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "deepflowhunter-control", version: "1" } } });
+      reply({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2024-11-05", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "deepsonar-control", version: "1" } } });
     } else if (request.method === "ping") {
       reply({ jsonrpc: "2.0", id: request.id, result: {} });
     } else if (request.method === "tools/list") {

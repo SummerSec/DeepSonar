@@ -27,7 +27,7 @@ const ACCENT_THEMES = [
 type AccentTheme = (typeof ACCENT_THEMES)[number]["id"];
 
 function initialAccentTheme(): AccentTheme {
-  const stored = localStorage.getItem("dfh:accent-theme");
+  const stored = localStorage.getItem("deepsonar:accent-theme");
   return ACCENT_THEMES.some((theme) => theme.id === stored) ? stored as AccentTheme : "mint";
 }
 
@@ -40,17 +40,17 @@ export function AppShell() {
   const projectId = projectMatch?.params.projectId;
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("dfh:rail") === "collapsed");
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("deepsonar:rail") === "collapsed");
   const [accentTheme, setAccentTheme] = useState<AccentTheme>(initialAccentTheme);
   const location = useLocation();
   const navigate = useNavigate();
   useEffect(() => setMenuOpen(false), [location.pathname]);
-  useEffect(() => { localStorage.setItem("dfh:rail", collapsed ? "collapsed" : "expanded"); }, [collapsed]);
+  useEffect(() => { localStorage.setItem("deepsonar:rail", collapsed ? "collapsed" : "expanded"); }, [collapsed]);
   useEffect(() => {
     const selected = ACCENT_THEMES.find((theme) => theme.id === accentTheme) ?? ACCENT_THEMES[0];
     document.documentElement.dataset.accentTheme = accentTheme;
     document.documentElement.dataset.colorScheme = selected.scheme;
-    localStorage.setItem("dfh:accent-theme", accentTheme);
+    localStorage.setItem("deepsonar:accent-theme", accentTheme);
   }, [accentTheme]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -67,11 +67,11 @@ export function AppShell() {
       <ThemePicker value={accentTheme} collapsed={collapsed} onChange={setAccentTheme} />
       <button className="command-trigger" onClick={() => setCommandOpen(true)} title="打开命令菜单"><MagnifyingGlass size={15} weight="light" /><span>搜索与跳转</span><kbd>⌘ K</kbd></button>
       <MainNav projectId={projectId} />
-      <div className="rail-status"><span className="dfh-live-dot" /><div><strong>Scheduler online</strong><small>状态每 5 秒同步</small></div></div>
+      <div className="rail-status"><span className="deepsonar-live-dot" /><div><strong>Scheduler online</strong><small>状态每 5 秒同步</small></div></div>
     </div></aside>
 
     <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>深流循迹</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
-    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><div className="mobile-menu-foot"><span className="dfh-live-dot" /> 调度器在线</div></div>
+    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><div className="mobile-menu-foot"><span className="deepsonar-live-dot" /> 调度器在线</div></div>
     {commandOpen && <CommandMenu projectId={projectId} onClose={() => setCommandOpen(false)} onNavigate={(to) => { navigate(to); setCommandOpen(false); }} />}
     <main id="main-content" className="app-stage"><Outlet /></main>
   </div>;

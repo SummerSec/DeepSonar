@@ -1,5 +1,5 @@
 {
-  "name": "deepflowhunter",
+  "name": "deepsonar",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -8,14 +8,14 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm --filter @dfh/scheduler dev",
-    "dev:web": "pnpm --filter @dfh/web dev",
+    "dev": "pnpm --filter @deepsonar/scheduler dev",
+    "dev:web": "pnpm --filter @deepsonar/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:up": "docker compose -f deploy/docker-compose.yml up -d",
     "db:down": "docker compose -f deploy/docker-compose.yml down",
-    "predev": "pnpm -r --filter @dfh/shared-types --filter @dfh/plane-client --filter @dfh/runtime-sandbox build",
-    "predev:web": "pnpm -r --filter @dfh/shared-types --filter @dfh/plane-client --filter @dfh/runtime-sandbox build"
+    "predev": "pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/plane-client --filter @deepsonar/runtime-sandbox build",
+    "predev:web": "pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/plane-client --filter @deepsonar/runtime-sandbox build"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

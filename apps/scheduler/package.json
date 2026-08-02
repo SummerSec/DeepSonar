@@ -1,5 +1,5 @@
 {
-  "name": "@dfh/scheduler",
+  "name": "@deepsonar/scheduler",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,9 +10,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@dfh/plane-client": "workspace:*",
-    "@dfh/runtime-sandbox": "workspace:*",
-    "@dfh/shared-types": "workspace:*",
+    "@deepsonar/plane-client": "workspace:*",
+    "@deepsonar/runtime-sandbox": "workspace:*",
+    "@deepsonar/shared-types": "workspace:*",
     "@fastify/websocket": "^11.3.0",
     "fastify": "^5.2.0",
     "postgres": "^3.4.5",

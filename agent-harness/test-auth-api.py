@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AUTH 工作包验收（SEC-01/§6.1）：平台 API Token 鉴权
-需要一个 DFH_AUTH_REQUIRED=true + DFH_ADMIN_TOKEN 的实例（默认 3101 端口）：
-  DFH_AUTH_REQUIRED=true DFH_ADMIN_TOKEN=boot-secret SCHEDULER_PORT=3101 pnpm --filter @dfh/scheduler dev
+需要一个 DEEPSONAR_AUTH_REQUIRED=true + DEEPSONAR_ADMIN_TOKEN 的实例（默认 3101 端口）：
+  DEEPSONAR_AUTH_REQUIRED=true DEEPSONAR_ADMIN_TOKEN=boot-secret SCHEDULER_PORT=3101 pnpm --filter @deepsonar/scheduler dev
 """
 import json
 import urllib.request
@@ -33,7 +33,7 @@ def main():
 
     # 2. 无 token / 坏 token → 401
     req("GET", "/projects", expect=401)
-    req("GET", "/projects", token="dfh_dev_00000000_wrongsecret123456", expect=401)
+    req("GET", "/projects", token="deepsonar_dev_00000000_wrongsecret123456", expect=401)
     req("GET", "/projects", token="not-a-token", expect=401)
     print("未认证 401 OK")
 
@@ -44,7 +44,7 @@ def main():
     # 4. 创建受限 token（tasks:read），明文只返回一次
     t = req("POST", "/tokens", {"name": f"ci-{uuid.uuid4().hex[:6]}", "scopes": ["tasks:read"]}, ADMIN, 201)
     plaintext = t["token"]
-    assert plaintext.startswith("dfh_dev_") and t["token_prefix"] in plaintext
+    assert plaintext.startswith("deepsonar_dev_") and t["token_prefix"] in plaintext
     tid = t["id"]
     # 列表不回明显文/哈希
     lst = req("GET", "/tokens", token=ADMIN)
@@ -87,7 +87,7 @@ def main():
     # 9. 过期 token → 401（直接改库过期时间）
     t4 = req("POST", "/tokens", {"name": "exp", "scopes": ["tasks:read"], "expires_in_days": 1}, ADMIN, 201)
     import subprocess
-    subprocess.run(["docker", "exec", "dfh-postgres", "psql", "-U", "dfh", "-d", "deepflowhunter", "-c",
+    subprocess.run(["docker", "exec", "deepsonar-postgres", "psql", "-U", "deepsonar", "-d", "deepsonar", "-c",
                     f"UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = '{t4['id']}';"],
                    check=True, capture_output=True)
     req("GET", "/jobs", token=t4["token"], expect=401)

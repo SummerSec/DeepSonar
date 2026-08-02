@@ -3,8 +3,8 @@ import { CheckCircle, FileText, FileX } from "@phosphor-icons/react";
 import type { CanvasNode } from "./api";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
-export type DFHNodeData = { canvas: CanvasNode };
-export type DFHNode = Node<DFHNodeData, string>;
+export type DEEPSONARNodeData = { canvas: CanvasNode };
+export type DEEPSONARNode = Node<DEEPSONARNodeData, string>;
 
 /** 语义状态色（与侧栏/图例共用同一套） */
 
@@ -24,7 +24,7 @@ const TYPE_LABEL: Record<string, string> = {
 /** 运行中状态：状态点带呼吸脉冲 */
 const LIVE_STATUS = new Set(["running", "claimed", "provisioning", "active", "generating"]);
 
-function BaseNode({ data }: NodeProps<DFHNode>) {
+function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const n = data.canvas;
   const status = n.status ?? "";
   const statusColor = STATUS_COLOR[status] ?? "#71717a";
@@ -91,7 +91,7 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
       : "";
 
   return (
-    <div className={`dfh-node w-full rounded-[18px] bg-white/[.045] p-1 ring-1 ring-white/[.065] ${intentBorder} ${reportBorder}`}>
+    <div className={`deepsonar-node w-full rounded-[18px] bg-white/[.045] p-1 ring-1 ring-white/[.065] ${intentBorder} ${reportBorder}`}>
       <Handle type="target" position={Position.Left} isConnectable={false} />
 
       <div className="rounded-[14px] bg-[#12171a] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.045)]">
@@ -113,7 +113,7 @@ function BaseNode({ data }: NodeProps<DFHNode>) {
         {status && (
           <span className="ml-auto flex items-center gap-1.5">
             <span
-              className={`inline-block size-2 rounded-full ${LIVE_STATUS.has(status) ? "dfh-live-dot" : ""}`}
+              className={`inline-block size-2 rounded-full ${LIVE_STATUS.has(status) ? "deepsonar-live-dot" : ""}`}
               style={{ background: statusColor }}
             />
             <span className="font-mono text-[12px]" style={{ color: statusColor }}>

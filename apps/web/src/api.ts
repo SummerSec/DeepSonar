@@ -350,13 +350,13 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** DFH_AUTH_REQUIRED 开启后，Web 端用本地保存的 API Token 调后端（§6.4） */
+/** DEEPSONAR_AUTH_REQUIRED 开启后，Web 端用本地保存的 API Token 调后端（§6.4） */
 export function getLocalToken(): string {
-  return localStorage.getItem("dfh_token") ?? "";
+  return localStorage.getItem("deepsonar_token") ?? "";
 }
 export function setLocalToken(token: string) {
-  if (token) localStorage.setItem("dfh_token", token);
-  else localStorage.removeItem("dfh_token");
+  if (token) localStorage.setItem("deepsonar_token", token);
+  else localStorage.removeItem("deepsonar_token");
 }
 function authHeaders(): Record<string, string> {
   const t = getLocalToken();

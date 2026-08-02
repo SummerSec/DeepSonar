@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GW 工作包验收（§6.3）：Model Gateway + 短期 DFH_JOB_TOKEN
+"""GW 工作包验收（§6.3）：Model Gateway + 短期 DEEPSONAR_JOB_TOKEN
 前置：调度器 3100 已应用 0016 迁移
 流程：mock 上游 → Credential(base_url=mock) → SQL 造 running job + job_token →
       转发/认证注入/usage 计数/模型限制/额度/终态吊销 全链路断言
@@ -41,7 +41,7 @@ class MockUpstream(BaseHTTPRequestHandler):
 
 def psql(sql, first_line=False):
     out = subprocess.run(
-        ["docker", "exec", "dfh-postgres", "psql", "-U", "dfh", "-d", "deepflowhunter", "-tA", "-c", sql],
+        ["docker", "exec", "deepsonar-postgres", "psql", "-U", "deepsonar", "-d", "deepsonar", "-tA", "-c", sql],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     # INSERT/UPDATE ... RETURNING 会附带命令标签行（INSERT 0 1），取首行
@@ -85,7 +85,7 @@ def main():
     # 3. 铸造 job token（python 侧算 sha256，与 TS hashJobToken 一致）
     prefix = secrets.token_hex(4)
     secret = secrets.token_urlsafe(24)
-    plaintext = f"dfhjob_{prefix}_{secret}"
+    plaintext = f"deepsonarjob_{prefix}_{secret}"
     th = hashlib.sha256(plaintext.encode()).hexdigest()
     psql(f"INSERT INTO job_tokens (job_id, project_id, credential_id, token_prefix, token_hash,"
          f" allowed_models, max_requests, expires_at) VALUES "
@@ -123,7 +123,7 @@ def main():
     print("终态吊销 OK：401 job_inactive，token revoked")
 
     # 8. 非法/不存在 token
-    api("POST", "/gateway/v1/messages", {"model": "x"}, token="dfhjob_00000000_" + secrets.token_urlsafe(24), expect=401)
+    api("POST", "/gateway/v1/messages", {"model": "x"}, token="deepsonarjob_00000000_" + secrets.token_urlsafe(24), expect=401)
     api("POST", "/gateway/v1/messages", {"model": "x"}, token="not-a-token", expect=401)
     print("非法 token 401 OK")
 

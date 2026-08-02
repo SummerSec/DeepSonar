@@ -1,4 +1,4 @@
-import { issueContent, PlaneClient } from "@dfh/plane-client";
+import { issueContent, PlaneClient } from "@deepsonar/plane-client";
 import { config } from "./config.js";
 import { createJob, ensureCanvasForTask, rulesForProject, transitionJob } from "./core.js";
 import { sql } from "./db.js";
@@ -35,7 +35,7 @@ export async function planePollOnce(): Promise<number> {
     try {
       created += await pollProject(plane, p.id, p.plane_project_id);
     } catch (e) {
-      inc("dfh_plane_sync_errors_total");
+      inc("deepsonar_plane_sync_errors_total");
       console.error(`[plane] 项目 ${p.plane_project_id} 轮询失败:`, e instanceof Error ? e.message : e);
     }
   }
@@ -96,7 +96,7 @@ async function pollProject(plane: PlaneClient, projectId: string, planeProjectId
     if (inProgressId) {
       await plane
         .updateIssueState(planeProjectId, issue.id, inProgressId)
-        .catch((e) => { inc("dfh_plane_sync_errors_total"); console.error("[plane] 状态回写失败:", e); });
+        .catch((e) => { inc("deepsonar_plane_sync_errors_total"); console.error("[plane] 状态回写失败:", e); });
     }
     await plane
       .addComment(planeProjectId, issue.id, `<p>🤖 DeepSonar 已领取，job=${job.id}</p>`)
@@ -140,7 +140,7 @@ export async function planeWriteback(jobId: string): Promise<void> {
         ? (states.get(config.plane.inProgressState) ?? doneId)
         : (states.get(config.plane.readyState) ?? doneId),
     )
-    .catch((e) => { inc("dfh_plane_sync_errors_total"); console.error("[plane] 回写失败:", e); });
+    .catch((e) => { inc("deepsonar_plane_sync_errors_total"); console.error("[plane] 回写失败:", e); });
   await plane
     .addComment(
       job.plane_project_id,

@@ -34,7 +34,7 @@ DeepSonar 需要提供应用级数据导入导出能力，满足：
 - 默认创建新项目，不覆盖现有项目；
 - 不包含数据库账号、主密钥、可用 API Token 和短期 Job Token。
 
-建议扩展名：`.dfhpack`，内部是 ZIP 容器。
+建议扩展名：`.deepsonarpack`，内部是 ZIP 容器。
 
 ### 2.2 运维级整库灾备
 
@@ -52,7 +52,7 @@ DeepSonar 需要提供应用级数据导入导出能力，满足：
 
 ### 3.1 导出的是业务语义，不是表结构
 
-`.dfhpack` 保存项目、任务、配置、Finding、报告等业务对象，不保存 `INSERT SQL`。数据库表可以继续演进，Importer 负责把旧格式迁移到当前内部结构。
+`.deepsonarpack` 保存项目、任务、配置、Finding、报告等业务对象，不保存 `INSERT SQL`。数据库表可以继续演进，Importer 负责把旧格式迁移到当前内部结构。
 
 ### 3.2 默认安全导出
 
@@ -70,7 +70,7 @@ DeepSonar 需要提供应用级数据导入导出能力，满足：
 - Credential 明文；
 - Scheduler 进程环境中的 Secret 值；
 - API Token 明文或哈希；
-- `DFH_JOB_TOKEN` 及 `job_tokens`；
+- `DEEPSONAR_JOB_TOKEN` 及 `job_tokens`；
 - Credential 主密钥；
 - Cookie、Authorization Header；
 - 数据库连接串和部署 `.env`；
@@ -145,7 +145,7 @@ DeepSonar 需要提供应用级数据导入导出能力，满足：
 
 “全部”仍不包含 API Token、Job Token、主密钥、数据库账号、容器运行状态和宿主机环境 Secret。这些数据不能安全地迁移为可直接使用的状态。
 
-## 5. `.dfhpack` 文件格式
+## 5. `.deepsonarpack` 文件格式
 
 ### 5.1 目录结构
 
@@ -183,7 +183,7 @@ secrets/
 
 ```json
 {
-  "format": "deepflowhunter-project-export",
+  "format": "deepsonar-project-export",
   "format_version": "1.0",
   "created_at": "2026-08-01T00:00:00.000Z",
   "source": {
@@ -354,7 +354,7 @@ Blob 处理：
 3. 重新计算 SHA256；
 4. 缺失或哈希不符时终止导出或在显式允许的归档模式下标记缺失；
 5. 生成 Manifest 和 checksums；
-6. 原子移动为最终 `.dfhpack`。
+6. 原子移动为最终 `.deepsonarpack`。
 
 ### 7.3 导出状态
 
@@ -553,7 +553,7 @@ Jobs 与 Findings 存在互相引用，必须两阶段写入，不能依赖偶�
 
 第三方 Skill Source 和运行时镜像不能因为来自导出包就继承 `trusted` 状态，目标实例必须重新执行自己的信任和准入流程。
 
-`.dfhpack` 不携带 OCI 镜像层。运行时镜像模块只保存绑定、digest、工具 Manifest 和来源元数据；需要迁移镜像制品时应通过 OCI Registry 完成。
+`.deepsonarpack` 不携带 OCI 镜像层。运行时镜像模块只保存绑定、digest、工具 Manifest 和来源元数据；需要迁移镜像制品时应通过 OCI Registry 完成。
 
 ## 12. 审计日志和证据链
 
@@ -665,7 +665,7 @@ CREATE TABLE data_imports (
 ### 13.3 后台执行
 
 - Export/Import 使用独立 Transfer Worker；
-- 通过 `pg_notify('dfh_transfers')` 或等价队列唤醒；
+- 通过 `pg_notify('deepsonar_transfers')` 或等价队列唤醒；
 - 不使用 Agentbox，不消耗模型，不触发 Hub；
 - Transfer Worker 使用 lease、heartbeat、timeout 和重启恢复；
 - 每个项目同一时间最多一个 applying import；
@@ -719,7 +719,7 @@ DELETE /imports/{id}
 
 ### 导入
 
-- 上传 `.dfhpack`；
+- 上传 `.deepsonarpack`；
 - 展示来源、版本、签名、模块和数量；
 - 冲突、非便携路径、缺失环境变量和 Credential 映射；
 - 选择创建新项目或合并配置；
@@ -755,7 +755,7 @@ DELETE /imports/{id}
 
 ### P0：配置导入导出
 
-- [ ] 定义 `.dfhpack` v1、Manifest、模块和 checksums；
+- [ ] 定义 `.deepsonarpack` v1、Manifest、模块和 checksums；
 - [ ] 建立 `data_exports` / `data_imports`；
 - [ ] 实现 project、rules、roles、skills、environment、integrations metadata；
 - [ ] 实现 create_new 和 merge_configuration；

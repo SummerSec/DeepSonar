@@ -1,4 +1,4 @@
-import { forceRemoveContainer, listDfhContainers } from "@dfh/runtime-sandbox";
+import { forceRemoveContainer, listDeepSonarContainers } from "@deepsonar/runtime-sandbox";
 import { sql } from "./db.js";
 import { planeWriteback } from "./plane-sync.js";
 
@@ -11,7 +11,7 @@ import { planeWriteback } from "./plane-sync.js";
  * 必须在 dispatcher/reaper 启动前执行完，避免新调度与旧残留交错。
  */
 export async function reconcileOnBoot(): Promise<void> {
-  const containers = await listDfhContainers();
+  const containers = await listDeepSonarContainers();
   const activeJobs = await sql`
     SELECT id, status, sandbox_id FROM jobs WHERE status IN ('claimed','provisioning','running')`;
   const activeJobIds = new Set(activeJobs.map((j) => j.id as string));

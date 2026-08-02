@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Provider Credential 验收：加密存储 + RoleConfig 绑定。
-前置：调度器配置 DFH_MASTER_KEY_FILE 且使用当前 schema 基线。
+前置：调度器配置 DEEPSONAR_MASTER_KEY_FILE 且使用当前 schema 基线。
 """
 import json
 import subprocess
@@ -25,7 +25,7 @@ def req(method, path, body=None, expect=200):
 
 def psql(sql):
     return subprocess.run(
-        ["docker", "exec", "dfh-postgres", "psql", "-U", "dfh", "-d", "deepflowhunter", "-tA", "-c", sql],
+        ["docker", "exec", "deepsonar-postgres", "psql", "-U", "deepsonar", "-d", "deepsonar", "-tA", "-c", sql],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
 

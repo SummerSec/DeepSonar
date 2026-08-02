@@ -6,12 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTROL_MCP_SERVER } from "../apps/scheduler/src/control-mcp.js";
 
-const eventFile = join(tmpdir(), `dfh-control-mcp-${randomUUID()}.jsonl`);
+const eventFile = join(tmpdir(), `deepsonar-control-mcp-${randomUUID()}.jsonl`);
 const child = spawn(process.execPath, ["--input-type=module", "-e", CONTROL_MCP_SERVER], {
   env: {
     ...process.env,
-    DFH_CONTROL_EVENT_FILE: eventFile,
-    DFH_CONTROL_TOOL_NAMES: JSON.stringify(["emit_fact", "mark_job_done"]),
+    DEEPSONAR_CONTROL_EVENT_FILE: eventFile,
+    DEEPSONAR_CONTROL_TOOL_NAMES: JSON.stringify(["emit_fact", "mark_job_done"]),
   },
   stdio: ["pipe", "pipe", "inherit"],
 });

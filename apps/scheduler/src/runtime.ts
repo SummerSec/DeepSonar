@@ -1,4 +1,4 @@
-import { AgentboxRunner, NoopRunner, type SandboxRunner } from "@dfh/runtime-sandbox";
+import { AgentboxRunner, NoopRunner, type SandboxRunner } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 
 /**

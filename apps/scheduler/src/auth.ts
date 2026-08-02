@@ -7,8 +7,8 @@ import { inc } from "./metrics.js";
 
 /**
  * 平台 API Token 鉴权（§6.1/SEC-01）
- * - Token 格式：dfh_<env>_<prefix>_<secret>；库中只存 sha256 哈希 + 前缀，明文仅创建/轮换时返回一次
- * - DFH_AUTH_REQUIRED=true 时除豁免路由外全部要求 Bearer；DFH_ADMIN_TOKEN 为引导管理员（不落库）
+ * - Token 格式：deepsonar_<env>_<prefix>_<secret>；库中只存 sha256 哈希 + 前缀，明文仅创建/轮换时返回一次
+ * - DEEPSONAR_AUTH_REQUIRED=true 时除豁免路由外全部要求 Bearer；DEEPSONAR_ADMIN_TOKEN 为引导管理员（不落库）
  * - scope 按路由表判定；admin 隐式拥有全部 scope；token 可限定单项目
  * - Provider Credential（LLM/Plane/Git 密钥）与 API Token 是两套东西，此处只管平台访问
  */
@@ -50,11 +50,11 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/** 生成 dfh_<env>_<prefix8>_<secret32>；哈希落库，明文只在此刻可见 */
+/** 生成 deepsonar_<env>_<prefix8>_<secret32>；哈希落库，明文只在此刻可见 */
 export function generateToken(): { plaintext: string; prefix: string; hash: string } {
   const prefix = randomBytes(4).toString("hex");
   const secret = randomBytes(24).toString("base64url");
-  const plaintext = `dfh_${config.auth.tokenEnv}_${prefix}_${secret}`;
+  const plaintext = `deepsonar_${config.auth.tokenEnv}_${prefix}_${secret}`;
   return { plaintext, prefix, hash: hashToken(plaintext) };
 }
 
@@ -148,7 +148,7 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
 
   // §7.2：认证失败与越权必须进审计（不写 Authorization 头/Token 本体）
   const denyAudited = (code: number, error: string, errorCode: string) => {
-    inc("dfh_api_auth_failed_total", { reason: errorCode });
+    inc("deepsonar_api_auth_failed_total", { reason: errorCode });
     void audit(req, {
       action: code === 401 ? "auth.failed" : "auth.denied",
       resourceType: "route",
@@ -159,7 +159,7 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
     return deny(reply, code, error);
   };
 
-  // Level A 回环部署可关闭；一旦跨出回环必须 DFH_AUTH_REQUIRED=true（.env.example 有警示）
+  // Level A 回环部署可关闭；一旦跨出回环必须 DEEPSONAR_AUTH_REQUIRED=true（.env.example 有警示）
   if (!config.auth.required) {
     req.actor = INTERNAL;
     return;
@@ -175,7 +175,7 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
   if (config.auth.adminToken && token === config.auth.adminToken) {
     actor = { type: "bootstrap_admin", id: null, name: "bootstrap_admin", projectId: null, scopes: ["admin"] };
   } else {
-    const m = token.match(/^dfh_[a-z0-9]+_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/);
+    const m = token.match(/^deepsonar_[a-z0-9]+_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/);
     if (!m) return denyAudited(401, "token 格式非法", "bad_format");
     const [row] = await sql`
       SELECT id, name, project_id, token_hash, scopes, expires_at, revoked_at

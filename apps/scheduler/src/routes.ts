@@ -103,10 +103,10 @@ const PriorityBody = z.object({ priority: z.number().int() });
 const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
 
 export function registerRoutes(app: FastifyInstance) {
-  // 平台 API Token 鉴权（SEC-01）：DFH_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
+  // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
   app.addHook("onRequest", authHook);
 
-  // Model Gateway（§6.3）：自身用 DFH_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
+  // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
   registerGateway(app);
 
   // ---------- Agent 实时流（WS /ws?job_id=...） ----------

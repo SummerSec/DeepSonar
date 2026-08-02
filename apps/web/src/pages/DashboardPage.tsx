@@ -60,7 +60,7 @@ export function DashboardPage() {
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <section className="surface-shell dfh-reveal xl:col-span-7" style={{ animationDelay: "180ms" }}>
+        <section className="surface-shell deepsonar-reveal xl:col-span-7" style={{ animationDelay: "180ms" }}>
           <div className="surface-core min-h-[350px] p-5 sm:p-6">
             <div className="flex items-start justify-between gap-4"><div><div className="eyebrow"><span style={{ background: attentionCount ? "#e8bd70" : "#65e6b4" }} />ATTENTION QUEUE</div><h2 className="mt-4 text-xl font-medium tracking-[-0.03em] text-zinc-100">{attentionCount ? "优先处理这些事项" : "当前没有阻塞项"}</h2><p className="mt-1 text-[12px] text-zinc-500">只展示会影响风险闭环或任务推进的事件</p></div><SectionLink to="/jobs">打开运行队列</SectionLink></div>
             {focusItems.length ? (
@@ -71,7 +71,7 @@ export function DashboardPage() {
           </div>
         </section>
 
-        <section className="surface-shell dfh-reveal xl:col-span-5" style={{ animationDelay: "240ms" }}>
+        <section className="surface-shell deepsonar-reveal xl:col-span-5" style={{ animationDelay: "240ms" }}>
           <div className="surface-core min-h-[350px] p-5 sm:p-6">
             <div className="flex items-start justify-between"><div><div className="eyebrow"><span style={{ background: "#6fbbe8" }} />EXECUTION STREAM</div><h2 className="mt-4 text-xl font-medium tracking-[-0.03em] text-zinc-100">最近运行</h2></div><Waveform size={21} weight="light" className="text-run-400" /></div>
             {jobs.length ? <div className="mt-5 flex flex-col">{jobs.slice(0, 6).map((job) => <Link key={job.id} to={job.canvas_id ? `/projects/${job.project_id}/tasks/${job.canvas_id}` : `/projects/${job.project_id}/tasks`} className="group flex items-center gap-3 border-b border-white/[.045] py-3 last:border-0"><span className="min-w-0 flex-1"><strong className="block truncate text-[12px] font-medium text-zinc-300 transition-colors group-hover:text-white">{job.canvas_title ?? job.type}</strong><small className="block truncate font-mono text-[9px] text-zinc-600">{job.project_name} · {relativeTime(job.created_at)}</small></span><StatusBadge status={job.status} /></Link>)}</div> : <div className="flex min-h-[230px] items-center justify-center text-[12px] text-zinc-600">创建任务后，运行会实时出现在这里</div>}
@@ -80,7 +80,7 @@ export function DashboardPage() {
       </div>
 
       <SectionHeading title="风险证据" meta="按最近产出排序" action={<SectionLink to="/findings">查看全部发现</SectionLink>} />
-      {findings.length ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{findings.slice(0, 6).map((finding, index) => <Link key={finding.id} to={finding.canvas_id ? `/projects/${finding.project_id}/tasks/${finding.canvas_id}` : `/projects/${finding.project_id}/findings`} className="surface-shell group dfh-reveal" style={{ animationDelay: `${index * 55}ms` }}><article className="surface-core flex min-h-[154px] flex-col p-4"><div className="flex items-start justify-between gap-3"><SeverityBadge severity={finding.severity} /><span className="font-mono text-[9px] text-zinc-700">{relativeTime(finding.created_at)}</span></div><h3 className="mt-4 line-clamp-2 text-[13px] font-medium leading-6 text-zinc-200 transition-colors group-hover:text-white">{finding.title}</h3><div className="mt-auto flex items-center gap-2 pt-4 text-[10px] text-zinc-600"><span className="truncate">{finding.project_name}</span><span>·</span><span className="truncate font-mono">{finding.location || finding.verify_status}</span></div></article></Link>)}</div> : <EmptyState title="还没有风险证据" hint="审计 Agent 产出的发现会先进入验证闭环，再沉淀为可追踪证据。" />}
+      {findings.length ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{findings.slice(0, 6).map((finding, index) => <Link key={finding.id} to={finding.canvas_id ? `/projects/${finding.project_id}/tasks/${finding.canvas_id}` : `/projects/${finding.project_id}/findings`} className="surface-shell group deepsonar-reveal" style={{ animationDelay: `${index * 55}ms` }}><article className="surface-core flex min-h-[154px] flex-col p-4"><div className="flex items-start justify-between gap-3"><SeverityBadge severity={finding.severity} /><span className="font-mono text-[9px] text-zinc-700">{relativeTime(finding.created_at)}</span></div><h3 className="mt-4 line-clamp-2 text-[13px] font-medium leading-6 text-zinc-200 transition-colors group-hover:text-white">{finding.title}</h3><div className="mt-auto flex items-center gap-2 pt-4 text-[10px] text-zinc-600"><span className="truncate">{finding.project_name}</span><span>·</span><span className="truncate font-mono">{finding.location || finding.verify_status}</span></div></article></Link>)}</div> : <EmptyState title="还没有风险证据" hint="审计 Agent 产出的发现会先进入验证闭环，再沉淀为可追踪证据。" />}
 
       <SectionHeading title="项目空间" meta="任务与证据的长期归属" action={<SectionLink to="/projects">管理全部项目</SectionLink>} />
       {projects.length ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{projects.slice(0, 6).map((project) => {

@@ -33,7 +33,7 @@ function Initialize-Env {
   if (-not (Test-Path -LiteralPath $EnvFile)) {
     $content = Get-Content -LiteralPath $EnvExample -Raw -Encoding UTF8
     $content = $content.Replace("change-me-postgres-password", (New-HexSecret 1))
-    $content = $content.Replace("change-me-bootstrap-admin-token", "dfh_bootstrap_$(New-HexSecret 2)")
+    $content = $content.Replace("change-me-bootstrap-admin-token", "deepsonar_bootstrap_$(New-HexSecret 2)")
     [IO.File]::WriteAllText($EnvFile, $content, [Text.UTF8Encoding]::new($false))
     Write-Host "[deploy] Created deploy/.env with random database and bootstrap secrets." -ForegroundColor Green
   }
@@ -42,8 +42,8 @@ function Initialize-Env {
   if ($raw -match "change-me-") {
     throw "deploy/.env still contains change-me placeholders"
   }
-  if ($raw -notmatch "(?m)^DFH_MASTER_KEY_FILE=") {
-    $raw = "$($raw.TrimEnd())`nDFH_MASTER_KEY_FILE=/run/secrets/dfh_master_key`n"
+  if ($raw -notmatch "(?m)^DEEPSONAR_MASTER_KEY_FILE=") {
+    $raw = "$($raw.TrimEnd())`nDEEPSONAR_MASTER_KEY_FILE=/run/secrets/deepsonar_master_key`n"
     [IO.File]::WriteAllText($EnvFile, $raw, [Text.UTF8Encoding]::new($false))
   }
 
@@ -65,7 +65,7 @@ Assert-Command "docker"
 & docker compose version | Out-Null
 Initialize-Env
 
-$ComposeArgs = @("compose", "-p", "deepflowhunter", "--env-file", $EnvFile, "-f", $ComposeFile)
+$ComposeArgs = @("compose", "-p", "deepsonar", "--env-file", $EnvFile, "-f", $ComposeFile)
 if ($Mode -eq "real") {
   $ComposeArgs += @("-f", $RealComposeFile)
 }
@@ -98,7 +98,7 @@ try {
       & docker @ComposeArgs @UpArgs
       if ($LASTEXITCODE -ne 0) { throw "Failed to start services" }
 
-      $port = Read-EnvValue "DFH_WEB_PORT" "8080"
+      $port = Read-EnvValue "DEEPSONAR_WEB_PORT" "8080"
       $health = "http://127.0.0.1:$port/api/health"
       $ready = $false
       for ($i = 0; $i -lt 60; $i++) {
@@ -115,7 +115,7 @@ try {
       }
 
       Write-Host "[deploy] DeepSonar is ready: http://127.0.0.1:$port" -ForegroundColor Green
-      Write-Host "[deploy] The bootstrap admin token is stored as DFH_ADMIN_TOKEN in deploy/.env."
+      Write-Host "[deploy] The bootstrap admin token is stored as DEEPSONAR_ADMIN_TOKEN in deploy/.env."
       if ($Mode -eq "fake") {
         Write-Host "[deploy] Running in fake mode. Configure credentials and use -Mode real for real agents." -ForegroundColor Yellow
       }

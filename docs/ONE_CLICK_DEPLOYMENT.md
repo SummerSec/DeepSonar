@@ -63,7 +63,7 @@ chmod +x deploy/deploy.sh
 首次执行会从 `deploy/.env.example` 生成 `deploy/.env`，并自动生成：
 
 - `POSTGRES_PASSWORD`；
-- `DFH_ADMIN_TOKEN`；
+- `DEEPSONAR_ADMIN_TOKEN`；
 - `deploy/master.key`：Provider Credential 的 AES-256-GCM 主密钥。
 
 `deploy/.env` 和 `deploy/master.key` 已加入 `.gitignore`。不要把密码、模型密钥、管理员 Token 或主密钥提交到 Git；主密钥丢失后，数据库中的 Provider Credential 将无法解密。
@@ -74,14 +74,14 @@ chmod +x deploy/deploy.sh
 http://127.0.0.1:8080
 ```
 
-可修改 `deploy/.env` 中的 `DFH_WEB_PORT` 改变端口，然后重新执行部署脚本。
+可修改 `deploy/.env` 中的 `DEEPSONAR_WEB_PORT` 改变端口，然后重新执行部署脚本。
 
 ## 4. 首次使用 API Token
 
-容器部署强制设置 `DFH_AUTH_REQUIRED=true`。首次打开控制台时：
+容器部署强制设置 `DEEPSONAR_AUTH_REQUIRED=true`。首次打开控制台时：
 
 1. 打开 `deploy/.env`；
-2. 复制 `DFH_ADMIN_TOKEN` 的值；
+2. 复制 `DEEPSONAR_ADMIN_TOKEN` 的值；
 3. 在控制台全局设置的“API Token”页面，把它填入“本机调用令牌”；
 4. 创建长期使用的数据库 Token；
 5. 保存新 Token 明文；它只在创建时显示一次；
@@ -128,7 +128,7 @@ npx agentbox image build --provider local-docker --file agent-harness/image.mjs
 2. 确认镜像名，并写入 `deploy/.env`：
 
 ```dotenv
-DOCKER_IMAGE_AUDIT=deepflowhunter-agent:latest
+DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
 AGENT_PROVIDER=claude-code
 ANTHROPIC_API_KEY=your-key
 ```
@@ -225,9 +225,9 @@ git pull
 升级前建议备份：
 
 ```bash
-docker compose -p deepflowhunter --env-file deploy/.env \
+docker compose -p deepsonar --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
-  pg_dump -U dfh -d deepflowhunter -Fc > deepflowhunter.dump
+  pg_dump -U deepsonar -d deepsonar -Fc > deepsonar.dump
 ```
 
 ## 9. 健康检查
@@ -245,7 +245,7 @@ curl http://127.0.0.1:8080/api/health
 查看服务状态：
 
 ```bash
-docker compose -p deepflowhunter --env-file deploy/.env \
+docker compose -p deepsonar --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml ps
 ```
 
@@ -255,7 +255,7 @@ docker compose -p deepflowhunter --env-file deploy/.env \
 
 ### 10.1 Web 可以打开，但 API 返回 401
 
-这是容器部署的预期行为。把 `deploy/.env` 中的 `DFH_ADMIN_TOKEN` 填入控制台“本机调用令牌”。
+这是容器部署的预期行为。把 `deploy/.env` 中的 `DEEPSONAR_ADMIN_TOKEN` 填入控制台“本机调用令牌”。
 
 ### 10.2 Scheduler 一直不健康
 
@@ -275,7 +275,7 @@ docker compose -p deepflowhunter --env-file deploy/.env \
 确认使用了 real 覆盖文件，并检查：
 
 ```bash
-docker compose -p deepflowhunter --env-file deploy/.env \
+docker compose -p deepsonar --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml -f deploy/docker-compose.real.yml \
   exec scheduler docker version
 ```
@@ -295,7 +295,7 @@ docker images
 ## 11. 上线检查表
 
 - [ ] `deploy/.env` 不含占位符且未提交 Git；
-- [ ] `DFH_AUTH_REQUIRED=true`；
+- [ ] `DEEPSONAR_AUTH_REQUIRED=true`；
 - [ ] 已创建长期数据库 API Token；
 - [ ] 外部事件 Token 绑定单项目且只有 `tasks:write`；
 - [ ] real 模式模型凭据可用；

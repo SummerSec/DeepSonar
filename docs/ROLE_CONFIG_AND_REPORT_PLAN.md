@@ -161,7 +161,7 @@ CREATE TABLE role_credentials (
 - 项目级 RoleConfig 只能绑定 `credentials.project_id IS NULL` 或同项目 Credential。
 - 全局 RoleConfig 只能绑定全局 Credential。
 - 同一 purpose 是否允许多个 Credential，由 purpose 的业务规则决定，不用单个 `credential_id` 降级现有能力。
-- LLM Credential 的真实密钥仍只在 Scheduler 内解密，通过短期 `DFH_JOB_TOKEN` 和 Model Gateway 使用。
+- LLM Credential 的真实密钥仍只在 Scheduler 内解密，通过短期 `DEEPSONAR_JOB_TOKEN` 和 Model Gateway 使用。
 
 ### 4.4 `role_config_files`：Provider 配置文件
 
@@ -400,7 +400,7 @@ Scheduler 非敏感缺省
 
 以下变量保留给系统，RoleConfig 和配置文件不得覆盖：
 
-- `DFH_JOB_TOKEN`
+- `DEEPSONAR_JOB_TOKEN`
 - Provider API Key 变量
 - Provider Base URL / Gateway URL
 - `PATH`、`HOME`、`NODE_OPTIONS`

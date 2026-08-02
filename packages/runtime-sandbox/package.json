@@ -1,5 +1,5 @@
 {
-  "name": "@dfh/runtime-sandbox",
+  "name": "@deepsonar/runtime-sandbox",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@dfh/shared-types": "workspace:*",
+    "@deepsonar/shared-types": "workspace:*",
     "agentbox-sdk": "^0.1.501"
   },
   "devDependencies": {

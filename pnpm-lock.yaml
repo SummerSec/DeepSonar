@@ -14,13 +14,13 @@ importers:
 
   apps/scheduler:
     dependencies:
-      '@dfh/plane-client':
+      '@deepsonar/plane-client':
         specifier: workspace:*
         version: link:../../packages/plane-client
-      '@dfh/runtime-sandbox':
+      '@deepsonar/runtime-sandbox':
         specifier: workspace:*
         version: link:../../packages/runtime-sandbox
-      '@dfh/shared-types':
+      '@deepsonar/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
       '@fastify/websocket':
@@ -103,7 +103,7 @@ importers:
 
   packages/plane-client:
     dependencies:
-      '@dfh/shared-types':
+      '@deepsonar/shared-types':
         specifier: workspace:*
         version: link:../shared-types
     devDependencies:
@@ -116,7 +116,7 @@ importers:
 
   packages/runtime-sandbox:
     dependencies:
-      '@dfh/shared-types':
+      '@deepsonar/shared-types':
         specifier: workspace:*
         version: link:../shared-types
       agentbox-sdk:
@@ -1082,7 +1082,7 @@ packages:
     os: [linux]
 
   '@rollup/rollup-openbsd-x64@4.62.3':
-    resolution: {integrity: sha512-ABVf3Q0RCu7NcyCCOZQI0pJ3GuSdfSl8EXcy88QtdceIMIoCUdfhsJChZ64L9zVM2aJHjde1Bhn5uqSRcX9ySA==}
+    resolution: {integrity: sha512-ABVf3Q0RCu7NcyCCOZQI0pJ3GuSdfSl8EXcy88QtdceIMIoCUdeepsonarsJChZ64L9zVM2aJHjde1Bhn5uqSRcX9ySA==}
     cpu: [x64]
     os: [openbsd]
 

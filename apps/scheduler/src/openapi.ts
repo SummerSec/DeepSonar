@@ -1,7 +1,7 @@
 /**
  * DeepSonar HTTP API OpenAPI 3 文档（机器可读 schema）。
  * 端点：GET /openapi.json、GET /schema（同源）、GET /schema.md（人类可读摘要）。
- * 与 skills/deepflowhunter-management/references/api.md 对齐；改路由时请同步更新本文件与该 md。
+ * 与 skills/deepsonar-management/references/api.md 对齐；改路由时请同步更新本文件与该 md。
  */
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -14,9 +14,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** 尝试定位仓库内 Management Skill 的 api.md */
 export function resolveApiMarkdownPath(): string | null {
   const candidates = [
-    path.resolve(HERE, "../../../skills/deepflowhunter-management/references/api.md"),
-    path.resolve(process.cwd(), "skills/deepflowhunter-management/references/api.md"),
-    path.resolve(process.cwd(), "../../skills/deepflowhunter-management/references/api.md"),
+    path.resolve(HERE, "../../../skills/deepsonar-management/references/api.md"),
+    path.resolve(process.cwd(), "skills/deepsonar-management/references/api.md"),
+    path.resolve(process.cwd(), "../../skills/deepsonar-management/references/api.md"),
   ];
   return candidates.find((p) => existsSync(p)) ?? null;
 }
@@ -301,7 +301,7 @@ const OPS: Op[] = [
       required: ["name", "repo_url"],
       properties: {
         name: { type: "string" },
-        repo_url: { type: "string", description: "仅 https，host 受 DFH_GIT_ALLOWED_HOSTS 约束" },
+        repo_url: { type: "string", description: "仅 https，host 受 DEEPSONAR_GIT_ALLOWED_HOSTS 约束" },
         branch: { type: "string", default: "main" },
       },
     },
@@ -463,7 +463,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       operationId: `${op.method}_${op.path.replace(/[{}/]/g, "_").replace(/_+/g, "_")}`,
       parameters: parameters.length ? parameters : undefined,
       security: op.scope === null ? [] : [{ bearerAuth: [] }],
-      "x-dfh-scope": op.scope === null ? "exempt" : op.scope,
+      "x-deepsonar-scope": op.scope === null ? "exempt" : op.scope,
       responses: {
         "200": {
           description: "成功",
@@ -497,7 +497,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       version: "0.0.1",
       description:
         "多项目代码审计调度平台 HTTP API。Agent 只提案，调度器是唯一有副作用的执行者。" +
-        " 人类可读摘要见 GET /schema.md；Management Skill 契约见 skills/deepflowhunter-management/references/api.md。",
+        " 人类可读摘要见 GET /schema.md；Management Skill 契约见 skills/deepsonar-management/references/api.md。",
     },
     servers: [
       {
@@ -528,8 +528,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         bearerAuth: {
           type: "http",
           scheme: "bearer",
-          bearerFormat: "dfh_<env>_<prefix>_<secret>",
-          description: "平台 API Token；DFH_AUTH_REQUIRED=false 时本地回环可省略",
+          bearerFormat: "deepsonar_<env>_<prefix>_<secret>",
+          description: "平台 API Token；DEEPSONAR_AUTH_REQUIRED=false 时本地回环可省略",
         },
       },
       schemas: {
@@ -581,8 +581,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         },
       },
     },
-    "x-dfh-scopes": [...ALL_SCOPES],
-    "x-dfh-auth-exempt": ["/health", "/openapi.json", "/schema", "/schema.md", "/webhooks/plane", "/gateway/*"],
+    "x-deepsonar-scopes": [...ALL_SCOPES],
+    "x-deepsonar-auth-exempt": ["/health", "/openapi.json", "/schema", "/schema.md", "/webhooks/plane", "/gateway/*"],
   };
 }
 
@@ -593,8 +593,8 @@ export function buildSchemaSummary(): Record<string, unknown> {
     version: "0.0.1",
     base_url: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
     auth: {
-      header: "Authorization: Bearer <dfh_token>",
-      required_when: "DFH_AUTH_REQUIRED=true",
+      header: "Authorization: Bearer <deepsonar_token>",
+      required_when: "DEEPSONAR_AUTH_REQUIRED=true",
       scopes: [...ALL_SCOPES],
       exempt: ["/health", "/openapi.json", "/schema", "/schema.md", "/webhooks/plane", "/gateway/*"],
     },
@@ -602,7 +602,7 @@ export function buildSchemaSummary(): Record<string, unknown> {
       openapi_json: "/openapi.json",
       schema: "/schema",
       schema_markdown: "/schema.md",
-      management_skill_api_md: "skills/deepflowhunter-management/references/api.md",
+      management_skill_api_md: "skills/deepsonar-management/references/api.md",
     },
     endpoints: OPS.map((op) => ({
       method: op.method.toUpperCase(),

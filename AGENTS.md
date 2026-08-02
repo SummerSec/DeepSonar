@@ -7,7 +7,7 @@ DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度�
 ## 常用命令
 
 ```bash
-pnpm db:up            # 起 Postgres（docker compose，deploy/docker-compose.yml，dfh/dfh@localhost:5432）
+pnpm db:up            # 起 Postgres（docker compose，deploy/docker-compose.yml，deepsonar/deepsonar@localhost:5432）
 pnpm dev              # 调度器（tsx watch，端口 3100，启动时自动跑 migrations）
 pnpm dev:web          # 前端（vite，5173；/api 代理到 3100）
 pnpm build            # 全 workspace tsc 构建
@@ -28,7 +28,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - **Agent 只提案，不决策**：系统按 Job 动态注入本地控制 MCP，工具为 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集。Fact/Finding 在执行中增量回传；`emit_finding` 只能带 `suggest_verify` 建议，是否派生 verify job 由调度器规则引擎（`core.ts`）唯一决定，有深度（`MAX_FOLLOWUP_DEPTH=4`）与频次护栏。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
-- **调度唤醒是事件驱动**：建 job 后 `pg_notify('dfh_jobs')` 唤醒 dispatcher；`DFH_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
+- **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
 
 ### 调度器（`apps/scheduler/src/`，Fastify + postgres.js）
 
@@ -51,9 +51,9 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 - `SandboxRunner` 是调度器与沙箱之间唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（agentbox-sdk，可切 local-docker/e2b/daytona）。换 provider 只动这个包。
 - 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
-- 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `dfh-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
+- 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `deepsonar-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
 - 语义事件由本地 MCP 写入控制队列，再经 agentbox-sdk 控制通道增量回传，**不经沙箱目标网络**；同一画布的新 Fact/Finding 通过 `Agent.attach(...).sendMessage(...)` 追加给仍在运行的 Agent CLI。终态后删除队列并销毁沙箱。
-- `env_keys` 白名单（`DFH_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 RoleConfig 下发变量；长期密钥不进快照或工作区。
+- `env_keys` 白名单（`DEEPSONAR_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 RoleConfig 下发变量；长期密钥不进快照或工作区。
 - 沙箱硬限制（cpu/memory/pids/cap-drop-all/no-new-privileges）在 config 的 `sandboxLimits`，0 仅限调试。
 
 ### 数据与迁移

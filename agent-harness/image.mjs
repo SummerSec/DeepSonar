@@ -4,7 +4,7 @@
 //   npx -y @madarco/agentbox image build --provider local-docker --file ./agent-harness/image.mjs
 // 生产/CI 构建走 deploy/Dockerfile.agent（基础镜像 digest + npm 版本固定，§12.1），版本号两边同步。
 export default {
-  name: "deepflowhunter-agent",
+  name: "deepsonar-agent",
   base: "node:20-bookworm",
   env: {
     // Claude Code 在容器内以 root 运行时跳过部分检查

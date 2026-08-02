@@ -1,7 +1,7 @@
 /**
  * Model Gateway（§6.3）：沙箱不持有长期 Provider Key。
  *
- *   Sandbox ──DFH_JOB_TOKEN（短期/单 Job/限模型/限额度）──▶ Gateway ──解密 Credential──▶ 上游
+ *   Sandbox ──DEEPSONAR_JOB_TOKEN（短期/单 Job/限模型/限额度）──▶ Gateway ──解密 Credential──▶ 上游
  *
  * - Token 只在执行器内铸造，明文仅注入本 Job 的沙箱 env；库中只存 sha256 + 前缀
  * - 每次请求回查：token 有效 + job 仍在活跃状态（容器残留也调不动）+ 模型/额度限制
@@ -35,7 +35,7 @@ export async function mintJobToken(input: {
 }): Promise<{ plaintext: string; id: string }> {
   const prefix = randomBytes(4).toString("hex");
   const secret = randomBytes(24).toString("base64url");
-  const plaintext = `dfhjob_${prefix}_${secret}`;
+  const plaintext = `deepsonarjob_${prefix}_${secret}`;
   const ttl = input.ttlSec ?? config.gateway.tokenTtlSec;
   const [row] = await sql`
     INSERT INTO job_tokens ${sql({
@@ -130,8 +130,8 @@ export function registerGateway(app: FastifyInstance): void {
     handler: async (req: FastifyRequest, reply: FastifyReply) => {
       const header = req.headers.authorization ?? "";
       const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-      const m = token.match(/^dfhjob_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/);
-      if (!m) return deny(reply, 401, "缺少或非法 DFH_JOB_TOKEN", "invalid_token");
+      const m = token.match(/^deepsonarjob_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/);
+      if (!m) return deny(reply, 401, "缺少或非法 DEEPSONAR_JOB_TOKEN", "invalid_token");
 
       const [jt] = await sql`
         SELECT jt.*, j.status AS job_status
@@ -233,11 +233,11 @@ export function registerGateway(app: FastifyInstance): void {
           signal: AbortSignal.timeout(config.gateway.upstreamTimeoutMs),
         });
       } catch (e) {
-        inc("dfh_provider_errors_total", { provider: cred.provider as string });
+        inc("deepsonar_provider_errors_total", { provider: cred.provider as string });
         return deny(reply, 502, `上游不可达: ${e instanceof Error ? e.message : e}`, "upstream_unreachable");
       }
-      inc("dfh_model_requests_total", { provider: cred.provider as string });
-      if (upstream.status >= 500) inc("dfh_provider_errors_total", { provider: cred.provider as string });
+      inc("deepsonar_model_requests_total", { provider: cred.provider as string });
+      if (upstream.status >= 500) inc("deepsonar_provider_errors_total", { provider: cred.provider as string });
 
       // 响应直通：非流式缓存全文以解析 usage；流式边转发边扫描
       const isSse = (upstream.headers.get("content-type") ?? "").includes("text/event-stream");
@@ -271,7 +271,7 @@ export function registerGateway(app: FastifyInstance): void {
         reply.raw.end();
       }
       if (scanned > 0) {
-        inc("dfh_model_tokens_total", { provider: cred.provider as string }, scanned);
+        inc("deepsonar_model_tokens_total", { provider: cred.provider as string }, scanned);
         await sql`UPDATE job_tokens SET used_tokens = used_tokens + ${scanned} WHERE id = ${jt.id}`;
       }
     },

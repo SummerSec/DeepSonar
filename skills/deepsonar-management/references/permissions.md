@@ -4,7 +4,7 @@
 Scope 全集以运行时为准：
 
 ```bash
-curl -s "$DFH_BASE_URL/schema?format=summary" | jq .auth.scopes
+curl -s "$DEEPSONAR_BASE_URL/schema?format=summary" | jq .auth.scopes
 # 或见 apps/scheduler/src/auth.ts 的 ALL_SCOPES
 ```
 
@@ -76,8 +76,8 @@ findings:read
 
 ```bash
 # 日常 CI
-curl -X POST $DFH_BASE_URL/tokens \
-  -H "Authorization: Bearer $DFH_ADMIN_TOKEN" \
+curl -X POST $DEEPSONAR_BASE_URL/tokens \
+  -H "Authorization: Bearer $DEEPSONAR_ADMIN_TOKEN" \
   -H 'content-type: application/json' \
   -d '{
     "name": "ci-management",
@@ -87,8 +87,8 @@ curl -X POST $DFH_BASE_URL/tokens \
   }'
 
 # 需要改 RoleConfig / 规则
-curl -X POST $DFH_BASE_URL/tokens \
-  -H "Authorization: Bearer $DFH_ADMIN_TOKEN" \
+curl -X POST $DEEPSONAR_BASE_URL/tokens \
+  -H "Authorization: Bearer $DEEPSONAR_ADMIN_TOKEN" \
   -H 'content-type: application/json' \
   -d '{
     "name": "role-config-bot",

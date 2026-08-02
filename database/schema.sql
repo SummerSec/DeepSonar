@@ -287,12 +287,12 @@ CREATE TABLE role_config_files (
   UNIQUE (role_config_id, path)
 );
 
-CREATE OR REPLACE FUNCTION dfh_notify_job_event() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION deepsonar_notify_job_event() RETURNS trigger AS $$
 BEGIN
   IF (TG_OP = 'INSERT' AND NEW.status = 'pending')
      OR (TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status
          AND NEW.status IN ('succeeded', 'failed', 'timeout', 'cancelled', 'orphan')) THEN
-    PERFORM pg_notify('dfh_jobs', NEW.id::text);
+    PERFORM pg_notify('deepsonar_jobs', NEW.id::text);
   END IF;
   RETURN NEW;
 END;
@@ -300,14 +300,14 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER jobs_notify_event
   AFTER INSERT OR UPDATE OF status ON jobs
-  FOR EACH ROW EXECUTE FUNCTION dfh_notify_job_event();
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_notify_job_event();
 
 -- 同一画布的运行中 Worker 可通过 Agent.attach(...).sendMessage(...) 收到新 Fact/Finding。
 -- NOTIFY 只传稳定标识；正文由 Scheduler 提交后实时回查数据库，避免 8 KiB payload 上限。
-CREATE OR REPLACE FUNCTION dfh_notify_canvas_event() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION deepsonar_notify_canvas_event() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify(
-    'dfh_canvas_events',
+    'deepsonar_canvas_events',
     json_build_object(
       'canvas_id', NEW.canvas_id,
       'node_id', NEW.id,
@@ -323,7 +323,7 @@ CREATE TRIGGER canvas_nodes_notify_semantic_event
   AFTER INSERT ON canvas_nodes
   FOR EACH ROW
   WHEN (NEW.node_type IN ('fact', 'finding'))
-  EXECUTE FUNCTION dfh_notify_canvas_event();
+  EXECUTE FUNCTION deepsonar_notify_canvas_event();
 
 INSERT INTO agent_roles (name, title, description, builtin, kind) VALUES
   ('explore', '探索', '围绕任务意图收集新的、可验证的事实与证据', true, 'role'),
@@ -392,7 +392,7 @@ $instructions$),
 
 1. 先写清假设、成功判据、失败判据和安全边界，再搭建最小环境。
 2. 优先使用 /workspace 内的隔离副本、测试数据和非破坏性命令；禁止越权扫描、持久化、破坏性利用或扩大目标范围。
-3. 网络是否可用以 DFH_ALLOW_EGRESS 和 runtime-manifest 的冻结值为准；模型通道凭据不是目标凭据。
+3. 网络是否可用以 DEEPSONAR_ALLOW_EGRESS 和 runtime-manifest 的冻结值为准；模型通道凭据不是目标凭据。
 4. 记录环境、版本、命令、关键输入输出和可重复步骤；对未执行或受限步骤明确说明，不得伪造结果。
 5. 通过本 Job 动态下发的系统工具提交测试事实，总结结论、证据、限制和复现条件。
 $instructions$),

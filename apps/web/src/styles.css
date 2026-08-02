@@ -153,7 +153,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   background: rgba(7, 8, 9, .93);
 }
 .app-stage::after {
-  content: "DFH / LOCAL TRUTH / DISPATCH CONTROL";
+  content: "DEEPSONAR / LOCAL TRUTH / DISPATCH CONTROL";
   position: absolute;
   right: 18px;
   bottom: 5px;
@@ -446,12 +446,12 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
 .agents-page-header .page-header p { max-width: 820px; margin-top: 9px; line-height: 1.65; }
 
 /* Motion */
-@keyframes dfh-reveal { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-.dfh-reveal { animation: dfh-reveal 440ms var(--ease-snap) both; }
-@keyframes dfh-slide-in { from { transform: translateX(22px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-.dfh-sidebar { animation: dfh-slide-in 320ms var(--ease-snap); }
+@keyframes deepsonar-reveal { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.deepsonar-reveal { animation: deepsonar-reveal 440ms var(--ease-snap) both; }
+@keyframes deepsonar-slide-in { from { transform: translateX(22px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.deepsonar-sidebar { animation: deepsonar-slide-in 320ms var(--ease-snap); }
 @keyframes live-blink { 0%, 82%, 100% { opacity: 1; } 88% { opacity: .24; } }
-.dfh-live-dot { animation: live-blink 2.2s var(--ease-decel) infinite; }
+.deepsonar-live-dot { animation: live-blink 2.2s var(--ease-decel) infinite; }
 
 /* React Flow as a forensic plotting surface. */
 .react-flow { background: #080a0b; }
@@ -466,15 +466,15 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
 .react-flow__edge-path { stroke-width: 1.5; }
 .react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
 .react-flow__handle { opacity: 0; }
-@keyframes dfh-edge-flow { to { stroke-dashoffset: -36; } }
-.react-flow__edge.dfh-edge .react-flow__edge-path { animation: dfh-edge-flow var(--dfh-edge-speed, 2.8s) cubic-bezier(.2,.8,.2,1) infinite; }
-.react-flow__edge.dfh-edge-child .react-flow__edge-path { stroke-dasharray: 4 10; }
-.react-flow__edge.dfh-edge-produces .react-flow__edge-path { stroke-dasharray: 12 7; }
-.react-flow__edge.dfh-edge-verifies .react-flow__edge-path { stroke-dasharray: 3 6; }
-.react-flow__edge.dfh-edge-next .react-flow__edge-path { stroke-dasharray: 16 8; }
-.react-flow__edge.dfh-edge-from .react-flow__edge-path { stroke-dasharray: 2 7; }
-.react-flow__edge.dfh-edge-to .react-flow__edge-path { stroke-dasharray: 9 6; }
-.react-flow__node.selected .dfh-node { border-color: var(--red-bright); box-shadow: inset 3px 0 0 var(--red); }
+@keyframes deepsonar-edge-flow { to { stroke-dashoffset: -36; } }
+.react-flow__edge.deepsonar-edge .react-flow__edge-path { animation: deepsonar-edge-flow var(--deepsonar-edge-speed, 2.8s) cubic-bezier(.2,.8,.2,1) infinite; }
+.react-flow__edge.deepsonar-edge-child .react-flow__edge-path { stroke-dasharray: 4 10; }
+.react-flow__edge.deepsonar-edge-produces .react-flow__edge-path { stroke-dasharray: 12 7; }
+.react-flow__edge.deepsonar-edge-verifies .react-flow__edge-path { stroke-dasharray: 3 6; }
+.react-flow__edge.deepsonar-edge-next .react-flow__edge-path { stroke-dasharray: 16 8; }
+.react-flow__edge.deepsonar-edge-from .react-flow__edge-path { stroke-dasharray: 2 7; }
+.react-flow__edge.deepsonar-edge-to .react-flow__edge-path { stroke-dasharray: 9 6; }
+.react-flow__node.selected .deepsonar-node { border-color: var(--red-bright); box-shadow: inset 3px 0 0 var(--red); }
 
 @media (max-width: 767px) {
   body { overflow: hidden; }
@@ -511,7 +511,7 @@ input[type="checkbox"], input[type="radio"] { width: 15px; height: 15px; border:
   .page-header p { font-size: 11px; }
   .page-actions { width: 100%; justify-content: flex-start; }
   .stat-card { min-height: 128px; }
-  .dfh-sidebar { width: 100% !important; }
+  .deepsonar-sidebar { width: 100% !important; }
   .module-toolbar { grid-template-columns: 1fr; }
   .module-summary { align-items: flex-start; flex-direction: column; }
   .module-results > label { grid-template-columns: 18px minmax(0,1fr); }
@@ -612,7 +612,7 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .empty-orbit, .empty-orbit span { border-radius: 8px !important; }
 .empty-orbit span { background: var(--accent); }
 .status-badge, .severity-badge { border-radius: 999px !important; }
-.status-dot, .dfh-live-dot { border-radius: 999px !important; }
+.status-dot, .deepsonar-live-dot { border-radius: 999px !important; }
 .selector-trigger, .selector-search, .selector-icon, .selector-options > button, .module-summary button, .selected-modules button, .module-check, .module-meta em { border-radius: 7px !important; }
 .selector-trigger.is-open, .selector-trigger:hover { border-color: rgb(var(--accent-rgb) / .42); }
 .selector-icon { color: var(--accent); background: rgb(var(--accent-rgb) / .055); }
@@ -624,7 +624,7 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .module-results > label.is-selected { box-shadow: inset 3px 0 0 var(--accent); background: rgb(var(--accent-rgb) / .045); }
 .is-selected .module-check { border-color: var(--accent); color: var(--accent-ink); background: var(--accent); }
 .react-flow__controls, .react-flow__minimap { border-radius: 9px !important; }
-.react-flow__node.selected .dfh-node { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / .07); }
+.react-flow__node.selected .deepsonar-node { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / .07); }
 
 /* Desktop theme selector */
 .theme-picker { position: relative; margin: -2px 0 10px; }
@@ -876,7 +876,7 @@ html[data-color-scheme="light"] .react-flow__minimap { background: #f8f7f3 !impo
 html[data-color-scheme="light"] .react-flow__controls-button:hover { background: #e7e4dd; }
 html[data-color-scheme="light"] .react-flow__controls-button svg { fill: #56625e; }
 html[data-color-scheme="light"] .react-flow__minimap-mask { fill: rgb(239 237 231 / .78); }
-html[data-color-scheme="light"] .dfh-node {
+html[data-color-scheme="light"] .deepsonar-node {
   --color-zinc-100: #f0f4f3;
   --color-zinc-200: #dce3e1;
   --color-zinc-300: #b7c2bf;

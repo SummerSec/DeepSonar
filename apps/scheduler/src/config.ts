@@ -33,24 +33,24 @@ function bool(name: string, dflt: boolean): boolean {
 }
 
 export const config = {
-  databaseUrl: str("DATABASE_URL", "postgres://dfh:dfh@localhost:5432/deepflowhunter"),
+  databaseUrl: str("DATABASE_URL", "postgres://deepsonar:deepsonar@localhost:5432/deepsonar"),
   port: int("SCHEDULER_PORT", 3100),
   /** 监听地址：默认只绑回环（P0 可信网络）；容器部署显式设 0.0.0.0 */
   host: str("SCHEDULER_HOST", "127.0.0.1"),
 
-  /** 平台 API Token 鉴权（SEC-01/§6.1）；跨出回环部署必须 DFH_AUTH_REQUIRED=true */
+  /** 平台 API Token 鉴权（SEC-01/§6.1）；跨出回环部署必须 DEEPSONAR_AUTH_REQUIRED=true */
   auth: {
-    required: bool("DFH_AUTH_REQUIRED", false),
+    required: bool("DEEPSONAR_AUTH_REQUIRED", false),
     /** 引导管理员 token（不落库）；用于首次创建 DB token 与应急 */
-    adminToken: str("DFH_ADMIN_TOKEN"),
-    /** token 格式中的环境段：dfh_<env>_<prefix>_<secret> */
-    tokenEnv: str("DFH_TOKEN_ENV", "dev"),
+    adminToken: str("DEEPSONAR_ADMIN_TOKEN"),
+    /** token 格式中的环境段：deepsonar_<env>_<prefix>_<secret> */
+    tokenEnv: str("DEEPSONAR_TOKEN_ENV", "dev"),
   },
 
   /** Provider Credential 主密钥（§6.2：与密文不同库；文件优先） */
   credentials: {
-    masterKeyFile: str("DFH_MASTER_KEY_FILE"),
-    masterKey: str("DFH_MASTER_KEY"),
+    masterKeyFile: str("DEEPSONAR_MASTER_KEY_FILE"),
+    masterKey: str("DEEPSONAR_MASTER_KEY"),
   },
 
   plane: {
@@ -90,7 +90,7 @@ export const config = {
     leaseTtlSec: int("LEASE_TTL_SEC", 120),
     reaperIntervalSec: int("REAPER_INTERVAL_SEC", 30),
     /** 任务领取的兜底轮询（默认 0=关闭，纯 LISTEN/NOTIFY 事件驱动） */
-    dispatchPollSec: int("DFH_DISPATCH_POLL_SEC", 0),
+    dispatchPollSec: int("DEEPSONAR_DISPATCH_POLL_SEC", 0),
     /** Plane 轮询（默认 0=关闭，走 /webhooks/plane 事件；未配 webhook 时须显式开启） */
     planePollSec: int("PLANE_POLL_INTERVAL_SEC", 0),
   },
@@ -104,36 +104,36 @@ export const config = {
 
   /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */
   hub: {
-    enabled: bool("DFH_HUB_ENABLED", false),
-    maxRounds: int("DFH_HUB_MAX_ROUNDS", 20),
-    maxIntents: int("DFH_HUB_MAX_INTENTS", 6),
+    enabled: bool("DEEPSONAR_HUB_ENABLED", false),
+    maxRounds: int("DEEPSONAR_HUB_MAX_ROUNDS", 20),
+    maxIntents: int("DEEPSONAR_HUB_MAX_INTENTS", 6),
   },
 
-  /** Model Gateway（§6.3）：沙箱持短期 DFH_JOB_TOKEN 经网关调用模型，不持有长期 Key */
+  /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */
   gateway: {
     /** 沙箱内可达的网关地址（容器→宿主；compose 内为服务名） */
-    sandboxUrl: str("DFH_GATEWAY_SANDBOX_URL", "http://host.docker.internal:3100/gateway"),
+    sandboxUrl: str("DEEPSONAR_GATEWAY_SANDBOX_URL", "http://host.docker.internal:3100/gateway"),
     /** 禁止出网 Worker 在 internal bridge 内访问的固定目标 sidecar URL。 */
-    restrictedSandboxUrl: str("DFH_GATEWAY_RESTRICTED_URL", "http://dfh-gateway-proxy:3100/gateway"),
+    restrictedSandboxUrl: str("DEEPSONAR_GATEWAY_RESTRICTED_URL", "http://deepsonar-gateway-proxy:3100/gateway"),
     /** Job Token 默认请求上限 */
-    maxRequests: int("DFH_JOB_TOKEN_MAX_REQUESTS", 500),
+    maxRequests: int("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 500),
     /** Job Token 生命周期（秒），应 ≥ job timeout */
-    tokenTtlSec: int("DFH_JOB_TOKEN_TTL_SEC", 4 * 3600),
+    tokenTtlSec: int("DEEPSONAR_JOB_TOKEN_TTL_SEC", 4 * 3600),
     /** 转发上游超时（毫秒；流式为首字节超时） */
-    upstreamTimeoutMs: int("DFH_GATEWAY_UPSTREAM_TIMEOUT_MS", 120_000),
+    upstreamTimeoutMs: int("DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS", 120_000),
   },
 
   /** 数据库连接治理（§12.3）：池上限、语句/空闲超时 */
   db: {
-    poolMax: int("DFH_DB_POOL_MAX", 10),
-    statementTimeoutMs: int("DFH_DB_STATEMENT_TIMEOUT_MS", 60_000),
-    idleTimeoutSec: int("DFH_DB_IDLE_TIMEOUT_SEC", 30),
-    connectTimeoutSec: int("DFH_DB_CONNECT_TIMEOUT_SEC", 10),
+    poolMax: int("DEEPSONAR_DB_POOL_MAX", 10),
+    statementTimeoutMs: int("DEEPSONAR_DB_STATEMENT_TIMEOUT_MS", 60_000),
+    idleTimeoutSec: int("DEEPSONAR_DB_IDLE_TIMEOUT_SEC", 30),
+    connectTimeoutSec: int("DEEPSONAR_DB_CONNECT_TIMEOUT_SEC", 10),
   },
 
   runtime: {
     provider: str("SANDBOX_PROVIDER", "local-docker"),
-    imageAudit: str("DOCKER_IMAGE_AUDIT", "deepflowhunter-agent:latest"),
+    imageAudit: str("DOCKER_IMAGE_AUDIT", "deepsonar-agent:latest"),
     /** fake=内置假 agent（联调用）；real=agentbox-sdk 真实 agent */
     agentMode: str("AGENT_MODE", "fake"),
     /** agentbox-sdk agent provider：claude-code | opencode | codex（同一 API 可换） */
@@ -147,17 +147,17 @@ export const config = {
     openrouterKey: str("OPENROUTER_API_KEY"),
     /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
     sandboxLimits: {
-      cpu: int("DFH_SANDBOX_CPU", 2),
-      memoryMiB: int("DFH_SANDBOX_MEMORY_MIB", 2048),
-      pidsLimit: int("DFH_SANDBOX_PIDS", 512),
-      capDropAll: bool("DFH_SANDBOX_CAP_DROP_ALL", true),
-      noNewPrivileges: bool("DFH_SANDBOX_NO_NEW_PRIVILEGES", true),
+      cpu: int("DEEPSONAR_SANDBOX_CPU", 2),
+      memoryMiB: int("DEEPSONAR_SANDBOX_MEMORY_MIB", 2048),
+      pidsLimit: int("DEEPSONAR_SANDBOX_PIDS", 512),
+      capDropAll: bool("DEEPSONAR_SANDBOX_CAP_DROP_ALL", true),
+      noNewPrivileges: bool("DEEPSONAR_SANDBOX_NO_NEW_PRIVILEGES", true),
     },
     /**
      * profile env_keys 白名单（P0：暂停任意环境变量下发，SEC 方案 §6.2 过渡措施）。
      * 逗号分隔，支持前缀通配（如 ANTHROPIC_*）；profile 里不在白名单的变量名会被拒绝注入。
      */
-    allowedEnvKeys: str("DFH_ALLOWED_ENV_KEYS", "ANTHROPIC_*,OPENAI_*,OPENROUTER_*"),
+    allowedEnvKeys: str("DEEPSONAR_ALLOWED_ENV_KEYS", "ANTHROPIC_*,OPENAI_*,OPENROUTER_*"),
     isEnvKeyAllowed(key: string): boolean {
       return this.allowedEnvKeys
         .split(",")
@@ -188,12 +188,12 @@ export const config = {
 
   skillSources: {
     /** 逗号分隔的 Git host 允许列表；空 = 任意 HTTPS host。 */
-    allowedGitHosts: str("DFH_GIT_ALLOWED_HOSTS", ""),
+    allowedGitHosts: str("DEEPSONAR_GIT_ALLOWED_HOSTS", ""),
   },
 
   /** 可信运行镜像目录（runtime_image_key 只能引用这里的 key；空 = 不允许自定义镜像） */
   images: {
-    trustedKeys: str("DFH_TRUSTED_IMAGE_KEYS", ""),
+    trustedKeys: str("DEEPSONAR_TRUSTED_IMAGE_KEYS", ""),
     isTrusted(key: string): boolean {
       return this.trustedKeys.split(",").map((s) => s.trim()).filter(Boolean).includes(key);
     },

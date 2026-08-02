@@ -27,27 +27,27 @@ interface Gauge {
 
 /** 抓取时现算的 gauge（DB 是唯一真相，进程重启不丢） */
 const GAUGES: Record<string, Gauge> = {
-  dfh_jobs_active: {
+  deepsonar_jobs_active: {
     help: "Jobs in non-terminal states",
     query: async () =>
       (await sql<[{ n: number }]>`
         SELECT COUNT(*)::int AS n FROM jobs
         WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`)[0].n,
   },
-  dfh_queue_depth: {
+  deepsonar_queue_depth: {
     help: "Pending jobs waiting to be claimed",
     query: async () =>
       (await sql<[{ n: number }]>`
         SELECT COUNT(*)::int AS n FROM jobs WHERE status = 'pending'`)[0].n,
   },
-  dfh_sandbox_active: {
+  deepsonar_sandbox_active: {
     help: "Running jobs with a live sandbox_id",
     query: async () =>
       (await sql<[{ n: number }]>`
         SELECT COUNT(*)::int AS n FROM jobs
         WHERE status = 'running' AND sandbox_id IS NOT NULL`)[0].n,
   },
-  dfh_audit_logs_total: {
+  deepsonar_audit_logs_total: {
     help: "Audit log rows (append-only)",
     query: async () =>
       (await sql<[{ n: number }]>`
@@ -56,17 +56,17 @@ const GAUGES: Record<string, Gauge> = {
 };
 
 const HELP: Record<string, string> = {
-  dfh_jobs_created_total: "Jobs created",
-  dfh_jobs_failed_total: "Jobs reaching failed/timeout terminal states, by reason",
-  dfh_jobs_orphan_total: "Jobs marked orphan",
-  dfh_job_duration_seconds_sum: "Sum of finished job durations (succeeded/failed)",
-  dfh_job_duration_seconds_count: "Count of finished jobs with duration",
-  dfh_model_requests_total: "Model gateway forwarded requests",
-  dfh_model_tokens_total: "Model gateway usage tokens (best-effort from usage fields)",
-  dfh_provider_errors_total: "Model gateway upstream/provider errors",
-  dfh_api_auth_failed_total: "API auth failures (401/403)",
-  dfh_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
-  dfh_plane_sync_errors_total: "Plane sync/writeback errors",
+  deepsonar_jobs_created_total: "Jobs created",
+  deepsonar_jobs_failed_total: "Jobs reaching failed/timeout terminal states, by reason",
+  deepsonar_jobs_orphan_total: "Jobs marked orphan",
+  deepsonar_job_duration_seconds_sum: "Sum of finished job durations (succeeded/failed)",
+  deepsonar_job_duration_seconds_count: "Count of finished jobs with duration",
+  deepsonar_model_requests_total: "Model gateway forwarded requests",
+  deepsonar_model_tokens_total: "Model gateway usage tokens (best-effort from usage fields)",
+  deepsonar_provider_errors_total: "Model gateway upstream/provider errors",
+  deepsonar_api_auth_failed_total: "API auth failures (401/403)",
+  deepsonar_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
+  deepsonar_plane_sync_errors_total: "Plane sync/writeback errors",
 };
 
 /** Prometheus text exposition */

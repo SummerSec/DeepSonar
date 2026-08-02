@@ -50,12 +50,12 @@ function toFlow(
         target: e.to_node_id,
         type: "smoothstep",
         animated: true,
-        className: `dfh-edge dfh-edge-${e.edge_type}`,
+        className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
         style: {
           stroke: st.stroke,
           strokeWidth: 1.8,
           opacity: 0.9,
-          "--dfh-edge-speed": st.speed,
+          "--deepsonar-edge-speed": st.speed,
         } as CSSProperties,
         markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: st.stroke },
       };
@@ -161,7 +161,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-zinc-500">
-          <span className="dfh-live-dot inline-block size-2 rounded-full bg-acc-500" />
+          <span className="deepsonar-live-dot inline-block size-2 rounded-full bg-acc-500" />
           正在连接调度器…
         </div>
       </div>

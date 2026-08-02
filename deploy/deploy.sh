@@ -28,7 +28,7 @@ random_hex() {
 if [ ! -f "$ENV_FILE" ]; then
   cp "$ENV_EXAMPLE" "$ENV_FILE"
   db_secret=$(random_hex 16)
-  admin_secret="dfh_bootstrap_$(random_hex 32)"
+  admin_secret="deepsonar_bootstrap_$(random_hex 32)"
   sed "s/change-me-postgres-password/$db_secret/; s/change-me-bootstrap-admin-token/$admin_secret/" "$ENV_FILE" > "$ENV_FILE.tmp"
   mv "$ENV_FILE.tmp" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
@@ -40,8 +40,8 @@ if grep -q 'change-me-' "$ENV_FILE"; then
   exit 1
 fi
 
-if ! grep -q '^DFH_MASTER_KEY_FILE=' "$ENV_FILE"; then
-  printf '\nDFH_MASTER_KEY_FILE=/run/secrets/dfh_master_key\n' >> "$ENV_FILE"
+if ! grep -q '^DEEPSONAR_MASTER_KEY_FILE=' "$ENV_FILE"; then
+  printf '\nDEEPSONAR_MASTER_KEY_FILE=/run/secrets/deepsonar_master_key\n' >> "$ENV_FILE"
 fi
 
 if [ ! -f "$MASTER_KEY_FILE" ]; then
@@ -50,7 +50,7 @@ if [ ! -f "$MASTER_KEY_FILE" ]; then
   echo "[deploy] 已生成 deploy/master.key，用于 Provider Credential 加密"
 fi
 
-set -- docker compose -p deepflowhunter --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
+set -- docker compose -p deepsonar --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
 if [ "$MODE" = "real" ]; then
   set -- "$@" -f "$REAL_COMPOSE_FILE"
 fi
@@ -75,7 +75,7 @@ case "$ACTION" in
   up)
     "$@" config --quiet
     "$@" up -d --build
-    port=$(awk -F= '$1=="DFH_WEB_PORT" {print $2; exit}' "$ENV_FILE")
+    port=$(awk -F= '$1=="DEEPSONAR_WEB_PORT" {print $2; exit}' "$ENV_FILE")
     port=${port:-8080}
     health="http://127.0.0.1:$port/api/health"
     ready=0
@@ -95,7 +95,7 @@ case "$ACTION" in
       exit 1
     fi
     echo "[deploy] DeepSonar 已启动：http://127.0.0.1:$port"
-    echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DFH_ADMIN_TOKEN，请勿提交该文件。"
+    echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DEEPSONAR_ADMIN_TOKEN，请勿提交该文件。"
     if [ "$MODE" = "fake" ]; then
       echo "[deploy] 当前为 fake 模式；真实 Agent 请使用：./deploy/deploy.sh up real"
     fi

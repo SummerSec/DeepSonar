@@ -27,7 +27,7 @@ export function StatusBadge({ status, compact = false }: { status: string; compa
       style={{ color: c, background: `color-mix(in srgb, ${c} 10%, transparent)` }}
       title={status}
     >
-      <span className={`status-dot ${["running", "claimed", "provisioning", "verifying"].includes(status) ? "dfh-live-dot" : ""}`} style={{ background: c }} />
+      <span className={`status-dot ${["running", "claimed", "provisioning", "verifying"].includes(status) ? "deepsonar-live-dot" : ""}`} style={{ background: c }} />
       {compact ? status : (STATUS_LABEL[status] ?? status)}
     </span>
   );
@@ -55,7 +55,7 @@ export function PageHeader({
   eyebrow?: string;
 }) {
   return (
-    <header className="page-header dfh-reveal">
+    <header className="page-header deepsonar-reveal">
       <div className="min-w-0 max-w-3xl">
         <div className="eyebrow"><span />{eyebrow}</div>
         <h1>{title}</h1>
@@ -83,7 +83,7 @@ export function SecondaryButton({ children, className = "", ...props }: ButtonHT
 
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
   return (
-    <div className="surface-shell dfh-reveal">
+    <div className="surface-shell deepsonar-reveal">
       <div className="empty-state surface-core">
         <div className="empty-orbit" aria-hidden="true"><span /></div>
         <div className="text-[15px] font-medium text-zinc-200">{title}</div>
@@ -100,7 +100,7 @@ export function PageSkeleton({ rows = 4 }: { rows?: number }) {
 
 export function StatCard({ label, value, accent, hint, index = 0 }: { label: string; value: string | number; accent?: string; hint?: string; index?: number }) {
   return (
-    <div className="surface-shell stat-shell dfh-reveal" style={{ animationDelay: `${index * 70}ms` }}>
+    <div className="surface-shell stat-shell deepsonar-reveal" style={{ animationDelay: `${index * 70}ms` }}>
       <div className="stat-card surface-core">
         <div className="flex items-center justify-between">
           <span className="metric-label">{label}</span>
@@ -154,7 +154,7 @@ export function relativeTime(iso: string | null | undefined): string {
 }
 
 export function DataTable({ children }: { children: ReactNode }) {
-  return <div className="surface-shell table-shell dfh-reveal"><div className="surface-core data-table"><div className="overflow-x-auto">{children}</div></div></div>;
+  return <div className="surface-shell table-shell deepsonar-reveal"><div className="surface-core data-table"><div className="overflow-x-auto">{children}</div></div></div>;
 }
 
 export const thCls = "px-4 py-3.5 text-left font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500";

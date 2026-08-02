@@ -49,7 +49,7 @@ export function TaskList({
               >
                 <div className="flex items-center gap-1.5">
                   {active && (
-                    <span className="dfh-live-dot inline-block size-1.5 shrink-0 rounded-full bg-run-400" />
+                    <span className="deepsonar-live-dot inline-block size-1.5 shrink-0 rounded-full bg-run-400" />
                   )}
                   <span
                     className="text-[14px] font-medium leading-snug text-zinc-100"

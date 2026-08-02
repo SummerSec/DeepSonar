@@ -166,7 +166,7 @@ export function TaskCanvasPage() {
             style={{ color: taskStatus.color, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${taskStatus.color} 20%, transparent)`, background: `${taskStatus.color}12` }}
           >
             <span
-              className={`inline-block size-1.5 rounded-full ${rootStatus === "reporting" ? "dfh-live-dot" : ""}`}
+              className={`inline-block size-1.5 rounded-full ${rootStatus === "reporting" ? "deepsonar-live-dot" : ""}`}
               style={{ background: taskStatus.color }}
             />
             {taskStatus.label}

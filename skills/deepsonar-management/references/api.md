@@ -1,12 +1,12 @@
 # DeepSonar Management API 契约
 
-> **权威机器可读 schema（运行时）**：调度器提供以下豁免鉴权端点，优先以此为准。  
-> - `GET /openapi.json` — OpenAPI 3.0.3 完整 JSON  
-> - `GET /schema` — 默认同 openapi；`?format=summary|markdown|openapi`  
-> - `GET /schema.md` — 本文件（仓库内副本）或运行时生成摘要  
+> **权威机器可读 schema（运行时）**：调度器提供以下豁免鉴权端点，优先以此为准。
+> - `GET /openapi.json` — OpenAPI 3.0.3 完整 JSON
+> - `GET /schema` — 默认同 openapi；`?format=summary|markdown|openapi`
+> - `GET /schema.md` — 本文件（仓库内副本）或运行时生成摘要
 
-Base URL：`DFH_BASE_URL`（默认 `http://localhost:3100`）  
-认证：`Authorization: Bearer <dfh_token>`（`DFH_AUTH_REQUIRED=false` 时本地回环可省略）  
+Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
+认证：`Authorization: Bearer <deepsonar_token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
 
 **豁免鉴权**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/webhooks/plane`、`/gateway/*`
 
@@ -111,7 +111,7 @@ PUT body：
 }
 ```
 
-保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。  
+保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。
 Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。
 
 | 方法 | 路径 | Scope | 说明 |
@@ -188,11 +188,11 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 
 ```bash
 # 1) 拉机器可读 OpenAPI
-curl -s "$DFH_BASE_URL/openapi.json" -o openapi.json
+curl -s "$DEEPSONAR_BASE_URL/openapi.json" -o openapi.json
 
 # 2) 或拉端点摘要
-curl -s "$DFH_BASE_URL/schema?format=summary" | jq .
+curl -s "$DEEPSONAR_BASE_URL/schema?format=summary" | jq .
 
 # 3) 或拉 Markdown
-curl -s "$DFH_BASE_URL/schema.md"
+curl -s "$DEEPSONAR_BASE_URL/schema.md"
 ```

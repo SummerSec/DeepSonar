@@ -6,7 +6,7 @@ import { config } from "./config.js";
 /**
  * Provider Credential 加密（§6.2 存储要求）：
  * - AES-256-GCM；nonce 每次随机；密文/nonce/tag base64 落库
- * - 主密钥 32 字节，来自 DFH_MASTER_KEY_FILE（优先）或 DFH_MASTER_KEY（hex/base64）
+ * - 主密钥 32 字节，来自 DEEPSONAR_MASTER_KEY_FILE（优先）或 DEEPSONAR_MASTER_KEY（hex/base64）
  * - 明文永不进日志/快照/API 响应；fingerprint=sha256(明文)[:16] 只做识别
  * - 未配置主密钥时：加解密直接报错（加密功能不可用），不影响其余系统
  */
@@ -15,7 +15,7 @@ let cachedKey: Buffer | null | undefined;
 
 function masterKey(): Buffer {
   if (cachedKey !== undefined) {
-    if (!cachedKey) throw new Error("未配置主密钥（DFH_MASTER_KEY_FILE），凭据功能不可用");
+    if (!cachedKey) throw new Error("未配置主密钥（DEEPSONAR_MASTER_KEY_FILE），凭据功能不可用");
     return cachedKey;
   }
   let raw = "";
@@ -32,7 +32,7 @@ function masterKey(): Buffer {
   }
   if (!raw) {
     cachedKey = null;
-    throw new Error("未配置主密钥（DFH_MASTER_KEY_FILE），凭据功能不可用");
+    throw new Error("未配置主密钥（DEEPSONAR_MASTER_KEY_FILE），凭据功能不可用");
   }
   const buf = /^[0-9a-f]{64}$/i.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
   if (buf.length !== 32) throw new Error("主密钥必须是 32 字节（64 hex 或 base64）");

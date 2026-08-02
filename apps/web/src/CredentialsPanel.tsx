@@ -200,7 +200,7 @@ export function CredentialsPanel() {
     <div className="flex flex-col gap-4 p-4 text-[13px]">
       <div className="text-[13px] leading-relaxed text-zinc-500">
         上游服务密钥（LLM / Plane / Git）经 AES-256-GCM 加密落库，主密钥由调度器的{" "}
-        <code className="font-mono text-zinc-400">DFH_MASTER_KEY_FILE</code> 持有。
+        <code className="font-mono text-zinc-400">DEEPSONAR_MASTER_KEY_FILE</code> 持有。
         密钥提交后不可回看、只能轮换；名称与{" "}
         <code className="font-mono text-zinc-400">base_url</code> 等非敏感元数据可随时修改。
       </div>

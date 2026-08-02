@@ -149,7 +149,7 @@ pending → claimed → provisioning → running → succeeded
 ```text
 loop:
   1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
-  2. 原子 claim（DB 唯一约束兜底）→ 写 jobs 表 → pg_notify('dfh_jobs') 事件唤醒 dispatcher
+  2. 原子 claim（DB 唯一约束兜底）→ 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher
   3. Canvas：创建/更新 job 节点（running）
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
@@ -365,9 +365,9 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 **事件通道**：事件不经过沙箱网络，经 agentbox-sdk 控制通道回传调度器侧：
 
 - SDK normalized event stream → 文本/进度 → `progress` 事件
-- 系统按 Job 动态注入本地 `deepflowhunter-control` MCP；Agent 在执行中可多次调用 `emit_fact` / `emit_finding`，每条事件立即进入本地控制队列
+- 系统按 Job 动态注入本地 `deepsonar-control` MCP；Agent 在执行中可多次调用 `emit_fact` / `emit_finding`，每条事件立即进入本地控制队列
 - 调度器通过 agentbox 文件控制通道增量读取并校验队列；Hub 决策、人工请求与 done 同样通过动态工具提交，不使用固定结果文件契约
-- 数据库在新 Fact/Finding 节点提交后发出 `dfh_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
+- 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
 - 终态后立即删除控制队列，随后销毁该 Job 的独立沙箱
 - 沙箱内不注入调度器数据库或 API 凭据；Provider Credential 只换成短期 Job Token
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
@@ -402,7 +402,7 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 - **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 整图 YAML + 数据库实时可用角色 → 通过动态系统工具提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
 - Hub 可下发工作角色输入 = 整图 YAML + 当前意图；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
-- 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DFH_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
+- 规则：`hubEnabled`（默认 false，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED`）、`maxHubRounds`、`maxIntentsPerDecision`
 - **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 每次从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不维护代码侧固定角色枚举。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单。其中 `audit` 产出 Finding，其余工作角色产出 Fact
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
@@ -488,7 +488,7 @@ Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills），每个
 ## 11. 目录结构
 
 ```text
-deepflowhunter/
+deepsonar/
   apps/
     scheduler/          # 核心调度（含 canvas-api，第一期合并）
     web/                # 画布前端（React + React Flow）
@@ -527,12 +527,12 @@ MAX_FOLLOWUPS_PER_JOB=20
 MAX_FOLLOWUP_DEPTH=4
 MAX_AUTO_RETRIES=6
 
-DFH_HUB_ENABLED=false
-DFH_HUB_MAX_ROUNDS=20
-DFH_HUB_MAX_INTENTS=6
+DEEPSONAR_HUB_ENABLED=false
+DEEPSONAR_HUB_MAX_ROUNDS=20
+DEEPSONAR_HUB_MAX_INTENTS=6
 
 SANDBOX_PROVIDER=local-docker
-DOCKER_IMAGE_AUDIT=deepflowhunter-agent:latest
+DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
 EVENT_PAYLOAD_MAX_KB=256
 
 BLOB_STORE=fs

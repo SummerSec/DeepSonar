@@ -38,14 +38,14 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
   for (const j of [...timedOut, ...provisionStuck, ...orphaned]) {
     if (j.sandbox_id) {
       await runner.destroy({ sandboxId: j.sandbox_id }).catch((e) => {
-        inc("dfh_sandbox_cleanup_failed_total");
+        inc("deepsonar_sandbox_cleanup_failed_total");
         console.error(`[reaper] 沙箱回收失败 ${j.sandbox_id}:`, e);
       });
     }
     // §13.1 指标：终局原因计数
-    if (timedOut.includes(j)) inc("dfh_jobs_failed_total", { reason: "timeout" });
-    else if (provisionStuck.includes(j)) inc("dfh_jobs_failed_total", { reason: "provision_stuck" });
-    else inc("dfh_jobs_orphan_total");
+    if (timedOut.includes(j)) inc("deepsonar_jobs_failed_total", { reason: "timeout" });
+    else if (provisionStuck.includes(j)) inc("deepsonar_jobs_failed_total", { reason: "provision_stuck" });
+    else inc("deepsonar_jobs_orphan_total");
     // §6.3：终局判定即吊销短期模型 Token
     const { revokeJobTokens } = await import("./gateway.js");
     await revokeJobTokens(j.id, "reaper").catch(() => {});

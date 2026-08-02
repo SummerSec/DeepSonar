@@ -3,10 +3,10 @@
 DeepSonar Management API CLI（Management Skill 的脚本入口）
 
 环境变量：
-  DFH_BASE_URL   调度器地址（默认 http://localhost:3100）
-  DFH_API_TOKEN  Platform API Token（dfh_<env>_<prefix>_<secret>）；auth 关闭时可省略
+  DEEPSONAR_BASE_URL   调度器地址（默认 http://localhost:3100）
+  DEEPSONAR_API_TOKEN  Platform API Token（deepsonar_<env>_<prefix>_<secret>）；auth 关闭时可省略
 
-用法：python dfh-api.py <资源> <动作> [位置参数] [--flag value...]
+用法：python deepsonar-api.py <资源> <动作> [位置参数] [--flag value...]
 输出：stdout 单行/多行 JSON（结构化，便于其他 Agent 消费）；错误走 stderr + 非零退出码。
       reports.markdown / reports.sarif 例外：直接输出原文（text/markdown、sarif+json）。
 
@@ -28,8 +28,8 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
-BASE = (os.environ.get("DFH_BASE_URL") or "http://localhost:3100").rstrip("/")
-TOKEN = os.environ.get("DFH_API_TOKEN") or ""
+BASE = (os.environ.get("DEEPSONAR_BASE_URL") or "http://localhost:3100").rstrip("/")
+TOKEN = os.environ.get("DEEPSONAR_API_TOKEN") or ""
 
 
 class ApiError(Exception):
@@ -391,7 +391,7 @@ def main() -> None:
     rest = argv[2:] if len(argv) > 2 else []
     if not resource:
         sys.stderr.write(
-            f"用法: dfh-api.py <资源> <动作> [args] [--flag value]\n"
+            f"用法: deepsonar-api.py <资源> <动作> [args] [--flag value]\n"
             f"先拉契约: schema openapi|summary|markdown\n"
             f"可用: {', '.join(COMMANDS)}\n"
         )

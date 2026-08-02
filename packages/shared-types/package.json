@@ -1,5 +1,5 @@
 {
-  "name": "@dfh/shared-types",
+  "name": "@deepsonar/shared-types",
   "version": "0.0.1",
   "private": true,
   "type": "module",

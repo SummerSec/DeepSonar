@@ -48,7 +48,7 @@ export function ProjectsPage() {
       {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}
 
       {creating && (
-        <div className="surface-shell mb-5 dfh-reveal">
+        <div className="surface-shell mb-5 deepsonar-reveal">
           <form className="surface-core grid gap-5 p-5 lg:grid-cols-[minmax(220px,.7fr)_minmax(320px,1.3fr)_auto] lg:items-end" onSubmit={(e) => { e.preventDefault(); void create(); }}>
             <div><div className="eyebrow"><span />NEW WORKSPACE</div><h2 className="mt-4 text-lg font-medium tracking-[-.03em] text-zinc-100">定义长期边界</h2><p className="mt-1 text-[11px] leading-5 text-zinc-600">先给它一个清晰名称，任务范围稍后用自然语言表达。</p></div>
             <div className="grid gap-3 sm:grid-cols-2"><label><span className="mb-1.5 block font-mono text-[9px] tracking-[.14em] text-zinc-600">项目名称 *</span><input autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} placeholder="例如：身份与权限审计" maxLength={120} /></label><label><span className="mb-1.5 block font-mono text-[9px] tracking-[.14em] text-zinc-600">一句话说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className={inputCls} placeholder="代码边界或业务目标（可选）" maxLength={500} /></label></div>
@@ -60,7 +60,7 @@ export function ProjectsPage() {
       {visible.length === 0 && !error ? <EmptyState title={projects.length ? "没有进行中的项目" : "创建你的第一个项目空间"} hint={projects.length ? "历史项目仍然安全保留，打开下方开关即可查看。" : "项目只定义长期边界；创建后你可以立即用自然语言下达第一项任务。"} action={!projects.length && <PrimaryButton onClick={() => setCreating(true)}>开始创建</PrimaryButton>} /> : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {visible.map((project, index) => (
-            <article key={project.id} className={`surface-shell dfh-reveal ${project.status === "archived" ? "opacity-55" : ""}`} style={{ animationDelay: `${index * 65}ms` }}>
+            <article key={project.id} className={`surface-shell deepsonar-reveal ${project.status === "archived" ? "opacity-55" : ""}`} style={{ animationDelay: `${index * 65}ms` }}>
               <div className="surface-core min-h-[210px] p-5">
                 {editing === project.id ? (
                   <form className="flex h-full flex-col gap-3" onSubmit={async (e) => { e.preventDefault(); try { await api.updateProject(project.id, { name: editForm.name.trim() || undefined, description: editForm.description }); setEditing(null); flash("项目资料已保存"); reload(); } catch (error) { flash(`保存失败：${error instanceof Error ? error.message : error}`); } }}>

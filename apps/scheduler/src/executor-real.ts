@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { runRealAgent } from "@dfh/runtime-sandbox";
-import { EventEnvelope, FindingPayload } from "@dfh/shared-types";
+import { runRealAgent } from "@deepsonar/runtime-sandbox";
+import { EventEnvelope, FindingPayload } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { ingestEvent, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
@@ -99,7 +99,7 @@ function instructionDocument(input: {
 
 - 本轮用户消息是 Hub/调度器注入的唯一任务 prompt；任务目标、画布 YAML 或待验证 Finding 会直接包含在该消息中。
 - 平台不会预设 '/workspace/src'、'task.json' 或代码仓库；只有实际存在于工作区和本轮 prompt 中的数据可用。
-- '/workspace/.dfh/runtime-manifest.json' 是本 Job 的非敏感运行清单，列出角色类别、出网冻结值、环境变量名、动态模块名、Provider 配置文件路径和动态系统工具。
+- '/workspace/.deepsonar/runtime-manifest.json' 是本 Job 的非敏感运行清单，列出角色类别、出网冻结值、环境变量名、动态模块名、Provider 配置文件路径和动态系统工具。
 - 画布、Finding、角色配置和项目规则由调度器从数据库读取；Worker 不得也无法直接读取数据库。
 - 运行期间若同一画布出现其他 Worker 新提交的 Fact/Finding，平台会用 SDK 的会话追加消息能力发送“DeepSonar 画布增量通知”；它是新的任务数据，不会改变本文件、角色、网络或工具权限。
 
@@ -112,7 +112,7 @@ function instructionDocument(input: {
 
 ## 环境变量
 
-- DFH_ALLOW_EGRESS 固定为 '${input.allowEgress ? "1" : "0"}'，与本文件的网络边界一致。
+- DEEPSONAR_ALLOW_EGRESS 固定为 '${input.allowEgress ? "1" : "0"}'，与本文件的网络边界一致。
 - 运行清单只公开本轮可用的环境变量名称；值只应在完成任务所需的进程中使用，禁止打印、写入结果文件或复制到任务材料。
 - Provider token/base URL 属于系统保留的短期模型通道，不是目标系统凭据，也不代表获得外部网络权限。
 - RoleConfig 可注入非敏感变量或经白名单引用的调度器变量；变量不存在时不得臆造。
@@ -204,9 +204,9 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     }
     void sql`UPDATE credentials SET last_used_at = now() WHERE id = ${cred.id as string}`.catch(() => {});
   }
-  env.DFH_ALLOW_EGRESS = allowEgress ? "1" : "0";
-  env.DFH_CONTROL_EVENT_FILE = CONTROL_EVENT_FILE;
-  env.DFH_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
+  env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
+  env.DEEPSONAR_CONTROL_EVENT_FILE = CONTROL_EVENT_FILE;
+  env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
 
   // Hub 与角色任务通过 input 注入动态任务；长期角色规则进入 AGENTS.md / CLAUDE.md。
   const graph = canvasId && (isHub || isRole || isAudit) ? await buildGraphSnapshot(canvasId) : null;
@@ -278,7 +278,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     name: CONTROL_MCP_NAME,
     type: "local" as const,
     command: "node",
-    args: ["/workspace/.dfh/control-mcp.mjs"],
+    args: ["/workspace/.deepsonar/control-mcp.mjs"],
   };
   const mcps = [
     ...snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME),
@@ -316,8 +316,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const workspaceFiles: Record<string, string> = {
     "/workspace/AGENTS.md": instructions,
     "/workspace/CLAUDE.md": instructions,
-    "/workspace/.dfh/runtime-manifest.json": JSON.stringify(componentManifest, null, 2),
-    "/workspace/.dfh/control-mcp.mjs": CONTROL_MCP_SERVER,
+    "/workspace/.deepsonar/runtime-manifest.json": JSON.stringify(componentManifest, null, 2),
+    "/workspace/.deepsonar/control-mcp.mjs": CONTROL_MCP_SERVER,
     [CONTROL_EVENT_FILE]: "",
   };
   for (const file of snapshot.config_files) {

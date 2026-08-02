@@ -1,7 +1,7 @@
 name: release
 
 # 可发布制品（§12.1）：tag v* 触发 —— 镜像固定版本推到 GHCR + Management Skill Release 附件
-# 制品：deepflowhunter-scheduler / deepflowhunter-web / deepflowhunter-agent（digest 固定）
+# 制品：deepsonar-scheduler / deepsonar-web / deepsonar-agent（digest 固定）
 on:
   push:
     tags: ["v*"]
@@ -44,7 +44,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/deepflowhunter-${{ matrix.name }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/deepsonar-${{ matrix.name }}
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
@@ -67,10 +67,10 @@ jobs:
       - name: 打包 Management Skill
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          tar -czf "deepflowhunter-management-skill-${VERSION}.tar.gz" -C skills deepflowhunter-management
+          tar -czf "deepsonar-management-skill-${VERSION}.tar.gz" -C skills deepsonar-management
 
       - name: 发布 Release + 附件
         uses: softprops/action-gh-release@v2
         with:
-          files: deepflowhunter-management-skill-*.tar.gz
+          files: deepsonar-management-skill-*.tar.gz
           generate_release_notes: true

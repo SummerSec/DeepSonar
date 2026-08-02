@@ -7,7 +7,7 @@ let listenerReady: Promise<void> | null = null;
 
 function ensureListener(): Promise<void> {
   if (listenerReady) return listenerReady;
-  listenerReady = sql.listen("dfh_canvas_events", (raw) => {
+  listenerReady = sql.listen("deepsonar_canvas_events", (raw) => {
     void forwardCanvasEvent(raw).catch((error) => {
       console.error("[canvas-update] 增量消息转发失败:", error);
     });

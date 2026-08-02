@@ -92,7 +92,7 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-ink-800 px-3 py-1.5">
         <span
-          className={`inline-block size-1.5 rounded-full ${connected ? "dfh-live-dot bg-acc-500" : "bg-zinc-600"}`}
+          className={`inline-block size-1.5 rounded-full ${connected ? "deepsonar-live-dot bg-acc-500" : "bg-zinc-600"}`}
         />
         <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
           {connected ? "live" : "已断开"}

@@ -12,16 +12,16 @@ COPY packages/shared-types/package.json packages/shared-types/package.json
 COPY packages/plane-client/package.json packages/plane-client/package.json
 COPY packages/runtime-sandbox/package.json packages/runtime-sandbox/package.json
 
-RUN pnpm install --frozen-lockfile --filter @dfh/scheduler...
+RUN pnpm install --frozen-lockfile --filter @deepsonar/scheduler...
 
 COPY apps/scheduler apps/scheduler
 COPY packages packages
 COPY agent-harness/demo-repo agent-harness/demo-repo
 
 # 生产制品（§12.1）：workspace 包 main/exports 指向 dist，scheduler 跑 node dist/index.js（不用 tsx）
-RUN pnpm -r --filter @dfh/shared-types --filter @dfh/plane-client --filter @dfh/runtime-sandbox --filter @dfh/scheduler build
+RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/plane-client --filter @deepsonar/runtime-sandbox --filter @deepsonar/scheduler build
 
 ENV NODE_ENV=production
 EXPOSE 3100
 
-CMD ["pnpm", "--filter", "@dfh/scheduler", "start"]
+CMD ["pnpm", "--filter", "@deepsonar/scheduler", "start"]

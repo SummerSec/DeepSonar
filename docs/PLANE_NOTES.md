@@ -17,7 +17,7 @@
 ## 已确认
 
 - **workspace slug：`sumsec`**（已填入 `.env`）
-- 演示项目：`DeepSonar Demo Audit`（identifier `DFH`，id `03846088-8daf-4f87-a1e6-969a37a48baa`）
+- 演示项目：`DeepSonar Demo Audit`（identifier `DEEPSONAR`，id `03846088-8daf-4f87-a1e6-969a37a48baa`）
 - 自定义状态：`Ready`（unstarted 组）已建，调度器只领取此状态的 issue
 - 演示 issue：`审计 auth 模块（演示）`（描述直接写自然语言任务内容）
 

@@ -10,7 +10,7 @@ let unsubscribe: (() => void) | undefined;
 try {
   await sql`
     INSERT INTO projects (id, canvas_id, name, description)
-    VALUES (${projectId}, ${randomUUID()}, '__dfh_canvas_update_smoke__', 'temporary smoke')`;
+    VALUES (${projectId}, ${randomUUID()}, '__deepsonar_canvas_update_smoke__', 'temporary smoke')`;
   await sql`
     INSERT INTO canvases (id, project_id, title, target_json)
     VALUES (${canvasId}, ${projectId}, 'canvas update smoke', ${{ network_policy: { allow_egress: false } } as never})`;
@@ -34,7 +34,7 @@ try {
   if (!message.includes("增量事实") || !message.includes("来自其他 Worker 的证据")) {
     throw new Error(`unexpected message: ${message}`);
   }
-  console.log(JSON.stringify({ delivered: true, via: "dfh_canvas_events", contains_fact: true }));
+  console.log(JSON.stringify({ delivered: true, via: "deepsonar_canvas_events", contains_fact: true }));
 } finally {
   unsubscribe?.();
   await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`.catch(() => {});

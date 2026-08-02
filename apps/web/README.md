@@ -1,4 +1,4 @@
-# @dfh/web — DeepSonar 控制台
+# @deepsonar/web — DeepSonar 控制台
 
 技术选型：React + React Router + React Flow（@xyflow/react）+ Tailwind
 
@@ -27,5 +27,5 @@
 ## 开发
 
 ```bash
-pnpm --filter @dfh/web dev   # :5173，代理 /api → :3100
+pnpm --filter @deepsonar/web dev   # :5173，代理 /api → :3100
 ```

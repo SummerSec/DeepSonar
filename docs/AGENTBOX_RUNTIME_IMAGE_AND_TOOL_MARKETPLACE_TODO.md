@@ -86,11 +86,11 @@ Agent 可以在已分配镜像中自主选择工具，但不能：
 
 | 镜像键 | 用途 | 初始内容 | 优先级 |
 |---|---|---|---|
-| `dfh-base` | Explore、Analyze、Code、Hub | git、rg、jq、file、unzip、Python、Node、ca-certificates | P0 |
-| `dfh-audit` | Audit、Verify | `dfh-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
-| `dfh-build` | 需要编译或最小 PoC 的 Test | 编译器、构建工具、常见语言运行时 | P1，按需创建 |
-| `dfh-language-*` | Java、Go、PHP、Rust 等专项审计 | 对应语言工具链与静态分析器 | P2，按真实任务增加 |
-| 第三方市场镜像 | 社区或合作方专项环境 | 必须满足 DFH 镜像契约 | P2 |
+| `deepsonar-base` | Explore、Analyze、Code、Hub | git、rg、jq、file、unzip、Python、Node、ca-certificates | P0 |
+| `deepsonar-audit` | Audit、Verify | `deepsonar-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
+| `deepsonar-build` | 需要编译或最小 PoC 的 Test | 编译器、构建工具、常见语言运行时 | P1，按需创建 |
+| `deepsonar-language-*` | Java、Go、PHP、Rust 等专项审计 | 对应语言工具链与静态分析器 | P2，按真实任务增加 |
+| 第三方市场镜像 | 社区或合作方专项环境 | 必须满足 DEEPSONAR 镜像契约 | P2 |
 
 暂不默认内置：
 
@@ -102,9 +102,9 @@ Agent 可以在已分配镜像中自主选择工具，但不能：
 
 Trivy、OSV-Scanner 等依赖漏洞数据库的工具不能简单安装完成即视为可用。其数据库必须由受控更新任务下载、签名或校验后形成独立版本，并记录数据库版本和时间。
 
-## 5. DFH 运行时镜像契约
+## 5. DEEPSONAR 运行时镜像契约
 
-所有官方和市场镜像必须满足 `dfh.runtime.contract/v1`。
+所有官方和市场镜像必须满足 `deepsonar.runtime.contract/v1`。
 
 最低要求：
 
@@ -121,9 +121,9 @@ Trivy、OSV-Scanner 等依赖漏洞数据库的工具不能简单安装完成即
 建议 OCI 标签：
 
 ```text
-io.deepflowhunter.contract=dfh.runtime.contract/v1
-io.deepflowhunter.toolset=audit
-io.deepflowhunter.tools-manifest=/opt/dfh/tool-manifest.json
+io.deepsonar.contract=deepsonar.runtime.contract/v1
+io.deepsonar.toolset=audit
+io.deepsonar.tools-manifest=/opt/deepsonar/tool-manifest.json
 org.opencontainers.image.source=https://...
 org.opencontainers.image.revision=<git-sha>
 ```
@@ -132,7 +132,7 @@ org.opencontainers.image.revision=<git-sha>
 
 ```json
 {
-  "contract": "dfh.runtime.contract/v1",
+  "contract": "deepsonar.runtime.contract/v1",
   "tools": [
     { "name": "semgrep", "version": "固定版本", "capabilities": ["sast"] },
     { "name": "gitleaks", "version": "固定版本", "capabilities": ["secret-scan"] }
@@ -160,7 +160,7 @@ Job 创建时必须冻结：
 {
   "runtime_image_id": "...",
   "runtime_image_version_id": "...",
-  "image_ref": "registry.example/dfh/audit@sha256:...",
+  "image_ref": "registry.example/deepsonar/audit@sha256:...",
   "image_digest": "sha256:...",
   "tools_manifest_hash": "sha256:...",
   "admission_scan_id": "..."
@@ -195,7 +195,7 @@ trusted → revoked
 1. 管理员提交 OCI registry 引用或市场清单 URL。
 2. 服务端解析 tag，并立即固定为 digest。
 3. 在独立扫描环境拉取镜像，不在 Scheduler 生产进程内执行第三方层内容。
-4. 校验 DFH 镜像契约、支持架构、大小限制和入口行为。
+4. 校验 DEEPSONAR 镜像契约、支持架构、大小限制和入口行为。
 5. 验证 Cosign/OCI 签名与发布者身份；保存验证结果。
 6. 生成或校验 SPDX/CycloneDX SBOM。
 7. 扫描系统包、语言依赖、恶意文件、嵌入凭据、setuid 文件和许可证。
@@ -223,7 +223,7 @@ trusted → revoked
 1. Job Snapshot 已冻结的不可变镜像版本；
 2. 项目为该角色绑定且已启用的可信镜像；
 3. 角色全局默认官方镜像；
-4. `dfh-base` 安全兜底；
+4. `deepsonar-base` 安全兜底；
 5. 无可用可信镜像则拒绝执行并记录明确错误，不回退到任意本地 tag。
 
 Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项目策略完成选择，防止任务 prompt injection 越过供应链边界。
@@ -232,9 +232,9 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 
 ### P0：官方工具镜像基线
 
-- [ ] 为 `dfh-base` 和 `dfh-audit` 确定首批工具及固定版本。
+- [ ] 为 `deepsonar-base` 和 `deepsonar-audit` 确定首批工具及固定版本。
 - [ ] 为下载型二进制记录来源 URL、SHA256 和许可证。
-- [ ] 在镜像中生成 `/opt/dfh/tool-manifest.json`。
+- [ ] 在镜像中生成 `/opt/deepsonar/tool-manifest.json`。
 - [ ] 为镜像添加 OCI 来源、revision、contract 和 toolset 标签。
 - [ ] 保持 `agent-harness/image.mjs` 与 `deploy/Dockerfile.agent` 工具和版本一致。
 - [ ] 增加 CI 一致性检查，发现两份镜像定义漂移时失败。

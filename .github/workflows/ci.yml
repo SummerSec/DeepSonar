@@ -7,7 +7,7 @@ on:
   pull_request:
 
 env:
-  DATABASE_URL: postgres://dfh:dfh-ci-pass@127.0.0.1:5432/deepflowhunter
+  DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/deepsonar
 
 jobs:
   gate:
@@ -16,12 +16,12 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: dfh
-          POSTGRES_PASSWORD: dfh-ci-pass
-          POSTGRES_DB: deepflowhunter
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U dfh -d deepflowhunter"
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
         env:
           AGENT_MODE: fake
           SCHEDULER_PORT: "3100"
-          DFH_HUB_ENABLED: "false"
+          DEEPSONAR_HUB_ENABLED: "false"
         run: |
           node apps/scheduler/dist/index.js &
           for i in $(seq 1 30); do

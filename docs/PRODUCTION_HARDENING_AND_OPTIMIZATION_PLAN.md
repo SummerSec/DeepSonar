@@ -94,7 +94,7 @@ Skill 与 API Token 必须成为本项目的一等能力：
                      ┌─────────────────────────────┐
                      │ Web / External Agent / CI   │
                      └──────────────┬──────────────┘
-                                    │ Session / DFH API Token
+                                    │ Session / DEEPSONAR API Token
                                     ▼
                      ┌─────────────────────────────┐
                      │ API Gateway + Auth + RBAC   │
@@ -202,10 +202,10 @@ project_skills
 建议目录：
 
 ```text
-skills/deepflowhunter-management/
+skills/deepsonar-management/
   SKILL.md
   scripts/
-    dfh-api.mjs
+    deepsonar-api.mjs
   references/
     api.md
     permissions.md
@@ -234,11 +234,11 @@ Management Skill 不应支持：
 运行配置：
 
 ```text
-DFH_API_BASE_URL=https://dfh.example.com/api
-DFH_API_TOKEN=<由安全存储注入>
+DEEPSONAR_API_BASE_URL=https://deepsonar.example.com/api
+DEEPSONAR_API_TOKEN=<由安全存储注入>
 ```
 
-Skill 必须通过 `DFH_API_TOKEN` 调用平台 API。归档项目、取消任务、解绑 Plane 等有影响操作需要明确确认或 `--yes` 参数。所有写操作使用 `Idempotency-Key`，防止 Agent 重试造成重复项目和任务。
+Skill 必须通过 `DEEPSONAR_API_TOKEN` 调用平台 API。归档项目、取消任务、解绑 Plane 等有影响操作需要明确确认或 `--yes` 参数。所有写操作使用 `Idempotency-Key`，防止 Agent 重试造成重复项目和任务。
 
 ## 6. API Token 与 Credential 管理方案
 
@@ -251,7 +251,7 @@ Skill 必须通过 `DFH_API_TOKEN` 调用平台 API。归档项目、取消任�
 建议格式：
 
 ```text
-dfh_<environment>_<public-prefix>_<secret>
+deepsonar_<environment>_<public-prefix>_<secret>
 ```
 
 数据库只保存：
@@ -312,7 +312,7 @@ skills:read
 #### 鉴权方式
 
 ```http
-Authorization: Bearer dfh_prod_xxx_secret
+Authorization: Bearer deepsonar_prod_xxx_secret
 ```
 
 服务端认证后生成统一 Actor：
@@ -368,7 +368,7 @@ profile_credentials
 - 明文不写日志、不写 Job Snapshot、不返回 API；
 - 数据库中使用 AES-256-GCM 或 KMS Envelope Encryption；
 - 主密钥不得与密文存放在同一数据库；
-- Level A 可由受保护的 `DFH_MASTER_KEY_FILE` 提供主密钥；
+- Level A 可由受保护的 `DEEPSONAR_MASTER_KEY_FILE` 提供主密钥；
 - Level B 使用 Vault、云 KMS 或等价 Secret Manager；
 - UI 只展示 Provider、状态、指纹、末四位、创建和最近使用时间；
 - 支持连接测试、禁用、轮换和使用记录；
@@ -392,7 +392,7 @@ Profile 只能选择已登记、类型匹配、当前用户有权使用的 Crede
 
 ```text
 Sandbox
-  │ DFH_JOB_TOKEN（短期、单 Job、限模型、限额度）
+  │ DEEPSONAR_JOB_TOKEN（短期、单 Job、限模型、限额度）
   ▼
 Model Gateway
   │ 解密并使用 Provider Credential
@@ -400,7 +400,7 @@ Model Gateway
 Anthropic / OpenAI / OpenRouter / Kimi
 ```
 
-`DFH_JOB_TOKEN` 应包含或关联：
+`DEEPSONAR_JOB_TOKEN` 应包含或关联：
 
 - job_id；
 - project_id；
@@ -521,7 +521,7 @@ RETURNING *;
 
 Scheduler 启动时执行：
 
-1. 按 `dfh.job` Label 枚举 Runtime 容器；
+1. 按 `deepsonar.job` Label 枚举 Runtime 容器；
 2. 读取数据库中 claimed/provisioning/running Job；
 3. 对齐数据库与容器状态；
 4. 无容器的活动 Job → orphan 或按策略重试；
@@ -664,10 +664,10 @@ ingested_at
 
 需要生成并固定：
 
-- `deepflowhunter-web:<version>`；
-- `deepflowhunter-scheduler:<version>`；
-- `deepflowhunter-worker:<version>` 或单节点 Runtime；
-- `deepflowhunter-agent:<digest>`；
+- `deepsonar-web:<version>`；
+- `deepsonar-scheduler:<version>`；
+- `deepsonar-worker:<version>` 或单节点 Runtime；
+- `deepsonar-agent:<digest>`；
 - Migration 制品；
 - Management Skill Release。
 
@@ -862,7 +862,7 @@ High 漏洞必须修复，或有明确的不可达性证明、负责人和到期
 
 - [ ] 轮换已经进入 orphan 容器的 Provider Credential；
 - [ ] 停止和删除遗留容器；
-- [ ] 枚举所有 `dfh.job` 容器并与数据库核对；
+- [ ] 枚举所有 `deepsonar.job` 容器并与数据库核对；
 - [ ] Scheduler、Web、PostgreSQL 暂时只绑定可信网络；
 - [ ] 禁止使用不可信外部仓库；
 - [ ] 暂停任意 env_keys 和任意 MCP 下发；

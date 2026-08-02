@@ -42,20 +42,20 @@ if (process.platform === "win32") {
 
 /** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
-const RESTRICTED_NETWORK = "dfh-restricted";
-const GATEWAY_PROXY = "dfh-gateway-proxy";
+const RESTRICTED_NETWORK = "deepsonar-restricted";
+const GATEWAY_PROXY = "deepsonar-gateway-proxy";
 let restrictedNetworkReady: Promise<void> | null = null;
 let gatewayProxyReady: Promise<void> | null = null;
 
 const GATEWAY_PROXY_SCRIPT = String.raw`
 const http = require("node:http");
 const https = require("node:https");
-const upstream = new URL(process.env.DFH_GATEWAY_UPSTREAM);
+const upstream = new URL(process.env.DEEPSONAR_GATEWAY_UPSTREAM);
 const prefix = upstream.pathname.replace(/\/$/, "");
 const client = upstream.protocol === "https:" ? https : http;
 const server = http.createServer((req, res) => {
   const incoming = new URL(req.url || "/", "http://proxy.local");
-  if (incoming.pathname === "/_dfh_health") {
+  if (incoming.pathname === "/_deepsonar_health") {
     res.writeHead(200).end("ok");
     return;
   }
@@ -93,11 +93,11 @@ async function ensureRestrictedNetwork(): Promise<void> {
     const validate = async () => {
       const state = await docker(
         "network", "inspect", "--format",
-        "{{.Internal}}|{{.Driver}}|{{index .Labels \"dfh.managed\"}}",
+        "{{.Internal}}|{{.Driver}}|{{index .Labels \"deepsonar.managed\"}}",
         RESTRICTED_NETWORK,
       );
       if (state !== "true|bridge|true") {
-        throw new Error(`Docker 网络 ${RESTRICTED_NETWORK} 存在但不是 DFH 管理的 internal bridge`);
+        throw new Error(`Docker 网络 ${RESTRICTED_NETWORK} 存在但不是 DEEPSONAR 管理的 internal bridge`);
       }
     };
     try {
@@ -106,7 +106,7 @@ async function ensureRestrictedNetwork(): Promise<void> {
     } catch {
       await docker(
         "network", "create", "--driver", "bridge", "--internal",
-        "--label", "dfh.managed=true", RESTRICTED_NETWORK,
+        "--label", "deepsonar.managed=true", RESTRICTED_NETWORK,
       ).catch(async (e) => {
         await validate().catch(() => { throw e; });
       });
@@ -134,7 +134,7 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<v
     try {
       const state = await docker(
         "inspect", "--format",
-        "{{index .Config.Labels \"dfh.gateway-upstream\"}}|{{.State.Running}}",
+        "{{index .Config.Labels \"deepsonar.gateway-upstream\"}}|{{.State.Running}}",
         GATEWAY_PROXY,
       );
       const [configuredHash, running] = state.split("|");
@@ -151,8 +151,8 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<v
       await docker(
         "run", "-d", "--name", GATEWAY_PROXY, "--restart", "unless-stopped",
         "--network", "bridge", "--add-host", "host.docker.internal:host-gateway",
-        "--label", "dfh.managed=true", "--label", `dfh.gateway-upstream=${upstreamHash}`,
-        "-e", `DFH_GATEWAY_UPSTREAM=${upstreamUrl}`,
+        "--label", "deepsonar.managed=true", "--label", `deepsonar.gateway-upstream=${upstreamHash}`,
+        "-e", `DEEPSONAR_GATEWAY_UPSTREAM=${upstreamUrl}`,
         "--entrypoint", "node", image, "-e", GATEWAY_PROXY_SCRIPT,
       );
     }
@@ -165,7 +165,7 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<v
       try {
         await docker(
           "exec", GATEWAY_PROXY, "node", "-e",
-          "fetch('http://127.0.0.1:3100/_dfh_health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:3100/_deepsonar_health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         );
         ready = true;
         break;
@@ -187,7 +187,7 @@ interface CreateContainerOptions {
 /**
  * SEC-03 容器硬限制：agentbox-sdk 只透传 cpu/memory，PidsLimit/CapDrop/SecurityOpt
  * 需要包住 dockerode 的 createContainer 注入。按实例包装（不碰全局原型），
- * 只对带 dfh.job 标签的容器生效，SDK 升级也不影响其他调用方。
+ * 只对带 deepsonar.job 标签的容器生效，SDK 升级也不影响其他调用方。
  * TODO(SEC-03 余项)：non-root 运行 + read_only_rootfs 需镜像侧配合（/workspace、/tmp 可写卷），留待 OPS。
  */
 function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"]): void {
@@ -202,7 +202,7 @@ function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"
   const capDropAll = limits?.capDropAll ?? true;
   const noNewPrivileges = limits?.noNewPrivileges ?? true;
   client.createContainer = (opts: CreateContainerOptions) => {
-    if (opts.Labels?.["dfh.job"]) {
+    if (opts.Labels?.["deepsonar.job"]) {
       opts.HostConfig = {
         ...opts.HostConfig,
         PidsLimit: pidsLimit,
@@ -225,14 +225,14 @@ export class AgentboxRunner implements SandboxRunner {
       image: input.image,
       workingDir: "/workspace",
       env: input.env,
-      tags: { "dfh.job": input.jobId },
+      tags: { "deepsonar.job": input.jobId },
       // SEC-03：CPU/内存硬限制（SDK 原生透传 NanoCpus/Memory）
       resources: {
         cpu: input.limits?.cpu ?? 2,
         memoryMiB: input.limits?.memoryMiB ?? 2048,
       },
       provider: {
-        name: `dfh-${input.jobId.slice(0, 8)}`,
+        name: `deepsonar-${input.jobId.slice(0, 8)}`,
         // restricted=无外网 NAT 的内部 bridge（仅保留 host-gateway 模型通道）；
         // egress=普通 bridge，Worker 可按 prompt 自主取材。
         networkMode:
@@ -282,19 +282,19 @@ export class AgentboxRunner implements SandboxRunner {
 
 // ---------- 重启 reconcile 用的引擎直查（JOB-04） ----------
 
-export interface DfhContainer {
+export interface DeepSonarContainer {
   containerId: string;
   jobId: string;
   state: string;
 }
 
-/** 枚举所有带 dfh.job 标签的容器（含已退出；autoRemove 的通常不留尸体） */
-export async function listDfhContainers(): Promise<DfhContainer[]> {
+/** 枚举所有带 deepsonar.job 标签的容器（含已退出；autoRemove 的通常不留尸体） */
+export async function listDeepSonarContainers(): Promise<DeepSonarContainer[]> {
   try {
     // 注意：docker ps 的 .Labels 是字符串（非 map），不能直接 index，取回后自行解析
     const out = await docker(
       "ps", "-a",
-      "--filter", "label=dfh.job",
+      "--filter", "label=deepsonar.job",
       "--format", "{{.ID}}\t{{.Labels}}\t{{.State}}",
     );
     return out
@@ -306,8 +306,8 @@ export async function listDfhContainers(): Promise<DfhContainer[]> {
         const jobId = labels
           .split(",")
           .map((kv) => kv.trim())
-          .find((kv) => kv.startsWith("dfh.job="))
-          ?.slice("dfh.job=".length);
+          .find((kv) => kv.startsWith("deepsonar.job="))
+          ?.slice("deepsonar.job=".length);
         return { containerId, jobId: jobId ?? "", state };
       })
       .filter((c) => c.containerId && c.jobId);
