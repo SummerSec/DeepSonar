@@ -95,7 +95,7 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173
 ```
 
-默认 `AGENT_MODE=fake`，不需要构建 Agent 镜像。Web 的 `/images` 是独立镜像市场页；项目内的 `/projects/:projectId/images` 用于启用第三方已准入镜像和固定版本。官方运行时按职责拆包：base 基于 Node 22 Debian slim，重型审计工具独立打包；Test 与 Verify 默认使用 `deepsonar-kali-minimal`（Kali Test），内含常见 Python/JDK 版本、Go 与 Rust，但仍不安装 Kali metapackage/GUI。基本验证：
+默认 `AGENT_MODE=fake`，不需要构建 Agent 镜像。Web 的 `/images` 是独立镜像市场页；项目内的 `/projects/:projectId/images` 用于启用第三方已准入镜像和固定版本。官方运行时按职责拆包：base 基于 Node 22 Debian slim，Verify 默认使用 base，重型审计工具独立打包；只有 Test 默认使用 `deepsonar-kali-minimal`（Kali Test），内含常见 Python/JDK 版本、Go 与 Rust，但仍不安装 Kali metapackage/GUI。基本验证：
 
 ```bash
 pnpm typecheck
