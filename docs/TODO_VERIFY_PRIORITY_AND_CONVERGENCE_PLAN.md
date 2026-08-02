@@ -4,7 +4,8 @@
 > **第一性原理**：用户只配 `minVerifySeverity`（最低关注级别）。  
 > 派生写死：≥ 该级别 → 自动 verify；Hub 等它们；验完停自驱；调度永远高危优先。  
 > 背景：`java-sec-code` 全量审计扇出过大；多旋钮配置违背第一性原理后已砍掉。  
-> 相关：`apps/scheduler/src/core.ts`、`apps/web` Settings / 画布。
+> 相关：`apps/scheduler/src/core.ts`、`apps/web` Settings / 画布。  
+> **后续**：未通过 verify 回弹 Hub / confirmed 唯一技术确认路径 → 见 [`TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md`](./TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md)。
 
 ---
 
