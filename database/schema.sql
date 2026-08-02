@@ -264,6 +264,38 @@ CREATE TABLE job_tokens (
 
 CREATE INDEX job_tokens_job_idx ON job_tokens (job_id);
 
+-- 审计日志（§7.2 append-only；红线：凭证明文/Authorization/Cookie/模型 Key 永不写入）
+CREATE TABLE audit_logs (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  at timestamptz NOT NULL DEFAULT now(),
+  actor_type text NOT NULL,
+  actor_id text NOT NULL,
+  action text NOT NULL,
+  project_id uuid REFERENCES projects(id),
+  resource_type text,
+  resource_id text,
+  request_id text,
+  ip text,
+  user_agent text,
+  before_json jsonb,
+  after_json jsonb,
+  result text NOT NULL DEFAULT 'ok',
+  error_code text
+);
+
+CREATE INDEX audit_logs_at_idx ON audit_logs (at DESC);
+CREATE INDEX audit_logs_project_idx ON audit_logs (project_id, at DESC);
+
+-- append-only 兜底：禁止 UPDATE/DELETE（§7.2）
+CREATE OR REPLACE FUNCTION audit_logs_append_only() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'audit_logs is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_logs_no_update BEFORE UPDATE OR DELETE ON audit_logs
+  FOR EACH ROW EXECUTE FUNCTION audit_logs_append_only();
+
 -- 角色运行配置（全局 project_id IS NULL + 项目级覆盖）
 CREATE TABLE role_configs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
