@@ -1494,8 +1494,9 @@ export function registerRoutes(app: FastifyInstance) {
       canvas_id: id,
       convergence: parseCanvasConvergence(canvas.target_json),
       minVerifySeverity: rules.minVerifySeverity,
+      maxVerificationRounds: rules.maxVerificationRounds,
       careSeverities: care,
-      // 兼容旧前端字段名
+      // 兼容旧前端字段名（severity 仅优先级/等待门，不再决定是否验证）
       hubWaitSeverities: care,
       autoVerifySeverities: care,
     };
@@ -1740,8 +1741,8 @@ export function registerRoutes(app: FastifyInstance) {
       LEFT JOIN canvases c ON c.id = j.canvas_id
       WHERE f.id = ${id}`;
     if (!finding) return reply.code(404).send({ error: "finding not found" });
-    const [verification_jobs, source_events, comments, links] = await Promise.all([
-      sql`SELECT id, type, status, error, started_at, finished_at, created_at
+    const [verification_jobs, source_events, comments, links, verification_rounds] = await Promise.all([
+      sql`SELECT id, type, status, error, started_at, finished_at, created_at, payload_json
           FROM jobs WHERE finding_id = ${id} ORDER BY created_at`,
       sql`SELECT id, job_seq, type, payload_json, created_at
           FROM events WHERE job_id = ${finding.job_id as string} ORDER BY id LIMIT 1000`,
@@ -1749,8 +1750,71 @@ export function registerRoutes(app: FastifyInstance) {
           FROM finding_comments WHERE finding_id = ${id} ORDER BY created_at`,
       sql`SELECT id, finding_id, url, title, link_type, created_by, created_at
           FROM finding_links WHERE finding_id = ${id} ORDER BY created_at`,
+      sql`SELECT id, attempt, verify_job_id, status, proposed_verdict, final_outcome,
+                 requirements_json, evidence_snapshot_json, summary, error, created_at, finished_at
+          FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt`,
     ]);
-    return { finding, verification_jobs, source_events, comments, links };
+    return { finding, verification_jobs, source_events, comments, links, verification_rounds };
+  });
+
+  // ---------- 任务报告（Hub complete → analysis_complete → Report） ----------
+  app.get("/canvases/:id/report", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { getTaskReport } = await import("./report.js");
+    const report = await getTaskReport(id);
+    if (!report) return reply.code(404).send({ error: "report not found" });
+    return report;
+  });
+
+  app.get("/reports/:id/markdown", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { getTaskReportById, readReportBlob } = await import("./report.js");
+    const report = await getTaskReportById(id);
+    if (!report) return reply.code(404).send({ error: "report not found" });
+    if (report.status !== "succeeded" || !report.markdown_uri) {
+      return reply.code(409).send({ error: "report not ready", status: report.status });
+    }
+    try {
+      const buf = await readReportBlob(report.markdown_uri as string);
+      return reply.type("text/markdown; charset=utf-8").send(buf.toString("utf8"));
+    } catch {
+      return reply.code(404).send({ error: "markdown blob missing" });
+    }
+  });
+
+  app.get("/reports/:id/sarif", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { getTaskReportById, readReportBlob } = await import("./report.js");
+    const report = await getTaskReportById(id);
+    if (!report) return reply.code(404).send({ error: "report not found" });
+    if (report.status !== "succeeded" || !report.sarif_uri) {
+      return reply.code(409).send({ error: "report not ready", status: report.status });
+    }
+    try {
+      const buf = await readReportBlob(report.sarif_uri as string);
+      return reply.type("application/json").send(JSON.parse(buf.toString("utf8")));
+    } catch {
+      return reply.code(404).send({ error: "sarif blob missing" });
+    }
+  });
+
+  app.post("/canvases/:id/report/retry", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const { retryReport } = await import("./report.js");
+    const result = await retryReport(id);
+    await audit(req, {
+      action: "report.retry",
+      resourceType: "canvas",
+      resourceId: id,
+      projectId: canvas.project_id as string,
+      after: result,
+    });
+    if (!result.ok) return reply.code(409).send(result);
+    // 唤醒 dispatcher
+    await sql`SELECT pg_notify('deepsonar_jobs', 'report_retry')`;
+    return result;
   });
 
   app.patch("/findings/:id/disposition", async (req, reply) => {
@@ -1761,8 +1825,16 @@ export function registerRoutes(app: FastifyInstance) {
         note: z.string().max(2000).optional(),
       })
       .parse(req.body);
-    const [cur] = await sql`SELECT id, disposition FROM findings WHERE id = ${id}`;
+    const [cur] = await sql`SELECT id, disposition, verify_status, project_id FROM findings WHERE id = ${id}`;
     if (!cur) return reply.code(404).send({ error: "finding not found" });
+    // 技术 confirmed 唯一入口是系统 Verify；人工 disposition 不得旁路
+    if (body.disposition === "confirmed_vuln" && cur.verify_status !== "confirmed") {
+      return reply.code(409).send({
+        error: "confirmed_vuln_requires_verify",
+        message: "仅当系统 Verify 已将 verify_status 置为 confirmed 后，才允许 disposition=confirmed_vuln",
+        verify_status: cur.verify_status,
+      });
+    }
     const actorName = req.actor?.name ?? "unknown";
     const [row] = await sql`
       UPDATE findings SET
@@ -1773,22 +1845,15 @@ export function registerRoutes(app: FastifyInstance) {
         updated_at = now()
       WHERE id = ${id}
       RETURNING *`;
-    // rejected_fp 时同步技术验证态，便于旧列表筛选
-    if (body.disposition === "rejected_fp" && row.verify_status !== "false_positive") {
-      await sql`UPDATE findings SET verify_status = 'false_positive', updated_at = now() WHERE id = ${id}`;
-      row.verify_status = "false_positive";
-    }
-    if (body.disposition === "confirmed_vuln" && row.verify_status === "pending") {
-      await sql`UPDATE findings SET verify_status = 'confirmed', updated_at = now() WHERE id = ${id}`;
-      row.verify_status = "confirmed";
-    }
+    // rejected_fp 仅人工业务处置；不伪造技术 confirmed，也不把未收敛 round 绕过
+    // 不再把 verify_status 写成 false_positive（新流程否定结论走 rework→pending）
     await audit(req, {
       action: "finding.disposition",
       resourceType: "finding",
       resourceId: id,
       projectId: row.project_id as string,
-      before: { disposition: cur.disposition },
-      after: { disposition: body.disposition, note: body.note ?? null },
+      before: { disposition: cur.disposition, verify_status: cur.verify_status },
+      after: { disposition: body.disposition, note: body.note ?? null, verify_status: row.verify_status },
     });
     return row;
   });
@@ -1980,7 +2045,7 @@ export function registerRoutes(app: FastifyInstance) {
     const [job] = await sql`
       UPDATE jobs SET status = 'cancelled', finished_at = now()
       WHERE id = ${id} AND status IN ('pending','claimed','provisioning','running','waiting_human')
-      RETURNING id, status, sandbox_id, project_id`;
+      RETURNING id, status, sandbox_id, project_id, type`;
     if (!job) return reply.code(409).send({ error: "job 不在可取消状态" });
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch((e) => {
@@ -1992,7 +2057,13 @@ export function registerRoutes(app: FastifyInstance) {
     await revokeJobTokens(id, "cancelled").catch(() => {});
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
-      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent"]})`;
+      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+    if (job.type === "verify_finding") {
+      const { recoverVerifyJobTerminal } = await import("./core.js");
+      await recoverVerifyJobTerminal(id, "cancelled", "job cancelled").catch((e) =>
+        console.error(`[cancel] verify recovery failed:`, e),
+      );
+    }
     await planeWriteback(id).catch(() => {});
     await audit(req, {
       action: "job.cancel",

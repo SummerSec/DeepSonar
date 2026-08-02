@@ -35,10 +35,46 @@ export const VerifyStatus = z.enum([
 ]);
 export type VerifyStatus = z.infer<typeof VerifyStatus>;
 
-export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact"]);
+/** Verify Agent 提交的 verdict 提案；false_positive 仅兼容期，服务端映射为 rework。 */
+export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human", "false_positive"]);
+export type VerifyVerdict = z.infer<typeof VerifyVerdict>;
+
+/** 绑定到 Finding 的独立复核 / 实测证据（emit_fact 可选字段）。 */
+export const VerificationEvidence = z.object({
+  finding_id: z.string().uuid(),
+  evidence_kind: z.enum(["review", "test"]),
+  outcome: z.enum(["supports", "refutes", "inconclusive"]),
+  subject_revision: z.string().min(1).max(500),
+  environment: z.string().max(1000).optional(),
+  steps: z.array(z.string().max(2000)).max(50).optional(),
+  expected: z.string().max(5000).optional(),
+  actual: z.string().max(5000).optional(),
+  artifact_refs: z
+    .array(
+      z.object({
+        uri: z.string().min(1).max(2000),
+        sha256: z.string().max(128).optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
+  limitations: z.array(z.string().max(1000)).max(20).optional(),
+});
+export type VerificationEvidence = z.infer<typeof VerificationEvidence>;
+
+export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact", "report"]);
 export type NodeType = z.infer<typeof NodeType>;
 
-export const EdgeType = z.enum(["child", "produces", "verifies", "next", "from", "to"]);
+export const EdgeType = z.enum([
+  "child",
+  "produces",
+  "verifies",
+  "next",
+  "from",
+  "to",
+  "reviewed_by",
+  "tested_by",
+]);
 export type EdgeType = z.infer<typeof EdgeType>;
 
 // ---------- Finding payload（SARIF 2.1.0 子集，见 ARCHITECTURE §6.1） ----------
@@ -49,10 +85,20 @@ export const FindingPayload = z.object({
   location: z.string().max(1000).optional(), // "auth/login.php:42" ← SARIF artifactLocation + region
   summary: z.string().max(10000).optional(),
   rule_id: z.string().max(200).optional(), // SARIF ruleId
+  /** 兼容字段：是否验证由调度器决定，不再影响派生。 */
   suggest_verify: z.boolean().default(false),
   raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
 });
 export type FindingPayload = z.infer<typeof FindingPayload>;
+
+/** 角色 agent 的 fact 提案；verification 仅在 Hub 回弹补证 Job 上被接受。 */
+export const FactPayload = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().min(1).max(10000),
+  intent_node_id: z.string().uuid().optional(),
+  verification: VerificationEvidence.optional(),
+});
+export type FactPayload = z.infer<typeof FactPayload>;
 
 // ---------- 事件 envelope（§17.3 版本化） ----------
 

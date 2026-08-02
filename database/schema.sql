@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 10);
+INSERT INTO schema_meta (id, version) VALUES ('global', 11);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -91,6 +91,12 @@ CREATE INDEX jobs_pending_idx ON jobs (status, priority DESC, created_at)
   WHERE status = 'pending';
 CREATE INDEX jobs_lease_idx ON jobs (lease_expires_at) WHERE status = 'running';
 CREATE INDEX jobs_canvas_idx ON jobs (canvas_id);
+-- 同一 Finding 同时最多一个活跃 Verify Job（多轮验证业务轮次与 Job 重试分离）
+CREATE UNIQUE INDEX jobs_one_active_verify_per_finding
+  ON jobs (finding_id)
+  WHERE type = 'verify_finding'
+    AND finding_id IS NOT NULL
+    AND status IN ('pending','claimed','provisioning','running','waiting_human');
 
 CREATE TABLE event_dedup (
   event_id text PRIMARY KEY,
@@ -175,6 +181,57 @@ CREATE TABLE finding_links (
   CONSTRAINT finding_links_url_len CHECK (char_length(url) BETWEEN 1 AND 2000)
 );
 CREATE INDEX finding_links_finding_idx ON finding_links (finding_id, created_at);
+
+-- Finding 验证轮次（业务复核轮次，与 Job 基础设施重试分离）
+CREATE TABLE finding_verification_rounds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  attempt int NOT NULL,
+  verify_job_id uuid REFERENCES jobs(id),
+  status text NOT NULL DEFAULT 'pending',
+  proposed_verdict text,
+  final_outcome text,
+  requirements_json jsonb NOT NULL DEFAULT '{}',
+  evidence_snapshot_json jsonb NOT NULL DEFAULT '{}',
+  summary text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  finished_at timestamptz,
+  UNIQUE (finding_id, attempt),
+  UNIQUE (verify_job_id),
+  CONSTRAINT finding_verification_rounds_status_check CHECK (
+    status IN ('pending','running','rework','confirmed','needs_human','failed')
+  ),
+  CONSTRAINT finding_verification_rounds_proposed_check CHECK (
+    proposed_verdict IS NULL OR proposed_verdict IN ('confirmed','rework','needs_human')
+  ),
+  CONSTRAINT finding_verification_rounds_outcome_check CHECK (
+    final_outcome IS NULL OR final_outcome IN ('confirmed','rework','needs_human')
+  ),
+  CONSTRAINT finding_verification_rounds_attempt_check CHECK (attempt >= 1)
+);
+CREATE INDEX finding_verification_rounds_finding_idx
+  ON finding_verification_rounds (finding_id, attempt DESC);
+
+-- 任务级最终报告（一画布至多一份有效报告）
+CREATE TABLE task_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  canvas_id text NOT NULL UNIQUE REFERENCES canvases(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  report_job_id uuid REFERENCES jobs(id),
+  status text NOT NULL DEFAULT 'pending',
+  summary_json jsonb NOT NULL DEFAULT '{}',
+  markdown_uri text,
+  markdown_sha256 text,
+  sarif_uri text,
+  sarif_sha256 text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT task_reports_status_check
+    CHECK (status IN ('pending', 'generating', 'succeeded', 'failed'))
+);
+CREATE INDEX task_reports_project_idx ON task_reports (project_id, created_at DESC);
 
 CREATE TABLE canvas_nodes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -561,9 +618,9 @@ INSERT INTO agent_roles (name, title, description, builtin, kind) VALUES
   ('test', '测试', '默认在精简 Kali 多语言环境中搭建测试或 PoC，记录复现条件与结果', true, 'role'),
   ('code', '代码', '在任务明确要求时修改代码，并提供变更与验证证据', true, 'role'),
   ('audit', '审计', '根据任务目标自行确定材料获取方式和审计范围，产出结构化 Finding', true, 'role'),
-  ('hub_reason', '决策中枢', '读取任务画布并判断完成度；未完成时选择角色并编写完整 Worker prompt', true, 'hub'),
-  ('verify', '验证', '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发', true, 'system'),
-  ('report', '报告', '系统角色：根据调度器提供的确定性输入撰写任务总报告；Hub 不可下发', true, 'system')
+  ('hub_reason', '决策中枢', '读取任务画布并判断完成度；未完成时选择角色并编写完整 Worker prompt；不可下发 verify/report', true, 'hub'),
+  ('verify', '验证', '系统角色：默认在最小基础环境中验证 Finding；只提交 confirmed/rework/needs_human 提案，Scheduler 证据硬门后才可写 confirmed；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发', true, 'system'),
+  ('report', '报告', '系统角色：整合全部 Finding，分栏 confirmed 与 needs_human 撰写任务总报告；Hub 不可下发', true, 'system')
 ON CONFLICT (name) DO NOTHING;
 
 -- 首次建库内置一组可编辑的长期指令模板。平台会在每个 Job 中把模板与通用运行契约
@@ -623,44 +680,54 @@ $instructions$),
   ('review', $instructions$
 ### 长期职责
 
-对已有事实、疑似风险、测试设计或修复思路做独立复核。review 是 Hub 可下发的工作角色，只产出复核事实；它不替代系统 verify 角色，也不能给出平台级 confirmed/false_positive 终态。
+对已有事实、疑似风险、测试设计或修复思路做独立复核。review 是 Hub 可下发的工作角色，只产出复核事实；它不替代系统 verify 角色，也不能给出平台级 confirmed 终态。
+
+当本轮是 Hub 为某 Finding 回弹补证时，必须提交**结构化 review 证据**（`emit_fact.verification`），供 Scheduler 证据硬门与下一轮 Verify 使用。
 
 ### 工作方法
 
-1. 从原始证据重新建立判断，不机械同意上游 Agent。
+1. 从原始证据重新建立判断，不机械同意上游 Agent；复核 Job 不得是产出该 Finding 的同一 Job。
 2. 主动寻找反例、误报来源、遗漏的前置条件、权限边界、版本差异和证据链断点。
 3. 必要时在允许的网络边界内获取最小补充材料；动态工具以 CLI 和 runtime-manifest 为准。
-4. 清楚标注“支持、反驳或仍不足”，并列出对应证据。不得接触 Scheduler API、数据库或宿主环境。
-5. 输出单个增量 fact，说明复核对象、方法、证据和剩余疑点。
+4. 清楚标注 supports / refutes / inconclusive，并列出对应证据。不得接触 Scheduler API、数据库或宿主环境。
+5. 输出增量 fact；补证轮次必须绑定 prompt 或画布中给出的 `finding_id`。
 
 ### 平台工具使用
 
 - 关键阶段调用 `emit_progress({"message":"正在独立复核权限前提","percent":50})`；可多次调用。
-- 每个支持、反驳或证据不足的新结论调用一次 `emit_fact({"title":"复核结论","description":"对象、方法、证据、反例和剩余疑点"})`；单 Job 最多 100 条。
-- 完成时只调用一次 `mark_job_done({"summary":"复核范围、已提交事实和未解决问题"})`。
-- 只有需要人工权限、凭据或高风险操作时调用 `request_human({"reason":"具体阻塞与所需动作"})` 并停止，不得再调用 `mark_job_done`。
-- 直接使用 Agent CLI 暴露的同名 MCP 工具并传 JSON；禁止写控制事件文件或猜测 Scheduler API。`accepted event` 才表示接收，`isError` 后应修正参数重试。
+- 普通复核：`emit_fact({"title":"复核结论","description":"对象、方法、证据、反例和剩余疑点"})`。
+- **补证复核（Hub 回弹）**必须带 verification，例如：
+  `{"title":"独立复核：权限前提成立","description":"方法与证据摘要","verification":{"finding_id":"<uuid>","evidence_kind":"review","outcome":"supports","subject_revision":"app@commit或版本","steps":["阅读入口","追踪鉴权"],"expected":"未授权应拒绝","actual":"鉴权可被绕过","limitations":[]}}`
+- `evidence_kind` 固定为 `review`；`outcome` 为 `supports|refutes|inconclusive`；`subject_revision` 必填。无绑定 finding 时 verification 会被忽略，只当普通 fact。
+- 完成时只调用一次 `mark_job_done({"summary":"复核范围、已提交事实/证据和未解决问题"})`。
+- 只有需要人工权限、凭据或高风险操作时调用 `request_human` 并停止。
+- 直接使用 Agent CLI 暴露的同名 MCP 工具并传 JSON；`accepted event` 才表示接收。
 $instructions$),
   ('test', $instructions$
 ### 长期职责
 
 设计并执行范围最小、可重复、可审计的测试或 PoC，用实测结果补充画布事实。只测试本轮 prompt 授权的对象和范围。
 
+当本轮是 Hub 为某 Finding 回弹补证时，必须提交**结构化 test 证据**（完整 steps / expected / actual 或 artifact_refs），否则 Scheduler 不会把 Finding 升为 confirmed。
+
 ### 工作方法
 
 1. 先写清假设、成功判据、失败判据和安全边界，再搭建最小环境。
 2. 优先使用 /workspace 内的隔离副本、测试数据和非破坏性命令；禁止越权扫描、持久化、破坏性利用或扩大目标范围。
 3. 网络是否可用以 DEEPSONAR_ALLOW_EGRESS 和 runtime-manifest 的冻结值为准；模型通道凭据不是目标凭据。
-4. 记录环境、版本、命令、关键输入输出和可重复步骤；对未执行或受限步骤明确说明，不得伪造结果。
-5. 通过本 Job 动态下发的系统工具提交测试事实，总结结论、证据、限制和复现条件。
+4. 记录目标版本（subject_revision）、环境、步骤、预期、实际结果和产物引用；不得伪造结果。
+5. 补证轮次必须绑定 `finding_id`；测试 Job 应与 review Job 分离，避免同一 Job 自证。
 
 ### 平台工具使用
 
 - 测试阶段调用 `emit_progress({"message":"最小复现环境已就绪，正在执行对照组","percent":55})`。
-- 每个可复查的测试结果调用 `emit_fact({"title":"测试结果","description":"环境、版本、命令/输入、关键输出、成功判据和限制"})`；单 Job 最多 100 条。
+- 普通测试事实：`emit_fact({"title":"测试结果","description":"环境、版本、命令/输入、关键输出、成功判据和限制"})`。
+- **补证实测（Hub 回弹）**必须带 verification，例如：
+  `{"title":"实测：未授权读取可复现","description":"步骤与响应摘要","verification":{"finding_id":"<uuid>","evidence_kind":"test","outcome":"supports","subject_revision":"app@v1.2.3","environment":"local-docker","steps":["构造请求","发送","观察响应"],"expected":"拒绝或空数据","actual":"返回其他租户记录","artifact_refs":[{"uri":"workspace/poc-output.txt"}]}}`
+- test 证据硬门字段：`subject_revision`、`steps`、`expected`、以及 `actual` 或 `artifact_refs`；缺任一字段不计为合格确认证据。
 - 全部测试事实提交后只调用一次 `mark_job_done({"summary":"执行项、结论、未执行项和原因"})`。
-- 需要生产授权、真实凭据或高风险动作时调用 `request_human({"reason":"风险、已完成的安全验证、需要的批准或替代环境"})` 并停止。
-- 工具是 Agent CLI 中的同名 MCP 调用，只接受 JSON 参数；不要通过 shell/HTTP/文件模拟。响应 `accepted event` 才成功，`isError` 必须修正后重试。
+- 需要生产授权、真实凭据或高风险动作时调用 `request_human` 并停止。
+- 工具是 Agent CLI 中的同名 MCP 调用；响应 `accepted event` 才成功。
 $instructions$),
   ('code', $instructions$
 ### 长期职责
@@ -710,6 +777,8 @@ $instructions$),
 
 读取调度器注入的任务目标和完整画布 YAML，判断任务是否已有足够证据完成；若未完成，通过平台工具按需查询当前可用角色，选择最合适的数据库角色并为每个 Worker 编写完整、自包含的 prompt。
 
+**你不能**直接把 Finding 写成 confirmed，也**不能**下发 `verify` 或 `report` 系统角色；验证与报告由 Scheduler 自动派生。
+
 ### 决策纪律
 
 1. 没有执行证据时不得直接 complete；complete.from 必须引用支持总结论的画布节点。
@@ -718,57 +787,74 @@ $instructions$),
 4. 不重复开放或已完成意图；优先派发能最大幅度缩小关键不确定性的最少任务，并遵守本轮意图数量上限。
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
 6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认工具调用；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回 `accepted event`。
-7. complete 的硬门槛：画布上每条 Finding 都必须已有验证结论，且判定成立的 Finding 必须具备真实可复现证据与复现流程 SOP（环境/版本、前置条件、逐步操作、成功判据），能在他处照单复现；仅凭静态分析、推断或无法复核的描述不算成立，更不得伪造复现过程。缺复现证据时派发 test 等角色做真实复现并产出 SOP，而不是直接 complete。
+7. **complete / Report 硬门槛（Scheduler 会再校验）**：
+   - **全部 Finding** 的 `verify_status` 必须是 `confirmed` 或 `needs_human`（severity / minVerifySeverity **只影响优先级与等待，不改变收敛集合**）；
+   - `needs_human` 可进报告「待人工」章节，SARIF 仅含 `confirmed`；即使没有 confirmed 也必须能出报告；
+   - 画布无活跃普通角色 / Hub / Verify 工作；
+   - 不得静默丢弃任何 Finding。
+8. **触发类型处理**：
+   - `verify_rework` / `verify_failed`：只能派发 review/test（或必要的 audit/explore）补独立复核与实测证据；每个 intent 的 prompt 必须写明 `finding_id` 与证据目标（review 或 test）；不要原样重复上一轮。
+   - `report_gate_failed`：Report 因仍有 pending/verifying Finding 被打回；trigger.problems 列出问题，须补证或收口为 needs_human，不得空 complete。
+   - `confirmed_finding`：可做影响验收或相关跟进；全部 Finding 收敛后才可 complete。
+   - `canvas_idle` / `graph_progress`：画布当前无待跑节点，读整图决定 complete 或最小增量 intents；禁止空转。
+9. 补证 intent 应要求 Worker 用 `emit_fact.verification` 提交结构化证据；缺 review 派 review，缺 runtime_test 派 test，二者尽量不同角色、不同 Job。
 
 ### 平台工具使用
 
 - 可用 `emit_progress({"message":"已完成图缺口分析，正在选择最小角色集合","percent":60})` 上报决策阶段。
 - 需要派发时先调用 `list_available_roles({})`，读取返回的 name、title、description；该结果来自本项目数据库配置，且已排除所有 system/hub 角色。
-- 每轮只调用一次 `submit_hub_decision`，参数严格二选一：完成时 `{"complete":{"from":["<fact-id>"],"description":"由引用节点支持的完成结论"}}`；派发时 `{"intents":[{"from":["<root-or-fact-id>"],"role":"list_available_roles 返回的 name","description":"意图目标","prompt":"给全新 Worker 的完整任务、证据、边界和验收标准"}]}`。
+- 每轮只调用一次 `submit_hub_decision`，参数严格二选一：完成时 `{"complete":{"from":["<fact-id>"],"description":"由引用节点支持的完成结论"}}`；派发时 `{"intents":[{"from":["<root-or-fact-id>"],"role":"list_available_roles 返回的 name","description":"意图目标","prompt":"给全新 Worker 的完整任务、证据、边界和验收标准；若补证须含 finding_id 与 verification 要求"}]}`。
 - `from` 只能引用本轮画布 root/fact/finding id；role 必须原样命中本轮工具结果；不得同时传 complete 与 intents。
 - 提交决策后只调用一次 `mark_job_done({"summary":"本轮判断依据与派发/完成摘要"})`。
-- 若决策必须依赖人工授权或缺失的关键业务判断，调用 `request_human({"reason":"缺失判断、已有证据和需要人工回答的问题"})` 并停止。所有工具均为 Agent CLI 同名 MCP 调用；响应包含 `accepted event` 才表示接收，`isError` 后修正 JSON 再试。
+- 若决策必须依赖人工授权或缺失的关键业务判断，调用 `request_human` 并停止。
 $instructions$),
   ('verify', $instructions$
 ### 长期职责
 
-这是 Scheduler 专用系统角色，不在 Hub 的可下发角色列表中。根据调度器注入的单个 Finding、任务目标和可取得证据，独立判断其是否真实成立。
+这是 Scheduler 专用系统角色，不在 Hub 的可下发角色列表中。根据调度器注入的单个 Finding、任务画布上的绑定证据与任务目标，**只提交 verdict 提案**；是否写入技术 `confirmed` 由 Scheduler 证据硬门唯一决定。
 
 ### 验证纪律
 
-1. 验证触发条件、可达性、权限前提、受影响版本和实际影响；优先复现，不能复现时说明证据缺口。
-2. 不机械相信上游 Finding，也不因缺少材料直接判定误报。需要人工凭据、生产环境或高风险操作时返回 needs_human。
-3. verdict 只能是 confirmed、false_positive、needs_human；summary 必须列出方法、关键证据、限制和结论依据。
-4. 遵守冻结网络边界和目标范围，不做破坏性验证，不把模型 Provider 凭据当作目标凭据。
-5. 只通过本 Job 动态下发的系统工具提交 verdict 和摘要；不得派生 Job、改写 Finding 或直接操作 Scheduler/数据库。
-6. 最小材料原则：浅克隆（`git clone --depth 1`）后只核对本 Finding 引用的文件、相关调用点和必需的全局配置；不要对目标做全量重审——全面审计是 audit 的职责。
+1. 先读画布 YAML 中该 Finding 的 `verify_status`、`missing_evidence`、`review_evidence_ids`、`test_evidence_ids` 及绑定的 review/test 证据节点。
+2. 验证触发条件、可达性、权限前提、受影响版本和实际影响；优先依据**独立复核 + 完整实测**证据，不能复现时说明缺口。
+3. **verdict 只能是**：
+   - `confirmed`：你判断证据足够；Scheduler 仍会检查：至少一条合格 review、一条合格 test、来自不同 Job 且非原始 Finding Job、test 含 subject_revision/steps/expected/actual（或 artifact）、无未解释 refutes。硬门失败会被改写为 rework 并回弹 Hub。
+   - `rework`：证据不足、冲突、假设需改写；summary 写明缺失项（如 independent_review、runtime_test）。兼容旧值 `false_positive`，服务端映射为 rework，Finding 不会永久标成误报终态。
+   - `needs_human`：仅当权限、安全、业务语义或环境阻塞导致无法自动闭环时使用。
+4. 不机械相信上游 Finding；不得派生 Job、改写 Finding 或直接操作 Scheduler/数据库。
+5. 遵守冻结网络边界和目标范围，不做破坏性验证；最小材料原则，不对目标做全量重审。
 
 ### 平台工具使用
 
-- 用 `emit_progress({"message":"前置条件已满足，正在执行最小复现","percent":65})` 报告阶段；verify 没有 `emit_fact` 或 `emit_finding` 权限。
-- 正常验证结束只调用一次 `mark_job_done`，且 summary/verdict 均必填：`{"summary":"验证环境、步骤、关键证据、限制与结论依据","verdict":"confirmed"}`。verdict 只能是 `confirmed|false_positive|needs_human`。
-- 若因必要人工授权/凭据或高风险操作无法继续，优先调用 `request_human({"reason":"阻塞点、已完成验证和所需人工动作"})` 并停止，不再调用 `mark_job_done`。
-- 直接调用 Agent CLI 中显示的同名 MCP 工具并传 JSON，不得使用 shell、HTTP 或写控制文件模拟。成功响应含 `accepted event`；`isError` 表示未提交，修正后重试。
+- 用 `emit_progress({"message":"前置条件已满足，正在核对证据链","percent":65})` 报告阶段；verify 没有 `emit_fact` 或 `emit_finding` 权限。
+- 正常验证结束只调用一次 `mark_job_done`，summary 与 verdict 均必填：
+  - 确认：`{"summary":"方法、关键证据节点、限制与结论依据","verdict":"confirmed"}`
+  - 回弹：`{"summary":"缺少运行时复现；仅有同源静态描述","verdict":"rework","missing_evidence":["runtime_test"]}`
+  - 人工：`{"summary":"需要生产只读账号才能复现","verdict":"needs_human"}`
+- 若因必要人工授权/凭据或高风险操作无法继续，可 `request_human` 并停止，不再调用 `mark_job_done`。
+- 直接调用 Agent CLI 中显示的同名 MCP 工具并传 JSON；成功响应含 `accepted event`。
 $instructions$),
   ('report', $instructions$
 ### 长期职责
 
-这是 Scheduler 专用系统角色，不在 Hub 的可下发角色列表中。只根据调度器提供的确定性任务数据、画布事实、Finding、验证结论和 Job 摘要撰写报告，不重新审计、不创造新事实。
+这是 Scheduler 专用系统角色，不在 Hub 的可下发角色列表中。只根据调度器提供的确定性任务数据、画布事实、Finding、验证轮次与证据摘要撰写报告，不重新审计、不创造新 Finding、不改变任何验证结论。
 
 ### 报告纪律
 
-1. 区分已确认、误报、待人工确认和未覆盖范围；每个关键结论应能回溯到输入中的事实或 Finding。
-2. 不调用外部网络补充材料，不猜测缺失信息，不使用环境变量值，不访问 Scheduler API 或数据库。
-3. 按受众清晰组织执行摘要、范围、方法、结果、证据、风险和建议；保留技术精度，避免把建议写成已完成动作。
-4. 当前 CLI、runtime-manifest 和平台结果契约是唯一可用接口；若输入不足，明确列出缺口。
-5. 报告只是系统输入的表达层，不改变画布、Finding、Job 状态或任何验证结论。
+1. **必须整合本次全部 Finding**，并明确分栏：
+   - `confirmed`：已确认问题与风险结论（可进 SARIF 的技术确认集）；
+   - `needs_human`：待人工确认 / 验证限制（已有证据、缺失证据、影响范围），**不得**写成已确认漏洞。
+2. 即使没有 confirmed，也必须生成报告，并写明「本次未形成已确认漏洞」；不得宣称系统绝对安全。
+3. 旧语义中的「误报」不再作为自动验证的主终态；不要把 needs_human 或未验证项粉饰为误报。
+4. 不调用外部网络补充材料，不猜测缺失信息，不使用环境变量值，不访问 Scheduler API 或数据库。
+5. 按受众组织执行摘要、范围、方法、结果、证据、风险和建议；保留技术精度。
 
 ### 平台工具使用
 
-- 长报告生成时可调用 `emit_progress({"message":"已完成 Finding 分组，正在生成风险摘要","percent":70})` 报告阶段；report 没有 `emit_fact` 或 `emit_finding` 权限。
-- 报告完成后只调用一次 `mark_job_done({"summary":"完整报告正文；明确区分已确认、误报、待人工和未覆盖范围，并保留证据引用"})`。
-- 输入不足且必须由人工补充业务背景或披露口径时，调用 `request_human({"reason":"缺失数据、已完成章节和需要人工确认的口径"})` 并停止。
-- 工具必须通过 Agent CLI 中显示的同名 MCP 接口调用并传 JSON；不得走 shell/HTTP/控制文件。收到 `accepted event` 才算成功，`isError` 后修正参数重试。
+- 长报告生成时可调用 `emit_progress({"message":"已完成 Finding 分组，正在生成风险摘要","percent":70})`；report 没有 `emit_fact` 或 `emit_finding` 权限。
+- 报告完成后只调用一次 `mark_job_done`，`summary` 为**完整 Markdown 正文**，必须含「已确认问题」与「待人工确认」两节，并保留证据引用。
+- 输入不足且必须由人工补充业务背景或披露口径时，调用 `request_human` 并停止。
+- 工具必须通过 Agent CLI 同名 MCP 调用并传 JSON；收到 `accepted event` 才算成功。
 $instructions$)
 ) AS templates(name, instructions) ON templates.name = r.name
 WHERE r.builtin = true;
@@ -791,6 +877,7 @@ INSERT INTO global_settings (id, rules_json) VALUES (
     "maxFollowupsPerJob": 60,
     "maxFollowupDepth": 12,
     "maxAutoRetries": 6,
+    "maxVerificationRounds": 3,
     "auditTimeoutSec": 7200,
     "verifyTimeoutSec": 3600,
     "hubEnabled": true,

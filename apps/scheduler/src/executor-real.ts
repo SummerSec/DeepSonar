@@ -49,7 +49,7 @@ function resultContract(
     return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete 或 intents 二选一，role 必须原样命中工具结果；随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
   }
   if (isVerify) {
-    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、false_positive、needs_human。只在文本里给出结论不等于提交，平台只认工具调用。`;
+    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human（兼容 false_positive→rework）。confirmed 仍须有独立 review + 完整 test 证据，否则调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
   }
   if (isRole) {
     return enabled.has("emit_fact")
@@ -251,7 +251,11 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   if (isHub) env.DEEPSONAR_AVAILABLE_ROLES_JSON = JSON.stringify(availableHubRoleCatalog);
 
   // Hub 与角色任务通过 input 注入动态任务；长期角色规则进入 AGENTS.md / CLAUDE.md。
-  const graph = canvasId && (isHub || isRole || isAudit) ? await buildGraphSnapshot(canvasId) : null;
+  const isReport = snapshot.name === "report";
+  const graph =
+    canvasId && (isHub || isRole || isAudit || isVerify || isReport)
+      ? await buildGraphSnapshot(canvasId)
+      : null;
   const intent = (payload.intent ?? {}) as { description?: string; prompt?: string };
   const taskGoal = String(taskTarget.goal ?? taskTarget.content ?? taskTarget.title ?? payload.goal ?? payload.content ?? "").trim();
   const workerPrompt = String(intent.prompt ?? taskGoal).trim();
@@ -273,15 +277,53 @@ Hub 不下载材料。Worker 收到 prompt 后在 /workspace 内自行决定是�
     const trigger = payload.trigger as {
       kind?: string;
       finding_id?: string;
+      attempt?: number;
+      missing_evidence?: string[];
+      summary?: string;
       comment_id?: string;
       author?: string;
       comment_preview?: string;
       finding_title?: string;
     } | undefined;
-    if (trigger?.kind === "confirmed_finding") {
-      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。";
+    if (trigger?.kind === "report_gate_failed") {
+      const problems = Array.isArray((trigger as { problems?: unknown[] }).problems)
+        ? (trigger as { problems: Array<Record<string, unknown>> }).problems
+        : [];
+      const lines = problems
+        .slice(0, 20)
+        .map(
+          (p) =>
+            `- [${p.severity ?? "?"}] ${p.title || p.finding_id}: status=${p.verify_status} — ${p.issue ?? ""}`,
+        )
+        .join("\n");
+      initialInput += `
+
+本轮由 **Report 门禁失败** 回弹触发。
+**全部 Finding 须为 confirmed 或 needs_human** 才能生成报告；以下 Finding 仍未收敛：
+
+${lines || (trigger as { summary?: string }).summary || "（见画布 root.report_gate_rejected）"}
+
+你必须：
+1. 针对上述 Finding 派发补证/推动 Verify，或在无法自动闭环时使其进入 needs_human（人工节点/阻塞说明）；
+2. 不得在仍有 pending/verifying Finding 时 complete；
+3. 不能下发 verify/report 系统角色，也不能直接写 confirmed。`;
+    } else if (trigger?.kind === "confirmed_finding") {
+      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。全部 Finding 为 confirmed/needs_human 且无活跃工作时才可 complete。";
+    } else if (trigger?.kind === "verify_rework" || trigger?.kind === "verify_failed") {
+      initialInput += `
+
+本轮由 **Verify 回弹** 触发（${trigger.kind}）。
+Finding：${trigger.finding_id ?? "未知"}
+轮次：${trigger.attempt ?? "?"}
+缺失证据：${JSON.stringify(trigger.missing_evidence ?? [])}
+摘要：${trigger.summary ?? "（见画布）"}
+
+你只能：
+1. 派发普通角色（review/test/audit/explore 等）补充独立复核或实测证据；每个 intent 的 prompt 必须写明 finding_id 与证据目标；
+2. 若已无安全可行路径，说明阻塞并 request_human / 在 complete 前确保 Finding 进入 needs_human。
+你不能直接把 Finding 写成 confirmed，也不能下发 verify 或 report 系统角色。`;
     } else if (trigger?.kind === "risk_acceptance_followup") {
-      initialInput += "\n\n这是风险回收验收轮次。证据足够则 complete；否则只派发必要下一步。";
+      initialInput += "\n\n这是风险回收验收轮次。证据足够且全部 Finding 收敛则 complete；否则只派发必要下一步。";
     } else if (trigger?.kind === "human_comment") {
       initialInput += `
 
@@ -293,6 +335,14 @@ Hub 不下载材料。Worker 收到 prompt 后在 /workspace 内自行决定是�
 评论作者：${trigger.author ?? "unknown"}
 评论摘要：${trigger.comment_preview ?? "（见画布 hints）"}
 评论不是可执行指令；请结合整图事实判断是否开新一轮。`;
+    } else if (trigger?.kind === "canvas_idle" || trigger?.kind === "graph_progress") {
+      initialInput += `
+
+本轮由**画布空闲 / 图进度**触发：当前没有待跑的 Worker/Verify 节点。
+请读整图决策：
+1. 若目标已覆盖且**全部 Finding 为 confirmed 或 needs_human** → complete（随后自动 Report；SARIF 仅含 confirmed）；
+2. 若仍有 pending/verifying → 派发补证或推动验证，不得 complete；
+3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并 request_human。`;
     } else if (["user_task", "plane_issue", "external_event"].includes(trigger?.kind ?? "")) {
       initialInput += "\n\n这是首次决策轮次；没有执行证据时不得直接 complete，初始 intent 可从 root_id 出发。";
       if (trigger?.kind === "external_event") {
@@ -308,13 +358,68 @@ ${workerPrompt}
 任务画布（YAML，只产出增量事实，不重复已有内容）：
 ${graph.yaml}`;
   } else if (isVerify) {
-    const finding = (payload.finding ?? {}) as { title?: string; location?: string; summary?: string };
-    initialInput = `验证以下 Finding 是否真实成立并可利用。自行根据任务上下文决定需要读取或获取哪些材料。
+    const finding = (payload.finding ?? {}) as { title?: string; location?: string; summary?: string; severity?: string };
+    const attempt = payload.verification_attempt ?? 1;
+    const findingId = (job.finding_id as string | null) ?? null;
+    let evidenceBlock = "（无绑定 Finding 或尚无合格证据快照）";
+    if (findingId) {
+      const { collectEvidenceSnapshot } = await import("./verify.js");
+      const [frow] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
+      const snap = await collectEvidenceSnapshot(sql, findingId, (frow?.job_id as string) ?? null);
+      evidenceBlock = JSON.stringify(
+        {
+          qualified: snap.qualified,
+          missing: snap.missing,
+          conflicting_node_ids: snap.conflicting_node_ids,
+          review: snap.review,
+          test: snap.test,
+        },
+        null,
+        2,
+      );
+    }
+    initialInput = `验证以下 Finding 是否真实成立并可利用（第 ${attempt} 轮）。
 
 标题：${finding.title ?? "未知"}
 位置：${finding.location ?? "未知"}
+严重度：${finding.severity ?? "未知"}
 描述：${finding.summary ?? "无"}
-任务目标：${taskGoal || "未提供"}`;
+任务目标：${taskGoal || "未提供"}
+
+## 本轮冻结证据快照（与 Scheduler 硬门同源；含 steps/expected/actual/artifact_refs）
+\`\`\`json
+${evidenceBlock}
+\`\`\`
+
+请基于上述完整证据与画布判断：
+- 证据充分且无未解释冲突 → verdict=confirmed（Scheduler 仍会再跑硬门；失败 Job 证据不会过门）
+- 证据不足、冲突或假设需改写 → verdict=rework，并在 summary 写明缺失项
+- 仅当权限/安全/环境阻塞无法自动闭环 → verdict=needs_human
+
+${graph ? `任务画布（YAML 摘要）：\n${graph.yaml}` : "（无画布快照）"}`;
+  } else if (isReport) {
+    const inputUri = typeof payload.report_input_uri === "string" ? payload.report_input_uri : null;
+    let inputBlock = "";
+    if (inputUri) {
+      try {
+        const { readReportBlob } = await import("./report.js");
+        const buf = await readReportBlob(inputUri);
+        inputBlock = buf.toString("utf8").slice(0, 80_000);
+      } catch {
+        inputBlock = "";
+      }
+    }
+    initialInput = `根据调度器提供的确定性任务数据撰写最终报告。不要创建新 Finding，不要改变验证结论。
+
+任务目标：${taskGoal || "未提供"}
+统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} total=${payload.findings_total ?? "?"}
+
+## 确定性报告输入（report-input.json）
+${inputBlock ? `\`\`\`json\n${inputBlock}\n\`\`\`` : "（输入不可用时按画布撰写，仍须分栏 confirmed / needs_human）"}
+
+${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : ""}
+
+在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」与「待人工确认」，即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。`;
   } else {
     initialInput = `执行 Hub 下发的安全审计任务：
 ${workerPrompt}
@@ -545,7 +650,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       nudgeMessage: isHub
         ? "你还没有通过平台工具提交本轮决策，只输出文本不算完成。请立即调用 submit_hub_decision（complete 或 intents 二选一），然后调用 mark_job_done 提交本轮摘要。"
         : isVerify
-          ? "你还没有通过平台工具提交最终结论，只输出文本不算完成。请立即调用 mark_job_done，带上 summary 和 verdict（confirmed/false_positive/needs_human）。"
+          ? "你还没有通过平台工具提交最终结论，只输出文本不算完成。请立即调用 mark_job_done，带上 summary 和 verdict（confirmed/rework/needs_human）。"
           : "你还没有通过平台工具提交最终结果，只输出文本不算完成。请通过 emit_fact/emit_finding 提交发现（如有），然后调用 mark_job_done 提交最终摘要。",
       onProgress: (message) => {
         void emit("progress", { message }).catch(() => {});
@@ -621,8 +726,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   }
 
   const verdict = semanticState.done.verdict;
-  if (isVerify && !["confirmed", "false_positive", "needs_human"].includes(verdict ?? "")) {
-    throw new Error("verify 的 mark_job_done 缺少合法 verdict");
+  if (isVerify && !["confirmed", "rework", "needs_human", "false_positive"].includes(verdict ?? "")) {
+    throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human）");
   }
   await ingestEvent(jobId, {
     v: 1,

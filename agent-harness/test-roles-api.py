@@ -70,7 +70,7 @@ def main() -> None:
     assert "emit_finding" in by_role["audit"]
     assert "list_available_roles" in by_role["hub_reason"]
     assert "submit_hub_decision" in by_role["hub_reason"]
-    assert "confirmed|false_positive|needs_human" in by_role["verify"]
+    assert "confirmed" in by_role["verify"] and "rework" in by_role["verify"]
     hub_cfg = next(c for c in global_configs if c["role_name"] == "hub_reason")
     code, _ = req(
         "PUT",

@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { globalRules, ingestEvent, rolesForProject, transitionJob, type AgentRuntimeSnapshot } from "./core.js";
+import {
+  advanceCanvasAfterTerminalJob,
+  globalRules,
+  ingestEvent,
+  recoverVerifyJobTerminal,
+  rolesForProject,
+  transitionJob,
+  type AgentRuntimeSnapshot,
+} from "./core.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
 import { executeReal } from "./executor-real.js";
@@ -31,7 +39,7 @@ export async function drainInFlight(timeoutMs = 15_000): Promise<void> {
 }
 
 /** 内置 real 类型；其余 job.type 若在角色注册表（agent_roles）中也为 real（Phase ② 自定义角色） */
-const REAL_BASE_TYPES = new Set(["audit_module", "verify_finding", "hub_reason"]);
+const REAL_BASE_TYPES = new Set(["audit_module", "verify_finding", "hub_reason", "report"]);
 
 async function isRealType(type: string): Promise<boolean> {
   if (REAL_BASE_TYPES.has(type)) return true;
@@ -206,8 +214,35 @@ async function runJob(jobId: string) {
     const msg = e instanceof Error ? e.message : String(e);
     inc("deepsonar_jobs_failed_total", { reason: "exception" });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
-    await sql`UPDATE jobs SET status = 'failed', finished_at = now(), error = ${msg} WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')`;
-    await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'running'`;
+    const failed = await sql`
+      UPDATE jobs SET status = 'failed', finished_at = now(), error = ${msg}
+      WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')
+      RETURNING id, type`;
+    await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
+    if (failed[0]?.type === "verify_finding") {
+      await recoverVerifyJobTerminal(jobId, "failed", msg).catch((err) =>
+        console.error(`[dispatcher] verify recovery failed:`, err),
+      );
+    }
+    if (failed[0]?.type === "report") {
+      const { finalizeReportJob } = await import("./report.js");
+      await sql.begin(async (tx) => {
+        await finalizeReportJob(tx as unknown as typeof sql, jobId, { failed: true, error: msg });
+      }).catch(() => {});
+    }
+    // 异常失败后统一推进画布：analysis_complete → Report，否则空闲唤醒 Hub。
+    if (failed[0] && failed[0].type !== "report") {
+      const [meta] = await sql`SELECT id, type, canvas_id, project_id, priority FROM jobs WHERE id = ${jobId}`;
+      if (meta?.canvas_id) {
+        await sql.begin(async (txRaw) => {
+          await advanceCanvasAfterTerminalJob(
+            txRaw as unknown as typeof sql,
+            meta as Record<string, unknown>,
+            "failed",
+          );
+        }).catch((err) => console.error(`[dispatcher] terminal canvas advance failed:`, err));
+      }
+    }
   } finally {
     stopLeaseRenewal(jobId);
     if (handle) {
@@ -266,12 +301,42 @@ async function executeFake(jobId: string, type: string) {
   }
 
   if (type === "verify_finding") {
-    await emit("progress", { message: "假 agent：验证中（静态复核）", percent: 50 });
+    await emit("progress", { message: "假 agent：验证中（证据硬门）", percent: 50 });
+    // 有合格 review+test 才 confirmed；否则 rework 回弹 Hub
+    const [vjob] = await sql`SELECT finding_id, payload_json FROM jobs WHERE id = ${jobId}`;
+    const findingId = vjob?.finding_id as string | null;
+    let canConfirm = false;
+    if (findingId) {
+      const { collectEvidenceSnapshot } = await import("./verify.js");
+      const [f] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
+      const snap = await collectEvidenceSnapshot(sql, findingId, (f?.job_id as string) ?? null);
+      canConfirm = snap.qualified;
+    }
     await ingestEvent(jobId, {
       v: 1,
       event_id: randomUUID(),
       type: "done",
-      payload: { summary: "假 agent：复核确认可利用", verdict: "confirmed" },
+      payload: canConfirm
+        ? { summary: "假 agent：独立复核与实测证据充分，确认可利用", verdict: "confirmed" }
+        : {
+            summary: "假 agent：缺少独立复核或实测证据，需要 Hub 补证",
+            verdict: "rework",
+            missing_evidence: ["independent_review", "runtime_test"],
+          },
+    });
+    return;
+  }
+
+  if (type === "report") {
+    await emit("progress", { message: "假 agent：生成任务报告", percent: 60 });
+    await ingestEvent(jobId, {
+      v: 1,
+      event_id: randomUUID(),
+      type: "done",
+      payload: {
+        summary:
+          "假 agent 任务报告：已区分已确认问题与待人工确认；SARIF 仅含 confirmed。本次演示路径覆盖完整收敛闭环。",
+      },
     });
     return;
   }
@@ -280,7 +345,11 @@ async function executeFake(jobId: string, type: string) {
     // 假 Hub 也实时读取数据库角色注册表；只模拟状态机，不维护第二份角色白名单。
     const [job] = await sql`SELECT canvas_id, project_id, payload_json FROM jobs WHERE id = ${jobId}`;
     const canvasId = job?.canvas_id as string | null;
-    const trigger = (job?.payload_json?.trigger ?? {}) as { kind?: string; finding_id?: string };
+    const trigger = (job?.payload_json?.trigger ?? {}) as {
+      kind?: string;
+      finding_id?: string;
+      missing_evidence?: string[];
+    };
     const roles = job ? await rolesForProject(sql, job.project_id as string) : [];
     const chooseRole = (preferred: string) => roles.find((role) => role.name === preferred) ?? roles[0];
     await emit("progress", { message: "假 hub：读图决策中", percent: 50 });
@@ -303,35 +372,130 @@ async function executeFake(jobId: string, type: string) {
         });
         return;
       }
-      if (trigger.kind === "confirmed_finding") {
-        const selected = chooseRole("test");
+      // verify 未通过 / 失败 → 派发 review + test 补证（绑定 finding）
+      if (trigger.kind === "verify_rework" || trigger.kind === "verify_failed") {
+        const findingId = trigger.finding_id;
+        const refs = findingId
+          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${findingId} AND node_id IS NOT NULL`
+          : [];
+        const from = refs.map((r) => r.id as string);
+        const review = chooseRole("review");
+        const test = chooseRole("test");
+        const intents: Array<Record<string, unknown>> = [];
+        if (review) {
+          intents.push({
+            from,
+            role: review.name,
+            description: `独立复核 Finding：补充 review 证据`,
+            prompt: `对绑定 Finding 做独立静态/逻辑复核，通过 emit_fact 提交 verification.evidence_kind=review 的结构化证据。finding_id=${findingId}`,
+          });
+        }
+        if (test) {
+          intents.push({
+            from,
+            role: test.name,
+            description: `实测 Finding：补充 runtime test 证据`,
+            prompt: `对绑定 Finding 做实际测试，通过 emit_fact 提交 verification.evidence_kind=test 的结构化证据（含 subject_revision/steps/expected/actual）。finding_id=${findingId}`,
+          });
+        }
+        if (intents.length > 0) {
+          await emit("hub_decision", { intents });
+          return;
+        }
+      }
+      if (trigger.kind === "report_gate_failed") {
+        // Report 打回：按 problems 派 test/review 补证
+        const problems = Array.isArray((trigger as { problems?: Array<{ finding_id?: string }> }).problems)
+          ? (trigger as { problems: Array<{ finding_id?: string }> }).problems
+          : [];
+        const findingId = problems[0]?.finding_id ?? (trigger as { finding_id?: string }).finding_id;
+        const selected = chooseRole("test") ?? chooseRole("review");
         if (!selected) return;
-        const refs = trigger.finding_id
-          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${trigger.finding_id} AND node_id IS NOT NULL`
+        const refs = findingId
+          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${findingId} AND node_id IS NOT NULL`
           : [];
         await emit("hub_decision", {
           intents: [
             {
               from: refs.map((r) => r.id as string),
               role: selected.name,
-              description: `由 ${selected.title} 角色验收已确认风险：${selected.description}`,
-              prompt: `针对画布中已确认的风险，按 ${selected.name} 角色职责补充验收证据。`,
+              description: `Report 门禁失败：补证或收口未收敛 Finding`,
+              prompt: `针对 report_gate_failed 列出的 Finding 补充证据或推动至 confirmed/needs_human。finding_id=${findingId ?? "见 trigger.problems"}`,
             },
           ],
         });
         return;
       }
+      if (trigger.kind === "confirmed_finding") {
+        // 已确认后：全部 Finding 收敛（confirmed|needs_human）才 complete
+        const { canvasFindingsConverged } = await import("./verify.js");
+        const care = await canvasFindingsConverged(sql, canvasId);
+        if (care.ok) {
+          const refs = await sql`
+            SELECT id FROM canvas_nodes
+            WHERE canvas_id = ${canvasId} AND node_type = ANY(${["finding", "fact", "root"]})
+            ORDER BY created_at LIMIT 5`;
+          await emit("hub_decision", {
+            complete: {
+              from: refs.map((r) => r.id as string),
+              description: "假 hub：全部 Finding 已收敛（confirmed/needs_human），分析完成，可生成报告。",
+            },
+          });
+          return;
+        }
+        const pending = care.problems;
+        const selected = chooseRole("test");
+        if (!selected) return;
+        const badId = pending[0]?.finding_id ?? trigger.finding_id;
+        const refs = badId
+          ? await sql`SELECT node_id AS id FROM findings WHERE id = ${badId} AND node_id IS NOT NULL`
+          : trigger.finding_id
+            ? await sql`SELECT node_id AS id FROM findings WHERE id = ${trigger.finding_id} AND node_id IS NOT NULL`
+            : [];
+        await emit("hub_decision", {
+          intents: [
+            {
+              from: refs.map((r) => r.id as string),
+              role: selected.name,
+              description: `由 ${selected.title} 角色补证未收敛 Finding`,
+              prompt: `针对尚未 confirmed/needs_human 的 Finding 补充实测证据。finding_id=${badId ?? "见画布"}`,
+            },
+          ],
+        });
+        return;
+      }
+      // 默认 / canvas_idle：全部 Finding 收敛则 complete，否则 explore/补证
+      const { canvasFindingsConverged } = await import("./verify.js");
+      const careGate = await canvasFindingsConverged(sql, canvasId);
       const facts = await sql`
         SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact' ORDER BY created_at`;
-      if (facts.length > 0) {
+      // 尚无任何角色工作：空闲唤醒也要先派 audit/explore，不能直接 complete
+      const roleDone = await sql`
+        SELECT 1 FROM jobs
+        WHERE canvas_id = ${canvasId}
+          AND type NOT IN ('hub_reason', 'verify_finding', 'report')
+          AND status = 'succeeded'
+        LIMIT 1`;
+      if (careGate.ok && roleDone.length > 0 && facts.length > 0) {
         await emit("hub_decision", {
           complete: {
             from: facts.map((f) => f.id as string),
-            description: "假 hub：事实已足够，目标达成（演示结论）",
+            description: "假 hub：事实已足够且 Finding 已收敛，目标达成。",
+          },
+        });
+      } else if (careGate.ok && roleDone.length > 0) {
+        const refs = await sql`
+          SELECT id FROM canvas_nodes
+          WHERE canvas_id = ${canvasId} AND node_type = ANY(${["finding", "root"]})
+          ORDER BY created_at LIMIT 3`;
+        await emit("hub_decision", {
+          complete: {
+            from: refs.map((r) => r.id as string),
+            description: "假 hub：Finding 已收敛（confirmed/needs_human），分析完成。",
           },
         });
       } else {
-        const selected = chooseRole("explore");
+        const selected = chooseRole(roleDone.length === 0 ? "audit" : "explore") ?? chooseRole("explore");
         if (!selected) return;
         const refs = await sql`
           SELECT id FROM canvas_nodes
@@ -342,8 +506,8 @@ async function executeFake(jobId: string, type: string) {
             {
               from: refs.map((r) => r.id as string),
               role: selected.name,
-              description: `假 Hub：由 ${selected.title} 角色补充事实`,
-              prompt: `围绕画布目标，按 ${selected.name} 角色职责补充尚缺的可验证事实。`,
+              description: `假 Hub：由 ${selected.title} 角色${roleDone.length === 0 ? "首次取证" : "补充事实"}`,
+              prompt: `围绕画布目标，按 ${selected.name} 角色职责补充尚缺的可验证${selected.name === "audit" ? "发现" : "事实"}。`,
             },
           ],
         });
@@ -352,10 +516,39 @@ async function executeFake(jobId: string, type: string) {
     return; // done 由 runJob 兜底
   }
 
-  // 角色 job（explore/analyze/review/test/code/自定义）：假 agent 产出一条演示事实
+  // 角色 job（explore/analyze/review/test/code/自定义）：假 agent 产出演示事实 / 验证证据
   const [roleJob] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
   const rolePayload = (roleJob?.payload_json ?? {}) as Record<string, unknown>;
+  const vf = rolePayload.verification_followup as { finding_id?: string; required_evidence?: string[] } | undefined;
   await emit("progress", { message: `假 agent（${type}）：执行中`, percent: 50 });
+
+  if (vf?.finding_id && (type === "review" || type === "test" || type === "analyze" || type === "audit")) {
+    const kind = type === "test" ? "test" : "review";
+    // 若 required 明确只要另一类，仍按角色默认：test→test，其它→review
+    const evidenceKind = type === "test" ? "test" : kind;
+    await emit("fact", {
+      intent_node_id: (rolePayload.intent_node_id as string) ?? null,
+      title: `假 agent ${evidenceKind} 证据`,
+      description: `假 agent（${type}）：对 Finding ${vf.finding_id} 的${evidenceKind === "test" ? "实测" : "独立复核"}证据（演示）。`,
+      verification: {
+        finding_id: vf.finding_id,
+        evidence_kind: evidenceKind,
+        outcome: "supports",
+        subject_revision: "demo-target@v1",
+        environment: "fake-sandbox",
+        steps: [
+          evidenceKind === "test" ? "构造恶意输入" : "阅读相关源码路径",
+          evidenceKind === "test" ? "发送请求并观察响应" : "追踪数据流至汇点",
+          "记录可复核结果",
+        ],
+        expected: evidenceKind === "test" ? "未授权数据不应返回" : "输入应参数化",
+        actual: evidenceKind === "test" ? "响应包含其他租户记录" : "$_GET 直达查询拼接",
+        artifact_refs: [{ uri: `fake://evidence/${jobId}` }],
+      },
+    });
+    return;
+  }
+
   await emit("fact", {
     intent_node_id: (rolePayload.intent_node_id as string) ?? null,
     title: `假 agent ${type} 事实`,
