@@ -54,38 +54,33 @@ export function sha16(s: string): string {
 }
 
 // ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
+//
+// 第一性原理：用户只配「最低关注级别」一件事。
+// 派生（写死，不暴露配置）：
+//   · ≥ 该级别 → 自动 verify
+//   · Hub 等这些 verify 跑完再决策（含 confirmed）
+//   · 这些验完且无活跃角色 job → 停自驱
+//   · verify 调度永远 critical > high > …
 
-/** confirmed 后如何触发 Hub（见 docs/TODO_VERIFY_PRIORITY_AND_CONVERGENCE_PLAN.md） */
-export type ConfirmedHubMode = "immediate" | "gated" | "batch" | "off";
-/** 自驱自动停止策略 */
-export type AutoStopMode = "never" | "after_wait_gate" | "after_all_auto_verify";
+/** 严重度从高到低；minVerifySeverity=high 表示 critical+high */
+export const SEVERITY_RANK = ["critical", "high", "medium", "low", "info"] as const;
+export type SeverityRank = (typeof SEVERITY_RANK)[number];
 
 export interface ProjectRules {
-  autoVerifySeverities: string[];
+  /**
+   * 唯一策略旋钮：最低关注级别。
+   * high（默认）= 自动验证/等待/停自驱 都只针对 critical+high。
+   */
+  minVerifySeverity: SeverityRank;
   maxFollowupsPerJob: number;
   maxFollowupDepth: number;
   maxAutoRetries: number;
   auditTimeoutSec: number;
   verifyTimeoutSec: number;
-  /** hub 循环：角色 job 成功后触发 hub_reason 读图决策（§8.3） */
   hubEnabled: boolean;
   maxHubRounds: number;
   maxIntentsPerDecision: number;
-  /** Worker 是否可访问模型网关之外的网络；任务创建时可覆盖并冻结。 */
   allowEgress: boolean;
-  /** claim 时是否按 severity 抬升 verify job 优先级 */
-  verifySeverityPriority: boolean;
-  /** confirmed 后 Hub 触发模式 */
-  confirmedHubMode: ConfirmedHubMode;
-  /**
-   * Hub 等待门：这些 severity 的活跃 verify 会阻塞非 immediate Hub。
-   * 空数组时回落到 autoVerifySeverities。
-   */
-  hubWaitSeverities: string[];
-  /** 门控/全量 auto-verify 终态后是否停止自动 maybeTriggerHub */
-  autoStopMode: AutoStopMode;
-  /** batch 模式 debounce 秒数（Phase 3；当前 batch 按 gated 处理） */
-  confirmedHubBatchSec: number;
 }
 
 /** 画布收敛控制态（落在 canvases.target_json.convergence，免 schema 迁移） */
@@ -97,9 +92,6 @@ export interface CanvasConvergence {
   pending_confirmed_ids?: string[];
 }
 
-const CONFIRMED_HUB_MODES = new Set<ConfirmedHubMode>(["immediate", "gated", "batch", "off"]);
-const AUTO_STOP_MODES = new Set<AutoStopMode>(["never", "after_wait_gate", "after_all_auto_verify"]);
-
 const SEVERITY_PRIORITY_DELTA: Record<string, number> = {
   critical: 40,
   high: 30,
@@ -108,25 +100,46 @@ const SEVERITY_PRIORITY_DELTA: Record<string, number> = {
   info: -5,
 };
 
-function asStringArray(v: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(v)) return fallback;
-  return v.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+function asSeverityRank(v: unknown, fallback: SeverityRank): SeverityRank {
+  const s = String(v ?? "").trim().toLowerCase();
+  return (SEVERITY_RANK as readonly string[]).includes(s) ? (s as SeverityRank) : fallback;
 }
 
-function asConfirmedHubMode(v: unknown, fallback: ConfirmedHubMode): ConfirmedHubMode {
-  const s = String(v ?? "").trim().toLowerCase() as ConfirmedHubMode;
-  return CONFIRMED_HUB_MODES.has(s) ? s : fallback;
+/** env / 旧 autoVerifySeverities 列表 → 最低关注级别（取列表中最「松」的一档） */
+function inferMinFromList(list: unknown, fallback: SeverityRank): SeverityRank {
+  if (!Array.isArray(list) || list.length === 0) return fallback;
+  let maxIdx = 0;
+  for (const item of list) {
+    const i = SEVERITY_RANK.indexOf(String(item).trim().toLowerCase() as SeverityRank);
+    if (i > maxIdx) maxIdx = i;
+  }
+  return SEVERITY_RANK[maxIdx] ?? fallback;
 }
 
-function asAutoStopMode(v: unknown, fallback: AutoStopMode): AutoStopMode {
-  const s = String(v ?? "").trim().toLowerCase() as AutoStopMode;
-  return AUTO_STOP_MODES.has(s) ? s : fallback;
+/** ≥ min 的全部 severity（自动验 / Hub 等待 / 停自驱 共用） */
+export function careSeverities(min: string): string[] {
+  const idx = SEVERITY_RANK.indexOf(asSeverityRank(min, "high"));
+  return SEVERITY_RANK.slice(0, idx + 1) as string[];
+}
+
+/** @deprecated 兼容旧调用名；语义 = careSeverities(rules.minVerifySeverity) */
+export function resolveHubWaitSeverities(rules: ProjectRules): string[] {
+  return careSeverities(rules.minVerifySeverity);
+}
+
+export function severityPriorityDelta(severity: string | null | undefined): number {
+  return SEVERITY_PRIORITY_DELTA[String(severity ?? "").toLowerCase()] ?? 0;
+}
+
+function defaultMinVerifySeverity(): SeverityRank {
+  // AUTO_VERIFY_SEVERITIES=critical,high → 推断为 high
+  return inferMinFromList(config.rules.autoVerifySeverities, "high");
 }
 
 /** env 兜底默认值（全局规则未配置时的最终回落） */
 function envDefaultRules(): ProjectRules {
   return {
-    autoVerifySeverities: config.rules.autoVerifySeverities,
+    minVerifySeverity: defaultMinVerifySeverity(),
     maxFollowupsPerJob: config.limits.maxFollowupsPerJob,
     maxFollowupDepth: config.limits.maxFollowupDepth,
     maxAutoRetries: config.limits.maxAutoRetries,
@@ -136,17 +149,18 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
-    verifySeverityPriority: true,
-    confirmedHubMode: "gated",
-    hubWaitSeverities: ["critical", "high"],
-    autoStopMode: "after_wait_gate",
-    confirmedHubBatchSec: 60,
   };
 }
 
 function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): ProjectRules {
+  // 优先新字段；否则从旧 autoVerifySeverities / hubWaitSeverities 推断，保持升级兼容
+  let min = base.minVerifySeverity;
+  if (raw.minVerifySeverity != null) min = asSeverityRank(raw.minVerifySeverity, min);
+  else if (raw.autoVerifySeverities != null) min = inferMinFromList(raw.autoVerifySeverities, min);
+  else if (raw.hubWaitSeverities != null) min = inferMinFromList(raw.hubWaitSeverities, min);
+
   return {
-    autoVerifySeverities: asStringArray(raw.autoVerifySeverities, base.autoVerifySeverities),
+    minVerifySeverity: min,
     maxFollowupsPerJob: (raw.maxFollowupsPerJob as number) ?? base.maxFollowupsPerJob,
     maxFollowupDepth: (raw.maxFollowupDepth as number) ?? base.maxFollowupDepth,
     maxAutoRetries: (raw.maxAutoRetries as number) ?? base.maxAutoRetries,
@@ -156,23 +170,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
-    verifySeverityPriority: (raw.verifySeverityPriority as boolean) ?? base.verifySeverityPriority,
-    confirmedHubMode: asConfirmedHubMode(raw.confirmedHubMode, base.confirmedHubMode),
-    hubWaitSeverities: asStringArray(raw.hubWaitSeverities, base.hubWaitSeverities),
-    autoStopMode: asAutoStopMode(raw.autoStopMode, base.autoStopMode),
-    confirmedHubBatchSec: (raw.confirmedHubBatchSec as number) ?? base.confirmedHubBatchSec,
   };
-}
-
-/** 解析 Hub 等待门 severity；未配置时回落 autoVerifySeverities */
-export function resolveHubWaitSeverities(rules: ProjectRules): string[] {
-  const wait = rules.hubWaitSeverities.map((s) => s.toLowerCase()).filter(Boolean);
-  if (wait.length > 0) return wait;
-  return rules.autoVerifySeverities.map((s) => s.toLowerCase()).filter(Boolean);
-}
-
-export function severityPriorityDelta(severity: string | null | undefined): number {
-  return SEVERITY_PRIORITY_DELTA[String(severity ?? "").toLowerCase()] ?? 0;
 }
 
 /** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */
@@ -782,9 +780,9 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   if ((job.followup_depth as number) >= rules.maxFollowupDepth) return;
 
-  // severity 门控：仅 autoVerifySeverities 内的 finding 自动派生 verify（人工点验另走 API）
+  // 只自动验证 ≥ minVerifySeverity 的 finding（更低级别需人工点验）
   const severity = String(finding.severity ?? "").toLowerCase();
-  const allowed = new Set(rules.autoVerifySeverities.map((s) => s.toLowerCase()));
+  const allowed = new Set(careSeverities(rules.minVerifySeverity));
   if (!allowed.has(severity)) return;
 
   // 同一 finding 已有 verify job → 不重复派生
@@ -809,10 +807,8 @@ async function evaluateFollowup(tx: Tx, job: Record<string, unknown>, finding: R
     "verify_finding",
   );
 
-  const basePriority = (job.priority as number) + 1;
-  const priority = rules.verifySeverityPriority
-    ? basePriority + severityPriorityDelta(severity)
-    : basePriority;
+  // 永远高危优先调度
+  const priority = (job.priority as number) + 1 + severityPriorityDelta(severity);
 
   const [verifyJob] = await tx`
     INSERT INTO jobs ${tx({
@@ -894,7 +890,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   const { revokeJobTokens } = await import("./gateway.js");
   await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
 
-  // verify_finding 闭环：结论写回 finding；confirmed 按 confirmedHubMode 触发 Hub。
+  // verify_finding 闭环：结论写回 finding；confirmed 走 gated Hub（等关注级别 verify 跑完）
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // §13.1 指标：终态计数 + 时长
   if (status === "failed") inc("deepsonar_jobs_failed_total", { reason: "failed" });
@@ -923,14 +919,9 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
       await tx`
         UPDATE canvas_nodes SET status = ${verdict}, updated_at = now() WHERE id = ${finding.node_id}`;
       if (verdict === "confirmed") {
-        const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
-        // batch 一期按 gated 处理；off = 不因 confirmed 单独 force
-        const mode = rules.confirmedHubMode === "batch" ? "gated" : rules.confirmedHubMode;
-        if (mode !== "off") {
-          forceHubReview = true;
-          hubSourceNodeIds = [finding.node_id as string];
-          hubTrigger = { kind: "confirmed_finding", finding_id: job.finding_id, mode };
-        }
+        forceHubReview = true;
+        hubSourceNodeIds = [finding.node_id as string];
+        hubTrigger = { kind: "confirmed_finding", finding_id: job.finding_id };
       }
     }
   }
@@ -1017,27 +1008,21 @@ export async function maybeTriggerHub(
     }
   }
 
-  const waitSeverities = resolveHubWaitSeverities(rules);
-  const mode = rules.confirmedHubMode === "batch" ? "gated" : rules.confirmedHubMode;
-  // immediate force 才完全绕过等待门；gated force / 普通路径都要等门控 severity
-  const bypassWait = Boolean(options.force && mode === "immediate") || Boolean(options.manual);
-  if (!bypassWait) {
+  // 关注级别：自动验 / 等 Hub / 停自驱 同一集合；人工 run-hub-now 才绕过等待
+  const waitSeverities = careSeverities(rules.minVerifySeverity);
+  if (!options.manual) {
     if (await hasActiveBlockingVerify(tx, canvasId, waitSeverities)) return;
   }
 
-  // 自动停止：门控（或全部 auto-verify）验完且无活跃角色 job 时标记并停自驱
-  if (!options.manual && !options.force && rules.autoStopMode !== "never") {
-    const stopSeverities =
-      rules.autoStopMode === "after_all_auto_verify"
-        ? rules.autoVerifySeverities.map((s) => s.toLowerCase())
-        : waitSeverities;
-    if ((await gateVerifiesSettled(tx, canvasId, stopSeverities)) && !(await hasActiveRoleJobs(tx, canvasId))) {
+  // 关注级别 verify 全部终态 + 无活跃角色 job → 自动停自驱
+  if (!options.manual && !options.force) {
+    if ((await gateVerifiesSettled(tx, canvasId, waitSeverities)) && !(await hasActiveRoleJobs(tx, canvasId))) {
       await patchCanvasConvergence(tx, canvasId, {
         auto_stopped: true,
-        paused_reason: `autoStopMode=${rules.autoStopMode}`,
+        paused_reason: `care_settled:${rules.minVerifySeverity}`,
         paused_at: new Date().toISOString(),
       });
-      console.info(`[hub] 画布 ${canvasId} 触发 ${rules.autoStopMode}，标记 auto_stopped`);
+      console.info(`[hub] 画布 ${canvasId} 关注级别 ${rules.minVerifySeverity} 已收敛，标记 auto_stopped`);
       return;
     }
   }

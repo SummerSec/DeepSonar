@@ -168,8 +168,8 @@ loop:
 
 **护栏**（同时是防注入措施，见 §9）：
 
-- 每 Job 最大 followup 数 `MAX_FOLLOWUPS_PER_JOB`（默认 20）
-- 派生深度上限 `MAX_FOLLOWUP_DEPTH`（默认 4；verify 的结果仍由规则引擎约束，不由 Agent 自行派生）
+- 每 Job 最大 followup 数 `MAX_FOLLOWUPS_PER_JOB`（默认 60）
+- 派生深度上限 `MAX_FOLLOWUP_DEPTH`（默认 12；verify 的结果仍由规则引擎约束，不由 Agent 自行派生）
 - 超出上限 → 自动转 `request_human`
 
 ### 4.4 人工介入与恢复
@@ -525,8 +525,8 @@ HEARTBEAT_INTERVAL_SEC=30
 REAPER_INTERVAL_SEC=30
 
 AUTO_VERIFY_SEVERITIES=low,medium,high,critical
-MAX_FOLLOWUPS_PER_JOB=20
-MAX_FOLLOWUP_DEPTH=4
+MAX_FOLLOWUPS_PER_JOB=60
+MAX_FOLLOWUP_DEPTH=12
 MAX_AUTO_RETRIES=6
 
 DEEPSONAR_HUB_ENABLED=true

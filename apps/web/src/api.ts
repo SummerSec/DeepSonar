@@ -158,7 +158,8 @@ export interface SkillSourceDetail {
 }
 
 export interface EffectiveRules {
-  autoVerifySeverities: string[];
+  /** 唯一策略：最低关注级别（high = critical+high 自动验/等Hub/停自驱） */
+  minVerifySeverity: "critical" | "high" | "medium" | "low" | "info";
   maxFollowupsPerJob: number;
   maxFollowupDepth: number;
   maxAutoRetries: number;
@@ -168,15 +169,6 @@ export interface EffectiveRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
-  /** claim 时按 severity 抬升 verify 优先级 */
-  verifySeverityPriority: boolean;
-  /** confirmed 后 Hub：immediate | gated | batch | off */
-  confirmedHubMode: "immediate" | "gated" | "batch" | "off";
-  /** 阻塞 Hub 的 verify severity 门控 */
-  hubWaitSeverities: string[];
-  /** 门控/全量 verify 终态后是否自动停自驱 */
-  autoStopMode: "never" | "after_wait_gate" | "after_all_auto_verify";
-  confirmedHubBatchSec: number;
 }
 
 export interface CanvasConvergence {
@@ -463,10 +455,8 @@ export const api = {
     get<{
       canvas_id: string;
       convergence: CanvasConvergence;
-      hubWaitSeverities: string[];
-      confirmedHubMode: string;
-      autoStopMode: string;
-      autoVerifySeverities: string[];
+      minVerifySeverity: string;
+      careSeverities: string[];
     }>(`/canvases/${canvasId}/convergence`),
   pauseCanvasDecision: (canvasId: string, reason?: string) =>
     send<{ canvas_id: string; convergence: CanvasConvergence }>(

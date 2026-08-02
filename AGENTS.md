@@ -26,7 +26,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 自 2026-08 起降级为可选集成（`docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md`），默认路径是 Web 直接建项目/任务。
 
-- **Agent 只提案，不决策**：系统按 Job 动态注入本地控制 MCP，工具为 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集。Fact/Finding 在执行中增量回传；`emit_finding` 只能带 `suggest_verify` 建议，是否派生 verify job 由调度器规则引擎（`core.ts`）唯一决定，有深度（`MAX_FOLLOWUP_DEPTH=4`）与频次护栏。
+- **Agent 只提案，不决策**：系统按 Job 动态注入本地控制 MCP，工具为 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集。Fact/Finding 在执行中增量回传；`emit_finding` 只能带 `suggest_verify` 建议，是否派生 verify job 由调度器规则引擎（`core.ts`）唯一决定，有深度（`MAX_FOLLOWUP_DEPTH=12`）与频次护栏。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
 - **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。

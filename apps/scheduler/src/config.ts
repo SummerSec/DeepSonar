@@ -77,8 +77,8 @@ export const config = {
   limits: {
     maxGlobalJobs: int("MAX_GLOBAL_JOBS", 6),
     maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 2),
-    maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 20),
-    maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 4),
+    maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 60),
+    maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 12),
     maxAutoRetries: int("MAX_AUTO_RETRIES", 6),
   },
 

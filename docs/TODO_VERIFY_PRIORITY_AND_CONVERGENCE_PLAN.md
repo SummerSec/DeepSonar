@@ -1,8 +1,10 @@
 # TODO：Verify 优先级 + 可配置收敛门 + 人工停决策
 
-> 状态：方案待实现（Phase 1 优先）  
-> 背景：`java-sec-code 全量审计` 运行观察——verify 扇出过大、`autoVerifySeverities` 未生效、confirmed 立即 force Hub 导致二次发散。  
-> 相关代码：`apps/scheduler/src/core.ts`（`evaluateFollowup` / `finalizeJob` / `maybeTriggerHub`）、`apps/web` Settings / 画布。
+> 状态：已收敛为单一旋钮（2026-08）  
+> **第一性原理**：用户只配 `minVerifySeverity`（最低关注级别）。  
+> 派生写死：≥ 该级别 → 自动 verify；Hub 等它们；验完停自驱；调度永远高危优先。  
+> 背景：`java-sec-code` 全量审计扇出过大；多旋钮配置违背第一性原理后已砍掉。  
+> 相关：`apps/scheduler/src/core.ts`、`apps/web` Settings / 画布。
 
 ---
 

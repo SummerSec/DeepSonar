@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  DotsThree,
   FileText,
   Graph,
   ListBullets,
@@ -8,10 +9,8 @@ import {
   SealCheck,
   Prohibit,
   Target,
-  Funnel,
-  Lightning,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   api,
@@ -107,6 +106,8 @@ export function TaskCanvasPage() {
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [convergence, setConvergence] = useState<CanvasConvergence | null>(null);
   const [convBusy, setConvBusy] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -146,28 +147,25 @@ export function TaskCanvasPage() {
     setTimeout(() => setMsg(null), 3500);
   };
 
-  const runConvergence = async (action: "pause" | "resume" | "stop-gate" | "drain" | "hub-now") => {
+  const runConvergence = async (action: "pause" | "resume" | "drain" | "hub-now") => {
     if (!canvasId) return;
     setConvBusy(true);
+    setMoreOpen(false);
     try {
       if (action === "pause") {
         const r = await api.pauseCanvasDecision(canvasId, "manual_pause");
         setConvergence(r.convergence);
-        flash("已暂停自动决策");
+        flash("已暂停");
       } else if (action === "resume") {
         const r = await api.resumeCanvasDecision(canvasId, false);
         setConvergence(r.convergence);
-        flash("已恢复自驱");
-      } else if (action === "stop-gate") {
-        const r = await api.stopCanvasAfterGate(canvasId);
-        setConvergence(r.convergence);
-        flash("已套用：高危门控验完即停");
+        flash("已继续");
       } else if (action === "drain") {
         const r = await api.drainCanvasPriority(canvasId);
-        flash(`已清理非门控 pending verify：${r.cancelled} 个`);
+        flash(`已清理 ${r.cancelled} 个低优先级 verify`);
       } else {
         await api.runCanvasHubNow(canvasId);
-        flash("已请求立即运行一轮 Hub");
+        flash("已请求一轮 Hub");
       }
     } catch (e) {
       flash(`操作失败：${e instanceof Error ? e.message : e}`);
@@ -175,6 +173,15 @@ export function TaskCanvasPage() {
       setConvBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [moreOpen]);
 
   const scopeEntries = useMemo(() => {
     const t = meta?.target_json ?? {};
@@ -190,11 +197,12 @@ export function TaskCanvasPage() {
     );
   }, [meta]);
 
-  const decisionBadge = useMemo(() => {
+  /** 决策态文案：并入副标题，不用彩色 badge */
+  const decisionLabel = useMemo(() => {
     if (!convergence) return null;
-    if (convergence.hub_paused) return { label: "已暂停决策", color: "#fbbf24" };
-    if (convergence.auto_stopped) return { label: "已自动停止", color: "#a78bfa" };
-    return { label: "自驱中", color: "#34d399" };
+    if (convergence.hub_paused) return "已暂停";
+    if (convergence.auto_stopped) return "已收敛";
+    return "自驱中";
   }, [convergence]);
 
   const setTab = (next: Tab) => {
@@ -237,84 +245,69 @@ export function TaskCanvasPage() {
           <span className="block truncate text-[13px] font-medium tracking-[-.015em] text-zinc-200">
             {meta?.title ?? "加载任务…"}
           </span>
-          <span className="hidden font-mono text-[8px] tracking-[.12em] text-zinc-700 sm:block">TASK WORKBENCH · {findings.length} FINDINGS · {jobs.length} RUNS</span>
+          <span className="mt-0.5 block font-mono text-[10px] text-zinc-600">
+            {[
+              decisionLabel,
+              taskStatus?.label,
+              `${findings.length} findings`,
+              `${jobs.length} runs`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            {msg ? ` · ${msg}` : ""}
+          </span>
         </div>
-        {/* 任务状态 chip：root 节点状态（§8.1 分析完成 → 生成报告 → 已完成） */}
-        {taskStatus && (
-          <span
-            className="flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] ring-1"
-            style={{ color: taskStatus.color, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${taskStatus.color} 20%, transparent)`, background: `${taskStatus.color}12` }}
+        {/* 唯一主操作：暂停 / 继续；次要能力收进 ⋯ */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            disabled={convBusy || !convergence}
+            onClick={() => runConvergence(convergence?.hub_paused ? "resume" : "pause")}
+            className="flex items-center gap-1.5 rounded-full bg-white/[.04] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.07] hover:text-zinc-100 disabled:opacity-40"
+            title={convergence?.hub_paused ? "继续自动决策" : "暂停自动决策（进行中的 job 不受影响）"}
           >
-            <span
-              className={`inline-block size-1.5 rounded-full ${rootStatus === "reporting" ? "deepsonar-live-dot" : ""}`}
-              style={{ background: taskStatus.color }}
-            />
-            {taskStatus.label}
-          </span>
-        )}
-        {decisionBadge && (
-          <span
-            className="flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] ring-1"
-            style={{
-              color: decisionBadge.color,
-              boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${decisionBadge.color} 20%, transparent)`,
-              background: `${decisionBadge.color}12`,
-            }}
-          >
-            {decisionBadge.label}
-          </span>
-        )}
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          {convergence?.hub_paused ? (
+            {convergence?.hub_paused ? (
+              <>
+                <Play size={12} /> 继续
+              </>
+            ) : (
+              <>
+                <Pause size={12} /> 暂停
+              </>
+            )}
+          </button>
+          <div className="relative" ref={moreRef}>
             <button
               type="button"
               disabled={convBusy}
-              onClick={() => runConvergence("resume")}
-              className="flex items-center gap-1 rounded-full bg-emerald-400/[.08] px-2.5 py-1.5 font-mono text-[10px] text-emerald-300 ring-1 ring-emerald-300/20 hover:bg-emerald-400/[.12] disabled:opacity-50"
-              title="恢复自动 Hub 自驱"
+              onClick={() => setMoreOpen((v) => !v)}
+              aria-label="更多"
+              className="flex size-8 items-center justify-center rounded-full text-zinc-500 ring-1 ring-white/[.06] transition-colors hover:bg-white/[.05] hover:text-zinc-300 disabled:opacity-40"
             >
-              <Play size={11} /> 恢复决策
+              <DotsThree size={16} weight="bold" />
             </button>
-          ) : (
-            <button
-              type="button"
-              disabled={convBusy}
-              onClick={() => runConvergence("pause")}
-              className="flex items-center gap-1 rounded-full bg-amber-400/[.08] px-2.5 py-1.5 font-mono text-[10px] text-amber-200 ring-1 ring-amber-300/20 hover:bg-amber-400/[.12] disabled:opacity-50"
-              title="暂停自动 Hub，已在跑的 job 不受影响"
-            >
-              <Pause size={11} /> 暂停决策
-            </button>
-          )}
-          <button
-            type="button"
-            disabled={convBusy}
-            onClick={() => runConvergence("stop-gate")}
-            className="flex items-center gap-1 rounded-full bg-white/[.04] px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] hover:text-zinc-200 disabled:opacity-50"
-            title="项目规则套用：门控 severity 验完后自动停自驱"
-          >
-            <Funnel size={11} /> 高危验完即停
-          </button>
-          <button
-            type="button"
-            disabled={convBusy}
-            onClick={() => runConvergence("drain")}
-            className="flex items-center gap-1 rounded-full bg-white/[.04] px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] hover:text-zinc-200 disabled:opacity-50"
-            title="取消非门控 severity 的 pending verify"
-          >
-            清理低优先级
-          </button>
-          <button
-            type="button"
-            disabled={convBusy}
-            onClick={() => runConvergence("hub-now")}
-            className="flex items-center gap-1 rounded-full bg-violet-400/[.08] px-2.5 py-1.5 font-mono text-[10px] text-violet-300 ring-1 ring-violet-300/20 hover:bg-violet-400/[.12] disabled:opacity-50"
-            title="忽略暂停状态，立即入队一轮 Hub"
-          >
-            <Lightning size={11} /> 立即 Hub
-          </button>
+            {moreOpen && (
+              <div className="absolute right-0 top-full z-20 mt-1 min-w-[11rem] overflow-hidden rounded-xl bg-[#12161a] py-1 shadow-xl ring-1 ring-white/[.1]">
+                <button
+                  type="button"
+                  disabled={convBusy}
+                  onClick={() => runConvergence("hub-now")}
+                  className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05]"
+                >
+                  立即跑一轮 Hub
+                </button>
+                <button
+                  type="button"
+                  disabled={convBusy}
+                  onClick={() => runConvergence("drain")}
+                  className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05]"
+                >
+                  清理低优先级 verify
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-        {msg && <span className="font-mono text-[10px] text-acc-400">{msg}</span>}
       </div>
 
       {/* 任务只展示自然语言内容。 */}

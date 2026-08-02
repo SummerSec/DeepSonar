@@ -945,13 +945,15 @@ export function registerRoutes(app: FastifyInstance) {
     const [canvas] = await sql`SELECT id, project_id, target_json FROM canvases WHERE id = ${id}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const rules = await rulesForProject(sql, canvas.project_id as string);
+    const care = resolveHubWaitSeverities(rules);
     return {
       canvas_id: id,
       convergence: parseCanvasConvergence(canvas.target_json),
-      hubWaitSeverities: resolveHubWaitSeverities(rules),
-      confirmedHubMode: rules.confirmedHubMode,
-      autoStopMode: rules.autoStopMode,
-      autoVerifySeverities: rules.autoVerifySeverities,
+      minVerifySeverity: rules.minVerifySeverity,
+      careSeverities: care,
+      // 兼容旧前端字段名
+      hubWaitSeverities: care,
+      autoVerifySeverities: care,
     };
   });
 
@@ -1024,13 +1026,11 @@ export function registerRoutes(app: FastifyInstance) {
       paused_reason: "stop_after_gate",
       paused_at: new Date().toISOString(),
     });
-    // 项目规则写入 after_wait_gate（若项目尚未覆盖则写项目 rules）
+    // 快捷：把项目关注级别定为 high（critical+high），其余语义写死
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${canvas.project_id as string}`;
     const cfg = { ...((p?.config_json ?? {}) as Record<string, unknown>) };
     const rules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
-    rules.autoStopMode = "after_wait_gate";
-    if (!rules.hubWaitSeverities) rules.hubWaitSeverities = ["critical", "high"];
-    if (!rules.confirmedHubMode) rules.confirmedHubMode = "gated";
+    rules.minVerifySeverity = "high";
     cfg.rules = rules;
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${canvas.project_id as string}`;
     await audit(req, {
@@ -1038,7 +1038,7 @@ export function registerRoutes(app: FastifyInstance) {
       resourceType: "canvas",
       resourceId: id,
       projectId: canvas.project_id as string,
-      after: { convergence, rules: { autoStopMode: "after_wait_gate" } },
+      after: { convergence, rules: { minVerifySeverity: "high" } },
     });
     return { canvas_id: id, convergence, project_rules: rules };
   });
