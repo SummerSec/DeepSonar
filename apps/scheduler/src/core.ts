@@ -845,11 +845,13 @@ async function maybeTriggerHub(
     LIMIT 1`;
   if (active.length > 0) return;
 
+  // 预算只统计真正产出决策的轮次：failed/orphan 轮没有读图决策，
+  // 计入预算会让排障/运维期的失败把 maxHubRounds 烧光，画布在仍有 verify 验收需求时提前停止自驱。
   const [{ count }] = await tx<[{ count: number }]>`
     SELECT COUNT(*)::int AS count FROM jobs
-    WHERE canvas_id = ${job.canvas_id as string} AND type = 'hub_reason'`;
+    WHERE canvas_id = ${job.canvas_id as string} AND type = 'hub_reason' AND status = 'succeeded'`;
   if (count >= rules.maxHubRounds) {
-    console.warn(`[hub] 画布 ${job.canvas_id} 已达 hub 轮次上限 ${rules.maxHubRounds}，停止自驱`);
+    console.warn(`[hub] 画布 ${job.canvas_id} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
     return;
   }
 
