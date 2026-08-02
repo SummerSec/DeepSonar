@@ -579,14 +579,108 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** DEEPSONAR_AUTH_REQUIRED 开启后，Web 端用本地保存的 API Token 调后端（§6.4） */
+/**
+ * 浏览器侧鉴权材料（DEEPSONAR_AUTH_REQUIRED 时 Web 调 API 用）。
+ * 用户会话与平台 API Token 分 key 存放，避免设置页把会话 secret 当成「可编辑本机令牌」摊开。
+ * 请求优先级：会话 token > API Token。
+ */
+const LEGACY_TOKEN_KEY = "deepsonar_token";
+const SESSION_TOKEN_KEY = "deepsonar_session";
+const API_TOKEN_KEY = "deepsonar_api_token";
+
+/** 用户会话明文形如 deepsonar_user_<env>_<prefix>_<secret> */
+export function isUserSessionToken(token: string): boolean {
+  return token.startsWith("deepsonar_user_");
+}
+
+function migrateLegacyTokenKeys(): void {
+  try {
+    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+    if (!legacy) return;
+    const hasSession = Boolean(localStorage.getItem(SESSION_TOKEN_KEY));
+    const hasApi = Boolean(localStorage.getItem(API_TOKEN_KEY));
+    if (!hasSession && !hasApi) {
+      if (isUserSessionToken(legacy)) localStorage.setItem(SESSION_TOKEN_KEY, legacy);
+      else localStorage.setItem(API_TOKEN_KEY, legacy);
+    }
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    /* private mode / SSR */
+  }
+}
+
+export function getSessionToken(): string {
+  migrateLegacyTokenKeys();
+  try {
+    return localStorage.getItem(SESSION_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setSessionToken(token: string): void {
+  migrateLegacyTokenKeys();
+  try {
+    if (token) localStorage.setItem(SESSION_TOKEN_KEY, token);
+    else localStorage.removeItem(SESSION_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getApiAccessToken(): string {
+  migrateLegacyTokenKeys();
+  try {
+    return localStorage.getItem(API_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiAccessToken(token: string): void {
+  migrateLegacyTokenKeys();
+  try {
+    if (token) localStorage.setItem(API_TOKEN_KEY, token);
+    else localStorage.removeItem(API_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 当前请求实际使用的 Bearer（会话优先） */
 export function getLocalToken(): string {
-  return localStorage.getItem("deepsonar_token") ?? "";
+  return getSessionToken() || getApiAccessToken();
 }
-export function setLocalToken(token: string) {
-  if (token) localStorage.setItem("deepsonar_token", token);
-  else localStorage.removeItem("deepsonar_token");
+
+/**
+ * 写入鉴权材料：空串清空两者；用户会话 / API Token 按格式分流。
+ * 粘贴 API Token 时会清掉会话，避免「会话优先」导致新 Token 不生效。
+ */
+export function setLocalToken(token: string): void {
+  if (!token) {
+    setSessionToken("");
+    setApiAccessToken("");
+    return;
+  }
+  if (isUserSessionToken(token)) {
+    setSessionToken(token);
+  } else {
+    setSessionToken("");
+    setApiAccessToken(token);
+  }
 }
+
+/** 展示用：保留前缀，遮住 secret（不用于鉴权） */
+export function maskTokenForDisplay(token: string): string {
+  if (!token) return "";
+  const m = token.match(/^(deepsonar_(?:user_)?[a-z0-9]+_[0-9a-f]{8})_([A-Za-z0-9_-]+)$/i);
+  if (m) return `${m[1]}_${"•".repeat(Math.min(12, m[2].length))}`;
+  if (token.length <= 16) return "•".repeat(token.length);
+  return `${token.slice(0, 12)}${"•".repeat(8)}…`;
+}
+
 function authHeaders(): Record<string, string> {
   const t = getLocalToken();
   return t ? { Authorization: `Bearer ${t}` } : {};

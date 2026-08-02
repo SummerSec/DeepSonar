@@ -1,6 +1,6 @@
 /**
- * Web 用户会话：与 API Token 共用 localStorage key（deepsonar_token），
- * 登录写入用户会话 token；服务账号仍可粘贴 API Token。
+ * Web 鉴权：用户会话（deepsonar_session）与平台 API Token（deepsonar_api_token）分存；
+ * 请求时会话优先。登录写会话；登录页「API Token」模式写 API Token。
  */
 import {
   createContext,
@@ -44,7 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setToken = useCallback((t: string) => {
     setLocalToken(t);
-    setTokenState(t);
+    setTokenState(getLocalToken());
   }, []);
 
   const refresh = useCallback(async () => {
@@ -67,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const m = await api.authMe();
         setMe(m);
+        setTokenState(getLocalToken());
       } catch {
         setLocalToken("");
         setTokenState("");

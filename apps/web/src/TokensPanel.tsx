@@ -1,17 +1,21 @@
-import { ArrowsClockwise, Copy, Key, Prohibit, Trash } from "@phosphor-icons/react";
+import { ArrowsClockwise, Copy, Eye, EyeSlash, Key, Prohibit, Trash } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import {
   api,
-  getLocalToken,
-  setLocalToken,
+  getApiAccessToken,
+  getSessionToken,
+  maskTokenForDisplay,
+  setApiAccessToken,
   type ApiToken,
   type ApiTokenCreated,
   type Project,
 } from "./api";
+import { useAuth } from "./auth";
 
 /**
  * 平台 API Token 管理（§6.4）：与 Provider Credential（LLM/Plane/Git 密钥）严格分离。
  * 明文只在创建/轮换响应里出现一次；列表永远只有前缀。
+ * 本机鉴权：用户会话与 API Token 分存；会话优先，默认遮罩不整段明文。
  */
 
 const SCOPE_GROUPS: { label: string; scopes: string[] }[] = [
@@ -33,11 +37,23 @@ const DEFAULT_SCOPES = [
   "skills:read",
 ];
 
+const ACTOR_LABEL: Record<string, string> = {
+  user: "用户会话",
+  api_token: "API Token",
+  bootstrap_admin: "引导管理员",
+  internal: "本地开发（鉴权关闭）",
+};
+
 export function TokensPanel() {
+  const { me, logout, refresh } = useAuth();
   const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState("");
-  const [localToken, setLocalTokenInput] = useState(getLocalToken());
+  const [sessionToken, setSessionTokenState] = useState(getSessionToken());
+  const [apiTokenDraft, setApiTokenDraft] = useState(getApiAccessToken());
+  const [revealSession, setRevealSession] = useState(false);
+  const [revealApi, setRevealApi] = useState(false);
+  const [apiSavedHint, setApiSavedHint] = useState<string | null>(null);
 
   // 创建表单
   const [name, setName] = useState("");
@@ -45,11 +61,14 @@ export function TokensPanel() {
   const [projectId, setProjectId] = useState<string>("");
   const [expireDays, setExpireDays] = useState("");
   const [created, setCreated] = useState<ApiTokenCreated | null>(null);
+  const [revealCreated, setRevealCreated] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const load = () => {
     api.tokens().then(setTokens).catch((e) => setError(String(e)));
     api.projects().then(setProjects).catch(() => {});
+    setSessionTokenState(getSessionToken());
+    setApiTokenDraft(getApiAccessToken());
   };
   useEffect(load, []);
 
@@ -67,6 +86,7 @@ export function TokensPanel() {
         ...(expireDays ? { expires_in_days: Number(expireDays) } : {}),
       });
       setCreated(t);
+      setRevealCreated(true);
       setName("");
       load();
     } catch (e) {
@@ -80,8 +100,42 @@ export function TokensPanel() {
     setError("");
     try {
       const r = (await fn()) as ApiTokenCreated;
-      if (r?.token) setCreated(r); // rotate 返回新明文
+      if (r?.token) {
+        setCreated(r); // rotate 返回新明文
+        setRevealCreated(true);
+      }
       load();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const saveApiToken = async () => {
+    setError("");
+    setApiSavedHint(null);
+    setApiAccessToken(apiTokenDraft.trim());
+    setRevealApi(false);
+    setApiTokenDraft(getApiAccessToken());
+    try {
+      await refresh();
+      load();
+      setApiSavedHint(apiTokenDraft.trim() ? "已保存本机 API Token" : "已清除本机 API Token");
+      setTimeout(() => setApiSavedHint(null), 2800);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const clearApiToken = async () => {
+    setApiTokenDraft("");
+    setApiAccessToken("");
+    setRevealApi(false);
+    setError("");
+    try {
+      await refresh();
+      load();
+      setApiSavedHint("已清除本机 API Token");
+      setTimeout(() => setApiSavedHint(null), 2800);
     } catch (e) {
       setError(String(e));
     }
@@ -90,29 +144,113 @@ export function TokensPanel() {
   const projectName = (id: string | null) =>
     id ? (projects.find((p) => p.id === id)?.name ?? id.slice(0, 8)) : "全部项目";
 
+  const actorType = me?.actor?.type ?? null;
+  const actorLabel = actorType ? (ACTOR_LABEL[actorType] ?? actorType) : "未认证";
+  const activeSource = sessionToken ? "session" : apiTokenDraft ? "api" : "none";
+
   return (
     <div className="flex flex-col gap-4 p-4 text-[13px]">
-      {/* 本机调用令牌（DEEPSONAR_AUTH_REQUIRED 开启后 Web 自身也需要） */}
+      {/* 本机鉴权材料：会话与 API Token 分存，默认遮罩 */}
       <div className="rounded-[10px] border border-ink-700 bg-ink-850/60 p-3">
         <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[12px] uppercase tracking-[0.12em] text-zinc-500">
-          <Key size={13} /> 本机访问令牌
+          <Key size={13} /> 本机鉴权
         </div>
-        <div className="flex gap-2">
-          <input
-            value={localToken}
-            onChange={(e) => setLocalTokenInput(e.target.value)}
-            placeholder="deepsonar_dev_xxxxxxxx_...（开启鉴权后 Web 访问 API 用）"
-            className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
-          />
-          <button
-            onClick={() => {
-              setLocalToken(localToken.trim());
-              load();
-            }}
-            className="shrink-0 rounded-md border border-ink-600 px-3 py-1.5 text-zinc-300 hover:border-acc-500 hover:text-acc-400"
-          >
-            保存
-          </button>
+        <p className="mb-3 text-[12px] leading-5 text-zinc-600">
+          用户会话与平台 API Token 分开存放。请求时<strong className="font-medium text-zinc-500">优先使用会话</strong>
+          ；secret 默认遮罩，不会在设置页整段明文摊开。
+        </p>
+
+        <div className="mb-3 rounded-lg border border-white/[.06] bg-black/20 px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">当前身份</span>
+            <span className="rounded-full bg-white/[.05] px-2 py-0.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08]">
+              {actorLabel}
+            </span>
+            {me?.user && (
+              <span className="text-[12px] text-zinc-400">
+                {me.user.display_name || me.user.username}
+                {me.user.role ? ` · ${me.user.role}` : ""}
+              </span>
+            )}
+            {!me?.user && me?.actor?.name && (
+              <span className="font-mono text-[12px] text-zinc-400">{me.actor.name}</span>
+            )}
+            <span className="ml-auto font-mono text-[10px] text-zinc-600">
+              {activeSource === "session" ? "生效：会话" : activeSource === "api" ? "生效：API Token" : "无本地令牌"}
+            </span>
+          </div>
+
+          {sessionToken ? (
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-300">
+                {revealSession ? sessionToken : maskTokenForDisplay(sessionToken)}
+              </code>
+              <button
+                type="button"
+                onClick={() => setRevealSession((v) => !v)}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-600 px-2.5 py-1.5 text-[12px] text-zinc-400 hover:border-acc-500/40 hover:text-zinc-200"
+                aria-label={revealSession ? "隐藏会话令牌" : "显示会话令牌"}
+              >
+                {revealSession ? <EyeSlash size={14} /> : <Eye size={14} />}
+                {revealSession ? "隐藏" : "显示"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void logout()}
+                className="shrink-0 rounded-md border border-ink-600 px-2.5 py-1.5 text-[12px] text-zinc-400 hover:border-red-500/40 hover:text-red-300"
+              >
+                退出登录
+              </button>
+            </div>
+          ) : (
+            <p className="mt-2 text-[12px] text-zinc-600">当前没有用户会话（账号登录后会出现在这里）。</p>
+          )}
+        </div>
+
+        <div>
+          <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">
+            本机 API Token（可选）
+          </div>
+          <p className="mb-2 text-[11px] leading-5 text-zinc-600">
+            服务账号或自动化用。有会话时不会覆盖会话；仅在无会话时作为 Bearer。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              type={revealApi ? "text" : "password"}
+              value={apiTokenDraft}
+              onChange={(e) => setApiTokenDraft(e.target.value)}
+              placeholder="deepsonar_dev_xxxxxxxx_…（粘贴平台 API Token）"
+              autoComplete="off"
+              spellCheck={false}
+              className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
+            />
+            <button
+              type="button"
+              onClick={() => setRevealApi((v) => !v)}
+              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-600 px-2.5 py-1.5 text-[12px] text-zinc-400 hover:border-acc-500/40 hover:text-zinc-200"
+              aria-label={revealApi ? "隐藏 API Token" : "显示 API Token"}
+            >
+              {revealApi ? <EyeSlash size={14} /> : <Eye size={14} />}
+              {revealApi ? "隐藏" : "显示"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveApiToken()}
+              className="shrink-0 rounded-md border border-ink-600 px-3 py-1.5 text-zinc-300 hover:border-acc-500 hover:text-acc-400"
+            >
+              保存
+            </button>
+            {getApiAccessToken() && (
+              <button
+                type="button"
+                onClick={() => void clearApiToken()}
+                className="shrink-0 rounded-md border border-ink-600 px-3 py-1.5 text-zinc-500 hover:border-red-500/40 hover:text-red-300"
+              >
+                清除
+              </button>
+            )}
+          </div>
+          {apiSavedHint && <p className="mt-2 text-[12px] text-acc-300/90">{apiSavedHint}</p>}
         </div>
       </div>
 
@@ -172,7 +310,7 @@ export function TokensPanel() {
         </button>
       </div>
 
-      {/* 创建/轮换结果：明文仅此一次 */}
+      {/* 创建/轮换结果：明文仅此一次；默认可见便于复制，可手动遮罩 */}
       {created && (
         <div className="rounded-[10px] border border-acc-500/60 bg-acc-500/10 p-3">
           <div className="mb-1 text-[13px] font-medium text-acc-400">
@@ -180,9 +318,18 @@ export function TokensPanel() {
           </div>
           <div className="flex items-center gap-2">
             <code className="min-w-0 flex-1 break-all rounded bg-ink-900 px-2 py-1.5 font-mono text-[12px] text-zinc-100">
-              {created.token}
+              {revealCreated ? created.token : maskTokenForDisplay(created.token)}
             </code>
             <button
+              type="button"
+              onClick={() => setRevealCreated((v) => !v)}
+              className="shrink-0 rounded-md border border-ink-600 p-1.5 text-zinc-300 hover:border-acc-500"
+              aria-label={revealCreated ? "隐藏" : "显示"}
+            >
+              {revealCreated ? <EyeSlash size={14} /> : <Eye size={14} />}
+            </button>
+            <button
+              type="button"
               onClick={() => navigator.clipboard.writeText(created.token)}
               className="shrink-0 rounded-md border border-ink-600 p-1.5 text-zinc-300 hover:border-acc-500"
               aria-label="复制"
@@ -190,7 +337,11 @@ export function TokensPanel() {
               <Copy size={14} />
             </button>
           </div>
-          <button onClick={() => setCreated(null)} className="mt-2 text-[12px] text-zinc-500 hover:text-zinc-300">
+          <button
+            type="button"
+            onClick={() => setCreated(null)}
+            className="mt-2 text-[12px] text-zinc-500 hover:text-zinc-300"
+          >
             我已保存，关闭
           </button>
         </div>

@@ -146,12 +146,18 @@ export function LoginPage() {
                 API Token / 会话 Token
               </span>
               <input
+                type="password"
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value)}
                 placeholder="deepsonar_… 或 deepsonar_user_…"
+                autoComplete="off"
+                spellCheck={false}
                 className="w-full rounded-lg border border-ink-700 bg-ink-850 px-3 py-2.5 font-mono text-[12px] text-zinc-100 outline-none focus:border-acc-500"
                 required
               />
+              <span className="mt-1 block text-[11px] leading-5 text-zinc-600">
+                默认隐藏明文。用户会话与 API Token 会分 key 存入本机。
+              </span>
             </label>
           )}
 
