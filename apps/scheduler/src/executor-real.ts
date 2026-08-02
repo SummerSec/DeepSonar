@@ -1,6 +1,4 @@
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 import { runRealAgent } from "@deepsonar/runtime-sandbox";
 import { EventEnvelope, FindingPayload, allowedPlatformTools, type PlatformToolName } from "@deepsonar/shared-types";
 import { config } from "./config.js";
@@ -21,18 +19,6 @@ import { platformToolGuide } from "./platform-tools.js";
  *   Hub 通过 input 注入本轮任务，Worker 自行决定是否及如何获取外部材料，
  *   运行中的 fact/finding/progress 经本地控制 MCP 增量回传，done/hub/human 经同一接口提交。
  */
-
-const execFileP = promisify(execFile);
-
-/** 本地镜像 digest（§10.3 证据链；镜像不存在/无 docker 时返回 null，不阻断执行） */
-async function imageDigestOf(image: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileP("docker", ["image", "inspect", "--format", "{{.Id}}", image], { timeout: 10_000 });
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
-}
 
 // ---------- 每 Job 动态指令与输入 ----------
 
@@ -399,12 +385,17 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     workspaceFiles[`/workspace/${file.path}`] = file.content;
   }
 
-  const runtimeImage = snapshot.runtime_image_key ?? config.runtime.imageAudit;
+  const runtimeImage = snapshot.runtime_image?.image_ref;
+  if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
 
   // ---------- 证据链（§10.3）：镜像 digest / provider / 模型 / prompt 版本随 job 冻结 ----------
   const runtimeEvidence: Record<string, unknown> = {
     image: runtimeImage,
-    image_digest: await imageDigestOf(runtimeImage),
+    image_digest: snapshot.runtime_image.image_digest,
+    runtime_image_id: snapshot.runtime_image.runtime_image_id,
+    runtime_image_version_id: snapshot.runtime_image.runtime_image_version_id,
+    tools_manifest_sha256: snapshot.runtime_image.tools_manifest_sha256,
+    admission_scan_id: snapshot.runtime_image.admission_scan_id,
     agent_provider: provider,
     model: model ?? null,
     credential_id: snapshot.credential_id,

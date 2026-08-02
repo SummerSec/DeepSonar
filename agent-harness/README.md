@@ -1,25 +1,16 @@
-# agent-harness — 沙箱镜像与工具约定（Phase 2 建设）
+# agent-harness — 沙箱镜像与工具约定
 
 ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工具约定」，事件经 agentbox-sdk 控制通道回传（沙箱可断网、零凭据）。
 
-## 镜像（agentbox-sdk 自定义镜像格式）
+## 官方镜像
 
-```js
-// image.mjs
-export default {
-  name: "deepsonar-agent",
-  base: "node:20-bookworm",
-  run: [
-    "apt-get update && apt-get install -y git python3 ca-certificates ripgrep",
-    // 三家 CLI 全预装，AGENT_PROVIDER 运行时切换（claude-code | opencode | codex）
-    "npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex",
-  ],
-  workdir: "/workspace",
-  cmd: ["sleep", "infinity"],
-};
-```
+- `deepsonar-base`：固定 digest 的 Node 22 Debian slim + 最小通用 CLI。
+- `deepsonar-audit`：在 base 清单上增加 Semgrep、Gitleaks、ShellCheck、binutils。
+- `deepsonar-kali-minimal`：固定官方 Kali last-release digest，只安装明确列出的 CLI；不安装 `kali-linux-*`、`kali-tools-*`、GUI 或桌面。它是项目 opt-in 专项环境，不参与默认选择。
 
-构建：`npx agentbox image build --provider local-docker --file ./image.mjs`
+`runtime-images.json` 与 `kali-minimal-runtime.json` 记录工具、来源、校验和、平台与 `maxSizeMiB`。镜像大小超预算、定义漂移或断网硬化冒烟失败都会阻断 CI。
+
+构建 base/audit：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`。Kali 使用 `deploy/Dockerfile.agent-kali-minimal`。
 
 ## 白名单工具注入（§3.4）
 
@@ -50,6 +41,7 @@ MCP 只写本地控制队列，调度器通过 agentbox 控制通道增量读取
 | `test-hub-loop.py` | Hub→Audit→Finding→Verify→complete |
 | `test-local-project-api.py` | 项目/任务/事件/重试/归档 |
 | `test-auth-api.py` | API Token 鉴权（独立 3101 + `DEEPSONAR_AUTH_REQUIRED`） |
+| `test-runtime-images-api.py` | 镜像目录、隔离导入、审批门禁、项目启用与 Job digest 冻结 |
 
 环境变量：`DEEPSONAR_BASE`（默认 `http://127.0.0.1:3100`）、`DEEPSONAR_ADMIN_TOKEN`、`DEEPSONAR_HUB_SMOKE_TIMEOUT`。
 本地快捷：`pnpm ci:smoke:mcp` / `ci:smoke:roles` / `ci:smoke:hub` / `ci:smoke:projects` / `ci:smoke:auth`。

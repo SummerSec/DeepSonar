@@ -1,7 +1,7 @@
 name: release
 
 # 可发布制品（§12.1）：tag v* 触发 —— 镜像固定版本推到 GHCR + Management Skill Release 附件
-# 制品：deepsonar-scheduler / deepsonar-web / deepsonar-agent（digest 固定）
+# 制品：deepsonar-scheduler / deepsonar-web / deepsonar-image-admission / 三类精简 agent 镜像（digest 固定）
 on:
   push:
     tags: ["v*"]
@@ -19,9 +19,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler }
-          - { name: web, dockerfile: deploy/Dockerfile.web }
-          - { name: agent, dockerfile: deploy/Dockerfile.agent }
+          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", build_args: "" }
+          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", build_args: "" }
+          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", build_args: "" }
+          - { name: base, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=base" }
+          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=audit" }
+          - { name: kali-minimal, dockerfile: deploy/Dockerfile.agent-kali-minimal, platforms: "linux/amd64,linux/arm64", build_args: "" }
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +59,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platforms }}
+          build-args: ${{ matrix.build_args }}
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 

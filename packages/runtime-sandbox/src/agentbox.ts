@@ -244,6 +244,30 @@ export class AgentboxRunner implements SandboxRunner {
     await sandbox.findOrProvision();
     const id = sandbox.id ?? `unknown-${input.jobId}`;
     sandboxes.set(id, sandbox);
+    try {
+      const contractResult = await sandbox.run(
+        "test -d /workspace && test -x /bin/sh && cat /opt/deepsonar/tool-manifest.json",
+        { timeoutMs: 15_000 },
+      );
+      if (contractResult.exitCode !== 0) {
+        throw new RuntimeImageContractError("runtime image missing /workspace, /bin/sh, or tool manifest");
+      }
+      const manifest = JSON.parse(contractResult.stdout) as { contract?: string };
+      if (input.expectedContract && manifest.contract !== input.expectedContract) {
+        throw new RuntimeImageContractError(`runtime contract mismatch: expected ${input.expectedContract}, got ${manifest.contract ?? "missing"}`);
+      }
+      if (input.expectedToolsManifestSha256) {
+        const hashResult = await sandbox.run("sha256sum /opt/deepsonar/tool-manifest.json | cut -d' ' -f1", { timeoutMs: 5_000 });
+        if (hashResult.exitCode !== 0 || hashResult.stdout.trim() !== input.expectedToolsManifestSha256.replace(/^sha256:/, "")) {
+          throw new RuntimeImageContractError("tool manifest sha256 mismatch");
+        }
+      }
+    } catch (error) {
+      sandboxes.delete(id);
+      await sandbox.delete().catch(() => {});
+      if (error instanceof RuntimeImageContractError) throw error;
+      throw new RuntimeImageContractError(error instanceof Error ? error.message : String(error));
+    }
     return { sandboxId: id };
   }
 
@@ -277,6 +301,15 @@ export class AgentboxRunner implements SandboxRunner {
   /** 供 executor 取沙箱实例（上传种子文件 / 跑 agent / 读结果） */
   static sandboxOf(handle: RunHandle): Sandbox | undefined {
     return sandboxes.get(handle.sandboxId);
+  }
+}
+
+/** 调度器可据此区分供应链准入失败与普通 provision 故障。 */
+export class RuntimeImageContractError extends Error {
+  readonly code = "RUNTIME_IMAGE_CONTRACT";
+  constructor(message: string) {
+    super(message);
+    this.name = "RuntimeImageContractError";
   }
 }
 

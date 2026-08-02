@@ -7,6 +7,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/scheduler/package.json apps/scheduler/package.json
+COPY apps/image-admission/package.json apps/image-admission/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared-types/package.json packages/shared-types/package.json
 COPY packages/plane-client/package.json packages/plane-client/package.json

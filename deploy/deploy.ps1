@@ -110,7 +110,7 @@ try {
       }
       if (-not $ready) {
         & docker @ComposeArgs ps
-        & docker @ComposeArgs logs --tail 100 scheduler web
+        & docker @ComposeArgs logs --tail 100 scheduler image-admission web
         throw "Services did not become healthy within 120 seconds: $health"
       }
 

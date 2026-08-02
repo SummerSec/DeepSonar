@@ -68,6 +68,26 @@ services:
     logging: *default-logging
     networks: [deepsonar]
 
+  # 第三方镜像只在独立准入 Worker 中执行自检；Scheduler 只管理状态与审批。
+  image-admission:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.image-admission
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      DEEPSONAR_IMAGE_SCAN_VOLUME: deepsonar_admission_scan
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./master.key:/run/secrets/deepsonar_master_key:ro
+      - admission_scan:/scan
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+    networks: [deepsonar]
+
   web:
     build:
       context: ..
@@ -85,6 +105,8 @@ volumes:
   postgres_data:
   blob_data:
   backup_data:
+  admission_scan:
+    name: deepsonar_admission_scan
 
 networks:
   deepsonar:

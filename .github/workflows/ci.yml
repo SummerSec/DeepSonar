@@ -45,6 +45,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Runtime image definition consistency
+        run: pnpm ci:images
+
       - run: pnpm -r typecheck
 
       - run: pnpm -r build
@@ -71,6 +74,9 @@ jobs:
 
       - name: Roles API smoke
         run: python agent-harness/test-roles-api.py
+
+      - name: Runtime image marketplace API smoke
+        run: python agent-harness/test-runtime-images-api.py
 
       - name: Hub loop smoke
         env:
@@ -112,3 +118,37 @@ jobs:
           cat /tmp/scheduler-3100.log 2>/dev/null || true
           echo "===== scheduler :3101 ====="
           cat /tmp/scheduler-3101.log 2>/dev/null || true
+
+  runtime-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - toolset: base
+            dockerfile: deploy/Dockerfile.agent
+            build_args: TOOLSET=base
+            config: agent-harness/runtime-images.json
+          - toolset: audit
+            dockerfile: deploy/Dockerfile.agent
+            build_args: TOOLSET=audit
+            config: agent-harness/runtime-images.json
+          - toolset: kali-minimal
+            dockerfile: deploy/Dockerfile.agent-kali-minimal
+            build_args: ""
+            config: agent-harness/kali-minimal-runtime.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build official runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: deepsonar-${{ matrix.toolset }}:ci
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=runtime-${{ matrix.toolset }}
+          cache-to: type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
+      - name: Offline hardened smoke
+        run: node agent-harness/test-runtime-image.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}

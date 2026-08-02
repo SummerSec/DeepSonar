@@ -8,6 +8,7 @@ import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
 import { startPlaneSync } from "./plane-sync.js";
 import { startTransferWorker } from "./transfer/worker.js";
+import { bootstrapOfficialRuntimeImages } from "./runtime-images.js";
 
 async function main() {
   // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
@@ -20,6 +21,7 @@ async function main() {
   const applied = await migrate();
   if (applied.length > 0) console.log(`[boot] 已应用: ${applied.join(", ")}`);
   else console.log("[boot] schema 已就绪（无需变更）");
+  await bootstrapOfficialRuntimeImages();
 
   const app = Fastify({ logger: { level: "info" } });
   await app.register(websocket);

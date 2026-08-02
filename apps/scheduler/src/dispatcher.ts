@@ -160,7 +160,8 @@ async function runJob(jobId: string) {
       networkPolicy.allow_egress;
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
-    const runtimeImage = snapshot.runtime_image_key ?? config.runtime.imageAudit;
+    const runtimeImage = snapshot.runtime_image?.image_ref;
+    if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
     if (!(await transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
     handle = await withTimeout(
       runner.provision({
@@ -169,6 +170,8 @@ async function runJob(jobId: string) {
         env: useReal ? { DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0" } : undefined,
         network: useReal ? (allowEgress ? "egress" : "restricted") : "none",
         gatewayUpstreamUrl: useReal && !allowEgress ? config.gateway.sandboxUrl : undefined,
+        expectedContract: snapshot.runtime_image.contract_version,
+        expectedToolsManifestSha256: snapshot.runtime_image.tools_manifest_sha256,
         limits: config.runtime.sandboxLimits,
       }),
       config.timeouts.provisionSec * 1000,

@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 9);
+INSERT INTO schema_meta (id, version) VALUES ('global', 10);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -275,7 +275,7 @@ CREATE TABLE credentials (
   rotated_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   created_by text,
-  CONSTRAINT credentials_kind_check CHECK (kind IN ('llm_provider', 'plane', 'git')),
+  CONSTRAINT credentials_kind_check CHECK (kind IN ('llm_provider', 'plane', 'git', 'oci_registry')),
   CONSTRAINT credentials_status_check
     CHECK (status IN ('active', 'disabled', 'rotation_required'))
 );
@@ -336,6 +336,121 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER audit_logs_no_update BEFORE UPDATE OR DELETE ON audit_logs
   FOR EACH ROW EXECUTE FUNCTION audit_logs_append_only();
 
+-- 可信运行时镜像目录。产品身份与不可变版本分离；第三方版本先隔离后准入。
+CREATE TABLE runtime_images (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  image_key text NOT NULL UNIQUE,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  publisher text NOT NULL,
+  source_url text,
+  source_kind text NOT NULL DEFAULT 'third_party',
+  official boolean NOT NULL DEFAULT false,
+  project_opt_in boolean NOT NULL DEFAULT false,
+  enabled boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT runtime_images_key_check CHECK (image_key ~ '^[a-z][a-z0-9-]{1,62}$'),
+  CONSTRAINT runtime_images_source_kind_check CHECK (source_kind IN ('official', 'third_party'))
+);
+
+CREATE TABLE runtime_image_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  runtime_image_id uuid NOT NULL REFERENCES runtime_images(id) ON DELETE CASCADE,
+  version text NOT NULL,
+  image_ref text NOT NULL,
+  resolved_ref text,
+  digest text,
+  contract_version text NOT NULL DEFAULT 'deepsonar.runtime.contract/v1',
+  platforms_json jsonb NOT NULL DEFAULT '[]',
+  tools_json jsonb NOT NULL DEFAULT '[]',
+  tools_manifest_sha256 text,
+  sbom_json jsonb,
+  sbom_uri text,
+  signature_json jsonb,
+  scan_summary_json jsonb NOT NULL DEFAULT '{}',
+  size_bytes bigint,
+  trust_status text NOT NULL DEFAULT 'quarantined',
+  status_reason text,
+  imported_by text,
+  approved_by text,
+  scanned_at timestamptz,
+  approved_at timestamptz,
+  promoted_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT runtime_image_versions_trust_check CHECK (
+    trust_status IN ('quarantined', 'scanning', 'trusted', 'disabled', 'rejected', 'revoked')
+  ),
+  CONSTRAINT runtime_image_versions_digest_check CHECK (
+    digest IS NULL OR digest ~ '^sha256:[0-9a-f]{64}$'
+  ),
+  CONSTRAINT runtime_image_versions_resolved_ref_check CHECK (
+    resolved_ref IS NULL OR resolved_ref ~ '(^sha256:[0-9a-f]{64}$|@sha256:[0-9a-f]{64}$)'
+  ),
+  UNIQUE (runtime_image_id, version)
+);
+CREATE UNIQUE INDEX runtime_image_versions_digest_uniq
+  ON runtime_image_versions (runtime_image_id, digest) WHERE digest IS NOT NULL;
+CREATE INDEX runtime_image_versions_market_idx
+  ON runtime_image_versions (runtime_image_id, trust_status, promoted_at DESC, created_at DESC);
+
+CREATE TABLE runtime_image_scans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  runtime_image_version_id uuid NOT NULL REFERENCES runtime_image_versions(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'queued',
+  worker_id text,
+  attempts int NOT NULL DEFAULT 0,
+  result_json jsonb NOT NULL DEFAULT '{}',
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  finished_at timestamptz,
+  CONSTRAINT runtime_image_scans_status_check CHECK (
+    status IN ('queued', 'claimed', 'running', 'succeeded', 'failed')
+  )
+);
+CREATE INDEX runtime_image_scans_queue_idx ON runtime_image_scans (status, created_at);
+
+-- 漏洞库/规则库等只读数据层与镜像解耦，版本同样以 digest 追溯，不随镜像 tag 漂移。
+CREATE TABLE runtime_data_layers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  layer_key text NOT NULL UNIQUE,
+  name text NOT NULL,
+  tool_name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  enabled boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE runtime_data_layer_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  runtime_data_layer_id uuid NOT NULL REFERENCES runtime_data_layers(id) ON DELETE CASCADE,
+  version text NOT NULL,
+  source_url text NOT NULL,
+  digest text NOT NULL,
+  signature_json jsonb,
+  trust_status text NOT NULL DEFAULT 'quarantined',
+  published_at timestamptz,
+  approved_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT runtime_data_layer_digest_check CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
+  CONSTRAINT runtime_data_layer_trust_check CHECK (trust_status IN ('quarantined','trusted','disabled','revoked')),
+  UNIQUE (runtime_data_layer_id, digest)
+);
+
+CREATE TABLE project_runtime_images (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  runtime_image_id uuid NOT NULL REFERENCES runtime_images(id) ON DELETE CASCADE,
+  selected_version_id uuid REFERENCES runtime_image_versions(id),
+  enabled boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, runtime_image_id)
+);
+
 -- 角色运行配置（全局 project_id IS NULL + 项目级覆盖）
 CREATE TABLE role_configs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -353,7 +468,7 @@ CREATE TABLE role_configs (
   subagents_json jsonb NOT NULL DEFAULT '[]',
   platform_tools_json jsonb NOT NULL DEFAULT '{}',
   instructions_markdown text,
-  runtime_image_key text,
+  runtime_image_key text REFERENCES runtime_images(image_key),
   version int NOT NULL DEFAULT 1,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -428,6 +543,17 @@ INSERT INTO skill_sources (id, name, repo_url, branch, trust_status, enabled) VA
   ('f150e774-d237-57e4-847c-4800722f88ee', 'DeepSonar-Skills', 'https://github.com/SummerSec/DeepSonar-Skills.git', 'main', 'trusted', true)
 ON CONFLICT (name) DO NOTHING;
 
+INSERT INTO runtime_images (image_key, name, description, publisher, source_url, source_kind, official, project_opt_in, enabled) VALUES
+  ('deepsonar-base', 'DeepSonar Base', 'Explore、Analyze、Code 与 Hub 的官方最小运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
+  ('deepsonar-audit', 'DeepSonar Audit', 'Audit 与 Verify 的官方审计运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
+  ('deepsonar-kali-minimal', 'DeepSonar Kali Minimal', '按项目启用的精简 Kali 专项运行时；不安装 Kali metapackage 或 GUI', 'SummerSec + Kali Linux', 'https://www.kali.org/docs/containers/using-kali-docker-images/', 'official', true, true, true)
+ON CONFLICT (image_key) DO NOTHING;
+
+INSERT INTO runtime_data_layers (layer_key, name, tool_name, description, enabled) VALUES
+  ('trivy-db', 'Trivy Vulnerability Database', 'trivy', '受控更新的只读漏洞库；版本与扫描时间进入准入证据', false),
+  ('osv-db', 'OSV Offline Database', 'osv-scanner', '可选的离线 OSV 数据层；未审批版本不得挂载到运行时', false)
+ON CONFLICT (layer_key) DO NOTHING;
+
 INSERT INTO agent_roles (name, title, description, builtin, kind) VALUES
   ('explore', '探索', '围绕任务意图收集新的、可验证的事实与证据', true, 'role'),
   ('analyze', '分析', '关联已有事实，追踪数据流、评估影响并形成有证据的分析结论', true, 'role'),
@@ -443,8 +569,9 @@ ON CONFLICT (name) DO NOTHING;
 -- 首次建库内置一组可编辑的长期指令模板。平台会在每个 Job 中把模板与通用运行契约
 -- 合成为 /workspace/AGENTS.md 和 /workspace/CLAUDE.md；任务正文只经 CLI prompt 注入。
 -- 运行时不读取代码中的固定角色清单，Hub 始终从数据库查询当前可下发角色。
-INSERT INTO role_configs (role_id, agent_cli, instructions_markdown)
-SELECT r.id, 'claude-code', templates.instructions
+INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)
+SELECT r.id, 'claude-code', templates.instructions,
+       CASE WHEN r.name IN ('audit', 'verify') THEN 'deepsonar-audit' ELSE 'deepsonar-base' END
 FROM agent_roles r
 JOIN (VALUES
   ('explore', $instructions$

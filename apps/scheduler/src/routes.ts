@@ -66,6 +66,7 @@ import {
   resolvePlatformModules,
 } from "./transfer/platform.js";
 import { processExportRow } from "./transfer/worker.js";
+import { immutableDigest } from "./runtime-images.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -133,6 +134,25 @@ const TriggerTaskBody = z.object({
 });
 const PriorityBody = z.object({ priority: z.number().int() });
 const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
+
+const RuntimeImageImportBody = z.object({
+  image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(2_000).default(""),
+  publisher: z.string().trim().min(1).max(120),
+  source_url: z.string().url().optional(),
+  image_ref: z.string().trim().min(3).max(500),
+  version: z.string().trim().min(1).max(100).optional(),
+  registry_credential_id: z.string().uuid().optional(),
+});
+const RuntimeImageStatusBody = z.object({
+  status: z.enum(["trusted", "rejected", "disabled", "revoked"]),
+  reason: z.string().trim().min(1).max(2_000).optional(),
+});
+const ProjectRuntimeImageBody = z.object({
+  enabled: z.boolean().default(true),
+  version_id: z.string().uuid().nullish(),
+});
 
 export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
@@ -753,6 +773,236 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // ---------- 可信运行时镜像目录 / 市场（P1-P3） ----------
+
+  app.get("/runtime-images", async (req, reply) => {
+    const query = req.query as { project_id?: string; search?: string };
+    if (req.actor?.projectId && query.project_id && query.project_id !== req.actor.projectId) {
+      return reply.code(403).send({ error: `token 仅限项目 ${req.actor.projectId}` });
+    }
+    const projectId = query.project_id ?? null;
+    const search = query.search?.trim() ? `%${query.search.trim()}%` : null;
+    return sql`
+      SELECT ri.id, ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url,
+             ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.created_at, ri.updated_at,
+             pri.enabled AS project_enabled, pri.selected_version_id,
+             latest.id AS latest_version_id, latest.version AS latest_version,
+             latest.digest, latest.resolved_ref, latest.platforms_json, latest.tools_json,
+             latest.tools_manifest_sha256, latest.trust_status, latest.scan_summary_json,
+             latest.size_bytes, latest.scanned_at, latest.approved_at, latest.promoted_at
+      FROM runtime_images ri
+      LEFT JOIN project_runtime_images pri
+        ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+      LEFT JOIN LATERAL (
+        SELECT v.* FROM runtime_image_versions v
+        WHERE v.runtime_image_id = ri.id
+        ORDER BY v.promoted_at DESC NULLS LAST, v.created_at DESC
+        LIMIT 1
+      ) latest ON true
+      WHERE (${search}::text IS NULL OR ri.name ILIKE ${search} OR ri.image_key ILIKE ${search}
+             OR ri.publisher ILIKE ${search})
+      ORDER BY ri.official DESC, ri.name`;
+  });
+
+  app.get("/runtime-images/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [image] = await sql`SELECT * FROM runtime_images WHERE id = ${id}`;
+    if (!image) return reply.code(404).send({ error: "runtime image not found" });
+    const versions = await sql`
+      SELECT v.*,
+             COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.created_at DESC)
+                       FROM runtime_image_scans s WHERE s.runtime_image_version_id = v.id), '[]'::jsonb) AS scans
+      FROM runtime_image_versions v WHERE v.runtime_image_id = ${id}
+      ORDER BY v.promoted_at DESC NULLS LAST, v.created_at DESC`;
+    return { image, versions };
+  });
+
+  app.post("/runtime-images/import", async (req, reply) => {
+    const body = RuntimeImageImportBody.parse(req.body);
+    if (!config.images.isRegistryAllowed(body.image_ref)) {
+      return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
+    }
+    if (body.registry_credential_id) {
+      const [credential] = await sql`
+        SELECT id FROM credentials WHERE id = ${body.registry_credential_id}
+          AND kind = 'oci_registry' AND status = 'active'`;
+      if (!credential) return reply.code(400).send({ error: "registry Credential 不存在或不可用" });
+    }
+    const digest = immutableDigest(body.image_ref);
+    const versionName = body.version ?? (digest ? digest.slice(7, 19) : body.image_ref.split(":").at(-1) ?? "imported");
+    try {
+      const result = await sql.begin(async (tx) => {
+        const [existing] = await tx`SELECT id, official FROM runtime_images WHERE image_key = ${body.image_key}`;
+        if (existing?.official) throw new Error("不能通过第三方导入 API 覆盖官方镜像");
+        const [image] = existing
+          ? await tx`
+              UPDATE runtime_images SET name = ${body.name}, description = ${body.description},
+                publisher = ${body.publisher}, source_url = ${body.source_url ?? null}, updated_at = now()
+              WHERE id = ${existing.id as string} RETURNING *`
+          : await tx`
+              INSERT INTO runtime_images ${tx({
+                image_key: body.image_key,
+                name: body.name,
+                description: body.description,
+                publisher: body.publisher,
+                source_url: body.source_url ?? null,
+                source_kind: "third_party",
+                official: false,
+                enabled: true,
+              })} RETURNING *`;
+        const [version] = await tx`
+          INSERT INTO runtime_image_versions ${tx({
+            runtime_image_id: image.id,
+            version: versionName,
+            image_ref: body.image_ref,
+            resolved_ref: digest ? body.image_ref : null,
+            digest,
+            trust_status: "quarantined",
+            imported_by: req.actor?.name ?? "internal",
+          } as never)} RETURNING *`;
+        const [scan] = await tx`
+          INSERT INTO runtime_image_scans ${tx({
+            runtime_image_version_id: version.id,
+            result_json: body.registry_credential_id
+              ? { registry_credential_id: body.registry_credential_id } as never
+              : {} as never,
+          } as never)} RETURNING *`;
+        return { image, version, scan };
+      });
+      await audit(req, {
+        action: "runtime_image.import",
+        resourceType: "runtime_image_version",
+        resourceId: result.version.id as string,
+        after: { image_key: body.image_key, image_ref: body.image_ref, trust_status: "quarantined" },
+      });
+      return reply.code(202).send(result);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as { code: string }).code === "23505") {
+        return reply.code(409).send({ error: "该镜像版本或 digest 已导入" });
+      }
+      throw error;
+    }
+  });
+
+  app.post("/runtime-image-versions/:id/rescan", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [version] = await sql`
+      UPDATE runtime_image_versions SET
+        trust_status = CASE WHEN trust_status = 'trusted' THEN 'trusted' ELSE 'quarantined' END,
+        status_reason = NULL, updated_at = now()
+      WHERE id = ${id} AND trust_status <> 'revoked' RETURNING id`;
+    if (!version) return reply.code(404).send({ error: "version not found or revoked" });
+    const [scan] = await sql`
+      INSERT INTO runtime_image_scans (runtime_image_version_id) VALUES (${id}) RETURNING *`;
+    await audit(req, { action: "runtime_image.rescan", resourceType: "runtime_image_version", resourceId: id });
+    return reply.code(202).send(scan);
+  });
+
+  app.post("/runtime-image-versions/:id/status", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = RuntimeImageStatusBody.parse(req.body);
+    if ((body.status === "rejected" || body.status === "revoked") && !body.reason) {
+      return reply.code(400).send({ error: `${body.status} 必须填写 reason` });
+    }
+    const [before] = await sql`
+      SELECT v.*, ri.image_key FROM runtime_image_versions v
+      JOIN runtime_images ri ON ri.id = v.runtime_image_id WHERE v.id = ${id}`;
+    if (!before) return reply.code(404).send({ error: "version not found" });
+    if (body.status === "trusted") {
+      const [scan] = await sql`
+        SELECT id, status FROM runtime_image_scans WHERE runtime_image_version_id = ${id}
+        ORDER BY created_at DESC LIMIT 1`;
+      if (!scan || scan.status !== "succeeded" || !before.resolved_ref || !before.digest) {
+        return reply.code(409).send({ error: "版本最新一次准入扫描未通过或未固定 digest" });
+      }
+    }
+    const now = new Date();
+    const [version] = await sql`
+      UPDATE runtime_image_versions SET
+        trust_status = ${body.status}, status_reason = ${body.reason ?? null}, updated_at = now(),
+        approved_by = ${body.status === "trusted" ? req.actor?.name ?? "internal" : before.approved_by},
+        approved_at = ${body.status === "trusted" ? now : before.approved_at},
+        promoted_at = ${body.status === "trusted" ? now : before.promoted_at},
+        revoked_at = ${body.status === "revoked" ? now : before.revoked_at}
+      WHERE id = ${id} RETURNING *`;
+
+    if (body.status === "revoked") {
+      const affected = await sql`
+        UPDATE jobs SET status = 'cancelled', finished_at = now(), error = ${`runtime image revoked: ${body.reason}`}
+        WHERE agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        RETURNING id, sandbox_id`;
+      for (const job of affected) {
+        if (job.sandbox_id) await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
+      }
+    }
+    await audit(req, {
+      action: `runtime_image.${body.status}`,
+      resourceType: "runtime_image_version",
+      resourceId: id,
+      before: { trust_status: before.trust_status },
+      after: { trust_status: body.status, reason: body.reason ?? null },
+    });
+    return version;
+  });
+
+  app.get("/runtime-image-versions/:id/usage", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [version] = await sql`SELECT id FROM runtime_image_versions WHERE id = ${id}`;
+    if (!version) return reply.code(404).send({ error: "version not found" });
+    const jobs = await sql`
+      SELECT j.id, j.project_id, p.name AS project_name, j.canvas_id, c.title AS canvas_title,
+             j.type, j.status, j.created_at, j.finished_at,
+             (SELECT count(*)::int FROM findings f WHERE f.job_id = j.id) AS finding_count
+      FROM jobs j
+      JOIN projects p ON p.id = j.project_id
+      LEFT JOIN canvases c ON c.id = j.canvas_id
+      WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
+      ORDER BY j.created_at DESC LIMIT 1000`;
+    const projects = await sql`
+      SELECT DISTINCT p.id, p.name
+      FROM jobs j JOIN projects p ON p.id = j.project_id
+      WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
+      ORDER BY p.name`;
+    const findings = await sql`
+      SELECT f.id, f.project_id, j.canvas_id, f.job_id, f.title, f.severity, f.verify_status, f.created_at
+      FROM findings f JOIN jobs j ON j.id = f.job_id
+      WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
+      ORDER BY f.created_at DESC LIMIT 1000`;
+    return { version_id: id, projects, jobs, findings };
+  });
+
+  app.put("/projects/:id/runtime-images/:imageId", async (req, reply) => {
+    const { id, imageId } = req.params as { id: string; imageId: string };
+    const body = ProjectRuntimeImageBody.parse(req.body);
+    const [image] = await sql`SELECT id, enabled FROM runtime_images WHERE id = ${imageId}`;
+    if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
+    const [version] = body.version_id
+      ? await sql`SELECT id FROM runtime_image_versions WHERE id = ${body.version_id} AND runtime_image_id = ${imageId} AND trust_status = 'trusted'`
+      : await sql`SELECT id FROM runtime_image_versions WHERE runtime_image_id = ${imageId} AND trust_status = 'trusted' LIMIT 1`;
+    if (body.enabled && !version) return reply.code(409).send({ error: "镜像没有可启用的可信版本" });
+    const [row] = await sql`
+      INSERT INTO project_runtime_images ${sql({
+        project_id: id,
+        runtime_image_id: imageId,
+        selected_version_id: body.version_id ?? null,
+        enabled: body.enabled,
+      } as never)}
+      ON CONFLICT (project_id, runtime_image_id) DO UPDATE SET
+        selected_version_id = EXCLUDED.selected_version_id,
+        enabled = EXCLUDED.enabled,
+        updated_at = now()
+      RETURNING *`;
+    await audit(req, {
+      action: "runtime_image.project_binding",
+      resourceType: "runtime_image",
+      resourceId: imageId,
+      projectId: id,
+      after: { enabled: body.enabled, selected_version_id: body.version_id ?? null },
+    });
+    return row;
+  });
+
   // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
 
   const RoleConfigPutBody = z.object({
@@ -783,8 +1033,18 @@ export function registerRoutes(app: FastifyInstance) {
     for (const key of body.env_keys) {
       if (!config.runtime.isEnvKeyAllowed(key)) return `env_key 不在白名单: ${key}`;
     }
-    if (body.runtime_image_key && !config.images.isTrusted(body.runtime_image_key)) {
-      return `runtime_image_key 不在服务端可信镜像目录: ${body.runtime_image_key}`;
+    if (body.runtime_image_key) {
+      const [image] = await sql`
+        SELECT ri.id, ri.official, ri.project_opt_in,
+               EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted') AS has_trusted,
+               pri.enabled AS project_enabled
+        FROM runtime_images ri
+        LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+        WHERE ri.image_key = ${body.runtime_image_key} AND ri.enabled = true`;
+      if (!image || !image.has_trusted) return `runtime_image_key 没有可信版本: ${body.runtime_image_key}`;
+      if ((!image.official || image.project_opt_in) && (!projectId || image.project_enabled !== true)) {
+        return `镜像必须先在目标项目显式启用: ${body.runtime_image_key}`;
+      }
     }
     const allowedTools = new Set<string>(allowedPlatformTools(role.name, role.kind));
     for (const tool of Object.keys(body.platform_tools)) {
@@ -1900,7 +2160,7 @@ export function registerRoutes(app: FastifyInstance) {
 
   const CredentialBody = z.object({
     name: z.string().trim().min(1).max(100),
-    kind: z.enum(["llm_provider", "plane", "git"]).default("llm_provider"),
+    kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]).default("llm_provider"),
     provider: z.string().trim().min(1).max(50),
     secret: z.string().min(1).max(4096),
     project_id: z.string().uuid().nullable().optional(),
@@ -1962,11 +2222,18 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.post("/credentials", async (req, reply) => {
     const body = CredentialBody.parse(req.body);
-    if (!isProviderKnown(body.provider)) {
+    if (body.kind !== "oci_registry" && !isProviderKnown(body.provider)) {
       return reply.code(400).send({ error: `未知 provider: ${body.provider}（固定映射表外的 provider 不允许登记）` });
     }
     if (body.kind !== "llm_provider" && (allowedModelIds(body.metadata).length > 0 || credentialConcurrencyPolicy(body.metadata).maxConcurrent !== null)) {
       return reply.code(400).send({ error: "只有 llm_provider Credential 可设置模型或运行并发" });
+    }
+    if (body.kind === "oci_registry") {
+      const registry = typeof body.metadata.registry === "string" ? body.metadata.registry.trim().toLowerCase() : "";
+      const username = typeof body.metadata.username === "string" ? body.metadata.username.trim() : "";
+      if (!registry || !username || !config.images.isRegistryAllowed(`${registry}/probe`)) {
+        return reply.code(400).send({ error: "OCI Registry Credential 必须提供允许列表内的 metadata.registry 与 metadata.username" });
+      }
     }
     let enc: Encrypted;
     try {

@@ -11,6 +11,9 @@ export interface ProvisionInput {
   network: "none" | "restricted" | "egress";
   /** restricted 模式由固定目标 sidecar 代理的调度器模型 Gateway。 */
   gatewayUpstreamUrl?: string;
+  /** 市场准入时冻结的镜像契约与工具清单摘要；provision 后再次复核。 */
+  expectedContract?: string;
+  expectedToolsManifestSha256?: string | null;
   /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
   limits?: SandboxLimits;
 }
@@ -51,6 +54,7 @@ export class NoopRunner implements SandboxRunner {
 }
 
 export { AgentboxRunner, forceRemoveContainer, listDeepSonarContainers, runRealAgent } from "./agentbox.js";
+export { RuntimeImageContractError } from "./agentbox.js";
 export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort } from "./agentbox.js";
 export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 export type {

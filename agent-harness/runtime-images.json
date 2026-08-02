@@ -1,0 +1,75 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "apt": {
+    "git": { "version": "1:2.39.5-0+deb12u3", "license": "GPL-2.0-only", "capabilities": ["source-control"] },
+    "python3": { "version": "3.11.2-1+b1", "license": "PSF-2.0", "capabilities": ["python-runtime"] },
+    "python3-venv": { "version": "3.11.2-1+b1", "license": "PSF-2.0", "capabilities": ["python-runtime"], "toolsets": ["audit"] },
+    "ca-certificates": { "version": "20230311+deb12u1", "license": "MPL-2.0", "capabilities": ["tls"] },
+    "curl": { "version": "7.88.1-10+deb12u15", "license": "curl", "capabilities": ["http-client"] },
+    "ripgrep": { "version": "13.0.0-4+b2", "license": "MIT OR Unlicense", "capabilities": ["search"] },
+    "jq": { "version": "1.6-2.1+deb12u2", "license": "MIT", "capabilities": ["json"] },
+    "file": { "version": "1:5.44-3", "license": "BSD-2-Clause", "capabilities": ["file-identification"] },
+    "unzip": { "version": "6.0-28", "license": "Info-ZIP", "capabilities": ["archive"] },
+    "xz-utils": { "version": "5.4.1-1", "license": "0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later", "capabilities": ["archive"] },
+    "binutils": { "version": "2.40-2", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"], "toolsets": ["audit"] }
+  },
+  "npm": {
+    "@anthropic-ai/claude-code": { "version": "2.1.220", "license": "Commercial", "capabilities": ["agent-runtime"] }
+  },
+  "downloads": {
+    "semgrep": {
+      "version": "1.172.0",
+      "license": "LGPL-2.1-only",
+      "capabilities": ["sast"],
+      "toolsets": ["audit"],
+      "assets": {
+        "amd64": {
+          "url": "https://files.pythonhosted.org/packages/84/a5/21624510b65271a673961a894af7511b5123d662e84c74c765560ea28b27/semgrep-1.172.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl",
+          "sha256": "d8b94af4266a575287ad2cd844573743ab4fe58f6bfb6d9229327807937eade3"
+        },
+        "arm64": {
+          "url": "https://files.pythonhosted.org/packages/1b/45/35488f2f609db23eed350ada093722484a6f8cb3b1eaf8ecfd54e2338521/semgrep-1.172.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_aarch64.whl",
+          "sha256": "c881a305b965e594b88b15c2c6419b398e76e438ec61e60916c8b2effe927240"
+        }
+      }
+    },
+    "gitleaks": {
+      "version": "8.30.1",
+      "license": "MIT",
+      "capabilities": ["secret-scan"],
+      "toolsets": ["audit"],
+      "assets": {
+        "amd64": {
+          "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+          "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        },
+        "arm64": {
+          "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz",
+          "sha256": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
+        }
+      }
+    },
+    "shellcheck": {
+      "version": "0.11.0",
+      "license": "GPL-3.0-or-later",
+      "capabilities": ["shell-analysis"],
+      "toolsets": ["audit"],
+      "assets": {
+        "amd64": {
+          "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz",
+          "sha256": "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+        },
+        "arm64": {
+          "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz",
+          "sha256": "12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+        }
+      }
+    }
+  },
+  "toolsets": {
+    "base": { "imageKey": "deepsonar-base", "description": "Explore, Analyze, Code and Hub runtime", "maxSizeMiB": 260 },
+    "audit": { "imageKey": "deepsonar-audit", "description": "Audit and Verify runtime with deterministic security tools", "maxSizeMiB": 400 }
+  }
+}
