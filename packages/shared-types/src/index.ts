@@ -159,6 +159,10 @@ export function allowedPlatformTools(
   roleName: string,
   roleKind: "role" | "hub" | "system",
 ): PlatformToolName[] {
+  // verify/report 必须形成确定性终态：
+  // - verify 通过 verdict=needs_human 收口 Finding；request_human 只会让 Job 停在 waiting_human。
+  // - report 只消费冻结输入；输入损坏应让 Job 失败并重试，不能停在人工等待。
+  const canRequestHuman = roleName !== "verify" && roleName !== "report";
   return [
     ...(roleKind === "hub" ? (["list_available_roles"] as PlatformToolName[]) : []),
     "emit_progress",
@@ -166,7 +170,7 @@ export function allowedPlatformTools(
     ...(roleName === "audit" ? (["emit_finding"] as PlatformToolName[]) : []),
     ...(roleKind === "hub" ? (["submit_hub_decision"] as PlatformToolName[]) : []),
     "mark_job_done",
-    "request_human",
+    ...(canRequestHuman ? (["request_human"] as PlatformToolName[]) : []),
   ];
 }
 

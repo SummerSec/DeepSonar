@@ -61,7 +61,11 @@ def main() -> None:
     assert all("### 平台工具使用" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
     assert all("emit_progress" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
     assert all("mark_job_done" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
-    assert all("request_human" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
+    assert all("request_human" in by_prompt for by_prompt in [
+        (c.get("instructions_markdown") or "")
+        for c in global_configs
+        if c.get("role_name") not in {"verify", "report"}
+    ]), global_configs
     assert all("accepted event" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
     assert all(c.get("platform_tools_json") == {} for c in global_configs), global_configs
     by_role = {c["role_name"]: c.get("instructions_markdown") or "" for c in global_configs}
@@ -71,6 +75,10 @@ def main() -> None:
     assert "list_available_roles" in by_role["hub_reason"]
     assert "submit_hub_decision" in by_role["hub_reason"]
     assert "confirmed" in by_role["verify"] and "rework" in by_role["verify"]
+    assert "不使用 `request_human`" in by_role["verify"]
+    assert "不使用 `request_human`" in by_role["report"]
+    assert "唯一权威" in by_role["verify"] and "唯一权威" in by_role["report"]
+    assert "audit/explore" in by_role["hub_reason"] and "不得" in by_role["hub_reason"]
     hub_cfg = next(c for c in global_configs if c["role_name"] == "hub_reason")
     code, _ = req(
         "PUT",
