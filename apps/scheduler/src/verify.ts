@@ -651,6 +651,7 @@ export async function maybeReverifyAfterFollowup(
 export function buildVerificationFollowupPayload(
   trigger: Record<string, unknown> | undefined,
   intentFrom: string[] | undefined,
+  role: string,
 ): Record<string, unknown> | null {
   if (!trigger) return null;
   const kind = String(trigger.kind ?? "");
@@ -662,9 +663,9 @@ export function buildVerificationFollowupPayload(
     : ["independent_review", "runtime_test"];
   return {
     finding_id: findingId,
-    required_evidence: missing.includes("independent_review") && missing.includes("runtime_test")
-      ? ["review", "test"]
-      : missing.map((m) => (m.includes("review") ? "review" : m.includes("test") ? "test" : m)),
+    // 每个补证 Job 只承担一种证据职责；服务端接收证据时再次校验 role ↔ evidence_kind。
+    required_evidence: [role],
+    missing_evidence: missing,
     trigger_kind: kind,
     from: intentFrom ?? [],
   };
@@ -687,6 +688,15 @@ export async function attachVerificationEvidence(
     return false;
   }
   const ver: VerificationEvidenceType = parsed.data;
+
+  // built-in 补证职责不可由 Agent 自报冒充：review 只能提交 review，test 只能提交 test。
+  // Hub 的 verify_rework/verify_failed 路径也只允许创建这两类 Job。
+  if (String(job.type ?? "") !== ver.evidence_kind) {
+    console.warn(
+      `[verify] ignore evidence kind ${ver.evidence_kind} from role ${String(job.type)} on job ${String(job.id)}`,
+    );
+    return false;
+  }
 
   const payload = (job.payload_json ?? {}) as Record<string, unknown>;
   const vf = payload.verification_followup as { finding_id?: string } | undefined;

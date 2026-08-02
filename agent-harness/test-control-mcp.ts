@@ -39,6 +39,13 @@ const hubTools = resolvePlatformTools("hub_reason", "hub", { list_available_role
 for (const required of ["list_available_roles", "submit_hub_decision", "mark_job_done"]) {
   if (!hubTools.some((name) => name === required)) throw new Error(`required Hub tool was disabled: ${required}`);
 }
+for (const systemRole of ["verify", "report"]) {
+  const tools = resolvePlatformTools(systemRole, "system", {});
+  if (tools.includes("request_human")) {
+    throw new Error(`${systemRole} must converge through mark_job_done instead of request_human`);
+  }
+  if (!tools.includes("mark_job_done")) throw new Error(`${systemRole} missing required mark_job_done`);
+}
 
 const availableRoles = new Set(["review"]);
 if (!parseHubDecision(JSON.stringify({ intents: [{ from: [], role: "review", description: "复核", prompt: "执行复核" }] }), availableRoles)) {

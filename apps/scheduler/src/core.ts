@@ -751,6 +751,21 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
       }
     }
 
+    const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
+      kind?: string;
+      finding_id?: string;
+      missing_evidence?: string[];
+    };
+    if (["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")) {
+      for (const it of intents) {
+        if (it.role !== "review" && it.role !== "test") {
+          throw new Error(
+            `Verify 补证只允许派发 review/test，收到 ${it.role ?? "<missing>"}`,
+          );
+        }
+      }
+    }
+
     for (const it of intents) {
       if (!it.description?.trim() || !it.prompt?.trim()) continue;
       if (roles.length === 0) {
@@ -769,18 +784,14 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
       // 服务端硬边界：只接受数据库实时查询出的项目可用工作角色，不做默认或回退。
       const role = it.role!;
       const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, job.project_id as string, role);
-      const trigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
-        kind?: string;
-        finding_id?: string;
-        missing_evidence?: string[];
-      };
+      const trigger = decisionTrigger;
       // verify_rework/verify_failed 补证不得 hub_followup：否则每个补证成功都会 force Hub，
       // 与「全部补证终态后 maybeReverifyAfterFollowup」冲突。
       const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
         trigger.kind ?? "",
       );
       const { buildVerificationFollowupPayload } = await import("./verify.js");
-      const verificationFollowup = buildVerificationFollowupPayload(trigger, it.from);
+      const verificationFollowup = buildVerificationFollowupPayload(trigger, it.from, role);
       // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
       const applyHubFollowup = hubFollowup && !verificationFollowup;
       const [roleJob] = await tx`

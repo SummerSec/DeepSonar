@@ -154,29 +154,29 @@ loop:
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
-  7. Hub 派发 audit 等角色；Finding 一律派生 verify Job，confirmed 再强制进入 Hub 风险验收
+  7. Hub 派发 audit 等角色；每个 Finding 一律自动进入多轮 verify，rework 强制回弹 Hub 补证；全部 Finding 收敛为 confirmed/needs_human 后自动生成 Report
 ```
 
 ### 4.3 审计 → 验证链（单一决策点）
 
 1. `hub_reason` 根据目标派发 `audit` 等角色，审计角色输出结构化 Finding
 2. Finding 只是待证实假设，**所有严重级别都必须自动派生验证**，不由人或前端决定
-3. 派生前按 `fingerprint` 去重：同一 finding 已存在 verify Job（任何状态）→ 不重复派生
-4. 调度器创建 verify Job，输入 = finding 快照 + 源码位置
-5. 验证 Worker 结果：`confirmed` / `false_positive` / `needs_human`，边方向为 `Finding → Verify`
-6. `confirmed` 强制触发 Hub 风险验收；Hub 自主决定是否继续派发环境搭建、PoC、动态复现和影响分析，子 Agent 结果再次回到 Hub 收敛
+3. 派生前按 `fingerprint` 去重；同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
+4. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
+5. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
+6. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。全部 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 自动派生唯一 Report
 
 **护栏**（同时是防注入措施，见 §9）：
 
 - 每 Job 最大 followup 数 `MAX_FOLLOWUPS_PER_JOB`（默认 60）
 - 派生深度上限 `MAX_FOLLOWUP_DEPTH`（默认 12；verify 的结果仍由规则引擎约束，不由 Agent 自行派生）
-- 超出上限 → 自动转 `request_human`
+- 超出验证轮次、派生深度或 Hub 轮次护栏 → Finding 收口为 `needs_human` 并记录 human blocker；随后仍可进入报告的待人工章节
 
 ### 4.4 人工介入与恢复
 
 - `request_human` → Job 转 `waiting_human`，Plane 标 Blocked，画布出 human 节点
 - 人处理完后调用 `POST /jobs/{id}/resume` → Job 重新入队（`pending`），恢复上下文从 events/findings 表重建
-- 验证结果 `needs_human` 同理，人在画布或 Plane 上标注结论后闭环
+- 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径，而是用 verdict=`needs_human` 把 Finding 收口为可报告终态
 
 ---
 
@@ -490,12 +490,12 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 ### Phase 3 — 派生验证（约 1 周）
 
-- [ ] 规则引擎（高危必验）+ fingerprint 去重 + 深度/频次护栏
-- [ ] verify Worker（独立沙箱策略）+ `verifies` 边
-- [ ] `request_human` / `resume` 完整流转
+- [x] 规则引擎（全部 Finding 自动验证）+ fingerprint 去重 + 多轮/深度/频次护栏
+- [x] verify Worker（独立沙箱策略）+ 冻结证据快照 + `verifies` 边
+- [x] 普通 Worker `request_human` / `resume` 与 Verify `needs_human` 收口分流
 - [ ] Plane 可选自动建子 Issue
 
-**验收**：审计 high 洞自动出现验证节点并跑完；重复 finding 不重复派生。
+**验收**：任意严重度 Finding 自动出现验证节点；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；全部 Finding 收敛后自动生成完整报告。
 
 ### Phase 4 — 多项目与打磨（持续）
 
@@ -623,7 +623,7 @@ CANVAS_LAYOUT=auto
 - **单 Scheduler 实例**：MVP 假设单实例运行，claim 靠 DB 唯一约束兜底。多实例扩展时改用 `SELECT ... FOR UPDATE SKIP LOCKED` 竞争领取，接口不变
 - **DB 轮询而非 Webhook/Redis**：延迟秒级可接受；二期再升级
 - **画布不做多人协同编辑**：第一期只读展示 + 服务端写入；协同编辑是二期候选
-- **verify 不自动派生下游**：深度上限 2，验证结论最终由规则或人闭环，防止链式失控
+- **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
 - **运行时选 TwillAI/agentbox-sdk（MIT）**：TS SDK 统一驱动沙箱与 Agent，事件走控制通道不经沙箱网络（化解"审计沙箱断网"与"事件回调"的矛盾，沙箱内零凭据）。已知风险：0.1.x 早期项目（2026-07 仍活跃），靠 runtime-adapter 接口隔离，最坏情况 fork local-docker provider（代码薄）
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
 - **不做 token 成本配额**（明确决策，如需观测后期再加用量字段）

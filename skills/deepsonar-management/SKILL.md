@@ -89,6 +89,7 @@ python scripts/deepsonar-api.py roles update <roleId> --data '{"description":"..
 python scripts/deepsonar-api.py roles delete <roleId>
 python scripts/deepsonar-api.py role-configs global
 python scripts/deepsonar-api.py role-configs global-put <roleId> --data @role-config.json
+python scripts/deepsonar-api.py role-configs sync-builtin-prompts [--dry-run] [--schema database/schema.sql]
 python scripts/deepsonar-api.py role-configs list <projectId>
 python scripts/deepsonar-api.py role-configs put <projectId> <roleId> --data @role-config.json
 python scripts/deepsonar-api.py role-configs delete <projectId> <roleId>
