@@ -13,7 +13,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
 import { elkLayout, layoutNodes, NODE_W } from "./layout";
-import { nodeTypes } from "./nodes";
+import { nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
 import { Sidebar } from "./Sidebar";
 
 /** 边语义色与流速；颜色表达关系，动画表达方向。 */
@@ -74,8 +74,15 @@ function Legend() {
     { color: EDGE_STYLE.child.stroke, label: "child 包含" },
   ];
   return (
-    <div className="surface-shell absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] rounded-[17px] p-1">
+    <div className="surface-shell absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] rounded-[17px] p-1" style={{ position: "absolute" }}>
       <div className="surface-core flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[13px] px-3 py-2">
+        {(["intent", "hub", "finding", "subagent", "verify"] as SemanticNodeKind[]).map((kind) => (
+          <span key={kind} className="flex items-center gap-1.5">
+            <span className="inline-block size-2 rounded-full" style={{ background: SEMANTIC_STYLE[kind].color }} />
+            <span className="font-mono text-[9px] text-zinc-500">{SEMANTIC_STYLE[kind].label}</span>
+          </span>
+        ))}
+        <span className="mx-1 h-3 w-px bg-white/[.08]" />
         {items.map((it) => (
           <span key={it.label} className="flex items-center gap-1.5">
             <span className="inline-block h-px w-3 rounded" style={{ background: it.color }} />
@@ -92,6 +99,12 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [elkPos, setElkPos] = useState<Map<string, { x: number; y: number }> | null>(null);
+  const [kindFilter, setKindFilter] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [query, setQuery] = useState("");
+  const [showContext, setShowContext] = useState(true);
   const rf = useRef<ReactFlowInstance | null>(null);
 
   // §6.4：MVP 轮询刷新（5s）；WS 二期
@@ -130,8 +143,40 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     [data, elkPos],
   );
 
+  const roleOptions = useMemo(() => {
+    if (!data) return [];
+    return Array.from(new Set(data.nodes.map((n) => String(n.body_json?.role ?? (n.node_type === "job" ? n.body_json?.type ?? "" : ""))).filter(Boolean))).sort();
+  }, [data]);
+  const statusOptions = useMemo(() => data ? Array.from(new Set(data.nodes.map((n) => n.status ?? "").filter(Boolean))).sort() : [], [data]);
+  const filterActive = Boolean(kindFilter || severityFilter || roleFilter || statusFilter || query.trim());
+  const { visibleNodes, visibleEdges, matchedCount } = useMemo(() => {
+    if (!data || !filterActive) return { visibleNodes: nodes, visibleEdges: edges, matchedCount: nodes.length };
+    const needle = query.trim().toLowerCase();
+    const matched = new Set(data.nodes.filter((n) => {
+      const role = String(n.body_json?.role ?? (n.node_type === "job" ? n.body_json?.type ?? "" : ""));
+      const severity = String(n.body_json?.severity ?? "");
+      const searchable = `${n.title} ${n.node_type} ${role} ${severity} ${n.status ?? ""}`.toLowerCase();
+      return (!kindFilter || semanticNodeKind(n) === kindFilter) && (!severityFilter || severity === severityFilter) && (!roleFilter || role === roleFilter) && (!statusFilter || n.status === statusFilter) && (!needle || searchable.includes(needle));
+    }).map((n) => n.id));
+    const visible = new Set(matched);
+    if (showContext) {
+      for (const edge of data.edges) {
+        if (matched.has(edge.from_node_id) || matched.has(edge.to_node_id)) {
+          visible.add(edge.from_node_id);
+          visible.add(edge.to_node_id);
+        }
+      }
+      for (const root of data.nodes.filter((n) => n.node_type === "root")) visible.add(root.id);
+    }
+    return {
+      visibleNodes: nodes.filter((n) => visible.has(n.id)),
+      visibleEdges: edges.filter((e) => visible.has(e.source) && visible.has(e.target)),
+      matchedCount: matched.size,
+    };
+  }, [data, edges, filterActive, kindFilter, nodes, query, roleFilter, severityFilter, showContext, statusFilter]);
+
   // 图生长（节点数变化）时自动 fitView；普通轮询不打扰用户视角
-  const nodeCount = nodes.length;
+  const nodeCount = visibleNodes.length;
   const prevCount = useRef(0);
   useEffect(() => {
     if (nodeCount > 0 && nodeCount !== prevCount.current) {
@@ -170,8 +215,8 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   return (
     <div className="relative h-full w-full">
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={visibleNodes}
+        edges={visibleEdges}
         nodeTypes={nodeTypes}
         onNodeClick={onNodeClick}
         onInit={(i) => (rf.current = i)}
@@ -188,12 +233,26 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         <MiniMap
           pannable
           zoomable
-          nodeColor="#2a2a31"
+          nodeColor={(node) => {
+            const canvasNode = (node.data as { canvas?: CanvasNode }).canvas;
+            return canvasNode ? SEMANTIC_STYLE[semanticNodeKind(canvasNode)].color : "#2a2a31";
+          }}
           nodeStrokeColor="#3f3f48"
           position="top-right"
           style={{ width: 140, height: 90 }}
         />
       </ReactFlow>
+      <div className="surface-shell absolute left-3 top-3 z-10 max-w-[calc(100%-12rem)] rounded-[18px] p-1" style={{ position: "absolute" }}>
+        <div className="surface-core flex flex-wrap items-end gap-2 rounded-[14px] px-3 py-2">
+          <label className="flex min-w-32 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">节点类型<select aria-label="节点类型" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部类型</option>{Object.entries(SEMANTIC_STYLE).map(([value, meta]) => <option key={value} value={value}>{meta.label}</option>)}</select></label>
+          <label className="flex min-w-28 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">Severity<select aria-label="画布 Severity" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部级别</option>{["critical", "high", "medium", "low"].map((v) => <option key={v}>{v}</option>)}</select></label>
+          <label className="flex min-w-28 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">角色<select aria-label="画布角色" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部角色</option>{roleOptions.map((v) => <option key={v}>{v}</option>)}</select></label>
+          <label className="flex min-w-28 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">状态<select aria-label="画布状态" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08]"><option value="">全部状态</option>{statusOptions.map((v) => <option key={v}>{v}</option>)}</select></label>
+          <label className="flex min-w-36 flex-col gap-1 font-mono text-[8px] uppercase tracking-[.14em] text-zinc-600">搜索<input aria-label="搜索画布节点" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="标题 / 角色" className="rounded-lg bg-black/30 px-2 py-1.5 text-[10px] normal-case text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700" /></label>
+          <label className="flex items-center gap-1.5 pb-1 font-mono text-[9px] text-zinc-500"><input type="checkbox" checked={showContext} onChange={(e) => setShowContext(e.target.checked)} /> 保留一跳上下文</label>
+          {filterActive && <button type="button" onClick={() => { setKindFilter(""); setSeverityFilter(""); setRoleFilter(""); setStatusFilter(""); setQuery(""); }} className="mb-0.5 rounded-full px-2 py-1 font-mono text-[9px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white">清除 · 命中 {matchedCount}</button>}
+        </div>
+      </div>
       <Legend />
       {selected && <Sidebar node={selected} onClose={() => setSelected(null)} />}
     </div>

@@ -240,6 +240,23 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
         ? config.gateway.sandboxUrl
         : config.gateway.restrictedSandboxUrl;
     }
+    if (provider === "claude-code") {
+      const gatewayBase = allowEgress ? config.gateway.sandboxUrl : config.gateway.restrictedSandboxUrl;
+      env.CLAUDE_CODE_ENABLE_TELEMETRY = "1";
+      env.OTEL_METRICS_EXPORTER = "otlp";
+      env.OTEL_LOGS_EXPORTER = "otlp";
+      env.OTEL_TRACES_EXPORTER = "otlp";
+      env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
+      env.OTEL_EXPORTER_OTLP_ENDPOINT = `${gatewayBase.replace(/\/$/, "")}/otel`;
+      env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=Bearer ${jt.plaintext}`;
+      env.OTEL_RESOURCE_ATTRIBUTES = [
+        `deepsonar.job.id=${jobId}`,
+        `deepsonar.project.id=${String(job.project_id)}`,
+        `deepsonar.canvas.id=${canvasId ?? "none"}`,
+        `agent.cli=${provider}`,
+        `agent.role=${snapshot.name}`,
+      ].join(",");
+    }
     void sql`UPDATE credentials SET last_used_at = now() WHERE id = ${cred.id as string}`.catch(() => {});
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
@@ -492,7 +509,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
   // 「当前动作」直接更新节点显示态（throttle 1.5s；非语义事件，不进 events 表）
   let lastActionPush = 0;
-  const evidenceWriter = new JobEvidenceWriter(jobId, provider);
+  const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(job.sandbox_id ?? "unknown"));
 
   const result = await runRealAgent(
     { sandboxId: job.sandbox_id as string },
@@ -548,7 +565,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         }
       },
     },
-  );
+  ).catch(async (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const evidence = await evidenceWriter.finalize(message);
+    await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
+    throw error;
+  });
 
   evidenceWriter.setSession(result.session);
   const evidence = await evidenceWriter.finalize(result.error);

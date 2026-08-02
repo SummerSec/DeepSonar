@@ -1,10 +1,38 @@
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
-import { CheckCircle, FileText, FileX } from "@phosphor-icons/react";
+import { Brain, Bug, CheckCircle, Compass, Database, FileText, FileX, Note, Robot, SealCheck, UserCircle } from "@phosphor-icons/react";
 import type { CanvasNode } from "./api";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
 export type DEEPSONARNodeData = { canvas: CanvasNode };
 export type DEEPSONARNode = Node<DEEPSONARNodeData, string>;
+export type SemanticNodeKind = "task" | "intent" | "hub" | "finding" | "subagent" | "verify" | "fact" | "report" | "human" | "note";
+
+export function semanticNodeKind(n: CanvasNode): SemanticNodeKind {
+  const jobType = String(n.body_json?.type ?? "");
+  if (n.node_type === "root") return "task";
+  if (n.node_type === "intent") return "intent";
+  if (n.node_type === "finding") return "finding";
+  if (n.node_type === "fact") return "fact";
+  if (n.node_type === "report") return "report";
+  if (n.node_type === "human") return "human";
+  if (n.node_type === "note") return "note";
+  if (jobType === "hub_reason") return "hub";
+  if (jobType === "verify_finding" || jobType === "verify") return "verify";
+  return "subagent";
+}
+
+export const SEMANTIC_STYLE: Record<SemanticNodeKind, { label: string; color: string }> = {
+  task: { label: "任务", color: "#2dd4bf" },
+  intent: { label: "意图", color: "#38bdf8" },
+  hub: { label: "中枢", color: "#a78bfa" },
+  finding: { label: "发现", color: "#fb7185" },
+  subagent: { label: "子 Agent", color: "#f59e0b" },
+  verify: { label: "验证 Agent", color: "#34d399" },
+  fact: { label: "事实", color: "#22d3ee" },
+  report: { label: "报告", color: "#818cf8" },
+  human: { label: "人工", color: "#f97316" },
+  note: { label: "说明", color: "#94a3b8" },
+};
 
 /** 语义状态色（与侧栏/图例共用同一套） */
 
@@ -26,6 +54,8 @@ const LIVE_STATUS = new Set(["running", "claimed", "provisioning", "active", "ge
 
 function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const n = data.canvas;
+  const semantic = semanticNodeKind(n);
+  const semanticStyle = SEMANTIC_STYLE[semantic];
   const status = n.status ?? "";
   const statusColor = STATUS_COLOR[status] ?? "#71717a";
   const severity = (n.body_json?.severity as string) ?? null;
@@ -42,10 +72,18 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
     : null;
 
   // 类型标签：hub job 单独标识为「中枢」
-  const typeLabel =
-    n.node_type === "job" && jobType === "hub_reason"
-      ? "中枢"
-      : (TYPE_LABEL[n.node_type] ?? n.node_type);
+  const typeLabel = semanticStyle.label ?? TYPE_LABEL[n.node_type] ?? n.node_type;
+
+  const semanticIcon =
+    semantic === "task" ? <Compass size={15} /> :
+    semantic === "intent" ? <Compass size={15} /> :
+    semantic === "hub" ? <Brain size={15} weight="fill" /> :
+    semantic === "finding" ? <Bug size={15} weight="fill" /> :
+    semantic === "subagent" ? <Robot size={15} /> :
+    semantic === "verify" ? <SealCheck size={15} /> :
+    semantic === "fact" ? <Database size={15} /> :
+    semantic === "human" ? <UserCircle size={15} /> :
+    semantic === "note" ? <Note size={15} /> : null;
 
   // 报告节点：图标随状态变化（生成中 / 成功 / 失败）
   const reportIcon =
@@ -91,7 +129,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
       : "";
 
   return (
-    <div className={`deepsonar-node w-full rounded-[18px] bg-white/[.045] p-1 ring-1 ring-white/[.065] ${intentBorder} ${reportBorder}`}>
+    <div className={`deepsonar-node w-full rounded-[18px] p-1 ring-1 ${intentBorder} ${reportBorder}`} style={{ background: `color-mix(in srgb, ${semanticStyle.color} 13%, transparent)`, boxShadow: `0 0 0 1px color-mix(in srgb, ${semanticStyle.color} 32%, transparent)` }}>
       <Handle type="target" position={Position.Left} isConnectable={false} />
 
       <div className="rounded-[14px] bg-[#12171a] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.045)]">
@@ -99,7 +137,8 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
       {/* 头部：类型 + 状态 */}
       <div className="flex items-center gap-2">
         {reportIcon}
-        <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
+        {!reportIcon && <span style={{ color: semanticStyle.color }}>{semanticIcon}</span>}
+        <span className="font-mono text-[12px] uppercase tracking-[0.14em]" style={{ color: semanticStyle.color }}>
           {typeLabel}
         </span>
         {verification && (

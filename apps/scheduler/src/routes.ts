@@ -848,9 +848,14 @@ export function registerRoutes(app: FastifyInstance) {
   // ---------- 全局设置（§8.1 所有配置落库：规则默认值 → global_settings 单例行） ----------
   app.get("/global-settings", async () => {
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+    const activeRows = await sql`
+      SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${config.runtime.agentProvider}) AS agent_cli,
+             COUNT(*)::int AS count
+      FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1`;
     return {
       rules: ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>,
       effective_rules: await globalRules(sql),
+      active_by_agent_cli: Object.fromEntries(activeRows.map((row) => [String(row.agent_cli), Number(row.count)])),
     };
   });
 
@@ -866,7 +871,15 @@ export function registerRoutes(app: FastifyInstance) {
       resourceId: "global",
       after: { changed_keys: Object.keys(body.rules) },
     });
-    return { rules: merged, effective_rules: await globalRules(sql) };
+    const activeRows = await sql`
+      SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${config.runtime.agentProvider}) AS agent_cli,
+             COUNT(*)::int AS count
+      FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1`;
+    return {
+      rules: merged,
+      effective_rules: await globalRules(sql),
+      active_by_agent_cli: Object.fromEntries(activeRows.map((row) => [String(row.agent_cli), Number(row.count)])),
+    };
   });
 
   // ---------- 项目设置：运行规则 + 角色启停 ----------
@@ -1551,7 +1564,13 @@ export function registerRoutes(app: FastifyInstance) {
     if (body.name !== undefined) sets.name = body.name;
     if (body.project_id !== undefined) sets.project_id = body.project_id;
     if (body.metadata !== undefined) {
-      sets.public_metadata_json = normalizeCredentialMeta(body.metadata);
+      const [existing] = await sql`SELECT kind FROM credentials WHERE id = ${id}`;
+      if (!existing) return reply.code(404).send({ error: "credential not found" });
+      const normalized = normalizeCredentialMeta(body.metadata);
+      if (existing.kind !== "llm_provider" && allowedModelIds(normalized).length > 0) {
+        return reply.code(400).send({ error: "只有 llm_provider Credential 可设置 allowed_model_ids" });
+      }
+      sets.public_metadata_json = normalized;
     }
     if (Object.keys(sets).length === 0) {
       return reply.code(400).send({ error: "没有可更新的字段" });

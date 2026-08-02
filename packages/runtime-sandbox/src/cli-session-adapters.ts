@@ -101,13 +101,26 @@ const codexAdapter: AgentCliSessionAdapter = {
 
 const openCodeAdapter: AgentCliSessionAdapter = {
   cli: "open-code",
-  async exportSession(_runtime, sessionId) {
-    // OpenCode 新版以共享数据库 + Session/Message API 为主；不得复制包含其它会话的共享 DB。
+  async exportSession(runtime, sessionId) {
+    // OpenCode 官方提供按 session 导出的 JSON；不复制可能混有其它会话与凭据的共享数据库。
+    const result = await runtime.run(`opencode export ${sh(sessionId)} 2>/dev/null`);
+    if (result.exitCode === 0 && result.stdout.trim()) {
+      return {
+        cli: "open-code",
+        sessionId,
+        artifacts: [{
+          name: `${safeName(sessionId, sessionId, 0)}.json`,
+          sourcePath: `opencode export ${sessionId}`,
+          content: result.stdout,
+          kind: "vendor_export",
+        }],
+      };
+    }
     return {
       cli: "open-code",
       sessionId,
       artifacts: [],
-      captureError: "OpenCode 需要通过 Session/Message API 导出；当前 CLI 驱动尚未启用",
+      captureError: result.stderr.trim() || `opencode export ${sessionId} 未返回内容`,
     };
   },
 };

@@ -255,6 +255,7 @@ export type RoleInput = {
 export interface GlobalSettings {
   rules: Record<string, unknown>;
   effective_rules: EffectiveRules;
+  active_by_agent_cli: Record<string, number>;
 }
 
 export interface DataExportRow {

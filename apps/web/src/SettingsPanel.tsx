@@ -65,6 +65,7 @@ export function SettingsPanel({
   const [tab, setTab] = useState<Tab>("roles");
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
   const [rules, setRules] = useState<EffectiveRules | null>(null);
+  const [cliActive, setCliActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
@@ -118,7 +119,7 @@ export function SettingsPanel({
         .catch((error) => showAgentLoadError("内置 Agent", error));
       api
         .globalSettings()
-        .then((g) => setRules(g.effective_rules))
+        .then((g) => { setRules(g.effective_rules); setCliActive(g.active_by_agent_cli ?? {}); })
         .catch(() => {});
     }
     api
@@ -510,6 +511,7 @@ export function SettingsPanel({
                         onChange={(event) => setCliLimit(cli, event.target.value)}
                         className={inputCls}
                       />
+                      <div className="mt-1 font-mono text-[10px] text-zinc-600">当前运行 {cliActive[cli] ?? 0}</div>
                     </div>
                   ))}
                 </div>

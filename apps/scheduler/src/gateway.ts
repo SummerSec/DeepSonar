@@ -16,6 +16,7 @@ import { config } from "./config.js";
 import { decryptSecret, isProviderKnown, PROVIDER_ENV_MAP } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
+import { appendOtlpEnvelope } from "./evidence.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 
@@ -124,6 +125,11 @@ function deny(reply: FastifyReply, code: number, error: string, code2: string) {
 
 /** 注册 /gateway/* 代理路由（自身鉴权，不走平台 authHook） */
 export function registerGateway(app: FastifyInstance): void {
+  app.addContentTypeParser(
+    ["application/x-protobuf", "application/protobuf"],
+    { parseAs: "buffer", bodyLimit: 2 * 1024 * 1024 },
+    (_req, body, done) => done(null, body),
+  );
   app.route({
     method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     url: "/gateway/*",
@@ -180,6 +186,25 @@ export function registerGateway(app: FastifyInstance): void {
           : Buffer.isBuffer(rawBody)
             ? rawBody
             : Buffer.from(typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody), "utf8");
+      const upstreamPath = (req.params as { "*": string })["*"];
+      const otlp = upstreamPath.match(/^otel\/v1\/(logs|metrics|traces)$/);
+      if (req.method === "POST" && otlp) {
+        try {
+          await appendOtlpEnvelope(
+            jt.job_id as string,
+            otlp[1] as "logs" | "metrics" | "traces",
+            String(req.headers["content-type"] ?? "application/json"),
+            rawBody ?? Buffer.alloc(0),
+          );
+          inc("deepsonar_otlp_requests_total", { signal: otlp[1]! });
+          return reply
+            .code(200)
+            .header("content-type", String(req.headers["content-type"] ?? "application/json"))
+            .send(Buffer.isBuffer(rawBody) ? Buffer.alloc(0) : {});
+        } catch (error) {
+          return deny(reply, 413, error instanceof Error ? error.message : String(error), "otlp_rejected");
+        }
+      }
       const allowed = (jt.allowed_models as string[]) ?? [];
       if (rawBody && typeof rawBody === "object" && allowed.length > 0) {
         const model = (rawBody as { model?: string }).model;
@@ -211,7 +236,6 @@ export function registerGateway(app: FastifyInstance): void {
       const meta = (cred.public_metadata_json ?? {}) as { base_url?: string };
       const baseUrl =
         meta.base_url ?? PROVIDER_ENV_MAP[cred.provider as string]?.defaultBaseUrl ?? "https://api.anthropic.com";
-      const upstreamPath = (req.params as { "*": string })["*"];
       const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
       const url = `${baseUrl.replace(/\/$/, "")}/${upstreamPath}${qs}`;
 
