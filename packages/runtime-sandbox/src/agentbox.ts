@@ -42,8 +42,12 @@ if (process.platform === "win32") {
 
 /** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
+/** sandboxId → 受限网络 relay 容器名（destroy 时一并回收） */
+const relayContainers = new Map<string, string>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
 const GATEWAY_PROXY = "deepsonar-gateway-proxy";
+/** agentbox 各 provider 的 in-sandbox daemon 端口（SDK AGENT_RESERVED_PORTS，宿主必须能 TCP 直连） */
+const AGENT_DAEMON_PORTS = [43180, 43181, 4096];
 let restrictedNetworkReady: Promise<void> | null = null;
 let gatewayProxyReady: Promise<void> | null = null;
 
@@ -83,6 +87,55 @@ const server = http.createServer((req, res) => {
 server.on("connect", (_req, socket) => socket.destroy());
 server.listen(3100, "0.0.0.0");
 `;
+
+/**
+ * 受限网络 relay：internal bridge 上 Docker 会静默丢弃端口发布（NetworkSettings.Ports 为空），
+ * 宿主无法直连沙箱内的 agent daemon（claude-code 43180 等），SDK getPreviewLink 直接抛错。
+ * 与 gateway sidecar 同构：relay 容器同时连普通 bridge（仅 127.0.0.1 发布 daemon 端口）和
+ * internal bridge（按容器名 TCP 转发到 Worker）。relay 只跑固定端口转发，不执行不可信代码。
+ */
+const RESTRICTED_RELAY_SCRIPT = String.raw`
+const net = require("node:net");
+const target = process.env.DEEPSONAR_RELAY_TARGET;
+const ports = (process.env.DEEPSONAR_RELAY_PORTS || "43180").split(",").map((p) => Number(p.trim()));
+for (const port of ports) {
+  net.createServer((client) => {
+    const upstream = net.connect(port, target);
+    client.on("error", () => upstream.destroy());
+    upstream.on("error", () => client.destroy());
+    client.pipe(upstream);
+    upstream.pipe(client);
+  }).listen(port, "0.0.0.0");
+}
+`;
+
+/** 每 Job 一个 relay 容器：bridge 发布 daemon 端口 + internal 转发到 Worker 容器名 */
+async function startRestrictedRelay(jobId: string, image: string): Promise<{ name: string; hostPorts: Map<number, number> }> {
+  const suffix = jobId.slice(0, 8);
+  const name = `deepsonar-relay-${suffix}`;
+  const workerHost = `deepsonar-${suffix}`; // provision 的 provider.name 约定
+  await docker("rm", "-f", name).catch(() => {});
+  const publishArgs = AGENT_DAEMON_PORTS.flatMap((p) => ["-p", `127.0.0.1::${p}`]);
+  await docker(
+    "run", "-d", "--name", name,
+    "--network", "bridge", ...publishArgs,
+    "--label", "deepsonar.managed=true", "--label", `deepsonar.job=${jobId}`,
+    "-e", `DEEPSONAR_RELAY_TARGET=${workerHost}`,
+    "-e", `DEEPSONAR_RELAY_PORTS=${AGENT_DAEMON_PORTS.join(",")}`,
+    "--entrypoint", "node", image, "-e", RESTRICTED_RELAY_SCRIPT,
+  );
+  await docker("network", "connect", RESTRICTED_NETWORK, name);
+  const hostPorts = new Map<number, number>();
+  for (const p of AGENT_DAEMON_PORTS) {
+    const out = await docker(
+      "inspect", "--format",
+      `{{(index (index .NetworkSettings.Ports "${p}/tcp") 0).HostPort}}`,
+      name,
+    );
+    hostPorts.set(p, Number(out));
+  }
+  return { name, hostPorts };
+}
 
 /**
  * Docker internal bridge 不做外网 NAT；模型请求由另一个固定目标 sidecar 转发。
@@ -216,10 +269,13 @@ function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"
 
 export class AgentboxRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
+    let relay: { name: string; hostPorts: Map<number, number> } | null = null;
     if (input.network === "restricted") {
       await ensureRestrictedNetwork();
       if (!input.gatewayUpstreamUrl) throw new Error("restricted Worker 缺少 Gateway 上游 URL");
       await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
+      // internal bridge 丢端口发布，宿主→沙箱 daemon 走 per-job relay（见 startRestrictedRelay）
+      relay = await startRestrictedRelay(input.jobId, input.image);
     }
     const sandbox = new Sandbox("local-docker", {
       image: input.image,
@@ -241,8 +297,21 @@ export class AgentboxRunner implements SandboxRunner {
       },
     });
     hardenCreateContainer(sandbox, input.limits);
-    await sandbox.findOrProvision();
+    try {
+      await sandbox.findOrProvision();
+    } catch (e) {
+      if (relay) await docker("rm", "-f", relay.name).catch(() => {});
+      throw e;
+    }
     const id = sandbox.id ?? `unknown-${input.jobId}`;
+    if (relay) {
+      // SDK 的 daemon 拨号走 getPreviewLink；受限网络下重定向到 relay 的宿主发布端口
+      const hostPorts = relay.hostPorts;
+      const original = sandbox.getPreviewLink.bind(sandbox);
+      sandbox.getPreviewLink = (port: number) =>
+        hostPorts.has(port) ? Promise.resolve(`http://127.0.0.1:${hostPorts.get(port)}`) : original(port);
+      relayContainers.set(id, relay.name);
+    }
     sandboxes.set(id, sandbox);
     return { sandboxId: id };
   }
@@ -253,6 +322,10 @@ export class AgentboxRunner implements SandboxRunner {
     await s?.delete().catch(() => {});
     // 兜底：内存注册表没有（进程重启后）或 SDK 删除失败，按持久化 sandboxId 强删
     await docker("rm", "-f", handle.sandboxId).catch(() => {});
+    // 受限网络的 per-job relay 一并回收（内存映射丢失时按标签兜底）
+    const relayName = relayContainers.get(handle.sandboxId);
+    relayContainers.delete(handle.sandboxId);
+    if (relayName) await docker("rm", "-f", relayName).catch(() => {});
   }
 
   async isAlive(handle: RunHandle): Promise<boolean> {
