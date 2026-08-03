@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 
 const config = JSON.parse(readFileSync(new URL("./runtime-images.json", import.meta.url), "utf8"));
@@ -6,6 +7,7 @@ const localDefinition = readFileSync(new URL("./image.mjs", import.meta.url), "u
 const kaliConfig = JSON.parse(readFileSync(new URL("./kali-minimal-runtime.json", import.meta.url), "utf8"));
 const kaliDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8");
 const openHarmonyDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony", import.meta.url), "utf8");
+const openHarmonyRepo = readFileSync(new URL("../deploy/vendor/gitcode-repo-py3", import.meta.url));
 const openHarmonyEnv = readFileSync(new URL("../deploy/openharmony-env.sh", import.meta.url), "utf8");
 const openHarmonyInit = readFileSync(new URL("../deploy/openharmony-init.sh", import.meta.url), "utf8");
 const openHarmonyBuild = readFileSync(new URL("../deploy/openharmony-build.sh", import.meta.url), "utf8");
@@ -72,17 +74,22 @@ for (const [file, content] of [
 }
 expect(openHarmonyDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "OpenHarmony 必须默认依赖本地 base 镜像");
 expect(openHarmonyDockerfile.includes("apt-get install -y --no-install-recommends"), "OpenHarmony apt 安装必须禁用 recommends");
-for (const tool of ["build-essential", "ccache", "cmake", "ninja-build", "repo", "git-lfs", "python3", "python3-requests"]) {
+for (const tool of ["build-essential", "ccache", "cmake", "ninja-build", "repo", "git-lfs", "python3", "python3-requests", "python-is-python3"]) {
   expect(openHarmonyDockerfile.includes(tool), `OpenHarmony 镜像缺少工具：${tool}`);
 }
 expect(openHarmonyDockerfile.includes("USER deepsonar"), "OpenHarmony 镜像必须使用非 root 用户");
 expect(openHarmonyDockerfile.includes("WORKDIR /workspace"), "OpenHarmony 镜像工作目录必须是 /workspace");
 expect(openHarmonyDockerfile.includes("/opt/deepsonar/tool-manifest.json"), "OpenHarmony 镜像必须生成 tool-manifest.json");
 expect(openHarmonyDockerfile.includes("openharmony-env.sh --check"), "OpenHarmony 镜像必须在构建时执行环境 smoke check");
-expect(openHarmonyDockerfile.includes("https://raw.gitcode.com/gitcode-dev/repo/raw/main/repo-py3"), "OpenHarmony 必须使用 GitCode 官方 repo 下载地址");
-expect(openHarmonyDockerfile.includes("2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020"), "OpenHarmony repo checksum 不匹配");
+expect(openHarmonyDockerfile.includes("COPY deploy/vendor/gitcode-repo-py3 /tmp/repo"), "OpenHarmony 必须使用仓库内受控 repo launcher");
+const openHarmonyRepoSha256 = "2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020";
+expect(openHarmonyDockerfile.includes(openHarmonyRepoSha256), "OpenHarmony repo checksum 不匹配");
+expect(createHash("sha256").update(openHarmonyRepo).digest("hex") === openHarmonyRepoSha256, "OpenHarmony vendored repo launcher checksum 不匹配");
 expect(openHarmonyDockerfile.includes("sha256sum -c -"), "OpenHarmony repo 安装前必须执行 sha256sum 校验");
+expect(!/curl[^\n]*(raw\.gitcode\.com|storage\.googleapis\.com|google\.com)/s.test(openHarmonyDockerfile), "OpenHarmony 构建期不得 curl GitCode Raw 或 Google");
+expect(!openHarmonyDockerfile.includes("raw.gitcode.com"), "OpenHarmony 构建期不得依赖 GitCode Raw");
 expect(!openHarmonyDockerfile.includes("storage.googleapis.com"), "OpenHarmony 不得从 storage.googleapis.com 下载 repo");
+expect(!openHarmonyDockerfile.includes("google.com"), "OpenHarmony 构建期不得依赖 Google");
 expect(openHarmonyDockerfile.includes("gitcode.com/openharmony/manifest.git"), "OpenHarmony 必须使用官方 GitCode manifest 默认地址");
 expect(openHarmonyInit.includes("[[ \"$manifest\" == https://* ]]"), "OpenHarmony manifest 必须限制为 HTTPS");
 expect(!openHarmonyInit.includes("eval ") && !openHarmonyBuild.includes("eval "), "OpenHarmony 入口不得使用 eval");

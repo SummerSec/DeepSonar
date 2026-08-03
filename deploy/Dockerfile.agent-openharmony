@@ -6,16 +6,14 @@ USER root
 ARG REPO_SHA256=2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    build-essential ccache cmake ninja-build git-lfs python3-requests openssh-client rsync patch \
+    build-essential ccache cmake ninja-build git-lfs python3-requests python-is-python3 openssh-client rsync patch \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* \
   && git lfs install --system \
   && install -d -m 0755 /opt/deepsonar/bin /workspace
 
-RUN curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 \
-  https://raw.gitcode.com/gitcode-dev/repo/raw/main/repo-py3 \
-  -o /tmp/repo \
-  && echo "$REPO_SHA256  /tmp/repo" | sha256sum -c - \
+COPY deploy/vendor/gitcode-repo-py3 /tmp/repo
+RUN echo "$REPO_SHA256  /tmp/repo" | sha256sum -c - \
   && install -m 0755 /tmp/repo /usr/local/bin/repo \
   && rm -f /tmp/repo
 
