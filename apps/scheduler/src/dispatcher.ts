@@ -204,8 +204,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
             WHERE j.status = 'pending'
               AND (
                 j.priority < ${cursor.priority}
-                OR (j.priority = ${cursor.priority} AND j.created_at > ${cursor.createdAt})
-                OR (j.priority = ${cursor.priority} AND j.created_at = ${cursor.createdAt} AND j.id > ${cursor.id}::uuid)
+              OR (j.priority = ${cursor.priority} AND j.created_at > ${sql.typed(cursor.createdAt, 25)}::timestamptz)
+              OR (j.priority = ${cursor.priority} AND j.created_at = ${sql.typed(cursor.createdAt, 25)}::timestamptz AND j.id > ${cursor.id}::uuid)
               )
             ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
             LIMIT ${pendingPageSize}

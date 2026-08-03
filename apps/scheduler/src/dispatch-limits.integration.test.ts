@@ -25,6 +25,7 @@ if (!testDatabaseUrl) {
     type ProjectId = (typeof projectIds)[number];
     const credentialId = randomUUID();
     const jobIds: string[] = [];
+    let databaseClosed = false;
     const rulesBefore = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const originalRules = rulesBefore[0]?.rules_json ?? {};
 
@@ -53,13 +54,21 @@ if (!testDatabaseUrl) {
       return id;
     };
 
-    const insertPendingBatch = async (projectId: ProjectId, count: number, firstCreatedAt: Date): Promise<string[]> => {
+    const insertPendingBatch = async (
+      projectId: ProjectId,
+      count: number,
+      firstCreatedAt: Date,
+      options: { samePreciseCreatedAt?: boolean } = {},
+    ): Promise<string[]> => {
       const ids = Array.from({ length: count }, () => randomUUID());
       const rows = ids.map((id, index) => {
         jobIds.push(id);
+        const createdAt = options.samePreciseCreatedAt
+          ? sql`statement_timestamp() - interval '120 seconds'`
+          : sql`${new Date(firstCreatedAt.getTime() + index)}`;
         return sql`(
           ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit_module', 'pending', 0,
-          ${sql.json(snapshot as never)}, ${new Date(firstCreatedAt.getTime() + index)}
+          ${sql.json(snapshot as never)}, ${createdAt}
         )`;
       });
       for (let offset = 0; offset < rows.length; offset += 100) {
@@ -79,6 +88,36 @@ if (!testDatabaseUrl) {
         UPDATE global_settings
         SET rules_json = ${sql.json(rules as never)}, updated_at = now()
         WHERE id = 'global'`;
+    };
+
+    const claimWithTimeout = async (timeoutMs: number) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timedOut = false;
+      const claim = claimPendingJobs();
+      try {
+        return await Promise.race([
+          claim,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              reject(new Error(`claimPendingJobs exceeded ${timeoutMs}ms`));
+            }, timeoutMs);
+          }),
+        ]);
+      } catch (error) {
+        if (timedOut) {
+          // The pre-fix cursor loop never resolves; close the explicit test
+          // pool so the timed-out transaction cannot keep the test process
+          // alive or block cleanup. The rejection is observed to avoid an
+          // unhandled promise after the connection closes.
+          claim.catch(() => undefined);
+          databaseClosed = true;
+          await sql.end({ timeout: 1 }).catch(() => undefined);
+        }
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     };
 
     try {
@@ -140,7 +179,7 @@ if (!testDatabaseUrl) {
       // under project cap=1. The tail project is eligible and must still be
       // claimed after the dispatcher advances past the first LIMIT 500 page.
       await setRules({
-        maxGlobalJobs: 2,
+        maxGlobalJobs: 3,
         maxJobsPerProject: 1,
         maxConcurrentByAgentCli: { "claude-code": 4 },
       });
@@ -149,6 +188,7 @@ if (!testDatabaseUrl) {
         projectIds[0],
         501,
         new Date(Date.now() - 120_000),
+        { samePreciseCreatedAt: true },
       );
       const tailId = await insertJob(projectIds[1], { createdAt: new Date(Date.now() + 120_000) });
       const pagedClaim = await claimPendingJobs();
@@ -158,15 +198,23 @@ if (!testDatabaseUrl) {
         SELECT COUNT(*)::int AS count FROM jobs
         WHERE id = ANY(${headIds}::uuid[]) AND status = 'claimed'`;
       assert.equal(Number(headStatus.count), 0);
+
+      // The head project remains at its cap while one global slot is free.
+      // This forces a second keyset scan over an entirely ineligible tail and
+      // guards the timestamp+id cursor, including equal created_at values.
+      const noEligibleClaim = await claimWithTimeout(2_000);
+      assert.deepEqual(noEligibleClaim, []);
     } finally {
-      await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;
-      if (jobIds.length > 0) {
-        await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+      if (!databaseClosed) {
+        await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;
+        if (jobIds.length > 0) {
+          await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+        }
+        await sql`DELETE FROM credentials WHERE id = ${credentialId}`;
+        await sql`DELETE FROM canvases WHERE id = ANY(${canvasIds})`;
+        await sql`DELETE FROM projects WHERE id = ANY(${projectIds}::uuid[])`;
+        await sql.end({ timeout: 5 });
       }
-      await sql`DELETE FROM credentials WHERE id = ${credentialId}`;
-      await sql`DELETE FROM canvases WHERE id = ANY(${canvasIds})`;
-      await sql`DELETE FROM projects WHERE id = ANY(${projectIds}::uuid[])`;
-      await sql.end({ timeout: 5 });
     }
   });
 }
