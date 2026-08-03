@@ -88,7 +88,7 @@ def main():
     assert code in (200, 409), f"priority 改动返回 {code}"
     print("优先级:", code, "(200=改成功 / 409=已被认领，均合法)")
 
-    # 7. 等整个 Hub 编排链收敛后重试：复用原画布，历史保留
+    # 7. 等整个 Hub 编排链收敛后硬重试：复用原画布，清空旧运行历史
     # fake hub 每轮派多角色 + finding 必验 + followup 回收，链长已到 ~8 分钟，窗口放宽到 15 分钟
     final = None
     for _ in range(450):
@@ -137,14 +137,22 @@ def main():
         assert time.time() < quiesce_deadline, "画布活动 job 10 分钟内未清空（无法安全重试）"
         time.sleep(5)
 
-    before = next(r for r in req("GET", f"/projects/{pid}/canvases") if r["id"] == cid)["job_count"]
+    old_job_ids = {
+        item["id"] for item in req("GET", f"/jobs?project_id={pid}")
+        if item.get("canvas_id") == cid
+    }
     retry = req("POST", f"/tasks/{cid}/retry", None, 201)
     assert retry["canvas_id"] == cid and retry["status"] == "pending"
+    current_job_ids = {
+        item["id"] for item in req("GET", f"/jobs?project_id={pid}")
+        if item.get("canvas_id") == cid
+    }
+    assert retry["id"] in current_job_ids, "硬重试创建的新入口 Job 应属于原画布"
+    assert old_job_ids.isdisjoint(current_job_ids), "硬重试应清空原画布的旧 Job"
     rows = req("GET", f"/projects/{pid}/canvases")
     row = next(r for r in rows if r["id"] == cid)
-    # fake 执行器跑完 audit 会立刻派生 verify followup，期间可能再多 1 个 job，故只断言至少 +1
-    assert row["job_count"] >= before + 1, f"重试后应至少多 1 个 job，{before} → {row['job_count']}"
-    print(f"重试 OK: 首跑 {final} → 新 job {retry['id'][:8]}，尝试次数 {row['job_count']}")
+    assert row["job_count"] >= 1, row
+    print(f"硬重试 OK: 首跑 {final} → 新 job {retry['id'][:8]}，新一轮 job 数 {row['job_count']}")
 
     # 8. 外部事件触发：进入 Hub，且 source + event_id 幂等
     event_body = {
