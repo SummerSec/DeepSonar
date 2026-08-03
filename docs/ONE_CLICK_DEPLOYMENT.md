@@ -141,9 +141,9 @@ DEEPSONAR_OFFICIAL_BASE_IMAGE=ghcr.io/<owner>/deepsonar-base@sha256:<digest>
 DEEPSONAR_OFFICIAL_AUDIT_IMAGE=ghcr.io/<owner>/deepsonar-audit@sha256:<digest>
 DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=ghcr.io/<owner>/deepsonar-kali-minimal@sha256:<digest>
 DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
-AGENT_PROVIDER=claude-code
-ANTHROPIC_API_KEY=your-key
 ```
+
+角色使用的 `agent_cli`、`model` 和 `env_vars` 不在部署环境变量中选择；请在 Agents / RoleConfig UI 或 API 中配置，创建 Job 时由 Scheduler 冻结快照。`AGENT_MODE` 仍只表示 fake/real 基础设施运行模式。Provider 凭据必须存入 Settings / Credentials，再绑定到 RoleConfig；长期密钥不会下发给沙箱。
 
 正式 `v*` Release 还会把三类运行时发布到同一个 Docker Hub 仓库 `docker.io/sumsec/deepsonar`：
 
@@ -157,13 +157,7 @@ sumsec/deepsonar:kali-minimal-<version>
 
 3. 若要从独立的“镜像市场”页导入第三方镜像，还要将 Cosign、Syft、Trivy、ClamAV 扫描器引用配成 `name@sha256:digest`，并校对 `DEEPSONAR_ALLOWED_IMAGE_REGISTRIES`。扫描器未固定时 Worker 会拒绝准入，不会退回 tag。
 
-也可以使用 Codex/OpenAI 兼容端点：
-
-```dotenv
-AGENT_PROVIDER=codex
-OPENAI_API_KEY=your-key
-OPENAI_BASE_URL=
-```
+使用 Codex/OpenAI 兼容端点时，在 Settings / Credentials 中创建 OpenAI Credential（包括密钥与可选 Base URL），再在 RoleConfig 中把目标角色的 `agent_cli` 设为 `codex`，选择该 Credential 和允许的 `model`；不要使用旧的 provider/model 环境变量作为生效配置。
 
 4. 启动 real 模式：
 
@@ -215,7 +209,29 @@ docker run --rm -it -w /workspace deepsonar-openharmony-fuzz:local \
 
 默认不执行 `git pull`。只有显式设置 `DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true` 且 worktree clean 时，脚本才执行 `git pull --ff-only`；dirty worktree 只记录跳过，绝不执行 stash、reset 或 merge。可用 `--dry-run` 或 `DEEPSONAR_RUNTIME_IMAGE_BUILD=false` 做无构建验证。
 
-本地构建或已有本地 tag 会先通过 `docker image inspect` 取得完整 image ID，并在 `SANDBOX_PROVIDER=local-docker` 下自动登记为官方 trusted 的 local-only 版本。该版本只适用于当前机器的 local-docker，不会进入导出 registry 清单；生产、多机部署仍应使用 registry manifest 的 `name@sha256:<digest>`。OpenHarmony 镜像在 base、audit、Kali 流程后准备，并依赖本地 `deepsonar-base:local`，整体准备仍由部署脚本后台异步执行。
+本地构建或已有本地 tag 先通过 Scheduler 的 `detect-local` 取得完整 image ID、RepoDigest、contract、架构和产品匹配证据；检测是 transport 与 trust 分离的只读候选检查，不会自动登记。只有管理员在 UI/CLI 中核对不可变 image ID 并二次确认 `adopt-local` 后，才会产生当前机器 `local-docker` 专用 trusted 版本。该版本不会进入导出 registry 清单；生产、多机部署仍应使用 registry manifest 的 `name@sha256:<digest>`。OpenHarmony 镜像在 base、audit、Kali 流程后准备，并依赖本地 `deepsonar-base:local`，整体准备仍由部署脚本后台异步执行。
+
+Linux/macOS 的后台准备流程默认也只检测、不改变 trust；需要由运维显式授权本机候选时，直接运行 `deploy/prepare-runtime-images.sh --adopt`。后台守护进程和一键部署不会代替管理员自动授权。
+
+Windows 用户可以在自行 `docker pull`、`docker build` 或 `docker load` 后运行检测脚本；脚本不会直改数据库，也不会因为 mutable tag 自动信任：
+
+```powershell
+# 使用现有本地 tag，只检测（默认不 pull/build/load）
+.\deploy\prepare-runtime-images.ps1 -LocalImage deepsonar-base=deepsonar-base:local
+
+# 可选：按受信目录拉取不可变 ref，再映射到本地 tag 后检测
+.\deploy\prepare-runtime-images.ps1 -Pull -LocalImage deepsonar-base=deepsonar-base:local
+
+# 可选：在当前工作树构建官方 base（audit/Kali/OpenHarmony 也可按 image-key 指定）
+.\deploy\prepare-runtime-images.ps1 -Build -LocalImage deepsonar-base=deepsonar-base:local
+
+# 可选：加载归档后指定其中的 tag；-Adopt 会对每个 adoptable 候选逐项要求输入 ADOPT
+.\deploy\prepare-runtime-images.ps1 -LoadPath .\deepsonar-base.tar -LocalImage deepsonar-base=deepsonar-base:local -Adopt
+```
+
+`detect-local` 需要 `images:read`；`adopt-local` 需要管理员角色或 `images:approve`。`expected_image_id` 用于防止检测后本地 tag 被替换。脚本读取 `DEEPSONAR_TOKEN`，否则仅从本地 `.env`/`deploy/.env` 读取 `DEEPSONAR_ADMIN_TOKEN`，不会打印或写入 token。
+
+Scheduler 若要访问私有 GitHub Release 目录，可配置 `DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN`；仅 Scheduler 读取 SummerSec/DeepSonar Release metadata/asset，权限应最小化为 `contents:read`，不下发沙箱。未配置时使用 bundled last-known-good fallback，目录来源、回退和错误会在镜像市场 UI 显示。
 
 Scheduler 启动时及其后每隔 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC`（默认 3600 秒）从固定的官方 GitHub Release 地址获取最新 `runtime-image-registry.json`，失败时回退当前部署内置清单；全局页“同步市场”会立即执行同一条受信任同步路径，不接受任意 URL。正式发布版本优先，`DEEPSONAR_OFFICIAL_*_IMAGE` 只在官方清单尚无版本时作为启动兜底。历史版本继续保留用于项目显式固定与 Job 快照，但不会保持默认 promoted 状态。同步后可用“异步拉取”按顺序拉取清单内远程不可变版本；本地 raw image ID 不会被 pull。
 

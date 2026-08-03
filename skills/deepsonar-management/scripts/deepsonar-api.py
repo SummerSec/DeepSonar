@@ -288,6 +288,25 @@ def _runtime_images_project_enable(pos, f):
     )
 
 
+def _runtime_images_detect_local(pos, f):
+    """检测当前机器已有的 Docker 镜像；只返回候选，不改变 trust 状态。"""
+    image_id = _p0(pos, "imageId")
+    image_ref = need(f.get("image-ref"), "--image-ref（本地 tag/ref）")
+    return call("POST", f"/runtime-images/{image_id}/detect-local", {"image_ref": image_ref})
+
+
+def _runtime_images_adopt_local(pos, f):
+    """在管理员二次核对 image ID 后授权采用本地候选。"""
+    image_id = _p0(pos, "imageId")
+    image_ref = need(f.get("image-ref"), "--image-ref（本地 tag/ref）")
+    expected_image_id = need(f.get("expected-image-id"), "--expected-image-id（detect-local 返回的 sha256）")
+    return call(
+        "POST",
+        f"/runtime-images/{image_id}/adopt-local",
+        {"image_ref": image_ref, "expected_image_id": expected_image_id},
+    )
+
+
 def _findings_list(_pos, f):
     qs = []
     if f.get("project"):
@@ -511,6 +530,8 @@ COMMANDS = {
     "runtime-images.usage": lambda pos, f: call(
         "GET", f"/runtime-image-versions/{_p0(pos, 'versionId')}/usage"),
     "runtime-images.project-enable": _runtime_images_project_enable,
+    "runtime-images.detect-local": _runtime_images_detect_local,
+    "runtime-images.adopt-local": _runtime_images_adopt_local,
 
     # ---------- Skill 模块源（Git 托管；新源默认 quarantined，需 trust 后才下发） ----------
     "skills.list": lambda pos, f: call("GET", "/skill-sources"),

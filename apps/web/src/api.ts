@@ -467,6 +467,36 @@ export interface RuntimeImageDetail {
   versions: RuntimeImageVersion[];
 }
 
+/** 本地 Docker 镜像检测结果；检测只返回候选，不改变市场信任状态。 */
+export interface RuntimeImageLocalCandidate {
+  exists: boolean;
+  image_ref: string;
+  image_id: string | null;
+  repo_digests: string[];
+  os: string | null;
+  architecture: string | null;
+  labels: Record<string, string>;
+  contract_valid: boolean;
+  product_match: boolean;
+  adoptable: boolean;
+  immutable_ref: string | null;
+  reasons: string[];
+  /** Optional diagnostics emitted by newer schedulers. */
+  tool_manifest_valid?: boolean;
+  error?: string | null;
+  product_id?: string;
+  product_key?: string;
+}
+
+export interface RuntimeImageLocalAdoptionResult {
+  adopted?: boolean;
+  local_only?: boolean;
+  immutable_ref?: string;
+  image: { id: string; image_key: string; official: boolean; enabled: boolean };
+  version: RuntimeImageVersion;
+  inspection?: RuntimeImageLocalCandidate;
+}
+
 export interface RuntimeImageRegistry {
   schema: "deepsonar.registry/v1";
   images: Array<{
@@ -479,6 +509,12 @@ export interface RuntimeImageRegistry {
     default_role?: string;
     versions: Array<{ version: string; image_ref: string; tools_manifest_sha256?: string; platforms?: string[]; size_bytes?: number }>;
   }>;
+  /** 目录获取诊断；旧服务端没有这些字段时仍可正常渲染。 */
+  metadata?: Record<string, unknown> | null;
+  source?: string | { kind?: string; url?: string; fetched_at?: string; [key: string]: unknown } | null;
+  fallback?: boolean;
+  error?: string | null;
+  checked_at?: string;
 }
 
 export interface RuntimeImageCatalogSyncResult {
@@ -1115,6 +1151,10 @@ export const api = {
   pullRuntimeImagesRegistry: () => send<{ task: RuntimeImagePullTask }>("POST", "/runtime-images/registry/pull"),
   runtimeImagesPullStatus: () => get<RuntimeImagePullTask>("/runtime-images/registry/pull-status"),
   runtimeImage: (id: string) => get<RuntimeImageDetail>(`/runtime-images/${id}`),
+  detectLocalRuntimeImage: (imageId: string, image_ref: string) =>
+    send<RuntimeImageLocalCandidate>("POST", `/runtime-images/${imageId}/detect-local`, { image_ref }),
+  adoptLocalRuntimeImage: (imageId: string, body: { image_ref: string; expected_image_id: string }) =>
+    send<RuntimeImageLocalAdoptionResult>("POST", `/runtime-images/${imageId}/adopt-local`, body),
   importRuntimeImage: (body: {
     image_key: string;
     name: string;
