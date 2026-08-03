@@ -84,6 +84,11 @@ jobs:
             org.opencontainers.image.description=Explore、Analyze、Code、Hub、Verify 与系统沙箱使用的 DeepSonar 官方最小运行时。
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar Base
+            org.opencontainers.image.description=Explore、Analyze、Code、Hub、Verify 与系统沙箱使用的 DeepSonar 官方最小运行时。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
@@ -213,6 +218,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-${{ matrix.name }}
           labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar
+          annotations: |
             org.opencontainers.image.title=${{ matrix.title }}
             org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.licenses=MIT
@@ -347,6 +357,11 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           labels: |
+            org.opencontainers.image.title=DeepSonar Kali Test
+            org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
             org.opencontainers.image.title=DeepSonar Kali Test
             org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
             org.opencontainers.image.licenses=MIT
@@ -523,6 +538,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-test
           labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Test
+            org.opencontainers.image.description=OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Test
             org.opencontainers.image.description=OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。
             org.opencontainers.image.licenses=MIT

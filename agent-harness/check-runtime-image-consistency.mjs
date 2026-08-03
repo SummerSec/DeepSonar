@@ -112,6 +112,7 @@ expect(releaseWorkflow.includes("steps.build.outputs.digest"), "release workflow
 expect(releaseWorkflow.includes("record-runtime-image-digest.mjs"), "release workflow 缺少 digest artifact 记录脚本");
 expect(releaseWorkflow.includes("DOCKER_METADATA_ANNOTATIONS_LEVELS"), "release workflow 必须生成 OCI manifest/index annotations");
 expect(releaseWorkflow.includes("steps.meta.outputs.annotations"), "release workflow 必须把 metadata annotations 传给 build-push-action");
+expect((releaseWorkflow.match(/^\s{10}annotations: \|$/gm) ?? []).length >= 4, "runtime metadata 必须显式生成镜像专属 OCI annotations");
 expect(releaseWorkflow.includes("index:org.opencontainers.image.description=DeepSonar Test"), "Kali multi-arch index 缺少 GHCR 包说明 annotation");
 expect(descriptorScript.includes("inspectPublishedImageSize"), "release descriptor 必须采集 OCI 多架构镜像大小");
 expect(descriptorScript.includes("platform_size_bytes"), "release descriptor 必须保留各平台大小证据");
