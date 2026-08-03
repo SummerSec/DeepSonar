@@ -1,8 +1,6 @@
 name: release
 
-# 可发布制品（§12.1）：tag v* 触发 —— 全量镜像推到 GHCR，三类精简 agent 镜像同时推到 Docker Hub。
-# Docker Hub 单仓库使用 base-* / audit-* / kali-minimal-* 标签区分运行时，不发布含义模糊的 latest。
-# 制品：deepsonar-scheduler / deepsonar-web / deepsonar-image-admission / 三类精简 agent 镜像（digest 固定）
+# v* tag 发布调度器、前端、准入服务和官方运行时镜像。
 on:
   push:
     tags: ["v*"]
@@ -13,45 +11,176 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  DOCKERHUB_IMAGE: docker.io/sumsec/deepsonar
 
 jobs:
-  images:
+  base-image:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      owner: ${{ steps.release.outputs.owner }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-    strategy:
-      matrix:
-        include:
-          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", build_args: "", dockerhub_tag: "" }
-          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", build_args: "", dockerhub_tag: "" }
-          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", build_args: "", dockerhub_tag: "" }
-          - { name: base, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=base", dockerhub_tag: "base" }
-          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", build_args: "TOOLSET=audit", dockerhub_tag: "audit" }
-          - { name: kali-minimal, dockerfile: deploy/Dockerfile.agent-kali-minimal, platforms: "linux/amd64,linux/arm64", build_args: "", dockerhub_tag: "kali-minimal" }
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      # scheduler/web 镜像构建内嵌 pnpm install --frozen-lockfile，lockfile 先验一遍
-      - run: pnpm install --frozen-lockfile
-
+      - id: release
+        name: 解析发布版本
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
-
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR/Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - name: Docker Hub 凭据未配置
-        if: ${{ matrix.dockerhub_tag != '' && (env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '') }}
-        run: echo "Docker Hub publish skipped; configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets." >> "$GITHUB_STEP_SUMMARY"
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=base-{{version}}
+            type=sha,prefix=base-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-base
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.dockerhub-meta.outputs.tags }}
+            ${{ steps.acr-meta.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          build-args: TOOLSET=base
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+      - name: 保存 base manifest digest
+        env:
+          IMAGE_KEY: deepsonar-base
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base
+          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-base
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          node agent-harness/record-runtime-image-digest.mjs release-digests/base.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-base
+          path: release-digests/base.json
+          if-no-files-found: error
 
+  images:
+    needs: base-image
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", dockerhub_tag: "" }
+          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", dockerhub_tag: "" }
+          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", dockerhub_tag: "" }
+          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "audit" }
+          - { name: kali-minimal, dockerfile: deploy/Dockerfile.agent-kali-minimal, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "kali-minimal" }
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: 预检锁文件
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR/Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: 登录 Docker Hub
         if: ${{ matrix.dockerhub_tag != '' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
@@ -59,53 +188,227 @@ jobs:
           registry: docker.io
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
-
+      - name: Docker Hub 凭据未配置
+        if: ${{ matrix.dockerhub_tag != '' && (env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '') }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/deepsonar-${{ matrix.name }}
+          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-${{ matrix.name }}
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
-
-      - id: dockerhub_meta
+      - id: dockerhub-meta
         if: ${{ matrix.dockerhub_tag != '' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/metadata-action@v5
         with:
-          images: docker.io/sumsec/deepsonar
+          images: ${{ env.DOCKERHUB_IMAGE }}
           flavor: latest=false
           tags: |
             type=semver,pattern=${{ matrix.dockerhub_tag }}-{{version}}
             type=sha,prefix=${{ matrix.dockerhub_tag }}-sha-
-
-      - uses: docker/build-push-action@v6
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
           tags: |
             ${{ steps.meta.outputs.tags }}
-            ${{ steps.dockerhub_meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+            ${{ steps.dockerhub-meta.outputs.tags }}
+            ${{ steps.acr-meta.outputs.tags }}
           platforms: ${{ matrix.platforms }}
-          build-args: ${{ matrix.build_args }}
+          build-args: ${{ matrix.name == 'audit' && 'TOOLSET=audit' || '' }}
           sbom: true
           provenance: mode=max
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: 保存运行时 manifest digest
+        if: ${{ matrix.dockerhub_tag != '' }}
+        env:
+          IMAGE_KEY: deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-${{ matrix.name }}
+          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs "release-digests/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        if: ${{ matrix.dockerhub_tag != '' }}
+        with:
+          name: runtime-image-digest-${{ matrix.name }}
+          path: release-digests/${{ matrix.name }}.json
+          if-no-files-found: error
 
-  management-skill:
+  openharmony-test:
+    needs: base-image
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: 打包 Management Skill
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
         run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-test
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-test
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=openharmony-test-{{version}}
+            type=sha,prefix=openharmony-test-sha-
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-openharmony
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.acr-meta.outputs.tags }}
+            ${{ steps.dockerhub-meta.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-base:${{ needs.base-image.outputs.version }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=openharmony-test
+          cache-to: type=gha,mode=max,scope=openharmony-test
+      - name: 保存 OpenHarmony manifest digest
+        env:
+          IMAGE_KEY: deepsonar-openharmony-test
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-test
+          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-test
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-test.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-openharmony-test
+          path: release-digests/openharmony-test.json
+          if-no-files-found: error
+
+  release:
+    needs: [base-image, images, openharmony-test]
+    runs-on: ubuntu-latest
+    env:
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-image-digest-*
+          path: release-digests
+          merge-multiple: true
+      - name: 生成 runtime 镜像清单
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+          OWNER: ${{ needs.base-image.outputs.owner }}
+        run: |
+          set -euo pipefail
+          node agent-harness/generate-runtime-image-registry.mjs release-digests deploy/runtime-image-registry.json
+      - name: 校验发布清单
+        run: |
+          set -euo pipefail
+          node agent-harness/generate-runtime-image-registry.mjs --check deploy/runtime-image-registry.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-registry
+          path: deploy/runtime-image-registry.json
+          if-no-files-found: error
+      - name: 打包 Management Skill
+        shell: bash
+        run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           tar -czf "deepsonar-management-skill-${VERSION}.tar.gz" -C skills deepsonar-management
-
-      - name: 发布 Release + 附件
+      - name: 发布 Release 与附件
         uses: softprops/action-gh-release@v2
         with:
-          files: deepsonar-management-skill-*.tar.gz
+          files: |
+            deepsonar-management-skill-*.tar.gz
+            deploy/runtime-image-registry.json
           generate_release_notes: true

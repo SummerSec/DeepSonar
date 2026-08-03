@@ -1,10 +1,17 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 const config = JSON.parse(readFileSync(new URL("./runtime-images.json", import.meta.url), "utf8"));
 const dockerfile = readFileSync(new URL("../deploy/Dockerfile.agent", import.meta.url), "utf8");
 const localDefinition = readFileSync(new URL("./image.mjs", import.meta.url), "utf8");
 const kaliConfig = JSON.parse(readFileSync(new URL("./kali-minimal-runtime.json", import.meta.url), "utf8"));
 const kaliDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8");
+const openHarmonyDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony", import.meta.url), "utf8");
+const openHarmonyEnv = readFileSync(new URL("../deploy/openharmony-env.sh", import.meta.url), "utf8");
+const openHarmonyInit = readFileSync(new URL("../deploy/openharmony-init.sh", import.meta.url), "utf8");
+const openHarmonyBuild = readFileSync(new URL("../deploy/openharmony-build.sh", import.meta.url), "utf8");
+const openHarmonyRegistry = JSON.parse(readFileSync(new URL("../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
+const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
+const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
@@ -46,8 +53,63 @@ for (const forbidden of ["kali-linux-core", "kali-linux-headless", "kali-linux-d
   expect(!kaliDockerfile.match(new RegExp(`apt-get install[^;]*${forbidden}`, "s")), `Kali minimal must not install metapackage ${forbidden}`);
 }
 expect(kaliDockerfile.includes("--no-install-recommends"), "Kali minimal apt install must disable recommends");
+const openHarmonyImage = openHarmonyRegistry.images?.find((image) => image.image_key === "deepsonar-openharmony-test");
+expect(openHarmonyImage, "registry 缺少 deepsonar-openharmony-test");
+if (openHarmonyImage) {
+  expect(openHarmonyImage.source_kind === "official", "OpenHarmony 镜像必须是 official");
+  expect(openHarmonyImage.project_opt_in === true, "OpenHarmony 镜像必须启用 project_opt_in");
+  expect(openHarmonyImage.default_role === "test", "OpenHarmony 镜像 default_role 必须是 test");
+  expect(Array.isArray(openHarmonyImage.versions), "OpenHarmony registry versions 必须是数组");
+}
+for (const [file, content] of [
+  ["openharmony-env.sh", openHarmonyEnv],
+  ["openharmony-init.sh", openHarmonyInit],
+  ["openharmony-build.sh", openHarmonyBuild],
+]) {
+  const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
+  expect((mode & 0o111) !== 0, `${file} 必须可执行`);
+  expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
+}
+expect(openHarmonyDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "OpenHarmony 必须默认依赖本地 base 镜像");
+expect(openHarmonyDockerfile.includes("apt-get install -y --no-install-recommends"), "OpenHarmony apt 安装必须禁用 recommends");
+for (const tool of ["build-essential", "ccache", "cmake", "ninja-build", "repo", "git-lfs", "python3", "python3-requests"]) {
+  expect(openHarmonyDockerfile.includes(tool), `OpenHarmony 镜像缺少工具：${tool}`);
+}
+expect(openHarmonyDockerfile.includes("USER deepsonar"), "OpenHarmony 镜像必须使用非 root 用户");
+expect(openHarmonyDockerfile.includes("WORKDIR /workspace"), "OpenHarmony 镜像工作目录必须是 /workspace");
+expect(openHarmonyDockerfile.includes("/opt/deepsonar/tool-manifest.json"), "OpenHarmony 镜像必须生成 tool-manifest.json");
+expect(openHarmonyDockerfile.includes("openharmony-env.sh --check"), "OpenHarmony 镜像必须在构建时执行环境 smoke check");
+expect(openHarmonyDockerfile.includes("https://raw.gitcode.com/gitcode-dev/repo/raw/main/repo-py3"), "OpenHarmony 必须使用 GitCode 官方 repo 下载地址");
+expect(openHarmonyDockerfile.includes("2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020"), "OpenHarmony repo checksum 不匹配");
+expect(openHarmonyDockerfile.includes("sha256sum -c -"), "OpenHarmony repo 安装前必须执行 sha256sum 校验");
+expect(!openHarmonyDockerfile.includes("storage.googleapis.com"), "OpenHarmony 不得从 storage.googleapis.com 下载 repo");
+expect(openHarmonyDockerfile.includes("gitcode.com/openharmony/manifest.git"), "OpenHarmony 必须使用官方 GitCode manifest 默认地址");
+expect(openHarmonyInit.includes("[[ \"$manifest\" == https://* ]]"), "OpenHarmony manifest 必须限制为 HTTPS");
+expect(!openHarmonyInit.includes("eval ") && !openHarmonyBuild.includes("eval "), "OpenHarmony 入口不得使用 eval");
+expect(openHarmonyBuild.includes('exec ./build.sh --product-name "$product_name" "${build_args[@]}"'), "OpenHarmony 构建参数必须严格传递");
+expect(prepareScript.includes("deepsonar-openharmony-test"), "prepare 脚本必须接入 OpenHarmony 镜像");
+expect(prepareScript.includes("Dockerfile.agent-openharmony"), "prepare 脚本必须使用 OpenHarmony Dockerfile");
+expect(prepareScript.includes('"deepsonar-base:local"'), "OpenHarmony 构建必须在 base 流程之后使用本地 base");
+expect(releaseWorkflow.includes("openharmony-test:"), "release workflow 缺少 OpenHarmony 独立 job");
+expect(releaseWorkflow.includes("needs: base-image"), "OpenHarmony job 必须依赖 base-image job");
+expect(releaseWorkflow.includes("Dockerfile.agent-openharmony"), "release workflow 未发布 OpenHarmony Dockerfile");
+expect(releaseWorkflow.includes("steps.build.outputs.digest"), "release workflow 必须使用 build-push-action 真实 digest");
+expect(releaseWorkflow.includes("record-runtime-image-digest.mjs"), "release workflow 缺少 digest artifact 记录脚本");
+expect(releaseWorkflow.includes("actions/upload-artifact@v4"), "release workflow 缺少 digest/registry artifact");
+expect(releaseWorkflow.includes("generate-runtime-image-registry.mjs"), "release workflow 缺少 runtime registry 合并脚本");
+expect(releaseWorkflow.includes("deploy/runtime-image-registry.json"), "release workflow 未发布 runtime registry");
+expect(releaseWorkflow.includes("needs: [base-image, images, openharmony-test]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
+for (const name of ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]) {
+  expect(releaseWorkflow.includes(`secrets.${name}`), `release workflow 缺少 ACR Secret：${name}`);
+}
+expect(releaseWorkflow.includes("docker/login-action@v3"), "release workflow 缺少 registry 登录动作");
+expect(releaseWorkflow.includes("set -euo pipefail"), "release workflow shell 必须启用严格模式");
+expect(releaseWorkflow.includes('owner="${GITHUB_REPOSITORY_OWNER,,}"'), "release workflow 必须输出小写 repository owner");
+expect(releaseWorkflow.includes("owner: ${{ steps.release.outputs.owner }}"), "base-image 必须暴露小写 owner job output");
+expect(releaseWorkflow.includes("needs.base-image.outputs.owner"), "依赖 job 必须使用 base-image 小写 owner output");
+expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow 不得直接使用 github.repository_owner 拼接 OCI 引用");
 if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));
   process.exit(1);
 }
-console.log(`runtime image definitions are consistent (${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets)].join(", ")})`);
+console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test"].join("、")}）`);
