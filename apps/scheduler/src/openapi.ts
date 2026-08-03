@@ -201,7 +201,13 @@ const OPS: Op[] = [
     },
   },
   { method: "post", path: "/jobs/{id}/cancel", summary: "取消 job", scope: "jobs:control", tags: ["Jobs"] },
-  { method: "post", path: "/jobs/{id}/resume", summary: "恢复 failed/timeout/orphan → pending", scope: "jobs:control", tags: ["Jobs"] },
+  {
+    method: "post",
+    path: "/jobs/{id}/resume",
+    summary: "恢复 failed/timeout/orphan/waiting_human → pending；按 type/purpose 重算固定 priority class，忽略历史或调用方 priority",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+  },
 
   // findings / reports
   {

@@ -67,11 +67,13 @@ jobs:
       - name: Convergence recovery Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          DEEPSONAR_HUB_ENABLED: "true"
         run: pnpm ci:integration:convergence-recovery
 
       - name: Verify eligibility Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          DEEPSONAR_HUB_ENABLED: "true"
         run: pnpm ci:integration:verify-eligibility
 
       - name: Control MCP protocol smoke

@@ -56,7 +56,7 @@ python scripts/deepsonar-api.py jobs get <jobId>
 python scripts/deepsonar-api.py jobs create --project-id <projectId> --type explore [--title ...] [--payload '{...}']
 python scripts/deepsonar-api.py jobs priority <jobId> --priority 10
 python scripts/deepsonar-api.py jobs cancel <jobId>
-python scripts/deepsonar-api.py jobs resume <jobId>   # failed/timeout/orphan → pending
+python scripts/deepsonar-api.py jobs resume <jobId>   # failed/timeout/orphan/waiting_human → pending；按 type/purpose 重新归一化固定 priority class
 
 # Finding / 画布 / 报告
 python scripts/deepsonar-api.py findings list [--project <projectId>] [--canvas <canvasId>]
@@ -190,7 +190,7 @@ python scripts/deepsonar-api.py tasks create <projectId> \
   --content "目标仓库：https://github.com/SummerSec/java-sec-code 。全量安全审计……" \
   --allow-egress true
 
-# 6) 盯 Job：pending → claimed → provisioning → running；orphan 用 resume
+# 6) 盯 Job：pending → claimed → provisioning → running/waiting_human；终态或 waiting_human 用 resume（会重算固定 priority class）
 python scripts/deepsonar-api.py jobs list --project <projectId>
 python scripts/deepsonar-api.py jobs get <jobId>
 python scripts/deepsonar-api.py jobs resume <jobId>
@@ -216,7 +216,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 2. **git pull 后 schema  bump**：调度器启动若报「当前数据库不是 schema vN」，只能 `DROP SCHEMA public CASCADE` + 重启让空库套 `database/schema.sql`，再恢复凭据与 RoleConfig。
 3. **RoleConfig PUT 400 `runtime_image_key 没有可信版本`**：市场 catalog 有 key 不等于有 trusted version。先 bootstrap 官方 digest 或 import+approve。
 4. **多模型分配**：`credentials models` 看各 Provider 真实目录；hub 与 worker 可不同凭证。Job 快照在创建时冻结，改 RoleConfig **不影响**已创建 job。
-5. **tsx watch 改 src 会重载**：running job → `orphan`（「调度器重启」）；`jobs resume` 回 pending。排障时先确认无 running job 再改代码，或接受重跑。
+5. **tsx watch 改 src 会重载**：running job → `orphan`（「调度器重启」）；`jobs resume`（也支持 waiting_human）回 pending 并重算固定 priority class。排障时先确认无 running job 再改代码，或接受重跑。
 6. **`jobs resume` 后若轮询关闭**：依赖 `pg_notify`；schema 触发器须覆盖 pending 恢复路径（基线已含）。
 7. **dispatcher `FOR UPDATE` + `LEFT JOIN credentials`**：必须 `FOR UPDATE OF j`，否则 Postgres `0A000` 导致领取失败。
 8. **证据 stream 写盘**：`stream.ndjson` 在 `attempts/<sandboxId>/` 下，mkdir 必须建 attempt 目录，否则 unhandledRejection ENOENT。
