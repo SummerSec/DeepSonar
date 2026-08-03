@@ -465,6 +465,20 @@ export interface RuntimeImageDetail {
   versions: RuntimeImageVersion[];
 }
 
+export interface RuntimeImageRegistry {
+  schema: "deepsonar.registry/v1";
+  images: Array<{
+    image_key: string;
+    name: string;
+    description: string;
+    publisher: string;
+    source_kind: "official";
+    project_opt_in: boolean;
+    default_role?: string;
+    versions: Array<{ version: string; image_ref: string; tools_manifest_sha256?: string; platforms?: string[]; size_bytes?: number }>;
+  }>;
+}
+
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
 
 /** RoleConfig 保存体（全量声明式：每次 PUT 整体替换 Credential 绑定与配置文件） */
@@ -1037,6 +1051,7 @@ export const api = {
     send<{ ok: boolean }>("POST", `/users/${id}/password`, { password }),
   runtimeImages: (projectId?: string, search?: string) =>
     get<RuntimeImageSummary[]>(`/runtime-images${qs({ project_id: projectId, search })}`),
+  runtimeImagesRegistry: () => get<RuntimeImageRegistry>("/runtime-images/registry"),
   runtimeImage: (id: string) => get<RuntimeImageDetail>(`/runtime-images/${id}`),
   importRuntimeImage: (body: {
     image_key: string;
@@ -1057,6 +1072,15 @@ export const api = {
   ) => send<{ image: RuntimeImageSummary; version: RuntimeImageVersion }>(
     "POST", `/runtime-images/${imageId}/official-digest`, body,
   ),
+  registerManualRuntimeDigest: (body: {
+    image_key: string;
+    name: string;
+    description?: string;
+    publisher: string;
+    source_url?: string;
+    image_ref: string;
+    version?: string;
+  }) => send<{ image: RuntimeImageSummary; version: RuntimeImageVersion }>("POST", "/runtime-images/manual-digest", body),
   setRuntimeImageVersionStatus: (
     id: string,
     status: "trusted" | "rejected" | "disabled" | "revoked",

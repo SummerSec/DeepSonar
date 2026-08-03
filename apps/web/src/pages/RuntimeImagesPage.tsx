@@ -1,4 +1,4 @@
-import { ArrowsClockwise, Cube, MagnifyingGlass, Plus, SealCheck, ShieldWarning } from "@phosphor-icons/react";
+import { ArrowsClockwise, Cube, DownloadSimple, MagnifyingGlass, Plus, SealCheck, ShieldWarning } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
@@ -8,6 +8,7 @@ import {
   type RuntimeImageSummary,
   type RuntimeImageTrustStatus,
   type RuntimeImageVersion,
+  type RuntimeImageRegistry,
 } from "../api";
 import { EmptyState, PageHeader, PageSkeleton, formatTime } from "../ui";
 
@@ -68,6 +69,9 @@ export function RuntimeImagesPage() {
   });
   const [officialRef, setOfficialRef] = useState("");
   const [officialVersion, setOfficialVersion] = useState("");
+  const [registry, setRegistry] = useState<RuntimeImageRegistry | null>(null);
+  const [showManual, setShowManual] = useState(false);
+  const [manualForm, setManualForm] = useState({ image_key: "", name: "", description: "", publisher: "", image_ref: "", version: "" });
 
   const reload = async (keepSelected = true) => {
     try {
@@ -91,6 +95,9 @@ export function RuntimeImagesPage() {
       .then((items) => setCredentials(items.filter((item) => item.kind === "oci_registry")))
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    if (!projectId) api.runtimeImagesRegistry().then(setRegistry).catch(() => {});
+  }, [projectId]);
   useEffect(() => {
     const timer = setInterval(() => void reload(), 5_000);
     return () => clearInterval(timer);
@@ -172,6 +179,31 @@ export function RuntimeImagesPage() {
     }
   };
 
+  const exportRegistry = () => {
+    if (!registry) return;
+    const blob = new Blob([JSON.stringify(registry, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "runtime-image-registry.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const registerManual = async () => {
+    setBusy("manual-digest");
+    try {
+      await api.registerManualRuntimeDigest({ ...manualForm, description: manualForm.description || undefined, version: manualForm.version || undefined });
+      setManualForm({ image_key: "", name: "", description: "", publisher: "", image_ref: "", version: "" });
+      setShowManual(false);
+      await reload(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const bind = async (image: RuntimeImageSummary, enabled: boolean, versionId?: string | null) => {
     if (!projectId) return;
     setBusy(image.id);
@@ -204,10 +236,13 @@ export function RuntimeImagesPage() {
               <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索镜像、发布者、key" />
             </label>
             {!projectId && (
-              <button className="primary-button" onClick={() => setShowImport((value) => !value)}>
-                <Plus size={14} />
-                导入镜像
-              </button>
+              <>
+                <button className="secondary-button" disabled={!registry} onClick={exportRegistry}>
+                  <DownloadSimple size={14} /> 导出清单
+                </button>
+                <button className="secondary-button" onClick={() => setShowManual((value) => !value)}>手动信任登记</button>
+                <button className="primary-button" onClick={() => setShowImport((value) => !value)}><Plus size={14} /> 导入镜像</button>
+              </>
             )}
           </div>
         }
@@ -215,6 +250,27 @@ export function RuntimeImagesPage() {
 
       {error && (
         <div className="mb-4 rounded-xl border border-red-400/20 bg-red-400/[.07] px-4 py-3 text-sm text-red-300">{error}</div>
+      )}
+
+      {showManual && !projectId && (
+        <section className="surface-shell mb-5 border-amber-400/20">
+          <div className="surface-core grid gap-3 p-5 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <span className="font-mono text-[10px] tracking-[.16em] text-amber-300">MANUAL TRUST</span>
+              <h2 className="mt-1 text-lg text-zinc-100">手动信任登记</h2>
+              <p className="mt-1 text-xs leading-5 text-amber-200/70">仅管理员可用。此操作绕过镜像准入扫描，请仅登记已由你独立核验的不可变 digest；官方产品不能通过此入口登记。</p>
+            </div>
+            {Object.entries({ image_key: "镜像 key", name: "显示名称", publisher: "发布者", image_ref: "OCI digest（必须含 @sha256:64hex）", version: "版本（可选）", description: "说明（可选）" }).map(([key, label]) => (
+              <label key={key} className={key === "image_ref" || key === "description" ? "md:col-span-2" : ""}>
+                <span className="mb-1 block font-mono text-[10px] tracking-[.12em] text-zinc-600">{label}</span>
+                <input className="field-input w-full font-mono text-[12px]" value={manualForm[key as keyof typeof manualForm]} onChange={(event) => setManualForm({ ...manualForm, [key]: event.target.value })} />
+              </label>
+            ))}
+            <div className="md:col-span-2 flex justify-end">
+              <button className="primary-button" disabled={busy === "manual-digest" || !manualForm.image_ref.includes("@sha256:")} onClick={() => void registerManual()}>{busy === "manual-digest" ? "登记中…" : "直接登记为 trusted"}</button>
+            </div>
+          </div>
+        </section>
       )}
 
       {showImport && (

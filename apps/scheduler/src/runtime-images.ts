@@ -1,8 +1,36 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 
 export const RUNTIME_IMAGE_CONTRACT = "deepsonar.runtime.contract/v1";
+export const RUNTIME_IMAGE_REGISTRY_SCHEMA = "deepsonar.registry/v1";
+
+export interface RuntimeImageRegistryVersion {
+  version: string;
+  image_ref: string;
+  tools_manifest_sha256?: string;
+  platforms?: string[];
+  size_bytes?: number;
+}
+
+export interface RuntimeImageRegistryImage {
+  image_key: string;
+  name: string;
+  description: string;
+  publisher: string;
+  source_kind: "official";
+  source_url?: string;
+  project_opt_in: boolean;
+  default_role?: string;
+  versions: RuntimeImageRegistryVersion[];
+}
+
+export interface RuntimeImageRegistry {
+  schema: typeof RUNTIME_IMAGE_REGISTRY_SCHEMA;
+  images: RuntimeImageRegistryImage[];
+}
 
 export interface RuntimeImageSnapshot {
   runtime_image_id: string | null;
@@ -18,7 +46,7 @@ export interface RuntimeImageSnapshot {
 }
 
 export function immutableDigest(imageRef: string): string | null {
-  const match = imageRef.trim().match(/(?:@|^)(sha256:[0-9a-f]{64})$/);
+  const match = imageRef.trim().match(/@(sha256:[0-9a-f]{64})$/);
   return match?.[1] ?? null;
 }
 
@@ -36,6 +64,131 @@ function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
     source_kind: "fake",
     trust_status: "fake",
   };
+}
+
+function parseRegistry(raw: unknown): RuntimeImageRegistry {
+  if (!raw || typeof raw !== "object") throw new Error("runtime-image-registry.json 必须是对象");
+  const value = raw as Record<string, unknown>;
+  if (value.schema !== RUNTIME_IMAGE_REGISTRY_SCHEMA || !Array.isArray(value.images)) {
+    throw new Error(`runtime-image-registry.json schema 必须为 ${RUNTIME_IMAGE_REGISTRY_SCHEMA}`);
+  }
+  const images = value.images.map((entry, imageIndex): RuntimeImageRegistryImage => {
+    if (!entry || typeof entry !== "object") throw new Error(`注册表 images[${imageIndex}] 无效`);
+    const image = entry as Record<string, unknown>;
+    const key = typeof image.image_key === "string" ? image.image_key : "";
+    const versionsRaw = image.versions;
+    if (!/^[a-z][a-z0-9-]{1,62}$/.test(key) || typeof image.name !== "string" || typeof image.description !== "string"
+      || typeof image.publisher !== "string" || image.source_kind !== "official" || !Array.isArray(versionsRaw)) {
+      throw new Error(`注册表 images[${imageIndex}] 字段无效`);
+    }
+    const versions = versionsRaw.map((version, versionIndex) => {
+      if (!version || typeof version !== "object") throw new Error(`注册表 ${key} versions[${versionIndex}] 无效`);
+      const item = version as Record<string, unknown>;
+      const imageRef = typeof item.image_ref === "string" ? item.image_ref.trim() : "";
+      if (!item.version || typeof item.version !== "string" || !immutableDigest(imageRef)) {
+        throw new Error(`注册表 ${key} versions[${versionIndex}] 必须使用 @sha256:64hex`);
+      }
+      return {
+        version: item.version,
+        image_ref: imageRef as string,
+        ...(typeof item.tools_manifest_sha256 === "string" ? { tools_manifest_sha256: item.tools_manifest_sha256 } : {}),
+        ...(Array.isArray(item.platforms) && item.platforms.every((v) => typeof v === "string") ? { platforms: item.platforms as string[] } : {}),
+        ...(typeof item.size_bytes === "number" ? { size_bytes: item.size_bytes } : {}),
+      };
+    });
+    return {
+      image_key: key,
+      name: typeof image.name === "string" ? image.name : key,
+      description: typeof image.description === "string" ? image.description : "",
+      publisher: typeof image.publisher === "string" ? image.publisher : "",
+      source_kind: "official",
+      ...(typeof image.source_url === "string" ? { source_url: image.source_url } : {}),
+      project_opt_in: image.project_opt_in === true,
+      ...(typeof image.default_role === "string" ? { default_role: image.default_role } : {}),
+      versions,
+    };
+  });
+  return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
+}
+
+export async function loadRuntimeImageRegistry(): Promise<RuntimeImageRegistry> {
+  const candidates = [
+    path.resolve(process.cwd(), "deploy/runtime-image-registry.json"),
+    path.resolve(process.cwd(), "../../deploy/runtime-image-registry.json"),
+  ];
+  for (const filePath of candidates) {
+    try {
+      const file = await readFile(filePath, "utf8");
+      return parseRegistry(JSON.parse(file) as unknown);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new Error(`读取运行时镜像注册表失败（${filePath}）：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  throw new Error(`找不到运行时镜像注册表；已尝试：${candidates.join("、")}`);
+}
+
+function envOfficialOverrides(): Array<{ image_key: string; image_ref: string }> {
+  return [
+    ["deepsonar-base", config.images.officialBaseRef],
+    ["deepsonar-audit", config.images.officialAuditRef || (immutableDigest(config.runtime.imageAudit) ? config.runtime.imageAudit : "")],
+    ["deepsonar-kali-minimal", config.images.officialKaliMinimalRef],
+  ].filter((item): item is [string, string] => Boolean(item[1]) && Boolean(immutableDigest(item[1])))
+    .map(([image_key, image_ref]) => ({ image_key, image_ref }));
+}
+
+export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageRegistry> {
+  const registry = await loadRuntimeImageRegistry();
+  const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
+  for (const override of envOfficialOverrides()) {
+    const image = images.find((item) => item.image_key === override.image_key);
+    if (!image) continue;
+    const digest = immutableDigest(override.image_ref)!;
+    if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
+      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, platforms: ["linux/amd64", "linux/arm64"] });
+    }
+  }
+  const trustedVersions = await sql`
+    SELECT ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url, ri.project_opt_in,
+           v.version, v.image_ref, v.resolved_ref, v.tools_manifest_sha256, v.platforms_json, v.size_bytes
+    FROM runtime_images ri
+    JOIN runtime_image_versions v ON v.runtime_image_id = ri.id
+    WHERE ri.official = true AND v.trust_status = 'trusted'`;
+  for (const row of trustedVersions) {
+    const imageRef = (row.resolved_ref as string | null) ?? (row.image_ref as string | null);
+    const digest = imageRef ? immutableDigest(imageRef) : null;
+    if (!digest) continue;
+    let image = images.find((item) => item.image_key === row.image_key);
+    if (!image) {
+      image = {
+        image_key: row.image_key as string,
+        name: row.name as string,
+        description: row.description as string,
+        publisher: row.publisher as string,
+        source_kind: "official",
+        ...(row.source_url ? { source_url: row.source_url as string } : {}),
+        project_opt_in: row.project_opt_in === true,
+        versions: [],
+      };
+      images.push(image);
+    }
+    if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
+      const sizeBytes = typeof row.size_bytes === "number"
+        ? row.size_bytes
+        : typeof row.size_bytes === "string" && /^\d+$/.test(row.size_bytes)
+          ? Number(row.size_bytes)
+          : null;
+      image.versions.push({
+        version: row.version as string,
+        image_ref: imageRef as string,
+        ...(typeof row.tools_manifest_sha256 === "string" ? { tools_manifest_sha256: row.tools_manifest_sha256 } : {}),
+        ...(Array.isArray(row.platforms_json) ? { platforms: row.platforms_json as string[] } : {}),
+        ...(sizeBytes !== null && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0 ? { size_bytes: sizeBytes } : {}),
+      });
+    }
+  }
+  return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
 }
 
 /** 启动时只接纳管理员显式配置的不可变官方引用；tag 不会被静默信任。 */
@@ -60,46 +213,33 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
       updated_at = now()
     WHERE name = 'verify' AND builtin = true AND kind = 'system'
       AND description = '系统角色：默认在精简 Kali 多语言环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；Hub 不可下发'`;
-  // 官方产品元数据由代码维护；同步全部条目，修复已有数据库里遗留的旧角色描述。
-  await sql`
-    UPDATE runtime_images ri SET
-      name = canonical.name,
-      description = canonical.description,
-      project_opt_in = false,
-      updated_at = now()
-    FROM (VALUES
-      ('deepsonar-base', 'DeepSonar Base', 'Explore、Analyze、Code、Hub 与 Verify 的官方最小运行时'),
-      ('deepsonar-audit', 'DeepSonar Audit', 'Audit 的官方审计运行时'),
-      ('deepsonar-kali-minimal', 'DeepSonar Kali Test', 'Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI')
-    ) AS canonical(image_key, name, description)
-    WHERE ri.image_key = canonical.image_key AND ri.official = true
-      AND (ri.name, ri.description, ri.project_opt_in)
-          IS DISTINCT FROM (canonical.name, canonical.description, false)`;
-
-  const configured = [
-    { key: "deepsonar-base", ref: config.images.officialBaseRef },
-    { key: "deepsonar-audit", ref: config.images.officialAuditRef || (immutableDigest(config.runtime.imageAudit) ? config.runtime.imageAudit : "") },
-    { key: "deepsonar-kali-minimal", ref: config.images.officialKaliMinimalRef },
-  ];
-  for (const item of configured) {
-    if (!item.ref) continue;
-    const digest = immutableDigest(item.ref);
-    if (!digest) {
-      console.warn(`[runtime-images] 忽略可移动官方 tag：${item.key}=${item.ref}；请配置 @sha256 digest`);
-      continue;
-    }
-    const [image] = await sql`SELECT id FROM runtime_images WHERE image_key = ${item.key} AND official = true`;
-    if (!image) throw new Error(`缺少官方 runtime_images 基线: ${item.key}`);
+  const registry = await loadRuntimeImageRegistry();
+  for (const item of registry.images) {
+    const [image] = await sql`
+      INSERT INTO runtime_images ${sql({
+        image_key: item.image_key, name: item.name, description: item.description, publisher: item.publisher,
+        source_url: item.source_url ?? null, source_kind: "official", official: true, project_opt_in: item.project_opt_in,
+      } as never)}
+      ON CONFLICT (image_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
+        publisher = EXCLUDED.publisher, source_url = EXCLUDED.source_url, official = true,
+        project_opt_in = EXCLUDED.project_opt_in, updated_at = now()
+      WHERE runtime_images.official = true
+      RETURNING id`;
+    if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
+    for (const version of item.versions) {
+      const digest = immutableDigest(version.image_ref)!;
     await sql`
       INSERT INTO runtime_image_versions ${sql({
         runtime_image_id: image.id,
-        version: `configured-${digest.slice(7, 19)}`,
-        image_ref: item.ref,
-        resolved_ref: item.ref,
+        version: version.version,
+        image_ref: version.image_ref,
+        resolved_ref: version.image_ref,
         digest,
         contract_version: RUNTIME_IMAGE_CONTRACT,
-        platforms_json: ["linux/amd64", "linux/arm64"] as never,
-        scan_summary_json: { source: "operator-configured-official", contract: "declared" } as never,
+        platforms_json: (version.platforms ?? []) as never,
+        tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
+        size_bytes: version.size_bytes ?? null,
+        scan_summary_json: { source: "static-registry", contract: "declared" } as never,
         trust_status: "trusted",
         approved_by: "bootstrap",
         scanned_at: new Date(),
@@ -111,6 +251,20 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
         resolved_ref = EXCLUDED.resolved_ref,
         promoted_at = EXCLUDED.promoted_at,
         updated_at = now()`;
+    }
+  }
+  for (const item of envOfficialOverrides()) {
+    const digest = immutableDigest(item.image_ref)!;
+    const [image] = await sql`SELECT id FROM runtime_images WHERE image_key = ${item.image_key} AND official = true`;
+    if (!image) throw new Error(`缺少官方 runtime_images 基线: ${item.image_key}`);
+    await sql`
+      INSERT INTO runtime_image_versions ${sql({ runtime_image_id: image.id, version: `configured-${digest.slice(7, 19)}`,
+        image_ref: item.image_ref, resolved_ref: item.image_ref, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
+        platforms_json: ["linux/amd64", "linux/arm64"] as never,
+        scan_summary_json: { source: "operator-configured-official", contract: "declared" } as never,
+        trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(), promoted_at: new Date() } as never)}
+      ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET image_ref = EXCLUDED.image_ref,
+        resolved_ref = EXCLUDED.resolved_ref, promoted_at = EXCLUDED.promoted_at, updated_at = now()`;
   }
 }
 

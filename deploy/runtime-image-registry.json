@@ -1,0 +1,35 @@
+{
+  "schema": "deepsonar.registry/v1",
+  "images": [
+    {
+      "image_key": "deepsonar-base",
+      "name": "DeepSonar Base",
+      "description": "Explore、Analyze、Code、Hub 与 Verify 的官方最小运行时",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": false,
+      "default_role": "base",
+      "versions": []
+    },
+    {
+      "image_key": "deepsonar-audit",
+      "name": "DeepSonar Audit",
+      "description": "Audit 的官方审计运行时",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": false,
+      "default_role": "audit",
+      "versions": []
+    },
+    {
+      "image_key": "deepsonar-kali-minimal",
+      "name": "DeepSonar Kali Test",
+      "description": "Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": false,
+      "default_role": "test",
+      "versions": []
+    }
+  ]
+}

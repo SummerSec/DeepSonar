@@ -67,7 +67,7 @@ import {
   resolvePlatformModules,
 } from "./transfer/platform.js";
 import { processExportRow } from "./transfer/worker.js";
-import { immutableDigest } from "./runtime-images.js";
+import { immutableDigest, runtimeImageRegistryWithOverrides } from "./runtime-images.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -154,6 +154,9 @@ const RuntimeImageStatusBody = z.object({
 const OfficialRuntimeImageDigestBody = z.object({
   image_ref: z.string().trim().min(3).max(500),
   version: z.string().trim().min(1).max(100).optional(),
+});
+const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_credential_id: true }).extend({
+  image_ref: z.string().trim().min(3).max(500),
 });
 const ProjectRuntimeImageBody = z.object({
   enabled: z.boolean().default(true),
@@ -1016,7 +1019,14 @@ export function registerRoutes(app: FastifyInstance) {
       ORDER BY ri.official DESC, ri.name`;
   });
 
-  app.get("/runtime-images/:id", async (req, reply) => {
+  app.get("/runtime-images/registry", async () => runtimeImageRegistryWithOverrides());
+
+  /**
+   * 注意：`:id` 必须带 uuid 约束，否则会吞掉同层静态路由 `/runtime-images/registry`
+   * （Fastify find-my-way 在本版本未把静态路由优先于参数路由）。
+   * registry / manual-digest / import / official-digest 等静态段必须不受 :id 干扰。
+   */
+  app.get("/runtime-images/:id([0-9a-fA-F-]{36})", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [image] = await sql`SELECT * FROM runtime_images WHERE id = ${id}`;
     if (!image) return reply.code(404).send({ error: "runtime image not found" });
@@ -1094,6 +1104,55 @@ export function registerRoutes(app: FastifyInstance) {
         trust_status: "trusted",
       },
     });
+    return reply.code(201).send({ image, version });
+  });
+
+  app.post("/runtime-images/manual-digest", async (req, reply) => {
+    const body = ManualRuntimeImageDigestBody.parse(req.body);
+    const digest = immutableDigest(body.image_ref);
+    if (!digest) return reply.code(400).send({ error: "必须使用不可变引用 name@sha256:64hex" });
+    if (!config.images.isRegistryAllowed(body.image_ref)) {
+      return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
+    }
+    let image: Record<string, unknown>;
+    let version: Record<string, unknown>;
+    try {
+      ({ image, version } = await sql.begin(async (tx) => {
+        const [existing] = await tx`SELECT official FROM runtime_images WHERE image_key = ${body.image_key}`;
+        if (existing?.official) throw new Error("官方产品不能通过手动登记绕过官方约束");
+        const [savedImage] = await tx`
+          INSERT INTO runtime_images ${tx({ image_key: body.image_key, name: body.name, description: body.description,
+            publisher: body.publisher, source_url: body.source_url ?? null, source_kind: "third_party", official: false,
+            project_opt_in: true } as never)}
+          ON CONFLICT (image_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
+            publisher = EXCLUDED.publisher, source_url = EXCLUDED.source_url, project_opt_in = true, enabled = true, updated_at = now()
+          RETURNING *`;
+        const now = new Date();
+        const [savedVersion] = await tx`
+          INSERT INTO runtime_image_versions ${tx({ runtime_image_id: savedImage.id, version: body.version ?? `manual-${digest.slice(7, 19)}`,
+            image_ref: body.image_ref, resolved_ref: body.image_ref, digest, contract_version: "deepsonar.runtime.contract/v1",
+            platforms_json: ["linux/amd64", "linux/arm64"] as never,
+            scan_summary_json: { source: "manual-operator", risk: "bypasses-admission-scan" } as never,
+            trust_status: "trusted", imported_by: req.actor?.name ?? "operator", approved_by: req.actor?.name ?? "operator",
+            approved_at: now, promoted_at: now } as never)}
+          ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET image_ref = EXCLUDED.image_ref,
+            resolved_ref = EXCLUDED.resolved_ref, trust_status = 'trusted', imported_by = EXCLUDED.imported_by,
+            approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at, promoted_at = EXCLUDED.promoted_at,
+            status_reason = NULL, updated_at = now()
+          RETURNING *`;
+        return { image: savedImage as Record<string, unknown>, version: savedVersion as Record<string, unknown> };
+      }));
+    } catch (error) {
+      if (error instanceof Error && error.message === "官方产品不能通过手动登记绕过官方约束") {
+        return reply.code(400).send({ error: error.message });
+      }
+      if ((error as { code?: string }).code === "23505") {
+        return reply.code(409).send({ error: "同一镜像产品的版本名称已存在且对应不同 digest，请更换 version 名称" });
+      }
+      throw error;
+    }
+    await audit(req, { action: "runtime_image.manual_digest", resourceType: "runtime_image_version", resourceId: version.id as string,
+      after: { image_key: image.image_key, image_ref: body.image_ref, digest, trust_status: "trusted", source: "manual-operator" } });
     return reply.code(201).send({ image, version });
   });
 
@@ -1321,7 +1380,9 @@ export function registerRoutes(app: FastifyInstance) {
         FROM runtime_images ri
         LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
         WHERE ri.image_key = ${body.runtime_image_key} AND ri.enabled = true`;
-      if (!image || !image.has_trusted) return `runtime_image_key 没有可信版本: ${body.runtime_image_key}`;
+      if (!image) return `runtime_image_key 不存在或已禁用: ${body.runtime_image_key}`;
+      const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official && !image.project_opt_in;
+      if (!image.has_trusted && !fakeOfficialCatalogImage) return `runtime_image_key 没有可信版本: ${body.runtime_image_key}`;
       if ((!image.official || image.project_opt_in) && (!projectId || image.project_enabled !== true)) {
         return `镜像必须先在目标项目显式启用: ${body.runtime_image_key}`;
       }

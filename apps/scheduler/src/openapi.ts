@@ -33,6 +33,7 @@ interface Op {
   method: HttpMethod;
   path: string;
   summary: string;
+  description?: string;
   scope?: string | null; // null = 豁免鉴权
   tags: string[];
   body?: Record<string, unknown>;
@@ -302,6 +303,14 @@ const OPS: Op[] = [
     tags: ["Runtime Images"],
     query: { project_id: { type: "string", format: "uuid" }, search: { type: "string" } },
   },
+  {
+    method: "get",
+    path: "/runtime-images/registry",
+    summary: "获取静态注册表及官方环境覆盖的最新清单",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。",
+  },
   { method: "get", path: "/runtime-images/{id}", summary: "镜像、不可变版本与准入扫描证据", scope: "images:read", tags: ["Runtime Images"] },
   {
     method: "post",
@@ -321,6 +330,27 @@ const OPS: Op[] = [
         image_ref: { type: "string", description: "受 registry allowlist 限制；tag 将由准入 Worker 解析为 digest" },
         version: { type: "string" },
         registry_credential_id: { type: "string", format: "uuid" },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/manual-digest",
+    summary: "管理员手动登记非官方镜像 digest 并直接信任",
+    description: "需要 images:approve（admin 隐式拥有）。仅允许 registry allowlist 内的不可变 @sha256:64hex；不创建准入扫描记录，调用方必须自行承担绕过扫描的供应链风险。官方产品不能通过此接口绕过官方约束，非官方镜像仍需项目显式启用。",
+    scope: "images:approve",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_key", "name", "publisher", "image_ref"],
+      properties: {
+        image_key: { type: "string", description: "非官方产品 key" },
+        name: { type: "string" },
+        description: { type: "string" },
+        publisher: { type: "string" },
+        source_url: { type: "string", format: "uri" },
+        image_ref: { type: "string", description: "必须是 registry/path@sha256:64hex，且 registry 在 allowlist 内" },
+        version: { type: "string" },
       },
     },
   },
@@ -530,6 +560,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     ];
     const operation: Record<string, unknown> = {
       summary: op.summary,
+      description: op.description,
       tags: op.tags,
       operationId: `${op.method}_${op.path.replace(/[{}/]/g, "_").replace(/_+/g, "_")}`,
       parameters: parameters.length ? parameters : undefined,
