@@ -267,6 +267,38 @@ export function shouldWakeEvidenceHub(lastSignature: string | null | undefined, 
   return currentSignature.trim().length > 0 && lastSignature !== currentSignature;
 }
 
+const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
+
+function isSchedulerOwnedVerificationFollowup(payload: Record<string, unknown>, parentJobType?: unknown): boolean {
+  const followup = payload.verification_followup;
+  if (!followup || typeof followup !== "object" || Array.isArray(followup)) return false;
+  const value = followup as Record<string, unknown>;
+  return (
+    value.scheduler_owned === true &&
+    String(parentJobType ?? "").trim().toLowerCase() === "hub_reason" &&
+    typeof value.finding_id === "string" &&
+    value.finding_id.trim().length > 0 &&
+    Array.isArray(value.required_evidence)
+  );
+}
+
+function schedulerPurposeForPendingNormalization(
+  type: string,
+  payload: Record<string, unknown>,
+  parentJobType?: unknown,
+): SchedulingPurpose {
+  const normalizedType = String(type ?? "").trim().toLowerCase();
+  if (SCHEDULER_SYSTEM_JOB_TYPES.has(normalizedType)) {
+    // System lanes are derived from the immutable type. Persisted payload
+    // purpose is never trusted during boot/resume repair.
+    return schedulingPurposeForJob({ type: normalizedType, payload: { ...payload, scheduling_purpose: undefined } });
+  }
+  // Hub-generated verification followups are the one scheduler-owned
+  // non-system lane. Both the Hub parent relation and the server-owned marker
+  // are required; legacy public payloads are ordinary discovery work.
+  return isSchedulerOwnedVerificationFollowup(payload, parentJobType) ? "convergence_evidence" : "discovery";
+}
+
 function priorityNormalization(row: Record<string, unknown>): {
   priority: number;
   payload: Record<string, unknown>;
@@ -276,15 +308,7 @@ function priorityNormalization(row: Record<string, unknown>): {
     row.payload_json && typeof row.payload_json === "object" && !Array.isArray(row.payload_json)
       ? { ...(row.payload_json as Record<string, unknown>) }
       : {};
-  const purpose = schedulingPurposeForJob({
-    type: row.type as string,
-    purpose: payload.scheduling_purpose,
-    severity:
-      row.finding_severity ??
-      payload.severity ??
-      (payload.finding as Record<string, unknown> | undefined)?.severity,
-    payload,
-  });
+  const purpose = schedulerPurposeForPendingNormalization(row.type as string, payload, row.parent_job_type);
   const priority = fixedPriorityForJob({
     type: row.type as string,
     purpose,
@@ -306,10 +330,12 @@ function priorityNormalization(row: Record<string, unknown>): {
  */
 export async function normalizePendingJobPriorities(db: typeof sql = sql): Promise<{ examined: number; updated: number }> {
   const rows = await db`
-    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id,
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id, j.parent_job_id,
+           parent.type AS parent_job_type,
            f.severity AS finding_severity
     FROM jobs j
     LEFT JOIN findings f ON f.id = j.finding_id
+    LEFT JOIN jobs parent ON parent.id = j.parent_job_id
     WHERE j.status = 'pending'
     ORDER BY j.created_at ASC, j.id ASC`;
   let updated = 0;
@@ -330,10 +356,12 @@ export async function normalizePendingJobPriorities(db: typeof sql = sql): Promi
 /** Re-apply the same scheduler-owned class when a historical Job is resumed. */
 export async function normalizePendingJobPriority(jobId: string, db: typeof sql = sql): Promise<boolean> {
   const [row] = await db`
-    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id,
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id, j.parent_job_id,
+           parent.type AS parent_job_type,
            f.severity AS finding_severity
     FROM jobs j
     LEFT JOIN findings f ON f.id = j.finding_id
+    LEFT JOIN jobs parent ON parent.id = j.parent_job_id
     WHERE j.id = ${jobId} AND j.status = 'pending'`;
   if (!row) return false;
   const normalized = priorityNormalization(row as Record<string, unknown>);
@@ -616,11 +644,23 @@ export interface CreateJobInput {
 
 export async function createJob(input: CreateJobInput) {
   const requestedPayload = { ...(input.payload ?? {}) };
-  const systemType = ["hub_reason", "hub", "verify_finding", "verify", "report"].includes(
-    String(input.type ?? "").toLowerCase(),
-  );
+  const systemType = SCHEDULER_SYSTEM_JOB_TYPES.has(String(input.type ?? "").toLowerCase());
   const schedulingPayload = { ...requestedPayload };
-  if (!systemType) delete schedulingPayload.scheduling_purpose;
+  if (!systemType) {
+    delete schedulingPayload.scheduling_purpose;
+    // Scheduler-owned Verify followup markers must never cross the public
+    // createJob/Plane ingress boundary.
+    delete schedulingPayload.scheduler_owned;
+    if (
+      schedulingPayload.verification_followup &&
+      typeof schedulingPayload.verification_followup === "object" &&
+      !Array.isArray(schedulingPayload.verification_followup)
+    ) {
+      const followup = { ...(schedulingPayload.verification_followup as Record<string, unknown>) };
+      delete followup.scheduler_owned;
+      schedulingPayload.verification_followup = followup;
+    }
+  }
   const purpose = schedulingPurposeForJob({
     type: input.type,
     // Custom/public Job creation never accepts a caller-selected convergence
@@ -638,7 +678,7 @@ export async function createJob(input: CreateJobInput) {
   if (input.priority !== undefined && input.priority !== priority) {
     throw new Error(`job priority is fixed for ${input.type}: expected ${priority}`);
   }
-  const payload = { ...requestedPayload, scheduling_purpose: purpose };
+  const payload = { ...schedulingPayload, scheduling_purpose: purpose };
   try {
     // 冻结角色运行快照：配置变更只影响之后创建的 Job。
     const snapshot = await resolveAgentSnapshotForJob(sql, input.projectId, input.type);
@@ -824,6 +864,24 @@ export async function ingestEvent(jobId: string, envelope: EventEnvelope): Promi
 }
 
 type Tx = typeof sql;
+
+/**
+ * Shared dispatcher/retry serialization key.  The dispatcher holds this
+ * transaction advisory lock while claiming pending jobs; destructive canvas
+ * retry acquires the same key before it checks and wipes runtime rows.
+ */
+export const DISPATCH_CLAIM_ADVISORY_KEY = "deepsonar_dispatch_claim";
+
+/**
+ * Every path that mutates convergence state takes the canvas row first.  The
+ * finding/verification-round locks are always acquired underneath this lock,
+ * so terminal/recovery paths cannot deadlock with Hub eligibility.
+ */
+export async function lockCanvasForConvergence(tx: Tx, canvasId: string | null | undefined): Promise<boolean> {
+  if (!canvasId) return true;
+  const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+  return Boolean(canvas);
+}
 
 /** canvas_edges 无唯一约束：from/to 边幂等插入 */
 async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: string) {
@@ -1068,6 +1126,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         INSERT INTO jobs ${tx({
           project_id: job.project_id as string,
           canvas_id: canvasId,
+          parent_job_id: job.id as string,
           agent_snapshot_json: snapshot as never,
           type: role,
           priority: fixedPriorityForJob({ type: role, purpose: schedulingPurpose }),
@@ -1079,7 +1138,9 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
               from: it.from ?? [],
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
-            ...(verificationFollowup ? { verification_followup: verificationFollowup } : {}),
+            ...(verificationFollowup
+              ? { verification_followup: { ...verificationFollowup, scheduler_owned: true } }
+              : {}),
           } as never,
           timeout_sec: rules.auditTimeoutSec,
           followup_depth: 0,
@@ -1168,6 +1229,11 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // §13.1 指标：终态计数 + 时长
+  // Canvas is the outer lock for every terminal path. Verify close/recovery
+  // locks Finding/Round underneath it, while Hub eligibility does the same
+  // canvas -> waiting-round order. This prevents 40P01 inversions when a
+  // Verify and a role finalize concurrently on one canvas.
+  await lockCanvasForConvergence(tx, (job?.canvas_id as string | null) ?? null);
   if (status === "failed") inc("deepsonar_jobs_failed_total", { reason: "failed" });
   if (job?.started_at) {
     const dur = (Date.now() - new Date(job.started_at as string).getTime()) / 1000;
@@ -1260,6 +1326,7 @@ export async function recoverVerifyJobTerminal(
     const tx = txRaw as unknown as Tx;
     const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (!job || job.type !== "verify_finding" || !job.finding_id) return;
+    if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;
     const { closeVerifyRound } = await import("./verify.js");
     const closed = await closeVerifyRound(tx, jobId, {
       jobStatus,
@@ -1311,6 +1378,8 @@ export async function advanceCanvasAfterTerminalJob(
 ): Promise<"report" | "hub" | "noop"> {
   const canvasId = job.canvas_id as string | null;
   if (!canvasId || job.type === "report") return "noop";
+
+  if (!(await lockCanvasForConvergence(tx, canvasId))) return "noop";
 
   const [root] = await tx`
     SELECT status FROM canvas_nodes
@@ -1526,9 +1595,7 @@ export async function maybeTriggerHub(
   // row lock, two concurrent terminal events can both observe "no active
   // Hub" and enqueue duplicate pending decisions that then block one another
   // in the dispatcher.
-  const [canvasLock] = await tx`
-    SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
-  if (!canvasLock) return;
+  if (!(await lockCanvasForConvergence(tx, canvasId))) return;
 
   // 分析已完成 / 报告中：不再唤醒 Hub
   if (await rootAnalysisFinished(tx, canvasId)) {

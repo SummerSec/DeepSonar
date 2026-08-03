@@ -89,3 +89,44 @@ test("pending Verify graph facts are loaded in one bounded-page query", async ()
   assert.equal(calls, 1);
   assert.equal(batch.verifyWaitingIds.has(verifyId), true);
 });
+
+test("Hub and Report graph facts are batched per canvas without join fanout", async () => {
+  let calls = 0;
+  const canvasId = "00000000-0000-0000-0000-000000000099";
+  const hubIds = Array.from({ length: 50 }, (_, i) => `hub-${i}`);
+  const reportIds = Array.from({ length: 50 }, (_, i) => `report-${i}`);
+  const pending = [
+    ...hubIds.map((id) => ({ id, type: "hub_reason", canvas_id: canvasId })),
+    ...reportIds.map((id) => ({ id, type: "report", canvas_id: canvasId })),
+  ] as never[];
+  const fakeTx = ((strings: TemplateStringsArray) => {
+    const text = strings.join("");
+    calls += 1;
+    if (text.includes("node_state") && text.includes("job_state")) {
+      return Promise.resolve([{
+        canvas_id: canvasId,
+        root_status: "analysis_complete",
+        active_hub: false,
+        active_waiting_human: false,
+        active_role: false,
+        active_canvas_job: false,
+      }]);
+    }
+    if (text.includes("array_agg") && text.includes("oldest_hub_id")) {
+      return Promise.resolve([{
+        canvas_id: canvasId,
+        oldest_hub_id: hubIds[0],
+        oldest_report_id: reportIds[0],
+      }]);
+    }
+    return Promise.resolve([]);
+  }) as unknown as Parameters<typeof loadGraphEligibilityBatch>[0];
+
+  const batch = await loadGraphEligibilityBatch(fakeTx, pending);
+  assert.equal(calls, 2, "one pre-aggregated system query plus one oldest query per page");
+  assert.equal(batch.systemStates.size, pending.length);
+  assert.equal(batch.systemStates.get(hubIds[0])?.pendingHubOlder, false);
+  assert.equal(batch.systemStates.get(hubIds[1])?.pendingHubOlder, true);
+  assert.equal(batch.systemStates.get(reportIds[0])?.pendingReportOlder, false);
+  assert.equal(batch.systemStates.get(reportIds[1])?.pendingReportOlder, true);
+});

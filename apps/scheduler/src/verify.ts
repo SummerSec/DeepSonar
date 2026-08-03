@@ -173,7 +173,8 @@ export async function createVerifyRound(
   },
 ): Promise<{ jobId: string; roundId: string; attempt: number } | null> {
   const findingId = opts.finding.id as string;
-  const { fixedPriorityForJob, rulesForProject, resolveAgentSnapshotForJob } = await core();
+  const { fixedPriorityForJob, lockCanvasForConvergence, rulesForProject, resolveAgentSnapshotForJob } = await core();
+  if (!(await lockCanvasForConvergence(tx, opts.canvasId))) return null;
   const rules = await rulesForProject(tx as unknown as typeof sql, opts.projectId);
 
   if (opts.followupDepth >= rules.maxFollowupDepth) {
@@ -414,6 +415,8 @@ export async function normalizePendingVerificationRounds(
   for (const candidate of missingJobRounds) {
     const outcome = await db.begin(async (txRaw) => {
       const tx = txRaw as unknown as Tx;
+      const { lockCanvasForConvergence } = await core();
+      if (!(await lockCanvasForConvergence(tx, (candidate.origin_canvas_id as string | null) ?? null))) return "gone" as const;
       const [round] = await tx`
         SELECT id, finding_id, status, verify_job_id, requirements_json
         FROM finding_verification_rounds
@@ -455,6 +458,7 @@ export async function normalizePendingVerificationRounds(
 
   const staleJobs = await db`
     SELECT r.id AS round_id, r.finding_id, r.verify_job_id,
+           j.canvas_id,
            j.status AS job_status, j.error AS job_error
     FROM finding_verification_rounds r
     JOIN jobs j ON j.id = r.verify_job_id
@@ -479,6 +483,8 @@ export async function normalizePendingVerificationRounds(
     // scheduling another attempt on every restart.
     const repaired = await db.begin(async (txRaw) => {
       const tx = txRaw as unknown as Tx;
+      const { lockCanvasForConvergence } = await core();
+      if (!(await lockCanvasForConvergence(tx, (stale.canvas_id as string | null) ?? null))) return false;
       const [round] = await tx`
         SELECT id, finding_id FROM finding_verification_rounds
         WHERE id = ${stale.round_id as string}
@@ -525,10 +531,11 @@ export async function evaluateFollowup(
   job: Record<string, unknown>,
   finding: Record<string, unknown>,
 ): Promise<void> {
-  const { rulesForProject } = await core();
+  const { lockCanvasForConvergence, rulesForProject } = await core();
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   const canvasId = (job.canvas_id as string) ?? null;
   const findingId = finding.id as string;
+  if (!(await lockCanvasForConvergence(tx, canvasId))) return;
 
   if ((job.followup_depth as number) >= rules.maxFollowupDepth) {
     await markFindingNeedsHuman(tx, findingId, "max_followup_depth", canvasId);
@@ -563,6 +570,8 @@ export async function settleCanvasFindingsAtGuardrail(
   canvasId: string,
   reason: string,
 ): Promise<{ settled: number }> {
+  const { lockCanvasForConvergence } = await core();
+  if (!(await lockCanvasForConvergence(tx, canvasId))) return { settled: 0 };
   const rows = await tx`
     SELECT f.id, f.node_id, f.verify_status
     FROM findings f
@@ -606,6 +615,11 @@ export async function closeVerifyRound(
 ): Promise<CloseVerifyResult> {
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job || job.type !== "verify_finding" || !job.finding_id) {
+    return { outcome: "skipped", forceHub: false };
+  }
+
+  const { lockCanvasForConvergence } = await core();
+  if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) {
     return { outcome: "skipped", forceHub: false };
   }
 
@@ -798,6 +812,9 @@ export async function maybeReverifyAfterFollowup(
   const canvasId = job.canvas_id as string | null;
   if (!canvasId) return;
   const selfJobId = String(job.id ?? "");
+
+  const { lockCanvasForConvergence } = await core();
+  if (!(await lockCanvasForConvergence(tx, canvasId))) return;
 
   // 串行化同一 Finding 的补证收口（关键：拿锁后再看 active）
   const [finding] = await tx`

@@ -52,7 +52,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /jobs | tasks:write | 直接建 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；一般用 tasks.create |
+| POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；公共入口对 `hub_reason` / `hub` / `verify_finding` / `report` 返回 409；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
 | GET | /jobs/:id | tasks:read | 详情（含事件） |
 | PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}` |

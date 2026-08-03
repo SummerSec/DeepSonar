@@ -163,7 +163,11 @@ const OPS: Op[] = [
       required: ["project_id", "type"],
       properties: {
         project_id: { type: "string", format: "uuid" },
-        type: { type: "string", description: "已注册角色名或系统类型" },
+        type: {
+          type: "string",
+          description:
+            "Registered public role name. Public POST rejects scheduler-owned hub_reason, hub, verify_finding, and report (409). verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
+        },
         title: { type: "string" },
         payload: { type: "object", additionalProperties: true },
         priority: { type: "integer", description: "可选；必须等于系统固定调度档位" },

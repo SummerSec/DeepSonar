@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
+  DISPATCH_CLAIM_ADVISORY_KEY,
   globalRules,
   ingestEvent,
   PLATFORM_DEFAULT_AGENT_CLI,
@@ -57,6 +58,7 @@ export interface GraphEligibilityState {
 /** Page-scoped graph facts loaded once before candidate evaluation. */
 export interface GraphEligibilityBatch {
   verifyWaitingIds: ReadonlySet<string>;
+  systemStates: ReadonlyMap<string, GraphEligibilityState>;
 }
 
 /**
@@ -72,15 +74,97 @@ export async function loadGraphEligibilityBatch(
   const verifyIds = pending
     .filter((job) => String(job.type ?? "") === "verify_finding" && job.id)
     .map((job) => String(job.id));
-  if (verifyIds.length === 0) return { verifyWaitingIds: new Set<string>() };
-  const rows = await tx`
-    SELECT verify_job_id
-    FROM finding_verification_rounds
-    WHERE verify_job_id = ANY(${verifyIds}::uuid[])
-      AND status IN ('pending','running')
-      AND requirements_json->>'eligibility' = 'waiting_evidence'`;
+  const canvasIds = [...new Set(
+    pending
+      .filter((job) => ["hub_reason", "report"].includes(String(job.type ?? "")) && job.canvas_id)
+      .map((job) => String(job.canvas_id)),
+  )];
+  const [verifyRows, systemRows, oldestRows] = await Promise.all([
+    verifyIds.length > 0
+      ? tx`
+          SELECT verify_job_id
+          FROM finding_verification_rounds
+          WHERE verify_job_id = ANY(${verifyIds}::uuid[])
+            AND status IN ('pending','running')
+            AND requirements_json->>'eligibility' = 'waiting_evidence'`
+      : Promise.resolve([]),
+    canvasIds.length > 0
+      ? tx`
+          WITH requested AS (
+            SELECT canvas_id
+            FROM unnest(${canvasIds}::text[]) AS input(canvas_id)
+          ),
+          node_state AS (
+            SELECT n.canvas_id,
+                   MAX(n.status) FILTER (WHERE n.node_type = 'root') AS root_status
+            FROM canvas_nodes n
+            JOIN requested r ON r.canvas_id = n.canvas_id
+            GROUP BY n.canvas_id
+          ),
+          job_state AS (
+            SELECT j.canvas_id,
+                   COALESCE(BOOL_OR(j.type = 'hub_reason' AND j.status IN ('claimed','provisioning','running','waiting_human')), false) AS active_hub,
+                   COALESCE(BOOL_OR(j.status = 'waiting_human'), false) AS active_waiting_human,
+                   COALESCE(BOOL_OR(j.type NOT IN ('hub_reason','verify_finding','report')
+                     AND j.status IN ('pending','claimed','provisioning','running','waiting_human')), false) AS active_role,
+                   COALESCE(BOOL_OR(
+                     j.status IN ('claimed','provisioning','running','waiting_human')
+                     OR (j.status = 'pending' AND j.type <> 'report')
+                   ), false) AS active_canvas_job
+            FROM jobs j
+            JOIN requested r ON r.canvas_id = j.canvas_id
+            GROUP BY j.canvas_id
+          )
+          SELECT r.canvas_id,
+                 ns.root_status,
+                 COALESCE(js.active_hub, false) AS active_hub,
+                 COALESCE(js.active_waiting_human, false) AS active_waiting_human,
+                 COALESCE(js.active_role, false) AS active_role,
+                 COALESCE(js.active_canvas_job, false) AS active_canvas_job
+          FROM requested r
+          LEFT JOIN node_state ns ON ns.canvas_id = r.canvas_id
+          LEFT JOIN job_state js ON js.canvas_id = r.canvas_id`
+      : Promise.resolve([]),
+    canvasIds.length > 0
+      ? tx`
+          SELECT canvas_id,
+                 (array_agg(id ORDER BY created_at ASC, id ASC) FILTER (WHERE type = 'hub_reason'))[1] AS oldest_hub_id,
+                 (array_agg(id ORDER BY created_at ASC, id ASC) FILTER (WHERE type = 'report'))[1] AS oldest_report_id
+          FROM jobs
+          WHERE canvas_id = ANY(${canvasIds}::text[])
+            AND status = 'pending'
+            AND type IN ('hub_reason','report')
+          GROUP BY canvas_id`
+      : Promise.resolve([]),
+  ]);
+  const systemByCanvas = new Map<string, Record<string, unknown>>(
+    systemRows.map((row) => [String(row.canvas_id), row as Record<string, unknown>]),
+  );
+  const oldestByCanvas = new Map<string, Record<string, unknown>>(
+    oldestRows.map((row) => [String(row.canvas_id), row as Record<string, unknown>]),
+  );
+  const systemStates = new Map<string, GraphEligibilityState>();
+  for (const job of pending) {
+    const type = String(job.type ?? "");
+    if (type !== "hub_reason" && type !== "report") continue;
+    const canvasId = String(job.canvas_id ?? "").trim();
+    if (!canvasId) continue;
+    const current = systemByCanvas.get(canvasId);
+    const oldest = oldestByCanvas.get(canvasId);
+    if (!current) continue;
+    systemStates.set(String(job.id ?? ""), {
+      activeHub: Boolean(current.active_hub),
+      activeWaitingHuman: Boolean(current.active_waiting_human),
+      activeRole: Boolean(current.active_role),
+      activeCanvasJob: Boolean(current.active_canvas_job),
+      rootStatus: (current.root_status as string | null) ?? null,
+      pendingHubOlder: Boolean(oldest?.oldest_hub_id && oldest.oldest_hub_id !== job.id),
+      pendingReportOlder: Boolean(oldest?.oldest_report_id && oldest.oldest_report_id !== job.id),
+    });
+  }
   return {
-    verifyWaitingIds: new Set(rows.map((row) => String(row.verify_job_id))),
+    verifyWaitingIds: new Set(verifyRows.map((row) => String(row.verify_job_id))),
+    systemStates,
   };
 }
 
@@ -228,6 +312,8 @@ async function graphEligibilityReasonFromDb(
   }
 
   if (type === "report") {
+    const batchedState = batch?.systemStates.get(id);
+    if (batchedState) return graphEligibilityReason({ type }, batchedState);
     const [root, activeCanvas, oldestPendingReport] = await Promise.all([
       tx`SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`,
       tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id}
@@ -247,6 +333,9 @@ async function graphEligibilityReasonFromDb(
       },
     );
   }
+
+  const batchedState = batch?.systemStates.get(id);
+  if (batchedState) return graphEligibilityReason({ type }, batchedState);
 
   const [activeHub, activeWaitingHuman, activeRole, root, oldestPendingHub] = await Promise.all([
     tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND type = 'hub_reason'
@@ -282,7 +371,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
   // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
   // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
   const claimedJobs = await sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtext('deepsonar_dispatch_claim'))`;
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     // global_settings.effective_rules is the sole dispatcher authority;
     // environment defaults are resolved inside globalRules before claim.
     const rules = await globalRules(tx as unknown as typeof sql);

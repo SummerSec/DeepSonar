@@ -31,6 +31,7 @@ import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
   CONFIG_FILE_MAX_TOTAL,
+  DISPATCH_CLAIM_ADVISORY_KEY,
   PLATFORM_DEFAULT_AGENT_CLI,
   createJob,
   drainNonGateVerifies,
@@ -882,7 +883,25 @@ export function registerRoutes(app: FastifyInstance) {
       payload.network_policy = target.network_policy;
     }
 
-    const job = await sql.begin(async (tx) => {
+    const retryResult = await sql.begin(async (tx) => {
+      // Retry is a destructive canvas reset. Serialize the whole operation
+      // on the same advisory key used by dispatcher claim, then on the canvas
+      // row. This prevents a dispatcher from claiming a pending Job after the
+      // active check but before wipeCanvasRuntimeData runs. Re-check active
+      // work after acquiring both locks; the preflight query is only a fast
+      // path.
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+      const [lockedCanvas] = await tx`
+        SELECT id, status FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+      if (!lockedCanvas) return { job: null, reason: "canvas_not_found" as const };
+      if ((lockedCanvas.status as string) === "archived") {
+        return { job: null, reason: "archived" as const };
+      }
+      const activeInside = await tx`
+        SELECT 1 FROM jobs WHERE canvas_id = ${canvasId}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        LIMIT 1`;
+      if (activeInside.length > 0) return { job: null, reason: "active" as const };
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态，保留用户任务内容
@@ -903,7 +922,7 @@ export function registerRoutes(app: FastifyInstance) {
         })}`;
 
       // 同事务内插入入口 Hub，避免 createJob 另开连接看不到未提交删除
-      const snapshot = await resolveAgentSnapshotForJob(sql, projectId, "hub_reason");
+      const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "hub_reason");
       const [hubJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: projectId,
@@ -944,8 +963,19 @@ export function registerRoutes(app: FastifyInstance) {
             edge_type: "child",
           })}`;
       }
-      return hubJob;
+      return { job: hubJob, reason: undefined };
     });
+
+    if (!retryResult.job) {
+      if (retryResult.reason === "archived") {
+        return reply.code(409).send({ error: "任务已归档，请先取消归档再重试" });
+      }
+      if (retryResult.reason === "active") {
+        return reply.code(409).send({ error: "该任务仍有活动 Job，请先取消后再重试" });
+      }
+      return reply.code(404).send({ error: "canvas not found" });
+    }
+    const job = retryResult.job;
 
     await audit(req, {
       action: "task.retry_hard",
@@ -2519,6 +2549,12 @@ export function registerRoutes(app: FastifyInstance) {
     // another system lane) into a custom role's fixed priority class.
     const payload = { ...body.payload };
     delete payload.scheduling_purpose;
+    delete payload.scheduler_owned;
+    if (payload.verification_followup && typeof payload.verification_followup === "object" && !Array.isArray(payload.verification_followup)) {
+      const followup = { ...(payload.verification_followup as Record<string, unknown>) };
+      delete followup.scheduler_owned;
+      payload.verification_followup = followup;
+    }
     const expectedPriority = fixedPriorityForJob({
       type: body.type,
       payload,
