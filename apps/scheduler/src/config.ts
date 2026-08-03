@@ -196,6 +196,8 @@ export const config = {
   skillSources: {
     /** 逗号分隔的 Git host 允许列表；空 = 任意 HTTPS host。 */
     allowedGitHosts: str("DEEPSONAR_GIT_ALLOWED_HOSTS", ""),
+    /** 启动时对已信任且启用的模块源默认执行一次同步。 */
+    bootSync: bool("DEEPSONAR_SKILL_SOURCE_BOOT_SYNC", true),
   },
 
   /** 可信运行镜像目录由数据库管理；环境变量只负责引导官方 digest 与 registry 边界。 */

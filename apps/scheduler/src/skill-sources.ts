@@ -248,3 +248,35 @@ export async function expandModules(
   }
   return { skills, commands, missing, revisions };
 }
+
+/**
+ * 启动时对已信任且启用的模块源各做一次浅克隆同步（默认开启）。
+ * 失败只记日志，不阻塞调度器启动；synced_by 标记为 boot。
+ */
+export async function bootstrapSkillSourcesOnBoot(): Promise<void> {
+  if (!config.skillSources.bootSync) {
+    console.log("[boot] 跳过模块源启动同步（DEEPSONAR_SKILL_SOURCE_BOOT_SYNC=false）");
+    return;
+  }
+  const sources = await sql`
+    SELECT id, name FROM skill_sources
+    WHERE enabled = true AND trust_status = 'trusted'
+    ORDER BY created_at ASC`;
+  if (sources.length === 0) {
+    console.log("[boot] 无已信任模块源，跳过启动同步");
+    return;
+  }
+  for (const src of sources) {
+    const name = src.name as string;
+    const id = src.id as string;
+    try {
+      const r = await syncSkillSource(id, "boot");
+      console.log(`[boot] 模块源 ${name} 同步完成：${r.modules} 个模块`);
+    } catch (error) {
+      console.warn(
+        `[boot] 模块源 ${name} 同步失败（不阻塞启动）:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+}
