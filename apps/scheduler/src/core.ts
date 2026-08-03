@@ -1617,8 +1617,19 @@ This Job uses a Scheduler-selected, trusted runtime image. Before testing, verif
 - If a required preinstalled command is missing, stop the dynamic attempt and submit structured inconclusive/needs-human evidence. Never claim a confirmed Finding from a static description alone.
 - Record the runtime image key/digest, tool versions, target revision, exact steps, expected result, actual result, and limitations in emit_fact.verification for runtime-test evidence.`;
 
-function withRuntimeTestToolchainPolicy(roleName: string, instructions: string | null): string | null {
-  if (roleName !== "test") return instructions;
+export function withRuntimeTestToolchainPolicy(
+  roleName: string,
+  instructions: string | null,
+  resolvedRuntimeImageKey: string | null,
+): string | null {
+  // Test always performs runtime work. Verify receives the same guard only
+  // when its project RoleConfig explicitly opts into a non-Base image; the
+  // global Base Verify path remains suitable for static evidence review.
+  const dynamicVerify =
+    roleName === "verify" &&
+    resolvedRuntimeImageKey !== null &&
+    resolvedRuntimeImageKey !== "deepsonar-base";
+  if (roleName !== "test" && !dynamicVerify) return instructions;
   const base = instructions?.trim() ?? "";
   if (base.includes("### Runtime test toolchain (Scheduler policy)")) return base;
   return `${base}${base ? "\n\n" : ""}${RUNTIME_TEST_TOOLCHAIN_POLICY}`;
@@ -1738,6 +1749,7 @@ export async function resolveAgentSnapshotForJob(
     instructions_markdown: withRuntimeTestToolchainPolicy(
       roleName,
       (cfg?.instructions_markdown as string) ?? null,
+      runtimeImage.image_key,
     ),
     platform_tools: platformTools,
     config_files: configFiles as unknown as { path: string; content: string; content_sha256: string }[],

@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import {
+  RUNTIME_TEST_TOOLCHAIN_POLICY,
+  withRuntimeTestToolchainPolicy,
+} from "../apps/scheduler/src/core.ts";
+
+const custom = "operator-authored test instructions";
+
+assert.equal(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal"),
+  RUNTIME_TEST_TOOLCHAIN_POLICY,
+);
+assert.equal(
+  withRuntimeTestToolchainPolicy("test", RUNTIME_TEST_TOOLCHAIN_POLICY, "deepsonar-base"),
+  RUNTIME_TEST_TOOLCHAIN_POLICY,
+);
+assert.equal(
+  withRuntimeTestToolchainPolicy("verify", custom, "deepsonar-base"),
+  custom,
+);
+assert.match(
+  withRuntimeTestToolchainPolicy("verify", custom, "deepsonar-kali-minimal") ?? "",
+  /Runtime test toolchain \(Scheduler policy\)/,
+);
+assert.equal(
+  withRuntimeTestToolchainPolicy("verify", custom, null),
+  custom,
+);
+assert.equal(
+  withRuntimeTestToolchainPolicy("audit", null, "deepsonar-audit"),
+  null,
+);
+
+console.log("OK: runtime test policy selection and idempotence");
