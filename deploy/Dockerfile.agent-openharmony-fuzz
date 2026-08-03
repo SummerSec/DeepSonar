@@ -3,6 +3,7 @@
 # 不包含全量源码、板级固件或 GUI；不安装 Kali metapackage。
 ARG BASE_IMAGE=deepsonar-base:local
 FROM ${BASE_IMAGE} AS runtime-rootfs
+ARG TARGETARCH
 
 USER root
 ARG REPO_SHA256=2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020
@@ -41,8 +42,12 @@ RUN install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.s
   && chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
 RUN /opt/deepsonar/bin/openharmony-env.sh --check \
-  && /opt/deepsonar/bin/openharmony-fuzz-env.sh --check \
-  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-fuzz","imageKey":"deepsonar-openharmony-fuzz","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","llvm-symbolizer","compiler-rt","libfuzzer","afl-fuzz","afl-clang-fast","gdb","objdump","addr2line","libasan","libubsan","node","claude"],"focus":["dynamic-verify","crash-repro","harness-fuzz"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-fuzz-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","fuzzBuild":"/opt/deepsonar/bin/openharmony-fuzz-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
+  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-fuzz","imageKey":"deepsonar-openharmony-fuzz","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","llvm-symbolizer","compiler-rt","libfuzzer","afl-fuzz","afl-clang-fast","gdb","objdump","addr2line","libasan","libubsan","node","claude"],"focus":["dynamic-verify","crash-repro","harness-fuzz"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-fuzz-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","fuzzBuild":"/opt/deepsonar/bin/openharmony-fuzz-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\n")' \
+  && if [ "$TARGETARCH" = "arm64" ]; then \
+       /opt/deepsonar/bin/openharmony-fuzz-env.sh --check --static; \
+     else \
+       /opt/deepsonar/bin/openharmony-fuzz-env.sh --check; \
+     fi
 
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \

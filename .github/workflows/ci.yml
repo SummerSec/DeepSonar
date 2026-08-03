@@ -197,21 +197,25 @@ jobs:
           - toolset: openharmony-audit
             dockerfile: deploy/Dockerfile.agent-openharmony-audit
             check: openharmony-audit-env.sh
+            check_args: --check
             platform: linux/amd64
             arch: amd64
           - toolset: openharmony-audit
             dockerfile: deploy/Dockerfile.agent-openharmony-audit
             check: openharmony-audit-env.sh
+            check_args: --check
             platform: linux/arm64
             arch: arm64
           - toolset: openharmony-fuzz
             dockerfile: deploy/Dockerfile.agent-openharmony-fuzz
             check: openharmony-fuzz-env.sh
+            check_args: --check
             platform: linux/amd64
             arch: amd64
           - toolset: openharmony-fuzz
             dockerfile: deploy/Dockerfile.agent-openharmony-fuzz
             check: openharmony-fuzz-env.sh
+            check_args: --check --static
             platform: linux/arm64
             arch: arm64
     steps:
@@ -235,4 +239,4 @@ jobs:
           cache-from: type=gha,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
       - name: Offline environment smoke
-        run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} --check
+        run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} ${{ matrix.check_args }}
