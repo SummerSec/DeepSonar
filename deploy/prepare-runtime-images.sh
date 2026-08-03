@@ -2,8 +2,8 @@
 # 后台准备四个内置运行时镜像。
 # 默认不执行 git pull；设置 DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true 后，只有 clean
 # worktree 才会执行 git pull --ff-only，dirty worktree 会记录跳过，不会 stash/reset/merge。
-# 本脚本将本地构建的官方镜像登记为 local-docker 专用 trusted 版本；real
-# 模式可直接使用该版本。使用 --dry-run 或设置
+# 本脚本默认只检测本地构建的官方镜像；只有显式传入 --adopt 才会请求
+# Scheduler 将通过门禁的候选登记为 local-docker 专用 trusted 版本。使用 --dry-run 或设置
 # DEEPSONAR_RUNTIME_IMAGE_BUILD=false 可只检查流程而不执行真实构建。
 set -euo pipefail
 
@@ -14,6 +14,7 @@ PULL_SCRIPT="$ROOT/deploy/pull-runtime-images.sh"
 FORCE_REFRESH="${DEEPSONAR_RUNTIME_IMAGE_FORCE_REFRESH:-false}"
 BUILD_ENABLED="${DEEPSONAR_RUNTIME_IMAGE_BUILD:-true}"
 DRY_RUN=false
+ADOPT_LOCAL=false
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 SKIP_COUNT=0
@@ -39,19 +40,21 @@ trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
-用法：deploy/prepare-runtime-images.sh [--dry-run]
+用法：deploy/prepare-runtime-images.sh [--dry-run] [--adopt]
 
 默认只读取 API/静态 registry，不执行 git pull。设置
 DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true 后，仅当 worktree clean 时执行
 git pull --ff-only；dirty worktree 只记录跳过，绝不 stash/reset/merge。
 设置 DEEPSONAR_RUNTIME_IMAGE_BUILD=false 或使用 --dry-run 可禁用真实 docker 构建。
-本地 image ID 仅登记为 local-docker 专用 trusted 版本，不会导出到 registry。
+默认只检测本地 image ID、契约和产品标签，不改变 trust；--adopt 是运维显式授权，
+仅把通过门禁的官方候选登记为 local-docker 专用 trusted 版本，不会导出到 registry。
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true; shift ;;
+    --adopt) ADOPT_LOCAL=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -213,19 +216,19 @@ build_one() {
     fail_item "$name（无法取得完整本地 image ID）"
     return 0
   fi
-  register_local "$name" "$key" "$image_id"
+  detect_local "$name" "$key" "$tag" "$image_id"
 }
 
-register_local() {
-  local name="$1" key="$2" image_id="$3" listing response status image_id_json
-  [[ -n "$API_ROOT" ]] || { fail_item "$name（API 不可用，无法登记本地 image ID）"; return 0; }
+detect_local() {
+  local name="$1" key="$2" image_ref="$3" image_id="$4" listing response status product_id candidate_fields adoptable detected_id
+  [[ -n "$API_ROOT" ]] || { fail_item "$name（API 不可用，无法检测本地 image ID）"; return 0; }
   listing="$(mktemp)"
   local -a curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 10 "$API_ROOT/runtime-images")
   [[ -z "$API_TOKEN" ]] || curl_args+=(--header "Authorization: Bearer $API_TOKEN")
   if ! curl "${curl_args[@]}" >"$listing"; then
     rm -f "$listing"; fail_item "$name（读取 /runtime-images 失败）"; return 0
   fi
-  image_id_json="$(node - "$listing" "$key" <<'NODE'
+  product_id="$(node - "$listing" "$key" <<'NODE'
 const fs = require("node:fs");
 const [file, key] = process.argv.slice(2);
 const item = JSON.parse(fs.readFileSync(file, "utf8")).find((row) => row.image_key === key && row.official === true);
@@ -233,20 +236,52 @@ if (item?.id) process.stdout.write(item.id);
 NODE
 )"
   rm -f "$listing"
-  if [[ -z "$image_id_json" ]]; then
+  if [[ -z "$product_id" ]]; then
     fail_item "$name（API 缺少官方镜像条目）"; return 0
   fi
   response="$(mktemp)"
   local -a post_args=(--silent --show-error --connect-timeout 3 --max-time 15 -o "$response" -w '%{http_code}'
-    -H 'Content-Type: application/json' --data "$(printf '{\"image_ref\":\"%s\",\"source\":\"local-build\",\"version\":\"local-%s\"}' "$image_id" "${image_id:7:12}")")
+    -H 'Content-Type: application/json' --data "$(printf '{\"image_ref\":\"%s\"}' "$image_ref")")
   [[ -z "$API_TOKEN" ]] || post_args+=(--header "Authorization: Bearer $API_TOKEN")
-  status="$(curl "${post_args[@]}" "$API_ROOT/runtime-images/$image_id_json/official-digest" || true)"
+  status="$(curl "${post_args[@]}" "$API_ROOT/runtime-images/$product_id/detect-local" || true)"
+  if [[ "$status" != 2* ]]; then
+    rm -f "$response"
+    if [[ "$status" == "401" || "$status" == "403" ]] && [[ -z "$API_TOKEN" ]]; then
+      fail_item "$name（API 要求鉴权，请设置 DEEPSONAR_TOKEN 或 .env 中的 DEEPSONAR_ADMIN_TOKEN）"
+    else
+      fail_item "$name（本地镜像检测失败，HTTP ${status:-未知}）"
+    fi
+    return 0
+  fi
+  candidate_fields="$(node - "$response" <<'NODE'
+const fs = require("node:fs");
+const candidate = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+process.stdout.write(`${candidate.adoptable === true}\t${candidate.image_id ?? ""}`);
+NODE
+)"
+  IFS=$'\t' read -r adoptable detected_id <<<"$candidate_fields"
+  rm -f "$response"
+  if [[ "$detected_id" != "$image_id" ]]; then
+    fail_item "$name（检测后的 image ID 与构建结果不一致）"
+    return 0
+  fi
+  if [[ "$adoptable" != "true" ]]; then
+    fail_item "$name（本地镜像未通过 contract / product / tool-manifest 门禁）"
+    return 0
+  fi
+  log "已检测 $name 的 adoptable 本地候选：${image_id:0:19}；尚未改变 trust"
+  if [[ "$ADOPT_LOCAL" != true ]]; then
+    return 0
+  fi
+  response="$(mktemp)"
+  post_args=(--silent --show-error --connect-timeout 3 --max-time 15 -o "$response" -w '%{http_code}'
+    -H 'Content-Type: application/json' --data "$(printf '{\"image_ref\":\"%s\",\"expected_image_id\":\"%s\"}' "$image_ref" "$image_id")")
+  [[ -z "$API_TOKEN" ]] || post_args+=(--header "Authorization: Bearer $API_TOKEN")
+  status="$(curl "${post_args[@]}" "$API_ROOT/runtime-images/$product_id/adopt-local" || true)"
   if [[ "$status" == 2* ]]; then
-    log "已登记 $name 为 trusted local 版本：${image_id:0:19}"
-  elif [[ "$status" == "401" || "$status" == "403" ]] && [[ -z "$API_TOKEN" ]]; then
-    fail_item "$name（API 要求鉴权，请设置 DEEPSONAR_TOKEN 或 .env 中的 DEEPSONAR_ADMIN_TOKEN）"
+    log "已显式采用 $name 为 trusted local 版本：${image_id:0:19}"
   else
-    fail_item "$name（本地 trusted 登记失败，HTTP ${status:-未知}）"
+    fail_item "$name（本地 trusted 采用失败，HTTP ${status:-未知}）"
   fi
   rm -f "$response"
 }
@@ -309,4 +344,8 @@ if [[ ${#FAILURES[@]} -gt 0 ]]; then
   log "部分本地镜像未登记成功；请检查失败项目后重试"
   exit 1
 fi
-log "准备流程完成；本地 trusted 版本不会进入 registry 导出清单"
+if [[ "$ADOPT_LOCAL" == true ]]; then
+  log "准备流程完成；显式采用的本地 trusted 版本不会进入 registry 导出清单"
+else
+  log "准备流程完成；默认仅检测本地候选，未改变 trust（如需授权请显式传 --adopt）"
+fi

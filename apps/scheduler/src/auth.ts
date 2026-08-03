@@ -130,6 +130,10 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /runtime-images/registry/sync": "images:manage",
   "POST /runtime-images/registry/pull": "images:manage",
   "GET /runtime-images/registry/pull-status": "images:read",
+  "POST /runtime-images/:id/detect-local": "images:read",
+  "POST /runtime-images/:id([0-9a-fA-F-]{36})/detect-local": "images:read",
+  "POST /runtime-images/:id/adopt-local": "images:approve",
+  "POST /runtime-images/:id([0-9a-fA-F-]{36})/adopt-local": "images:approve",
   "GET /runtime-images/:id": "images:read",
   "GET /runtime-images/:id([0-9a-fA-F-]{36})": "images:read",
   "POST /runtime-images/import": "images:manage",
@@ -205,6 +209,9 @@ function requiredScope(method: string, routeUrl: string): string | null {
 
 function hasScope(actor: Actor, scope: string | null): boolean {
   if (!scope) return true;
+  // Management implies read access for the read-only local image detector;
+  // callers may hold either images:read or images:manage as documented.
+  if (scope === "images:read" && actor.scopes.includes("images:manage")) return true;
   return actor.scopes.includes("admin") || actor.scopes.includes(scope);
 }
 

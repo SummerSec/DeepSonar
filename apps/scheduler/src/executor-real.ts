@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { runRealAgent } from "@deepsonar/runtime-sandbox";
 import { EventEnvelope, FindingPayload, allowedPlatformTools, type PlatformToolName } from "@deepsonar/shared-types";
 import { config } from "./config.js";
-import { ingestEvent, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
+import { ingestEvent, PLATFORM_DEFAULT_AGENT_CLI, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecision } from "./graph.js";
 import { PROVIDER_ENV_MAP, allowedModelIds } from "./credentials.js";
@@ -165,7 +165,9 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const disabledControlToolNames = allowedControlToolNames.filter((name) => !controlToolNames.includes(name));
   const contract = resultContract(controlToolNames, isHub, isRole, isVerify, isAudit);
   const toolGuide = platformToolGuide(controlToolNames);
-  const cliName = snapshot.agent_cli;
+  // Historical Jobs created before platform defaults were frozen may lack
+  // agent_cli; use the code-level compatibility constant, never AGENT_PROVIDER.
+  const cliName = snapshot.agent_cli || PLATFORM_DEFAULT_AGENT_CLI;
   const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
   const model = snapshot.model ?? undefined;
   const reasoning = snapshot.reasoning ?? undefined;

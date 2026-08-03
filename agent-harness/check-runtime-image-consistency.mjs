@@ -127,6 +127,13 @@ for (const tool of ["clang", "clang-tidy", "clang-tools", "libclang-rt-dev", "sp
 for (const tool of ["clang", "libclang-rt-dev", "afl++", "libasan8", "libubsan1", "gdb", "llvm"]) {
   expect(openHarmonyFuzzDockerfile.includes(tool), `OpenHarmony Fuzz 镜像缺少工具：${tool}`);
 }
+expect(openHarmonyFuzzDockerfile.includes('"compiler-rt","libfuzzer"'), "OpenHarmony Fuzz manifest must declare compiler-rt and libfuzzer");
+expect(openHarmonyFuzzEnv.includes("clang -print-resource-dir"), "OpenHarmony Fuzz check must probe Clang's resource dir dynamically");
+expect(openHarmonyFuzzEnv.includes("clang -print-target-triple"), "OpenHarmony Fuzz check must derive the runtime architecture from Clang");
+expect(openHarmonyFuzzEnv.includes("fuzzer_interceptors"), "OpenHarmony Fuzz check must verify the libFuzzer interceptor archive");
+expect(openHarmonyFuzzEnv.includes("ubsan_standalone"), "OpenHarmony Fuzz check must verify the UBSan compiler-rt archive");
+expect(openHarmonyFuzzEnv.includes("-fsanitize=fuzzer,address,undefined"), "OpenHarmony Fuzz check must compile with the production sanitizer set");
+expect(openHarmonyFuzzEnv.includes("ASAN_OPTIONS=detect_leaks=0") && openHarmonyFuzzEnv.includes('"$smoke_binary" -runs=1'), "OpenHarmony Fuzz check must run the sanitizer/libFuzzer smoke binary");
 expect(openHarmonyDockerfile.includes("openharmony-env.sh --check"), "OpenHarmony Test 必须在构建时执行环境 smoke check");
 expect(openHarmonyAuditDockerfile.includes("openharmony-audit-env.sh --check"), "OpenHarmony Audit 必须在构建时执行环境 smoke check");
 expect(openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check"), "OpenHarmony Fuzz 必须在构建时执行环境 smoke check");

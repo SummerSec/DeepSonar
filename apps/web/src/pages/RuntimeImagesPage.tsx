@@ -1,10 +1,12 @@
 import { ArrowsClockwise, Cube, DownloadSimple, MagnifyingGlass, Plus, SealCheck, ShieldWarning } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { useAuth } from "../auth";
 import {
   api,
   type ProviderCredential,
   type RuntimeImageDetail,
+  type RuntimeImageLocalCandidate,
   type RuntimeImageSummary,
   type RuntimeImageTrustStatus,
   type RuntimeImageVersion,
@@ -48,8 +50,99 @@ function canApproveVersion(version: RuntimeImageVersion): { ok: boolean; reason:
   return { ok: true, reason: "" };
 }
 
+function localCheckLabel(value: boolean | null | undefined): string {
+  return value === true ? "通过" : value === false ? "未通过" : "未知";
+}
+
+function localCheckStyle(value: boolean | null | undefined): string {
+  return value === true
+    ? "text-emerald-300 bg-emerald-400/[.08] ring-emerald-400/20"
+    : value === false
+      ? "text-red-300 bg-red-400/[.08] ring-red-400/20"
+      : "text-zinc-400 bg-white/[.04] ring-white/[.08]";
+}
+
+function registrySourceLabel(registry: RuntimeImageRegistry): string {
+  const source = registry.source;
+  if (typeof source === "string") return source;
+  if (source && typeof source === "object") {
+    return source.kind ?? source.url ?? "未说明";
+  }
+  const metadataSource = registry.metadata?.source;
+  return typeof metadataSource === "string" ? metadataSource : "未说明";
+}
+
+function LocalCandidatePanel({
+  candidate,
+  canAdopt,
+  busy,
+  onAdopt,
+}: {
+  candidate: RuntimeImageLocalCandidate;
+  canAdopt: boolean;
+  busy: boolean;
+  onAdopt: () => void;
+}) {
+  return (
+    <div className="mt-4 rounded-xl border border-white/[.07] bg-black/20 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`rounded-full px-2 py-1 font-mono text-[9px] ring-1 ${localCheckStyle(candidate.exists)}`}>本地镜像 {localCheckLabel(candidate.exists)}</span>
+        <span className={`rounded-full px-2 py-1 font-mono text-[9px] ring-1 ${localCheckStyle(candidate.contract_valid)}`}>contract {localCheckLabel(candidate.contract_valid)}</span>
+        <span className={`rounded-full px-2 py-1 font-mono text-[9px] ring-1 ${localCheckStyle(candidate.product_match)}`}>product {localCheckLabel(candidate.product_match)}</span>
+        <span className={`rounded-full px-2 py-1 font-mono text-[9px] ring-1 ${localCheckStyle(candidate.adoptable)}`}>adoptable {localCheckLabel(candidate.adoptable)}</span>
+      </div>
+      <dl className="mt-3 grid gap-x-4 gap-y-2 text-[10px] sm:grid-cols-2">
+        <div className="min-w-0">
+          <dt className="font-mono text-zinc-700">IMAGE REF</dt>
+          <dd className="mt-0.5 break-all font-mono text-zinc-400">{candidate.image_ref || "—"}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="font-mono text-zinc-700">IMAGE ID（不可变）</dt>
+          <dd className="mt-0.5 break-all font-mono text-zinc-400">{candidate.image_id || "—"}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="font-mono text-zinc-700">REPO DIGESTS</dt>
+          <dd className="mt-0.5 break-all font-mono text-zinc-400">{candidate.repo_digests.length ? candidate.repo_digests.join(" · ") : "—"}</dd>
+        </div>
+        <div>
+          <dt className="font-mono text-zinc-700">OS / ARCH</dt>
+          <dd className="mt-0.5 font-mono text-zinc-400">{candidate.os || "—"} / {candidate.architecture || "—"}</dd>
+        </div>
+        <div className="min-w-0 sm:col-span-2">
+          <dt className="font-mono text-zinc-700">IMMUTABLE REF</dt>
+          <dd className="mt-0.5 break-all font-mono text-zinc-400">{candidate.immutable_ref || "—"}</dd>
+        </div>
+      </dl>
+      {candidate.reasons.length > 0 && (
+        <div className="mt-3 rounded-lg bg-white/[.035] px-3 py-2">
+          <div className="font-mono text-[9px] tracking-[.12em] text-zinc-600">CHECK REASONS</div>
+          <ul className="mt-1 space-y-1 text-[11px] leading-5 text-zinc-400">
+            {candidate.reasons.map((reason, index) => <li key={`${index}:${reason}`}>· {reason}</li>)}
+          </ul>
+        </div>
+      )}
+      {candidate.error && (
+        <p className="mt-3 rounded-lg bg-red-400/[.06] px-3 py-2 text-[11px] leading-5 text-red-300">检测诊断：{candidate.error}</p>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          className="primary-button"
+          disabled={!candidate.adoptable || !candidate.image_id || !canAdopt || busy}
+          title={!canAdopt ? "需要管理员角色或 images:approve 权限" : !candidate.adoptable ? "检测未通过，不能授权采用" : undefined}
+          onClick={onAdopt}
+        >
+          {busy ? "授权中…" : "授权采用此候选"}
+        </button>
+        {!canAdopt && <span className="text-[11px] text-amber-300/80">当前账号无 images:approve；请让管理员复核并授权。</span>}
+        {canAdopt && !candidate.adoptable && <span className="text-[11px] text-zinc-600">仅 adoptable 候选可授权，检测本身不会改变信任状态。</span>}
+      </div>
+    </div>
+  );
+}
+
 export function RuntimeImagesPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const { me } = useAuth();
   const [rows, setRows] = useState<RuntimeImageSummary[]>([]);
   const [selected, setSelected] = useState<RuntimeImageDetail | null>(null);
   const [search, setSearch] = useState("");
@@ -75,6 +168,11 @@ export function RuntimeImagesPage() {
   const [showManual, setShowManual] = useState(false);
   const [manualForm, setManualForm] = useState({ image_key: "", name: "", description: "", publisher: "", image_ref: "", version: "" });
   const [pullStatus, setPullStatus] = useState<RuntimeImagePullTask | null>(null);
+  const [localPanel, setLocalPanel] = useState<string | null>(null);
+  const [localRefs, setLocalRefs] = useState<Record<string, string>>({});
+  const [localCandidates, setLocalCandidates] = useState<Record<string, RuntimeImageLocalCandidate | null>>({});
+
+  const canAdoptLocal = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:approve")));
 
   const reload = async (keepSelected = true) => {
     try {
@@ -260,6 +358,56 @@ export function RuntimeImagesPage() {
     }
   };
 
+  const detectLocal = async (image: RuntimeImageSummary) => {
+    const imageRef = (localRefs[image.id] ?? "").trim();
+    if (!imageRef) {
+      setError("请输入本地镜像 tag 或引用，例如 deepsonar-base:local");
+      return;
+    }
+    setBusy(`detect-local:${image.id}`);
+    setError(null);
+    setLocalCandidates((current) => ({ ...current, [image.id]: null }));
+    try {
+      const candidate = await api.detectLocalRuntimeImage(image.id, imageRef);
+      setLocalCandidates((current) => ({ ...current, [image.id]: candidate }));
+      setNotice(candidate.adoptable ? `${image.name} 检测到可供管理员复核的本地候选；检测不会自动授权采用` : `${image.name} 本地候选未通过采用条件，请查看原因`);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(/401|403|unauthori[sz]ed|forbidden|权限|鉴权/i.test(message) ? "没有检测本地镜像的权限（需要 images:read）" : `检测本地镜像失败：${message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const adoptLocal = async (image: RuntimeImageSummary, candidate: RuntimeImageLocalCandidate) => {
+    if (!candidate.adoptable || !candidate.image_id) return;
+    if (!canAdoptLocal) {
+      setError("授权采用需要管理员角色或 images:approve 权限");
+      return;
+    }
+    const expectedImageId = candidate.image_id;
+    const confirmed = window.confirm(
+      `确认授权采用 ${image.name} 的本地镜像？\n\nimage_ref: ${candidate.image_ref}\nimage_id: ${expectedImageId}\n\n这会把当前 image_id 绑定为本机 local-docker trusted 版本；确认前请核对不可变引用。`,
+    );
+    if (!confirmed) return;
+    setBusy(`adopt-local:${image.id}`);
+    setError(null);
+    try {
+      await api.adoptLocalRuntimeImage(image.id, {
+        image_ref: candidate.image_ref,
+        expected_image_id: expectedImageId,
+      });
+      setNotice(`${image.name} 已授权采用本地 trusted 版本（image_id ${expectedImageId.slice(0, 19)}…）`);
+      setLocalCandidates((current) => ({ ...current, [image.id]: null }));
+      await reload(false);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(/401|403|unauthori[sz]ed|forbidden|权限|鉴权/i.test(message) ? "没有授权采用权限（需要管理员角色或 images:approve）" : `授权采用失败：${message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (loading) return <PageSkeleton rows={6} />;
 
   return (
@@ -270,7 +418,7 @@ export function RuntimeImagesPage() {
         subtitle={
           projectId
             ? "为项目启用已准入镜像，并固定角色可选择的可信版本。任务表单仍不暴露镜像参数。"
-            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。同步仅重新读取当前部署内置清单、env 和 DB，不会联网下载任意 registry 文件；真正更新清单请先更新部署或执行 git pull。"
+            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。同步只访问固定的 SummerSec GitHub Release 清单；私有目录不可达时回退内置 last-known-good，不接受任意 registry URL。"
         }
         actions={
           <div className="flex gap-2">
@@ -304,6 +452,24 @@ export function RuntimeImagesPage() {
         <div className="mb-4 rounded-xl border border-emerald-400/20 bg-emerald-400/[.07] px-4 py-3 text-sm text-emerald-300">{notice}</div>
       )}
 
+      {!projectId && registry && (
+        <section className="surface-shell mb-5">
+          <div className="surface-core flex flex-wrap items-center gap-x-6 gap-y-3 p-4">
+            <div>
+              <div className="font-mono text-[10px] tracking-[.16em] text-zinc-600">CATALOG PROVENANCE</div>
+              <div className="mt-1 text-sm text-zinc-200">来源：{registrySourceLabel(registry)}</div>
+            </div>
+            <div className="text-xs text-zinc-500">
+              {registry.fallback ? <span className="text-amber-300">当前为内置回退清单</span> : <span className="text-emerald-300">当前为受信目录</span>}
+              {registry.error && <span className="ml-2 text-amber-200/80">诊断：{registry.error}</span>}
+            </div>
+            {(registry.checked_at || (registry.metadata && typeof registry.metadata.fetched_at === "string" && registry.metadata.fetched_at)) && (
+              <span className="font-mono text-[10px] text-zinc-700">checked {registry.checked_at ?? String(registry.metadata?.fetched_at)}</span>
+            )}
+          </div>
+        </section>
+      )}
+
       {!projectId && pullStatus && pullStatus.status !== "idle" && (
         <section className="surface-shell mb-5">
           <div className="surface-core p-4">
@@ -320,8 +486,8 @@ export function RuntimeImagesPage() {
               {pullStatus.items.map((item) => (
                 <div key={`${item.image_key}:${item.image_ref}`} className="flex items-center justify-between gap-3">
                   <span className="truncate">{item.image_key} · {item.image_ref}</span>
-                  <span className={item.status === "failed" ? "text-red-300" : item.status === "succeeded" ? "text-emerald-300" : "text-zinc-500"}>
-                    {item.status === "failed" ? item.error : item.status}
+                  <span className={`max-w-[58%] break-words text-right ${item.status === "failed" ? "text-red-300" : item.status === "succeeded" ? "text-emerald-300" : "text-zinc-500"}`}>
+                    {item.status === "failed" ? (item.error || "失败：Scheduler 未返回具体原因") : item.status}
                   </span>
                 </div>
               ))}
@@ -479,6 +645,16 @@ export function RuntimeImagesPage() {
                   <button className="secondary-button" disabled={busy === image.id} onClick={() => open(image.id)}>
                     版本与证据
                   </button>
+                  {!projectId && image.official && (
+                    <button
+                      className="secondary-button"
+                      disabled={busy === `detect-local:${image.id}` || busy === `adopt-local:${image.id}`}
+                      onClick={() => setLocalPanel((current) => (current === image.id ? null : image.id))}
+                    >
+                      <MagnifyingGlass size={12} />
+                      {localPanel === image.id ? "收起本地检测" : "检测本地镜像"}
+                    </button>
+                  )}
                   {projectId && image.trust_status === "trusted" && (
                     <button
                       className={image.project_enabled ? "secondary-button" : "primary-button"}
@@ -493,6 +669,47 @@ export function RuntimeImagesPage() {
                   )}
                   <span className="ml-auto font-mono text-[8px] text-zinc-700">SCAN {formatTime(image.scanned_at)}</span>
                 </div>
+                {!projectId && image.official && localPanel === image.id && (
+                  <section className="mt-4 rounded-2xl border border-acc-400/20 bg-acc-400/[.04] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <span className="font-mono text-[9px] tracking-[.14em] text-acc-300">LOCAL IMAGE GATE</span>
+                        <h3 className="mt-1 text-sm font-medium text-zinc-100">只检测，不自动信任</h3>
+                      </div>
+                      <span className="rounded-full bg-white/[.04] px-2 py-1 font-mono text-[9px] text-zinc-500">transport ≠ trust</span>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-5 text-zinc-500">
+                      先在本机 docker pull / build / load，再输入本地 tag 或引用。服务端会重新读取 image ID、RepoDigest、契约和产品匹配；只有候选明确可采用时，管理员才可二次确认授权。
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        className="field-input min-w-0 flex-1 font-mono text-[12px]"
+                        value={localRefs[image.id] ?? ""}
+                        onChange={(event) => {
+                          setLocalRefs((current) => ({ ...current, [image.id]: event.target.value }));
+                          setLocalCandidates((current) => ({ ...current, [image.id]: null }));
+                        }}
+                        placeholder={`${image.image_key}:local 或 name@sha256:…`}
+                        spellCheck={false}
+                      />
+                      <button
+                        className="primary-button shrink-0"
+                        disabled={busy === `detect-local:${image.id}` || !(localRefs[image.id] ?? "").trim()}
+                        onClick={() => void detectLocal(image)}
+                      >
+                        {busy === `detect-local:${image.id}` ? "检测中…" : "开始检测"}
+                      </button>
+                    </div>
+                    {localCandidates[image.id] && (
+                      <LocalCandidatePanel
+                        candidate={localCandidates[image.id]!}
+                        canAdopt={canAdoptLocal}
+                        busy={busy === `adopt-local:${image.id}`}
+                        onAdopt={() => void adoptLocal(image, localCandidates[image.id]!)}
+                      />
+                    )}
+                  </section>
+                )}
               </div>
             </article>
           ))}
@@ -560,10 +777,15 @@ export function RuntimeImagesPage() {
                 >
                   {busy === "official-digest" ? "登记中…" : "登记为可信版本"}
                 </button>
-              </section>
+            </section>
             )}
 
             <div className="mt-6 space-y-4">
+              {selected.versions.some((version) => version.trust_status === "trusted") && selected.versions.some((version) => version.trust_status === "disabled") && (
+                <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/[.04] px-3 py-2 text-[11px] leading-5 text-zinc-400">
+                  <span className="text-emerald-300">可信版本优先：</span>disabled 版本的扫描/停用诊断仍保留在下方，不会遮蔽当前可用的 trusted 版本。
+                </div>
+              )}
               {selected.versions.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-white/[.1] bg-white/[.02] px-4 py-8 text-center">
                   <p className="text-[13px] text-zinc-300">还没有任何版本</p>
@@ -574,7 +796,9 @@ export function RuntimeImagesPage() {
                   </p>
                 </div>
               ) : (
-                selected.versions.map((version) => {
+                [...selected.versions]
+                  .sort((left, right) => Number(right.trust_status === "trusted") - Number(left.trust_status === "trusted") || Number(right.promoted_at !== null) - Number(left.promoted_at !== null))
+                  .map((version) => {
                   const approve = canApproveVersion(version);
                   return (
                     <section key={version.id} className="rounded-2xl border border-white/[.065] bg-white/[.025] p-4">

@@ -1,6 +1,4 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { PlatformToolName, allowedPlatformTools, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
@@ -33,6 +31,7 @@ import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
   CONFIG_FILE_MAX_TOTAL,
+  PLATFORM_DEFAULT_AGENT_CLI,
   createJob,
   drainNonGateVerifies,
   ensureCanvasForTask,
@@ -71,14 +70,13 @@ import {
 import { processExportRow } from "./transfer/worker.js";
 import {
   immutableDigest,
+  inspectLocalRuntimeImage,
   localImageDigest,
   runtimeImagePullStatus,
   runtimeImageRegistryWithOverrides,
   startRuntimeImagePull,
   syncOfficialRuntimeCatalog,
 } from "./runtime-images.js";
-
-const execFileP = promisify(execFile);
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -167,6 +165,21 @@ const OfficialRuntimeImageDigestBody = z.object({
   version: z.string().trim().min(1).max(100).optional(),
   source: z.enum(["registry", "local-build"]).default("registry"),
 });
+const LocalRuntimeImageInspectBody = z.object({
+  image_ref: z.string().trim().min(1).max(500),
+});
+const LocalRuntimeImageAdoptBody = LocalRuntimeImageInspectBody.extend({
+  expected_image_id: z.string().trim().regex(/^sha256:[0-9a-f]{64}$/i),
+  version: z.string().trim().min(1).max(100).optional(),
+});
+
+class RevokedRuntimeImageVersionError extends Error {
+  constructor(public readonly versionId: string) {
+    super("runtime image version is revoked and cannot be adopted");
+    this.name = "RevokedRuntimeImageVersionError";
+  }
+}
+
 const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_credential_id: true }).extend({
   image_ref: z.string().trim().min(3).max(500),
 });
@@ -1161,7 +1174,8 @@ export function registerRoutes(app: FastifyInstance) {
       LEFT JOIN LATERAL (
         SELECT v.* FROM runtime_image_versions v
         WHERE v.runtime_image_id = ri.id
-        ORDER BY v.promoted_at DESC NULLS LAST, v.created_at DESC
+        ORDER BY CASE v.trust_status WHEN 'trusted' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,
+                 v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
         LIMIT 1
       ) latest ON true
       WHERE (${search}::text IS NULL OR ri.name ILIKE ${search} OR ri.image_key ILIKE ${search}
@@ -1213,6 +1227,188 @@ export function registerRoutes(app: FastifyInstance) {
     });
   });
 
+  const inspectLocalRuntimeImageForProduct = async (productId: string, imageRef: string) => {
+    const [image] = await sql`SELECT id, image_key, official, enabled FROM runtime_images WHERE id = ${productId}`;
+    if (!image) return { image: null, inspection: null } as const;
+    const refs = await sql`
+      SELECT image_ref, resolved_ref FROM runtime_image_versions
+      WHERE runtime_image_id = ${productId}`;
+    const knownRefs = refs.flatMap((row) => [row.image_ref, row.resolved_ref])
+      .filter((value): value is string => typeof value === "string");
+    return {
+      image,
+      inspection: await inspectLocalRuntimeImage(imageRef, image.image_key as string, knownRefs),
+    } as const;
+  };
+  const localInspectionResponse = (inspection: Awaited<ReturnType<typeof inspectLocalRuntimeImage>>) => ({
+    ...inspection,
+    architecture: inspection.arch,
+    contract_valid: inspection.contract_matches,
+    product_match: inspection.matches_product,
+    adoptable: inspection.can_adopt,
+    tool_manifest_valid: inspection.tool_manifest_matches,
+    labels: {
+      ...(inspection.labels.contract ? { "io.deepsonar.contract": inspection.labels.contract } : {}),
+      ...(inspection.labels.image_key ? { "io.deepsonar.image-key": inspection.labels.image_key } : {}),
+      ...(inspection.labels.toolset ? { "io.deepsonar.toolset": inspection.labels.toolset } : {}),
+      ...(inspection.labels.tool_manifest && inspection.labels.tool_manifest_label
+        ? { [inspection.labels.tool_manifest_label]: inspection.labels.tool_manifest } : {}),
+    },
+  });
+
+  /**
+   * Read-only local image check. A mutable tag is accepted as an inspect input,
+   * but it is never trusted or persisted by this endpoint.
+   */
+  app.post("/runtime-images/:id([0-9a-fA-F-]{36})/detect-local", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = LocalRuntimeImageInspectBody.parse(req.body);
+    const result = await inspectLocalRuntimeImageForProduct(id, body.image_ref);
+    if (!result.image) return reply.code(404).send({ error: "runtime image not found" });
+    return reply.send({
+      product_id: id,
+      product_key: result.image.image_key,
+      ...localInspectionResponse(result.inspection!),
+    });
+  });
+
+  /**
+   * Explicit administrator adoption of a locally inspected image. The image is
+   * inspected again here (TOCTOU guard), and expected_image_id must match the
+   * fresh Docker ID before a trusted local-only version is written.
+   */
+  app.post("/runtime-images/:id([0-9a-fA-F-]{36})/adopt-local", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = LocalRuntimeImageAdoptBody.parse(req.body);
+    if (config.runtime.provider !== "local-docker") {
+      return reply.code(400).send({ error: "adopt-local 仅支持 SANDBOX_PROVIDER=local-docker" });
+    }
+    const result = await inspectLocalRuntimeImageForProduct(id, body.image_ref);
+    if (!result.image) return reply.code(404).send({ error: "runtime image not found" });
+    if (!result.image.official) {
+      return reply.code(400).send({
+        error: "本地直接采用仅适用于官方产品；第三方镜像仍须经过导入、准入扫描与管理员批准",
+      });
+    }
+    const inspection = result.inspection!;
+    if (!inspection.exists && inspection.reasons.includes("docker_inspect_failed")) {
+      return reply.code(503).send({ error: inspection.error || "无法验证本地 Docker 镜像", inspection: localInspectionResponse(inspection) });
+    }
+    if (inspection.image_id?.toLowerCase() !== body.expected_image_id.toLowerCase()) {
+      return reply.code(409).send({
+        error: "本地镜像 image ID 已变化，请重新检测后再采用",
+        expected_image_id: body.expected_image_id,
+        actual_image_id: inspection.image_id,
+        inspection: localInspectionResponse(inspection),
+      });
+    }
+    if (!inspection.can_adopt || !inspection.immutable_ref) {
+      return reply.code(409).send({ error: "本地镜像未通过运行时契约门禁", inspection: localInspectionResponse(inspection) });
+    }
+    const digest = immutableDigest(inspection.immutable_ref) ?? localImageDigest(inspection.immutable_ref);
+    if (!digest) return reply.code(409).send({ error: "本地镜像没有可用的不可变引用", inspection: localInspectionResponse(inspection) });
+    const now = new Date();
+    const actor = req.actor?.name ?? "internal";
+    let version: Record<string, unknown>;
+    try {
+      version = await sql.begin(async (tx) => {
+        // Lock an existing digest before deciding whether it may be adopted.
+        // If a concurrent transaction inserts the digest after this check, the
+        // guarded ON CONFLICT below waits for it and applies the same rule.
+        const [existing] = await tx`
+          SELECT id, trust_status FROM runtime_image_versions
+          WHERE runtime_image_id = ${id} AND digest = ${digest}
+          FOR UPDATE`;
+        if (existing?.trust_status === "revoked") {
+          throw new RevokedRuntimeImageVersionError(existing.id as string);
+        }
+
+        const [saved] = await tx`
+          INSERT INTO runtime_image_versions ${tx({
+            runtime_image_id: id,
+            version: body.version ?? `local-${digest.slice(7, 19)}`,
+            image_ref: inspection.immutable_ref,
+            resolved_ref: inspection.immutable_ref,
+            digest,
+            contract_version: "deepsonar.runtime.contract/v1",
+            platforms_json: (inspection.os && inspection.arch ? [`${inspection.os}/${inspection.arch}`] : []) as never,
+            scan_summary_json: {
+              source: "local-adopt",
+              risk: "local-only",
+              contract: inspection.labels.contract,
+              image_key: result.image.image_key,
+              tool_manifest_label: inspection.labels.tool_manifest_label,
+              registered_by: actor,
+            } as never,
+            trust_status: "trusted",
+            imported_by: actor,
+            approved_by: actor,
+            scanned_at: now,
+            approved_at: now,
+            promoted_at: now,
+          } as never)}
+          ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
+            image_ref = EXCLUDED.image_ref,
+            resolved_ref = EXCLUDED.resolved_ref,
+            trust_status = 'trusted',
+            contract_version = EXCLUDED.contract_version,
+            platforms_json = EXCLUDED.platforms_json,
+            scan_summary_json = EXCLUDED.scan_summary_json,
+            imported_by = EXCLUDED.imported_by,
+            approved_by = EXCLUDED.approved_by,
+            approved_at = EXCLUDED.approved_at,
+            promoted_at = EXCLUDED.promoted_at,
+            status_reason = NULL,
+            updated_at = now()
+          WHERE runtime_image_versions.trust_status <> 'revoked'
+          RETURNING *`;
+        if (saved) return saved as Record<string, unknown>;
+
+        // A concurrent insert may have won the unique-index race with a
+        // revoked row. Re-read it under the transaction lock so the caller
+        // gets a deterministic 409 instead of silently reviving the version.
+        const [current] = await tx`
+          SELECT id, trust_status FROM runtime_image_versions
+          WHERE runtime_image_id = ${id} AND digest = ${digest}
+          FOR UPDATE`;
+        if (current?.trust_status === "revoked") {
+          throw new RevokedRuntimeImageVersionError(current.id as string);
+        }
+        throw new Error("runtime image adoption conflict; please retry");
+      });
+    } catch (error) {
+      if (error instanceof RevokedRuntimeImageVersionError) {
+        return reply.code(409).send({
+          error: "runtime image version is revoked and cannot be adopted",
+          runtime_image_version_id: error.versionId,
+        });
+      }
+      throw error;
+    }
+    await audit(req, {
+      action: "runtime_image.adopt_local",
+      resourceType: "runtime_image_version",
+      resourceId: version.id as string,
+      after: {
+        image_key: result.image.image_key,
+        immutable_ref: inspection.immutable_ref,
+        digest,
+        trust_status: "trusted",
+        local_only: true,
+      },
+    });
+    return reply.code(201).send({
+      adopted: true,
+      local_only: true,
+      product_id: id,
+      product_key: result.image.image_key,
+      immutable_ref: inspection.immutable_ref,
+      image: result.image,
+      version,
+      inspection: localInspectionResponse(inspection),
+    });
+  });
+
   /**
    * 注意：`:id` 必须带 uuid 约束，否则会吞掉同层静态路由 `/runtime-images/registry`
    * （Fastify find-my-way 在本版本未把静态路由优先于参数路由）。
@@ -1245,7 +1441,9 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "仅官方镜像可通过此接口登记 digest；第三方请走导入 + 准入扫描 + 批准" });
     }
     const local = body.source === "local-build";
-    const digest = local ? localImageDigest(body.image_ref) : immutableDigest(body.image_ref);
+    let digest = local ? localImageDigest(body.image_ref) : immutableDigest(body.image_ref);
+    let localImmutableRef = body.image_ref;
+    let localInspection: Awaited<ReturnType<typeof inspectLocalRuntimeImage>> | null = null;
     if (!digest) return reply.code(400).send({
       error: local ? "local-build 必须使用完整本地 image ID：sha256:64hex" : "必须使用不可变引用 name@sha256:…；可移动 tag 不会被信任",
     });
@@ -1256,37 +1454,42 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
     }
     if (local) {
-      try {
-        const inspected = await execFileP("docker", ["image", "inspect", body.image_ref, "--format", "{{.Id}}"], {
-          timeout: 10_000,
-          maxBuffer: 256,
-          windowsHide: true,
-        });
-        if (inspected.stdout.trim() !== body.image_ref) {
-          return reply.code(400).send({ error: "Docker 镜像存在，但 image ID 校验不匹配" });
-        }
-      } catch {
-        return reply.code(503).send({ error: "无法验证本地 Docker 镜像；请确认 Docker 可用且该 image ID 已存在" });
+      const localResult = await inspectLocalRuntimeImageForProduct(id, body.image_ref);
+      localInspection = localResult.inspection;
+      if (!localInspection?.exists) {
+        return reply.code(503).send({ error: localInspection?.error || "无法验证本地 Docker 镜像；请确认 Docker 可用且该 image ID 已存在", inspection: localInspection ? localInspectionResponse(localInspection) : null });
       }
+      if (localInspection.image_id?.toLowerCase() !== body.image_ref.toLowerCase()) {
+        return reply.code(400).send({ error: "Docker 镜像存在，但 image ID 校验不匹配", inspection: localInspectionResponse(localInspection) });
+      }
+      if (!localInspection.can_adopt || !localInspection.immutable_ref) {
+        return reply.code(400).send({ error: "本地镜像未通过运行时契约门禁", inspection: localInspectionResponse(localInspection) });
+      }
+      localImmutableRef = localInspection.immutable_ref;
+      digest = immutableDigest(localImmutableRef) ?? localImageDigest(localImmutableRef);
+      if (!digest) return reply.code(400).send({ error: "本地镜像没有可用的不可变引用", inspection: localInspectionResponse(localInspection) });
     }
     const versionName = body.version ?? `${local ? "local" : "configured"}-${digest.slice(7, 19)}`;
     const platforms = local
-      ? (process.arch === "x64" ? ["linux/amd64"] : process.arch === "arm64" ? ["linux/arm64"] : [])
+      ? (localInspection?.os && localInspection.arch ? [`${localInspection.os}/${localInspection.arch}`]
+        : process.arch === "x64" ? ["linux/amd64"] : process.arch === "arm64" ? ["linux/arm64"] : [])
       : ["linux/amd64", "linux/arm64"];
     const now = new Date();
     const [version] = await sql`
       INSERT INTO runtime_image_versions ${sql({
         runtime_image_id: image.id,
         version: versionName,
-        image_ref: local ? digest : body.image_ref,
-        resolved_ref: digest,
+        image_ref: local ? localImmutableRef : body.image_ref,
+        resolved_ref: local ? localImmutableRef : digest,
         digest,
         contract_version: "deepsonar.runtime.contract/v1",
         platforms_json: platforms as never,
         scan_summary_json: {
           source: local ? "operator-registered-official-local" : "operator-registered-official",
           risk: local ? "local-only" : undefined,
-          contract: "declared",
+          contract: local ? localInspection?.labels.contract : "declared",
+          image_key: local ? localInspection?.labels.image_key ?? localInspection?.labels.toolset : undefined,
+          tool_manifest_label: local ? localInspection?.labels.tool_manifest_label : undefined,
           registered_by: req.actor?.name ?? "internal",
         } as never,
         trust_status: "trusted",
@@ -1911,7 +2114,7 @@ export function registerRoutes(app: FastifyInstance) {
   app.get("/global-settings", async () => {
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const activeRows = await sql`
-      SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${config.runtime.agentProvider}) AS agent_cli,
+      SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
              agent_snapshot_json->>'credential_provider' AS provider,
              COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1, 2`;
@@ -1936,7 +2139,7 @@ export function registerRoutes(app: FastifyInstance) {
       after: { changed_keys: Object.keys(body.rules) },
     });
     const activeRows = await sql`
-      SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${config.runtime.agentProvider}) AS agent_cli,
+      SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
              agent_snapshot_json->>'credential_provider' AS provider,
              COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1, 2`;

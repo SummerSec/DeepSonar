@@ -317,6 +317,23 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
 /** 与 agentbox-sdk AgentReasoningEffort 对齐；null = provider 默认 */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
+/**
+ * Platform-owned agent defaults. These are code-level compatibility values,
+ * deliberately independent from AGENT_PROVIDER/AGENT_MODEL and never replaced
+ * by process environment at RoleConfig or Job execution time.
+ */
+export const PLATFORM_DEFAULT_AGENT_CLI = "claude-code";
+export const PLATFORM_DEFAULT_AGENT_MODEL: string | null = null;
+
+let legacyAgentDefaultsWarningEmitted = false;
+function warnIgnoredLegacyAgentDefaults(): void {
+  if (legacyAgentDefaultsWarningEmitted) return;
+  const hasLegacyValues = ["AGENT_PROVIDER", "AGENT_MODEL"].some((name) => process.env[name] !== undefined);
+  if (!hasLegacyValues) return;
+  legacyAgentDefaultsWarningEmitted = true;
+  console.warn("[role-config] legacy AGENT_PROVIDER/AGENT_MODEL are ignored; configure agent_cli/model/env_vars in RoleConfig");
+}
+
 export interface AgentRuntimeSnapshot {
   name: string;
   /** 角色类别随 Job 冻结；决定 Hub/可下发角色/系统角色的运行契约。 */
@@ -1594,6 +1611,7 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
 ): Promise<AgentRuntimeSnapshot> {
+  warnIgnoredLegacyAgentDefaults();
   const roleName = roleNameForJobType(jobType);
   const [role] = await db`SELECT id, name, description, kind FROM agent_roles WHERE name = ${roleName}`;
   if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);
@@ -1640,7 +1658,9 @@ export async function resolveAgentSnapshotForJob(
     if ((llm.status as string) !== "active") {
       throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
     }
-    const configuredModel = (cfg?.model as string) ?? config.runtime.agentModel ?? null;
+    const configuredModel = typeof cfg?.model === "string" && cfg.model.trim()
+      ? cfg.model.trim()
+      : PLATFORM_DEFAULT_AGENT_MODEL;
     const allowed = allowedModelIds(llm.public_metadata_json);
     if (allowed.length > 0 && !configuredModel) {
       throw new Error(`Credential ${llm.id} 已启用模型白名单，RoleConfig 必须显式选择模型`);
@@ -1672,10 +1692,16 @@ export async function resolveAgentSnapshotForJob(
   return {
     name: roleName,
     role_kind: roleKind,
-    agent_cli: (cfg?.agent_cli as string) ?? config.runtime.agentProvider,
-    model: (cfg?.model as string) ?? config.runtime.agentModel ?? null,
+    agent_cli: typeof cfg?.agent_cli === "string" && cfg.agent_cli.trim()
+      ? cfg.agent_cli.trim()
+      : PLATFORM_DEFAULT_AGENT_CLI,
+    model: typeof cfg?.model === "string" && cfg.model.trim()
+      ? cfg.model.trim()
+      : PLATFORM_DEFAULT_AGENT_MODEL,
     reasoning,
-    env_vars: (cfg?.env_vars_json as Record<string, string>) ?? config.runtime.agentEnv,
+    env_vars: cfg?.env_vars_json && typeof cfg.env_vars_json === "object"
+      ? cfg.env_vars_json as Record<string, string>
+      : {},
     env_keys: (cfg?.env_keys as string[]) ?? [],
     credential_id: (llm?.id as string) ?? null,
     credential_name: (llm?.name as string) ?? null,

@@ -119,6 +119,8 @@ python scripts/deepsonar-api.py runtime-images rescan <versionId>
 python scripts/deepsonar-api.py runtime-images status <versionId> --status trusted [--reason "..."]
 python scripts/deepsonar-api.py runtime-images usage <versionId>
 python scripts/deepsonar-api.py runtime-images project-enable <projectId> <imageId> --enabled true [--version-id <vid>]
+python scripts/deepsonar-api.py runtime-images detect-local <imageId> --image-ref deepsonar-base:local
+python scripts/deepsonar-api.py runtime-images adopt-local <imageId> --image-ref deepsonar-base:local --expected-image-id sha256:<64hex>
 
 # Plane（可选）
 python scripts/deepsonar-api.py plane bind <projectId> --project-id <planeProjectUuid>
@@ -167,7 +169,8 @@ python scripts/deepsonar-api.py runtime-images list
 # 若 latest_version / digest 为空：先在 .env 配官方不可变 digest 并重启调度器：
 #   DEEPSONAR_OFFICIAL_BASE_IMAGE=repo/image@sha256:...
 #   DEEPSONAR_OFFICIAL_AUDIT_IMAGE=repo/image@sha256:...
-# 或 POST /runtime-images/import + status trusted（images:approve）
+# 本地镜像采用是两步操作：先 detect-local，再由管理员核对 image_id 后 adopt-local（images:approve）。
+# adopt-local 只接受服务端检测得到的 adoptable 候选；不会因为输入 mutable tag 就自动信任。
 
 # 4) 拉全局 RoleConfig，按角色 PUT 不同 model/credential/reasoning
 python scripts/deepsonar-api.py role-configs global

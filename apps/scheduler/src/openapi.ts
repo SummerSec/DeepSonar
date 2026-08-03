@@ -309,7 +309,7 @@ const OPS: Op[] = [
     summary: "获取静态注册表及官方环境覆盖的最新清单",
     scope: "images:read",
     tags: ["Runtime Images"],
-    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。",
+    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 source=remote|bundled、fallback、error（脱敏）和 checked_at 元数据。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
   },
   {
     method: "post",
@@ -337,9 +337,39 @@ const OPS: Op[] = [
   },
   {
     method: "post",
+    path: "/runtime-images/{id}/detect-local",
+    summary: "只读检测本地 Docker 运行时镜像",
+    description: "输入 runtime image product UUID 与 image_ref（可为本地 tag）；服务端使用无 shell docker image inspect 返回存在性、Id、RepoDigests、os/arch、契约/产品/工具清单标签、不可变采用引用与 reasons。检测不会写库，也不会因 mutable tag 自动信任。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_ref"],
+      properties: { image_ref: { type: "string", description: "本地 tag、digest 或完整 sha256 image ID" } },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/{id}/adopt-local",
+    summary: "管理员显式采用已检测的本地运行时镜像",
+    description: "仅适用于官方产品；第三方镜像仍须走导入、准入扫描与批准。接口再次 inspect 防 TOCTOU，要求 expected_image_id 与当前 Id 一致，并通过 contract、产品 image-key/toolset 兼容标签、/opt/deepsonar/tool-manifest.json 门禁。优先采用匹配产品仓库 RepoDigest，否则使用完整 sha256 image ID；写入 trusted/local-only 与审计，不自动授权项目。",
+    scope: "images:approve",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_ref", "expected_image_id"],
+      properties: {
+        image_ref: { type: "string" },
+        expected_image_id: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        version: { type: "string" },
+      },
+    },
+  },
+  {
+    method: "post",
     path: "/runtime-images/{id}/official-digest",
     summary: "登记官方镜像 registry 或本地构建 digest",
-    description: "默认 source=registry，仅接受 allowlist 内的 name@sha256:64hex；source=local-build 时仅允许 local-docker、官方产品和完整 sha256:64hex 本地 image ID，服务端通过无 shell docker image inspect 校验后直接 trusted，不创建扫描记录，不进入 registry 导出清单。",
+    description: "默认 source=registry，仅接受 allowlist 内的 name@sha256:64hex；source=local-build 时仅允许 local-docker、官方产品和完整 sha256:64hex 本地 image ID，服务端通过无 shell docker image inspect 校验 contract、产品 image-key/toolset 兼容标签与工具清单路径后直接 trusted，不创建扫描记录，不进入 registry 导出清单。旧版 tools-manifest/toolset 标签仍受兼容门禁约束。",
     scope: "images:approve",
     tags: ["Runtime Images"],
     body: {
@@ -640,7 +670,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       version: "0.0.1",
       description:
         "多项目代码审计调度平台 HTTP API。Agent 只提案，调度器是唯一有副作用的执行者。" +
-        " 人类可读摘要见 GET /schema.md；Management Skill 契约见 skills/deepsonar-management/references/api.md。",
+        " 人类可读摘要见 GET /schema.md；Management Skill 契约见 skills/deepsonar-management/references/api.md。" +
+        " 运行时镜像官方目录支持 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN（仅向 github.com/api.github.com 发送，重定向到 release-assets/objects 时丢弃）。",
     },
     servers: [
       {
@@ -667,6 +698,13 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       { name: "Admin" },
     ],
     paths,
+    "x-deepsonar-environment": {
+      DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN: {
+        description: "可选的私有 GitHub Release 只读凭据；Scheduler 仅访问固定 SummerSec/DeepSonar 目录，绝不在 API 响应中返回。",
+        secret: true,
+        used_by: ["GET /runtime-images/registry", "POST /runtime-images/registry/sync"],
+      },
+    },
     components: {
       securitySchemes: {
         bearerAuth: {
