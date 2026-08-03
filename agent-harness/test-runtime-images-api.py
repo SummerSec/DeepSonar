@@ -28,6 +28,13 @@ def req(method: str, path: str, body=None, expect: int = 200):
     return payload
 
 
+def assert_frozen_runtime(snapshot: dict, image_key: str) -> None:
+    """Job must freeze an immutable runtime, regardless of fake/real catalog source."""
+    assert snapshot["image_key"] == image_key, snapshot
+    assert snapshot["image_digest"].startswith("sha256:"), snapshot
+    assert snapshot["image_ref"].endswith("@" + snapshot["image_digest"]), snapshot
+
+
 def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     project = req("POST", "/projects", {"name": f"images-ci-{suffix}"}, 201)
@@ -122,9 +129,7 @@ def main() -> None:
     )
     snapshot = job["agent_snapshot_json"]["runtime_image"]
     assert job["agent_snapshot_json"]["runtime_image_key"] is None, job["agent_snapshot_json"]
-    assert snapshot["image_key"] == "deepsonar-base", snapshot
-    assert snapshot["image_ref"].startswith("fake://deepsonar-base@sha256:"), snapshot
-    assert snapshot["image_digest"].startswith("sha256:"), snapshot
+    assert_frozen_runtime(snapshot, "deepsonar-base")
 
     test_job = req(
         "POST",
@@ -133,8 +138,7 @@ def main() -> None:
         201,
     )
     test_snapshot = test_job["agent_snapshot_json"]["runtime_image"]
-    assert test_snapshot["image_key"] == "deepsonar-kali-minimal", test_snapshot
-    assert test_snapshot["image_ref"].startswith("fake://deepsonar-kali-minimal@sha256:"), test_snapshot
+    assert_frozen_runtime(test_snapshot, "deepsonar-kali-minimal")
 
     verify_job = req(
         "POST",
@@ -144,8 +148,7 @@ def main() -> None:
     )
     verify_snapshot = verify_job["agent_snapshot_json"]["runtime_image"]
     assert verify_job["agent_snapshot_json"]["runtime_image_key"] is None, verify_job["agent_snapshot_json"]
-    assert verify_snapshot["image_key"] == "deepsonar-base", verify_snapshot
-    assert verify_snapshot["image_ref"].startswith("fake://deepsonar-base@sha256:"), verify_snapshot
+    assert_frozen_runtime(verify_snapshot, "deepsonar-base")
 
     usage = req("GET", f"/runtime-image-versions/{version_id}/usage")
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}

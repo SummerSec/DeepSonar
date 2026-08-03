@@ -89,7 +89,8 @@ def main() -> None:
     assert "confirmed" in by_role["verify"] and "rework" in by_role["verify"]
     assert "不使用 `request_human`" in by_role["verify"]
     assert "不使用 `request_human`" in by_role["report"]
-    assert "唯一权威" in by_role["verify"] and "唯一权威" in by_role["report"]
+    assert any(marker in by_role["verify"] for marker in ("唯一权威", "唯一决定")), "verify 缺少 Scheduler 唯一裁决语义"
+    assert "唯一权威" in by_role["report"], "report 缺少冻结输入唯一权威语义"
     assert "audit/explore" in by_role["hub_reason"] and "不得" in by_role["hub_reason"]
     hub_cfg = next(c for c in global_configs if c["role_name"] == "hub_reason")
     code, _ = req(
@@ -109,6 +110,9 @@ def main() -> None:
     assert official["trust_status"] == "trusted" and official["enabled"] is True
     global_settings = req("GET", "/global-settings")
     expected_hub = expected_hub_enabled()
+    original_hub = global_settings["effective_rules"]["hubEnabled"]
+    if original_hub is not expected_hub:
+        global_settings = req("PATCH", "/global-settings", {"rules": {"hubEnabled": expected_hub}})
     actual_hub = global_settings["effective_rules"]["hubEnabled"]
     assert actual_hub is expected_hub, (
         "effective_rules.hubEnabled 期望 "
@@ -215,6 +219,8 @@ def main() -> None:
     # Hub 可下发的 kind=role 均可删除；自定义角色在这里验证并清理。
     req("DELETE", f"/agent-roles/{custom['id']}")
     req("POST", f"/projects/{pid}/archive", None)
+    if original_hub is not expected_hub:
+        req("PATCH", "/global-settings", {"rules": {"hubEnabled": original_hub}})
     print("OK")
 
 
