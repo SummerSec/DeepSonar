@@ -61,6 +61,19 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:dispatch-limits
 
+      - name: Verify eligibility unit
+        run: pnpm ci:unit:verify-eligibility
+
+      - name: Convergence recovery Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:convergence-recovery
+
+      - name: Verify eligibility Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:verify-eligibility
+
       - name: Control MCP protocol smoke
         run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts
 
