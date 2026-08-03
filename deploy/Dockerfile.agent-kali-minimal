@@ -18,6 +18,9 @@ ARG UV_ARM64_SHA256=4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0
 ARG SEMGREP_VERSION=1.172.0
 ARG GITLEAKS_VERSION=8.30.1
 ARG SHELLCHECK_VERSION=0.11.0
+ARG MAVEN_VERSION=3.9.16
+ARG MAVEN_URL=https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz
+ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
 ARG SEMGREP_AMD64_SHA256=d8b94af4266a575287ad2cd844573743ab4fe58f6bfb6d9229327807937eade3
 ARG SEMGREP_ARM64_SHA256=c881a305b965e594b88b15c2c6419b398e76e438ec61e60916c8b2effe927240
 ARG GITLEAKS_AMD64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
@@ -71,6 +74,16 @@ COPY --from=jdk11 /opt/java/openjdk /opt/deepsonar/jdks/11
 COPY --from=jdk17 /opt/java/openjdk /opt/deepsonar/jdks/17
 
 RUN set -eu; \
+    maven_archive="/tmp/apache-maven-${MAVEN_VERSION}-bin.tar.gz"; \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$MAVEN_URL" -o "$maven_archive"; \
+    echo "$MAVEN_SHA512  $maven_archive" | sha512sum -c -; \
+    rm -rf /opt/deepsonar/maven; mkdir -p /opt/deepsonar/maven; \
+    tar -xzf "$maven_archive" -C /opt/deepsonar/maven --strip-components=1; \
+    test -x /opt/deepsonar/maven/bin/mvn; \
+    ln -s /opt/deepsonar/maven/bin/mvn /usr/local/bin/mvn; \
+    rm "$maven_archive"
+
+RUN set -eu; \
     uv --version | grep -Eq "^uv ${UV_VERSION}([[:space:]]|$)"; \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install 3.10.20 3.11.15 3.12.13 3.13.14; \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install --default 3.14.6; \
@@ -80,7 +93,8 @@ RUN set -eu; \
       ln -s "/opt/deepsonar/jdks/$version/bin/javac" "/usr/local/bin/javac$version"; \
     done; \
     ln -s /opt/deepsonar/jdks/17/bin/java /usr/local/bin/java; \
-    ln -s /opt/deepsonar/jdks/17/bin/javac /usr/local/bin/javac
+    ln -s /opt/deepsonar/jdks/17/bin/javac /usr/local/bin/javac; \
+    ln -s /opt/deepsonar/jdks/17/bin/jar /usr/local/bin/jar
 
 RUN set -eu; arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -104,7 +118,7 @@ COPY agent-harness/write-tool-manifest.mjs /opt/deepsonar/write-tool-manifest.mj
 RUN node /opt/deepsonar/write-tool-manifest.mjs /opt/deepsonar/runtime-images.json kali-minimal /opt/deepsonar/tool-manifest.json \
   && rm /opt/deepsonar/runtime-images.json /opt/deepsonar/write-tool-manifest.mjs \
   && find /var/log -type f -exec truncate -s 0 {} \; \
-  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /root/.cache /tmp/* /var/tmp/* \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /root/.cache /root/.m2 /home/*/.m2 /tmp/* /var/tmp/* \
   && find /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale -mindepth 1 -delete 2>/dev/null || true
 
 WORKDIR /workspace
@@ -124,6 +138,7 @@ LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
 ENV IS_SANDBOX=1 \
     SEMGREP_SEND_METRICS=off \
     SEMGREP_ENABLE_VERSION_CHECK=0 \
+    MAVEN_HOME=/opt/deepsonar/maven \
     JAVA_HOME=/opt/deepsonar/jdks/17 \
     JAVA8_HOME=/opt/deepsonar/jdks/8 \
     JAVA11_HOME=/opt/deepsonar/jdks/11 \
@@ -131,7 +146,7 @@ ENV IS_SANDBOX=1 \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python \
     UV_PYTHON_BIN_DIR=/usr/local/bin \
     UV_PYTHON_DOWNLOADS=never \
-    PATH=/opt/deepsonar/jdks/17/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/deepsonar/maven/bin:/opt/deepsonar/jdks/17/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY --from=runtime-rootfs / /
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

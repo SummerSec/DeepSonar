@@ -70,6 +70,15 @@
         "amd64": { "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz", "sha256": "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198" },
         "arm64": { "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz", "sha256": "12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588" }
       }
+    },
+    "maven": {
+      "version": "3.9.16",
+      "source": "Apache Maven distribution",
+      "license": "Apache-2.0",
+      "capabilities": ["java-build", "maven-build"],
+      "assets": {
+        "all": { "url": "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz", "sha512": "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6" }
+      }
     }
   },
   "managed": {

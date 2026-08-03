@@ -23,6 +23,9 @@ const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml",
 const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
 const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
 const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
+const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
+const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
+const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
@@ -40,7 +43,9 @@ for (const [name, entry] of Object.entries(config.apt)) {
 for (const [name, entry] of Object.entries(config.downloads)) {
   expect(dockerfile.includes(`ARG ${name.toUpperCase()}_VERSION=${entry.version}`), `${name} version drift`);
   for (const asset of Object.values(entry.assets)) {
-    expect(dockerfile.includes(asset.sha256), `${name} asset checksum missing: ${asset.sha256}`);
+    const checksum = asset.sha256 ?? asset.sha512;
+    expect(checksum, `${name} asset must declare sha256 or sha512`);
+    expect(dockerfile.includes(checksum), `${name} asset checksum missing: ${checksum}`);
   }
 }
 for (const required of ["io.deepsonar.contract", "io.deepsonar.toolset", "io.deepsonar.tools-manifest", "org.opencontainers.image.source"]) {
@@ -59,8 +64,32 @@ expect(kaliDockerfile.includes("FROM ${BASE_IMAGE}"), "Kali minimal Dockerfile m
 expect(kaliDockerfile.includes(`ARG CLAUDE_CODE_VERSION=${kaliConfig.npm["@anthropic-ai/claude-code"].version}`), "Kali minimal Claude Code version drift");
 for (const [name, entry] of Object.entries(kaliConfig.downloads)) {
   expect(kaliDockerfile.includes(`ARG ${name.toUpperCase()}_VERSION=${entry.version}`), `Kali minimal ${name} version drift`);
-  for (const asset of Object.values(entry.assets)) expect(kaliDockerfile.includes(asset.sha256), `Kali minimal ${name} checksum missing: ${asset.sha256}`);
+  for (const asset of Object.values(entry.assets)) {
+    const checksum = asset.sha256 ?? asset.sha512;
+    expect(checksum, `Kali minimal ${name} asset must declare sha256 or sha512`);
+    expect(kaliDockerfile.includes(checksum), `Kali minimal ${name} checksum missing: ${checksum}`);
+  }
 }
+const maven = kaliConfig.downloads.maven;
+const mavenAsset = maven?.assets?.all;
+expect(mavenAsset, "Kali minimal runtime must define the Maven all-platform asset");
+if (mavenAsset) {
+  expect(kaliDockerfile.includes(`ARG MAVEN_URL=${mavenAsset.url}`), "Kali minimal Maven URL drift");
+  expect(kaliDockerfile.includes("sha512sum -c -"), "Kali minimal Maven download must use sha512sum");
+}
+expect(kaliDockerfile.includes("MAVEN_HOME=/opt/deepsonar/maven"), "Kali minimal Maven home is not exported");
+expect(kaliDockerfile.includes("/opt/deepsonar/maven/bin"), "Kali minimal Maven bin directory is not on PATH");
+expect(kaliDockerfile.includes("ln -s /opt/deepsonar/maven/bin/mvn /usr/local/bin/mvn"), "Kali minimal Maven must expose a stable /usr/local/bin/mvn symlink");
+expect(kaliDockerfile.includes("ln -s /opt/deepsonar/jdks/17/bin/jar /usr/local/bin/jar"), "Kali minimal JDK must expose a stable /usr/local/bin/jar symlink");
+expect(kaliDockerfile.includes("/root/.m2"), "Kali minimal image cleanup must remove Maven's .m2 cache");
+expect(runtimeSmoke.includes("mvn -v"), "Kali minimal offline smoke must run mvn -v");
+expect(runtimeSmoke.includes("command -v mvn"), "Kali minimal offline smoke must verify mvn PATH");
+expect(runtimeSmoke.includes("readlink -f"), "Kali minimal offline smoke must resolve mvn to the immutable Maven home");
+expect(runtimeSmoke.includes("command -v jar"), "Kali minimal offline smoke must verify jar PATH");
+expect(runtimeSmoke.includes("jar --version"), "Kali minimal offline smoke must run jar --version");
+expect(mavenSmoke.includes("mvn -q"), "Kali minimal online smoke must run a Maven package");
+expect(mavenSmoke.includes("maven.repo.local=/tmp/maven-repository"), "Maven smoke must keep the repository outside .m2");
+expect(ciWorkflow.includes("test-maven-package.mjs"), "CI must run the Maven package smoke");
 for (const version of kaliConfig.managed.python.versions) {
   expect(kaliDockerfile.includes(version), `Kali minimal managed Python version drift: ${version}`);
 }

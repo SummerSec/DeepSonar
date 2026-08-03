@@ -88,7 +88,7 @@ Agent 可以在已分配镜像中自主选择工具，但不能：
 |---|---|---|---|
 | `deepsonar-base` | Explore、Analyze、Code、Hub | git、rg、jq、file、unzip、Python、Node、ca-certificates | P0 |
 | `deepsonar-audit` | Audit | `deepsonar-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
-| `deepsonar-kali-minimal`（Kali Test） | Test 默认 | Kali 最小 rootfs + base/audit CLI + Python 3.10–3.14 + JDK 8/11/17（默认 17，不含 21）+ Go/Rust；无 Kali metapackage/GUI | P0 |
+| `deepsonar-kali-minimal`（Kali Test） | Test 默认 | Kali 最小 rootfs + base/audit CLI + Python 3.10–3.14 + JDK 8/11/17（默认 17，不含 21）+ Apache Maven 3.9.16 + Go/Rust；无 `.m2` 缓存、Kali metapackage/GUI | P0 |
 | `deepsonar-language-*` | Java、Go、PHP、Rust 等专项审计 | 对应语言工具链与静态分析器 | P2，按真实任务增加 |
 | 第三方市场镜像 | 社区或合作方专项环境 | 必须满足 DEEPSONAR 镜像契约 | P2 |
 
@@ -243,7 +243,7 @@ Hub 只输出角色与意图，不输出镜像 ID。Scheduler 根据角色和项
 - [x] 以 `maxSizeMiB` 建立压缩镜像包大小门禁并报告解压大小；base 使用 slim，Kali 禁止 metapackage/GUI。
 - [x] 在断网、资源限制和 cap-drop 条件下跑工具冒烟测试。
 
-验收：官方镜像可以离线执行 `rg`、`jq`、`file`、Semgrep、Gitleaks 和 ShellCheck；Kali Test 还能运行全部预装 Python/JDK 版本并实际编译 Java、Go、Rust 最小程序。
+验收：官方镜像可以离线执行 `rg`、`jq`、`file`、Semgrep、Gitleaks 和 ShellCheck；Kali Test 还能运行全部预装 Python/JDK 版本、离线执行 `mvn -v`，并用联网最小 POM 实际编译打包 Java、Go、Rust 最小程序。
 
 ### P1：可信镜像目录与角色绑定
 
