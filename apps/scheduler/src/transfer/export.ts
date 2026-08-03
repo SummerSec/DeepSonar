@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { sql } from "../db.js";
 import {
+  buildManifestSource,
   ensureTransferDirs,
   toJsonl,
   transferRoot,
@@ -14,8 +15,6 @@ import {
 } from "./pack.js";
 import { resolveModules, type ModuleKey, type Preset } from "./modules.js";
 import { ACTIVE_JOB_STATUSES, filterEnvVars, sanitizeAgentSnapshot } from "./sanitize.js";
-
-const SCHEMA_VER = 7;
 
 function sha256Hex(s: string): string {
   return createHash("sha256").update(s).digest("hex");
@@ -28,6 +27,40 @@ export interface ExportOptions {
   credentials?: { mode?: "excluded" | "metadata" };
   /** 允许在有活动 Job 时仍导出完整任务（归档模式） */
   allow_active_jobs?: boolean;
+}
+
+export interface ProjectManifestOptions {
+  projectId: string;
+  projectName: string;
+  preset: Preset;
+  modules: ModuleKey[];
+  counts: Record<string, number>;
+  credentialsMode: "excluded" | "metadata";
+  instanceId: string;
+}
+
+/** Build the project export manifest with the current Scheduler schema baseline. */
+export function buildProjectManifest(options: ProjectManifestOptions): Manifest {
+  return {
+    format: "deepsonar-project-export",
+    format_version: "1.0",
+    created_at: new Date().toISOString(),
+    source: buildManifestSource({
+      app_version: "0.0.1",
+      instance_id: `sha256:${options.instanceId.slice(0, 16)}`,
+      project_id: options.projectId,
+      project_name: options.projectName,
+    }),
+    preset: options.preset,
+    modules: options.modules,
+    counts: options.counts,
+    compatibility: {
+      minimum_importer_version: "1.0",
+      module_versions: Object.fromEntries(options.modules.map((m) => [m, 1])),
+    },
+    secrets: { mode: options.credentialsMode === "excluded" ? "excluded" : "metadata", algorithm: null },
+    signature: null,
+  };
 }
 
 export async function runExport(exportId: string): Promise<void> {
@@ -130,27 +163,15 @@ export async function runExport(exportId: string): Promise<void> {
     }
 
     const instanceId = sha256Hex(`deepsonar:${process.env.COMPUTERNAME ?? process.env.HOSTNAME ?? "local"}`);
-    const manifest: Manifest = {
-      format: "deepsonar-project-export",
-      format_version: "1.0",
-      created_at: new Date().toISOString(),
-      source: {
-        app_version: "0.0.1",
-        schema_version: SCHEMA_VER,
-        instance_id: `sha256:${instanceId.slice(0, 16)}`,
-        project_id: projectId,
-        project_name: project.name as string,
-      },
+    const manifest = buildProjectManifest({
+      projectId,
+      projectName: project.name as string,
       preset,
       modules,
       counts,
-      compatibility: {
-        minimum_importer_version: "1.0",
-        module_versions: Object.fromEntries(modules.map((m) => [m, 1])),
-      },
-      secrets: { mode: credMode === "excluded" ? "excluded" : "metadata", algorithm: null },
-      signature: null,
-    };
+      credentialsMode: credMode,
+      instanceId,
+    });
 
     await ensureTransferDirs();
     const outPath = path.join(transferRoot(), "exports", `${exportId}.deepsonarpack`);

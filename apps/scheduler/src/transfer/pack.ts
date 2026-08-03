@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { SCHEMA_VERSION } from "../schema-version.js";
 import { FORMAT, FORMAT_VERSION, type ModuleKey, type Preset } from "./modules.js";
 
 export interface PackFile {
@@ -34,6 +35,34 @@ export interface Manifest {
   secrets: { mode: "excluded" | "metadata"; algorithm: null };
   signature: null;
   content_sha256?: string;
+}
+
+export type ManifestSourceInput = Omit<Manifest["source"], "schema_version">;
+
+/** Build a manifest source using the same schema baseline as Scheduler startup. */
+export function buildManifestSource(source: ManifestSourceInput): Manifest["source"] {
+  return { ...source, schema_version: SCHEMA_VERSION };
+}
+
+/**
+ * Validate the producing schema against this application.
+ *
+ * Packs are logical business-data exports, so older baselines remain importable
+ * while a pack produced by a newer, unknown baseline must not be applied.
+ */
+export function validateManifestSchemaVersion(schemaVersion: unknown): number {
+  if (!Number.isInteger(schemaVersion) || (schemaVersion as number) < 1) {
+    throw Object.assign(new Error("manifest source.schema_version must be a positive integer"), {
+      code: "BAD_SCHEMA_VERSION",
+    });
+  }
+  if ((schemaVersion as number) > SCHEMA_VERSION) {
+    throw Object.assign(
+      new Error(`schema_version ${String(schemaVersion)} too new (current ${SCHEMA_VERSION})`),
+      { code: "SCHEMA_TOO_NEW" },
+    );
+  }
+  return schemaVersion as number;
 }
 
 export function sha256Hex(data: Buffer | string): string {
@@ -132,6 +161,7 @@ export async function openDeepsonarPack(buf: Buffer): Promise<OpenedPack> {
       });
     }
   }
+  validateManifestSchemaVersion(manifest.source?.schema_version);
 
   const checksumBuf = files.get("checksums.sha256");
   if (!checksumBuf) throw Object.assign(new Error("checksums.sha256 missing"), { code: "NO_CHECKSUMS" });

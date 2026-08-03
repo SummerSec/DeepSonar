@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { sql } from "../db.js";
 import {
+  buildManifestSource,
   ensureTransferDirs,
   openDeepsonarPack,
   readJson,
@@ -30,6 +31,38 @@ export type PlatformModule =
   | "credentials";
 
 export type PlatformPreset = "platform_full" | "custom";
+
+export interface PlatformManifestOptions {
+  preset: PlatformPreset;
+  modules: PlatformModule[];
+  counts: Record<string, number>;
+  credentialsMode: "excluded" | "metadata";
+  instanceId: string;
+}
+
+/** Build the platform export manifest with the current Scheduler schema baseline. */
+export function buildPlatformManifest(options: PlatformManifestOptions): Manifest {
+  return {
+    format: PLATFORM_FORMAT as Manifest["format"],
+    format_version: PLATFORM_FORMAT_VERSION,
+    created_at: new Date().toISOString(),
+    source: buildManifestSource({
+      app_version: "0.0.1",
+      instance_id: `sha256:${options.instanceId}`,
+      project_id: "platform",
+      project_name: "platform",
+    }),
+    preset: options.preset as Manifest["preset"],
+    modules: options.modules as unknown as Manifest["modules"],
+    counts: options.counts,
+    compatibility: {
+      minimum_importer_version: "1.0",
+      module_versions: Object.fromEntries(options.modules.map((m) => [m, 1])),
+    },
+    secrets: { mode: options.credentialsMode === "excluded" ? "excluded" : "metadata", algorithm: null },
+    signature: null,
+  };
+}
 
 const PLATFORM_PRESETS: Record<"platform_full", PlatformModule[]> = {
   platform_full: ["global_rules", "agent_roles", "global_role_configs", "skill_sources", "credentials"],
@@ -207,27 +240,13 @@ export async function runPlatformExport(exportId: string): Promise<void> {
       counts.credentials = creds.length;
     }
 
-    const manifest: Manifest = {
-      format: PLATFORM_FORMAT as Manifest["format"],
-      format_version: PLATFORM_FORMAT_VERSION,
-      created_at: new Date().toISOString(),
-      source: {
-        app_version: "0.0.1",
-        schema_version: 7,
-        instance_id: `sha256:${instanceFingerprint()}`,
-        project_id: "platform",
-        project_name: "platform",
-      },
-      preset: preset as Manifest["preset"],
-      modules: modules as unknown as Manifest["modules"],
+    const manifest = buildPlatformManifest({
+      preset,
+      modules,
       counts,
-      compatibility: {
-        minimum_importer_version: "1.0",
-        module_versions: Object.fromEntries(modules.map((m) => [m, 1])),
-      },
-      secrets: { mode: credMode === "excluded" ? "excluded" : "metadata", algorithm: null },
-      signature: null,
-    };
+      credentialsMode: credMode,
+      instanceId: instanceFingerprint(),
+    });
 
     await ensureTransferDirs();
     const outPath = path.join(transferRoot(), "exports", `${exportId}.deepsonarpack`);
