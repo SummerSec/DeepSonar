@@ -181,7 +181,24 @@ export function RoleConfigEditor({
   const enabledModels = Array.isArray(selectedCredential?.public_metadata_json?.allowed_model_ids)
     ? selectedCredential.public_metadata_json.allowed_model_ids.filter((model): model is string => typeof model === "string")
     : [];
+  const selectedModel = form.model.trim();
+  const modelRequired = Boolean(form.credential_id && enabledModels.length > 0 && !selectedModel);
+  const modelInvalid = Boolean(form.credential_id && enabledModels.length > 0 && selectedModel && !enabledModels.includes(selectedModel));
+  const initialModelAutofilled = useRef(false);
   const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
+  useEffect(() => {
+    if (initialModelAutofilled.current) return;
+    const initialCredentialId = initial?.credentials.find((credential) => credential.purpose === "llm")?.credential_id ?? "";
+    if (
+      !initialCredentialId ||
+      initial?.model?.trim() ||
+      form.credential_id !== initialCredentialId ||
+      form.model.trim() ||
+      enabledModels.length !== 1
+    ) return;
+    initialModelAutofilled.current = true;
+    setForm((current) => ({ ...current, model: enabledModels[0] }));
+  }, [enabledModels, form.credential_id, form.model, initial]);
   useEffect(() => {
     api.runtimeImages(projectId).then(setRuntimeImages).catch(() => setRuntimeImages([]));
   }, [projectId]);
@@ -194,8 +211,23 @@ export function RoleConfigEditor({
       env_pairs: f.env_pairs.map((p, idx) => (idx === i ? { ...p, ...patch } : p)),
     }));
 
+  const handleCredentialChange = (credential_id: string) => {
+    const credential = credentials.find((item) => item.id === credential_id);
+    const allowedModels = Array.isArray(credential?.public_metadata_json?.allowed_model_ids)
+      ? credential.public_metadata_json.allowed_model_ids.filter((model): model is string => typeof model === "string")
+      : [];
+    setForm((current) => ({
+      ...current,
+      credential_id,
+      model: allowedModels.length === 1 ? allowedModels[0] : "",
+    }));
+    setError(null);
+  };
+
   const submit = () => {
     try {
+      if (modelRequired) throw new Error("当前 Credential 启用了模型白名单，必须选择一个模型后才能保存");
+      if (modelInvalid) throw new Error(`当前模型不在 Credential 的允许列表中，请选择：${enabledModels.join("、")}`);
       const env_vars: Record<string, string> = {};
       for (const p of form.env_pairs) {
         const k = p.key.trim();
@@ -299,20 +331,28 @@ export function RoleConfigEditor({
           </div>
           <div>
             <label className={labelCls}>LLM Credential</label>
-            <CredentialPicker credentials={credentials} value={form.credential_id} onChange={(credential_id) => setForm({ ...form, credential_id, model: "" })} />
+            <CredentialPicker credentials={credentials} value={form.credential_id} onChange={handleCredentialChange} />
             <p className="mt-1.5 text-[10px] leading-5 text-zinc-600">单次运行绑定一个 LLM 凭据；可按名称、Provider 或尾号搜索。</p>
           </div>
           <div>
-            <label className={labelCls}>模型 ID（由 Credential 启用列表约束）</label>
+            <label className={labelCls}>模型 ID{enabledModels.length > 0 ? "（必选，由 Credential 启用列表约束）" : "（由 Credential 启用列表约束）"}</label>
             {enabledModels.length > 0 ? (
-              <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls}>
+              <select
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                className={inputCls}
+                aria-invalid={modelRequired || modelInvalid}
+                aria-describedby="role-config-model-hint"
+              >
                 <option value="">选择模型</option>
                 {enabledModels.map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
             ) : (
-              <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls} placeholder={selectedCredential ? "该凭据尚未配置模型白名单" : "如 claude-sonnet-4-5 / gpt-5 / k3"} spellCheck={false} />
+              <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls} placeholder={selectedCredential ? "该凭据尚未配置模型白名单" : "如 claude-sonnet-4-5 / gpt-5 / k3"} spellCheck={false} aria-invalid={false} aria-describedby="role-config-model-hint" />
             )}
-            {selectedCredential && <p className="mt-1 text-[10px] leading-5 text-zinc-600">{enabledModels.length ? `仅可选择凭据已启用的 ${enabledModels.length} 个模型。` : "请先在凭据页从 Provider 获取模型并启用；当前仍兼容手工 ID。"}</p>}
+            {selectedCredential && <p id="role-config-model-hint" className="mt-1 text-[10px] leading-5 text-zinc-600">{enabledModels.length ? `必选：仅可选择凭据已启用的 ${enabledModels.length} 个模型。` : "请先在凭据页从 Provider 获取模型并启用；当前仍兼容手工 ID。"}</p>}
+            {modelRequired && <p className="mt-1 rounded border border-red-900/60 bg-red-950/40 px-2 py-1 text-[11px] text-red-300">请先选择一个模型后再保存。</p>}
+            {modelInvalid && <p className="mt-1 rounded border border-red-900/60 bg-red-950/40 px-2 py-1 text-[11px] text-red-300">当前模型不在该 Credential 的允许列表中，请重新选择。</p>}
           </div>
           {form.credential_id === "" && <div><label className={labelCls}>调度器环境变量引用</label><input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} placeholder="逗号分隔变量名，值取调度器环境" /></div>}
           <div>
@@ -399,7 +439,7 @@ export function RoleConfigEditor({
       <div className="role-config-actions">
         <button
           onClick={submit}
-          disabled={busy}
+          disabled={busy || modelRequired || modelInvalid}
           className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:opacity-50"
         >
           <FloppyDisk size={13} /> {busy ? "保存中…" : "保存配置"}
