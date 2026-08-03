@@ -429,14 +429,21 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
     FROM agent_roles r
     WHERE rc.role_id = r.id AND rc.project_id IS NULL AND rc.version = 1
       AND r.name = 'test' AND rc.runtime_image_key = 'deepsonar-base'`;
-  // 历史默认是 Audit；上一版又曾把未编辑的 Verify 默认迁到 Kali（version=2）。这些内置默认统一迁到 Base。
+  // 非专项角色默认直接使用系统沙箱，不在 RoleConfig 中绑定市场镜像。
+  // 只迁移从未编辑过的内置值；项目/用户显式选择保持不动。
   await sql`
-    UPDATE role_configs rc SET runtime_image_key = 'deepsonar-base', version = version + 1, updated_at = now()
+    UPDATE role_configs rc SET runtime_image_key = NULL, version = version + 1, updated_at = now()
     FROM agent_roles r
     WHERE rc.role_id = r.id AND rc.project_id IS NULL
       AND r.name = 'verify'
-      AND ((rc.version = 1 AND rc.runtime_image_key IN ('deepsonar-audit', 'deepsonar-kali-minimal'))
-        OR (rc.version = 2 AND rc.runtime_image_key = 'deepsonar-kali-minimal'))`;
+      AND ((rc.version = 1 AND rc.runtime_image_key IN ('deepsonar-base', 'deepsonar-audit', 'deepsonar-kali-minimal'))
+        OR (rc.version = 2 AND rc.runtime_image_key IN ('deepsonar-base', 'deepsonar-kali-minimal')))`;
+  await sql`
+    UPDATE role_configs rc SET runtime_image_key = NULL, version = version + 1, updated_at = now()
+    FROM agent_roles r
+    WHERE rc.role_id = r.id AND rc.project_id IS NULL AND rc.version = 1
+      AND r.name IN ('explore', 'analyze', 'review', 'code', 'hub_reason', 'report')
+      AND rc.runtime_image_key = 'deepsonar-base'`;
   await sql`
     UPDATE agent_roles SET
       description = '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发',
@@ -446,7 +453,10 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
   await syncOfficialRuntimeCatalog();
 }
 
-/** 创建 Job 时选择一次并冻结；Executor 不再读取目录或 tag。 */
+/**
+ * 创建 Job 时选择一次并冻结；Executor 不再读取目录或 tag。
+ * 未绑定市场镜像时使用平台治理的最小 Base 作为系统沙箱底座，而不是允许 Agent 指定引用。
+ */
 export async function resolveRuntimeImageForJob(
   db: typeof sql,
   projectId: string,

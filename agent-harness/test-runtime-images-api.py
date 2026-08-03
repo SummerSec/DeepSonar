@@ -92,8 +92,9 @@ def main() -> None:
     explore = next(item for item in role_configs if item["role_name"] == "explore")
     test_role = next(item for item in role_configs if item["role_name"] == "test")
     verify_role = next(item for item in role_configs if item["role_name"] == "verify")
+    assert explore["runtime_image_key"] is None, explore
     assert test_role["runtime_image_key"] == "deepsonar-kali-minimal", test_role
-    assert verify_role["runtime_image_key"] == "deepsonar-base", verify_role
+    assert verify_role["runtime_image_key"] is None, verify_role
     invalid = {
         "agent_cli": explore["agent_cli"],
         "model": explore["model"],
@@ -120,6 +121,7 @@ def main() -> None:
         201,
     )
     snapshot = job["agent_snapshot_json"]["runtime_image"]
+    assert job["agent_snapshot_json"]["runtime_image_key"] is None, job["agent_snapshot_json"]
     assert snapshot["image_key"] == "deepsonar-base", snapshot
     assert snapshot["image_ref"].startswith("fake://deepsonar-base@sha256:"), snapshot
     assert snapshot["image_digest"].startswith("sha256:"), snapshot
@@ -141,6 +143,7 @@ def main() -> None:
         201,
     )
     verify_snapshot = verify_job["agent_snapshot_json"]["runtime_image"]
+    assert verify_job["agent_snapshot_json"]["runtime_image_key"] is None, verify_job["agent_snapshot_json"]
     assert verify_snapshot["image_key"] == "deepsonar-base", verify_snapshot
     assert verify_snapshot["image_ref"].startswith("fake://deepsonar-base@sha256:"), verify_snapshot
 
@@ -148,7 +151,7 @@ def main() -> None:
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}
     req("POST", f"/runtime-image-versions/{version_id}/status", {"status": "rejected", "reason": "CI cleanup"})
     req("POST", f"/projects/{project_id}/archive")
-    print("OK: standalone market, Kali Test and Base Verify defaults, quarantine gate, project binding gate, immutable Job snapshot")
+    print("OK: standalone market, specialist image opt-in, system sandbox default, quarantine gate, project binding gate, immutable Job snapshot")
 
 
 if __name__ == "__main__":

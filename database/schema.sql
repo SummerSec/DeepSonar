@@ -635,7 +635,7 @@ SELECT r.id, 'claude-code', templates.instructions,
        CASE
          WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'
          WHEN r.name = 'audit' THEN 'deepsonar-audit'
-         ELSE 'deepsonar-base'
+         ELSE NULL
        END
 FROM agent_roles r
 JOIN (VALUES

@@ -1689,7 +1689,8 @@ export async function resolveAgentSnapshotForJob(
     config_files: configFiles as unknown as { path: string; content: string; content_sha256: string }[],
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,
-    runtime_image_key: runtimeImage.image_key,
+    // null 表示 RoleConfig 未绑定市场镜像；runtime_image 仍记录系统沙箱实际使用的不可变底座。
+    runtime_image_key: runtimeImageKey,
     runtime_image: runtimeImage,
   };
 }
