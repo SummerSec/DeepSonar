@@ -43,6 +43,16 @@ function snapStr(snap: Record<string, unknown> | null | undefined, key: string):
   }
 }
 
+function snapRuntimeImageKey(snap: Record<string, unknown> | null | undefined): string {
+  const runtimeImage = snap?.runtime_image;
+  if (runtimeImage && typeof runtimeImage === "object" && !Array.isArray(runtimeImage)) {
+    const key = (runtimeImage as Record<string, unknown>).image_key;
+    if (typeof key === "string" && key.trim()) return key;
+  }
+  // Older snapshots may only carry the RoleConfig override field.
+  return snapStr(snap, "runtime_image_key");
+}
+
 function ConfigField({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
     <div className="theme-surface min-w-0 rounded-xl px-3 py-2.5 ring-1">
@@ -152,6 +162,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const model = snapStr(snapshot, "model");
   const roleName = snapStr(snapshot, "name");
   const credentialId = snapStr(snapshot, "credential_id");
+  const runtimeImageKey = snapRuntimeImageKey(snapshot);
   const forceExit = async () => {
     if (!detail || !ACTIVE.has(detail.job.status)) return;
     if (
@@ -749,8 +760,8 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                     </div>
                     <div className="grid gap-2 sm:grid-cols-2">
                       <ConfigField
-                        label="运行镜像 key"
-                        value={snapStr(snapshot, "runtime_image_key")}
+                        label="冻结运行镜像 key"
+                        value={runtimeImageKey}
                       />
                       <ConfigField label="推理 (reasoning)" value={snapStr(snapshot, "reasoning")} />
                       <ConfigField

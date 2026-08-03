@@ -722,6 +722,10 @@ $instructions$),
 4. 记录目标版本（subject_revision）、环境、步骤、预期、实际结果和产物引用；不得伪造结果。
 5. 补证轮次必须绑定 `finding_id`；测试 Job 应与 review Job 分离，避免同一 Job 自证。
 
+### Runtime test 工具链纪律
+
+Scheduler 会为 Test Job 冻结可信的预构建运行时。开始动态测试前，先读取冻结 runtime manifest，再按目标语言检查相关预装工具：Java 用 `command -v java`、`java -version`；使用 Maven 时再用 `command -v mvn`、`mvn -v`（以及目标需要的 `java8` / `java11` / `java17`）；Python 用目标所需的 `python3.x` / `uv`；Go 用 `command -v go`、`go version`；Rust 用 `command -v rustc`、`rustc --version`、`command -v cargo`、`cargo --version`。禁止在沙箱内通过 `apt-get`、下载 JDK/Maven 压缩包、SDKMAN、`./mvnw` 或其它 bootstrap fallback 安装或下载 JDK、Maven、Gradle、编译器工具链；依赖下载仍须服从冻结的 `DEEPSONAR_ALLOW_EGRESS`。目标所需工具缺失时停止动态尝试并提交结构化 inconclusive/needs_human 证据，不得把静态描述写成 confirmed。
+
 ### 平台工具使用
 
 - 测试阶段调用 `emit_progress({"message":"最小复现环境已就绪，正在执行对照组","percent":55})`。

@@ -13,6 +13,8 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工�
 
 构建 base/audit：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`。Kali Test 使用 `deploy/Dockerfile.agent-kali-minimal`；Python 版本化命令为 `python3.10`…`python3.14`，Java 可用 `java8`/`javac8`、`java11`/`javac11` 与默认的 `java17`/`javac17`，Maven 可用 `mvn`（3.9.16）。断网硬化冒烟执行 `mvn -v`；联网最小 POM 构建可运行 `node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:local`。
 
+动态测试的 RoleConfig/证据纪律、Java/Python/Go/Rust 静态—动态矩阵见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](../docs/RUNTIME_TEST_TOOLCHAINS.md)。系统 Verify 仍默认使用 Base；只在项目级 RoleConfig 中显式选择已准入的动态镜像，不把 Kali 全局化。
+
 ## 白名单工具注入（§3.4）
 
 每个 Job 经 agentbox-sdk 动态注入本地 `deepsonar-control` MCP；工具按角色裁剪：

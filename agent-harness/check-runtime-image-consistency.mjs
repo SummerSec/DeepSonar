@@ -26,6 +26,10 @@ const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runti
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const schedulerCore = readFileSync(new URL("../apps/scheduler/src/core.ts", import.meta.url), "utf8");
+const schedulerDispatcher = readFileSync(new URL("../apps/scheduler/src/dispatcher.ts", import.meta.url), "utf8");
+const schema = readFileSync(new URL("../database/schema.sql", import.meta.url), "utf8");
+const roleSmoke = readFileSync(new URL("./test-runtime-images-api.py", import.meta.url), "utf8");
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
@@ -89,7 +93,19 @@ expect(runtimeSmoke.includes("command -v jar"), "Kali minimal offline smoke must
 expect(runtimeSmoke.includes("jar --version"), "Kali minimal offline smoke must run jar --version");
 expect(mavenSmoke.includes("mvn -q"), "Kali minimal online smoke must run a Maven package");
 expect(mavenSmoke.includes("maven.repo.local=/tmp/maven-repository"), "Maven smoke must keep the repository outside .m2");
+expect(mavenSmoke.includes("commons_jar=/tmp/maven-repository/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar"), "Maven smoke must locate the downloaded commons-lang3 dependency");
+expect(mavenSmoke.includes('test -s \\\"$commons_jar\\\"'), "Maven smoke must assert the local commons-lang3 jar exists");
+expect(mavenSmoke.includes('target/classes:$commons_jar'), "Maven smoke must run with target classes and the local dependency jar");
 expect(ciWorkflow.includes("test-maven-package.mjs"), "CI must run the Maven package smoke");
+expect(schedulerRuntimeImages.includes('test: "deepsonar-kali-minimal"'), "Scheduler Test default must resolve to Kali Test");
+expect(schedulerRuntimeImages.includes('verify: "deepsonar-base"'), "Scheduler Verify default must remain Base");
+expect(schedulerCore.includes("Runtime test toolchain (Scheduler policy)"), "Test snapshots must carry the prebuilt toolchain policy");
+expect(schedulerCore.includes("Do **not** install or download JDK, Maven"), "Test snapshots must prohibit runtime JDK/Maven bootstrap");
+expect(schedulerDispatcher.includes("禁止 apt-get、下载 JDK/Maven"), "runtime_test intents must prohibit JDK/Maven downloads");
+expect(schema.includes("WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'"), "schema Test RoleConfig default must select Kali Test");
+expect(schema.includes("Runtime test 工具链纪律"), "schema Test instructions must document prebuilt toolchain policy");
+expect(roleSmoke.includes("explicit dynamic verify runtime smoke"), "API smoke must cover explicit dynamic Verify image selection");
+expect(roleSmoke.includes("assert verify_role[\"runtime_image_key\"] is None"), "API smoke must preserve global Verify Base default");
 for (const version of kaliConfig.managed.python.versions) {
   expect(kaliDockerfile.includes(version), `Kali minimal managed Python version drift: ${version}`);
 }

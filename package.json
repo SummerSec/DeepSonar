@@ -13,6 +13,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "ci:smoke:mcp": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts",
+    "ci:smoke:runtime-policy": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-runtime-policy.ts",
     "ci:smoke:convergence": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-scheduler-convergence.ts",
     "ci:test:lifecycle": "pnpm --filter @deepsonar/web exec tsx ../../agent-harness/test-task-lifecycle.ts",
     "ci:smoke:roles": "python agent-harness/test-roles-api.py",

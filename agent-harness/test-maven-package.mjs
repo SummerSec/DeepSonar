@@ -54,6 +54,9 @@ const command = [
   "mvn -q -Dmaven.repo.local=/tmp/maven-repository -DskipTests package",
   "test -f target/maven-smoke-1.0.0.jar",
   "jar tf target/maven-smoke-1.0.0.jar | grep -F 'com/deepsonar/Smoke.class'",
+  "commons_jar=/tmp/maven-repository/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar",
+  "test -s \"$commons_jar\"",
+  "test \"$(java -cp \"target/classes:$commons_jar\" com.deepsonar.Smoke)\" = maven-ok",
   "test ! -d /root/.m2",
 ].join(" && ");
 

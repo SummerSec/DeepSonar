@@ -1603,6 +1603,39 @@ export function roleNameForJobType(jobType: string): string {
 }
 
 /**
+ * Dynamic test Jobs must consume the toolchain frozen into the selected
+ * runtime image.  This policy is appended at snapshot time (rather than only
+ * seeded in schema.sql) so existing databases and custom RoleConfigs receive
+ * the same guard without overwriting operator-authored instructions.
+ */
+export const RUNTIME_TEST_TOOLCHAIN_POLICY = `### Runtime test toolchain (Scheduler policy)
+
+This Job uses a Scheduler-selected, trusted runtime image. Before testing, read the frozen runtime manifest and verify only the preinstalled tools required by the target language: Java uses "command -v java" and "java -version"; Maven projects additionally use "command -v mvn" and "mvn -v" (and the versioned "java8"/"java11"/"java17" commands when required); Python uses the required "python3.x"/"uv" commands; Go uses "command -v go" and "go version"; Rust uses "command -v rustc"/"rustc --version" and "command -v cargo"/"cargo --version".
+
+- Do **not** install or download JDK, Maven, Gradle, SDKMAN, or compiler toolchains in the sandbox. Do not use apt-get, curl/wget archives, ./mvnw, or equivalent bootstrap fallbacks for those tools.
+- Project dependencies may be fetched only when the frozen DEEPSONAR_ALLOW_EGRESS policy permits it; dependency downloads are not a substitute for the prebuilt toolchain.
+- If a required preinstalled command is missing, stop the dynamic attempt and submit structured inconclusive/needs-human evidence. Never claim a confirmed Finding from a static description alone.
+- Record the runtime image key/digest, tool versions, target revision, exact steps, expected result, actual result, and limitations in emit_fact.verification for runtime-test evidence.`;
+
+export function withRuntimeTestToolchainPolicy(
+  roleName: string,
+  instructions: string | null,
+  resolvedRuntimeImageKey: string | null,
+): string | null {
+  // Test always performs runtime work. Verify receives the same guard only
+  // when its project RoleConfig explicitly opts into a non-Base image; the
+  // global Base Verify path remains suitable for static evidence review.
+  const dynamicVerify =
+    roleName === "verify" &&
+    resolvedRuntimeImageKey !== null &&
+    resolvedRuntimeImageKey !== "deepsonar-base";
+  if (roleName !== "test" && !dynamicVerify) return instructions;
+  const base = instructions?.trim() ?? "";
+  if (base.includes("### Runtime test toolchain (Scheduler policy)")) return base;
+  return `${base}${base ? "\n\n" : ""}${RUNTIME_TEST_TOOLCHAIN_POLICY}`;
+}
+
+/**
  * 解析 RoleConfig 并冻结为 Executor 运行快照。
  * 项目级 → 全局 → 平台缺省，无论哪一层都会产生完整快照。
  */
@@ -1713,7 +1746,11 @@ export async function resolveAgentSnapshotForJob(
     mcps: (cfg?.mcps_json as unknown[]) ?? [],
     subagents: (cfg?.subagents_json as unknown[]) ?? [],
     role_description: (role.description as string) ?? roleName,
-    instructions_markdown: (cfg?.instructions_markdown as string) ?? null,
+    instructions_markdown: withRuntimeTestToolchainPolicy(
+      roleName,
+      (cfg?.instructions_markdown as string) ?? null,
+      runtimeImage.image_key,
+    ),
     platform_tools: platformTools,
     config_files: configFiles as unknown as { path: string; content: string; content_sha256: string }[],
     role_config_id: (cfg?.id as string) ?? null,
