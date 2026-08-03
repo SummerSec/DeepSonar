@@ -172,6 +172,14 @@ const LocalRuntimeImageAdoptBody = LocalRuntimeImageInspectBody.extend({
   expected_image_id: z.string().trim().regex(/^sha256:[0-9a-f]{64}$/i),
   version: z.string().trim().min(1).max(100).optional(),
 });
+
+class RevokedRuntimeImageVersionError extends Error {
+  constructor(public readonly versionId: string) {
+    super("runtime image version is revoked and cannot be adopted");
+    this.name = "RevokedRuntimeImageVersionError";
+  }
+}
+
 const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_credential_id: true }).extend({
   image_ref: z.string().trim().min(3).max(500),
 });
@@ -1301,44 +1309,82 @@ export function registerRoutes(app: FastifyInstance) {
     if (!digest) return reply.code(409).send({ error: "本地镜像没有可用的不可变引用", inspection: localInspectionResponse(inspection) });
     const now = new Date();
     const actor = req.actor?.name ?? "internal";
-    const [version] = await sql`
-      INSERT INTO runtime_image_versions ${sql({
-        runtime_image_id: id,
-        version: body.version ?? `local-${digest.slice(7, 19)}`,
-        image_ref: inspection.immutable_ref,
-        resolved_ref: inspection.immutable_ref,
-        digest,
-        contract_version: "deepsonar.runtime.contract/v1",
-        platforms_json: (inspection.os && inspection.arch ? [`${inspection.os}/${inspection.arch}`] : []) as never,
-        scan_summary_json: {
-          source: "local-adopt",
-          risk: "local-only",
-          contract: inspection.labels.contract,
-          image_key: result.image.image_key,
-          tool_manifest_label: inspection.labels.tool_manifest_label,
-          registered_by: actor,
-        } as never,
-        trust_status: "trusted",
-        imported_by: actor,
-        approved_by: actor,
-        scanned_at: now,
-        approved_at: now,
-        promoted_at: now,
-      } as never)}
-      ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
-        image_ref = EXCLUDED.image_ref,
-        resolved_ref = EXCLUDED.resolved_ref,
-        trust_status = 'trusted',
-        contract_version = EXCLUDED.contract_version,
-        platforms_json = EXCLUDED.platforms_json,
-        scan_summary_json = EXCLUDED.scan_summary_json,
-        imported_by = EXCLUDED.imported_by,
-        approved_by = EXCLUDED.approved_by,
-        approved_at = EXCLUDED.approved_at,
-        promoted_at = EXCLUDED.promoted_at,
-        status_reason = NULL,
-        updated_at = now()
-      RETURNING *`;
+    let version: Record<string, unknown>;
+    try {
+      version = await sql.begin(async (tx) => {
+        // Lock an existing digest before deciding whether it may be adopted.
+        // If a concurrent transaction inserts the digest after this check, the
+        // guarded ON CONFLICT below waits for it and applies the same rule.
+        const [existing] = await tx`
+          SELECT id, trust_status FROM runtime_image_versions
+          WHERE runtime_image_id = ${id} AND digest = ${digest}
+          FOR UPDATE`;
+        if (existing?.trust_status === "revoked") {
+          throw new RevokedRuntimeImageVersionError(existing.id as string);
+        }
+
+        const [saved] = await tx`
+          INSERT INTO runtime_image_versions ${tx({
+            runtime_image_id: id,
+            version: body.version ?? `local-${digest.slice(7, 19)}`,
+            image_ref: inspection.immutable_ref,
+            resolved_ref: inspection.immutable_ref,
+            digest,
+            contract_version: "deepsonar.runtime.contract/v1",
+            platforms_json: (inspection.os && inspection.arch ? [`${inspection.os}/${inspection.arch}`] : []) as never,
+            scan_summary_json: {
+              source: "local-adopt",
+              risk: "local-only",
+              contract: inspection.labels.contract,
+              image_key: result.image.image_key,
+              tool_manifest_label: inspection.labels.tool_manifest_label,
+              registered_by: actor,
+            } as never,
+            trust_status: "trusted",
+            imported_by: actor,
+            approved_by: actor,
+            scanned_at: now,
+            approved_at: now,
+            promoted_at: now,
+          } as never)}
+          ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
+            image_ref = EXCLUDED.image_ref,
+            resolved_ref = EXCLUDED.resolved_ref,
+            trust_status = 'trusted',
+            contract_version = EXCLUDED.contract_version,
+            platforms_json = EXCLUDED.platforms_json,
+            scan_summary_json = EXCLUDED.scan_summary_json,
+            imported_by = EXCLUDED.imported_by,
+            approved_by = EXCLUDED.approved_by,
+            approved_at = EXCLUDED.approved_at,
+            promoted_at = EXCLUDED.promoted_at,
+            status_reason = NULL,
+            updated_at = now()
+          WHERE runtime_image_versions.trust_status <> 'revoked'
+          RETURNING *`;
+        if (saved) return saved as Record<string, unknown>;
+
+        // A concurrent insert may have won the unique-index race with a
+        // revoked row. Re-read it under the transaction lock so the caller
+        // gets a deterministic 409 instead of silently reviving the version.
+        const [current] = await tx`
+          SELECT id, trust_status FROM runtime_image_versions
+          WHERE runtime_image_id = ${id} AND digest = ${digest}
+          FOR UPDATE`;
+        if (current?.trust_status === "revoked") {
+          throw new RevokedRuntimeImageVersionError(current.id as string);
+        }
+        throw new Error("runtime image adoption conflict; please retry");
+      });
+    } catch (error) {
+      if (error instanceof RevokedRuntimeImageVersionError) {
+        return reply.code(409).send({
+          error: "runtime image version is revoked and cannot be adopted",
+          runtime_image_version_id: error.versionId,
+        });
+      }
+      throw error;
+    }
     await audit(req, {
       action: "runtime_image.adopt_local",
       resourceType: "runtime_image_version",
