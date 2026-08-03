@@ -22,6 +22,8 @@ if (toolset === "kali-minimal") commands.push(
   `test \"$(readlink -f \"$(command -v mvn)\")\" = /opt/deepsonar/maven/bin/mvn`,
   `mvn -v | grep -F 'Apache Maven ${config.downloads.maven.version}'`,
   "test ! -d /root/.m2", "test -x /opt/deepsonar/maven/bin/mvn",
+  `test \"$(readlink -f \"$(command -v jar)\")\" = /opt/deepsonar/jdks/17/bin/jar`,
+  "jar --version", "test -x /opt/deepsonar/jdks/17/bin/jar",
   "go version", "rustc --version", "cargo --version", "cc --version",
   "cd /tmp && printf 'public class Smoke { public static void main(String[] args) { System.out.print(\"java-ok\"); } }\\n' > Smoke.java && javac Smoke.java && test \"$(java Smoke)\" = java-ok",
   "printf 'fn main(){print!(\"rust-ok\");}\\n' > /tmp/smoke.rs && rustc /tmp/smoke.rs -o /tmp/rust-smoke && test \"$(/tmp/rust-smoke)\" = rust-ok",

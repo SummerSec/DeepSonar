@@ -93,7 +93,8 @@ RUN set -eu; \
       ln -s "/opt/deepsonar/jdks/$version/bin/javac" "/usr/local/bin/javac$version"; \
     done; \
     ln -s /opt/deepsonar/jdks/17/bin/java /usr/local/bin/java; \
-    ln -s /opt/deepsonar/jdks/17/bin/javac /usr/local/bin/javac
+    ln -s /opt/deepsonar/jdks/17/bin/javac /usr/local/bin/javac; \
+    ln -s /opt/deepsonar/jdks/17/bin/jar /usr/local/bin/jar
 
 RUN set -eu; arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
