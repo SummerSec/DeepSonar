@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { asConcurrencyLimit, globalRules, rulesForProject } from "./core.js";
+import { asConcurrencyLimit, globalRules, mergeGlobalRulesPatch, rulesForProject } from "./core.js";
 import { dispatchSkipReason, dispatchSlots, scanDispatchPages, type DispatchCounts } from "./dispatcher.js";
 import { sql } from "./db.js";
+import { parseConcurrencyRulesPatch } from "./routes.js";
 
 function emptyCounts(): DispatchCounts {
   return {
@@ -159,4 +160,36 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
   );
   assert.equal(project.maxGlobalJobs, 4);
   assert.equal(project.maxJobsPerProject, 3);
+});
+
+test("concurrency caps reject boolean/object/null and only accept JSON numbers", () => {
+  assert.equal(asConcurrencyLimit(true, 6), 6);
+  assert.equal(asConcurrencyLimit({}, 6), 6);
+  assert.equal(asConcurrencyLimit(null, 6), 6);
+  assert.throws(() => parseConcurrencyRulesPatch({ maxGlobalJobs: true }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxGlobalJobs: {} }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxGlobalJobs: null }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByAgentCli: { "claude-code": true } }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByAgentCli: { "claude-code": null } }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByAgentCli: { "claude-code": {} } }));
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxGlobalJobs: 4, maxConcurrentByAgentCli: { "claude-code": 4 } }), {
+    maxGlobalJobs: 4,
+    maxConcurrentByAgentCli: { "claude-code": 4 },
+  });
+});
+
+test("global settings patches deep-merge CLI and provider maps", () => {
+  const merged = mergeGlobalRulesPatch(
+    {
+      maxConcurrentByAgentCli: { "claude-code": 4, codex: 2 },
+      maxConcurrentByProvider: { anthropic: 3 },
+      maxGlobalJobs: 6,
+    },
+    {
+      maxConcurrentByAgentCli: { "claude-code": 5 },
+      maxConcurrentByProvider: { openai: 2 },
+    },
+  );
+  assert.deepEqual(merged.maxConcurrentByAgentCli, { "claude-code": 5, codex: 2 });
+  assert.deepEqual(merged.maxConcurrentByProvider, { anthropic: 3, openai: 2 });
 });

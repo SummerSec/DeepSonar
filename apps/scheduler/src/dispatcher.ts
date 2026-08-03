@@ -128,7 +128,12 @@ async function isRealType(type: string): Promise<boolean> {
   return Boolean(r);
 }
 
-export async function dispatchOnce(): Promise<number> {
+/**
+ * Claim pending jobs under the dispatcher advisory lock without provisioning
+ * or executing them. This narrow entry point is used by integration tests and
+ * keeps the database-side quota decision independently verifiable.
+ */
+export async function claimPendingJobs(): Promise<{ id: string }[]> {
   // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
   // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
   // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
@@ -263,6 +268,12 @@ export async function dispatchOnce(): Promise<number> {
     }
     return claimed;
   });
+
+  return claimedJobs;
+}
+
+export async function dispatchOnce(): Promise<number> {
+  const claimedJobs = await claimPendingJobs();
 
   for (const job of claimedJobs) {
     const p = runJob(job.id).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));

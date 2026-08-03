@@ -17,6 +17,7 @@
     "ci:smoke:convergence": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-scheduler-convergence.ts",
     "ci:test:lifecycle": "pnpm --filter @deepsonar/web exec tsx ../../agent-harness/test-task-lifecycle.ts",
     "ci:unit:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.test.ts",
+    "ci:integration:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.integration.test.ts",
     "ci:smoke:roles": "python agent-harness/test-roles-api.py",
     "ci:smoke:hub": "python agent-harness/test-hub-loop.py",
     "ci:smoke:projects": "python agent-harness/test-local-project-api.py",

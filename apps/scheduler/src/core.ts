@@ -118,11 +118,12 @@ function asSeverityRank(v: unknown, fallback: SeverityRank): SeverityRank {
 }
 
 function asCliLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
-  if (!v || typeof v !== "object" || Array.isArray(v)) return fallback;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    const n = Number(value);
-    if (["claude-code", "codex", "open-code"].includes(key) && Number.isInteger(n) && n >= 0 && n <= 1000) out[key] = n;
+    if (!["claude-code", "codex", "open-code"].includes(key)) return fallback;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
+    out[key] = value;
   }
   return out;
 }
@@ -134,16 +135,15 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
  * remain positive.
  */
 export function asConcurrencyLimit(v: unknown, fallback: number): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isInteger(n) && n >= 1 && n <= 1000 ? n : fallback;
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000 ? v : fallback;
 }
 
 function asProviderLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
-  if (!v || typeof v !== "object" || Array.isArray(v)) return fallback;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    const n = Number(value);
-    if (isProviderKnown(key) && Number.isInteger(n) && n >= 0 && n <= 1000) out[key] = n;
+    if (!isProviderKnown(key) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
+    out[key] = value;
   }
   return out;
 }
@@ -233,6 +233,28 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
     maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
   };
+}
+
+/**
+ * Merge a global settings patch without replacing existing quota maps. Rule
+ * fields are declaration-style scalars, while provider/CLI quota maps are
+ * incremental so an operator can change one key without dropping siblings.
+ */
+export function mergeGlobalRulesPatch(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...current, ...patch };
+  for (const key of ["maxConcurrentByAgentCli", "maxConcurrentByProvider"]) {
+    const incoming = patch[key];
+    if (incoming === null || typeof incoming !== "object" || Array.isArray(incoming)) continue;
+    const previous = current[key];
+    const previousMap = previous && typeof previous === "object" && !Array.isArray(previous)
+      ? (previous as Record<string, unknown>)
+      : {};
+    merged[key] = { ...previousMap, ...(incoming as Record<string, unknown>) };
+  }
+  return merged;
 }
 
 /** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */

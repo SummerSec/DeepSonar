@@ -36,6 +36,7 @@ import {
   drainNonGateVerifies,
   ensureCanvasForTask,
   globalRules,
+  mergeGlobalRulesPatch,
   maybeTriggerHub,
   parseCanvasConvergence,
   patchCanvasConvergence,
@@ -114,8 +115,8 @@ const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code"]);
 const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
   for (const key of RULE_CONCURRENCY_KEYS) {
     if (!(key in rules)) continue;
-    const n = Number(rules[key]);
-    if (!Number.isInteger(n) || n < 1 || n > 1000) {
+    const value = rules[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1000) {
       ctx.addIssue({ code: "custom", path: [key], message: `${key} 必须是 1-1000 的整数` });
     }
   }
@@ -126,13 +127,16 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
     return;
   }
   for (const [cli, value] of Object.entries(cliRules as Record<string, unknown>)) {
-    if (!CLI_CONCURRENCY_KEYS.has(cli)) continue;
-    const n = Number(value);
-    if (!Number.isInteger(n) || n < 0 || n > 1000) {
+    if (!CLI_CONCURRENCY_KEYS.has(cli) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
       ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli", cli], message: `${cli} 必须是 0-1000 的整数` });
     }
   }
 });
+
+/** Strict parser exported for unit tests and non-HTTP adapters. */
+export function parseConcurrencyRulesPatch(input: unknown): Record<string, unknown> {
+  return RulesPatch.parse(input);
+}
 
 // roles.enabled：hub 可下发角色清单（name 数组；null = 恢复默认=全部内置）
 const SettingsPatchBody = z.object({
@@ -2166,7 +2170,7 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invalid global settings rules", details: error instanceof z.ZodError ? error.issues : undefined });
     }
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const merged = { ...(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>), ...body.rules };
+    const merged = mergeGlobalRulesPatch(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>, body.rules);
     await sql`UPDATE global_settings SET rules_json = ${sql.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
     // Wake a LISTEN-driven dispatcher so a newly available slot/CLI cap is
     // observed without waiting for an optional polling interval or restart.
