@@ -204,6 +204,11 @@ export function RoleConfigEditor({
   }, [projectId]);
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
+  const runtimeImageGuidance = roleName === "test"
+    ? "Test 默认使用 Kali Test；需要 runtime_test 时不要选择 Base 或在沙箱内冷装 JDK/Maven。"
+    : roleName === "verify"
+      ? "Verify 全局默认是 Base；仅当目标确实需要动态复现时，在项目级配置显式选择已准入的动态镜像。"
+      : "系统沙箱使用平台治理的最小 Base；选择专项镜像后，下一 Job 会冻结其 digest。";
 
   const setPair = (i: number, patch: Partial<EnvPair>) =>
     setForm((f) => ({
@@ -425,7 +430,20 @@ export function RoleConfigEditor({
           {jsonField("commands（slash 命令）", "commands")}
           {jsonField("mcps（MCP server）", "mcps", '[{"name":"fs","type":"local","command":"npx","args":[…]}]')}
           {jsonField("subagents（子 Agent）", "subagents")}
-          <div><label className={labelCls}>运行环境</label><select value={form.runtime_image_key} onChange={(e) => setForm({ ...form, runtime_image_key: e.target.value })} className={inputCls}><option value="">系统沙箱（不绑定专项镜像）</option>{runtimeImages.filter((image) => image.trust_status === "trusted" && ((image.official && !image.project_opt_in) || Boolean(projectId && image.project_enabled))).map((image) => <option key={image.id} value={image.image_key}>{image.name} · {image.latest_version ?? "trusted"}</option>)}</select><p className="mt-1 text-[10px] leading-5 text-zinc-600">系统沙箱使用平台治理的最小底座；选择专项镜像后，下一 Job 会冻结其 digest。</p></div>
+          <div>
+            <label className={labelCls}>运行环境</label>
+            <select value={form.runtime_image_key} onChange={(e) => setForm({ ...form, runtime_image_key: e.target.value })} className={inputCls}>
+              <option value="">{roleName === "verify" ? "系统沙箱（默认 Base）" : "系统沙箱（不绑定专项镜像）"}</option>
+              {runtimeImages
+                .filter((image) => image.trust_status === "trusted" && ((image.official && !image.project_opt_in) || Boolean(projectId && image.project_enabled)))
+                .map((image) => (
+                  <option key={image.id} value={image.image_key}>
+                    {image.name} · {image.image_key === "deepsonar-kali-minimal" ? "动态 Java/Python/Go/Rust" : image.latest_version ?? "trusted"}
+                  </option>
+                ))}
+            </select>
+            <p className="mt-1 text-[10px] leading-5 text-zinc-600">{runtimeImageGuidance}</p>
+          </div>
           <div className="role-config-provider"><label className={labelCls}>Provider 配置文件（<span className="text-zinc-300">{CONFIG_FILE_PATHS[form.agent_cli]}</span>）</label><textarea value={form.config_content} onChange={(e) => setForm({ ...form, config_content: e.target.value })} rows={4} spellCheck={false} className={`${inputCls} resize-y leading-relaxed`} placeholder={form.agent_cli === "codex" ? "# TOML 配置内容" : "{ …JSON 配置内容… }"} /><div className="mt-1 text-[11px] leading-5 text-zinc-600">配置命中密钥特征会被拒绝，请改用 Credential。</div></div>
         </div>
       </details>

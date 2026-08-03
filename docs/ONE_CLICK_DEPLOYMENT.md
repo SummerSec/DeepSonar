@@ -172,6 +172,8 @@ sumsec/deepsonar:kali-minimal-<version>
 
 5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17（默认 17，不含 21）、Apache Maven 3.9.16、Go 与 Rust；Maven 位于 `/opt/deepsonar/maven`，不预置 `.m2` 缓存，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
 
+需要 `runtime_test` 时不要把 Test 绑回 Base，也不要在沙箱内下载 JDK/Maven；Verify 只有在项目级 RoleConfig 中显式选择已准入的动态镜像时才使用该工具链。静态/动态矩阵与真实证据边界见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
+
 如需 OpenHarmony 源码专项工作，可在项目中显式启用下列官方镜像（均为 `project_opt_in`，不把全量源码烘焙进镜像，也不等于板级固件）：
 
 | 镜像 key | 用途 | Dockerfile |

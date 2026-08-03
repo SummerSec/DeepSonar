@@ -88,6 +88,23 @@ export interface RuntimeImageSnapshot {
   trust_status: "trusted" | "fake";
 }
 
+/**
+ * Factory defaults are deliberately kept in one server-side map.  RoleConfig
+ * may override the key, but a missing/null key must resolve through this map so
+ * Job snapshots cannot silently drift back to the slim Base for dynamic tests.
+ * Verify stays on Base by default; a project RoleConfig can explicitly select
+ * a trusted dynamic-capable image for a particular target.
+ */
+export const DEFAULT_RUNTIME_IMAGE_BY_ROLE: Readonly<Record<string, string>> = Object.freeze({
+  test: "deepsonar-kali-minimal",
+  audit: "deepsonar-audit",
+  verify: "deepsonar-base",
+});
+
+export function defaultRuntimeImageKey(roleName: string): string {
+  return DEFAULT_RUNTIME_IMAGE_BY_ROLE[roleName] ?? "deepsonar-base";
+}
+
 export function immutableDigest(imageRef: string): string | null {
   const match = imageRef.trim().match(/@(sha256:[0-9a-f]{64})$/);
   return match?.[1] ?? null;
@@ -781,7 +798,16 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
     UPDATE role_configs rc SET runtime_image_key = 'deepsonar-kali-minimal', version = version + 1, updated_at = now()
     FROM agent_roles r
     WHERE rc.role_id = r.id AND rc.project_id IS NULL AND rc.version = 1
-      AND r.name = 'test' AND rc.runtime_image_key = 'deepsonar-base'`;
+      AND r.name = 'test' AND (rc.runtime_image_key IS NULL OR rc.runtime_image_key = 'deepsonar-base')`;
+  // Repair only the untouched built-in description.  A project/operator may
+  // customize role copy, so arbitrary text is never overwritten at bootstrap.
+  await sql`
+    UPDATE agent_roles SET
+      description = '默认在精简 Kali 多语言环境中搭建测试或 PoC，记录复现条件与结果',
+      updated_at = now()
+    WHERE name = 'test' AND builtin = true AND kind = 'role'
+      AND description IN ('按需搭建最小环境、设计测试或 PoC，记录复现条件与结果',
+                          '按需搭建最小环境、设计测试或 PoC，记录复现条件与结果；Hub 可按需下发')`;
   // 非专项角色默认直接使用系统沙箱，不在 RoleConfig 中绑定市场镜像。
   // 只迁移从未编辑过的内置值；项目/用户显式选择保持不动。
   await sql`
@@ -816,11 +842,7 @@ export async function resolveRuntimeImageForJob(
   roleName: string,
   configuredKey: string | null,
 ): Promise<RuntimeImageSnapshot> {
-  const imageKey = configuredKey || (
-    roleName === "test"
-      ? "deepsonar-kali-minimal"
-      : roleName === "audit" ? "deepsonar-audit" : "deepsonar-base"
-  );
+  const imageKey = configuredKey || defaultRuntimeImageKey(roleName);
   const [row] = await db`
     SELECT ri.id AS runtime_image_id, ri.image_key, ri.source_kind, ri.official,
            riv.id AS runtime_image_version_id, riv.resolved_ref, riv.digest,

@@ -35,6 +35,33 @@ def assert_frozen_runtime(snapshot: dict, image_key: str) -> None:
     assert snapshot["image_ref"].endswith("@" + snapshot["image_digest"]), snapshot
 
 
+def role_config_body(config: dict, runtime_image_key: str | None) -> dict:
+    """Round-trip the API view while changing only the project image override."""
+    return {
+        "agent_cli": config["agent_cli"],
+        "model": config.get("model"),
+        "reasoning": config.get("reasoning"),
+        "env_keys": config.get("env_keys") or [],
+        "env_vars": config.get("env_vars_json") or {},
+        "modules": config.get("modules_json") or [],
+        "skills": config.get("skills_json") or [],
+        "commands": config.get("commands_json") or [],
+        "mcps": config.get("mcps_json") or [],
+        "subagents": config.get("subagents_json") or [],
+        "platform_tools": config.get("platform_tools_json") or {},
+        "instructions_markdown": config.get("instructions_markdown"),
+        "runtime_image_key": runtime_image_key,
+        "credentials": [
+            {"credential_id": row["credential_id"], "purpose": row["purpose"]}
+            for row in (config.get("credentials") or [])
+        ],
+        "config_files": [
+            {"path": row["path"], "content": row["content"]}
+            for row in (config.get("config_files") or [])
+        ],
+    }
+
+
 def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     project = req("POST", "/projects", {"name": f"images-ci-{suffix}"}, 201)
@@ -149,6 +176,27 @@ def main() -> None:
     verify_snapshot = verify_job["agent_snapshot_json"]["runtime_image"]
     assert verify_job["agent_snapshot_json"]["runtime_image_key"] is None, verify_job["agent_snapshot_json"]
     assert_frozen_runtime(verify_snapshot, "deepsonar-base")
+
+    # Verify remains Base globally, but a project can explicitly opt into the
+    # same trusted dynamic-capable runtime used by Test.  The override must be
+    # reflected in this Job only; it must not mutate the global RoleConfig.
+    req(
+        "PUT",
+        f"/projects/{project_id}/role-configs/{verify_role['role_id']}",
+        role_config_body(verify_role, "deepsonar-kali-minimal"),
+        200,
+    )
+    dynamic_verify_job = req(
+        "POST",
+        "/jobs",
+        {"project_id": project_id, "type": "verify", "title": "explicit dynamic verify runtime smoke"},
+        201,
+    )
+    dynamic_verify_snapshot = dynamic_verify_job["agent_snapshot_json"]["runtime_image"]
+    assert dynamic_verify_job["agent_snapshot_json"]["runtime_image_key"] == "deepsonar-kali-minimal", dynamic_verify_job["agent_snapshot_json"]
+    assert_frozen_runtime(dynamic_verify_snapshot, "deepsonar-kali-minimal")
+    assert "Runtime test toolchain" in (dynamic_verify_job["agent_snapshot_json"].get("instructions_markdown") or "")
+    req("DELETE", f"/projects/{project_id}/role-configs/{verify_role['role_id']}")
 
     usage = req("GET", f"/runtime-image-versions/{version_id}/usage")
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}
