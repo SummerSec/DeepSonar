@@ -10,10 +10,17 @@ const assertRegistry = (registry) => {
   if (registry.schema !== "deepsonar.registry/v1" || !Array.isArray(registry.images)) {
     throw new Error("runtime-image-registry.json schema 无效");
   }
-  const expected = ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal", "deepsonar-openharmony-test"];
+  const expected = [
+    "deepsonar-base",
+    "deepsonar-audit",
+    "deepsonar-kali-minimal",
+    "deepsonar-openharmony-test",
+    "deepsonar-openharmony-audit",
+    "deepsonar-openharmony-fuzz",
+  ];
   const images = new Map(registry.images.map((image) => [image.image_key, image]));
   if (images.size !== expected.length || expected.some((key) => !images.has(key))) {
-    throw new Error("runtime-image-registry.json 必须包含四项官方运行时镜像");
+    throw new Error("runtime-image-registry.json 必须包含六项官方运行时镜像");
   }
   for (const key of expected) {
     const versions = images.get(key).versions;
@@ -36,7 +43,14 @@ if (checkOnly) {
   const descriptorDir = args[0];
   const outputPath = args[1];
   const template = parse(new URL("../deploy/runtime-image-registry.json", import.meta.url));
-  const expected = ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal", "deepsonar-openharmony-test"];
+  const expected = [
+    "deepsonar-base",
+    "deepsonar-audit",
+    "deepsonar-kali-minimal",
+    "deepsonar-openharmony-test",
+    "deepsonar-openharmony-audit",
+    "deepsonar-openharmony-fuzz",
+  ];
   const descriptors = new Map();
   for (const key of expected) {
     const descriptor = parse(`${descriptorDir}/${key.replace("deepsonar-", "")}.json`);

@@ -175,21 +175,39 @@ OPENAI_BASE_URL=
 ./deploy/deploy.sh up real
 ```
 
-5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17/21、Go 与 Rust，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
+5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17（默认 17，不含 21）、Go 与 Rust，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
 
-如需 OpenHarmony 源码专项测试，可在项目中启用官方 `deepsonar-openharmony-test` 镜像。它是源码同步与构建验证环境，不把 OpenHarmony 全量源码烘焙进镜像，也不等于可直接烧录到特定开发板的固件。镜像提供 GitCode manifest 的 HTTPS 拉取、Git LFS、Python、基础编译工具、ccache、CMake、Ninja 和 Claude Code Agent 运行能力：
+如需 OpenHarmony 源码专项工作，可在项目中显式启用下列官方镜像（均为 `project_opt_in`，不把全量源码烘焙进镜像，也不等于板级固件）：
+
+| 镜像 key | 用途 | Dockerfile |
+|----------|------|------------|
+| `deepsonar-openharmony-test` | 源码同步与产品构建验证 | `deploy/Dockerfile.agent-openharmony` |
+| `deepsonar-openharmony-audit` | 高危静态审计（Clang/clang-tidy/cppcheck/sparse + ASan/UBSan 工具链） | `deploy/Dockerfile.agent-openharmony-audit` |
+| `deepsonar-openharmony-fuzz` | 动态验证与 Fuzz（libFuzzer / AFL++ + ASan/UBSan） | `deploy/Dockerfile.agent-openharmony-fuzz` |
+
+默认全局 RoleConfig 仍是 `audit → deepsonar-audit`、`test → deepsonar-kali-minimal`。做 OpenHarmony 高危挖掘时，在项目镜像市场启用对应镜像后，把项目级 RoleConfig 覆盖为：`audit → deepsonar-openharmony-audit`，`test`/`verify` → `deepsonar-openharmony-fuzz`（按需）。
 
 ```bash
+# 需先有 deepsonar-base:local
 docker build -f deploy/Dockerfile.agent-openharmony \
   --build-arg BASE_IMAGE=deepsonar-base:local \
   -t deepsonar-openharmony-test:local .
+docker build -f deploy/Dockerfile.agent-openharmony-audit \
+  --build-arg BASE_IMAGE=deepsonar-base:local \
+  -t deepsonar-openharmony-audit:local .
+docker build -f deploy/Dockerfile.agent-openharmony-fuzz \
+  --build-arg BASE_IMAGE=deepsonar-base:local \
+  -t deepsonar-openharmony-fuzz:local .
+
 docker run --rm -it -w /workspace deepsonar-openharmony-test:local \
   openharmony-init.sh --branch master --jobs "$(nproc)"
-docker run --rm -it -w /workspace deepsonar-openharmony-test:local \
-  openharmony-build.sh --product-name rk3568
+docker run --rm -it -w /workspace deepsonar-openharmony-audit:local \
+  openharmony-audit-env.sh --check
+docker run --rm -it -w /workspace deepsonar-openharmony-fuzz:local \
+  openharmony-fuzz-env.sh --check
 ```
 
-同步和完整编译需要任务允许出网，并准备足够的磁盘和内存；构建时必须指定实际的 `product_name`。`openharmony-init.sh` 默认使用 `https://gitcode.com/openharmony/manifest.git` 与 `master`，可用 `--group`、`--manifest-file`、`--jobs` 和 `--source-dir` 做必要调整；`openharmony-build.sh` 会将其他参数原样传递给源码根目录的 `./build.sh`。
+同步和完整编译需要任务允许出网，并准备足够的磁盘和内存；构建时必须指定实际的 `product_name`。`openharmony-init.sh` 默认使用 `https://gitcode.com/openharmony/manifest.git` 与 `master`，可用 `--group`、`--manifest-file`、`--jobs` 和 `--source-dir` 做必要调整；`openharmony-build.sh` 会将其他参数原样传递给源码根目录的 `./build.sh`。Audit 镜像提供 `openharmony-audit-scan.sh`（clang-tidy/cppcheck/sparse）；Fuzz 镜像提供 `openharmony-fuzz-build.sh`（编译 libFuzzer/AFL harness）。
 
 ### 5.3 启动后的运行时镜像准备
 

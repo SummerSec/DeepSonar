@@ -40,6 +40,26 @@
       "project_opt_in": true,
       "default_role": "test",
       "versions": []
+    },
+    {
+      "image_key": "deepsonar-openharmony-audit",
+      "name": "DeepSonar OpenHarmony Audit",
+      "description": "OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan；项目显式启用后供 audit 覆盖",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "audit",
+      "versions": []
+    },
+    {
+      "image_key": "deepsonar-openharmony-fuzz",
+      "name": "DeepSonar OpenHarmony Fuzz",
+      "description": "OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；项目显式启用后供 test/verify 覆盖",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "test",
+      "versions": []
     }
   ]
 }

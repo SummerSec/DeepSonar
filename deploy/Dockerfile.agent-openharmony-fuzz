@@ -1,0 +1,75 @@
+# DeepSonar OpenHarmony 动态验证 / Fuzz 运行时。
+# 用于证伪或确认高危 Finding：libFuzzer、AFL++、ASan/UBSan。
+# 不包含全量源码、板级固件或 GUI；不安装 Kali metapackage。
+ARG BASE_IMAGE=deepsonar-base:local
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+USER root
+ARG REPO_SHA256=2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    build-essential ccache cmake ninja-build git-lfs python3-requests python-is-python3 \
+    openssh-client rsync patch pkg-config \
+    clang clang-tools llvm lld \
+    libasan8 libubsan1 liblsan0 \
+    afl++ \
+    gdb binutils \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* \
+  && git lfs install --system \
+  && install -d -m 0755 /opt/deepsonar/bin /workspace
+
+COPY deploy/vendor/gitcode-repo-py3 /tmp/repo
+RUN echo "$REPO_SHA256  /tmp/repo" | sha256sum -c - \
+  && install -m 0755 /tmp/repo /usr/local/bin/repo \
+  && rm -f /tmp/repo
+
+COPY deploy/openharmony-env.sh /tmp/openharmony-env.sh
+COPY deploy/openharmony-init.sh /tmp/openharmony-init.sh
+COPY deploy/openharmony-build.sh /tmp/openharmony-build.sh
+COPY deploy/openharmony-fuzz-env.sh /tmp/openharmony-fuzz-env.sh
+COPY deploy/openharmony-fuzz-build.sh /tmp/openharmony-fuzz-build.sh
+RUN install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.sh \
+  && install -m 0755 /tmp/openharmony-init.sh /opt/deepsonar/bin/openharmony-init.sh \
+  && install -m 0755 /tmp/openharmony-build.sh /opt/deepsonar/bin/openharmony-build.sh \
+  && install -m 0755 /tmp/openharmony-fuzz-env.sh /opt/deepsonar/bin/openharmony-fuzz-env.sh \
+  && install -m 0755 /tmp/openharmony-fuzz-build.sh /opt/deepsonar/bin/openharmony-fuzz-build.sh \
+  && rm -f /tmp/openharmony-env.sh /tmp/openharmony-init.sh /tmp/openharmony-build.sh \
+    /tmp/openharmony-fuzz-env.sh /tmp/openharmony-fuzz-build.sh \
+  && if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi \
+  && if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi \
+  && chown -R deepsonar:deepsonar /opt/deepsonar /workspace
+
+RUN /opt/deepsonar/bin/openharmony-env.sh --check \
+  && /opt/deepsonar/bin/openharmony-fuzz-env.sh --check \
+  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-fuzz","imageKey":"deepsonar-openharmony-fuzz","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","llvm-symbolizer","libfuzzer","afl-fuzz","afl-clang-fast","gdb","objdump","addr2line","libasan","libubsan","node","claude"],"focus":["dynamic-verify","crash-repro","harness-fuzz"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-fuzz-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","fuzzBuild":"/opt/deepsonar/bin/openharmony-fuzz-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
+
+ENV IS_SANDBOX=1 \
+    OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
+    CC=clang \
+    CXX=clang++ \
+    AFL_SKIP_CPUFREQ=1 \
+    AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+
+FROM scratch
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="openharmony-fuzz" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.title="DeepSonar OpenHarmony Fuzz" \
+      org.opencontainers.image.description="OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="MIT"
+ENV IS_SANDBOX=1 \
+    OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
+    CC=clang \
+    CXX=clang++ \
+    AFL_SKIP_CPUFREQ=1 \
+    AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]

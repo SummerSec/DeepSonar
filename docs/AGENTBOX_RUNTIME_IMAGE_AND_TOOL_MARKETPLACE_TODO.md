@@ -88,7 +88,7 @@ Agent 可以在已分配镜像中自主选择工具，但不能：
 |---|---|---|---|
 | `deepsonar-base` | Explore、Analyze、Code、Hub | git、rg、jq、file、unzip、Python、Node、ca-certificates | P0 |
 | `deepsonar-audit` | Audit | `deepsonar-base` + Semgrep、Gitleaks、ShellCheck、binutils | P0 |
-| `deepsonar-kali-minimal`（Kali Test） | Test 默认 | Kali 最小 rootfs + base/audit CLI + Python 3.10–3.14 + JDK 8/11/17/21 + Go/Rust；无 Kali metapackage/GUI | P0 |
+| `deepsonar-kali-minimal`（Kali Test） | Test 默认 | Kali 最小 rootfs + base/audit CLI + Python 3.10–3.14 + JDK 8/11/17（默认 17，不含 21）+ Go/Rust；无 Kali metapackage/GUI | P0 |
 | `deepsonar-language-*` | Java、Go、PHP、Rust 等专项审计 | 对应语言工具链与静态分析器 | P2，按真实任务增加 |
 | 第三方市场镜像 | 社区或合作方专项环境 | 必须满足 DEEPSONAR 镜像契约 | P2 |
 

@@ -139,7 +139,14 @@ const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (registry.schema !== "deepsonar.registry/v1" || !Array.isArray(registry.images)) {
   throw new Error("注册表 schema 无效");
 }
-const builtinKeys = new Set(["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal", "deepsonar-openharmony-test"]);
+const builtinKeys = new Set([
+  "deepsonar-base",
+  "deepsonar-audit",
+  "deepsonar-kali-minimal",
+  "deepsonar-openharmony-test",
+  "deepsonar-openharmony-audit",
+  "deepsonar-openharmony-fuzz",
+]);
 const keys = new Set();
 for (const image of registry.images) {
   if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
@@ -293,6 +300,8 @@ prepare_builtin "base" "deepsonar-base" "deepsonar-base:local" "$ROOT/deploy/Doc
 prepare_builtin "audit" "deepsonar-audit" "deepsonar-audit:local" "$ROOT/deploy/Dockerfile.agent" audit
 prepare_builtin "kali-minimal" "deepsonar-kali-minimal" "deepsonar-kali-minimal:local" "$ROOT/deploy/Dockerfile.agent-kali-minimal"
 prepare_builtin "openharmony-test" "deepsonar-openharmony-test" "deepsonar-openharmony-test:local" "$ROOT/deploy/Dockerfile.agent-openharmony" "" "deepsonar-base:local"
+prepare_builtin "openharmony-audit" "deepsonar-openharmony-audit" "deepsonar-openharmony-audit:local" "$ROOT/deploy/Dockerfile.agent-openharmony-audit" "" "deepsonar-base:local"
+prepare_builtin "openharmony-fuzz" "deepsonar-openharmony-fuzz" "deepsonar-openharmony-fuzz:local" "$ROOT/deploy/Dockerfile.agent-openharmony-fuzz" "" "deepsonar-base:local"
 
 log "汇总：成功/模拟 ${SUCCESS_COUNT}，跳过 ${SKIP_COUNT}，失败 ${FAILURE_COUNT}"
 if [[ ${#FAILURES[@]} -gt 0 ]]; then

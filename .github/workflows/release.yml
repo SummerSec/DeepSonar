@@ -606,8 +606,250 @@ jobs:
           path: release-digests/openharmony-test.json
           if-no-files-found: error
 
+  openharmony-audit:
+    needs: base-image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-audit
+          labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Audit
+            org.opencontainers.image.description=OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Audit
+            org.opencontainers.image.description=OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-audit
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=openharmony-audit-{{version}}
+            type=sha,prefix=openharmony-audit-sha-
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-openharmony-audit
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.acr-meta.outputs.tags }}
+            ${{ steps.dockerhub-meta.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-base:${{ needs.base-image.outputs.version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=openharmony-audit
+          cache-to: type=gha,mode=max,scope=openharmony-audit
+      - name: 保存 OpenHarmony Audit manifest digest
+        env:
+          IMAGE_KEY: deepsonar-openharmony-audit
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-audit
+          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-audit
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-openharmony-audit
+          path: release-digests/openharmony-audit.json
+          if-no-files-found: error
+
+  openharmony-fuzz:
+    needs: base-image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-fuzz
+          labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
+            org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
+            org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-fuzz
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=openharmony-fuzz-{{version}}
+            type=sha,prefix=openharmony-fuzz-sha-
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-openharmony-fuzz
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.acr-meta.outputs.tags }}
+            ${{ steps.dockerhub-meta.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-base:${{ needs.base-image.outputs.version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=openharmony-fuzz
+          cache-to: type=gha,mode=max,scope=openharmony-fuzz
+      - name: 保存 OpenHarmony Fuzz manifest digest
+        env:
+          IMAGE_KEY: deepsonar-openharmony-fuzz
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-fuzz
+          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-fuzz
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-fuzz.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-openharmony-fuzz
+          path: release-digests/openharmony-fuzz.json
+          if-no-files-found: error
+
   release:
-    needs: [base-image, images, kali-minimal, openharmony-test]
+    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz]
     runs-on: ubuntu-latest
     env:
       ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}

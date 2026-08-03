@@ -395,7 +395,8 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 - 官方 `deepsonar-base` 供 explore/analyze/review/code/hub/report，`deepsonar-audit` 供 audit；两者以固定 digest 的 `node:22-bookworm-slim` 为底（满足当前 Claude Code 的 Node 版本要求），共用 `agent-harness/runtime-images.json` 版本/来源/摘要单一定义，本地 image DSL 与生产 Dockerfile 均消费该约束并由 CI 检测漂移。
 - **镜像体积是准入硬门槛**：按角色拆包、`--no-install-recommends`、不安装重复 Agent SDK/CLI、构建后清理包缓存，并在断网冒烟中以 gzip 压缩分发包检查 `maxSizeMiB`、同时报告解压层大小。重型扫描器只进入专项镜像，不允许为了“可能用到”扩张默认 base。
-- `deepsonar-kali-minimal`（市场名 Kali Test）仅是 test 的官方默认镜像：固定官方 `kali-last-release` digest，预装 Python 3.10–3.14、固定 digest 的 Temurin JDK 8/11/17/21、Kali 仓库的 Go/Rust 与清单化审计 CLI；不安装 `kali-linux-*` / `kali-tools-*` metapackage、GUI、桌面或默认工具全集。Python 运行时构建后禁止联网补装，Java/Python 均提供明确的版本化命令。系统 verify 默认使用最小 Base，需要专项工具时通过 RoleConfig 显式覆盖。
+- `deepsonar-kali-minimal`（市场名 Kali Test）仅是 test 的官方默认镜像：固定官方 `kali-last-release` digest，预装 Python 3.10–3.14、固定 digest 的 Temurin JDK 8/11/17（默认 17，不含 21）、Kali 仓库的 Go/Rust 与清单化审计 CLI；不安装 `kali-linux-*` / `kali-tools-*` metapackage、GUI、桌面或默认工具全集。Python 运行时构建后禁止联网补装，Java/Python 均提供明确的版本化命令。系统 verify 默认使用最小 Base，需要专项工具时通过 RoleConfig 显式覆盖。
+- OpenHarmony 专项镜像均为 `project_opt_in`：`deepsonar-openharmony-test`（源码同步与构建）、`deepsonar-openharmony-audit`（Clang 静态分析 + ASan/UBSan 工具链，面向 OOB/UAF/提权类假设）、`deepsonar-openharmony-fuzz`（libFuzzer/AFL++ 动态验证）。三者均基于 `deepsonar-base`，不烘焙全量源码或板级固件；高危挖掘时由项目启用后覆盖 audit/test/verify 的 RoleConfig，不改变全局默认。
 - Job 创建于 `core.ts` 时按项目 RoleConfig → 全局 RoleConfig → 角色官方默认值解析可信版本（test → Kali Test，audit → Audit，verify 与其余角色 → Base），并立即冻结 digest；Dispatcher/Executor 只消费快照，不在执行期重新解析 tag。
 - `image-admission` 是与 Scheduler 进程隔离的 Worker。它对 allowlist registry 的导入执行 digest 解析、Cosign 验签、Syft SBOM、Trivy 漏洞/凭据扫描、ClamAV 恶意文件检查、setuid 枚举和断网硬化自检。扫描通过后仍保持 quarantined，只有 `images:approve` 管理员能提升 trusted。
 - 复扫失败的 trusted 版本自动 revoked，调度器/准入 Worker 会取消尚未完成的相关 Job 并精确回收它们的 sandbox ID。历史 Job 快照、Finding 和扫描记录不删除；新 digest 只进入 quarantined，不自动替换生产版本。
