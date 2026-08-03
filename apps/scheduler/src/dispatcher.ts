@@ -47,9 +47,41 @@ export interface GraphEligibilityState {
   activeHub?: boolean;
   activeWaitingHuman?: boolean;
   activeRole?: boolean;
+  pendingHubOlder?: boolean;
+  pendingReportOlder?: boolean;
   waitingEvidence?: boolean;
   rootStatus?: string | null;
   activeCanvasJob?: boolean;
+}
+
+/** Page-scoped graph facts loaded once before candidate evaluation. */
+export interface GraphEligibilityBatch {
+  verifyWaitingIds: ReadonlySet<string>;
+}
+
+/**
+ * Verify eligibility used to issue one round lookup per pending candidate.
+ * Load the bounded page's waiting-evidence markers in one query instead, so a
+ * large backlog cannot turn the dispatcher claim transaction into an N+1
+ * advisory/row-lock fanout.
+ */
+export async function loadGraphEligibilityBatch(
+  tx: typeof sql,
+  pending: readonly DispatchCandidate[],
+): Promise<GraphEligibilityBatch> {
+  const verifyIds = pending
+    .filter((job) => String(job.type ?? "") === "verify_finding" && job.id)
+    .map((job) => String(job.id));
+  if (verifyIds.length === 0) return { verifyWaitingIds: new Set<string>() };
+  const rows = await tx`
+    SELECT verify_job_id
+    FROM finding_verification_rounds
+    WHERE verify_job_id = ANY(${verifyIds}::uuid[])
+      AND status IN ('pending','running')
+      AND requirements_json->>'eligibility' = 'waiting_evidence'`;
+  return {
+    verifyWaitingIds: new Set(rows.map((row) => String(row.verify_job_id))),
+  };
 }
 
 /** Pure graph-stage gate kept separate from numeric ordering/resource caps. */
@@ -61,14 +93,18 @@ export function graphEligibilityReason(
   if (type === "hub_reason") {
     if (state.activeHub) return "hub_active";
     if (state.activeWaitingHuman) return "waiting_human";
+    if (state.pendingHubOlder) return "hub_pending_older";
     if (state.activeRole) return "canvas_busy";
     if (state.rootStatus && ["analysis_complete", "reporting", "succeeded"].includes(state.rootStatus)) {
       return "root_finished";
     }
   }
   if (type === "verify_finding" && state.waitingEvidence) return "waiting_evidence";
-  if (type === "report" && (state.activeCanvasJob || !["analysis_complete", "reporting"].includes(String(state.rootStatus)))) {
-    return "report_gate";
+  if (type === "report") {
+    if (state.pendingReportOlder) return "report_pending_older";
+    if (state.activeCanvasJob || !["analysis_complete", "reporting"].includes(String(state.rootStatus))) {
+      return "report_gate";
+    }
   }
   return null;
 }
@@ -166,6 +202,7 @@ async function isRealType(type: string): Promise<boolean> {
 async function graphEligibilityReasonFromDb(
   tx: typeof sql,
   job: Pick<DispatchCandidate, "id" | "canvas_id" | "type" | "finding_id">,
+  batch?: GraphEligibilityBatch,
 ): Promise<string | null> {
   const type = String(job.type ?? "");
   // Ordinary role/discovery Jobs are eligible once resource quotas pass; do
@@ -177,6 +214,9 @@ async function graphEligibilityReasonFromDb(
   const activeStatuses = ["pending", "claimed", "provisioning", "running", "waiting_human"];
   if (type === "verify_finding") {
     if (!job.finding_id) return null;
+    if (batch) {
+      return graphEligibilityReason({ type }, { waitingEvidence: batch.verifyWaitingIds.has(id) });
+    }
     const rows = await tx`
       SELECT 1 FROM finding_verification_rounds
       WHERE finding_id = ${String(job.finding_id)}
@@ -188,34 +228,44 @@ async function graphEligibilityReasonFromDb(
   }
 
   if (type === "report") {
-    const [root, activeCanvas] = await Promise.all([
+    const [root, activeCanvas, oldestPendingReport] = await Promise.all([
       tx`SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`,
       tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id}
-         AND status = ANY(${activeStatuses}) LIMIT 1`,
+         AND (
+           status IN ('claimed','provisioning','running','waiting_human')
+           OR (status = 'pending' AND type <> 'report')
+         ) LIMIT 1`,
+      tx`SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'report' AND status = 'pending'
+         ORDER BY created_at ASC, id ASC LIMIT 1`,
     ]);
     return graphEligibilityReason(
       { type },
       {
         rootStatus: (root[0]?.status as string | null) ?? null,
         activeCanvasJob: activeCanvas.length > 0,
+        pendingReportOlder: Boolean(oldestPendingReport[0]?.id && oldestPendingReport[0].id !== id),
       },
     );
   }
 
-  const [activeHub, activeWaitingHuman, activeRole, root] = await Promise.all([
+  const [activeHub, activeWaitingHuman, activeRole, root, oldestPendingHub] = await Promise.all([
     tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND type = 'hub_reason'
-       AND status = ANY(${activeStatuses}) LIMIT 1`,
+       AND status = ANY(${["claimed", "provisioning", "running", "waiting_human"]}) LIMIT 1`,
     tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND status = 'waiting_human' LIMIT 1`,
     tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id}
        AND type NOT IN ('hub_reason','verify_finding','report')
        AND status = ANY(${activeStatuses}) LIMIT 1`,
     tx`SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`,
+    tx`SELECT id FROM jobs
+       WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'pending'
+       ORDER BY created_at ASC, id ASC LIMIT 1`,
   ]);
   return graphEligibilityReason(
     { type },
     {
       activeHub: activeHub.length > 0,
       activeWaitingHuman: activeWaitingHuman.length > 0,
+      pendingHubOlder: Boolean(oldestPendingHub[0]?.id && oldestPendingHub[0].id !== id),
       activeRole: activeRole.length > 0,
       rootStatus: (root[0]?.status as string | null) ?? null,
     },
@@ -327,10 +377,18 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         createdAt: String(last.created_at_key),
         id: String(last.id),
       };
+      const graphBatch = await loadGraphEligibilityBatch(
+        tx as unknown as typeof sql,
+        pending as unknown as DispatchCandidate[],
+      );
 
       for (const job of pending) {
         if (claimed.length >= slots) break;
-        const graphSkip = await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job as DispatchCandidate);
+        const graphSkip = await graphEligibilityReasonFromDb(
+          tx as unknown as typeof sql,
+          job as DispatchCandidate,
+          graphBatch,
+        );
         if (graphSkip) continue;
         const projectId = job.project_id as string;
         // Historical snapshots may omit agent_cli; keep quota accounting on

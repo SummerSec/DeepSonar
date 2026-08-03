@@ -72,7 +72,7 @@ if (!testDatabaseUrl) {
         type: "audit_module",
         priority: fixedPriorityForJob({ type: "audit_module", purpose: "discovery" }),
       };
-      await maybeTriggerHub(sql, dummyJob);
+      await sql.begin(async (tx) => maybeTriggerHub(tx as unknown as typeof sql, dummyJob));
       const [{ first_hub_count }] = await sql`
         SELECT COUNT(*)::int AS first_hub_count FROM jobs
         WHERE canvas_id = ${canvasId} AND type = 'hub_reason'`;
@@ -80,7 +80,7 @@ if (!testDatabaseUrl) {
       await sql`
         UPDATE jobs SET status = 'succeeded', finished_at = now()
         WHERE canvas_id = ${canvasId} AND type = 'hub_reason'`;
-      await maybeTriggerHub(sql, dummyJob);
+      await sql.begin(async (tx) => maybeTriggerHub(tx as unknown as typeof sql, dummyJob));
       const [{ no_churn_count }] = await sql`
         SELECT COUNT(*)::int AS no_churn_count FROM jobs
         WHERE canvas_id = ${canvasId} AND type = 'hub_reason'`;

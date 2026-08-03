@@ -204,11 +204,10 @@ export async function createVerifyRound(
   const evidence = await collectEvidenceSnapshot(tx, findingId, (opts.finding.job_id as string) ?? null);
   const signature = evidenceSignature(evidence);
   const existingRequirements = (openRound?.requirements_json ?? {}) as Record<string, unknown>;
-  const existingRoundIsWaiting =
-    Boolean(openRound) &&
-    !openRound?.verify_job_id &&
-    (String(existingRequirements.eligibility ?? "") === "waiting_evidence" ||
-      String(existingRequirements.eligibility ?? "") === "");
+  // Any open round without a runnable Job is scheduler-owned state that must
+  // be reclassified from current evidence. This also repairs legacy rows with
+  // a stale/missing eligibility marker instead of leaving them invisible.
+  const existingRoundIsWaiting = Boolean(openRound) && !openRound?.verify_job_id;
 
   // A Finding always enters the Verify lifecycle, but a round with missing
   // independent evidence is represented explicitly and has no runnable Job.
@@ -381,6 +380,143 @@ export async function createVerifyRound(
   }
 
   return { jobId: verifyJob.id, roundId: round.id as string, attempt: nextAttempt };
+}
+
+export interface VerificationRoundNormalizationSummary {
+  missingJobExamined: number;
+  missingJobReclassified: number;
+  staleJobExamined: number;
+  staleJobRepaired: number;
+}
+
+/**
+ * Repair open verification rounds left by older scheduler versions. A plain
+ * pending row with a NULL verify_job_id and no eligibility marker used to be
+ * invisible to the dispatcher forever. Re-read and lock each row before
+ * reusing it so a restart cannot create a duplicate attempt. Terminal jobs
+ * are recovered through the same close/rework path used by Reaper and the
+ * dispatcher failure handler.
+ */
+export async function normalizePendingVerificationRounds(
+  db: typeof sql = sql,
+): Promise<VerificationRoundNormalizationSummary> {
+  const missingJobRounds = await db`
+    SELECT r.id, r.finding_id, r.status, r.verify_job_id,
+           f.project_id, f.job_id AS origin_job_id, f.verify_status,
+           j.canvas_id AS origin_canvas_id, j.followup_depth AS origin_followup_depth
+    FROM finding_verification_rounds r
+    JOIN findings f ON f.id = r.finding_id
+    JOIN jobs j ON j.id = f.job_id
+    WHERE r.status IN ('pending','running')
+      AND r.verify_job_id IS NULL
+    ORDER BY r.created_at ASC, r.id ASC`;
+  let missingJobReclassified = 0;
+  for (const candidate of missingJobRounds) {
+    const outcome = await db.begin(async (txRaw) => {
+      const tx = txRaw as unknown as Tx;
+      const [round] = await tx`
+        SELECT id, finding_id, status, verify_job_id, requirements_json
+        FROM finding_verification_rounds
+        WHERE id = ${candidate.id as string}
+          AND status IN ('pending','running')
+        FOR UPDATE`;
+      if (!round || round.verify_job_id) return "gone" as const;
+      const [finding] = await tx`
+        SELECT f.*, j.canvas_id AS origin_canvas_id, j.followup_depth AS origin_followup_depth
+        FROM findings f JOIN jobs j ON j.id = f.job_id
+        WHERE f.id = ${round.finding_id as string}`;
+      if (!finding) return "gone" as const;
+      const canvasId = (finding.origin_canvas_id as string | null) ?? null;
+      if (finding.verify_status === "confirmed" || finding.verify_status === "needs_human") {
+        // The Finding status is already terminal. Close only this stale open
+        // round; never rewrite the terminal Finding or any prior round.
+        const terminalStatus = finding.verify_status === "confirmed" ? "confirmed" : "needs_human";
+        await tx`
+          UPDATE finding_verification_rounds SET
+            status = ${terminalStatus}, final_outcome = ${terminalStatus},
+            error = 'boot_stale_open_verification_round',
+            finished_at = COALESCE(finished_at, now())
+          WHERE id = ${round.id as string}`;
+        return "closed" as const;
+      }
+      const created = await createVerifyRound(tx, {
+        projectId: finding.project_id as string,
+        canvasId,
+        finding: finding as Record<string, unknown>,
+        parentJobId: finding.job_id as string,
+        followupDepth: Number(finding.origin_followup_depth ?? 0),
+        priorityBase: 0,
+        reason: "boot_reconcile",
+      });
+      return created ? "eligible" as const : "classified" as const;
+    });
+    if (outcome !== "gone") missingJobReclassified += 1;
+  }
+
+  const staleJobs = await db`
+    SELECT r.id AS round_id, r.finding_id, r.verify_job_id,
+           j.status AS job_status, j.error AS job_error
+    FROM finding_verification_rounds r
+    JOIN jobs j ON j.id = r.verify_job_id
+    WHERE r.status IN ('pending','running')
+      AND j.status = ANY(${TERMINAL_JOB as unknown as string[]})
+    ORDER BY r.created_at ASC, r.id ASC`;
+  let staleJobRepaired = 0;
+  for (const stale of staleJobs) {
+    const status = String(stale.job_status) as (typeof TERMINAL_JOB)[number];
+    if (status === "failed" || status === "timeout" || status === "orphan" || status === "cancelled") {
+      const { recoverVerifyJobTerminal } = await core();
+      await recoverVerifyJobTerminal(
+        stale.verify_job_id as string,
+        status,
+        (stale.job_error as string | null) ?? "boot_stale_terminal_verify",
+      );
+      staleJobRepaired += 1;
+      continue;
+    }
+    // A succeeded Verify without a closed round has no durable verdict to
+    // replay. Hand it to a human rather than inventing an outcome or
+    // scheduling another attempt on every restart.
+    const repaired = await db.begin(async (txRaw) => {
+      const tx = txRaw as unknown as Tx;
+      const [round] = await tx`
+        SELECT id, finding_id FROM finding_verification_rounds
+        WHERE id = ${stale.round_id as string}
+          AND status IN ('pending','running')
+        FOR UPDATE`;
+      if (!round) return false;
+      const [job] = await tx`
+        SELECT j.status, j.canvas_id, f.verify_status
+        FROM jobs j JOIN findings f ON f.id = ${round.finding_id as string}
+        WHERE j.id = ${stale.verify_job_id as string}`;
+      if (job?.status !== "succeeded") return false;
+      if (job.verify_status === "confirmed" || job.verify_status === "needs_human") {
+        const terminalStatus = job.verify_status === "confirmed" ? "confirmed" : "needs_human";
+        await tx`
+          UPDATE finding_verification_rounds SET
+            status = ${terminalStatus}, final_outcome = ${terminalStatus},
+            error = 'boot_stale_verify_success',
+            finished_at = COALESCE(finished_at, now())
+          WHERE id = ${round.id as string}`;
+        return true;
+      }
+      await markFindingNeedsHuman(
+        tx,
+        round.finding_id as string,
+        "boot_stale_verify_success",
+        (job.canvas_id as string | null) ?? null,
+      );
+      return true;
+    });
+    if (repaired) staleJobRepaired += 1;
+  }
+
+  return {
+    missingJobExamined: missingJobRounds.length,
+    missingJobReclassified,
+    staleJobExamined: staleJobs.length,
+    staleJobRepaired,
+  };
 }
 
 /** Finding 创建后自动进入 Verify 生命周期；缺证据时先登记等待态。 */

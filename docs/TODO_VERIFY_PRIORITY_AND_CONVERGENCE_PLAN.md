@@ -15,6 +15,15 @@
 
 ---
 
+## Historical draft (non-normative)
+
+> Everything from this heading through the end of section 11 is archived
+> design history. It is retained for context only and must not be used as
+> operator guidance. In particular, references below to `autoVerifySeverities`,
+> skipping low/medium Findings, `confirmedHubMode`, or parent-priority deltas
+> are superseded by Issue #12. Use the fixed priority classes and the
+> `waiting_evidence` lifecycle in section 12 instead.
+
 ## 0. 目标与非目标
 
 ### 目标
@@ -410,7 +419,11 @@ maybeTriggerHub 公共门:
 - [x] Issue #12 回归：固定档位/扇出 FIFO、Hub 资格、缺证据无 churn
 - [x] Phase 2 部分：autoStop 基础 + drain-priority（maxHubRounds 仅 succeeded 已在 main）
 - [ ] Phase 3：batch confirmed hub
-# Issue #12 implementation note (2026-08-04)
+## 12. Issue #12 implementation note (normative, 2026-08-04)
+
+> This is the only normative section in this file. Scheduler operators and
+> tests must follow this section together with `docs/ARCHITECTURE.md`; the
+> historical draft above is not an implementation contract.
 
 The scheduler now treats graph eligibility and queue ordering as separate
 decisions.  Every Finding enters the Verify lifecycle; `minVerifySeverity`
@@ -433,3 +446,12 @@ role, and `waiting_human` work has cleared; each evidence snapshot wakes one
 deterministic `verify_rework` decision, so repeated no-op role completions do
 not create churn.  Once the evidence gate qualifies, the same round receives
 its Verify Job and becomes `eligible`.
+
+On startup, reconciliation runs before the dispatcher, then the scheduler
+normalizes only runnable pending Job classes and repairs open legacy
+verification rounds. Claimed/provisioning resets are therefore FIFO-safe, and
+terminal Job/round history is left unchanged. For a single canvas, pending Hub
+and Report candidates are deterministic oldest-first gates; concurrent Hub
+triggers serialize on the canvas row. Public Job creation cannot choose the
+`convergence_evidence` lane, and Verify eligibility facts are loaded once per
+pending dispatch page.

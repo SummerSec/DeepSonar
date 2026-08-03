@@ -267,6 +267,86 @@ export function shouldWakeEvidenceHub(lastSignature: string | null | undefined, 
   return currentSignature.trim().length > 0 && lastSignature !== currentSignature;
 }
 
+function priorityNormalization(row: Record<string, unknown>): {
+  priority: number;
+  payload: Record<string, unknown>;
+  changed: boolean;
+} {
+  const payload =
+    row.payload_json && typeof row.payload_json === "object" && !Array.isArray(row.payload_json)
+      ? { ...(row.payload_json as Record<string, unknown>) }
+      : {};
+  const purpose = schedulingPurposeForJob({
+    type: row.type as string,
+    purpose: payload.scheduling_purpose,
+    severity:
+      row.finding_severity ??
+      payload.severity ??
+      (payload.finding as Record<string, unknown> | undefined)?.severity,
+    payload,
+  });
+  const priority = fixedPriorityForJob({
+    type: row.type as string,
+    purpose,
+    severity:
+      row.finding_severity ??
+      payload.severity ??
+      (payload.finding as Record<string, unknown> | undefined)?.severity,
+    payload,
+  });
+  const changed = Number(row.priority) !== priority || payload.scheduling_purpose !== purpose;
+  if (payload.scheduling_purpose !== purpose) payload.scheduling_purpose = purpose;
+  return { priority, payload, changed };
+}
+
+/**
+ * Normalize only runnable pending Jobs after boot reconciliation. Historical
+ * terminal priorities remain untouched; reset claimed/provisioning Jobs are
+ * included because reconcileOnBoot has already returned them to pending.
+ */
+export async function normalizePendingJobPriorities(db: typeof sql = sql): Promise<{ examined: number; updated: number }> {
+  const rows = await db`
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id,
+           f.severity AS finding_severity
+    FROM jobs j
+    LEFT JOIN findings f ON f.id = j.finding_id
+    WHERE j.status = 'pending'
+    ORDER BY j.created_at ASC, j.id ASC`;
+  let updated = 0;
+  for (const row of rows as unknown as Record<string, unknown>[]) {
+    const normalized = priorityNormalization(row);
+    if (!normalized.changed) continue;
+    const [result] = await db`
+      UPDATE jobs SET
+        priority = ${normalized.priority},
+        payload_json = ${db.json(normalized.payload as never)}
+      WHERE id = ${row.id as string} AND status = 'pending'
+      RETURNING id`;
+    if (result) updated += 1;
+  }
+  return { examined: rows.length, updated };
+}
+
+/** Re-apply the same scheduler-owned class when a historical Job is resumed. */
+export async function normalizePendingJobPriority(jobId: string, db: typeof sql = sql): Promise<boolean> {
+  const [row] = await db`
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id,
+           f.severity AS finding_severity
+    FROM jobs j
+    LEFT JOIN findings f ON f.id = j.finding_id
+    WHERE j.id = ${jobId} AND j.status = 'pending'`;
+  if (!row) return false;
+  const normalized = priorityNormalization(row as Record<string, unknown>);
+  if (!normalized.changed) return false;
+  const [result] = await db`
+    UPDATE jobs SET
+      priority = ${normalized.priority},
+      payload_json = ${db.json(normalized.payload as never)}
+    WHERE id = ${jobId} AND status = 'pending'
+    RETURNING id`;
+  return Boolean(result);
+}
+
 function defaultMinVerifySeverity(): SeverityRank {
   // AUTO_VERIFY_SEVERITIES=critical,high → 推断为 high
   return inferMinFromList(config.rules.autoVerifySeverities, "high");
@@ -536,16 +616,24 @@ export interface CreateJobInput {
 
 export async function createJob(input: CreateJobInput) {
   const requestedPayload = { ...(input.payload ?? {}) };
+  const systemType = ["hub_reason", "hub", "verify_finding", "verify", "report"].includes(
+    String(input.type ?? "").toLowerCase(),
+  );
+  const schedulingPayload = { ...requestedPayload };
+  if (!systemType) delete schedulingPayload.scheduling_purpose;
   const purpose = schedulingPurposeForJob({
     type: input.type,
-    purpose: requestedPayload.scheduling_purpose,
-    payload: requestedPayload,
+    // Custom/public Job creation never accepts a caller-selected convergence
+    // lane. Scheduler-owned role INSERT paths use fixedPriorityForJob
+    // directly and freeze their purpose there.
+    purpose: systemType ? requestedPayload.scheduling_purpose : undefined,
+    payload: schedulingPayload,
   });
   const priority = fixedPriorityForJob({
     type: input.type,
     purpose,
-    severity: requestedPayload.severity ?? (requestedPayload.finding as Record<string, unknown> | undefined)?.severity,
-    payload: requestedPayload,
+    severity: schedulingPayload.severity ?? (schedulingPayload.finding as Record<string, unknown> | undefined)?.severity,
+    payload: schedulingPayload,
   });
   if (input.priority !== undefined && input.priority !== priority) {
     throw new Error(`job priority is fixed for ${input.type}: expected ${priority}`);
@@ -1433,6 +1521,14 @@ export async function maybeTriggerHub(
 
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   if (!rules.hubEnabled && !options.force && !options.manual) return;
+
+  // Serialize the Hub eligibility check and INSERT per canvas. Without a
+  // row lock, two concurrent terminal events can both observe "no active
+  // Hub" and enqueue duplicate pending decisions that then block one another
+  // in the dispatcher.
+  const [canvasLock] = await tx`
+    SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+  if (!canvasLock) return;
 
   // 分析已完成 / 报告中：不再唤醒 Hub
   if (await rootAnalysisFinished(tx, canvasId)) {

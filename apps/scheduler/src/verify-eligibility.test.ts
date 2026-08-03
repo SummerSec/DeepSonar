@@ -6,7 +6,7 @@ import {
   priorityMatchesJob,
   shouldWakeEvidenceHub,
 } from "./core.js";
-import { graphEligibilityReason } from "./dispatcher.js";
+import { graphEligibilityReason, loadGraphEligibilityBatch } from "./dispatcher.js";
 
 test("five Hub rounds do not inflate child or Verify priority", () => {
   const hub = Array.from({ length: 5 }, () => fixedPriorityForJob({ type: "hub_reason" }));
@@ -50,9 +50,12 @@ test("Verify severity ordering is critical > high > medium and roles are FIFO ti
 test("Hub eligibility blocks active Hub, role, and waiting-human work", () => {
   const base = { type: "hub_reason" } as const;
   assert.equal(graphEligibilityReason(base, { activeHub: true }), "hub_active");
+  assert.equal(graphEligibilityReason(base, { pendingHubOlder: true }), "hub_pending_older");
   assert.equal(graphEligibilityReason(base, { activeWaitingHuman: true }), "waiting_human");
   assert.equal(graphEligibilityReason(base, { activeRole: true }), "canvas_busy");
   assert.equal(graphEligibilityReason(base, {}), null);
+  assert.equal(graphEligibilityReason({ type: "report" }, { pendingReportOlder: true }), "report_pending_older");
+  assert.equal(graphEligibilityReason({ type: "report" }, { rootStatus: "analysis_complete" }), null);
 });
 
 test("evidence-wait wakeup is edge-triggered and does not churn", () => {
@@ -68,4 +71,21 @@ test("evidence-wait wakeup is edge-triggered and does not churn", () => {
     priorityMatchesJob({ type: "verify_finding", purpose: "verify", severity: "high" }, FIXED_PRIORITY.hub),
     false,
   );
+});
+
+test("pending Verify graph facts are loaded in one bounded-page query", async () => {
+  let calls = 0;
+  const verifyId = "00000000-0000-0000-0000-000000000001";
+  const fakeTx = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+    void strings;
+    calls += 1;
+    const ids = values.find((value) => Array.isArray(value)) as string[] | undefined;
+    return Promise.resolve([{ verify_job_id: ids?.[0] ?? verifyId }]);
+  }) as unknown as Parameters<typeof loadGraphEligibilityBatch>[0];
+  const batch = await loadGraphEligibilityBatch(fakeTx, [
+    { id: verifyId, type: "verify_finding" } as never,
+    { id: "role-id", type: "review" } as never,
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(batch.verifyWaitingIds.has(verifyId), true);
 });
