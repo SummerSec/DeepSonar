@@ -180,6 +180,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
       - name: Offline hardened smoke
         run: node agent-harness/test-runtime-image.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
+      - name: Maven online package smoke
+        if: matrix.toolset == 'kali-minimal'
+        run: node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:ci
 
   openharmony-runtime-images:
     runs-on: ubuntu-latest

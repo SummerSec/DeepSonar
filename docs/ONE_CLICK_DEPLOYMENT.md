@@ -132,6 +132,7 @@ DEEPSONAR_IMAGE_TOOLSET=audit npx agentbox image build --provider local-docker -
 pnpm ci:images
 docker build -f deploy/Dockerfile.agent-kali-minimal -t deepsonar-kali-minimal:local .
 node agent-harness/test-runtime-image.mjs deepsonar-kali-minimal:local kali-minimal agent-harness/kali-minimal-runtime.json
+node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:local
 ```
 
 2. 推送或转换为 registry digest 引用，写入 `deploy/.env`。`DOCKER_IMAGE_AUDIT` 只是升级期兼容值，新 Job 只使用目录内的 digest：
@@ -169,7 +170,7 @@ sumsec/deepsonar:kali-minimal-<version>
 ./deploy/deploy.sh up real
 ```
 
-5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17（默认 17，不含 21）、Go 与 Rust，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
+5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17（默认 17，不含 21）、Apache Maven 3.9.16、Go 与 Rust；Maven 位于 `/opt/deepsonar/maven`，不预置 `.m2` 缓存，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
 
 如需 OpenHarmony 源码专项工作，可在项目中显式启用下列官方镜像（均为 `project_opt_in`，不把全量源码烘焙进镜像，也不等于板级固件）：
 
@@ -370,7 +371,7 @@ docker images
 - [ ] 外部事件 Token 绑定单项目且只有 `tasks:write`；
 - [ ] real 模式模型凭据可用；
 - [ ] Agent 镜像存在；
-- [ ] 官方 base/audit/kali-minimal 引用均为 digest，并通过断网硬化冒烟与大小预算；其中 kali-minimal 仅是 Test 默认环境，Verify 默认使用 Base；
+- [ ] 官方 base/audit/kali-minimal 引用均为 digest，并通过断网硬化冒烟（含 `mvn -v`）与联网最小 Maven POM package、大小预算；其中 kali-minimal 仅是 Test 默认环境，Verify 默认使用 Base；
 - [ ] 第三方准入需要的四个扫描器均以 digest 固定；
 - [ ] PostgreSQL、Scheduler、Image Admission、Web 状态正常；
 - [ ] `pnpm typecheck` 和 `pnpm build` 通过；
