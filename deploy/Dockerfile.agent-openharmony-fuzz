@@ -10,7 +10,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential ccache cmake ninja-build git-lfs python3-requests python-is-python3 \
     openssh-client rsync patch pkg-config \
-    clang clang-tools llvm lld \
+    clang clang-tools llvm lld libclang-rt-dev \
     libasan8 libubsan1 liblsan0 \
     afl++ \
     gdb binutils \
@@ -42,7 +42,7 @@ RUN install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.s
 
 RUN /opt/deepsonar/bin/openharmony-env.sh --check \
   && /opt/deepsonar/bin/openharmony-fuzz-env.sh --check \
-  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-fuzz","imageKey":"deepsonar-openharmony-fuzz","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","llvm-symbolizer","libfuzzer","afl-fuzz","afl-clang-fast","gdb","objdump","addr2line","libasan","libubsan","node","claude"],"focus":["dynamic-verify","crash-repro","harness-fuzz"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-fuzz-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","fuzzBuild":"/opt/deepsonar/bin/openharmony-fuzz-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
+  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-fuzz","imageKey":"deepsonar-openharmony-fuzz","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","llvm-symbolizer","compiler-rt","libfuzzer","afl-fuzz","afl-clang-fast","gdb","objdump","addr2line","libasan","libubsan","node","claude"],"focus":["dynamic-verify","crash-repro","harness-fuzz"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-fuzz-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","fuzzBuild":"/opt/deepsonar/bin/openharmony-fuzz-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
 
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \

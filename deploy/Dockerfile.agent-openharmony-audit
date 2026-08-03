@@ -10,7 +10,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential ccache cmake ninja-build git-lfs python3-requests python-is-python3 \
     openssh-client rsync patch pkg-config \
-    clang clang-tidy clang-tools llvm lld \
+    clang clang-tidy clang-tools llvm lld libclang-rt-dev \
     libasan8 libubsan1 liblsan0 \
     gdb binutils \
     sparse cppcheck bear \
@@ -42,7 +42,7 @@ RUN install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.s
 
 RUN /opt/deepsonar/bin/openharmony-env.sh --check \
   && /opt/deepsonar/bin/openharmony-audit-env.sh --check \
-  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-audit","imageKey":"deepsonar-openharmony-audit","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","clang-tidy","scan-build","llvm-symbolizer","gdb","objdump","addr2line","sparse","cppcheck","bear","libasan","libubsan","node","claude"],"focus":["oob","uaf","integer-overflow","privilege-escalation","memory-safety"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-audit-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","scan":"/opt/deepsonar/bin/openharmony-audit-scan.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
+  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-audit","imageKey":"deepsonar-openharmony-audit","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","clang-tidy","scan-build","llvm-symbolizer","compiler-rt","gdb","objdump","addr2line","sparse","cppcheck","bear","libasan","libubsan","node","claude"],"focus":["oob","uaf","integer-overflow","privilege-escalation","memory-safety"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-audit-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","scan":"/opt/deepsonar/bin/openharmony-audit-scan.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
 
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \

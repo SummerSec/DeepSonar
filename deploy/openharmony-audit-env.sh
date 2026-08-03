@@ -32,6 +32,10 @@ clang --version >/dev/null
 clang-tidy --version >/dev/null
 scan-build --help >/dev/null
 llvm-symbolizer --version >/dev/null
+echo 'int main(void){return 0;}' \
+  | clang -x c - -fsanitize=address,undefined -o /tmp/deepsonar-sanitizer-smoke
+/tmp/deepsonar-sanitizer-smoke
+rm -f /tmp/deepsonar-sanitizer-smoke
 gdb --version >/dev/null
 sparse --version >/dev/null
 cppcheck --version >/dev/null

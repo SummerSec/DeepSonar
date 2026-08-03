@@ -121,10 +121,10 @@ for (const item of openHarmonyImages) {
 for (const tool of ["build-essential", "ccache", "cmake", "ninja-build", "repo", "git-lfs", "python3", "python3-requests", "python-is-python3"]) {
   expect(openHarmonyDockerfile.includes(tool), `OpenHarmony Test 镜像缺少工具：${tool}`);
 }
-for (const tool of ["clang", "clang-tidy", "clang-tools", "sparse", "cppcheck", "bear", "libasan8", "libubsan1", "gdb"]) {
+for (const tool of ["clang", "clang-tidy", "clang-tools", "libclang-rt-dev", "sparse", "cppcheck", "bear", "libasan8", "libubsan1", "gdb"]) {
   expect(openHarmonyAuditDockerfile.includes(tool), `OpenHarmony Audit 镜像缺少工具：${tool}`);
 }
-for (const tool of ["clang", "afl++", "libasan8", "libubsan1", "gdb", "llvm"]) {
+for (const tool of ["clang", "libclang-rt-dev", "afl++", "libasan8", "libubsan1", "gdb", "llvm"]) {
   expect(openHarmonyFuzzDockerfile.includes(tool), `OpenHarmony Fuzz 镜像缺少工具：${tool}`);
 }
 expect(openHarmonyDockerfile.includes("openharmony-env.sh --check"), "OpenHarmony Test 必须在构建时执行环境 smoke check");
