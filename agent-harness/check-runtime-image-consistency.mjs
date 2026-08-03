@@ -93,6 +93,9 @@ expect(runtimeSmoke.includes("command -v jar"), "Kali minimal offline smoke must
 expect(runtimeSmoke.includes("jar --version"), "Kali minimal offline smoke must run jar --version");
 expect(mavenSmoke.includes("mvn -q"), "Kali minimal online smoke must run a Maven package");
 expect(mavenSmoke.includes("maven.repo.local=/tmp/maven-repository"), "Maven smoke must keep the repository outside .m2");
+expect(mavenSmoke.includes("commons_jar=/tmp/maven-repository/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar"), "Maven smoke must locate the downloaded commons-lang3 dependency");
+expect(mavenSmoke.includes('test -s \\\"$commons_jar\\\"'), "Maven smoke must assert the local commons-lang3 jar exists");
+expect(mavenSmoke.includes('target/classes:$commons_jar'), "Maven smoke must run with target classes and the local dependency jar");
 expect(ciWorkflow.includes("test-maven-package.mjs"), "CI must run the Maven package smoke");
 expect(schedulerRuntimeImages.includes('test: "deepsonar-kali-minimal"'), "Scheduler Test default must resolve to Kali Test");
 expect(schedulerRuntimeImages.includes('verify: "deepsonar-base"'), "Scheduler Verify default must remain Base");
