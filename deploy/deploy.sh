@@ -99,5 +99,10 @@ case "$ACTION" in
     if [ "$MODE" = "fake" ]; then
       echo "[deploy] 当前为 fake 模式；真实 Agent 请使用：./deploy/deploy.sh up real"
     fi
+    mkdir -p "$REPO_ROOT/data/logs"
+    nohup env DEEPSONAR_URL="http://127.0.0.1:$port/api" \
+      "$REPO_ROOT/deploy/prepare-runtime-images.sh" \
+      >> "$REPO_ROOT/data/logs/runtime-images.log" 2>&1 < /dev/null &
+    echo "[deploy] 运行时镜像准备已后台启动，日志：$REPO_ROOT/data/logs/runtime-images.log"
     ;;
 esac

@@ -41,11 +41,33 @@ start_web() {
   nohup setsid env PUBLIC_ROOT="$ROOT/apps/web/dist" HOST=0.0.0.0 PORT="$WEB_PORT" \
     SCHEDULER_URL=http://127.0.0.1:3100 node "$ROOT/deploy/web-server.mjs" > "$LOG/web.log" 2>&1 < /dev/null &
 }
+start_runtime_image_prepare() {
+  nohup env DEEPSONAR_URL=http://127.0.0.1:3100 "$ROOT/deploy/prepare-runtime-images.sh" \
+    >> "$LOG/runtime-images.log" 2>&1 < /dev/null &
+  echo "运行时镜像准备已后台启动，日志：$LOG/runtime-images.log"
+}
+wait_scheduler_health() {
+  local health="http://127.0.0.1:3100/health"
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "未找到 curl，无法轮询 scheduler 健康状态；继续后台准备镜像" >&2
+    return 0
+  fi
+  for _ in $(seq 1 30); do
+    if curl -fsS --connect-timeout 1 --max-time 2 "$health" >/dev/null 2>&1; then
+      echo "scheduler 健康检查通过，开始后台准备镜像"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "scheduler 健康检查 30 秒内未通过；不阻断服务启动，仍继续后台准备镜像" >&2
+}
 
 case "${1:-status}" in
   start)
     [ -z "$(pid_scheduler)" ] && { start_scheduler; echo "scheduler 已启动"; } || echo "scheduler 已在运行 pid=$(pid_scheduler)"
     [ -z "$(pid_web)" ] && { start_web; echo "web 已启动"; } || echo "web 已在运行 pid=$(pid_web)"
+    wait_scheduler_health
+    start_runtime_image_prepare
     sleep 5
     exec "$0" status
     ;;

@@ -1,6 +1,6 @@
 # 方案：凭据配置回显 bug 修复 + 镜像市场内置注册表
 
-> 状态：待实施（TODO）。本文件为实施方案文档，落库于 `docs/`。
+> 状态：已实施（2026-08-03）。本文件为实施方案与验收记录。
 
 ## Context（为什么改）
 
@@ -93,9 +93,9 @@ digest 从现有 CI 产物 / `DEEPSONAR_OFFICIAL_*_IMAGE` 当前值固化写入�
 ## 实施步骤
 
 0. ~~把本方案落成 `docs/` 文档~~ —— 已完成（本文件）。
-1. **Part A**：复现 bug → 修 `CredentialsPanel.startEdit` 防御性回显 → 重新编辑验证全字段回显。
-2. **Part B**：建清单文件 → 改 bootstrap → 加 API 导出端点 → 加拉取脚本 → 加手动登记 → 各端验证。
-3. 每步 `pnpm build` 过类型；改后端需 `restart` 生产 scheduler（`deploy/local-daemon.sh restart`）。
+1. ~~**Part A**：复现 bug → 修 `CredentialsPanel.startEdit` 防御性回显 → 重新编辑验证全字段回显。~~
+2. ~~**Part B**：建清单文件 → 改 bootstrap → 加 API 导出端点 → 加拉取脚本 → 加手动登记 → 各端验证。~~
+3. ~~每步 `pnpm build` 过类型；改后端需 `restart` 生产 scheduler（`deploy/local-daemon.sh restart`）。~~
 
 ## 验证
 - **Part A**：凭据页手动填 模型 ID + 单模型并发(如 3) + 总并发(如 5) → 保存 → 重新打开编辑 → 三项全回显；0 并发也回显 "0"。
@@ -103,5 +103,8 @@ digest 从现有 CI 产物 / `DEEPSONAR_OFFICIAL_*_IMAGE` 当前值固化写入�
   - 清单文件存在且 schema 校验通过。
   - scheduler 启动日志显示从清单注入官方镜像；`runtime_images` 表有对应 trusted version。
   - `GET /runtime-images/registry`（带 admin token）返回清单 JSON。
-  - `deploy/pull-runtime-images.sh` 在有 docker 的机器逐个 pull 成功（本机 docker 坏则仅验证脚本逻辑/日志，实际 pull 在 docker 可用环境测）。
+  - `deploy/pull-runtime-images.sh`、`deploy/prepare-runtime-images.sh` 的后台拉取/逐项构建、失败回退、日志和原子锁已验证；本机 Docker rootless 缺少 `newgidmap`，真实构建未成功，未将本地 image ID 冒充 digest。
+  - `deploy/local-daemon.sh` 会先轮询 scheduler health，最长约 30 秒后再后台启动准备流程；失败只记录，不阻断服务启动。
+  - 启动后支持异步读取 API/静态 registry、按内置 image key 拉取或构建 local tag；仅显式设置 `DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true` 且 worktree clean 时执行 `git pull --ff-only`。
   - 手动登记一个 `@sha256:` 镜像 → 立即 `trusted`、无 scan 记录、RoleConfigEditor 镜像下拉可选。
+  - 静态清单中的官方真实 digest 仍为空；`AGENT_MODE=real` 必须通过 `DEEPSONAR_OFFICIAL_*_IMAGE` 或官方登记接口提供不可变 digest。

@@ -177,6 +177,14 @@ OPENAI_BASE_URL=
 
 5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17/21、Go 与 Rust，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
 
+### 5.3 启动后的运行时镜像准备
+
+`deploy/local-daemon.sh start` 与 `deploy/deploy.sh up` 会在服务健康后后台运行 `deploy/prepare-runtime-images.sh`，日志写入 `data/logs/runtime-images.log`，不会阻塞主服务启动。脚本优先读取 API/静态注册表并拉取不可变版本；无版本或拉取失败时，逐项构建 `deepsonar-base:local`、`deepsonar-audit:local` 与 `deepsonar-kali-minimal:local`，单项失败不会阻断其他项。
+
+默认不执行 `git pull`。只有显式设置 `DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true` 且 worktree clean 时，脚本才执行 `git pull --ff-only`；dirty worktree 只记录跳过，绝不执行 stash、reset 或 merge。可用 `--dry-run` 或 `DEEPSONAR_RUNTIME_IMAGE_BUILD=false` 做无构建验证。
+
+本地 image ID 不会被当作 OCI manifest digest，也不会自动登记为 trusted；`AGENT_MODE=real` 仍必须配置并使用不可变 registry digest。
+
 ## 6. 数据库 schema 基线
 
 正常 Compose 部署无需手工导入数据库：Scheduler 启动时持有 PostgreSQL advisory lock。空库会一次性套用 `database/schema.sql`；非空库只有 `schema_meta.version` 与程序完全一致才启动。

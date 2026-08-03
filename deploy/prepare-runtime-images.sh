@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# 后台准备三个内置运行时镜像。
+# 默认不执行 git pull；设置 DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true 后，只有 clean
+# worktree 才会执行 git pull --ff-only，dirty worktree 会记录跳过，不会 stash/reset/merge。
+# 本脚本不把本地 image ID 当作 OCI manifest digest，也不会自动登记 trusted；real
+# 模式仍必须使用不可变 registry digest。使用 --dry-run 或设置
+# DEEPSONAR_RUNTIME_IMAGE_BUILD=false 可只检查流程而不执行真实构建。
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="$ROOT/data/logs"
+REGISTRY_FILE="$ROOT/deploy/runtime-image-registry.json"
+PULL_SCRIPT="$ROOT/deploy/pull-runtime-images.sh"
+FORCE_REFRESH="${DEEPSONAR_RUNTIME_IMAGE_FORCE_REFRESH:-false}"
+BUILD_ENABLED="${DEEPSONAR_RUNTIME_IMAGE_BUILD:-true}"
+DRY_RUN=false
+SUCCESS_COUNT=0
+FAILURE_COUNT=0
+SKIP_COUNT=0
+FAILURES=()
+TEMP_REGISTRY=""
+TEMP_REGISTRY_IS_TEMP=false
+LOCK_DIR="$ROOT/data/run/runtime-images.prepare.lock"
+LOCK_ACQUIRED=false
+
+log() { printf '[runtime-images] %s\n' "$*"; }
+fail_item() { FAILURE_COUNT=$((FAILURE_COUNT + 1)); FAILURES+=("$1"); log "失败：$1"; }
+cleanup() {
+  if [[ "$TEMP_REGISTRY_IS_TEMP" == true && -n "$TEMP_REGISTRY" ]]; then
+    rm -f "$TEMP_REGISTRY"
+  fi
+  if [[ "$LOCK_ACQUIRED" == true ]]; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<'EOF'
+用法：deploy/prepare-runtime-images.sh [--dry-run]
+
+默认只读取 API/静态 registry，不执行 git pull。设置
+DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true 后，仅当 worktree clean 时执行
+git pull --ff-only；dirty worktree 只记录跳过，绝不 stash/reset/merge。
+设置 DEEPSONAR_RUNTIME_IMAGE_BUILD=false 或使用 --dry-run 可禁用真实 docker 构建。
+本地 image ID 不会被冒充为 OCI manifest digest，也不会自动登记 trusted。
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+mkdir -p "$LOG_DIR"
+cd "$ROOT"
+mkdir -p "$ROOT/data/run"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  log "已有运行时镜像准备任务正在执行，跳过本次启动"
+  exit 0
+fi
+LOCK_ACQUIRED=true
+
+if [[ "${DEEPSONAR_RUNTIME_IMAGE_GIT_PULL:-false}" == "true" ]]; then
+  if [[ -z "$(git status --porcelain)" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log "dry-run：worktree clean，跳过 git pull --ff-only 实际执行"
+    elif git pull --ff-only; then
+      log "已完成 git pull --ff-only"
+    else
+      log "git pull --ff-only 失败，继续准备镜像；未执行 stash/reset/merge"
+    fi
+  else
+    log "检测到 dirty worktree，跳过 git pull；不会 stash/reset/merge"
+  fi
+else
+  log "默认不执行 git pull；如需显式更新，请设置 DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true"
+fi
+
+load_registry() {
+  local url="${DEEPSONAR_URL:-http://127.0.0.1:3100}"
+  if command -v curl >/dev/null 2>&1; then
+    TEMP_REGISTRY="$(mktemp)"
+    TEMP_REGISTRY_IS_TEMP=true
+    local -a curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 10 "${url%/}/runtime-images/registry")
+    [[ -z "${DEEPSONAR_TOKEN:-}" ]] || curl_args+=(--header "Authorization: Bearer ${DEEPSONAR_TOKEN}")
+    if curl "${curl_args[@]}" >"$TEMP_REGISTRY"; then
+      log "已从 API 读取运行时镜像注册表：$url"
+      return 0
+    fi
+    rm -f "$TEMP_REGISTRY"
+    TEMP_REGISTRY=""
+    TEMP_REGISTRY_IS_TEMP=false
+  fi
+  if [[ -f "$REGISTRY_FILE" ]]; then
+    TEMP_REGISTRY="$REGISTRY_FILE"
+    TEMP_REGISTRY_IS_TEMP=false
+    log "API 不可用，退回静态注册表：$REGISTRY_FILE"
+    return 0
+  fi
+  log "找不到 API 或静态运行时镜像注册表"
+  return 1
+}
+
+registry_version_keys() {
+  node - "$1" <<'NODE'
+const fs = require("node:fs");
+const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (registry.schema !== "deepsonar.registry/v1" || !Array.isArray(registry.images)) {
+  throw new Error("注册表 schema 无效");
+}
+const builtinKeys = new Set(["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
+const keys = new Set();
+for (const image of registry.images) {
+  if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
+  for (const version of image.versions) {
+    if (!/^.+@sha256:[0-9a-f]{64}$/.test(version.image_ref)) throw new Error(`${image.image_key} 存在非不可变 digest`);
+    if (builtinKeys.has(image.image_key)) keys.add(image.image_key);
+  }
+}
+process.stdout.write([...keys].join("\n"));
+NODE
+}
+
+registry_for_key() {
+  node - "$1" "$2" <<'NODE'
+const fs = require("node:fs");
+const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const key = process.argv[3];
+const image = registry.images.find((item) => item.image_key === key);
+if (!image) throw new Error(`注册表缺少 ${key}`);
+process.stdout.write(JSON.stringify({ ...registry, images: [image] }));
+NODE
+}
+
+has_version_key() {
+  local key="$1"
+  for version_key in "${VERSION_KEYS[@]}"; do
+    [[ "$version_key" == "$key" ]] && return 0
+  done
+  return 1
+}
+
+build_one() {
+  local name="$1" tag="$2" dockerfile="$3" toolset="${4:-}"
+  if [[ "$FORCE_REFRESH" != true ]] && docker image inspect "$tag" >/dev/null 2>&1; then
+    SKIP_COUNT=$((SKIP_COUNT + 1)); log "已存在，跳过：$tag"; return 0
+  fi
+  if [[ "$DRY_RUN" == true || "$BUILD_ENABLED" != true ]]; then
+    log "模拟构建：$name -> $tag"
+    SUCCESS_COUNT=$((SUCCESS_COUNT + 1)); return 0
+  fi
+  log "开始构建：$name -> $tag"
+  local -a args=(docker build --file "$dockerfile" --tag "$tag")
+  [[ -z "$toolset" ]] || args+=(--build-arg "TOOLSET=$toolset")
+  args+=(.)
+  if "${args[@]}"; then
+    SUCCESS_COUNT=$((SUCCESS_COUNT + 1)); log "构建成功：$tag"
+  else
+    fail_item "$name（$tag）"
+  fi
+}
+
+if ! load_registry; then
+  fail_item "读取注册表"
+  exit 1
+fi
+
+VERSION_KEYS_FILE="$(mktemp)"
+if ! registry_version_keys "$TEMP_REGISTRY" >"$VERSION_KEYS_FILE"; then
+  rm -f "$VERSION_KEYS_FILE"
+  fail_item "解析注册表"
+  exit 1
+fi
+
+mapfile -t VERSION_KEYS <"$VERSION_KEYS_FILE"
+rm -f "$VERSION_KEYS_FILE"
+
+prepare_builtin() {
+  local name="$1" key="$2" tag="$3" dockerfile="$4" toolset="${5:-}"
+  local pull_file=""
+  if has_version_key "$key" && [[ "$DRY_RUN" == false && "$BUILD_ENABLED" == true && -x "$PULL_SCRIPT" ]]; then
+    pull_file="$(mktemp)"
+    if registry_for_key "$TEMP_REGISTRY" "$key" >"$pull_file" \
+      && DEEPSONAR_URL="" "$PULL_SCRIPT" --file "$pull_file"; then
+      rm -f "$pull_file"
+      log "已拉取 $name 的不可变 registry 版本"
+      return 0
+    fi
+    rm -f "$pull_file"
+    log "$name 的 registry 拉取失败，回退本地构建"
+  elif has_version_key "$key"; then
+    log "$name 存在不可变版本；dry-run/禁用构建模式不拉取，执行模拟构建"
+  else
+    log "$name 没有不可变版本，执行本地构建"
+  fi
+  build_one "$name" "$tag" "$dockerfile" "$toolset"
+}
+
+prepare_builtin "base" "deepsonar-base" "deepsonar-base:local" "$ROOT/deploy/Dockerfile.agent" base
+prepare_builtin "audit" "deepsonar-audit" "deepsonar-audit:local" "$ROOT/deploy/Dockerfile.agent" audit
+prepare_builtin "kali-minimal" "deepsonar-kali-minimal" "deepsonar-kali-minimal:local" "$ROOT/deploy/Dockerfile.agent-kali-minimal"
+
+log "汇总：成功/模拟 ${SUCCESS_COUNT}，跳过 ${SKIP_COUNT}，失败 ${FAILURE_COUNT}"
+if [[ ${#FAILURES[@]} -gt 0 ]]; then
+  log "失败项目：${FAILURES[*]}"
+  log "本地镜像不会自动登记为 trusted；real 模式仍需不可变 registry digest"
+  exit 1
+fi
+log "准备流程完成；本地 image ID 不会被当作 OCI manifest digest"
