@@ -1,9 +1,15 @@
 # DeepSonar default Test runtime. Keep Kali itself minimal: no
 # kali-linux-*, kali-tools-*, GUI or desktop metapackage.
 ARG BASE_IMAGE=kalilinux/kali-last-release@sha256:01a402ec78a2b3bd86394f34f8c3d6adefe3c593ae259ac0779c4d1f971c8ff5
+ARG CA_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ARG JDK8_IMAGE=eclipse-temurin:8-jdk@sha256:9fd5233e39b963aad25dae3ca002c5a1b435c378f6d484c24f0c68be34b54b72
 ARG JDK11_IMAGE=eclipse-temurin:11-jdk@sha256:51cad80517b1e18e289460e0a48657374d17711c83270263054a4a22cc1a992a
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
+
+FROM ${CA_IMAGE} AS ca-bootstrap
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 FROM ${JDK8_IMAGE} AS jdk8
 FROM ${JDK11_IMAGE} AS jdk11
@@ -33,7 +39,8 @@ ARG NODE_ARM64_SHA256=fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY --from=jdk17 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=ca-bootstrap /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=ca-bootstrap /usr/lib/ssl/ /usr/lib/ssl/
 
 RUN set -eu; \
   rm -f /etc/apt/sources.list.d/kali.sources; \

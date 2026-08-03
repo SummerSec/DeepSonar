@@ -70,7 +70,12 @@ const kaliAptSuite = "kali-last-snapshot main contrib non-free non-free-firmware
 expect(kaliDockerfile.includes(`ARG KALI_MIRROR=${kaliMirror}`), "Kali minimal APT mirror must use the pinned HTTPS default");
 expect(kaliDockerfile.includes("rm -f /etc/apt/sources.list.d/kali.sources"), "Kali minimal APT sources must disable the base image's mutable mirror");
 expect(kaliDockerfile.includes(`printf 'deb %s ${kaliAptSuite}\\n' "\${KALI_MIRROR}" > /etc/apt/sources.list`), "Kali minimal APT sources must use the stable snapshot suite");
-expect(kaliDockerfile.includes("COPY --from=jdk17 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"), "Kali minimal HTTPS APT must bootstrap CA certificates before update");
+const kaliCaImage = "debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818";
+expect(kaliDockerfile.includes(`ARG CA_IMAGE=${kaliCaImage}`), "Kali minimal CA bootstrap image digest drift");
+expect(kaliDockerfile.includes("FROM ${CA_IMAGE} AS ca-bootstrap"), "Kali minimal CA bootstrap stage must consume the pinned image");
+expect(kaliDockerfile.includes("apt-get install -y --no-install-recommends ca-certificates"), "Kali minimal CA bootstrap must install ca-certificates");
+expect(kaliDockerfile.includes("COPY --from=ca-bootstrap /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"), "Kali minimal HTTPS APT must use the pinned CA bootstrap");
+expect(kaliDockerfile.includes("COPY --from=ca-bootstrap /usr/lib/ssl/ /usr/lib/ssl/"), "Kali minimal HTTPS APT must include the pinned OpenSSL trust paths");
 expect(!kaliDockerfile.includes("http://http.kali.org/kali"), "Kali minimal APT sources must not fall back to the mutable HTTP mirror");
 expect(kaliDockerfile.includes(`ARG CLAUDE_CODE_VERSION=${kaliConfig.npm["@anthropic-ai/claude-code"].version}`), "Kali minimal Claude Code version drift");
 for (const [name, entry] of Object.entries(kaliConfig.downloads)) {
