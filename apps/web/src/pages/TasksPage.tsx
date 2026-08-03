@@ -1,11 +1,11 @@
-import { AirplaneTakeoff, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Pause, Plus, Sparkle, X } from "@phosphor-icons/react";
+import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Pause, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CanvasSummary, type Project } from "../api";
 import { targetLine } from "../TaskList";
 import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, StatusBadge, formatTime, relativeTime } from "../ui";
 
-type Filter = "" | "active" | "findings";
+type Filter = "" | "active" | "findings" | "archived";
 interface PlaneInfo { enabled: boolean; web_url: string; workspace_slug: string; ready_state: string; }
 const inputCls =
   "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
@@ -149,39 +149,46 @@ export function TasksPage() {
     api.projects().then((list) => setProject(list.find((item) => item.id === projectId))).catch(() => {});
     api.planeInfo().then(setPlane).catch(() => {});
     let stop = false;
-    const tick = () => api.canvases(projectId).then((list) => { if (!stop) { setCanvases(list); setError(null); setLoading(false); } }).catch((e) => { if (!stop) { setError(String(e)); setLoading(false); } });
+    const status = filter === "archived" ? ("archived" as const) : ("active" as const);
+    const tick = () => api.canvases(projectId, { status }).then((list) => { if (!stop) { setCanvases(list); setError(null); setLoading(false); } }).catch((e) => { if (!stop) { setError(String(e)); setLoading(false); } });
     tick(); const timer = setInterval(tick, 5000);
     return () => { stop = true; clearInterval(timer); };
-  }, [projectId]);
+  }, [projectId, filter]);
 
-  const filtered = useMemo(() => filter === "active" ? canvases.filter((c) => c.active_count > 0) : filter === "findings" ? canvases.filter((c) => c.finding_count > 0) : canvases, [canvases, filter]);
+  const filtered = useMemo(() => {
+    if (filter === "active") return canvases.filter((c) => c.active_count > 0);
+    if (filter === "findings") return canvases.filter((c) => c.finding_count > 0);
+    return canvases;
+  }, [canvases, filter]);
   if (!projectId) return null;
   if (loading) return <PageSkeleton rows={3} />;
   const activeCount = canvases.filter((canvas) => canvas.active_count > 0).length;
   const findingCount = canvases.reduce((total, canvas) => total + canvas.finding_count, 0);
+  const visibleCount = canvases.length;
 
   return (
     <div className="page-scroll">
-      <PageHeader title="任务工作台" eyebrow="INTENT PIPELINE" subtitle="每个任务是一个完整闭环：意图进入 Hub，角色 Agent 产出事实，系统验证后生成可交付报告。" actions={<><FilterSelect value={filter} onChange={(value) => setFilter(value as Filter)} placeholder="全部任务" options={[{ value: "active", label: "正在推进" }, { value: "findings", label: "已有发现" }]} />{project?.status === "active" && <PrimaryButton onClick={() => setCreating(true)}><Plus size={15} weight="bold" />下达任务</PrimaryButton>}</>} />
+      <PageHeader title="任务工作台" eyebrow="INTENT PIPELINE" subtitle="每个任务是一个完整闭环：意图进入 Hub，角色 Agent 产出事实，系统验证后生成可交付报告。" actions={<><FilterSelect value={filter} onChange={(value) => setFilter(value as Filter)} placeholder="全部任务" options={[{ value: "active", label: "正在推进" }, { value: "findings", label: "已有发现" }, { value: "archived", label: "已归档" }]} />{project?.status === "active" && <PrimaryButton onClick={() => setCreating(true)}><Plus size={15} weight="bold" />下达任务</PrimaryButton>}</>} />
 
-      <div className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{canvases.length}</strong>全部任务</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>
+      <div className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{visibleCount}</strong>{filter === "archived" ? "已归档" : "全部任务"}</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>
       {error && <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">{error}</div>}
       {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}
       {creating && <NewTaskForm projectId={projectId} flash={flash} onCancel={() => setCreating(false)} onDone={(canvasId) => navigate(`/projects/${projectId}/tasks/${canvasId}`)} />}
       {project?.plane_project_id && <PlaneGuide project={project} plane={plane} />}
 
-      {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
+      {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && filter !== "archived" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {filtered.map((canvas, index) => {
             const isActive = canvas.active_count > 0;
-            return <article key={canvas.id} className="surface-shell deepsonar-reveal" style={{ animationDelay: `${index * 55}ms` }}><div className="surface-core flex min-h-[225px] flex-col p-5"><div className="flex items-start gap-4"><div className={`relative mt-0.5 grid size-10 shrink-0 place-items-center rounded-[14px] ring-1 ${isActive ? "bg-run-400/[.08] text-run-400 ring-run-400/15" : "bg-white/[.03] text-zinc-500 ring-white/[.055]"}`}>{isActive ? <span className="deepsonar-live-dot size-2 rounded-full bg-current" /> : <span className="size-2 rounded-full bg-current" />}</div><div className="min-w-0 flex-1"><Link to={`/projects/${projectId}/tasks/${canvas.id}`} className="line-clamp-2 text-[15px] font-medium leading-6 tracking-[-.02em] text-zinc-100 hover:text-acc-300">{canvas.title}</Link><p className="mt-2 line-clamp-2 text-[11px] leading-5 text-zinc-600">{targetLine(canvas.target_json) || "任务正在等待范围解析"}</p></div>{canvas.last_job_status && <StatusBadge status={canvas.last_job_status} />}</div>
+            const isArchived = canvas.status === "archived";
+            return <article key={canvas.id} className="surface-shell deepsonar-reveal" style={{ animationDelay: `${index * 55}ms` }}><div className="surface-core flex min-h-[225px] flex-col p-5"><div className="flex items-start gap-4"><div className={`relative mt-0.5 grid size-10 shrink-0 place-items-center rounded-[14px] ring-1 ${isArchived ? "bg-zinc-500/[.08] text-zinc-500 ring-white/[.06]" : isActive ? "bg-run-400/[.08] text-run-400 ring-run-400/15" : "bg-white/[.03] text-zinc-500 ring-white/[.055]"}`}>{isActive && !isArchived ? <span className="deepsonar-live-dot size-2 rounded-full bg-current" /> : <span className="size-2 rounded-full bg-current" />}</div><div className="min-w-0 flex-1"><Link to={`/projects/${projectId}/tasks/${canvas.id}`} className="line-clamp-2 text-[15px] font-medium leading-6 tracking-[-.02em] text-zinc-100 hover:text-acc-300">{canvas.title}</Link><p className="mt-2 line-clamp-2 text-[11px] leading-5 text-zinc-600">{targetLine(canvas.target_json) || "任务正在等待范围解析"}</p></div><div className="flex flex-col items-end gap-1">{isArchived && <span className="rounded-full bg-zinc-500/10 px-2 py-0.5 font-mono text-[9px] text-zinc-500 ring-1 ring-white/[.06]">已归档</span>}{canvas.last_job_status && <StatusBadge status={canvas.last_job_status} />}</div></div>
               <div className="mt-6 grid grid-cols-3 gap-2"><Metric label="运行" value={canvas.job_count} /><Metric label="发现" value={canvas.finding_count} tone={canvas.finding_count ? "#ec8c5d" : undefined} /><Metric label="已确认" value={canvas.confirmed_count} tone={canvas.confirmed_count ? "#65e6b4" : undefined} /></div>
               <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-white/[.045] pt-4">
                 <span className="font-mono text-[9px] text-zinc-700" title={formatTime(canvas.created_at)}>
                   {relativeTime(canvas.created_at)} · PRIORITY {canvas.last_job_priority ?? "—"}
                 </span>
-                <div className="ml-auto flex items-center gap-1">
-                  {canvas.last_job_id && canvas.last_job_status && ACTIVE_STATUS.has(canvas.last_job_status) && (
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
+                  {!isArchived && canvas.last_job_id && canvas.last_job_status && ACTIVE_STATUS.has(canvas.last_job_status) && (
                     <button
                       onClick={async () => {
                         try {
@@ -197,7 +204,7 @@ export function TasksPage() {
                       取消
                     </button>
                   )}
-                  {!isActive && canvas.job_count > 0 && (
+                  {!isArchived && !isActive && canvas.job_count > 0 && (
                     <button
                       title="继续执行：恢复中断 Job 或唤醒 Hub（保留历史）"
                       onClick={async () => {
@@ -216,7 +223,7 @@ export function TasksPage() {
                       恢复会话
                     </button>
                   )}
-                  {!isActive && canvas.job_count > 0 && (
+                  {!isArchived && !isActive && canvas.job_count > 0 && (
                     <button
                       title="清空历史后从意图重新执行"
                       onClick={async () => {
@@ -240,6 +247,74 @@ export function TasksPage() {
                       重试
                     </button>
                   )}
+                  {!isArchived && (
+                    <button
+                      title="归档任务：停止调度，历史保留，列表默认隐藏"
+                      onClick={async () => {
+                        if (!window.confirm("归档后任务将停止调度并从默认列表隐藏，历史数据保留。确定？")) return;
+                        try {
+                          const r = await api.archiveTask(canvas.id);
+                          flash(r.cancelled_jobs > 0 ? `已归档（取消 ${r.cancelled_jobs} 个活动 Job）` : "已归档");
+                          setCanvases((list) =>
+                            filter === "archived"
+                              ? list
+                              : list.filter((c) => c.id !== canvas.id),
+                          );
+                        } catch (e) {
+                          flash(`归档失败：${e instanceof Error ? e.message : e}`);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                    >
+                      <Archive size={12} />
+                      归档
+                    </button>
+                  )}
+                  {isArchived && (
+                    <button
+                      title="取消归档，恢复为可调度任务（需手动恢复会话）"
+                      onClick={async () => {
+                        try {
+                          await api.unarchiveTask(canvas.id);
+                          flash("已取消归档");
+                          setCanvases((list) =>
+                            filter === "archived"
+                              ? list.filter((c) => c.id !== canvas.id)
+                              : list.map((c) => (c.id === canvas.id ? { ...c, status: "active" as const, archived_at: null } : c)),
+                          );
+                        } catch (e) {
+                          flash(`取消归档失败：${e instanceof Error ? e.message : e}`);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                    >
+                      <Archive size={12} />
+                      取消归档
+                    </button>
+                  )}
+                  <button
+                    title="永久删除任务及全部运行数据（不可恢复）"
+                    onClick={async () => {
+                      if (
+                        !window.confirm(
+                          `将永久删除任务「${canvas.title}」及其全部 Job、Finding、画布与报告，不可恢复。确定？`,
+                        )
+                      ) {
+                        return;
+                      }
+                      try {
+                        await api.deleteTask(canvas.id);
+                        flash("任务已永久删除");
+                        setCanvases((list) => list.filter((c) => c.id !== canvas.id));
+                      } catch (e) {
+                        flash(`删除失败：${e instanceof Error ? e.message : e}`);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
+                  >
+                    <Trash size={12} />
+                    删除
+                  </button>
                   <Link
                     to={`/projects/${projectId}/tasks/${canvas.id}`}
                     className="group ml-1 inline-flex items-center gap-2 rounded-full bg-white/[.045] px-3 py-2 text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-all hover:bg-white/[.075] hover:text-white"

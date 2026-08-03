@@ -175,6 +175,69 @@ const ProjectRuntimeImageBody = z.object({
   version_id: z.string().uuid().nullish(),
 });
 
+/** 清空任务画布上的运行数据（jobs / findings / 图节点等），保留 canvas 行本身。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
+  await tx`UPDATE canvas_nodes SET job_id = NULL WHERE canvas_id = ${canvasId}`;
+  await tx`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
+  await tx`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+  await tx`
+    DELETE FROM finding_verification_rounds
+    WHERE finding_id IN (
+      SELECT f.id FROM findings f
+      JOIN jobs j ON j.id = f.job_id
+      WHERE j.canvas_id = ${canvasId}
+    )
+    OR verify_job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
+  await tx`DELETE FROM task_reports WHERE canvas_id = ${canvasId}`;
+  await tx`
+    DELETE FROM findings WHERE job_id IN (
+      SELECT id FROM jobs WHERE canvas_id = ${canvasId}
+    )`;
+  await tx`
+    DELETE FROM events WHERE job_id IN (
+      SELECT id FROM jobs WHERE canvas_id = ${canvasId}
+    )`;
+  await tx`
+    DELETE FROM event_dedup WHERE job_id IN (
+      SELECT id FROM jobs WHERE canvas_id = ${canvasId}
+    )`;
+  await tx`
+    UPDATE jobs SET parent_job_id = NULL, finding_id = NULL
+    WHERE canvas_id = ${canvasId}`;
+  await tx`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
+}
+
+/** 取消画布上全部活动 job（归档/删除前兜底）。 */
+async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
+  const active = await sql`
+    SELECT id, sandbox_id, type FROM jobs
+    WHERE canvas_id = ${canvasId}
+      AND status IN ('pending','claimed','provisioning','running','waiting_human')`;
+  if (active.length === 0) return 0;
+  const { revokeJobTokens } = await import("./gateway.js");
+  const { recoverVerifyJobTerminal } = await import("./core.js");
+  for (const job of active) {
+    const id = job.id as string;
+    await sql`
+      UPDATE jobs SET status = 'cancelled', finished_at = now(),
+        error = COALESCE(error, 'task archived/deleted')
+      WHERE id = ${id}
+        AND status IN ('pending','claimed','provisioning','running','waiting_human')`;
+    if (job.sandbox_id) {
+      await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
+    }
+    await revokeJobTokens(id, "cancelled").catch(() => {});
+    await sql`
+      UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+    if (job.type === "verify_finding") {
+      await recoverVerifyJobTerminal(id, "cancelled", "task archived/deleted").catch(() => {});
+    }
+  }
+  return active.length;
+}
+
 export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
   app.addHook("onRequest", authHook);
@@ -623,6 +686,9 @@ export function registerRoutes(app: FastifyInstance) {
     const { canvasId } = req.params as { canvasId: string };
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    if ((canvas.status as string) === "archived") {
+      return reply.code(409).send({ error: "任务已归档，请先取消归档再恢复会话" });
+    }
     const projectId = canvas.project_id as string;
 
     const active = await sql`
@@ -724,6 +790,9 @@ export function registerRoutes(app: FastifyInstance) {
     const { canvasId } = req.params as { canvasId: string };
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    if ((canvas.status as string) === "archived") {
+      return reply.code(409).send({ error: "任务已归档，请先取消归档再重试" });
+    }
     const projectId = canvas.project_id as string;
 
     const active = await sql`
@@ -749,36 +818,7 @@ export function registerRoutes(app: FastifyInstance) {
     }
 
     const job = await sql.begin(async (tx) => {
-      // 解除图节点 → job 引用，再按依赖删业务数据
-      await tx`UPDATE canvas_nodes SET job_id = NULL WHERE canvas_id = ${canvasId}`;
-      await tx`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
-      await tx`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
-
-      await tx`
-        DELETE FROM finding_verification_rounds
-        WHERE finding_id IN (
-          SELECT f.id FROM findings f
-          JOIN jobs j ON j.id = f.job_id
-          WHERE j.canvas_id = ${canvasId}
-        )
-        OR verify_job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
-      await tx`DELETE FROM task_reports WHERE canvas_id = ${canvasId}`;
-      await tx`
-        DELETE FROM findings WHERE job_id IN (
-          SELECT id FROM jobs WHERE canvas_id = ${canvasId}
-        )`;
-      await tx`
-        DELETE FROM events WHERE job_id IN (
-          SELECT id FROM jobs WHERE canvas_id = ${canvasId}
-        )`;
-      await tx`
-        DELETE FROM event_dedup WHERE job_id IN (
-          SELECT id FROM jobs WHERE canvas_id = ${canvasId}
-        )`;
-      await tx`
-        UPDATE jobs SET parent_job_id = NULL, finding_id = NULL
-        WHERE canvas_id = ${canvasId}`;
-      await tx`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
+      await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态，保留用户任务内容
       await tx`
@@ -851,6 +891,104 @@ export function registerRoutes(app: FastifyInstance) {
     });
     await sql`SELECT pg_notify('deepsonar_jobs', 'task_retry')`;
     return reply.code(201).send(job);
+  });
+
+  /**
+   * 归档任务（软删除）：取消活动 Job、暂停 hub，历史数据保留；默认列表隐藏。
+   */
+  app.post("/tasks/:canvasId/archive", async (req, reply) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    if ((canvas.status as string) === "archived") {
+      return reply.code(200).send({
+        id: canvasId,
+        status: "archived",
+        archived_at: canvas.archived_at,
+        cancelled_jobs: 0,
+      });
+    }
+    const cancelled = await cancelActiveJobsOnCanvas(canvasId);
+    await patchCanvasConvergence(sql, canvasId, {
+      hub_paused: true,
+      paused_reason: "task_archived",
+    }).catch(() => {});
+    const [row] = await sql`
+      UPDATE canvases
+      SET status = 'archived', archived_at = now()
+      WHERE id = ${canvasId}
+      RETURNING id, status, archived_at, project_id, title`;
+    await audit(req, {
+      action: "task.archive",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId: row.project_id as string,
+      after: { status: "archived", cancelled_jobs: cancelled },
+    });
+    return { ...row, cancelled_jobs: cancelled };
+  });
+
+  /** 取消归档：恢复为 active，不自动唤醒 Hub（需手动恢复会话）。 */
+  app.post("/tasks/:canvasId/unarchive", async (req, reply) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const [project] = await sql`SELECT status FROM projects WHERE id = ${canvas.project_id}`;
+    if (project?.status === "archived") {
+      return reply.code(409).send({ error: "所属项目已归档，不能恢复任务" });
+    }
+    const [row] = await sql`
+      UPDATE canvases
+      SET status = 'active', archived_at = NULL
+      WHERE id = ${canvasId}
+      RETURNING id, status, archived_at, project_id, title`;
+    await audit(req, {
+      action: "task.unarchive",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId: row.project_id as string,
+      after: { status: "active" },
+    });
+    return row;
+  });
+
+  /**
+   * 硬删除任务数据：画布 + jobs/findings/events/报告/图节点一并清除，不可恢复。
+   * 有活动 Job 时先取消；删除后画布行不存在。
+   */
+  app.delete("/tasks/:canvasId", async (req, reply) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const projectId = canvas.project_id as string;
+    const cancelled = await cancelActiveJobsOnCanvas(canvasId);
+
+    await sql.begin(async (tx) => {
+      await wipeCanvasRuntimeData(tx, canvasId);
+      // 历史 projects.canvas_id 可能指向本画布（遗留字段）
+      await tx`
+        UPDATE projects SET canvas_id = ${`archived-${canvasId}`}
+        WHERE canvas_id = ${canvasId}`;
+      await tx`DELETE FROM canvases WHERE id = ${canvasId}`;
+    });
+
+    await audit(req, {
+      action: "task.delete",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId,
+      after: {
+        deleted: true,
+        title: canvas.title,
+        cancelled_jobs: cancelled,
+      },
+    });
+    return reply.code(200).send({
+      ok: true,
+      id: canvasId,
+      deleted: true,
+      cancelled_jobs: cancelled,
+    });
   });
 
   // ---------- Plane 集成（按项目绑定；解绑不删除已导入任务） ----------
@@ -1858,8 +1996,13 @@ export function registerRoutes(app: FastifyInstance) {
   // 列表：项目下所有任务画布 + rollup 计数
   app.get("/projects/:id/canvases", async (req) => {
     const { id } = req.params as { id: string };
+    const q = req.query as { status?: string };
+    // 默认只返回 active；status=archived|all 显式筛选
+    const statusFilter =
+      q.status === "all" ? null : q.status === "archived" ? "archived" : "active";
     return sql`
       SELECT c.id, c.title, c.plane_issue_id, c.target_json, c.created_at,
+        c.status, c.archived_at,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
            AND j.status IN ('claimed','provisioning','running','waiting_human')) AS active_count,
@@ -1873,6 +2016,7 @@ export function registerRoutes(app: FastifyInstance) {
         FROM jobs j WHERE j.canvas_id = c.id ORDER BY j.created_at DESC LIMIT 1
       ) lj ON true
       WHERE c.project_id = ${id}
+        AND (${statusFilter}::text IS NULL OR c.status = ${statusFilter})
       ORDER BY c.created_at DESC`;
   });
 

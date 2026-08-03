@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 11);
+INSERT INTO schema_meta (id, version) VALUES ('global', 12);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -39,14 +39,18 @@ CREATE TABLE canvases (
   trigger_source text,
   trigger_event_id text,
   trigger_payload_json jsonb NOT NULL DEFAULT '{}',
-  created_at timestamptz NOT NULL DEFAULT now()
+  -- 任务生命周期：active 可调度；archived 软删除（历史保留，默认列表隐藏）
+  status text NOT NULL DEFAULT 'active',
+  archived_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT canvases_status_check CHECK (status IN ('active', 'archived'))
 );
 CREATE UNIQUE INDEX canvases_issue_uniq
   ON canvases (plane_issue_id) WHERE plane_issue_id IS NOT NULL;
 CREATE UNIQUE INDEX canvases_trigger_uniq
   ON canvases (project_id, trigger_source, trigger_event_id)
   WHERE trigger_event_id IS NOT NULL;
-CREATE INDEX canvases_project_idx ON canvases (project_id, created_at DESC);
+CREATE INDEX canvases_project_idx ON canvases (project_id, status, created_at DESC);
 
 CREATE TABLE jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

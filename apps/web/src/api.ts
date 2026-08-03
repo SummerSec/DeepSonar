@@ -53,6 +53,8 @@ export interface CanvasSummary {
   plane_issue_id: string | null;
   target_json: Record<string, unknown>;
   created_at: string;
+  status: "active" | "archived";
+  archived_at: string | null;
   job_count: number;
   active_count: number;
   finding_count: number;
@@ -823,6 +825,24 @@ export const api = {
     }>("POST", `/tasks/${canvasId}/resume-session`),
   /** 重试任务：清空本画布历史后从意图重新执行 */
   retryTask: (canvasId: string) => send<{ id: string; status: string }>("POST", `/tasks/${canvasId}/retry`),
+  /** 归档任务（软删除，历史保留） */
+  archiveTask: (canvasId: string) =>
+    send<{ id: string; status: string; archived_at: string | null; cancelled_jobs: number }>(
+      "POST",
+      `/tasks/${canvasId}/archive`,
+    ),
+  /** 取消归档 */
+  unarchiveTask: (canvasId: string) =>
+    send<{ id: string; status: string; archived_at: string | null }>(
+      "POST",
+      `/tasks/${canvasId}/unarchive`,
+    ),
+  /** 硬删除任务及全部运行数据（不可恢复） */
+  deleteTask: (canvasId: string) =>
+    send<{ ok: boolean; id: string; deleted: boolean; cancelled_jobs: number }>(
+      "DELETE",
+      `/tasks/${canvasId}`,
+    ),
   setJobPriority: (jobId: string, priority: number) =>
     send<{ id: string; status: string; priority: number }>("PATCH", `/jobs/${jobId}/priority`, { priority }),
   /** Plane 集成（按项目绑定；解绑不删已导入任务） */
@@ -837,7 +857,10 @@ export const api = {
     get<{ enabled: boolean; web_url: string; workspace_slug: string; ready_state: string }>(
       "/plane-info",
     ),
-  canvases: (projectId: string) => get<CanvasSummary[]>(`/projects/${projectId}/canvases`),
+  canvases: (projectId: string, opts?: { status?: "active" | "archived" | "all" }) =>
+    get<CanvasSummary[]>(
+      `/projects/${projectId}/canvases${opts?.status ? `?status=${opts.status}` : ""}`,
+    ),
   canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
   canvasConvergence: (canvasId: string) =>
     get<{
