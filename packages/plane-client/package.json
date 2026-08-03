@@ -1,6 +1,6 @@
 {
   "name": "@deepsonar/plane-client",
-  "version": "0.0.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^5.6.0"
+    "typescript": "^5.9.3"
   },
   "exports": {
     ".": {

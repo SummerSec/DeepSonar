@@ -1,6 +1,6 @@
 {
   "name": "@deepsonar/shared-types",
-  "version": "0.0.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -10,11 +10,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "zod": "^4.0.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^5.6.0"
+    "typescript": "^5.9.3"
   },
   "exports": {
     ".": {

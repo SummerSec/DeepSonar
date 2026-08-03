@@ -1,6 +1,6 @@
 {
   "name": "@deepsonar/image-admission",
-  "version": "0.0.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,10 +9,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.9"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^5.6.0"
+    "typescript": "^5.9.3"
   }
 }
