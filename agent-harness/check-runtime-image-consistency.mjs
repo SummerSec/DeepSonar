@@ -65,6 +65,13 @@ for (const required of ["org.opencontainers.image.title", "org.opencontainers.im
 }
 expect(kaliDockerfile.includes(`ARG BASE_IMAGE=${kaliConfig.baseImage}`), "Kali minimal base image digest drift");
 expect(kaliDockerfile.includes("FROM ${BASE_IMAGE}"), "Kali minimal Dockerfile must consume the pinned BASE_IMAGE arg");
+const kaliMirror = "https://kali.download/kali";
+const kaliAptSuite = "kali-last-snapshot main contrib non-free non-free-firmware";
+expect(kaliDockerfile.includes(`ARG KALI_MIRROR=${kaliMirror}`), "Kali minimal APT mirror must use the pinned HTTPS default");
+expect(kaliDockerfile.includes("rm -f /etc/apt/sources.list.d/kali.sources"), "Kali minimal APT sources must disable the base image's mutable mirror");
+expect(kaliDockerfile.includes(`printf 'deb %s ${kaliAptSuite}\\n' "\${KALI_MIRROR}" > /etc/apt/sources.list`), "Kali minimal APT sources must use the stable snapshot suite");
+expect(kaliDockerfile.includes("COPY --from=jdk17 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"), "Kali minimal HTTPS APT must bootstrap CA certificates before update");
+expect(!kaliDockerfile.includes("http://http.kali.org/kali"), "Kali minimal APT sources must not fall back to the mutable HTTP mirror");
 expect(kaliDockerfile.includes(`ARG CLAUDE_CODE_VERSION=${kaliConfig.npm["@anthropic-ai/claude-code"].version}`), "Kali minimal Claude Code version drift");
 for (const [name, entry] of Object.entries(kaliConfig.downloads)) {
   expect(kaliDockerfile.includes(`ARG ${name.toUpperCase()}_VERSION=${entry.version}`), `Kali minimal ${name} version drift`);
