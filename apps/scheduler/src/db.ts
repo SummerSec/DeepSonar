@@ -3,6 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { config } from "./config.js";
+import { SCHEMA_VERSION } from "./schema-version.js";
+
+export { SCHEMA_VERSION } from "./schema-version.js";
 
 export const sql = postgres(config.databaseUrl, {
   // §12.3 连接治理：池上限 + 语句/空闲/连接超时（schema 应用在同一连接上执行，statement_timeout 不宜过小）
@@ -18,8 +21,6 @@ export const sql = postgres(config.databaseUrl, {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** 空库基线：database/schema.sql（当前 schema v12）。 */
 const SCHEMA_FILE = path.resolve(HERE, "../../../database/schema.sql");
-const SCHEMA_VERSION = 12;
-
 /** 启动时校验/建立唯一 Schema 基线；advisory lock 防多实例并发建库。 */
 const MIGRATE_LOCK_ID = 726868001;
 
