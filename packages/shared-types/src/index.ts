@@ -77,6 +77,71 @@ export const EdgeType = z.enum([
 ]);
 export type EdgeType = z.infer<typeof EdgeType>;
 
+/** Scheduler 画布增量广播投递状态；injected 仅代表平台 sendMessage 调用成功。 */
+export const CanvasBroadcastStatus = z.enum(["planned", "injected", "failed", "skipped", "unknown"]);
+export type CanvasBroadcastStatus = z.infer<typeof CanvasBroadcastStatus>;
+
+export const CanvasBroadcastTargetRoleKind = z.enum(["role", "hub", "verify", "report"]);
+export type CanvasBroadcastTargetRoleKind = z.infer<typeof CanvasBroadcastTargetRoleKind>;
+
+export const CanvasBroadcastSourceNodeType = z.enum(["fact", "finding"]);
+export type CanvasBroadcastSourceNodeType = z.infer<typeof CanvasBroadcastSourceNodeType>;
+
+export const CanvasBroadcastItem = z.object({
+  id: z.string().uuid(),
+  canvas_id: z.string().min(1),
+  source_job_id: z.string().uuid(),
+  source_node_id: z.string().uuid(),
+  source_node_type: CanvasBroadcastSourceNodeType,
+  target_job_id: z.string().uuid(),
+  target_role: z.string().min(1),
+  target_role_kind: CanvasBroadcastTargetRoleKind,
+  attempt: z.number().int().positive(),
+  delivery_status: CanvasBroadcastStatus,
+  skip_reason: z.string().nullable().optional(),
+  error_code: z.string().nullable().optional(),
+  error_message: z.string().max(500).nullable().optional(),
+  title: z.string().max(500).nullable().optional(),
+  payload_preview: z.string().max(2_000).nullable().optional(),
+  payload_sha256: z.string().max(128).nullable().optional(),
+  message_chars: z.number().int().nonnegative().nullable().optional(),
+  injected_at: z.string().nullable().optional(),
+  finished_at: z.string().nullable().optional(),
+  decision_deadline_at: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type CanvasBroadcastItem = z.infer<typeof CanvasBroadcastItem>;
+
+export const CanvasBroadcastPage = z.object({
+  items: z.array(CanvasBroadcastItem),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+export type CanvasBroadcastPage = z.infer<typeof CanvasBroadcastPage>;
+
+export const LayoutStatus = z.enum(["dirty", "running", "ready", "failed"]);
+export type LayoutStatus = z.infer<typeof LayoutStatus>;
+
+export const CanvasLayoutMetadata = z.object({
+  graph_revision: z.number().int().nonnegative(),
+  layout_revision: z.number().int().min(-1),
+  layout_status: LayoutStatus,
+  layout_algorithm: z.string().nullable().optional(),
+  layout_warning: z.string().nullable().optional(),
+  layout_error: z.string().nullable().optional(),
+});
+export type CanvasLayoutMetadata = z.infer<typeof CanvasLayoutMetadata>;
+
+/** Global scheduler concurrency knobs persisted in global_settings.rules_json. */
+export const GlobalConcurrencyRules = z.object({
+  maxGlobalJobs: z.number().int().min(0).max(10_000).optional(),
+  maxJobsPerProject: z.number().int().min(0).max(10_000).optional(),
+  maxConcurrentByAgentCli: z.record(z.string(), z.number().int().min(0).max(1_000)).optional(),
+  maxConcurrentByProvider: z.record(z.string(), z.number().int().min(0).max(1_000)).optional(),
+});
+export type GlobalConcurrencyRules = z.infer<typeof GlobalConcurrencyRules>;
+
 // ---------- Finding payload（SARIF 2.1.0 子集，见 ARCHITECTURE §6.1） ----------
 
 export const FindingPayload = z.object({

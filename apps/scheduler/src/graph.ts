@@ -44,10 +44,21 @@ export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapsho
   );
   const hints = nodes.filter((n) => n.node_type === "human");
 
-  // intent ← from 边引用（fact → intent）
+  const nodeById = new Map(nodes.map((node) => [node.id as string, node]));
+  const referableIds = new Set(
+    nodes
+      .filter((node) => ["root", "fact", "finding"].includes(String(node.node_type)))
+      .map((node) => node.id as string),
+  );
+
+  // intent ← from 边引用（只投影同画布 root/fact/finding → 现存 intent）。
+  // produces/verifies/next/reviewed_by/tested_by/child 不得污染 Hub 决策子图。
   const intentFrom = new Map<string, string[]>();
   for (const e of edges) {
     if (e.edge_type !== "from") continue;
+    const source = nodeById.get(e.from_node_id as string);
+    const target = nodeById.get(e.to_node_id as string);
+    if (!source || !target || target.node_type !== "intent" || !referableIds.has(source.id as string)) continue;
     const list = intentFrom.get(e.to_node_id as string) ?? [];
     list.push(e.from_node_id as string);
     intentFrom.set(e.to_node_id as string, list);
@@ -135,10 +146,7 @@ export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapsho
     goal,
     target,
     yaml: lines.join("\n"),
-    referableIds: [
-      ...facts.map((f) => f.id as string),
-      ...nodes.filter((n) => n.node_type === "root").map((n) => n.id as string),
-    ],
+    referableIds: [...referableIds],
     openIntentCount: openIntents.length,
   };
 }
@@ -186,7 +194,12 @@ function strArray(v: unknown): string[] {
 }
 
 /** 动态系统工具提交的 Hub 决策；role 必须来自本 Job 的可用角色工具结果。 */
-export function parseHubDecision(raw: string, allowedRoles: ReadonlySet<string>): HubDecision | null {
+export function parseHubDecision(
+  raw: string,
+  allowedRoles: ReadonlySet<string>,
+  referableIds?: ReadonlySet<string> | readonly string[],
+): HubDecision | null {
+  const references = referableIds ? new Set(referableIds) : null;
   const v = parseJsonLoose(raw);
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
@@ -194,7 +207,9 @@ export function parseHubDecision(raw: string, allowedRoles: ReadonlySet<string>)
   if (o.complete && typeof o.complete === "object") {
     const c = o.complete as Record<string, unknown>;
     if (typeof c.description === "string" && c.description.trim()) {
-      return { complete: { from: strArray(c.from), description: c.description } };
+      const from = strArray(c.from);
+      if (references && from.some((id) => !references.has(id))) return null;
+      return { complete: { from, description: c.description } };
     }
   }
   if (Array.isArray(o.intents)) {
@@ -205,8 +220,10 @@ export function parseHubDecision(raw: string, allowedRoles: ReadonlySet<string>)
       if (typeof i.description !== "string" || !i.description.trim()) continue;
       if (typeof i.prompt !== "string" || !i.prompt.trim()) continue;
       if (typeof i.role !== "string" || !allowedRoles.has(i.role.trim())) return null;
+      const from = strArray(i.from);
+      if (references && from.some((id) => !references.has(id))) return null;
       intents.push({
-        from: strArray(i.from),
+        from,
         role: i.role.trim(),
         description: i.description.slice(0, 2_000),
         prompt: i.prompt.trim().slice(0, 20_000),

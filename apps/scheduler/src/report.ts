@@ -486,7 +486,7 @@ export async function maybeDispatchReport(
     SELECT id FROM canvas_nodes
     WHERE canvas_id = ${canvasId} AND node_type = 'report' LIMIT 1`;
   if (existingNode.length === 0) {
-    await tx`
+    const [reportNode] = await tx`
       INSERT INTO canvas_nodes ${tx({
         canvas_id: canvasId,
         job_id: reportJobId,
@@ -496,11 +496,36 @@ export async function maybeDispatchReport(
         x: 60,
         y: 520,
         status: "pending",
-      })}`;
+      })}
+      RETURNING id`;
+    const [root] = await tx`
+      SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+    if (root && reportNode) {
+      await tx`
+        INSERT INTO canvas_edges ${tx({
+          canvas_id: canvasId,
+          from_node_id: root.id as string,
+          to_node_id: reportNode.id as string,
+          edge_type: "child",
+        })}
+        ON CONFLICT (canvas_id, from_node_id, to_node_id, edge_type) DO NOTHING`;
+    }
   } else {
     await tx`
       UPDATE canvas_nodes SET job_id = ${reportJobId}, status = 'pending', updated_at = now()
       WHERE id = ${existingNode[0].id as string}`;
+    const [root] = await tx`
+      SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+    if (root) {
+      await tx`
+        INSERT INTO canvas_edges ${tx({
+          canvas_id: canvasId,
+          from_node_id: root.id as string,
+          to_node_id: existingNode[0].id as string,
+          edge_type: "child",
+        })}
+        ON CONFLICT (canvas_id, from_node_id, to_node_id, edge_type) DO NOTHING`;
+    }
   }
 
   console.info(`[report] canvas ${canvasId} 派发 Report Job ${reportJobId}`);

@@ -53,6 +53,12 @@ const GAUGES: Record<string, Gauge> = {
       (await sql<[{ n: number }]>`
         SELECT COUNT(*)::int AS n FROM audit_logs`)[0].n,
   },
+  deepsonar_canvas_broadcast_planned: {
+    help: "Canvas broadcast rows awaiting injection outcome",
+    query: async () =>
+      (await sql<[{ n: number }]>`
+        SELECT COUNT(*)::int AS n FROM canvas_broadcasts WHERE delivery_status = 'planned'`)[0].n,
+  },
 };
 
 const HELP: Record<string, string> = {
@@ -67,6 +73,8 @@ const HELP: Record<string, string> = {
   deepsonar_api_auth_failed_total: "API auth failures (401/403)",
   deepsonar_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
   deepsonar_plane_sync_errors_total: "Plane sync/writeback errors",
+  deepsonar_canvas_broadcast_attempts_total: "Canvas broadcast attempts by terminal outcome",
+  deepsonar_canvas_broadcast_no_local_subscriber_total: "Canvas broadcasts with no local subscriber (not a global assertion)",
 };
 
 /** Prometheus text exposition */

@@ -1,6 +1,6 @@
 import { Prohibit, SealCheck, Stop, X } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
-import { api, type CanvasNode, type JobDetail } from "./api";
+import { useEffect, useMemo, useState } from "react";
+import { api, type CanvasEdge, type CanvasNode, type JobDetail } from "./api";
 import { LiveStream } from "./LiveStream";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
@@ -43,8 +43,72 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "events", label: "事件" },
 ];
 
+const EDGE_LABEL: Record<string, string> = {
+  child: "child · 入口/兼容",
+  produces: "produces · 产出 Finding",
+  verifies: "verifies · 验证",
+  next: "next · 流程续接",
+  from: "from · 决策依据",
+  to: "to · 决策产出",
+  reviewed_by: "reviewed_by · 独立审查证据",
+  tested_by: "tested_by · 实测证据",
+};
+
+function EdgeList({
+  title,
+  edges,
+  nodeById,
+  peer,
+}: {
+  title: string;
+  edges: CanvasEdge[];
+  nodeById: Map<string, CanvasNode>;
+  peer: (edge: CanvasEdge) => string;
+}) {
+  return (
+    <div>
+      <div className="mb-1 font-mono text-[10px] uppercase tracking-[.14em] text-zinc-600">
+        {title} · {edges.length}
+      </div>
+      {edges.length === 0 ? (
+        <div className="font-mono text-[11px] text-zinc-700">无</div>
+      ) : (
+        <div className="space-y-1">
+          {edges.map((edge) => {
+            const linked = nodeById.get(peer(edge));
+            return (
+              <div key={edge.id} className="rounded-lg bg-black/20 px-2.5 py-2 ring-1 ring-white/[.05]">
+                <div className="flex flex-wrap items-baseline gap-1.5">
+                  <span className="font-mono text-[10px] text-cyan-300/80">
+                    {EDGE_LABEL[edge.edge_type] ?? edge.edge_type}
+                  </span>
+                  <span className="font-mono text-[9px] text-zinc-700">{edge.id}</span>
+                </div>
+                <div className="mt-0.5 text-[12px] leading-relaxed text-zinc-300">
+                  {linked?.title ?? `节点 ${peer(edge)}`}
+                </div>
+                {linked && <div className="font-mono text-[10px] text-zinc-600">{linked.node_type}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 节点详情侧栏：概览 / 实时流（WS）/ 事件时间线 */
-export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => void }) {
+export function Sidebar({
+  node,
+  nodes = [],
+  edges = [],
+  onClose,
+}: {
+  node: CanvasNode;
+  nodes?: CanvasNode[];
+  edges?: CanvasEdge[];
+  onClose: () => void;
+}) {
   const [job, setJob] = useState<JobDetail | null>(null);
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [forceBusy, setForceBusy] = useState(false);
@@ -72,6 +136,15 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
     .map((k) => [k, body[k]] as const);
   const bodyEntries = Object.entries(body).filter(
     ([k]) => !["last_progress", "severity", ...PRIMARY_BODY_KEYS].includes(k),
+  );
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const incomingEdges = useMemo(
+    () => edges.filter((edge) => edge.to_node_id === node.id),
+    [edges, node.id],
+  );
+  const outgoingEdges = useMemo(
+    () => edges.filter((edge) => edge.from_node_id === node.id),
+    [edges, node.id],
   );
   const runtimeImage = (job?.job.agent_snapshot_json?.runtime_image ?? null) as Record<string, unknown> | null;
   const runtimeEvidence = (job?.job.payload_json?.runtime_evidence ?? null) as Record<string, unknown> | null;
@@ -253,6 +326,27 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
                 <div className="py-6 text-center font-mono text-[13px] text-zinc-600">
                   该节点暂无正文内容
                 </div>
+              )}
+              {(incomingEdges.length > 0 || outgoingEdges.length > 0) && (
+                <section className="mt-4 border-t border-ink-800 pt-3">
+                  <div className="mb-2 font-mono text-[10px] uppercase tracking-[.16em] text-zinc-500">
+                    因果边（完整八类）
+                  </div>
+                  <div className="space-y-3">
+                    <EdgeList
+                      title="入边 / 来源"
+                      edges={incomingEdges}
+                      nodeById={nodeById}
+                      peer={(edge) => edge.from_node_id}
+                    />
+                    <EdgeList
+                      title="出边 / 目标"
+                      edges={outgoingEdges}
+                      nodeById={nodeById}
+                      peer={(edge) => edge.to_node_id}
+                    />
+                  </div>
+                </section>
               )}
               {job && (
                 <div className="mt-3 divide-y divide-ink-800/70 border-t border-ink-800 pt-1">

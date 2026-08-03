@@ -17,18 +17,90 @@ export interface StreamItem {
   toolName?: string;
   action?: string;
   text?: string;
+  /** canvas.broadcast 的结构化字段（由 stream-bus 直接推送，或嵌在 payload 中）。 */
+  payload?: Record<string, unknown>;
+  broadcast_id?: string;
+  delivery_status?: string;
+  source_node_type?: string;
+  source_job_id?: string;
+  source_node_id?: string;
+  target_job_id?: string;
+  target_role?: string;
+  title?: string | null;
+  attempt?: number;
+  error_code?: string | null;
+  error_message?: string | null;
+  skip_reason?: string | null;
+  payload_preview?: string | null;
 }
 
 /** 渲染单元：text 段落会随 delta 追加增长；tool 卡片 started→completed 置完成态 */
 export type StreamBlock =
   | { kind: "text"; key: string; text: string; reasoning: boolean }
   | { kind: "tool"; key: string; name: string; action: string; done: boolean }
+  | {
+      kind: "broadcast";
+      key: string;
+      status: string;
+      title: string;
+      sourceNodeType: string;
+      attempt: number | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+      skipReason: string | null;
+      preview: string | null;
+    }
   | { kind: "meta"; key: string; text: string };
 
-export type StreamKindFilter = "all" | "text" | "tool" | "meta";
+export type StreamKindFilter = "all" | "text" | "tool" | "broadcast" | "meta";
+
+/** 画布广播状态是平台投递账本状态，不代表模型已读取或采纳。 */
+function broadcastField(item: StreamItem, key: string): unknown {
+  const direct = (item as unknown as Record<string, unknown>)[key];
+  if (direct !== undefined) return direct;
+  return item.payload?.[key];
+}
+
+function broadcastStatus(item: StreamItem): string {
+  const raw = broadcastField(item, "delivery_status");
+  return raw === "planned" || raw === "injected" || raw === "failed" || raw === "skipped" || raw === "unknown"
+    ? raw
+    : "unknown";
+}
+
+function broadcastText(item: StreamItem, key: string): string | null {
+  const value = broadcastField(item, key);
+  return typeof value === "string" && value.trim() ? value : null;
+}
 
 export function reduceStreamItem(blocks: StreamBlock[], item: StreamItem): StreamBlock[] {
   const key = String(item.seq);
+  if (item.type === "canvas.broadcast") {
+    const status = broadcastStatus(item);
+    const attemptValue = broadcastField(item, "attempt");
+    const attempt = typeof attemptValue === "number" && Number.isFinite(attemptValue) ? attemptValue : null;
+    const title = broadcastText(item, "title") ?? "未命名画布增量";
+    const sourceNodeType = broadcastText(item, "source_node_type") ?? "fact/finding";
+    const errorCode = broadcastText(item, "error_code");
+    const errorMessage = broadcastText(item, "error_message");
+    const skipReason = broadcastText(item, "skip_reason");
+    const preview = broadcastText(item, "payload_preview");
+    return [
+      ...blocks,
+      {
+        kind: "broadcast",
+        key: `broadcast-${String(broadcastField(item, "broadcast_id") ?? key)}`,
+        status,
+        title,
+        sourceNodeType,
+        attempt,
+        errorCode,
+        errorMessage,
+        skipReason,
+        preview,
+      },
+    ];
+  }
   if (item.type === "text.delta" || item.type === "reasoning.delta") {
     const reasoning = item.type === "reasoning.delta";
     const last = blocks[blocks.length - 1];
@@ -71,6 +143,7 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
       type,
       seq: Number(record.seq ?? record.job_seq ?? blocks.length + 1),
       at: Number(record.at ?? record.ts ?? Date.now()),
+      payload: type === "canvas.broadcast" ? { ...record, ...payload } : payload,
       delta: typeof payload.delta === "string" ? payload.delta : undefined,
       toolName: typeof payload.toolName === "string" ? payload.toolName : typeof payload.tool_name === "string" ? payload.tool_name : undefined,
       action: typeof payload.action === "string" ? payload.action : typeof payload.message === "string" ? payload.message : undefined,
@@ -81,6 +154,10 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
             ? payload.message
             : undefined,
     };
+    if (type === "canvas.broadcast") {
+      blocks = reduceStreamItem(blocks, item);
+      continue;
+    }
     // 非标准帧：尽量落到 text/meta
     if (
       !type.includes("delta") &&
@@ -103,7 +180,7 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
 
 export function filterStreamBlocks(
   blocks: StreamBlock[],
-  kind: StreamKindFilter,
+  kind: StreamKindFilter | "broadcast",
   query: string,
 ): StreamBlock[] {
   const needle = query.trim().toLowerCase();
@@ -112,6 +189,11 @@ export function filterStreamBlocks(
     if (!needle) return true;
     if (b.kind === "text") return b.text.toLowerCase().includes(needle);
     if (b.kind === "tool") return `${b.name} ${b.action}`.toLowerCase().includes(needle);
+    if (b.kind === "broadcast") {
+      return `${b.status} ${b.sourceNodeType} ${b.title} ${b.errorCode ?? ""} ${b.errorMessage ?? ""} ${b.preview ?? ""}`
+        .toLowerCase()
+        .includes(needle);
+    }
     return b.text.toLowerCase().includes(needle);
   });
 }
@@ -120,6 +202,7 @@ const KIND_OPTIONS: { value: StreamKindFilter; label: string }[] = [
   { value: "all", label: "全部" },
   { value: "text", label: "文本" },
   { value: "tool", label: "工具" },
+  { value: "broadcast", label: "画布注入" },
   { value: "meta", label: "系统" },
 ];
 
@@ -252,6 +335,67 @@ export function ProcessStreamView({
                 )}
                 <Wrench size={11} className="shrink-0 text-zinc-600" />
                 <span className="truncate font-mono text-[13px] text-zinc-300">{b.action || b.name}</span>
+              </div>
+            );
+          }
+          if (b.kind === "broadcast") {
+            const statusLabel: Record<string, string> = {
+              planned: "已计划",
+              injected: "平台已注入",
+              failed: "注入失败",
+              skipped: "已跳过",
+              unknown: "结果不确定",
+            };
+            const statusColor: Record<string, string> = {
+              planned: "text-sky-300",
+              injected: "text-emerald-300",
+              failed: "text-red-300",
+              skipped: "text-zinc-400",
+              unknown: "text-amber-300",
+            };
+            return (
+              <div
+                key={b.key}
+                className="mb-2 rounded-xl border border-cyan-400/15 bg-cyan-400/[.045] px-3 py-2.5"
+              >
+                <div className="flex flex-wrap items-center gap-2 font-mono text-[10px]">
+                  <span className="rounded bg-cyan-400/10 px-1.5 py-0.5 uppercase tracking-[.12em] text-cyan-300 ring-1 ring-cyan-300/20">
+                    画布注入
+                  </span>
+                  <span className={statusColor[b.status] ?? "text-zinc-300"}>
+                    {statusLabel[b.status] ?? `状态 ${b.status}`}
+                  </span>
+                  <span className="text-zinc-600">·</span>
+                  <span className="text-zinc-500">{b.sourceNodeType}</span>
+                  {b.attempt !== null && <span className="text-zinc-600">attempt {b.attempt}</span>}
+                </div>
+                <div className="mt-1 text-[13px] leading-relaxed text-zinc-200">{b.title}</div>
+                {b.status === "injected" && (
+                  <div className="mt-1 font-mono text-[10px] leading-relaxed text-emerald-300/70">
+                    Agent.attach/sendMessage 已由平台调用并返回成功；这不表示模型已读取或采纳。
+                  </div>
+                )}
+                {b.status === "unknown" && (
+                  <div className="mt-1 font-mono text-[10px] leading-relaxed text-amber-200/80">
+                    平台未能确认注入结果，不会据此推断模型是否读取。
+                  </div>
+                )}
+                {(b.errorCode || b.errorMessage) && (
+                  <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-red-300/90">
+                    {b.errorCode ? `${b.errorCode}${b.errorMessage ? "：" : ""}` : "错误"}
+                    {b.errorMessage ?? ""}
+                  </div>
+                )}
+                {b.status === "skipped" && b.skipReason && (
+                  <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-zinc-500">
+                    跳过原因：{b.skipReason}
+                  </div>
+                )}
+                {b.preview && (
+                  <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/20 px-2.5 py-2 font-mono text-[11px] leading-5 text-zinc-400">
+                    {b.preview}
+                  </pre>
+                )}
               </div>
             );
           }

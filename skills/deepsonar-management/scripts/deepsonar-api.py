@@ -24,6 +24,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Dict
+from urllib.parse import quote
 import urllib.error
 import urllib.request
 
@@ -298,6 +299,56 @@ def _findings_list(_pos, f):
     return call("GET", path)
 
 
+def _pagination_query(f, *, statuses: set[str] | None = None) -> str:
+    """Build the read-only keyset query used by live list endpoints."""
+    qs = []
+    if f.get("after"):
+        qs.append("after=" + quote(str(f["after"]), safe=""))
+    if f.get("limit") is not None:
+        try:
+            limit = int(str(f["limit"]))
+        except ValueError:
+            raise ApiError("--limit 必须是整数（1..100）")
+        if not 1 <= limit <= 100:
+            raise ApiError("--limit 必须在 1..100 范围内")
+        qs.append(f"limit={limit}")
+    if f.get("status"):
+        value = str(f["status"])
+        requested = [item.strip() for item in value.split(",") if item.strip()]
+        if not requested:
+            raise ApiError("--status 不能为空")
+        if statuses is not None:
+            invalid = sorted(set(requested) - statuses)
+            if invalid:
+                raise ApiError(f"--status 包含非法值: {', '.join(invalid)}")
+        qs.append("status=" + quote(",".join(requested), safe=""))
+    return ("?" + "&".join(qs)) if qs else ""
+
+
+def _jobs_list(_pos, f):
+    qs = []
+    if f.get("project"):
+        qs.append("project_id=" + quote(str(f["project"]), safe=""))
+    if f.get("status"):
+        qs.append("status=" + quote(str(f["status"]), safe=""))
+    # The scheduler's current and upcoming OpenAPI both use keyset `after`;
+    # keep the same bounded limit guard as the broadcast endpoints.
+    pagination = _pagination_query({k: f[k] for k in ("after", "limit") if k in f})
+    if pagination:
+        qs.extend(pagination[1:].split("&"))
+    return call("GET", "/jobs" + (("?" + "&".join(qs)) if qs else ""))
+
+
+def _jobs_broadcasts(pos, f):
+    path = f"/jobs/{_p0(pos, 'jobId')}/broadcasts"
+    return call("GET", path + _pagination_query(f, statuses={"planned", "injected", "failed", "skipped", "unknown"}))
+
+
+def _canvases_broadcasts(pos, f):
+    path = f"/canvases/{_p0(pos, 'canvasId')}/broadcasts"
+    return call("GET", path + _pagination_query(f, statuses={"planned", "injected", "failed", "skipped", "unknown"}))
+
+
 def _schema_cmd(pos, f):
     """schema openapi|summary|markdown — 拉运行时契约（豁免鉴权）。"""
     kind = (pos[0] if pos else f.get("format") or "summary").lower()
@@ -437,8 +488,9 @@ COMMANDS = {
     "events.push": _events_push,
 
     # ---------- Job ----------
-    "jobs.list": lambda pos, f: call("GET", f"/jobs?project_id={f['project']}" if f.get("project") else "/jobs"),
+    "jobs.list": _jobs_list,
     "jobs.get": lambda pos, f: call("GET", f"/jobs/{_p0(pos, 'jobId')}"),
+    "jobs.broadcasts": _jobs_broadcasts,
     # 直接建 job（type 须为已注册 agent_roles.name 或系统类型；一般用 tasks.create 而非此命令）
     "jobs.create": _jobs_create,
     "jobs.priority": lambda pos, f: call(
@@ -452,6 +504,7 @@ COMMANDS = {
     "findings.get": lambda pos, f: call("GET", f"/findings/{_p0(pos, 'findingId')}"),
     "canvases.list": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}/canvases"),
     "canvases.get": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}"),
+    "canvases.broadcasts": _canvases_broadcasts,
 
     # ---------- 任务报告（job 完成后由调度器自动生成） ----------
     "reports.get": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}/report"),

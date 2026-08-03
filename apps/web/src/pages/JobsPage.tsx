@@ -10,7 +10,8 @@ import {
   PageSkeleton,
   StatusBadge,
   formatTime,
-  relativeTime,
+  formatDuration,
+  jobTiming,
   tdCls,
 } from "../ui";
 
@@ -50,6 +51,13 @@ export function JobsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
+
+  // 运行中时长每秒刷新；不改后端账本，仅更新墙钟展示。
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 拉全量队列，筛选在前端做，才能同时展示「筛选后 / 全量」
   const reload = () =>
@@ -238,7 +246,7 @@ export function JobsPage() {
       {/* 桌面：状态 / 类型 / CLI / 模型 / 项目 / 画布 表头筛选 */}
       <div className="hidden min-w-0 md:block">
         <DataTable>
-          <table className="data-table-adaptive w-full min-w-[1100px]">
+            <table className="data-table-adaptive w-full min-w-[1220px]">
             <colgroup>
               <col style={{ width: "10%" }} />
               <col style={{ width: "9%" }} />
@@ -248,6 +256,7 @@ export function JobsPage() {
               <col style={{ width: "14%" }} />
               <col style={{ width: "11%" }} />
               <col style={{ width: "9%" }} />
+              <col style={{ width: "14%" }} />
               <col style={{ width: "11%" }} />
             </colgroup>
             <thead>
@@ -362,20 +371,26 @@ export function JobsPage() {
                 </th>
                 <th className="table-head-cell">开始</th>
                 <th className="table-head-cell">创建</th>
+                <th className="table-head-cell">结束 / 时长</th>
                 <th className="table-head-cell">操作</th>
               </tr>
             </thead>
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center text-[13px] text-zinc-600">
+                  <td colSpan={10} className="px-4 py-12 text-center text-[13px] text-zinc-600">
                     {rows.length
                       ? `没有匹配当前筛选的运行（0 / 全量 ${totalCount}），可在表头调整条件`
                       : "队列为空 · 没有匹配的 Job"}
                   </td>
                 </tr>
               ) : (
-                visible.map((j) => (
+                visible.map((j) => {
+                  const timing = jobTiming(j, now);
+                  const queueMs = j.queue_duration_ms ?? timing.waitingMs;
+                  const runMs = j.run_duration_ms ?? timing.runtimeMs;
+                  const lifecycleMs = j.lifecycle_duration_ms ?? timing.totalMs;
+                  return (
                   <tr
                     key={j.id}
                     className="table-row-hover cursor-pointer"
@@ -446,13 +461,27 @@ export function JobsPage() {
                       )}
                     </td>
                     <td className={`${tdCls} font-mono text-[13px] text-zinc-500`}>
-                      {formatTime(j.started_at)}
+                      <div>{formatTime(j.started_at)}</div>
+                      <div className="mt-1 text-[10px] text-zinc-600">
+                        {timing.waiting && !j.started_at
+                          ? `排队中 ${formatDuration(queueMs)}`
+                          : runMs == null
+                            ? "实际运行 数据缺失"
+                            : `实际运行 ${formatDuration(runMs)}`}
+                      </div>
                     </td>
                     <td
                       className={`${tdCls} font-mono text-[13px] text-zinc-500`}
                       title={formatTime(j.created_at)}
                     >
-                      {relativeTime(j.created_at)}
+                      <div>{formatTime(j.created_at)}</div>
+                      <div className="mt-1 text-[10px] text-zinc-600">
+                        {queueMs == null ? "排队时长 数据缺失" : timing.waiting && !j.started_at ? `排队中 ${formatDuration(queueMs)}` : `排队 ${formatDuration(queueMs)}`}
+                      </div>
+                    </td>
+                    <td className={`${tdCls} font-mono text-[12px] text-zinc-500`}>
+                      <div>{j.finished_at ? formatTime(j.finished_at) : timing.active ? "尚未结束" : "结束时间 数据缺失"}</div>
+                      <div className="mt-1 text-[10px] text-zinc-600">总时长 {lifecycleMs == null ? "数据缺失" : formatDuration(lifecycleMs)}</div>
                     </td>
                     <td className={tdCls}>
                       <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -478,7 +507,8 @@ export function JobsPage() {
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -576,7 +606,12 @@ export function JobsPage() {
           />
         ) : (
           <div className="grid gap-3">
-            {visible.map((j) => (
+            {visible.map((j) => {
+              const timing = jobTiming(j, now);
+              const queueMs = j.queue_duration_ms ?? timing.waitingMs;
+              const runMs = j.run_duration_ms ?? timing.runtimeMs;
+              const lifecycleMs = j.lifecycle_duration_ms ?? timing.totalMs;
+              return (
               <article key={j.id} className="surface-shell">
                 <div className="surface-core p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -598,7 +633,7 @@ export function JobsPage() {
                           .join(" · ")}
                       </p>
                       <p className="mt-1 text-[10px] text-zinc-600">
-                        {j.project_name} · {relativeTime(j.created_at)}
+                        {j.project_name} · 创建 {formatTime(j.created_at)}
                       </p>
                     </div>
                     <StatusBadge status={j.status} />
@@ -608,7 +643,14 @@ export function JobsPage() {
                       {j.error}
                     </p>
                   )}
-                  <div className="mt-4 flex items-center gap-2 border-t border-white/[.045] pt-3">
+                  <div className="mt-3 grid grid-cols-2 gap-1 border-t border-white/[.045] pt-3 font-mono text-[10px] text-zinc-600">
+                    <span>开始 {formatTime(j.started_at)}</span>
+                    <span>结束 {j.finished_at ? formatTime(j.finished_at) : timing.active ? "尚未结束" : "数据缺失"}</span>
+                    <span>{timing.waiting && !j.started_at ? `排队中 ${formatDuration(queueMs)}` : runMs == null ? "运行 数据缺失" : `运行 ${formatDuration(runMs)}`}</span>
+                    <span>总时长 {lifecycleMs == null ? "数据缺失" : formatDuration(lifecycleMs)}</span>
+                    <span>{queueMs == null ? "排队 数据缺失" : timing.waiting && !j.started_at ? `排队中 ${formatDuration(queueMs)}` : `排队 ${formatDuration(queueMs)}`}</span>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => openJob(j.id)}
@@ -641,7 +683,8 @@ export function JobsPage() {
                   </div>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

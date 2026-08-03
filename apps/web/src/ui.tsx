@@ -282,6 +282,68 @@ export function relativeTime(iso: string | null | undefined): string {
   return `${Math.floor(hr / 24)} 天前`;
 }
 
+/** 运行生命周期计时（队列等待与实际执行分开；缺字段时不猜测）。 */
+export type JobTimingStatus = {
+  status: string;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
+export interface JobTiming {
+  waitingMs: number | null;
+  runtimeMs: number | null;
+  totalMs: number | null;
+  waiting: boolean;
+  active: boolean;
+  missingStart: boolean;
+  missingFinish: boolean;
+}
+
+// pending 也属于未结束生命周期：它没有实际运行时长，但总生命周期应从 created_at 持续计时。
+const TIMING_ACTIVE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
+const TIMING_QUEUED = new Set(["pending", "claimed", "provisioning"]);
+
+export function jobTiming(job: JobTimingStatus, now = Date.now()): JobTiming {
+  const created = job.created_at ? new Date(job.created_at).getTime() : NaN;
+  const started = job.started_at ? new Date(job.started_at).getTime() : NaN;
+  const finished = job.finished_at ? new Date(job.finished_at).getTime() : NaN;
+  const hasCreated = Number.isFinite(created);
+  const hasStarted = Number.isFinite(started);
+  const hasFinished = Number.isFinite(finished);
+  const active = TIMING_ACTIVE.has(job.status) && !hasFinished;
+  const end = hasFinished ? finished : active ? now : NaN;
+  return {
+    waitingMs: hasCreated && hasStarted
+      ? Math.max(0, started - created)
+      : hasCreated && TIMING_QUEUED.has(job.status)
+        ? Math.max(0, now - created)
+        : null,
+    runtimeMs: hasStarted && Number.isFinite(end) ? Math.max(0, end - started) : null,
+    totalMs: hasCreated && Number.isFinite(end) ? Math.max(0, end - created) : null,
+    waiting: !hasStarted && (job.status === "pending" || TIMING_ACTIVE.has(job.status)),
+    active,
+    missingStart: !hasStarted,
+    missingFinish: !hasFinished && !active,
+  };
+}
+
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
+  const totalSec = Math.floor(ms / 1000);
+  const sec = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const min = totalMin % 60;
+  const hr = Math.floor(totalMin / 60);
+  if (hr > 0) return `${hr}时 ${String(min).padStart(2, "0")}分 ${String(sec).padStart(2, "0")}秒`;
+  if (min > 0) return `${min}分 ${String(sec).padStart(2, "0")}秒`;
+  return `${sec}秒`;
+}
+
+export function formatTimingValue(value: number | null, fallback: string): string {
+  return value == null ? fallback : formatDuration(value);
+}
+
 export function DataTable({ children }: { children: ReactNode }) {
   return <div className="surface-shell table-shell deepsonar-reveal"><div className="surface-core data-table"><div className="overflow-x-auto">{children}</div></div></div>;
 }

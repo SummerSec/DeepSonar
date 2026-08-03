@@ -175,9 +175,93 @@ const ProjectRuntimeImageBody = z.object({
   version_id: z.string().uuid().nullish(),
 });
 
+const BROADCAST_STATUSES = ["planned", "injected", "failed", "skipped", "unknown"] as const;
+type BroadcastStatus = (typeof BROADCAST_STATUSES)[number];
+
+function decodeBroadcastCursor(value: string | undefined): { created_at: string; id: string } | null {
+  if (!value) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as { created_at?: unknown; id?: unknown };
+    if (typeof decoded.created_at !== "string" || typeof decoded.id !== "string") return null;
+    if (!Number.isFinite(Date.parse(decoded.created_at)) || !/^[0-9a-f-]{36}$/i.test(decoded.id)) return null;
+    return { created_at: decoded.created_at, id: decoded.id };
+  } catch {
+    return null;
+  }
+}
+
+function encodeBroadcastCursor(row: { created_at: unknown; id: unknown }): string {
+  return Buffer.from(JSON.stringify({ created_at: row.created_at, id: row.id }), "utf8").toString("base64url");
+}
+
+function actorCanReadProject(req: { actor?: { projectId: string | null; scopes: string[] } }, projectId: string): boolean {
+  const actor = req.actor;
+  return !actor?.projectId || actor.projectId === projectId || actor.scopes.includes("admin");
+}
+
+function durationMs(start: unknown, end: unknown): number | null {
+  if (!start) return null;
+  const s = new Date(start as string).getTime();
+  const e = end ? new Date(end as string).getTime() : Date.now();
+  return Number.isFinite(s) && Number.isFinite(e) ? Math.max(0, e - s) : null;
+}
+
+function jobLifecycle(row: Record<string, unknown>) {
+  const created = row.created_at;
+  const started = row.started_at;
+  const finished = row.finished_at;
+  const lifecycle = durationMs(created, finished);
+  const queue = started ? durationMs(created, started) : lifecycle;
+  const run = durationMs(started, finished);
+  return {
+    created_at: created ?? null,
+    started_at: started ?? null,
+    finished_at: finished ?? null,
+    queue_duration_ms: queue,
+    run_duration_ms: run,
+    lifecycle_duration_ms: lifecycle,
+  };
+}
+
+async function readBroadcastPage(input: {
+  canvasId: string;
+  targetJobId?: string;
+  after: { created_at: string; id: string } | null;
+  limit: number;
+  statuses: readonly BroadcastStatus[];
+}) {
+  const { canvasId, targetJobId, after, limit, statuses } = input;
+  const statusFilter = statuses.length > 0;
+  const rows = await sql`
+    SELECT id, canvas_id, source_job_id, source_node_id, source_node_type,
+           target_job_id, target_role, target_role_kind, attempt, delivery_status,
+           skip_reason, error_code, error_message, title, payload_preview, payload_sha256,
+           message_chars, injected_at, finished_at, decision_deadline_at, created_at, updated_at
+    FROM canvas_broadcasts
+    WHERE canvas_id = ${canvasId}
+      AND (${targetJobId ?? null}::uuid IS NULL OR target_job_id = ${targetJobId ?? null})
+      AND (${statusFilter} = false OR delivery_status = ANY(${statuses as unknown as string[]}))
+      AND (
+        ${after?.created_at ?? null}::timestamptz IS NULL
+        OR created_at < ${after?.created_at ?? null}::timestamptz
+        OR (created_at = ${after?.created_at ?? null}::timestamptz AND id < ${after?.id ?? null}::uuid)
+      )
+    ORDER BY created_at DESC, id DESC
+    LIMIT ${limit + 1}`;
+  const hasMore = rows.length > limit;
+  const items = (hasMore ? rows.slice(0, limit) : rows) as unknown as { created_at: unknown; id: unknown }[];
+  return {
+    items,
+    next_cursor: hasMore && items.length > 0 ? encodeBroadcastCursor(items[items.length - 1]) : null,
+    has_more: hasMore,
+  };
+}
+
 /** 清空任务画布上的运行数据（jobs / findings / 图节点等），保留 canvas 行本身。 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
+  // Broadcasts retain FKs to jobs/nodes; hard-delete must clear the audit ledger first.
+  await tx`DELETE FROM canvas_broadcasts WHERE canvas_id = ${canvasId}`;
   await tx`UPDATE canvas_nodes SET job_id = NULL WHERE canvas_id = ${canvasId}`;
   await tx`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
   await tx`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
@@ -471,12 +555,31 @@ export function registerRoutes(app: FastifyInstance) {
 
   // ---------- Agent 实时流（WS /ws?job_id=...） ----------
   // 连接后先补发环形缓冲（晚加入也能看到上下文），随后实时推送
-  app.get("/ws", { websocket: true }, (socket, req) => {
+  app.get("/ws", { websocket: true }, async (socket, req) => {
     const jobId = (req.query as { job_id?: string }).job_id;
     if (!jobId) {
       socket.close(4000, "missing job_id");
       return;
     }
+    const [job] = await sql`SELECT id, project_id, status, created_at, started_at, finished_at FROM jobs WHERE id = ${jobId}`;
+    if (!job) {
+      socket.close(4004, "job not found");
+      return;
+    }
+    if (!actorCanReadProject(req, job.project_id as string)) {
+      socket.close(4003, "project access denied");
+      return;
+    }
+    socket.send(
+      JSON.stringify({
+        type: "job.lifecycle",
+        seq: 0,
+        at: Date.now(),
+        job_id: job.id,
+        status: job.status,
+        ...jobLifecycle(job as Record<string, unknown>),
+      }),
+    );
     for (const item of streamBuffer(jobId)) socket.send(JSON.stringify(item));
     const unsub = subscribeStream(jobId, (item) => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(item));
@@ -723,7 +826,6 @@ export function registerRoutes(app: FastifyInstance) {
         error: null,
         lease_expires_at: null,
         claimed_at: null,
-        started_at: null,
         finished_at: null,
         heartbeat_at: null,
       });
@@ -877,7 +979,8 @@ export function registerRoutes(app: FastifyInstance) {
             from_node_id: root.id,
             to_node_id: hubNode.id,
             edge_type: "child",
-          })}`;
+          })}
+          ON CONFLICT (canvas_id, from_node_id, to_node_id, edge_type) DO NOTHING`;
       }
       return hubJob;
     });
@@ -2008,8 +2111,22 @@ export function registerRoutes(app: FastifyInstance) {
            AND j.status IN ('claimed','provisioning','running','waiting_human')) AS active_count,
         (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding') AS finding_count,
         (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding' AND n.status = 'confirmed') AS confirmed_count,
+        ja.task_started_at, ja.task_finished_at, ja.active_started_at,
+        ja.cumulative_runtime_ms, ja.cumulative_wait_ms,
         lj.last_job_id, lj.last_job_status, lj.last_job_priority, lj.last_job_at
       FROM canvases c
+      LEFT JOIN LATERAL (
+        SELECT
+          MIN(j.started_at) AS task_started_at,
+          CASE WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
+               AND COUNT(*) > 0 THEN MAX(j.finished_at) ELSE NULL END AS task_finished_at,
+          MIN(j.started_at) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_started_at,
+          COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(j.finished_at, now()) - j.started_at)) * 1000)
+                   FILTER (WHERE j.started_at IS NOT NULL), 0) AS cumulative_runtime_ms,
+          COALESCE(SUM(EXTRACT(EPOCH FROM (j.started_at - j.created_at)) * 1000)
+                   FILTER (WHERE j.started_at IS NOT NULL), 0) AS cumulative_wait_ms
+        FROM jobs j WHERE j.canvas_id = c.id
+      ) ja ON true
       LEFT JOIN LATERAL (
         SELECT j.id AS last_job_id, j.status AS last_job_status,
                j.priority AS last_job_priority, j.created_at AS last_job_at
@@ -2027,7 +2144,13 @@ export function registerRoutes(app: FastifyInstance) {
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const [nodes, edges] = await Promise.all([
       sql`
-        SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, updated_at
+        SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, created_at, updated_at,
+               CASE
+                 WHEN body_json->'verification'->>'outcome' = 'supports' THEN 'verified'
+                 WHEN body_json->'verification'->>'outcome' = 'refutes' THEN 'rejected'
+                 WHEN body_json->'verification'->>'outcome' = 'inconclusive' THEN 'needs_human'
+                 ELSE NULL
+               END AS verification_status
         FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
       sql`
         SELECT id, from_node_id, to_node_id, edge_type
@@ -2038,8 +2161,63 @@ export function registerRoutes(app: FastifyInstance) {
       canvas_id: id,
       nodes,
       edges,
+      layout: {
+        graph_revision: Number(canvas.graph_revision ?? 0),
+        layout_revision: Number(canvas.layout_revision ?? -1),
+        layout_status: String(canvas.layout_status ?? "dirty"),
+        layout_algorithm: canvas.layout_algorithm ?? null,
+        layout_warning: canvas.layout_warning ?? null,
+        layout_error: canvas.layout_error ?? null,
+      },
       convergence: parseCanvasConvergence(canvas.target_json),
     };
+  });
+
+  // ---------- 画布广播账本（只读，tasks:read） ----------
+  app.get("/jobs/:id/broadcasts", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [job] = await sql`SELECT id, project_id, canvas_id FROM jobs WHERE id = ${id}`;
+    if (!job || !job.canvas_id) return reply.code(404).send({ error: "job not found" });
+    if (!actorCanReadProject(req, job.project_id as string)) return reply.code(403).send({ error: "project access denied" });
+    const q = req.query as { after?: string; limit?: string; status?: string };
+    const limit = q.limit === undefined ? 50 : Number(q.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return reply.code(400).send({ error: "limit must be 1..100" });
+    const after = decodeBroadcastCursor(q.after);
+    if (q.after && !after) return reply.code(400).send({ error: "invalid after cursor" });
+    const statuses = (q.status ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean) as BroadcastStatus[];
+    if (statuses.some((status) => !(BROADCAST_STATUSES as readonly string[]).includes(status))) {
+      return reply.code(400).send({ error: "invalid broadcast status" });
+    }
+    return readBroadcastPage({
+      canvasId: job.canvas_id as string,
+      targetJobId: id,
+      after,
+      limit,
+      statuses,
+    });
+  });
+
+  app.get("/canvases/:id/broadcasts", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    if (!actorCanReadProject(req, canvas.project_id as string)) return reply.code(403).send({ error: "project access denied" });
+    const q = req.query as { after?: string; limit?: string; status?: string };
+    const limit = q.limit === undefined ? 50 : Number(q.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return reply.code(400).send({ error: "limit must be 1..100" });
+    const after = decodeBroadcastCursor(q.after);
+    if (q.after && !after) return reply.code(400).send({ error: "invalid after cursor" });
+    const statuses = (q.status ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean) as BroadcastStatus[];
+    if (statuses.some((status) => !(BROADCAST_STATUSES as readonly string[]).includes(status))) {
+      return reply.code(400).send({ error: "invalid broadcast status" });
+    }
+    return readBroadcastPage({ canvasId: id, after, limit, statuses });
   });
 
   // ---------- 画布收敛控制（暂停/恢复决策、门控停、清理低优先级 verify） ----------
@@ -2199,7 +2377,13 @@ export function registerRoutes(app: FastifyInstance) {
     if (!project) return { error: "project not found" };
     const [nodes, edges] = await Promise.all([
       sql`
-        SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, updated_at
+        SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, created_at, updated_at,
+               CASE
+                 WHEN body_json->'verification'->>'outcome' = 'supports' THEN 'verified'
+                 WHEN body_json->'verification'->>'outcome' = 'refutes' THEN 'rejected'
+                 WHEN body_json->'verification'->>'outcome' = 'inconclusive' THEN 'needs_human'
+                 ELSE NULL
+               END AS verification_status
         FROM canvas_nodes WHERE canvas_id = ${project.canvas_id} ORDER BY created_at`,
       sql`
         SELECT id, from_node_id, to_node_id, edge_type
@@ -2240,6 +2424,10 @@ export function registerRoutes(app: FastifyInstance) {
     return sql`
       SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
+             EXTRACT(EPOCH FROM (COALESCE(j.started_at, j.finished_at, now()) - j.created_at)) * 1000 AS queue_duration_ms,
+             CASE WHEN j.started_at IS NULL THEN NULL
+                  ELSE EXTRACT(EPOCH FROM (COALESCE(j.finished_at, now()) - j.started_at)) * 1000 END AS run_duration_ms,
+             EXTRACT(EPOCH FROM (COALESCE(j.finished_at, now()) - j.created_at)) * 1000 AS lifecycle_duration_ms,
              p.name AS project_name, c.title AS canvas_title,
              j.agent_snapshot_json->>'agent_cli' AS agent_cli,
              j.agent_snapshot_json->>'model' AS model,
@@ -2543,7 +2731,7 @@ export function registerRoutes(app: FastifyInstance) {
       sql`SELECT id, job_seq, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 1000`,
       sql`SELECT id, fingerprint, title, severity, location, verify_status FROM findings WHERE job_id = ${id}`,
     ]);
-    return { job, events, findings };
+    return { job: { ...job, ...jobLifecycle(job as Record<string, unknown>) }, events, findings };
   });
 
   app.get("/jobs/:id/evidence", async (req, reply) => {
@@ -2705,7 +2893,6 @@ export function registerRoutes(app: FastifyInstance) {
       error: null,
       lease_expires_at: null,
       claimed_at: null,
-      started_at: null,
       finished_at: null,
       heartbeat_at: null,
     });

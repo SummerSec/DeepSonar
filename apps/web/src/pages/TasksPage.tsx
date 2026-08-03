@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CanvasSummary, type Project } from "../api";
 import { targetLine } from "../TaskList";
-import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, StatusBadge, formatTime, relativeTime } from "../ui";
+import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, StatusBadge, formatDuration, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived";
 interface PlaneInfo { enabled: boolean; web_url: string; workspace_slug: string; ready_state: string; }
@@ -142,7 +142,14 @@ export function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const flash = (message: string) => { setMsg(message); setTimeout(() => setMsg(null), 3200); };
+
+  // 活动任务墙钟时长每秒刷新；服务端聚合字段仍作为累计耗时权威。
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!projectId) return;
@@ -181,8 +188,23 @@ export function TasksPage() {
           {filtered.map((canvas, index) => {
             const isActive = canvas.active_count > 0;
             const isArchived = canvas.status === "archived";
+            const firstStartedAt = canvas.task_started_at ?? null;
+            const activeStartedAt = canvas.active_started_at ?? null;
+            // active_started_at 为空表示当前活动仅在队列等待，不能把历史首个开始时间冒充当前运行起点。
+            const wallStartAt = isActive ? activeStartedAt : firstStartedAt;
+            const wallStart = wallStartAt ? new Date(wallStartAt).getTime() : NaN;
+            const wallEnd = canvas.task_finished_at ? new Date(canvas.task_finished_at).getTime() : isActive ? now : NaN;
+            const wallMs = Number.isFinite(wallStart) && Number.isFinite(wallEnd) ? Math.max(0, wallEnd - wallStart) : null;
             return <article key={canvas.id} className="surface-shell deepsonar-reveal" style={{ animationDelay: `${index * 55}ms` }}><div className="surface-core flex min-h-[225px] flex-col p-5"><div className="flex items-start gap-4"><div className={`relative mt-0.5 grid size-10 shrink-0 place-items-center rounded-[14px] ring-1 ${isArchived ? "bg-zinc-500/[.08] text-zinc-500 ring-white/[.06]" : isActive ? "bg-run-400/[.08] text-run-400 ring-run-400/15" : "bg-white/[.03] text-zinc-500 ring-white/[.055]"}`}>{isActive && !isArchived ? <span className="deepsonar-live-dot size-2 rounded-full bg-current" /> : <span className="size-2 rounded-full bg-current" />}</div><div className="min-w-0 flex-1"><Link to={`/projects/${projectId}/tasks/${canvas.id}`} className="line-clamp-2 text-[15px] font-medium leading-6 tracking-[-.02em] text-zinc-100 hover:text-acc-300">{canvas.title}</Link><p className="mt-2 line-clamp-2 text-[11px] leading-5 text-zinc-600">{targetLine(canvas.target_json) || "任务正在等待范围解析"}</p></div><div className="flex flex-col items-end gap-1">{isArchived && <span className="rounded-full bg-zinc-500/10 px-2 py-0.5 font-mono text-[9px] text-zinc-500 ring-1 ring-white/[.06]">已归档</span>}{canvas.last_job_status && <StatusBadge status={canvas.last_job_status} />}</div></div>
               <div className="mt-6 grid grid-cols-3 gap-2"><Metric label="运行" value={canvas.job_count} /><Metric label="发现" value={canvas.finding_count} tone={canvas.finding_count ? "#ec8c5d" : undefined} /><Metric label="已确认" value={canvas.confirmed_count} tone={canvas.confirmed_count ? "#65e6b4" : undefined} /></div>
+              <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-xl bg-black/15 px-3 py-2.5 font-mono text-[10px] text-zinc-600 ring-1 ring-white/[.035] sm:grid-cols-3">
+                <span title={formatTime(canvas.created_at)}>创建 {formatTime(canvas.created_at)}</span>
+                <span title={firstStartedAt ? formatTime(firstStartedAt) : undefined}>首次开始 {firstStartedAt ? formatTime(firstStartedAt) : "—"}</span>
+                <span title={canvas.task_finished_at ? formatTime(canvas.task_finished_at) : undefined}>结束 {canvas.task_finished_at ? formatTime(canvas.task_finished_at) : isActive ? "进行中" : "未记录"}</span>
+                <span className={isActive ? "text-run-400" : ""}>当前墙钟 {isActive ? (wallMs == null ? "等待中" : formatDuration(wallMs)) : canvas.task_finished_at ? formatDuration(wallMs) : "—"}</span>
+                <span title="各 Job started→finished 的累计执行时长">累计执行 {formatDuration(canvas.cumulative_runtime_ms)}</span>
+                <span title="各 Job created→started 的累计排队时长">累计排队 {formatDuration(canvas.cumulative_wait_ms)}</span>
+              </div>
               <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-white/[.045] pt-4">
                 <span className="font-mono text-[9px] text-zinc-700" title={formatTime(canvas.created_at)}>
                   {relativeTime(canvas.created_at)} · PRIORITY {canvas.last_job_priority ?? "—"}

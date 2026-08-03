@@ -4,7 +4,7 @@
  *
  * 注意：通过动态 import("./core.js") 访问 core，避免与 core → verify 形成静态环。
  */
-import { VerificationEvidence, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
+import { VerificationEvidence, type EdgeType, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
 
 type Tx = typeof sql;
@@ -960,19 +960,15 @@ export async function evaluateAnalysisCompleteGate(
 
 // ---------- internals ----------
 
-async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: string) {
-  const existing = await tx`
-    SELECT 1 FROM canvas_edges
-    WHERE canvas_id = ${canvasId} AND from_node_id = ${fromId} AND to_node_id = ${toId} AND edge_type = ${edgeType}
-    LIMIT 1`;
-  if (existing.length > 0) return;
+async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: EdgeType) {
   await tx`
     INSERT INTO canvas_edges ${tx({
       canvas_id: canvasId,
       from_node_id: fromId,
       to_node_id: toId,
       edge_type: edgeType,
-    })}`;
+    })}
+    ON CONFLICT (canvas_id, from_node_id, to_node_id, edge_type) DO NOTHING`;
 }
 
 async function finishRound(

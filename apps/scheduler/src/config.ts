@@ -26,6 +26,10 @@ function int(name: string, dflt: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
+function nonNegativeInt(name: string, dflt: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && Number.isInteger(v) && v >= 0 ? v : dflt;
+}
 function bool(name: string, dflt: boolean): boolean {
   const v = process.env[name];
   if (v === undefined || v === "") return dflt;
@@ -75,8 +79,9 @@ export const config = {
   },
 
   limits: {
-    maxGlobalJobs: int("MAX_GLOBAL_JOBS", 6),
-    maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 2),
+    // 0 is an explicit pause for claims; omitted/invalid values use these startup defaults.
+    maxGlobalJobs: nonNegativeInt("MAX_GLOBAL_JOBS", 6),
+    maxJobsPerProject: nonNegativeInt("MAX_JOBS_PER_PROJECT", 2),
     maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 60),
     maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 12),
     maxAutoRetries: int("MAX_AUTO_RETRIES", 6),
@@ -93,6 +98,10 @@ export const config = {
     dispatchPollSec: int("DEEPSONAR_DISPATCH_POLL_SEC", 0),
     /** Plane 轮询（默认 0=关闭，走 /webhooks/plane 事件；未配 webhook 时须显式开启） */
     planePollSec: int("PLANE_POLL_INTERVAL_SEC", 0),
+    /** Planned 广播在 sendMessage 前后崩溃时的判定窗口。 */
+    broadcastDecisionSec: int("CANVAS_BROADCAST_DECISION_SEC", 30),
+    /** 语义布局 worker 扫描 dirty 画布的间隔；布局只读写数据库坐标。 */
+    layoutIntervalSec: int("CANVAS_LAYOUT_INTERVAL_SEC", 1),
   },
 
   rules: {

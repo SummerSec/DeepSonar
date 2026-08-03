@@ -14,6 +14,8 @@
     "typecheck": "pnpm -r typecheck",
     "ci:smoke:mcp": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts",
     "ci:smoke:convergence": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-scheduler-convergence.ts",
+    "ci:smoke:dispatch-policy": "pnpm --filter @deepsonar/scheduler ci:smoke:dispatch-policy",
+    "ci:smoke:transfer-static": "pnpm --filter @deepsonar/scheduler exec -- tsx ../../agent-harness/test-transfer-static.mts && python agent-harness/test-management-static.py",
     "ci:smoke:roles": "python agent-harness/test-roles-api.py",
     "ci:smoke:hub": "python agent-harness/test-hub-loop.py",
     "ci:smoke:projects": "python agent-harness/test-local-project-api.py",

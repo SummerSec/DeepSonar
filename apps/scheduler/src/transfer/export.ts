@@ -14,6 +14,14 @@ import {
 } from "./pack.js";
 import { resolveModules, type ModuleKey, type Preset } from "./modules.js";
 import { ACTIVE_JOB_STATUSES, filterEnvVars, sanitizeAgentSnapshot } from "./sanitize.js";
+import {
+  CANVAS_BROADCASTS_FILE,
+  sanitizeCanvasBroadcastRow,
+  validateCanvasBroadcastRows,
+  type TransferCanvasRef,
+  type TransferJobRef,
+  type TransferNodeRef,
+} from "./broadcasts.js";
 
 const SCHEMA_VER = 7;
 
@@ -51,7 +59,11 @@ export async function runExport(exportId: string): Promise<void> {
     const [project] = await sql`SELECT * FROM projects WHERE id = ${projectId}`;
     if (!project) throw Object.assign(new Error("project not found"), { code: "PROJECT_NOT_FOUND" });
 
-    const hasTasks = modules.includes("tasks") || modules.includes("findings") || modules.includes("events");
+    const hasTasks =
+      modules.includes("tasks") ||
+      modules.includes("canvas_broadcasts") ||
+      modules.includes("findings") ||
+      modules.includes("events");
     if (hasTasks && !options.allow_active_jobs) {
       const active = await sql`
         SELECT COUNT(*)::int AS n FROM jobs
@@ -116,7 +128,13 @@ export async function runExport(exportId: string): Promise<void> {
       counts.integrations = 1;
     }
 
-    if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events") || modules.includes("artifacts")) {
+    if (
+      modules.includes("tasks") ||
+      modules.includes("canvas_broadcasts") ||
+      modules.includes("findings") ||
+      modules.includes("events") ||
+      modules.includes("artifacts")
+    ) {
       await collectTasks(projectId, modules, files, counts);
     }
 
@@ -406,9 +424,22 @@ async function collectTasks(
   });
   counts.jobs = jobs.length;
 
+  const transferCanvases: TransferCanvasRef[] = canvases.map((c) => ({ source_id: String(c.id) }));
+  const transferJobs: TransferJobRef[] = jobs.map((j) => ({
+    source_id: String(j.id),
+    source_canvas_id: j.canvas_id == null ? null : String(j.canvas_id),
+  }));
+  let transferNodes: TransferNodeRef[] = [];
+
   if (canvases.length) {
     const canvasIds = canvases.map((c) => c.id as string);
     const nodes = await sql`SELECT * FROM canvas_nodes WHERE canvas_id = ANY(${canvasIds}) ORDER BY created_at`;
+    transferNodes = nodes.map((n) => ({
+      source_id: String(n.id),
+      source_canvas_id: n.canvas_id == null ? null : String(n.canvas_id),
+      source_job_id: n.job_id == null ? null : String(n.job_id),
+      node_type: n.node_type == null ? null : String(n.node_type),
+    }));
     files.push({
       path: "data/nodes.jsonl",
       content: toJsonl(
@@ -443,6 +474,52 @@ async function collectTasks(
       ),
     });
     counts.edges = edges.length;
+  }
+
+  if (modules.includes("canvas_broadcasts")) {
+    const canvasIds = canvases.map((c) => c.id as string);
+    const broadcasts = canvasIds.length
+      ? await sql`
+          SELECT id, canvas_id, source_job_id, source_node_id, source_node_type,
+                 target_job_id, target_role, target_role_kind, attempt, delivery_status,
+                 skip_reason, error_code, error_message, title, payload_preview,
+                 payload_sha256, message_chars, injected_at, finished_at,
+                 decision_deadline_at, created_at, updated_at
+          FROM canvas_broadcasts
+          WHERE canvas_id = ANY(${canvasIds})
+          ORDER BY created_at, id`
+      : [];
+    const rows = broadcasts.map((b) =>
+      sanitizeCanvasBroadcastRow({
+        source_id: b.id,
+        source_canvas_id: b.canvas_id,
+        source_job_id: b.source_job_id,
+        source_node_id: b.source_node_id,
+        source_node_type: b.source_node_type,
+        target_job_id: b.target_job_id,
+        target_role: b.target_role,
+        target_role_kind: b.target_role_kind,
+        attempt: b.attempt,
+        delivery_status: b.delivery_status,
+        skip_reason: b.skip_reason,
+        error_code: b.error_code,
+        error_message: b.error_message,
+        title: b.title,
+        payload_preview: b.payload_preview,
+        payload_sha256: b.payload_sha256,
+        message_chars: b.message_chars,
+        injected_at: b.injected_at,
+        finished_at: b.finished_at,
+        decision_deadline_at: b.decision_deadline_at,
+        created_at: b.created_at,
+        updated_at: b.updated_at,
+      }),
+    );
+    // Export must fail closed if existing data violates the package's
+    // cross-table reference or natural-key contract; never silently drop rows.
+    const validated = validateCanvasBroadcastRows(rows as unknown as Record<string, unknown>[], transferCanvases, transferJobs, transferNodes);
+    files.push({ path: CANVAS_BROADCASTS_FILE, content: toJsonl(validated) });
+    counts.canvas_broadcasts = validated.length;
   }
 
   if (modules.includes("findings")) {

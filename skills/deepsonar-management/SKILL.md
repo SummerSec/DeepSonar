@@ -51,8 +51,9 @@ python scripts/deepsonar-api.py tasks create <projectId> --title "审计 auth �
 python scripts/deepsonar-api.py tasks retry <canvasId>
 
 # Job
-python scripts/deepsonar-api.py jobs list [--project <projectId>]
+python scripts/deepsonar-api.py jobs list [--project <projectId>] [--status <status>] [--after <cursor>] [--limit 50]
 python scripts/deepsonar-api.py jobs get <jobId>
+python scripts/deepsonar-api.py jobs broadcasts <jobId> [--after <cursor>] [--status planned,injected] [--limit 50]
 python scripts/deepsonar-api.py jobs create --project-id <projectId> --type explore [--title ...] [--payload '{...}']
 python scripts/deepsonar-api.py jobs priority <jobId> --priority 10
 python scripts/deepsonar-api.py jobs cancel <jobId>
@@ -62,6 +63,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>   # failed/timeout/orphan �
 python scripts/deepsonar-api.py findings list [--project <projectId>] [--canvas <canvasId>]
 python scripts/deepsonar-api.py canvases list <projectId>
 python scripts/deepsonar-api.py canvases get <canvasId>
+python scripts/deepsonar-api.py canvases broadcasts <canvasId> [--after <cursor>] [--status failed,unknown] [--limit 50]
 python scripts/deepsonar-api.py reports get <canvasId>
 python scripts/deepsonar-api.py reports markdown <reportId>     # Markdown 原文
 python scripts/deepsonar-api.py reports sarif <reportId>        # SARIF 原文
@@ -188,6 +190,12 @@ python scripts/deepsonar-api.py jobs list --project <projectId>
 python scripts/deepsonar-api.py jobs get <jobId>
 python scripts/deepsonar-api.py jobs resume <jobId>
 ```
+
+广播查询是只读的：`jobs broadcasts` / `canvases broadcasts` 只接受
+`--after`、`--limit`（1..100）和逗号分隔的
+`planned,injected,failed,skipped,unknown` 状态过滤，不提供发送或重试命令。
+列表响应沿用 OpenAPI 的 `{items,next_cursor,has_more}` keyset 分页；以服务端
+`GET /openapi.json` 为最终契约。
 
 ## Real 模式前置清单（缺一 job 会 pending/failed/orphan）
 

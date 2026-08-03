@@ -175,6 +175,8 @@ export function SettingsPanel({
     };
     // CLI 并发仅全局可写；Provider 并发在凭据页配置，此处不写
     if (!projectId) {
+      ruleBody.maxGlobalJobs = rules.maxGlobalJobs;
+      ruleBody.maxJobsPerProject = rules.maxJobsPerProject;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
     }
     try {
@@ -500,6 +502,18 @@ export function SettingsPanel({
                   <strong className="text-zinc-200">「角色配置」tab 的项目覆盖</strong>；
                   未覆盖的角色使用全局缺省（在「Agent 管理 → 角色注册表」维护）。
                 </div>
+                {rules && (
+                  <div className="mt-3 rounded-[10px] border border-ink-700 bg-ink-900/45 px-4 py-3">
+                    <div className="font-mono text-[10px] uppercase tracking-[.14em] text-zinc-500">调度上限（只读生效值）</div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 font-mono text-[12px] text-zinc-300">
+                      <span>全局最大活动 Job：{rules.maxGlobalJobs ?? "—"}</span>
+                      <span>单项目最大活动 Job：{rules.maxJobsPerProject ?? "—"}</span>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-5 text-zinc-600">
+                      这些值来自数据库全局规则的 effective_rules，由调度器实际执行；env 仅提供初始默认/安全边界，项目层不能覆盖。
+                    </p>
+                  </div>
+                )}
               </section>
             )}
 
@@ -507,15 +521,27 @@ export function SettingsPanel({
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
-                    Agent CLI 全局并发
+                    调度并发上限（数据库全局规则）
                   </div>
                   <p className="mt-1 text-[11px] leading-5 text-zinc-600">
-                    按 Agent CLI 限制全局并发。Provider / Credential / Model 并发请在「凭据」页配置。
-                    留空只受全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
+                    下方是调度器读取的 <span className="text-zinc-400">global_settings.effective_rules</span> 实际生效值，数据库规则是唯一权威。
+                    env 仅用于初始默认值与安全边界，不会在项目设置里静默覆盖这些值；修改只影响后续 claim，不终止已运行 Job。
                   </p>
                 </div>
                 <div className="px-4 py-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {numField(
+                      "maxGlobalJobs",
+                      "全局最大活动 Job",
+                      "调度器所有项目共享的硬上限；0 表示暂停新 Job。",
+                    )}
+                    {numField(
+                      "maxJobsPerProject",
+                      "单项目最大活动 Job",
+                      "按项目隔离的硬上限；项目规则不可覆盖。",
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {(["claude-code", "codex", "open-code"] as const).map((cli) => (
                       <div key={cli}>
                         <label className={labelCls}>{cli}</label>

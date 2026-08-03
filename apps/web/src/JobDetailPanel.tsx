@@ -1,17 +1,32 @@
-import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
-import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
+import { ArrowClockwise, DownloadSimple, Stop, X } from "@phosphor-icons/react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  api,
+  type CanvasBroadcast,
+  type JobDetail,
+  type JobEvidence,
+  type JobEvent,
+  type ProviderCredential,
+} from "./api";
 import { LiveStream, ProcessStreamView, recordsToStreamBlocks } from "./LiveStream";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
-import { SeverityBadge, StatusBadge, formatTime } from "./ui";
+import { SeverityBadge, StatusBadge, formatDuration, formatTime, jobTiming } from "./ui";
 
 /**
  * 运行详情（画布节点 / 运行列表共用）：
  * - 结果：下发 prompt + 运行摘要 + 产出（已结束默认）
  * - 执行过程 / 实时流 / 事件 / 原始 Session / 产出发现 / 运行配置
  */
-type DetailTab = "result" | "process" | "live" | "events" | "session" | "findings" | "config";
+type DetailTab =
+  | "result"
+  | "process"
+  | "live"
+  | "events"
+  | "broadcasts"
+  | "session"
+  | "findings"
+  | "config";
 const ACTIVE = new Set(["claimed", "provisioning", "running", "waiting_human"]);
 
 const EVENT_COLOR: Record<string, string> = {
@@ -54,6 +69,229 @@ function ConfigField({ label, value, title }: { label: string; value: string; ti
   );
 }
 
+const BROADCAST_STATUS_META: Record<
+  string,
+  { label: string; className: string; hint: string }
+> = {
+  planned: {
+    label: "已计划",
+    className: "text-sky-300 ring-sky-300/20 bg-sky-400/[.08]",
+    hint: "平台已创建投递计划，尚未确认 sendMessage 返回。",
+  },
+  injected: {
+    label: "平台已注入",
+    className: "text-emerald-300 ring-emerald-300/20 bg-emerald-400/[.08]",
+    hint: "Agent.attach/sendMessage 已由平台调用并返回成功；不代表模型已读取或采纳。",
+  },
+  failed: {
+    label: "注入失败",
+    className: "text-red-300 ring-red-300/20 bg-red-400/[.08]",
+    hint: "平台调用 sendMessage 失败。",
+  },
+  skipped: {
+    label: "已跳过",
+    className: "text-zinc-400 ring-white/[.12] bg-white/[.04]",
+    hint: "平台已识别目标，但按策略没有注入。",
+  },
+  unknown: {
+    label: "结果不确定",
+    className: "text-amber-300 ring-amber-300/20 bg-amber-400/[.08]",
+    hint: "平台未能确认注入结果；不据此推断模型是否读取。",
+  },
+};
+
+function broadcastStatusMeta(status: string) {
+  return BROADCAST_STATUS_META[status] ?? {
+    label: `未知状态 · ${status || "unknown"}`,
+    className: "text-amber-300 ring-amber-300/20 bg-amber-400/[.08]",
+    hint: "服务端返回了未识别的状态，按不确定处理。",
+  };
+}
+
+function PlainText({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`whitespace-pre-wrap break-words ${className}`}>{children}</div>;
+}
+
+function BroadcastRow({ row }: { row: CanvasBroadcast }) {
+  const status = String(row.delivery_status ?? "unknown");
+  const meta = broadcastStatusMeta(status);
+  const title = row.title?.trim() || "未命名画布增量";
+  return (
+    <article className="theme-surface rounded-2xl p-3.5 ring-1 ring-white/[.07]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`rounded-full px-2 py-1 font-mono text-[10px] ring-1 ${meta.className}`}
+          title={meta.hint}
+        >
+          {meta.label}
+        </span>
+        <span className="font-mono text-[10px] text-zinc-500">{row.source_node_type || "fact/finding"}</span>
+        <span className="font-mono text-[10px] text-zinc-700">attempt {row.attempt}</span>
+        <span className="ml-auto font-mono text-[10px] text-zinc-600">{formatTime(row.created_at)}</span>
+      </div>
+      <PlainText className="mt-2 text-[13px] leading-relaxed text-zinc-200">{title}</PlainText>
+      <div className="mt-2 grid gap-1 font-mono text-[10px] text-zinc-600 sm:grid-cols-2">
+        <span>来源 Job {row.source_job_id || "—"}</span>
+        <span>目标 Job {row.target_job_id || "—"}</span>
+        <span>目标角色 {row.target_role || "—"}</span>
+        <span>广播 ID {row.id || "—"}</span>
+      </div>
+      {status === "injected" && (
+        <p className="mt-2 font-mono text-[10px] leading-relaxed text-emerald-300/70">
+          平台 sendMessage 已返回成功（平台注入确认）；不表示模型已读取、理解或采纳。
+        </p>
+      )}
+      {status === "unknown" && (
+        <p className="mt-2 font-mono text-[10px] leading-relaxed text-amber-200/80">
+          平台未能确认注入结果。系统默认不自动重发，避免重复注入。
+        </p>
+      )}
+      {row.skip_reason && (
+        <PlainText className="mt-2 font-mono text-[11px] text-zinc-500">跳过原因：{row.skip_reason}</PlainText>
+      )}
+      {(row.error_code || row.error_message) && (
+        <PlainText className="mt-2 font-mono text-[11px] text-red-300/90">
+          {row.error_code ? `${row.error_code}${row.error_message ? "：" : ""}` : "错误"}
+          {row.error_message ?? ""}
+        </PlainText>
+      )}
+      {row.payload_preview && (
+        <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/25 px-3 py-2.5 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.05]">
+          {row.payload_preview}
+        </pre>
+      )}
+    </article>
+  );
+}
+
+function BroadcastList({
+  jobId,
+  active,
+  onCount,
+}: {
+  jobId: string;
+  active: boolean;
+  onCount: (count: number) => void;
+}) {
+  const [items, setItems] = useState<CanvasBroadcast[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [legacyUnavailable, setLegacyUnavailable] = useState(false);
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const page = await api.jobBroadcasts(jobId, { limit: 50 });
+      setItems(page.items ?? []);
+      setNextCursor(page.next_cursor ?? null);
+      setHasMore(Boolean(page.has_more));
+      onCount(page.items?.length ?? 0);
+      setLoadError(null);
+      setLegacyUnavailable(false);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes("-> 404")) {
+        setLegacyUnavailable(true);
+        setLoadError(null);
+        setItems([]);
+        onCount(0);
+      } else {
+        setLoadError(message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setItems([]);
+    setNextCursor(null);
+    setHasMore(false);
+    setLoadError(null);
+    setLegacyUnavailable(false);
+    void refresh();
+    if (!active) return;
+    const timer = setInterval(() => void refresh(), 5000);
+    return () => clearInterval(timer);
+    // refresh intentionally captures current jobId; this effect is reset per Job.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, active]);
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.jobBroadcasts(jobId, { after: nextCursor, limit: 50 });
+      setItems((prev) => [...prev, ...(page.items ?? [])]);
+      setNextCursor(page.next_cursor ?? null);
+      setHasMore(Boolean(page.has_more));
+      onCount(items.length + (page.items?.length ?? 0));
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  return (
+    <div className="h-full min-h-0 overflow-y-auto p-4">
+      <section className="mb-4 rounded-2xl bg-cyan-400/[.045] px-4 py-3 ring-1 ring-cyan-300/15">
+        <div className="font-mono text-[10px] uppercase tracking-[.14em] text-cyan-300/90">画布注入账本</div>
+        <p className="mt-1 text-[12px] leading-relaxed text-zinc-400">
+          「平台已注入」表示 Agent.attach/sendMessage 已由平台调用并返回成功，不表示模型已读取、理解或采纳。
+          广播只投递给当时仍在运行的同画布 Worker；没有记录也不能反向证明当时没有其他订阅者。
+        </p>
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.1] hover:text-zinc-200 disabled:opacity-50"
+          >
+            <ArrowClockwise size={12} className={loading ? "animate-spin" : ""} />
+            {loading ? "刷新中…" : "刷新"}
+          </button>
+          {active && <span className="font-mono text-[10px] text-zinc-600">运行中每 5 秒刷新</span>}
+        </div>
+      </section>
+      {loadError && (
+        <div className="mb-3 rounded-xl bg-red-950/25 px-3 py-2.5 text-[11px] text-red-300 ring-1 ring-red-400/20">
+          读取画布注入账本失败：{loadError}
+        </div>
+      )}
+      {items.length === 0 ? (
+        <div className="theme-surface rounded-2xl p-8 text-center ring-1 ring-white/[.06]">
+          <p className="text-[13px] text-zinc-500">暂无结构化投递记录</p>
+          <p className="mt-2 font-mono text-[10px] leading-relaxed text-zinc-700">
+            {legacyUnavailable
+              ? "当前调度器尚未提供广播账本；旧版本任务可能未记录广播。"
+              : "旧版本任务可能未记录广播；没有记录不等于证明当时没有其他订阅者。"}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((row) => (
+            <BroadcastRow key={row.id} row={row} />
+          ))}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              className="w-full rounded-xl px-3 py-2 font-mono text-[11px] text-zinc-400 ring-1 ring-white/[.08] hover:text-zinc-200 disabled:opacity-50"
+            >
+              {loadingMore ? "加载中…" : "加载更早记录"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [evidence, setEvidence] = useState<JobEvidence | null>(null);
@@ -64,9 +302,17 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [eventTypeFilter, setEventTypeFilter] = useState("");
   const [eventQuery, setEventQuery] = useState("");
+  const [broadcastCount, setBroadcastCount] = useState(0);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [forceBusy, setForceBusy] = useState(false);
   const [forceMsg, setForceMsg] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  // 活动 Job 的墙钟时长每秒刷新；后端字段仍是生命周期最终真相。
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 初次加载 + 运行中轮询：与调度器账本保持同步
   useEffect(() => {
@@ -79,6 +325,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     setDownloadError(null);
     setEventTypeFilter("");
     setEventQuery("");
+    setBroadcastCount(0);
     api.credentials().then((list) => alive && setCredentials(list)).catch(() => {});
 
     const loadCore = () =>
@@ -129,6 +376,10 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   }, [jobId]);
 
   const active = detail ? ACTIVE.has(detail.job.status) : false;
+  const timing = detail ? jobTiming(detail.job, now) : null;
+  const queueMs = detail?.job.queue_duration_ms ?? timing?.waitingMs ?? null;
+  const runtimeMs = detail?.job.run_duration_ms ?? timing?.runtimeMs ?? null;
+  const lifecycleMs = detail?.job.lifecycle_duration_ms ?? timing?.totalMs ?? null;
   const archivedBlocks = useMemo(() => recordsToStreamBlocks(stream), [stream]);
 
   const eventTypes = useMemo(() => {
@@ -243,6 +494,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
       evidence?.manifest.files.filter((f) => f.kind === "main" || f.kind === "subagent").length ?? null,
       true,
     ],
+    ["broadcasts", "画布注入", broadcastCount, true],
     ["findings", "产出发现", detail?.findings.length ?? null, true],
     ["config", "运行配置", snapshot ? 1 : 0, true],
   ];
@@ -323,14 +575,44 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
         )}
 
         {detail && (
-          <div className="theme-divider grid shrink-0 grid-cols-2 gap-px border-b bg-[var(--line)] sm:grid-cols-3 lg:grid-cols-6">
+          <div className="theme-divider grid shrink-0 grid-cols-2 gap-px border-b bg-[var(--line)] sm:grid-cols-3 lg:grid-cols-5">
             {(
               [
                 ["JOB ID", jobId],
                 ["CLI 工具", agentCli],
                 ["模型", model],
+                ["创建", formatTime(detail.job.created_at)],
                 ["开始", formatTime(detail.job.started_at)],
-                ["结束", formatTime(detail.job.finished_at)],
+                [
+                  "结束",
+                  detail.job.finished_at
+                    ? formatTime(detail.job.finished_at)
+                    : timing?.active
+                      ? "尚未结束"
+                      : "数据缺失",
+                ],
+                [
+                  "排队等待",
+                  timing?.waiting && !detail.job.started_at
+                    ? `排队中 ${formatDuration(queueMs)}`
+                    : queueMs == null
+                      ? "数据缺失"
+                      : formatDuration(queueMs),
+                ],
+                [
+                  "实际运行",
+                  timing?.waiting && !detail.job.started_at
+                    ? "尚未开始"
+                    : timing?.active
+                      ? `进行中 · ${runtimeMs == null ? "数据缺失" : formatDuration(runtimeMs)}`
+                      : runtimeMs == null
+                        ? "数据缺失"
+                        : formatDuration(runtimeMs),
+                ],
+                [
+                  "总生命周期",
+                  lifecycleMs == null ? "数据缺失" : formatDuration(lifecycleMs),
+                ],
                 [
                   "证据",
                   evidence
@@ -637,6 +919,11 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                 )}
               </div>
             </div>
+          )}
+
+          {/* 画布注入：独立账本视图；状态来自 Scheduler 的 sendMessage 投递记录。 */}
+          {detail && tab === "broadcasts" && (
+            <BroadcastList jobId={jobId} active={active} onCount={setBroadcastCount} />
           )}
 
           {detail && tab === "session" && (

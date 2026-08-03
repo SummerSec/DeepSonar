@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 12);
+INSERT INTO schema_meta (id, version) VALUES ('global', 13);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -43,7 +43,17 @@ CREATE TABLE canvases (
   status text NOT NULL DEFAULT 'active',
   archived_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT canvases_status_check CHECK (status IN ('active', 'archived'))
+  -- 画布图结构与服务端权威布局版本。坐标更新不会递增 graph_revision。
+  graph_revision bigint NOT NULL DEFAULT 0,
+  layout_revision bigint NOT NULL DEFAULT -1,
+  layout_status text NOT NULL DEFAULT 'dirty',
+  layout_algorithm text,
+  layout_warning text,
+  layout_error text,
+  CONSTRAINT canvases_status_check CHECK (status IN ('active', 'archived')),
+  CONSTRAINT canvases_graph_revision_check CHECK (graph_revision >= 0),
+  CONSTRAINT canvases_layout_revision_check CHECK (layout_revision >= -1),
+  CONSTRAINT canvases_layout_status_check CHECK (layout_status IN ('dirty', 'running', 'ready', 'failed'))
 );
 CREATE UNIQUE INDEX canvases_issue_uniq
   ON canvases (plane_issue_id) WHERE plane_issue_id IS NOT NULL;
@@ -101,6 +111,27 @@ CREATE UNIQUE INDEX jobs_one_active_verify_per_finding
   WHERE type = 'verify_finding'
     AND finding_id IS NOT NULL
     AND status IN ('pending','claimed','provisioning','running','waiting_human');
+
+-- 生命周期兜底：首次进入 running 记录 started_at；任何终态必须有 finished_at。
+-- Scheduler 仍可显式提供时间（例如迁移/恢复），但不能覆盖既有首次 started_at。
+CREATE OR REPLACE FUNCTION deepsonar_job_lifecycle_timestamps() RETURNS trigger AS $$
+BEGIN
+  IF NEW.status = 'running' AND NEW.started_at IS NULL THEN
+    IF TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM 'running' THEN
+      NEW.started_at := now();
+    END IF;
+  END IF;
+  IF NEW.status IN ('succeeded', 'failed', 'timeout', 'cancelled', 'orphan')
+     AND NEW.finished_at IS NULL THEN
+    NEW.finished_at := now();
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER jobs_lifecycle_timestamps
+  BEFORE INSERT OR UPDATE OF status ON jobs
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_job_lifecycle_timestamps();
 
 CREATE TABLE event_dedup (
   event_id text PRIMARY KEY,
@@ -262,9 +293,112 @@ CREATE TABLE canvas_edges (
   from_node_id uuid NOT NULL REFERENCES canvas_nodes(id),
   to_node_id uuid NOT NULL REFERENCES canvas_nodes(id),
   edge_type text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT canvas_edges_type_check CHECK (
+    edge_type IN ('child', 'produces', 'verifies', 'next', 'from', 'to', 'reviewed_by', 'tested_by')
+  ),
+  CONSTRAINT canvas_edges_not_self_check CHECK (from_node_id <> to_node_id)
 );
 CREATE INDEX canvas_edges_canvas_idx ON canvas_edges (canvas_id);
+CREATE UNIQUE INDEX canvas_edges_natural_uniq
+  ON canvas_edges (canvas_id, from_node_id, to_node_id, edge_type);
+
+-- 画布增量广播投递账本。source/target/job/node 外键不级联，硬删时由
+-- Scheduler 按 broadcasts → edges/nodes → jobs/canvas 的顺序显式清理。
+CREATE TABLE canvas_broadcasts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  canvas_id text NOT NULL REFERENCES canvases(id),
+  source_job_id uuid NOT NULL REFERENCES jobs(id),
+  source_node_id uuid NOT NULL REFERENCES canvas_nodes(id),
+  source_node_type text NOT NULL,
+  target_job_id uuid NOT NULL REFERENCES jobs(id),
+  target_role text NOT NULL,
+  target_role_kind text NOT NULL,
+  attempt int NOT NULL DEFAULT 1,
+  delivery_status text NOT NULL,
+  skip_reason text,
+  error_code text,
+  error_message text,
+  title text,
+  payload_preview text,
+  payload_sha256 text,
+  message_chars int,
+  injected_at timestamptz,
+  finished_at timestamptz,
+  decision_deadline_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT canvas_broadcasts_attempt_check CHECK (attempt >= 1),
+  CONSTRAINT canvas_broadcasts_not_self_check CHECK (source_job_id <> target_job_id),
+  CONSTRAINT canvas_broadcasts_status_check CHECK (
+    delivery_status IN ('planned', 'injected', 'failed', 'skipped', 'unknown')
+  ),
+  CONSTRAINT canvas_broadcasts_source_type_check CHECK (source_node_type IN ('fact', 'finding')),
+  CONSTRAINT canvas_broadcasts_target_kind_check CHECK (
+    target_role_kind IN ('role', 'hub', 'verify', 'report')
+  ),
+  CONSTRAINT canvas_broadcasts_skip_reason_check CHECK (
+    (delivery_status = 'skipped' AND skip_reason IS NOT NULL)
+    OR (delivery_status <> 'skipped' AND skip_reason IS NULL)
+  ),
+  CONSTRAINT canvas_broadcasts_timestamps_check CHECK (
+    (delivery_status = 'planned' AND injected_at IS NULL AND finished_at IS NULL)
+    OR (delivery_status = 'injected' AND injected_at IS NOT NULL AND finished_at IS NOT NULL)
+    OR (delivery_status IN ('failed', 'skipped', 'unknown') AND finished_at IS NOT NULL)
+  ),
+  CONSTRAINT canvas_broadcasts_error_code_check CHECK (
+    (delivery_status IN ('failed', 'unknown') AND error_code IS NOT NULL)
+    OR (delivery_status NOT IN ('failed', 'unknown') AND error_code IS NULL)
+  ),
+  CONSTRAINT canvas_broadcasts_message_chars_check CHECK (
+    message_chars IS NULL OR (message_chars >= 0 AND message_chars <= 100000)
+  ),
+  CONSTRAINT canvas_broadcasts_delivery_attempt_uniq UNIQUE (source_node_id, target_job_id, attempt)
+);
+CREATE INDEX canvas_broadcasts_canvas_idx ON canvas_broadcasts (canvas_id, created_at DESC, id DESC);
+CREATE INDEX canvas_broadcasts_target_job_idx ON canvas_broadcasts (target_job_id, created_at DESC, id DESC);
+CREATE INDEX canvas_broadcasts_source_node_idx ON canvas_broadcasts (source_node_id);
+CREATE INDEX canvas_broadcasts_status_idx ON canvas_broadcasts (delivery_status, updated_at DESC);
+
+-- 图结构变化只标记布局过期；布局事务更新 x/y 时不会触发本函数。
+CREATE OR REPLACE FUNCTION deepsonar_mark_canvas_graph_dirty() RETURNS trigger AS $$
+DECLARE
+  cid text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    cid := OLD.canvas_id;
+  ELSE
+    cid := NEW.canvas_id;
+  END IF;
+  IF cid IS NOT NULL THEN
+    UPDATE canvases
+       SET graph_revision = graph_revision + 1,
+           layout_status = 'dirty',
+           layout_error = NULL
+     WHERE id = cid;
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER canvas_nodes_graph_dirty_insert
+  AFTER INSERT ON canvas_nodes
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_mark_canvas_graph_dirty();
+CREATE TRIGGER canvas_nodes_graph_dirty_delete
+  AFTER DELETE ON canvas_nodes
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_mark_canvas_graph_dirty();
+CREATE TRIGGER canvas_nodes_graph_dirty_update
+  AFTER UPDATE OF node_type, title, status, w, h, job_id ON canvas_nodes
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_mark_canvas_graph_dirty();
+CREATE TRIGGER canvas_edges_graph_dirty_insert
+  AFTER INSERT ON canvas_edges
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_mark_canvas_graph_dirty();
+CREATE TRIGGER canvas_edges_graph_dirty_delete
+  AFTER DELETE ON canvas_edges
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_mark_canvas_graph_dirty();
 
 CREATE TABLE skill_sources (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

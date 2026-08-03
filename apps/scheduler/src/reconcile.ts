@@ -1,6 +1,7 @@
 import { forceRemoveContainer, listDeepSonarContainers } from "@deepsonar/runtime-sandbox";
 import { sql } from "./db.js";
 import { planeWriteback } from "./plane-sync.js";
+import { reconcileCanvasBroadcasts } from "./canvas-updates.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
@@ -11,6 +12,9 @@ import { planeWriteback } from "./plane-sync.js";
  * 必须在 dispatcher/reaper 启动前执行完，避免新调度与旧残留交错。
  */
 export async function reconcileOnBoot(): Promise<void> {
+  await reconcileCanvasBroadcasts().catch((error) =>
+    console.error("[reconcile] canvas broadcast reconciliation failed:", error),
+  );
   const containers = await listDeepSonarContainers();
   const activeJobs = await sql`
     SELECT id, status, sandbox_id FROM jobs WHERE status IN ('claimed','provisioning','running')`;

@@ -11,6 +11,7 @@ import {
 } from "./core.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
+import { dispatchConcurrencyDecision } from "./dispatch-policy.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
@@ -66,8 +67,9 @@ export async function dispatchOnce(): Promise<number> {
                agent_snapshot_json->>'credential_id',
                agent_snapshot_json->>'credential_provider',
                agent_snapshot_json->>'model'`;
+    const rules = await globalRules(tx as unknown as typeof sql);
     const totalActive = active.reduce((n, row) => n + Number(row.count), 0);
-    const slots = config.limits.maxGlobalJobs - totalActive;
+    const slots = rules.maxGlobalJobs - totalActive;
     if (slots <= 0) return [] as { id: string }[];
 
     const projectCounts = new Map<string, number>();
@@ -88,7 +90,6 @@ export async function dispatchOnce(): Promise<number> {
       if (credentialId && model) modelCounts.set(modelKey(credentialId, model), (modelCounts.get(modelKey(credentialId, model)) ?? 0) + Number(row.count));
       cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + Number(row.count));
     }
-    const rules = await globalRules(tx as unknown as typeof sql);
     const providerLimits = rules.maxConcurrentByProvider;
     const cliLimits = rules.maxConcurrentByAgentCli;
     // FOR UPDATE 不能锁 outer join 的可空侧；只锁 jobs 行。
@@ -114,15 +115,22 @@ export async function dispatchOnce(): Promise<number> {
       const provider = String(job.credential_provider ?? "");
       const credentialId = String(job.credential_id ?? "");
       const model = String(job.model ?? "");
-      if ((projectCounts.get(projectId) ?? 0) >= config.limits.maxJobsPerProject) continue;
+      const cliLimit = cliLimits[cli];
+      const concurrency = dispatchConcurrencyDecision({
+        totalActive: totalActive + claimed.length,
+        projectActive: projectCounts.get(projectId) ?? 0,
+        cliActive: cliCounts.get(cli) ?? 0,
+        globalLimit: rules.maxGlobalJobs,
+        projectLimit: rules.maxJobsPerProject,
+        cliLimit,
+      });
+      if (!concurrency.allowed) continue;
       const providerLimit = provider ? providerLimits[provider] : undefined;
       if (providerLimit !== undefined && (providerCounts.get(provider) ?? 0) >= providerLimit) continue;
       const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
       if (credentialId && credentialPolicy.maxConcurrent !== null && (credentialCounts.get(credentialId) ?? 0) >= credentialPolicy.maxConcurrent) continue;
       const modelLimit = model ? credentialPolicy.modelConcurrency[model] : undefined;
       if (credentialId && model && modelLimit !== undefined && (modelCounts.get(modelKey(credentialId, model)) ?? 0) >= modelLimit) continue;
-      const cliLimit = cliLimits[cli];
-      if (cliLimit !== undefined && (cliCounts.get(cli) ?? 0) >= cliLimit) continue;
       const [row] = await tx`
         UPDATE jobs SET status = 'claimed', claimed_at = now()
         WHERE id = ${job.id as string} AND status = 'pending'
@@ -190,7 +198,8 @@ async function runJob(jobId: string) {
 
     // running：开 lease（竞态守卫：此时被 cancel 则放弃执行，直接走 finally 回收）
     const lease = new Date(Date.now() + config.timeouts.leaseTtlSec * 1000);
-    if (!(await transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
+    // DB trigger records the first actual running timestamp and preserves it on resume.
+    if (!(await transitionJob(jobId, "running", { lease_expires_at: lease }))) {
       return;
     }
     startLeaseRenewal(jobId, handle);
@@ -617,7 +626,8 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
         from_node_id: root.id,
         to_node_id: node.id,
         edge_type: "child",
-      })}`;
+      })}
+      ON CONFLICT (canvas_id, from_node_id, to_node_id, edge_type) DO NOTHING`;
   }
 }
 

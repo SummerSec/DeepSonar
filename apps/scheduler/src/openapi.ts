@@ -133,6 +133,18 @@ const OPS: Op[] = [
   { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", scope: "tasks:read", tags: ["Tasks"] },
   { method: "get", path: "/projects/{id}/canvas", summary: "项目当前画布（兼容）", scope: "tasks:read", tags: ["Tasks"] },
   { method: "get", path: "/canvases/{id}", summary: "画布节点与边", scope: "tasks:read", tags: ["Tasks"] },
+  {
+    method: "get",
+    path: "/canvases/{id}/broadcasts",
+    summary: "画布广播投递账本（keyset cursor）",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    query: {
+      after: { type: "string", description: "base64url(created_at,id) cursor" },
+      limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+      status: { type: "string", description: "逗号分隔 planned,injected,failed,skipped,unknown" },
+    },
+  },
   { method: "post", path: "/tasks/{canvasId}/resume-session", summary: "恢复会话（继续执行，不删历史）", scope: "jobs:control", tags: ["Tasks"] },
   { method: "post", path: "/tasks/{canvasId}/retry", summary: "重试任务（清空历史后从意图重跑）", scope: "jobs:control", tags: ["Tasks"] },
   {
@@ -180,6 +192,18 @@ const OPS: Op[] = [
     query: { project_id: { type: "string", format: "uuid" }, status: { type: "string" } },
   },
   { method: "get", path: "/jobs/{id}", summary: "Job 详情（含事件）", scope: "tasks:read", tags: ["Jobs"] },
+  {
+    method: "get",
+    path: "/jobs/{id}/broadcasts",
+    summary: "Job 作为接收方的广播投递账本（keyset cursor）",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      after: { type: "string", description: "base64url(created_at,id) cursor" },
+      limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+      status: { type: "string", description: "逗号分隔 planned,injected,failed,skipped,unknown" },
+    },
+  },
   { method: "get", path: "/jobs/{id}/evidence", summary: "Job 原始证据 manifest", scope: "tasks:read", tags: ["Jobs"] },
   { method: "get", path: "/jobs/{id}/evidence/session", summary: "查看 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
   { method: "get", path: "/jobs/{id}/evidence/session/download", summary: "下载 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
@@ -215,14 +239,29 @@ const OPS: Op[] = [
   { method: "post", path: "/canvases/{id}/report/retry", summary: "失败报告重试", scope: "jobs:control", tags: ["Reports"] },
 
   // settings
-  { method: "get", path: "/global-settings", summary: "全局规则", scope: "agents:read", tags: ["Settings"] },
+  { method: "get", path: "/global-settings", summary: "全局规则（含并发 effective 值）", scope: "agents:read", tags: ["Settings"] },
   {
     method: "patch",
     path: "/global-settings",
     summary: "合并更新全局规则",
     scope: "agents:write",
     tags: ["Settings"],
-    body: { type: "object", required: ["rules"], properties: { rules: { type: "object", additionalProperties: true } } },
+    body: {
+      type: "object",
+      required: ["rules"],
+      properties: {
+        rules: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            maxGlobalJobs: { type: "integer", minimum: 0, description: "全局总 claim 安全顶；0 暂停 claim" },
+            maxJobsPerProject: { type: "integer", minimum: 0, description: "每项目 claim 安全顶；0 暂停该项目 claim" },
+            maxConcurrentByAgentCli: { type: "object", additionalProperties: { type: "integer", minimum: 0 } },
+            maxConcurrentByProvider: { type: "object", additionalProperties: { type: "integer", minimum: 0 } },
+          },
+        },
+      },
+    },
   },
   { method: "get", path: "/projects/{id}/settings", summary: "项目规则与角色启用", scope: "agents:read", tags: ["Settings"] },
   {

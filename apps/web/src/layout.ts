@@ -1,10 +1,10 @@
 import type { CanvasEdge, CanvasNode } from "./api";
 
 /**
- * elkjs 分层 DAG 自动布局（§8.3 Phase ③）：
+ * 临时 ELK 分层布局（服务端 layout_status=dirty/running/failed/legacy 时的明确降级）：
  * 从 root 向右自由生长，层级由图的拓扑决定（不再是固定语义列）。
- * 环（fact → root 的收敛边）由 ELK cycle-breaking 处理。
- * layoutNodes（固定列）保留为首帧占位，elk 算完即替换。
+ * 服务端 layout_status=ready 时调用方直接使用 canvas_nodes.x/y，不进入此函数。
+ * 环（fact → root 的收敛边）由 ELK cycle-breaking 处理；本模块绝不写回坐标。
  *
  * 高度按实际卡片估算；间距必须覆盖渲染高度，否则会视觉重合。
  * 调用方应只传入当前展示子图（深度 + 筛选后）；集合变化时重算，自适应最优排布。
@@ -71,7 +71,7 @@ export async function elkLayout(
 }
 
 /**
- * 语义分层布局（固定列，首帧占位 / elk 失败兜底）：
+ * 语义分层布局（固定列，临时首帧占位 / ELK 失败兜底）：
  *   列0 root → 列1 审计/普通 job（含 hub）→ 列2 finding → 列3 verify job / intent → 列4 fact → 列5 其他
  */
 

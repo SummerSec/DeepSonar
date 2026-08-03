@@ -14,6 +14,7 @@ export type ModuleKey =
   | "environment"
   | "integrations"
   | "tasks"
+  | "canvas_broadcasts"
   | "events"
   | "findings"
   | "reports"
@@ -32,6 +33,7 @@ export const MODULE_DEPS: Record<ModuleKey, ModuleKey[]> = {
   environment: ["roles"],
   integrations: ["project"],
   tasks: ["project"],
+  canvas_broadcasts: ["tasks"],
   events: ["tasks"],
   findings: ["tasks"],
   reports: ["tasks", "findings"],
@@ -52,12 +54,13 @@ const PRESETS: Record<Exclude<Preset, "custom">, ModuleKey[]> = {
     "integrations",
     "credentials",
     "tasks",
+    "canvas_broadcasts",
     "events",
     "findings",
     "artifacts",
     "audit_archive",
   ],
-  evidence_archive: ["project", "tasks", "findings", "events", "artifacts", "audit_archive"],
+  evidence_archive: ["project", "tasks", "canvas_broadcasts", "findings", "events", "artifacts", "audit_archive"],
 };
 
 export function resolveModules(preset: Preset, modules?: string[]): { modules: ModuleKey[]; autoAdded: ModuleKey[] } {

@@ -10,6 +10,7 @@ import { startPlaneSync } from "./plane-sync.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import { bootstrapOfficialRuntimeImages, startRuntimeImageRegistrySync } from "./runtime-images.js";
 import { bootstrapSkillSourcesOnBoot } from "./skill-sources.js";
+import { startLayoutWorker } from "./layout.js";
 
 async function main() {
   // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
@@ -37,6 +38,7 @@ async function main() {
   const stopPlane = startPlaneSync();
   const stopTransfer = startTransferWorker();
   const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
+  const stopLayoutWorker = startLayoutWorker();
 
   const shutdown = async () => {
     stopDispatcher();
@@ -44,6 +46,7 @@ async function main() {
     stopPlane();
     stopTransfer();
     stopRuntimeImageRegistrySync();
+    stopLayoutWorker();
     // 优雅退出（§12.2）：先等在执行的 job 收尾，再关 HTTP 与 DB
     await drainInFlight(15_000);
     await app.close();

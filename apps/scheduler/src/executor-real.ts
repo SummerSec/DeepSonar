@@ -709,7 +709,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let hubNote = "";
   if (isHub) {
     const decision = semanticState.hub
-      ? parseHubDecision(JSON.stringify(semanticState.hub.payload), availableHubRoleNames)
+      ? parseHubDecision(JSON.stringify(semanticState.hub.payload), availableHubRoleNames, graph?.referableIds)
       : null;
     if (!decision) {
       throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");

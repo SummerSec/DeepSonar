@@ -46,6 +46,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布） |
 | GET | /projects/:id/canvas | tasks:read | 项目当前画布（兼容） |
 | GET | /canvases/:id | tasks:read | 画布节点/边 |
+| GET | /canvases/:id/broadcasts | tasks:read | 画布广播时间线；`?after=` keyset cursor、`?limit=1..100`、`?status=planned,injected,failed,skipped,unknown` |
 | PATCH | /canvas-nodes/:id/verification | jobs:control | Fact 人工验证 `{status: verified\|rejected\|needs_human, note?}` |
 
 ### Job
@@ -55,6 +56,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | POST | /jobs | tasks:write | 直接建 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；一般用 tasks.create |
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
 | GET | /jobs/:id | tasks:read | 详情（含事件） |
+| GET | /jobs/:id/broadcasts | tasks:read | 该 Job 作为接收方的广播；`?after=`、`?limit=1..100`、`?status=planned,injected,failed,skipped,unknown` |
 | PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}` |
 | POST | /jobs/:id/cancel | jobs:control | 取消（running 回收沙箱） |
 | POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan → pending（终态 409） |
@@ -207,6 +209,10 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | GET | /ws | tasks:read | Job 实时流 WebSocket |
 
 ## 错误格式
+
+广播列表是只读查询，不存在发送/重试端点。两个广播 GET 均返回
+`{items,next_cursor,has_more}`，按 `(created_at DESC, id DESC)` 使用 opaque
+`after` cursor；`injected` 仅表示平台调用 `sendMessage` 成功，不表示模型已读取或采纳。
 
 ```json
 { "error": "人类可读信息" }

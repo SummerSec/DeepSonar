@@ -11,8 +11,14 @@ import {
   type Manifest,
   type OpenedPack,
 } from "./pack.js";
-import { CONFIG_MODULES, isConfigOnly, type ModuleKey } from "./modules.js";
+import { CONFIG_MODULES, isConfigOnly, resolveModules, type ModuleKey } from "./modules.js";
 import { archiveJobStatus } from "./sanitize.js";
+import {
+  broadcastContent,
+  CANVAS_BROADCASTS_FILE,
+  validateCanvasBroadcastRows,
+  type CanvasBroadcastTransferRow,
+} from "./broadcasts.js";
 
 export interface PreviewResult {
   compatible: boolean;
@@ -38,9 +44,10 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
 
   const buf = await loadPackFile(row.source_artifact_uri as string);
   const pack = await openDeepsonarPack(buf);
-  const modules = (row.selected_modules_json as ModuleKey[])?.length
+  const requestedModules = (row.selected_modules_json as ModuleKey[])?.length
     ? (row.selected_modules_json as ModuleKey[])
     : pack.manifest.modules;
+  const { modules, autoAdded } = resolveModules("custom", requestedModules);
 
   const warnings: string[] = [];
   const conflicts: PreviewResult["conflicts"] = [];
@@ -59,6 +66,10 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
     }
   }
 
+  if (modules.includes("canvas_broadcasts")) {
+    validateCanvasBroadcastPackage(pack, modules);
+  }
+
   for (const m of modules) {
     if (!CONFIG_MODULES.has(m) && m !== "tasks" && m !== "findings" && m !== "events" && m !== "artifacts" && m !== "audit_archive") {
       warnings.push(`模块 ${m} 当前版本支持有限，可能被跳过`);
@@ -74,7 +85,7 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
     compatible: true,
     source: pack.manifest.source,
     selected_modules: modules,
-    auto_added_dependencies: [],
+    auto_added_dependencies: autoAdded,
     counts: pack.manifest.counts ?? {},
     conflicts,
     warnings,
@@ -137,11 +148,15 @@ export async function applyImport(importId: string, body: ApplyBody): Promise<{ 
   try {
     const buf = await loadPackFile(row.source_artifact_uri as string);
     const pack = await openDeepsonarPack(buf);
-    const modules = body.modules?.length
+    const requestedModules = body.modules?.length
       ? body.modules
       : ((row.selected_modules_json as ModuleKey[])?.length
           ? (row.selected_modules_json as ModuleKey[])
           : pack.manifest.modules);
+    const { modules } = resolveModules("custom", requestedModules);
+    if (modules.includes("canvas_broadcasts")) {
+      validateCanvasBroadcastPackage(pack, modules);
+    }
 
     if (body.mode === "merge_configuration") {
       if (!body.target_project_id) {
@@ -215,6 +230,7 @@ async function createNewProject(
     jobs: Record<string, string>;
     nodes: Record<string, string>;
     findings: Record<string, string>;
+    canvas_broadcasts: Record<string, string>;
     role_configs: Record<string, string>;
     credentials: Record<string, string>;
   } = {
@@ -223,6 +239,7 @@ async function createNewProject(
     jobs: {},
     nodes: {},
     findings: {},
+    canvas_broadcasts: {},
     role_configs: {},
     credentials: { ...(body.credential_mappings ?? {}) },
   };
@@ -244,7 +261,12 @@ async function createNewProject(
       await importRoleConfigs(tx as Tx, projectId, pack, id_map);
     }
 
-    if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
+    if (
+      modules.includes("tasks") ||
+      modules.includes("canvas_broadcasts") ||
+      modules.includes("findings") ||
+      modules.includes("events")
+    ) {
       await importTasks(tx as Tx, projectId, pack, modules, id_map);
     }
 
@@ -298,6 +320,33 @@ async function mergeConfiguration(
     await tx`UPDATE projects SET config_json = ${tx.json(cfg as never)}, updated_at = now() WHERE id = ${targetProjectId}`;
     return id_map;
   });
+}
+
+/**
+ * Read and validate the independent broadcast file before applying any
+ * project rows.  A selected module with a missing file is a malformed package,
+ * not an empty export; fail closed so refs cannot be silently dropped.
+ */
+export function validateCanvasBroadcastPackage(pack: OpenedPack, modules: ModuleKey[]): CanvasBroadcastTransferRow[] {
+  if (!modules.includes("canvas_broadcasts")) return [];
+  if (!pack.files.has(CANVAS_BROADCASTS_FILE)) {
+    throw Object.assign(new Error(`${CANVAS_BROADCASTS_FILE} missing`), { code: "BROADCAST_FILE_MISSING" });
+  }
+  const rawRows = readJsonl(pack.files, CANVAS_BROADCASTS_FILE);
+  return validateCanvasBroadcastRows(
+    rawRows,
+    readJsonl(pack.files, "data/canvases.jsonl").map((row) => ({ source_id: String(row.source_id) })),
+    readJsonl(pack.files, "data/jobs.jsonl").map((row) => ({
+      source_id: String(row.source_id),
+      source_canvas_id: row.source_canvas_id == null ? null : String(row.source_canvas_id),
+    })),
+    readJsonl(pack.files, "data/nodes.jsonl").map((row) => ({
+      source_id: String(row.source_id),
+      source_canvas_id: row.source_canvas_id == null ? null : String(row.source_canvas_id),
+      source_job_id: row.source_job_id == null ? null : String(row.source_job_id),
+      node_type: row.node_type == null ? null : String(row.node_type),
+    })),
+  );
 }
 
 // postgres.js 事务连接与 Sql 类型不完全一致，导入路径统一用宽松 helper
@@ -392,9 +441,13 @@ async function importTasks(
     jobs: Record<string, string>;
     nodes: Record<string, string>;
     findings: Record<string, string>;
+    canvas_broadcasts: Record<string, string>;
   },
 ) {
   const canvases = readJsonl(pack.files, "data/canvases.jsonl");
+  const broadcastRows = modules.includes("canvas_broadcasts")
+    ? validateCanvasBroadcastPackage(pack, modules)
+    : [];
   for (const c of canvases) {
     const newId = randomUUID();
     id_map.canvases[String(c.source_id)] = newId;
@@ -478,6 +531,13 @@ async function importTasks(
       })}`;
   }
 
+  // Broadcasts reference both source/target jobs and the source node.  They
+  // must be applied only after all three UUID maps exist; unlike older task
+  // rows, a missing reference is a hard import error, never a skipped row.
+  if (broadcastRows.length) {
+    await importCanvasBroadcasts(tx, broadcastRows, id_map);
+  }
+
   // findings
   if (modules.includes("findings")) {
     const findings = readJsonl(pack.files, "data/findings.jsonl");
@@ -557,5 +617,81 @@ async function importTasks(
         /* skip */
       }
     }
+  }
+}
+
+async function importCanvasBroadcasts(
+  tx: Tx,
+  rows: CanvasBroadcastTransferRow[],
+  idMap: {
+    canvases: Record<string, string>;
+    jobs: Record<string, string>;
+    nodes: Record<string, string>;
+    canvas_broadcasts: Record<string, string>;
+  },
+) {
+  for (const row of rows) {
+    const canvasId = idMap.canvases[row.source_canvas_id];
+    const sourceJobId = idMap.jobs[row.source_job_id];
+    const targetJobId = idMap.jobs[row.target_job_id];
+    const sourceNodeId = idMap.nodes[row.source_node_id];
+    if (!canvasId || !sourceJobId || !targetJobId || !sourceNodeId) {
+      throw Object.assign(
+        new Error(`canvas_broadcasts ${row.source_id} 缺少导入后的 source/target/node UUID 映射`),
+        { code: "BROADCAST_REF_MISSING" },
+      );
+    }
+
+    const candidate = {
+      id: randomUUID(),
+      canvas_id: canvasId,
+      source_job_id: sourceJobId,
+      source_node_id: sourceNodeId,
+      source_node_type: row.source_node_type,
+      target_job_id: targetJobId,
+      target_role: row.target_role,
+      target_role_kind: row.target_role_kind,
+      attempt: row.attempt,
+      delivery_status: row.delivery_status,
+      skip_reason: row.skip_reason,
+      error_code: row.error_code,
+      error_message: row.error_message,
+      title: row.title,
+      payload_preview: row.payload_preview,
+      payload_sha256: row.payload_sha256,
+      message_chars: row.message_chars,
+      injected_at: row.injected_at,
+      finished_at: row.finished_at,
+      decision_deadline_at: row.decision_deadline_at,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+
+    // The schema's natural-key unique constraint makes this atomic under
+    // concurrent imports.  If a destination row already exists, compare all
+    // content (excluding the generated primary key) before allowing a no-op.
+    const [inserted] = await tx`
+      INSERT INTO canvas_broadcasts ${tx(candidate)}
+      ON CONFLICT (source_node_id, target_job_id, attempt) DO NOTHING
+      RETURNING id`;
+    if (inserted) {
+      idMap.canvas_broadcasts[row.source_id] = inserted.id as string;
+      continue;
+    }
+
+    const [existing] = await tx`
+      SELECT * FROM canvas_broadcasts
+      WHERE source_node_id = ${sourceNodeId}
+        AND target_job_id = ${targetJobId}
+        AND attempt = ${row.attempt}
+      LIMIT 1`;
+    if (existing && broadcastContent(existing as Record<string, unknown>) === broadcastContent(candidate)) {
+      idMap.canvas_broadcasts[row.source_id] = existing.id as string;
+      continue;
+    }
+    throw Object.assign(
+      new Error(`canvas_broadcasts 目标自然键冲突且内容不同: ${row.source_id}`),
+      { code: "BROADCAST_CONFLICT" },
+    );
   }
 }

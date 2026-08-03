@@ -35,7 +35,73 @@ const EDGE_STYLE: Record<string, { stroke: string; speed: string }> = {
   next: { stroke: "#748087", speed: "2.2s" },
   from: { stroke: "#657279", speed: "3.2s" }, // 事实 → 意图（Cairn Intent.from）
   to: { stroke: "var(--color-acc-400)", speed: "2.5s" }, // 意图 → 事实（Cairn Intent.to）
+  reviewed_by: { stroke: "#c084fc", speed: "2.1s" }, // Finding → 独立审查证据 fact
+  tested_by: { stroke: "#f59e0b", speed: "1.9s" }, // Finding → 实测证据 fact
 };
+
+type EdgeGroup = "decision" | "process" | "evidence";
+
+const EDGE_GROUP: Record<string, EdgeGroup> = {
+  from: "decision",
+  to: "decision",
+  child: "process",
+  produces: "process",
+  verifies: "process",
+  next: "process",
+  reviewed_by: "evidence",
+  tested_by: "evidence",
+};
+
+const EDGE_LABEL: Record<string, string> = {
+  child: "child · 入口/兼容",
+  produces: "produces · 产出 Finding",
+  verifies: "verifies · 验证",
+  next: "next · 流程续接",
+  from: "from · 决策依据",
+  to: "to · 决策产出",
+  reviewed_by: "reviewed_by · 独立审查证据",
+  tested_by: "tested_by · 实测证据",
+};
+
+function layoutRevision(value: unknown): number | null {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function layoutAuthority(data: CanvasData): {
+  ready: boolean;
+  status: string;
+  graphRevision: number | null;
+  layoutRevision: number | null;
+  label: string;
+} {
+  const canvas = data.canvas;
+  const status = String(data.layout?.layout_status ?? canvas?.layout_status ?? data.layout_status ?? "legacy");
+  const graph = layoutRevision(data.layout?.graph_revision ?? canvas?.graph_revision ?? data.graph_revision);
+  const layout = layoutRevision(data.layout?.layout_revision ?? canvas?.layout_revision ?? data.layout_revision);
+  const ready =
+    status === "ready" &&
+    (graph === null || layout === null || graph <= layout);
+  const revision = layout ?? graph;
+  if (ready) {
+    return {
+      ready: true,
+      status,
+      graphRevision: graph,
+      layoutRevision: layout,
+      label: `服务端布局权威${revision === null ? "" : ` · rev ${revision}`}`,
+    };
+  }
+  const stale = graph !== null && layout !== null && graph > layout;
+  const fallbackStatus = stale ? "stale" : status;
+  return {
+    ready: false,
+    status: fallbackStatus,
+    graphRevision: graph,
+    layoutRevision: layout,
+    label: `临时 ELK 降级 · ${fallbackStatus}（不回写坐标）`,
+  };
+}
 
 type ExpandHandlers = {
   expandNode: (id: string) => void;
@@ -46,6 +112,7 @@ function toFlow(
   data: CanvasData,
   elkPos: Map<string, { x: number; y: number }> | null,
   fallbackPos: Map<string, { x: number; y: number }> | null,
+  usePersistedLayout: boolean,
   depths: Map<string, number>,
   maxDepth: number,
   expandedIds: ReadonlySet<string>,
@@ -62,7 +129,10 @@ function toFlow(
         id: n.id,
         type: n.node_type,
         // 布局只对当前可见子图计算，展开/收起后自适应重排
-        position: elkPos?.get(n.id) ?? fallbackPos?.get(n.id) ?? { x: n.x, y: n.y },
+        // ready 布局时 x/y 是服务端权威坐标；其它状态才允许临时 ELK/固定列降级。
+        position: usePersistedLayout
+          ? { x: n.x, y: n.y }
+          : elkPos?.get(n.id) ?? fallbackPos?.get(n.id) ?? { x: n.x, y: n.y },
         width: NODE_W,
         data: {
           canvas: n,
@@ -85,6 +155,7 @@ function toFlow(
         type: "smoothstep",
         animated: true,
         className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
+        data: { edgeGroup: EDGE_GROUP[e.edge_type] ?? "process", edgeLabel: EDGE_LABEL[e.edge_type] ?? e.edge_type },
         style: {
           stroke: st.stroke,
           strokeWidth: 1.8,
@@ -110,13 +181,10 @@ function Legend() {
     "report",
     "human",
   ];
-  const edgeItems = [
-    { color: EDGE_STYLE.produces.stroke, label: "produces" },
-    { color: EDGE_STYLE.verifies.stroke, label: "verifies" },
-    { color: EDGE_STYLE.next.stroke, label: "next" },
-    { color: EDGE_STYLE.from.stroke, label: "from" },
-    { color: EDGE_STYLE.to.stroke, label: "to" },
-    { color: EDGE_STYLE.child.stroke, label: "child" },
+  const edgeGroups: Array<{ group: EdgeGroup; label: string; items: string[] }> = [
+    { group: "decision", label: "决策边", items: ["from", "to"] },
+    { group: "process", label: "流程 / 执行边", items: ["child", "produces", "verifies", "next"] },
+    { group: "evidence", label: "证据边", items: ["reviewed_by", "tested_by"] },
   ];
   return (
     <div
@@ -147,10 +215,15 @@ function Legend() {
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/[.05] pt-1.5">
           <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">边</span>
-          {edgeItems.map((it) => (
-            <span key={it.label} className="flex items-center gap-1.5">
-              <span className="inline-block h-px w-3 rounded" style={{ background: it.color }} />
-              <span className="font-mono text-[9px] text-zinc-500">{it.label}</span>
+          {edgeGroups.map((group) => (
+            <span key={group.group} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="font-mono text-[9px] text-zinc-600">{group.label}</span>
+              {group.items.map((type) => (
+                <span key={type} className="flex items-center gap-1.5" title={EDGE_LABEL[type]}>
+                  <span className="inline-block h-px w-3 rounded" style={{ background: EDGE_STYLE[type].stroke }} />
+                  <span className="font-mono text-[9px] text-zinc-500">{type}</span>
+                </span>
+              ))}
             </span>
           ))}
         </div>
@@ -178,6 +251,8 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   /** 用户强制收起（覆盖默认 depth 展开） */
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const rf = useRef<ReactFlowInstance | null>(null);
+
+  const layoutMeta = useMemo(() => (data ? layoutAuthority(data) : null), [data]);
 
   // §6.4：MVP 轮询刷新（5s）；WS 二期
   useEffect(() => {
@@ -365,9 +440,9 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
   }, [data, layoutKey]);
 
-  // elkjs：对当前展示子图重算最优分层布局
+  // Server ready 坐标是权威；dirty/running/failed/legacy 才允许临时 ELK 降级。
   useEffect(() => {
-    if (layoutSubgraph.nodes.length === 0) {
+    if (layoutMeta?.ready || layoutSubgraph.nodes.length === 0) {
       setElkPos(null);
       return;
     }
@@ -384,14 +459,14 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 layoutKey 驱动
-  }, [layoutKey]);
+  }, [layoutKey, layoutMeta?.ready]);
 
   const fallbackPos = useMemo(
     () =>
-      layoutSubgraph.nodes.length > 0
+      !layoutMeta?.ready && layoutSubgraph.nodes.length > 0
         ? layoutNodes(layoutSubgraph.nodes, layoutSubgraph.edges)
         : null,
-    [layoutSubgraph],
+    [layoutMeta?.ready, layoutSubgraph],
   );
 
   const handlers = useMemo(
@@ -413,6 +488,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
       subset,
       elkPos,
       fallbackPos,
+      Boolean(layoutMeta?.ready),
       depths,
       effectiveMaxDepth,
       expandedIds,
@@ -432,6 +508,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     fallbackPos,
     handlers,
     outgoing,
+    layoutMeta?.ready,
   ]);
 
   const totalNodeCount = data?.nodes.length ?? 0;
@@ -539,6 +616,23 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
           style={{ width: 140, height: 90 }}
         />
       </ReactFlow>
+
+      {layoutMeta && (
+        <div
+          className={`surface-shell absolute bottom-3 right-3 z-10 rounded-lg px-2.5 py-1.5 font-mono text-[10px] ring-1 ${
+            layoutMeta.ready
+              ? "text-emerald-300 ring-emerald-300/20"
+              : "text-amber-300 ring-amber-300/20"
+          }`}
+          title={
+            layoutMeta.status === "failed"
+              ? data.layout?.layout_error ?? data.canvas?.layout_error ?? "服务端布局失败，当前仅临时展示"
+              : "筛选/展开不会写回坐标；临时 ELK 仅用于展示降级"
+          }
+        >
+          {layoutMeta.label}
+        </div>
+      )}
 
       <div
         className="surface-shell absolute left-4 top-4 z-10 w-[calc(100%-2rem)] max-w-[980px] rounded-[20px] p-1 xl:w-[calc(100%-13rem)]"
@@ -758,7 +852,12 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
         (selected.job_id && ["intent", "job"].includes(selected.node_type) ? (
           <JobDetailPanel jobId={selected.job_id} onClose={() => setSelected(null)} />
         ) : (
-          <Sidebar node={selected} onClose={() => setSelected(null)} />
+          <Sidebar
+            node={selected}
+            nodes={data.nodes}
+            edges={data.edges}
+            onClose={() => setSelected(null)}
+          />
         ))}
     </div>
   );

@@ -29,21 +29,99 @@ export interface CanvasNode {
   verification_status: string | null;
   job_id: string | null;
   updated_at: string;
+  /** 服务端布局排序使用；旧 API 可能不返回。 */
+  created_at?: string;
 }
+
+/** 画布的八类规范边（与 shared-types.EdgeType 单源保持一致）。 */
+export type CanvasEdgeType =
+  | "child"
+  | "produces"
+  | "verifies"
+  | "next"
+  | "from"
+  | "to"
+  | "reviewed_by"
+  | "tested_by";
 
 export interface CanvasEdge {
   id: string;
   from_node_id: string;
   to_node_id: string;
-  edge_type: "child" | "produces" | "verifies" | "next" | "from" | "to";
+  edge_type: CanvasEdgeType;
+  created_at?: string;
+}
+
+export type CanvasLayoutStatus = "dirty" | "running" | "ready" | "failed";
+
+export interface CanvasMetadata {
+  id: string;
+  title: string;
+  target_json: Record<string, unknown>;
+  project_id?: string;
+  /** v13 server layout metadata. Missing fields mean legacy API/data. */
+  graph_revision?: number | string | null;
+  layout_revision?: number | string | null;
+  layout_status?: CanvasLayoutStatus | string | null;
+  layout_algorithm?: string | null;
+  layout_error?: string | null;
 }
 
 export interface CanvasData {
-  canvas?: { id: string; title: string; target_json: Record<string, unknown>; project_id?: string };
+  canvas?: CanvasMetadata;
   canvas_id: string;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   convergence?: CanvasConvergence;
+  /** v13 layout 服务元数据；ready 时节点 x/y 是权威坐标。 */
+  layout?: {
+    graph_revision: number | string;
+    layout_revision: number | string;
+    layout_status: CanvasLayoutStatus | string;
+    layout_algorithm: string | null;
+    layout_warning?: string | null;
+    layout_error: string | null;
+  } | null;
+  /** Transitional servers may expose layout metadata at the response root. */
+  graph_revision?: number | string | null;
+  layout_revision?: number | string | null;
+  layout_status?: CanvasLayoutStatus | string | null;
+  layout_algorithm?: string | null;
+  layout_error?: string | null;
+}
+
+export type CanvasBroadcastStatus = "planned" | "injected" | "failed" | "skipped" | "unknown";
+
+/** 脱敏后的画布广播投递账本行；preview/error 均按纯文本展示。 */
+export interface CanvasBroadcast {
+  id: string;
+  canvas_id: string;
+  source_job_id: string;
+  source_node_id: string;
+  source_node_type: "fact" | "finding" | string;
+  target_job_id: string;
+  target_role: string;
+  target_role_kind: "role" | "hub" | "verify" | "report" | string;
+  attempt: number;
+  delivery_status: CanvasBroadcastStatus | string;
+  skip_reason: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  title: string | null;
+  payload_preview: string | null;
+  payload_sha256: string | null;
+  message_chars: number | null;
+  injected_at: string | null;
+  finished_at: string | null;
+  decision_deadline_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CanvasBroadcastPage {
+  items: CanvasBroadcast[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 /** 任务画布列表项（一任务一画布；聚合最近一次 job 得任务状态） */
@@ -63,6 +141,12 @@ export interface CanvasSummary {
   last_job_status: string | null;
   last_job_priority: number | null;
   last_job_at: string | null;
+  /** 任务级生命周期聚合（后端可空，兼容旧数据）。 */
+  task_started_at?: string | null;
+  task_finished_at?: string | null;
+  active_started_at?: string | null;
+  cumulative_runtime_ms?: number | null;
+  cumulative_wait_ms?: number | null;
 }
 
 export interface JobEvent {
@@ -79,8 +163,12 @@ export interface JobDetail {
     type: string;
     status: string;
     error: string | null;
+    created_at: string;
     started_at: string | null;
     finished_at: string | null;
+    queue_duration_ms?: number | null;
+    run_duration_ms?: number | null;
+    lifecycle_duration_ms?: number | null;
     payload_json: Record<string, unknown>;
     agent_snapshot_json: Record<string, unknown>;
   };
@@ -101,6 +189,9 @@ export interface JobSummary {
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
+  queue_duration_ms?: number | null;
+  run_duration_ms?: number | null;
+  lifecycle_duration_ms?: number | null;
   project_name?: string;
   canvas_title?: string;
   /** 冻结快照：所用 Agent CLI（claude-code / open-code / codex…） */
@@ -217,6 +308,9 @@ export interface EffectiveRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** 调度器全局硬并发上限；仅全局规则可写，项目层读取生效值。 */
+  maxGlobalJobs: number;
+  maxJobsPerProject: number;
   /** Provider 总并发；优先级高于 Credential / Model / Agent CLI。 */
   maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层只读继承。 */
@@ -862,6 +956,18 @@ export const api = {
       `/projects/${projectId}/canvases${opts?.status ? `?status=${opts.status}` : ""}`,
     ),
   canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
+  /** 画布广播投递账本（keyset cursor；DB 是历史真相，WS 仅作实时增强）。 */
+  canvasBroadcasts: (
+    canvasId: string,
+    opts?: { after?: string | null; limit?: number; status?: CanvasBroadcastStatus | CanvasBroadcastStatus[] },
+  ) =>
+    get<CanvasBroadcastPage>(
+      `/canvases/${canvasId}/broadcasts${qs({
+        after: opts?.after,
+        limit: opts?.limit ? String(opts.limit) : undefined,
+        status: Array.isArray(opts?.status) ? opts.status.join(",") : opts?.status,
+      })}`,
+    ),
   canvasConvergence: (canvasId: string) =>
     get<{
       canvas_id: string;
@@ -897,6 +1003,18 @@ export const api = {
       `/canvases/${canvasId}/convergence/run-hub-now`,
     ),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
+  /** 该 Job 作为接收方的画布广播投递账本。 */
+  jobBroadcasts: (
+    jobId: string,
+    opts?: { after?: string | null; limit?: number; status?: CanvasBroadcastStatus | CanvasBroadcastStatus[] },
+  ) =>
+    get<CanvasBroadcastPage>(
+      `/jobs/${jobId}/broadcasts${qs({
+        after: opts?.after,
+        limit: opts?.limit ? String(opts.limit) : undefined,
+        status: Array.isArray(opts?.status) ? opts.status.join(",") : opts?.status,
+      })}`,
+    ),
   jobEvidence: (jobId: string) => get<JobEvidence>(`/jobs/${jobId}/evidence`),
   jobStream: (jobId: string) => get<{ events: Array<Record<string, unknown>> }>(`/jobs/${jobId}/evidence/stream`),
   jobSession: (jobId: string) => get<{ meta: EvidenceFileMeta; text: string; truncated: boolean }>(`/jobs/${jobId}/evidence/session`),

@@ -2,6 +2,7 @@ import { config } from "./config.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { runner } from "./runtime.js";
+import { reconcileCanvasBroadcasts } from "./canvas-updates.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -10,6 +11,9 @@ import { runner } from "./runtime.js";
  */
 
 export async function reapOnce(): Promise<{ timeouts: number; orphans: number; provisionStuck: number }> {
+  await reconcileCanvasBroadcasts().catch((error) =>
+    console.error("[reaper] canvas broadcast reconciliation failed:", error),
+  );
   const timedOut = await sql`
     UPDATE jobs SET status = 'timeout', finished_at = now(),
                     error = COALESCE(error, '') || '超时（Reaper 判定）'

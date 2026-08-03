@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   resolvePlatformTools,
   type EventEnvelope,
+  type EdgeType,
   type FindingPayload,
   type PlatformToolConfig,
   type PlatformToolName,
@@ -10,6 +11,7 @@ import {
 import { config } from "./config.js";
 import { allowedModelIds, isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
+import { parseNonNegativeLimit } from "./dispatch-policy.js";
 import { inc } from "./metrics.js";
 import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
 import { expandModules } from "./skill-sources.js";
@@ -85,6 +87,9 @@ export interface ProjectRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** Scheduler claim safety caps; authoritative values come from global_settings.rules_json. */
+  maxGlobalJobs: number;
+  maxJobsPerProject: number;
   /** 全局 Provider 总并发；优先于 Credential / 模型 / Agent CLI 配额。 */
   maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层不得覆盖。 */
@@ -178,6 +183,8 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
+    maxGlobalJobs: config.limits.maxGlobalJobs,
+    maxJobsPerProject: config.limits.maxJobsPerProject,
     maxConcurrentByProvider: {},
     maxConcurrentByAgentCli: {},
   };
@@ -206,6 +213,8 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
+    maxGlobalJobs: parseNonNegativeLimit(raw.maxGlobalJobs, base.maxGlobalJobs),
+    maxJobsPerProject: parseNonNegativeLimit(raw.maxJobsPerProject, base.maxJobsPerProject),
     maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
     maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
   };
@@ -229,6 +238,8 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
   const global = mergeRulesLayer(gr, envDefaultRules());
   return {
     ...mergeRulesLayer(r, global),
+    maxGlobalJobs: global.maxGlobalJobs,
+    maxJobsPerProject: global.maxJobsPerProject,
     maxConcurrentByProvider: global.maxConcurrentByProvider,
     maxConcurrentByAgentCli: global.maxConcurrentByAgentCli,
   };
@@ -560,20 +571,16 @@ export async function ingestEvent(jobId: string, envelope: EventEnvelope): Promi
 
 type Tx = typeof sql;
 
-/** canvas_edges 无唯一约束：from/to 边幂等插入 */
-async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: string) {
-  const existing = await tx`
-    SELECT 1 FROM canvas_edges
-    WHERE canvas_id = ${canvasId} AND from_node_id = ${fromId} AND to_node_id = ${toId} AND edge_type = ${edgeType}
-    LIMIT 1`;
-  if (existing.length > 0) return;
+/** canvas_edges 的自然键由 schema 唯一约束保护；并发写入必须单条原子 upsert。 */
+async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: EdgeType) {
   await tx`
     INSERT INTO canvas_edges ${tx({
       canvas_id: canvasId,
       from_node_id: fromId,
       to_node_id: toId,
       edge_type: edgeType,
-    })}`;
+    })}
+    ON CONFLICT (canvas_id, from_node_id, to_node_id, edge_type) DO NOTHING`;
 }
 
 async function applySideEffects(tx: Tx, jobId: string, type: string, payload: unknown) {
@@ -629,13 +636,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           status: "open",
         })}
         RETURNING id`;
-      await tx`
-        INSERT INTO canvas_edges ${tx({
-          canvas_id: jobNode.canvas_id,
-          from_node_id: jobNode.id,
-          to_node_id: node.id,
-          edge_type: "produces",
-        })}`;
+      await insertEdgeIfAbsent(tx, jobNode.canvas_id as string, jobNode.id as string, node.id as string, "produces");
       await tx`UPDATE findings SET node_id = ${node.id} WHERE id = ${finding.id}`;
     }
 
@@ -705,6 +706,20 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     const canvasId = (job.canvas_id as string) ?? null;
     if (!canvasId) return;
     const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
+    const referableRows = await tx`
+      SELECT id FROM canvas_nodes
+      WHERE canvas_id = ${canvasId} AND node_type = ANY(${["root", "fact", "finding"]})`;
+    const referableIds = new Set(referableRows.map((row) => row.id as string));
+    const validateReferences = (ids: unknown, label: string): string[] => {
+      const values = Array.isArray(ids)
+        ? ids.filter((value): value is string => typeof value === "string")
+        : [];
+      if (values.some((value) => !referableIds.has(value))) {
+        throw new Error(`Hub ${label} 引用了不属于当前画布的 root/fact/finding`);
+      }
+      return values;
+    };
+    const completeFrom = validateReferences(p.complete?.from, "complete.from");
 
     if (p.complete?.description) {
       // Hub complete 只是提案：统一完成门（排除当前仍 running 的 Hub 做门检）
@@ -734,7 +749,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           UPDATE canvas_nodes SET status = 'analysis_complete',
             body_json = body_json || ${tx.json({ conclusion: p.complete.description })}, updated_at = now()
           WHERE id = ${root.id}`;
-        for (const fid of p.complete.from ?? []) {
+        for (const fid of completeFrom) {
           const [src] = await tx`
             SELECT id FROM canvas_nodes WHERE id = ${fid} AND canvas_id = ${canvasId}`;
           if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, root.id as string, "to");
@@ -751,6 +766,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
       if (!it.role || !enabledNames.has(it.role)) {
         throw new Error(`Hub 派发了不可用角色: ${it.role ?? "<missing>"}`);
       }
+      validateReferences(it.from, "intent.from");
     }
 
     const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
