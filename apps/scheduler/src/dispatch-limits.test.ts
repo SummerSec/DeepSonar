@@ -172,6 +172,9 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByAgentCli: { "claude-code": true } }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByAgentCli: { "claude-code": null } }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByAgentCli: { "claude-code": {} } }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByProvider: { anthropic: true } }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByProvider: { anthropic: null } }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByProvider: { anthropic: {} } }));
   assert.deepEqual(parseConcurrencyRulesPatch({ maxGlobalJobs: 4, maxConcurrentByAgentCli: { "claude-code": 4 } }), {
     maxGlobalJobs: 4,
     maxConcurrentByAgentCli: { "claude-code": 4 },

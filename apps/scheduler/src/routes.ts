@@ -120,15 +120,27 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
       ctx.addIssue({ code: "custom", path: [key], message: `${key} 必须是 1-1000 的整数` });
     }
   }
-  if (!Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByAgentCli")) return;
-  const cliRules = rules.maxConcurrentByAgentCli;
-  if (!cliRules || typeof cliRules !== "object" || Array.isArray(cliRules)) {
-    ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli"], message: "Agent CLI 并发必须是对象" });
+  if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByAgentCli")) {
+    const cliRules = rules.maxConcurrentByAgentCli;
+    if (!cliRules || typeof cliRules !== "object" || Array.isArray(cliRules)) {
+      ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli"], message: "Agent CLI 并发必须是对象" });
+    } else {
+      for (const [cli, value] of Object.entries(cliRules as Record<string, unknown>)) {
+        if (!CLI_CONCURRENCY_KEYS.has(cli) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
+          ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli", cli], message: `${cli} 必须是 0-1000 的整数` });
+        }
+      }
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByProvider")) return;
+  const providerRules = rules.maxConcurrentByProvider;
+  if (!providerRules || typeof providerRules !== "object" || Array.isArray(providerRules)) {
+    ctx.addIssue({ code: "custom", path: ["maxConcurrentByProvider"], message: "Provider 并发必须是对象" });
     return;
   }
-  for (const [cli, value] of Object.entries(cliRules as Record<string, unknown>)) {
-    if (!CLI_CONCURRENCY_KEYS.has(cli) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
-      ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli", cli], message: `${cli} 必须是 0-1000 的整数` });
+  for (const [provider, value] of Object.entries(providerRules as Record<string, unknown>)) {
+    if (!isProviderKnown(provider) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
+      ctx.addIssue({ code: "custom", path: ["maxConcurrentByProvider", provider], message: `${provider} 必须是 0-1000 的整数` });
     }
   }
 });
