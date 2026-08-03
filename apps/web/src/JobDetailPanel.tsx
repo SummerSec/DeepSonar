@@ -1,4 +1,4 @@
-import { DownloadSimple, X } from "@phosphor-icons/react";
+import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, ProcessStreamView, recordsToStreamBlocks } from "./LiveStream";
@@ -65,6 +65,8 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [eventTypeFilter, setEventTypeFilter] = useState("");
   const [eventQuery, setEventQuery] = useState("");
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
+  const [forceBusy, setForceBusy] = useState(false);
+  const [forceMsg, setForceMsg] = useState<string | null>(null);
 
   // 初次加载 + 运行中轮询：与调度器账本保持同步
   useEffect(() => {
@@ -150,6 +152,28 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const model = snapStr(snapshot, "model");
   const roleName = snapStr(snapshot, "name");
   const credentialId = snapStr(snapshot, "credential_id");
+  const forceExit = async () => {
+    if (!detail || !ACTIVE.has(detail.job.status)) return;
+    if (
+      !window.confirm(
+        `强制退出 Job「${detail.job.type}」？\n将立即取消调度、回收沙箱并标记为 cancelled，不可恢复。`,
+      )
+    ) {
+      return;
+    }
+    setForceBusy(true);
+    setForceMsg(null);
+    try {
+      await api.cancelJob(jobId, { force: true, reason: "强制退出" });
+      setForceMsg("已强制退出");
+      const v = await api.job(jobId);
+      setDetail(v);
+    } catch (e) {
+      setForceMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setForceBusy(false);
+    }
+  };
   const credentialLabel = useMemo(() => {
     if (!snapshot) return "—";
     const frozenName = snapStr(snapshot, "credential_name");
@@ -235,7 +259,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
         <header className="theme-drawer-header theme-divider flex shrink-0 items-center gap-3 border-b px-5 py-4">
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] uppercase tracking-[.18em] text-zinc-600">
-              Execution detail
+              运行详情
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className="font-mono text-[13px] text-zinc-200">
@@ -265,15 +289,38 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               </div>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭运行详情"
-            className="theme-surface flex size-9 items-center justify-center rounded-full text-zinc-500 ring-1 hover:opacity-90"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {detail && ACTIVE.has(detail.job.status) && (
+              <button
+                type="button"
+                disabled={forceBusy}
+                onClick={() => void forceExit()}
+                title="强制退出：取消 Job 并回收沙箱"
+                className="inline-flex items-center gap-1.5 rounded-full bg-red-500/[.08] px-3 py-2 font-mono text-[11px] text-red-300 ring-1 ring-red-400/20 transition-colors hover:bg-red-500/[.14] disabled:opacity-50"
+              >
+                <Stop size={14} weight="fill" />
+                {forceBusy ? "退出中…" : "强制退出"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="关闭运行详情"
+              className="theme-surface flex size-9 items-center justify-center rounded-full text-zinc-500 ring-1 hover:opacity-90"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </header>
+        {forceMsg && (
+          <div
+            className={`theme-divider shrink-0 border-b px-5 py-2 font-mono text-[11px] ${
+              forceMsg === "已强制退出" ? "text-acc-300" : "text-red-300"
+            }`}
+          >
+            {forceMsg}
+          </div>
+        )}
 
         {detail && (
           <div className="theme-divider grid shrink-0 grid-cols-2 gap-px border-b bg-[var(--line)] sm:grid-cols-3 lg:grid-cols-6">

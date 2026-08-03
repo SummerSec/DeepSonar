@@ -101,6 +101,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /jobs/:id/evidence/stream": "tasks:read",
   "PATCH /jobs/:id/priority": "jobs:control",
   "POST /jobs/:id/cancel": "jobs:control",
+  "POST /canvases/:id/jobs/cancel-active": "jobs:control",
   "POST /jobs/:id/resume": "jobs:control",
   "GET /findings": "findings:read",
   "GET /findings/:id": "findings:read",

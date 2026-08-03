@@ -951,7 +951,19 @@ export const api = {
   ) => send<FindingLink>("POST", `/findings/${id}/links`, body),
   deleteFindingLink: (id: string, linkId: string) =>
     send<{ ok: boolean }>("DELETE", `/findings/${id}/links/${linkId}`),
-  cancelJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/cancel`),
+  cancelJob: (id: string, opts?: { force?: boolean; reason?: string }) =>
+    send<{ id: string; status: string; force?: boolean; reason?: string }>(
+      "POST",
+      `/jobs/${id}/cancel`,
+      opts ?? {},
+    ),
+  /** 强制退出画布上全部活动 Job */
+  cancelCanvasActiveJobs: (canvasId: string, reason?: string) =>
+    send<{ canvas_id: string; cancelled: number; reason: string }>(
+      "POST",
+      `/canvases/${canvasId}/jobs/cancel-active`,
+      reason ? { reason } : {},
+    ),
   resumeJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/resume`),
   settings: (projectId: string) => get<ProjectSettings>(`/projects/${projectId}/settings`),
   patchSettings: (

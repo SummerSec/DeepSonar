@@ -190,6 +190,32 @@ export function TaskCanvasPage() {
   const hasActiveJob = jobs.some((j) => ACTIVE_JOB.has(j.status));
   const canResumeSession = !hasActiveJob && jobs.length > 0;
   const canHardRetry = !hasActiveJob && jobs.length > 0;
+  const activeJobs = jobs.filter((j) => ACTIVE_JOB.has(j.status));
+
+  /** 强制退出画布上全部活动 Job（含 running） */
+  const forceExitActive = async () => {
+    if (!canvasId || activeJobs.length === 0) return;
+    if (
+      !window.confirm(
+        `强制退出本任务 ${activeJobs.length} 个活动 Job？\n将立即取消调度并回收沙箱，节点标记为 cancelled。`,
+      )
+    ) {
+      return;
+    }
+    setConvBusy(true);
+    setMoreOpen(false);
+    try {
+      const r = await api.cancelCanvasActiveJobs(canvasId, "强制退出全部活动 Job");
+      flash(r.cancelled > 0 ? `已强制退出 ${r.cancelled} 个活动 Job` : "没有可退出的活动 Job");
+      // 立即刷新列表
+      const js = await api.jobs({ project_id: projectId! });
+      setJobs(js.filter((j) => j.canvas_id === canvasId));
+    } catch (e) {
+      flash(`强制退出失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setConvBusy(false);
+    }
+  };
 
   /** 恢复会话 = 继续执行（恢复失败 Job / 解除暂停 / 空闲唤醒 Hub），不删历史 */
   const resumeSession = async () => {
@@ -366,6 +392,19 @@ export function TaskCanvasPage() {
                   className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   恢复会话
+                </button>
+                <button
+                  type="button"
+                  disabled={convBusy || !hasActiveJob}
+                  title={
+                    hasActiveJob
+                      ? `强制退出 ${activeJobs.length} 个活动 Job（含 running）`
+                      : "当前没有活动 Job"
+                  }
+                  onClick={() => void forceExitActive()}
+                  className="block w-full px-3 py-2 text-left text-[12px] text-red-300/90 hover:bg-red-500/[.08] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  强制退出活动 Job{hasActiveJob ? ` (${activeJobs.length})` : ""}
                 </button>
                 <button
                   type="button"
@@ -582,6 +621,7 @@ export function TaskCanvasPage() {
                       <th className={thCls}>模型</th>
                       <th className={thCls}>开始</th>
                       <th className={thCls}>创建</th>
+                      <th className={thCls}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -624,6 +664,33 @@ export function TaskCanvasPage() {
                           title={formatTime(j.created_at)}
                         >
                           {relativeTime(j.created_at)}
+                        </td>
+                        <td className={tdCls} onClick={(e) => e.stopPropagation()}>
+                          {ACTIVE_JOB.has(j.status) ? (
+                            <button
+                              type="button"
+                              disabled={convBusy}
+                              onClick={async () => {
+                                if (!window.confirm(`强制退出 Job「${j.type}」？`)) return;
+                                setConvBusy(true);
+                                try {
+                                  await api.cancelJob(j.id, { force: true, reason: "强制退出" });
+                                  flash("已强制退出");
+                                  const js = await api.jobs({ project_id: projectId! });
+                                  setJobs(js.filter((row) => row.canvas_id === canvasId));
+                                } catch (e) {
+                                  flash(`强制退出失败：${e instanceof Error ? e.message : e}`);
+                                } finally {
+                                  setConvBusy(false);
+                                }
+                              }}
+                              className="rounded-md border border-red-900/50 px-2.5 py-1 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40 disabled:opacity-50"
+                            >
+                              强制退出
+                            </button>
+                          ) : (
+                            <span className="font-mono text-[12px] text-zinc-700">—</span>
+                          )}
                         </td>
                       </tr>
                     ))}

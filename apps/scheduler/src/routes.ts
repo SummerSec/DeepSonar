@@ -2598,13 +2598,26 @@ export function registerRoutes(app: FastifyInstance) {
     return job;
   });
 
-  // 取消（§8.3）：置 cancel 终态 + 立即停容器 + 画布节点同步；迟到 done 由 finalizeJob 守卫忽略
+  // 取消 / 强制退出（§8.3）：置 cancel 终态 + 立即停容器 + 画布节点同步；迟到 done 由 finalizeJob 守卫忽略
   app.post("/jobs/:id/cancel", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        /** 强制退出时写入 error 字段，便于 UI/审计区分 */
+        force: z.boolean().optional(),
+        reason: z.string().max(500).optional(),
+      })
+      .parse(req.body ?? {});
+    const reason =
+      body.reason?.trim() ||
+      (body.force ? "强制退出" : "cancelled");
     const [job] = await sql`
-      UPDATE jobs SET status = 'cancelled', finished_at = now()
+      UPDATE jobs SET status = 'cancelled', finished_at = now(),
+        error = ${reason},
+        lease_expires_at = NULL,
+        heartbeat_at = NULL
       WHERE id = ${id} AND status IN ('pending','claimed','provisioning','running','waiting_human')
-      RETURNING id, status, sandbox_id, project_id, type`;
+      RETURNING id, status, sandbox_id, project_id, type, canvas_id`;
     if (!job) return reply.code(409).send({ error: "job 不在可取消状态" });
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch((e) => {
@@ -2619,18 +2632,69 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
     if (job.type === "verify_finding") {
       const { recoverVerifyJobTerminal } = await import("./core.js");
-      await recoverVerifyJobTerminal(id, "cancelled", "job cancelled").catch((e) =>
+      await recoverVerifyJobTerminal(id, "cancelled", reason).catch((e) =>
         console.error(`[cancel] verify recovery failed:`, e),
       );
     }
     await planeWriteback(id).catch(() => {});
     await audit(req, {
-      action: "job.cancel",
+      action: body.force ? "job.force_cancel" : "job.cancel",
       resourceType: "job",
       resourceId: id,
       projectId: (job.project_id as string) ?? null,
+      after: { status: "cancelled", force: body.force ?? false, reason },
     });
-    return { id: job.id, status: job.status };
+    await sql`SELECT pg_notify('deepsonar_jobs', 'job_cancelled')`;
+    return { id: job.id, status: job.status, force: body.force ?? false, reason };
+  });
+
+  /** 强制退出画布上全部活动 Job（pending/claimed/provisioning/running/waiting_human） */
+  app.post("/canvases/:id/jobs/cancel-active", async (req, reply) => {
+    const { id: canvasId } = req.params as { id: string };
+    const body = z
+      .object({ reason: z.string().max(500).optional() })
+      .parse(req.body ?? {});
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${canvasId}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const reason = body.reason?.trim() || "强制退出全部活动 Job";
+    const active = await sql`
+      SELECT id, sandbox_id, type FROM jobs
+      WHERE canvas_id = ${canvasId}
+        AND status IN ('pending','claimed','provisioning','running','waiting_human')`;
+    const { revokeJobTokens } = await import("./gateway.js");
+    const { recoverVerifyJobTerminal } = await import("./core.js");
+    let cancelled = 0;
+    for (const job of active) {
+      const jobId = job.id as string;
+      const [row] = await sql`
+        UPDATE jobs SET status = 'cancelled', finished_at = now(),
+          error = ${reason}, lease_expires_at = NULL, heartbeat_at = NULL
+        WHERE id = ${jobId}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        RETURNING id`;
+      if (!row) continue;
+      cancelled += 1;
+      if (job.sandbox_id) {
+        await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
+      }
+      await revokeJobTokens(jobId, "cancelled").catch(() => {});
+      await sql`
+        UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+      if (job.type === "verify_finding") {
+        await recoverVerifyJobTerminal(jobId, "cancelled", reason).catch(() => {});
+      }
+      await planeWriteback(jobId).catch(() => {});
+    }
+    await audit(req, {
+      action: "canvas.force_cancel_active",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId: canvas.project_id as string,
+      after: { cancelled, reason },
+    });
+    await sql`SELECT pg_notify('deepsonar_jobs', 'canvas_force_cancel')`;
+    return { canvas_id: canvasId, cancelled, reason };
   });
 
   // 人工处理后恢复（§4.4/§8.3）：waiting_human/orphan/failed/timeout → pending 重入队

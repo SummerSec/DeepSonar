@@ -190,9 +190,10 @@ export function JobsPage() {
   };
 
   const act = async (id: string, kind: "cancel" | "resume") => {
+    if (kind === "cancel" && !window.confirm("强制退出该 Job？将立即取消调度并回收沙箱。")) return;
     setBusy(id);
     try {
-      if (kind === "cancel") await api.cancelJob(id);
+      if (kind === "cancel") await api.cancelJob(id, { force: true, reason: "强制退出" });
       else await api.resumeJob(id);
       await reload();
     } catch (e) {
@@ -459,9 +460,10 @@ export function JobsPage() {
                           <button
                             disabled={busy === j.id}
                             onClick={() => act(j.id, "cancel")}
+                            title="强制退出：取消 Job 并回收沙箱"
                             className="rounded-md border border-ink-700 px-2.5 py-1 font-mono text-[12px] text-zinc-400 transition-colors hover:border-red-900/60 hover:text-red-300 disabled:opacity-50"
                           >
-                            取消
+                            强制退出
                           </button>
                         )}
                         {RESUMABLE.has(j.status) && (
@@ -618,9 +620,10 @@ export function JobsPage() {
                       <button
                         disabled={busy === j.id}
                         onClick={() => act(j.id, "cancel")}
+                        title="强制退出：取消 Job 并回收沙箱"
                         className="secondary-button min-h-8 px-3 py-1 text-[10px]"
                       >
-                        取消
+                        强制退出
                       </button>
                     )}
                     {RESUMABLE.has(j.status) && (

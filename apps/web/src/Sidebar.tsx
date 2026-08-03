@@ -1,9 +1,11 @@
-import { Prohibit, SealCheck, X } from "@phosphor-icons/react";
+import { Prohibit, SealCheck, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api, type CanvasNode, type JobDetail } from "./api";
 import { LiveStream } from "./LiveStream";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
+
+const CANCELLABLE_NODE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 
 const EVENT_COLOR: Record<string, string> = {
   progress: "#38bdf8",
@@ -45,10 +47,14 @@ const TABS: { key: Tab; label: string }[] = [
 export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => void }) {
   const [job, setJob] = useState<JobDetail | null>(null);
   const [verifyBusy, setVerifyBusy] = useState(false);
+  const [forceBusy, setForceBusy] = useState(false);
+  const [forceMsg, setForceMsg] = useState<string | null>(null);
   // running 的 job 节点默认落到实时流 tab，其余落概览
   const [tab, setTab] = useState<Tab>(
     node.job_id && node.status === "running" ? "stream" : "overview",
   );
+  const jobStatus = job?.job.status ?? node.status ?? "";
+  const canForceExit = Boolean(node.job_id && CANCELLABLE_NODE.has(jobStatus));
 
   useEffect(() => {
     setJob(null);
@@ -92,6 +98,29 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
     }
   };
 
+  const forceExit = async () => {
+    if (!node.job_id || !canForceExit) return;
+    if (
+      !window.confirm(
+        `强制退出节点「${node.title}」对应的 Job？\n将立即取消调度、回收沙箱并标记为 cancelled。`,
+      )
+    ) {
+      return;
+    }
+    setForceBusy(true);
+    setForceMsg(null);
+    try {
+      await api.cancelJob(node.job_id, { force: true, reason: "强制退出" });
+      setForceMsg("已强制退出");
+      const next = await api.job(node.job_id);
+      setJob(next);
+    } catch (e) {
+      setForceMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setForceBusy(false);
+    }
+  };
+
   return (
     <aside className="theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-20 flex w-[420px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]">
       {/* 头部 */}
@@ -101,7 +130,7 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
             <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
               {node.node_type}
             </span>
-            {node.status && <StatusDot status={node.status} />}
+            {node.status && <StatusDot status={jobStatus || node.status} />}
             {verification && (
               <span
                 className="rounded border px-1 font-mono text-[11px]"
@@ -114,14 +143,33 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
           <h2 className="mt-1 break-words text-[16px] font-semibold leading-snug text-zinc-100">
             {node.title}
           </h2>
+          {forceMsg && (
+            <div className={`mt-1.5 font-mono text-[11px] ${forceMsg === "已强制退出" ? "text-acc-300" : "text-red-300"}`}>
+              {forceMsg}
+            </div>
+          )}
         </div>
-        <button
-          onClick={onClose}
-          aria-label="关闭"
-          className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-ink-800 hover:text-zinc-200"
-        >
-          <X size={16} />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {canForceExit && (
+            <button
+              type="button"
+              disabled={forceBusy}
+              onClick={() => void forceExit()}
+              title="强制退出运行中的 Job"
+              className="inline-flex items-center gap-1 rounded-md border border-red-900/50 px-2 py-1 font-mono text-[11px] text-red-300 transition-colors hover:bg-red-950/40 disabled:opacity-50"
+            >
+              <Stop size={12} weight="fill" />
+              {forceBusy ? "退出中…" : "强制退出"}
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            aria-label="关闭"
+            className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-ink-800 hover:text-zinc-200"
+          >
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       {/* tab 栏（实时流只对 job 节点有意义） */}
