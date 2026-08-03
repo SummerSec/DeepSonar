@@ -4,12 +4,10 @@ ARG BASE_IMAGE=kalilinux/kali-last-release@sha256:01a402ec78a2b3bd86394f34f8c3d6
 ARG JDK8_IMAGE=eclipse-temurin:8-jdk@sha256:9fd5233e39b963aad25dae3ca002c5a1b435c378f6d484c24f0c68be34b54b72
 ARG JDK11_IMAGE=eclipse-temurin:11-jdk@sha256:51cad80517b1e18e289460e0a48657374d17711c83270263054a4a22cc1a992a
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
-ARG JDK21_IMAGE=eclipse-temurin:21-jdk@sha256:da9d3a4f7650db39b918fc5a2c3da76556fb8cc8e5f3767cdea0bb409286951a
 
 FROM ${JDK8_IMAGE} AS jdk8
 FROM ${JDK11_IMAGE} AS jdk11
 FROM ${JDK17_IMAGE} AS jdk17
-FROM ${JDK21_IMAGE} AS jdk21
 FROM ${BASE_IMAGE} AS runtime-rootfs
 
 ARG CLAUDE_CODE_VERSION=2.1.220
@@ -77,12 +75,12 @@ RUN set -eu; \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install 3.10.20 3.11.15 3.12.13 3.13.14; \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install --default 3.14.6; \
     uv cache clean; \
-    for version in 8 11 17 21; do \
+    for version in 8 11 17; do \
       ln -s "/opt/deepsonar/jdks/$version/bin/java" "/usr/local/bin/java$version"; \
       ln -s "/opt/deepsonar/jdks/$version/bin/javac" "/usr/local/bin/javac$version"; \
     done; \
-    ln -s /opt/deepsonar/jdks/21/bin/java /usr/local/bin/java; \
-    ln -s /opt/deepsonar/jdks/21/bin/javac /usr/local/bin/javac
+    ln -s /opt/deepsonar/jdks/17/bin/java /usr/local/bin/java; \
+    ln -s /opt/deepsonar/jdks/17/bin/javac /usr/local/bin/javac
 
 RUN set -eu; arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -105,7 +103,9 @@ COPY agent-harness/kali-minimal-runtime.json /opt/deepsonar/runtime-images.json
 COPY agent-harness/write-tool-manifest.mjs /opt/deepsonar/write-tool-manifest.mjs
 RUN node /opt/deepsonar/write-tool-manifest.mjs /opt/deepsonar/runtime-images.json kali-minimal /opt/deepsonar/tool-manifest.json \
   && rm /opt/deepsonar/runtime-images.json /opt/deepsonar/write-tool-manifest.mjs \
-  && find /var/log -type f -exec truncate -s 0 {} \;
+  && find /var/log -type f -exec truncate -s 0 {} \; \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /root/.cache /tmp/* /var/tmp/* \
+  && find /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale -mindepth 1 -delete 2>/dev/null || true
 
 WORKDIR /workspace
 
@@ -120,15 +120,14 @@ LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
 ENV IS_SANDBOX=1 \
     SEMGREP_SEND_METRICS=off \
     SEMGREP_ENABLE_VERSION_CHECK=0 \
-    JAVA_HOME=/opt/deepsonar/jdks/21 \
+    JAVA_HOME=/opt/deepsonar/jdks/17 \
     JAVA8_HOME=/opt/deepsonar/jdks/8 \
     JAVA11_HOME=/opt/deepsonar/jdks/11 \
     JAVA17_HOME=/opt/deepsonar/jdks/17 \
-    JAVA21_HOME=/opt/deepsonar/jdks/21 \
     UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python \
     UV_PYTHON_BIN_DIR=/usr/local/bin \
     UV_PYTHON_DOWNLOADS=never \
-    PATH=/opt/deepsonar/jdks/21/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/deepsonar/jdks/17/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY --from=runtime-rootfs / /
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

@@ -6,11 +6,11 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工�
 
 - `deepsonar-base`：固定 digest 的 Node 22 Debian slim + 最小通用 CLI。
 - `deepsonar-audit`：在 base 清单上增加 Semgrep、Gitleaks、ShellCheck、binutils，默认供 Audit 使用。
-- `deepsonar-kali-minimal`（市场名 Kali Test）：仅 Test 的默认环境。固定官方 Kali last-release digest，预装 Python 3.10–3.14、Temurin JDK 8/11/17/21（默认 21）、Go、Rust 与原有审计 CLI；不安装 `kali-linux-*`、`kali-tools-*`、GUI 或桌面。Verify 默认使用最小的 `deepsonar-base`，需要专项工具时再由 RoleConfig 覆盖。
+- `deepsonar-kali-minimal`（市场名 Kali Test）：仅 Test 的默认环境。固定官方 Kali last-release digest，预装 Python 3.10–3.14、Temurin JDK 8/11/17（默认 17，不含 21）、Go、Rust 与原有审计 CLI；不安装 `kali-linux-*`、`kali-tools-*`、GUI 或桌面。Verify 默认使用最小的 `deepsonar-base`，需要专项工具时再由 RoleConfig 覆盖。
 
 `runtime-images.json` 与 `kali-minimal-runtime.json` 记录工具、来源、校验和、平台与 `maxSizeMiB`。`maxSizeMiB` 约束 `docker save` 后 gzip 压缩的可分发镜像包；CI 同时报告解压层大小。压缩包超预算、定义漂移或断网硬化冒烟失败都会阻断 CI。
 
-构建 base/audit：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`。Kali Test 使用 `deploy/Dockerfile.agent-kali-minimal`；Python 版本化命令为 `python3.10`…`python3.14`，Java 可用 `java8`/`javac8`…`java21`/`javac21`。
+构建 base/audit：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`。Kali Test 使用 `deploy/Dockerfile.agent-kali-minimal`；Python 版本化命令为 `python3.10`…`python3.14`，Java 可用 `java8`/`javac8`、`java11`/`javac11` 与默认的 `java17`/`javac17`。
 
 ## 白名单工具注入（§3.4）
 

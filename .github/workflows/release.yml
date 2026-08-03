@@ -145,7 +145,7 @@ jobs:
           - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", dockerhub_tag: "" }
           - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", dockerhub_tag: "" }
           - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "audit" }
-          - { name: kali-minimal, dockerfile: deploy/Dockerfile.agent-kali-minimal, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "kali-minimal" }
+          # kali-minimal 体量大，amd64+arm64 同作业并行导出易 ENOSPC；独立 job 顺序构建
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -261,6 +261,181 @@ jobs:
           path: release-digests/${{ matrix.name }}.json
           if-no-files-found: error
 
+  # Kali 工具链镜像很大：同作业并行构建 amd64+arm64 并 COPY 根文件系统时极易 ENOSPC。
+  # 按平台顺序 push-by-digest，再 imagetools 合成多架构标签。
+  kali-minimal:
+    needs: base-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+      IMAGE_NAME: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-kali-minimal
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk for Kali multi-arch
+        run: |
+          set -euo pipefail
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/go \
+            /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk \
+            "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker system prune -af || true
+          df -h /
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR/Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=kali-minimal-{{version}}
+            type=sha,prefix=kali-minimal-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-kali-minimal
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: build-amd64
+        name: Build linux/amd64 (push by digest)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-kali-minimal
+          platforms: linux/amd64
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=kali-minimal-amd64
+          cache-to: type=gha,mode=max,scope=kali-minimal-amd64
+      - name: Reclaim disk before arm64
+        run: |
+          set -euo pipefail
+          docker builder prune -af || true
+          docker system prune -af || true
+          sudo rm -rf /tmp/* || true
+          df -h /
+      - id: build-arm64
+        name: Build linux/arm64 (push by digest)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-kali-minimal
+          platforms: linux/arm64
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=kali-minimal-arm64
+          cache-to: type=gha,mode=max,scope=kali-minimal-arm64
+      - name: Create multi-arch tags
+        id: merge
+        env:
+          AMD64_DIGEST: ${{ steps.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ steps.build-arm64.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          source_refs=(
+            "${IMAGE_NAME}@${AMD64_DIGEST}"
+            "${IMAGE_NAME}@${ARM64_DIGEST}"
+          )
+          tag_args=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] || continue
+            tag_args+=(-t "$tag")
+          done <<< "$(printf '%s\n%s\n%s\n' "$GHCR_TAGS" "${DOCKERHUB_TAGS:-}" "${ACR_TAGS:-}")"
+          [[ ${#tag_args[@]} -gt 0 ]]
+          docker buildx imagetools create "${tag_args[@]}" "${source_refs[@]}"
+          # 取 GHCR 首个标签的 multi-arch index digest
+          primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          digest="$(docker buildx imagetools inspect --raw "$primary" | node -e '
+            let s=""; process.stdin.on("data", d => s += d);
+            process.stdin.on("end", () => {
+              const crypto = require("node:crypto");
+              const digest = "sha256:" + crypto.createHash("sha256").update(s).digest("hex");
+              if (!/^sha256:[0-9a-f]{64}$/.test(digest)) process.exit(2);
+              process.stdout.write(digest);
+            });
+          ')"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          {
+            printf 'primary=%s\n' "$primary"
+            printf 'digest=%s\n' "$digest"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 保存运行时 manifest digest
+        env:
+          IMAGE_KEY: deepsonar-kali-minimal
+          DIGEST: ${{ steps.merge.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-kali-minimal
+          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-kali-minimal
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs release-digests/kali-minimal.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-kali-minimal
+          path: release-digests/kali-minimal.json
+          if-no-files-found: error
+
   openharmony-test:
     needs: base-image
     runs-on: ubuntu-latest
@@ -369,7 +544,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [base-image, images, openharmony-test]
+    needs: [base-image, images, kali-minimal, openharmony-test]
     runs-on: ubuntu-latest
     env:
       ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
