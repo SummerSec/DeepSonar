@@ -163,10 +163,14 @@ const OPS: Op[] = [
       required: ["project_id", "type"],
       properties: {
         project_id: { type: "string", format: "uuid" },
-        type: { type: "string", description: "已注册角色名或系统类型" },
+        type: {
+          type: "string",
+          description:
+            "Registered public role name. Public POST rejects scheduler-owned hub_reason, hub, verify_finding, and report (409). verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
+        },
         title: { type: "string" },
         payload: { type: "object", additionalProperties: true },
-        priority: { type: "integer" },
+        priority: { type: "integer", description: "可选；必须等于系统固定调度档位" },
         timeout_sec: { type: "integer" },
       },
     },
@@ -187,13 +191,23 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/jobs/{id}/priority",
-    summary: "调整 pending 优先级",
+    summary: "校验并写入 pending Job 的固定调度档位",
     scope: "jobs:control",
     tags: ["Jobs"],
-    body: { type: "object", required: ["priority"], properties: { priority: { type: "integer" } } },
+    body: {
+      type: "object",
+      required: ["priority"],
+      properties: { priority: { type: "integer", description: "不得跨越固定语义档位" } },
+    },
   },
   { method: "post", path: "/jobs/{id}/cancel", summary: "取消 job", scope: "jobs:control", tags: ["Jobs"] },
-  { method: "post", path: "/jobs/{id}/resume", summary: "恢复 failed/timeout/orphan → pending", scope: "jobs:control", tags: ["Jobs"] },
+  {
+    method: "post",
+    path: "/jobs/{id}/resume",
+    summary: "恢复 failed/timeout/orphan/waiting_human → pending；按 type/purpose 重算固定 priority class，忽略历史或调用方 priority",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+  },
 
   // findings / reports
   {

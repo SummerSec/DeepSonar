@@ -2,19 +2,34 @@
 
 > 状态：已收敛为单一旋钮（2026-08）  
 > **第一性原理**：用户只配 `minVerifySeverity`（最低关注级别）。  
-> 派生写死：≥ 该级别 → 自动 verify；Hub 等它们；验完停自驱；调度永远高危优先。  
+> 所有 Finding 都进入 Verify 生命周期；该旋钮只定义 care/wait 门和 Verify 队列内的排序范围，不能让低危 Finding 绕过验证。
 > 背景：`java-sec-code` 全量审计扇出过大；多旋钮配置违背第一性原理后已砍掉。  
 > 相关：`apps/scheduler/src/core.ts`、`apps/web` Settings / 画布。  
 > **后续**：未通过 verify 回弹 Hub / confirmed 唯一技术确认路径 → 见 [`TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md`](./TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md)。
 
+> **Issue #12 supersedes the historical draft below.** Do not interpret the
+> older `autoVerifySeverities` examples or parent-priority deltas as current
+> behavior; the authoritative semantics are the fixed classes and
+> `waiting_evidence` lifecycle described in the implementation note at the
+> end of this file.
+
 ---
+
+## Historical draft (non-normative)
+
+> Everything from this heading through the end of section 11 is archived
+> design history. It is retained for context only and must not be used as
+> operator guidance. In particular, references below to `autoVerifySeverities`,
+> skipping low/medium Findings, `confirmedHubMode`, or parent-priority deltas
+> are superseded by Issue #12. Use the fixed priority classes and the
+> `waiting_evidence` lifecycle in section 12 instead.
 
 ## 0. 目标与非目标
 
 ### 目标
 
 1. **高危 Finding 优先进入 verify 队列**（critical/high 先于 medium/low）。
-2. **恢复并强化 severity 门槛**：不是每条 finding 都自动 verify。
+2. **保持全量 Verify 生命周期**：severity 只影响 care/wait 门与队列排序，不改变收敛集合。
 3. **confirmed 触发 Hub 可配置**，不再默认「一条 confirmed 立刻 force、绕过等 verify」。
 4. **收敛门可配置**：例如「priority 档（默认 high+critical）全部 verify 终态后即可停自驱」；更低 severity 可继续跑、可丢弃、或不再阻塞 Hub。
 5. **人工可随时选择停止决策任务**（停新 hub / 停新 intent / 只 drain 高危 verify）。
@@ -388,19 +403,55 @@ maybeTriggerHub 公共门:
 
 ## 10. 一句话总结
 
-> 用 **`autoVerifySeverities` + severity 优先级** 控制「谁先验、谁验」；用 **`hubWaitSeverities` + `confirmedHubMode=gated`** 控制「验到哪一档就能继续/停」；用 **画布 `hub_paused` / 自动 stop 策略** 让人随时选择决策停止点——调度器仍是唯一有副作用的执行者。
+> 用 **固定调度档位 + Verify severity 顺序** 控制「谁先验」；用 **`minVerifySeverity` / `hubWaitSeverities`** 控制 care/wait 门；缺证据时由 `waiting_evidence` round 唤醒一次 Hub 补证——调度器仍是唯一有副作用的执行者。
 
 ---
 
 ## 11. 实现 checklist（TODO）
 
 - [x] `ProjectRules` 扩展字段 + env/全局/项目回落（branch: `feat/verify-priority-convergence`）
-- [x] `evaluateFollowup`：severity 门控 + priority 加权
+- [x] `evaluateFollowup`：全量 Verify 生命周期 + 缺证据等待态 + 固定调度档位
 - [x] `maybeTriggerHub`：`hubWaitSeverities` 阻塞查询
 - [x] `finalizeJob`：按 `confirmedHubMode` 处理 confirmed
 - [x] 画布 convergence JSON + pause/resume API
 - [x] Settings UI 绑定新字段 + 文案说明「门控 / 自动验」
 - [x] 画布顶栏：暂停决策 / 恢复 / 高危验完即停 / 清理低优先级 / 立即 Hub
-- [ ] Phase 1 冒烟：高危优先 claim、low 不自动 verify、pause 后无新 hub
+- [x] Issue #12 回归：固定档位/扇出 FIFO、Hub 资格、缺证据无 churn
 - [x] Phase 2 部分：autoStop 基础 + drain-priority（maxHubRounds 仅 succeeded 已在 main）
 - [ ] Phase 3：batch confirmed hub
+## 12. Issue #12 implementation note (normative, 2026-08-04)
+
+> This is the only normative section in this file. Scheduler operators and
+> tests must follow this section together with `docs/ARCHITECTURE.md`; the
+> historical draft above is not an implementation contract.
+
+The scheduler now treats graph eligibility and queue ordering as separate
+decisions.  Every Finding enters the Verify lifecycle; `minVerifySeverity`
+only defines the care/wait gate and the ordering scope, never whether a
+Finding receives a verification round.
+
+Job priority is a fixed semantic class, computed by the pure
+`fixedPriorityForJob` helper in `apps/scheduler/src/core.ts`:
+
+- Hub > report > Verify critical > Verify high > convergence evidence >
+  ordinary role/discovery > Verify medium > Verify low/info;
+- `created_at, id` provide FIFO within a class;
+- Hub/parent priority is never inherited, and a priority PATCH must equal the
+  class-derived value.
+
+When review/test evidence is incomplete, the Finding keeps a pending
+verification round with `requirements_json.eligibility = "waiting_evidence"`
+and no runnable `verify_finding` Job.  Hub is eligible only after active Hub,
+role, and `waiting_human` work has cleared; each evidence snapshot wakes one
+deterministic `verify_rework` decision, so repeated no-op role completions do
+not create churn.  Once the evidence gate qualifies, the same round receives
+its Verify Job and becomes `eligible`.
+
+On startup, reconciliation runs before the dispatcher, then the scheduler
+normalizes only runnable pending Job classes and repairs open legacy
+verification rounds. Claimed/provisioning resets are therefore FIFO-safe, and
+terminal Job/round history is left unchanged. For a single canvas, pending Hub
+and Report candidates are deterministic oldest-first gates; concurrent Hub
+triggers serialize on the canvas row. Public Job creation cannot choose the
+`convergence_evidence` lane, and Verify eligibility facts are loaded once per
+pending dispatch page.

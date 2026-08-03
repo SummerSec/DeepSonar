@@ -683,3 +683,17 @@ CANVAS_LAYOUT=auto
 | 状态机加状态 | status 新字符串值 | ❌ |
 
 总原则：**表结构管"关系和不变量"，JSONB 管"内容"，版本号管"格式演进"，migration 工具管"物理变更"。** 真正危险的是把易变内容固化成列，§6 已规避。
+
+### Issue #12 调度语义补充：资格与排序分离
+
+`jobs.priority` 只保存 `fixedPriorityForJob` 生成的固定语义档位；Hub
+轮次、父 Job 和 severity delta 均不得累加。调度器先判断图资格，再在
+固定档位内按 `created_at, id` FIFO（Verify 档位仍保持
+critical > high > medium > low/info）。`minVerifySeverity` 仅定义 care/wait
+门与 Verify 排序范围，所有 Finding 都进入 Verify 生命周期。
+
+证据不足时，`finding_verification_rounds.requirements_json` 写入
+`eligibility = "waiting_evidence"`，Finding 的 `raw_json.verification_state`
+同步记录同一资格；此时不创建可运行的 `verify_finding` Job。补证 Hub
+在无活跃 Hub、普通角色或 `waiting_human` Job 后按证据快照至多唤醒一次，
+证据齐全后复用该 round 绑定 Verify Job。

@@ -95,6 +95,9 @@ export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapsho
     if (f.node_type === "finding") {
       const fr = findingByNode.get(f.id as string);
       if (fr) {
+        // The canvas node id is a rendering handle; Hub follow-up prompts
+        // must carry the stable findings.id used by verification APIs.
+        lines.push(`    ${kv("finding_id", fr.id)}`);
         const { findingVerificationSummary } = await import("./verify.js");
         const summary = await findingVerificationSummary(sql, fr.id as string);
         lines.push(`    ${kv("verify_status", summary.verify_status)}`);

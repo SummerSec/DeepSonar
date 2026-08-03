@@ -31,15 +31,19 @@ import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
   CONFIG_FILE_MAX_TOTAL,
+  DISPATCH_CLAIM_ADVISORY_KEY,
   PLATFORM_DEFAULT_AGENT_CLI,
   createJob,
   drainNonGateVerifies,
   ensureCanvasForTask,
+  fixedPriorityForJob,
   globalRules,
   mergeGlobalRulesPatch,
   maybeTriggerHub,
+  normalizePendingJobPriority,
   parseCanvasConvergence,
   patchCanvasConvergence,
+  priorityMatchesJob,
   readCanvasConvergence,
   resolveAgentSnapshotForJob,
   resolveHubWaitSeverities,
@@ -91,7 +95,7 @@ const CreateJobBody = z.object({
   title: z.string().optional(),
   type: z.string().min(1),
   payload: z.record(z.string(), z.unknown()).default({}),
-  priority: z.number().int().default(0),
+  priority: z.number().int().optional(),
   timeout_sec: z.number().int().positive().optional(),
 });
 
@@ -789,6 +793,7 @@ export function registerRoutes(app: FastifyInstance) {
         heartbeat_at: null,
       });
       if (row) {
+        await normalizePendingJobPriority(resumable.id as string);
         await sql`
           UPDATE canvas_nodes SET status = 'pending', updated_at = now()
           WHERE job_id = ${resumable.id as string} AND node_type = ANY(${["job", "intent"]})`;
@@ -818,7 +823,7 @@ export function registerRoutes(app: FastifyInstance) {
           project_id: projectId,
           canvas_id: canvasId,
           type: "manual",
-          priority: 0,
+          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
         },
         { manual: true, force: true, trigger: { kind: "resume_session" } },
       );
@@ -878,7 +883,25 @@ export function registerRoutes(app: FastifyInstance) {
       payload.network_policy = target.network_policy;
     }
 
-    const job = await sql.begin(async (tx) => {
+    const retryResult = await sql.begin(async (tx) => {
+      // Retry is a destructive canvas reset. Serialize the whole operation
+      // on the same advisory key used by dispatcher claim, then on the canvas
+      // row. This prevents a dispatcher from claiming a pending Job after the
+      // active check but before wipeCanvasRuntimeData runs. Re-check active
+      // work after acquiring both locks; the preflight query is only a fast
+      // path.
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+      const [lockedCanvas] = await tx`
+        SELECT id, status FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+      if (!lockedCanvas) return { job: null, reason: "canvas_not_found" as const };
+      if ((lockedCanvas.status as string) === "archived") {
+        return { job: null, reason: "archived" as const };
+      }
+      const activeInside = await tx`
+        SELECT 1 FROM jobs WHERE canvas_id = ${canvasId}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        LIMIT 1`;
+      if (activeInside.length > 0) return { job: null, reason: "active" as const };
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态，保留用户任务内容
@@ -899,7 +922,7 @@ export function registerRoutes(app: FastifyInstance) {
         })}`;
 
       // 同事务内插入入口 Hub，避免 createJob 另开连接看不到未提交删除
-      const snapshot = await resolveAgentSnapshotForJob(sql, projectId, "hub_reason");
+      const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "hub_reason");
       const [hubJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: projectId,
@@ -907,8 +930,8 @@ export function registerRoutes(app: FastifyInstance) {
           plane_issue_id: (canvas.plane_issue_id as string) ?? null,
           agent_snapshot_json: snapshot as never,
           type: "hub_reason",
-          priority: 0,
-          payload_json: payload as never,
+          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+          payload_json: { ...payload, scheduling_purpose: "hub" } as never,
           timeout_sec: config.timeouts.auditSec,
           followup_depth: 0,
         })}
@@ -940,8 +963,19 @@ export function registerRoutes(app: FastifyInstance) {
             edge_type: "child",
           })}`;
       }
-      return hubJob;
+      return { job: hubJob, reason: undefined };
     });
+
+    if (!retryResult.job) {
+      if (retryResult.reason === "archived") {
+        return reply.code(409).send({ error: "任务已归档，请先取消归档再重试" });
+      }
+      if (retryResult.reason === "active") {
+        return reply.code(409).send({ error: "该任务仍有活动 Job，请先取消后再重试" });
+      }
+      return reply.code(404).send({ error: "canvas not found" });
+    }
+    const job = retryResult.job;
 
     await audit(req, {
       action: "task.retry_hard",
@@ -2393,7 +2427,7 @@ export function registerRoutes(app: FastifyInstance) {
             project_id: canvas.project_id,
             canvas_id: id,
             type: "manual",
-            priority: 0,
+            priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
           },
           { manual: true, force: true, trigger: { kind: "manual_resume" } },
         );
@@ -2467,7 +2501,7 @@ export function registerRoutes(app: FastifyInstance) {
           project_id: canvas.project_id,
           canvas_id: id,
           type: "manual",
-          priority: 0,
+          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
         },
         { manual: true, force: true, trigger: { kind: "manual_run_hub_now" } },
       );
@@ -2502,19 +2536,50 @@ export function registerRoutes(app: FastifyInstance) {
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
     const body = CreateJobBody.parse(req.body);
+    // `verify` remains a compatibility alias used by the runtime-image smoke
+    // to inspect the governed Verify snapshot. It is still scheduler-owned
+    // for priority/purpose, but unlike `verify_finding` it has no Finding
+    // lifecycle and cannot confirm anything on its own.
+    const systemJobTypes = new Set(["hub_reason", "hub", "verify_finding", "report"]);
+    if (systemJobTypes.has(body.type.trim().toLowerCase())) {
+      return reply.code(409).send({ error: "scheduler-owned system Job types cannot be created through the public endpoint" });
+    }
+    // Scheduling lanes are scheduler-owned.  A public caller may include
+    // arbitrary payload metadata, but cannot smuggle convergence_evidence (or
+    // another system lane) into a custom role's fixed priority class.
+    const payload = { ...body.payload };
+    delete payload.scheduling_purpose;
+    delete payload.scheduler_owned;
+    if (payload.verification_followup && typeof payload.verification_followup === "object" && !Array.isArray(payload.verification_followup)) {
+      const followup = { ...(payload.verification_followup as Record<string, unknown>) };
+      delete followup.scheduler_owned;
+      payload.verification_followup = followup;
+    }
+    const expectedPriority = fixedPriorityForJob({
+      type: body.type,
+      payload,
+      severity:
+        payload.severity ?? (payload.finding as Record<string, unknown> | undefined)?.severity,
+    });
+    if (body.priority !== undefined && body.priority !== expectedPriority) {
+      return reply.code(409).send({
+        error: "priority is fixed by scheduling class",
+        expected_priority: expectedPriority,
+      });
+    }
     // 一任务一画布：有 issue 复用（重试），无 issue 每次新建 ad-hoc 画布
     const canvasId = await ensureCanvasForTask({
       projectId: body.project_id,
       planeIssueId: body.plane_issue_id,
       title: body.title ?? `${body.type} 任务`,
-      target: { type: body.type, ...body.payload },
+      target: { type: body.type, ...payload },
     });
     const { job, duplicated } = await createJob({
       projectId: body.project_id,
       canvasId,
       planeIssueId: body.plane_issue_id,
       type: body.type,
-      payload: body.payload,
+      payload,
       priority: body.priority,
       timeoutSec: body.timeout_sec,
     });
@@ -2880,6 +2945,30 @@ export function registerRoutes(app: FastifyInstance) {
   app.patch("/jobs/:id/priority", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = PriorityBody.parse(req.body);
+    const [current] = await sql`
+      SELECT id, type, status, priority, finding_id, payload_json
+      FROM jobs WHERE id = ${id}`;
+    if (!current) return reply.code(404).send({ error: "job not found" });
+    let severity: string | undefined;
+    if (current.finding_id) {
+      const [finding] = await sql`SELECT severity FROM findings WHERE id = ${current.finding_id as string}`;
+      severity = finding?.severity as string | undefined;
+    }
+    const expected = fixedPriorityForJob({
+      type: current.type as string,
+      severity,
+      payload: (current.payload_json ?? {}) as Record<string, unknown>,
+    });
+    if (!priorityMatchesJob({
+      type: current.type as string,
+      severity,
+      payload: (current.payload_json ?? {}) as Record<string, unknown>,
+    }, body.priority)) {
+      return reply.code(409).send({
+        error: "priority is fixed by scheduling class; use an in-class value",
+        expected_priority: expected,
+      });
+    }
     const [job] = await sql`
       UPDATE jobs SET priority = ${body.priority}
       WHERE id = ${id} AND status = 'pending'
@@ -3000,6 +3089,7 @@ export function registerRoutes(app: FastifyInstance) {
       finished_at: null,
       heartbeat_at: null,
     });
+    if (row) await normalizePendingJobPriority(id);
     if (!row) return reply.code(409).send({ error: "job 不在可恢复状态（succeeded/cancelled 不可恢复，重跑请用 retry）" });
     await sql`
       UPDATE canvas_nodes SET status = 'pending', updated_at = now()

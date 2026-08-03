@@ -52,12 +52,12 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /jobs | tasks:write | 直接建 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；一般用 tasks.create |
+| POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；公共入口对 `hub_reason` / `hub` / `verify_finding` / `report` 返回 409；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
 | GET | /jobs/:id | tasks:read | 详情（含事件） |
-| PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}` |
+| PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}`；值必须匹配 Scheduler 根据 Job 类型/Finding 严重度计算的固定 priority class，不能任意改分 |
 | POST | /jobs/:id/cancel | jobs:control | 取消（running 回收沙箱） |
-| POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan → pending（终态 409） |
+| POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan/waiting_human → pending（终态 409）；恢复时按 Scheduler 固定 priority class 重新归一化，忽略历史或调用方 payload 中的 scheduling priority |
 
 ### 结果与报告
 
@@ -236,10 +236,10 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 ## Job 状态与运维
 
 ```text
-pending → claimed → provisioning → running → succeeded|failed|timeout|cancelled|orphan
+pending → claimed → provisioning → running → waiting_human → succeeded|failed|timeout|cancelled|orphan
 ```
 
-- `POST /jobs/:id/resume`：`failed` / `timeout` / `orphan` → `pending`（终态 409）。
+- `POST /jobs/:id/resume`：`failed` / `timeout` / `orphan` / `waiting_human` → `pending`（终态 409）；Scheduler 按 Job `type`/`purpose` 重算固定 priority class，不信任历史或调用方 priority。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。
 - schema 版本：`schema_meta.version` 必须等于调度器 `SCHEMA_VERSION`；**无增量迁移**，不符则重建空库（`DROP SCHEMA public CASCADE`）再恢复凭据。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。

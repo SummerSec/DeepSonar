@@ -80,6 +80,36 @@ async function testConcurrentReverify(): Promise<void> {
   };
   const review = await insertJob(canvasId, "review", "running", followup);
   const test = await insertJob(canvasId, "test", "running", followup);
+  // Verify eligibility is evidence-driven: completed followups must leave
+  // attributable Fact nodes, otherwise the scheduler correctly keeps the
+  // round in waiting_evidence and no Verify job is runnable.
+  await sql`
+    INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+    VALUES
+      (
+        ${canvasId}, ${review.id as string}, 'fact', 'review evidence', 'succeeded',
+        ${sql.json({
+          verification: {
+            finding_id: finding.id as string,
+            evidence_kind: "review",
+            outcome: "supports",
+          },
+        })}
+      ),
+      (
+        ${canvasId}, ${test.id as string}, 'fact', 'runtime test evidence', 'succeeded',
+        ${sql.json({
+          verification: {
+            finding_id: finding.id as string,
+            evidence_kind: "test",
+            outcome: "supports",
+            subject_revision: "convergence-fixture-revision",
+            steps: ["run fixture test"],
+            expected: "pass",
+            actual: "pass",
+          },
+        })}
+      )`;
 
   let arrivals = 0;
   let release!: () => void;

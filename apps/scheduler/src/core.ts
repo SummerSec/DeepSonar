@@ -59,9 +59,9 @@ export function sha16(s: string): string {
 //
 // 第一性原理：用户只配「最低关注级别」一件事。
 // 派生（写死，不暴露配置）：
-//   · ≥ 该级别 → 自动 verify
-//   · Hub 等这些 verify 跑完再决策（含 confirmed）
-//   · 这些验完且无活跃角色 job → 停自驱
+//   · 所有 Finding 都进入 Verify 生命周期；缺证据时显式等待
+//   · minVerifySeverity 只定义 care/wait 门及 Verify 队列内的排序范围
+//   · Hub 等 care verify 跑完再决策（含 confirmed）
 //   · verify 调度永远 critical > high > …
 
 /** 严重度从高到低；minVerifySeverity=high 表示 critical+high */
@@ -103,14 +103,6 @@ export interface CanvasConvergence {
   auto_stopped: boolean;
   pending_confirmed_ids?: string[];
 }
-
-const SEVERITY_PRIORITY_DELTA: Record<string, number> = {
-  critical: 40,
-  high: 30,
-  medium: 10,
-  low: 0,
-  info: -5,
-};
 
 function asSeverityRank(v: unknown, fallback: SeverityRank): SeverityRank {
   const s = String(v ?? "").trim().toLowerCase();
@@ -170,8 +162,217 @@ export function resolveHubWaitSeverities(rules: ProjectRules): string[] {
   return careSeverities(rules.minVerifySeverity);
 }
 
-export function severityPriorityDelta(severity: string | null | undefined): number {
-  return SEVERITY_PRIORITY_DELTA[String(severity ?? "").toLowerCase()] ?? 0;
+/**
+ * Scheduling purpose is frozen into a Job payload at creation time.  It is
+ * deliberately a small vocabulary: it explains why a Job exists without
+ * letting an Agent invent a numeric queue score.
+ */
+export type SchedulingPurpose =
+  | "hub"
+  | "convergence_evidence"
+  | "discovery"
+  | "verify"
+  | "report"
+  | "manual";
+
+/** Fixed, documented queue classes.  FIFO is provided by created_at/id within
+ * a class; these numbers never inherit a parent or Hub round. */
+export const FIXED_PRIORITY = Object.freeze({
+  hub: 500,
+  report: 450,
+  verifyCritical: 320,
+  verifyHigh: 310,
+  convergenceEvidence: 220,
+  role: 200,
+  verifyMedium: 120,
+  verifyLow: 110,
+  verifyInfo: 100,
+});
+
+const SCHEDULING_PURPOSES = new Set<SchedulingPurpose>([
+  "hub",
+  "convergence_evidence",
+  "discovery",
+  "verify",
+  "report",
+  "manual",
+]);
+
+export function asSchedulingPurpose(value: unknown, fallback: SchedulingPurpose = "manual"): SchedulingPurpose {
+  const purpose = String(value ?? "").trim().toLowerCase() as SchedulingPurpose;
+  return SCHEDULING_PURPOSES.has(purpose) ? purpose : fallback;
+}
+
+export interface SchedulingPriorityInput {
+  type: string;
+  severity?: unknown;
+  purpose?: unknown;
+  payload?: Record<string, unknown> | null;
+}
+
+/** Resolve a Job's immutable semantic purpose from its type/payload. */
+export function schedulingPurposeForJob(input: SchedulingPriorityInput): SchedulingPurpose {
+  const type = String(input.type ?? "").toLowerCase();
+  if (type === "hub_reason" || type === "hub") return "hub";
+  if (type === "verify_finding" || type === "verify") return "verify";
+  if (type === "report") return "report";
+  const explicit = input.purpose ?? input.payload?.scheduling_purpose;
+  if (explicit !== undefined) {
+    const purpose = asSchedulingPurpose(explicit, "discovery");
+    // Custom roles may only choose between the two role lanes.  System
+    // classes (Hub/Verify/Report) are selected from the immutable type above.
+    return purpose === "convergence_evidence" ? purpose : "discovery";
+  }
+  return "discovery";
+}
+
+/**
+ * Pure fixed-priority resolver used by every Job creation path.  Severity is
+ * consulted only for Verify ordering; minVerifySeverity is intentionally not
+ * an input, so it cannot remove a Finding from the Verify lifecycle.
+ */
+export function fixedPriorityForJob(input: SchedulingPriorityInput): number {
+  const purpose = schedulingPurposeForJob(input);
+  if (purpose === "report") return FIXED_PRIORITY.report;
+  if (purpose === "hub") return FIXED_PRIORITY.hub;
+  if (purpose === "convergence_evidence") return FIXED_PRIORITY.convergenceEvidence;
+  if (purpose === "verify") {
+    switch (asSeverityRank(input.severity, "medium")) {
+      case "critical":
+        return FIXED_PRIORITY.verifyCritical;
+      case "high":
+        return FIXED_PRIORITY.verifyHigh;
+      case "medium":
+        return FIXED_PRIORITY.verifyMedium;
+      case "low":
+        return FIXED_PRIORITY.verifyLow;
+      case "info":
+        return FIXED_PRIORITY.verifyInfo;
+    }
+  }
+  return FIXED_PRIORITY.role;
+}
+
+/** Alias kept intentionally explicit for tests and API adapters. */
+export const priorityForJob = fixedPriorityForJob;
+export const resolveJobPriority = fixedPriorityForJob;
+
+/** A PATCH may only write the class-derived value, never an arbitrary score. */
+export function priorityMatchesJob(input: SchedulingPriorityInput, priority: number): boolean {
+  return Number.isInteger(priority) && priority === fixedPriorityForJob(input);
+}
+
+/** Evidence-wait Hub wakeups are edge-triggered by the evidence snapshot. */
+export function shouldWakeEvidenceHub(lastSignature: string | null | undefined, currentSignature: string): boolean {
+  return currentSignature.trim().length > 0 && lastSignature !== currentSignature;
+}
+
+const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
+
+function isSchedulerOwnedVerificationFollowup(payload: Record<string, unknown>, parentJobType?: unknown): boolean {
+  const followup = payload.verification_followup;
+  if (!followup || typeof followup !== "object" || Array.isArray(followup)) return false;
+  const value = followup as Record<string, unknown>;
+  return (
+    value.scheduler_owned === true &&
+    String(parentJobType ?? "").trim().toLowerCase() === "hub_reason" &&
+    typeof value.finding_id === "string" &&
+    value.finding_id.trim().length > 0 &&
+    Array.isArray(value.required_evidence)
+  );
+}
+
+function schedulerPurposeForPendingNormalization(
+  type: string,
+  payload: Record<string, unknown>,
+  parentJobType?: unknown,
+): SchedulingPurpose {
+  const normalizedType = String(type ?? "").trim().toLowerCase();
+  if (SCHEDULER_SYSTEM_JOB_TYPES.has(normalizedType)) {
+    // System lanes are derived from the immutable type. Persisted payload
+    // purpose is never trusted during boot/resume repair.
+    return schedulingPurposeForJob({ type: normalizedType, payload: { ...payload, scheduling_purpose: undefined } });
+  }
+  // Hub-generated verification followups are the one scheduler-owned
+  // non-system lane. Both the Hub parent relation and the server-owned marker
+  // are required; legacy public payloads are ordinary discovery work.
+  return isSchedulerOwnedVerificationFollowup(payload, parentJobType) ? "convergence_evidence" : "discovery";
+}
+
+function priorityNormalization(row: Record<string, unknown>): {
+  priority: number;
+  payload: Record<string, unknown>;
+  changed: boolean;
+} {
+  const payload =
+    row.payload_json && typeof row.payload_json === "object" && !Array.isArray(row.payload_json)
+      ? { ...(row.payload_json as Record<string, unknown>) }
+      : {};
+  const purpose = schedulerPurposeForPendingNormalization(row.type as string, payload, row.parent_job_type);
+  const priority = fixedPriorityForJob({
+    type: row.type as string,
+    purpose,
+    severity:
+      row.finding_severity ??
+      payload.severity ??
+      (payload.finding as Record<string, unknown> | undefined)?.severity,
+    payload,
+  });
+  const changed = Number(row.priority) !== priority || payload.scheduling_purpose !== purpose;
+  if (payload.scheduling_purpose !== purpose) payload.scheduling_purpose = purpose;
+  return { priority, payload, changed };
+}
+
+/**
+ * Normalize only runnable pending Jobs after boot reconciliation. Historical
+ * terminal priorities remain untouched; reset claimed/provisioning Jobs are
+ * included because reconcileOnBoot has already returned them to pending.
+ */
+export async function normalizePendingJobPriorities(db: typeof sql = sql): Promise<{ examined: number; updated: number }> {
+  const rows = await db`
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id, j.parent_job_id,
+           parent.type AS parent_job_type,
+           f.severity AS finding_severity
+    FROM jobs j
+    LEFT JOIN findings f ON f.id = j.finding_id
+    LEFT JOIN jobs parent ON parent.id = j.parent_job_id
+    WHERE j.status = 'pending'
+    ORDER BY j.created_at ASC, j.id ASC`;
+  let updated = 0;
+  for (const row of rows as unknown as Record<string, unknown>[]) {
+    const normalized = priorityNormalization(row);
+    if (!normalized.changed) continue;
+    const [result] = await db`
+      UPDATE jobs SET
+        priority = ${normalized.priority},
+        payload_json = ${db.json(normalized.payload as never)}
+      WHERE id = ${row.id as string} AND status = 'pending'
+      RETURNING id`;
+    if (result) updated += 1;
+  }
+  return { examined: rows.length, updated };
+}
+
+/** Re-apply the same scheduler-owned class when a historical Job is resumed. */
+export async function normalizePendingJobPriority(jobId: string, db: typeof sql = sql): Promise<boolean> {
+  const [row] = await db`
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id, j.parent_job_id,
+           parent.type AS parent_job_type,
+           f.severity AS finding_severity
+    FROM jobs j
+    LEFT JOIN findings f ON f.id = j.finding_id
+    LEFT JOIN jobs parent ON parent.id = j.parent_job_id
+    WHERE j.id = ${jobId} AND j.status = 'pending'`;
+  if (!row) return false;
+  const normalized = priorityNormalization(row as Record<string, unknown>);
+  if (!normalized.changed) return false;
+  const [result] = await db`
+    UPDATE jobs SET
+      priority = ${normalized.priority},
+      payload_json = ${db.json(normalized.payload as never)}
+    WHERE id = ${jobId} AND status = 'pending'
+    RETURNING id`;
+  return Boolean(result);
 }
 
 function defaultMinVerifySeverity(): SeverityRank {
@@ -442,6 +643,42 @@ export interface CreateJobInput {
 }
 
 export async function createJob(input: CreateJobInput) {
+  const requestedPayload = { ...(input.payload ?? {}) };
+  const systemType = SCHEDULER_SYSTEM_JOB_TYPES.has(String(input.type ?? "").toLowerCase());
+  const schedulingPayload = { ...requestedPayload };
+  if (!systemType) {
+    delete schedulingPayload.scheduling_purpose;
+    // Scheduler-owned Verify followup markers must never cross the public
+    // createJob/Plane ingress boundary.
+    delete schedulingPayload.scheduler_owned;
+    if (
+      schedulingPayload.verification_followup &&
+      typeof schedulingPayload.verification_followup === "object" &&
+      !Array.isArray(schedulingPayload.verification_followup)
+    ) {
+      const followup = { ...(schedulingPayload.verification_followup as Record<string, unknown>) };
+      delete followup.scheduler_owned;
+      schedulingPayload.verification_followup = followup;
+    }
+  }
+  const purpose = schedulingPurposeForJob({
+    type: input.type,
+    // Custom/public Job creation never accepts a caller-selected convergence
+    // lane. Scheduler-owned role INSERT paths use fixedPriorityForJob
+    // directly and freeze their purpose there.
+    purpose: systemType ? requestedPayload.scheduling_purpose : undefined,
+    payload: schedulingPayload,
+  });
+  const priority = fixedPriorityForJob({
+    type: input.type,
+    purpose,
+    severity: schedulingPayload.severity ?? (schedulingPayload.finding as Record<string, unknown> | undefined)?.severity,
+    payload: schedulingPayload,
+  });
+  if (input.priority !== undefined && input.priority !== priority) {
+    throw new Error(`job priority is fixed for ${input.type}: expected ${priority}`);
+  }
+  const payload = { ...schedulingPayload, scheduling_purpose: purpose };
   try {
     // 冻结角色运行快照：配置变更只影响之后创建的 Job。
     const snapshot = await resolveAgentSnapshotForJob(sql, input.projectId, input.type);
@@ -454,8 +691,8 @@ export async function createJob(input: CreateJobInput) {
         parent_job_id: input.parentJobId ?? null,
         finding_id: input.findingId ?? null,
         type: input.type,
-        priority: input.priority ?? 0,
-        payload_json: (input.payload ?? {}) as never,
+        priority,
+        payload_json: payload as never,
         timeout_sec: input.timeoutSec ?? config.timeouts.auditSec,
         followup_depth: input.followupDepth ?? 0,
         ingress_key: input.ingressKey ?? null,
@@ -627,6 +864,24 @@ export async function ingestEvent(jobId: string, envelope: EventEnvelope): Promi
 }
 
 type Tx = typeof sql;
+
+/**
+ * Shared dispatcher/retry serialization key.  The dispatcher holds this
+ * transaction advisory lock while claiming pending jobs; destructive canvas
+ * retry acquires the same key before it checks and wipes runtime rows.
+ */
+export const DISPATCH_CLAIM_ADVISORY_KEY = "deepsonar_dispatch_claim";
+
+/**
+ * Every path that mutates convergence state takes the canvas row first.  The
+ * finding/verification-round locks are always acquired underneath this lock,
+ * so terminal/recovery paths cannot deadlock with Hub eligibility.
+ */
+export async function lockCanvasForConvergence(tx: Tx, canvasId: string | null | undefined): Promise<boolean> {
+  if (!canvasId) return true;
+  const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+  return Boolean(canvas);
+}
 
 /** canvas_edges 无唯一约束：from/to 边幂等插入 */
 async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: string) {
@@ -864,21 +1119,28 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
       const verificationFollowup = buildVerificationFollowupPayload(trigger, it.from, role);
       // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
       const applyHubFollowup = hubFollowup && !verificationFollowup;
+      const schedulingPurpose: SchedulingPurpose = verificationFollowup
+        ? "convergence_evidence"
+        : "discovery";
       const [roleJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: job.project_id as string,
           canvas_id: canvasId,
+          parent_job_id: job.id as string,
           agent_snapshot_json: snapshot as never,
           type: role,
-          priority: (job.priority as number) + 1,
+          priority: fixedPriorityForJob({ type: role, purpose: schedulingPurpose }),
           payload_json: {
+            scheduling_purpose: schedulingPurpose,
             intent: {
               description: it.description,
               prompt: it.prompt.trim(),
               from: it.from ?? [],
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
-            ...(verificationFollowup ? { verification_followup: verificationFollowup } : {}),
+            ...(verificationFollowup
+              ? { verification_followup: { ...verificationFollowup, scheduler_owned: true } }
+              : {}),
           } as never,
           timeout_sec: rules.auditTimeoutSec,
           followup_depth: 0,
@@ -967,6 +1229,11 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // §13.1 指标：终态计数 + 时长
+  // Canvas is the outer lock for every terminal path. Verify close/recovery
+  // locks Finding/Round underneath it, while Hub eligibility does the same
+  // canvas -> waiting-round order. This prevents 40P01 inversions when a
+  // Verify and a role finalize concurrently on one canvas.
+  await lockCanvasForConvergence(tx, (job?.canvas_id as string | null) ?? null);
   if (status === "failed") inc("deepsonar_jobs_failed_total", { reason: "failed" });
   if (job?.started_at) {
     const dur = (Date.now() - new Date(job.started_at as string).getTime()) / 1000;
@@ -1059,6 +1326,7 @@ export async function recoverVerifyJobTerminal(
     const tx = txRaw as unknown as Tx;
     const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (!job || job.type !== "verify_finding" || !job.finding_id) return;
+    if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;
     const { closeVerifyRound } = await import("./verify.js");
     const closed = await closeVerifyRound(tx, jobId, {
       jobStatus,
@@ -1073,7 +1341,7 @@ export async function recoverVerifyJobTerminal(
           project_id: job.project_id,
           canvas_id: job.canvas_id,
           type: "verify_finding",
-          priority: job.priority ?? 0,
+          priority: fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity: "medium" }),
         },
         {
           force: true,
@@ -1111,6 +1379,8 @@ export async function advanceCanvasAfterTerminalJob(
   const canvasId = job.canvas_id as string | null;
   if (!canvasId || job.type === "report") return "noop";
 
+  if (!(await lockCanvasForConvergence(tx, canvasId))) return "noop";
+
   const [root] = await tx`
     SELECT status FROM canvas_nodes
     WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
@@ -1118,6 +1388,20 @@ export async function advanceCanvasAfterTerminalJob(
     const { maybeDispatchReport } = await import("./report.js");
     await maybeDispatchReport(tx, canvasId);
     return "report";
+  }
+
+  // A failed Hub must not leave the evidence-wait edge-trigger marker armed;
+  // the next idle wake may retry the decision without changing evidence.
+  if (job.type === "hub_reason" && terminalStatus !== "succeeded") {
+    await tx`
+      UPDATE finding_verification_rounds r
+      SET requirements_json = requirements_json - 'hub_evidence_signature'
+      FROM findings f
+      JOIN jobs origin ON origin.id = f.job_id
+      WHERE r.finding_id = f.id
+        AND origin.canvas_id = ${canvasId}
+        AND r.status = 'pending'
+        AND r.requirements_json->>'eligibility' = 'waiting_evidence'`;
   }
 
   await maybeTriggerHub(tx, job, {
@@ -1167,6 +1451,74 @@ async function hasActiveRoleJobs(tx: Tx, canvasId: string): Promise<boolean> {
     WHERE canvas_id = ${canvasId}
       AND type NOT IN ('hub_reason', 'verify_finding', 'report')
       AND status IN ('pending','claimed','provisioning','running','waiting_human')
+    LIMIT 1`;
+  return rows.length > 0;
+}
+
+/**
+ * Find the oldest Verify round waiting for independent evidence.  This is a
+ * graph eligibility record, not a Job status: no verify Job is runnable until
+ * the round has both review and test evidence.
+ */
+async function waitingEvidenceRound(tx: Tx, canvasId: string): Promise<{
+  id: string;
+  finding_id: string;
+  origin_job_id: string | null;
+  missing: string[];
+  evidence_signature: string;
+  hub_evidence_signature: string | null;
+  node_id: string | null;
+} | null> {
+  const rows = await tx`
+    SELECT r.id, r.finding_id, r.requirements_json, r.evidence_snapshot_json,
+           f.job_id AS origin_job_id, f.node_id
+    FROM finding_verification_rounds r
+    JOIN findings f ON f.id = r.finding_id
+    JOIN jobs origin ON origin.id = f.job_id
+    WHERE origin.canvas_id = ${canvasId}
+      AND r.status = 'pending'
+      AND r.verify_job_id IS NULL
+      AND r.requirements_json->>'eligibility' = 'waiting_evidence'
+    ORDER BY r.created_at ASC, r.id ASC
+    FOR UPDATE OF r`;
+  for (const row of rows) {
+    const req = (row.requirements_json ?? {}) as Record<string, unknown>;
+    const snap = (row.evidence_snapshot_json ?? {}) as Record<string, unknown>;
+    const ids = (key: string) =>
+      Array.isArray(snap[key])
+        ? (snap[key] as Array<Record<string, unknown>>).map((item) => String(item.node_id ?? "")).filter(Boolean).sort()
+        : [];
+    const missing = Array.isArray(req.missing)
+      ? (req.missing as unknown[]).map(String).filter(Boolean).sort()
+      : [];
+    const evidence_signature = JSON.stringify({ review: ids("review"), test: ids("test"), missing });
+    const hub_evidence_signature = (req.hub_evidence_signature as string | null) ?? null;
+    // Skip rounds whose current evidence edge has already been consumed, so
+    // an older stalled finding cannot starve a newer waiting round.
+    if (!shouldWakeEvidenceHub(hub_evidence_signature, evidence_signature)) continue;
+    return {
+      id: row.id as string,
+      finding_id: row.finding_id as string,
+      origin_job_id: (row.origin_job_id as string | null) ?? null,
+      missing,
+      evidence_signature,
+      hub_evidence_signature,
+      node_id: (row.node_id as string | null) ?? null,
+    };
+  }
+  return null;
+}
+
+async function hasWaitingEvidenceRound(tx: Tx, canvasId: string): Promise<boolean> {
+  const rows = await tx`
+    SELECT 1
+    FROM finding_verification_rounds r
+    JOIN findings f ON f.id = r.finding_id
+    JOIN jobs origin ON origin.id = f.job_id
+    WHERE origin.canvas_id = ${canvasId}
+      AND r.status = 'pending'
+      AND r.verify_job_id IS NULL
+      AND r.requirements_json->>'eligibility' = 'waiting_evidence'
     LIMIT 1`;
   return rows.length > 0;
 }
@@ -1239,6 +1591,12 @@ export async function maybeTriggerHub(
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   if (!rules.hubEnabled && !options.force && !options.manual) return;
 
+  // Serialize the Hub eligibility check and INSERT per canvas. Without a
+  // row lock, two concurrent terminal events can both observe "no active
+  // Hub" and enqueue duplicate pending decisions that then block one another
+  // in the dispatcher.
+  if (!(await lockCanvasForConvergence(tx, canvasId))) return;
+
   // 分析已完成 / 报告中：不再唤醒 Hub
   if (await rootAnalysisFinished(tx, canvasId)) {
     return;
@@ -1280,6 +1638,35 @@ export async function maybeTriggerHub(
   } else if (!options.manual && !options.force) {
     // 普通路径：仍有角色 job 在跑则等它们结束（结束时会再触发）
     if (await hasActiveRoleJobs(tx, canvasId)) return;
+  }
+
+  // Graph eligibility is distinct from queue ordering.  A waiting-evidence
+  // round wakes Hub exactly once per evidence snapshot; repeated role
+  // completions with no new evidence do not create decision churn.
+  const waiting = await waitingEvidenceRound(tx, canvasId);
+  let waitingWake: { id: string; evidence_signature: string } | null = null;
+  let trigger = options.trigger ?? {
+    kind: options.idleWake ? "canvas_idle" : "graph_progress",
+  };
+  if (waiting && !options.manual) {
+    if (!shouldWakeEvidenceHub(waiting.hub_evidence_signature, waiting.evidence_signature)) return;
+    trigger = {
+      kind: "verify_rework",
+      finding_id: waiting.finding_id,
+      missing_evidence: waiting.missing,
+      summary: "Verify 缺少独立 review/test 证据，先派发补证工作",
+      evidence_signature: waiting.evidence_signature,
+    };
+    // Arm the edge-trigger marker only after all Hub eligibility/guardrail
+    // gates pass and the Hub row is about to be inserted. Otherwise a
+    // blocked care-severity Verify or max-round guard could consume the
+    // evidence edge without ever creating the compensating Hub Job.
+    waitingWake = { id: waiting.id, evidence_signature: waiting.evidence_signature };
+  } else if (!waiting && !options.manual && (await hasWaitingEvidenceRound(tx, canvasId))) {
+    // There is still a waiting round, but its current evidence edge has
+    // already been consumed. Keep the graph idle instead of creating a
+    // generic graph_progress Hub on every unrelated completion.
+    return;
   }
 
   // 关注级别 verify 阻塞非 force/manual 的 Hub（severity 只影响等待门，不决定是否验证）
@@ -1339,9 +1726,13 @@ export async function maybeTriggerHub(
     return;
   }
 
-  const trigger = options.trigger ?? {
-    kind: options.idleWake ? "canvas_idle" : "graph_progress",
-  };
+  if (waitingWake) {
+    await tx`
+      UPDATE finding_verification_rounds
+      SET requirements_json = requirements_json || ${tx.json({ hub_evidence_signature: waitingWake.evidence_signature } as never)}
+      WHERE id = ${waitingWake.id}`;
+  }
+
   const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "hub_reason");
   const [hubJob] = await tx`
     INSERT INTO jobs ${tx({
@@ -1349,8 +1740,8 @@ export async function maybeTriggerHub(
       canvas_id: canvasId,
       agent_snapshot_json: snapshot as never,
       type: "hub_reason",
-      priority: ((job.priority as number) ?? 0) + 2, // hub 优先于普通角色 job，尽快收敛图
-      payload_json: { trigger } as never,
+      priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+      payload_json: { trigger, scheduling_purpose: "hub" } as never,
       timeout_sec: rules.auditTimeoutSec,
       followup_depth: 0,
     })}
@@ -1492,7 +1883,7 @@ export async function triggerHubFromHumanComment(input: {
         project_id: projectId,
         canvas_id: canvasId,
         type: "human_comment",
-        priority: (finding.priority as number) ?? 0,
+        priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
       },
       {
         force: true,

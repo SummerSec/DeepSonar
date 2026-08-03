@@ -281,7 +281,7 @@ async function bounceReportGateToHub(
       updated_at = now()
     WHERE canvas_id = ${canvasId} AND status IN ('pending', 'generating')`;
 
-  const { maybeTriggerHub, patchCanvasConvergence } = await import("./core.js");
+  const { fixedPriorityForJob, maybeTriggerHub, patchCanvasConvergence } = await import("./core.js");
   await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
     auto_stopped: false,
     paused_reason: undefined,
@@ -300,7 +300,7 @@ async function bounceReportGateToHub(
       project_id: projectId,
       canvas_id: canvasId,
       type: "report_gate",
-      priority: 40,
+      priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
     },
     {
       force: true,
@@ -346,6 +346,12 @@ export async function maybeDispatchReport(
   bounced?: boolean;
   problems?: FindingStatusProblem[];
 }> {
+  // Canonical report ingress lock order is canvas -> task_reports -> jobs.
+  // Every caller that can retry/dispatch a report must follow this order so
+  // concurrent finalize/retry paths cannot deadlock or race the ingress key.
+  const [canvas] = await tx`
+    SELECT id, project_id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+  if (!canvas) return { dispatched: false, reason: "no_canvas" };
   const [root] = await tx`
     SELECT id, status FROM canvas_nodes
     WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
@@ -354,8 +360,6 @@ export async function maybeDispatchReport(
     return { dispatched: false, reason: `root_status:${root.status}` };
   }
 
-  const [canvas] = await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`;
-  if (!canvas) return { dispatched: false, reason: "no_canvas" };
   const projectId = canvas.project_id as string;
 
   // 统一完成门：Finding 收敛 + 角色工作 + 无活跃 Job（可排除当前 Hub）
@@ -382,7 +386,7 @@ export async function maybeDispatchReport(
   }
 
   const [existing] = await tx`
-    SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId}`;
+    SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId} FOR UPDATE`;
   if (existing?.status === "succeeded") return { dispatched: false, reason: "already_succeeded" };
   if (existing?.status === "generating" || existing?.status === "pending") {
     if (existing.report_job_id) {
@@ -393,7 +397,7 @@ export async function maybeDispatchReport(
     }
   }
 
-  const { resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
+  const { fixedPriorityForJob, resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   let snapshot: unknown;
   try {
@@ -433,9 +437,10 @@ export async function maybeDispatchReport(
       canvas_id: canvasId,
       agent_snapshot_json: snapshot as never,
       type: "report",
-      priority: 50,
+      priority: fixedPriorityForJob({ type: "report", purpose: "report" }),
       ingress_key: ingressKey,
       payload_json: {
+        scheduling_purpose: "report",
         kind: "task_report",
         report_input_uri: inputUri,
         findings_total: reportInput.statistics.findings_total,
@@ -519,6 +524,11 @@ export async function finalizeReportJob(
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job || job.type !== "report" || !job.canvas_id) return;
   const canvasId = job.canvas_id as string;
+  // Recovery/reaper callers invoke this function directly, outside
+  // finalizeJob. Keep their lock order identical to canonical ingress/retry:
+  // canvas -> task_reports -> jobs/nodes.
+  const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+  if (!canvas) return;
 
   if (opts.failed) {
     await tx`
@@ -631,6 +641,10 @@ export async function getTaskReportById(id: string) {
 export async function retryReport(canvasId: string): Promise<{ ok: boolean; reason?: string }> {
   return sql.begin(async (txRaw) => {
     const tx = txRaw as unknown as Tx;
+    // Match maybeDispatchReport's canvas -> task_reports lock order.
+    const [canvas] = await tx`
+      SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+    if (!canvas) return { ok: false, reason: "no_canvas" };
     const [report] = await tx`
       SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId} FOR UPDATE`;
     if (!report) return { ok: false, reason: "no_report" };

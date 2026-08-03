@@ -10,6 +10,8 @@ import { startPlaneSync } from "./plane-sync.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import { bootstrapOfficialRuntimeImages, startRuntimeImageRegistrySync } from "./runtime-images.js";
 import { bootstrapSkillSourcesOnBoot } from "./skill-sources.js";
+import { normalizePendingJobPriorities } from "./core.js";
+import { normalizePendingVerificationRounds } from "./verify.js";
 
 async function main() {
   // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
@@ -31,6 +33,17 @@ async function main() {
 
   // 重启 reconcile（JOB-04）：先对齐 DB↔docker，再放行调度
   await reconcileOnBoot();
+  const normalizedRounds = await normalizePendingVerificationRounds();
+  if (normalizedRounds.missingJobReclassified > 0 || normalizedRounds.staleJobRepaired > 0) {
+    console.warn(
+      `[boot] normalized verification rounds: missing=${normalizedRounds.missingJobReclassified}/${normalizedRounds.missingJobExamined}, ` +
+        `stale=${normalizedRounds.staleJobRepaired}/${normalizedRounds.staleJobExamined}`,
+    );
+  }
+  const normalizedPriorities = await normalizePendingJobPriorities();
+  if (normalizedPriorities.updated > 0) {
+    console.warn(`[boot] normalized ${normalizedPriorities.updated}/${normalizedPriorities.examined} pending Job priorities`);
+  }
 
   const stopDispatcher = startDispatcher();
   const stopReaper = startReaper();

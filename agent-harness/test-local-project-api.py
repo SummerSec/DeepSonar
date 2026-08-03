@@ -57,7 +57,7 @@ def main():
         "content": "重点检查认证模块中的注入和权限绕过问题",
     }, 201)
     cid, job = t["canvas_id"], t["job"]
-    assert job["status"] == "pending" and job["priority"] == 0 and job["canvas_id"] == cid
+    assert job["status"] == "pending" and job["priority"] > 0 and job["canvas_id"] == cid
     assert job["type"] == "hub_reason", "所有任务必须先由 Hub 决策"
     canvas = req("GET", f"/canvases/{cid}")
     roots = [n for n in canvas["nodes"] if n["node_type"] == "root"]
