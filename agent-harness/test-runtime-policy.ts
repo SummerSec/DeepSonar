@@ -6,6 +6,12 @@ import {
 
 const custom = "operator-authored test instructions";
 
+assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Java uses/);
+assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Python uses/);
+assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Go uses/);
+assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Rust uses/);
+assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Do \*\*not\*\* install or download JDK, Maven/);
+
 assert.equal(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal"),
   RUNTIME_TEST_TOOLCHAIN_POLICY,

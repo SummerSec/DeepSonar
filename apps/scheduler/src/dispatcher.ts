@@ -399,7 +399,7 @@ async function executeFake(jobId: string, type: string) {
             from,
             role: test.name,
             description: `实测 Finding：补充 runtime test 证据`,
-            prompt: `对绑定 Finding 做实际 runtime_test，通过 emit_fact 提交 verification.evidence_kind=test 的结构化证据（含 subject_revision/steps/expected/actual）。先用 command -v java、java -version、command -v mvn、mvn -v 检查 Scheduler 冻结镜像内的预装工具；禁止 apt-get、下载 JDK/Maven 压缩包、./mvnw 或其它工具链 bootstrap fallback。工具缺失时提交 inconclusive/needs_human，不得臆造 confirmed。finding_id=${findingId}`,
+            prompt: `对绑定 Finding 做实际 runtime_test，通过 emit_fact 提交 verification.evidence_kind=test 的结构化证据（含 subject_revision/steps/expected/actual）。先依据目标语言和构建文件检查 Scheduler 冻结镜像内与目标相关的预装工具：Java 用 command -v java、java -version；使用 Maven 时再用 command -v mvn、mvn -v；Python 用对应 python3.x/uv；Go 用 command -v go、go version；Rust 用 command -v rustc、rustc --version、command -v cargo、cargo --version。禁止 apt-get、下载 JDK/Maven 压缩包、./mvnw 或其它工具链 bootstrap fallback。相关工具缺失时提交 inconclusive/needs_human，不得臆造 confirmed。finding_id=${findingId}`,
           });
         }
         if (intents.length > 0) {
