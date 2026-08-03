@@ -9,6 +9,7 @@ import {
   rolesForProject,
   transitionJob,
   type AgentRuntimeSnapshot,
+  type ProjectRules,
 } from "./core.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
@@ -27,6 +28,85 @@ const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
 
 /** 在执行的 job（优雅退出 drain 用，§12.2） */
 const inFlight = new Set<Promise<void>>();
+
+export type DispatchCandidate = {
+  project_id: unknown;
+  agent_cli: unknown;
+  credential_provider: unknown;
+  credential_id: unknown;
+  model: unknown;
+  credential_metadata: unknown;
+};
+
+export type DispatchCounts = {
+  project: Map<string, number>;
+  provider: Map<string, number>;
+  credential: Map<string, number>;
+  model: Map<string, number>;
+  cli: Map<string, number>;
+};
+
+const dispatchModelKey = (credentialId: string, model: string) => `${credentialId}\u0000${model}`;
+
+/** Number of additional active jobs the effective global cap permits. */
+export function dispatchSlots(maxGlobalJobs: number, totalActive: number): number {
+  return Math.max(0, maxGlobalJobs - totalActive);
+}
+
+/**
+ * Select eligible candidates across one or more pending pages. The caller
+ * supplies keyset pages; this helper intentionally keeps scanning later pages
+ * when an earlier page is entirely ineligible (the former LIMIT 500 head
+ * starvation bug).
+ */
+export function scanDispatchPages<T>(
+  pages: Iterable<readonly T[]>,
+  slots: number,
+  isEligible: (candidate: T) => boolean,
+): T[] {
+  if (slots <= 0) return [];
+  const selected: T[] = [];
+  for (const page of pages) {
+    for (const candidate of page) {
+      if (selected.length >= slots) return selected;
+      if (isEligible(candidate)) selected.push(candidate);
+    }
+  }
+  return selected;
+}
+
+/**
+ * Return the first resource gate that blocks a pending candidate, or null if
+ * the candidate can be claimed. Kept pure so the quota ordering is unit
+ * testable without a live Postgres/Scheduler process.
+ */
+export function dispatchSkipReason(
+  job: DispatchCandidate,
+  counts: DispatchCounts,
+  rules: Pick<ProjectRules, "maxJobsPerProject" | "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
+): string | null {
+  const projectId = String(job.project_id);
+  // Historical snapshots may omit agent_cli; use the platform default rather
+  // than the mutable AGENT_PROVIDER environment value in quota accounting.
+  const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
+  const provider = String(job.credential_provider ?? "");
+  const credentialId = String(job.credential_id ?? "");
+  const model = String(job.model ?? "");
+  if ((counts.project.get(projectId) ?? 0) >= rules.maxJobsPerProject) return "project";
+  const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
+  if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
+  const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
+  if (credentialId && credentialPolicy.maxConcurrent !== null && (counts.credential.get(credentialId) ?? 0) >= credentialPolicy.maxConcurrent) {
+    return "credential";
+  }
+  const modelLimit = model ? credentialPolicy.modelConcurrency[model] : undefined;
+  if (credentialId && model && modelLimit !== undefined && (counts.model.get(dispatchModelKey(credentialId, model)) ?? 0) >= modelLimit) {
+    return "model";
+  }
+  const cliLimit = rules.maxConcurrentByAgentCli[cli];
+  if (cliLimit !== undefined && (counts.cli.get(cli) ?? 0) >= cliLimit) return "agent_cli";
+  return null;
+}
 
 /** 等所有在执行的 job 收尾（超时强制返回；超时未完成的由下次启动 reconcile 接管为 orphan） */
 export async function drainInFlight(timeoutMs = 15_000): Promise<void> {
@@ -54,6 +134,9 @@ export async function dispatchOnce(): Promise<number> {
   // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
   const claimedJobs = await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext('deepsonar_dispatch_claim'))`;
+    // global_settings.effective_rules is the sole dispatcher authority;
+    // environment defaults are resolved inside globalRules before claim.
+    const rules = await globalRules(tx as unknown as typeof sql);
     const active = await tx`
       SELECT project_id,
              agent_snapshot_json->>'agent_cli' AS agent_cli,
@@ -68,7 +151,7 @@ export async function dispatchOnce(): Promise<number> {
                agent_snapshot_json->>'credential_provider',
                agent_snapshot_json->>'model'`;
     const totalActive = active.reduce((n, row) => n + Number(row.count), 0);
-    const slots = config.limits.maxGlobalJobs - totalActive;
+    const slots = dispatchSlots(rules.maxGlobalJobs, totalActive);
     if (slots <= 0) return [] as { id: string }[];
 
     const projectCounts = new Map<string, number>();
@@ -76,7 +159,6 @@ export async function dispatchOnce(): Promise<number> {
     const credentialCounts = new Map<string, number>();
     const modelCounts = new Map<string, number>();
     const cliCounts = new Map<string, number>();
-    const modelKey = (credentialId: string, model: string) => `${credentialId}\u0000${model}`;
     for (const row of active) {
       const projectId = row.project_id as string;
       // Historical Jobs may lack agent_cli; use the platform constant only,
@@ -88,56 +170,96 @@ export async function dispatchOnce(): Promise<number> {
       projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + Number(row.count));
       if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + Number(row.count));
       if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + Number(row.count));
-      if (credentialId && model) modelCounts.set(modelKey(credentialId, model), (modelCounts.get(modelKey(credentialId, model)) ?? 0) + Number(row.count));
+      if (credentialId && model) modelCounts.set(dispatchModelKey(credentialId, model), (modelCounts.get(dispatchModelKey(credentialId, model)) ?? 0) + Number(row.count));
       cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + Number(row.count));
     }
-    const rules = await globalRules(tx as unknown as typeof sql);
-    const providerLimits = rules.maxConcurrentByProvider;
-    const cliLimits = rules.maxConcurrentByAgentCli;
-    // FOR UPDATE 不能锁 outer join 的可空侧；只锁 jobs 行。
-    const pending = await tx`
-      SELECT j.id, j.project_id,
-             j.agent_snapshot_json->>'agent_cli' AS agent_cli,
-             j.agent_snapshot_json->>'credential_id' AS credential_id,
-             j.agent_snapshot_json->>'credential_provider' AS credential_provider,
-             j.agent_snapshot_json->>'model' AS model,
-             c.public_metadata_json AS credential_metadata
-      FROM jobs j
-      LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
-      WHERE j.status = 'pending'
-      ORDER BY j.priority DESC, j.created_at
-      LIMIT 500
-      FOR UPDATE OF j SKIP LOCKED`;
-
     const claimed: { id: string }[] = [];
-    for (const job of pending) {
-      if (claimed.length >= slots) break;
-      const projectId = job.project_id as string;
-      // Historical Jobs may lack agent_cli; use the platform constant only.
-      const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
-      const provider = String(job.credential_provider ?? "");
-      const credentialId = String(job.credential_id ?? "");
-      const model = String(job.model ?? "");
-      if ((projectCounts.get(projectId) ?? 0) >= config.limits.maxJobsPerProject) continue;
-      const providerLimit = provider ? providerLimits[provider] : undefined;
-      if (providerLimit !== undefined && (providerCounts.get(provider) ?? 0) >= providerLimit) continue;
-      const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
-      if (credentialId && credentialPolicy.maxConcurrent !== null && (credentialCounts.get(credentialId) ?? 0) >= credentialPolicy.maxConcurrent) continue;
-      const modelLimit = model ? credentialPolicy.modelConcurrency[model] : undefined;
-      if (credentialId && model && modelLimit !== undefined && (modelCounts.get(modelKey(credentialId, model)) ?? 0) >= modelLimit) continue;
-      const cliLimit = cliLimits[cli];
-      if (cliLimit !== undefined && (cliCounts.get(cli) ?? 0) >= cliLimit) continue;
-      const [row] = await tx`
-        UPDATE jobs SET status = 'claimed', claimed_at = now()
-        WHERE id = ${job.id as string} AND status = 'pending'
-        RETURNING id`;
-      if (!row) continue;
-      claimed.push({ id: row.id as string });
-      projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
-      if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
-      if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + 1);
-      if (credentialId && model) modelCounts.set(modelKey(credentialId, model), (modelCounts.get(modelKey(credentialId, model)) ?? 0) + 1);
-      cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + 1);
+    /**
+     * Scan pending jobs in bounded pages, advancing a keyset cursor after
+     * every page. A single LIMIT 500 lets an ineligible high-priority prefix
+     * starve eligible jobs behind it; keyset paging keeps scanning until all
+     * available slots are filled or pending is exhausted.
+     */
+    const pendingPageSize = 500;
+    let cursor: { priority: number; createdAt: string; id: string } | null = null;
+    while (claimed.length < slots) {
+      // FOR UPDATE 不能锁 outer join 的可空侧；只锁 jobs 行。
+      // ORDER BY uses mixed directions, so the keyset predicate is expanded
+      // explicitly instead of relying on a tuple comparison.
+      const pending = cursor
+        ? await tx`
+            SELECT j.id, j.project_id, j.priority, j.created_at::text AS created_at_key,
+                   j.agent_snapshot_json->>'agent_cli' AS agent_cli,
+                   j.agent_snapshot_json->>'credential_id' AS credential_id,
+                   j.agent_snapshot_json->>'credential_provider' AS credential_provider,
+                   j.agent_snapshot_json->>'model' AS model,
+                   c.public_metadata_json AS credential_metadata
+            FROM jobs j
+            LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
+            WHERE j.status = 'pending'
+              AND (
+                j.priority < ${cursor.priority}
+                OR (j.priority = ${cursor.priority} AND j.created_at > ${cursor.createdAt})
+                OR (j.priority = ${cursor.priority} AND j.created_at = ${cursor.createdAt} AND j.id > ${cursor.id}::uuid)
+              )
+            ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
+            LIMIT ${pendingPageSize}
+            FOR UPDATE OF j SKIP LOCKED`
+        : await tx`
+            SELECT j.id, j.project_id, j.priority, j.created_at::text AS created_at_key,
+                   j.agent_snapshot_json->>'agent_cli' AS agent_cli,
+                   j.agent_snapshot_json->>'credential_id' AS credential_id,
+                   j.agent_snapshot_json->>'credential_provider' AS credential_provider,
+                   j.agent_snapshot_json->>'model' AS model,
+                   c.public_metadata_json AS credential_metadata
+            FROM jobs j
+            LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
+            WHERE j.status = 'pending'
+            ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
+            LIMIT ${pendingPageSize}
+            FOR UPDATE OF j SKIP LOCKED`;
+
+      if (pending.length === 0) break;
+      const last = pending[pending.length - 1] as Record<string, unknown>;
+      cursor = {
+        priority: Number(last.priority),
+        createdAt: String(last.created_at_key),
+        id: String(last.id),
+      };
+
+      for (const job of pending) {
+        if (claimed.length >= slots) break;
+        const projectId = job.project_id as string;
+        // Historical snapshots may omit agent_cli; keep quota accounting on
+        // the immutable platform default rather than mutable env config.
+        const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
+        const provider = String(job.credential_provider ?? "");
+        const credentialId = String(job.credential_id ?? "");
+        const model = String(job.model ?? "");
+        const skipReason = dispatchSkipReason(
+          job as DispatchCandidate,
+          {
+            project: projectCounts,
+            provider: providerCounts,
+            credential: credentialCounts,
+            model: modelCounts,
+            cli: cliCounts,
+          },
+          rules,
+        );
+        if (skipReason) continue;
+        const [row] = await tx`
+          UPDATE jobs SET status = 'claimed', claimed_at = now()
+          WHERE id = ${job.id as string} AND status = 'pending'
+          RETURNING id`;
+        if (!row) continue;
+        claimed.push({ id: row.id as string });
+        projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
+        if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
+        if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + 1);
+        if (credentialId && model) modelCounts.set(dispatchModelKey(credentialId, model), (modelCounts.get(dispatchModelKey(credentialId, model)) ?? 0) + 1);
+        cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + 1);
+      }
     }
     return claimed;
   });

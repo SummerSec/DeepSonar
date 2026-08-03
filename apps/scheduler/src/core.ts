@@ -85,6 +85,10 @@ export interface ProjectRules {
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;
+  /** Scheduler-wide active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
+  maxGlobalJobs: number;
+  /** Scheduler-wide per-project active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
+  maxJobsPerProject: number;
   /** 全局 Provider 总并发；优先于 Credential / 模型 / Agent CLI 配额。 */
   maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层不得覆盖。 */
@@ -121,6 +125,17 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
     if (["claude-code", "codex", "open-code"].includes(key) && Number.isInteger(n) && n >= 0 && n <= 1000) out[key] = n;
   }
   return out;
+}
+
+/**
+ * Normalize a scheduler concurrency cap. Caps are deliberately bounded so a
+ * malformed value in JSONB cannot disable resource protection. A value of 0
+ * is reserved for Agent CLI limits (pause that CLI); global/project caps must
+ * remain positive.
+ */
+export function asConcurrencyLimit(v: unknown, fallback: number): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 1000 ? n : fallback;
 }
 
 function asProviderLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
@@ -178,6 +193,8 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
+    maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, 6),
+    maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, 2),
     maxConcurrentByProvider: {},
     maxConcurrentByAgentCli: {},
   };
@@ -191,6 +208,11 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
   else if (raw.hubWaitSeverities != null) min = inferMinFromList(raw.hubWaitSeverities, min);
 
   const maxVerificationRounds = Number(raw.maxVerificationRounds);
+  const maxGlobalJobs = asConcurrencyLimit(raw.maxGlobalJobs, base.maxGlobalJobs);
+  const maxJobsPerProject = Math.min(
+    maxGlobalJobs,
+    asConcurrencyLimit(raw.maxJobsPerProject, base.maxJobsPerProject),
+  );
   return {
     minVerifySeverity: min,
     maxFollowupsPerJob: (raw.maxFollowupsPerJob as number) ?? base.maxFollowupsPerJob,
@@ -206,6 +228,8 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
+    maxGlobalJobs,
+    maxJobsPerProject,
     maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
     maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
   };
@@ -227,8 +251,13 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
   const r = (((p[0]?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
   const gr = ((g[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
   const global = mergeRulesLayer(gr, envDefaultRules());
+  // Concurrency caps are global scheduler hard limits. Keep them visible in
+  // project effective rules, but never let a project rules JSON widen either
+  // cap (or create a second dispatcher truth).
   return {
     ...mergeRulesLayer(r, global),
+    maxGlobalJobs: global.maxGlobalJobs,
+    maxJobsPerProject: global.maxJobsPerProject,
     maxConcurrentByProvider: global.maxConcurrentByProvider,
     maxConcurrentByAgentCli: global.maxConcurrentByAgentCli,
   };
