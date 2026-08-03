@@ -1,0 +1,52 @@
+# DeepSonar OpenHarmony 官方源码测试验证运行时。
+ARG BASE_IMAGE=deepsonar-base:local
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+USER root
+ARG REPO_SHA256=2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    build-essential ccache cmake ninja-build git-lfs python3-requests openssh-client rsync patch \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* \
+  && git lfs install --system \
+  && install -d -m 0755 /opt/deepsonar/bin /workspace
+
+RUN curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 \
+  https://raw.gitcode.com/gitcode-dev/repo/raw/main/repo-py3 \
+  -o /tmp/repo \
+  && echo "$REPO_SHA256  /tmp/repo" | sha256sum -c - \
+  && install -m 0755 /tmp/repo /usr/local/bin/repo \
+  && rm -f /tmp/repo
+
+COPY deploy/openharmony-env.sh /tmp/openharmony-env.sh
+COPY deploy/openharmony-init.sh /tmp/openharmony-init.sh
+COPY deploy/openharmony-build.sh /tmp/openharmony-build.sh
+RUN install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.sh \
+  && install -m 0755 /tmp/openharmony-init.sh /opt/deepsonar/bin/openharmony-init.sh \
+  && install -m 0755 /tmp/openharmony-build.sh /opt/deepsonar/bin/openharmony-build.sh \
+  && rm -f /tmp/openharmony-env.sh /tmp/openharmony-init.sh /tmp/openharmony-build.sh \
+  && if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi \
+  && if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi \
+  && chown -R deepsonar:deepsonar /opt/deepsonar /workspace
+
+RUN /opt/deepsonar/bin/openharmony-env.sh --check \
+  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-test","imageKey":"deepsonar-openharmony-test","tools":["git","git-lfs","repo","python3","python3-requests","build-essential","ccache","cmake","ninja","node","claude"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
+
+ENV IS_SANDBOX=1 \
+    OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+
+FROM scratch
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="openharmony-test" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar"
+ENV IS_SANDBOX=1 \
+    OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]

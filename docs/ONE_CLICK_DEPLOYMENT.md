@@ -177,13 +177,29 @@ OPENAI_BASE_URL=
 
 5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17/21、Go 与 Rust，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
 
+如需 OpenHarmony 源码专项测试，可在项目中启用官方 `deepsonar-openharmony-test` 镜像。它是源码同步与构建验证环境，不把 OpenHarmony 全量源码烘焙进镜像，也不等于可直接烧录到特定开发板的固件。镜像提供 GitCode manifest 的 HTTPS 拉取、Git LFS、Python、基础编译工具、ccache、CMake、Ninja 和 Claude Code Agent 运行能力：
+
+```bash
+docker build -f deploy/Dockerfile.agent-openharmony \
+  --build-arg BASE_IMAGE=deepsonar-base:local \
+  -t deepsonar-openharmony-test:local .
+docker run --rm -it -w /workspace deepsonar-openharmony-test:local \
+  openharmony-init.sh --branch master --jobs "$(nproc)"
+docker run --rm -it -w /workspace deepsonar-openharmony-test:local \
+  openharmony-build.sh --product-name rk3568
+```
+
+同步和完整编译需要任务允许出网，并准备足够的磁盘和内存；构建时必须指定实际的 `product_name`。`openharmony-init.sh` 默认使用 `https://gitcode.com/openharmony/manifest.git` 与 `master`，可用 `--group`、`--manifest-file`、`--jobs` 和 `--source-dir` 做必要调整；`openharmony-build.sh` 会将其他参数原样传递给源码根目录的 `./build.sh`。
+
 ### 5.3 启动后的运行时镜像准备
 
 `deploy/local-daemon.sh start` 与 `deploy/deploy.sh up` 会在服务健康后后台运行 `deploy/prepare-runtime-images.sh`，日志写入 `data/logs/runtime-images.log`，不会阻塞主服务启动。脚本优先读取 API/静态注册表并拉取不可变版本；无版本或拉取失败时，逐项构建 `deepsonar-base:local`、`deepsonar-audit:local` 与 `deepsonar-kali-minimal:local`，单项失败不会阻断其他项。
 
 默认不执行 `git pull`。只有显式设置 `DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true` 且 worktree clean 时，脚本才执行 `git pull --ff-only`；dirty worktree 只记录跳过，绝不执行 stash、reset 或 merge。可用 `--dry-run` 或 `DEEPSONAR_RUNTIME_IMAGE_BUILD=false` 做无构建验证。
 
-本地 image ID 不会被当作 OCI manifest digest，也不会自动登记为 trusted；`AGENT_MODE=real` 仍必须配置并使用不可变 registry digest。
+本地构建或已有本地 tag 会先通过 `docker image inspect` 取得完整 image ID，并在 `SANDBOX_PROVIDER=local-docker` 下自动登记为官方 trusted 的 local-only 版本。该版本只适用于当前机器的 local-docker，不会进入导出 registry 清单；生产、多机部署仍应使用 registry manifest 的 `name@sha256:<digest>`。OpenHarmony 镜像在 base、audit、Kali 流程后准备，并依赖本地 `deepsonar-base:local`，整体准备仍由部署脚本后台异步执行。
+
+镜像市场全局页的“同步市场”只会重新读取当前部署内置的 `deploy/runtime-image-registry.json` 与环境变量覆盖，并幂等同步本地数据库，不会联网抓取任意 URL。要获取真正更新的市场文件，仍需通过部署更新、git pull 或未来配置的可信上游完成。同步后可用“异步拉取”按顺序拉取清单内远程不可变版本；本地 raw image ID 不会被 pull。
 
 ## 6. 数据库 schema 基线
 

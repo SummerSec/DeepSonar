@@ -30,6 +30,16 @@
       "project_opt_in": false,
       "default_role": "test",
       "versions": []
+    },
+    {
+      "image_key": "deepsonar-openharmony-test",
+      "name": "DeepSonar OpenHarmony Test",
+      "description": "OpenHarmony 官方源码同步与构建验证环境，不包含全量源码或特定开发板固件",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "test",
+      "versions": []
     }
   ]
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 后台准备三个内置运行时镜像。
+# 后台准备四个内置运行时镜像。
 # 默认不执行 git pull；设置 DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true 后，只有 clean
 # worktree 才会执行 git pull --ff-only，dirty worktree 会记录跳过，不会 stash/reset/merge。
-# 本脚本不把本地 image ID 当作 OCI manifest digest，也不会自动登记 trusted；real
-# 模式仍必须使用不可变 registry digest。使用 --dry-run 或设置
+# 本脚本将本地构建的官方镜像登记为 local-docker 专用 trusted 版本；real
+# 模式可直接使用该版本。使用 --dry-run 或设置
 # DEEPSONAR_RUNTIME_IMAGE_BUILD=false 可只检查流程而不执行真实构建。
 set -euo pipefail
 
@@ -20,6 +20,8 @@ SKIP_COUNT=0
 FAILURES=()
 TEMP_REGISTRY=""
 TEMP_REGISTRY_IS_TEMP=false
+API_ROOT=""
+API_TOKEN="${DEEPSONAR_TOKEN:-}"
 LOCK_DIR="$ROOT/data/run/runtime-images.prepare.lock"
 LOCK_ACQUIRED=false
 
@@ -43,7 +45,7 @@ usage() {
 DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true 后，仅当 worktree clean 时执行
 git pull --ff-only；dirty worktree 只记录跳过，绝不 stash/reset/merge。
 设置 DEEPSONAR_RUNTIME_IMAGE_BUILD=false 或使用 --dry-run 可禁用真实 docker 构建。
-本地 image ID 不会被冒充为 OCI manifest digest，也不会自动登记 trusted。
+本地 image ID 仅登记为 local-docker 专用 trusted 版本，不会导出到 registry。
 EOF
 }
 
@@ -80,20 +82,45 @@ else
   log "默认不执行 git pull；如需显式更新，请设置 DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true"
 fi
 
+load_api_token() {
+  [[ -n "$API_TOKEN" ]] && return 0
+  API_TOKEN="$(node - "$ROOT/.env" "$ROOT/deploy/.env" <<'NODE'
+const fs = require("node:fs");
+for (const file of process.argv.slice(2)) {
+  if (!fs.existsSync(file)) continue;
+  for (const raw of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const match = raw.match(/^\s*DEEPSONAR_ADMIN_TOKEN\s*=\s*(.*?)\s*$/);
+    if (!match) continue;
+    let value = match[1];
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    process.stdout.write(value);
+    process.exit(0);
+  }
+}
+NODE
+)"
+}
+
 load_registry() {
   local url="${DEEPSONAR_URL:-http://127.0.0.1:3100}"
   if command -v curl >/dev/null 2>&1; then
-    TEMP_REGISTRY="$(mktemp)"
-    TEMP_REGISTRY_IS_TEMP=true
-    local -a curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 10 "${url%/}/runtime-images/registry")
-    [[ -z "${DEEPSONAR_TOKEN:-}" ]] || curl_args+=(--header "Authorization: Bearer ${DEEPSONAR_TOKEN}")
-    if curl "${curl_args[@]}" >"$TEMP_REGISTRY"; then
-      log "已从 API 读取运行时镜像注册表：$url"
-      return 0
-    fi
-    rm -f "$TEMP_REGISTRY"
-    TEMP_REGISTRY=""
-    TEMP_REGISTRY_IS_TEMP=false
+    local -a roots=("${url%/}")
+    [[ "${url%/}" == */api ]] || roots+=("${url%/}/api")
+    load_api_token
+    for root in "${roots[@]}"; do
+      TEMP_REGISTRY="$(mktemp)"
+      TEMP_REGISTRY_IS_TEMP=true
+      local -a curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 10 "$root/runtime-images/registry")
+      [[ -z "$API_TOKEN" ]] || curl_args+=(--header "Authorization: Bearer $API_TOKEN")
+      if curl "${curl_args[@]}" >"$TEMP_REGISTRY"; then
+        API_ROOT="$root"
+        log "已从 API 读取运行时镜像注册表：$root"
+        return 0
+      fi
+      rm -f "$TEMP_REGISTRY"
+      TEMP_REGISTRY=""
+      TEMP_REGISTRY_IS_TEMP=false
+    done
   fi
   if [[ -f "$REGISTRY_FILE" ]]; then
     TEMP_REGISTRY="$REGISTRY_FILE"
@@ -112,7 +139,7 @@ const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (registry.schema !== "deepsonar.registry/v1" || !Array.isArray(registry.images)) {
   throw new Error("注册表 schema 无效");
 }
-const builtinKeys = new Set(["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
+const builtinKeys = new Set(["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal", "deepsonar-openharmony-test"]);
 const keys = new Set();
 for (const image of registry.images) {
   if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
@@ -136,6 +163,16 @@ process.stdout.write(JSON.stringify({ ...registry, images: [image] }));
 NODE
 }
 
+registry_first_ref() {
+  node - "$1" "$2" <<'NODE'
+const fs = require("node:fs");
+const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const image = registry.images.find((item) => item.image_key === process.argv[3]);
+const ref = image?.versions?.[0]?.image_ref;
+if (ref) process.stdout.write(ref);
+NODE
+}
+
 has_version_key() {
   local key="$1"
   for version_key in "${VERSION_KEYS[@]}"; do
@@ -145,23 +182,66 @@ has_version_key() {
 }
 
 build_one() {
-  local name="$1" tag="$2" dockerfile="$3" toolset="${4:-}"
+  local name="$1" key="$2" tag="$3" dockerfile="$4" toolset="${5:-}" base_image="${6:-}"
   if [[ "$FORCE_REFRESH" != true ]] && docker image inspect "$tag" >/dev/null 2>&1; then
-    SKIP_COUNT=$((SKIP_COUNT + 1)); log "已存在，跳过：$tag"; return 0
-  fi
-  if [[ "$DRY_RUN" == true || "$BUILD_ENABLED" != true ]]; then
+    SKIP_COUNT=$((SKIP_COUNT + 1)); log "已存在，跳过构建：$tag"
+  elif [[ "$DRY_RUN" == true || "$BUILD_ENABLED" != true ]]; then
     log "模拟构建：$name -> $tag"
     SUCCESS_COUNT=$((SUCCESS_COUNT + 1)); return 0
-  fi
-  log "开始构建：$name -> $tag"
-  local -a args=(docker build --file "$dockerfile" --tag "$tag")
-  [[ -z "$toolset" ]] || args+=(--build-arg "TOOLSET=$toolset")
-  args+=(.)
-  if "${args[@]}"; then
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1)); log "构建成功：$tag"
   else
-    fail_item "$name（$tag）"
+    log "开始构建：$name -> $tag"
+    local -a args=(docker build --file "$dockerfile" --tag "$tag")
+    [[ -z "$toolset" ]] || args+=(--build-arg "TOOLSET=$toolset")
+    [[ -z "$base_image" ]] || args+=(--build-arg "BASE_IMAGE=$base_image")
+    args+=(.)
+    if "${args[@]}"; then
+      SUCCESS_COUNT=$((SUCCESS_COUNT + 1)); log "构建成功：$tag"
+    else
+      fail_item "$name（$tag）"; return 0
+    fi
   fi
+
+  local image_id
+  if ! image_id="$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null)" || [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    fail_item "$name（无法取得完整本地 image ID）"
+    return 0
+  fi
+  register_local "$name" "$key" "$image_id"
+}
+
+register_local() {
+  local name="$1" key="$2" image_id="$3" listing response status image_id_json
+  [[ -n "$API_ROOT" ]] || { fail_item "$name（API 不可用，无法登记本地 image ID）"; return 0; }
+  listing="$(mktemp)"
+  local -a curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 10 "$API_ROOT/runtime-images")
+  [[ -z "$API_TOKEN" ]] || curl_args+=(--header "Authorization: Bearer $API_TOKEN")
+  if ! curl "${curl_args[@]}" >"$listing"; then
+    rm -f "$listing"; fail_item "$name（读取 /runtime-images 失败）"; return 0
+  fi
+  image_id_json="$(node - "$listing" "$key" <<'NODE'
+const fs = require("node:fs");
+const [file, key] = process.argv.slice(2);
+const item = JSON.parse(fs.readFileSync(file, "utf8")).find((row) => row.image_key === key && row.official === true);
+if (item?.id) process.stdout.write(item.id);
+NODE
+)"
+  rm -f "$listing"
+  if [[ -z "$image_id_json" ]]; then
+    fail_item "$name（API 缺少官方镜像条目）"; return 0
+  fi
+  response="$(mktemp)"
+  local -a post_args=(--silent --show-error --connect-timeout 3 --max-time 15 -o "$response" -w '%{http_code}'
+    -H 'Content-Type: application/json' --data "$(printf '{\"image_ref\":\"%s\",\"source\":\"local-build\",\"version\":\"local-%s\"}' "$image_id" "${image_id:7:12}")")
+  [[ -z "$API_TOKEN" ]] || post_args+=(--header "Authorization: Bearer $API_TOKEN")
+  status="$(curl "${post_args[@]}" "$API_ROOT/runtime-images/$image_id_json/official-digest" || true)"
+  if [[ "$status" == 2* ]]; then
+    log "已登记 $name 为 trusted local 版本：${image_id:0:19}"
+  elif [[ "$status" == "401" || "$status" == "403" ]] && [[ -z "$API_TOKEN" ]]; then
+    fail_item "$name（API 要求鉴权，请设置 DEEPSONAR_TOKEN 或 .env 中的 DEEPSONAR_ADMIN_TOKEN）"
+  else
+    fail_item "$name（本地 trusted 登记失败，HTTP ${status:-未知}）"
+  fi
+  rm -f "$response"
 }
 
 if ! load_registry; then
@@ -180,13 +260,22 @@ mapfile -t VERSION_KEYS <"$VERSION_KEYS_FILE"
 rm -f "$VERSION_KEYS_FILE"
 
 prepare_builtin() {
-  local name="$1" key="$2" tag="$3" dockerfile="$4" toolset="${5:-}"
+  local name="$1" key="$2" tag="$3" dockerfile="$4" toolset="${5:-}" base_image="${6:-}"
   local pull_file=""
   if has_version_key "$key" && [[ "$DRY_RUN" == false && "$BUILD_ENABLED" == true && -x "$PULL_SCRIPT" ]]; then
     pull_file="$(mktemp)"
     if registry_for_key "$TEMP_REGISTRY" "$key" >"$pull_file" \
       && DEEPSONAR_URL="" "$PULL_SCRIPT" --file "$pull_file"; then
+      local pulled_ref
+      pulled_ref="$(registry_first_ref "$TEMP_REGISTRY" "$key")"
+      if [[ -z "$pulled_ref" ]] || ! docker tag "$pulled_ref" "$tag"; then
+        rm -f "$pull_file"
+        log "$name 的 registry 版本无法建立本地构建标签，回退本地构建"
+        build_one "$name" "$key" "$tag" "$dockerfile" "$toolset" "$base_image"
+        return 0
+      fi
       rm -f "$pull_file"
+      log "已为 $name 建立本地构建标签：$tag"
       log "已拉取 $name 的不可变 registry 版本"
       return 0
     fi
@@ -197,17 +286,18 @@ prepare_builtin() {
   else
     log "$name 没有不可变版本，执行本地构建"
   fi
-  build_one "$name" "$tag" "$dockerfile" "$toolset"
+  build_one "$name" "$key" "$tag" "$dockerfile" "$toolset" "$base_image"
 }
 
 prepare_builtin "base" "deepsonar-base" "deepsonar-base:local" "$ROOT/deploy/Dockerfile.agent" base
 prepare_builtin "audit" "deepsonar-audit" "deepsonar-audit:local" "$ROOT/deploy/Dockerfile.agent" audit
 prepare_builtin "kali-minimal" "deepsonar-kali-minimal" "deepsonar-kali-minimal:local" "$ROOT/deploy/Dockerfile.agent-kali-minimal"
+prepare_builtin "openharmony-test" "deepsonar-openharmony-test" "deepsonar-openharmony-test:local" "$ROOT/deploy/Dockerfile.agent-openharmony" "" "deepsonar-base:local"
 
 log "汇总：成功/模拟 ${SUCCESS_COUNT}，跳过 ${SKIP_COUNT}，失败 ${FAILURE_COUNT}"
 if [[ ${#FAILURES[@]} -gt 0 ]]; then
   log "失败项目：${FAILURES[*]}"
-  log "本地镜像不会自动登记为 trusted；real 模式仍需不可变 registry digest"
+  log "部分本地镜像未登记成功；请检查失败项目后重试"
   exit 1
 fi
-log "准备流程完成；本地 image ID 不会被当作 OCI manifest digest"
+log "准备流程完成；本地 trusted 版本不会进入 registry 导出清单"
