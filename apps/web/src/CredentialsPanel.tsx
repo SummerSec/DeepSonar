@@ -137,7 +137,8 @@ export function CredentialsPanel() {
     setEditBaseUrl(metaBaseUrl(c));
     setEditMaxConcurrent(metaMaxConcurrent(c)?.toString() ?? "");
     const limits = metaModelLimits(c);
-    setEditModelLimits(Object.fromEntries(metaAllowedModels(c).map((model) => [model, String(limits[model] ?? 1)])));
+    const modelKeys = [...new Set([...metaAllowedModels(c), ...Object.keys(limits)])];
+    setEditModelLimits(Object.fromEntries(modelKeys.map((model) => [model, String(limits[model] ?? 1)])));
     setEditProjectId(c.project_id ?? "");
     setModelQuery("");
     setManualModel("");
