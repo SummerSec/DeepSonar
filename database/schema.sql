@@ -214,6 +214,9 @@ CREATE TABLE finding_verification_rounds (
   ),
   CONSTRAINT finding_verification_rounds_attempt_check CHECK (attempt >= 1)
 );
+-- requirements_json.eligibility is scheduler-owned graph state
+-- (eligible|waiting_evidence|blocked); waiting_evidence rounds intentionally
+-- keep verify_job_id NULL, so no new Job status is needed.
 CREATE INDEX finding_verification_rounds_finding_idx
   ON finding_verification_rounds (finding_id, attempt DESC);
 

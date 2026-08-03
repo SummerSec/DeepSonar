@@ -36,6 +36,28 @@ export interface EvidenceSnapshot {
   reason?: string;
 }
 
+export type VerificationEligibility = "eligible" | "waiting_evidence" | "blocked";
+
+function evidenceSignature(evidence: Pick<EvidenceSnapshot, "review" | "test" | "missing">): string {
+  return JSON.stringify({
+    review: evidence.review.map((row) => row.node_id).sort(),
+    test: evidence.test.map((row) => row.node_id).sort(),
+    missing: [...evidence.missing].sort(),
+  });
+}
+
+function verificationState(
+  eligibility: VerificationEligibility,
+  evidence: EvidenceSnapshot,
+): Record<string, unknown> {
+  return {
+    eligibility,
+    missing_evidence: evidence.missing,
+    evidence_signature: evidenceSignature(evidence),
+    updated_at: new Date().toISOString(),
+  };
+}
+
 const VALID_OUTCOMES = new Set(["supports", "refutes", "inconclusive"]);
 
 /**
@@ -151,7 +173,7 @@ export async function createVerifyRound(
   },
 ): Promise<{ jobId: string; roundId: string; attempt: number } | null> {
   const findingId = opts.finding.id as string;
-  const { rulesForProject, resolveAgentSnapshotForJob, severityPriorityDelta } = await core();
+  const { fixedPriorityForJob, rulesForProject, resolveAgentSnapshotForJob } = await core();
   const rules = await rulesForProject(tx as unknown as typeof sql, opts.projectId);
 
   if (opts.followupDepth >= rules.maxFollowupDepth) {
@@ -159,9 +181,13 @@ export async function createVerifyRound(
     return null;
   }
 
+  const [openRound] = await tx`
+    SELECT * FROM finding_verification_rounds
+    WHERE finding_id = ${findingId} AND status IN ('pending','running')
+    ORDER BY attempt DESC LIMIT 1`;
   const [{ max_attempt }] = await tx<[{ max_attempt: number | null }]>`
     SELECT MAX(attempt) AS max_attempt FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
-  const nextAttempt = (max_attempt ?? 0) + 1;
+  const nextAttempt = Number(openRound?.attempt ?? ((max_attempt ?? 0) + 1));
   if (nextAttempt > rules.maxVerificationRounds) {
     await markFindingNeedsHuman(tx, findingId, "max_verification_rounds", opts.canvasId);
     return null;
@@ -174,17 +200,66 @@ export async function createVerifyRound(
     LIMIT 1`;
   if (active.length > 0) return null;
 
-  const openRound = await tx`
-    SELECT id FROM finding_verification_rounds
-    WHERE finding_id = ${findingId} AND status IN ('pending','running')
-    LIMIT 1`;
-  if (openRound.length > 0) return null;
-
   const severity = String(opts.finding.severity ?? "").toLowerCase();
-  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding");
-  const priority = opts.priorityBase + 1 + severityPriorityDelta(severity);
-
   const evidence = await collectEvidenceSnapshot(tx, findingId, (opts.finding.job_id as string) ?? null);
+  const signature = evidenceSignature(evidence);
+  const existingRequirements = (openRound?.requirements_json ?? {}) as Record<string, unknown>;
+  const existingRoundIsWaiting =
+    Boolean(openRound) &&
+    !openRound?.verify_job_id &&
+    (String(existingRequirements.eligibility ?? "") === "waiting_evidence" ||
+      String(existingRequirements.eligibility ?? "") === "");
+
+  // A Finding always enters the Verify lifecycle, but a round with missing
+  // independent evidence is represented explicitly and has no runnable Job.
+  // This avoids a pending verify spinning through rework while Hub is waiting
+  // for review/test evidence.
+  if (!evidence.qualified && (!openRound || existingRoundIsWaiting)) {
+    const requirements = {
+      ...existingRequirements,
+      need_review: true,
+      need_test: true,
+      eligibility: "waiting_evidence" as VerificationEligibility,
+      missing: evidence.missing,
+      evidence_signature: signature,
+      hub_evidence_signature: existingRequirements.hub_evidence_signature ?? null,
+    };
+    if (openRound) {
+      await tx`
+        UPDATE finding_verification_rounds SET
+          requirements_json = ${tx.json(requirements as never)},
+          evidence_snapshot_json = ${tx.json(evidence as never)},
+          status = 'pending', verify_job_id = NULL
+        WHERE id = ${openRound.id as string}`;
+    } else {
+      await tx`
+        INSERT INTO finding_verification_rounds ${tx({
+          finding_id: findingId,
+          attempt: nextAttempt,
+          verify_job_id: null,
+          status: "pending",
+          requirements_json: requirements as never,
+          evidence_snapshot_json: evidence as never,
+        })}`;
+    }
+    await tx`
+      UPDATE findings SET
+        verify_status = 'pending',
+        raw_json = raw_json || ${tx.json({ verification_state: verificationState("waiting_evidence", evidence) } as never)},
+        updated_at = now()
+      WHERE id = ${findingId}`;
+    if (opts.finding.node_id) {
+      await tx`
+        UPDATE canvas_nodes SET status = 'verifying', updated_at = now()
+        WHERE id = ${opts.finding.node_id as string}`;
+    }
+    return null;
+  }
+
+  if (openRound && !existingRoundIsWaiting) return null;
+
+  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding");
+  const priority = fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity });
 
   let verifyJob: { id: string };
   try {
@@ -199,6 +274,8 @@ export async function createVerifyRound(
         type: "verify_finding",
         priority,
         payload_json: {
+          scheduling_purpose: "verify",
+          verification_eligibility: "eligible",
           finding: {
             fingerprint: opts.finding.fingerprint,
             title: opts.finding.title,
@@ -221,29 +298,60 @@ export async function createVerifyRound(
     throw e;
   }
 
-  const [round] = await tx`
-    INSERT INTO finding_verification_rounds ${tx({
-      finding_id: findingId,
-      attempt: nextAttempt,
-      verify_job_id: verifyJob.id,
-      status: "pending",
-      requirements_json: {
-        need_review: true,
-        need_test: true,
-        missing: evidence.missing,
-      } as never,
-      evidence_snapshot_json: evidence as never,
-    })}
-    RETURNING id`;
+  let round: Record<string, unknown> | undefined;
+  if (openRound && existingRoundIsWaiting) {
+    const requirements = {
+      ...existingRequirements,
+      need_review: true,
+      need_test: true,
+      eligibility: "eligible" as VerificationEligibility,
+      missing: [],
+      evidence_signature: signature,
+    };
+    const [updated] = await tx`
+      UPDATE finding_verification_rounds SET
+        verify_job_id = ${verifyJob.id}, status = 'pending',
+        requirements_json = ${tx.json(requirements as never)},
+        evidence_snapshot_json = ${tx.json(evidence as never)}
+      WHERE id = ${openRound.id as string}
+      RETURNING id`;
+    round = updated as Record<string, unknown>;
+  } else {
+    const [created] = await tx`
+      INSERT INTO finding_verification_rounds ${tx({
+        finding_id: findingId,
+        attempt: nextAttempt,
+        verify_job_id: verifyJob.id,
+        status: "pending",
+        requirements_json: {
+          need_review: true,
+          need_test: true,
+          eligibility: "eligible",
+          missing: [],
+          evidence_signature: signature,
+        } as never,
+        evidence_snapshot_json: evidence as never,
+      })}
+      RETURNING id`;
+    round = created as Record<string, unknown>;
+  }
 
-  await tx`UPDATE findings SET verify_status = 'verifying', updated_at = now() WHERE id = ${findingId}`;
+  await tx`
+    UPDATE findings SET
+      verify_status = 'verifying',
+      raw_json = raw_json || ${tx.json({ verification_state: verificationState("eligible", evidence) } as never)},
+      updated_at = now()
+    WHERE id = ${findingId}`;
 
   // 画布：finding → verifies → verify job
   const [findingNode] = await tx`SELECT node_id FROM findings WHERE id = ${findingId}`;
-  if (findingNode?.node_id) {
+  if (findingNode?.node_id && round?.id) {
     const [source] = await tx`
       SELECT id, canvas_id, x, y FROM canvas_nodes WHERE id = ${findingNode.node_id}`;
     if (source) {
+      const existingNode = await tx`
+        SELECT id FROM canvas_nodes WHERE job_id = ${verifyJob.id} AND node_type = 'job' LIMIT 1`;
+      if (existingNode.length > 0) return { jobId: verifyJob.id, roundId: round.id as string, attempt: nextAttempt };
       const [verifyNode] = await tx`
         INSERT INTO canvas_nodes ${tx({
           canvas_id: source.canvas_id as string,
@@ -275,7 +383,7 @@ export async function createVerifyRound(
   return { jobId: verifyJob.id, roundId: round.id as string, attempt: nextAttempt };
 }
 
-/** Finding 创建后自动进入第 1 轮 Verify（severity 只影响 priority）。 */
+/** Finding 创建后自动进入 Verify 生命周期；缺证据时先登记等待态。 */
 export async function evaluateFollowup(
   tx: Tx,
   job: Record<string, unknown>,
@@ -584,7 +692,7 @@ export async function maybeReverifyAfterFollowup(
 
   // 对比上一轮证据快照哈希：无增量则回弹 Hub 说明无新证据
   const [prev] = await tx`
-    SELECT id, attempt, evidence_snapshot_json FROM finding_verification_rounds
+    SELECT id, attempt, requirements_json, evidence_snapshot_json FROM finding_verification_rounds
     WHERE finding_id = ${findingId}
     ORDER BY attempt DESC LIMIT 1`;
   const prevSnap = JSON.stringify(
@@ -601,36 +709,22 @@ export async function maybeReverifyAfterFollowup(
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   const attempt = Number(prev?.attempt ?? 0);
 
-  // 无增量证据：若已达验证轮次上限 → needs_human；否则 force Hub 说明无新证据
+  // 无增量证据：若已达验证轮次上限 → needs_human；否则保持既有
+  // waiting_evidence 资格态。重复回弹 Hub 会在每个 role 终态制造同一
+  // 个决策 Job，形成 churn，因此没有新的证据就不再派生任何 Job。
   if (prev && prevSnap === curSnap && evidence.missing.length > 0) {
-    if (attempt >= rules.maxVerificationRounds) {
+    const previousNoNew = Number(
+      ((prev.requirements_json as Record<string, unknown> | undefined)?.no_new_evidence_count ?? 0),
+    );
+    const noNewCount = previousNoNew + 1;
+    await tx`
+      UPDATE finding_verification_rounds
+      SET requirements_json = requirements_json || ${tx.json({ no_new_evidence_count: noNewCount } as never)}
+      WHERE id = ${prev.id as string}`;
+    if (attempt >= rules.maxVerificationRounds || noNewCount >= rules.maxVerificationRounds) {
       await markFindingNeedsHuman(tx, findingId, "max_verification_rounds_no_new_evidence", canvasId);
       return;
     }
-    await clearAutoStopped(tx, canvasId);
-    const { maybeTriggerHub } = await core();
-    await maybeTriggerHub(
-      tx,
-      {
-        id: job.id,
-        project_id: job.project_id,
-        canvas_id: canvasId,
-        type: "verify_followup_empty",
-        priority: job.priority ?? 0,
-      },
-      {
-        force: true,
-        sourceNodeIds: finding.node_id ? [finding.node_id as string] : [],
-        trigger: {
-          kind: "verify_rework",
-          finding_id: findingId,
-          attempt: prev.attempt,
-          missing_evidence: evidence.missing,
-          summary: "补证轮次未产生新增合格证据，请改派非重复工作或转人工",
-          no_new_evidence: true,
-        },
-      },
-    );
     return;
   }
 
@@ -1022,6 +1116,14 @@ async function markFindingNeedsHuman(
 ) {
   const [finding] = await tx`SELECT id, node_id FROM findings WHERE id = ${findingId}`;
   if (!finding) return;
+  // A waiting-evidence round has no Job to finalize; close it explicitly so
+  // the convergence gate cannot remain blocked after the Finding is handed
+  // to a human.
+  await tx`
+    UPDATE finding_verification_rounds SET
+      status = 'needs_human', final_outcome = 'needs_human',
+      error = ${reason}, finished_at = COALESCE(finished_at, now())
+    WHERE finding_id = ${findingId} AND status IN ('pending','running')`;
   await setFindingStatus(tx, findingId, "needs_human", finding.node_id as string | null);
   if (canvasId) {
     await ensureHumanBlocker(tx, canvasId, findingId, finding.node_id as string | null, {
@@ -1090,9 +1192,9 @@ export async function findingVerificationSummary(
   tx: Tx,
   findingId: string,
 ): Promise<Record<string, unknown>> {
-  const [finding] = await tx`SELECT verify_status, job_id FROM findings WHERE id = ${findingId}`;
+  const [finding] = await tx`SELECT verify_status, job_id, raw_json FROM findings WHERE id = ${findingId}`;
   const [round] = await tx`
-    SELECT attempt, status, final_outcome, proposed_verdict, evidence_snapshot_json, summary, error
+    SELECT attempt, status, final_outcome, proposed_verdict, verify_job_id, requirements_json, evidence_snapshot_json, summary, error
     FROM finding_verification_rounds
     WHERE finding_id = ${findingId}
     ORDER BY attempt DESC LIMIT 1`;
@@ -1103,6 +1205,11 @@ export async function findingVerificationSummary(
   );
   return {
     verify_status: finding?.verify_status ?? "pending",
+    eligibility:
+      ((finding?.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined)
+        ?.eligibility ??
+      ((round?.requirements_json as Record<string, unknown> | undefined)?.eligibility ??
+        (round?.verify_job_id ? "eligible" : "waiting_evidence")),
     verification_attempt: round?.attempt ?? 0,
     latest_outcome: round?.final_outcome ?? round?.status ?? null,
     proposed_verdict: round?.proposed_verdict ?? null,

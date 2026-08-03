@@ -35,11 +35,13 @@ import {
   createJob,
   drainNonGateVerifies,
   ensureCanvasForTask,
+  fixedPriorityForJob,
   globalRules,
   mergeGlobalRulesPatch,
   maybeTriggerHub,
   parseCanvasConvergence,
   patchCanvasConvergence,
+  priorityMatchesJob,
   readCanvasConvergence,
   resolveAgentSnapshotForJob,
   resolveHubWaitSeverities,
@@ -91,7 +93,7 @@ const CreateJobBody = z.object({
   title: z.string().optional(),
   type: z.string().min(1),
   payload: z.record(z.string(), z.unknown()).default({}),
-  priority: z.number().int().default(0),
+  priority: z.number().int().optional(),
   timeout_sec: z.number().int().positive().optional(),
 });
 
@@ -818,7 +820,7 @@ export function registerRoutes(app: FastifyInstance) {
           project_id: projectId,
           canvas_id: canvasId,
           type: "manual",
-          priority: 0,
+          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
         },
         { manual: true, force: true, trigger: { kind: "resume_session" } },
       );
@@ -907,8 +909,8 @@ export function registerRoutes(app: FastifyInstance) {
           plane_issue_id: (canvas.plane_issue_id as string) ?? null,
           agent_snapshot_json: snapshot as never,
           type: "hub_reason",
-          priority: 0,
-          payload_json: payload as never,
+          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+          payload_json: { ...payload, scheduling_purpose: "hub" } as never,
           timeout_sec: config.timeouts.auditSec,
           followup_depth: 0,
         })}
@@ -2393,7 +2395,7 @@ export function registerRoutes(app: FastifyInstance) {
             project_id: canvas.project_id,
             canvas_id: id,
             type: "manual",
-            priority: 0,
+            priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
           },
           { manual: true, force: true, trigger: { kind: "manual_resume" } },
         );
@@ -2467,7 +2469,7 @@ export function registerRoutes(app: FastifyInstance) {
           project_id: canvas.project_id,
           canvas_id: id,
           type: "manual",
-          priority: 0,
+          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
         },
         { manual: true, force: true, trigger: { kind: "manual_run_hub_now" } },
       );
@@ -2502,6 +2504,18 @@ export function registerRoutes(app: FastifyInstance) {
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
     const body = CreateJobBody.parse(req.body);
+    const expectedPriority = fixedPriorityForJob({
+      type: body.type,
+      payload: body.payload,
+      severity:
+        body.payload.severity ?? (body.payload.finding as Record<string, unknown> | undefined)?.severity,
+    });
+    if (body.priority !== undefined && body.priority !== expectedPriority) {
+      return reply.code(409).send({
+        error: "priority is fixed by scheduling class",
+        expected_priority: expectedPriority,
+      });
+    }
     // 一任务一画布：有 issue 复用（重试），无 issue 每次新建 ad-hoc 画布
     const canvasId = await ensureCanvasForTask({
       projectId: body.project_id,
@@ -2880,6 +2894,30 @@ export function registerRoutes(app: FastifyInstance) {
   app.patch("/jobs/:id/priority", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = PriorityBody.parse(req.body);
+    const [current] = await sql`
+      SELECT id, type, status, priority, finding_id, payload_json
+      FROM jobs WHERE id = ${id}`;
+    if (!current) return reply.code(404).send({ error: "job not found" });
+    let severity: string | undefined;
+    if (current.finding_id) {
+      const [finding] = await sql`SELECT severity FROM findings WHERE id = ${current.finding_id as string}`;
+      severity = finding?.severity as string | undefined;
+    }
+    const expected = fixedPriorityForJob({
+      type: current.type as string,
+      severity,
+      payload: (current.payload_json ?? {}) as Record<string, unknown>,
+    });
+    if (!priorityMatchesJob({
+      type: current.type as string,
+      severity,
+      payload: (current.payload_json ?? {}) as Record<string, unknown>,
+    }, body.priority)) {
+      return reply.code(409).send({
+        error: "priority is fixed by scheduling class; use an in-class value",
+        expected_priority: expected,
+      });
+    }
     const [job] = await sql`
       UPDATE jobs SET priority = ${body.priority}
       WHERE id = ${id} AND status = 'pending'

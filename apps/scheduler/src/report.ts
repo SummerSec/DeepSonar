@@ -281,7 +281,7 @@ async function bounceReportGateToHub(
       updated_at = now()
     WHERE canvas_id = ${canvasId} AND status IN ('pending', 'generating')`;
 
-  const { maybeTriggerHub, patchCanvasConvergence } = await import("./core.js");
+  const { fixedPriorityForJob, maybeTriggerHub, patchCanvasConvergence } = await import("./core.js");
   await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
     auto_stopped: false,
     paused_reason: undefined,
@@ -300,7 +300,7 @@ async function bounceReportGateToHub(
       project_id: projectId,
       canvas_id: canvasId,
       type: "report_gate",
-      priority: 40,
+      priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
     },
     {
       force: true,
@@ -393,7 +393,7 @@ export async function maybeDispatchReport(
     }
   }
 
-  const { resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
+  const { fixedPriorityForJob, resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   let snapshot: unknown;
   try {
@@ -433,9 +433,10 @@ export async function maybeDispatchReport(
       canvas_id: canvasId,
       agent_snapshot_json: snapshot as never,
       type: "report",
-      priority: 50,
+      priority: fixedPriorityForJob({ type: "report", purpose: "report" }),
       ingress_key: ingressKey,
       payload_json: {
+        scheduling_purpose: "report",
         kind: "task_report",
         report_input_uri: inputUri,
         findings_total: reportInput.statistics.findings_total,

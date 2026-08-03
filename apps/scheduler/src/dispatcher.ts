@@ -30,13 +30,48 @@ const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
 const inFlight = new Set<Promise<void>>();
 
 export type DispatchCandidate = {
+  id?: unknown;
   project_id: unknown;
+  canvas_id?: unknown;
+  finding_id?: unknown;
+  type?: unknown;
+  payload_json?: unknown;
   agent_cli: unknown;
   credential_provider: unknown;
   credential_id: unknown;
   model: unknown;
   credential_metadata: unknown;
 };
+
+export interface GraphEligibilityState {
+  activeHub?: boolean;
+  activeWaitingHuman?: boolean;
+  activeRole?: boolean;
+  waitingEvidence?: boolean;
+  rootStatus?: string | null;
+  activeCanvasJob?: boolean;
+}
+
+/** Pure graph-stage gate kept separate from numeric ordering/resource caps. */
+export function graphEligibilityReason(
+  job: Pick<DispatchCandidate, "type">,
+  state: GraphEligibilityState,
+): string | null {
+  const type = String(job.type ?? "");
+  if (type === "hub_reason") {
+    if (state.activeHub) return "hub_active";
+    if (state.activeWaitingHuman) return "waiting_human";
+    if (state.activeRole) return "canvas_busy";
+    if (state.rootStatus && ["analysis_complete", "reporting", "succeeded"].includes(state.rootStatus)) {
+      return "root_finished";
+    }
+  }
+  if (type === "verify_finding" && state.waitingEvidence) return "waiting_evidence";
+  if (type === "report" && (state.activeCanvasJob || !["analysis_complete", "reporting"].includes(String(state.rootStatus)))) {
+    return "report_gate";
+  }
+  return null;
+}
 
 export type DispatchCounts = {
   project: Map<string, number>;
@@ -128,6 +163,65 @@ async function isRealType(type: string): Promise<boolean> {
   return Boolean(r);
 }
 
+async function graphEligibilityReasonFromDb(
+  tx: typeof sql,
+  job: Pick<DispatchCandidate, "id" | "canvas_id" | "type" | "finding_id">,
+): Promise<string | null> {
+  const type = String(job.type ?? "");
+  // Ordinary role/discovery Jobs are eligible once resource quotas pass; do
+  // not pay the graph-state query cost for them on every pending scan.
+  if (type !== "hub_reason" && type !== "verify_finding" && type !== "report") return null;
+  const canvasId = String(job.canvas_id ?? "").trim();
+  if (!canvasId) return null;
+  const id = String(job.id ?? "");
+  const activeStatuses = ["pending", "claimed", "provisioning", "running", "waiting_human"];
+  if (type === "verify_finding") {
+    if (!job.finding_id) return null;
+    const rows = await tx`
+      SELECT 1 FROM finding_verification_rounds
+      WHERE finding_id = ${String(job.finding_id)}
+        AND verify_job_id = ${String(job.id)}
+        AND status IN ('pending','running')
+        AND requirements_json->>'eligibility' = 'waiting_evidence'
+      LIMIT 1`;
+    return graphEligibilityReason({ type }, { waitingEvidence: rows.length > 0 });
+  }
+
+  if (type === "report") {
+    const [root, activeCanvas] = await Promise.all([
+      tx`SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`,
+      tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id}
+         AND status = ANY(${activeStatuses}) LIMIT 1`,
+    ]);
+    return graphEligibilityReason(
+      { type },
+      {
+        rootStatus: (root[0]?.status as string | null) ?? null,
+        activeCanvasJob: activeCanvas.length > 0,
+      },
+    );
+  }
+
+  const [activeHub, activeWaitingHuman, activeRole, root] = await Promise.all([
+    tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND type = 'hub_reason'
+       AND status = ANY(${activeStatuses}) LIMIT 1`,
+    tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND status = 'waiting_human' LIMIT 1`,
+    tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id}
+       AND type NOT IN ('hub_reason','verify_finding','report')
+       AND status = ANY(${activeStatuses}) LIMIT 1`,
+    tx`SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`,
+  ]);
+  return graphEligibilityReason(
+    { type },
+    {
+      activeHub: activeHub.length > 0,
+      activeWaitingHuman: activeWaitingHuman.length > 0,
+      activeRole: activeRole.length > 0,
+      rootStatus: (root[0]?.status as string | null) ?? null,
+    },
+  );
+}
+
 /**
  * Claim pending jobs under the dispatcher advisory lock without provisioning
  * or executing them. This narrow entry point is used by integration tests and
@@ -193,7 +287,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       // explicitly instead of relying on a tuple comparison.
       const pending = cursor
         ? await tx`
-            SELECT j.id, j.project_id, j.priority, j.created_at::text AS created_at_key,
+            SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
+                   j.priority, j.created_at::text AS created_at_key,
                    j.agent_snapshot_json->>'agent_cli' AS agent_cli,
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
@@ -211,7 +306,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
             LIMIT ${pendingPageSize}
             FOR UPDATE OF j SKIP LOCKED`
         : await tx`
-            SELECT j.id, j.project_id, j.priority, j.created_at::text AS created_at_key,
+            SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
+                   j.priority, j.created_at::text AS created_at_key,
                    j.agent_snapshot_json->>'agent_cli' AS agent_cli,
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
@@ -234,6 +330,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
 
       for (const job of pending) {
         if (claimed.length >= slots) break;
+        const graphSkip = await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job as DispatchCandidate);
+        if (graphSkip) continue;
         const projectId = job.project_id as string;
         // Historical snapshots may omit agent_cli; keep quota accounting on
         // the immutable platform default rather than mutable env config.
