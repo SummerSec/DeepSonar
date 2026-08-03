@@ -137,15 +137,6 @@ export const config = {
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepsonar-agent:latest"),
     /** fake=内置假 agent（联调用）；real=agentbox-sdk 真实 agent */
     agentMode: str("AGENT_MODE", "fake"),
-    /** agentbox-sdk agent provider：claude-code | opencode | codex（同一 API 可换） */
-    agentProvider: str("AGENT_PROVIDER", "claude-code"),
-    agentModel: str("AGENT_MODEL"),
-    anthropicKey: str("ANTHROPIC_API_KEY"),
-    anthropicBaseUrl: str("ANTHROPIC_BASE_URL"),
-    anthropicAuthToken: str("ANTHROPIC_AUTH_TOKEN"),
-    openaiKey: str("OPENAI_API_KEY"),
-    openaiBaseUrl: str("OPENAI_BASE_URL"),
-    openrouterKey: str("OPENROUTER_API_KEY"),
     /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
     sandboxLimits: {
       cpu: int("DEEPSONAR_SANDBOX_CPU", 2),
@@ -165,21 +156,6 @@ export const config = {
         .map((s) => s.trim())
         .filter(Boolean)
         .some((p) => (p.endsWith("*") ? key.startsWith(p.slice(0, -1)) : key === p));
-    },
-    /** 注入沙箱的 Agent 环境变量（只放非空项，密钥仅调度器持有，§9） */
-    get agentEnv(): Record<string, string> {
-      const env: Record<string, string> = {};
-      if (this.anthropicKey) env.ANTHROPIC_API_KEY = this.anthropicKey;
-      if (this.anthropicBaseUrl) env.ANTHROPIC_BASE_URL = this.anthropicBaseUrl;
-      if (this.anthropicAuthToken) env.ANTHROPIC_AUTH_TOKEN = this.anthropicAuthToken;
-      // 中转端点（如 Kimi for Coding）通常要求 AUTH_TOKEN；只配了 KEY 时镜像一份
-      if (this.anthropicBaseUrl && !this.anthropicAuthToken && this.anthropicKey) {
-        env.ANTHROPIC_AUTH_TOKEN = this.anthropicKey;
-      }
-      if (this.openaiKey) env.OPENAI_API_KEY = this.openaiKey;
-      if (this.openaiBaseUrl) env.OPENAI_BASE_URL = this.openaiBaseUrl;
-      if (this.openrouterKey) env.OPENROUTER_API_KEY = this.openrouterKey;
-      return env;
     },
   },
 
@@ -205,6 +181,8 @@ export const config = {
     officialBaseRef: str("DEEPSONAR_OFFICIAL_BASE_IMAGE"),
     officialAuditRef: str("DEEPSONAR_OFFICIAL_AUDIT_IMAGE"),
     officialKaliMinimalRef: str("DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE"),
+    /** 私有 GitHub Release 清单的短期/部署级读取凭据；永不返回 API。 */
+    registryGithubToken: str("DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN"),
     registrySyncSec: int("DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC", 3600),
     allowedRegistries: str("DEEPSONAR_ALLOWED_IMAGE_REGISTRIES", "ghcr.io,docker.io,registry-1.docker.io"),
     isRegistryAllowed(imageRef: string): boolean {

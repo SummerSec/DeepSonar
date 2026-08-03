@@ -4,6 +4,7 @@ import {
   advanceCanvasAfterTerminalJob,
   globalRules,
   ingestEvent,
+  PLATFORM_DEFAULT_AGENT_CLI,
   recoverVerifyJobTerminal,
   rolesForProject,
   transitionJob,
@@ -78,7 +79,9 @@ export async function dispatchOnce(): Promise<number> {
     const modelKey = (credentialId: string, model: string) => `${credentialId}\u0000${model}`;
     for (const row of active) {
       const projectId = row.project_id as string;
-      const cli = String(row.agent_cli ?? config.runtime.agentProvider);
+      // Historical Jobs may lack agent_cli; use the platform constant only,
+      // never the mutable AGENT_PROVIDER environment value.
+      const cli = String(row.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
       const provider = String(row.credential_provider ?? "");
       const credentialId = String(row.credential_id ?? "");
       const model = String(row.model ?? "");
@@ -110,7 +113,8 @@ export async function dispatchOnce(): Promise<number> {
     for (const job of pending) {
       if (claimed.length >= slots) break;
       const projectId = job.project_id as string;
-      const cli = String(job.agent_cli ?? config.runtime.agentProvider);
+      // Historical Jobs may lack agent_cli; use the platform constant only.
+      const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
       const provider = String(job.credential_provider ?? "");
       const credentialId = String(job.credential_id ?? "");
       const model = String(job.model ?? "");

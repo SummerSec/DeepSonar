@@ -9,7 +9,14 @@
       "source_kind": "official",
       "project_opt_in": false,
       "default_role": "base",
-      "versions": []
+      "versions": [
+        {
+          "version": "v0.1.6",
+          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 215224931
+        }
+      ]
     },
     {
       "image_key": "deepsonar-audit",
@@ -19,7 +26,14 @@
       "source_kind": "official",
       "project_opt_in": false,
       "default_role": "audit",
-      "versions": []
+      "versions": [
+        {
+          "version": "v0.1.6",
+          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 348303740
+        }
+      ]
     },
     {
       "image_key": "deepsonar-kali-minimal",
@@ -29,7 +43,14 @@
       "source_kind": "official",
       "project_opt_in": false,
       "default_role": "test",
-      "versions": []
+      "versions": [
+        {
+          "version": "v0.1.6",
+          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 1214541172
+        }
+      ]
     },
     {
       "image_key": "deepsonar-openharmony-test",
@@ -39,7 +60,14 @@
       "source_kind": "official",
       "project_opt_in": true,
       "default_role": "test",
-      "versions": []
+      "versions": [
+        {
+          "version": "v0.1.6",
+          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 341721931
+        }
+      ]
     },
     {
       "image_key": "deepsonar-openharmony-audit",

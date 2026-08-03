@@ -1,16 +1,22 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 
 export const RUNTIME_IMAGE_CONTRACT = "deepsonar.runtime.contract/v1";
 export const RUNTIME_IMAGE_REGISTRY_SCHEMA = "deepsonar.registry/v1";
 const OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL = "https://github.com/SummerSec/DeepSonar/releases/latest/download/runtime-image-registry.json";
-const OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS = new Set(["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"]);
+const OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS = new Set(["github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"]);
+const OFFICIAL_RUNTIME_IMAGE_REGISTRY_AUTH_HOSTS = new Set(["github.com", "api.github.com"]);
 const RUNTIME_IMAGE_REGISTRY_MAX_BYTES = 1024 * 1024;
 const RUNTIME_IMAGE_REGISTRY_CACHE_MS = 5 * 60_000;
+const RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES = 8 * 1024;
+const RUNTIME_IMAGE_INSPECT_MAX_BYTES = 512 * 1024;
+const RUNTIME_IMAGE_INSPECT_TIMEOUT_MS = 10_000;
+const execFileP = promisify(execFile);
 
 export interface RuntimeImageRegistryVersion {
   version: string;
@@ -35,6 +41,11 @@ export interface RuntimeImageRegistryImage {
 export interface RuntimeImageRegistry {
   schema: typeof RUNTIME_IMAGE_REGISTRY_SCHEMA;
   images: RuntimeImageRegistryImage[];
+  /** 仅由 Scheduler 加在 GET /runtime-images/registry 响应上的可观察来源元数据。 */
+  source?: "remote" | "bundled";
+  fallback?: boolean;
+  error?: string | null;
+  checked_at?: string;
 }
 
 export interface RuntimeImageCatalogSyncResult {
@@ -62,7 +73,7 @@ export interface RuntimeImagePullTask {
 }
 
 let runtimeImagePullTask: RuntimeImagePullTask | null = null;
-let remoteRegistryCache: { registry: RuntimeImageRegistry | null; checked_at: number } | null = null;
+let remoteRegistryCache: { registry: RuntimeImageRegistry | null; checked_at: number; error: string | null } | null = null;
 
 export interface RuntimeImageSnapshot {
   runtime_image_id: string | null;
@@ -85,6 +96,168 @@ export function immutableDigest(imageRef: string): string | null {
 export function localImageDigest(imageRef: string): string | null {
   const match = imageRef.trim().match(/^sha256:[0-9a-f]{64}$/);
   return match?.[0] ?? null;
+}
+
+/**
+ * Docker/registry errors are operator diagnostics, not an opportunity to echo
+ * credentials or unbounded command output back through the API.
+ */
+export function sanitizeRuntimeImageError(value: unknown, maxBytes = RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES): string {
+  let text = value instanceof Error ? value.message : String(value ?? "");
+  text = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  text = text.replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+)(?::[^\s/@]*)?@/gi, "$1<redacted>@");
+  text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <redacted>");
+  text = text.replace(/\b(authorization|password|passwd|token|secret|credential)\s*[:=]\s*[^\s,;]+/gi, "$1=<redacted>");
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= maxBytes) return text;
+  let end = Math.max(0, Math.floor(maxBytes * 0.9));
+  while (end > 0 && Buffer.byteLength(text.slice(0, end), "utf8") > maxBytes - 16) end -= 1;
+  return `${text.slice(0, end)} …[truncated]`;
+}
+
+export interface RuntimeImageLocalInspection {
+  image_ref: string;
+  exists: boolean;
+  image_id: string | null;
+  repo_digests: string[];
+  os: string | null;
+  arch: string | null;
+  labels: {
+    contract: string | null;
+    image_key: string | null;
+    tool_manifest: string | null;
+    tool_manifest_label: "io.deepsonar.tool-manifest" | "io.deepsonar.tools-manifest" | null;
+    toolset: string | null;
+  };
+  contract_matches: boolean;
+  matches_product: boolean;
+  tool_manifest_matches: boolean;
+  immutable_ref: string | null;
+  can_adopt: boolean;
+  reasons: string[];
+  error: string | null;
+}
+
+const TOOLSET_TO_RUNTIME_IMAGE_KEY: Record<string, string> = {
+  base: "deepsonar-base",
+  audit: "deepsonar-audit",
+  "kali-minimal": "deepsonar-kali-minimal",
+  "openharmony-test": "deepsonar-openharmony-test",
+  "openharmony-audit": "deepsonar-openharmony-audit",
+  "openharmony-fuzz": "deepsonar-openharmony-fuzz",
+};
+
+function imageRepository(imageRef: string): string | null {
+  const value = imageRef.trim().replace(/@sha256:[0-9a-f]{64}$/i, "");
+  if (!value) return null;
+  const lastSlash = value.lastIndexOf("/");
+  const lastColon = value.lastIndexOf(":");
+  return (lastColon > lastSlash ? value.slice(0, lastColon) : value).toLowerCase();
+}
+
+function localInspectionSkeleton(imageRef: string, reasons: string[], error: string | null): RuntimeImageLocalInspection {
+  return {
+    image_ref: imageRef,
+    exists: false,
+    image_id: null,
+    repo_digests: [],
+    os: null,
+    arch: null,
+    labels: { contract: null, image_key: null, tool_manifest: null, tool_manifest_label: null, toolset: null },
+    contract_matches: false,
+    matches_product: false,
+    tool_manifest_matches: false,
+    immutable_ref: null,
+    can_adopt: false,
+    reasons,
+    error,
+  };
+}
+
+/**
+ * Read-only local Docker inspection. The command always uses execFile with an
+ * argument array and shell=false; callers decide whether a mutable tag may be
+ * used for detection, while adoption only accepts the returned immutable ref.
+ */
+export async function inspectLocalRuntimeImage(
+  imageRef: string,
+  productKey: string,
+  knownImageRefs: string[] = [],
+): Promise<RuntimeImageLocalInspection> {
+  const normalizedRef = imageRef.trim();
+  try {
+    const result = await execFileP("docker", ["image", "inspect", normalizedRef], {
+      shell: false,
+      windowsHide: true,
+      timeout: RUNTIME_IMAGE_INSPECT_TIMEOUT_MS,
+      maxBuffer: RUNTIME_IMAGE_INSPECT_MAX_BYTES,
+    });
+    const parsed = JSON.parse(result.stdout) as unknown;
+    const item = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!item || typeof item !== "object") throw new Error("docker image inspect 返回格式无效");
+    const raw = item as Record<string, unknown>;
+    const config = raw.Config && typeof raw.Config === "object" ? raw.Config as Record<string, unknown> : {};
+    const rawLabels = config.Labels && typeof config.Labels === "object" ? config.Labels as Record<string, unknown> : {};
+    const labels = Object.fromEntries(Object.entries(rawLabels).filter(([, value]) => typeof value === "string")) as Record<string, string>;
+    const imageId = typeof raw.Id === "string" && localImageDigest(raw.Id) ? raw.Id.toLowerCase() : null;
+    const repoDigests = Array.isArray(raw.RepoDigests)
+      ? raw.RepoDigests.filter((value): value is string => typeof value === "string" && immutableDigest(value) !== null)
+      : [];
+    const contract = labels["io.deepsonar.contract"] ?? null;
+    const explicitImageKey = labels["io.deepsonar.image-key"] ?? null;
+    const toolset = labels["io.deepsonar.toolset"] ?? null;
+    const toolManifestLabel = labels["io.deepsonar.tool-manifest"] !== undefined
+      ? "io.deepsonar.tool-manifest"
+      : labels["io.deepsonar.tools-manifest"] !== undefined ? "io.deepsonar.tools-manifest" : null;
+    const toolManifest = toolManifestLabel ? labels[toolManifestLabel] ?? null : null;
+    const compatibleImageKey = explicitImageKey ?? (toolset ? TOOLSET_TO_RUNTIME_IMAGE_KEY[toolset] ?? null : null);
+    const knownRepositories = knownImageRefs.map(imageRepository).filter((value): value is string => Boolean(value));
+    const matchingRepoDigest = repoDigests.find((value) => {
+      const repository = imageRepository(value);
+      return repository !== null && knownRepositories.includes(repository);
+    }) ?? null;
+    const immutableRef = matchingRepoDigest ?? imageId;
+    const reasons: string[] = [];
+    const contractMatches = contract === RUNTIME_IMAGE_CONTRACT;
+    const matchesProduct = compatibleImageKey === productKey;
+    const toolManifestMatches = toolManifest === "/opt/deepsonar/tool-manifest.json";
+    if (!contractMatches) reasons.push("contract_mismatch");
+    if (!matchesProduct) {
+      reasons.push(explicitImageKey ? "image_key_mismatch" : toolset ? "toolset_mismatch" : "image_key_and_toolset_missing");
+    }
+    if (!toolManifestMatches) reasons.push("tool_manifest_mismatch");
+    if (!matchingRepoDigest && !imageId) reasons.push("immutable_ref_unavailable");
+    if (!explicitImageKey && compatibleImageKey === productKey) reasons.push("legacy_toolset_label_accepted");
+    const canAdopt = Boolean(imageId && immutableRef && contractMatches && matchesProduct && toolManifestMatches);
+    if (canAdopt) reasons.push("ready_for_adoption");
+    return {
+      image_ref: normalizedRef,
+      exists: true,
+      image_id: imageId,
+      repo_digests: repoDigests,
+      os: typeof raw.Os === "string" ? raw.Os : null,
+      arch: typeof raw.Architecture === "string" ? raw.Architecture : null,
+      labels: {
+        contract,
+        image_key: explicitImageKey,
+        tool_manifest: toolManifest,
+        tool_manifest_label: toolManifestLabel,
+        toolset,
+      },
+      contract_matches: contractMatches,
+      matches_product: matchesProduct,
+      tool_manifest_matches: toolManifestMatches,
+      immutable_ref: immutableRef,
+      can_adopt: canAdopt,
+      reasons,
+      error: null,
+    };
+  } catch (error) {
+    const rawError = error as { stderr?: unknown; code?: unknown };
+    const detail = sanitizeRuntimeImageError(rawError.stderr || error);
+    const notFound = /no such (image|object)|unable to find image|not found/i.test(detail);
+    return localInspectionSkeleton(normalizedRef, [notFound ? "image_not_found" : "docker_inspect_failed"], detail || "docker image inspect 失败");
+  }
 }
 
 function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
@@ -166,46 +339,154 @@ async function loadBundledRuntimeImageRegistry(): Promise<RuntimeImageRegistry> 
   throw new Error(`找不到运行时镜像注册表；已尝试：${candidates.join("、")}`);
 }
 
+function registryFetchError(error: unknown): string {
+  const text = sanitizeRuntimeImageError(error, 512);
+  if (!text) return "remote registry request failed";
+  if (/^HTTP \d{3}$/i.test(text)) return text;
+  if (/redirect/i.test(text)) return "remote registry redirect rejected";
+  if (/timeout|timed out|abort/i.test(text)) return "remote registry request timed out";
+  if (/JSON|schema|注册表|runtime-image-registry/i.test(text)) return "remote registry payload invalid";
+  if (/host|信任边界|hostname/i.test(text)) return "remote registry host rejected";
+  return "remote registry unavailable";
+}
+
+/** Exported for deterministic backend tests; host/redirect guards stay inside. */
+export async function fetchGithubResource(target: URL, accept: string, token?: string): Promise<string> {
+  let authorization = token ? `Bearer ${token}` : undefined;
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
+    if (target.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(target.hostname)) {
+      throw new Error("official registry host rejected");
+    }
+    const headers: Record<string, string> = { accept, "user-agent": "DeepSonar-Scheduler/1" };
+    // Never carry the GitHub token to release-assets/objects or an arbitrary
+    // redirect target. Only the fixed github.com/api.github.com trust boundary
+    // may receive Authorization.
+    if (authorization && OFFICIAL_RUNTIME_IMAGE_REGISTRY_AUTH_HOSTS.has(target.hostname)) headers.authorization = authorization;
+    const response = await fetch(target, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+      headers,
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location || redirects >= 5) throw new Error("official registry redirect rejected");
+      const next = new URL(location, target);
+      // A redirect to release-assets/objects is allowed for GitHub release
+      // assets, but the token is deliberately dropped on the next request.
+      if (next.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(next.hostname)) {
+        throw new Error("official registry redirect host rejected");
+      }
+      target = next;
+      authorization = undefined;
+      continue;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const finalUrl = new URL(response.url || target.toString());
+    if (finalUrl.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(finalUrl.hostname)) {
+      throw new Error("official registry final host rejected");
+    }
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
+      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
+    }
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
+      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
+    }
+    return text;
+  }
+  throw new Error("official registry redirect rejected");
+}
+
+async function fetchOfficialRuntimeRegistry(): Promise<RuntimeImageRegistry> {
+  const githubToken = config.images.registryGithubToken.trim();
+  if (githubToken) {
+    // GitHub's private release `latest/download` endpoint returns 404 even for
+    // a valid token. Resolve the release through api.github.com first, then use
+    // the authenticated asset API URL. The helper drops Authorization before
+    // following any redirect to release-assets/objects.
+    const releaseText = await fetchGithubResource(
+      new URL("https://api.github.com/repos/SummerSec/DeepSonar/releases/latest"),
+      "application/vnd.github+json",
+      githubToken,
+    );
+    if (Buffer.byteLength(releaseText, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
+      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
+    }
+    let release: unknown;
+    try {
+      release = JSON.parse(releaseText) as unknown;
+    } catch {
+      throw new Error("official release metadata invalid");
+    }
+    const assets = release && typeof release === "object" && Array.isArray((release as Record<string, unknown>).assets)
+      ? (release as Record<string, unknown>).assets as unknown[]
+      : [];
+    const asset = assets.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).name === "runtime-image-registry.json") as Record<string, unknown> | undefined;
+    const assetUrl = typeof asset?.url === "string" ? asset.url : typeof asset?.api_url === "string" ? asset.api_url : "";
+    if (!assetUrl) throw new Error("official registry asset missing");
+    const assetTarget = new URL(assetUrl);
+    if (assetTarget.protocol !== "https:" || assetTarget.hostname !== "api.github.com") {
+      throw new Error("official registry asset host rejected");
+    }
+    const assetText = await fetchGithubResource(assetTarget, "application/octet-stream", githubToken);
+    if (Buffer.byteLength(assetText, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
+      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
+    }
+    return parseRegistry(JSON.parse(assetText) as unknown);
+  }
+  const publicText = await fetchGithubResource(new URL(OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL), "application/json");
+  return parseRegistry(JSON.parse(publicText) as unknown);
+}
+
 async function loadRemoteRuntimeImageRegistry(force = false): Promise<RuntimeImageRegistry | null> {
   const now = Date.now();
   if (!force && remoteRegistryCache && now - remoteRegistryCache.checked_at < RUNTIME_IMAGE_REGISTRY_CACHE_MS) {
     return remoteRegistryCache.registry;
   }
   try {
-    const upstream = new URL(OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL);
-    if (upstream.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(upstream.hostname)) {
-      throw new Error("官方运行时清单地址不在固定 HTTPS 信任边界内");
-    }
-    const response = await fetch(upstream, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(10_000),
-      headers: { accept: "application/json", "user-agent": "DeepSonar-Scheduler/1" },
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const finalUrl = new URL(response.url);
-    if (finalUrl.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(finalUrl.hostname)) {
-      throw new Error(`官方运行时清单重定向到非信任主机: ${finalUrl.hostname}`);
-    }
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredLength) && declaredLength > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
-      throw new Error(`官方运行时清单超过 ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
-    }
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
-      throw new Error(`官方运行时清单超过 ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
-    }
-    const registry = parseRegistry(JSON.parse(text) as unknown);
-    remoteRegistryCache = { registry, checked_at: now };
+    const registry = await fetchOfficialRuntimeRegistry();
+    remoteRegistryCache = { registry, checked_at: now, error: null };
     return registry;
   } catch (error) {
-    remoteRegistryCache = { registry: null, checked_at: now };
-    console.warn(`[runtime-images] 获取官方最新清单失败，回退内置清单: ${error instanceof Error ? error.message : String(error)}`);
+    const safeError = registryFetchError(error);
+    remoteRegistryCache = { registry: null, checked_at: now, error: safeError };
+    console.warn(`[runtime-images] official registry unavailable; using bundled fallback (${safeError})`);
     return null;
   }
 }
 
 export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolean } = {}): Promise<RuntimeImageRegistry> {
-  return (await loadRemoteRuntimeImageRegistry(options.refreshRemote === true)) ?? loadBundledRuntimeImageRegistry();
+  const refreshRemote = options.refreshRemote === true;
+  const remote = await loadRemoteRuntimeImageRegistry(refreshRemote);
+  const checkedAt = new Date(remoteRegistryCache?.checked_at ?? Date.now()).toISOString();
+  const bundled = await loadBundledRuntimeImageRegistry();
+  if (remote) {
+    const remoteByKey = new Map(remote.images.map((image) => [image.image_key, image]));
+    const bundledKeys = new Set(bundled.images.map((image) => image.image_key));
+    // Release assets contain only products that have a published version. Keep
+    // the bundled product skeleton so not-yet-published products remain visible
+    // and build/adoptable, while every remote version stays authoritative.
+    const images = [
+      ...bundled.images.map((image) => remoteByKey.get(image.image_key) ?? image),
+      ...remote.images.filter((image) => !bundledKeys.has(image.image_key)),
+    ];
+    return {
+      ...remote,
+      images,
+      source: "remote",
+      fallback: false,
+      error: null,
+      checked_at: checkedAt,
+    };
+  }
+  return {
+    ...bundled,
+    source: "bundled",
+    fallback: true,
+    error: remoteRegistryCache?.error ?? "remote registry unavailable",
+    checked_at: checkedAt,
+  };
 }
 
 function envOfficialOverrides(): Array<{ image_key: string; image_ref: string }> {
@@ -278,7 +559,14 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       }
     }
   }
-  return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
+  return {
+    schema: RUNTIME_IMAGE_REGISTRY_SCHEMA,
+    images,
+    ...(registry.source ? { source: registry.source } : {}),
+    ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
+    ...(registry.error !== undefined ? { error: registry.error } : {}),
+    ...(registry.checked_at ? { checked_at: registry.checked_at } : {}),
+  };
 }
 
 function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageRegistry {
@@ -291,11 +579,24 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
       image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, platforms: ["linux/amd64", "linux/arm64"] });
     }
   }
-  return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
+  return {
+    schema: RUNTIME_IMAGE_REGISTRY_SCHEMA,
+    images,
+    ...(registry.source ? { source: registry.source } : {}),
+    ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
+    ...(registry.error !== undefined ? { error: registry.error } : {}),
+    ...(registry.checked_at ? { checked_at: registry.checked_at } : {}),
+  };
 }
 
 export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogSyncResult> {
-  const registry = registryWithEnvOverrides(await loadRuntimeImageRegistry({ refreshRemote: true }));
+  const loadedRegistry = await loadRuntimeImageRegistry({ refreshRemote: true });
+  const envOverrides = envOfficialOverrides();
+  const envOnlyKeys = new Set(envOverrides.flatMap((override) => {
+    const sourceImage = loadedRegistry.images.find((item) => item.image_key === override.image_key);
+    return sourceImage && sourceImage.versions.length === 0 ? [override.image_key] : [];
+  }));
+  const registry = registryWithEnvOverrides(loadedRegistry);
   for (const item of registry.images) {
     const [image] = await sql`
       INSERT INTO runtime_images ${sql({
@@ -310,30 +611,70 @@ export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogS
     if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
     for (const version of item.versions) {
       const digest = immutableDigest(version.image_ref)!;
-      await sql`
-        INSERT INTO runtime_image_versions ${sql({
-          runtime_image_id: image.id, version: version.version, image_ref: version.image_ref,
-          resolved_ref: version.image_ref, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
-          platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
-          size_bytes: version.size_bytes ?? null, scan_summary_json: { source: "static-registry", contract: "declared" } as never,
-          trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(), promoted_at: new Date(),
-        } as never)}
-        ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
-          image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
-          version = EXCLUDED.version,
-          platforms_json = CASE WHEN jsonb_array_length(EXCLUDED.platforms_json) > 0
-            THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
-          tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
-          size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
-          promoted_at = EXCLUDED.promoted_at, updated_at = now()`;
+      const envOnly = envOnlyKeys.has(item.image_key);
+      const source = envOnly ? "env-configured" : "static-registry";
+      const values = {
+        runtime_image_id: image.id, version: version.version, image_ref: version.image_ref,
+        resolved_ref: version.image_ref, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
+        platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
+        size_bytes: version.size_bytes ?? null, scan_summary_json: { source, contract: "declared" } as never,
+        trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(), promoted_at: new Date(),
+      } as never;
+      if (envOnly) {
+        // An operator-provided env digest is an explicit bootstrap hint. It may
+        // fill an empty catalog but must never resurrect a disabled/revoked
+        // version or steal the promoted slot on a later sync.
+        await sql`
+          INSERT INTO runtime_image_versions ${sql(values)}
+          ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
+            image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
+            version = EXCLUDED.version,
+            platforms_json = CASE WHEN jsonb_array_length(EXCLUDED.platforms_json) > 0
+              THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
+            tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
+            size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
+            updated_at = now()`;
+      } else {
+        // A digest present in the trusted official catalog is authoritative for
+        // that exact digest: it can repair a previously disabled/quarantined
+        // catalog row, but revoked rows stay revoked until an administrator
+        // explicitly changes them.
+        await sql`
+          INSERT INTO runtime_image_versions ${sql(values)}
+          ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
+            image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
+            version = EXCLUDED.version,
+            platforms_json = CASE WHEN jsonb_array_length(EXCLUDED.platforms_json) > 0
+              THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
+            tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
+            size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
+            trust_status = CASE WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
+              THEN 'trusted' ELSE runtime_image_versions.trust_status END,
+            approved_by = CASE WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
+              THEN EXCLUDED.approved_by ELSE runtime_image_versions.approved_by END,
+            approved_at = CASE WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
+              THEN EXCLUDED.approved_at ELSE runtime_image_versions.approved_at END,
+            updated_at = now()`;
+      }
     }
-    const promotedDigest = item.versions[0] ? immutableDigest(item.versions[0].image_ref) : null;
+    const digests = item.versions.map((version) => immutableDigest(version.image_ref)).filter((value): value is string => Boolean(value));
+    const trustedRows = await sql`SELECT digest FROM runtime_image_versions
+      WHERE runtime_image_id = ${image.id} AND trust_status = 'trusted'`;
+    const trustedDigests = new Set(trustedRows.map((row) => row.digest as string));
+    const promotedDigest = digests.find((digest) => trustedDigests.has(digest)) ?? null;
     if (promotedDigest) {
       await sql`
         UPDATE runtime_image_versions
-        SET promoted_at = NULL, updated_at = now()
-        WHERE runtime_image_id = ${image.id} AND digest IS DISTINCT FROM ${promotedDigest}`;
+        SET promoted_at = CASE WHEN digest = ${promotedDigest} THEN COALESCE(promoted_at, now()) ELSE NULL END,
+            updated_at = now()
+        WHERE runtime_image_id = ${image.id} AND trust_status = 'trusted'`;
     }
+    // A disabled version (including an env override) remains a diagnostic
+    // candidate only; clear any stale promotion marker so it cannot look like
+    // the market's latest item.
+    await sql`
+      UPDATE runtime_image_versions SET promoted_at = NULL, updated_at = now()
+      WHERE runtime_image_id = ${image.id} AND trust_status = 'disabled'`;
   }
   return {
     registry,
@@ -363,7 +704,16 @@ export function runtimeImagePullStatus(): RuntimeImagePullTask | null {
 
 function pullRuntimeImage(imageRef: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", ["pull", imageRef], { shell: false, stdio: "ignore", windowsHide: true });
+    const child = spawn("docker", ["pull", imageRef], { shell: false, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    let stderr = "";
+    const capture = (chunk: Buffer | string) => {
+      if (Buffer.byteLength(stderr, "utf8") >= RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES) return;
+      stderr += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      if (Buffer.byteLength(stderr, "utf8") > RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES) {
+        while (Buffer.byteLength(stderr, "utf8") > RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES) stderr = stderr.slice(0, -1);
+      }
+    };
+    child.stderr?.on("data", capture);
     let settled = false;
     const finish = (error?: Error) => {
       if (settled) return;
@@ -379,7 +729,10 @@ function pullRuntimeImage(imageRef: string): Promise<void> {
     child.once("error", (error) => finish(error));
     child.once("close", (code) => {
       if (code === 0) finish();
-      else finish(new Error(`docker pull exit code ${code ?? "unknown"}`));
+      else {
+        const detail = sanitizeRuntimeImageError(stderr);
+        finish(new Error(`docker pull exit code ${code ?? "unknown"}${detail ? `: ${detail}` : ""}`));
+      }
     });
   });
 }
@@ -409,9 +762,9 @@ export async function startRuntimeImagePull(): Promise<RuntimeImagePullTask> {
       try {
         await pullRuntimeImage(item.image_ref);
         item.status = "succeeded";
-      } catch {
+      } catch (error) {
         item.status = "failed";
-        item.error = "docker pull 失败，请检查 Docker、网络和 registry 凭据";
+        item.error = sanitizeRuntimeImageError(error) || "docker pull 失败，请检查 Docker、网络和 registry 凭据";
       }
       task.completed += 1;
     }
