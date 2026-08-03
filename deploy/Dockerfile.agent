@@ -71,10 +71,16 @@ WORKDIR /workspace
 # budget reflects what users actually pull and store.
 FROM scratch
 ARG TOOLSET=base
+ARG OCI_TITLE="DeepSonar Runtime"
+ARG OCI_DESCRIPTION="DeepSonar official governed Agent sandbox runtime."
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="${TOOLSET}" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar"
+      org.opencontainers.image.title="${OCI_TITLE}" \
+      org.opencontainers.image.description="${OCI_DESCRIPTION}" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="MIT"
 ENV IS_SANDBOX=1 \
     SEMGREP_SEND_METRICS=off \
     SEMGREP_ENABLE_VERSION_CHECK=0

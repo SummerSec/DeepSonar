@@ -79,9 +79,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          labels: |
+            org.opencontainers.image.title=DeepSonar Base
+            org.opencontainers.image.description=Explore、Analyze、Code、Hub、Verify 与系统沙箱使用的 DeepSonar 官方最小运行时。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
       - id: dockerhub-meta
         if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/metadata-action@v5
@@ -113,6 +120,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: TOOLSET=base
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
           cache-from: type=gha,scope=base
@@ -141,10 +149,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", dockerhub_tag: "" }
-          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", dockerhub_tag: "" }
-          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", dockerhub_tag: "" }
-          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "audit" }
+          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Scheduler", description: "DeepSonar 调度器与唯一副作用执行服务。" }
+          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Web", description: "DeepSonar Loop Graph 工程平台 Web 控制台。" }
+          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Image Admission", description: "DeepSonar 第三方运行镜像准入与安全扫描 Worker。" }
+          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "audit", title: "DeepSonar Audit", description: "DeepSonar Audit 的官方审计运行时。" }
           # kali-minimal 体量大，amd64+arm64 同作业并行导出易 ENOSPC；独立 job 顺序构建
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -204,9 +212,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: ${{ matrix.name == 'audit' && 'manifest,index' || 'manifest' }}
       - id: dockerhub-meta
         if: ${{ matrix.dockerhub_tag != '' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/metadata-action@v5
@@ -237,6 +252,8 @@ jobs:
             ${{ steps.acr-meta.outputs.tags }}
           platforms: ${{ matrix.platforms }}
           build-args: ${{ matrix.name == 'audit' && 'TOOLSET=audit' || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
           cache-from: type=gha,scope=${{ matrix.name }}
@@ -329,9 +346,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.title=DeepSonar Kali Test
+            org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest
       - id: dockerhub-meta
         if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/metadata-action@v5
@@ -358,6 +382,8 @@ jobs:
           file: deploy/Dockerfile.agent-kali-minimal
           platforms: linux/amd64
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
           sbom: false
           cache-from: type=gha,scope=kali-minimal-amd64
@@ -377,6 +403,8 @@ jobs:
           file: deploy/Dockerfile.agent-kali-minimal
           platforms: linux/arm64
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
           sbom: false
           cache-from: type=gha,scope=kali-minimal-arm64
@@ -401,7 +429,13 @@ jobs:
             tag_args+=(-t "$tag")
           done <<< "$(printf '%s\n%s\n%s\n' "$GHCR_TAGS" "${DOCKERHUB_TAGS:-}" "${ACR_TAGS:-}")"
           [[ ${#tag_args[@]} -gt 0 ]]
-          docker buildx imagetools create "${tag_args[@]}" "${source_refs[@]}"
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test" \
+            --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar" \
+            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+            --annotation "index:org.opencontainers.image.licenses=MIT" \
+            "${tag_args[@]}" "${source_refs[@]}"
           # 取 GHCR 首个标签的 multi-arch index digest
           primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
           digest="$(docker buildx imagetools inspect --raw "$primary" | node -e '
@@ -488,9 +522,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-test
+          labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Test
+            org.opencontainers.image.description=OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
       - id: acr-meta
         if: ${{ steps.acr-config.outputs.configured == 'true' }}
         uses: docker/metadata-action@v5
@@ -521,6 +562,8 @@ jobs:
             ${{ steps.dockerhub-meta.outputs.tags }}
           platforms: linux/amd64,linux/arm64
           build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-base:${{ needs.base-image.outputs.version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
           cache-from: type=gha,scope=openharmony-test

@@ -40,7 +40,11 @@ FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="openharmony-test" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar"
+      org.opencontainers.image.title="DeepSonar OpenHarmony Test" \
+      org.opencontainers.image.description="OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="MIT"
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
     PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
