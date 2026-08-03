@@ -19,7 +19,7 @@ if (toolset === "kali-minimal") commands.push(
   "java17 -version", "javac17 -version",
   "test \"$JAVA_HOME\" = /opt/deepsonar/jdks/17", "java -version", "javac -version",
   `test \"$MAVEN_HOME\" = /opt/deepsonar/maven`,
-  `test \"$(command -v mvn)\" = /opt/deepsonar/maven/bin/mvn`,
+  `test \"$(readlink -f \"$(command -v mvn)\")\" = /opt/deepsonar/maven/bin/mvn`,
   `mvn -v | grep -F 'Apache Maven ${config.downloads.maven.version}'`,
   "test ! -d /root/.m2", "test -x /opt/deepsonar/maven/bin/mvn",
   "go version", "rustc --version", "cargo --version", "cc --version",

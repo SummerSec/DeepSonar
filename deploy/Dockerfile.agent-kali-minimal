@@ -80,6 +80,7 @@ RUN set -eu; \
     rm -rf /opt/deepsonar/maven; mkdir -p /opt/deepsonar/maven; \
     tar -xzf "$maven_archive" -C /opt/deepsonar/maven --strip-components=1; \
     test -x /opt/deepsonar/maven/bin/mvn; \
+    ln -s /opt/deepsonar/maven/bin/mvn /usr/local/bin/mvn; \
     rm "$maven_archive"
 
 RUN set -eu; \
