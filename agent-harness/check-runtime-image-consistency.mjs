@@ -162,7 +162,14 @@ expect(openHarmonyFuzzEnv.includes("clang -print-target-triple"), "OpenHarmony F
 expect(openHarmonyFuzzEnv.includes("fuzzer_interceptors"), "OpenHarmony Fuzz check must verify the libFuzzer interceptor archive");
 expect(openHarmonyFuzzEnv.includes("ubsan_standalone"), "OpenHarmony Fuzz check must verify the UBSan compiler-rt archive");
 expect(openHarmonyFuzzEnv.includes("-fsanitize=fuzzer,address,undefined"), "OpenHarmony Fuzz check must compile with the production sanitizer set");
-expect(openHarmonyFuzzEnv.includes("ASAN_OPTIONS=detect_leaks=0") && openHarmonyFuzzEnv.includes('"$smoke_binary" -runs=1'), "OpenHarmony Fuzz check must run the sanitizer/libFuzzer smoke binary");
+expect(openHarmonyFuzzEnv.includes("--static"), "OpenHarmony Fuzz check must expose a static cross-architecture mode");
+expect(openHarmonyFuzzEnv.includes("readelf -h") && openHarmonyFuzzEnv.includes("readelf -Ws") && openHarmonyFuzzEnv.includes("file \"$smoke_binary\""), "OpenHarmony Fuzz static mode must inspect ELF metadata");
+expect(openHarmonyFuzzEnv.includes("__asan_init") && openHarmonyFuzzEnv.includes("LLVMFuzzerRunDriver"), "OpenHarmony Fuzz static mode must prove ASan/libFuzzer instrumentation");
+expect(openHarmonyFuzzEnv.includes("tool-manifest.json") && openHarmonyFuzzEnv.includes("deepsonar.runtime.contract/v1"), "OpenHarmony Fuzz check must validate its runtime manifest");
+expect(openHarmonyFuzzEnv.includes('if [[ "$check_mode" == "static" ]]'), "OpenHarmony Fuzz static mode must branch before sanitizer execution");
+expect(openHarmonyFuzzEnv.includes("ASAN_OPTIONS=detect_leaks=0") && openHarmonyFuzzEnv.includes('"$smoke_binary" -runs=1'), "OpenHarmony Fuzz amd64 mode must run the sanitizer/libFuzzer smoke binary");
+expect(openHarmonyFuzzDockerfile.includes("ARG TARGETARCH") && openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check --static"), "OpenHarmony Fuzz image build must use static mode for arm64 targets");
+expect(ciWorkflow.includes("check_args: --check --static") && ciWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
 expect(openHarmonyDockerfile.includes("openharmony-env.sh --check"), "OpenHarmony Test 必须在构建时执行环境 smoke check");
 expect(openHarmonyAuditDockerfile.includes("openharmony-audit-env.sh --check"), "OpenHarmony Audit 必须在构建时执行环境 smoke check");
 expect(openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check"), "OpenHarmony Fuzz 必须在构建时执行环境 smoke check");
