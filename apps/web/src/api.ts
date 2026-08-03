@@ -39,11 +39,30 @@ export interface CanvasEdge {
 }
 
 export interface CanvasData {
-  canvas?: { id: string; title: string; target_json: Record<string, unknown>; project_id?: string };
+  canvas?: CanvasLifecycle & {
+    id: string;
+    title: string;
+    target_json: Record<string, unknown>;
+    project_id?: string;
+  };
   canvas_id: string;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   convergence?: CanvasConvergence;
+}
+
+/** 任务画布的生命周期聚合（由调度器按 Job 时间戳计算）。 */
+export interface CanvasLifecycle {
+  /** 画布创建时间，是任务生命周期的起点。 */
+  created_at: string;
+  /** 所有 Job 中第一个实际开始执行的时间；pending 尚未开始时为 null。 */
+  started_at: string | null;
+  /** 无活动 Job 后的最后完成时间；存在活动 Job 时始终为 null。 */
+  ended_at: string | null;
+  /** 活动 Job 数量（pending 也算活动工作）。 */
+  active_count?: number;
+  /** 画布上累计 Job 数量。 */
+  job_count?: number;
 }
 
 /** 任务画布列表项（一任务一画布；聚合最近一次 job 得任务状态） */
@@ -55,6 +74,9 @@ export interface CanvasSummary {
   created_at: string;
   status: "active" | "archived";
   archived_at: string | null;
+  /** 首个实际开始、终态结束与活动 Job 数量，均由服务端 rollup。 */
+  started_at: string | null;
+  ended_at: string | null;
   job_count: number;
   active_count: number;
   finding_count: number;

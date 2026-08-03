@@ -32,6 +32,7 @@ import {
   FilterSelect,
   SeverityBadge,
   StatusBadge,
+  formatElapsed,
   formatTime,
   relativeTime,
   tdCls,
@@ -40,6 +41,8 @@ import {
 
 type Tab = "canvas" | "findings" | "jobs" | "report";
 
+// Human-gated work is still active; current running elapsed therefore continues
+// from the first actual start while a Job is waiting_human.
 const ACTIVE_JOB = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 
 /** 任务状态 chip（root 节点状态 → 中文；§8.1 报告成功才是任务最终完成） */
@@ -119,10 +122,17 @@ export function TaskCanvasPage() {
   const [convBusy, setConvBusy] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  const [clock, setClock] = useState(() => Date.now());
   /** 任务内容 / 审计范围：默认折叠，避免挤占画布 */
   const [scopeOpen, setScopeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // Lifecycle counters remain live while the task is open, independent of API polling.
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!canvasId || !projectId) return;
@@ -191,6 +201,13 @@ export function TaskCanvasPage() {
   const canResumeSession = !hasActiveJob && jobs.length > 0;
   const canHardRetry = !hasActiveJob && jobs.length > 0;
   const activeJobs = jobs.filter((j) => ACTIVE_JOB.has(j.status));
+  const lifecycleActive = (meta?.active_count ?? 0) > 0 || hasActiveJob;
+  const runningElapsed = meta?.started_at
+    ? formatElapsed(meta.started_at, meta.ended_at, clock)
+    : lifecycleActive
+      ? "等待启动"
+      : "—";
+  const lifecycleElapsed = meta ? formatElapsed(meta.created_at, meta.ended_at, clock) : "—";
 
   /** 强制退出画布上全部活动 Job（含 running） */
   const forceExitActive = async () => {
@@ -346,6 +363,15 @@ export function TaskCanvasPage() {
               .join(" · ")}
             {msg ? ` · ${msg}` : ""}
           </span>
+          {meta && (
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-5">
+              <LifecycleDatum label="创建" value={relativeTime(meta.created_at)} title={formatTime(meta.created_at)} />
+              <LifecycleDatum label="首个开始" value={meta.started_at ? relativeTime(meta.started_at) : "等待启动"} title={meta.started_at ? formatTime(meta.started_at) : "尚未有 Job 实际开始"} />
+              <LifecycleDatum label="运行耗时" value={runningElapsed} title={meta.started_at ? (meta.ended_at ? "从首个实际开始到终态结束" : "从首个实际开始到现在") : undefined} active={lifecycleActive} />
+              <LifecycleDatum label="生命周期" value={lifecycleElapsed} title="从画布创建到结束（或现在）" />
+              <LifecycleDatum label="结束" value={meta.ended_at ? formatTime(meta.ended_at) : lifecycleActive ? "进行中" : "—"} title={meta.ended_at ? formatTime(meta.ended_at) : undefined} />
+            </div>
+          )}
         </div>
         {/* 唯一主操作：暂停 / 继续；次要能力收进 ⋯ */}
         <div className="flex shrink-0 items-center gap-1.5">
@@ -705,4 +731,8 @@ export function TaskCanvasPage() {
       {selectedJob && <JobDetailPanel jobId={selectedJob} onClose={() => setQuery("job", null)} />}
     </div>
   );
+}
+
+function LifecycleDatum({ label, value, title, active = false }: { label: string; value: string; title?: string; active?: boolean }) {
+  return <span className="min-w-0 truncate" title={title}><span className="text-zinc-700">{label} </span><strong className={active ? "font-medium text-run-400" : "font-medium text-zinc-400"}>{value}</strong></span>;
 }

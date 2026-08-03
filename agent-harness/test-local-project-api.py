@@ -72,6 +72,14 @@ def main():
         "pending", "claimed", "provisioning", "running", "succeeded", "waiting_human",
     ), row
     assert row["last_job_priority"] >= 0
+    # Lifecycle rollups: canvas creation is the origin; pending work has no fake start;
+    # an active task cannot expose a terminal end timestamp.
+    assert row["created_at"]
+    assert "started_at" in row and "ended_at" in row
+    if row["active_count"] > 0:
+        assert row["ended_at"] is None, row
+    if row["started_at"] is None and row["last_job_status"] == "pending":
+        assert row["ended_at"] is None, row
     print("任务聚合 OK:", row["last_job_status"], "priority", row["last_job_priority"])
 
     # 6. 优先级：pending 可改（job 可能已被 fake 调度跑掉，两种结果都合法）
@@ -136,6 +144,12 @@ def main():
     while active_jobs():
         assert time.time() < quiesce_deadline, "画布活动 job 10 分钟内未清空（无法安全重试）"
         time.sleep(5)
+
+    # Once all work is terminal, the rollup freezes the latest finished_at as ended_at.
+    settled = next(r for r in req("GET", f"/projects/{pid}/canvases") if r["id"] == cid)
+    assert settled["active_count"] == 0 and settled["ended_at"], settled
+    if settled["started_at"]:
+        assert settled["started_at"] <= settled["ended_at"], settled
 
     old_job_ids = {
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
