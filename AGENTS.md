@@ -19,6 +19,8 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - **联调不开沙箱**：`.env` 设 `AGENT_MODE=fake`（默认），dispatcher 走 NoopRunner 只跑状态机；`AGENT_MODE=real` 才经 agentbox-sdk 起真实容器。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
 - **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission 四个 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。CI 在 `.github/workflows/ci.yml`，GHCR 制品发布在 `release.yml`。
+- **镜像发布**：Release 必须显式向多架构 OCI index 写入各镜像专属 annotations；Docker Hub 仅在 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN` 同时存在时发布，Actions 中被跳过的“凭据未配置”步骤不代表登录失败。
+- **发布纪律**：先确保 main CI 全绿，再创建新的 `v*` 标签；不要覆盖旧标签或尝试修改既有 digest 的说明与证据。
 
 ## 架构要点（跨文件才能看懂的部分）
 
@@ -61,6 +63,8 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 - `SandboxRunner` 是调度器与沙箱之间唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（agentbox-sdk，可切 local-docker/e2b/daytona）。换 provider 只动这个包。
 - 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
+- **系统沙箱**：RoleConfig 的 `runtime_image_key=null` 表示不绑定市场镜像；Scheduler 仍使用受治理的最小 Base 底座，并在 Job 快照中冻结不可变 digest。Test/Audit 等专项角色才默认或显式绑定专项镜像。
+- **最新版本策略**：官方市场从 GitHub Release 的 `latest/runtime-image-registry.json` 同步并只提升最新版本；旧版本仅保留给显式 pin 与历史 Job，实际执行始终使用快照中的 digest，不使用可变 `latest`。
 - 运行镜像由 RoleConfig 的市场 key 选择，Job 创建时冻结已准入的 `name@sha256:digest`、工具清单哈希和扫描 ID；Dispatcher 不重新解析 tag。第三方镜像只能经 `apps/image-admission` 扫描、管理员批准、项目启用后执行，Agent/Hub/任务内容都不能指定镜像引用。
 - 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `deepsonar-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
 - 语义事件由本地 MCP 写入控制队列，再经 agentbox-sdk 控制通道增量回传，**不经沙箱目标网络**；同一画布的新 Fact/Finding 通过 `Agent.attach(...).sendMessage(...)` 追加给仍在运行的 Agent CLI。终态后删除队列并销毁沙箱。
