@@ -41,9 +41,14 @@ export function sanitizeAgentSnapshot(snap: unknown): Record<string, unknown> {
   delete s.sandbox_id;
   // credential 只保留可映射的逻辑字段
   if (s.credential_id) {
-    s.credential_ref = { source_id: s.credential_id, provider: s.credential_provider ?? null };
+    s.credential_ref = {
+      source_id: s.credential_id,
+      name: s.credential_name ?? null,
+      provider: s.credential_provider ?? null,
+    };
   }
   delete s.credential_id;
+  delete s.credential_name;
   if (s.env_vars && typeof s.env_vars === "object") {
     const { safe, redacted_keys } = filterEnvVars(s.env_vars as Record<string, unknown>);
     s.env_vars = safe;

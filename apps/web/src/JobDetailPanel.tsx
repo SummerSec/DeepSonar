@@ -1,6 +1,6 @@
 import { DownloadSimple, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type JobDetail, type JobEvidence, type JobEvent } from "./api";
+import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, ProcessStreamView, recordsToStreamBlocks } from "./LiveStream";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
@@ -43,11 +43,11 @@ function snapStr(snap: Record<string, unknown> | null | undefined, key: string):
   }
 }
 
-function ConfigField({ label, value }: { label: string; value: string }) {
+function ConfigField({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
     <div className="theme-surface min-w-0 rounded-xl px-3 py-2.5 ring-1">
       <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">{label}</div>
-      <div className="mt-1 break-all font-mono text-[12px] text-zinc-200" title={value}>
+      <div className="mt-1 break-all font-mono text-[12px] text-zinc-200" title={title ?? value}>
         {value}
       </div>
     </div>
@@ -64,6 +64,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [eventTypeFilter, setEventTypeFilter] = useState("");
   const [eventQuery, setEventQuery] = useState("");
+  const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
 
   // 初次加载 + 运行中轮询：与调度器账本保持同步
   useEffect(() => {
@@ -76,6 +77,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     setDownloadError(null);
     setEventTypeFilter("");
     setEventQuery("");
+    api.credentials().then((list) => alive && setCredentials(list)).catch(() => {});
 
     const loadCore = () =>
       api
@@ -147,6 +149,16 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const agentCli = snapStr(snapshot, "agent_cli");
   const model = snapStr(snapshot, "model");
   const roleName = snapStr(snapshot, "name");
+  const credentialId = snapStr(snapshot, "credential_id");
+  const credentialLabel = useMemo(() => {
+    if (!snapshot) return "—";
+    const frozenName = snapStr(snapshot, "credential_name");
+    if (frozenName !== "—") return frozenName;
+    const id = snapStr(snapshot, "credential_id");
+    if (id === "—") return "—";
+    const hit = credentials.find((c) => c.id === id);
+    return hit?.name?.trim() || id;
+  }, [snapshot, credentials]);
 
   /** 下发 prompt / 运行摘要：来自 payload.intent 与 done 事件 */
   const dispatchPrompt = useMemo(() => {
@@ -670,8 +682,9 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                         value={snapStr(snapshot, "credential_provider")}
                       />
                       <ConfigField
-                        label="Credential ID"
-                        value={snapStr(snapshot, "credential_id")}
+                        label="凭据"
+                        value={credentialLabel}
+                        title={credentialId !== "—" ? `ID: ${credentialId}` : undefined}
                       />
                       <ConfigField
                         label="RoleConfig 版本"

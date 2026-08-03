@@ -328,8 +328,10 @@ export interface AgentRuntimeSnapshot {
   /** RoleConfig 内声明的非敏感环境变量。 */
   env_vars: Record<string, string>;
   env_keys: string[];
-  /** 绑定的 Provider Credential（§6.2）：快照只存 id/provider，密钥运行时解密，不进快照 */
+  /** 绑定的 Provider Credential（§6.2）：快照只存 id/name/provider，密钥运行时解密，不进快照 */
   credential_id: string | null;
+  /** 凭据展示名（创建 Job 时冻结；UI 优先展示此字段而非 UUID） */
+  credential_name: string | null;
   credential_provider: string | null;
   /** 勾选的 Git 模块（["<source_id>:<module_id>"]，展示用；下发内容已展开进 skills/commands） */
   modules: string[];
@@ -1621,7 +1623,7 @@ export async function resolveAgentSnapshotForJob(
 
   const [llm] = cfg
     ? await db`
-        SELECT c.id, c.provider, c.status, c.project_id AS cred_project_id, c.public_metadata_json
+        SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id, c.public_metadata_json
         FROM role_credentials rc
         JOIN credentials c ON c.id = rc.credential_id
         WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
@@ -1676,6 +1678,7 @@ export async function resolveAgentSnapshotForJob(
     env_vars: (cfg?.env_vars_json as Record<string, string>) ?? config.runtime.agentEnv,
     env_keys: (cfg?.env_keys as string[]) ?? [],
     credential_id: (llm?.id as string) ?? null,
+    credential_name: (llm?.name as string) ?? null,
     credential_provider: (llm?.provider as string) ?? null,
     modules,
     skill_revisions: expanded.revisions,
