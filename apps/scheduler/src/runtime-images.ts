@@ -7,6 +7,10 @@ import { sql } from "./db.js";
 
 export const RUNTIME_IMAGE_CONTRACT = "deepsonar.runtime.contract/v1";
 export const RUNTIME_IMAGE_REGISTRY_SCHEMA = "deepsonar.registry/v1";
+const OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL = "https://github.com/SummerSec/DeepSonar/releases/latest/download/runtime-image-registry.json";
+const OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS = new Set(["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"]);
+const RUNTIME_IMAGE_REGISTRY_MAX_BYTES = 1024 * 1024;
+const RUNTIME_IMAGE_REGISTRY_CACHE_MS = 5 * 60_000;
 
 export interface RuntimeImageRegistryVersion {
   version: string;
@@ -58,6 +62,7 @@ export interface RuntimeImagePullTask {
 }
 
 let runtimeImagePullTask: RuntimeImagePullTask | null = null;
+let remoteRegistryCache: { registry: RuntimeImageRegistry | null; checked_at: number } | null = null;
 
 export interface RuntimeImageSnapshot {
   runtime_image_id: string | null;
@@ -143,7 +148,7 @@ function parseRegistry(raw: unknown): RuntimeImageRegistry {
   return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
 }
 
-export async function loadRuntimeImageRegistry(): Promise<RuntimeImageRegistry> {
+async function loadBundledRuntimeImageRegistry(): Promise<RuntimeImageRegistry> {
   const candidates = [
     path.resolve(process.cwd(), "deploy/runtime-image-registry.json"),
     path.resolve(process.cwd(), "../../deploy/runtime-image-registry.json"),
@@ -161,6 +166,48 @@ export async function loadRuntimeImageRegistry(): Promise<RuntimeImageRegistry> 
   throw new Error(`找不到运行时镜像注册表；已尝试：${candidates.join("、")}`);
 }
 
+async function loadRemoteRuntimeImageRegistry(force = false): Promise<RuntimeImageRegistry | null> {
+  const now = Date.now();
+  if (!force && remoteRegistryCache && now - remoteRegistryCache.checked_at < RUNTIME_IMAGE_REGISTRY_CACHE_MS) {
+    return remoteRegistryCache.registry;
+  }
+  try {
+    const upstream = new URL(OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL);
+    if (upstream.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(upstream.hostname)) {
+      throw new Error("官方运行时清单地址不在固定 HTTPS 信任边界内");
+    }
+    const response = await fetch(upstream, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000),
+      headers: { accept: "application/json", "user-agent": "DeepSonar-Scheduler/1" },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const finalUrl = new URL(response.url);
+    if (finalUrl.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(finalUrl.hostname)) {
+      throw new Error(`官方运行时清单重定向到非信任主机: ${finalUrl.hostname}`);
+    }
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
+      throw new Error(`官方运行时清单超过 ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
+    }
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
+      throw new Error(`官方运行时清单超过 ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
+    }
+    const registry = parseRegistry(JSON.parse(text) as unknown);
+    remoteRegistryCache = { registry, checked_at: now };
+    return registry;
+  } catch (error) {
+    remoteRegistryCache = { registry: null, checked_at: now };
+    console.warn(`[runtime-images] 获取官方最新清单失败，回退内置清单: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolean } = {}): Promise<RuntimeImageRegistry> {
+  return (await loadRemoteRuntimeImageRegistry(options.refreshRemote === true)) ?? loadBundledRuntimeImageRegistry();
+}
+
 function envOfficialOverrides(): Array<{ image_key: string; image_ref: string }> {
   return [
     ["deepsonar-base", config.images.officialBaseRef],
@@ -175,7 +222,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
   const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
-    if (!image) continue;
+    if (!image || image.versions.length > 0) continue;
     const digest = immutableDigest(override.image_ref)!;
     if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
       image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, platforms: ["linux/amd64", "linux/arm64"] });
@@ -205,12 +252,13 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       };
       images.push(image);
     }
-    if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
-      const sizeBytes = typeof row.size_bytes === "number"
-        ? row.size_bytes
-        : typeof row.size_bytes === "string" && /^\d+$/.test(row.size_bytes)
-          ? Number(row.size_bytes)
-          : null;
+    const sizeBytes = typeof row.size_bytes === "number"
+      ? row.size_bytes
+      : typeof row.size_bytes === "string" && /^\d+$/.test(row.size_bytes)
+        ? Number(row.size_bytes)
+        : null;
+    const existingVersion = image.versions.find((version) => immutableDigest(version.image_ref) === digest);
+    if (!existingVersion) {
       image.versions.push({
         version: row.version as string,
         image_ref: imageRef as string,
@@ -218,6 +266,16 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
         ...(Array.isArray(row.platforms_json) ? { platforms: row.platforms_json as string[] } : {}),
         ...(sizeBytes !== null && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0 ? { size_bytes: sizeBytes } : {}),
       });
+    } else {
+      if (!existingVersion.tools_manifest_sha256 && typeof row.tools_manifest_sha256 === "string") {
+        existingVersion.tools_manifest_sha256 = row.tools_manifest_sha256;
+      }
+      if ((!existingVersion.platforms || existingVersion.platforms.length === 0) && Array.isArray(row.platforms_json)) {
+        existingVersion.platforms = row.platforms_json as string[];
+      }
+      if (existingVersion.size_bytes === undefined && sizeBytes !== null && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0) {
+        existingVersion.size_bytes = sizeBytes;
+      }
     }
   }
   return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
@@ -227,7 +285,7 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
   const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
-    if (!image) continue;
+    if (!image || image.versions.length > 0) continue;
     const digest = immutableDigest(override.image_ref)!;
     if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
       image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, platforms: ["linux/amd64", "linux/arm64"] });
@@ -237,7 +295,7 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
 }
 
 export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogSyncResult> {
-  const registry = registryWithEnvOverrides(await loadRuntimeImageRegistry());
+  const registry = registryWithEnvOverrides(await loadRuntimeImageRegistry({ refreshRemote: true }));
   for (const item of registry.images) {
     const [image] = await sql`
       INSERT INTO runtime_images ${sql({
@@ -262,9 +320,19 @@ export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogS
         } as never)}
         ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
           image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
-          version = EXCLUDED.version, platforms_json = EXCLUDED.platforms_json,
-          tools_manifest_sha256 = EXCLUDED.tools_manifest_sha256, size_bytes = EXCLUDED.size_bytes,
+          version = EXCLUDED.version,
+          platforms_json = CASE WHEN jsonb_array_length(EXCLUDED.platforms_json) > 0
+            THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
+          tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
+          size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
           promoted_at = EXCLUDED.promoted_at, updated_at = now()`;
+    }
+    const promotedDigest = item.versions[0] ? immutableDigest(item.versions[0].image_ref) : null;
+    if (promotedDigest) {
+      await sql`
+        UPDATE runtime_image_versions
+        SET promoted_at = NULL, updated_at = now()
+        WHERE runtime_image_id = ${image.id} AND digest IS DISTINCT FROM ${promotedDigest}`;
     }
   }
   return {
@@ -273,6 +341,20 @@ export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogS
     version_count: registry.images.reduce((total, image) => total + image.versions.length, 0),
     synced_at: new Date().toISOString(),
   };
+}
+
+export function startRuntimeImageRegistrySync(): () => void {
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void syncOfficialRuntimeCatalog()
+      .then((result) => console.log(`[runtime-images] 官方清单已自动同步：${result.version_count} 个当前版本`))
+      .catch((error) => console.warn(`[runtime-images] 官方清单自动同步失败: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => { running = false; });
+  }, config.images.registrySyncSec * 1000);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 export function runtimeImagePullStatus(): RuntimeImagePullTask | null {

@@ -25,6 +25,7 @@ const assertRegistry = (registry) => {
       throw new Error(`${key} image_ref 必须是不可变 manifest digest`);
     }
     if (!Array.isArray(version.platforms) || version.platforms.length === 0) throw new Error(`${key} platforms 无效`);
+    if (!Number.isSafeInteger(version.size_bytes) || version.size_bytes <= 0) throw new Error(`${key} size_bytes 无效`);
   }
 };
 
@@ -55,6 +56,7 @@ if (checkOnly) {
         version: process.env.VERSION,
         image_ref: imageRef,
         platforms: descriptor.platforms,
+        size_bytes: descriptor.size_bytes,
       }],
     };
   });

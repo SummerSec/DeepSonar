@@ -199,7 +199,7 @@ docker run --rm -it -w /workspace deepsonar-openharmony-test:local \
 
 本地构建或已有本地 tag 会先通过 `docker image inspect` 取得完整 image ID，并在 `SANDBOX_PROVIDER=local-docker` 下自动登记为官方 trusted 的 local-only 版本。该版本只适用于当前机器的 local-docker，不会进入导出 registry 清单；生产、多机部署仍应使用 registry manifest 的 `name@sha256:<digest>`。OpenHarmony 镜像在 base、audit、Kali 流程后准备，并依赖本地 `deepsonar-base:local`，整体准备仍由部署脚本后台异步执行。
 
-镜像市场全局页的“同步市场”只会重新读取当前部署内置的 `deploy/runtime-image-registry.json` 与环境变量覆盖，并幂等同步本地数据库，不会联网抓取任意 URL。要获取真正更新的市场文件，仍需通过部署更新、git pull 或未来配置的可信上游完成。同步后可用“异步拉取”按顺序拉取清单内远程不可变版本；本地 raw image ID 不会被 pull。
+Scheduler 启动时及其后每隔 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC`（默认 3600 秒）从固定的官方 GitHub Release 地址获取最新 `runtime-image-registry.json`，失败时回退当前部署内置清单；全局页“同步市场”会立即执行同一条受信任同步路径，不接受任意 URL。正式发布版本优先，`DEEPSONAR_OFFICIAL_*_IMAGE` 只在官方清单尚无版本时作为启动兜底。历史版本继续保留用于项目显式固定与 Job 快照，但不会保持默认 promoted 状态。同步后可用“异步拉取”按顺序拉取清单内远程不可变版本；本地 raw image ID 不会被 pull。
 
 ## 6. 数据库 schema 基线
 

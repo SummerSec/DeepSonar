@@ -8,7 +8,7 @@ import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
 import { startPlaneSync } from "./plane-sync.js";
 import { startTransferWorker } from "./transfer/worker.js";
-import { bootstrapOfficialRuntimeImages } from "./runtime-images.js";
+import { bootstrapOfficialRuntimeImages, startRuntimeImageRegistrySync } from "./runtime-images.js";
 
 async function main() {
   // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
@@ -34,12 +34,14 @@ async function main() {
   const stopReaper = startReaper();
   const stopPlane = startPlaneSync();
   const stopTransfer = startTransferWorker();
+  const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
 
   const shutdown = async () => {
     stopDispatcher();
     stopReaper();
     stopPlane();
     stopTransfer();
+    stopRuntimeImageRegistrySync();
     // 优雅退出（§12.2）：先等在执行的 job 收尾，再关 HTTP 与 DB
     await drainInFlight(15_000);
     await app.close();

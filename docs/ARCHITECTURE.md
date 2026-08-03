@@ -404,6 +404,10 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
 
+官方运行时市场只从固定 HTTPS 信任边界内的 GitHub Release `latest` 清单同步。Scheduler 启动时同步一次，并按 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC` 定时刷新；远端不可用时回退随部署内置的清单。正式发布清单存在版本时，环境变量镜像引用仅作为无版本场景的启动兜底，不能覆盖正式最新版本。同步后每个官方镜像只有清单首个版本保持 `promoted_at`，历史版本继续保留，供项目显式固定与既有 Job 不可变快照追溯。
+
+发布清单的 `size_bytes` 来自不可变 OCI manifest/index 的压缩层描述符：分别汇总目标平台层大小，清单记录其中最大的平台大小，并保留各平台大小作为发布证据。该值不是本机解压后的 Docker 占用，避免不同构建机的本地 inspect 结果影响市场元数据。
+
 ### 8.3 Git 模块源（skill_sources）
 
 Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：

@@ -14,6 +14,9 @@ const openHarmonyBuild = readFileSync(new URL("../deploy/openharmony-build.sh", 
 const openHarmonyRegistry = JSON.parse(readFileSync(new URL("../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
 const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
+const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
+const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
@@ -102,6 +105,12 @@ expect(releaseWorkflow.includes("needs: base-image"), "OpenHarmony job 必须依
 expect(releaseWorkflow.includes("Dockerfile.agent-openharmony"), "release workflow 未发布 OpenHarmony Dockerfile");
 expect(releaseWorkflow.includes("steps.build.outputs.digest"), "release workflow 必须使用 build-push-action 真实 digest");
 expect(releaseWorkflow.includes("record-runtime-image-digest.mjs"), "release workflow 缺少 digest artifact 记录脚本");
+expect(descriptorScript.includes("inspectPublishedImageSize"), "release descriptor 必须采集 OCI 多架构镜像大小");
+expect(descriptorScript.includes("platform_size_bytes"), "release descriptor 必须保留各平台大小证据");
+expect(registryScript.includes("size_bytes: descriptor.size_bytes"), "runtime registry 必须合并 descriptor size_bytes");
+expect(schedulerRuntimeImages.includes("releases/latest/download/runtime-image-registry.json"), "Scheduler 必须从固定官方 latest Release 同步清单");
+expect(schedulerRuntimeImages.includes("image.versions.length > 0"), "正式清单已有版本时不能被环境变量旧版本覆盖");
+expect(schedulerRuntimeImages.includes("SET promoted_at = NULL"), "同步最新版本后必须取消旧版本默认 promoted 状态");
 expect(releaseWorkflow.includes("actions/upload-artifact@v4"), "release workflow 缺少 digest/registry artifact");
 expect(releaseWorkflow.includes("generate-runtime-image-registry.mjs"), "release workflow 缺少 runtime registry 合并脚本");
 expect(releaseWorkflow.includes("deploy/runtime-image-registry.json"), "release workflow 未发布 runtime registry");

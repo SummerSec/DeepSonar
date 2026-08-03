@@ -203,6 +203,7 @@ export const config = {
     officialBaseRef: str("DEEPSONAR_OFFICIAL_BASE_IMAGE"),
     officialAuditRef: str("DEEPSONAR_OFFICIAL_AUDIT_IMAGE"),
     officialKaliMinimalRef: str("DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE"),
+    registrySyncSec: int("DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC", 3600),
     allowedRegistries: str("DEEPSONAR_ALLOWED_IMAGE_REGISTRIES", "ghcr.io,docker.io,registry-1.docker.io"),
     isRegistryAllowed(imageRef: string): boolean {
       const first = imageRef.split("/")[0]?.toLowerCase() ?? "";

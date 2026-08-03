@@ -22,7 +22,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 ## 清单与校验
 
-清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像 `build-push-action` 输出的真实 digest 生成，包含 Base、Audit、Kali Minimal 和 OpenHarmony Test 四项。静态模板只保存镜像市场元数据，不伪造版本或 digest。
+清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像 `build-push-action` 输出的真实 digest 生成，包含 Base、Audit、Kali Minimal 和 OpenHarmony Test 四项。发布步骤通过 OCI index/manifest 记录各平台压缩层大小，并以单个平台最大压缩大小写入 `size_bytes`。静态模板只保存镜像市场元数据，不伪造版本或 digest。Scheduler 定时读取官方 GitHub Release 的最新清单；新正式版本成为默认 promoted 版本，旧版本只保留给显式项目 pin 与历史 Job 快照。
 
 本地可运行：
 
