@@ -479,6 +479,30 @@ export interface RuntimeImageRegistry {
   }>;
 }
 
+export interface RuntimeImageCatalogSyncResult {
+  registry: RuntimeImageRegistry;
+  product_count: number;
+  version_count: number;
+  synced_at: string;
+}
+
+export interface RuntimeImagePullItem {
+  image_key: string;
+  image_ref: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  error: string | null;
+}
+
+export interface RuntimeImagePullTask {
+  task_id: string | null;
+  status: "idle" | "queued" | "running" | "succeeded" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  total: number;
+  completed: number;
+  items: RuntimeImagePullItem[];
+}
+
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
 
 /** RoleConfig 保存体（全量声明式：每次 PUT 整体替换 Credential 绑定与配置文件） */
@@ -1052,6 +1076,9 @@ export const api = {
   runtimeImages: (projectId?: string, search?: string) =>
     get<RuntimeImageSummary[]>(`/runtime-images${qs({ project_id: projectId, search })}`),
   runtimeImagesRegistry: () => get<RuntimeImageRegistry>("/runtime-images/registry"),
+  syncRuntimeImagesRegistry: () => send<RuntimeImageCatalogSyncResult>("POST", "/runtime-images/registry/sync"),
+  pullRuntimeImagesRegistry: () => send<{ task: RuntimeImagePullTask }>("POST", "/runtime-images/registry/pull"),
+  runtimeImagesPullStatus: () => get<RuntimeImagePullTask>("/runtime-images/registry/pull-status"),
   runtimeImage: (id: string) => get<RuntimeImageDetail>(`/runtime-images/${id}`),
   importRuntimeImage: (body: {
     image_key: string;
@@ -1068,7 +1095,7 @@ export const api = {
   /** 官方镜像登记 @sha256 digest 为 trusted（无版本时可用；等价 env bootstrap） */
   registerOfficialRuntimeDigest: (
     imageId: string,
-    body: { image_ref: string; version?: string },
+    body: { image_ref: string; version?: string; source?: "registry" | "local-build" },
   ) => send<{ image: RuntimeImageSummary; version: RuntimeImageVersion }>(
     "POST", `/runtime-images/${imageId}/official-digest`, body,
   ),

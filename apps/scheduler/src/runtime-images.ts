@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
@@ -32,6 +33,32 @@ export interface RuntimeImageRegistry {
   images: RuntimeImageRegistryImage[];
 }
 
+export interface RuntimeImageCatalogSyncResult {
+  registry: RuntimeImageRegistry;
+  product_count: number;
+  version_count: number;
+  synced_at: string;
+}
+
+export interface RuntimeImagePullItem {
+  image_key: string;
+  image_ref: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  error: string | null;
+}
+
+export interface RuntimeImagePullTask {
+  task_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  total: number;
+  completed: number;
+  items: RuntimeImagePullItem[];
+}
+
+let runtimeImagePullTask: RuntimeImagePullTask | null = null;
+
 export interface RuntimeImageSnapshot {
   runtime_image_id: string | null;
   runtime_image_version_id: string | null;
@@ -48,6 +75,11 @@ export interface RuntimeImageSnapshot {
 export function immutableDigest(imageRef: string): string | null {
   const match = imageRef.trim().match(/@(sha256:[0-9a-f]{64})$/);
   return match?.[1] ?? null;
+}
+
+export function localImageDigest(imageRef: string): string | null {
+  const match = imageRef.trim().match(/^sha256:[0-9a-f]{64}$/);
+  return match?.[0] ?? null;
 }
 
 function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
@@ -191,6 +223,122 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
   return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
 }
 
+function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageRegistry {
+  const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
+  for (const override of envOfficialOverrides()) {
+    const image = images.find((item) => item.image_key === override.image_key);
+    if (!image) continue;
+    const digest = immutableDigest(override.image_ref)!;
+    if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
+      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, platforms: ["linux/amd64", "linux/arm64"] });
+    }
+  }
+  return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
+}
+
+export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogSyncResult> {
+  const registry = registryWithEnvOverrides(await loadRuntimeImageRegistry());
+  for (const item of registry.images) {
+    const [image] = await sql`
+      INSERT INTO runtime_images ${sql({
+        image_key: item.image_key, name: item.name, description: item.description, publisher: item.publisher,
+        source_url: item.source_url ?? null, source_kind: "official", official: true, project_opt_in: item.project_opt_in,
+      } as never)}
+      ON CONFLICT (image_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
+        publisher = EXCLUDED.publisher, source_url = EXCLUDED.source_url, official = true,
+        project_opt_in = EXCLUDED.project_opt_in, updated_at = now()
+      WHERE runtime_images.official = true
+      RETURNING id`;
+    if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
+    for (const version of item.versions) {
+      const digest = immutableDigest(version.image_ref)!;
+      await sql`
+        INSERT INTO runtime_image_versions ${sql({
+          runtime_image_id: image.id, version: version.version, image_ref: version.image_ref,
+          resolved_ref: version.image_ref, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
+          platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
+          size_bytes: version.size_bytes ?? null, scan_summary_json: { source: "static-registry", contract: "declared" } as never,
+          trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(), promoted_at: new Date(),
+        } as never)}
+        ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
+          image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
+          version = EXCLUDED.version, platforms_json = EXCLUDED.platforms_json,
+          tools_manifest_sha256 = EXCLUDED.tools_manifest_sha256, size_bytes = EXCLUDED.size_bytes,
+          promoted_at = EXCLUDED.promoted_at, updated_at = now()`;
+    }
+  }
+  return {
+    registry,
+    product_count: registry.images.length,
+    version_count: registry.images.reduce((total, image) => total + image.versions.length, 0),
+    synced_at: new Date().toISOString(),
+  };
+}
+
+export function runtimeImagePullStatus(): RuntimeImagePullTask | null {
+  return runtimeImagePullTask;
+}
+
+function pullRuntimeImage(imageRef: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", ["pull", imageRef], { shell: false, stdio: "ignore", windowsHide: true });
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(new Error("docker pull 超时"));
+    }, 300_000);
+    child.once("error", (error) => finish(error));
+    child.once("close", (code) => {
+      if (code === 0) finish();
+      else finish(new Error(`docker pull exit code ${code ?? "unknown"}`));
+    });
+  });
+}
+
+export async function startRuntimeImagePull(): Promise<RuntimeImagePullTask> {
+  if (runtimeImagePullTask && (runtimeImagePullTask.status === "queued" || runtimeImagePullTask.status === "running")) {
+    throw new Error("已有运行中的镜像拉取任务");
+  }
+  const registry = await runtimeImageRegistryWithOverrides();
+  const items = registry.images.flatMap((image) => image.versions.map((version) => ({
+    image_key: image.image_key,
+    image_ref: version.image_ref,
+    status: "queued" as const,
+    error: null,
+  })));
+  if (items.length === 0) throw new Error("当前市场清单没有可拉取的不可变版本，请先同步或登记官方 digest");
+  const task: RuntimeImagePullTask = {
+    task_id: createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24),
+    status: "queued", started_at: null, finished_at: null, total: items.length, completed: 0, items,
+  };
+  runtimeImagePullTask = task;
+  void (async () => {
+    task.status = "running";
+    task.started_at = new Date().toISOString();
+    for (const item of task.items) {
+      item.status = "running";
+      try {
+        await pullRuntimeImage(item.image_ref);
+        item.status = "succeeded";
+      } catch {
+        item.status = "failed";
+        item.error = "docker pull 失败，请检查 Docker、网络和 registry 凭据";
+      }
+      task.completed += 1;
+    }
+    task.status = task.items.some((item) => item.status === "failed") ? "failed" : "succeeded";
+    task.finished_at = new Date().toISOString();
+  })();
+  return task;
+}
+
 /** 启动时只接纳管理员显式配置的不可变官方引用；tag 不会被静默信任。 */
 export async function bootstrapOfficialRuntimeImages(): Promise<void> {
   // 只迁移从未编辑过的旧 Test 默认值；用户改过（version > 1）的配置保持不动。
@@ -213,59 +361,7 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
       updated_at = now()
     WHERE name = 'verify' AND builtin = true AND kind = 'system'
       AND description = '系统角色：默认在精简 Kali 多语言环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；Hub 不可下发'`;
-  const registry = await loadRuntimeImageRegistry();
-  for (const item of registry.images) {
-    const [image] = await sql`
-      INSERT INTO runtime_images ${sql({
-        image_key: item.image_key, name: item.name, description: item.description, publisher: item.publisher,
-        source_url: item.source_url ?? null, source_kind: "official", official: true, project_opt_in: item.project_opt_in,
-      } as never)}
-      ON CONFLICT (image_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
-        publisher = EXCLUDED.publisher, source_url = EXCLUDED.source_url, official = true,
-        project_opt_in = EXCLUDED.project_opt_in, updated_at = now()
-      WHERE runtime_images.official = true
-      RETURNING id`;
-    if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
-    for (const version of item.versions) {
-      const digest = immutableDigest(version.image_ref)!;
-    await sql`
-      INSERT INTO runtime_image_versions ${sql({
-        runtime_image_id: image.id,
-        version: version.version,
-        image_ref: version.image_ref,
-        resolved_ref: version.image_ref,
-        digest,
-        contract_version: RUNTIME_IMAGE_CONTRACT,
-        platforms_json: (version.platforms ?? []) as never,
-        tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
-        size_bytes: version.size_bytes ?? null,
-        scan_summary_json: { source: "static-registry", contract: "declared" } as never,
-        trust_status: "trusted",
-        approved_by: "bootstrap",
-        scanned_at: new Date(),
-        approved_at: new Date(),
-        promoted_at: new Date(),
-      } as never)}
-      ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
-        image_ref = EXCLUDED.image_ref,
-        resolved_ref = EXCLUDED.resolved_ref,
-        promoted_at = EXCLUDED.promoted_at,
-        updated_at = now()`;
-    }
-  }
-  for (const item of envOfficialOverrides()) {
-    const digest = immutableDigest(item.image_ref)!;
-    const [image] = await sql`SELECT id FROM runtime_images WHERE image_key = ${item.image_key} AND official = true`;
-    if (!image) throw new Error(`缺少官方 runtime_images 基线: ${item.image_key}`);
-    await sql`
-      INSERT INTO runtime_image_versions ${sql({ runtime_image_id: image.id, version: `configured-${digest.slice(7, 19)}`,
-        image_ref: item.image_ref, resolved_ref: item.image_ref, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
-        platforms_json: ["linux/amd64", "linux/arm64"] as never,
-        scan_summary_json: { source: "operator-configured-official", contract: "declared" } as never,
-        trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(), promoted_at: new Date() } as never)}
-      ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET image_ref = EXCLUDED.image_ref,
-        resolved_ref = EXCLUDED.resolved_ref, promoted_at = EXCLUDED.promoted_at, updated_at = now()`;
-  }
+  await syncOfficialRuntimeCatalog();
 }
 
 /** 创建 Job 时选择一次并冻结；Executor 不再读取目录或 tag。 */
@@ -311,7 +407,8 @@ export async function resolveRuntimeImageForJob(
   }
   const resolvedRef = row.resolved_ref as string | null;
   const digest = row.digest as string | null;
-  if (!resolvedRef || !digest || immutableDigest(resolvedRef) !== digest) {
+  const resolvedDigest = resolvedRef ? (immutableDigest(resolvedRef) ?? localImageDigest(resolvedRef)) : null;
+  if (!resolvedRef || !digest || resolvedDigest !== digest) {
     throw new Error(`可信镜像版本缺少一致的不可变引用（key=${imageKey}）`);
   }
   return {

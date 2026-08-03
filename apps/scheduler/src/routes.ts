@@ -1,4 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { PlatformToolName, allowedPlatformTools, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
@@ -67,7 +69,16 @@ import {
   resolvePlatformModules,
 } from "./transfer/platform.js";
 import { processExportRow } from "./transfer/worker.js";
-import { immutableDigest, runtimeImageRegistryWithOverrides } from "./runtime-images.js";
+import {
+  immutableDigest,
+  localImageDigest,
+  runtimeImagePullStatus,
+  runtimeImageRegistryWithOverrides,
+  startRuntimeImagePull,
+  syncOfficialRuntimeCatalog,
+} from "./runtime-images.js";
+
+const execFileP = promisify(execFile);
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -154,6 +165,7 @@ const RuntimeImageStatusBody = z.object({
 const OfficialRuntimeImageDigestBody = z.object({
   image_ref: z.string().trim().min(3).max(500),
   version: z.string().trim().min(1).max(100).optional(),
+  source: z.enum(["registry", "local-build"]).default("registry"),
 });
 const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_credential_id: true }).extend({
   image_ref: z.string().trim().min(3).max(500),
@@ -1021,6 +1033,48 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/runtime-images/registry", async () => runtimeImageRegistryWithOverrides());
 
+  app.post("/runtime-images/registry/sync", async (req, reply) => {
+    try {
+      const result = await syncOfficialRuntimeCatalog();
+      await audit(req, {
+        action: "runtime_image.registry_sync",
+        resourceType: "runtime_image_catalog",
+        after: { product_count: result.product_count, version_count: result.version_count, synced_at: result.synced_at },
+      });
+      return reply.code(200).send(result);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "读取或同步运行时镜像注册表失败" });
+    }
+  });
+
+  app.post("/runtime-images/registry/pull", async (req, reply) => {
+    try {
+      const task = await startRuntimeImagePull();
+      await audit(req, {
+        action: "runtime_image.registry_pull",
+        resourceType: "runtime_image_pull",
+        resourceId: task.task_id,
+        after: { task_id: task.task_id, total: task.total },
+      });
+      return reply.code(202).send({ task });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "启动镜像拉取失败";
+      return reply.code(message.includes("已有运行中") || message.includes("没有可拉取") ? 409 : 503).send({ error: message, task: runtimeImagePullStatus() });
+    }
+  });
+
+  app.get("/runtime-images/registry/pull-status", async (_req, reply) => {
+    return reply.send(runtimeImagePullStatus() ?? {
+      task_id: null,
+      status: "idle",
+      started_at: null,
+      finished_at: null,
+      total: 0,
+      completed: 0,
+      items: [],
+    });
+  });
+
   /**
    * 注意：`:id` 必须带 uuid 约束，否则会吞掉同层静态路由 `/runtime-images/registry`
    * （Fastify find-my-way 在本版本未把静态路由优先于参数路由）。
@@ -1052,28 +1106,48 @@ export function registerRoutes(app: FastifyInstance) {
     if (!image.official) {
       return reply.code(400).send({ error: "仅官方镜像可通过此接口登记 digest；第三方请走导入 + 准入扫描 + 批准" });
     }
-    const digest = immutableDigest(body.image_ref);
-    if (!digest) {
-      return reply.code(400).send({
-        error: "必须使用不可变引用 name@sha256:…；可移动 tag 不会被信任",
-      });
+    const local = body.source === "local-build";
+    const digest = local ? localImageDigest(body.image_ref) : immutableDigest(body.image_ref);
+    if (!digest) return reply.code(400).send({
+      error: local ? "local-build 必须使用完整本地 image ID：sha256:64hex" : "必须使用不可变引用 name@sha256:…；可移动 tag 不会被信任",
+    });
+    if (local && config.runtime.provider !== "local-docker") {
+      return reply.code(400).send({ error: "local-build 仅支持 SANDBOX_PROVIDER=local-docker" });
     }
-    if (!config.images.isRegistryAllowed(body.image_ref)) {
+    if (!local && !config.images.isRegistryAllowed(body.image_ref)) {
       return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
     }
-    const versionName = body.version ?? `configured-${digest.slice(7, 19)}`;
+    if (local) {
+      try {
+        const inspected = await execFileP("docker", ["image", "inspect", body.image_ref, "--format", "{{.Id}}"], {
+          timeout: 10_000,
+          maxBuffer: 256,
+          windowsHide: true,
+        });
+        if (inspected.stdout.trim() !== body.image_ref) {
+          return reply.code(400).send({ error: "Docker 镜像存在，但 image ID 校验不匹配" });
+        }
+      } catch {
+        return reply.code(503).send({ error: "无法验证本地 Docker 镜像；请确认 Docker 可用且该 image ID 已存在" });
+      }
+    }
+    const versionName = body.version ?? `${local ? "local" : "configured"}-${digest.slice(7, 19)}`;
+    const platforms = local
+      ? (process.arch === "x64" ? ["linux/amd64"] : process.arch === "arm64" ? ["linux/arm64"] : [])
+      : ["linux/amd64", "linux/arm64"];
     const now = new Date();
     const [version] = await sql`
       INSERT INTO runtime_image_versions ${sql({
         runtime_image_id: image.id,
         version: versionName,
-        image_ref: body.image_ref,
-        resolved_ref: body.image_ref,
+        image_ref: local ? digest : body.image_ref,
+        resolved_ref: digest,
         digest,
         contract_version: "deepsonar.runtime.contract/v1",
-        platforms_json: ["linux/amd64", "linux/arm64"] as never,
+        platforms_json: platforms as never,
         scan_summary_json: {
-          source: "operator-registered-official",
+          source: local ? "operator-registered-official-local" : "operator-registered-official",
+          risk: local ? "local-only" : undefined,
           contract: "declared",
           registered_by: req.actor?.name ?? "internal",
         } as never,

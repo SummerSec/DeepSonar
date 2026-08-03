@@ -9,6 +9,7 @@ import {
   type RuntimeImageTrustStatus,
   type RuntimeImageVersion,
   type RuntimeImageRegistry,
+  type RuntimeImagePullTask,
 } from "../api";
 import { EmptyState, PageHeader, PageSkeleton, formatTime } from "../ui";
 
@@ -55,6 +56,7 @@ export function RuntimeImagesPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [form, setForm] = useState({
@@ -72,6 +74,7 @@ export function RuntimeImagesPage() {
   const [registry, setRegistry] = useState<RuntimeImageRegistry | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [manualForm, setManualForm] = useState({ image_key: "", name: "", description: "", publisher: "", image_ref: "", version: "" });
+  const [pullStatus, setPullStatus] = useState<RuntimeImagePullTask | null>(null);
 
   const reload = async (keepSelected = true) => {
     try {
@@ -96,8 +99,19 @@ export function RuntimeImagesPage() {
       .catch(() => {});
   }, []);
   useEffect(() => {
-    if (!projectId) api.runtimeImagesRegistry().then(setRegistry).catch(() => {});
+    if (!projectId) api.runtimeImagesRegistry().then(setRegistry).catch((cause) => setError(cause instanceof Error ? `获取市场清单失败：${cause.message}` : "获取市场清单失败"));
   }, [projectId]);
+  useEffect(() => {
+    if (projectId) return;
+    void api.runtimeImagesPullStatus().then(setPullStatus).catch((cause) => setError(cause instanceof Error ? `获取拉取状态失败：${cause.message}` : "获取拉取状态失败"));
+  }, [projectId]);
+  useEffect(() => {
+    if (projectId || !pullStatus || !["queued", "running"].includes(pullStatus.status)) return;
+    const timer = window.setInterval(() => {
+      void api.runtimeImagesPullStatus().then(setPullStatus).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [projectId, pullStatus?.status]);
   useEffect(() => {
     const timer = setInterval(() => void reload(), 5_000);
     return () => clearInterval(timer);
@@ -190,6 +204,35 @@ export function RuntimeImagesPage() {
     URL.revokeObjectURL(url);
   };
 
+  const syncRegistry = async () => {
+    setBusy("registry-sync");
+    try {
+      const result = await api.syncRuntimeImagesRegistry();
+      setRegistry(result.registry);
+      setNotice(`市场同步完成：${result.product_count} 个产品，${result.version_count} 个版本`);
+      setError(null);
+      await reload(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pullRegistry = async () => {
+    setBusy("registry-pull");
+    try {
+      const result = await api.pullRuntimeImagesRegistry();
+      setPullStatus(result.task);
+      setNotice(`已启动异步拉取：${result.task.total} 个远程不可变版本`);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const registerManual = async () => {
     setBusy("manual-digest");
     try {
@@ -227,7 +270,7 @@ export function RuntimeImagesPage() {
         subtitle={
           projectId
             ? "为项目启用已准入镜像，并固定角色可选择的可信版本。任务表单仍不暴露镜像参数。"
-            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。"
+            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。同步仅重新读取当前部署内置清单、env 和 DB，不会联网下载任意 registry 文件；真正更新清单请先更新部署或执行 git pull。"
         }
         actions={
           <div className="flex gap-2">
@@ -237,6 +280,12 @@ export function RuntimeImagesPage() {
             </label>
             {!projectId && (
               <>
+                <button className="secondary-button" disabled={busy !== null} onClick={syncRegistry}>
+                  <ArrowsClockwise size={14} /> 同步市场
+                </button>
+                <button className="secondary-button" disabled={busy !== null || pullStatus?.status === "running" || pullStatus?.status === "queued"} onClick={pullRegistry}>
+                  <Cube size={14} /> 异步拉取
+                </button>
                 <button className="secondary-button" disabled={!registry} onClick={exportRegistry}>
                   <DownloadSimple size={14} /> 导出清单
                 </button>
@@ -250,6 +299,35 @@ export function RuntimeImagesPage() {
 
       {error && (
         <div className="mb-4 rounded-xl border border-red-400/20 bg-red-400/[.07] px-4 py-3 text-sm text-red-300">{error}</div>
+      )}
+      {notice && (
+        <div className="mb-4 rounded-xl border border-emerald-400/20 bg-emerald-400/[.07] px-4 py-3 text-sm text-emerald-300">{notice}</div>
+      )}
+
+      {!projectId && pullStatus && pullStatus.status !== "idle" && (
+        <section className="surface-shell mb-5">
+          <div className="surface-core p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-mono text-[10px] tracking-[.16em] text-zinc-500">REGISTRY PULL</div>
+                <div className="mt-1 text-sm text-zinc-200">
+                  {pullStatus.status === "succeeded" ? "拉取完成" : pullStatus.status === "failed" ? "拉取完成，但有失败项" : `拉取进度 ${pullStatus.completed}/${pullStatus.total}`}
+                </div>
+              </div>
+              <span className="font-mono text-xs text-zinc-400">{pullStatus.completed}/{pullStatus.total}</span>
+            </div>
+            <div className="mt-3 space-y-1 text-xs text-zinc-400">
+              {pullStatus.items.map((item) => (
+                <div key={`${item.image_key}:${item.image_ref}`} className="flex items-center justify-between gap-3">
+                  <span className="truncate">{item.image_key} · {item.image_ref}</span>
+                  <span className={item.status === "failed" ? "text-red-300" : item.status === "succeeded" ? "text-emerald-300" : "text-zinc-500"}>
+                    {item.status === "failed" ? item.error : item.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
       )}
 
       {showManual && !projectId && (
