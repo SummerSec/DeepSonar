@@ -2208,7 +2208,16 @@ export function registerRoutes(app: FastifyInstance) {
         c.status, c.archived_at,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
-           AND j.status IN ('claimed','provisioning','running','waiting_human')) AS active_count,
+           AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+        -- Lifecycle rollups are derived from Job execution timestamps. Pending work and
+        -- waiting_human are both active work: pending has no started_at yet, while a
+        -- human gate keeps the running interval open until the Job reaches a terminal state.
+        (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = c.id) AS started_at,
+        (SELECT CASE
+           WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
+           THEN MAX(j.finished_at)
+           ELSE NULL
+         END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at,
         (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding') AS finding_count,
         (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding' AND n.status = 'confirmed') AS confirmed_count,
         lj.last_job_id, lj.last_job_status, lj.last_job_priority, lj.last_job_at
@@ -2226,7 +2235,22 @@ export function registerRoutes(app: FastifyInstance) {
   // 详情：单任务画布的节点与边
   app.get("/canvases/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${id}`;
+    // Keep the detail response on the same lifecycle semantics as the project list:
+    // canvas creation is the origin, the first non-null Job started_at is the first
+    // actual start, and ended_at is only fixed after all active work (including
+    // pending and waiting_human Jobs) is gone.
+    const [canvas] = await sql`
+      SELECT c.*,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+           AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+        (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = c.id) AS started_at,
+        (SELECT CASE
+           WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
+           THEN MAX(j.finished_at)
+           ELSE NULL
+         END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at
+      FROM canvases c WHERE c.id = ${id}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const [nodes, edges] = await Promise.all([
       sql`

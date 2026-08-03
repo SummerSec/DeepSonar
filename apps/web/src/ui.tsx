@@ -282,6 +282,44 @@ export function relativeTime(iso: string | null | undefined): string {
   return `${Math.floor(hr / 24)} 天前`;
 }
 
+/** Return a non-negative elapsed duration, keeping an unfinished interval live at `now`. */
+export function elapsedMs(
+  startIso: string | null | undefined,
+  endIso?: string | null,
+  now = Date.now(),
+): number | null {
+  if (!startIso) return null;
+  const start = Date.parse(startIso);
+  const end = endIso ? Date.parse(endIso) : now;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, end - start);
+}
+
+/** Compact Chinese duration for task cards and the workbench timeline. */
+export function formatDuration(milliseconds: number | null | undefined): string {
+  if (milliseconds === null || milliseconds === undefined || !Number.isFinite(milliseconds)) return "—";
+  const totalSeconds = Math.floor(Math.max(0, milliseconds) / 1000);
+  if (totalSeconds < 60) return `${totalSeconds} 秒`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours ? `${days} 天 ${remainingHours} 小时` : `${days} 天`;
+}
+
+/** Format a task interval using an optional fixed clock for deterministic tests. */
+export function formatElapsed(
+  startIso: string | null | undefined,
+  endIso?: string | null,
+  now = Date.now(),
+): string {
+  return formatDuration(elapsedMs(startIso, endIso, now));
+}
+
 export function DataTable({ children }: { children: ReactNode }) {
   return <div className="surface-shell table-shell deepsonar-reveal"><div className="surface-core data-table"><div className="overflow-x-auto">{children}</div></div></div>;
 }
