@@ -76,6 +76,8 @@ jobs:
           exit 1
 
       - name: Roles API smoke
+        env:
+          DEEPSONAR_EXPECT_HUB_ENABLED: "false"
         run: python agent-harness/test-roles-api.py
 
       - name: Runtime image marketplace API smoke

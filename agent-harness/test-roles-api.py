@@ -12,6 +12,18 @@ import uuid
 BASE = os.environ.get("DEEPSONAR_BASE", "http://127.0.0.1:3100").rstrip("/")
 
 
+def expected_hub_enabled() -> bool:
+    value = os.environ.get("DEEPSONAR_EXPECT_HUB_ENABLED", "true")
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ValueError(
+        "DEEPSONAR_EXPECT_HUB_ENABLED 必须为 true 或 false，"
+        f"实际为 {value!r}"
+    )
+
+
 def req(method: str, path: str, body=None, expect: int | None = 200):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"content-type": "application/json"} if data is not None else {}
@@ -96,8 +108,17 @@ def main() -> None:
     assert official["branch"] == "main"
     assert official["trust_status"] == "trusted" and official["enabled"] is True
     global_settings = req("GET", "/global-settings")
-    assert global_settings["effective_rules"]["hubEnabled"] is True
-    assert global_settings["effective_rules"]["allowEgress"] is True
+    expected_hub = expected_hub_enabled()
+    actual_hub = global_settings["effective_rules"]["hubEnabled"]
+    assert actual_hub is expected_hub, (
+        "effective_rules.hubEnabled 期望 "
+        f"{expected_hub!r}，实际为 {actual_hub!r}"
+    )
+    actual_egress = global_settings["effective_rules"]["allowEgress"]
+    assert actual_egress is True, (
+        "effective_rules.allowEgress 期望 True，"
+        f"实际为 {actual_egress!r}"
+    )
 
     # 2. 项目视角：默认全部内置工作角色启用（库中可能残留历史自定义角色，不纳入集合相等）
     proles = req("GET", f"/projects/{pid}/roles")
