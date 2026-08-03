@@ -36,6 +36,7 @@ import {
   drainNonGateVerifies,
   ensureCanvasForTask,
   globalRules,
+  mergeGlobalRulesPatch,
   maybeTriggerHub,
   parseCanvasConvergence,
   patchCanvasConvergence,
@@ -103,11 +104,58 @@ const SkillSourceBody = z.object({
   branch: z.string().default("main"),
 });
 
+const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject"]);
+const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code"]);
+
+/**
+ * Validate scheduler concurrency knobs at the API boundary. Other rule keys
+ * remain open-ended for backwards compatibility, while these limits must be
+ * finite integers in the same range used by globalRules().
+ */
+const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
+  for (const key of RULE_CONCURRENCY_KEYS) {
+    if (!(key in rules)) continue;
+    const value = rules[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1000) {
+      ctx.addIssue({ code: "custom", path: [key], message: `${key} 必须是 1-1000 的整数` });
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByAgentCli")) {
+    const cliRules = rules.maxConcurrentByAgentCli;
+    if (!cliRules || typeof cliRules !== "object" || Array.isArray(cliRules)) {
+      ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli"], message: "Agent CLI 并发必须是对象" });
+    } else {
+      for (const [cli, value] of Object.entries(cliRules as Record<string, unknown>)) {
+        if (!CLI_CONCURRENCY_KEYS.has(cli) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
+          ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli", cli], message: `${cli} 必须是 0-1000 的整数` });
+        }
+      }
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByProvider")) return;
+  const providerRules = rules.maxConcurrentByProvider;
+  if (!providerRules || typeof providerRules !== "object" || Array.isArray(providerRules)) {
+    ctx.addIssue({ code: "custom", path: ["maxConcurrentByProvider"], message: "Provider 并发必须是对象" });
+    return;
+  }
+  for (const [provider, value] of Object.entries(providerRules as Record<string, unknown>)) {
+    if (!isProviderKnown(provider) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
+      ctx.addIssue({ code: "custom", path: ["maxConcurrentByProvider", provider], message: `${provider} 必须是 0-1000 的整数` });
+    }
+  }
+});
+
+/** Strict parser exported for unit tests and non-HTTP adapters. */
+export function parseConcurrencyRulesPatch(input: unknown): Record<string, unknown> {
+  return RulesPatch.parse(input);
+}
+
 // roles.enabled：hub 可下发角色清单（name 数组；null = 恢复默认=全部内置）
 const SettingsPatchBody = z.object({
-  rules: z.record(z.string(), z.unknown()).optional(),
+  rules: RulesPatch.optional(),
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
 });
+const GlobalSettingsPatchBody = z.object({ rules: RulesPatch });
 
 // 角色注册表：name 即 job.type，description 供 Hub 选角色时使用。
 const RoleBody = z.object({
@@ -2126,11 +2174,19 @@ export function registerRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch("/global-settings", async (req) => {
-    const body = z.object({ rules: z.record(z.string(), z.unknown()) }).parse(req.body);
+  app.patch("/global-settings", async (req, reply) => {
+    let body: z.infer<typeof GlobalSettingsPatchBody>;
+    try {
+      body = GlobalSettingsPatchBody.parse(req.body);
+    } catch (error) {
+      return reply.code(400).send({ error: "invalid global settings rules", details: error instanceof z.ZodError ? error.issues : undefined });
+    }
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const merged = { ...(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>), ...body.rules };
+    const merged = mergeGlobalRulesPatch(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>, body.rules);
     await sql`UPDATE global_settings SET rules_json = ${sql.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
+    // Wake a LISTEN-driven dispatcher so a newly available slot/CLI cap is
+    // observed without waiting for an optional polling interval or restart.
+    await sql`SELECT pg_notify('deepsonar_jobs', 'global-settings-updated')`;
     // 全局规则修改是「全局规则修改」必记项
     await audit(req, {
       action: "settings.global_update",
@@ -2166,7 +2222,12 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.patch("/projects/:id/settings", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = SettingsPatchBody.parse(req.body);
+    let body: z.infer<typeof SettingsPatchBody>;
+    try {
+      body = SettingsPatchBody.parse(req.body);
+    } catch (error) {
+      return reply.code(400).send({ error: "invalid project settings rules", details: error instanceof z.ZodError ? error.issues : undefined });
+    }
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
@@ -2180,6 +2241,9 @@ export function registerRoutes(app: FastifyInstance) {
       cfg.roles = roles;
     }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+    // Project rule changes can alter effective task behavior; wake dispatch so
+    // pending jobs do not wait for the next unrelated enqueue event.
+    await sql`SELECT pg_notify('deepsonar_jobs', 'project-settings-updated')`;
     // 项目级 rules 覆盖 / roles 启停都属配置修改
     await audit(req, {
       action: "settings.project_update",

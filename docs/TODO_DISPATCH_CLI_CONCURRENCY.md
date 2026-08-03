@@ -1,6 +1,6 @@
 # TODO：调度并发应以「Agent CLI 全局并发」为准
 
-> 状态：待修复  
+> 状态：已修复（Issue #8）
 > 类型：bug + 修复方案  
 > 相关：`apps/scheduler/src/dispatcher.ts`、`core.ts` `globalRules`、`SettingsPanel`「Agent CLI 全局并发」、`.env` `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT`  
 > 现象复现：java-sec-code 全量审计时仅 2 个 Job running、verify 大量 pending
@@ -16,7 +16,7 @@
 
 ## 2. 根因
 
-`dispatchOnce` 的 claim 顺序与权威源不一致：
+`dispatchOnce` 的 claim 顺序与权威源不一致（已在 Issue #8 修复）：
 
 | 顺序 | 限制 | 数据源 | 可在 UI 配置？ |
 |------|------|--------|----------------|
@@ -61,7 +61,7 @@ UI 文案（`SettingsPanel`）：
 3. 修改规则只影响后续 claim，不杀已运行 Job（与现 UI 一致）。  
 4. 有效规则可在 `GET /global-settings` 的 `effective_rules` 中看到 **maxGlobalJobs / maxJobsPerProject / maxConcurrentByAgentCli** 的最终值。
 
-## 4. 修复方案
+## 4. 修复方案（已落地）
 
 ### 4.1 数据与规则模型
 
@@ -115,6 +115,10 @@ for each pending job (priority, created_at):
 3. `GET /global-settings` 的 effective 含三项并发，与 claim 实际一致。  
 4. 改规则不重启进程即可影响后续 claim（已是 DB 读路径则自然满足）。  
 5. 单测/冒烟：mock active counts，断言 CLI 限额先生效、项目限额可配置。
+
+实现补充：pending claim 使用 `priority/created_at/id` keyset 分页扫描，每页 500
+条，直到槽位填满或 pending 耗尽；因此前 500 个因项目/CLI/凭据配额不合格时，
+后续可运行任务仍会被扫描，不再发生头部饥饿。
 
 ## 5. 分期
 

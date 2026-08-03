@@ -213,6 +213,28 @@ def _project_settings_update(pos, f):
     return call("PATCH", f"/projects/{need(pos[0] if pos else None, 'projectId')}/settings", body)
 
 
+def _settings_update(_pos, f):
+    """Patch global rules, with explicit concurrency shortcuts for operators."""
+    rules = {}
+    if f.get("rules"):
+        parsed = parse_json_arg(str(f["rules"]), "--rules")
+        if not isinstance(parsed, dict):
+            raise ApiError("--rules 必须是 JSON 对象")
+        rules.update(parsed)
+    if f.get("max-global-jobs") is not None:
+        rules["maxGlobalJobs"] = int(f["max-global-jobs"])
+    if f.get("max-jobs-per-project") is not None:
+        rules["maxJobsPerProject"] = int(f["max-jobs-per-project"])
+    if f.get("cli-limits"):
+        cli_limits = parse_json_arg(str(f["cli-limits"]), "--cli-limits")
+        if not isinstance(cli_limits, dict):
+            raise ApiError("--cli-limits 必须是 JSON 对象")
+        rules["maxConcurrentByAgentCli"] = cli_limits
+    if not rules:
+        raise ApiError("至少提供 --rules、--max-global-jobs、--max-jobs-per-project 或 --cli-limits")
+    return call("PATCH", "/global-settings", {"rules": rules})
+
+
 def _roles_create(_pos, f):
     body = {
         "name": need(f.get("name"), "--name（小写字母开头的标识符）"),
@@ -486,9 +508,7 @@ COMMANDS = {
 
     # ---------- 设置（规则默认值 / 项目覆盖 / 角色启停） ----------
     "settings.get": lambda pos, f: call("GET", "/global-settings"),
-    "settings.update": lambda pos, f: call(
-        "PATCH", "/global-settings",
-        {"rules": parse_json_arg(need(f.get("rules"), "--rules '{...}'"), "--rules")}),
+    "settings.update": _settings_update,
     "project-settings.get": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}/settings"),
     "project-settings.update": _project_settings_update,
 

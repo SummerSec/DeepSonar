@@ -175,6 +175,8 @@ export function SettingsPanel({
     };
     // CLI 并发仅全局可写；Provider 并发在凭据页配置，此处不写
     if (!projectId) {
+      ruleBody.maxGlobalJobs = rules.maxGlobalJobs;
+      ruleBody.maxJobsPerProject = rules.maxJobsPerProject;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
     }
     try {
@@ -507,11 +509,57 @@ export function SettingsPanel({
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                    调度器总并发硬上限
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">
+                    claim 使用本页规则的 effective 值；<code>.env</code> 只在数据库未配置时提供启动默认。
+                    全局上限是安全顶，每项目上限不能被项目配置放宽。修改只影响后续 claim，不终止已运行 Job。
+                  </p>
+                </div>
+                <div className="px-4 py-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {numField("maxGlobalJobs", "全局活跃 Job 上限", "所有 claimed / provisioning / running Job 的总数。")}
+                    {numField("maxJobsPerProject", "每项目活跃 Job 上限", "单个项目的安全 cap；effective 值不会超过全局设置。")}
+                  </div>
+                  <div className="mt-2 font-mono text-[10px] text-zinc-600">
+                    当前运行 {Object.values(cliActive).reduce((sum, value) => sum + Number(value || 0), 0)} / {rules.maxGlobalJobs}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {projectId && (
+              <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+                <div className="border-b border-white/[.055] px-4 py-3">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                    调度器并发（全局托管）
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">
+                    并发 claim 只读全局设置的 effective 值；项目规则不能放宽全局安全 cap。请在全局设置页调整。
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
+                  <div>
+                    <div className={labelCls}>全局活跃 Job 上限</div>
+                    <div className="font-mono text-[15px] text-zinc-200">{rules.maxGlobalJobs}</div>
+                  </div>
+                  <div>
+                    <div className={labelCls}>每项目活跃 Job 上限</div>
+                    <div className="font-mono text-[15px] text-zinc-200">{rules.maxJobsPerProject}</div>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {!projectId && (
+              <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+                <div className="border-b border-white/[.055] px-4 py-3">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
                     Agent CLI 全局并发
                   </div>
                   <p className="mt-1 text-[11px] leading-5 text-zinc-600">
-                    按 Agent CLI 限制全局并发。Provider / Credential / Model 并发请在「凭据」页配置。
-                    留空只受全局/项目总并发限制；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
+                    Agent CLI 配额是调度 claim 的操作面；同时受上方全局/项目安全 cap 与「凭据」页的 Provider / Credential / Model 限制。
+                    留空表示该 CLI 不单独限额；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
                   </p>
                 </div>
                 <div className="px-4 py-4">

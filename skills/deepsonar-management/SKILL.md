@@ -76,6 +76,10 @@ python scripts/deepsonar-api.py events push <projectId> --source ci --event-id b
 # 设置
 python scripts/deepsonar-api.py settings get
 python scripts/deepsonar-api.py settings update --rules '{"maxHubRounds": 8}'
+# 调度并发的权威配置（返回 effective_rules；0 仅暂停对应 CLI）
+python scripts/deepsonar-api.py settings update --rules '{"maxGlobalJobs": 4, "maxJobsPerProject": 4, "maxConcurrentByAgentCli": {"claude-code": 4}}'
+# 也可使用运维快捷参数（--cli-limits 接受 JSON 或 @file）
+python scripts/deepsonar-api.py settings update --max-global-jobs 4 --max-jobs-per-project 4 --cli-limits '{"claude-code": 4}'
 python scripts/deepsonar-api.py project-settings get <projectId>
 python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"hubEnabled": true, "allowEgress": true}'
 python scripts/deepsonar-api.py project-settings update <projectId> --roles "explore,analyze,review"

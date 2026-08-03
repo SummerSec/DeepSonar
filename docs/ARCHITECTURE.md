@@ -149,7 +149,7 @@ pending → claimed → provisioning → running → succeeded
 ```text
 loop:
   1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
-  2. 原子 claim（DB advisory lock 串行化配额判断）→ 按“平台/项目 → Provider → Credential → Model ID → Agent CLI”依次检查并发硬上限 → 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher
+  2. 原子 claim（DB advisory lock 串行化配额判断）→ 读取 `global_settings.effective_rules` 的全局/每项目 cap，再按“Provider → Credential → Model ID → Agent CLI”检查资源配额 → 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher；规则更新也会 notify，后续 claim 热生效
   3. Canvas：创建/更新 job 节点（running）
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
@@ -385,7 +385,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 长期密钥不进入数据库明文字段、Job 快照或工作区文件。RoleConfig 的 `env_vars` 只能保存非敏感值；`env_keys` 经过服务端白名单；Credential 运行时换成短期 Job Token。
 
-并发治理服从单一的调度优先级：平台与项目总量先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
+并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
 平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权。`mark_job_done` 对所有角色，以及 `list_available_roles`、`submit_hub_decision` 对 Hub 是不可关闭的决策/终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。
 
@@ -457,7 +457,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 | 项 | 配置建议 |
 |----|----------------|
 | 全局并发沙箱 | 4～8 |
-| 单项目并发 | 1～2 |
+| 单项目并发 | 1～2（`global_settings` 可调；项目不能放宽） |
 | 默认超时 | audit 30–60min；verify 15–30min |
 | Lease TTL | 120s，心跳 30s |
 | 网络 | 项目默认 + 任务覆盖只得到一个 `allow_egress` 布尔值；Hub 不出网，禁止出网 Worker 使用 internal bridge，模型请求只能经固定目标 Gateway sidecar 到 `/gateway` |
@@ -543,8 +543,8 @@ PLANE_BASE_URL=
 PLANE_API_TOKEN=
 PLANE_READY_STATE=Ready
 
-MAX_GLOBAL_JOBS=6
-MAX_JOBS_PER_PROJECT=2
+MAX_GLOBAL_JOBS=6              # global_settings 未配置时的启动默认
+MAX_JOBS_PER_PROJECT=2         # global_settings 未配置时的启动默认
 
 DEFAULT_AUDIT_TIMEOUT_SEC=7200
 DEFAULT_VERIFY_TIMEOUT_SEC=3600
@@ -574,6 +574,12 @@ SEARCH_STATEMENT_TIMEOUT_MS=3000
 EVENTS_PARTITION_RETENTION_MONTHS=6
 CANVAS_LAYOUT=auto
 ```
+
+调度并发的运行时权威源是设置页或 `PATCH /global-settings` 写入的
+`global_settings.rules_json`。有效值可通过 `GET /global-settings` 的
+`effective_rules` 查看：包括 `maxGlobalJobs`、`maxJobsPerProject` 与
+`maxConcurrentByAgentCli`。修改规则会发送 `pg_notify('deepsonar_jobs')`，无需
+重启即可影响后续 claim；已运行 Job 不会被强制终止。
 
 ---
 

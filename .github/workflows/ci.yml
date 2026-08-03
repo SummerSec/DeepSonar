@@ -56,6 +56,11 @@ jobs:
 
       - run: pnpm -r build
 
+      - name: Dispatcher claim Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:dispatch-limits
+
       - name: Control MCP protocol smoke
         run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts
 

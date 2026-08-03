@@ -32,7 +32,7 @@ OTLP 不替代原始 Session。OTLP 适合检索、聚合、指标、trace 和�
 
 ```ts
 interface AgentCliAdapter {
-  cli: "claude-code" | "codex" | "opencode";
+  cli: "claude-code" | "codex" | "open-code";
   buildInvocation(...): CliInvocation;
   mapStreamEvent(raw: unknown): NormalizedRunEvent[];
   discoverSession(runtime: SandboxAccess, identity: SessionIdentity): Promise<SessionArtifact[]>;
@@ -140,15 +140,17 @@ data/blobs/
 
 ```json
 {
+  "maxGlobalJobs": 6,
+  "maxJobsPerProject": 2,
   "maxConcurrentByAgentCli": {
     "claude-code": 2,
     "codex": 1,
-    "opencode": 1
+    "open-code": 1
   }
 }
 ```
 
-- 缺失 key 表示只受 `MAX_GLOBAL_JOBS` 与 `MAX_JOBS_PER_PROJECT` 限制；0 表示暂停该 CLI 新 claim。
+- 缺失 CLI key 表示只受 effective `maxGlobalJobs` / `maxJobsPerProject` 限制；这两个 cap 缺失时才回落到 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT`。0 表示暂停该 CLI 新 claim。
 - Scheduler 按 `jobs.agent_snapshot_json->>'agent_cli'` 统计 `claimed/provisioning/running`。
 - claim 必须在数据库事务/锁内同时检查全局、项目和 CLI 三层配额；不能采用“先 count、后 update”的竞态实现。
 - 配额只影响新 claim，不强杀已经运行的 Job。

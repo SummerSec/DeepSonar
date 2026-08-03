@@ -73,8 +73,8 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /global-settings | agents:read | `{rules, effective_rules}` |
-| PATCH | /global-settings | agents:write | `{rules: {...}}` 合并 |
+| GET | /global-settings | agents:read | `{rules, effective_rules, active_by_agent_cli, active_by_provider}`；`effective_rules` 含 `maxGlobalJobs` / `maxJobsPerProject` / `maxConcurrentByAgentCli` |
+| PATCH | /global-settings | agents:write | `{rules: {...}}` 合并；调度 claim 读取更新后的 effective 规则并由 `pg_notify` 唤醒，无需重启 |
 | GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 |
 | PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}}`；`enabled: null` 恢复默认 |
 
