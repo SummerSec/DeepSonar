@@ -95,9 +95,27 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173
 ```
 
-默认 `AGENT_MODE=fake`，不需要构建 Agent 镜像。Web 的 `/images` 是独立镜像市场页；项目内的 `/projects/:projectId/images` 用于启用第三方已准入镜像和固定版本。官方运行时按职责拆包：base 基于 Node 22 Debian slim，Verify 默认使用 base，重型审计工具独立打包；只有 Test 默认使用 `deepsonar-kali-minimal`（Kali Test），内含常见 Python/JDK 版本、固定 Apache Maven 3.9.16、Go 与 Rust，但仍不安装 Kali metapackage/GUI。Maven 使用 `/opt/deepsonar/maven`，不预置 `.m2` 缓存。基本验证：
+默认 `AGENT_MODE=fake`，不需要构建 Agent 镜像。Web 的 `/images` 是独立镜像市场页；项目内的 `/projects/:projectId/images` 用于启用第三方已准入镜像和固定版本。
 
-需要 `runtime_test` 时，Test/项目级动态 Verify 必须使用可信预构建工具链；不要在沙箱内冷装 JDK/Maven。Java、Python、Go、Rust 的静态/动态能力矩阵和证据边界见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](docs/RUNTIME_TEST_TOOLCHAINS.md)。
+### 官方运行时镜像与语言能力
+
+官方运行时按职责拆包，**镜像选择以 RoleConfig 为准**（Job 创建时冻结 digest），不要用全局 env 指定 CLI 或临时 `apt` 充当工具链：
+
+| 镜像 | 默认角色 | 主要能力 | 刻意不含 |
+|------|----------|----------|----------|
+| `deepsonar-base` | explore / analyze / review / code / hub / **verify** | Node 22 slim、git、系统 python3、curl、rg、jq | 多版本语言、JDK、Go、Rust、Maven、审计重器 |
+| `deepsonar-audit` | **audit** | base + Semgrep、Gitleaks、ShellCheck、binutils | 完整应用构建链（如 Maven 起 Spring） |
+| `deepsonar-kali-minimal`（Kali Test） | **test** | Python 3.10–3.14 + `uv`、Temurin JDK 8/11/17、固定 Apache Maven 3.9.16（`/opt/deepsonar/maven`，无预置 `.m2`）、Go、Rust、以及 audit 系 CLI | Kali metapackage/GUI、Gradle、Docker-in-Docker |
+
+**静态审计 vs 动态验证**
+
+- **只读代码出 Finding**（audit）：多数语言在 `deepsonar-audit` 上即可起步（Semgrep + 读仓）。
+- **要 runtime_test / 编译运行 / 打 PoC**（test，必要时项目级覆盖 verify）：必须使用 **Kali Test**（或项目启用的专项镜像），**不要**把 test 绑到 base。
+- base 上没有 `go` / `cargo` / `java` / `mvn`；系统仅有单版本 `python3`。test 误绑 base 时，Python 也偏弱，Go/Rust/Java 会直接 `command not found`，Agent 会浪费时间在沙箱内下载工具链（不可复现，见 [issue #11](https://github.com/SummerSec/DeepSonar/issues/11)）。
+- 需要 `runtime_test` 时，Test/项目级动态 Verify 必须使用可信预构建工具链；**不要在沙箱内冷装** JDK/Maven。完整 Web+DB、Compose 全家桶任何语言都不在默认镜像范围内。
+- Java、Python、Go、Rust 的静态/动态能力矩阵与证据边界见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](docs/RUNTIME_TEST_TOOLCHAINS.md)；OpenHarmony 等专项镜像为 `project_opt_in`，见 [agent-harness/README.md](agent-harness/README.md) 与 [一键部署](docs/ONE_CLICK_DEPLOYMENT.md)。
+
+基本验证：
 
 ```bash
 pnpm typecheck

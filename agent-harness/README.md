@@ -15,6 +15,27 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工�
 
 动态测试的 RoleConfig/证据纪律、Java/Python/Go/Rust 静态—动态矩阵见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](../docs/RUNTIME_TEST_TOOLCHAINS.md)。系统 Verify 仍默认使用 Base；只在项目级 RoleConfig 中显式选择已准入的动态镜像，不把 Kali 全局化。
 
+### 静态审计 vs 动态验证（多语言）
+
+| 阶段 | 角色 | 推荐镜像 | 说明 |
+|------|------|----------|------|
+| 静态审计 | audit | `deepsonar-audit` | 读仓 + Semgrep 等；多数语言可起步 |
+| 动态验证 / PoC | test | `deepsonar-kali-minimal` | 需编译运行时**必须**用 Kali（或专项），勿绑 base |
+| 系统验证 | verify | 默认 base；需 runtime 时 RoleConfig 覆盖为 Kali/专项 | 与 test 同样受语言工具链约束 |
+
+| 语言 / 能力 | base | Kali Test |
+|-------------|------|-----------|
+| Python | 系统 python3 单版本 | 3.10–3.14 + `uv` |
+| Go | 无 | `golang-go` |
+| Rust | 无 | `rustc` + `cargo` |
+| Java | 无 | JDK 8/11/17 + Maven 3.9.16（`/opt/deepsonar/maven`，无预置 `.m2`）；无 Gradle |
+| Docker-in-Docker | 无 | 无 |
+
+- test 误绑 base 时：Go/Rust/Java/Maven 会 `command not found`，Python 仅有弱单版本；Agent 常在 Job 内下载工具链，不可复现且易 rework 空转。
+- 正确使用 Kali 时：Java 可用 `java*`/`javac*`/`mvn`；Python/Go/Rust 亦有预装工具链。依赖下载仍受冻结的 `DEEPSONAR_ALLOW_EGRESS` 约束。
+- 不把完整语言矩阵塞进 base；重型栈（DB/Compose/K8s）用专项镜像或宿主编排，不默认进 Kali metapackage。
+- 证据纪律与矩阵细节见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](../docs/RUNTIME_TEST_TOOLCHAINS.md)。
+
 ## 白名单工具注入（§3.4）
 
 每个 Job 经 agentbox-sdk 动态注入本地 `deepsonar-control` MCP；工具按角色裁剪：
