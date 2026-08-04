@@ -194,6 +194,56 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<s
   return ip;
 }
 
+/**
+ * 解析运行时 tool-manifest。部分已发布 OH 镜像在合法 JSON 后多了字面量 `\n`
+ *（Dockerfile 单引号里写了 +"\\n"），严格 parse 会报
+ * "Unexpected non-whitespace character after JSON"。
+ */
+function parseToolManifest(raw: string): { contract?: string } {
+  const text = raw.replace(/^\uFEFF/, "").trim();
+  try {
+    return JSON.parse(text) as { contract?: string };
+  } catch (first) {
+    // 去掉尾部孤立的 \n / 多余空白后再试
+    const stripped = text.replace(/(?:\\n)+\s*$/g, "").trim();
+    if (stripped !== text) {
+      try {
+        return JSON.parse(stripped) as { contract?: string };
+      } catch {
+        /* fall through */
+      }
+    }
+    // 取第一个完整 JSON 值（从首个 { 起 brace-match）
+    const start = text.indexOf("{");
+    if (start >= 0) {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i]!;
+        if (inString) {
+          if (escape) escape = false;
+          else if (ch === "\\") escape = true;
+          else if (ch === "\"") inString = false;
+          continue;
+        }
+        if (ch === "\"") {
+          inString = true;
+          continue;
+        }
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) {
+            return JSON.parse(text.slice(start, i + 1)) as { contract?: string };
+          }
+        }
+      }
+    }
+    throw first instanceof Error ? first : new Error(String(first));
+  }
+}
+
 /** dockerode createContainer 调用签名（只需要我们注入 HostConfig 的部分） */
 interface CreateContainerOptions {
   Labels?: Record<string, string>;
@@ -281,7 +331,8 @@ export class AgentboxRunner implements SandboxRunner {
       if (contractResult.exitCode !== 0) {
         throw new RuntimeImageContractError("runtime image missing /workspace, /bin/sh, or tool manifest");
       }
-      const manifest = JSON.parse(contractResult.stdout) as { contract?: string };
+      // 兼容历史 OH 镜像：Dockerfile 误写 +"\\n" 导致 manifest 末尾多字面量 \n，严格 JSON.parse 失败。
+      const manifest = parseToolManifest(contractResult.stdout);
       if (input.expectedContract && manifest.contract !== input.expectedContract) {
         throw new RuntimeImageContractError(`runtime contract mismatch: expected ${input.expectedContract}, got ${manifest.contract ?? "missing"}`);
       }

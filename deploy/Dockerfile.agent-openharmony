@@ -29,7 +29,7 @@ RUN install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.s
   && chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
 RUN /opt/deepsonar/bin/openharmony-env.sh --check \
-  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-test","imageKey":"deepsonar-openharmony-test","tools":["git","git-lfs","repo","python3","python3-requests","build-essential","ccache","cmake","ninja","node","claude"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\\n")'
+  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-test","imageKey":"deepsonar-openharmony-test","tools":["git","git-lfs","repo","python3","python3-requests","build-essential","ccache","cmake","ninja","node","claude"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\n")'
 
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
