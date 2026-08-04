@@ -6,6 +6,7 @@
  */
 import { VerificationEvidence, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
+import { invalidVerification } from "./control-input.js";
 
 type Tx = typeof sql;
 
@@ -917,7 +918,8 @@ export function buildVerificationFollowupPayload(
 
 /**
  * 接受结构化验证证据 fact：Zod 校验 + 绑定校验后写入 body_json 与边。
- * 非法 verification 字段被忽略（仍保留普通 fact description）。
+ * 任一绑定失败都抛出稳定控制面错误；调用方所在事件事务会回滚，
+ * 绝不把补证失败降级成普通 fact。
  */
 export async function attachVerificationEvidence(
   tx: Tx,
@@ -928,38 +930,43 @@ export async function attachVerificationEvidence(
 ): Promise<boolean> {
   const parsed = VerificationEvidence.safeParse(verification);
   if (!parsed.success) {
-    console.warn(`[verify] ignore invalid verification on job ${String(job.id)}:`, parsed.error.flatten());
-    return false;
+    throw invalidVerification(`verification 字段不符合严格契约（job=${String(job.id)}）。`);
   }
   const ver: VerificationEvidenceType = parsed.data;
 
   // built-in 补证职责不可由 Agent 自报冒充：review 只能提交 review，test 只能提交 test。
   // Hub 的 verify_rework/verify_failed 路径也只允许创建这两类 Job。
   if (String(job.type ?? "") !== ver.evidence_kind) {
-    console.warn(
-      `[verify] ignore evidence kind ${ver.evidence_kind} from role ${String(job.type)} on job ${String(job.id)}`,
+    throw invalidVerification(
+      `verification.evidence_kind=${ver.evidence_kind} 与当前角色 ${String(job.type)} 不匹配。`,
+      "verification.evidence_kind",
     );
-    return false;
   }
 
   const payload = (job.payload_json ?? {}) as Record<string, unknown>;
   const vf = payload.verification_followup as { finding_id?: string } | undefined;
   if (!vf?.finding_id || vf.finding_id !== ver.finding_id) {
-    // 无绑定或 finding 不匹配：忽略验证字段，当作普通 fact
-    return false;
+    throw invalidVerification(
+      "verification.finding_id 必须匹配当前 Scheduler 绑定的补证 Finding。",
+      "verification.finding_id",
+    );
   }
 
   const [finding] = await tx`
     SELECT id, node_id, project_id FROM findings WHERE id = ${ver.finding_id}`;
-  if (!finding?.node_id) return false;
+  if (!finding?.node_id) {
+    throw invalidVerification("verification.finding_id 不存在或尚未生成 Finding 节点。", "verification.finding_id");
+  }
 
   // 确认 finding 属于当前画布
   const [fn] = await tx`
     SELECT canvas_id FROM canvas_nodes WHERE id = ${finding.node_id as string}`;
-  if (!fn || fn.canvas_id !== canvasId) return false;
+  if (!fn || fn.canvas_id !== canvasId) {
+    throw invalidVerification("verification.finding_id 不属于当前任务画布。", "verification.finding_id");
+  }
 
   const edgeType = ver.evidence_kind === "review" ? "reviewed_by" : "tested_by";
-  await tx`
+  const updated = await tx`
     UPDATE canvas_nodes
     SET body_json = body_json || ${tx.json({
       verification: {
@@ -977,7 +984,9 @@ export async function attachVerificationEvidence(
         source_role: String(job.type),
       },
     })}
-    WHERE id = ${nodeId}`;
+    WHERE id = ${nodeId}
+    RETURNING id`;
+  if (updated.length === 0) throw invalidVerification("验证事实节点不存在，证据未附着。", "verification");
 
   await insertEdgeIfAbsent(tx, canvasId, finding.node_id as string, nodeId, edgeType);
   return true;

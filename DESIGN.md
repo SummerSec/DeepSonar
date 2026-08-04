@@ -56,6 +56,9 @@ Finding 1 ── * finding_verification_rounds
 
 - **Agent 只提案**：`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human`；是否 verify、是否 report 由调度器决定。
 - **图引用硬约束**：Hub 的 `intents[].from` / `complete.from` 必须使用同画布 `root`/`fact`/`finding` 节点的 canonical UUID（YAML `root_id` 的值）；字段名、别名、占位符或跨画布 ID 会使整次决策被拒绝。
+- **控制面默认拒绝（#57）**：所有控制工具与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。MCP 合法响应只代表 `schema_validated / pending_scheduler_validation`，不是落库成功；`isError` 始终带稳定 `error_code` 与人话。
+- **二阶段 ack 边界**：本地 MCP 子进程不连 Scheduler/数据库，无法同步返回业务事务结果；禁止引入可写控制文件队列或未经治理的 socket。需要端到端同步业务 ack 时另立受治理宿主 IPC 架构变更。
+- **控制通道不污染**：结构化 MCP `tool_use` 先进入宿主 bounded pending；对应的合法非错误 `tool_result`（`is_error` 省略或为 `false`）才释放语义事件，显式错误或畸形标记均丢弃 pending。控制工具 telemetry 只保留 toolName/callId 与输入 shape/count，不记录原始 input/content；非 JSON 运行时行、未知行和写 `.deepsonar/control-*` 的尝试只记低基数告警/指标，跳过后继续处理后续合法事件。
 - **Hub 不可下发** `verify` / `report`；须先 `list_available_roles`。
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
@@ -146,6 +149,29 @@ pending → claimed → provisioning → running
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
+
+### 13.1 Agent 控制面输入 doctrine（D1–D6）
+
+1. **D1 默认拒绝**：每个工具 `additionalProperties: false`；未知字段返回 `unknown_field`，不得 strip 后部分落库。
+2. **D2 标识符标准形态**：节点/边只认当前画布 `referableIds` 中的 canonical UUID；Finding 绑定只认数据库 Finding UUID；角色只认本轮 `list_available_roles`；未来路径工具只认白名单前缀。
+3. **D3 通道不可污染**：语义事件只能由控制 MCP 结构化提交；Agent 不能用 shell 或 `.deepsonar/control-*` 文件模拟队列；脏行告警后不得丢弃后续合法事件。
+4. **D4 错误形态**：拒绝返回稳定 `error_code` + 可读消息；禁止把 PostgreSQL/`JSON.parse` 堆栈作为唯一结果；禁止 MCP 先报成功、Scheduler 后静默失败。
+5. **D5 单源契约**：`shared-types` Zod schema 同时生成 MCP JSON Schema；每个工具必须有合法/非法夹具、宿主重验和业务前置条件测试。
+6. **D6 纵深校验**：MCP schema → runtime/host parse → ingest/apply transaction 三层均须拒绝；任何层缺失都不算完成。
+
+工具 → 禁止输入 → 稳定错误码：
+
+| 工具 | 关键禁止输入 | 错误码 |
+|---|---|---|
+| `list_available_roles` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
+| `emit_progress` | 空白/超长 message、percent 越界或非数字 | `invalid_progress` |
+| `emit_fact` | 缺 title/description、未知字段、非法 verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
+| `emit_finding` | 非法 severity、空白/超长字段、写入内部 `raw` | `invalid_payload` / `unknown_field` |
+| `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` |
+| `mark_job_done` | 空白 summary、verify 缺 verdict、rework 缺 missing_evidence、非 verify 乱传 verdict | `invalid_done` |
+| `request_human` | 空白/超长 reason、未授权角色 | `invalid_human` / `tool_not_allowed` |
+
+新增控制工具 checklist：定义严格 Zod payload + 同源 JSON Schema；列出禁止输入/错误码/业务白名单；MCP 与宿主各有合法/非法测试；core 事务断言失败全回滚；确认不写控制文件、不把普通文本当语义事件；更新本表、平台工具说明和 CI 冒烟。
 
 1. **不扩大 Agent 权限**：镜像、凭据、派生、状态机终态只在调度器。  
 2. **改表 = 改基线 + bump 版本 + 重建库验证**（直至 #34 类迁移落地）。  

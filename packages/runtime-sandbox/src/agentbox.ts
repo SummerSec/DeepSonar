@@ -4,8 +4,8 @@
  * 要点：
  * - agentbox 只作沙箱（容器生命周期 + exec + 文件上下行）；Agent 由 claude CLI
  *   以 stream-json 模式直接在沙箱内驱动，不走 SDK daemon/relay。
- * - 语义事件由宿主从 Claude stream-json 的 assistant tool_use 块捕获；
- *   不经过沙箱目标网络，也不依赖 Agent 可写文件。
+ * - assistant tool_use 先只进入宿主 bounded pending 表；对应的合法非错误 tool_result
+ *   （is_error 省略或为 false）后才释放语义事件，不经过沙箱目标网络，也不依赖 Agent 可写文件。
  */
 import { Sandbox } from "agentbox-sdk";
 import type {
@@ -478,6 +478,8 @@ export interface RealAgentSpec {
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
   onEvent?: (event: Record<string, unknown>) => void;
+  /** 非语义运行流告警；告警不会进入控制事件或写库。 */
+  onWarning?: (warning: { code: string; detail?: string }) => void;
 }
 
 export interface RealAgentResult {
@@ -738,6 +740,93 @@ export const DEFAULT_SEMANTIC_TOOL_EVENTS: Record<string, string> = {
   "mcp__deepsonar-control__request_human": "human",
 };
 
+export const DEFAULT_PENDING_CONTROL_TOOL_LIMIT = 128;
+const SETTLED_CONTROL_TOOL_LIMIT = 4096;
+
+type PendingSemanticTool = {
+  toolName: string;
+  event: Record<string, unknown>;
+};
+
+type ObservedToolKind = "control" | "other";
+
+/** Stream-local state for two-phase control tool delivery. */
+export interface SemanticToolState {
+  /** Successful call ids only; failed calls are never released as events. */
+  seenToolUseIds: Set<string>;
+  /** Calls that received a result (success or error), preventing replay. */
+  settledToolUseIds: Set<string>;
+  /** Assistant control calls awaiting their matching user tool_result. */
+  pendingToolUses: Map<string, PendingSemanticTool>;
+  /** Bounded raw ids for control calls, which are length-validated before storage. */
+  observedToolUses: Map<string, ObservedToolKind>;
+  /** Hash-only tracking for ordinary tool calls; raw ids remain telemetry-compatible. */
+  observedNonControlToolUseHashes: Set<string>;
+  /** Hash-only settled ids for ordinary tool calls, preventing replay without raw-id retention. */
+  settledNonControlToolUseHashes: Set<string>;
+  maxPendingToolUses: number;
+}
+
+export function createSemanticToolState(
+  maxPendingToolUses = DEFAULT_PENDING_CONTROL_TOOL_LIMIT,
+): SemanticToolState {
+  return {
+    seenToolUseIds: new Set(),
+    settledToolUseIds: new Set(),
+    pendingToolUses: new Map(),
+    observedToolUses: new Map(),
+    observedNonControlToolUseHashes: new Set(),
+    settledNonControlToolUseHashes: new Set(),
+    maxPendingToolUses,
+  };
+}
+
+/** Drop unresolved control calls at run end without exposing their payloads. */
+export function discardPendingSemanticTools(
+  state: SemanticToolState,
+  onWarning?: (warning: { code: string; detail?: string }) => void,
+): void {
+  if (state.pendingToolUses.size === 0) {
+    state.observedToolUses.clear();
+    state.observedNonControlToolUseHashes.clear();
+    state.settledNonControlToolUseHashes.clear();
+    return;
+  }
+  onWarning?.({
+    code: "control_tool_pending_discarded",
+    detail: `pending_count=${state.pendingToolUses.size}`,
+  });
+  state.pendingToolUses.clear();
+  state.observedToolUses.clear();
+  state.observedNonControlToolUseHashes.clear();
+  state.settledNonControlToolUseHashes.clear();
+}
+
+function rememberToolId(set: Set<string>, callId: string): void {
+  set.add(callId);
+  if (set.size <= SETTLED_CONTROL_TOOL_LIMIT) return;
+  const oldest = set.values().next().value;
+  if (typeof oldest === "string") set.delete(oldest);
+}
+
+function rememberObservedToolUse(state: SemanticToolState, callId: string, kind: ObservedToolKind): void {
+  state.observedToolUses.set(callId, kind);
+  if (state.observedToolUses.size <= SETTLED_CONTROL_TOOL_LIMIT) return;
+  const oldest = state.observedToolUses.keys().next().value;
+  if (typeof oldest === "string") state.observedToolUses.delete(oldest);
+}
+
+function telemetryToolHash(callId: string): string {
+  return createHash("sha256").update(`deepsonar-tool-telemetry:${callId}`).digest("hex");
+}
+
+function rememberToolHash(set: Set<string>, callId: string): void {
+  set.add(telemetryToolHash(callId));
+  if (set.size <= SETTLED_CONTROL_TOOL_LIMIT) return;
+  const oldest = set.values().next().value;
+  if (typeof oldest === "string") set.delete(oldest);
+}
+
 function semanticEventId(callId: string): string {
   const bytes = createHash("sha256").update(`deepsonar-control:${callId}`).digest().subarray(0, 16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x50;
@@ -746,65 +835,218 @@ function semanticEventId(callId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+const MAX_CONTROL_CALL_ID_LENGTH = 256;
+
+/** Correlate control telemetry without persisting an untrusted tool id. */
+function controlTelemetryCallId(callId: string): string {
+  return `control-${createHash("sha256").update(`deepsonar-control-telemetry:${callId}`).digest("hex").slice(0, 24)}`;
+}
+
+function validControlCallId(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_CONTROL_CALL_ID_LENGTH;
+}
+
+function safeRuntimeValueKind(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+/** Shape-only telemetry for control inputs; never include values or field names. */
+function safeControlInputShape(value: unknown): Record<string, unknown> {
+  if (value === null) return { kind: "null" };
+  if (Array.isArray(value)) return { kind: "array", count: Math.min(value.length, 1000) };
+  if (typeof value === "object") {
+    return { kind: "object", field_count: Math.min(Object.keys(value as Record<string, unknown>).length, 1000) };
+  }
+  return { kind: safeRuntimeValueKind(value) };
+}
+
+function runtimeContentBlocks(
+  line: Record<string, unknown>,
+  role: "assistant" | "user",
+  warnings: Array<{ code: string; detail?: string }>,
+): Array<Record<string, unknown>> {
+  const message = line.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) return [];
+  const messageRecord = message as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(messageRecord, "content")) return [];
+  const content = messageRecord.content;
+  if (!Array.isArray(content)) {
+    warnings.push({ code: "malformed_runtime_block", detail: `${role}_content_type=${safeRuntimeValueKind(content)}` });
+    return [];
+  }
+  const blocks: Array<Record<string, unknown>> = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      warnings.push({ code: "malformed_runtime_block", detail: `${role}_content_block_type=${safeRuntimeValueKind(block)}` });
+      continue;
+    }
+    blocks.push(block as Record<string, unknown>);
+  }
+  return blocks;
+}
+
+/** Parse one CLI stream line without letting malformed/legacy control-file
+ * text poison the following structured line. */
+export function parseRuntimeLine(line: string): {
+  parsed?: Record<string, unknown>;
+  warning?: { code: "malformed_runtime_line" | "forbidden_control_file"; detail: string };
+} {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { warning: { code: "malformed_runtime_line", detail: `line_length=${line.length}` } };
+    }
+    return { parsed: parsed as Record<string, unknown> };
+  } catch {
+    const forbidden = /\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(line);
+    return {
+      warning: {
+        code: forbidden ? "forbidden_control_file" : "malformed_runtime_line",
+        detail: `line_length=${line.length}`,
+      },
+    };
+  }
+}
+
 export function mapCliEvent(
   line: Record<string, unknown>,
   emit: (e: Record<string, unknown>) => void,
   semanticToolEvents: Record<string, string> = DEFAULT_SEMANTIC_TOOL_EVENTS,
-  seenToolUseIds = new Set<string>(),
+  state: SemanticToolState = createSemanticToolState(),
 ): {
   finalText?: string;
   isError?: boolean;
   errorDetail?: string;
   sessionId?: string;
   semanticEvents: Array<Record<string, unknown>>;
+  warnings: Array<{ code: string; detail?: string }>;
 } {
   const semanticEvents: Array<Record<string, unknown>> = [];
+  const warnings: Array<{ code: string; detail?: string }> = [];
   const type = line.type as string;
   if (type === "system" && line.subtype === "init") {
     emit({ type: "run.started", sessionId: line.session_id });
-    return { sessionId: typeof line.session_id === "string" ? line.session_id : undefined, semanticEvents };
+    return { sessionId: typeof line.session_id === "string" ? line.session_id : undefined, semanticEvents, warnings };
   }
   if (type === "assistant") {
-    const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
-    for (const block of content as Record<string, unknown>[]) {
+    for (const block of runtimeContentBlocks(line, "assistant", warnings)) {
       if (block.type === "text" && typeof block.text === "string" && block.text) {
         emit({ type: "text.delta", delta: block.text });
       } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
         emit({ type: "reasoning.delta", delta: block.thinking });
       } else if (block.type === "tool_use") {
-        emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
         const toolName = typeof block.name === "string" ? block.name : "";
         const callId = typeof block.id === "string" ? block.id : "";
-        const eventType = semanticToolEvents[toolName];
-        if (eventType && callId && !seenToolUseIds.has(callId)) {
-          seenToolUseIds.add(callId);
-          semanticEvents.push({
+        const eventType = Object.prototype.hasOwnProperty.call(semanticToolEvents, toolName)
+          ? semanticToolEvents[toolName]
+          : undefined;
+        const isControlNamespace = toolName.startsWith("mcp__deepsonar-control__");
+        const controlEventType = isControlNamespace && typeof eventType === "string" ? eventType : undefined;
+        const canTrackControl = Boolean(
+          controlEventType &&
+          validControlCallId(callId) &&
+          !state.seenToolUseIds.has(callId) &&
+          !state.settledToolUseIds.has(callId) &&
+          !state.pendingToolUses.has(callId),
+        );
+        if (controlEventType) {
+          if (!validControlCallId(callId)) {
+            warnings.push({
+              code: "malformed_control_tool_use",
+              detail: callId ? `call_id_length=${callId.length}` : "call_id_missing",
+            });
+          } else if (canTrackControl) {
+            rememberObservedToolUse(state, callId, "control");
+            emit({ type: "tool.call.started", toolName, callId: controlTelemetryCallId(callId), inputShape: safeControlInputShape(block.input) });
+          }
+        } else if (isControlNamespace) {
+          if (validControlCallId(callId)) rememberObservedToolUse(state, callId, "control");
+          warnings.push({ code: "unknown_control_tool", detail: "control_namespace" });
+        } else {
+          emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
+          if (callId) rememberToolHash(state.observedNonControlToolUseHashes, callId);
+        }
+        if (canTrackControl) {
+          if (state.pendingToolUses.size >= state.maxPendingToolUses) {
+            rememberToolId(state.settledToolUseIds, callId);
+            warnings.push({ code: "control_tool_pending_limit", detail: `pending_count=${state.pendingToolUses.size}` });
+            continue;
+          }
+          state.pendingToolUses.set(callId, {
+            toolName,
+            event: {
             v: 1,
             event_id: semanticEventId(callId),
             type: eventType,
             payload: block.input && typeof block.input === "object" ? block.input : {},
+            },
           });
         }
       }
     }
-    return { semanticEvents };
+    return { semanticEvents, warnings };
   }
   if (type === "user") {
-    const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
-    for (const block of content as Record<string, unknown>[]) {
+    for (const block of runtimeContentBlocks(line, "user", warnings)) {
       if (block.type === "tool_result") {
-        emit({ type: "tool.call.completed", callId: block.tool_use_id });
+        const callId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
+        if (!callId) continue;
+        const isControlSizedId = validControlCallId(callId);
+        if (isControlSizedId && state.settledToolUseIds.has(callId)) continue;
+        const pending = isControlSizedId ? state.pendingToolUses.get(callId) : undefined;
+        // A result without a matching control tool_use is not control telemetry.
+        // Do not let out-of-order/unknown ids poison the bounded replay sets.
+        if (!pending) {
+          const observedKind = isControlSizedId ? state.observedToolUses.get(callId) : undefined;
+          if (observedKind === "control") {
+            state.observedToolUses.delete(callId);
+            rememberToolId(state.settledToolUseIds, callId);
+            continue;
+          }
+          const nonControlHash = telemetryToolHash(callId);
+          if (!state.observedNonControlToolUseHashes.delete(nonControlHash)) continue;
+          if (!state.settledNonControlToolUseHashes.has(nonControlHash)) {
+            rememberToolHash(state.settledNonControlToolUseHashes, callId);
+            emit({ type: "tool.call.completed", callId, isError: block.is_error === true });
+          }
+          continue;
+        }
+        state.pendingToolUses.delete(callId);
+        state.observedToolUses.delete(callId);
+        rememberToolId(state.settledToolUseIds, callId);
+        const hasIsError = Object.prototype.hasOwnProperty.call(block, "is_error");
+        const isErrorFlag = hasIsError ? block.is_error : undefined;
+        const validIsErrorFlag = !hasIsError || typeof isErrorFlag === "boolean";
+        const isError = !validIsErrorFlag || isErrorFlag === true;
+        if (!validIsErrorFlag) {
+          warnings.push({
+            code: "malformed_control_tool_result",
+            detail: hasIsError ? `is_error_type=${safeRuntimeValueKind(isErrorFlag)}` : "is_error_missing",
+          });
+        }
+        emit({
+          type: "tool.call.completed",
+          callId: controlTelemetryCallId(callId),
+          toolName: pending.toolName,
+          isError,
+        });
+        if (!isError) {
+          rememberToolId(state.seenToolUseIds, callId);
+          semanticEvents.push(pending.event);
+        }
       }
     }
-    return { semanticEvents };
+    return { semanticEvents, warnings };
   }
   if (type === "result") {
     const text = typeof line.result === "string" ? line.result : "";
     const isError = line.is_error === true || (line.subtype as string) !== "success";
     emit({ type: "run.completed", text: text || (line.subtype as string) });
-    return { finalText: text, isError, errorDetail: isError ? text || `claude result: ${String(line.subtype)}` : undefined, semanticEvents };
+    return { finalText: text, isError, errorDetail: isError ? text || `claude result: ${String(line.subtype)}` : undefined, semanticEvents, warnings };
   }
-  return { semanticEvents };
+  return { semanticEvents, warnings };
 }
 
 export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
@@ -872,7 +1114,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   await writeUserMessage(spec.input);
   const disposeMessageSource = await spec.onRunReady?.({ sendMessage: writeUserMessage });
   let semanticError: string | undefined;
-  const seenToolUseIds = new Set<string>();
+  const semanticToolState = createSemanticToolState();
   const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
@@ -914,18 +1156,29 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         const line = stdoutBuffer.slice(0, idx).trim();
         stdoutBuffer = stdoutBuffer.slice(idx + 1);
         if (!line) continue;
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue; // CLI 的非 JSON 噪音行
+        const parsedLine = parseRuntimeLine(line);
+        if (!parsedLine.parsed) {
+          if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
+          continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
         }
+        const parsed = parsedLine.parsed;
         const outcome = mapCliEvent(parsed, (e) => {
           spec.onEvent?.(e);
+          if (e.type === "tool.call.started") {
+            const input = e.input && typeof e.input === "object" ? e.input as Record<string, unknown> : {};
+            const command = typeof input.command === "string" ? input.command : "";
+            if (/\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(command)) {
+              spec.onWarning?.({ code: "forbidden_control_file", detail: `command_length=${command.length}` });
+            }
+          }
           if (e.type === "text.delta" && typeof e.delta === "string") {
             progressBuffer += e.delta as string;
           }
-        }, semanticToolEvents, seenToolUseIds);
+        }, semanticToolEvents, semanticToolState);
+        for (const warning of outcome.warnings) spec.onWarning?.(warning);
+        if (!["system", "assistant", "user", "result"].includes(String(parsed.type))) {
+          spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
+        }
         for (const event of outcome.semanticEvents) {
           try {
             await spec.onSemanticEvent?.(event);
@@ -959,6 +1212,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   } catch (e) {
     if (!runError) runError = e instanceof Error ? e.message : String(e);
   } finally {
+    discardPendingSemanticTools(semanticToolState, (warning) => spec.onWarning?.(warning));
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
 

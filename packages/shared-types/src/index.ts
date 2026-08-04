@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
+
 // ---------- 枚举（一律字符串，不用 DB enum，见 ARCHITECTURE §17.1） ----------
 
 export const JobStatus = z.enum([
@@ -40,26 +42,30 @@ export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human", "fals
 export type VerifyVerdict = z.infer<typeof VerifyVerdict>;
 
 /** 绑定到 Finding 的独立复核 / 实测证据（emit_fact 可选字段）。 */
-export const VerificationEvidence = z.object({
+export const VerificationEvidence = z
+  .object({
   finding_id: z.string().uuid(),
   evidence_kind: z.enum(["review", "test"]),
   outcome: z.enum(["supports", "refutes", "inconclusive"]),
-  subject_revision: z.string().min(1).max(500),
-  environment: z.string().max(1000).optional(),
-  steps: z.array(z.string().max(2000)).max(50).optional(),
-  expected: z.string().max(5000).optional(),
-  actual: z.string().max(5000).optional(),
+  subject_revision: nonEmptyText(500),
+  environment: z.string().max(1000).regex(/\S/).optional(),
+  steps: z.array(z.string().max(2000).regex(/\S/)).max(50).optional(),
+  expected: z.string().max(5000).regex(/\S/).optional(),
+  actual: z.string().max(5000).regex(/\S/).optional(),
   artifact_refs: z
     .array(
-      z.object({
-        uri: z.string().min(1).max(2000),
-        sha256: z.string().max(128).optional(),
-      }),
+      z
+        .object({
+          uri: z.string().min(1).max(2000),
+          sha256: z.string().max(128).optional(),
+        })
+        .strict(),
     )
     .max(20)
     .optional(),
-  limitations: z.array(z.string().max(1000)).max(20).optional(),
-});
+  limitations: z.array(z.string().max(1000).regex(/\S/)).max(20).optional(),
+  })
+  .strict();
 export type VerificationEvidence = z.infer<typeof VerificationEvidence>;
 
 export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact", "report"]);
@@ -94,36 +100,83 @@ export type EdgeType = z.infer<typeof EdgeType>;
 
 // ---------- Finding payload（SARIF 2.1.0 子集，见 ARCHITECTURE §6.1） ----------
 
-export const FindingPayload = z.object({
-  title: z.string().min(1).max(500),
-  severity: Severity,
-  location: z.string().max(1000).optional(), // "auth/login.php:42" ← SARIF artifactLocation + region
-  summary: z.string().max(10000).optional(),
-  rule_id: z.string().max(200).optional(), // SARIF ruleId
-  /** 兼容字段：是否验证由调度器决定，不再影响派生。 */
-  suggest_verify: z.boolean().default(false),
-  raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
-});
+export const FindingPayload = z
+  .object({
+    title: nonEmptyText(500),
+    severity: Severity,
+    location: z.string().max(1000).regex(/\S/).optional(), // "auth/login.php:42" ← SARIF artifactLocation + region
+    summary: z.string().max(10000).regex(/\S/).optional(),
+    rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
+    /** 兼容字段：是否验证由调度器决定，不再影响派生。 */
+    suggest_verify: z.boolean().default(false),
+    raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
+  })
+  .strict();
 export type FindingPayload = z.infer<typeof FindingPayload>;
 
+/** Agent-facing Finding contract.  SARIF/raw is Scheduler-owned internal data
+ * and is intentionally not writable through the control MCP. */
+export const EmitFindingPayload = z
+  .object({
+    title: nonEmptyText(500),
+    severity: Severity,
+    location: z.string().max(1000).regex(/\S/).optional(),
+    summary: z.string().max(10000).regex(/\S/).optional(),
+    rule_id: z.string().max(200).regex(/\S/).optional(),
+    suggest_verify: z.boolean().optional(),
+  })
+  .strict();
+export type EmitFindingPayload = z.infer<typeof EmitFindingPayload>;
+
 /** 角色 agent 的 fact 提案；verification 仅在 Hub 回弹补证 Job 上被接受。 */
-export const FactPayload = z.object({
-  title: z.string().min(1).max(200),
-  description: z.string().min(1).max(10000),
-  intent_node_id: z.string().uuid().optional(),
-  verification: VerificationEvidence.optional(),
-});
+export const FactPayload = z
+  .object({
+    title: nonEmptyText(200),
+    description: nonEmptyText(10000),
+    /** Scheduler-owned association; Agent input is ignored and overwritten. */
+    intent_node_id: z.string().uuid().nullable().optional(),
+    verification: VerificationEvidence.optional(),
+  })
+  .strict();
 export type FactPayload = z.infer<typeof FactPayload>;
 
-// ---------- 事件 envelope（§17.3 版本化） ----------
+/** Control-tool input contracts.  These schemas are the single source used by
+ * the Scheduler boundary and the generated in-sandbox MCP JSON Schema. */
+export const EmitFactPayload = z
+  .object({
+    title: nonEmptyText(200),
+    description: nonEmptyText(10000),
+    verification: VerificationEvidence.optional(),
+  })
+  .strict();
+export type EmitFactPayload = z.infer<typeof EmitFactPayload>;
 
-export const EventEnvelope = z.object({
-  v: z.literal(1),
-  event_id: z.string().uuid(),
-  type: EventType,
-  payload: z.unknown(),
-});
-export type EventEnvelope = z.infer<typeof EventEnvelope>;
+export const ProgressPayload = z
+  .object({
+    message: nonEmptyText(2000),
+    percent: z.number().min(0).max(100).optional(),
+  })
+  .strict();
+export type ProgressPayload = z.infer<typeof ProgressPayload>;
+
+export const HumanPayload = z
+  .object({
+    reason: nonEmptyText(2000),
+  })
+  .strict();
+export type HumanPayload = z.infer<typeof HumanPayload>;
+
+export const DonePayload = z
+  .object({
+    summary: nonEmptyText(10000),
+    verdict: VerifyVerdict.optional(),
+    missing_evidence: z.array(z.string().min(1).max(200)).max(8).optional(),
+  })
+  .strict();
+export type DonePayload = z.infer<typeof DonePayload>;
+
+export const ListAvailableRolesPayload = z.object({}).strict();
+export type ListAvailableRolesPayload = z.infer<typeof ListAvailableRolesPayload>;
 
 export const VerifyFindingPayload = z.object({
   finding: z.object({
@@ -343,9 +396,9 @@ const HubReferenceList = z.array(GraphNodeReference).max(HUB_REFERENCE_LIMITS.pe
 export const HubIntentPayload = z
   .object({
     from: HubReferenceList,
-    role: z.string().min(1).max(64),
-    description: z.string().min(1).max(2_000),
-    prompt: z.string().min(1).max(20_000),
+    role: nonEmptyText(64),
+    description: nonEmptyText(2_000),
+    prompt: nonEmptyText(20_000),
   })
   .strict();
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
@@ -353,7 +406,7 @@ export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
 export const HubCompletePayload = z
   .object({
     from: HubReferenceList,
-    description: z.string().min(1).max(10_000),
+    description: nonEmptyText(10_000),
   })
   .strict();
 export type HubCompletePayload = z.infer<typeof HubCompletePayload>;
@@ -373,6 +426,71 @@ export const HubDecisionPayload = z.union([
   });
 });
 export type HubDecisionPayload = z.infer<typeof HubDecisionPayload>;
+
+export const ControlToolPayloadSchemas = {
+  list_available_roles: ListAvailableRolesPayload,
+  emit_progress: ProgressPayload,
+  emit_fact: EmitFactPayload,
+  emit_finding: EmitFindingPayload,
+  submit_hub_decision: HubDecisionPayload,
+  mark_job_done: DonePayload,
+  request_human: HumanPayload,
+} as const;
+export type ControlToolPayload = {
+  [K in keyof typeof ControlToolPayloadSchemas]: z.infer<(typeof ControlToolPayloadSchemas)[K]>;
+};
+
+/** JSON Schema emitted for MCP tools/list from the same Zod contracts. */
+export const ControlToolInputSchemasJson = Object.fromEntries(
+  Object.entries(ControlToolPayloadSchemas).map(([name, schema]) => [
+    name,
+    z.toJSONSchema(schema, { target: "draft-7" }),
+  ]),
+) as unknown as Record<keyof typeof ControlToolPayloadSchemas, Record<string, unknown>>;
+
+// ---------- 事件 envelope（§17.3 版本化） ----------
+
+/** Internal Hub envelope shape. Graph references stay opaque here so the
+ * Scheduler can turn malformed values into stable invalid_node_ref errors
+ * before any PostgreSQL UUID cast. */
+const HubDecisionEnvelopeInput = z
+  .object({
+    complete: z.unknown().optional(),
+    intents: z.unknown().optional(),
+  })
+  .strict();
+
+/** Agent-facing envelope. Scheduler-owned fact intent_node_id and Finding raw
+ * SARIF data are deliberately unavailable at this boundary. */
+export const ControlEventEnvelope = z.discriminatedUnion("type", [
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: EmitFindingPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
+]);
+export type ControlEventEnvelope = z.infer<typeof ControlEventEnvelope>;
+
+/** Internal payloads may carry scheduler-owned fields, but every side effect
+ * revalidates the corresponding strict schema before writing. */
+export const EventEnvelope = z.discriminatedUnion("type", [
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: FindingPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: FactPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionEnvelopeInput }).strict(),
+]);
+export type EventEnvelope = z.infer<typeof EventEnvelope>;
+/** Broad producer input; `EventEnvelope.parse` is the runtime gate before
+ * ingestion and side effects. */
+export type EventEnvelopeInput = {
+  v: 1;
+  event_id: string;
+  type: EventType;
+  payload: unknown;
+};
 
 // ---------- DeepSonar 平台工具（RoleConfig 可按 Job 开关） ----------
 

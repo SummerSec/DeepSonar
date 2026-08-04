@@ -69,6 +69,7 @@ const HELP: Record<string, string> = {
   deepsonar_plane_sync_errors_total: "Plane sync/writeback errors",
   deepsonar_graph_snapshots_total: "Bounded graph prompt projections by scope and truncation",
   deepsonar_graph_yaml_chars_total: "Total characters injected through bounded graph projections by scope",
+  deepsonar_control_input_warnings_total: "Malformed runtime lines and forbidden control-file attempts",
 };
 
 /** Prometheus text exposition */

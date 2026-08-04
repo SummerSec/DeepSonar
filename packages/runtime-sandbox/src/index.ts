@@ -53,9 +53,19 @@ export class NoopRunner implements SandboxRunner {
   }
 }
 
-export { AgentboxRunner, forceRemoveContainer, listDeepSonarContainers, materializationPathCollisions, runRealAgent } from "./agentbox.js";
+export {
+  AgentboxRunner,
+  createSemanticToolState,
+  discardPendingSemanticTools,
+  forceRemoveContainer,
+  listDeepSonarContainers,
+  materializationPathCollisions,
+  parseRuntimeLine,
+  runRealAgent,
+} from "./agentbox.js";
 export { RuntimeImageContractError } from "./agentbox.js";
 export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort } from "./agentbox.js";
+export type { SemanticToolState } from "./agentbox.js";
 export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 export type {
   AgentCliSessionAdapter,

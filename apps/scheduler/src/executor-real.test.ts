@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EventEnvelope } from "@deepsonar/shared-types";
+import { ControlEventEnvelope, EventEnvelope } from "@deepsonar/shared-types";
 import {
   ingestFactSemanticEvent,
+  assertSemanticTerminalExclusivity,
   moduleEvidenceFromSnapshot,
+  normalizeLegacyControlInstructions,
   runtimeCredentialProviderError,
   semanticToolEventsFor,
 } from "./executor-real.js";
@@ -11,6 +13,36 @@ import { expandModules } from "./skill-sources.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("ControlEventEnvelope rejects Scheduler-owned fact and Finding fields", () => {
+  const base = { v: 1 as const, event_id: "00000000-0000-4000-8000-000000000013" };
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "fact",
+    payload: { title: "事实", description: "证据", intent_node_id: intentNodeId },
+  }).success, false);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "finding",
+    payload: { title: "Finding", severity: "high", raw: { secret: "do-not-forward" } },
+  }).success, false);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "fact",
+    payload: { title: "事实", description: "证据" },
+  }).success, true);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "finding",
+    payload: { title: "Finding", severity: "high" },
+  }).success, true);
+});
+
+test("legacy RoleConfig acknowledgement wording is normalized at runtime", () => {
+  const normalized = normalizeLegacyControlInstructions(`成功响应包含 ${"accepted"} ${"event"}；收到 isError 后重试。`);
+  assert.match(normalized, /schema_validated \/ pending_scheduler_validation/);
+  assert.doesNotMatch(normalized, /accepted\s+event/i);
+});
 
 test("module evidence carries structured omissions and defaults old snapshots to []", () => {
   const missing = [{
@@ -143,7 +175,11 @@ test("real fact ingress rejects malformed verification before convergence", asyn
   await assert.rejects(
     () =>
       ingestFactSemanticEvent(
-        factEvent({
+        {
+          v: 1,
+          event_id: "00000000-0000-4000-8000-000000000014",
+          type: "fact",
+          payload: {
           title: "Malformed evidence",
           description: "This must not be ingested.",
           verification: {
@@ -152,7 +188,8 @@ test("real fact ingress rejects malformed verification before convergence", asyn
             outcome: "supports",
             subject_revision: "app@abc123",
           },
-        }),
+          },
+        },
         intentNodeId,
         async () => {
           accepted++;
@@ -176,8 +213,43 @@ test("runtime rejects stale or incompatible credential providers", () => {
 });
 
 test("semantic tool capture only enables this Job's authorized tools", () => {
-  assert.deepEqual(semanticToolEventsFor(["list_available_roles", "emit_fact", "mark_job_done"]), {
+  const semanticTools = semanticToolEventsFor(["list_available_roles", "emit_fact", "mark_job_done"]);
+  assert.deepEqual({ ...semanticTools }, {
     "mcp__deepsonar-control__emit_fact": "fact",
     "mcp__deepsonar-control__mark_job_done": "done",
   });
+  assert.equal(Object.getPrototypeOf(semanticTools), null);
+});
+
+test("semantic tool map rejects prototype keys", () => {
+  const semanticTools = semanticToolEventsFor(["__proto__", "constructor", "toString", "emit_fact"]);
+  assert.deepEqual({ ...semanticTools }, {
+    "mcp__deepsonar-control__emit_fact": "fact",
+  });
+  for (const name of ["__proto__", "constructor", "toString"]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(semanticTools, `mcp__deepsonar-control__${name}`), false);
+  }
+});
+
+test("request_human 与 done/hub 终态双向互斥且重复 human 稳定拒绝", () => {
+  const empty = () => ({ done: null, hub: null, human: null });
+  assert.doesNotThrow(() => assertSemanticTerminalExclusivity(empty(), "human"));
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: null, hub: null, human: {} }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
+  for (const eventType of ["done", "hub_decision"] as const) {
+    assert.throws(
+      () => assertSemanticTerminalExclusivity({ done: null, hub: null, human: {} }, eventType),
+      (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+    );
+  }
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: {}, hub: null, human: null }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: null, hub: {}, human: null }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
 });
