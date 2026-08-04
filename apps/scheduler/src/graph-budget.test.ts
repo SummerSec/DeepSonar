@@ -73,12 +73,14 @@ test("projection markers expose truncation and omission counts", () => {
 });
 
 test("Hub decision parser remains role-gated after graph scope changes", () => {
+  const rootId = "00000000-0000-4000-8000-000000000001";
   const decision = parseHubDecision(
-    JSON.stringify({ intents: [{ role: "review", description: "check", prompt: "check the target", from: ["root"] }] }),
+    JSON.stringify({ intents: [{ role: "review", description: "check", prompt: "check the target", from: [rootId] }] }),
     new Set(["review"]),
+    [rootId],
   );
   assert.equal(decision?.intents?.[0]?.role, "review");
-  assert.equal(parseHubDecision(JSON.stringify({ intents: [{ role: "verify", description: "bad", prompt: "bad" }] }), new Set(["review"])), null);
+  assert.equal(parseHubDecision(JSON.stringify({ intents: [{ role: "verify", description: "bad", prompt: "bad", from: [] }] }), new Set(["review"])), null);
 });
 
 test("single and batch evidence paths share the same hard-gate helper", () => {
