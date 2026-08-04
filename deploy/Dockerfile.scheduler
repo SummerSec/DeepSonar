@@ -17,6 +17,7 @@ RUN pnpm install --frozen-lockfile --filter @deepsonar/scheduler...
 
 COPY apps/scheduler apps/scheduler
 COPY packages packages
+COPY database database
 COPY agent-harness/demo-repo agent-harness/demo-repo
 COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
 
