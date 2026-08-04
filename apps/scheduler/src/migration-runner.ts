@@ -106,11 +106,68 @@ export function sha256Utf8(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function stripSqlCommentsAndStrings(sql: string): string {
+  let output = "";
+  let index = 0;
+  while (index < sql.length) {
+    const current = sql[index];
+    const next = sql[index + 1];
+    if (current === "-" && next === "-") {
+      index += 2;
+      while (index < sql.length && sql[index] !== "\n") index += 1;
+      output += "\n";
+      continue;
+    }
+    if (current === "/" && next === "*") {
+      index += 2;
+      while (index < sql.length && !(sql[index] === "*" && sql[index + 1] === "/")) index += 1;
+      index += 2;
+      output += " ";
+      continue;
+    }
+    if (current === "'" || current === '"') {
+      const quote = current;
+      index += 1;
+      while (index < sql.length) {
+        if (sql[index] === quote && sql[index + 1] === quote) {
+          index += 2;
+        } else if (sql[index] === quote) {
+          index += 1;
+          break;
+        } else {
+          index += 1;
+        }
+      }
+      output += " ";
+      continue;
+    }
+    if (current === "$") {
+      const dollarTag = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/u.exec(sql.slice(index))?.[0];
+      if (dollarTag) {
+        const end = sql.indexOf(dollarTag, index + dollarTag.length);
+        index = end < 0 ? sql.length : end + dollarTag.length;
+        output += " ";
+        continue;
+      }
+    }
+    output += current;
+    index += 1;
+  }
+  return output;
+}
+
+function assertNoTransactionControl(body: string, label: string): void {
+  const sanitized = stripSqlCommentsAndStrings(body);
+  if (/(?:^|;)\s*(?:BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|END)\b/im.test(sanitized)) {
+    throw new Error(`${label} contains top-level transaction control; the runner owns BEGIN/COMMIT/ROLLBACK`);
+  }
+}
+
 /**
  * Discover and validate the immutable migration chain.  Numbering starts at
  * v13 because v12 is the only supported pre-migration baseline.
  */
-export function discoverMigrations(directory = MIGRATIONS_DIR): MigrationInfo[] {
+export function discoverMigrations(directory = MIGRATIONS_DIR, targetVersion = SCHEMA_VERSION): MigrationInfo[] {
   if (!existsSync(directory)) {
     throw new Error(`migration directory not found: ${directory}`);
   }
@@ -133,6 +190,7 @@ export function discoverMigrations(directory = MIGRATIONS_DIR): MigrationInfo[] 
     const filePath = path.join(directory, entry.name);
     const bytes = readFileSync(filePath);
     const body = decodeUtf8(bytes, `migration ${entry.name}`);
+    assertNoTransactionControl(body, `migration ${entry.name}`);
     migrations.push({
       version,
       filename: entry.name,
@@ -153,9 +211,9 @@ export function discoverMigrations(directory = MIGRATIONS_DIR): MigrationInfo[] 
     }
     expected += 1;
   }
-  if (expected - 1 !== SCHEMA_VERSION) {
+  if (expected - 1 !== targetVersion) {
     throw new Error(
-      `migration chain ends at v${expected - 1}, but the Scheduler expects v${SCHEMA_VERSION}`,
+      `migration chain ends at v${expected - 1}, but the Scheduler expects v${targetVersion}`,
     );
   }
   return migrations;
@@ -356,7 +414,7 @@ async function assertStructure(
 async function assertLedgerShape(db: MigrationConnection): Promise<void> {
   const manifest = await readDatabaseManifest(db);
   const columns = manifest.get("schema_migrations");
-  if (!columns || columns.size !== LEDGER_COLUMNS.size || [...LEDGER_COLUMNS].some((column) => !columns.has(column))) {
+  if (!columns || [...LEDGER_COLUMNS].some((column) => !columns.has(column))) {
     throw new Error("schema_migrations exists with an unexpected structure; refusing to continue");
   }
 }
@@ -400,25 +458,38 @@ function baselineVersion(body: string, expected: number, label: string): void {
   }
 }
 
-async function assertAppliedLedger(
-  db: MigrationConnection,
-  migrations: MigrationInfo[],
-): Promise<void> {
+async function readSuccessfulLedger(db: MigrationConnection): Promise<MigrationLedgerRow[]> {
   await assertLedgerShape(db);
-  const rows = await db<MigrationLedgerRow>`
+  return db<MigrationLedgerRow>`
     SELECT id, version, filename, checksum, result
     FROM schema_migrations
     WHERE result = 'succeeded'
     ORDER BY version, id
   `;
+}
+
+async function assertAppliedLedgerThrough(
+  db: MigrationConnection,
+  migrations: MigrationInfo[],
+  throughVersion: number,
+  targetVersion: number,
+): Promise<void> {
+  const rows = await readSuccessfulLedger(db);
   const byVersion = new Map<number, MigrationLedgerRow>();
   for (const row of rows) {
     if (byVersion.has(row.version)) {
       throw new Error(`schema_migrations contains duplicate successful version ${row.version}`);
     }
+    if (row.version < FIRST_MIGRATION_VERSION || row.version > throughVersion) {
+      throw new Error(
+        `schema_migrations contains successful version ${row.version} outside the applied range ` +
+          `${FIRST_MIGRATION_VERSION}..${throughVersion} (target v${targetVersion})`,
+      );
+    }
     byVersion.set(row.version, row);
   }
-  for (const migration of migrations) {
+  const expectedMigrations = migrations.filter((migration) => migration.version <= throughVersion);
+  for (const migration of expectedMigrations) {
     const row = byVersion.get(migration.version);
     if (!row) {
       throw new Error(`schema_migrations is missing successful migration ${migration.filename}`);
@@ -430,11 +501,19 @@ async function assertAppliedLedger(
       );
     }
   }
-  for (const row of rows) {
-    if (!migrations.some((migration) => migration.version === row.version)) {
-      throw new Error(`schema_migrations contains unknown successful version ${row.version}`);
-    }
+  if (byVersion.size !== expectedMigrations.length) {
+    throw new Error(
+      `schema_migrations successful versions are not contiguous through v${throughVersion}`,
+    );
   }
+}
+
+async function assertAppliedLedger(
+  db: MigrationConnection,
+  migrations: MigrationInfo[],
+  targetVersion: number,
+): Promise<void> {
+  await assertAppliedLedgerThrough(db, migrations, targetVersion, targetVersion);
 }
 
 async function recordFailure(
@@ -535,13 +614,19 @@ export async function runMigrations(
     schemaFile?: string;
     v12BaselineFile?: string;
     migrationsDirectory?: string;
+    /** Internal test/release hook for validating a future target chain. */
+    targetVersion?: number;
   } = {},
 ): Promise<string[]> {
+  const targetVersion = options.targetVersion ?? SCHEMA_VERSION;
+  if (targetVersion < FIRST_MIGRATION_VERSION) {
+    throw new Error(`target schema v${targetVersion} is below the first migration version`);
+  }
   const schemaFile = options.schemaFile ?? SCHEMA_FILE;
   const v12BaselineFile = options.v12BaselineFile ?? V12_BASELINE_FILE;
-  const migrations = discoverMigrations(options.migrationsDirectory ?? MIGRATIONS_DIR);
+  const migrations = discoverMigrations(options.migrationsDirectory ?? MIGRATIONS_DIR, targetVersion);
   const latestBody = decodeUtf8(readFileSync(schemaFile), schemaFile);
-  baselineVersion(latestBody, SCHEMA_VERSION, schemaFile);
+  baselineVersion(latestBody, targetVersion, schemaFile);
   const trustedV12 = readTrustedV12Baseline(v12BaselineFile);
   baselineVersion(trustedV12, SUPPORTED_BASELINE_VERSION, v12BaselineFile);
 
@@ -549,8 +634,8 @@ export async function runMigrations(
   if (state.table_count === 0) {
     await db.unsafe(latestBody);
     const latestManifest = parseTableManifest(latestBody);
-    await assertStructure(db, latestManifest, `fresh baseline v${SCHEMA_VERSION}`);
-    await assertAppliedLedger(db, migrations);
+    await assertStructure(db, latestManifest, `fresh baseline v${targetVersion}`);
+    await assertAppliedLedger(db, migrations, targetVersion);
     return ["database/schema.sql"];
   }
   if (!state.has_schema_meta || !state.has_projects) {
@@ -564,22 +649,26 @@ export async function runMigrations(
         "restore a backup at v12 or rebuild before upgrading",
     );
   }
-  if (currentVersion > SCHEMA_VERSION) {
+  if (currentVersion > targetVersion) {
     throw new Error(
-      `database schema v${currentVersion} is newer than this Scheduler's v${SCHEMA_VERSION}; refusing to start`,
+      `database schema v${currentVersion} is newer than this Scheduler's v${targetVersion}; refusing to start`,
     );
   }
 
-  if (currentVersion === SCHEMA_VERSION) {
-    await assertStructure(db, parseTableManifest(latestBody), `schema v${SCHEMA_VERSION}`);
-    await assertAppliedLedger(db, migrations);
+  if (currentVersion === targetVersion) {
+    await assertStructure(db, parseTableManifest(latestBody), `schema v${targetVersion}`);
+    await assertAppliedLedger(db, migrations, targetVersion);
     return [];
   }
 
-  const v12Manifest = parseTableManifest(trustedV12);
-  await assertStructure(db, v12Manifest, "trusted schema v12", new Set(["schema_migrations"]));
-  if (currentVersion !== SUPPORTED_BASELINE_VERSION) {
-    throw new Error(`database schema v${currentVersion} is not a supported migration source`);
+  if (currentVersion === SUPPORTED_BASELINE_VERSION) {
+    const v12Manifest = parseTableManifest(trustedV12);
+    await assertStructure(db, v12Manifest, "trusted schema v12", new Set(["schema_migrations"]));
+  } else {
+    // A database already beyond v12 is a valid intermediate source.  Its
+    // ledger is the authority for the migrations already committed; verify
+    // every row before applying the next contiguous file.
+    await assertAppliedLedgerThrough(db, migrations, currentVersion, targetVersion);
   }
 
   // The ledger is prepared outside the migration transaction so a failed DDL
@@ -595,10 +684,10 @@ export async function runMigrations(
     version = migration.version;
     applied.push(`database/migrations/${migration.filename}`);
   }
-  if (version !== SCHEMA_VERSION) {
-    throw new Error(`migration chain stopped at v${version}; expected v${SCHEMA_VERSION}`);
+  if (version !== targetVersion) {
+    throw new Error(`migration chain stopped at v${version}; expected v${targetVersion}`);
   }
-  await assertStructure(db, parseTableManifest(latestBody), `schema v${SCHEMA_VERSION}`);
-  await assertAppliedLedger(db, migrations);
+  await assertStructure(db, parseTableManifest(latestBody), `schema v${targetVersion}`);
+  await assertAppliedLedger(db, migrations, targetVersion);
   return applied;
 }
