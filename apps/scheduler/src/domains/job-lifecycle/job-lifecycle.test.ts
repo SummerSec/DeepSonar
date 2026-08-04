@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { canTransition as coreCanTransition } from "../../core.js";
 import {
@@ -14,6 +15,11 @@ import {
   isKnownJobStatus,
   isTerminalJobStatus,
 } from "./transition-policy.js";
+
+const architectureDoc = readFileSync(
+  new URL("../../../../../docs/ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md", import.meta.url),
+  "utf8",
+);
 
 const expectedTransitions: Record<string, readonly string[]> = {
   pending: ["claimed", "cancelled"],
@@ -103,4 +109,11 @@ test("unknown targets fail before persistence and stale terminal events are idem
     { to: "succeeded", allowedFrom: ["running"] },
     { to: "failed", allowedFrom: ["claimed", "provisioning", "running", "waiting_human"] },
   ]);
+});
+
+test("lock-order contract keeps Canvas-aware event ingress out of Job-first transactions", () => {
+  assert.match(architectureDoc, /Event ingress \(Job-only\).*commit/s);
+  assert.match(architectureDoc, /never acquire Canvas under an already-held Job lock/);
+  assert.match(architectureDoc, /ingestEvent.*applySideEffects.*migration\s+debt/s);
+  assert.match(architectureDoc, /patch\.status.*override/);
 });

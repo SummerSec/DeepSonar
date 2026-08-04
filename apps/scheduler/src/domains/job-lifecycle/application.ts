@@ -41,9 +41,9 @@ export function createJobLifecycleApplication(execute: JobTransitionExecutor): J
  */
 export function createSqlJobLifecycleApplication(db: typeof sql = sql): JobLifecycleApplication {
   return createJobLifecycleApplication(async ({ jobId, to, allowedFrom, patch }) => {
-    // Preserve the compatibility facade's merge order: callers historically
-    // supplied a patch after the target status, so a supplied `status` key is
-    // left untouched rather than silently changing the old API contract.
+    // Preserve the compatibility facade's historical merge order.  A supplied
+    // `status` key can therefore override `to`; this is a documented follow-up
+    // hardening item, and current internal callers never pass that key.
     const sets = { status: to, ...patch };
     const [row] = await db`
       UPDATE jobs SET ${db(sets)}

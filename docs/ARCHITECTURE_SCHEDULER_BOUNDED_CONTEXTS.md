@@ -55,25 +55,47 @@ schema, or external status value changes in this slice.
 
 ## Canonical lock matrix
 
-When a transaction touches more than one lockable resource, acquire locks in
-the following order.  A path that only performs the lifecycle CAS acquires the
-Job row and must not opportunistically acquire a Canvas lock.
+The rows below are the **target contract** for the incremental split.  A path
+that only performs the lifecycle CAS acquires the Job row and must not
+opportunistically acquire a Canvas lock.  A path that can update a Canvas must
+enter the Canvas-first convergence boundary before it takes a Job lock.  The
+matrix is intentionally explicit about the one currently non-compliant path:
+the legacy `core.ts` `ingestEvent`/`applySideEffects` transaction still holds a
+Job row while dispatching some Canvas-aware side effects.  That is migration
+debt, not a canonical order, and must be removed before event-ingestion is
+claimed complete.
 
 | Operation | Canonical acquisition order | Contract |
 | --- | --- | --- |
 | Dispatcher claim | `deepsonar_dispatch_claim` transaction advisory lock → candidate `jobs` rows (`FOR UPDATE SKIP LOCKED`) | The advisory lock serializes claim/retry and other runtime mutations; keep the candidate page bounded. |
 | Destructive canvas retry | `deepsonar_dispatch_claim` → `canvases` row (`FOR UPDATE`) → Job/runtime rows and canvas nodes | Re-check active Jobs after both locks; never wipe runtime rows from the preflight read. |
-| Event ingestion | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → semantic side effects | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. |
+| Event ingress (Job-only) | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → **commit** | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. Any Canvas/Finding/Hub work starts a new Canvas-first convergence transaction after this boundary. |
+| Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → convergence child locks | Read the Job's Canvas id before entering the transaction if needed; never acquire Canvas under an already-held Job lock. |
 | Convergence terminal/recovery | `canvases` row (`FOR UPDATE`) → `findings` row (`FOR UPDATE`) → `finding_verification_rounds` row (`FOR UPDATE`) → Jobs/nodes | Canvas is the outer convergence lock; Verify and Hub paths use the same canvas-first order. |
 | Report ingress/recovery | `canvases` row → `task_reports` row → report Job/nodes | Matches `report.ts`'s existing `canvas → task_reports → jobs/nodes` contract. |
 | Credential/runtime mutation | `deepsonar_dispatch_claim` → Credential row (`FOR UPDATE`) → dependent RoleConfig/Job reads | Prevents a runtime snapshot from observing a half-applied provider/credential mutation. |
 
 The same resource must never be acquired in a reverse order in another path.
 In particular, a new lifecycle implementation must not lock a Finding or
-Verification round before its Canvas.  The current `finalizeJob` body retains
-its pre-existing Job CAS and side effects for behavior compatibility; moving
-that orchestration behind the canvas-first lifecycle application boundary is a
-follow-up slice and must be accompanied by a deadlock/regression test.
+Verification round before its Canvas, and no event side effect may take Canvas
+under a held Job lock.  The current `finalizeJob` body retains its pre-existing
+Job CAS and side effects for behavior compatibility; moving that orchestration
+behind the canvas-first lifecycle application boundary is a follow-up slice and
+must be accompanied by a deadlock/regression test.  The current
+`ingestEvent`/`applySideEffects` Job-first transaction has the same explicit
+follow-up debt: split the Job-only event append from Canvas-aware convergence,
+or acquire Canvas before the Job row for the Canvas-aware variant.
+
+## Lifecycle patch compatibility debt
+
+The SQL adapter currently preserves the historical merge order
+`{ status: to, ...patch }`.  Consequently a caller that supplies
+`patch.status` can override the requested target.  This first slice keeps that
+behavior to avoid an API/behavior change; all existing internal callers pass
+only metadata fields (`started_at`, lease, error, and similar) and do not use
+the override.  A follow-up seam hardening change should reject or strip
+`patch.status`, add a regression test, and then migrate any external callers
+before making the application interface public.
 
 ## Migration rules
 
