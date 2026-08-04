@@ -117,10 +117,26 @@ function responseTooLarge(response: Response): boolean {
   }
 }
 
+function isAbortError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" &&
+    ((error as { name?: unknown }).name === "AbortError" ||
+      (error as { name?: unknown }).name === "TimeoutError" ||
+      (error as { code?: unknown }).code === "ABORT_ERR"));
+}
+
+/** Release an upstream body on every status-only probe path. */
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Best-effort cleanup must never mask the fixed health result.
+  }
+}
+
 /** Read a bounded JSON body without ever buffering an untrusted response in full. */
 async function readJsonBounded(response: Response): Promise<unknown> {
   if (responseTooLarge(response)) {
-    await response.body?.cancel().catch(() => undefined);
+    await cancelResponseBody(response);
     throw new CredentialProbeError("Provider 返回数据过大", "invalid_response");
   }
   const body = response.body;
@@ -142,6 +158,7 @@ async function readJsonBounded(response: Response): Promise<unknown> {
     }
   } catch (error) {
     if (error instanceof CredentialProbeError) throw error;
+    if (isAbortError(error)) throw new CredentialProbeError("Provider 请求超时", "timeout");
     throw new CredentialProbeError("Provider 返回数据无法识别", "invalid_response");
   } finally {
     reader.releaseLock();
@@ -156,6 +173,7 @@ async function readJsonBounded(response: Response): Promise<unknown> {
 async function summarizeResponse(url: string, response: Response): Promise<CredentialProbeResult> {
   const sourceUrl = safeSourceUrl(url);
   if (response.ok) {
+    await cancelResponseBody(response);
     return {
       ok: true,
       detail: `连接成功（HTTP ${response.status}）`,
@@ -163,6 +181,7 @@ async function summarizeResponse(url: string, response: Response): Promise<Crede
       fetched_at: now(),
     };
   }
+  await cancelResponseBody(response);
   const category = categoryForStatus(response.status);
   // Never read or persist upstream body text: it routinely contains URLs,
   // request IDs, or accidental key echoes.  The status/category is enough.
@@ -196,12 +215,16 @@ export async function listCredentialModels(cred: CredentialProbe): Promise<{
   try {
     response = await fetch(sourceUrl, { headers: request.headers, signal: AbortSignal.timeout(15_000) });
   } catch (error) {
-    const category: CredentialHealthErrorCategory = error instanceof Error && error.name === "TimeoutError"
+    const category: CredentialHealthErrorCategory = isAbortError(error)
       ? "timeout"
       : "network";
     throw new CredentialProbeError(detailForCategory(category), category);
   }
-  if (!response.ok) throw new CredentialProbeError(detailForCategory(categoryForStatus(response.status), response.status), categoryForStatus(response.status));
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    const category = categoryForStatus(response.status);
+    throw new CredentialProbeError(detailForCategory(category, response.status), category);
+  }
 
   const payload = await readJsonBounded(response) as { data?: unknown; models?: unknown };
   const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
@@ -258,7 +281,7 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
     if (error instanceof CredentialProbeError) {
       return { ok: false, detail: error.message, category: error.category, fetched_at: now() };
     }
-    const category: CredentialHealthErrorCategory = error instanceof Error && error.name === "TimeoutError"
+    const category: CredentialHealthErrorCategory = isAbortError(error)
       ? "timeout"
       : error instanceof CredentialMetadataError
         ? "configuration"

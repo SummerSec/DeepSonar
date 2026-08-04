@@ -91,6 +91,18 @@ if (!testDatabaseUrl) {
       assert.equal(rejectedCreate.statusCode, 400, rejectedCreate.payload);
       assertNoSecretMaterial(rejectedCreate.payload);
 
+      const unknownProvider = "attacker-provider-should-not-echo";
+      const rejectedProviderCreate = await request("POST", "/credentials", {
+        name: "reject-unknown-provider",
+        kind: "llm_provider",
+        provider: unknownProvider,
+        secret,
+        metadata: {},
+      });
+      assert.equal(rejectedProviderCreate.statusCode, 400, rejectedProviderCreate.payload);
+      assert.equal(rejectedProviderCreate.payload.includes(unknownProvider), false);
+
+
       const created = await request("POST", "/credentials", {
         name: "legacy-projection",
         kind: "llm_provider",
@@ -107,6 +119,25 @@ if (!testDatabaseUrl) {
       });
       assert.equal(rejectedPatch.statusCode, 400, rejectedPatch.payload);
       assertNoSecretMaterial(rejectedPatch.payload);
+
+      const rejectedProviderPatch = await request("PATCH", `/credentials/${credentialId}`, {
+        provider: unknownProvider,
+      });
+      assert.equal(rejectedProviderPatch.statusCode, 400, rejectedProviderPatch.payload);
+      assert.equal(rejectedProviderPatch.payload.includes(unknownProvider), false);
+
+      const nonLlm = await request("POST", "/credentials", {
+        name: "non-llm-compatibility",
+        kind: "plane",
+        provider: "plane",
+        secret,
+        metadata: {},
+      });
+      assert.equal(nonLlm.statusCode, 201, nonLlm.payload);
+      const nonLlmId = String(json(nonLlm).id);
+      const nonLlmCompatibility = await request("GET", `/credentials/${nonLlmId}/compatibility`);
+      assert.equal(nonLlmCompatibility.statusCode, 400, nonLlmCompatibility.payload);
+      await sql`DELETE FROM credentials WHERE id = ${nonLlmId}`;
 
       // Simulate a pre-v15 row that bypassed the API.  Every outward projection
       // must use the same allowlist and remove these fields before serialization.

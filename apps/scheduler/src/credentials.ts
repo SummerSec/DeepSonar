@@ -101,6 +101,10 @@ export class CredentialMetadataError extends Error {
   }
 }
 
+/** Provider failures are intentionally generic: provider is user-controlled
+ * input and must not be copied into API error text or error metadata. */
+export const UNKNOWN_PROVIDER_ERROR = "未知 provider（固定映射表外的 provider 不允许登记）";
+
 /** Public metadata keys supported for a Credential kind/provider pair. */
 export function credentialMetadataKeys(kind: string, provider: string): ReadonlySet<string> {
   if (kind === "llm_provider" && ["anthropic", "kimi", "openai", "openrouter"].includes(provider)) return LLM_METADATA_KEYS;
@@ -156,15 +160,22 @@ function normalizeBaseUrl(value: unknown): string {
   return `${parsed.origin}${pathname}`;
 }
 
-function normalizeModelIds(value: unknown): string[] {
+function normalizeModelIds(value: unknown, mode: CredentialMetadataMode): string[] {
   if (!Array.isArray(value)) throw new CredentialMetadataError("metadata.allowed_model_ids 必须是数组", "allowed_model_ids");
-  if (value.length > CREDENTIAL_MODEL_CATALOG_MAX) {
+  if (mode === "reject" && value.length > CREDENTIAL_MODEL_CATALOG_MAX) {
     throw new CredentialMetadataError("metadata.allowed_model_ids 数量超限", "allowed_model_ids");
   }
   const result: string[] = [];
   for (const item of value) {
-    const model = cleanMetadataString(item, "allowed_model_ids", CREDENTIAL_MODEL_ID_MAX_LENGTH);
-    if (!result.includes(model)) result.push(model);
+    try {
+      const model = cleanMetadataString(item, "allowed_model_ids", CREDENTIAL_MODEL_ID_MAX_LENGTH);
+      if (!result.includes(model)) result.push(model);
+      if (result.length >= CREDENTIAL_MODEL_CATALOG_MAX) break;
+    } catch (error) {
+      if (mode === "reject") throw error;
+      // Legacy/drop projections retain valid model IDs while removing only
+      // malformed items; an invalid item must not discard the whole allowlist.
+    }
   }
   return result;
 }
@@ -173,7 +184,10 @@ function normalizeConcurrency(value: unknown, key: string, mode: CredentialMetad
   if (mode === "reject" && typeof value !== "number") {
     throw new CredentialMetadataError(`metadata.${key} 必须是 JSON number`, key);
   }
-  const number = typeof value === "number" ? value : Number(value);
+  if (typeof value !== "number") {
+    throw new CredentialMetadataError(`metadata.${key} 必须是 JSON number`, key);
+  }
+  const number = value;
   if (!Number.isInteger(number) || number < 0 || number > 1000) {
     throw new CredentialMetadataError(`metadata.${key} 必须是 0..1000 的整数`, key);
   }
@@ -197,7 +211,9 @@ export function sanitizeCredentialMetadata(
   for (const [key, value] of Object.entries(record)) {
     if (SECRET_LIKE_METADATA_KEY.test(key) || !allowed.has(key)) {
       if (mode === "reject") {
-        throw new CredentialMetadataError(`metadata key 不在服务器允许列表: ${key}`, key);
+        // Do not echo attacker-controlled key text in an API error: callers
+        // should learn only that the server-owned allowlist was violated.
+        throw new CredentialMetadataError("metadata key 不在服务器允许列表");
       }
       continue;
     }
@@ -205,9 +221,16 @@ export function sanitizeCredentialMetadata(
       if (key === "base_url") {
         output.base_url = normalizeBaseUrl(value);
       } else if (key === "allowed_model_ids") {
-        output.allowed_model_ids = normalizeModelIds(value);
+        output.allowed_model_ids = normalizeModelIds(value, mode);
       } else if (key === "max_concurrent") {
-        if (value !== null && value !== "") output.max_concurrent = normalizeConcurrency(value, key, mode);
+        if (value !== null && value !== "") {
+          try {
+            output.max_concurrent = normalizeConcurrency(value, key, mode);
+          } catch (error) {
+            if (mode === "reject") throw error;
+            // Drop malformed legacy values without coercing strings/booleans.
+          }
+        }
       } else if (key === "model_concurrency") {
         if (!value || typeof value !== "object" || Array.isArray(value)) {
           throw new CredentialMetadataError("metadata.model_concurrency 必须是对象", key);
@@ -216,12 +239,19 @@ export function sanitizeCredentialMetadata(
         if (Object.keys(configured).length > CREDENTIAL_MODEL_CATALOG_MAX) {
           throw new CredentialMetadataError("metadata.model_concurrency 数量超限", key);
         }
-        output.model_concurrency = Object.fromEntries(
-          Object.entries(configured).map(([model, limit]) => [
-            cleanMetadataString(model, "model_concurrency", CREDENTIAL_MODEL_ID_MAX_LENGTH),
-            normalizeConcurrency(limit, "model_concurrency", mode),
-          ]),
-        );
+        const normalized: Record<string, number> = {};
+        for (const [model, limit] of Object.entries(configured)) {
+          try {
+            const normalizedModel = cleanMetadataString(model, "model_concurrency", CREDENTIAL_MODEL_ID_MAX_LENGTH);
+            normalized[normalizedModel] = normalizeConcurrency(limit, "model_concurrency", mode);
+          } catch (error) {
+            if (mode === "reject") throw error;
+            // Drop only the malformed legacy entry, retaining valid limits.
+          }
+        }
+        if (mode === "reject" || Object.keys(normalized).length > 0) {
+          output.model_concurrency = normalized;
+        }
       } else if (key === "registry") {
         const registry = cleanMetadataString(value, key).toLowerCase();
         if (registry.includes("://") || registry.includes("@") || registry.includes("?") || registry.includes("#")) {
@@ -246,9 +276,11 @@ export function sanitizeCredentialMetadata(
     const allowedModels = new Set(output.allowed_model_ids as string[]);
     const configured = output.model_concurrency as Record<string, number> | undefined;
     if (configured) {
-      output.model_concurrency = Object.fromEntries(
+      const filtered = Object.fromEntries(
         Object.entries(configured).filter(([model]) => allowedModels.has(model)),
       );
+      if (Object.keys(filtered).length > 0) output.model_concurrency = filtered;
+      else delete output.model_concurrency;
     }
   } else {
     delete output.model_concurrency;
@@ -306,7 +338,8 @@ export interface CredentialConcurrencyPolicy {
 }
 
 function concurrencyLimit(value: unknown): number | null {
-  const n = Number(value);
+  if (typeof value !== "number") return null;
+  const n = value;
   return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : null;
 }
 
@@ -389,7 +422,7 @@ export function validateCredentialRuntimeMutation(input: {
   metadata: unknown;
   consumers: CredentialRuntimeConsumer[];
 }): string | null {
-  if (!isProviderKnown(input.provider)) return `未知 provider: ${input.provider}`;
+  if (!isProviderKnown(input.provider)) return UNKNOWN_PROVIDER_ERROR;
   const allowed = allowedModelIds(input.metadata);
   for (const consumer of input.consumers) {
     const compatibilityError = validateCredentialCompatibility(consumer.agentCli, input.provider);

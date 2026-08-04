@@ -44,6 +44,31 @@ test("new Credential metadata accepts only server-owned fields and rejects secre
   );
 });
 
+test("unknown metadata keys do not survive in error metadata", () => {
+  assert.throws(
+    () => sanitizeCredentialMetadata({ "attacker-controlled-secret-key": "value" }, { kind: "llm_provider", provider: "openai" }),
+    (error: unknown) => {
+      assert.equal((error as { key?: unknown }).key, undefined);
+      assert.equal(String((error as Error).message).includes("attacker-controlled-secret-key"), false);
+      return true;
+    },
+  );
+});
+
+test("legacy/drop metadata keeps valid model and numeric entries only", () => {
+  assert.deepEqual(
+    projectCredentialMetadata("llm_provider", "openai", {
+      allowed_model_ids: ["model-a", null, true, "", 42, "model-b"],
+      model_concurrency: { "model-a": 2, "model-b": null, "model-c": true, "model-d": "4" },
+      max_concurrent: "8",
+    }),
+    {
+      allowed_model_ids: ["model-a", "model-b"],
+      model_concurrency: { "model-a": 2 },
+    },
+  );
+});
+
 test("base_url rejects userinfo/query/fragment and only allows http(s)", () => {
   for (const base_url of [
     "https://user:password@example.test/v1",

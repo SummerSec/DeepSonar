@@ -37,6 +37,41 @@ test("connection success/failure returns fixed health category and safe URL", as
   }
 });
 
+test("status-only probes best-effort cancel successful and failed response bodies", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  let cancelled = 0;
+  const responseWithTrackedBody = (status: number) => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("upstream body"));
+    },
+    cancel() {
+      cancelled += 1;
+    },
+  }), { status });
+  try {
+    globalThis.fetch = (async () => responseWithTrackedBody(200)) as typeof fetch;
+    await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "https://provider.example/v1" },
+    });
+    globalThis.fetch = (async () => responseWithTrackedBody(500)) as typeof fetch;
+    await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "https://provider.example/v1" },
+    });
+    assert.equal(cancelled, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("model discovery returns bounded IDs and fixed error categories", async () => {
   const { encryptSecret } = await import("./credentials.js");
   const { listCredentialModels } = await import("./credential-test.js");
@@ -66,6 +101,33 @@ test("model discovery returns bounded IDs and fixed error categories", async () 
         return true;
       },
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("model discovery best-effort cancels a non-ok response body", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { listCredentialModels } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  let cancelled = 0;
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("upstream body"));
+      },
+      cancel() {
+        cancelled += 1;
+      },
+    }), { status: 503 })) as typeof fetch;
+    await assert.rejects(listCredentialModels({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "https://provider.example/v1" },
+    }));
+    assert.equal(cancelled, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -109,6 +171,37 @@ test("model discovery rejects oversized declared and streamed provider bodies", 
       assert.equal(String((error as Error).message).includes("body-secret"), false);
       return true;
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("model discovery maps a header-then-stall AbortError to timeout", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { listCredentialModels } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  try {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const error = new Error("upstream stalled");
+        error.name = "AbortError";
+        controller.error(error);
+      },
+    });
+    globalThis.fetch = (async () => new Response(stream, { status: 200 })) as typeof fetch;
+    await assert.rejects(
+      listCredentialModels({
+        provider: "openai",
+        kind: "llm_provider",
+        ...encrypted,
+        public_metadata_json: { base_url: "https://provider.example/v1" },
+      }),
+      (error: unknown) => {
+        assert.equal((error as { category?: string }).category, "timeout");
+        return true;
+      },
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

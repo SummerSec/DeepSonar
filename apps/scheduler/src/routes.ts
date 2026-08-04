@@ -35,6 +35,7 @@ import {
   last4Of,
   projectCredentialMetadata,
   sanitizeCredentialMetadata,
+  UNKNOWN_PROVIDER_ERROR,
   type CredentialHealthErrorCategory,
   validateCredentialCompatibility,
   validateCredentialRuntimeMutation,
@@ -4121,7 +4122,7 @@ export function registerRoutes(app: FastifyInstance) {
   app.post("/credentials", async (req, reply) => {
     const body = CredentialBody.parse(req.body);
     if (!isProviderAllowedForKind(body.kind, body.provider) || (body.kind !== "oci_registry" && !isProviderKnown(body.provider))) {
-      return reply.code(400).send({ error: `未知 provider: ${body.provider}（固定映射表外的 provider 不允许登记）` });
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
     let metadata: Record<string, unknown>;
     try {
@@ -4201,7 +4202,7 @@ export function registerRoutes(app: FastifyInstance) {
         : (existing.project_id as string | null) ?? null;
       if (!isProviderAllowedForKind(String(existing.kind), targetProvider)
         || (existing.kind !== "oci_registry" && !isProviderKnown(targetProvider))) {
-        return { error: `未知 provider: ${targetProvider}` };
+        return { error: UNKNOWN_PROVIDER_ERROR };
       }
       let targetMetadata: Record<string, unknown>;
       try {
@@ -4368,16 +4369,24 @@ export function registerRoutes(app: FastifyInstance) {
   // 连接测试：用解密后的凭据对 provider 做一次轻量调用（明文不出进程）
   app.post("/credentials/:id/test", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
+    const [cred] = await sql`
+      SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     const result = await testCredential(cred as never);
-    await sql`
+    const [updated] = await sql`
       UPDATE credentials SET
         last_tested_at = ${result.fetched_at},
         health_status = ${result.ok ? "ok" : "error"},
         health_error_category = ${result.ok ? null : (result.category ?? "unknown")},
         health_detail = ${result.detail.slice(0, 300)}
-      WHERE id = ${id}`;
+      WHERE id = ${id}
+        AND key_version = ${cred.key_version}
+        AND provider = ${cred.provider}
+        AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+      RETURNING id`;
+    if (!updated) {
+      return reply.code(409).send({ error: "Credential 在测试期间已变更，请重试" });
+    }
     await audit(req, {
       action: "credential.test",
       resourceType: "credential",
@@ -4415,6 +4424,7 @@ export function registerRoutes(app: FastifyInstance) {
     const query = queryResult.data;
     const [cred] = await sql`SELECT id, kind, provider, public_metadata_json FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
     const agentCli = query.agent_cli;
     const model = query.model ?? null;
     const metadata = projectCredentialMetadata(String(cred.kind), String(cred.provider), cred.public_metadata_json);
@@ -4443,14 +4453,19 @@ export function registerRoutes(app: FastifyInstance) {
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
     try {
       const result = await listCredentialModels(cred as never);
-      await sql`
+      const [updated] = await sql`
         UPDATE credentials SET
           last_tested_at = ${result.fetched_at}, health_status = 'ok',
           health_error_category = NULL,
           health_detail = ${`模型目录获取成功（${result.models.length} 个）`},
           model_catalog_json = ${sql.json(normalizeModelCatalog(result.models) as never)},
           model_catalog_fetched_at = ${result.fetched_at}
-        WHERE id = ${id}`;
+        WHERE id = ${id}
+          AND key_version = ${cred.key_version}
+          AND provider = ${cred.provider}
+          AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+        RETURNING id`;
+      if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
       await audit(req, {
         action: "credential.models_discover",
         resourceType: "credential",
@@ -4467,12 +4482,17 @@ export function registerRoutes(app: FastifyInstance) {
       const categoryCandidate = error instanceof CredentialProbeError ? error.category : "unknown";
       const category = validCategories.has(categoryCandidate) ? categoryCandidate : "unknown";
       const message = error instanceof CredentialProbeError ? error.message.slice(0, 300) : "模型目录获取失败";
-      await sql`
+      const [updated] = await sql`
         UPDATE credentials SET
           last_tested_at = now(), health_status = 'error',
           health_error_category = ${category as CredentialHealthErrorCategory},
           health_detail = ${message}
-        WHERE id = ${id}`;
+        WHERE id = ${id}
+          AND key_version = ${cred.key_version}
+          AND provider = ${cred.provider}
+          AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+        RETURNING id`;
+      if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
       await audit(req, {
         action: "credential.models_discover",
         resourceType: "credential",
