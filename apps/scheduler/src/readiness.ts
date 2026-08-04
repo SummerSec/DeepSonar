@@ -68,6 +68,10 @@ export interface ReadinessRuntimeImageRow {
   trust_status: string | null;
   admission_scan_id: string | null;
   admission_bypassed: boolean;
+  platforms_json?: unknown;
+  promoted_at?: string | Date | null;
+  approved_at?: string | Date | null;
+  created_at?: string | Date | null;
 }
 
 export interface ReadinessAuditRow {
@@ -178,6 +182,55 @@ function modelCountFromAudit(audit: ReadinessAuditRow | undefined): number | nul
   return typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : null;
 }
 
+function runtimePlatformRank(row: ReadinessRuntimeImageRow, hostPlatform: string): number {
+  const platforms = Array.isArray(row.platforms_json)
+    ? row.platforms_json.filter((value): value is string => typeof value === "string")
+    : [];
+  if (platforms.includes(hostPlatform)) return 0;
+  return platforms.length === 0 ? 1 : 2;
+}
+
+function runtimeTimestamp(value: string | Date | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function compareRuntimeTimestampDesc(a: string | Date | null | undefined, b: string | Date | null | undefined): number {
+  const left = runtimeTimestamp(a);
+  const right = runtimeTimestamp(b);
+  if (left === 0 && right !== 0) return 1;
+  if (left !== 0 && right === 0) return -1;
+  return right - left;
+}
+
+/**
+ * Select the same candidate the resolver can execute: trusted versions are
+ * filtered before platform/latest ordering, so an untrusted host-platform
+ * version cannot hide a trusted fallback. The fallback to an untrusted row is
+ * diagnostic-only for pure projections; SQL loading mirrors the resolver and
+ * returns no version when no trusted candidate exists.
+ */
+export function selectRuntimeImageCandidate(
+  rows: ReadinessRuntimeImageRow[],
+  imageKey: string,
+  hostPlatform: string,
+): ReadinessRuntimeImageRow | undefined {
+  const candidates = rows.filter((row) => row.image_key === imageKey);
+  if (candidates.length === 0) return undefined;
+  const trusted = candidates.filter((row) => row.trust_status === "trusted");
+  const pool = trusted.length > 0 ? trusted : candidates;
+  return [...pool].sort((a, b) => {
+    const platform = runtimePlatformRank(a, hostPlatform) - runtimePlatformRank(b, hostPlatform);
+    if (platform !== 0) return platform;
+    const promoted = compareRuntimeTimestampDesc(a.promoted_at, b.promoted_at);
+    if (promoted !== 0) return promoted;
+    const approved = compareRuntimeTimestampDesc(a.approved_at, b.approved_at);
+    if (approved !== 0) return approved;
+    return compareRuntimeTimestampDesc(a.created_at, b.created_at);
+  })[0];
+}
+
 function fail(
   code: string,
   message: string,
@@ -238,6 +291,7 @@ function roleConfigFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
 export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessResponseType {
   const now = input.now ?? new Date();
   const checks: ReadinessCheck[] = [];
+  let unresolved = false;
   const credentials = input.credentials ?? [];
   const audits = input.audits ?? [];
   const images = input.runtimeImages ?? [];
@@ -249,7 +303,11 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     if (!credentialByConfig.has(row.role_config_id)) credentialByConfig.set(row.role_config_id, []);
     credentialByConfig.get(row.role_config_id)!.push(row);
   }
-  const imageByKey = new Map(images.map((row) => [row.image_key, row]));
+  const hostPlatform = hostRuntimePlatform();
+  const imageByKey = new Map(
+    [...new Set(images.map((row) => row.image_key))]
+      .map((imageKey) => [imageKey, selectRuntimeImageCandidate(images, imageKey, hostPlatform)] as const),
+  );
 
   if (input.scope.projectId && input.projectStatus === "archived") {
     checks.push(fail(
@@ -414,12 +472,19 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 不存在或未被 Scheduler 选中。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
     } else if (!image.image_enabled) {
       checks.push(fail("RUNTIME_IMAGE_DISABLED", `${role.name} 所需 runtime image ${imageKey} 已被禁用。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
-    } else if (image.trust_status !== "trusted") {
-      checks.push(fail("RUNTIME_IMAGE_NOT_TRUSTED", `${role.name} 所需 runtime image ${imageKey} 没有 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
-    } else if (!image.version_id || !image.digest || !immutableDigest(image.resolved_ref ?? "") || immutableDigest(image.resolved_ref ?? "") !== image.digest) {
-      checks.push(fail("RUNTIME_IMAGE_DIGEST_INVALID", `${role.name} 的 runtime image 缺少一致的不可变 digest，不能进入 real 沙箱。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (!input.scope.projectId && !(image.official === true && image.project_opt_in === false)) {
+      unresolved = true;
+      checks.push(attention("RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED", `${role.name} 的 runtime image 需要具体项目启用；请在项目作用域重新执行 real 预检。`, { href: "/projects", target: "project-runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (input.scope.projectId && image.project_enabled === false) {
+      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 已在当前项目显式禁用。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
     } else if (input.scope.projectId && !(image.official === true && image.project_opt_in === false) && image.project_enabled !== true) {
       checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 尚未在当前项目启用。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (!image.version_id) {
+      checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 没有 Scheduler 可执行的 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (image.trust_status !== "trusted") {
+      checks.push(fail("RUNTIME_IMAGE_NOT_TRUSTED", `${role.name} 所需 runtime image ${imageKey} 没有 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (!image.digest || !immutableDigest(image.resolved_ref ?? "") || immutableDigest(image.resolved_ref ?? "") !== image.digest) {
+      checks.push(fail("RUNTIME_IMAGE_DIGEST_INVALID", `${role.name} 的 runtime image 缺少一致的不可变 digest，不能进入 real 沙箱。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
     } else if (image.source_kind === "third_party" && !image.admission_scan_id && !image.admission_bypassed) {
       checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成准入扫描。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
     } else if (image.source_kind === "third_party" && !image.admission_scan_id && image.admission_bypassed) {
@@ -456,7 +521,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
   const infos = checks.filter((check) => check.severity === "info").length;
   return ReadinessResponse.parse({
     schema: "deepsonar.readiness/v1",
-    ready: errors === 0,
+    ready: errors === 0 && !unresolved,
     execution_mode: input.executionMode,
     scope: { kind: input.scope.kind, project_id: input.scope.projectId },
     network_policy: {
@@ -558,6 +623,7 @@ export async function loadReadiness(
     SELECT ri.image_key, ri.enabled AS image_enabled, ri.project_opt_in, ri.source_kind, ri.official,
            pri.enabled AS project_enabled,
            v.id AS version_id, v.digest, v.resolved_ref, v.trust_status,
+           v.platforms_json, v.promoted_at, v.approved_at, v.created_at,
            scan.id AS admission_scan_id,
            COALESCE(v.scan_summary_json->>'risk', '') = 'bypasses-admission-scan' AS admission_bypassed
     FROM runtime_images ri
@@ -566,10 +632,12 @@ export async function loadReadiness(
     LEFT JOIN LATERAL (
       SELECT v.* FROM runtime_image_versions v
       WHERE v.runtime_image_id = ri.id
+        AND v.trust_status = 'trusted'
         AND (pri.selected_version_id IS NULL OR v.id = pri.selected_version_id)
+        AND ri.enabled = true
+        AND (CASE WHEN ri.official AND NOT ri.project_opt_in THEN COALESCE(pri.enabled, true) ELSE COALESCE(pri.enabled, false) END)
       ORDER BY CASE WHEN v.platforms_json @> ${db.json([hostRuntimePlatform()])} THEN 0
                     WHEN v.platforms_json IS NULL OR jsonb_array_length(v.platforms_json) = 0 THEN 1 ELSE 2 END,
-               CASE v.trust_status WHEN 'trusted' THEN 0 ELSE 1 END,
                v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
       LIMIT 1
     ) v ON true

@@ -197,6 +197,14 @@ test("credential scope follows global and project RoleConfig boundaries", () => 
 });
 
 test("runtime image project opt-in and manual digest admission follow resolver semantics", () => {
+  const explicitDisabled = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, project_opt_in: false, project_enabled: false }
+      : image),
+  }));
+  assert.equal(explicitDisabled.ready, false);
+  assert.ok(explicitDisabled.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
+
   const officialOptInMissing = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
       ? { ...image, project_opt_in: true, project_enabled: null }
@@ -227,6 +235,55 @@ test("runtime image project opt-in and manual digest admission follow resolver s
   }));
   assert.equal(manualDigest.ready, true);
   assert.ok(manualDigest.checks.some((check) => check.code === "RUNTIME_IMAGE_ADMISSION_BYPASSED" && check.severity === "warning"));
+});
+
+test("global real readiness leaves project-scoped runtime images unresolved", () => {
+  const base = baseInput();
+  const result = evaluateReadiness({
+    ...base,
+    scope: { kind: "global", projectId: null },
+    networkSource: "global",
+    roles: base.roles.map((role) => role.name === "audit"
+      ? {
+          ...role,
+          project_config_id: null,
+          project_config_scope: "none",
+          global_config_id: workerConfigId,
+          global_agent_cli: "claude-code",
+          global_model: "claude-sonnet-4-5",
+          global_runtime_image_key: "deepsonar-audit",
+        }
+      : role),
+    credentials: base.credentials?.map((credential) => ({ ...credential, project_id: null })),
+    runtimeImages: base.runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, project_opt_in: true, project_enabled: null }
+      : { ...image, project_enabled: null }),
+  });
+  assert.equal(result.ready, false);
+  assert.ok(result.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED"));
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_READY"), false);
+});
+
+test("trusted runtime fallback wins over untrusted preferred-platform candidate", () => {
+  const images = baseInput().runtimeImages ?? [];
+  const trusted = images.find((image) => image.image_key === "deepsonar-audit")!;
+  const untrustedPreferred = {
+    ...trusted,
+    trust_status: "quarantined",
+    admission_scan_id: null,
+    platforms_json: ["linux/amd64"],
+  };
+  const trustedFallback = { ...trusted, platforms_json: ["linux/arm64"] };
+  const result = evaluateReadiness(baseInput({
+    runtimeImages: [
+      ...images.filter((image) => image.image_key !== "deepsonar-audit"),
+      untrustedPreferred,
+      trustedFallback,
+    ],
+  }));
+  assert.equal(result.ready, true);
+  assert.ok(result.checks.some((check) => check.code === "RUNTIME_IMAGE_READY" && check.role?.name === "audit"));
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_NOT_TRUSTED" && check.role?.name === "audit"), false);
 });
 
 test("archived projects fail preflight before task creation", () => {

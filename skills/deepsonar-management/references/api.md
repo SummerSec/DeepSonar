@@ -240,7 +240,7 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | GET | /readiness | agents:read | 全局只读预检；返回 `deepsonar.readiness/v1`、`ready`、稳定 `checks[]`、网络策略和非敏感 role/credential/image 摘要。 |
 | GET | /projects/:id/readiness | agents:read | 按项目启用角色、RoleConfig 覆盖和项目网络默认值预检。 |
 
-两个端点都接受可选查询参数 `allow_egress=true|false`（只模拟一次任务网络覆盖，不写入项目/画布）以及 `material_source=workspace_or_offline|external_or_workspace|declared|unspecified`。未声明 `material_source` 时保持 `unspecified`，不会因为允许出网就推断任务需要外部材料。`checks[].code` 是稳定机器码；`severity=error` 才会令 `ready=false`，`warning` 只给出可行动提示。
+两个端点都接受可选查询参数 `allow_egress=true|false`（只模拟一次任务网络覆盖，不写入项目/画布）以及 `material_source=workspace_or_offline|external_or_workspace|declared|unspecified`。未声明 `material_source` 时保持 `unspecified`，不会因为允许出网就推断任务需要外部材料。`checks[].code` 是稳定机器码；通常 `severity=error` 会令 `ready=false`，此外全局 real 概览若镜像必须由具体项目启用，也会以 `RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED` 标记 unresolved 并保持 `ready=false`，需要改用项目端点确认。
 
 Credential 连接测试和模型目录只读取 Scheduler append-only audit evidence，并要求最近 24 小时成功记录才标记 `ok`；没有证据或证据过期时响应会明确标记 `missing/stale`，不会凭空声称 Provider 在线或模型可用。运维通过 immutable digest 手工登记的第三方镜像若标记为跳过准入扫描，会给出显式 warning，但遵循运行时 resolver 的实际可执行语义。响应绝不包含 secret、任意 env 名/值、ciphertext、base URL 或任意 OCI 引用；runtime image 仅返回受治理的 `image_key`、版本 ID、digest、trust/准入摘要。
 
