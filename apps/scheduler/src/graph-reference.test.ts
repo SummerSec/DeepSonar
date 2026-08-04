@@ -123,11 +123,27 @@ test("duplicate references count once toward the total budget and are queried on
   const tx = ((strings: TemplateStringsArray, ...values: unknown[]) => {
     void strings;
     queries.push({ values });
-    return Promise.resolve([{ id: rootId }]);
+    return Promise.resolve([{ id: rootId, node_type: "root" }]);
   }) as unknown as Parameters<typeof assertHubDecisionCanvasReferences>[0];
   await assertHubDecisionCanvasReferences(tx, "canvas-1", decision!);
   assert.equal(queries.length, 1);
   assert.deepEqual(queries[0]?.values[0], [rootId]);
+});
+
+test("max Hub decision uses one batched membership query with no per-reference reads", async () => {
+  const decision = parseHubDecision(JSON.stringify({ intents: boundedIntents(HUB_REFERENCE_LIMITS.totalUnique) }), roles);
+  const refs = decision?.intents?.flatMap((intent) => intent.from) ?? [];
+  const queries: Array<{ text: string; values: unknown[] }> = [];
+  const tx = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+    queries.push({ text: [...strings].join("?"), values });
+    return Promise.resolve(refs.map((id) => ({ id, node_type: "fact" })));
+  }) as unknown as Parameters<typeof assertHubDecisionCanvasReferences>[0];
+
+  const validated = await assertHubDecisionCanvasReferences(tx, "canvas-1", decision!);
+  assert.equal(validated.size, HUB_REFERENCE_LIMITS.totalUnique);
+  assert.equal(queries.length, 1);
+  assert.equal((queries[0]?.values[0] as string[]).length, HUB_REFERENCE_LIMITS.totalUnique);
+  assert.match(queries[0]?.text ?? "", /ANY/);
 });
 
 interface McpResponse {

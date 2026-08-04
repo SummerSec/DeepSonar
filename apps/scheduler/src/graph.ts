@@ -480,6 +480,11 @@ export interface HubDecision {
   intents?: HubIntent[];
 }
 
+export interface HubReferenceNode {
+  id: string;
+  node_type: "root" | "fact" | "finding";
+}
+
 type ReferencePath = { path: string; value: unknown };
 
 function objectValue(value: unknown): Record<string, unknown> | null {
@@ -581,21 +586,30 @@ export function assertHubDecisionReferableIds(
   return decision;
 }
 
-/** Resolve referable IDs in the Scheduler transaction before inserting jobs/edges. */
+/**
+ * Resolve referable IDs in one bounded Scheduler query before inserting
+ * jobs/edges. The returned read-only map is the validated snapshot that core
+ * reuses while constructing every Hub edge; callers must not query each ID
+ * again.
+ */
 export async function assertHubDecisionCanvasReferences(
   tx: typeof sql,
   canvasId: string,
   decision: HubDecision,
-): Promise<HubDecision> {
+): Promise<ReadonlyMap<string, HubReferenceNode>> {
   const ids = [...new Set(refsOf(decision).map((ref) => ref.value))];
-  if (ids.length === 0) return decision;
-  const rows = await tx<{ id: string }[]>`
-    SELECT id FROM canvas_nodes
+  if (ids.length === 0) return new Map();
+  const rows = await tx<HubReferenceNode[]>`
+    SELECT id, node_type FROM canvas_nodes
     WHERE id = ANY(${ids}::uuid[])
       AND canvas_id = ${canvasId}
       AND node_type = ANY(${["root", "fact", "finding"]})`;
-  const allowed = new Set(rows.map((row) => String(row.id)));
-  return assertHubDecisionReferableIds(decision, allowed);
+  const validated = new Map(rows.map((row) => [String(row.id), {
+    id: String(row.id),
+    node_type: row.node_type,
+  }] as const));
+  assertHubDecisionReferableIds(decision, new Set(validated.keys()));
+  return validated;
 }
 
 /** Validate a dynamic Hub decision against this Job's available role set. */

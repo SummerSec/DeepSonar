@@ -885,6 +885,44 @@ async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId
     })}`;
 }
 
+type CanvasEdgeInput = {
+  canvasId: string;
+  fromId: string;
+  toId: string;
+  edgeType: string;
+};
+
+/**
+ * Insert a deduplicated edge batch without reading each candidate edge. The
+ * event-ingestion transaction already serializes a canvas, and the NOT EXISTS
+ * guard preserves the idempotency of insertEdgeIfAbsent for earlier events.
+ */
+async function insertEdgesIfAbsentBatch(tx: Tx, edges: readonly CanvasEdgeInput[]) {
+  const unique = new Map<string, CanvasEdgeInput>();
+  for (const edge of edges) {
+    const key = `${edge.canvasId}\u0000${edge.fromId}\u0000${edge.toId}\u0000${edge.edgeType}`;
+    unique.set(key, edge);
+  }
+  const values = [...unique.values()];
+  if (values.length === 0) return;
+
+  let rows = tx`(${values[0]!.canvasId}, ${values[0]!.fromId}::uuid, ${values[0]!.toId}::uuid, ${values[0]!.edgeType})`;
+  for (const edge of values.slice(1)) {
+    rows = tx`${rows}, (${edge.canvasId}, ${edge.fromId}::uuid, ${edge.toId}::uuid, ${edge.edgeType})`;
+  }
+  await tx`
+    INSERT INTO canvas_edges (canvas_id, from_node_id, to_node_id, edge_type)
+    SELECT candidate.canvas_id, candidate.from_node_id, candidate.to_node_id, candidate.edge_type
+    FROM (VALUES ${rows}) AS candidate(canvas_id, from_node_id, to_node_id, edge_type)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM canvas_edges existing
+      WHERE existing.canvas_id = candidate.canvas_id
+        AND existing.from_node_id = candidate.from_node_id
+        AND existing.to_node_id = candidate.to_node_id
+        AND existing.edge_type = candidate.edge_type
+    )`;
+}
+
 async function applySideEffects(tx: Tx, jobId: string, type: string, payload: unknown) {
   // Parse Hub references before the event/application can perform any write.
   // Event-ingestion wraps this callback in the same transaction, so a later
@@ -1016,7 +1054,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     if (!canvasId) return;
     // Resolve every submitted reference, including intents beyond the runtime
     // dispatch cap, before role/job/payload/edge side effects begin.
-    await assertHubDecisionCanvasReferences(tx, canvasId, p);
+    const referenceNodes = await assertHubDecisionCanvasReferences(tx, canvasId, p);
     const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
     if (p.complete?.description) {
@@ -1047,11 +1085,12 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           UPDATE canvas_nodes SET status = 'analysis_complete',
             body_json = body_json || ${tx.json({ conclusion: p.complete.description })}, updated_at = now()
           WHERE id = ${root.id}`;
+        const edges: CanvasEdgeInput[] = [];
         for (const fid of p.complete.from) {
-          const [src] = await tx`
-            SELECT id FROM canvas_nodes WHERE id = ${fid} AND canvas_id = ${canvasId}`;
-          if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, root.id as string, "to");
+          const src = referenceNodes.get(fid);
+          if (src) edges.push({ canvasId, fromId: src.id, toId: root.id as string, edgeType: "to" });
         }
+        await insertEdgesIfAbsentBatch(tx, edges);
       }
       return;
     }
@@ -1060,6 +1099,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     const roles = await rolesForProject(tx as unknown as typeof sql, job.project_id as string);
     const enabledNames = new Set(roles.map((r) => r.name));
     const intents = (p.intents ?? []).slice(0, rules.maxIntentsPerDecision);
+    const hubEdges: CanvasEdgeInput[] = [];
     for (const it of intents) {
       if (!it.role || !enabledNames.has(it.role)) {
         throw new Error(`Hub 派发了不可用角色: ${it.role ?? "<missing>"}`);
@@ -1157,11 +1197,11 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         WHERE id = ${roleJob.id}`;
       // 'from' 边：被引用事实 → 新意图（Cairn Intent.from）
       for (const fid of it.from) {
-        const [src] = await tx`
-          SELECT id FROM canvas_nodes WHERE id = ${fid} AND canvas_id = ${canvasId}`;
-        if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, intentNode.id as string, "from");
+        const src = referenceNodes.get(fid);
+        if (src) hubEdges.push({ canvasId, fromId: src.id, toId: intentNode.id as string, edgeType: "from" });
       }
     }
+    await insertEdgesIfAbsentBatch(tx, hubEdges);
     return;
   }
 
