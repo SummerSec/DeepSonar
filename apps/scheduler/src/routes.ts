@@ -61,7 +61,6 @@ import {
   validateEnvVars,
 } from "./core.js";
 import { sql } from "./db.js";
-import { normalizeDeltaWatermark } from "./canvas-delta.js";
 import { readEvidenceManifest, readMainSession, readNormalizedStreamPage } from "./evidence.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
 import { registerGateway } from "./gateway.js";
@@ -77,6 +76,8 @@ import {
 } from "./stream-bus.js";
 import { consumeWsTicket, issueWsTicket } from "./ws-tickets.js";
 import { WsSendQueue } from "./ws-send-queue.js";
+import { installWsCloseGuard } from "./ws-early-close.js";
+import { isUuid, projectScopeAllows } from "./project-scope.js";
 import { CursorError, cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
 import { resolveModules } from "./transfer/modules.js";
 import { buildPreview, applyImport } from "./transfer/import.js";
@@ -325,6 +326,60 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
 export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
   app.addHook("onRequest", authHook);
+  // Central ownership guard for project-scoped tokens. Resource UUIDs are not
+  // authorization: resolve their project_id server-side before any handler
+  // reads or mutates a canvas/job, and constrain unqualified list queries.
+  app.addHook("preHandler", async (req, reply) => {
+    const routeUrl = req.routeOptions?.url ?? "";
+    const params = (req.params ?? {}) as Record<string, string | undefined>;
+    if (routeUrl.startsWith("/jobs/:id") && !isUuid(params.id)) {
+      return reply.code(400).send({ error: "invalid job id", error_code: "INVALID_ID" });
+    }
+    if (routeUrl.startsWith("/findings/:id") && !isUuid(params.id)) {
+      return reply.code(400).send({ error: "invalid finding id", error_code: "INVALID_ID" });
+    }
+    if (routeUrl.startsWith("/canvases/:id/nodes/:nodeId") && !isUuid(params.nodeId)) {
+      return reply.code(400).send({ error: "invalid canvas node id", error_code: "INVALID_ID" });
+    }
+    const query = (req.query ?? {}) as { project_id?: string };
+    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.project_id && !isUuid(query.project_id)) {
+      return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
+    }
+    const actorProjectId = req.actor?.projectId;
+    if (!actorProjectId) return;
+    if (routeUrl.startsWith("/canvases/:id") || routeUrl.startsWith("/tasks/:canvasId")) {
+      const canvasId = params.id ?? params.canvasId;
+      if (!canvasId) return;
+      const [canvas] = await sql`SELECT project_id FROM canvases WHERE id = ${canvasId}`;
+      if (canvas && !projectScopeAllows(actorProjectId, canvas.project_id as string | null)) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+      return;
+    }
+    if (routeUrl.startsWith("/jobs/:id")) {
+      const jobId = params.id;
+      if (!jobId) return;
+      const [job] = await sql`SELECT project_id FROM jobs WHERE id = ${jobId}`;
+      if (job && !projectScopeAllows(actorProjectId, job.project_id as string | null)) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+      return;
+    }
+    if (routeUrl.startsWith("/findings/:id")) {
+      const findingId = params.id;
+      if (!findingId) return;
+      const [finding] = await sql`SELECT project_id FROM findings WHERE id = ${findingId}`;
+      if (finding && !projectScopeAllows(actorProjectId, finding.project_id as string | null)) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+      return;
+    }
+    if (routeUrl === "/jobs" || routeUrl === "/findings") {
+      if (query.project_id && query.project_id !== actorProjectId) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+    }
+  });
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
   registerGateway(app);
@@ -637,27 +692,44 @@ export function registerRoutes(app: FastifyInstance) {
   // queue bounds memory; when a slow client cannot keep up we close with 1013
   // so the UI can backfill over HTTP and reconnect.
   app.get("/ws", { websocket: true }, async (socket, req) => {
+    // Install this before the first database/evidence await.  The client can
+    // close while those reads are in flight; the guard then prevents a late
+    // subscribe and invokes the stream cleanup once it exists.
+    let cleanup: () => void = () => {};
+    const closeGuard = installWsCloseGuard(socket, () => cleanup());
+    const abortIfClosed = () => {
+      if (closeGuard.isOpen()) return false;
+      closeGuard.dispose();
+      return true;
+    };
     const q = req.query as { job_id?: string; ticket?: string; after?: string; limit?: string };
     const jobId = q.job_id?.trim();
     if (!jobId) {
+      closeGuard.dispose();
       socket.close(4400, "missing job_id");
       return;
     }
     const actor = consumeWsTicket(q.ticket ?? "", jobId);
     if (!actor) {
+      closeGuard.dispose();
       socket.close(4401, "invalid or expired websocket ticket");
       return;
     }
+    if (abortIfClosed()) return;
     const [job] = await sql`SELECT id, project_id, status FROM jobs WHERE id = ${jobId}`;
+    if (abortIfClosed()) return;
     if (!job) {
+      closeGuard.dispose();
       socket.close(4404, "job not found");
       return;
     }
     if (actor.projectId && actor.projectId !== job.project_id) {
+      closeGuard.dispose();
       socket.close(4403, "project scope denied");
       return;
     }
     if (!STREAMABLE_JOB_STATUSES.has(String(job.status))) {
+      closeGuard.dispose();
       socket.close(4409, "job is not running");
       return;
     }
@@ -670,31 +742,40 @@ export function registerRoutes(app: FastifyInstance) {
         await readNormalizedStreamPage(jobId, { after: q.after, limit: 1, live: true });
       } catch (error) {
         const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";
+        closeGuard.dispose();
         socket.close(code === "CURSOR_GAP" ? 4410 : 4400, code);
         return;
       }
+      if (abortIfClosed()) return;
     }
 
     let closed = false;
     let unsub = () => {};
-    const closeStream = (code: number, reason: string) => {
-      if (closed) return;
+    let queue: WsSendQueue;
+    let cleaned = false;
+    cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
       closed = true;
+      queue?.stop();
       unsub();
-      queue.stop();
+      closeGuard.dispose();
+    };
+    const closeStream = (code: number, reason: string) => {
+      if (cleaned) return;
+      cleanup();
       try { socket.close(code, reason); } catch { /* ignore */ }
     };
-    const queue = new WsSendQueue(socket, {
+    queue = new WsSendQueue(socket, {
       maxItems: STREAM_SUBSCRIBER_QUEUE_MAX,
       maxBytes: STREAM_SUBSCRIBER_QUEUE_MAX * 16 * 1024,
-      onClose: () => {
-        closed = true;
-        unsub();
-      },
+      onClose: () => cleanup(),
     });
     const enqueue = (value: unknown) => {
       if (!closed) queue.enqueue(value);
     };
+
+    if (abortIfClosed()) return;
 
     // Subscribe before taking the snapshot.  Anything published during the
     // synchronous snapshot is held in this pending list and drained after the
@@ -723,6 +804,13 @@ export function registerRoutes(app: FastifyInstance) {
       if (snapshotting) pendingItems.push(item);
       else emitLive(item);
     });
+    // Check again immediately after subscribing.  No await occurs between
+    // this check and subscribe, but a close event may already have been
+    // observed by the early guard while setup was finishing.
+    if (abortIfClosed()) {
+      cleanup();
+      return;
+    }
     let initial;
     try {
       // The HTTP evidence endpoint validates a durable cursor before opening
@@ -738,18 +826,15 @@ export function registerRoutes(app: FastifyInstance) {
       closeStream(code === "CURSOR_GAP" ? 4410 : 4400, code);
       return;
     }
+    if (abortIfClosed()) {
+      cleanup();
+      return;
+    }
     for (const item of initial.items) seen.add(streamItemKey(item));
     enqueue({ ...initial, events: initial.items });
     after = initial.next_cursor ?? after;
     snapshotting = false;
     for (const item of pendingItems) emitLive(item);
-    const cleanup = () => {
-      closed = true;
-      queue.stop();
-      unsub();
-    };
-    socket.on("close", cleanup);
-    socket.on("error", cleanup);
   });
 
   // ---------- 项目绑定（§7 POST /projects/sync） ----------
@@ -2686,61 +2771,13 @@ export function registerRoutes(app: FastifyInstance) {
     return { node, projection: "L1" };
   });
 
-  /** Delta projection for lightweight polling after the initial L0 snapshot. */
-  app.get("/canvases/:id/delta", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const q = req.query as { since?: string };
-    const since = q.since?.trim() || "";
-    if (!since || !Number.isFinite(Date.parse(since))) {
-      return reply.code(400).send({ error: "since must be an ISO timestamp", error_code: "INVALID_WATERMARK" });
-    }
-    const delta = await sql.begin(async (tx) => {
-      // Capture the upper watermark before reading any rows, then bound every
-      // query by it in one transaction.  Updates committed after this point
-      // are intentionally left for the next poll (`since = watermark`).
-      const [upper] = await tx`SELECT clock_timestamp() AS watermark`;
-      const [canvas] = await tx`
-        SELECT id, project_id,
-          (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id
-            AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count
-        FROM canvases WHERE id = ${id}`;
-      if (!canvas) return null;
-      const nodes = await tx`
-          SELECT id, node_type, title,
-            jsonb_build_object(
-              'summary', LEFT(COALESCE(body_json->>'summary', body_json->>'description', body_json->>'message', ''), 240),
-              'description', LEFT(COALESCE(body_json->>'description', body_json->>'summary', ''), 240),
-              'severity', body_json->>'severity', 'role', body_json->>'role', 'type', body_json->>'type',
-              'last_progress', CASE WHEN jsonb_typeof(body_json->'last_progress') = 'object' THEN body_json->'last_progress' ELSE NULL END
-            ) AS body_json,
-            x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
-          FROM canvas_nodes
-          WHERE canvas_id = ${id}
-            AND updated_at > ${since}::timestamptz
-            AND updated_at <= ${upper.watermark}::timestamptz
-          ORDER BY updated_at, id`;
-      const edges = await tx`
-          SELECT id, from_node_id, to_node_id, edge_type
-          FROM canvas_edges
-          WHERE canvas_id = ${id}
-            AND created_at > ${since}::timestamptz
-            AND created_at <= ${upper.watermark}::timestamptz
-          ORDER BY created_at, id`;
-      return {
-        canvas_id: id,
-        since,
-        server_time: normalizeDeltaWatermark(upper.watermark as string | Date),
-        watermark: normalizeDeltaWatermark(upper.watermark as string | Date),
-        upsert_nodes: nodes,
-        upsert_edges: edges,
-        delete_node_ids: [],
-        delete_edge_ids: [],
-        live: Number(canvas.active_count ?? 0) > 0,
-      };
-    });
-    if (!delta) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
-    return delta;
-  });
+  /** Incremental canvas deltas require the durable revision/change-log path. */
+  app.get("/canvases/:id/delta", async (_req, reply) =>
+    reply.code(410).send({
+      error: "canvas delta requires durable revision/change-log support",
+      error_code: "DELTA_CHANGELOG_REQUIRED",
+    }),
+  );
 
   // ---------- 画布收敛控制（暂停/恢复决策、门控停、清理低优先级 verify） ----------
   app.get("/canvases/:id/convergence", async (req, reply) => {
@@ -2966,7 +3003,7 @@ export function registerRoutes(app: FastifyInstance) {
     const q = req.query as { project_id?: string; status?: string; canvas_id?: string; cursor?: string; after?: string; limit?: string };
     // 联表项目名 / 画布标题；从冻结快照抽出 CLI / 模型 / 角色，列表实时展示
     // agent_snapshot_json 在 createJob 时冻结，列表侧不二次解析 RoleConfig
-    const projectId = q.project_id?.trim() || null;
+    const projectId = q.project_id?.trim() || req.actor?.projectId || null;
     const status = q.status?.trim() || null;
     const canvasId = q.canvas_id?.trim() || null;
     const after = q.cursor ?? q.after ?? null;
@@ -3021,7 +3058,7 @@ export function registerRoutes(app: FastifyInstance) {
       after?: string;
       limit?: string;
     };
-    const projectId = q.project_id || null;
+    const projectId = q.project_id || req.actor?.projectId || null;
     const severity = q.severity || null;
     const verifyStatus = q.verify_status || null;
     const canvasId = q.canvas_id || null;

@@ -22,6 +22,7 @@ import {
   type JobSummary,
 } from "../api";
 import { CanvasView } from "../CanvasView";
+import { appendUniqueRows, mergeRefreshedPage } from "../canvas-page-sync";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
@@ -161,18 +162,10 @@ export function TaskCanvasPage() {
       ])
         .then(([fs, js]) => {
           if (stop) return;
-          setFindings((before) => {
-            const tail = before.length > 50 ? before.slice(50) : [];
-            const seen = new Set(fs.items.map((item) => item.id));
-            return [...fs.items, ...tail.filter((item) => !seen.has(item.id))];
-          });
+          setFindings((before) => mergeRefreshedPage(fs.items, before));
           setFindingsCursor((before) => before ?? fs.next_cursor);
           setFindingsHasMore((before) => before || fs.has_more);
-          setJobs((before) => {
-            const tail = before.length > 50 ? before.slice(50) : [];
-            const seen = new Set(js.items.map((item) => item.id));
-            return [...js.items, ...tail.filter((item) => !seen.has(item.id))];
-          });
+          setJobs((before) => mergeRefreshedPage(js.items, before));
           setJobsCursor((before) => before ?? js.next_cursor);
           setJobsHasMore((before) => before || js.has_more);
           setError(null);
@@ -199,7 +192,7 @@ export function TaskCanvasPage() {
     if (!canvasId || !findingsHasMore || !findingsCursor) return;
     try {
       const next = await api.findingsPage({ canvas_id: canvasId, after: findingsCursor, limit: 50 });
-      setFindings((before) => [...before, ...next.items]);
+      setFindings((before) => appendUniqueRows(before, next.items));
       setFindingsCursor(next.next_cursor);
       setFindingsHasMore(next.has_more);
     } catch (e) {
@@ -211,7 +204,7 @@ export function TaskCanvasPage() {
     if (!canvasId || !jobsHasMore || !jobsCursor) return;
     try {
       const next = await api.jobsPage({ canvas_id: canvasId, after: jobsCursor, limit: 50 });
-      setJobs((before) => [...before, ...next.items]);
+      setJobs((before) => appendUniqueRows(before, next.items));
       setJobsCursor(next.next_cursor);
       setJobsHasMore(next.has_more);
     } catch (e) {

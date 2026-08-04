@@ -83,7 +83,9 @@ export class JobEvidenceWriter {
     otlpPaths.set(jobId, path.join(this.attemptRoot, "otlp.ndjson"));
   }
 
-  appendNormalized(event: Record<string, unknown>): number {
+  /** Resolve only after this event's line is persisted. Stream publication
+   * uses the promise as its cursor visibility gate. */
+  appendNormalized(event: Record<string, unknown>): Promise<number> {
     const seq = ++this.sequence;
     const line = JSON.stringify({ ...event, at: Date.now(), attempt_id: this.safeAttemptId, seq }) + "\n";
     this.queue = this.queue.then(async () => {
@@ -91,7 +93,7 @@ export class JobEvidenceWriter {
       await mkdir(this.attemptRoot, { recursive: true });
       await appendFile(this.streamPath, line, "utf8");
     });
-    return seq;
+    return this.queue.then(() => seq);
   }
 
   get attemptId(): string {
@@ -206,6 +208,11 @@ export async function readMainSession(jobId: string): Promise<{ meta: EvidenceFi
 const MAX_STREAM_READ_BYTES = 8 * 1024 * 1024;
 const MAX_STREAM_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 const MAX_STREAM_COMPRESSED_BYTES = 128 * 1024 * 1024;
+const MAX_STREAM_FILES_PER_REQUEST = 32;
+const MAX_STREAM_DECOMPRESSED_TOTAL = 96 * 1024 * 1024;
+const MAX_STREAM_RETAINED_BYTES = 16 * 1024 * 1024;
+const MAX_STREAM_RECORDS = 20_000;
+const MAX_STREAM_RECORD_BYTES = 256 * 1024;
 
 function streamCursor(record: Record<string, unknown>): string | null {
   const attempt = typeof record.attempt_id === "string" ? record.attempt_id : null;
@@ -215,9 +222,9 @@ function streamCursor(record: Record<string, unknown>): string | null {
     : null;
 }
 
-async function readTail(filePath: string): Promise<{ raw: Buffer; truncated: boolean }> {
+export async function readTail(filePath: string): Promise<{ raw: Buffer; truncated: boolean; aligned: boolean; bytes: number }> {
   const info = await stat(filePath);
-  if (info.size <= MAX_STREAM_READ_BYTES) return { raw: await readFile(filePath), truncated: false };
+  if (info.size <= MAX_STREAM_READ_BYTES) return { raw: await readFile(filePath), truncated: false, aligned: true, bytes: info.size };
   const handle = await open(filePath, "r");
   try {
     const length = MAX_STREAM_READ_BYTES;
@@ -229,6 +236,10 @@ async function readTail(filePath: string): Promise<{ raw: Buffer; truncated: boo
     return {
       raw: firstNewline >= 0 ? buffer.subarray(firstNewline + 1) : Buffer.alloc(0),
       truncated: true,
+      // The raw tail is aligned here; parseStreamFile must not discard a
+      // second complete line from its already-trimmed first record.
+      aligned: firstNewline >= 0,
+      bytes: info.size,
     };
   } finally {
     await handle.close();
@@ -240,7 +251,14 @@ async function readTail(filePath: string): Promise<{ raw: Buffer; truncated: boo
  * decompressed archive: a hostile compression ratio is stopped at the budget
  * and reported as truncated so callers can surface a cursor gap explicitly.
  */
-export async function readGzipTail(filePath: string): Promise<{ raw: Buffer; truncated: boolean }> {
+export async function readGzipTail(filePath: string): Promise<{
+  raw: Buffer;
+  truncated: boolean;
+  aligned: boolean;
+  bytes: number;
+  compressedBytes: number;
+  decompressedBytes: number;
+}> {
   const input = createReadStream(filePath, { highWaterMark: 64 * 1024 });
   const gunzip = createGunzip();
   const chunks: Buffer[] = [];
@@ -307,17 +325,19 @@ export async function readGzipTail(filePath: string): Promise<{ raw: Buffer; tru
     });
     input.pipe(gunzip);
   });
-  return { raw, truncated };
+  // A decompressed gzip tail starts at an arbitrary byte boundary. The parser
+  // performs the one necessary partial-line trim.
+  return { raw, truncated, aligned: false, bytes: raw.byteLength, compressedBytes, decompressedBytes };
 }
 
-async function parseStreamFile(
+export async function parseStreamFile(
   filePath: string,
   attemptHint: string | null,
   compressed: boolean,
-): Promise<{ records: Record<string, unknown>[]; truncated: boolean }> {
+): Promise<{ records: Record<string, unknown>[]; truncated: boolean; bytes: number; decompressedBytes: number }> {
   const read = compressed ? await readGzipTail(filePath) : await readTail(filePath);
   let raw = read.raw;
-  if (read.truncated) {
+  if (read.truncated && !read.aligned) {
     // The first line in a bounded tail can be partial.  Dropping it avoids
     // fabricating a record and makes the returned gap explicit.
     const firstNewline = raw.indexOf(0x0a);
@@ -325,10 +345,18 @@ async function parseStreamFile(
   }
   const fallbackAttempt = attemptHint ?? path.basename(path.dirname(filePath));
   let fallbackSeq = 0;
+  let oversized = false;
   const records = raw
     .toString("utf8")
     .split("\n")
-    .filter(Boolean)
+    .filter((line) => {
+      if (!line) return false;
+      if (Buffer.byteLength(line, "utf8") > MAX_STREAM_RECORD_BYTES) {
+        oversized = true;
+        return false;
+      }
+      return true;
+    })
     .flatMap((line) => {
       try {
         const parsed = JSON.parse(line) as Record<string, unknown>;
@@ -343,7 +371,15 @@ async function parseStreamFile(
         return [];
       }
     });
-  return { records, truncated: read.truncated };
+  return {
+    records,
+    truncated: read.truncated || oversized,
+    bytes: read.raw.byteLength,
+    decompressedBytes:
+      "decompressedBytes" in read && typeof read.decompressedBytes === "number"
+        ? read.decompressedBytes
+        : read.bytes,
+  };
 }
 
 async function evidenceStreamRecords(jobId: string): Promise<{
@@ -353,15 +389,47 @@ async function evidenceStreamRecords(jobId: string): Promise<{
 }> {
   const manifest = await readEvidenceManifest(jobId);
   const records: Record<string, unknown>[] = [];
+  const parsedPaths = new Set<string>();
   let hasRaw = false;
   let truncated = false;
-  for (const meta of manifest?.files.filter((file) => file.kind === "stream") ?? []) {
-    const filePath = resolveManifestFile(jobId, meta);
-    const attempt = meta.path.match(/attempts\/([^/]+)\/stream\.ndjson(?:\.gz)?$/)?.[1] ?? null;
-    const parsed = await parseStreamFile(filePath, attempt, filePath.endsWith(".gz"));
-    records.push(...parsed.records);
-    truncated ||= parsed.truncated;
-  }
+  let retainedBytes = 0;
+  let decompressedBytes = 0;
+  const appendFile = async (filePath: string, attempt: string | null, compressed: boolean) => {
+    if (parsedPaths.has(filePath)) return;
+    if (parsedPaths.size >= MAX_STREAM_FILES_PER_REQUEST || decompressedBytes >= MAX_STREAM_DECOMPRESSED_TOTAL) {
+      truncated = true;
+      return;
+    }
+    parsedPaths.add(filePath);
+    try {
+      const parsed = await parseStreamFile(filePath, attempt, compressed);
+      records.push(...parsed.records);
+      retainedBytes += parsed.bytes;
+      decompressedBytes += parsed.decompressedBytes;
+      truncated ||= parsed.truncated;
+      if (decompressedBytes > MAX_STREAM_DECOMPRESSED_TOTAL) truncated = true;
+      if (retainedBytes > MAX_STREAM_RETAINED_BYTES || records.length > MAX_STREAM_RECORDS) {
+        truncated = true;
+        // Keep the newest bounded records so tail consumers get useful data;
+        // the explicit gap flag tells cursor consumers not to assume history.
+        if (retainedBytes > MAX_STREAM_RETAINED_BYTES) retainedBytes = MAX_STREAM_RETAINED_BYTES;
+        if (records.length > MAX_STREAM_RECORDS) records.splice(0, records.length - MAX_STREAM_RECORDS);
+      }
+    } catch (error) {
+      // Finalization can gzip+remove a raw file between stat and open. Treat
+      // that narrow race as a cache miss; the manifest refresh below picks up
+      // the replacement archive when it is already committed.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  };
+  const appendManifest = async (current: JobEvidenceManifest | null) => {
+    for (const meta of current?.files.filter((file) => file.kind === "stream") ?? []) {
+      const filePath = resolveManifestFile(jobId, meta);
+      const attempt = meta.path.match(/attempts\/([^/]+)\/stream\.ndjson(?:\.gz)?$/)?.[1] ?? null;
+      await appendFile(filePath, attempt, filePath.endsWith(".gz"));
+    }
+  };
+  await appendManifest(manifest);
 
   const attemptsRoot = path.join(jobDir(jobId), "attempts");
   try {
@@ -380,13 +448,15 @@ async function evidenceStreamRecords(jobId: string): Promise<{
     }
     rawFiles.sort((a, b) => a.mtime - b.mtime);
     for (const raw of rawFiles) {
-      const parsed = await parseStreamFile(raw.file, raw.attempt, false);
-      records.push(...parsed.records);
-      truncated ||= parsed.truncated;
+      await appendFile(raw.file, raw.attempt, false);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+
+  // A finalize may have replaced a raw file after the first manifest read;
+  // refresh once so the same request can observe the committed gzip archive.
+  await appendManifest(await readEvidenceManifest(jobId));
 
   records.sort((a, b) => {
     const at = Number(a.at ?? 0) - Number(b.at ?? 0);

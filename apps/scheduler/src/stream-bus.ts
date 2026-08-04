@@ -24,10 +24,33 @@ export interface StreamItem {
 export const STREAM_BUFFER_MAX = 300;
 export const STREAM_ITEM_MAX_BYTES = 16 * 1024;
 export const STREAM_SUBSCRIBER_QUEUE_MAX = 128;
+export const STREAM_JOB_CACHE_MAX = 256;
+export const STREAM_JOB_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const buffers = new Map<string, StreamItem[]>();
 const subs = new Map<string, Set<(item: StreamItem) => void>>();
 const attempts = new Map<string, { attemptId: string; seq: number }>();
+const touched = new Map<string, number>();
+
+function evictStreamCaches(now = Date.now()): void {
+  for (const [jobId, at] of touched) {
+    if (subs.has(jobId)) continue;
+    if (now - at > STREAM_JOB_CACHE_TTL_MS) {
+      buffers.delete(jobId);
+      attempts.delete(jobId);
+      touched.delete(jobId);
+    }
+  }
+  const candidates = [...touched.entries()]
+    .filter(([jobId]) => !subs.has(jobId))
+    .sort((a, b) => a[1] - b[1]);
+  while (touched.size > STREAM_JOB_CACHE_MAX && candidates.length > 0) {
+    const [jobId] = candidates.shift()!;
+    buffers.delete(jobId);
+    attempts.delete(jobId);
+    touched.delete(jobId);
+  }
+}
 
 function boundString(value: string, max = 4000): string {
   return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
@@ -69,6 +92,8 @@ export function publishStream(
   attemptId?: string,
   evidenceSeq?: number,
 ): void {
+  evictStreamCaches();
+  touched.set(jobId, Date.now());
   const explicitAttempt = attemptId ?? (typeof item.attempt_id === "string" ? item.attempt_id : undefined);
   const state = currentAttempt(jobId, explicitAttempt);
   if (item.type === "run.started") {
@@ -108,6 +133,7 @@ export function publishStream(
 }
 
 export function streamBuffer(jobId: string): StreamItem[] {
+  evictStreamCaches();
   return [...(buffers.get(jobId) ?? [])];
 }
 
@@ -149,6 +175,7 @@ export function streamWindow(
 }
 
 export function subscribeStream(jobId: string, fn: (item: StreamItem) => void): () => void {
+  touched.set(jobId, Date.now());
   let set = subs.get(jobId);
   if (!set) {
     set = new Set();
@@ -161,8 +188,22 @@ export function subscribeStream(jobId: string, fn: (item: StreamItem) => void): 
   };
 }
 
+/** Number of active subscribers, exposed for lifecycle regression tests. */
+export function streamSubscriberCount(jobId?: string): number {
+  if (jobId !== undefined) return subs.get(jobId)?.size ?? 0;
+  let total = 0;
+  for (const set of subs.values()) total += set.size;
+  return total;
+}
+
 export function clearStreamForTests(): void {
   buffers.clear();
   subs.clear();
   attempts.clear();
+  touched.clear();
+}
+
+export function streamCacheSizeForTests(): number {
+  evictStreamCaches();
+  return touched.size;
 }

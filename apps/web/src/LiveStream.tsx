@@ -30,12 +30,17 @@ export type StreamBlock =
 
 export type StreamKindFilter = "all" | "text" | "tool" | "meta";
 
+export function streamItemKey(item: Pick<StreamItem, "attempt_id" | "seq">): string {
+  return `${item.attempt_id ?? "legacy"}:${item.seq}`;
+}
+
 export function reduceStreamItem(blocks: StreamBlock[], item: StreamItem): StreamBlock[] {
-  const key = String(item.seq);
+  const key = streamItemKey(item);
+  const namespace = `${item.attempt_id ?? "legacy"}:`;
   if (item.type === "text.delta" || item.type === "reasoning.delta") {
     const reasoning = item.type === "reasoning.delta";
     const last = blocks[blocks.length - 1];
-    if (last?.kind === "text" && last.reasoning === reasoning) {
+    if (last?.kind === "text" && last.reasoning === reasoning && last.key.startsWith(namespace)) {
       return [...blocks.slice(0, -1), { ...last, text: last.text + (item.delta ?? "") }];
     }
     return [...blocks, { kind: "text", key, text: item.delta ?? "", reasoning }];
@@ -72,6 +77,11 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
     const type = String(record.type ?? payload.type ?? "");
     const item: StreamItem = {
       type,
+      attempt_id: typeof record.attempt_id === "string"
+        ? record.attempt_id
+        : typeof payload.attempt_id === "string"
+          ? payload.attempt_id
+          : undefined,
       seq: Number(record.seq ?? record.job_seq ?? blocks.length + 1),
       at: Number(record.at ?? record.ts ?? Date.now()),
       delta: typeof payload.delta === "string" ? payload.delta : undefined,
@@ -96,7 +106,7 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
         [payload.message, payload.text, payload.summary, payload.title]
           .find((v): v is string => typeof v === "string" && v.trim().length > 0) ??
         JSON.stringify(payload);
-      blocks = [...blocks, { kind: "meta", key: String(item.seq), text: `${type}: ${text}` }];
+      blocks = [...blocks, { kind: "meta", key: streamItemKey(item), text: `${type}: ${text}` }];
       continue;
     }
     blocks = reduceStreamItem(blocks, item);

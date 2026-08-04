@@ -6,6 +6,7 @@ import {
   streamBuffer,
   streamCursor,
   streamWindow,
+  streamCacheSizeForTests,
   subscribeStream,
   STREAM_BUFFER_MAX,
   STREAM_ITEM_MAX_BYTES,
@@ -69,5 +70,15 @@ test("stream cursor namespace changes with a new attempt", () => {
   assert.equal(items.length, 1);
   assert.equal(items[0]?.attempt_id, "attempt-two");
   assert.equal(items[0]?.seq, 1);
+  clearStreamForTests();
+});
+
+test("global stream cache evicts old jobs without subscribers", () => {
+  clearStreamForTests();
+  for (let i = 0; i < 260; i++) {
+    publishStream(`cache-job-${i}`, { type: "text.delta", delta: String(i) }, `attempt-${i}`, 1);
+  }
+  assert.equal(streamBuffer("cache-job-0").length, 0);
+  assert.ok(streamCacheSizeForTests() <= 256);
   clearStreamForTests();
 });

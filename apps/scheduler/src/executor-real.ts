@@ -701,6 +701,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let lastActionPush = 0;
   const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(job.sandbox_id ?? job.id ?? "unknown"));
   const evidenceAttemptId = evidenceWriter.attemptId;
+  // Advertise stream cursors only after their evidence line is persisted.
+  let streamPublishTail: Promise<void> = Promise.resolve();
 
   const result = await runRealAgent(
     { sandboxId: job.sandbox_id as string },
@@ -733,8 +735,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         void emit("progress", { message }).catch(() => {});
       },
       onEvent: (e) => {
-        const evidenceSeq = evidenceWriter.appendNormalized(e);
         const type = String(e.type ?? "");
+        const persisted = evidenceWriter.appendNormalized(e);
+        streamPublishTail = streamPublishTail
+          .then(() => persisted)
+          .then((evidenceSeq) => {
         // 实时流：选择性字段转发（输入/输出可能很大，只取摘要）
         if (type === "tool.call.started") {
           const toolName = String(e.toolName ?? "tool");
@@ -754,16 +759,20 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         } else if (type.startsWith("run.") || type.startsWith("message.")) {
           publishStream(jobId, { type, text: typeof e.text === "string" ? e.text.slice(0, 300) : undefined }, evidenceAttemptId, evidenceSeq);
         }
+          })
+          .catch(() => {});
       },
     },
   ).catch(async (error) => {
     const message = error instanceof Error ? error.message : String(error);
+    await streamPublishTail;
     const evidence = await evidenceWriter.finalize(message);
     await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
     throw error;
   });
 
   evidenceWriter.setSession(result.session);
+  await streamPublishTail;
   const evidence = await evidenceWriter.finalize(result.error);
   await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
 

@@ -63,18 +63,6 @@ export interface PageEnvelope<T> {
   gap?: boolean;
 }
 
-export interface CanvasDelta {
-  canvas_id: string;
-  since: string;
-  server_time: string;
-  watermark?: string;
-  upsert_nodes: CanvasNode[];
-  upsert_edges: CanvasEdge[];
-  delete_node_ids: string[];
-  delete_edge_ids: string[];
-  live: boolean;
-}
-
 /** 任务画布的生命周期聚合（由调度器按 Job 时间戳计算）。 */
 export interface CanvasLifecycle {
   /** 画布创建时间，是任务生命周期的起点。 */
@@ -988,7 +976,6 @@ export const api = {
   canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
   /** L0 graph projection; node body_json is a bounded summary. */
   canvasSummary: (canvasId: string) => get<CanvasData & { projection?: "L0"; watermark?: string; live?: boolean }>(`/canvases/${canvasId}/summary`),
-  canvasDelta: (canvasId: string, since: string) => get<CanvasDelta>(`/canvases/${canvasId}/delta?since=${encodeURIComponent(since)}`),
   canvasNode: (canvasId: string, nodeId: string) =>
     get<{ node: CanvasNode; projection: "L1" }>(`/canvases/${canvasId}/nodes/${nodeId}`),
   canvasConvergence: (canvasId: string) =>

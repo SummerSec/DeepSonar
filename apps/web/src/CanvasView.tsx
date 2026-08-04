@@ -13,6 +13,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
+import { CANVAS_SKELETON_REFRESH_MS, isCurrentNodeRequest, mergeHydratedCanvasData } from "./canvas-sync";
 import {
   buildOutgoing,
   computeNodeDepths,
@@ -181,43 +182,22 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
   /** 用户强制收起（覆盖默认 depth 展开） */
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const rf = useRef<ReactFlowInstance | null>(null);
-  const watermarkRef = useRef<string | null>(null);
+  const hydratedNodesRef = useRef(new Map<string, CanvasNode>());
+  const nodeRequestRef = useRef(0);
 
-  // L0 once + bounded deltas.  Full body_json is fetched only for the node the
-  // user opens (L1), avoiding duplicate heavy canvas polling in the workbench.
+  // Keep the active canvas responsive with a bounded L0 skeleton refresh. Full
+  // body_json is fetched only for selected nodes (L1/L2) and retained locally;
+  // durable incremental deltas wait for the revision/change-log migration.
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
-        const d = await api.canvasSummary(canvasId);
+        const summary = await api.canvasSummary(canvasId);
         if (!alive) return;
-        watermarkRef.current = d.watermark ?? new Date().toISOString();
-        setData(d);
-        onData?.(d);
+        const next = mergeHydratedCanvasData(summary, hydratedNodesRef.current);
+        setData(next);
+        onData?.(next);
         setError(null);
-      } catch (e) {
-        if (alive) setError(String(e));
-      }
-    };
-    const loadDelta = async () => {
-      const since = watermarkRef.current;
-      if (!since) return;
-      try {
-        const delta = await api.canvasDelta(canvasId, since);
-        if (!alive) return;
-        watermarkRef.current = delta.watermark ?? delta.server_time;
-        setData((before) => {
-          if (!before) return before;
-          const nodeMap = new Map(before.nodes.map((node) => [node.id, node]));
-          for (const node of delta.upsert_nodes) nodeMap.set(node.id, node);
-          for (const id of delta.delete_node_ids) nodeMap.delete(id);
-          const edgeMap = new Map(before.edges.map((edge) => [edge.id, edge]));
-          for (const edge of delta.upsert_edges) edgeMap.set(edge.id, edge);
-          for (const id of delta.delete_edge_ids) edgeMap.delete(id);
-          const next = { ...before, nodes: [...nodeMap.values()], edges: [...edgeMap.values()] };
-          onData?.(next);
-          return next;
-        });
       } catch (e) {
         if (alive) setError(String(e));
       }
@@ -228,9 +208,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
-    watermarkRef.current = null;
+    hydratedNodesRef.current.clear();
+    nodeRequestRef.current += 1;
     void load();
-    const t = setInterval(() => void loadDelta(), 5000);
+    const t = setInterval(() => void load(), CANVAS_SKELETON_REFRESH_MS);
     return () => {
       alive = false;
       clearInterval(t);
@@ -518,7 +499,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       const found = data?.nodes.find((n) => n.id === node.id) ?? null;
       setSelected(found);
       if (!found) return;
+      const requestId = ++nodeRequestRef.current;
       void api.canvasNode(canvasId, found.id).then((result) => {
+        if (!isCurrentNodeRequest(requestId, nodeRequestRef.current)) return;
+        hydratedNodesRef.current.set(result.node.id, result.node);
         setSelected(result.node);
         setData((before) => {
           if (!before) return before;
@@ -534,7 +518,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     [canvasId, data, onData],
   );
 
-  if (error)
+  if (!data && error)
     return (
       <div className="flex h-full items-center justify-center">
         <div className="rounded-[10px] border border-red-900/60 bg-red-950/40 px-6 py-4 text-sm text-red-300">
@@ -561,6 +545,11 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
 
   return (
     <div className="relative h-full w-full">
+      {error && (
+        <div className="absolute right-4 top-4 z-20 rounded-md border border-red-900/60 bg-red-950/80 px-3 py-2 font-mono text-[10px] text-red-300">
+          同步失败：{error}
+        </div>
+      )}
       <ReactFlow
         nodes={visibleNodes}
         edges={visibleEdges}

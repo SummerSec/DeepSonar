@@ -67,15 +67,73 @@ export function encodeCursor(payload: Omit<CursorPayload, "v">): string {
 }
 
 export function decodeCursor(raw: unknown, kind: string): CursorPayload | null {
-  if (typeof raw !== "string" || raw.length < 8 || raw.length > 512) return null;
+  if (
+    typeof raw !== "string" ||
+    raw.length < 8 ||
+    raw.length > 512 ||
+    !/^[A-Za-z0-9_-]+$/.test(raw)
+  ) return null;
   try {
-    const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<CursorPayload>;
+    const decoded = Buffer.from(raw, "base64url");
+    // Reject alternate/padded encodings so the opaque token has one stable
+    // representation and malformed base64 cannot smuggle an empty payload.
+    if (decoded.length === 0 || decoded.toString("base64url") !== raw) return null;
+    const parsed = JSON.parse(decoded.toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const value = parsed as Partial<CursorPayload>;
     if (value.v !== 1 || value.kind !== kind) return null;
+
+    if (kind === "stream") {
+      if (
+        typeof value.attempt_id !== "string" ||
+        value.attempt_id.length === 0 ||
+        value.attempt_id.length > 128 ||
+        !Number.isSafeInteger(value.seq) ||
+        (value.seq as number) <= 0
+      ) return null;
+      return value as CursorPayload;
+    }
+
+    // SQL keyset endpoints interpolate these fields into explicit PostgreSQL
+    // casts.  Validate the exact wire shape before a query is constructed so
+    // malformed-but-decodable cursors become a deterministic 400 rather than
+    // a database cast error (500).
+    if (!canonicalTimestamp(value.created_at)) return null;
+    if (kind === "jobs" || kind === "findings") {
+      if (typeof value.id !== "string" || !UUID_RE.test(value.id)) return null;
+      return value as CursorPayload;
+    }
+    if (kind === "events") {
+      const id = positiveBigIntString(value.id);
+      if (!id) return null;
+      return { ...value, id } as CursorPayload;
+    }
+
     if (value.id !== undefined && (typeof value.id !== "string" || value.id.length > 128)) return null;
-    if (value.created_at !== undefined && typeof value.created_at !== "string") return null;
     if (value.attempt_id !== undefined && (typeof value.attempt_id !== "string" || value.attempt_id.length > 128)) return null;
     if (value.seq !== undefined && (!Number.isSafeInteger(value.seq) || value.seq < 0)) return null;
     return value as CursorPayload;
+  } catch {
+    return null;
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function canonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 40) return false;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString() === value;
+}
+
+function positiveBigIntString(value: unknown): string | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  }
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) return null;
+  try {
+    const id = BigInt(value);
+    return id > 0n ? id.toString() : null;
   } catch {
     return null;
   }

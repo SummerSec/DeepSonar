@@ -2,6 +2,7 @@ import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, ProcessStreamView, recordsToStreamBlocks } from "./LiveStream";
+import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
@@ -178,7 +179,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               setStreamHasMore(s.has_more);
               setStreamTruncated((before) => before || Boolean(s.truncated || s.gap));
             }).catch((e) => alive && setStreamError(String(e)));
-            api.jobEventsPage(jobId, { limit: 50 }).then((s) => alive && setJobEvents(s.items)).catch(() => {});
+            api.jobEventsPage(jobId, { limit: 50 }).then((s) => alive && setJobEvents((before) => mergeRefreshedPage(s.items, before))).catch(() => {});
           }
         })
         .catch(() => {});
@@ -264,7 +265,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     if (!eventsHasMore || !eventsCursor) return;
     try {
       const next = await api.jobEventsPage(jobId, { after: eventsCursor, limit: 50 });
-      setJobEvents((before) => [...before, ...next.items]);
+      setJobEvents((before) => appendUniqueRows(before, next.items));
       setEventsCursor(next.next_cursor);
       setEventsHasMore(next.has_more);
     } catch (e) {
