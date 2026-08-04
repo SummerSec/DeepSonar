@@ -5,7 +5,13 @@ import {
   hubReferenceBudgetViolation,
   HubDecisionPayload as HubDecisionPayloadSchema,
 } from "@deepsonar/shared-types";
-import { ControlInputError, invalidNodeReference, invalidReferenceBudget } from "./control-input.js";
+import {
+  ControlInputError,
+  invalidControlPayload,
+  invalidNodeReference,
+  invalidReferenceBudget,
+  unknownControlField,
+} from "./control-input.js";
 
 /** Server-side bounded graph projections for Hub/Worker prompt inputs. */
 export type GraphScope = "hub" | "agent" | "verify" | "report";
@@ -562,7 +568,15 @@ export function parseHubDecisionPayload(
 
   const parsed = HubDecisionPayloadSchema.safeParse(value);
   if (!parsed.success) {
-    throw new Error("Hub decision 必须且只能提供 complete 或 intents 之一，且字段必须完整");
+    const issue = parsed.error.issues[0];
+    if (issue?.code === "unrecognized_keys") {
+      const keys = "keys" in issue && Array.isArray(issue.keys) ? issue.keys.join(",") : "<unknown>";
+      throw unknownControlField(issue.path.length > 0 ? issue.path.join(".") : `hub_decision.${keys}`);
+    }
+    throw invalidControlPayload(
+      "Hub 决策必须且只能提供 complete 或 intents 之一，且每个字段都必须完整。",
+      issue?.path.join(".") || "hub_decision",
+    );
   }
 
   const decision: HubDecision = "complete" in parsed.data
@@ -634,7 +648,9 @@ export function parseHubDecision(
   try {
     decision = parseHubDecisionPayload(value, referableIds);
   } catch (error) {
-    if (error instanceof ControlInputError) throw error;
+    if (error instanceof ControlInputError && ["invalid_node_ref", "invalid_reference_budget"].includes(error.code)) {
+      throw error;
+    }
     return null;
   }
   if (decision.intents && decision.intents.some((intent) => !allowedRoles.has(intent.role))) return null;

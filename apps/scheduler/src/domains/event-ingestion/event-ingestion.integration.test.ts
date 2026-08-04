@@ -27,6 +27,8 @@ if (!testDatabaseUrl) {
     const legacyJobId = randomUUID();
     const repointJobId = randomUUID();
     const factRepointJobId = randomUUID();
+    const verificationJobId = randomUUID();
+    const verificationFindingId = randomUUID();
     const multiCanvasJobId = randomUUID();
     const conflictingCanvasJobId = randomUUID();
     const reportOnlyJobId = randomUUID();
@@ -89,6 +91,25 @@ if (!testDatabaseUrl) {
       INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
       VALUES (${canvasId}, ${factRepointJobId}, 'intent', 'fact target', 'running', ${sql.json({})})
       RETURNING id`;
+    const [verificationFindingNode] = await sql<{ id: string }[]>`
+      INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+      VALUES (${canvasId}, 'finding', 'verification finding', 'open', ${sql.json({ severity: 'high' })})
+      RETURNING id`;
+    await sql`
+      INSERT INTO findings (
+        id, project_id, job_id, node_id, fingerprint, title, severity, summary, raw_json
+      ) VALUES (
+        ${verificationFindingId}, ${projectId}, ${jobId}, ${verificationFindingNode.id},
+        ${`verification-${verificationFindingId}`}, 'verification finding', 'high', 'finding under test', ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, finding_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${verificationJobId}, ${projectId}, ${canvasId}, ${verificationFindingId}, 'test', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })},
+        ${sql.json({ verification_followup: { finding_id: verificationFindingId } })}
+      )`;
     await sql`
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
@@ -163,6 +184,79 @@ if (!testDatabaseUrl) {
       assert.deepEqual(first, { deduped: false, seq: 1 });
       assert.deepEqual(duplicate, { deduped: true });
       assert.equal(callbackCount, 1, "duplicate event must not invoke semantic side effects");
+
+      // Verification binding failures must reject the whole fact event.  The
+      // fact node, event row and dedup marker are all inside one transaction;
+      // no ordinary fact may survive a failed evidence attachment.
+      const invalidVerificationEventId = randomUUID();
+      fixture.eventIds.push(invalidVerificationEventId);
+      await assert.rejects(
+        ingestEvent(factRepointJobId, {
+          v: 1,
+          event_id: invalidVerificationEventId,
+          type: "fact",
+          payload: {
+            intent_node_id: factRepointNode.id,
+            title: "should rollback",
+            description: "invalid verification binding",
+            verification: {
+              finding_id: randomUUID(),
+              evidence_kind: "test",
+              outcome: "supports",
+              subject_revision: "app@test",
+            },
+          },
+        }),
+        (error: unknown) => error instanceof Error && /invalid_verification/.test(error.message),
+      );
+      const [rolledBackFact] = await sql`
+        SELECT 1 FROM canvas_nodes WHERE job_id = ${factRepointJobId} AND title = 'should rollback'`;
+      const [rolledBackFactEvent] = await sql`SELECT 1 FROM events WHERE event_id = ${invalidVerificationEventId}`;
+      const [rolledBackFactDedup] = await sql`SELECT 1 FROM event_dedup WHERE event_id = ${invalidVerificationEventId}`;
+      assert.equal(rolledBackFact, undefined);
+      assert.equal(rolledBackFactEvent, undefined);
+      assert.equal(rolledBackFactDedup, undefined);
+
+      // A correctly bound test Job may attach structured evidence to its new
+      // fact node.  The finding edge and verification body must commit with
+      // the event, proving the strict host boundary accepts valid input.
+      const validVerificationEventId = randomUUID();
+      fixture.eventIds.push(validVerificationEventId);
+      const validVerification = await ingestEvent(verificationJobId, {
+        v: 1,
+        event_id: validVerificationEventId,
+        type: "fact",
+        payload: {
+          title: "verified fact",
+          description: "the isolated test produced structured evidence",
+          verification: {
+            finding_id: verificationFindingId,
+            evidence_kind: "test",
+            outcome: "supports",
+            subject_revision: "app@verified",
+            steps: ["run the isolated test"],
+            expected: "the request is rejected",
+            actual: "the request is rejected",
+          },
+        },
+      });
+      assert.deepEqual(validVerification, { deduped: false, seq: 1 });
+      const [verifiedFact] = await sql<{
+        id: string;
+        body_json: { verification?: { finding_id?: string; evidence_kind?: string; outcome?: string } };
+      }[]>`
+        SELECT id, body_json FROM canvas_nodes
+        WHERE job_id = ${verificationJobId} AND node_type = 'fact' AND title = 'verified fact'`;
+      assert.equal(verifiedFact?.body_json.verification?.finding_id, verificationFindingId);
+      assert.equal(verifiedFact?.body_json.verification?.evidence_kind, "test");
+      assert.equal(verifiedFact?.body_json.verification?.outcome, "supports");
+      const [verificationEdge] = await sql`
+        SELECT 1 FROM canvas_edges
+        WHERE canvas_id = ${canvasId}
+          AND from_node_id = ${verificationFindingNode.id}
+          AND to_node_id = ${verifiedFact?.id}
+          AND edge_type = 'tested_by'`;
+      assert.ok(verificationEdge, "valid verification must create a tested_by edge");
 
       // Simulate a legacy node re-point between the read-only hint preflight
       // and transaction start.  The first Canvas lock must fail closed during
@@ -400,6 +494,7 @@ if (!testDatabaseUrl) {
       }
       await sql`DELETE FROM canvas_edges WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await sql`DELETE FROM projects WHERE id = ${projectId}`;

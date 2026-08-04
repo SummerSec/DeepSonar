@@ -1,6 +1,7 @@
 import {
   EventEnvelope as EventEnvelopeSchema,
   type EventEnvelope,
+  type EventEnvelopeInput,
 } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
 
@@ -26,7 +27,7 @@ export type EventSideEffects = (
 ) => Promise<void>;
 
 export interface EventIngestionApplication {
-  ingestEvent(jobId: string, envelope: EventEnvelope): Promise<EventIngestionResult>;
+  ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<EventIngestionResult>;
 }
 
 export interface EventIngestionOptions {

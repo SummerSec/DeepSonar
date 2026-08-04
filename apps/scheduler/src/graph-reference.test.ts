@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { CONTROL_MCP_SERVER } from "./control-mcp.js";
-import { ControlInputError } from "./control-input.js";
+import { ControlInputError, invalidNodeReference, invalidRole } from "./control-input.js";
 import { assertHubDecisionCanvasReferences, parseHubDecision } from "./graph.js";
 import { HUB_REFERENCE_LIMITS, HubDecisionPayload } from "@deepsonar/shared-types";
 
@@ -48,6 +48,12 @@ function assertInvalidNodeRef(action: () => unknown): void {
 test("Hub parser rejects root_id field names and non-UUID references", () => {
   assertInvalidNodeRef(() => parseIntent(["root_id"]));
   assertInvalidNodeRef(() => parseIntent(["not-a-uuid"]));
+});
+
+test("control input errors do not echo token-like untrusted values", () => {
+  const token = "ghp_super_secret_should_not_echo";
+  assert.doesNotMatch(invalidNodeReference("intents.0.from.0", token).message, new RegExp(token));
+  assert.doesNotMatch(invalidRole(token, "intents.0.role").message, new RegExp(token));
 });
 
 test("Hub parser accepts canonical UUIDs and rejects cross-canvas IDs", () => {
@@ -188,7 +194,7 @@ async function callControlMcp(requests: unknown[]): Promise<McpResponse[]> {
   }
 }
 
-test("control MCP advertises and rejects invalid Hub references before accepted event", async () => {
+test("control MCP advertises and rejects invalid Hub references before scheduler validation", async () => {
   const maxBoundary = { intents: boundedIntents(HUB_REFERENCE_LIMITS.totalUnique) };
   const perLimit = {
     intents: [{ ...maxBoundary.intents[0], from: Array.from({ length: HUB_REFERENCE_LIMITS.perFrom + 1 }, (_, index) => referenceId(index + 1)) }],
@@ -229,9 +235,8 @@ test("control MCP advertises and rejects invalid Hub references before accepted 
   const tool = (listed.result?.content ?? [])[0];
   assert.ok(tool || listed.result);
   const listedText = JSON.stringify(listed);
-  assert.match(CONTROL_MCP_SERVER, /format: "uuid"/);
-  assert.match(CONTROL_MCP_SERVER, /pattern: CANONICAL_UUID_PATTERN/);
-  assert.match(CONTROL_MCP_SERVER, /maxItems: MAX_REFERENCES_PER_FROM/);
+  assert.match(CONTROL_MCP_SERVER, /TOOL_INPUT_SCHEMAS/);
+  assert.match(CONTROL_MCP_SERVER, /schema_validated/);
   assert.equal(invalid.result?.isError, true);
   assert.match(invalid.result?.content?.[0]?.text ?? "", /invalid_node_ref/);
   assert.equal(valid.result?.isError, undefined);
