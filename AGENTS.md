@@ -20,6 +20,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
 - **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission 四个 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。CI 在 `.github/workflows/ci.yml`，GHCR 制品发布在 `release.yml`。
 - **镜像发布**：Release 必须显式向多架构 OCI index 写入各镜像专属 annotations；Docker Hub 仅在 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN` 同时存在时发布，Actions 中被跳过的“凭据未配置”步骤不代表登录失败。
+- **运行时镜像发布顺序**：按阿里云 ACR → GHCR → Docker Hub 逐仓库完成全部标签，禁止在同一次 `imagetools create` 中混合不同 Registry；跨仓库复制必须使用有限次数指数退避重试，并通过兼容降级规避 HTTP/2 传输故障。
 - **发布纪律**：先确保 main CI 全绿，再创建新的 `v*` 标签；不要覆盖旧标签或尝试修改既有 digest 的说明与证据。
 
 ## 架构要点（跨文件才能看懂的部分）

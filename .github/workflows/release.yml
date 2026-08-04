@@ -117,11 +117,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile.agent
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            ${{ steps.dockerhub-meta.outputs.tags }}
-            ${{ steps.acr-meta.outputs.tags }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base,push-by-digest=true,name-canonical=true,push=true
           platforms: linux/amd64,linux/arm64
           build-args: TOOLSET=base
           labels: ${{ steps.meta.outputs.labels }}
@@ -130,6 +126,48 @@ jobs:
           provenance: mode=max
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
+      - name: 按 Registry 发布标签
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        run: |
+          set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2" source="$3"
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "$source"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "$source"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
+          publish_tags false "$GHCR_TAGS" "$source_ref"
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
       - name: 保存 base manifest digest
         env:
           IMAGE_KEY: deepsonar-base
@@ -266,11 +304,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            ${{ steps.dockerhub-meta.outputs.tags }}
-            ${{ steps.acr-meta.outputs.tags }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
           platforms: ${{ matrix.platforms }}
           build-args: ${{ matrix.name == 'audit' && 'TOOLSET=audit' || '' }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -279,6 +313,48 @@ jobs:
           provenance: mode=max
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: 按 Registry 发布标签
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        run: |
+          set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2" source="$3"
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "$source"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "$source"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
+          publish_tags false "$GHCR_TAGS" "$source_ref"
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
       - name: 保存运行时 manifest digest
         if: ${{ matrix.dockerhub_tag != '' }}
         env:
@@ -455,27 +531,65 @@ jobs:
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
         run: |
           set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1
+            local max_attempts=4
+            local delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then
+                return 0
+              fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
           source_refs=(
             "${IMAGE_NAME}@${AMD64_DIGEST}"
             "${IMAGE_NAME}@${ARM64_DIGEST}"
           )
-          tag_args=()
+          annotation_args=(
+            --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test"
+            --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。"
+            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+            --annotation "index:org.opencontainers.image.licenses=MIT"
+          )
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then
+            acr_tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              acr_tag_args+=(-t "$tag")
+            done <<< "${ACR_TAGS:-}"
+            [[ ${#acr_tag_args[@]} -gt 0 ]]
+            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"
+          fi
+          ghcr_tag_args=()
           while IFS= read -r tag; do
             [[ -n "$tag" ]] || continue
-            tag_args+=(-t "$tag")
-          done <<< "$(printf '%s\n%s\n%s\n' "$GHCR_TAGS" "${DOCKERHUB_TAGS:-}" "${ACR_TAGS:-}")"
-          [[ ${#tag_args[@]} -gt 0 ]]
-          docker buildx imagetools create \
-            --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test" \
-            --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。" \
-            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar" \
-            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
-            --annotation "index:org.opencontainers.image.licenses=MIT" \
-            "${tag_args[@]}" "${source_refs[@]}"
+            ghcr_tag_args+=(-t "$tag")
+          done <<< "$GHCR_TAGS"
+          [[ ${#ghcr_tag_args[@]} -gt 0 ]]
+          docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
           # 取 GHCR 首个标签的 multi-arch index digest
           primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+            dockerhub_tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              dockerhub_tag_args+=(-t "$tag")
+            done <<< "$DOCKERHUB_TAGS"
+            [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
+            retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"
+          fi
           digest="$(docker buildx imagetools inspect --raw "$primary" | node -e '
             let s=""; process.stdin.on("data", d => s += d);
             process.stdin.on("end", () => {
@@ -609,11 +723,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile.agent-openharmony
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            ${{ steps.acr-meta.outputs.tags }}
-            ${{ steps.dockerhub-meta.outputs.tags }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test,push-by-digest=true,name-canonical=true,push=true
           platforms: linux/amd64,linux/arm64
           build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -622,6 +732,48 @@ jobs:
           provenance: mode=max
           cache-from: type=gha,scope=openharmony-test
           cache-to: type=gha,mode=max,scope=openharmony-test
+      - name: 按 Registry 发布标签
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        run: |
+          set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2" source="$3"
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "$source"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "$source"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
+          publish_tags false "$GHCR_TAGS" "$source_ref"
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
       - name: 保存 OpenHarmony manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-test
@@ -741,11 +893,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile.agent-openharmony-audit
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            ${{ steps.acr-meta.outputs.tags }}
-            ${{ steps.dockerhub-meta.outputs.tags }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit,push-by-digest=true,name-canonical=true,push=true
           platforms: linux/amd64,linux/arm64
           build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -754,6 +902,48 @@ jobs:
           provenance: mode=max
           cache-from: type=gha,scope=openharmony-audit
           cache-to: type=gha,mode=max,scope=openharmony-audit
+      - name: 按 Registry 发布标签
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        run: |
+          set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2" source="$3"
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "$source"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "$source"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
+          publish_tags false "$GHCR_TAGS" "$source_ref"
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
       - name: 保存 OpenHarmony Audit manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-audit
@@ -873,11 +1063,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile.agent-openharmony-fuzz
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            ${{ steps.acr-meta.outputs.tags }}
-            ${{ steps.dockerhub-meta.outputs.tags }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz,push-by-digest=true,name-canonical=true,push=true
           platforms: linux/amd64,linux/arm64
           build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -886,6 +1072,48 @@ jobs:
           provenance: mode=max
           cache-from: type=gha,scope=openharmony-fuzz
           cache-to: type=gha,mode=max,scope=openharmony-fuzz
+      - name: 按 Registry 发布标签
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        run: |
+          set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2" source="$3"
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "$source"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "$source"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
+          publish_tags false "$GHCR_TAGS" "$source_ref"
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
       - name: 保存 OpenHarmony Fuzz manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-fuzz
