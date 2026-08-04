@@ -210,7 +210,7 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
         ) : permissionDenied || !canStart ? (
           <div className="intent-launch-permission is-denied" role="alert">
             <span className="intent-launch-permission-icon"><LockKey size={18} weight="light" /></span>
-            <div><strong>当前账号不能开始任务</strong><p>需要项目写入与任务写入权限。请切换到 operator/admin 账号，或让管理员调整访问范围。</p><Link to="/settings" className="intent-launch-inline-link">查看设置 <ArrowUpRight size={13} /></Link></div>
+            <div><strong>当前账号不能开始任务</strong><p>需要项目写入与任务写入权限。请切换到 operator/admin 账号，或让管理员调整访问范围。</p><Link to="/agents?tab=roles" className="intent-launch-inline-link">查看设置 <ArrowUpRight size={13} /></Link></div>
           </div>
         ) : (
           <form className="intent-launch-form" onSubmit={submit}>
