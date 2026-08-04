@@ -27,6 +27,7 @@ import { FindingDetailPanel } from "../FindingDetailPanel";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
+import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle } from "../task-lifecycle";
 import {
   DataTable,
   EmptyState,
@@ -44,15 +45,7 @@ type Tab = "canvas" | "findings" | "jobs" | "report";
 
 // Human-gated work is still active; current running elapsed therefore continues
 // from the first actual start while a Job is waiting_human.
-const ACTIVE_JOB = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
-
-/** 任务状态 chip（root 节点状态 → 中文；§8.1 报告成功才是任务最终完成） */
-const TASK_STATUS: Record<string, { label: string; color: string }> = {
-  analysis_complete: { label: "分析完成", color: "#34d399" },
-  reporting: { label: "生成报告", color: "#38bdf8" },
-  succeeded: { label: "已完成", color: "#34d399" },
-  failed: { label: "失败", color: "#f87171" },
-};
+const ACTIVE_JOB = ACTIVE_TASK_JOB_STATUSES;
 
 function parseConvergenceFromTarget(target: Record<string, unknown> | undefined): CanvasConvergence | null {
   if (!target || typeof target !== "object") return null;
@@ -259,13 +252,29 @@ export function TaskCanvasPage() {
   const canResumeSession = !hasActiveJob && jobs.length > 0;
   const canHardRetry = !hasActiveJob && jobs.length > 0;
   const activeJobs = jobs.filter((j) => ACTIVE_JOB.has(j.status));
-  const lifecycleActive = (meta?.active_count ?? 0) > 0 || hasActiveJob;
+  const rootNode = nodes.find((n) => n.node_type === "root");
+  const rootStatus = rootNode?.status ?? null;
+  const reportStatus = nodes.find((n) => n.node_type === "report")?.status ?? null;
+  // The detail endpoint includes canvas.status, while older web typings keep
+  // CanvasLifecycle deliberately small. Read it defensively so archived tasks
+  // use the same projection without changing the shared API contract here.
+  const canvasStatus = (meta as ({ status?: string } | null))?.status;
+  const taskLifecycle = deriveTaskLifecycle({
+    status: canvasStatus,
+    activeCount: meta?.active_count,
+    jobs,
+    jobCount: meta?.job_count,
+    rootStatus,
+    reportStatus,
+    endedAt: meta?.ended_at,
+  });
+  const lifecycleActive = taskLifecycle.isActive;
   const runningElapsed = meta?.started_at
-    ? formatElapsed(meta.started_at, meta.ended_at, clock)
+    ? formatElapsed(meta.started_at, lifecycleActive ? null : taskLifecycle.endedAt, clock)
     : lifecycleActive
       ? "等待启动"
       : "—";
-  const lifecycleElapsed = meta ? formatElapsed(meta.created_at, meta.ended_at, clock) : "—";
+  const lifecycleElapsed = meta ? formatElapsed(meta.created_at, lifecycleActive ? null : taskLifecycle.endedAt, clock) : "—";
 
   /** 强制退出画布上全部活动 Job（含 running） */
   const forceExitActive = async () => {
@@ -378,11 +387,6 @@ export function TaskCanvasPage() {
 
   if (!projectId || !canvasId) return null;
 
-  // 任务状态 chip：root 节点状态优先映射中文（分析完成/生成报告/已完成）
-  const rootNode = nodes.find((n) => n.node_type === "root");
-  const rootStatus = rootNode?.status ?? null;
-  const taskStatus = rootStatus ? TASK_STATUS[rootStatus] : undefined;
-
   // 待人工处理事实（needs_human 的 fact 节点）
   const humanFacts = nodes.filter(
     (n) => n.node_type === "fact" && n.verification_status === "needs_human",
@@ -429,10 +433,12 @@ export function TaskCanvasPage() {
           <span className="block truncate text-[13px] font-medium tracking-[-.015em] text-zinc-200">
             {meta?.title ?? "加载任务…"}
           </span>
+          <span className="mt-1 inline-flex rounded-full px-2 py-0.5 font-mono text-[9px] ring-1" style={{ color: taskLifecycle.color, background: `${taskLifecycle.color}18`, borderColor: `${taskLifecycle.color}35` }}>
+            {taskLifecycle.label}
+          </span>
           <span className="mt-0.5 block font-mono text-[10px] text-zinc-600">
             {[
               decisionLabel,
-              taskStatus?.label,
               `${findings.length} findings`,
               `${jobs.length} runs`,
             ]
@@ -444,9 +450,9 @@ export function TaskCanvasPage() {
             <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-5">
               <LifecycleDatum label="创建" value={relativeTime(meta.created_at)} title={formatTime(meta.created_at)} />
               <LifecycleDatum label="首个开始" value={meta.started_at ? relativeTime(meta.started_at) : "等待启动"} title={meta.started_at ? formatTime(meta.started_at) : "尚未有 Job 实际开始"} />
-              <LifecycleDatum label="运行耗时" value={runningElapsed} title={meta.started_at ? (meta.ended_at ? "从首个实际开始到终态结束" : "从首个实际开始到现在") : undefined} active={lifecycleActive} />
+              <LifecycleDatum label="运行耗时" value={runningElapsed} title={meta.started_at ? (lifecycleActive ? "从首个实际开始到现在" : taskLifecycle.endedAt ? "从首个实际开始到终态结束" : undefined) : undefined} active={lifecycleActive} />
               <LifecycleDatum label="生命周期" value={lifecycleElapsed} title="从画布创建到结束（或现在）" />
-              <LifecycleDatum label="结束" value={meta.ended_at ? formatTime(meta.ended_at) : lifecycleActive ? "进行中" : "—"} title={meta.ended_at ? formatTime(meta.ended_at) : undefined} />
+              <LifecycleDatum label="结束" value={lifecycleActive ? "进行中" : taskLifecycle.endedAt ? formatTime(taskLifecycle.endedAt) : "—"} title={taskLifecycle.endedAt && !lifecycleActive ? formatTime(taskLifecycle.endedAt) : undefined} />
             </div>
           )}
         </div>
