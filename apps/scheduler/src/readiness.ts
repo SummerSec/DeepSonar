@@ -11,7 +11,7 @@ import { config } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
 import { allowedModelIds, isProviderKnown, validateCredentialCompatibility } from "./credentials.js";
-import { defaultRuntimeImageKey, hostRuntimePlatform, immutableDigest } from "./runtime-images.js";
+import { defaultRuntimeImageKey, hostRuntimePlatform, immutableDigest, localImageDigest } from "./runtime-images.js";
 
 const EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -147,6 +147,10 @@ function imageSummary(row: ReadinessRuntimeImageRow | undefined, imageKey: strin
     project_enabled: row?.project_enabled ?? null,
     admission_scan_id: row?.admission_scan_id ?? null,
   };
+}
+
+function resolvedRuntimeImageDigest(resolvedRef: string | null): string | null {
+  return resolvedRef ? immutableDigest(resolvedRef) ?? localImageDigest(resolvedRef) : null;
 }
 
 function evidenceSummary(
@@ -483,7 +487,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 没有 Scheduler 可执行的 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
     } else if (image.trust_status !== "trusted") {
       checks.push(fail("RUNTIME_IMAGE_NOT_TRUSTED", `${role.name} 所需 runtime image ${imageKey} 没有 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
-    } else if (!image.digest || !immutableDigest(image.resolved_ref ?? "") || immutableDigest(image.resolved_ref ?? "") !== image.digest) {
+    } else if (!image.digest || resolvedRuntimeImageDigest(image.resolved_ref) !== image.digest) {
       checks.push(fail("RUNTIME_IMAGE_DIGEST_INVALID", `${role.name} 的 runtime image 缺少一致的不可变 digest，不能进入 real 沙箱。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
     } else if (image.source_kind === "third_party" && !image.admission_scan_id && !image.admission_bypassed) {
       checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成准入扫描。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));

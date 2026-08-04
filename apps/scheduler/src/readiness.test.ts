@@ -126,6 +126,17 @@ test("real preflight accepts governed role, credential, evidence and image proje
   assert.equal(JSON.stringify(result).includes("ANTHROPIC_API_KEY"), false);
 });
 
+test("real preflight accepts a bare immutable digest from the runtime resolver", () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const result = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, resolved_ref: digest }
+      : image),
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_DIGEST_INVALID"), false);
+});
+
 test("real preflight fails closed for CLI/provider/model and untrusted image mismatches", () => {
   const input = baseInput({
     roles: baseInput().roles.map((role) => role.name === "audit"
