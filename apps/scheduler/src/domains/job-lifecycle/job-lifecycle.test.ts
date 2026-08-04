@@ -126,10 +126,11 @@ test("unknown targets fail before persistence and stale terminal events are idem
 });
 
 test("lock-order contract keeps Canvas-aware event ingress out of Job-first transactions", () => {
-  assert.match(architectureDoc, /Event ingress \(Job-only\).*commit/s);
+  assert.match(architectureDoc, /Event ingress \(Job-only\).*job-only side effects.*commit/s);
   assert.match(architectureDoc, /never acquire Canvas under an already-held Job lock/i);
-  assert.match(architectureDoc, /Canvas-aware target.*commit.*new Canvas-first convergence transaction/s);
-  assert.match(architectureDoc, /never acquire Finding\/Round child locks while the Job-first append transaction is open/);
-  assert.match(architectureDoc, /ingestEvent.*applySideEffects.*migration\s+debt/s);
+  assert.match(architectureDoc, /Canvas-aware target.*commit/s);
+  assert.match(architectureDoc, /append and semantic effects are one atomic transaction/);
+  assert.match(architectureDoc, /Event-ingestion second slice/);
+  assert.doesNotMatch(architectureDoc, /ingestEvent.*applySideEffects.*migration\s+debt/s);
   assert.match(architectureDoc, /rejects a `patch\.status` property/);
 });

@@ -59,18 +59,17 @@ The rows below are the **target contract** for the incremental split.  A path
 that only performs the lifecycle CAS acquires the Job row and must not
 opportunistically acquire a Canvas lock.  A path that can update a Canvas must
 enter the Canvas-first convergence boundary before it takes a Job lock.  The
-matrix is intentionally explicit about the one currently non-compliant path:
-the legacy `core.ts` `ingestEvent`/`applySideEffects` transaction still holds a
-Job row while dispatching some Canvas-aware side effects.  That is migration
-debt, not a canonical order, and must be removed before event-ingestion is
-claimed complete.  Never acquire Canvas under an already-held Job lock.
+event-ingestion application now implements both variants: Job-only events keep
+the small Job lock, while Canvas-aware events acquire Canvas before Job and run
+append plus semantic side effects in one transaction.  The terminal path in
+`core.ts` follows the same Canvas-first boundary.  Never acquire Canvas under an already-held Job lock.
 
 | Operation | Canonical acquisition order | Contract |
 | --- | --- | --- |
 | Dispatcher claim | `deepsonar_dispatch_claim` transaction advisory lock → candidate `jobs` rows (`FOR UPDATE SKIP LOCKED`) | The advisory lock serializes claim/retry and other runtime mutations; keep the candidate page bounded. |
 | Destructive canvas retry | `deepsonar_dispatch_claim` → `canvases` row (`FOR UPDATE`) → Job/runtime rows and canvas nodes | Re-check active Jobs after both locks; never wipe runtime rows from the preflight read. |
-| Event ingress (Job-only) | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → **commit** | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. Any Canvas/Finding/Hub work starts a new Canvas-first convergence transaction after this boundary. |
-| Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → **commit** → new Canvas-first convergence transaction | Read the Job's Canvas id before entering the transaction if needed; never acquire Finding/Round child locks while the Job-first append transaction is open. |
+| Event ingress (Job-only) | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → job-only side effects → **commit** | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. |
+| Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → Canvas/Finding/Hub side effects → **commit** | The append and semantic effects are one atomic transaction, so a side-effect failure rolls back the append and dedup marker. A preflight Canvas hint is rechecked after both locks; no reverse lock is taken. |
 | Convergence terminal/recovery | `canvases` row (`FOR UPDATE`) → `findings` row (`FOR UPDATE`) → `finding_verification_rounds` row (`FOR UPDATE`) → Jobs/nodes | Canvas is the outer convergence lock; Verify and Hub paths use the same canvas-first order. |
 | Report ingress/recovery | `canvases` row → `task_reports` row → report Job/nodes | Matches `report.ts`'s existing `canvas → task_reports → jobs/nodes` contract. |
 | Credential/runtime mutation | `deepsonar_dispatch_claim` → Credential row (`FOR UPDATE`) → dependent RoleConfig/Job reads | Prevents a runtime snapshot from observing a half-applied provider/credential mutation. |
@@ -78,14 +77,28 @@ claimed complete.  Never acquire Canvas under an already-held Job lock.
 The same resource must never be acquired in a reverse order in another path.
 In particular, a new lifecycle implementation must not lock a Finding or
 Verification round before its Canvas, and no event side effect may take Canvas
-under a held Job lock.  The current `finalizeJob` body retains its pre-existing
-Job CAS and side effects for behavior compatibility; moving that orchestration
-behind the canvas-first lifecycle application boundary is a follow-up slice and
-must be accompanied by a deadlock/regression test.  The current
-`ingestEvent`/`applySideEffects` Job-first transaction has the same explicit
-follow-up debt: split the Job-only event append from Canvas-aware convergence,
-or move the complete Canvas-aware append to a Canvas-first transaction and keep
-all Finding/Round work after the append boundary.
+under a held Job lock.  `finalizeJob` now reads the Job's Canvas target,
+acquires that Canvas, and only then performs the guarded Job update; Verify,
+Hub, and Report work continue underneath that outer Canvas lock.  The
+event-ingestion callback is invoked only after the ordered locks are held, so
+duplicate replay and a callback failure cannot produce an append/side-effect
+split-brain.  Moving the remaining semantic callback implementations behind
+their own context interfaces is a later Issue #37 slice, not a lock-order
+exception.
+
+## Event-ingestion second slice
+
+`apps/scheduler/src/domains/event-ingestion/application.ts` owns envelope
+validation, payload limits, event-id deduplication, and per-Job sequencing.
+`core.ts` remains the compatibility facade and supplies the semantic callback
+until Hub/Verify/Report move behind their own application interfaces.  The
+application performs a read-only Canvas hint preflight, then re-checks the Job
+row after acquiring locks (`Canvas → Job`) and retries once if legacy data was
+reassigned concurrently.  Both the append and callback run before the
+transaction commits; an exception rolls back `event_dedup`, `events`, and all
+side effects without requiring a schema marker.  The integration coverage
+exercises duplicate replay, concurrent sequence allocation, rollback/retry,
+and a concurrent terminal event/finalize path to guard this boundary.
 
 ## Lifecycle patch contract
 

@@ -17,6 +17,13 @@ import {
   canTransition as canJobTransition,
   transitionJob as applyJobTransition,
 } from "./domains/job-lifecycle/index.js";
+import {
+  createEventIngestionApplication,
+  type EventIngestionResult,
+} from "./domains/event-ingestion/index.js";
+
+type Tx = typeof sql;
+export type IngestResult = EventIngestionResult;
 
 // ---------- Job lifecycle compatibility facade ----------
 //
@@ -37,6 +44,17 @@ export async function transitionJob(jobId: string, to: string, patch: Record<str
 export function sha16(s: string): string {
   return createHash("sha256").update(s).digest("hex").slice(0, 16);
 }
+
+// Event-ingestion owns append/dedup/sequence ordering.  The semantic callback
+// remains here until the Hub/Verify/Report contexts move out in later slices.
+// It is invoked inside the application's Canvas-first transaction variant.
+const eventIngestionApplication = createEventIngestionApplication(
+  sql,
+  async (tx, jobId, envelope) => {
+    await applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload);
+  },
+  { maxPayloadBytes: config.events.payloadMaxKb * 1024 },
+);
 
 // ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
 //
@@ -808,49 +826,9 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
 
 // ---------- 事件摄入（幂等 + job_seq + 按类型落地副作用） ----------
 
-export interface IngestResult {
-  deduped: boolean;
-  seq?: number;
-}
-
 export async function ingestEvent(jobId: string, envelope: EventEnvelope): Promise<IngestResult> {
-  const payloadSize = Buffer.byteLength(JSON.stringify(envelope.payload ?? {}), "utf8");
-  if (payloadSize > config.events.payloadMaxKb * 1024) {
-    throw new Error(`event payload 超限：${payloadSize}B > ${config.events.payloadMaxKb}KB`);
-  }
-
-  return sql.begin(async (tx) => {
-    // 0. 锁 job 行：串行化同一 job 的事件摄入，job_seq 的 MAX()+1 才有并发安全（§8.5）
-    await tx`SELECT id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
-
-    // 1. 幂等闸：event_dedup 撞不上即为重放
-    const dedup = await tx`
-      INSERT INTO event_dedup (event_id, job_id) VALUES (${envelope.event_id}, ${jobId})
-      ON CONFLICT (event_id) DO NOTHING
-      RETURNING event_id`;
-    if (dedup.length === 0) return { deduped: true };
-
-    // 2. 局部序
-    const [{ next }] = await tx<[{ next: number }]>`
-      SELECT COALESCE(MAX(job_seq), 0) + 1 AS next FROM events WHERE job_id = ${jobId}`;
-
-    await tx`
-      INSERT INTO events ${tx({
-        job_id: jobId,
-        event_id: envelope.event_id,
-        job_seq: next,
-        type: envelope.type,
-        payload_json: (envelope.payload ?? {}) as never,
-      })}`;
-
-    // 3. 按类型落地（画布节点 / finding / 状态）
-    await applySideEffects(tx as unknown as typeof sql, jobId, envelope.type, envelope.payload);
-
-    return { deduped: false, seq: next };
-  });
+  return eventIngestionApplication.ingestEvent(jobId, envelope);
 }
-
-type Tx = typeof sql;
 
 /**
  * Shared dispatcher/retry serialization key.  The dispatcher holds this
@@ -1198,13 +1176,38 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
  * 终态永不被迟到事件覆盖。
  */
 export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "failed", result?: { summary?: string; error?: string; verdict?: string }) {
-  const [updated] = await tx`
+  // Terminal convergence is Canvas-first. Read the immutable canvas target
+  // without a lock, acquire Canvas, then take the Job row through the guarded
+  // update. A concurrent repair that changes canvas_id aborts this transaction
+  // instead of acquiring a second Canvas after Job.
+  const [candidate] = await tx<{ canvas_id: string | null }[]>`
+    SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+  if (!candidate) return false;
+  const candidateJobCanvasId = (candidate.canvas_id as string | null) ?? null;
+  let candidateCanvasId = candidateJobCanvasId;
+  if (!candidateCanvasId) {
+    // Legacy Jobs may have a NULL canvas_id while their job/intent node still
+    // points at the convergence Canvas.  Discover that target before taking
+    // the Job lock so terminal node updates remain Canvas-first as well.
+    const [jobNode] = await tx<{ canvas_id: string | null }[]>`
+      SELECT canvas_id FROM canvas_nodes
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+      ORDER BY created_at ASC
+      LIMIT 1`;
+    candidateCanvasId = (jobNode?.canvas_id as string | null) ?? null;
+  }
+  if (!(await lockCanvasForConvergence(tx, candidateCanvasId))) return false;
+
+  const [updated] = await tx<{ id: string; canvas_id: string | null }[]>`
     UPDATE jobs SET status = ${status}, finished_at = now(), error = ${result?.error ?? null}
     WHERE id = ${jobId} AND status = 'running'
-    RETURNING id`;
+    RETURNING id, canvas_id`;
   if (!updated) {
     console.warn(`[finalize] job ${jobId} 已不在 running，忽略迟到 ${status} 事件副作用`);
     return false;
+  }
+  if (((updated.canvas_id as string | null) ?? null) !== candidateJobCanvasId) {
+    throw new Error(`job ${jobId} canvas changed while finalizing`);
   }
   await tx`
     UPDATE canvas_nodes SET status = ${status}, body_json = body_json || ${tx.json({ summary: result?.summary ?? null })}, updated_at = now()
@@ -1216,11 +1219,8 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // §13.1 指标：终态计数 + 时长
-  // Canvas is the outer lock for every terminal path. Verify close/recovery
-  // locks Finding/Round underneath it, while Hub eligibility does the same
-  // canvas -> waiting-round order. This prevents 40P01 inversions when a
-  // Verify and a role finalize concurrently on one canvas.
-  await lockCanvasForConvergence(tx, (job?.canvas_id as string | null) ?? null);
+  // Canvas is already held as the outer lock for this terminal path. Verify
+  // close/recovery and Hub eligibility take Finding/Round locks underneath it.
   if (status === "failed") inc("deepsonar_jobs_failed_total", { reason: "failed" });
   if (job?.started_at) {
     const dur = (Date.now() - new Date(job.started_at as string).getTime()) / 1000;
