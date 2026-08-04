@@ -20,4 +20,3 @@ export function appendUniqueRows<T extends IdentifiedRow>(loaded: readonly T[], 
   const seen = new Set(loaded.map((item) => item.id));
   return [...loaded, ...next.filter((item) => !seen.has(item.id))];
 }
-

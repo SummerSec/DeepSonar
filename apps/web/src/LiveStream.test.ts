@@ -18,4 +18,3 @@ test("stream keys include attempt identity when sequence numbers restart", () =>
   assert.equal(blocks.length, 2);
   assert.deepEqual(blocks.map((block) => block.key), ["attempt-a:1", "attempt-b:1"]);
 });
-

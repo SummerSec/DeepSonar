@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { JobEvidenceWriter, parseStreamFile, readGzipTail, readNormalizedStreamPage } from "./evidence.js";
 import { config } from "./config.js";
+import { encodeCursor } from "./pagination.js";
 
 const gzipP = promisify(gzip);
 
@@ -91,6 +92,97 @@ test("evidence request applies a total decompression budget across archives", as
     const result = await readNormalizedStreamPage(jobId, { limit: 1 });
     assert.equal(result.truncated, true);
     assert.equal(result.gap, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("tail prioritizes the current raw attempt over an exhausted archive budget", async () => {
+  const jobId = "00000000-0000-0000-0000-000000000097";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const attempts = Array.from({ length: 32 }, (_, index) => `archive-${String(index).padStart(2, "0")}`);
+  try {
+    const files = [];
+    for (const [index, attempt] of attempts.entries()) {
+      const dir = path.join(root, "attempts", attempt);
+      await mkdir(dir, { recursive: true });
+      const streamPath = path.join(dir, "stream.ndjson.gz");
+      await writeFile(streamPath, await gzipP(Buffer.from(JSON.stringify({ attempt_id: attempt, seq: 1, at: index + 1 }) + "\n")));
+      files.push({
+        name: attempt,
+        path: `attempts/${attempt}/stream.ndjson.gz`,
+        kind: "stream" as const,
+        bytes: 1,
+        sha256: "",
+      });
+    }
+    const current = path.join(root, "attempts", "attempt-current");
+    await mkdir(current, { recursive: true });
+    await writeFile(
+      path.join(current, "stream.ndjson"),
+      `${JSON.stringify({ attempt_id: "attempt-current", seq: 1, at: 1000 })}\n`,
+    );
+    await writeFile(path.join(root, "manifest.json"), JSON.stringify({
+      v: 1,
+      job_id: jobId,
+      cli: "test",
+      session_id: null,
+      created_at: new Date().toISOString(),
+      finalized_at: new Date().toISOString(),
+      files,
+    }));
+
+    const result = await readNormalizedStreamPage(jobId, { tail: true, limit: 1 });
+    assert.equal(result.items[0]?.attempt_id, "attempt-current");
+    assert.equal(result.truncated, true);
+    assert.equal(result.gap, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cursor attempts beyond early archives are read before the archive budget is spent", async () => {
+  const jobId = "00000000-0000-0000-0000-000000000096";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const attempts = Array.from({ length: 32 }, (_, index) => `archive-${String(index).padStart(2, "0")}`);
+  try {
+    const files = [];
+    for (const [index, attempt] of attempts.entries()) {
+      const dir = path.join(root, "attempts", attempt);
+      await mkdir(dir, { recursive: true });
+      const streamPath = path.join(dir, "stream.ndjson.gz");
+      await writeFile(streamPath, await gzipP(Buffer.from(JSON.stringify({ attempt_id: attempt, seq: 1, at: index + 1 }) + "\n")));
+      files.push({
+        name: attempt,
+        path: `attempts/${attempt}/stream.ndjson.gz`,
+        kind: "stream" as const,
+        bytes: 1,
+        sha256: "",
+      });
+    }
+    const current = path.join(root, "attempts", "attempt-current");
+    await mkdir(current, { recursive: true });
+    await writeFile(
+      path.join(current, "stream.ndjson"),
+      `${JSON.stringify({ attempt_id: "attempt-current", seq: 1, at: 1000 })}\n${JSON.stringify({ attempt_id: "attempt-current", seq: 2, at: 1001 })}\n`,
+    );
+    await writeFile(path.join(root, "manifest.json"), JSON.stringify({
+      v: 1,
+      job_id: jobId,
+      cli: "test",
+      session_id: null,
+      created_at: new Date().toISOString(),
+      finalized_at: new Date().toISOString(),
+      files,
+    }));
+
+    const result = await readNormalizedStreamPage(jobId, {
+      after: encodeCursor({ kind: "stream", attempt_id: "attempt-current", seq: 1 }),
+      limit: 1,
+    });
+    assert.equal(result.items[0]?.attempt_id, "attempt-current");
+    assert.equal(result.items[0]?.seq, 2);
+    assert.equal(result.gap, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -7,7 +7,15 @@ import path from "node:path";
 import { createGunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 import { config } from "./config.js";
-import { encodeCursor, page, pageLimit, parseCursor, CursorError, type PageEnvelope } from "./pagination.js";
+import {
+  encodeCursor,
+  page,
+  pageLimit,
+  parseCursor,
+  CursorError,
+  type CursorPayload,
+  type PageEnvelope,
+} from "./pagination.js";
 
 const gzipP = promisify(gzip);
 const otlpQueues = new Map<string, Promise<void>>();
@@ -382,7 +390,20 @@ export async function parseStreamFile(
   };
 }
 
-async function evidenceStreamRecords(jobId: string): Promise<{
+interface StreamFileCandidate {
+  filePath: string;
+  attempt: string | null;
+  compressed: boolean;
+}
+
+function streamAttemptFromPath(filePath: string): string | null {
+  return filePath.match(/attempts\/([^/]+)\/stream\.ndjson(?:\.gz)?$/)?.[1] ?? null;
+}
+
+async function evidenceStreamRecords(
+  jobId: string,
+  options: { tail?: boolean; cursor?: CursorPayload | null } = {},
+): Promise<{
   records: Record<string, unknown>[];
   live: boolean;
   truncated: boolean;
@@ -422,48 +443,89 @@ async function evidenceStreamRecords(jobId: string): Promise<{
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   };
-  const appendManifest = async (current: JobEvidenceManifest | null) => {
-    for (const meta of current?.files.filter((file) => file.kind === "stream") ?? []) {
-      const filePath = resolveManifestFile(jobId, meta);
-      const attempt = meta.path.match(/attempts\/([^/]+)\/stream\.ndjson(?:\.gz)?$/)?.[1] ?? null;
-      await appendFile(filePath, attempt, filePath.endsWith(".gz"));
-    }
-  };
-  await appendManifest(manifest);
-
   const attemptsRoot = path.join(jobDir(jobId), "attempts");
+  const rawFiles: Array<StreamFileCandidate & { mtime: number }> = [];
   try {
     const entries = await readdir(attemptsRoot, { withFileTypes: true });
-    const rawFiles: Array<{ file: string; attempt: string; mtime: number }> = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const file = path.join(attemptsRoot, entry.name, "stream.ndjson");
       try {
         const info = await stat(file);
         hasRaw = true;
-        rawFiles.push({ file, attempt: entry.name, mtime: info.mtimeMs });
+        rawFiles.push({ filePath: file, attempt: entry.name, compressed: false, mtime: info.mtimeMs });
       } catch {
         /* a finalize may remove the raw file between readdir and stat */
       }
-    }
-    rawFiles.sort((a, b) => a.mtime - b.mtime);
-    for (const raw of rawFiles) {
-      await appendFile(raw.file, raw.attempt, false);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
   // A finalize may have replaced a raw file after the first manifest read;
-  // refresh once so the same request can observe the committed gzip archive.
-  await appendManifest(await readEvidenceManifest(jobId));
+  // refresh before planning so the same request can observe the committed
+  // archive without spending the bounded read budget on stale history first.
+  const refreshedManifest = await readEvidenceManifest(jobId);
+  const manifestFiles = new Map<string, EvidenceFileMeta>();
+  for (const current of [manifest, refreshedManifest]) {
+    for (const file of current?.files.filter((candidate) => candidate.kind === "stream") ?? []) {
+      manifestFiles.set(file.path, file);
+    }
+  }
+  const manifestFilesInOrder: StreamFileCandidate[] = [...manifestFiles.values()].map((meta) => {
+    const filePath = resolveManifestFile(jobId, meta);
+    return {
+      filePath,
+      attempt: streamAttemptFromPath(meta.path),
+      compressed: filePath.endsWith(".gz"),
+    };
+  });
+  const rawFilesInOrder = rawFiles.sort((a, b) => a.mtime - b.mtime);
+  const allCandidates = [...manifestFilesInOrder, ...rawFilesInOrder];
+  const candidateKey = (candidate: StreamFileCandidate): string => candidate.filePath;
+  const seenCandidates = new Set<string>();
+  const addCandidate = (candidate: StreamFileCandidate, ordered: StreamFileCandidate[]) => {
+    const key = candidateKey(candidate);
+    if (seenCandidates.has(key)) return;
+    seenCandidates.add(key);
+    ordered.push(candidate);
+  };
+  const orderedCandidates: StreamFileCandidate[] = [];
+  const cursorAttempt = options.cursor?.attempt_id;
+  if (cursorAttempt) {
+    // A cursor is a request for the suffix of one attempt.  Read that attempt
+    // first, then later attempts, so a long archive prefix cannot hide the
+    // cursor behind the global file/decompression budgets.
+    const target = allCandidates.findIndex((candidate) => candidate.attempt === cursorAttempt);
+    if (target >= 0) {
+      for (const candidate of allCandidates) {
+        if (candidate.attempt === cursorAttempt) addCandidate(candidate, orderedCandidates);
+      }
+      for (const candidate of allCandidates.slice(target + 1)) {
+        addCandidate(candidate, orderedCandidates);
+      }
+    } else {
+      for (const candidate of allCandidates) addCandidate(candidate, orderedCandidates);
+    }
+  } else if (options.tail) {
+    // Tail consumers need the current raw attempt and newest archives before
+    // older history.  The final record sort below restores event order.
+    for (const candidate of [...rawFilesInOrder].reverse()) addCandidate(candidate, orderedCandidates);
+    for (const candidate of [...manifestFilesInOrder].reverse()) addCandidate(candidate, orderedCandidates);
+  } else {
+    // Ordinary first pages retain the historical forward scan order.
+    for (const candidate of allCandidates) addCandidate(candidate, orderedCandidates);
+  }
+  for (const candidate of orderedCandidates) {
+    await appendFile(candidate.filePath, candidate.attempt, candidate.compressed);
+  }
 
   records.sort((a, b) => {
     const at = Number(a.at ?? 0) - Number(b.at ?? 0);
     if (at !== 0) return at;
     return Number(a.seq ?? 0) - Number(b.seq ?? 0);
   });
-  return { records, live: hasRaw || !manifest, truncated };
+  return { records, live: hasRaw || !(refreshedManifest ?? manifest), truncated };
 }
 
 /**
@@ -476,10 +538,13 @@ export async function readNormalizedStreamPage(
   jobId: string,
   options: { after?: string | null; limit?: number; live?: boolean; tail?: boolean } = {},
 ): Promise<PageEnvelope<Record<string, unknown>>> {
-  const { records, live: detectedLive, truncated } = await evidenceStreamRecords(jobId);
   const limit = pageLimit(options.limit, 50);
   const after = options.after ?? null;
   const cursor = parseCursor(after, "stream");
+  const { records, live: detectedLive, truncated } = await evidenceStreamRecords(jobId, {
+    tail: options.tail,
+    cursor,
+  });
   let start = options.tail && !cursor ? Math.max(0, records.length - limit) : 0;
   if (cursor?.attempt_id && Number.isSafeInteger(cursor.seq)) {
     const found = records.findIndex(

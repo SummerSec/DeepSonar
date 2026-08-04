@@ -42,4 +42,3 @@ test("early websocket close runs cleanup for a subscription created before the c
   guard.dispose();
   clearStreamForTests();
 });
-

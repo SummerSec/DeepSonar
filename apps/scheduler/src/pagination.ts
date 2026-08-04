@@ -47,6 +47,10 @@ export class CursorError extends Error {
   }
 }
 
+export function cursorErrorHttpStatus(code: CursorErrorCode): 400 | 409 {
+  return code === "CURSOR_GAP" ? 409 : 400;
+}
+
 /** Decode a caller cursor, distinguishing an omitted cursor from bad input. */
 export function parseCursor(raw: unknown, kind: string): CursorPayload | null {
   if (raw === undefined || raw === null || raw === "") return null;

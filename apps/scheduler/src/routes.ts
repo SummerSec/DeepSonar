@@ -78,7 +78,7 @@ import { consumeWsTicket, issueWsTicket } from "./ws-tickets.js";
 import { WsSendQueue } from "./ws-send-queue.js";
 import { installWsCloseGuard } from "./ws-early-close.js";
 import { isUuid, projectScopeAllows } from "./project-scope.js";
-import { CursorError, cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
+import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
 import { resolveModules } from "./transfer/modules.js";
 import { buildPreview, applyImport } from "./transfer/import.js";
 import { saveImportUpload, loadPackFile, removeFileSafe, sha256Hex, openDeepsonarPack } from "./transfer/pack.js";
@@ -3442,7 +3442,11 @@ export function registerRoutes(app: FastifyInstance) {
       });
     } catch (error) {
       if (error instanceof CursorError) {
-        return reply.code(409).send({ error: error.code, error_code: error.code, gap: error.code === "CURSOR_GAP" });
+        return reply.code(cursorErrorHttpStatus(error.code)).send({
+          error: error.code,
+          error_code: error.code,
+          gap: error.code === "CURSOR_GAP",
+        });
       }
       throw error;
     }

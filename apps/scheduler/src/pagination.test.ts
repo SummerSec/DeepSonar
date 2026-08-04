@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeCursor, encodeCursor, pageLimit } from "./pagination.js";
+import { cursorErrorHttpStatus, decodeCursor, encodeCursor, pageLimit } from "./pagination.js";
 
 function rawCursor(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
@@ -57,4 +57,9 @@ test("page limit is capped for bounded list endpoints", () => {
   assert.equal(pageLimit("5000"), 50);
   assert.equal(pageLimit("0"), 50);
   assert.equal(pageLimit("7"), 7);
+});
+
+test("cursor errors use bad-request for malformed cursors and conflict for gaps", () => {
+  assert.equal(cursorErrorHttpStatus("INVALID_CURSOR"), 400);
+  assert.equal(cursorErrorHttpStatus("CURSOR_GAP"), 409);
 });

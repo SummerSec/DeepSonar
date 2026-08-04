@@ -17,4 +17,3 @@ test("load-more appends only unseen rows", () => {
   const merged = appendUniqueRows(rows(1, 3), [{ id: "3" }, { id: "4" }]);
   assert.deepEqual(merged.map((row) => row.id), ["1", "2", "3", "4"]);
 });
-
