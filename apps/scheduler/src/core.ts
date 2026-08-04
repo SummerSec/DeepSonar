@@ -12,7 +12,7 @@ import { allowedModelIds, isProviderKnown, validateCredentialCompatibility } fro
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
-import { expandModules } from "./skill-sources.js";
+import { expandModules, type MissingModule } from "./skill-sources.js";
 import {
   canTransition as canJobTransition,
   transitionJob as applyJobTransition,
@@ -617,6 +617,8 @@ export interface AgentRuntimeSnapshot {
     description: string;
     content_hash: string;
   }[];
+  /** Selectors omitted from execution, including deterministic name conflicts. */
+  missing_modules: MissingModule[];
   /** 所有展开模块内容的确定性哈希；执行期不再读取可变 catalog。 */
   module_content_hash: string;
   /** §5.1：模块来源版本证据（commit + 内容哈希，随快照冻结） */
@@ -2240,6 +2242,7 @@ export async function resolveAgentSnapshotForJob(
     modules,
     module_selectors: [...modules],
     expanded_modules: expanded.resolved_modules,
+    missing_modules: expanded.missing_modules,
     module_content_hash: expanded.content_hash,
     skill_revisions: expanded.revisions,
     skills,

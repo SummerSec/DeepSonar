@@ -1,10 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEnvelope } from "@deepsonar/shared-types";
-import { ingestFactSemanticEvent, runtimeCredentialProviderError, semanticToolEventsFor } from "./executor-real.js";
+import {
+  ingestFactSemanticEvent,
+  moduleEvidenceFromSnapshot,
+  runtimeCredentialProviderError,
+  semanticToolEventsFor,
+} from "./executor-real.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("module evidence carries structured omissions and defaults old snapshots to []", () => {
+  const missing = [{
+    selector: "source:plugin:one",
+    source_id: "00000000-0000-4000-8000-000000000010",
+    reason: "name-conflict" as const,
+    kind: "skill" as const,
+    name: "one",
+  }];
+  const current = moduleEvidenceFromSnapshot({
+    modules: ["source:plugin:one"],
+    module_selectors: ["source:plugin:one"],
+    expanded_modules: [],
+    missing_modules: missing,
+    module_content_hash: "hash",
+    skill_revisions: [],
+  });
+  assert.deepEqual(current.missing_modules, missing);
+  assert.deepEqual(moduleEvidenceFromSnapshot({}).missing_modules, []);
+});
 
 function factEvent(payload: unknown): EventEnvelope {
   return EventEnvelope.parse({

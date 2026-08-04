@@ -546,6 +546,32 @@ function yamlScalar(value: string): string {
   return JSON.stringify(value);
 }
 
+/** Return duplicate local component paths before any upload happens. */
+export function materializationPathCollisions(
+  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills">,
+): string[] {
+  const paths: string[] = [];
+  for (const command of spec.commands ?? []) {
+    paths.push(`${CLAUDE_DIR}/commands/${command.name}.md`);
+  }
+  for (const sub of spec.subAgents ?? []) {
+    paths.push(`${CLAUDE_DIR}/agents/${sub.name}.md`);
+  }
+  for (const skill of spec.skills ?? []) {
+    if (!("files" in skill)) continue;
+    for (const rel of Object.keys(skill.files)) {
+      paths.push(`${CLAUDE_DIR}/skills/${skill.name}/${rel}`);
+    }
+  }
+  const seen = new Set<string>();
+  const collisions = new Set<string>();
+  for (const target of paths) {
+    if (seen.has(target)) collisions.add(target);
+    seen.add(target);
+  }
+  return [...collisions].sort();
+}
+
 /**
  * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
@@ -556,6 +582,10 @@ async function materializeAgentFiles(
   spec: RealAgentSpec,
   cliEnv: Record<string, string>,
 ): Promise<void> {
+  const collisions = materializationPathCollisions(spec);
+  if (collisions.length > 0) {
+    throw new Error(`拒绝 materialize 组件路径冲突（不会执行覆盖写入）: ${collisions.join(", ")}`);
+  }
   const writes: Array<[string, string]> = [];
   for (const command of spec.commands ?? []) {
     const frontmatter = command.description ? `---\ndescription: ${yamlScalar(command.description)}\n---\n\n` : "";

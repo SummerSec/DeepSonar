@@ -5,7 +5,14 @@ import {
   normalizeModuleSelectorPath,
   validateModuleSelectors,
 } from "@deepsonar/shared-types";
-import { expandCatalogSelectors, type SourceModule } from "./skill-sources.js";
+import {
+  contentHashOf,
+  contentHashOfSelected,
+  expandCatalogSelectors,
+  expandModules,
+  resolveModuleNameConflicts,
+  type SourceModule,
+} from "./skill-sources.js";
 import { sanitizeAgentSnapshot } from "./transfer/sanitize.js";
 
 const SOURCE = "11111111-1111-4111-8111-111111111111";
@@ -46,6 +53,7 @@ test("selector parser rejects traversal, absolute and ambiguous formats", () => 
   assert.equal(normalizeModuleSelectorPath("whitebox\\authz"), "whitebox/authz");
   assert.throws(() => normalizeModuleSelectorPath("whitebox\\..\\escape"), /不得包含/);
   assert.throws(() => normalizeModuleSelectorPath("whitebox/%2e%2e/escape"), /越界/);
+  assert.throws(() => normalizeModuleSelectorPath("whitebox/%3Asecret"), /非法路径字符|越界/);
 });
 
 test("plugin and source expansion deduplicates explicit modules and follows sync additions", () => {
@@ -80,6 +88,66 @@ test("source selector expands all catalog entries and reports missing groups", (
   assert.match(missingPlugin.missing[0] ?? "", /plugin-not-found/);
   const empty = expandCatalogSelectors(SOURCE, [], [parseModuleSelector(`${SOURCE}:source:*`)]);
   assert.match(empty.missing[0] ?? "", /catalog-empty/);
+});
+
+test("duplicate embedded names are excluded deterministically and audited", () => {
+  const duplicateSkill = catalog([
+    { id: "plugin-a/one", plugin: "plugin-a", name: "shared", description: "A" },
+    { id: "plugin-b/two", plugin: "plugin-b", name: "shared", description: "B" },
+    { id: "plugin-c/command", plugin: "plugin-c", kind: "command", name: "shared", files: { "command.md": "run" } },
+  ]);
+  const resolved = resolveModuleNameConflicts([
+    { source_id: SOURCE, module: duplicateSkill[0]! },
+    { source_id: "22222222-2222-4222-8222-222222222222", module: duplicateSkill[1]! },
+    { source_id: SOURCE, module: duplicateSkill[2]! },
+  ]);
+  assert.deepEqual(resolved.modules.map(({ module }) => `${module.kind}:${module.name}`), ["command:shared"]);
+  assert.equal(resolved.missing_modules.length, 2);
+  assert.deepEqual(
+    resolved.missing_modules.map((item) => item.reason),
+    ["name-conflict", "name-conflict"],
+  );
+  assert.equal(resolved.missing_modules[0]?.conflicts_with?.length, 1);
+
+  const sameSource = expandCatalogSelectors(
+    SOURCE,
+    duplicateSkill,
+    [parseModuleSelector(`${SOURCE}:source:*`)],
+  );
+  assert.deepEqual(sameSource.modules.map(({ module }) => `${module.kind}:${module.name}`), ["command:shared"]);
+  assert.equal(sameSource.missing_modules.length, 2);
+
+  // Hashing is over the final embedded set and is order independent.
+  const finalHash = contentHashOfSelected(resolved.modules);
+  assert.equal(finalHash, contentHashOfSelected([...resolved.modules].reverse()));
+  const renamed = catalog([{ id: "plugin-a/one", plugin: "plugin-a", name: "shared-renamed", description: "A" }]);
+  assert.notEqual(contentHashOf([duplicateSkill[0]!]), contentHashOf(renamed));
+  const described = catalog([{ id: "plugin-a/one", plugin: "plugin-a", name: "shared", description: "changed" }]);
+  assert.notEqual(contentHashOf([duplicateSkill[0]!]), contentHashOf(described));
+});
+
+test("expandModules returns structured missing evidence for the frozen snapshot", async () => {
+  const source = catalog([
+    { id: "plugin-a/one", plugin: "plugin-a", name: "shared" },
+    { id: "plugin-b/two", plugin: "plugin-b", name: "shared" },
+  ]);
+  const fakeDb = (async () => [{
+    catalog_json: source,
+    trust_status: "trusted",
+    enabled: true,
+    last_commit_sha: "abc123",
+    last_content_hash: "catalog-hash",
+  }]) as unknown as Parameters<typeof expandModules>[1];
+  const expanded = await expandModules(
+    [`${SOURCE}:source:*`],
+    fakeDb,
+  );
+  assert.equal(expanded.skills.length, 0);
+  assert.equal(expanded.missing_modules.length, 2);
+  assert.equal(expanded.missing_modules[0]?.reason, "name-conflict");
+  assert.deepEqual(expanded.resolved_modules, []);
+  assert.equal(expanded.content_hash, contentHashOfSelected([]));
+  assert.match(expanded.missing[0] ?? "", /name-conflict/);
 });
 
 test("transfer validation preserves legal selector bytes and rejects malicious selectors", () => {

@@ -3035,7 +3035,12 @@ export function registerRoutes(app: FastifyInstance) {
       sql`SELECT id, job_seq, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 1000`,
       sql`SELECT id, fingerprint, title, severity, location, verify_status FROM findings WHERE job_id = ${id}`,
     ]);
-    return { job, events, findings };
+    const snapshot = job.agent_snapshot_json;
+    const missingModules =
+      snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) && Array.isArray((snapshot as Record<string, unknown>).missing_modules)
+        ? (snapshot as Record<string, unknown>).missing_modules
+        : [];
+    return { job, events, findings, missing_modules: missingModules };
   });
 
   app.get("/jobs/:id/evidence", async (req, reply) => {

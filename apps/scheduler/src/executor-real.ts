@@ -54,6 +54,29 @@ export function semanticToolEventsFor(toolNames: string[]): Record<string, strin
   );
 }
 
+/** Normalize module evidence for both the runtime manifest and API payloads.
+ * Jobs created before structured missing-module evidence use an empty list. */
+export function moduleEvidenceFromSnapshot(
+  snapshot: Partial<Pick<
+    AgentRuntimeSnapshot,
+    | "modules"
+    | "module_selectors"
+    | "expanded_modules"
+    | "missing_modules"
+    | "module_content_hash"
+    | "skill_revisions"
+  >> | null | undefined,
+) {
+  return {
+    modules: Array.isArray(snapshot?.modules) ? snapshot.modules : [],
+    module_selectors: Array.isArray(snapshot?.module_selectors) ? snapshot.module_selectors : [],
+    expanded_modules: Array.isArray(snapshot?.expanded_modules) ? snapshot.expanded_modules : [],
+    missing_modules: Array.isArray(snapshot?.missing_modules) ? snapshot.missing_modules : [],
+    module_content_hash: typeof snapshot?.module_content_hash === "string" ? snapshot.module_content_hash : "",
+    skill_revisions: Array.isArray(snapshot?.skill_revisions) ? snapshot.skill_revisions : [],
+  };
+}
+
 function jsonHash(value: unknown): string {
   return sha256(JSON.stringify(value ?? null));
 }
@@ -526,6 +549,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     ...snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME),
     controlMcp,
   ];
+  const moduleEvidence = moduleEvidenceFromSnapshot(snapshot);
   const componentManifest = {
     v: 1,
     role: type,
@@ -534,10 +558,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     provider,
     network: { allow_egress: allowEgress },
     env_names: Object.keys(env).sort(),
-    modules: snapshot.modules,
-    module_selectors: snapshot.module_selectors,
-    expanded_modules: snapshot.expanded_modules,
-    module_content_hash: snapshot.module_content_hash,
+    ...moduleEvidence,
     skills: { names: componentNames(snapshot.skills), count: snapshot.skills.length, sha256: jsonHash(snapshot.skills) },
     commands: { names: componentNames(snapshot.commands), count: snapshot.commands.length, sha256: jsonHash(snapshot.commands) },
     mcps: { names: componentNames(mcps), count: mcps.length, sha256: jsonHash(mcps) },
@@ -598,9 +619,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     component_manifest_sha256: jsonHash(componentManifest),
     provider_config_files: componentManifest.provider_files,
     allow_egress: allowEgress,
-    module_selectors: snapshot.module_selectors,
-    module_content_hash: snapshot.module_content_hash,
-    skill_revisions: snapshot.skill_revisions,
+    module_selectors: moduleEvidence.module_selectors,
+    missing_modules: moduleEvidence.missing_modules,
+    module_content_hash: moduleEvidence.module_content_hash,
+    skill_revisions: moduleEvidence.skill_revisions,
     recorded_at: new Date().toISOString(),
   };
   await sql`

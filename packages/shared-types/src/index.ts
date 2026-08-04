@@ -190,7 +190,12 @@ export function normalizeModuleSelectorPath(value: string, field = "module path"
   } catch {
     throw new Error(`${field} 含非法 URL 编码`);
   }
-  if (decoded.startsWith("/") || /^[A-Za-z]:\//.test(decoded) || decoded.split("/").some((segment) => segment === "..")) {
+  if (
+    decoded.startsWith("/") ||
+    decoded.includes(":") ||
+    /^[A-Za-z]:\//.test(decoded) ||
+    decoded.split("/").some((segment) => segment === "..")
+  ) {
     throw new Error(`${field} 归一化后越界`);
   }
   if (segments.some((segment) => /[\u0000-\u001f\u007f]/.test(segment)) || /[\u0000-\u001f\u007f]/.test(decoded)) {

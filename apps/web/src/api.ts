@@ -110,6 +110,8 @@ export interface JobDetail {
   };
   events: JobEvent[];
   findings: { id: string; severity: string; title: string; verify_status: string }[];
+  /** Structured module omissions copied from the frozen snapshot (old jobs: []). */
+  missing_modules: unknown[];
 }
 
 /** 全局 / 项目 Job 列表 */

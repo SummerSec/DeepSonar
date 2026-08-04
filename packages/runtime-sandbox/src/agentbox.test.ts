@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mapCliEvent, DEFAULT_SEMANTIC_TOOL_EVENTS, runtimeCliEnv } from "./agentbox.js";
+import {
+  mapCliEvent,
+  DEFAULT_SEMANTIC_TOOL_EVENTS,
+  materializationPathCollisions,
+  runtimeCliEnv,
+} from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 
 test("把控制 MCP tool_use 转换为版本化语义事件", () => {
@@ -86,4 +91,30 @@ test("Claude CLI 使用工作区内可写 HOME 与配置目录", () => {
     HOME: "/workspace/.deepsonar/home",
     CLAUDE_CONFIG_DIR: "/workspace/.deepsonar/claude",
   });
+});
+
+test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () => {
+  assert.deepEqual(
+    materializationPathCollisions({
+      commands: [
+        { name: "review", description: "one", template: "a" },
+        { name: "review", description: "two", template: "b" },
+      ],
+      skills: [
+        { source: "embedded", name: "audit", files: { "SKILL.md": "one" } },
+        { source: "embedded", name: "audit", files: { "SKILL.md": "two" } },
+      ],
+      subAgents: [],
+    }),
+    ["/workspace/.claude/commands/review.md", "/workspace/.claude/skills/audit/SKILL.md"],
+  );
+  // Skill and command namespaces are separate and may intentionally share a name.
+  assert.deepEqual(
+    materializationPathCollisions({
+      commands: [{ name: "shared", description: "", template: "" }],
+      skills: [{ source: "embedded", name: "shared", files: { "SKILL.md": "" } }],
+      subAgents: [],
+    }),
+    [],
+  );
 });
