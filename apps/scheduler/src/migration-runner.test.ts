@@ -41,6 +41,9 @@ test("migration discovery rejects gaps and malformed filenames", async () => {
     await rm(path.join(directory, "0013_BAD.sql"));
     await writeFile(path.join(directory, "0013_transaction.sql"), "BEGIN; SELECT 1; COMMIT;", "utf8");
     assert.throws(() => discoverMigrations(directory), /transaction control/i);
+    await rm(path.join(directory, "0013_transaction.sql"));
+    await writeFile(path.join(directory, "0013_bom.sql"), Buffer.from([0xef, 0xbb, 0xbf, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x31, 0x3b]));
+    assert.throws(() => discoverMigrations(directory), /BOM/i);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

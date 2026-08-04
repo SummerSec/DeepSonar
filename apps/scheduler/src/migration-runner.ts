@@ -56,7 +56,7 @@ export const MIGRATIONS_DIR = path.resolve(HERE, "../../../database/migrations")
 export const MIGRATE_LOCK_ID = 726868001;
 
 const MIGRATION_FILENAME_RE = /^(\d{4})_([a-z0-9][a-z0-9_-]*)\.sql$/;
-const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const LEDGER_COLUMNS = new Set([
   "id",
   "version",
@@ -93,6 +93,9 @@ function errorMessage(error: unknown): string {
 function decodeUtf8(bytes: Buffer, label: string): string {
   try {
     const body = UTF8_DECODER.decode(bytes);
+    if (body.startsWith("\uFEFF")) {
+      throw new Error(`${label} contains a UTF-8 BOM`);
+    }
     if (body.includes("\u0000")) {
       throw new Error(`${label} contains a NUL byte`);
     }
