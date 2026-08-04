@@ -77,11 +77,18 @@ chmod +x deploy/deploy.sh
 http://127.0.0.1:8080
 ```
 
+容器首次启动会在空数据库中自动创建人类管理员 `admin` / `Deep@Sonar66`。默认口令是公开的本地/演示引导值，不会在重启时覆盖已修改的密码；生产或公网部署必须在首次登录后立即修改密码，并建议修改登录名。修改会话账号不会影响 API Token 服务账号。
+
 可修改 `deploy/.env` 中的 `DEEPSONAR_WEB_PORT` 改变端口，然后重新执行部署脚本。
 
-## 4. 首次使用 API Token
+## 4. 首次使用人类账号与 API Token
 
-容器部署强制设置 `DEEPSONAR_AUTH_REQUIRED=true`。首次打开控制台时：
+容器部署强制设置 `DEEPSONAR_AUTH_REQUIRED=true`。首次打开控制台时可以先用默认人类账号登录：
+
+1. 用户名填 `admin`，密码填 `Deep@Sonar66`；
+2. 立即在「Agent 管理 → 我的账号」修改密码，并建议修改登录名；修改后旧会话会失效，页面会自动换发新会话。
+
+随后再配置 API Token 服务账号：
 
 1. 打开 `deploy/.env`；
 2. 复制 `DEEPSONAR_ADMIN_TOKEN` 的值；

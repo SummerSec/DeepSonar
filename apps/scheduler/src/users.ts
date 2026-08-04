@@ -10,6 +10,11 @@ import { sql } from "./db.js";
 
 export type UserRole = "admin" | "operator" | "viewer";
 
+/** Public, first-run credentials for local/demo installations. Production must rotate them immediately. */
+export const DEFAULT_ADMIN_USERNAME = "admin";
+export const DEFAULT_ADMIN_PASSWORD = "Deep@Sonar66";
+const DEFAULT_ADMIN_SEED_LOCK_ID = 726868002;
+
 export interface PublicUser {
   id: string;
   username: string;
@@ -79,6 +84,14 @@ export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+export function normalizeUsername(input: string): string {
+  const username = input.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(username)) {
+    throw Object.assign(new Error("用户名仅允许小写字母数字与 ._-，2–64 字符"), { code: "BAD_USERNAME" });
+  }
+  return username;
+}
+
 /** 生成用户会话明文；prefix 用于查库 */
 export function generateSessionToken(): { plaintext: string; prefix: string; hash: string } {
   const prefix = randomBytes(4).toString("hex");
@@ -109,6 +122,59 @@ export async function countUsers(): Promise<number> {
   return (r?.n as number) ?? 0;
 }
 
+/** True only while the public first-run credentials still work for an active admin row. */
+export async function defaultAdminCredentialsActive(): Promise<boolean> {
+  const [row] = await sql`
+    SELECT password_salt, password_hash
+    FROM users
+    WHERE username = ${DEFAULT_ADMIN_USERNAME} AND status = 'active'`;
+  return Boolean(
+    row && verifyPassword(DEFAULT_ADMIN_PASSWORD, row.password_salt as string, row.password_hash as string),
+  );
+}
+
+/**
+ * Seed the public first-run admin exactly once. The transaction advisory lock
+ * serializes multiple scheduler instances during boot; existing users always
+ * win, so a restart can never reset a password or recreate the account.
+ */
+export async function ensureDefaultAdmin(): Promise<{ created: boolean; user: PublicUser | null }> {
+  let created = false;
+  let user: PublicUser | null = null;
+  await sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(${DEFAULT_ADMIN_SEED_LOCK_ID})`;
+    const [count] = await tx`SELECT COUNT(*)::int AS n FROM users`;
+    if (Number(count?.n ?? 0) > 0) return;
+
+    const { salt, hash } = hashPassword(DEFAULT_ADMIN_PASSWORD);
+    const [row] = await tx`
+      INSERT INTO users ${tx({
+        username: DEFAULT_ADMIN_USERNAME,
+        display_name: DEFAULT_ADMIN_USERNAME,
+        password_hash: hash,
+        password_salt: salt,
+        role: "admin",
+        status: "active",
+        created_by: "system:default-admin",
+      })}
+      RETURNING *`;
+    if (!row) throw new Error("默认管理员创建失败");
+    user = toPublicUser(row as Record<string, unknown>);
+    created = true;
+
+    // Startup has no Fastify request context. Keep the audit append-only and
+    // include only safe identity metadata (never the seed password/hash).
+    await tx`
+      INSERT INTO audit_logs (
+        actor_type, actor_id, action, resource_type, resource_id, after_json
+      ) VALUES (
+        'system', 'scheduler', 'auth.default_admin_seed', 'user', ${user.id},
+        ${tx.json({ username: user.username, role: user.role } as never)}
+      )`;
+  });
+  return { created, user };
+}
+
 export async function createUser(input: {
   username: string;
   password: string;
@@ -116,10 +182,7 @@ export async function createUser(input: {
   role?: UserRole;
   created_by?: string | null;
 }): Promise<PublicUser> {
-  const username = input.username.trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(username)) {
-    throw Object.assign(new Error("用户名仅允许小写字母数字与 ._-，2–64 字符"), { code: "BAD_USERNAME" });
-  }
+  const username = normalizeUsername(input.username);
   if (input.password.length < 8) {
     throw Object.assign(new Error("密码至少 8 位"), { code: "WEAK_PASSWORD" });
   }
@@ -246,6 +309,24 @@ export async function setUserPassword(userId: string, password: string): Promise
     UPDATE users SET password_hash = ${hash}, password_salt = ${salt}, updated_at = now()
     WHERE id = ${userId}`;
   await revokeAllUserSessions(userId);
+}
+
+export async function setUserUsername(userId: string, usernameInput: string): Promise<PublicUser | null> {
+  const username = normalizeUsername(usernameInput);
+  try {
+    const [row] = await sql`
+      UPDATE users SET username = ${username}, updated_at = now()
+      WHERE id = ${userId}
+      RETURNING *`;
+    if (!row) return null;
+    await revokeAllUserSessions(userId);
+    return toPublicUser(row as Record<string, unknown>);
+  } catch (e) {
+    if (e && typeof e === "object" && "code" in e && (e as { code: string }).code === "23505") {
+      throw Object.assign(new Error("用户名已存在"), { code: "USERNAME_TAKEN" });
+    }
+    throw e;
+  }
 }
 
 export async function updateUser(

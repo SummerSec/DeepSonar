@@ -7,12 +7,15 @@ import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
 import {
   countUsers,
   createUser,
+  defaultAdminCredentialsActive,
   listUsers,
   loginUser,
   revokeSession,
   setUserPassword,
+  setUserUsername,
   toPublicUser,
   updateUser,
+  verifyPassword,
   type UserRole,
 } from "./users.js";
 import { renderMetrics } from "./metrics.js";
@@ -317,6 +320,7 @@ export function registerRoutes(app: FastifyInstance) {
       auth_required: config.auth.required,
       has_users: n > 0,
       bootstrap_available: n === 0,
+      default_admin_credentials_active: await defaultAdminCredentialsActive(),
       session_ttl_days: 7,
     };
   });
@@ -449,8 +453,14 @@ export function registerRoutes(app: FastifyInstance) {
       .parse(req.body);
     const [row] = await sql`SELECT * FROM users WHERE id = ${req.actor.id}`;
     if (!row) return reply.code(404).send({ error: "user not found" });
-    const { verifyPassword } = await import("./users.js");
     if (!verifyPassword(body.current_password, row.password_salt as string, row.password_hash as string)) {
+      await audit(req, {
+        action: "auth.change_password",
+        resourceType: "user",
+        resourceId: req.actor.id,
+        result: "denied",
+        errorCode: "BAD_CURRENT_PASSWORD",
+      });
       return reply.code(401).send({ error: "当前密码错误" });
     }
     await setUserPassword(req.actor.id, body.new_password);
@@ -465,6 +475,53 @@ export function registerRoutes(app: FastifyInstance) {
       resourceId: req.actor.id,
     });
     return { ok: true, token: session.token, expires_at: session.expires_at, user: session.user };
+  });
+
+  app.post("/auth/change-username", async (req, reply) => {
+    if (req.actor?.type !== "user" || !req.actor.id) {
+      return reply.code(403).send({ error: "仅登录用户可修改自己的登录名" });
+    }
+    const body = z
+      .object({
+        current_password: z.string().min(1),
+        new_username: z.string().min(2).max(64),
+      })
+      .parse(req.body);
+    const [row] = await sql`SELECT * FROM users WHERE id = ${req.actor.id}`;
+    if (!row) return reply.code(404).send({ error: "user not found" });
+    if (!verifyPassword(body.current_password, row.password_salt as string, row.password_hash as string)) {
+      await audit(req, {
+        action: "auth.change_username",
+        resourceType: "user",
+        resourceId: req.actor.id,
+        result: "denied",
+        errorCode: "BAD_CURRENT_PASSWORD",
+      });
+      return reply.code(401).send({ error: "当前密码错误" });
+    }
+    try {
+      const user = await setUserUsername(req.actor.id, body.new_username);
+      if (!user) return reply.code(404).send({ error: "user not found" });
+      // Username changes revoke all existing sessions (including this one),
+      // then issue one fresh session for the authenticated browser.
+      const session = await loginUser(user.username, body.current_password, {
+        ip: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
+      await audit(req, {
+        action: "auth.change_username",
+        resourceType: "user",
+        resourceId: user.id,
+        before: { username: row.username as string },
+        after: { username: user.username },
+      });
+      return { ok: true, token: session.token, expires_at: session.expires_at, user: session.user };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : "CHANGE_USERNAME_FAILED";
+      const status = code === "USERNAME_TAKEN" ? 409 : code === "BAD_USERNAME" ? 400 : 500;
+      return reply.code(status).send({ error: msg, error_code: code });
+    }
   });
 
   app.get("/users", async () => listUsers());
