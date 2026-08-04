@@ -2,7 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度层安全执行多类 Agent（探索 → 分析 → 验证 → 反馈），Agent 只提「提案」，系统负责真正下发与记账，让复杂执行持续收敛。设计文档与所有架构决策见 `docs/ARCHITECTURE.md`（v1.1），改架构前先读它。
+DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度层安全执行多类 Agent（探索 → 分析 → 验证 → 反馈），Agent 只提「提案」，系统负责真正下发与记账，让复杂执行持续收敛。
+
+**设计入口（必读顺序）**
+
+1. **`DESIGN.md`（仓库根）** — 当前 as-built 设计摘要、实体模型、Hub 闭环、配置覆盖、已知演进（Issues）；**改功能/提方案先读它**。
+2. **`docs/ARCHITECTURE.md`** — 完整架构、威胁建模、存储与状态机细则；与 `DESIGN.md` 冲突时以本文件 + 代码为准，并应回写 `DESIGN.md`。
+3. 专题计划在 `docs/TODO_*.md` / `docs/*_PLAN.md`；开放演进以 GitHub Issues 为准（`DESIGN.md` §11 有索引）。
 
 ## 常用命令
 
@@ -27,12 +33,16 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 ### 核心纪律
 
-> **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 自 2026-08 起降级为可选集成（`docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md`），默认路径是 Web 直接建项目/任务。
+> **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 自 2026-08 起降级为可选集成（`docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md`），默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
 - **Agent 只提案，不决策**：系统按 Job 动态注入本地控制 MCP，工具为 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集。Fact/Finding 在执行中增量回传；`emit_finding` 只能带 `suggest_verify` 建议，是否派生 verify job 由调度器规则引擎（`core.ts`）唯一决定，有深度（`MAX_FOLLOWUP_DEPTH=12`）与频次护栏。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
 - **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
+- **无独立 `tasks` 表**：任务 = `canvases`；列表 `GET /projects/:id/canvases`。
+- **读图注入**：`graph.ts` `buildGraphSnapshot` 按 `GraphScope` 投影 fact/finding 等 YAML 注入 Hub/Worker，并有整图字符预算（#30）；细节见 `DESIGN.md` §7。`job` 节点不进 YAML。
+- **任务是否在跑**：以 `active_count`（活跃 Job）为准，勿用 `last_job_status=succeeded` 当作任务已完成（#46）。
+- **配置覆盖**：**任务 > 项目 > 全局**；Job 只认创建时冻结的 `agent_snapshot_json`。
 
 ### 调度器（`apps/scheduler/src/`，Fastify + postgres.js）
 
@@ -88,8 +98,12 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 ## 开发时的注意事项
 
+- **设计变更**：先对齐 `DESIGN.md`；结构性/安全相关再改 `docs/ARCHITECTURE.md`，并更新 `DESIGN.md` §11 与相关 Issue。
 - 全仓库 TypeScript ESM；`shared-types`（zod schema）是前后端/事件 payload 单源，改 schema 从这里改。
 - 新增 job 类型 = 字符串新值 +（如需真实执行）在 `agent_roles` 注册，无需迁移；dispatcher 的 `isRealType` 自动识别。
 - 改表 = 改 `database/schema.sql` 并同步 bump `db.ts` 的 `SCHEMA_VERSION`；无增量迁移，版本不符调度器拒绝启动，直接清库重建验证。
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
+- RoleConfig `modules` 现为 `"<source_id>:<module_id>"` 逐条勾选（整插件挂载见 #33）。
+- 实时流：`stream-bus` + `/ws`；`AUTH_REQUIRED` 下 WS 鉴权与运行中过程流可读性见 #38。
+- Windows 探库：避免 PowerShell 弄坏 `node -e` 模板字符串；临时 `apps/scheduler/*.mjs` 跑完即删。
