@@ -173,7 +173,8 @@ function assertNoTransactionControl(body: string, label: string): void {
 
 /**
  * Discover and validate the immutable migration chain.  Numbering starts at
- * v13 because v12 is the only supported pre-migration baseline.
+ * v13 because v12 is the only supported pre-migration baseline; the chain
+ * currently ends at v14.
  */
 export function discoverMigrations(directory = MIGRATIONS_DIR, targetVersion = SCHEMA_VERSION): MigrationInfo[] {
   if (!existsSync(directory)) {
@@ -759,7 +760,7 @@ async function applyMigration(
 }
 
 /**
- * Apply the latest baseline or the supported v12→v13 chain on one reserved
+ * Apply the latest baseline or the supported v12→v14 chain on one reserved
  * PostgreSQL session.  The caller owns the session advisory lock lifecycle.
  */
 export async function runMigrations(
@@ -849,7 +850,7 @@ export async function runMigrations(
   await assertCatalogFingerprint(db, ledgerCatalog, `schema v${ledgerCatalogVersion} ledger`);
   // This check intentionally happens after creating/verifying the ledger but
   // before the first migration DDL.  A v12 database carrying a successful
-  // future/legacy row must fail closed without partially applying v13.
+  // future/legacy row must fail closed without partially applying v13/v14.
   await assertAppliedLedgerThrough(db, migrations, currentVersion, targetVersion);
   let version = currentVersion;
   const applied: string[] = [];
