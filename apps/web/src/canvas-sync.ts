@@ -1,5 +1,36 @@
 import type { CanvasData, CanvasDelta, CanvasNode } from "./api";
 
+const CANVAS_LIFECYCLE_FIELDS = [
+  "active_count",
+  "job_count",
+  "started_at",
+  "ended_at",
+  "root_status",
+  "report_status",
+] as const;
+
+type CanvasLifecycleRollup = Pick<CanvasDelta, (typeof CANVAS_LIFECYCLE_FIELDS)[number]>;
+
+/**
+ * Older Schedulers can still return a durable delta without the lifecycle
+ * projection added later.  Treat that envelope as a legacy delta instead of
+ * copying missing values over the current rollup.  A rollup is only usable
+ * when all fields are present and have the same shape as the shared contract.
+ */
+export function hasCompleteCanvasLifecycleRollup(value: unknown): value is CanvasLifecycleRollup {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (!CANVAS_LIFECYCLE_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(record, field))) return false;
+  return Number.isInteger(record.active_count)
+    && Number(record.active_count) >= 0
+    && Number.isInteger(record.job_count)
+    && Number(record.job_count) >= 0
+    && (record.started_at === null || typeof record.started_at === "string")
+    && (record.ended_at === null || typeof record.ended_at === "string")
+    && (record.root_status === null || typeof record.root_status === "string")
+    && (record.report_status === null || typeof record.report_status === "string");
+}
+
 /** Slow consistency fallback; normal active updates use durable revision deltas. */
 export const CANVAS_SKELETON_REFRESH_MS = 120_000;
 
@@ -103,6 +134,20 @@ export function applyCanvasDelta(
       ...canvas,
       ...meta,
       target_json: meta.target_json ?? canvas.target_json,
+    };
+  }
+  // Lifecycle fields are an authoritative scheduler rollup.  Assign them
+  // directly so complete terminal deltas can clear stale active values with
+  // 0/null.  A legacy/partial envelope must retain the previous rollup.
+  if (canvas && hasCompleteCanvasLifecycleRollup(delta)) {
+    canvas = {
+      ...canvas,
+      active_count: delta.active_count,
+      job_count: delta.job_count,
+      started_at: delta.started_at,
+      ended_at: delta.ended_at,
+      root_status: delta.root_status,
+      report_status: delta.report_status,
     };
   }
   return {

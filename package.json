@@ -19,6 +19,7 @@
     "ci:unit:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.test.ts",
     "ci:integration:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.integration.test.ts",
     "ci:integration:event-ingestion": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/event-ingestion.integration.test.ts",
+    "ci:integration:canvas-lifecycle": "pnpm --filter @deepsonar/scheduler exec tsx --test src/canvas-lifecycle-projection.integration.test.ts",
     "ci:unit:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.test.ts",
     "ci:unit:executor-real": "pnpm --filter @deepsonar/scheduler exec tsx --test src/executor-real.test.ts",
     "ci:unit:credential-compatibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/credential-compatibility.test.ts",

@@ -1,6 +1,6 @@
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
-import type { PlatformToolConfig, ReadinessResponse } from "@deepsonar/shared-types";
+import type { CanvasLifecycleRollup, PlatformToolConfig, ReadinessResponse } from "@deepsonar/shared-types";
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
 
@@ -75,6 +75,13 @@ export interface CanvasDelta {
     status?: string;
     archived_at?: string | null;
   }>;
+  /** Authoritative lifecycle rollup; null/zero values are meaningful. */
+  active_count: CanvasLifecycleRollup["active_count"];
+  job_count: CanvasLifecycleRollup["job_count"];
+  started_at: CanvasLifecycleRollup["started_at"];
+  ended_at: CanvasLifecycleRollup["ended_at"];
+  root_status: CanvasLifecycleRollup["root_status"];
+  report_status: CanvasLifecycleRollup["report_status"];
   projection?: "L0_DELTA";
   live?: boolean;
 }
@@ -92,7 +99,7 @@ export interface PageEnvelope<T> {
 }
 
 /** 任务画布的生命周期聚合（由调度器按 Job 时间戳计算）。 */
-export interface CanvasLifecycle {
+export type CanvasLifecycle = CanvasLifecycleRollup & {
   /** 画布创建时间，是任务生命周期的起点。 */
   created_at: string;
   /** 所有 Job 中第一个实际开始执行的时间；pending 尚未开始时为 null。 */
@@ -100,13 +107,17 @@ export interface CanvasLifecycle {
   /** 无活动 Job 后的最后完成时间；存在活动 Job 时始终为 null。 */
   ended_at: string | null;
   /** 活动 Job 数量（pending 也算活动工作）。 */
-  active_count?: number;
+  active_count: number;
   /** 画布上累计 Job 数量。 */
-  job_count?: number;
-}
+  job_count: number;
+  /** 当前根节点阶段（由 Scheduler 从画布投影中治理）。 */
+  root_status: string | null;
+  /** 当前报告节点阶段（由 Scheduler 从画布投影中治理）。 */
+  report_status: string | null;
+};
 
 /** 任务画布列表项（一任务一画布；聚合最近一次 job 得任务状态） */
-export interface CanvasSummary {
+export type CanvasSummary = CanvasLifecycleRollup & {
   id: string;
   title: string;
   plane_issue_id: string | null;
@@ -119,13 +130,16 @@ export interface CanvasSummary {
   ended_at: string | null;
   job_count: number;
   active_count: number;
+  /** 当前根节点/报告阶段，避免列表从 last_job_status 推断任务终态。 */
+  root_status: string | null;
+  report_status: string | null;
   finding_count: number;
   confirmed_count: number;
   last_job_id: string | null;
   last_job_status: string | null;
   last_job_priority: number | null;
   last_job_at: string | null;
-}
+};
 
 export interface JobEvent {
   id: string;
