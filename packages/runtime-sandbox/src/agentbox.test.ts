@@ -21,7 +21,7 @@ test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
         type: "tool_use",
         id: "call-1",
         name: "mcp__deepsonar-control__emit_fact",
-        input: { title: "事实", description: "证据" },
+        input: { title: "事实", description: "Bearer supersecret" },
       }],
     },
   }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
@@ -35,14 +35,14 @@ test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
     v: 1,
     event_id: released.semanticEvents[0]?.event_id,
     type: "fact",
-    payload: { title: "事实", description: "证据" },
+    payload: { title: "事实", description: "Bearer supersecret" },
   });
   assert.match(String(released.semanticEvents[0]?.event_id), /^[0-9a-f-]{36}$/);
   assert.deepEqual(events[0], {
     type: "tool.call.started",
     toolName: "mcp__deepsonar-control__emit_fact",
     callId: "call-1",
-    input: { title: "事实", description: "证据" },
+    inputShape: { kind: "object", field_count: 2 },
   });
   assert.deepEqual(events[1], {
     type: "tool.call.completed",
@@ -50,6 +50,7 @@ test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
     toolName: "mcp__deepsonar-control__emit_fact",
     isError: false,
   });
+  assert.doesNotMatch(JSON.stringify(events), /supersecret/);
 });
 
 test("工具错误不会释放事件，修正后的新 callId 成功只释放一次且结果重放幂等", () => {
@@ -80,6 +81,36 @@ test("工具错误不会释放事件，修正后的新 callId 成功只释放一
   assert.equal(released.semanticEvents[0]?.type, "progress");
   assert.equal(mapCliEvent(correctedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
   assert.equal(state.pendingToolUses.size, 0);
+});
+
+test("tool_result 缺省 is_error 视为成功，畸形标记 fail-closed 并告警", () => {
+  const missingState = createSemanticToolState();
+  mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "missing-flag", name: "mcp__deepsonar-control__emit_progress", input: { message: "ok" } }] },
+  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, missingState);
+  const missingResult = mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "missing-flag" }] },
+  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, missingState);
+  assert.equal(missingResult.semanticEvents.length, 1);
+  assert.deepEqual(missingResult.warnings, []);
+
+  for (const [index, is_error] of ["false", null, 0].entries()) {
+    const id = `malformed-flag-${index}`;
+    const state = createSemanticToolState();
+    mapCliEvent({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id, name: "mcp__deepsonar-control__emit_progress", input: { message: "ok" } }] },
+    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    const malformed = mapCliEvent({
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: id, is_error }] },
+    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    assert.equal(malformed.semanticEvents.length, 0);
+    assert.equal(malformed.warnings[0]?.code, "malformed_control_tool_result");
+    assert.doesNotMatch(JSON.stringify(malformed.warnings), /secret|Bearer/);
+  }
 });
 
 test("pending 控制调用有上限且终态清理告警不包含输入内容", () => {
@@ -121,12 +152,77 @@ test("流重放时同一成功 callId 派生相同 event_id", () => {
   assert.equal(first.semanticEvents[0]?.event_id, replay.semanticEvents[0]?.event_id);
 });
 
+test("畸形 content block 只告警，后续合法控制调用仍可处理且不泄露原文", () => {
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  const parsed = mapCliEvent({
+    type: "assistant",
+    message: {
+      content: [
+        null,
+        "Bearer block-secret",
+        42,
+        { type: "tool_use", id: "after-malformed", name: "mcp__deepsonar-control__emit_progress", input: { message: "safe" } },
+      ],
+    },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(parsed.semanticEvents.length, 0);
+  assert.equal(parsed.warnings.length, 3);
+  assert.equal(parsed.warnings.every((warning) => warning.code === "malformed_runtime_block"), true);
+  assert.doesNotMatch(JSON.stringify(parsed.warnings), /block-secret/);
+  assert.doesNotMatch(JSON.stringify(events), /block-secret/);
+
+  const released = mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "after-malformed", is_error: false }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(released.semanticEvents.length, 1);
+  assert.doesNotMatch(JSON.stringify(events), /block-secret/);
+});
+
 test("忽略非控制工具", () => {
   const result = mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: "other-1", name: "Bash", input: { command: "pwd" } }] },
   }, () => {});
   assert.deepEqual(result.semanticEvents, []);
+});
+
+test("控制工具映射只接受 own key，原型键不会生成语义事件", () => {
+  for (const [index, name] of ["__proto__", "constructor", "toString"].entries()) {
+    const state = createSemanticToolState();
+    const callId = `prototype-key-${index}`;
+    const started = mapCliEvent({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: callId, name, input: { secret: "do-not-emit" } }] },
+    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    assert.equal(started.semanticEvents.length, 0);
+    const result = mapCliEvent({
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: callId, is_error: false }] },
+    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    assert.equal(result.semanticEvents.length, 0);
+    assert.equal(state.pendingToolUses.size, 0);
+  }
+});
+
+test("未知控制命名空间工具不发 telemetry 事件且不泄露输入", () => {
+  const events: Record<string, unknown>[] = [];
+  const result = mapCliEvent({
+    type: "assistant",
+    message: {
+      content: [{
+        type: "tool_use",
+        id: "unknown-control",
+        name: "mcp__deepsonar-control__unknown",
+        input: { description: "Bearer namespace-secret" },
+      }],
+    },
+  }, (event) => events.push(event));
+  assert.deepEqual(events, []);
+  assert.equal(result.warnings[0]?.code, "unknown_control_tool");
+  assert.doesNotMatch(JSON.stringify(result.warnings), /namespace-secret/);
+  assert.doesNotMatch(JSON.stringify(events), /namespace-secret/);
 });
 
 test("脏运行时行只产生告警，后续合法 tool_use 仍可解析", () => {

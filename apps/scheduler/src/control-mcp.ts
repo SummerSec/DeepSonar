@@ -13,7 +13,7 @@ import {
 /**
  * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络：只读查询返回调度器在启动
  * 本 Job 时动态下发的数据；语义提案由宿主先暂存 Claude stream-json 的 tool_use，
- * 仅在对应 tool_result.is_error=false 后释放。
+ * 仅在对应的合法非错误 tool_result（is_error 省略或为 false）后释放。
  */
 export const CONTROL_MCP_NAME = "deepsonar-control";
 export const CONTROL_SEMANTIC_EVENT_TYPES = {
@@ -52,6 +52,7 @@ const TOOL_INPUT_SCHEMAS = ${JSON.stringify(ControlToolInputSchemasJson)};
 const MAX_REFERENCES_PER_FROM = ${HUB_REFERENCE_LIMITS.perFrom};
 const MAX_UNIQUE_REFERENCES = ${HUB_REFERENCE_LIMITS.totalUnique};
 const NODE_REF_RE = new RegExp(CANONICAL_UUID_PATTERN, "i");
+const hasOwn = (object, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(object, key);
 
 
 const descriptions = {
@@ -65,7 +66,7 @@ const descriptions = {
 };
 const definitions = Object.fromEntries(
   Object.keys(TOOL_INPUT_SCHEMAS).map((name) => [name, {
-    description: descriptions[name] || "DeepSonar 控制工具。",
+    description: hasOwn(descriptions, name) ? descriptions[name] : "DeepSonar 控制工具。",
     inputSchema: TOOL_INPUT_SCHEMAS[name],
   }]),
 );
@@ -164,15 +165,15 @@ function validateSchema(value, schema, path) {
 }
 
 function validateToolInput(name, input) {
+  if (!hasOwn(TOOL_INPUT_SCHEMAS, name)) return schemaError("tool", "未知工具");
   const schema = TOOL_INPUT_SCHEMAS[name];
-  if (!schema) return schemaError("tool", "未知工具 " + name);
   if (name === "submit_hub_decision") {
     const hubFailure = validateHubDecision(input);
     if (hubFailure) return hubFailure;
   }
   const failure = validateSchema(input, schema, "arguments");
   if (failure) {
-    if (failure.code === INVALID_PAYLOAD_CODE && TOOL_ERROR_CODES[name]) {
+    if (failure.code === INVALID_PAYLOAD_CODE && hasOwn(TOOL_ERROR_CODES, name)) {
       return { ...failure, code: TOOL_ERROR_CODES[name], text: failure.text.replace("[" + INVALID_PAYLOAD_CODE + "]", "[" + TOOL_ERROR_CODES[name] + "]") };
     }
     return failure;
@@ -200,7 +201,7 @@ function validateHubDecision(input) {
   const hasComplete = Object.prototype.hasOwnProperty.call(args, "complete");
   const hasIntents = Object.prototype.hasOwnProperty.call(args, "intents");
   if ((hasComplete ? 1 : 0) + (hasIntents ? 1 : 0) !== 1) {
-    return { code: "invalid_hub_decision", text: "submit_hub_decision 必须且只能提供 complete 或 intents 之一" };
+    return { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " submit_hub_decision 必须且只能提供 complete 或 intents 之一" };
   }
   const references = [];
   if (hasComplete) {
@@ -251,11 +252,11 @@ rl.on("line", (line) => {
     } else if (request.method === "ping") {
       reply({ jsonrpc: "2.0", id: request.id, result: {} });
     } else if (request.method === "tools/list") {
-      const tools = [...allowed].filter((name) => definitions[name]).map((name) => ({ name, ...definitions[name] }));
+      const tools = [...allowed].filter((name) => hasOwn(definitions, name)).map((name) => ({ name, ...definitions[name] }));
       reply({ jsonrpc: "2.0", id: request.id, result: { tools } });
     } else if (request.method === "tools/call") {
       const name = request.params?.name;
-      if (!definitions[name]) {
+      if (!hasOwn(definitions, name)) {
         reply({
           jsonrpc: "2.0",
           id: request.id,

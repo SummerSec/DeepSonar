@@ -4,8 +4,8 @@
  * 要点：
  * - agentbox 只作沙箱（容器生命周期 + exec + 文件上下行）；Agent 由 claude CLI
  *   以 stream-json 模式直接在沙箱内驱动，不走 SDK daemon/relay。
- * - assistant tool_use 先只进入宿主 bounded pending 表；对应 tool_result
- *   成功后才释放语义事件，不经过沙箱目标网络，也不依赖 Agent 可写文件。
+ * - assistant tool_use 先只进入宿主 bounded pending 表；对应的合法非错误 tool_result
+ *   （is_error 省略或为 false）后才释放语义事件，不经过沙箱目标网络，也不依赖 Agent 可写文件。
  */
 import { Sandbox } from "agentbox-sdk";
 import type {
@@ -798,6 +798,47 @@ function semanticEventId(callId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+function safeRuntimeValueKind(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+/** Shape-only telemetry for control inputs; never include values or field names. */
+function safeControlInputShape(value: unknown): Record<string, unknown> {
+  if (value === null) return { kind: "null" };
+  if (Array.isArray(value)) return { kind: "array", count: Math.min(value.length, 1000) };
+  if (typeof value === "object") {
+    return { kind: "object", field_count: Math.min(Object.keys(value as Record<string, unknown>).length, 1000) };
+  }
+  return { kind: safeRuntimeValueKind(value) };
+}
+
+function runtimeContentBlocks(
+  line: Record<string, unknown>,
+  role: "assistant" | "user",
+  warnings: Array<{ code: string; detail?: string }>,
+): Array<Record<string, unknown>> {
+  const message = line.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) return [];
+  const messageRecord = message as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(messageRecord, "content")) return [];
+  const content = messageRecord.content;
+  if (!Array.isArray(content)) {
+    warnings.push({ code: "malformed_runtime_block", detail: `${role}_content_type=${safeRuntimeValueKind(content)}` });
+    return [];
+  }
+  const blocks: Array<Record<string, unknown>> = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      warnings.push({ code: "malformed_runtime_block", detail: `${role}_content_block_type=${safeRuntimeValueKind(block)}` });
+      continue;
+    }
+    blocks.push(block as Record<string, unknown>);
+  }
+  return blocks;
+}
+
 /** Parse one CLI stream line without letting malformed/legacy control-file
  * text poison the following structured line. */
 export function parseRuntimeLine(line: string): {
@@ -842,17 +883,25 @@ export function mapCliEvent(
     return { sessionId: typeof line.session_id === "string" ? line.session_id : undefined, semanticEvents, warnings };
   }
   if (type === "assistant") {
-    const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
-    for (const block of content as Record<string, unknown>[]) {
+    for (const block of runtimeContentBlocks(line, "assistant", warnings)) {
       if (block.type === "text" && typeof block.text === "string" && block.text) {
         emit({ type: "text.delta", delta: block.text });
       } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
         emit({ type: "reasoning.delta", delta: block.thinking });
       } else if (block.type === "tool_use") {
-        emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
         const toolName = typeof block.name === "string" ? block.name : "";
         const callId = typeof block.id === "string" ? block.id : "";
-        const eventType = semanticToolEvents[toolName];
+        const eventType = Object.prototype.hasOwnProperty.call(semanticToolEvents, toolName)
+          ? semanticToolEvents[toolName]
+          : undefined;
+        const isControlNamespace = toolName.startsWith("mcp__deepsonar-control__");
+        if (eventType) {
+          emit({ type: "tool.call.started", toolName, callId, inputShape: safeControlInputShape(block.input) });
+        } else if (isControlNamespace) {
+          warnings.push({ code: "unknown_control_tool", detail: "control_namespace" });
+        } else {
+          emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
+        }
         if (eventType && callId && !state.seenToolUseIds.has(callId) && !state.settledToolUseIds.has(callId) && !state.pendingToolUses.has(callId)) {
           if (state.pendingToolUses.size >= state.maxPendingToolUses) {
             rememberToolId(state.settledToolUseIds, callId);
@@ -874,15 +923,23 @@ export function mapCliEvent(
     return { semanticEvents, warnings };
   }
   if (type === "user") {
-    const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
-    for (const block of content as Record<string, unknown>[]) {
+    for (const block of runtimeContentBlocks(line, "user", warnings)) {
       if (block.type === "tool_result") {
         const callId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
         if (!callId || state.settledToolUseIds.has(callId)) continue;
         const pending = state.pendingToolUses.get(callId);
         state.pendingToolUses.delete(callId);
         rememberToolId(state.settledToolUseIds, callId);
-        const isError = block.is_error === true;
+        const hasIsError = Object.prototype.hasOwnProperty.call(block, "is_error");
+        const isErrorFlag = hasIsError ? block.is_error : undefined;
+        const validIsErrorFlag = !hasIsError || typeof isErrorFlag === "boolean";
+        const isError = !validIsErrorFlag || isErrorFlag === true;
+        if (!validIsErrorFlag) {
+          warnings.push({
+            code: "malformed_control_tool_result",
+            detail: hasIsError ? `is_error_type=${safeRuntimeValueKind(isErrorFlag)}` : "is_error_missing",
+          });
+        }
         emit({
           type: "tool.call.completed",
           callId,

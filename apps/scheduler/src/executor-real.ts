@@ -55,6 +55,21 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
+export function assertSemanticTerminalExclusivity(
+  state: { done: unknown; hub: unknown; human: unknown },
+  eventType: "done" | "hub_decision" | "human",
+): void {
+  if (eventType === "human") {
+    if (state.human) throw toolBoundaryError("duplicateToolCall", "request_human 每个 Job 只能调用一次");
+    if (state.done || state.hub) throw toolBoundaryError("duplicateToolCall", "request_human 不得与 mark_job_done 或 submit_hub_decision 同时调用");
+    return;
+  }
+  if (state.human) {
+    const conflictingTool = eventType === "done" ? "mark_job_done" : "submit_hub_decision";
+    throw toolBoundaryError("duplicateToolCall", `${conflictingTool} 不得与 request_human 同时调用`);
+  }
+}
+
 /**
  * 真实 Agent 执行器（ARCHITECTURE §8）
  * 契约：每个 Job 使用全新 /workspace；系统动态生成 AGENTS.md / CLAUDE.md，
@@ -750,6 +765,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     }
     if (event.type === "hub_decision") {
       if (!isHub) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 submit_hub_decision`);
+      assertSemanticTerminalExclusivity(semanticState, "hub_decision");
       const decision = event.payload;
       const intents = "intents" in decision ? decision.intents : undefined;
       if (intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
@@ -773,6 +789,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       if (isVerify && verdict === "rework" && (!missingEvidence || missingEvidence.length === 0)) {
         throw invalidToolPayload("mark_job_done", "verdict=rework 必须列出 missing_evidence", "missing_evidence");
       }
+      assertSemanticTerminalExclusivity(semanticState, "done");
       if (semanticState.done) throw toolBoundaryError("duplicateToolCall", "mark_job_done 每个 Job 只能调用一次");
       semanticState.done = {
         eventId,
@@ -785,6 +802,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     if (event.type === "human") {
       const parsed = HumanPayload.safeParse(event.payload);
       if (!parsed.success) throw invalidToolPayload("request_human", "request_human 参数非法");
+      assertSemanticTerminalExclusivity(semanticState, "human");
       const p = parsed.data;
       semanticState.human = { eventId, reason: p.reason.trim() };
       return;

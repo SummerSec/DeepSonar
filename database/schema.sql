@@ -914,7 +914,7 @@ JOIN (VALUES
 - 新事实：每得到一个新增原子事实立即调用 `emit_fact`，例如 `{"title":"目标版本为 2.4.1","description":"证据：release.json；来源：工作区制品；未知：是否含私有补丁。"}`；单 Job 最多 100 条。
 - 正常结束：所有事实已提交后只调用一次 `mark_job_done`，例如 `{"summary":"完成材料与版本梳理，提交 4 条事实；仍缺少部署配置。"}`。
 - 人工阻塞：仅缺少必要授权、凭据或必须执行高风险动作时调用 `request_human`，例如 `{"reason":"需要人工提供只读制品访问权；已完成公开材料核对。"}`；调用后停止，不再调用 `mark_job_done`。
-- 必须直接调用 Agent CLI 中显示的同名 MCP 工具并传 JSON 对象；不得用 shell、curl 或手写控制事件文件模拟。合法响应仅表示 `schema_validated / pending_scheduler_validation`，Scheduler 仍会重验与记账；`isError` 后修正参数再调用。
+- 必须直接调用 Agent CLI 中显示的同名 MCP 工具并传 JSON 对象；不得用 shell、curl 或手写控制事件文件模拟；`isError` 后修正参数再调用。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$),
   ('analyze', $instructions$
 ### 长期职责
@@ -935,7 +935,7 @@ $instructions$),
 - 每个新增分析结论单独调用 `emit_fact({"title":"结论标题","description":"证据、推理链、反例检查、未知项"})`，不要把多条事实塞进最终摘要；单 Job 最多 100 条。
 - 正常收尾只调用一次 `mark_job_done({"summary":"已提交哪些事实、覆盖范围和剩余缺口"})`。
 - 只有人工权限/凭据或高风险动作阻塞时调用 `request_human({"reason":"阻塞点、已完成工作、所需人工动作"})` 并停止，不再调用 `mark_job_done`。
-- 这些是 Agent CLI 中的同名 MCP 工具，不是 shell 命令或 HTTP API。合法响应仅表示 `schema_validated / pending_scheduler_validation`；若返回 `isError`，必须修正 JSON 参数并重试。
+- 这些是 Agent CLI 中的同名 MCP 工具，不是 shell 命令或 HTTP API；若返回 `isError`，必须修正 JSON 参数并重试。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$),
   ('review', $instructions$
 ### 长期职责
@@ -961,7 +961,7 @@ $instructions$),
 - `evidence_kind` 固定为 `review`；`outcome` 为 `supports|refutes|inconclusive`；`subject_revision` 必填。无绑定 finding 时 verification 会被忽略，只当普通 fact。
 - 完成时只调用一次 `mark_job_done({"summary":"复核范围、已提交事实/证据和未解决问题"})`。
 - 只有需要人工权限、凭据或高风险操作时调用 `request_human` 并停止。
-- 直接使用 Agent CLI 暴露的同名 MCP 工具并传 JSON；`schema_validated / pending_scheduler_validation` 只表示结构校验通过，Scheduler 仍会重验。
+- 直接使用 Agent CLI 暴露的同名 MCP 工具并传 JSON。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$),
   ('test', $instructions$
 ### 长期职责
@@ -991,7 +991,7 @@ Scheduler 会为 Test Job 冻结可信的预构建运行时。开始动态测试
 - test 证据硬门字段：`subject_revision`、`steps`、`expected`、以及 `actual` 或 `artifact_refs`；缺任一字段不计为合格确认证据。
 - 全部测试事实提交后只调用一次 `mark_job_done({"summary":"执行项、结论、未执行项和原因"})`。
 - 需要生产授权、真实凭据或高风险动作时调用 `request_human` 并停止。
-- 工具是 Agent CLI 中的同名 MCP 调用；响应 `schema_validated / pending_scheduler_validation` 只表示进入 Scheduler 二阶段校验。
+- 工具是 Agent CLI 中的同名 MCP 调用。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$),
   ('code', $instructions$
 ### 长期职责
@@ -1012,7 +1012,7 @@ $instructions$),
 - 每个需要画布保留的实现事实调用 `emit_fact({"title":"实现或验证事实","description":"文件、关键 diff、命令、结果和未验证项"})`；单 Job 最多 100 条。
 - 正常结束只调用一次 `mark_job_done({"summary":"修改文件、行为变化、验证结果及工作区销毁后的复现方法"})`。
 - 缺少写权限、部署授权、密钥或必须执行高风险操作时调用 `request_human({"reason":"阻塞点、当前补丁状态、所需人工动作"})` 并停止。
-- 直接调用 Agent CLI 中的同名 MCP 工具并传 JSON；不得把工具名当 shell 命令，也不得写 `.deepsonar` 控制文件。不得把 MCP 阶段响应当作落库成功，`isError` 后修正重试。
+- 直接调用 Agent CLI 中的同名 MCP 工具并传 JSON；不得把工具名当 shell 命令，也不得写 `.deepsonar` 控制文件；`isError` 后修正重试。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$),
   ('audit', $instructions$
 ### 长期职责
@@ -1034,7 +1034,7 @@ $instructions$),
 - 每个证据充分的安全问题立即调用 `emit_finding`：`{"title":"重置令牌可重放","severity":"high","location":"src/auth/reset.ts:88","summary":"触发路径、证据与影响","rule_id":"AUTH-RESET-REPLAY","suggest_verify":true}`。title/severity 必填，严重度仅 `low|medium|high|critical`，单 Job 最多 20 条。**边发现边提交，严禁攒到最后批量补交**——工作区随时可能被回收重启，未提交的结论会全部丢失；行号等细节可以后补，先交证据充分的条目再继续审计。
 - 全部 Finding 已提交后只调用一次 `mark_job_done({"summary":"审计范围、方法、Finding 数量和未覆盖面"})`，不要只在摘要里描述 Finding。
 - 缺少必要授权/凭据或验证动作风险过高时调用 `request_human({"reason":"阻塞点、已有证据和所需人工动作"})` 并停止。
-- 必须调用 Agent CLI 中的同名 MCP 工具并传 JSON，不得走 shell、HTTP 或手写事件文件。MCP 仅返回结构校验阶段状态；`isError` 后修正参数重试。
+- 必须调用 Agent CLI 中的同名 MCP 工具并传 JSON，不得走 shell、HTTP 或手写事件文件；`isError` 后修正参数重试。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$),
   ('hub_reason', $instructions$
 ### 长期职责
@@ -1050,7 +1050,7 @@ $instructions$),
 3. intent.prompt 必须包含目标、范围、已有证据、期望新增事实、约束和验收标准，使全新 Worker 无需隐含上下文即可执行。
 4. 不重复开放或已完成意图；优先派发能最大幅度缩小关键不确定性的最少任务，并遵守本轮意图数量上限。
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
-6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认工具调用；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回结构校验阶段状态，并等待 Scheduler 二阶段记账。
+6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认工具调用；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回响应。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 7. **complete / Report 硬门槛（Scheduler 会再校验）**：
    - **全部 Finding** 的 `verify_status` 必须是 `confirmed` 或 `needs_human`（severity / minVerifySeverity **只影响优先级与等待，不改变收敛集合**）；
    - `needs_human` 可进报告「待人工」章节，SARIF 仅含 `confirmed`；即使没有 confirmed 也必须能出报告；
@@ -1096,7 +1096,7 @@ $instructions$),
   - 回弹：`{"summary":"缺少运行时复现；仅有同源静态描述","verdict":"rework","missing_evidence":["runtime_test"]}`
   - 人工：`{"summary":"需要生产只读账号才能复现","verdict":"needs_human"}`
 - verify 不使用 `request_human`：遇到必要人工授权、凭据、业务判断或高风险阻塞时，调用 `mark_job_done({"summary":"阻塞点、已有证据和所需人工动作","verdict":"needs_human"})` 收口 Finding。
-- 直接调用 Agent CLI 中显示的同名 MCP 工具并传 JSON；合法响应仅表示结构校验通过，Scheduler 仍会重验与记账。
+- 直接调用 Agent CLI 中显示的同名 MCP 工具并传 JSON。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$),
   ('report', $instructions$
 ### 长期职责
@@ -1118,7 +1118,7 @@ $instructions$),
 - 长报告生成时可调用 `emit_progress({"message":"已完成 Finding 分组，正在生成风险摘要","percent":70})`；report 没有 `emit_fact` 或 `emit_finding` 权限。
 - 报告完成后只调用一次 `mark_job_done`，`summary` 为**完整 Markdown 正文**，必须含「已确认问题」与「待人工确认」两节，并保留证据引用。
 - 输入中的业务背景或披露口径不足时，在报告中如实列为限制；report 不使用 `request_human`，也不因此改变 Finding 状态。
-- 工具必须通过 Agent CLI 同名 MCP 调用并传 JSON；MCP 响应仅表示结构校验通过，最终成功以 Scheduler 二阶段记账为准。
+- 工具必须通过 Agent CLI 同名 MCP 调用并传 JSON。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$)
 ) AS templates(name, instructions) ON templates.name = r.name
 WHERE r.builtin = true;

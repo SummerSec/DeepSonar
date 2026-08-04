@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -22,6 +23,18 @@ def expected_hub_enabled() -> bool:
         "DEEPSONAR_EXPECT_HUB_ENABLED 必须为 true 或 false，"
         f"实际为 {value!r}"
     )
+
+
+def has_two_phase_control_contract(prompt: str) -> bool:
+    """Require the shared two-phase ACK contract used by builtin prompts."""
+    lowered = prompt.lower()
+    if re.search(r"accepted\s+event", lowered):
+        return False
+
+    return (
+        "MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，"
+        "不代表业务落库成功；Scheduler 仍会二阶段重验与记账。"
+    ) in prompt
 
 
 def req(method: str, path: str, body=None, expect: int | None = 200):
@@ -78,7 +91,10 @@ def main() -> None:
         for c in global_configs
         if c.get("role_name") not in {"verify", "report"}
     ]), global_configs
-    assert all("schema_validated / pending_scheduler_validation" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
+    assert all(
+        has_two_phase_control_contract(c.get("instructions_markdown") or "")
+        for c in global_configs
+    ), "每个全局 RoleConfig 都必须说明结构校验不是业务落库成功，且仍需 Scheduler 二阶段"
     assert all(c.get("platform_tools_json") == {} for c in global_configs), global_configs
     by_role = {c["role_name"]: c.get("instructions_markdown") or "" for c in global_configs}
     for role in ("explore", "analyze", "review", "test", "code"):

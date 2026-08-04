@@ -3,6 +3,7 @@ import test from "node:test";
 import { ControlEventEnvelope, EventEnvelope } from "@deepsonar/shared-types";
 import {
   ingestFactSemanticEvent,
+  assertSemanticTerminalExclusivity,
   moduleEvidenceFromSnapshot,
   normalizeLegacyControlInstructions,
   runtimeCredentialProviderError,
@@ -216,4 +217,27 @@ test("semantic tool capture only enables this Job's authorized tools", () => {
     "mcp__deepsonar-control__emit_fact": "fact",
     "mcp__deepsonar-control__mark_job_done": "done",
   });
+});
+
+test("request_human 与 done/hub 终态双向互斥且重复 human 稳定拒绝", () => {
+  const empty = () => ({ done: null, hub: null, human: null });
+  assert.doesNotThrow(() => assertSemanticTerminalExclusivity(empty(), "human"));
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: null, hub: null, human: {} }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
+  for (const eventType of ["done", "hub_decision"] as const) {
+    assert.throws(
+      () => assertSemanticTerminalExclusivity({ done: null, hub: null, human: {} }, eventType),
+      (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+    );
+  }
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: {}, hub: null, human: null }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: null, hub: {}, human: null }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
 });

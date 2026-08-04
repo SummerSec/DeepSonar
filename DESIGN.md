@@ -58,7 +58,7 @@ Finding 1 ── * finding_verification_rounds
 - **图引用硬约束**：Hub 的 `intents[].from` / `complete.from` 必须使用同画布 `root`/`fact`/`finding` 节点的 canonical UUID（YAML `root_id` 的值）；字段名、别名、占位符或跨画布 ID 会使整次决策被拒绝。
 - **控制面默认拒绝（#57）**：所有控制工具与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。MCP 合法响应只代表 `schema_validated / pending_scheduler_validation`，不是落库成功；`isError` 始终带稳定 `error_code` 与人话。
 - **二阶段 ack 边界**：本地 MCP 子进程不连 Scheduler/数据库，无法同步返回业务事务结果；禁止引入可写控制文件队列或未经治理的 socket。需要端到端同步业务 ack 时另立受治理宿主 IPC 架构变更。
-- **控制通道不污染**：结构化 MCP `tool_use` 先进入宿主 bounded pending；只有对应 `tool_result.is_error=false` 才释放语义事件。非 JSON 运行时行、未知行和写 `.deepsonar/control-*` 的尝试只记低基数告警/指标，跳过后继续处理后续合法事件。
+- **控制通道不污染**：结构化 MCP `tool_use` 先进入宿主 bounded pending；对应的合法非错误 `tool_result`（`is_error` 省略或为 `false`）才释放语义事件，显式错误或畸形标记均丢弃 pending。控制工具 telemetry 只保留 toolName/callId 与输入 shape/count，不记录原始 input/content；非 JSON 运行时行、未知行和写 `.deepsonar/control-*` 的尝试只记低基数告警/指标，跳过后继续处理后续合法事件。
 - **Hub 不可下发** `verify` / `report`；须先 `list_available_roles`。
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。

@@ -1,7 +1,8 @@
 /** 本地控制 MCP 协议冒烟：验证动态工具列表与控制工具成功响应。 */
 import { spawn } from "node:child_process";
 import { CONTROL_MCP_SERVER } from "../apps/scheduler/src/control-mcp.js";
-import { parseHubDecision } from "../apps/scheduler/src/graph.js";
+import { parseHubDecision, parseHubDecisionPayload } from "../apps/scheduler/src/graph.js";
+import { ControlInputError } from "../apps/scheduler/src/control-input.js";
 import { platformToolGuide } from "../apps/scheduler/src/platform-tools.js";
 import { ControlToolInputSchemasJson, resolvePlatformTools } from "../packages/shared-types/src/index.js";
 
@@ -145,11 +146,25 @@ send(17, "tools/call", {
   name: "ghp_unknown_secret_should_not_echo",
   arguments: {},
 });
+for (const [id, name] of [
+  [18, "__proto__"],
+  [19, "constructor"],
+  [20, "toString"],
+] as const) {
+  send(id, "tools/call", { name, arguments: {} });
+}
+send(21, "tools/call", {
+  name: "submit_hub_decision",
+  arguments: {
+    complete: { from: [], description: "完成" },
+    intents: [{ from: [], role: "review", description: "复核", prompt: "执行复核" }],
+  },
+});
 
 await new Promise<void>((resolve, reject) => {
   const deadline = setTimeout(() => reject(new Error("MCP response timeout")), 5_000);
   const timer = setInterval(() => {
-    if (replies.trim().split("\n").length >= 17) {
+    if (replies.trim().split("\n").length >= 21) {
       clearTimeout(deadline);
       clearInterval(timer);
       resolve();
@@ -203,6 +218,24 @@ assertError(17, "unknown_tool");
 const unknownToolText = rpcReplies.find((reply) => reply.id === 17)?.result?.content?.[0]?.text ?? "";
 if (unknownToolText.includes("ghp_unknown_secret_should_not_echo")) {
   throw new Error("MCP unknown_tool echoed an untrusted tool name");
+}
+for (const [id, name] of [[18, "__proto__"], [19, "constructor"], [20, "toString"]] as const) {
+  assertError(id, "unknown_tool");
+  const text = rpcReplies.find((reply) => reply.id === id)?.result?.content?.[0]?.text ?? "";
+  if (text.includes(name)) throw new Error(`MCP unknown_tool echoed prototype key ${name}`);
+}
+assertError(21, "invalid_payload");
+let hostHubErrorCode = "";
+try {
+  parseHubDecisionPayload({
+    complete: { from: [], description: "完成" },
+    intents: [{ from: [], role: "review", description: "复核", prompt: "执行复核" }],
+  }, new Set(["root"]));
+} catch (error) {
+  hostHubErrorCode = error instanceof ControlInputError ? error.code : "";
+}
+if (hostHubErrorCode !== "invalid_payload") {
+  throw new Error(`host Hub both-branch contract drifted: ${hostHubErrorCode}`);
 }
 if (rpcReplies.some((reply) => /accepted\s+event/i.test(String(reply?.result?.content?.[0]?.text ?? "")))) {
   throw new Error("legacy MCP success response leaked from control MCP");
