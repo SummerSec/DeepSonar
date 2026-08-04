@@ -845,7 +845,11 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             reasoning: { $ref: "#/components/schemas/ReasoningEffort" },
             env_keys: { type: "array", items: { type: "string" } },
             env_vars: { type: "object", additionalProperties: { type: "string" } },
-            modules: { type: "array", items: { type: "string" }, description: "<source_id>:<module_id>" },
+            modules: {
+              type: "array",
+              items: { type: "string" },
+              description: "原始 selector：<source_uuid>:<module_id>、<source_uuid>:plugin:<plugin_path> 或 <source_uuid>:source:*",
+            },
             skills: { type: "array", items: { type: "object", additionalProperties: true } },
             commands: { type: "array", items: { type: "object", additionalProperties: true } },
             mcps: { type: "array", items: { type: "object", additionalProperties: true } },

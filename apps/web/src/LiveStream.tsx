@@ -1,5 +1,6 @@
 import { CircleNotch, Check, Funnel, Wrench, TextAlignLeft, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { api, type StreamPage } from "./api";
 import { MarkdownView } from "./MarkdownView";
 
 /**
@@ -11,8 +12,10 @@ import { MarkdownView } from "./MarkdownView";
 
 export interface StreamItem {
   type: string;
+  attempt_id?: string;
   seq: number;
   at: number;
+  cursor?: string;
   delta?: string;
   toolName?: string;
   action?: string;
@@ -27,12 +30,17 @@ export type StreamBlock =
 
 export type StreamKindFilter = "all" | "text" | "tool" | "meta";
 
+export function streamItemKey(item: Pick<StreamItem, "attempt_id" | "seq">): string {
+  return `${item.attempt_id ?? "legacy"}:${item.seq}`;
+}
+
 export function reduceStreamItem(blocks: StreamBlock[], item: StreamItem): StreamBlock[] {
-  const key = String(item.seq);
+  const key = streamItemKey(item);
+  const namespace = `${item.attempt_id ?? "legacy"}:`;
   if (item.type === "text.delta" || item.type === "reasoning.delta") {
     const reasoning = item.type === "reasoning.delta";
     const last = blocks[blocks.length - 1];
-    if (last?.kind === "text" && last.reasoning === reasoning) {
+    if (last?.kind === "text" && last.reasoning === reasoning && last.key.startsWith(namespace)) {
       return [...blocks.slice(0, -1), { ...last, text: last.text + (item.delta ?? "") }];
     }
     return [...blocks, { kind: "text", key, text: item.delta ?? "", reasoning }];
@@ -69,6 +77,11 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
     const type = String(record.type ?? payload.type ?? "");
     const item: StreamItem = {
       type,
+      attempt_id: typeof record.attempt_id === "string"
+        ? record.attempt_id
+        : typeof payload.attempt_id === "string"
+          ? payload.attempt_id
+          : undefined,
       seq: Number(record.seq ?? record.job_seq ?? blocks.length + 1),
       at: Number(record.at ?? record.ts ?? Date.now()),
       delta: typeof payload.delta === "string" ? payload.delta : undefined,
@@ -93,7 +106,7 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
         [payload.message, payload.text, payload.summary, payload.title]
           .find((v): v is string => typeof v === "string" && v.trim().length > 0) ??
         JSON.stringify(payload);
-      blocks = [...blocks, { kind: "meta", key: String(item.seq), text: `${type}: ${text}` }];
+      blocks = [...blocks, { kind: "meta", key: streamItemKey(item), text: `${type}: ${text}` }];
       continue;
     }
     blocks = reduceStreamItem(blocks, item);
@@ -273,34 +286,131 @@ export function ProcessStreamView({
 export function LiveStream({ jobId, active }: { jobId: string; active: boolean }) {
   const [blocks, setBlocks] = useState<StreamBlock[]>([]);
   const [connected, setConnected] = useState(false);
+  const [status, setStatus] = useState("正在申请实时流凭证…");
 
   useEffect(() => {
-    if (!active) return;
+    let alive = true;
+    let ws: WebSocket | null = null;
+    let retryTimer: number | undefined;
+    let retry = 0;
+    let cursor: string | null = null;
+    const seen = new Set<string>();
     setBlocks([]);
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/api/ws?job_id=${jobId}`);
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
-    ws.onmessage = (ev) => {
-      try {
-        const item = JSON.parse(String(ev.data)) as StreamItem;
-        setBlocks((bs) => reduceStreamItem(bs, item));
-      } catch {
-        // 非 JSON 帧忽略
+    setConnected(false);
+
+    const appendPage = (page: StreamPage) => {
+      const items = page.items ?? page.events ?? [];
+      const fresh = items.filter((item) => {
+        const streamItem = item as unknown as StreamItem;
+        const key = `${streamItem.attempt_id ?? "legacy"}:${streamItem.seq}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      setBlocks((before) => fresh.reduce((next, item) => reduceStreamItem(next, item as unknown as StreamItem), before));
+      if (page.next_cursor) cursor = page.next_cursor;
+      if (page.truncated || page.gap) {
+        setStatus(page.gap ? "实时流存在 CURSOR_GAP，请从归档首帧重新加载" : "实时流归档已截断，较早帧可能存在 CURSOR_GAP");
       }
     };
-    return () => ws.close();
-  }, [jobId, active]);
+
+    const connect = async () => {
+      if (!alive) return;
+      try {
+        // Reconnects first backfill the durable/active evidence tail.  The bus
+        // itself is best-effort and may have evicted frames while disconnected.
+        const backfill = await api.jobStreamPage(jobId, {
+          after: cursor,
+          limit: 50,
+          tail: cursor === null,
+        });
+        if (!alive) return;
+        appendPage(backfill);
+        setStatus("正在申请实时流凭证…");
+        const ticket = await api.createWsTicket(jobId);
+        if (!alive) return;
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        const query = new URLSearchParams({ job_id: jobId, ticket: ticket.ticket });
+        if (cursor) query.set("after", cursor);
+        ws = new WebSocket(`${proto}://${location.host}/api/ws?${query.toString()}`);
+        ws.onopen = () => {
+          retry = 0;
+          setConnected(true);
+          setStatus("实时流已连接");
+        };
+        ws.onclose = (event) => {
+          if (!alive) return;
+          setConnected(false);
+          const terminal = event.code === 4400 || event.code === 4410 || event.code === 4401 || event.code === 4403 || event.code === 4404 || event.code === 4409;
+          if (event.code === 4400) setStatus("实时流游标 INVALID_CURSOR，请刷新归档");
+          else if (event.code === 4410) setStatus("实时流游标 CURSOR_GAP，请刷新归档");
+          else if (event.code === 4401) setStatus("实时流鉴权失败，请重新登录");
+          else if (event.code === 4404) setStatus("Job 不存在，无法读取实时流");
+          else if (event.code === 4409) setStatus("Job 已结束，实时流已关闭；可查看归档过程");
+          else if (event.code === 1013) setStatus("实时流背压，正在通过 HTTP 补齐…");
+          else setStatus("实时流已断开，正在重连…");
+          if (terminal) return;
+          retryTimer = window.setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
+        };
+        ws.onerror = () => {
+          if (alive) setStatus("实时流连接错误，正在重连…");
+        };
+        ws.onmessage = (ev) => {
+          try {
+            const payload = JSON.parse(String(ev.data)) as StreamPage | StreamItem;
+            if (Array.isArray((payload as StreamPage).items) || Array.isArray((payload as StreamPage).events)) {
+              appendPage(payload as StreamPage);
+              return;
+            }
+            const item = payload as StreamItem;
+            const key = `${item.attempt_id ?? "legacy"}:${item.seq}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              setBlocks((before) => reduceStreamItem(before, item));
+            }
+            if (item.cursor) cursor = item.cursor;
+          } catch {
+            // 非 JSON 帧忽略
+          }
+        };
+      } catch (error) {
+        if (!alive) return;
+        setConnected(false);
+        const message = error instanceof Error ? error.message : String(error);
+        const cursorError = message.includes("INVALID_CURSOR") || message.includes("CURSOR_GAP");
+        setStatus(message.includes("JOB_NOT_RUNNING") || message.includes("job is not running")
+          ? "Job 已结束，实时流已关闭；可查看归档过程"
+          : message.includes("CURSOR_GAP")
+            ? "实时流游标 CURSOR_GAP，请刷新归档"
+            : message.includes("INVALID_CURSOR")
+              ? "实时流游标 INVALID_CURSOR，请刷新归档"
+          : message.includes("401") || message.includes("AUTH")
+            ? "实时流鉴权失败，请重新登录"
+            : "实时流暂不可用，正在重试…");
+        if (!cursorError && !message.includes("JOB_NOT_RUNNING") && !message.includes("job is not running")) {
+          retryTimer = window.setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
+        }
+      }
+    };
+    void connect();
+    return () => {
+      alive = false;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      ws?.close();
+    };
+  }, [jobId]);
 
   if (!active) return null;
 
-  return (
-    <ProcessStreamView
-      blocks={blocks}
-      live
-      connected={connected}
-      emptyHint="等待 agent 事件…（job 运行时这里会实时滚动）"
-    />
-  );
+  return <div className="flex h-full min-h-0 flex-col">
+    <div className="border-b border-white/[.06] px-3 py-1.5 font-mono text-[10px] text-zinc-600">{status}</div>
+    <div className="min-h-0 flex-1">
+      <ProcessStreamView
+        blocks={blocks}
+        live
+        connected={connected}
+        emptyHint="等待 agent 事件…（实时流与归档会自动补齐）"
+      />
+    </div>
+  </div>;
 }

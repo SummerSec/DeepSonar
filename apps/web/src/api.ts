@@ -2,6 +2,8 @@
 
 import type { PlatformToolConfig } from "@deepsonar/shared-types";
 
+export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
+
 export interface Project {
   id: string;
   /** 可空：NULL = 纯本地项目（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md） */
@@ -49,6 +51,18 @@ export interface CanvasData {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   convergence?: CanvasConvergence;
+}
+
+/** Bounded keyset response shared by jobs, findings, events, and evidence. */
+export interface PageEnvelope<T> {
+  items: T[];
+  after: string | null;
+  next_cursor: string | null;
+  has_more: boolean;
+  watermark: string;
+  live: boolean;
+  truncated?: boolean;
+  gap?: boolean;
 }
 
 /** 任务画布的生命周期聚合（由调度器按 Job 时间戳计算）。 */
@@ -108,6 +122,8 @@ export interface JobDetail {
   };
   events: JobEvent[];
   findings: { id: string; severity: string; title: string; verify_status: string }[];
+  /** Structured module omissions copied from the frozen snapshot (old jobs: []). */
+  missing_modules: unknown[];
 }
 
 /** 全局 / 项目 Job 列表 */
@@ -268,6 +284,24 @@ export interface JobEvidence {
     files: EvidenceFileMeta[];
     capture_error?: string;
   };
+}
+
+export interface StreamPage {
+  items: Array<Record<string, unknown>>;
+  events?: Array<Record<string, unknown>>;
+  after: string | null;
+  next_cursor: string | null;
+  has_more: boolean;
+  watermark: string;
+  live: boolean;
+  truncated?: boolean;
+  gap?: boolean;
+}
+
+export interface WsTicket {
+  ticket: string;
+  expires_at: string;
+  job_id: string;
 }
 
 export interface FindingDetail {
@@ -584,6 +618,7 @@ export type RoleConfigInput = {
   env_keys: string[];
   /** 非敏感环境变量（疑似密钥名会被后端拒绝，引导改用 Credential） */
   env_vars: Record<string, string>;
+  /** 原始模块 selector：source:module（兼容）/source:plugin:path/source:source:*。 */
   modules: string[];
   skills: Record<string, unknown>[];
   commands: Record<string, unknown>[];
@@ -609,6 +644,7 @@ export interface RoleConfigView {
   reasoning: ReasoningEffort | null;
   env_keys: string[];
   env_vars_json: Record<string, string>;
+  /** 保存原始 selector 意图；Job 创建时才按当前 trusted catalog 展开。 */
   modules_json: string[];
   skills_json: Record<string, unknown>[];
   commands_json: Record<string, unknown>[];
@@ -683,7 +719,16 @@ export interface TaskReport {
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const err = (await res.json()) as { error?: string; message?: string; error_code?: string };
+      detail = [err.error_code, err.error ?? err.message].filter(Boolean).join(": ");
+    } catch {
+      /* ignore non-JSON error body */
+    }
+    throw new Error(detail ? `${path} -> ${res.status}: ${detail}` : `${path} -> ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -843,8 +888,8 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
   if (!res.ok) {
     let detail = "";
     try {
-      const err = (await res.json()) as { error?: string; message?: string };
-      detail = err.error ?? err.message ?? "";
+      const err = (await res.json()) as { error?: string; message?: string; error_code?: string };
+      detail = [err.error_code, err.error ?? err.message].filter(Boolean).join(": ");
     } catch {
       /* ignore non-JSON error body */
     }
@@ -864,6 +909,10 @@ function qs(params: Record<string, string | undefined | null>): string {
   }
   const s = sp.toString();
   return s ? `?${s}` : "";
+}
+
+function unwrapPage<T>(payload: T[] | PageEnvelope<T>): T[] {
+  return Array.isArray(payload) ? payload : payload.items;
 }
 
 export const api = {
@@ -931,6 +980,10 @@ export const api = {
       `/projects/${projectId}/canvases${opts?.status ? `?status=${opts.status}` : ""}`,
     ),
   canvas: (canvasId: string) => get<CanvasData>(`/canvases/${canvasId}`),
+  /** L0 graph projection; node body_json is a bounded summary. */
+  canvasSummary: (canvasId: string) => get<CanvasData & { projection?: "L0"; watermark?: string; live?: boolean }>(`/canvases/${canvasId}/summary`),
+  canvasNode: (canvasId: string, nodeId: string) =>
+    get<{ node: CanvasNode; projection: "L1" }>(`/canvases/${canvasId}/nodes/${nodeId}`),
   canvasConvergence: (canvasId: string) =>
     get<{
       canvas_id: string;
@@ -967,7 +1020,14 @@ export const api = {
     ),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
   jobEvidence: (jobId: string) => get<JobEvidence>(`/jobs/${jobId}/evidence`),
-  jobStream: (jobId: string) => get<{ events: Array<Record<string, unknown>> }>(`/jobs/${jobId}/evidence/stream`),
+  jobStreamPage: (jobId: string, opts?: { after?: string | null; limit?: number; tail?: boolean }) =>
+    get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined, tail: opts?.tail ? "1" : undefined })}`),
+  jobStream: async (jobId: string) => {
+    const page = await get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ limit: "50" })}`);
+    return { events: page.items, ...page };
+  },
+  jobEventsPage: (jobId: string, opts?: { after?: string | null; limit?: number }) =>
+    get<PageEnvelope<JobEvent>>(`/jobs/${jobId}/events${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
   jobSession: (jobId: string) => get<{ meta: EvidenceFileMeta; text: string; truncated: boolean }>(`/jobs/${jobId}/evidence/session`),
   downloadJobSession: async (jobId: string): Promise<void> => {
     const res = await fetch(`/api/jobs/${jobId}/evidence/session/download`, { headers: authHeaders() });
@@ -982,25 +1042,43 @@ export const api = {
     anchor.click();
     URL.revokeObjectURL(url);
   },
-  jobs: (opts?: { project_id?: string; status?: string }) =>
-    get<JobSummary[]>(`/jobs${qs({ project_id: opts?.project_id, status: opts?.status })}`),
-  findings: (opts?: {
+  jobsPage: (opts?: { project_id?: string; canvas_id?: string; status?: string; after?: string | null; limit?: number }) =>
+    get<PageEnvelope<JobSummary>>(`/jobs${qs({ project_id: opts?.project_id, canvas_id: opts?.canvas_id, status: opts?.status, after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
+  jobs: async (opts?: { project_id?: string; canvas_id?: string; status?: string }) =>
+    unwrapPage(await get<JobSummary[] | PageEnvelope<JobSummary>>(`/jobs${qs({ project_id: opts?.project_id, canvas_id: opts?.canvas_id, status: opts?.status })}`)),
+  findingsPage: (opts?: {
     project_id?: string;
     severity?: string;
     verify_status?: string;
     disposition?: string;
     /** 只拉某任务画布的发现，不混其它任务 */
     canvas_id?: string;
-  }) =>
-    get<FindingSummary[]>(
+    after?: string | null;
+    limit?: number;
+  }) => get<PageEnvelope<FindingSummary>>(
       `/findings${qs({
         project_id: opts?.project_id,
         severity: opts?.severity,
         verify_status: opts?.verify_status,
         disposition: opts?.disposition,
         canvas_id: opts?.canvas_id,
+        after: opts?.after,
+        limit: opts?.limit ? String(opts.limit) : undefined,
       })}`,
     ),
+  findings: async (opts?: {
+    project_id?: string;
+    severity?: string;
+    verify_status?: string;
+    disposition?: string;
+    canvas_id?: string;
+  }) => unwrapPage(await get<FindingSummary[] | PageEnvelope<FindingSummary>>(`/findings${qs({
+    project_id: opts?.project_id,
+    severity: opts?.severity,
+    verify_status: opts?.verify_status,
+    disposition: opts?.disposition,
+    canvas_id: opts?.canvas_id,
+  })}`)),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
   setFindingDisposition: (
     id: string,
@@ -1157,6 +1235,7 @@ export const api = {
   /** 用户认证 */
   authStatus: () => get<AuthStatus>("/auth/status"),
   authMe: () => get<AuthMe>("/auth/me"),
+  createWsTicket: (jobId: string) => send<WsTicket>("POST", "/auth/ws-ticket", { job_id: jobId }),
   login: (body: { username: string; password: string }) =>
     send<LoginResult>("POST", "/auth/login", body),
   bootstrap: (body: { username: string; password: string; display_name?: string }) =>

@@ -420,7 +420,10 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 - `POST /skill-sources/:id/sync`：浅克隆 → 扫描 `SKILL.md`（skill）与 `commands/*.md`（slash 命令）→ catalog（含文件内容）落库缓存
 - 模块归属按最近含 `.claude-plugin/plugin.json` 的祖先目录分组（= 插件）
-- RoleConfig 勾选 `["<source_id>:<module_id>"]`，快照时展开为 agentbox **embedded skills / commands** 与手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 下发到当次 Worker
+- RoleConfig 保存原始 selector：历史 `<source_id>:<module_id>`，以及 `<source_id>:plugin:<plugin_path>`（插件下全部 skill/command）和 `<source_id>:source:*`（整源）。快照时只在 trusted + enabled 的当前 catalog 上展开，和手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 下发到当次 Worker
+- `module_selectors`、展开模块元数据、`module_content_hash`、`skill_revisions` 与结构化 `missing_modules` 一并冻结进 Job snapshot；后续 sync 只影响下一 Job，历史 Job 只消费快照内容。插件/整源 selector 会自动纳入 sync 后新增模块，旧的显式 module 列表不会。手写 `skills_json`/`commands_json` 对同 kind/name 的 catalog 模块具有确定性优先级，被屏蔽模块从最终 expanded 集合与 hash 排除并记录 `manual-override`
+- selector 解析固定以 36 字符 source UUID 开头；插件/模块路径拒绝绝对路径、空段、`..` 与 URL 解码后的保留 `:`。未信任/禁用来源、缺失插件、空 catalog、手工覆盖和同一 skill/command 命名空间内的重复名称写入明确 missing；重复名称的全部冲突模块排除，不依赖 catalog 顺序覆盖写入
+- catalog 与最终展开集合的内容哈希覆盖 plugin/name/description 与文件内容；Job 证据 manifest/runtime evidence/API 详情均保留 missing_modules，旧快照按空数组兼容。Runtime materializer 在 mkdir/upload 前对 command/subAgent/skill 名称及 skill 文件相对路径做 normalize/resolve 子树校验，路径穿越、绝对路径和控制字符直接拒绝
 - 内容在 sync 时缓存，跑任务不再访问 Git —— 断网/私有网络也能跑
 
 ### 8.4 图语义与 hub 循环（Cairn 式自驱审计）

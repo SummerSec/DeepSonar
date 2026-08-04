@@ -54,6 +54,29 @@ export function semanticToolEventsFor(toolNames: string[]): Record<string, strin
   );
 }
 
+/** Normalize module evidence for both the runtime manifest and API payloads.
+ * Jobs created before structured missing-module evidence use an empty list. */
+export function moduleEvidenceFromSnapshot(
+  snapshot: Partial<Pick<
+    AgentRuntimeSnapshot,
+    | "modules"
+    | "module_selectors"
+    | "expanded_modules"
+    | "missing_modules"
+    | "module_content_hash"
+    | "skill_revisions"
+  >> | null | undefined,
+) {
+  return {
+    modules: Array.isArray(snapshot?.modules) ? snapshot.modules : [],
+    module_selectors: Array.isArray(snapshot?.module_selectors) ? snapshot.module_selectors : [],
+    expanded_modules: Array.isArray(snapshot?.expanded_modules) ? snapshot.expanded_modules : [],
+    missing_modules: Array.isArray(snapshot?.missing_modules) ? snapshot.missing_modules : [],
+    module_content_hash: typeof snapshot?.module_content_hash === "string" ? snapshot.module_content_hash : "",
+    skill_revisions: Array.isArray(snapshot?.skill_revisions) ? snapshot.skill_revisions : [],
+  };
+}
+
 function jsonHash(value: unknown): string {
   return sha256(JSON.stringify(value ?? null));
 }
@@ -526,6 +549,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     ...snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME),
     controlMcp,
   ];
+  const moduleEvidence = moduleEvidenceFromSnapshot(snapshot);
   const componentManifest = {
     v: 1,
     role: type,
@@ -534,7 +558,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     provider,
     network: { allow_egress: allowEgress },
     env_names: Object.keys(env).sort(),
-    modules: snapshot.modules,
+    ...moduleEvidence,
     skills: { names: componentNames(snapshot.skills), count: snapshot.skills.length, sha256: jsonHash(snapshot.skills) },
     commands: { names: componentNames(snapshot.commands), count: snapshot.commands.length, sha256: jsonHash(snapshot.commands) },
     mcps: { names: componentNames(mcps), count: mcps.length, sha256: jsonHash(mcps) },
@@ -595,7 +619,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     component_manifest_sha256: jsonHash(componentManifest),
     provider_config_files: componentManifest.provider_files,
     allow_egress: allowEgress,
-    skill_revisions: snapshot.skill_revisions,
+    module_selectors: moduleEvidence.module_selectors,
+    missing_modules: moduleEvidence.missing_modules,
+    module_content_hash: moduleEvidence.module_content_hash,
+    skill_revisions: moduleEvidence.skill_revisions,
     recorded_at: new Date().toISOString(),
   };
   await sql`
@@ -699,7 +726,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
   // 「当前动作」直接更新节点显示态（throttle 1.5s；非语义事件，不进 events 表）
   let lastActionPush = 0;
-  const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(job.sandbox_id ?? "unknown"));
+  const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(job.sandbox_id ?? job.id ?? "unknown"));
+  const evidenceAttemptId = evidenceWriter.attemptId;
+  // Advertise stream cursors only after their evidence line is persisted.
+  let streamPublishTail: Promise<void> = Promise.resolve();
 
   const result = await runRealAgent(
     { sandboxId: job.sandbox_id as string },
@@ -732,13 +762,16 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         void emit("progress", { message }).catch(() => {});
       },
       onEvent: (e) => {
-        evidenceWriter.appendNormalized(e);
         const type = String(e.type ?? "");
+        const persisted = evidenceWriter.appendNormalized(e);
+        streamPublishTail = streamPublishTail
+          .then(() => persisted)
+          .then((evidenceSeq) => {
         // 实时流：选择性字段转发（输入/输出可能很大，只取摘要）
         if (type === "tool.call.started") {
           const toolName = String(e.toolName ?? "tool");
           const action = actionOf(toolName, e.input);
-          publishStream(jobId, { type, toolName, action });
+          publishStream(jobId, { type, toolName, action }, evidenceAttemptId, evidenceSeq);
           const now = Date.now();
           if (now - lastActionPush > 1500) {
             lastActionPush = now;
@@ -747,22 +780,26 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
               WHERE job_id = ${jobId} AND node_type = 'job'`.catch(() => {});
           }
         } else if (type === "tool.call.completed") {
-          publishStream(jobId, { type, toolName: e.toolName, callId: e.callId });
+          publishStream(jobId, { type, toolName: e.toolName, callId: e.callId }, evidenceAttemptId, evidenceSeq);
         } else if (type === "text.delta" || type === "reasoning.delta") {
-          publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) });
+          publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) }, evidenceAttemptId, evidenceSeq);
         } else if (type.startsWith("run.") || type.startsWith("message.")) {
-          publishStream(jobId, { type, text: typeof e.text === "string" ? e.text.slice(0, 300) : undefined });
+          publishStream(jobId, { type, text: typeof e.text === "string" ? e.text.slice(0, 300) : undefined }, evidenceAttemptId, evidenceSeq);
         }
+          })
+          .catch(() => {});
       },
     },
   ).catch(async (error) => {
     const message = error instanceof Error ? error.message : String(error);
+    await streamPublishTail;
     const evidence = await evidenceWriter.finalize(message);
     await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
     throw error;
   });
 
   evidenceWriter.setSession(result.session);
+  await streamPublishTail;
   const evidence = await evidenceWriter.finalize(result.error);
   await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
 
