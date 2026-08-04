@@ -159,7 +159,7 @@ function Legend() {
   );
 }
 
-export function CanvasView({ canvasId }: { canvasId: string }) {
+export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (data: CanvasData) => void }) {
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,28 +178,61 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   /** 用户强制收起（覆盖默认 depth 展开） */
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const rf = useRef<ReactFlowInstance | null>(null);
+  const watermarkRef = useRef<string | null>(null);
 
-  // §6.4：MVP 轮询刷新（5s）；WS 二期
+  // L0 once + bounded deltas.  Full body_json is fetched only for the node the
+  // user opens (L1), avoiding duplicate heavy canvas polling in the workbench.
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      api
-        .canvas(canvasId)
-        .then((d) => alive && (setData(d), setError(null)))
-        .catch((e) => alive && setError(String(e)));
+    const load = async () => {
+      try {
+        const d = await api.canvasSummary(canvasId);
+        if (!alive) return;
+        watermarkRef.current = d.watermark ?? new Date().toISOString();
+        setData(d);
+        onData?.(d);
+        setError(null);
+      } catch (e) {
+        if (alive) setError(String(e));
+      }
+    };
+    const loadDelta = async () => {
+      const since = watermarkRef.current;
+      if (!since) return;
+      try {
+        const delta = await api.canvasDelta(canvasId, since);
+        if (!alive) return;
+        watermarkRef.current = delta.server_time;
+        setData((before) => {
+          if (!before) return before;
+          const nodeMap = new Map(before.nodes.map((node) => [node.id, node]));
+          for (const node of delta.upsert_nodes) nodeMap.set(node.id, node);
+          for (const id of delta.delete_node_ids) nodeMap.delete(id);
+          const edgeMap = new Map(before.edges.map((edge) => [edge.id, edge]));
+          for (const edge of delta.upsert_edges) edgeMap.set(edge.id, edge);
+          for (const id of delta.delete_edge_ids) edgeMap.delete(id);
+          const next = { ...before, nodes: [...nodeMap.values()], edges: [...edgeMap.values()] };
+          onData?.(next);
+          return next;
+        });
+      } catch (e) {
+        if (alive) setError(String(e));
+      }
+    };
     setData(null);
     setSelected(null);
     setElkPos(null);
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
-    load();
-    const t = setInterval(load, 5000);
+    watermarkRef.current = null;
+    void load();
+    const t = setInterval(() => void loadDelta(), 5000);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, [canvasId]);
+  }, [canvasId, onData]);
 
   // 节点消失时清理手动覆盖，避免悬空 id 堆积
   useEffect(() => {
@@ -480,8 +513,21 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     (_: unknown, node: Node) => {
       const found = data?.nodes.find((n) => n.id === node.id) ?? null;
       setSelected(found);
+      if (!found) return;
+      void api.canvasNode(canvasId, found.id).then((result) => {
+        setSelected(result.node);
+        setData((before) => {
+          if (!before) return before;
+          const nodes = before.nodes.map((item) => item.id === result.node.id ? result.node : item);
+          const next = { ...before, nodes };
+          onData?.(next);
+          return next;
+        });
+      }).catch(() => {
+        // L0 summary remains usable when an optional L1 hydration races a deleted node.
+      });
     },
-    [data],
+    [canvasId, data, onData],
   );
 
   if (error)

@@ -699,7 +699,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
   // 「当前动作」直接更新节点显示态（throttle 1.5s；非语义事件，不进 events 表）
   let lastActionPush = 0;
-  const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(job.sandbox_id ?? "unknown"));
+  const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(job.sandbox_id ?? job.id ?? "unknown"));
+  const evidenceAttemptId = evidenceWriter.attemptId;
 
   const result = await runRealAgent(
     { sandboxId: job.sandbox_id as string },
@@ -732,13 +733,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         void emit("progress", { message }).catch(() => {});
       },
       onEvent: (e) => {
-        evidenceWriter.appendNormalized(e);
+        const evidenceSeq = evidenceWriter.appendNormalized(e);
         const type = String(e.type ?? "");
         // 实时流：选择性字段转发（输入/输出可能很大，只取摘要）
         if (type === "tool.call.started") {
           const toolName = String(e.toolName ?? "tool");
           const action = actionOf(toolName, e.input);
-          publishStream(jobId, { type, toolName, action });
+          publishStream(jobId, { type, toolName, action }, evidenceAttemptId, evidenceSeq);
           const now = Date.now();
           if (now - lastActionPush > 1500) {
             lastActionPush = now;
@@ -747,11 +748,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
               WHERE job_id = ${jobId} AND node_type = 'job'`.catch(() => {});
           }
         } else if (type === "tool.call.completed") {
-          publishStream(jobId, { type, toolName: e.toolName, callId: e.callId });
+          publishStream(jobId, { type, toolName: e.toolName, callId: e.callId }, evidenceAttemptId, evidenceSeq);
         } else if (type === "text.delta" || type === "reasoning.delta") {
-          publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) });
+          publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) }, evidenceAttemptId, evidenceSeq);
         } else if (type.startsWith("run.") || type.startsWith("message.")) {
-          publishStream(jobId, { type, text: typeof e.text === "string" ? e.text.slice(0, 300) : undefined });
+          publishStream(jobId, { type, text: typeof e.text === "string" ? e.text.slice(0, 300) : undefined }, evidenceAttemptId, evidenceSeq);
         }
       },
     },

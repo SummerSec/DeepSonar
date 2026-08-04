@@ -11,7 +11,7 @@ import {
   Prohibit,
   Target,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   api,
@@ -118,6 +118,10 @@ export function TaskCanvasPage() {
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [findings, setFindings] = useState<FindingSummary[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [findingsCursor, setFindingsCursor] = useState<string | null>(null);
+  const [findingsHasMore, setFindingsHasMore] = useState(false);
+  const [jobsCursor, setJobsCursor] = useState<string | null>(null);
+  const [jobsHasMore, setJobsHasMore] = useState(false);
   const [jobStatusFilter, setJobStatusFilter] = useState("");
   const [jobRoleTypeFilter, setJobRoleTypeFilter] = useState("");
   const [jobKeyword, setJobKeyword] = useState("");
@@ -140,20 +144,37 @@ export function TaskCanvasPage() {
   useEffect(() => {
     if (!canvasId || !projectId) return;
     let stop = false;
+    setFindings([]);
+    setFindingsCursor(null);
+    setFindingsHasMore(false);
+    setJobs([]);
+    setJobsCursor(null);
+    setJobsHasMore(false);
+    setMeta(null);
+    setNodes([]);
+    setConvergence(null);
+    setError(null);
     const tick = () => {
       Promise.all([
-        api.canvas(canvasId),
-        api.findings({ canvas_id: canvasId }),
-        api.jobs({ project_id: projectId }),
+        api.findingsPage({ canvas_id: canvasId, limit: 50 }),
+        api.jobsPage({ canvas_id: canvasId, limit: 50 }),
       ])
-        .then(([canvas, fs, js]) => {
+        .then(([fs, js]) => {
           if (stop) return;
-          setMeta(canvas.canvas ?? null);
-          setNodes(canvas.nodes ?? []);
-          setFindings(fs);
-          // 只保留挂在本画布上的 job
-          setJobs(js.filter((j) => j.canvas_id === canvasId));
-          setConvergence(canvas.convergence ?? parseConvergenceFromTarget(canvas.canvas?.target_json));
+          setFindings((before) => {
+            const tail = before.length > 50 ? before.slice(50) : [];
+            const seen = new Set(fs.items.map((item) => item.id));
+            return [...fs.items, ...tail.filter((item) => !seen.has(item.id))];
+          });
+          setFindingsCursor((before) => before ?? fs.next_cursor);
+          setFindingsHasMore((before) => before || fs.has_more);
+          setJobs((before) => {
+            const tail = before.length > 50 ? before.slice(50) : [];
+            const seen = new Set(js.items.map((item) => item.id));
+            return [...js.items, ...tail.filter((item) => !seen.has(item.id))];
+          });
+          setJobsCursor((before) => before ?? js.next_cursor);
+          setJobsHasMore((before) => before || js.has_more);
           setError(null);
         })
         .catch((e) => {
@@ -167,6 +188,36 @@ export function TaskCanvasPage() {
       clearInterval(t);
     };
   }, [canvasId, projectId]);
+
+  const onCanvasData = useCallback((canvas: CanvasData) => {
+    setMeta(canvas.canvas ?? null);
+    setNodes(canvas.nodes ?? []);
+    setConvergence(canvas.convergence ?? parseConvergenceFromTarget(canvas.canvas?.target_json));
+  }, []);
+
+  const loadMoreFindings = async () => {
+    if (!canvasId || !findingsHasMore || !findingsCursor) return;
+    try {
+      const next = await api.findingsPage({ canvas_id: canvasId, after: findingsCursor, limit: 50 });
+      setFindings((before) => [...before, ...next.items]);
+      setFindingsCursor(next.next_cursor);
+      setFindingsHasMore(next.has_more);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const loadMoreJobs = async () => {
+    if (!canvasId || !jobsHasMore || !jobsCursor) return;
+    try {
+      const next = await api.jobsPage({ canvas_id: canvasId, after: jobsCursor, limit: 50 });
+      setJobs((before) => [...before, ...next.items]);
+      setJobsCursor(next.next_cursor);
+      setJobsHasMore(next.has_more);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const flash = (m: string) => {
     setMsg(m);
@@ -228,8 +279,10 @@ export function TaskCanvasPage() {
       const r = await api.cancelCanvasActiveJobs(canvasId, "强制退出全部活动 Job");
       flash(r.cancelled > 0 ? `已强制退出 ${r.cancelled} 个活动 Job` : "没有可退出的活动 Job");
       // 立即刷新列表
-      const js = await api.jobs({ project_id: projectId! });
-      setJobs(js.filter((j) => j.canvas_id === canvasId));
+      const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
+      setJobs(js.items);
+      setJobsCursor(js.next_cursor);
+      setJobsHasMore(js.has_more);
     } catch (e) {
       flash(`强制退出失败：${e instanceof Error ? e.message : e}`);
     } finally {
@@ -573,7 +626,9 @@ export function TaskCanvasPage() {
       )}
 
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 min-h-0 flex-1 overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
-        {tab === "canvas" && <CanvasView canvasId={canvasId} />}
+        <div className={`h-full min-h-0 ${tab === "canvas" ? "" : "invisible pointer-events-none absolute inset-0"}`}>
+          <CanvasView canvasId={canvasId} onData={onCanvasData} />
+        </div>
 
         {tab === "report" && <ReportPanel canvasId={canvasId} />}
 
@@ -605,6 +660,7 @@ export function TaskCanvasPage() {
             {visibleFindings.length === 0 ? (
               <EmptyState title="本任务暂无发现" hint="审计 Job 产出 finding 后会出现在这里" />
             ) : (
+              <>
               <DataTable>
                 <table className="w-full min-w-[720px]">
                   <thead>
@@ -645,6 +701,12 @@ export function TaskCanvasPage() {
                   </tbody>
                 </table>
               </DataTable>
+              {findingsHasMore && (
+                <button type="button" onClick={() => void loadMoreFindings()} className="mt-3 rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]">
+                  加载更多发现
+                </button>
+              )}
+              </>
             )}
           </div>
         )}
@@ -671,6 +733,7 @@ export function TaskCanvasPage() {
             ) : visibleJobs.length === 0 ? (
               <EmptyState title="没有匹配的运行记录" hint="调整状态、角色 / Job 类型或关键词后重试。" action={<button type="button" onClick={() => { setJobStatusFilter(""); setJobRoleTypeFilter(""); setJobKeyword(""); }} className="rounded-full bg-white/[.05] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.08]">清空筛选</button>} />
             ) : (
+              <>
               <DataTable>
                 <table className="w-full min-w-[800px]">
                   <thead>
@@ -736,8 +799,10 @@ export function TaskCanvasPage() {
                                 try {
                                   await api.cancelJob(j.id, { force: true, reason: "强制退出" });
                                   flash("已强制退出");
-                                  const js = await api.jobs({ project_id: projectId! });
-                                  setJobs(js.filter((row) => row.canvas_id === canvasId));
+                                  const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
+                                  setJobs(js.items);
+                                  setJobsCursor(js.next_cursor);
+                                  setJobsHasMore(js.has_more);
                                 } catch (e) {
                                   flash(`强制退出失败：${e instanceof Error ? e.message : e}`);
                                 } finally {
@@ -757,6 +822,12 @@ export function TaskCanvasPage() {
                   </tbody>
                 </table>
               </DataTable>
+              {jobsHasMore && (
+                <button type="button" onClick={() => void loadMoreJobs()} className="mt-3 rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]">
+                  加载更多运行
+                </button>
+              )}
+              </>
             )}
           </div>
         )}

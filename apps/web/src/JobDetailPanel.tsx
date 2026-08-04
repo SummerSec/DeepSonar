@@ -68,6 +68,9 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [evidence, setEvidence] = useState<JobEvidence | null>(null);
   const [stream, setStream] = useState<Array<Record<string, unknown>>>([]);
+  const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
+  const [eventsCursor, setEventsCursor] = useState<string | null>(null);
+  const [eventsHasMore, setEventsHasMore] = useState(false);
   const [session, setSession] = useState<{ text: string; truncated: boolean } | null>(null);
   const [tab, setTab] = useState<DetailTab>("process");
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +87,9 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     setDetail(null);
     setEvidence(null);
     setStream([]);
+    setJobEvents([]);
+    setEventsCursor(null);
+    setEventsHasMore(false);
     setSession(null);
     setError(null);
     setDownloadError(null);
@@ -97,6 +103,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
         .then((v) => {
           if (!alive) return;
           setDetail(v);
+          setJobEvents((before) => before.length > 0 ? before : v.events);
           setError(null);
           // 运行中默认实时流；已结束默认「结果」（prompt + 摘要 + 产出）
           setTab(ACTIVE.has(v.job.status) ? "live" : "result");
@@ -105,7 +112,13 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
 
     const loadEvidenceBundle = () => {
       api.jobEvidence(jobId).then((v) => alive && setEvidence(v)).catch(() => {});
-      api.jobStream(jobId).then((v) => alive && setStream(v.events)).catch(() => {});
+      api.jobStreamPage(jobId, { limit: 50 }).then((v) => alive && setStream(v.items)).catch(() => {});
+      api.jobEventsPage(jobId, { limit: 50 }).then((v) => {
+        if (!alive) return;
+        setJobEvents(v.items);
+        setEventsCursor(v.next_cursor);
+        setEventsHasMore(v.has_more);
+      }).catch(() => {});
       api
         .jobSession(jobId)
         .then((v) => alive && setSession({ text: v.text, truncated: v.truncated }))
@@ -124,9 +137,11 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
         .then((v) => {
           if (!alive) return;
           setDetail(v);
+          setJobEvents((before) => before.length > 0 ? before : v.events);
           if (ACTIVE.has(v.job.status)) {
             // 运行中：过程流持续刷新（事件随 job 详情一起更新）
-            api.jobStream(jobId).then((s) => alive && setStream(s.events)).catch(() => {});
+            api.jobStreamPage(jobId, { limit: 50 }).then((s) => alive && setStream(s.items)).catch(() => {});
+            api.jobEventsPage(jobId, { limit: 50 }).then((s) => alive && setJobEvents(s.items)).catch(() => {});
           }
         })
         .catch(() => {});
@@ -143,19 +158,19 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
 
   const eventTypes = useMemo(() => {
     if (!detail) return [] as string[];
-    return Array.from(new Set(detail.events.map((e) => e.type).filter(Boolean))).sort();
-  }, [detail]);
+    return Array.from(new Set(jobEvents.map((e) => e.type).filter(Boolean))).sort();
+  }, [jobEvents]);
 
   const filteredEvents = useMemo(() => {
     if (!detail) return [] as JobEvent[];
     const needle = eventQuery.trim().toLowerCase();
-    return detail.events.filter((e) => {
+    return jobEvents.filter((e) => {
       if (eventTypeFilter && e.type !== eventTypeFilter) return false;
       if (!needle) return true;
       const blob = `${e.type} ${JSON.stringify(e.payload_json ?? {})}`.toLowerCase();
       return blob.includes(needle);
     });
-  }, [detail, eventQuery, eventTypeFilter]);
+  }, [detail, eventQuery, eventTypeFilter, jobEvents]);
 
   const snapshot = (detail?.job.agent_snapshot_json ?? null) as Record<string, unknown> | null;
   const agentCli = snapStr(snapshot, "agent_cli");
@@ -183,6 +198,17 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
       setForceMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setForceBusy(false);
+    }
+  };
+  const loadMoreEvents = async () => {
+    if (!eventsHasMore || !eventsCursor) return;
+    try {
+      const next = await api.jobEventsPage(jobId, { after: eventsCursor, limit: 50 });
+      setJobEvents((before) => [...before, ...next.items]);
+      setEventsCursor(next.next_cursor);
+      setEventsHasMore(next.has_more);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
   const credentialLabel = useMemo(() => {
@@ -221,17 +247,18 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
 
   const runSummary = useMemo(() => {
     if (!detail) return "";
+    const events = jobEvents.length > 0 ? jobEvents : detail.events;
     // done 事件 summary 优先
-    for (let i = detail.events.length - 1; i >= 0; i--) {
-      const e = detail.events[i];
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i];
       if (e.type !== "done" && e.type !== "mark_job_done") continue;
       const p = e.payload_json ?? {};
       const s = typeof p.summary === "string" ? p.summary.trim() : "";
       if (s) return s;
     }
     // progress 最后一条有时也带结论
-    for (let i = detail.events.length - 1; i >= 0; i--) {
-      const e = detail.events[i];
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i];
       if (e.type !== "progress") continue;
       const p = e.payload_json ?? {};
       const s =
@@ -241,13 +268,13 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
       if (s && s.length > 40) return s; // 避免过短的心跳
     }
     return "";
-  }, [detail]);
+  }, [detail, jobEvents]);
 
   const tabs: Array<[DetailTab, string, number | null, boolean]> = [
     ["result", "结果", runSummary || detail?.findings.length ? 1 : 0, true],
     ["process", "执行过程", stream.length, true],
     ["live", "实时流", null, true],
-    ["events", "事件", detail?.events.length ?? null, true],
+    ["events", "事件", jobEvents.length || detail?.events.length || null, true],
     [
       "session",
       "原始 Session",
@@ -466,13 +493,13 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                   >
                     查看完整执行过程{stream.length ? ` · ${stream.length}` : ""}
                   </button>
-                  {detail.events.length > 0 && (
+                  {(jobEvents.length > 0 || detail.events.length > 0) && (
                     <button
                       type="button"
                       onClick={() => setTab("events")}
                       className="rounded-full px-3 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] hover:text-zinc-200"
                     >
-                      查看事件 · {detail.events.length}
+                      查看事件 · {jobEvents.length || detail.events.length}
                     </button>
                   )}
                 </div>
@@ -559,28 +586,29 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
             </div>
           )}
 
-          {/* 实时流：WS 原始流（仅运行中有意义） */}
-          {detail && tab === "live" && (
+          {/* 实时流常驻挂载：切换结果/事件 tab 只隐藏，不销毁 WS。 */}
+          {detail && active && (
+            <div className={`relative flex h-full min-h-0 flex-col overflow-hidden ${tab === "live" ? "" : "hidden"}`}>
+              <LiveStream jobId={jobId} active={tab === "live"} />
+            </div>
+          )}
+          {detail && !active && tab === "live" && (
             <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
-              {active ? (
-                <LiveStream jobId={jobId} active />
-              ) : (
-                <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-                  <p className="text-[13px] text-zinc-500">运行已结束，实时流已关闭。</p>
-                  <button
-                    type="button"
-                    onClick={() => setTab("process")}
-                    className="rounded-full px-3 py-1.5 font-mono text-[11px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]"
-                  >
-                    查看执行过程
-                  </button>
-                  {stream.length > 0 && (
-                    <p className="font-mono text-[10px] text-zinc-600">
-                      已归档 {stream.length} 条过程记录
-                    </p>
-                  )}
-                </div>
-              )}
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+                <p className="text-[13px] text-zinc-500">运行已结束，实时流已关闭。</p>
+                <button
+                  type="button"
+                  onClick={() => setTab("process")}
+                  className="rounded-full px-3 py-1.5 font-mono text-[11px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]"
+                >
+                  查看执行过程
+                </button>
+                {stream.length > 0 && (
+                  <p className="font-mono text-[10px] text-zinc-600">
+                    已归档 {stream.length} 条过程记录
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
@@ -609,13 +637,13 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                   className="min-h-8 min-w-[8rem] flex-1 rounded-lg bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700"
                 />
                 <span className="font-mono text-[10px] text-zinc-600">
-                  {filteredEvents.length}/{detail.events.length}
+                  {filteredEvents.length}/{jobEvents.length || detail.events.length}
                 </span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
                 {filteredEvents.length === 0 ? (
                   <div className="py-8 text-center text-[13px] text-zinc-600">
-                    {detail.events.length ? "没有匹配当前筛选的事件" : "没有语义事件"}
+                    {jobEvents.length || detail.events.length ? "没有匹配当前筛选的事件" : "没有语义事件"}
                   </div>
                 ) : (
                   <ol className="relative ml-1 border-l border-ink-700 pl-4">
@@ -645,6 +673,15 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                       </li>
                     ))}
                   </ol>
+                )}
+                {eventsHasMore && (
+                  <button
+                    type="button"
+                    onClick={() => void loadMoreEvents()}
+                    className="mt-4 rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]"
+                  >
+                    加载更多事件
+                  </button>
                 )}
               </div>
             </div>

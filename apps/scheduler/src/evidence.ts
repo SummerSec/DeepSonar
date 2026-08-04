@@ -1,11 +1,12 @@
 import type { SessionBundle } from "@deepsonar/runtime-sandbox";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { config } from "./config.js";
+import { decodeCursor, encodeCursor, page, pageLimit, type PageEnvelope } from "./pagination.js";
 
 const gzipP = promisify(gzip);
 const gunzipP = promisify(gunzip);
@@ -69,23 +70,32 @@ export class JobEvidenceWriter {
   private readonly streamPath: string;
   private queue: Promise<void> = Promise.resolve();
   private session: SessionBundle | undefined;
+  private sequence = 0;
+  private readonly safeAttemptId: string;
 
   constructor(private readonly jobId: string, private readonly cli: string, attemptId: string) {
     this.root = jobDir(jobId);
     const safeAttempt = attemptId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
     if (!safeAttempt) throw new Error("非法 evidence attempt id");
+    this.safeAttemptId = safeAttempt;
     this.attemptRoot = path.join(this.root, "attempts", safeAttempt);
     this.streamPath = path.join(this.attemptRoot, "stream.ndjson");
     otlpPaths.set(jobId, path.join(this.attemptRoot, "otlp.ndjson"));
   }
 
-  appendNormalized(event: Record<string, unknown>): void {
-    const line = JSON.stringify({ at: Date.now(), ...event }) + "\n";
+  appendNormalized(event: Record<string, unknown>): number {
+    const seq = ++this.sequence;
+    const line = JSON.stringify({ ...event, at: Date.now(), attempt_id: this.safeAttemptId, seq }) + "\n";
     this.queue = this.queue.then(async () => {
       // stream.ndjson 在 attempts/<id>/ 下，必须建 attempt 目录而不是仅 job 根目录
       await mkdir(this.attemptRoot, { recursive: true });
       await appendFile(this.streamPath, line, "utf8");
     });
+    return seq;
+  }
+
+  get attemptId(): string {
+    return this.safeAttemptId;
   }
 
   setSession(session: SessionBundle | undefined): void {
@@ -193,23 +203,151 @@ export async function readMainSession(jobId: string): Promise<{ meta: EvidenceFi
   return { meta, content: await readFile(resolveManifestFile(jobId, meta)) };
 }
 
-export async function readNormalizedStream(jobId: string): Promise<Record<string, unknown>[]> {
-  const manifest = await readEvidenceManifest(jobId);
-  const metas = manifest?.files.filter((file) => file.kind === "stream") ?? [];
-  if (metas.length === 0) return [];
-  const chunks = await Promise.all(metas.map(async (meta) => {
-    const filePath = resolveManifestFile(jobId, meta);
-    const packed = await readFile(filePath);
-    return filePath.endsWith(".gz") ? await gunzipP(packed) : packed;
-  }));
-  return Buffer.concat(chunks)
+const MAX_STREAM_READ_BYTES = 8 * 1024 * 1024;
+const MAX_STREAM_ARCHIVE_BYTES = 32 * 1024 * 1024;
+
+function streamCursor(record: Record<string, unknown>): string | null {
+  const attempt = typeof record.attempt_id === "string" ? record.attempt_id : null;
+  const seq = Number(record.seq);
+  return attempt && Number.isSafeInteger(seq) && seq > 0
+    ? encodeCursor({ kind: "stream", attempt_id: attempt, seq })
+    : null;
+}
+
+async function readTail(filePath: string): Promise<Buffer> {
+  const info = await stat(filePath);
+  if (info.size <= MAX_STREAM_READ_BYTES) return readFile(filePath);
+  const handle = await open(filePath, "r");
+  try {
+    const length = MAX_STREAM_READ_BYTES;
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, info.size - length);
+    // The first line is usually partial after a tail read; dropping it keeps
+    // JSON parsing deterministic and makes the watermark honest.
+    const firstNewline = buffer.indexOf(0x0a);
+    return firstNewline >= 0 ? buffer.subarray(firstNewline + 1) : Buffer.alloc(0);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function parseStreamFile(
+  filePath: string,
+  attemptHint: string | null,
+  compressed: boolean,
+): Promise<Record<string, unknown>[]> {
+  if (compressed) {
+    const archive = await stat(filePath);
+    if (archive.size > MAX_STREAM_ARCHIVE_BYTES) return [];
+  }
+  let raw = compressed ? await readFile(filePath) : await readTail(filePath);
+  if (compressed) {
+    raw = await gunzipP(raw);
+    if (raw.byteLength > MAX_STREAM_READ_BYTES) raw = raw.subarray(raw.byteLength - MAX_STREAM_READ_BYTES);
+  }
+  const fallbackAttempt = attemptHint ?? path.basename(path.dirname(filePath));
+  let fallbackSeq = 0;
+  return raw
     .toString("utf8")
     .split("\n")
     .filter(Boolean)
-    .slice(-5000)
     .flatMap((line) => {
-      try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        const attempt = typeof parsed.attempt_id === "string" ? parsed.attempt_id : fallbackAttempt;
+        const seq = Number(parsed.seq);
+        return [{
+          ...parsed,
+          attempt_id: attempt,
+          seq: Number.isSafeInteger(seq) && seq > 0 ? seq : ++fallbackSeq,
+        }];
+      } catch {
+        return [];
+      }
     });
+}
+
+async function evidenceStreamRecords(jobId: string): Promise<{ records: Record<string, unknown>[]; live: boolean }> {
+  const manifest = await readEvidenceManifest(jobId);
+  const records: Record<string, unknown>[] = [];
+  let hasRaw = false;
+  for (const meta of manifest?.files.filter((file) => file.kind === "stream") ?? []) {
+    const filePath = resolveManifestFile(jobId, meta);
+    const attempt = meta.path.match(/attempts\/([^/]+)\/stream\.ndjson(?:\.gz)?$/)?.[1] ?? null;
+    records.push(...(await parseStreamFile(filePath, attempt, filePath.endsWith(".gz"))));
+  }
+
+  const attemptsRoot = path.join(jobDir(jobId), "attempts");
+  try {
+    const entries = await readdir(attemptsRoot, { withFileTypes: true });
+    const rawFiles: Array<{ file: string; attempt: string; mtime: number }> = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const file = path.join(attemptsRoot, entry.name, "stream.ndjson");
+      try {
+        const info = await stat(file);
+        hasRaw = true;
+        rawFiles.push({ file, attempt: entry.name, mtime: info.mtimeMs });
+      } catch {
+        /* a finalize may remove the raw file between readdir and stat */
+      }
+    }
+    rawFiles.sort((a, b) => a.mtime - b.mtime);
+    for (const raw of rawFiles) records.push(...(await parseStreamFile(raw.file, raw.attempt, false)));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  records.sort((a, b) => {
+    const at = Number(a.at ?? 0) - Number(b.at ?? 0);
+    if (at !== 0) return at;
+    return Number(a.seq ?? 0) - Number(b.seq ?? 0);
+  });
+  return { records, live: hasRaw || !manifest };
+}
+
+/**
+ * Read a bounded process page.  Running attempts tail the raw NDJSON file and
+ * report live=true; finalized attempts use the manifest archive.  The in-memory
+ * stream bus remains best-effort and this endpoint makes no durability promise
+ * until the writer has finalized the archive.
+ */
+export async function readNormalizedStreamPage(
+  jobId: string,
+  options: { after?: string | null; limit?: number; live?: boolean } = {},
+): Promise<PageEnvelope<Record<string, unknown>>> {
+  const { records, live: detectedLive } = await evidenceStreamRecords(jobId);
+  const limit = pageLimit(options.limit, 50);
+  const after = options.after ?? null;
+  const cursor = decodeCursor(after, "stream");
+  let start = Math.max(0, records.length - limit);
+  if (cursor?.attempt_id && Number.isSafeInteger(cursor.seq)) {
+    const found = records.findIndex(
+      (record) => record.attempt_id === cursor.attempt_id && Number(record.seq) === cursor.seq,
+    );
+    if (found >= 0) start = found + 1;
+    else {
+      const firstAfter = records.findIndex(
+        (record) => record.attempt_id === cursor.attempt_id && Number(record.seq) > (cursor.seq as number),
+      );
+      start = firstAfter >= 0 ? firstAfter : records.length;
+    }
+  }
+  const selected = records.slice(start, start + limit);
+  const next = selected.at(-1);
+  const nextCursor = next ? streamCursor(next) : null;
+  return page(selected, {
+    after,
+    nextCursor,
+    hasMore: start + selected.length < records.length,
+    live: options.live ?? detectedLive,
+    watermark: nextCursor ?? new Date().toISOString(),
+  });
+}
+
+export async function readNormalizedStream(jobId: string): Promise<Record<string, unknown>[]> {
+  const result = await evidenceStreamRecords(jobId);
+  return result.records.slice(-5000);
 }
 
 export async function evidenceSize(jobId: string): Promise<number> {
