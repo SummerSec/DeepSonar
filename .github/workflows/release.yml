@@ -9,6 +9,10 @@ permissions:
   contents: write
   packages: write
 
+concurrency:
+  group: release-runtime-images-${{ github.repository }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   DOCKERHUB_IMAGE: docker.io/sumsec/deepsonar
@@ -139,7 +143,7 @@ jobs:
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
-              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
                 return 1
@@ -167,7 +171,10 @@ jobs:
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
+            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
+            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: 保存 base manifest digest
         env:
           IMAGE_KEY: deepsonar-base
@@ -326,7 +333,7 @@ jobs:
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
-              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
                 return 1
@@ -354,7 +361,10 @@ jobs:
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
+            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
+            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: 保存运行时 manifest digest
         if: ${{ matrix.dockerhub_tag != '' }}
         env:
@@ -539,7 +549,7 @@ jobs:
             local max_attempts=4
             local delay_seconds=5
             while true; do
-              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then
                 return 0
               fi
               if (( attempt >= max_attempts )); then
@@ -588,7 +598,10 @@ jobs:
               dockerhub_tag_args+=(-t "$tag")
             done <<< "$DOCKERHUB_TAGS"
             [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
-            retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"; then
+              echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
+              echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           digest="$(docker buildx imagetools inspect --raw "$primary" | node -e '
             let s=""; process.stdin.on("data", d => s += d);
@@ -745,7 +758,7 @@ jobs:
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
-              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
                 return 1
@@ -773,7 +786,10 @@ jobs:
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
+            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
+            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: 保存 OpenHarmony manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-test
@@ -915,7 +931,7 @@ jobs:
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
-              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
                 return 1
@@ -943,7 +959,10 @@ jobs:
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
+            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
+            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: 保存 OpenHarmony Audit manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-audit
@@ -1085,7 +1104,7 @@ jobs:
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
-              if GODEBUG=http2client=0 docker buildx imagetools create "$@"; then return 0; fi
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
                 return 1
@@ -1113,7 +1132,10 @@ jobs:
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
+            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
+            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: 保存 OpenHarmony Fuzz manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-fuzz

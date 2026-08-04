@@ -5,7 +5,7 @@ import {
   type PlatformToolConfig,
   type PlatformToolName,
 } from "@deepsonar/shared-types";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   type ProviderCredential,
@@ -186,6 +186,7 @@ export function RoleConfigEditor({
   const modelInvalid = Boolean(form.credential_id && enabledModels.length > 0 && selectedModel && !enabledModels.includes(selectedModel));
   const initialModelAutofilled = useRef(false);
   const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
+  const [runtimeImagesError, setRuntimeImagesError] = useState<string | null>(null);
   useEffect(() => {
     if (initialModelAutofilled.current) return;
     const initialCredentialId = initial?.credentials.find((credential) => credential.purpose === "llm")?.credential_id ?? "";
@@ -199,9 +200,17 @@ export function RoleConfigEditor({
     initialModelAutofilled.current = true;
     setForm((current) => ({ ...current, model: enabledModels[0] }));
   }, [enabledModels, form.credential_id, form.model, initial]);
-  useEffect(() => {
-    api.runtimeImages(projectId).then(setRuntimeImages).catch(() => setRuntimeImages([]));
+  const loadRuntimeImages = useCallback(async () => {
+    try {
+      setRuntimeImages(await api.runtimeImages(projectId));
+      setRuntimeImagesError(null);
+    } catch {
+      setRuntimeImagesError("运行镜像列表加载失败，请稍后重试");
+    }
   }, [projectId]);
+  useEffect(() => {
+    void loadRuntimeImages();
+  }, [loadRuntimeImages]);
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
   const runtimeImageGuidance = roleName === "test"
@@ -432,16 +441,17 @@ export function RoleConfigEditor({
           {jsonField("subagents（子 Agent）", "subagents")}
           <div>
             <label className={labelCls}>运行环境</label>
-            <select value={form.runtime_image_key} onChange={(e) => setForm({ ...form, runtime_image_key: e.target.value })} className={inputCls}>
+            <select value={form.runtime_image_key} onFocus={() => void loadRuntimeImages()} onChange={(e) => setForm({ ...form, runtime_image_key: e.target.value })} className={inputCls}>
               <option value="">{roleName === "verify" ? "系统沙箱（默认 Base）" : "系统沙箱（不绑定专项镜像）"}</option>
               {runtimeImages
                 .filter((image) => image.trust_status === "trusted" && ((image.official && !image.project_opt_in) || Boolean(projectId && image.project_enabled)))
                 .map((image) => (
                   <option key={image.id} value={image.image_key}>
-                    {image.name} · {image.image_key === "deepsonar-kali-minimal" ? "动态 Java/Python/Go/Rust" : image.latest_version ?? "trusted"}
+                    {image.name} · {image.latest_version ?? "trusted"}{image.image_key === "deepsonar-kali-minimal" ? " · 动态 Java/Python/Go/Rust" : ""}
                   </option>
                 ))}
             </select>
+            {runtimeImagesError && <p className="mt-1 text-[10px] leading-5 text-red-400">{runtimeImagesError}</p>}
             <p className="mt-1 text-[10px] leading-5 text-zinc-600">{runtimeImageGuidance}</p>
           </div>
           <div className="role-config-provider"><label className={labelCls}>Provider 配置文件（<span className="text-zinc-300">{CONFIG_FILE_PATHS[form.agent_cli]}</span>）</label><textarea value={form.config_content} onChange={(e) => setForm({ ...form, config_content: e.target.value })} rows={4} spellCheck={false} className={`${inputCls} resize-y leading-relaxed`} placeholder={form.agent_cli === "codex" ? "# TOML 配置内容" : "{ …JSON 配置内容… }"} /><div className="mt-1 text-[11px] leading-5 text-zinc-600">配置命中密钥特征会被拒绝，请改用 Credential。</div></div>

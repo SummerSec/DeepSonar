@@ -23,6 +23,7 @@ const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml",
 const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
 const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
 const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
+const schedulerRoutes = readFileSync(new URL("../apps/scheduler/src/routes.ts", import.meta.url), "utf8");
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -235,10 +236,21 @@ expect(registryScript.includes("platforms.length !== 1") || registryScript.inclu
 expect(schedulerRuntimeImages.includes("releases/latest/download/runtime-image-registry.json"), "Scheduler 必须从固定官方 latest Release 同步清单");
 expect(schedulerRuntimeImages.includes("image.versions.length > 0"), "正式清单已有版本时不能被环境变量旧版本覆盖");
 expect(schedulerRuntimeImages.includes("SET promoted_at = NULL"), "同步最新版本后必须取消旧版本默认 promoted 状态");
+const runtimeImageListRoute = schedulerRoutes.slice(
+  schedulerRoutes.indexOf('app.get("/runtime-images"'),
+  schedulerRoutes.indexOf('app.get("/runtime-images/registry"'),
+);
+const trustPriorityIndex = runtimeImageListRoute.indexOf("ORDER BY CASE v.trust_status");
+const platformPriorityIndex = runtimeImageListRoute.indexOf("WHEN v.platforms_json @>");
+expect(trustPriorityIndex >= 0 && platformPriorityIndex > trustPriorityIndex, "/runtime-images 最新版本必须先按可信状态排序，再优先 Scheduler 宿主平台");
 expect(releaseWorkflow.includes("actions/upload-artifact@v4"), "release workflow 缺少 digest/registry artifact");
 expect(releaseWorkflow.includes("generate-runtime-image-registry.mjs"), "release workflow 缺少 runtime registry 合并脚本");
 expect(releaseWorkflow.includes("deploy/runtime-image-registry.json"), "release workflow 未发布 runtime registry");
 expect(releaseWorkflow.includes("回写 bundled 清单到默认分支"), "release workflow 必须在发布后回写 deploy/runtime-image-registry.json");
+expect(releaseWorkflow.includes("group: release-runtime-images-${{ github.repository }}"), "release workflow 必须跨 tag 串行执行");
+expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 不得取消正在执行的旧发布");
+expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length === 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
+expect((releaseWorkflow.match(/::warning::Docker Hub 标签发布失败/g) ?? []).length === 6, "所有运行时镜像发布必须把 Docker Hub 复制失败降级为警告");
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");

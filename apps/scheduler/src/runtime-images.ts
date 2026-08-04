@@ -896,10 +896,10 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
  * 创建 Job 时选择一次并冻结；Executor 不再读取目录或 tag。
  * 未绑定市场镜像时使用平台治理的最小 Base 作为系统沙箱底座，而不是允许 Agent 指定引用。
  */
-function hostRuntimePlatform(): string {
-  // Node: x64 → linux/amd64；arm64 → linux/arm64
-  const arch = process.arch === "x64" ? "amd64" : process.arch;
-  return `linux/${arch}`;
+export function hostRuntimePlatform(arch: NodeJS.Architecture = process.arch): "linux/amd64" | "linux/arm64" {
+  if (arch === "x64") return "linux/amd64";
+  if (arch === "arm64") return "linux/arm64";
+  throw new Error(`不支持的 Scheduler 宿主架构：${arch}`);
 }
 
 export async function resolveRuntimeImageForJob(

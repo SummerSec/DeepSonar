@@ -78,6 +78,7 @@ import {
 import { processExportRow } from "./transfer/worker.js";
 import {
   applyUploadedRuntimeCatalog,
+  hostRuntimePlatform,
   immutableDigest,
   inspectLocalRuntimeImage,
   localImageDigest,
@@ -1300,6 +1301,7 @@ export function registerRoutes(app: FastifyInstance) {
     }
     const projectId = query.project_id ?? null;
     const search = query.search?.trim() ? `%${query.search.trim()}%` : null;
+    const hostPlatform = hostRuntimePlatform();
     return sql`
       SELECT ri.id, ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url,
              ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.created_at, ri.updated_at,
@@ -1315,6 +1317,11 @@ export function registerRoutes(app: FastifyInstance) {
         SELECT v.* FROM runtime_image_versions v
         WHERE v.runtime_image_id = ri.id
         ORDER BY CASE v.trust_status WHEN 'trusted' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,
+                 CASE
+                   WHEN v.platforms_json @> ${sql.json([hostPlatform])} THEN 0
+                   WHEN v.platforms_json IS NULL OR jsonb_array_length(v.platforms_json) = 0 THEN 1
+                   ELSE 2
+                 END,
                  v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
         LIMIT 1
       ) latest ON true
