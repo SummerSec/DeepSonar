@@ -3,7 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { validateModuleSelectors } from "@deepsonar/shared-types";
-import { validateCredentialRoleConfigBinding } from "../credentials.js";
+import { projectCredentialMetadata, validateCredentialRoleConfigBinding } from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import {
@@ -71,6 +71,18 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
   warnings.push("导入默认创建新项目并重映射 ID；外部集成与 Credential 需在目标环境重新绑定");
   if (modules.includes("tasks")) {
     warnings.push("活动 Job 将归档为 cancelled，不会自动继续执行");
+  }
+
+  // Credential metadata in an old package is untrusted input.  It is not
+  // imported as a secret, but still sanitize it before any preview/manifest
+  // projection and make lossy cleanup visible to the operator.
+  let sanitizedCredentialMetadata = 0;
+  for (const credential of creds) {
+    const safe = projectCredentialMetadata(String(credential.kind ?? ""), String(credential.provider ?? ""), credential.public_metadata);
+    if (JSON.stringify(safe) !== JSON.stringify(credential.public_metadata ?? {})) sanitizedCredentialMetadata += 1;
+  }
+  if (sanitizedCredentialMetadata > 0) {
+    warnings.push(`已清理 ${sanitizedCredentialMetadata} 条 Credential 的不安全 legacy metadata；不会原样写入目标库`);
   }
 
   const preview: PreviewResult = {

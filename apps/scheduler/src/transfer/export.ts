@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { validateModuleSelectors } from "@deepsonar/shared-types";
 import { sql } from "../db.js";
+import { projectCredentialMetadata } from "../credentials.js";
 import {
   buildManifestSource,
   ensureTransferDirs,
@@ -289,7 +290,7 @@ async function collectRoles(
         provider: b.provider,
         fingerprint: b.fingerprint,
         last4: b.last4,
-        public_metadata: b.public_metadata_json,
+        public_metadata: projectCredentialMetadata(String(b.kind), String(b.provider), b.public_metadata_json),
         secret_included: false,
       });
     }

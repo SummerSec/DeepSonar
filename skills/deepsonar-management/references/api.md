@@ -207,13 +207,19 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /credentials | agents:read | 列表（指纹 / last4 / metadata） |
+| GET | /credentials | agents:read | 列表（指纹 / last4 / 安全 metadata / scope / health / bound RoleConfig count；无密文） |
+| GET | /credentials/:id | agents:read | 详情（安全 health/model catalog + 有界 impact 投影；无密文） |
+| GET | /credentials/:id/impact | agents:read | 只读影响：global/project RoleConfig、pending 未 claim、active frozen、terminal historical Job（counts + 有界条目） |
 | POST | /credentials | agents:write | `{name, provider, secret, kind?, project_id?, metadata?}`；OCI 使用 `kind=oci_registry`、`provider=<registry-host>`、`metadata={registry,username}` |
-| PATCH | /credentials/:id | agents:write | 非敏感：`{name?, project_id?, metadata?}`（可改 base_url） |
+| PATCH | /credentials/:id | agents:write | 非敏感：`{name?, provider?, project_id?, metadata?}`（可改 base_url） |
 | POST | /credentials/:id/rotate | agents:write | `{secret}` 轮换密钥 |
 | POST | /credentials/:id/status | agents:write | `{status: active\|disabled\|rotation_required}` |
 | POST | /credentials/:id/test | agents:read | 连接测试（无 body） |
 | POST | /credentials/:id/models | agents:read | 实时拉取 Provider 模型目录（无 body；选 RoleConfig.model 前调用） |
+| GET | /credentials/:id/models | agents:read | 读取已持久化的有界模型 ID 目录与 allowed_model_ids |
+| GET | /credentials/:id/compatibility | agents:read | `?agent_cli=claude-code|open-code|codex&model=<id>`；复用服务端 CLI/provider/model 白名单规则 |
+
+Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`allowed_model_ids`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。旧数据库与导入包在服务端按同一 allowlist 丢弃不安全字段，不把未知值迁移到其它明文字段。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。
 
 ### Plane 集成（可选）
 
@@ -274,7 +280,7 @@ pending → claimed → provisioning → running → waiting_human → succeeded
 
 - `POST /jobs/:id/resume`：`failed` / `timeout` / `orphan` / `waiting_human` → `pending`（终态 409）；Scheduler 按 Job `type`/`purpose` 重算固定 priority class，不信任历史或调用方 priority。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。
-- schema 版本：当前支持 v12 → v13；Scheduler 持 session advisory lock 执行连续 migration，并校验 `schema_migrations` 的原始字节 checksum。v12 之前、未知结构或已应用文件漂移会 fail closed；先备份并按数据库恢复文档处理，不要直接 `DROP SCHEMA public CASCADE`。
+- schema 版本：当前支持 v12 → v15；Scheduler 持 session advisory lock 执行连续 migration，并校验 `schema_migrations` 的原始字节 checksum。v15 会重建 Credential public metadata allowlist 并添加持久化 health/model catalog。v12 之前、未知结构或已应用文件漂移会 fail closed；先备份并按数据库恢复文档处理，不要直接 `DROP SCHEMA public CASCADE`。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。
 
 ## 发现契约（推荐流程）

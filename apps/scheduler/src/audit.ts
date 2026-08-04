@@ -21,14 +21,18 @@ export interface AuditEntry {
 }
 
 function canonicalizeMetadata(input: unknown): unknown {
-  if (Array.isArray(input)) return input.map(canonicalizeMetadata);
+  if (Array.isArray(input)) return { type: "array", length: input.length, items: input.map(canonicalizeMetadata) };
   if (input && typeof input === "object") {
     const object = input as Record<string, unknown>;
     return Object.fromEntries(
       Object.keys(object).sort().map((key) => [key, canonicalizeMetadata(object[key])]),
     );
   }
-  return input;
+  if (typeof input === "string") return { type: "string", length: input.length };
+  if (typeof input === "number") return { type: "number", integer: Number.isInteger(input) };
+  if (typeof input === "boolean") return { type: "boolean" };
+  if (input === null) return { type: "null" };
+  return { type: typeof input };
 }
 
 /**
@@ -36,9 +40,9 @@ function canonicalizeMetadata(input: unknown): unknown {
  *
  * public_metadata_json is intentionally extensible and user-controlled, so
  * neither its keys nor values may be copied into an audit entry.  Keep only
- * fixed-shape counts/presence flags and a SHA-256 fingerprint as change
- * evidence.  This makes the summary useful without allowing a secret to be
- * smuggled through a metadata key, model id, URL, or arbitrary value.
+ * fixed-shape counts/presence flags and a SHA-256 fingerprint of value shapes
+ * as change evidence.  This makes the summary useful without allowing a
+ * secret to be smuggled through a metadata key, model id, URL, or arbitrary value.
  */
 export function summarizeCredentialMetadata(input: unknown): Record<string, unknown> {
   const record = input && typeof input === "object" && !Array.isArray(input)
@@ -55,7 +59,7 @@ export function summarizeCredentialMetadata(input: unknown): Record<string, unkn
     : 0;
   const summary: Record<string, unknown> = {
     metadata_key_count: allKeys.length,
-    metadata_sha256: metadataSha256,
+    metadata_shape_sha256: metadataSha256,
     base_url_present: Object.prototype.hasOwnProperty.call(record, "base_url"),
     allowed_model_ids_present: Object.prototype.hasOwnProperty.call(record, "allowed_model_ids"),
     allowed_model_count: allowed.length,

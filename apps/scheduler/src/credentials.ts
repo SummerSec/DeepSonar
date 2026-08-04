@@ -74,6 +74,223 @@ export function last4Of(plaintext: string): string {
   return plaintext.slice(-4);
 }
 
+/**
+ * Credential metadata is public by design, but it is not an arbitrary JSON
+ * extension point.  Keep this allowlist in the scheduler so API, transfer and
+ * runtime consumers all apply the same projection.  Values are deliberately
+ * validated by type/length/control characters only; model identifiers and
+ * registry account names are user data and must not be filtered by token-like
+ * heuristics.
+ */
+export type CredentialKind = "llm_provider" | "plane" | "git" | "oci_registry";
+export type CredentialMetadataMode = "reject" | "drop";
+
+export const CREDENTIAL_MODEL_CATALOG_MAX = 200;
+export const CREDENTIAL_MODEL_ID_MAX_LENGTH = 200;
+export const CREDENTIAL_METADATA_STRING_MAX_LENGTH = 500;
+
+const SECRET_LIKE_METADATA_KEY = /(password|passwd|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|access[_-]?key|credential|bearer)/i;
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
+const LLM_METADATA_KEYS = new Set(["base_url", "allowed_model_ids", "model_concurrency", "max_concurrent"]);
+const OCI_METADATA_KEYS = new Set(["registry", "username"]);
+
+export class CredentialMetadataError extends Error {
+  constructor(message: string, public readonly key?: string) {
+    super(message);
+    this.name = "CredentialMetadataError";
+  }
+}
+
+/** Public metadata keys supported for a Credential kind/provider pair. */
+export function credentialMetadataKeys(kind: string, provider: string): ReadonlySet<string> {
+  if (kind === "llm_provider" && ["anthropic", "kimi", "openai", "openrouter"].includes(provider)) return LLM_METADATA_KEYS;
+  if (kind === "oci_registry") return OCI_METADATA_KEYS;
+  // Plane/Git credentials currently carry no provider-specific public fields.
+  // Keeping the set explicit means future fields must be reviewed here first.
+  return new Set<string>();
+}
+
+/** Provider/kind pairs accepted by Credential routes. */
+export function isProviderAllowedForKind(kind: string, provider: string): boolean {
+  if (kind === "llm_provider") return ["anthropic", "kimi", "openai", "openrouter"].includes(provider);
+  if (kind === "plane") return provider === "plane";
+  if (kind === "git") return provider === "git";
+  // OCI provider is the registry host itself and is checked against the
+  // configured registry allowlist by the route.
+  return kind === "oci_registry";
+}
+
+function metadataRecord(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new CredentialMetadataError("metadata 必须是对象");
+  }
+  return input as Record<string, unknown>;
+}
+
+function cleanMetadataString(value: unknown, key: string, maxLength = CREDENTIAL_METADATA_STRING_MAX_LENGTH): string {
+  if (typeof value !== "string") throw new CredentialMetadataError(`metadata.${key} 必须是字符串`, key);
+  const result = value.trim();
+  if (!result) throw new CredentialMetadataError(`metadata.${key} 不能为空`, key);
+  if (result.length > maxLength) throw new CredentialMetadataError(`metadata.${key} 超过长度限制`, key);
+  if (CONTROL_CHARACTER.test(result)) throw new CredentialMetadataError(`metadata.${key} 含控制字符`, key);
+  return result;
+}
+
+function normalizeBaseUrl(value: unknown): string {
+  const raw = cleanMetadataString(value, "base_url");
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new CredentialMetadataError("metadata.base_url 必须是有效 URL", "base_url");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new CredentialMetadataError("metadata.base_url 只允许 http/https", "base_url");
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new CredentialMetadataError("metadata.base_url 不得包含 userinfo、query 或 fragment", "base_url");
+  }
+  const pathname = parsed.pathname.replace(/\/+$/u, "");
+  // URL#origin/host is normalized by the WHATWG parser and contains no query
+  // or credentials.  Preserve a provider path (for example /coding/v1).
+  return `${parsed.origin}${pathname}`;
+}
+
+function normalizeModelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new CredentialMetadataError("metadata.allowed_model_ids 必须是数组", "allowed_model_ids");
+  if (value.length > CREDENTIAL_MODEL_CATALOG_MAX) {
+    throw new CredentialMetadataError("metadata.allowed_model_ids 数量超限", "allowed_model_ids");
+  }
+  const result: string[] = [];
+  for (const item of value) {
+    const model = cleanMetadataString(item, "allowed_model_ids", CREDENTIAL_MODEL_ID_MAX_LENGTH);
+    if (!result.includes(model)) result.push(model);
+  }
+  return result;
+}
+
+function normalizeConcurrency(value: unknown, key: string, mode: CredentialMetadataMode): number {
+  if (mode === "reject" && typeof value !== "number") {
+    throw new CredentialMetadataError(`metadata.${key} 必须是 JSON number`, key);
+  }
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(number) || number < 0 || number > 1000) {
+    throw new CredentialMetadataError(`metadata.${key} 必须是 0..1000 的整数`, key);
+  }
+  return number;
+}
+
+/**
+ * Normalize new/API metadata (`mode=reject`) or project old rows/transfers
+ * (`mode=drop`).  Drop mode is intentionally lossy: unknown or malformed
+ * legacy values are removed rather than copied to another plaintext field.
+ */
+export function sanitizeCredentialMetadata(
+  input: unknown,
+  options: { kind: string; provider: string; mode?: CredentialMetadataMode },
+): Record<string, unknown> {
+  const mode = options.mode ?? "reject";
+  const record = metadataRecord(input);
+  const allowed = credentialMetadataKeys(options.kind, options.provider);
+  const output: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(record)) {
+    if (SECRET_LIKE_METADATA_KEY.test(key) || !allowed.has(key)) {
+      if (mode === "reject") {
+        throw new CredentialMetadataError(`metadata key 不在服务器允许列表: ${key}`, key);
+      }
+      continue;
+    }
+    try {
+      if (key === "base_url") {
+        output.base_url = normalizeBaseUrl(value);
+      } else if (key === "allowed_model_ids") {
+        output.allowed_model_ids = normalizeModelIds(value);
+      } else if (key === "max_concurrent") {
+        if (value !== null && value !== "") output.max_concurrent = normalizeConcurrency(value, key, mode);
+      } else if (key === "model_concurrency") {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new CredentialMetadataError("metadata.model_concurrency 必须是对象", key);
+        }
+        const configured = value as Record<string, unknown>;
+        if (Object.keys(configured).length > CREDENTIAL_MODEL_CATALOG_MAX) {
+          throw new CredentialMetadataError("metadata.model_concurrency 数量超限", key);
+        }
+        output.model_concurrency = Object.fromEntries(
+          Object.entries(configured).map(([model, limit]) => [
+            cleanMetadataString(model, "model_concurrency", CREDENTIAL_MODEL_ID_MAX_LENGTH),
+            normalizeConcurrency(limit, "model_concurrency", mode),
+          ]),
+        );
+      } else if (key === "registry") {
+        const registry = cleanMetadataString(value, key).toLowerCase();
+        if (registry.includes("://") || registry.includes("@") || registry.includes("?") || registry.includes("#")) {
+          throw new CredentialMetadataError("metadata.registry 不得包含 scheme、userinfo、query 或 fragment", key);
+        }
+        if (!/^[a-z0-9][a-z0-9._:-]*(?:\/[a-z0-9._-]+)*$/iu.test(registry)) {
+          throw new CredentialMetadataError("metadata.registry 格式非法", key);
+        }
+        output.registry = registry.replace(/\/+$/u, "");
+      } else if (key === "username") {
+        output.username = cleanMetadataString(value, key, 200);
+      }
+    } catch (error) {
+      if (mode === "reject") throw error;
+      // Existing rows are sanitized by dropping malformed fields, never by
+      // preserving their original value.
+    }
+  }
+
+  // model_concurrency is meaningful only for the explicit model allowlist.
+  if (Array.isArray(output.allowed_model_ids)) {
+    const allowedModels = new Set(output.allowed_model_ids as string[]);
+    const configured = output.model_concurrency as Record<string, number> | undefined;
+    if (configured) {
+      output.model_concurrency = Object.fromEntries(
+        Object.entries(configured).filter(([model]) => allowedModels.has(model)),
+      );
+    }
+  } else {
+    delete output.model_concurrency;
+  }
+  return output;
+}
+
+/** Safe projection for DB rows/transfers; never throws for legacy garbage. */
+export function projectCredentialMetadata(kind: string, provider: string, input: unknown): Record<string, unknown> {
+  try {
+    return sanitizeCredentialMetadata(input ?? {}, { kind, provider, mode: "drop" });
+  } catch {
+    return {};
+  }
+}
+
+/** Bound and normalize model IDs persisted from a Provider response. */
+export function normalizeModelCatalog(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const output: string[] = [];
+  for (const value of input) {
+    if (typeof value !== "string") continue;
+    const model = value.trim();
+    if (!model || model.length > CREDENTIAL_MODEL_ID_MAX_LENGTH || CONTROL_CHARACTER.test(model)) continue;
+    if (!output.includes(model)) output.push(model);
+    if (output.length >= CREDENTIAL_MODEL_CATALOG_MAX) break;
+  }
+  return output.sort((left, right) => left.localeCompare(right));
+}
+
+export type CredentialHealthStatus = "unknown" | "ok" | "error";
+export type CredentialHealthErrorCategory =
+  | "configuration"
+  | "authentication"
+  | "authorization"
+  | "rate_limited"
+  | "timeout"
+  | "network"
+  | "upstream"
+  | "invalid_response"
+  | "unknown";
+
 /** Credential 公共元数据中的模型白名单；空数组表示不额外限制。 */
 export function allowedModelIds(metadata: unknown): string[] {
   const raw = (metadata as { allowed_model_ids?: unknown } | null)?.allowed_model_ids;

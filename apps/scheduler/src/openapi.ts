@@ -628,6 +628,8 @@ const OPS: Op[] = [
 
   // credentials
   { method: "get", path: "/credentials", summary: "凭据列表（无密文）", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录与绑定影响；无密文）", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials/{id}/impact", summary: "凭据只读影响投影（RoleConfig / pending / active / historical Job）", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "post",
     path: "/credentials",
@@ -645,8 +647,16 @@ const OPS: Op[] = [
         project_id: { type: "string", format: "uuid", nullable: true },
         metadata: {
           type: "object",
-          additionalProperties: true,
-          description: "非敏感元数据，如 { base_url }",
+          additionalProperties: false,
+          properties: {
+            base_url: { type: "string", format: "uri", description: "仅 http/https；不得含 userinfo/query/fragment" },
+            allowed_model_ids: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
+            model_concurrency: { type: "object", additionalProperties: { type: "integer", minimum: 0, maximum: 1000 } },
+            max_concurrent: { type: "integer", minimum: 0, maximum: 1000 },
+            registry: { type: "string", description: "OCI registry host/path（不含 scheme/userinfo/query/fragment）" },
+            username: { type: "string", maxLength: 200, description: "OCI registry account name（非密钥）" },
+          },
+          description: "服务器拥有固定字段白名单；未知或 secret-like key 一律拒绝",
         },
       },
     },
@@ -661,8 +671,9 @@ const OPS: Op[] = [
       type: "object",
       properties: {
         name: { type: "string" },
+        provider: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
-        metadata: { type: "object", additionalProperties: true },
+        metadata: { $ref: "#/components/schemas/CredentialMetadata" },
       },
     },
   },
@@ -688,6 +699,18 @@ const OPS: Op[] = [
   },
   { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:read", tags: ["Credentials"] },
   { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials/{id}/models", summary: "读取已持久化的安全模型目录", scope: "agents:read", tags: ["Credentials"] },
+  {
+    method: "get",
+    path: "/credentials/{id}/compatibility",
+    summary: "校验 Credential 与 Agent CLI/模型兼容性",
+    scope: "agents:read",
+    tags: ["Credentials"],
+    query: {
+      agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex"] },
+      model: { type: "string", minLength: 1, maxLength: 200 },
+    },
+  },
 
   // tokens
   { method: "get", path: "/tokens", summary: "API Token 列表", scope: "tokens:manage", tags: ["Tokens"] },
@@ -848,6 +871,31 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       },
       schemas: {
         Error: ErrorSchema,
+        CredentialMetadata: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            base_url: { type: "string", format: "uri" },
+            allowed_model_ids: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
+            model_concurrency: { type: "object", additionalProperties: { type: "integer", minimum: 0, maximum: 1000 } },
+            max_concurrent: { type: "integer", minimum: 0, maximum: 1000 },
+            registry: { type: "string" },
+            username: { type: "string", maxLength: 200 },
+          },
+          description: "Server-owned metadata allowlist; secret-like/unknown keys are rejected.",
+        },
+        CredentialHealth: {
+          type: "object",
+          required: ["status", "last_tested_at", "error_category", "detail", "model_catalog", "model_catalog_fetched_at"],
+          properties: {
+            status: { type: "string", enum: ["unknown", "ok", "error"] },
+            last_tested_at: { type: "string", format: "date-time", nullable: true },
+            error_category: { type: "string", nullable: true },
+            detail: { type: "string", nullable: true, maxLength: 300 },
+            model_catalog: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
+            model_catalog_fetched_at: { type: "string", format: "date-time", nullable: true },
+          },
+        },
         ReasoningEffort: { type: "string", enum: [...ReasoningEnum], nullable: true },
         RoleConfigInput: {
           type: "object",
