@@ -393,12 +393,14 @@ export function JobsPage() {
                       )}
                     </td>
                     <td className={`${tdCls} font-mono text-[13px]`}>
-                      <div>{j.type}</div>
-                      {j.role_name && (
-                        <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-600" title={j.role_name}>
-                          {j.role_name}
-                        </div>
-                      )}
+                      <button type="button" className="text-left hover:text-acc-400" onClick={(event) => { event.stopPropagation(); openJob(j.id); }}>
+                        <span className="block">{j.type}</span>
+                        {j.role_name && (
+                          <span className="mt-0.5 block truncate font-mono text-[11px] text-zinc-600" title={j.role_name}>
+                            {j.role_name}
+                          </span>
+                        )}
+                      </button>
                     </td>
                     <td className={`${tdCls} font-mono text-[12px] text-zinc-300`}>
                       {j.agent_cli ? (

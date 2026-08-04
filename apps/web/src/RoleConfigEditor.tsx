@@ -299,8 +299,8 @@ export function RoleConfigEditor({
   );
 
   return (
-    <div className="role-config-editor">
-      <div className="role-config-header">
+    <div className="role-config-editor min-w-0">
+      <div className="role-config-header flex-wrap">
         <div>
           <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-acc-400">{title}</span>
           <p>定义这个角色下一次运行时冻结的执行快照。</p>
@@ -318,7 +318,7 @@ export function RoleConfigEditor({
       <div className="role-config-grid">
         <section className="role-config-section role-config-runtime">
           <div className="role-config-section-title"><span>01</span><strong>执行与凭据</strong></div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div>
               <label className={labelCls}>Agent CLI</label>
               <select value={form.agent_cli} onChange={(e) => setForm({ ...form, agent_cli: e.target.value })} className={inputCls}>

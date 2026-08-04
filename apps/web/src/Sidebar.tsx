@@ -122,7 +122,7 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
   };
 
   return (
-    <aside className="theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-20 flex w-[420px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]">
+    <aside className="theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-20 flex w-[calc(100%-1rem)] max-w-[420px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]">
       {/* 头部 */}
       <div className="flex items-start gap-3 border-b border-white/[.05] px-5 py-4">
         <div className="min-w-0 flex-1">

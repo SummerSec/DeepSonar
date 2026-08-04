@@ -289,13 +289,21 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 </tr>
               ) : (
                 visible.map((f) => (
-                  <tr key={f.id} className={trHover} onClick={() => openFinding(f.id)}>
+                  <tr
+                    key={f.id}
+                    className={`${trHover} cursor-pointer`}
+                    onClick={() => openFinding(f.id)}
+                  >
                     <td className={tdCls}>
                       <SeverityBadge severity={f.severity} />
                     </td>
                     <td className={tdCls}>
                       <button
                         type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openFinding(f.id);
+                        }}
                         className="text-left font-medium text-zinc-100 hover:text-acc-400"
                       >
                         {f.title}
