@@ -29,6 +29,8 @@ if (!testDatabaseUrl) {
     const factRepointJobId = randomUUID();
     const multiCanvasJobId = randomUUID();
     const conflictingCanvasJobId = randomUUID();
+    const reportOnlyJobId = randomUUID();
+    const reportConflictJobId = randomUUID();
     const fixture = {
       jobId,
       projectId,
@@ -109,6 +111,26 @@ if (!testDatabaseUrl) {
     await sql`
       INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
       VALUES (${movedCanvasId}, ${conflictingCanvasJobId}, 'job', 'conflicting canvas', 'running', ${sql.json({})})`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${reportOnlyJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+      VALUES (${canvasId}, ${reportOnlyJobId}, 'report', 'legacy report-only node', 'running', ${sql.json({})})`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${reportConflictJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+      VALUES (${movedCanvasId}, ${reportConflictJobId}, 'report', 'cross canvas report', 'running', ${sql.json({})})`;
 
     const marker = (tx: typeof sql, eventId: string) =>
       tx`UPDATE canvas_nodes
@@ -238,6 +260,31 @@ if (!testDatabaseUrl) {
       const [legacyTerminalNode] = await sql<{ status: string }[]>`
         SELECT status FROM canvas_nodes WHERE job_id = ${legacyJobId} AND node_type = 'job'`;
       assert.equal(legacyTerminalNode?.status, "succeeded");
+
+      // A legacy Job may have only a report node and no jobs.canvas_id.  The
+      // terminal path must discover and lock that report Canvas before the
+      // Job row, then update the report node normally.
+      await sql.begin(async (tx) => {
+        await finalizeJob(tx as unknown as typeof sql, reportOnlyJobId, "succeeded", { summary: "report-only" });
+      });
+      const [reportOnlyJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${reportOnlyJobId}`;
+      const [reportOnlyNode] = await sql<{ status: string; canvas_id: string }[]>`
+        SELECT status, canvas_id FROM canvas_nodes WHERE job_id = ${reportOnlyJobId}`;
+      assert.equal(reportOnlyJob?.status, "succeeded");
+      assert.equal(reportOnlyNode?.status, "succeeded");
+      assert.equal(reportOnlyNode?.canvas_id, canvasId);
+
+      await assert.rejects(
+        sql.begin(async (tx) => {
+          await finalizeJob(tx as unknown as typeof sql, reportConflictJobId, "succeeded", { summary: "must reject" });
+        }),
+        /outside canvas/,
+      );
+      const [reportConflictJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${reportConflictJobId}`;
+      const [reportConflictNode] = await sql<{ status: string }[]>`
+        SELECT status FROM canvas_nodes WHERE job_id = ${reportConflictJobId}`;
+      assert.equal(reportConflictJob?.status, "running");
+      assert.equal(reportConflictNode?.status, "running");
 
       await assert.rejects(
         sql.begin(async (tx) => {

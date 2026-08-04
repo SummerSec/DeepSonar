@@ -58,7 +58,7 @@ type CanvasHint = {
   /** A fact's optional intent target, including a missing-row snapshot. */
   targetNodeId: string | null;
   targetNode: CanvasNodeSnapshot | null;
-  /** All Job/Intent nodes used by Canvas-aware side effects. */
+  /** All Job/Intent/Report nodes used by Canvas-aware side effects. */
   jobNodes: CanvasNodeSnapshot[];
 };
 
@@ -106,7 +106,7 @@ async function resolveCanvasHint(
 
   const jobNodes = await db<{ id: string; canvas_id: string | null }[]>`
     SELECT id, canvas_id FROM canvas_nodes
-    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
     ORDER BY id`;
   const jobNodeSnapshots = jobNodes.map((node) => nodeSnapshot(node));
   const jobNodeCanvasIds = [...new Set(jobNodeSnapshots.map((node) => node.canvasId))];
@@ -116,7 +116,7 @@ async function resolveCanvasHint(
     throw new Error(`event intent node ${targetNodeId} does not belong to job canvas ${jobCanvasId}`);
   }
   if (jobNodeSnapshots.some((node) => !node.canvasId)) {
-    throw new Error(`job ${jobId} has a Job/Intent node without a Canvas`);
+    throw new Error(`job ${jobId} has a Job/Intent/Report node without a Canvas`);
   }
   if (jobNodeCanvasIds.some((canvasId) => canvasId !== resolvedCanvasId)) {
     throw new Error(`job ${jobId} has a job node outside canvas ${resolvedCanvasId ?? "<none>"}`);
@@ -152,19 +152,19 @@ async function revalidateCanvasHint(
   const currentJobNodes = (
     await tx<{ id: string; canvas_id: string | null }[]>`
       SELECT id, canvas_id FROM canvas_nodes
-      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
       ORDER BY id
       FOR UPDATE`
   ).map((node) => nodeSnapshot(node));
   if (!sameNodeSnapshots(currentJobNodes, hint.jobNodes)) {
-    throw new RetryCanvasResolution("Job/Intent nodes changed while resolving lock order");
+    throw new RetryCanvasResolution("Job/Intent/Report nodes changed while resolving lock order");
   }
 
   if (currentTarget?.canvasId && currentTarget.canvasId !== hint.canvasId) {
     throw new RetryCanvasResolution("event target node moved to another Canvas");
   }
   if (currentJobNodes.some((node) => node.canvasId !== hint.canvasId)) {
-    throw new RetryCanvasResolution("Job/Intent node moved to another Canvas");
+    throw new RetryCanvasResolution("Job/Intent/Report node moved to another Canvas");
   }
   if (!hint.canvasId && (currentTarget?.canvasId || currentJobNodes.length > 0)) {
     throw new RetryCanvasResolution("a Canvas appeared after the lock target preflight");

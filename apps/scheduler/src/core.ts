@@ -1200,13 +1200,13 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   const candidateJobCanvasId = (candidate.canvas_id as string | null) ?? null;
   const candidateNodes = await tx<TerminalCanvasNodeSnapshot[]>`
     SELECT id, canvas_id FROM canvas_nodes
-    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
     ORDER BY id`;
   const candidateNodeCanvasIds = [
     ...new Set(candidateNodes.map((node) => (node.canvas_id as string | null) ?? null)),
   ];
   if (candidateNodes.some((node) => !node.canvas_id)) {
-    throw new Error(`job ${jobId} has a Job/Intent node without a Canvas`);
+    throw new Error(`job ${jobId} has a Job/Intent/Report node without a Canvas`);
   }
   if (candidateNodeCanvasIds.length > 1) {
     throw new Error(`job ${jobId} has multiple convergence canvases`);
@@ -1225,7 +1225,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
   }
   const lockedNodes = await tx<TerminalCanvasNodeSnapshot[]>`
     SELECT id, canvas_id FROM canvas_nodes
-    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
     ORDER BY id
     FOR UPDATE`;
   if (!sameTerminalCanvasNodes(candidateNodes, lockedNodes)) {
