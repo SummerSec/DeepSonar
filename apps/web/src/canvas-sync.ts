@@ -21,3 +21,9 @@ export function mergeHydratedCanvasData(
     }),
   };
 }
+
+/** Keep the sidebar selection aligned with the latest L0 node projection. */
+export function syncSelectedNode(data: CanvasData, selected: CanvasNode | null): CanvasNode | null {
+  if (!selected) return null;
+  return data.nodes.find((node) => node.id === selected.id) ?? null;
+}

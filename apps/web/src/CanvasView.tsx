@@ -13,7 +13,12 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
-import { CANVAS_SKELETON_REFRESH_MS, isCurrentNodeRequest, mergeHydratedCanvasData } from "./canvas-sync";
+import {
+  CANVAS_SKELETON_REFRESH_MS,
+  isCurrentNodeRequest,
+  mergeHydratedCanvasData,
+  syncSelectedNode,
+} from "./canvas-sync";
 import {
   buildOutgoing,
   computeNodeDepths,
@@ -184,6 +189,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
   const rf = useRef<ReactFlowInstance | null>(null);
   const hydratedNodesRef = useRef(new Map<string, CanvasNode>());
   const nodeRequestRef = useRef(0);
+  const clearSelected = useCallback(() => {
+    nodeRequestRef.current += 1;
+    setSelected(null);
+  }, []);
 
   // Keep the active canvas responsive with a bounded L0 skeleton refresh. Full
   // body_json is fetched only for selected nodes (L1/L2) and retained locally;
@@ -196,6 +205,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
         if (!alive) return;
         const next = mergeHydratedCanvasData(summary, hydratedNodesRef.current);
         setData(next);
+        setSelected((previous) => syncSelectedNode(next, previous));
         onData?.(next);
         setError(null);
       } catch (e) {
@@ -203,20 +213,19 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       }
     };
     setData(null);
-    setSelected(null);
+    clearSelected();
     setElkPos(null);
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
     hydratedNodesRef.current.clear();
-    nodeRequestRef.current += 1;
     void load();
     const t = setInterval(() => void load(), CANVAS_SKELETON_REFRESH_MS);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, [canvasId, onData]);
+  }, [canvasId, clearSelected, onData]);
 
   // 节点消失时清理手动覆盖，避免悬空 id 堆积
   useEffect(() => {
@@ -798,9 +807,9 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       */}
       {selected &&
         (selected.job_id && ["intent", "job"].includes(selected.node_type) ? (
-          <JobDetailPanel jobId={selected.job_id} onClose={() => setSelected(null)} />
+          <JobDetailPanel jobId={selected.job_id} onClose={clearSelected} />
         ) : (
-          <Sidebar node={selected} onClose={() => setSelected(null)} />
+          <Sidebar node={selected} onClose={clearSelected} />
         ))}
     </div>
   );

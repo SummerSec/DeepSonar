@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync.js";
+import { appendUniqueRows, initializePageProgress, mergeRefreshedPage } from "./canvas-page-sync.js";
 
 const rows = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => ({ id: String(from + i) }));
 
@@ -16,4 +16,11 @@ test("refresh keeps the previous keyset boundary after a new top item", () => {
 test("load-more appends only unseen rows", () => {
   const merged = appendUniqueRows(rows(1, 3), [{ id: "3" }, { id: "4" }]);
   assert.deepEqual(merged.map((row) => row.id), ["1", "2", "3", "4"]);
+});
+
+test("exhausted findings and jobs pagination stays exhausted across polls", () => {
+  const findings = initializePageProgress(null, { next_cursor: null, has_more: false });
+  const jobs = initializePageProgress(null, { next_cursor: null, has_more: false });
+  assert.deepEqual(initializePageProgress(findings, { next_cursor: "rewind", has_more: true }), findings);
+  assert.deepEqual(initializePageProgress(jobs, { next_cursor: "rewind", has_more: true }), jobs);
 });

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CANVAS_SKELETON_REFRESH_MS, isCurrentNodeRequest, mergeHydratedCanvasData } from "./canvas-sync.js";
+import {
+  CANVAS_SKELETON_REFRESH_MS,
+  isCurrentNodeRequest,
+  mergeHydratedCanvasData,
+  syncSelectedNode,
+} from "./canvas-sync.js";
 import type { CanvasData, CanvasNode } from "./api.js";
 
 const node = (id: string, body_json: Record<string, unknown>, x = 0): CanvasNode => ({
@@ -37,4 +42,18 @@ test("L0 refresh preserves hydrated body while applying summary fields", () => {
 test("out-of-order L1 hydration applies only the latest request", () => {
   assert.equal(isCurrentNodeRequest(2, 2), true);
   assert.equal(isCurrentNodeRequest(1, 2), false);
+  const requestId = 3;
+  const generationAfterClose = requestId + 1;
+  assert.equal(isCurrentNodeRequest(requestId, generationAfterClose), false);
+});
+
+test("L0 refresh updates or clears the selected node", () => {
+  const selected = node("n1", { description: "hydrated" });
+  const refreshed: CanvasData = {
+    canvas_id: "canvas-1",
+    nodes: [{ ...selected, title: "updated", status: "succeeded", body_json: { summary: "fresh" } }],
+    edges: [],
+  };
+  assert.equal(syncSelectedNode(refreshed, selected)?.title, "updated");
+  assert.equal(syncSelectedNode({ ...refreshed, nodes: [] }, selected), null);
 });

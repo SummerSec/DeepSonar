@@ -22,7 +22,7 @@ import {
   type JobSummary,
 } from "../api";
 import { CanvasView } from "../CanvasView";
-import { appendUniqueRows, mergeRefreshedPage } from "../canvas-page-sync";
+import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type PageProgress } from "../canvas-page-sync";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
@@ -130,6 +130,10 @@ export function TaskCanvasPage() {
   const [convBusy, setConvBusy] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  const paginationRef = useRef<{ findings: PageProgress | null; jobs: PageProgress | null }>({
+    findings: null,
+    jobs: null,
+  });
   const [clock, setClock] = useState(() => Date.now());
   /** 任务内容 / 审计范围：默认折叠，避免挤占画布 */
   const [scopeOpen, setScopeOpen] = useState(false);
@@ -151,6 +155,7 @@ export function TaskCanvasPage() {
     setJobs([]);
     setJobsCursor(null);
     setJobsHasMore(false);
+    paginationRef.current = { findings: null, jobs: null };
     setMeta(null);
     setNodes([]);
     setConvergence(null);
@@ -163,11 +168,17 @@ export function TaskCanvasPage() {
         .then(([fs, js]) => {
           if (stop) return;
           setFindings((before) => mergeRefreshedPage(fs.items, before));
-          setFindingsCursor((before) => before ?? fs.next_cursor);
-          setFindingsHasMore((before) => before || fs.has_more);
+          if (!paginationRef.current.findings) {
+            paginationRef.current.findings = initializePageProgress(null, fs);
+            setFindingsCursor(paginationRef.current.findings.cursor);
+            setFindingsHasMore(paginationRef.current.findings.hasMore);
+          }
           setJobs((before) => mergeRefreshedPage(js.items, before));
-          setJobsCursor((before) => before ?? js.next_cursor);
-          setJobsHasMore((before) => before || js.has_more);
+          if (!paginationRef.current.jobs) {
+            paginationRef.current.jobs = initializePageProgress(null, js);
+            setJobsCursor(paginationRef.current.jobs.cursor);
+            setJobsHasMore(paginationRef.current.jobs.hasMore);
+          }
           setError(null);
         })
         .catch((e) => {
