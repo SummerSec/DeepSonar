@@ -1,21 +1,49 @@
 # Database schema
 
-`schema.sql` 是数据库结构的唯一基线，包含当前版本的最终态 DDL。Scheduler 启动时持有 advisory lock：
+`schema.sql` 是全新数据库使用的最新完整基线（当前 v13）。Scheduler 启动时在一个
+reserved PostgreSQL session 上持有 session advisory lock：
 
-- 空数据库：执行 `database/schema.sql`
-- 已有且 `schema_meta.version` 与当前版本一致：不重放 DDL
-- 其他结构：拒绝启动并要求重建数据库
+- 空数据库：原子执行 `database/schema.sql`，直接得到 v13；
+- v12 数据库：按 `database/migrations/0013_*.sql` 的连续编号顺序升级；
+- 已是 v13：校验迁移账本与 checksum 后 no-op；
+- v12 之前、未知结构、缺少账本或 checksum 漂移：fail closed，不能靠启动过程猜测或
+  重放 DDL。
 
-当前基线版本为 v7。除角色、RoleConfig 与官方 Skill 源外，它还包含 `runtime_images`、不可变 `runtime_image_versions`、准入扫描、项目启用关系以及可版本化的离线漏洞数据层。基线会登记 `deepsonar-base` / `deepsonar-audit` 产品身份；可执行版本由 Scheduler 根据运维人员配置的 digest 引导，或经独立准入 Worker 扫描、管理员审批后产生。
+## 迁移账本
 
-当前阶段不维护历史 migration、增量升级或基线迁移登记；结构变化直接更新 `schema.sql` 和 `schema_meta.version`。不要手工修改运行中的数据库。
+`schema_migrations` 记录版本、文件名、原始 UTF-8 字节 SHA-256、时间、结果和错误信息。
+成功的迁移和 `schema_meta.version` 在同一个事务中提交；失败的事务完全回滚，Scheduler
+随后在回滚后的连接上追加 `result = 'failed'` 审计行，因此重启可以安全重试。已成功应用的
+文件内容不可修改；必须新增下一个连续编号的 migration，不能编辑历史文件。
 
-全新外部 PostgreSQL 可以执行：
+当前支持窗口是 **v12 → v13**。v12 的受信冻结 fixture 位于
+`database/fixtures/schema-v12.sql`，启动时会校验其固定 SHA-256；删除、修改或伪造旧结构
+都将拒绝升级。项目导入导出包（`.deepsonarpack`）是业务数据格式，不是数据库 schema
+升级工具。
+
+## 升级、备份与恢复
+
+升级前先完成 PostgreSQL 物理备份，并确认备份可以在隔离数据库恢复：
+
+```bash
+pg_dump "$DATABASE_URL" -Fc > deepsonar-$(date +%Y%m%d-%H%M%S).dump
+createdb deepsonar_restore_check
+pg_restore --clean --if-exists --no-owner -d deepsonar_restore_check deepsonar-*.dump
+```
+
+部署升级时直接发布新 Scheduler 并重启；它会在 lock 内完成 v12→v13，其他实例会等待并
+在 v13 上 no-op。不要在迁移运行期间删除 volume、手工执行同一 SQL 或修改 migration
+文件。若迁移失败，检查 Scheduler 日志与 `schema_migrations` 的失败审计行，修复部署包后
+重新启动；版本不会前进。若需要恢复，停止 Scheduler，先将备份恢复到新的 PostgreSQL
+实例，校验 `schema_meta.version` 和账本，再切换 `DATABASE_URL`。本项目不提供自动
+down migration；从 v13 回退应用代码时仍需保留已新增的结构。
+
+手工建立全新外部 PostgreSQL：
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
 ```
 
-在 Windows 上向 Docker 内的 PostgreSQL 重建时，先用 `docker cp database/schema.sql <container>:/tmp/schema.sql`，再在容器内执行 `psql -f /tmp/schema.sql`。不要用未设置 `$OutputEncoding` 的 `Get-Content | docker exec ... psql` 管道，PowerShell 可能把中文模板转成 `?`。
-
-`schema.sql` 不包含 `psql` 专用的 `\i` / `\ir` 指令，因此也可以粘贴到 Supabase、Neon、RDS Query Editor 等 PostgreSQL SQL 控制台执行。它适配 PostgreSQL，不适配 MySQL、SQLite 或 SQL Server。
+`schema.sql` 不包含 `psql` 专用的 `\i` / `\ir` 指令，也可以粘贴到 Supabase、Neon、RDS
+Query Editor 等 PostgreSQL SQL 控制台执行。它适配 PostgreSQL，不适配 MySQL、SQLite 或
+SQL Server。
