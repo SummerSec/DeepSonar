@@ -2,10 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { runRealAgent } from "@deepsonar/runtime-sandbox";
 import {
   DonePayload,
+  ControlEventEnvelope,
+  EmitFactPayload,
   EmitFindingPayload,
   EventEnvelope,
   type EventEnvelopeInput,
-  FactPayload,
   FindingPayload,
   HumanPayload,
   ProgressPayload,
@@ -132,9 +133,9 @@ export async function ingestFactSemanticEvent(
   intentNodeId: string | null,
   ingest: (event: EventEnvelope) => Promise<void>,
 ): Promise<void> {
-  let fact: ReturnType<typeof FactPayload.parse>;
+  let fact: ReturnType<typeof EmitFactPayload.parse>;
   try {
-    fact = FactPayload.parse(event.payload);
+    fact = EmitFactPayload.parse(event.payload);
   } catch {
     throw invalidToolPayload("emit_fact", "emit_fact 参数非法");
   }
@@ -694,10 +695,18 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   } = { done: null, hub: null, human: null };
 
   const onSemanticEvent = async (raw: Record<string, unknown>) => {
-    let event: EventEnvelope;
+    let event: ControlEventEnvelope;
     try {
-      event = EventEnvelope.parse(raw);
+      // Hub references need the graph-aware parser first so malformed values
+      // retain the stable invalid_node_ref contract instead of becoming a
+      // generic Zod error.  ControlEventEnvelope then enforces the external
+      // no-Scheduler-owned-fields boundary for every tool.
+      const payload = raw.type === "hub_decision"
+        ? parseHubDecisionPayload(raw.payload, graph?.referableIds)
+        : raw.payload;
+      event = ControlEventEnvelope.parse({ ...raw, payload });
     } catch (error) {
+      if (error instanceof ControlInputError) throw error;
       const detail = error instanceof Error ? error.message : String(error);
       throw invalidControlPayload(`语义事件不符合严格契约：${detail}`, "event");
     }
@@ -715,9 +724,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       throw toolBoundaryError("toolNotAllowed", `本 Job 未启用平台工具 ${requiredTool}`);
     }
     if (event.type === "progress") {
-      const parsed = ProgressPayload.safeParse(event.payload);
-      if (!parsed.success) throw invalidToolPayload("emit_progress", "emit_progress 参数非法");
-      const p = parsed.data;
+      const p = ProgressPayload.parse(event.payload);
       await ingestEvent(jobId, { ...event, payload: { message: p.message.trim(), ...(typeof p.percent === "number" ? { percent: p.percent } : {}) } });
       return;
     }
@@ -737,17 +744,16 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     if (event.type === "finding") {
       if (!isAudit) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 emit_finding`);
       if (findingCount >= 20) throw toolBoundaryError("toolLimit", "单 Job Finding 超过 20 条上限");
-      const finding = EmitFindingPayload.safeParse(event.payload);
-      if (!finding.success) throw invalidToolPayload("emit_finding", "emit_finding 参数非法");
-      await ingestEvent(jobId, { ...event, payload: FindingPayload.parse(finding.data) });
+      await ingestEvent(jobId, { ...event, payload: FindingPayload.parse(event.payload) });
       findingCount++;
       return;
     }
     if (event.type === "hub_decision") {
       if (!isHub) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 submit_hub_decision`);
-      const decision = parseHubDecisionPayload(event.payload, graph?.referableIds);
-      if (decision.intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
-        const invalid = decision.intents.find((intent) => !availableHubRoleNames.has(intent.role));
+      const decision = event.payload;
+      const intents = "intents" in decision ? decision.intents : undefined;
+      if (intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
+        const invalid = intents.find((intent) => !availableHubRoleNames.has(intent.role));
         throw invalidRole(invalid?.role);
       }
       if (semanticState.hub) throw toolBoundaryError("duplicateToolCall", "submit_hub_decision 每个 Job 只能调用一次");

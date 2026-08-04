@@ -450,15 +450,37 @@ export const ControlToolInputSchemasJson = Object.fromEntries(
 
 // ---------- 事件 envelope（§17.3 版本化） ----------
 
-/** Event payloads are discriminated at the Scheduler boundary; no unknown
- * payload may reach SQL or semantic side effects. */
+/** Internal Hub envelope shape. Graph references stay opaque here so the
+ * Scheduler can turn malformed values into stable invalid_node_ref errors
+ * before any PostgreSQL UUID cast. */
+const HubDecisionEnvelopeInput = z
+  .object({
+    complete: z.unknown().optional(),
+    intents: z.unknown().optional(),
+  })
+  .strict();
+
+/** Agent-facing envelope. Scheduler-owned fact intent_node_id and Finding raw
+ * SARIF data are deliberately unavailable at this boundary. */
+export const ControlEventEnvelope = z.discriminatedUnion("type", [
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: EmitFindingPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
+]);
+export type ControlEventEnvelope = z.infer<typeof ControlEventEnvelope>;
+
+/** Internal payloads may carry scheduler-owned fields, but every side effect
+ * revalidates the corresponding strict schema before writing. */
 export const EventEnvelope = z.discriminatedUnion("type", [
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: FindingPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: FactPayload }).strict(),
-  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionEnvelopeInput }).strict(),
 ]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;
 /** Broad producer input; `EventEnvelope.parse` is the runtime gate before

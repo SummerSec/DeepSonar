@@ -3,15 +3,18 @@ import assert from "node:assert/strict";
 import {
   mapCliEvent,
   DEFAULT_SEMANTIC_TOOL_EVENTS,
+  createSemanticToolState,
+  discardPendingSemanticTools,
   materializationPathCollisions,
   parseRuntimeLine,
   runtimeCliEnv,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 
-test("把控制 MCP tool_use 转换为版本化语义事件", () => {
+test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
   const events: Record<string, unknown>[] = [];
-  const result = mapCliEvent({
+  const state = createSemanticToolState();
+  const pending = mapCliEvent({
     type: "assistant",
     message: {
       content: [{
@@ -21,43 +24,100 @@ test("把控制 MCP tool_use 转换为版本化语义事件", () => {
         input: { title: "事实", description: "证据" },
       }],
     },
-  }, (event) => events.push(event));
-
-  assert.equal(result.semanticEvents.length, 1);
-  assert.deepEqual(result.semanticEvents[0], {
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(pending.semanticEvents.length, 0);
+  const released = mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "call-1", is_error: false, content: "ok" }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(released.semanticEvents.length, 1);
+  assert.deepEqual(released.semanticEvents[0], {
     v: 1,
-    event_id: result.semanticEvents[0]?.event_id,
+    event_id: released.semanticEvents[0]?.event_id,
     type: "fact",
     payload: { title: "事实", description: "证据" },
   });
-  assert.match(String(result.semanticEvents[0]?.event_id), /^[0-9a-f-]{36}$/);
+  assert.match(String(released.semanticEvents[0]?.event_id), /^[0-9a-f-]{36}$/);
   assert.deepEqual(events[0], {
     type: "tool.call.started",
     toolName: "mcp__deepsonar-control__emit_fact",
     callId: "call-1",
     input: { title: "事实", description: "证据" },
   });
+  assert.deepEqual(events[1], {
+    type: "tool.call.completed",
+    callId: "call-1",
+    toolName: "mcp__deepsonar-control__emit_fact",
+    isError: false,
+  });
 });
 
-test("按 tool_use id 对语义事件幂等去重", () => {
-  const seen = new Set<string>();
-  const line = {
+test("工具错误不会释放事件，修正后的新 callId 成功只释放一次且结果重放幂等", () => {
+  const state = createSemanticToolState();
+  const failedCall = {
     type: "assistant",
-    message: { content: [{ type: "tool_use", id: "same-call", name: "mcp__deepsonar-control__emit_progress", input: { message: "进行中" } }] },
+    message: { content: [{ type: "tool_use", id: "failed-call", name: "mcp__deepsonar-control__emit_progress", input: { message: "bad" } }] },
   };
-  const first = mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, seen);
-  const second = mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, seen);
-  assert.equal(first.semanticEvents.length, 1);
-  assert.equal(second.semanticEvents.length, 0);
+  assert.equal(mapCliEvent(failedCall, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
+  const failedResult = {
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "failed-call", is_error: true, content: "invalid" }] },
+  };
+  assert.equal(mapCliEvent(failedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
+  assert.equal(mapCliEvent(failedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
+
+  const correctedCall = {
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "corrected-call", name: "mcp__deepsonar-control__emit_progress", input: { message: "good" } }] },
+  };
+  assert.equal(mapCliEvent(correctedCall, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
+  const correctedResult = {
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "corrected-call", is_error: false, content: "ok" }] },
+  };
+  const released = mapCliEvent(correctedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(released.semanticEvents.length, 1);
+  assert.equal(released.semanticEvents[0]?.type, "progress");
+  assert.equal(mapCliEvent(correctedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
+  assert.equal(state.pendingToolUses.size, 0);
 });
 
-test("流重放时同一 tool_use id 派生相同 event_id", () => {
+test("pending 控制调用有上限且终态清理告警不包含输入内容", () => {
+  const state = createSemanticToolState(1);
+  const first = mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "pending-one", name: "mcp__deepsonar-control__emit_fact", input: { description: "Bearer supersecret" } }] },
+  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(first.semanticEvents.length, 0);
+  const overflow = mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "pending-two", name: "mcp__deepsonar-control__emit_fact", input: { description: "another-secret" } }] },
+  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(overflow.semanticEvents.length, 0);
+  assert.equal(overflow.warnings[0]?.code, "control_tool_pending_limit");
+  assert.doesNotMatch(JSON.stringify(overflow.warnings), /supersecret|another-secret/);
+  const warnings: Array<{ code: string; detail?: string }> = [];
+  discardPendingSemanticTools(state, (warning) => warnings.push(warning));
+  assert.equal(state.pendingToolUses.size, 0);
+  assert.equal(warnings[0]?.code, "control_tool_pending_discarded");
+  assert.doesNotMatch(JSON.stringify(warnings), /supersecret|another-secret/);
+});
+
+test("流重放时同一成功 callId 派生相同 event_id", () => {
   const line = {
     type: "assistant",
-    message: { content: [{ type: "tool_use", id: "replayed-call", name: "mcp__deepsonar-control__emit_fact", input: { title: "事实" } }] },
+    message: { content: [{ type: "tool_use", id: "replayed-call", name: "mcp__deepsonar-control__emit_fact", input: { title: "事实", description: "证据" } }] },
   };
-  const first = mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, new Set());
-  const replay = mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, new Set());
+  const firstState = createSemanticToolState();
+  const replayState = createSemanticToolState();
+  mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, firstState);
+  mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, replayState);
+  const resultLine = (id: string) => ({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: id, is_error: false }] },
+  });
+  const first = mapCliEvent(resultLine("replayed-call"), () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, firstState);
+  const replay = mapCliEvent(resultLine("replayed-call"), () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, replayState);
   assert.equal(first.semanticEvents[0]?.event_id, replay.semanticEvents[0]?.event_id);
 });
 
@@ -80,7 +140,7 @@ test("脏运行时行只产生告警，后续合法 tool_use 仍可解析", () =
   }));
   assert.ok(valid.parsed);
   const events = mapCliEvent(valid.parsed!, () => {});
-  assert.equal(events.semanticEvents.length, 1);
+  assert.equal(events.semanticEvents.length, 0);
 });
 
 test("Claude session 使用动态 CLAUDE_CONFIG_DIR 或 HOME", async () => {

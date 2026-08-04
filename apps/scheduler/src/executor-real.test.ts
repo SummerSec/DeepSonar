@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EventEnvelope } from "@deepsonar/shared-types";
+import { ControlEventEnvelope, EventEnvelope } from "@deepsonar/shared-types";
 import {
   ingestFactSemanticEvent,
   moduleEvidenceFromSnapshot,
@@ -12,6 +12,30 @@ import { expandModules } from "./skill-sources.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("ControlEventEnvelope rejects Scheduler-owned fact and Finding fields", () => {
+  const base = { v: 1 as const, event_id: "00000000-0000-4000-8000-000000000013" };
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "fact",
+    payload: { title: "事实", description: "证据", intent_node_id: intentNodeId },
+  }).success, false);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "finding",
+    payload: { title: "Finding", severity: "high", raw: { secret: "do-not-forward" } },
+  }).success, false);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "fact",
+    payload: { title: "事实", description: "证据" },
+  }).success, true);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "finding",
+    payload: { title: "Finding", severity: "high" },
+  }).success, true);
+});
 
 test("legacy RoleConfig acknowledgement wording is normalized at runtime", () => {
   const normalized = normalizeLegacyControlInstructions(`成功响应包含 ${"accepted"} ${"event"}；收到 isError 后重试。`);

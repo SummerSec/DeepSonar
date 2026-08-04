@@ -12,7 +12,8 @@ import {
 
 /**
  * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络：只读查询返回调度器在启动
- * 本 Job 时动态下发的数据；语义提案由宿主从 Claude stream-json 的 tool_use 块捕获。
+ * 本 Job 时动态下发的数据；语义提案由宿主先暂存 Claude stream-json 的 tool_use，
+ * 仅在对应 tool_result.is_error=false 后释放。
  */
 export const CONTROL_MCP_NAME = "deepsonar-control";
 export const CONTROL_SEMANTIC_EVENT_TYPES = {
