@@ -7,9 +7,8 @@ import {
   FIRST_MIGRATION_VERSION,
   SCHEMA_VERSION,
   SUPPORTED_BASELINE_VERSION,
-  TRUSTED_V12_CATALOG_SHA256,
+  TRUSTED_CATALOG_SHA256_BY_VERSION,
   TRUSTED_V12_BASELINE_SHA256,
-  TRUSTED_V13_CATALOG_SHA256,
 } from "./schema-version.js";
 
 /** The subset of postgres.js used by the migration runner. */
@@ -503,6 +502,18 @@ async function assertCatalogFingerprint(
   }
 }
 
+function catalogFingerprintForVersion(
+  expectedByVersion: Readonly<Record<number, string>>,
+  version: number,
+  label: string,
+): string {
+  const expected = expectedByVersion[version];
+  if (!expected || !/^[0-9a-f]{64}$/u.test(expected)) {
+    throw new Error(`missing trusted catalog fingerprint for ${label} (schema v${version}); refusing to migrate`);
+  }
+  return expected;
+}
+
 async function assertStructure(
   db: MigrationConnection,
   expected: TableManifest,
@@ -737,18 +748,19 @@ export async function runMigrations(
     migrationsDirectory?: string;
     /** Internal test/release hook for validating a future target chain. */
     targetVersion?: number;
-    /** Internal future-chain hook; required when targetVersion exceeds v13. */
-    expectedCatalogFingerprint?: string;
+    /** Internal future-chain hook; add pins for versions beyond the checked-in map. */
+    expectedCatalogFingerprints?: Readonly<Record<number, string>>;
   } = {},
 ): Promise<string[]> {
   const targetVersion = options.targetVersion ?? SCHEMA_VERSION;
   if (targetVersion < FIRST_MIGRATION_VERSION) {
     throw new Error(`target schema v${targetVersion} is below the first migration version`);
   }
-  if (options.expectedCatalogFingerprint && targetVersion <= SCHEMA_VERSION) {
-    throw new Error("expectedCatalogFingerprint is only valid for a future target schema");
-  }
-  const expectedCatalog = options.expectedCatalogFingerprint ?? TRUSTED_V13_CATALOG_SHA256;
+  const expectedCatalogByVersion: Readonly<Record<number, string>> = {
+    ...TRUSTED_CATALOG_SHA256_BY_VERSION,
+    ...(options.expectedCatalogFingerprints ?? {}),
+  };
+  const targetCatalog = catalogFingerprintForVersion(expectedCatalogByVersion, targetVersion, "target");
   const schemaFile = options.schemaFile ?? SCHEMA_FILE;
   const v12BaselineFile = options.v12BaselineFile ?? V12_BASELINE_FILE;
   const migrations = discoverMigrations(options.migrationsDirectory ?? MIGRATIONS_DIR, targetVersion);
@@ -762,7 +774,7 @@ export async function runMigrations(
     await db.unsafe(latestBody);
     const latestManifest = parseTableManifest(latestBody);
     await assertStructure(db, latestManifest, `fresh baseline v${targetVersion}`);
-    await assertCatalogFingerprint(db, expectedCatalog, `fresh baseline v${targetVersion}`);
+    await assertCatalogFingerprint(db, targetCatalog, `fresh baseline v${targetVersion}`);
     await assertAppliedLedger(db, migrations, targetVersion);
     return ["database/schema.sql"];
   }
@@ -785,34 +797,34 @@ export async function runMigrations(
 
   if (currentVersion === targetVersion) {
     await assertStructure(db, parseTableManifest(latestBody), `schema v${targetVersion}`);
-    await assertCatalogFingerprint(db, expectedCatalog, `schema v${targetVersion}`);
+    await assertCatalogFingerprint(db, targetCatalog, `schema v${targetVersion}`);
     await assertAppliedLedger(db, migrations, targetVersion);
     return [];
   }
 
+  const sourceCatalog = catalogFingerprintForVersion(expectedCatalogByVersion, currentVersion, "source");
   if (currentVersion === SUPPORTED_BASELINE_VERSION) {
     const v12Manifest = parseTableManifest(trustedV12);
     await assertStructure(db, v12Manifest, "trusted schema v12", new Set(["schema_migrations"]));
-    await assertCatalogFingerprint(db, TRUSTED_V12_CATALOG_SHA256, "trusted schema v12", {
+    await assertCatalogFingerprint(db, sourceCatalog, "trusted schema v12", {
       excludeTables: ["schema_migrations"],
     });
   } else {
-    // A database already beyond v12 is a valid intermediate source.  Its
-    // v13 is the only known intermediate catalog; verify it before applying
-    // the next contiguous file.  Future source versions need their own
-    // versioned fingerprint before this scheduler can safely execute them.
-    if (currentVersion === SCHEMA_VERSION) {
-      await assertCatalogFingerprint(db, TRUSTED_V13_CATALOG_SHA256, "schema v13");
-    }
+    // A database already beyond v12 is a valid intermediate source only when
+    // its versioned catalog fingerprint is explicitly trusted.
+    await assertCatalogFingerprint(db, sourceCatalog, `schema v${currentVersion}`);
   }
 
   // The ledger is prepared outside the migration transaction so a failed DDL
   // can be recorded after PostgreSQL rolls its transaction back.
   await ensureMigrationLedger(db);
-  // The v12 ledger DDL should now have the canonical v13 catalog shape before
-  // any migration is allowed to run.  This also rejects a pre-existing ledger
-  // table whose names happen to match but whose constraints/indexes drifted.
-  await assertCatalogFingerprint(db, TRUSTED_V13_CATALOG_SHA256, "schema v13 ledger");
+  // The v12 ledger bootstrap should now have the canonical v13 catalog shape;
+  // later intermediate versions use their own versioned catalog pin.  This
+  // rejects a pre-existing ledger table whose names happen to match but whose
+  // constraints/indexes drifted before any migration DDL runs.
+  const ledgerCatalogVersion = currentVersion === SUPPORTED_BASELINE_VERSION ? SCHEMA_VERSION : currentVersion;
+  const ledgerCatalog = catalogFingerprintForVersion(expectedCatalogByVersion, ledgerCatalogVersion, "ledger");
+  await assertCatalogFingerprint(db, ledgerCatalog, `schema v${ledgerCatalogVersion} ledger`);
   // This check intentionally happens after creating/verifying the ledger but
   // before the first migration DDL.  A v12 database carrying a successful
   // future/legacy row must fail closed without partially applying v13.
@@ -831,7 +843,7 @@ export async function runMigrations(
     throw new Error(`migration chain stopped at v${version}; expected v${targetVersion}`);
   }
   await assertStructure(db, parseTableManifest(latestBody), `schema v${targetVersion}`);
-  await assertCatalogFingerprint(db, expectedCatalog, `schema v${targetVersion}`);
+  await assertCatalogFingerprint(db, targetCatalog, `schema v${targetVersion}`);
   await assertAppliedLedger(db, migrations, targetVersion);
   return applied;
 }

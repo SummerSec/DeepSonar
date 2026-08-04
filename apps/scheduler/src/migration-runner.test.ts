@@ -23,6 +23,7 @@ import {
   TRUSTED_V12_BASELINE_SHA256,
   TRUSTED_V12_CATALOG_SHA256,
   TRUSTED_V13_CATALOG_SHA256,
+  TRUSTED_CATALOG_SHA256_BY_VERSION,
 } from "./schema-version.js";
 
 test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", async () => {
@@ -37,6 +38,8 @@ test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", asyn
   assert.equal(TRUSTED_V12_BASELINE_SHA256.length, 64);
   assert.match(TRUSTED_V12_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.match(TRUSTED_V13_CATALOG_SHA256, /^[0-9a-f]{64}$/);
+  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SUPPORTED_BASELINE_VERSION], TRUSTED_V12_CATALOG_SHA256);
+  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SCHEMA_VERSION], TRUSTED_V13_CATALOG_SHA256);
 });
 
 test("migration discovery rejects gaps and malformed filenames", async () => {
@@ -198,7 +201,7 @@ test("a v12 database with legacy or future successful ledger rows fails before v
   }
 });
 
-test("an intermediate v13 database can continue through a future v14 chain", {
+test("versioned catalog pins continue v13 through v14 and v15 chains", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -210,6 +213,8 @@ test("an intermediate v13 database can continue through a future v14 chain", {
   const expectedDb = postgres(expected.url, { max: 2 });
   const directory = await mkdtemp(path.join(os.tmpdir(), "deepsonar-future-migrations-"));
   const futureSchemaFile = path.join(os.tmpdir(), `deepsonar-schema-v14-${process.pid}-${Date.now()}.sql`);
+  const directory15 = await mkdtemp(path.join(os.tmpdir(), "deepsonar-future-migrations-v15-"));
+  const futureSchemaFile15 = path.join(os.tmpdir(), `deepsonar-schema-v15-${process.pid}-${Date.now()}.sql`);
   try {
     await applyBaseline(db);
     await withMigrationLock(db);
@@ -238,7 +243,7 @@ test("an intermediate v13 database can continue through a future v14 chain", {
         schemaFile: futureSchemaFile,
         migrationsDirectory: directory,
         targetVersion: 14,
-        expectedCatalogFingerprint,
+        expectedCatalogFingerprints: { 14: expectedCatalogFingerprint },
       }),
       /checksum drift/i,
     );
@@ -248,7 +253,7 @@ test("an intermediate v13 database can continue through a future v14 chain", {
       schemaFile: futureSchemaFile,
       migrationsDirectory: directory,
       targetVersion: 14,
-      expectedCatalogFingerprint,
+      expectedCatalogFingerprints: { 14: expectedCatalogFingerprint },
     });
     assert.deepEqual(applied, ["database/migrations/0014_add_migration_marker.sql"]);
     const [meta] = await db<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
@@ -258,11 +263,55 @@ test("an intermediate v13 database can continue through a future v14 chain", {
       WHERE table_schema = 'public' AND table_name = 'schema_migrations' AND column_name = 'migration14_marker'
     `;
     assert.equal(marker?.column_name, "migration14_marker");
+
+    const body15 = "ALTER TABLE schema_migrations ADD COLUMN migration15_marker text;\n";
+    const checksum15 = sha256Utf8(Buffer.from(body15, "utf8"));
+    await expectedDb`ALTER TABLE schema_migrations ADD COLUMN migration15_marker text`;
+    const expectedCatalogFingerprint15 = await catalogFingerprint(expectedDb as unknown as MigrationConnection);
+    await writeFile(path.join(directory15, "0013_add_schema_migrations.sql"), body13, "utf8");
+    await writeFile(path.join(directory15, "0014_add_migration_marker.sql"), body14, "utf8");
+    await writeFile(path.join(directory15, "0015_add_migration_marker.sql"), body15, "utf8");
+    const futureLatest15 = latest
+      .replace("INSERT INTO schema_meta (id, version) VALUES ('global', 13);", "INSERT INTO schema_meta (id, version) VALUES ('global', 15);")
+      .replace("  error text,\n", "  error text,\n  migration14_marker text,\n  migration15_marker text,\n")
+      .replace(
+        "        'succeeded');\n\nCREATE TABLE projects",
+        `        'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (14, '0014_add_migration_marker.sql', '${checksum14}', 'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (15, '0015_add_migration_marker.sql', '${checksum15}', 'succeeded');\n\nCREATE TABLE projects`,
+      );
+    await writeFile(futureSchemaFile15, futureLatest15, "utf8");
+    await assert.rejects(
+      withMigrationLock(db, {
+        schemaFile: futureSchemaFile15,
+        migrationsDirectory: directory15,
+        targetVersion: 15,
+        expectedCatalogFingerprints: { 15: expectedCatalogFingerprint15 },
+      }),
+      /missing trusted catalog fingerprint.*schema v14/i,
+    );
+    const applied15 = await withMigrationLock(db, {
+      schemaFile: futureSchemaFile15,
+      migrationsDirectory: directory15,
+      targetVersion: 15,
+      expectedCatalogFingerprints: {
+        14: expectedCatalogFingerprint,
+        15: expectedCatalogFingerprint15,
+      },
+    });
+    assert.deepEqual(applied15, ["database/migrations/0015_add_migration_marker.sql"]);
+    const [meta15] = await db<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
+    assert.equal(meta15?.version, 15);
+    const [marker15] = await db<{ column_name: string }[]>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'schema_migrations' AND column_name = 'migration15_marker'
+    `;
+    assert.equal(marker15?.column_name, "migration15_marker");
   } finally {
     await db.end();
     await expectedDb.end();
     await rm(futureSchemaFile, { force: true });
     await rm(directory, { recursive: true, force: true });
+    await rm(futureSchemaFile15, { force: true });
+    await rm(directory15, { recursive: true, force: true });
     await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
     await admin.unsafe(`DROP DATABASE IF EXISTS "${expected.name}"`);
     await admin.end();
