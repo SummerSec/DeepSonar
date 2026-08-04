@@ -64,6 +64,8 @@ chmod +x deploy/deploy.sh
 
 启动后访问：<http://127.0.0.1:8080>。
 
+启用 `DEEPSONAR_AUTH_REQUIRED=true` 的新库会在首次启动时创建默认管理员：`admin` / `Deep@Sonar66`。该口令仅用于本地/演示开箱，已公开且不会在重启时重置；生产或公网部署首次登录后必须立即修改密码，并建议修改登录名。人类账号会话与 API Token 服务账号相互独立。
+
 默认使用 `AGENT_MODE=fake`，可以直接验证完整编排。真实 Agent 部署、首次 Token 配置、升级、备份和故障排查见：[一键部署教程](docs/ONE_CLICK_DEPLOYMENT.md)。
 
 常用命令：

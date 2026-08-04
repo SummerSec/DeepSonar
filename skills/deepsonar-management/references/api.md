@@ -14,6 +14,22 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 **注意**：「角色 / RoleConfig / 设置 / 凭据」统一使用 `agents:read` / `agents:write`；运行时镜像市场使用独立的 `images:*` scopes。
 
+### 人类用户认证
+
+人类登录使用数据库中的 scrypt 用户会话，与 API Token 服务账号分离。空库启动时 Scheduler 只创建一次公开的默认管理员 `admin` / `Deep@Sonar66`；已有任意用户时不会重置密码或再次创建。生产或公网部署必须在首次登录后立即修改登录名和密码。密码或登录名修改会吊销该用户全部旧会话，并返回一个新的会话 Token。
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET | /auth/status | 豁免 | 返回 `auth_required`、`has_users`、`bootstrap_available` |
+| POST | /auth/login | 豁免 | `{username,password}`；返回用户会话 |
+| POST | /auth/bootstrap | 豁免 | 兼容旧版首次引导；默认管理员种子后返回 409 |
+| POST | /auth/logout | projects:read | 吊销当前用户会话 |
+| GET | /auth/me | projects:read | 当前用户/认证主体 |
+| POST | /auth/change-password | projects:read | `{current_password,new_password}`；旧会话失效并返回新 Token |
+| POST | /auth/change-username | projects:read | `{current_password,new_username}`；用户名冲突返回 409，旧会话失效并返回新 Token |
+
+用户管理（仅 `admin`）：`GET /users`、`POST /users`、`PATCH /users/:id`、`POST /users/:id/password`。
+
 ## 端点一览
 
 ### Meta / Schema（发现契约）

@@ -152,6 +152,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /tokens/:id/rotate": "tokens:manage",
   // /auth/me / logout：任意已认证主体（user / api_token / bootstrap）
   "POST /auth/change-password": "projects:read",
+  "POST /auth/change-username": "projects:read",
   "GET /users": "admin",
   "POST /users": "admin",
   "PATCH /users/:id": "admin",

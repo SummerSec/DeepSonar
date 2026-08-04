@@ -58,6 +58,59 @@ const OPS: Op[] = [
   { method: "get", path: "/schema.md", summary: "API Markdown 文档", scope: null, tags: ["Meta"] },
   { method: "get", path: "/metrics", summary: "Prometheus 指标文本", scope: "admin", tags: ["Meta"] },
 
+  // human authentication (API Token auth remains separate)
+  { method: "get", path: "/auth/status", summary: "用户认证状态与首次种子状态", scope: null, tags: ["Auth"] },
+  {
+    method: "post",
+    path: "/auth/login",
+    summary: "用户名密码登录",
+    scope: null,
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["username", "password"],
+      properties: { username: { type: "string" }, password: { type: "string", format: "password" } },
+    },
+  },
+  {
+    method: "post",
+    path: "/auth/bootstrap",
+    summary: "兼容旧版的首次管理员引导（默认管理员种子后返回 409）",
+    scope: null,
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["username", "password"],
+      properties: { username: { type: "string" }, password: { type: "string", format: "password" }, display_name: { type: "string" } },
+    },
+  },
+  { method: "post", path: "/auth/logout", summary: "注销当前用户会话", scope: "projects:read", tags: ["Auth"] },
+  { method: "get", path: "/auth/me", summary: "当前认证主体", scope: "projects:read", tags: ["Auth"] },
+  {
+    method: "post",
+    path: "/auth/change-password",
+    summary: "修改当前用户密码并刷新会话",
+    scope: "projects:read",
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["current_password", "new_password"],
+      properties: { current_password: { type: "string", format: "password" }, new_password: { type: "string", format: "password" } },
+    },
+  },
+  {
+    method: "post",
+    path: "/auth/change-username",
+    summary: "修改当前用户登录名并刷新会话",
+    scope: "projects:read",
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["current_password", "new_username"],
+      properties: { current_password: { type: "string", format: "password" }, new_username: { type: "string" } },
+    },
+  },
+
   // projects
   { method: "get", path: "/projects", summary: "项目列表", scope: "projects:read", tags: ["Projects"] },
   {
@@ -695,6 +748,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     ],
     tags: [
       { name: "Meta" },
+      { name: "Auth" },
       { name: "Projects" },
       { name: "Tasks" },
       { name: "Jobs" },
@@ -783,7 +837,17 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       },
     },
     "x-deepsonar-scopes": [...ALL_SCOPES],
-    "x-deepsonar-auth-exempt": ["/health", "/openapi.json", "/schema", "/schema.md", "/webhooks/plane", "/gateway/*"],
+    "x-deepsonar-auth-exempt": [
+      "/health",
+      "/openapi.json",
+      "/schema",
+      "/schema.md",
+      "/auth/status",
+      "/auth/login",
+      "/auth/bootstrap",
+      "/webhooks/plane",
+      "/gateway/*",
+    ],
   };
 }
 
@@ -797,7 +861,17 @@ export function buildSchemaSummary(): Record<string, unknown> {
       header: "Authorization: Bearer <deepsonar_token>",
       required_when: "DEEPSONAR_AUTH_REQUIRED=true",
       scopes: [...ALL_SCOPES],
-      exempt: ["/health", "/openapi.json", "/schema", "/schema.md", "/webhooks/plane", "/gateway/*"],
+      exempt: [
+        "/health",
+        "/openapi.json",
+        "/schema",
+        "/schema.md",
+        "/auth/status",
+        "/auth/login",
+        "/auth/bootstrap",
+        "/webhooks/plane",
+        "/gateway/*",
+      ],
     },
     documents: {
       openapi_json: "/openapi.json",

@@ -92,7 +92,47 @@ def main() -> None:
     projects = req("GET", "/projects", token=ADMIN)
     print("引导管理员 OK，项目数:", len(projects))
 
-    # 4. 创建受限 token（tasks:read），明文只返回一次
+    # 4. First-run human account: the scheduler seeds this only when users is empty.
+    status = req("GET", "/auth/status")
+    assert status["has_users"] and not status["bootstrap_available"], status
+    human = req("POST", "/auth/login", {"username": "admin", "password": "Deep@Sonar66"})
+    human_token = human["token"]
+    changed_password = f"{uuid.uuid4().hex}A!"
+    changed_username = f"admin-ci-{uuid.uuid4().hex[:8]}"
+    changed = req(
+        "POST",
+        "/auth/change-password",
+        {"current_password": "Deep@Sonar66", "new_password": changed_password},
+        human_token,
+    )
+    req("GET", "/auth/me", token=human_token, expect=401)
+    req("POST", "/auth/login", {"username": "admin", "password": "Deep@Sonar66"}, expect=401)
+    req("POST", "/auth/login", {"username": "admin", "password": changed_password})
+    renamed = req(
+        "POST",
+        "/auth/change-username",
+        {"current_password": changed_password, "new_username": changed_username},
+        changed["token"],
+    )
+    req("GET", "/auth/me", token=changed["token"], expect=401)
+    req("POST", "/auth/login", {"username": "admin", "password": changed_password}, expect=401)
+    req("POST", "/auth/login", {"username": changed_username, "password": changed_password})
+    # Restore the public fixture so other CI smoke steps never depend on a generated credential.
+    restored_name = req(
+        "POST",
+        "/auth/change-username",
+        {"current_password": changed_password, "new_username": "admin"},
+        renamed["token"],
+    )
+    req(
+        "POST",
+        "/auth/change-password",
+        {"current_password": changed_password, "new_password": "Deep@Sonar66"},
+        restored_name["token"],
+    )
+    print("默认人类管理员登录、改密、改名及旧会话吊销 OK")
+
+    # 5. 创建受限 token（tasks:read），明文只返回一次
     t = req(
         "POST",
         "/tokens",

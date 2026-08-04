@@ -1156,6 +1156,8 @@ export const api = {
   logout: () => send<{ ok: boolean }>("POST", "/auth/logout"),
   changePassword: (body: { current_password: string; new_password: string }) =>
     send<LoginResult & { ok: boolean }>("POST", "/auth/change-password", body),
+  changeUsername: (body: { current_password: string; new_username: string }) =>
+    send<LoginResult & { ok: boolean }>("POST", "/auth/change-username", body),
   listUsers: () => get<PublicUser[]>("/users"),
   createUser: (body: {
     username: string;

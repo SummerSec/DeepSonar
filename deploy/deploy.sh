@@ -96,6 +96,7 @@ case "$ACTION" in
     fi
     echo "[deploy] DeepSonar 已启动：http://127.0.0.1:$port"
     echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DEEPSONAR_ADMIN_TOKEN，请勿提交该文件。"
+    echo "[deploy] 人类默认管理员：admin / Deep@Sonar66；生产首次登录后必须立即修改密码并建议修改登录名。"
     if [ "$MODE" = "fake" ]; then
       echo "[deploy] 当前为 fake 模式；真实 Agent 请使用：./deploy/deploy.sh up real"
     fi

@@ -12,6 +12,7 @@ import { bootstrapOfficialRuntimeImages, startRuntimeImageRegistrySync } from ".
 import { bootstrapSkillSourcesOnBoot } from "./skill-sources.js";
 import { normalizePendingJobPriorities } from "./core.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
+import { ensureDefaultAdmin } from "./users.js";
 
 async function main() {
   // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
@@ -24,6 +25,8 @@ async function main() {
   const applied = await migrate();
   if (applied.length > 0) console.log(`[boot] 已应用: ${applied.join(", ")}`);
   else console.log("[boot] schema 已就绪（无需变更）");
+  const defaultAdmin = await ensureDefaultAdmin();
+  if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();
   await bootstrapSkillSourcesOnBoot();
 

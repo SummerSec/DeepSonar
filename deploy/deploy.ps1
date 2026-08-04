@@ -116,6 +116,7 @@ try {
 
       Write-Host "[deploy] DeepSonar is ready: http://127.0.0.1:$port" -ForegroundColor Green
       Write-Host "[deploy] The bootstrap admin token is stored as DEEPSONAR_ADMIN_TOKEN in deploy/.env."
+      Write-Host "[deploy] Human default admin: admin / Deep@Sonar66. Change the password (and preferably the username) immediately in production."
       if ($Mode -eq "fake") {
         Write-Host "[deploy] Running in fake mode. Configure credentials and use -Mode real for real agents." -ForegroundColor Yellow
       }

@@ -19,6 +19,7 @@ import { CredentialsPanel } from "./CredentialsPanel";
 import { RoleConfigEditor } from "./RoleConfigEditor";
 import { TransferPanel } from "./TransferPanel";
 import { UsersPanel } from "./UsersPanel";
+import { AccountPanel } from "./AccountPanel";
 import { MarkdownView } from "./MarkdownView";
 
 /**
@@ -27,7 +28,7 @@ import { MarkdownView } from "./MarkdownView";
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users";
+type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users" | "account";
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
@@ -443,6 +444,7 @@ export function SettingsPanel({
         { key: "roles", label: "角色注册表" },
         { key: "sources", label: "模块源" },
         { key: "rules", label: "全局规则" },
+        { key: "account", label: "我的账号" },
         { key: "users", label: "用户" },
         { key: "transfer", label: "平台导入导出" },
         { key: "credentials", label: "凭据" },
@@ -792,6 +794,7 @@ export function SettingsPanel({
         )}
 
         {activeTab === "users" && !projectId && <UsersPanel />}
+        {activeTab === "account" && !projectId && <AccountPanel />}
         {activeTab === "transfer" && !projectId && <TransferPanel projectId={null} scope="platform" />}
 
         {activeTab === "plane" && projectId && (
