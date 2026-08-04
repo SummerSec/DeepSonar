@@ -661,9 +661,22 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   if (systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(systemPromptPath)})"`;
 
   const exec = await sandbox.runAsync(command, { cwd: "/workspace", env: spec.env });
+  // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
+  // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
+  let stdinClosed = false;
+  const rawStream = (exec.raw as { stream?: { destroyed?: boolean; writableEnded?: boolean; writable?: boolean } } | undefined)?.stream;
   const writeUserMessage = async (content: string) => {
     if (!exec.write) throw new Error("沙箱 exec 不支持 stdin 写入");
-    await exec.write(JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n");
+    if (stdinClosed || rawStream?.destroyed || rawStream?.writableEnded || rawStream?.writable === false) {
+      throw new Error("agent stdin 已关闭，无法追加消息");
+    }
+    try {
+      await exec.write(JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n");
+    } catch (error) {
+      stdinClosed = true;
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`agent stdin 写入失败: ${msg}`);
+    }
   };
   await writeUserMessage(spec.input);
   const disposeMessageSource = await spec.onRunReady?.({ sendMessage: writeUserMessage });
@@ -714,9 +727,15 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let nudgesLeft = 3;
   // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
   const closeStdin = () => {
+    stdinClosed = true;
     const raw = exec.raw as { stream?: { end?: () => void } } | undefined;
-    if (raw?.stream?.end) raw.stream.end();
-    else void exec.kill().catch(() => {});
+    if (raw?.stream?.end) {
+      try {
+        raw.stream.end();
+      } catch {
+        /* already ended */
+      }
+    } else void exec.kill().catch(() => {});
   };
   try {
     for await (const chunk of exec) {
