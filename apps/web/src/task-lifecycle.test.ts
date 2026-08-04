@@ -23,6 +23,18 @@ test("root completion is still running while active_count is non-zero", () => {
   );
 });
 
+test("authoritative zero active_count clears a stale visible running Job", () => {
+  const lifecycle = deriveTaskLifecycle({
+    activeCount: 0,
+    jobCount: 1,
+    jobs: [{ status: "running" }],
+    rootStatus: "succeeded",
+    endedAt: "2026-08-04T00:00:00.000Z",
+  });
+  assert.equal(lifecycle.status, "completed");
+  assert.equal(lifecycle.activeCount, 0);
+});
+
 test("current active Job is detected when the rollup is stale", () => {
   const lifecycle = deriveTaskLifecycle({ jobs: [{ status: "waiting_human" }], jobCount: 1 });
   assert.equal(lifecycle.status, "running");
@@ -58,6 +70,17 @@ test("a canvas with no Jobs is idle", () => {
   const lifecycle = deriveTaskLifecycle({ rootStatus: null, reportStatus: null, jobCount: 0 });
   assert.equal(lifecycle.status, "idle");
   assert.equal(lifecycle.hasJobs, false);
+});
+
+test("a no-job root success marker remains idle", () => {
+  const lifecycle = deriveTaskLifecycle({ rootStatus: "succeeded", reportStatus: "succeeded", jobCount: 0 });
+  assert.equal(lifecycle.status, "idle");
+  assert.equal(lifecycle.hasJobs, false);
+  assert.equal(lifecycle.endedAt, null);
+});
+
+test("a success marker without a terminal timestamp is not completed", () => {
+  assert.equal(deriveTaskLifecycle({ rootStatus: "succeeded", jobCount: 1, activeCount: 0 }).status, "idle");
 });
 
 test("a pending root before first execution is not mislabeled as reporting", () => {

@@ -99,8 +99,13 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
     (total, job) => total + (ACTIVE_TASK_JOB_STATUSES.has(normalized(job.status)) ? 1 : 0),
     0,
   );
-  const activeCount = Math.max(count(input.activeCount), activeJobs);
-  const jobCount = Math.max(count(input.jobCount), jobs.length, activeCount);
+  // A present scheduler rollup is authoritative, including explicit zero.
+  // Visible Jobs are only a fallback for callers that do not have the rollup
+  // (the workbench can be paginated or briefly stale during a delta).
+  const hasActiveRollup = typeof input.activeCount === "number" && Number.isFinite(input.activeCount);
+  const activeCount = hasActiveRollup ? count(input.activeCount) : activeJobs;
+  const hasJobRollup = typeof input.jobCount === "number" && Number.isFinite(input.jobCount);
+  const jobCount = hasJobRollup ? count(input.jobCount) : Math.max(jobs.length, activeCount);
   const hasJobs = jobCount > 0;
   const archived = input.archived === true || normalized(input.status) === "archived";
   const rootStatus = normalized(input.rootStatus);
@@ -111,7 +116,11 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
   // explicit `reporting` phase is also governed by the Scheduler.
   const hasReportPhase = rootStatus === "reporting" || isReportGeneration(reportStatus);
   const hasAnalysisComplete = rootStatus === "analysis_complete";
-  const hasCompletion = isSuccess(rootStatus) || isSuccess(reportStatus);
+  // A root/report success is only a task completion when the canvas has at
+  // least one Job.  A freshly-created canvas may carry a stale/default root
+  // success marker, but it must remain idle until execution exists and has a
+  // consistent terminal timestamp.
+  const hasCompletion = hasJobs && Boolean(input.endedAt) && (isSuccess(rootStatus) || isSuccess(reportStatus));
 
   let status: TaskLifecycleStatus;
   if (archived) status = "archived";

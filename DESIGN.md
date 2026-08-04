@@ -124,7 +124,7 @@ pending → claimed → provisioning → running
 | Finding 追踪链 + 画布只看链路 | #31 | 服务端 `trace`；`traceFinding` 聚焦 |
 | 整插件 / 整源挂载 | #33 | `modules` selector：`plugin:` / `source:*` |
 | 实时流 + 运行中过程流 | #38 | WS 鉴权；inflight 读 `stream.ndjson` |
-| 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`delta?since=` |
+| 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`canvas_changes` durable revision/tombstone；`delta?since=<revision>`，游标过旧显式回退 L0 |
 | 分层共享资产 | #41 | platform / project / finding 只读注入；人工+Agent publish |
 | 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
 | 双轨报告 | #43 | 任务总报告 + 每条 confirmed 单报告 |
