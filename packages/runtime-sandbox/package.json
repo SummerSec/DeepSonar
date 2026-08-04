@@ -1,6 +1,6 @@
 {
   "name": "@deepsonar/runtime-sandbox",
-  "version": "0.1.2",
+  "version": "0.1.10",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
