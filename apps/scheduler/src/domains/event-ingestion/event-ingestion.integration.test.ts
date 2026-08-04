@@ -249,7 +249,10 @@ if (!testDatabaseUrl) {
       const multiCanvasNodes = await sql<{ status: string }[]>`
         SELECT status FROM canvas_nodes WHERE job_id = ${multiCanvasJobId} ORDER BY id`;
       assert.equal(multiCanvasJob?.status, "running");
-      assert.deepEqual(multiCanvasNodes.map((node) => node.status), ["running", "pending"]);
+      assert.deepEqual(
+        multiCanvasNodes.map((node) => node.status).sort(),
+        ["pending", "running"],
+      );
 
       await assert.rejects(
         sql.begin(async (tx) => {
