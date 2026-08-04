@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { decodeCursor, encodeCursor, page, pageLimit, type PageEnvelope } from "./pagination.js";
+import { encodeCursor, page, pageLimit, parseCursor, CursorError, type PageEnvelope } from "./pagination.js";
 
 /**
  * Agent realtime stream bus (in-memory only).
@@ -115,19 +115,26 @@ export function streamCursor(item: Pick<StreamItem, "attempt_id" | "seq">): stri
   return encodeCursor({ kind: "stream", attempt_id: item.attempt_id, seq: item.seq });
 }
 
+export function streamItemKey(item: Pick<StreamItem, "attempt_id" | "seq">): string {
+  return `${item.attempt_id}:${item.seq}`;
+}
+
 export function streamWindow(
   jobId: string,
-  options: { after?: string | null; limit?: number } = {},
+  options: { after?: string | null; limit?: number; allowMissingCursor?: boolean } = {},
 ): PageEnvelope<StreamItem> {
   const source = buffers.get(jobId) ?? [];
   const limit = pageLimit(options.limit, 50);
   const after = options.after ?? null;
-  const cursor = decodeCursor(after, "stream");
+  const cursor = parseCursor(after, "stream");
   let start = 0;
   if (cursor?.attempt_id && Number.isSafeInteger(cursor.seq)) {
     const found = source.findIndex((item) => item.attempt_id === cursor.attempt_id && item.seq === cursor.seq);
-    start = found >= 0 ? found + 1 : source.findIndex((item) => item.attempt_id === cursor.attempt_id && item.seq > (cursor.seq as number));
-    if (start < 0) start = source.length;
+    if (found < 0 && !options.allowMissingCursor) throw new CursorError("CURSOR_GAP");
+    start = found >= 0
+      ? found + 1
+      : source.findIndex((item) => item.attempt_id === cursor.attempt_id && item.seq > (cursor.seq as number));
+    if (start < 0) start = options.allowMissingCursor ? 0 : source.length;
   }
   const selected = source.slice(start, start + limit);
   const hasMore = start + selected.length < source.length;

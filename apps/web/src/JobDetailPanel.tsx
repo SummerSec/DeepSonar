@@ -1,5 +1,5 @@
 import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, ProcessStreamView, recordsToStreamBlocks } from "./LiveStream";
 import { MarkdownView } from "./MarkdownView";
@@ -68,6 +68,11 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [evidence, setEvidence] = useState<JobEvidence | null>(null);
   const [stream, setStream] = useState<Array<Record<string, unknown>>>([]);
+  const [streamCursor, setStreamCursor] = useState<string | null>(null);
+  const [streamHasMore, setStreamHasMore] = useState(false);
+  const [streamTruncated, setStreamTruncated] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const streamCursorRef = useRef<string | null>(null);
   const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
   const [eventsCursor, setEventsCursor] = useState<string | null>(null);
   const [eventsHasMore, setEventsHasMore] = useState(false);
@@ -87,6 +92,11 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     setDetail(null);
     setEvidence(null);
     setStream([]);
+    setStreamCursor(null);
+    streamCursorRef.current = null;
+    setStreamHasMore(false);
+    setStreamTruncated(false);
+    setStreamError(null);
     setJobEvents([]);
     setEventsCursor(null);
     setEventsHasMore(false);
@@ -112,7 +122,14 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
 
     const loadEvidenceBundle = () => {
       api.jobEvidence(jobId).then((v) => alive && setEvidence(v)).catch(() => {});
-      api.jobStreamPage(jobId, { limit: 50 }).then((v) => alive && setStream(v.items)).catch(() => {});
+      api.jobStreamPage(jobId, { limit: 50 }).then((v) => {
+        if (!alive) return;
+        setStream(v.items);
+        setStreamCursor(v.next_cursor);
+        streamCursorRef.current = v.next_cursor;
+        setStreamHasMore(v.has_more);
+        setStreamTruncated(Boolean(v.truncated || v.gap));
+      }).catch((e) => alive && setStreamError(String(e)));
       api.jobEventsPage(jobId, { limit: 50 }).then((v) => {
         if (!alive) return;
         setJobEvents(v.items);
@@ -140,7 +157,27 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           setJobEvents((before) => before.length > 0 ? before : v.events);
           if (ACTIVE.has(v.job.status)) {
             // 运行中：过程流持续刷新（事件随 job 详情一起更新）
-            api.jobStreamPage(jobId, { limit: 50 }).then((s) => alive && setStream(s.items)).catch(() => {});
+            const after = streamCursorRef.current;
+            api.jobStreamPage(jobId, { after, limit: 50, tail: after === null }).then((s) => {
+              if (!alive) return;
+              if (s.items.length > 0) {
+                setStream((before) => {
+                  const seen = new Set(before.map((item) => `${String(item.attempt_id ?? "legacy")}:${String(item.seq ?? "")}`));
+                  return [...before, ...s.items.filter((item) => {
+                    const key = `${String(item.attempt_id ?? "legacy")}:${String(item.seq ?? "")}`;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                  })];
+                });
+              }
+              if (s.next_cursor) {
+                streamCursorRef.current = s.next_cursor;
+                setStreamCursor(s.next_cursor);
+              }
+              setStreamHasMore(s.has_more);
+              setStreamTruncated((before) => before || Boolean(s.truncated || s.gap));
+            }).catch((e) => alive && setStreamError(String(e)));
             api.jobEventsPage(jobId, { limit: 50 }).then((s) => alive && setJobEvents(s.items)).catch(() => {});
           }
         })
@@ -155,6 +192,29 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
 
   const active = detail ? ACTIVE.has(detail.job.status) : false;
   const archivedBlocks = useMemo(() => recordsToStreamBlocks(stream), [stream]);
+
+  const loadMoreStream = async () => {
+    if (!streamCursor || !streamHasMore) return;
+    try {
+      const next = await api.jobStreamPage(jobId, { after: streamCursor, limit: 50 });
+      setStream((before) => {
+        const seen = new Set(before.map((item) => `${String(item.attempt_id ?? "legacy")}:${String(item.seq ?? "")}`));
+        return [...before, ...next.items.filter((item) => {
+          const key = `${String(item.attempt_id ?? "legacy")}:${String(item.seq ?? "")}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })];
+      });
+      setStreamCursor(next.next_cursor);
+      streamCursorRef.current = next.next_cursor;
+      setStreamHasMore(next.has_more);
+      setStreamTruncated((before) => before || Boolean(next.truncated || next.gap));
+      setStreamError(null);
+    } catch (e) {
+      setStreamError(String(e));
+    }
+  };
 
   const eventTypes = useMemo(() => {
     if (!detail) return [] as string[];
@@ -572,10 +632,26 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           {detail && tab === "process" && (
             <div className="flex h-full min-h-0 flex-col overflow-hidden">
               {stream.length ? (
-                <ProcessStreamView
-                  blocks={archivedBlocks}
-                  emptyHint="此运行没有可解析的过程流。"
-                />
+                <>
+                  <ProcessStreamView
+                    blocks={archivedBlocks}
+                    emptyHint="此运行没有可解析的过程流。"
+                  />
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-white/[.06] px-3 py-2">
+                    {streamHasMore && (
+                      <button
+                        type="button"
+                        onClick={() => void loadMoreStream()}
+                        className="rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]"
+                      >
+                        加载更多过程
+                      </button>
+                    )}
+                    <span className="font-mono text-[10px] text-zinc-600">已加载 {stream.length} 条</span>
+                    {streamTruncated && <span className="font-mono text-[10px] text-amber-300">归档已截断，可能存在 CURSOR_GAP</span>}
+                    {streamError && <span className="font-mono text-[10px] text-red-300">{streamError}</span>}
+                  </div>
+                </>
               ) : (
                 <div className="p-8 text-center text-[13px] text-zinc-600">
                   {active

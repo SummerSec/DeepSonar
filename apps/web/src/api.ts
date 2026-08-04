@@ -59,12 +59,15 @@ export interface PageEnvelope<T> {
   has_more: boolean;
   watermark: string;
   live: boolean;
+  truncated?: boolean;
+  gap?: boolean;
 }
 
 export interface CanvasDelta {
   canvas_id: string;
   since: string;
   server_time: string;
+  watermark?: string;
   upsert_nodes: CanvasNode[];
   upsert_edges: CanvasEdge[];
   delete_node_ids: string[];
@@ -299,6 +302,8 @@ export interface StreamPage {
   has_more: boolean;
   watermark: string;
   live: boolean;
+  truncated?: boolean;
+  gap?: boolean;
 }
 
 export interface WsTicket {
@@ -720,7 +725,16 @@ export interface TaskReport {
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const err = (await res.json()) as { error?: string; message?: string; error_code?: string };
+      detail = [err.error_code, err.error ?? err.message].filter(Boolean).join(": ");
+    } catch {
+      /* ignore non-JSON error body */
+    }
+    throw new Error(detail ? `${path} -> ${res.status}: ${detail}` : `${path} -> ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -1013,8 +1027,8 @@ export const api = {
     ),
   job: (jobId: string) => get<JobDetail>(`/jobs/${jobId}`),
   jobEvidence: (jobId: string) => get<JobEvidence>(`/jobs/${jobId}/evidence`),
-  jobStreamPage: (jobId: string, opts?: { after?: string | null; limit?: number }) =>
-    get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
+  jobStreamPage: (jobId: string, opts?: { after?: string | null; limit?: number; tail?: boolean }) =>
+    get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined, tail: opts?.tail ? "1" : undefined })}`),
   jobStream: async (jobId: string) => {
     const page = await get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ limit: "50" })}`);
     return { events: page.items, ...page };

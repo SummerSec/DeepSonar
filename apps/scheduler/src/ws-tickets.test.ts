@@ -24,4 +24,3 @@ test("browser WS tickets are scoped and single use", () => {
   assert.equal(consumeWsTicket(second.ticket, "job-1"), null);
   clearWsTicketsForTests();
 });
-

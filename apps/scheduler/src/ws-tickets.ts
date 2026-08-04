@@ -65,4 +65,3 @@ export function consumeWsTicket(ticket: string, jobId: string): WsTicketActor | 
 export function clearWsTicketsForTests(): void {
   tickets.clear();
 }
-

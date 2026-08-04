@@ -37,6 +37,9 @@ const EDGE_STYLE: Record<string, { stroke: string; speed: string }> = {
   to: { stroke: "var(--color-acc-400)", speed: "2.5s" }, // 意图 → 事实（Cairn Intent.to）
 };
 
+/** Avoid a main-thread ELK layout spike on large topology snapshots. */
+export const ELK_NODE_THRESHOLD = 200;
+
 type ExpandHandlers = {
   expandNode: (id: string) => void;
   collapseNode: (id: string) => void;
@@ -202,7 +205,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       try {
         const delta = await api.canvasDelta(canvasId, since);
         if (!alive) return;
-        watermarkRef.current = delta.server_time;
+        watermarkRef.current = delta.watermark ?? delta.server_time;
         setData((before) => {
           if (!before) return before;
           const nodeMap = new Map(before.nodes.map((node) => [node.id, node]));
@@ -398,9 +401,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
   }, [data, layoutKey]);
 
-  // elkjs：对当前展示子图重算最优分层布局
+  // elkjs：对小型当前展示子图重算最优分层布局。大图使用服务端持久化
+  // 坐标，避免一次性把数百节点/边交给 ELK 阻塞主线程。
   useEffect(() => {
-    if (layoutSubgraph.nodes.length === 0) {
+    if (layoutSubgraph.nodes.length === 0 || layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD) {
       setElkPos(null);
       return;
     }
@@ -421,7 +425,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
 
   const fallbackPos = useMemo(
     () =>
-      layoutSubgraph.nodes.length > 0
+      layoutSubgraph.nodes.length > 0 && layoutSubgraph.nodes.length <= ELK_NODE_THRESHOLD
         ? layoutNodes(layoutSubgraph.nodes, layoutSubgraph.edges)
         : null,
     [layoutSubgraph],
@@ -602,6 +606,9 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
                 {depthHiddenCount > 0 ? ` · 藏 ${depthHiddenCount}` : ""}
                 {manualOverrideHint}
               </span>
+              {layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD && (
+                <span className="font-mono text-[10px] text-amber-300">大图使用服务端坐标（跳过 ELK）</span>
+              )}
               {filterActive && (
                 <button
                   type="button"

@@ -28,6 +28,31 @@ export interface PageEnvelope<T> {
   watermark: string;
   /** True when the source may still change (in-memory/live evidence). */
   live: boolean;
+  /** True when the bounded source had to drop older records. */
+  truncated?: boolean;
+  /** True when the requested cursor crossed a bounded retention gap. */
+  gap?: boolean;
+}
+
+export type CursorErrorCode = "INVALID_CURSOR" | "CURSOR_GAP";
+
+/** Explicit cursor failures are part of the HTTP/WS stream contract. */
+export class CursorError extends Error {
+  readonly code: CursorErrorCode;
+
+  constructor(code: CursorErrorCode, message = code) {
+    super(message);
+    this.name = "CursorError";
+    this.code = code;
+  }
+}
+
+/** Decode a caller cursor, distinguishing an omitted cursor from bad input. */
+export function parseCursor(raw: unknown, kind: string): CursorPayload | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const decoded = decodeCursor(raw, kind);
+  if (!decoded) throw new CursorError("INVALID_CURSOR");
+  return decoded;
 }
 
 export function pageLimit(raw: unknown, fallback = MAX_PAGE_SIZE): number {
@@ -58,7 +83,15 @@ export function decodeCursor(raw: unknown, kind: string): CursorPayload | null {
 
 export function page<T>(
   items: T[],
-  options: { after?: string | null; nextCursor?: string | null; hasMore?: boolean; live?: boolean; watermark?: string },
+  options: {
+    after?: string | null;
+    nextCursor?: string | null;
+    hasMore?: boolean;
+    live?: boolean;
+    watermark?: string;
+    truncated?: boolean;
+    gap?: boolean;
+  },
 ): PageEnvelope<T> {
   return {
     items,
@@ -67,6 +100,8 @@ export function page<T>(
     has_more: options.hasMore ?? false,
     watermark: options.watermark ?? new Date().toISOString(),
     live: options.live ?? false,
+    ...(options.truncated ? { truncated: true } : {}),
+    ...(options.gap ? { gap: true } : {}),
   };
 }
 

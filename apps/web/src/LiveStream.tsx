@@ -284,13 +284,24 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
     let retryTimer: number | undefined;
     let retry = 0;
     let cursor: string | null = null;
+    const seen = new Set<string>();
     setBlocks([]);
     setConnected(false);
 
     const appendPage = (page: StreamPage) => {
       const items = page.items ?? page.events ?? [];
-      setBlocks((before) => items.reduce((next, item) => reduceStreamItem(next, item as unknown as StreamItem), before));
+      const fresh = items.filter((item) => {
+        const streamItem = item as unknown as StreamItem;
+        const key = `${streamItem.attempt_id ?? "legacy"}:${streamItem.seq}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      setBlocks((before) => fresh.reduce((next, item) => reduceStreamItem(next, item as unknown as StreamItem), before));
       if (page.next_cursor) cursor = page.next_cursor;
+      if (page.truncated || page.gap) {
+        setStatus(page.gap ? "实时流存在 CURSOR_GAP，请从归档首帧重新加载" : "实时流归档已截断，较早帧可能存在 CURSOR_GAP");
+      }
     };
 
     const connect = async () => {
@@ -298,11 +309,13 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
       try {
         // Reconnects first backfill the durable/active evidence tail.  The bus
         // itself is best-effort and may have evicted frames while disconnected.
-        if (cursor) {
-          const backfill = await api.jobStreamPage(jobId, { after: cursor, limit: 50 });
-          if (!alive) return;
-          appendPage(backfill);
-        }
+        const backfill = await api.jobStreamPage(jobId, {
+          after: cursor,
+          limit: 50,
+          tail: cursor === null,
+        });
+        if (!alive) return;
+        appendPage(backfill);
         setStatus("正在申请实时流凭证…");
         const ticket = await api.createWsTicket(jobId);
         if (!alive) return;
@@ -318,8 +331,10 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         ws.onclose = (event) => {
           if (!alive) return;
           setConnected(false);
-          const terminal = event.code === 4401 || event.code === 4403 || event.code === 4404 || event.code === 4409;
-          if (event.code === 4401) setStatus("实时流鉴权失败，请重新登录");
+          const terminal = event.code === 4400 || event.code === 4410 || event.code === 4401 || event.code === 4403 || event.code === 4404 || event.code === 4409;
+          if (event.code === 4400) setStatus("实时流游标 INVALID_CURSOR，请刷新归档");
+          else if (event.code === 4410) setStatus("实时流游标 CURSOR_GAP，请刷新归档");
+          else if (event.code === 4401) setStatus("实时流鉴权失败，请重新登录");
           else if (event.code === 4404) setStatus("Job 不存在，无法读取实时流");
           else if (event.code === 4409) setStatus("Job 已结束，实时流已关闭；可查看归档过程");
           else if (event.code === 1013) setStatus("实时流背压，正在通过 HTTP 补齐…");
@@ -338,7 +353,11 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
               return;
             }
             const item = payload as StreamItem;
-            setBlocks((before) => reduceStreamItem(before, item));
+            const key = `${item.attempt_id ?? "legacy"}:${item.seq}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              setBlocks((before) => reduceStreamItem(before, item));
+            }
             if (item.cursor) cursor = item.cursor;
           } catch {
             // 非 JSON 帧忽略
@@ -348,12 +367,17 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         if (!alive) return;
         setConnected(false);
         const message = error instanceof Error ? error.message : String(error);
+        const cursorError = message.includes("INVALID_CURSOR") || message.includes("CURSOR_GAP");
         setStatus(message.includes("JOB_NOT_RUNNING") || message.includes("job is not running")
           ? "Job 已结束，实时流已关闭；可查看归档过程"
+          : message.includes("CURSOR_GAP")
+            ? "实时流游标 CURSOR_GAP，请刷新归档"
+            : message.includes("INVALID_CURSOR")
+              ? "实时流游标 INVALID_CURSOR，请刷新归档"
           : message.includes("401") || message.includes("AUTH")
             ? "实时流鉴权失败，请重新登录"
             : "实时流暂不可用，正在重试…");
-        if (!message.includes("JOB_NOT_RUNNING") && !message.includes("job is not running")) {
+        if (!cursorError && !message.includes("JOB_NOT_RUNNING") && !message.includes("job is not running")) {
           retryTimer = window.setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
         }
       }

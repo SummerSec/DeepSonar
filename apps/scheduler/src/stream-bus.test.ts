@@ -6,6 +6,7 @@ import {
   streamBuffer,
   streamCursor,
   streamWindow,
+  subscribeStream,
   STREAM_BUFFER_MAX,
   STREAM_ITEM_MAX_BYTES,
 } from "./stream-bus.js";
@@ -30,6 +31,36 @@ test("stream bus keeps bounded attempt cursors and payloads", () => {
   clearStreamForTests();
 });
 
+test("subscribe-before-snapshot drains the exact race without duplicate frames", () => {
+  clearStreamForTests();
+  publishStream("race-job", { type: "text.delta", delta: "before" }, "attempt-race", 1);
+  const pending: ReturnType<typeof streamBuffer> = [];
+  const stop = subscribeStream("race-job", (item) => pending.push(item));
+  // The actual route subscribes first, then this publish represents a frame
+  // arriving while it is taking its snapshot.
+  publishStream("race-job", { type: "text.delta", delta: "during" }, "attempt-race", 2);
+  const snapshot = streamWindow("race-job", { limit: 50 });
+  const seen = new Set(snapshot.items.map((item) => streamCursor(item)));
+  for (const item of pending) {
+    if (!seen.has(streamCursor(item))) {
+      seen.add(streamCursor(item));
+    }
+  }
+  assert.deepEqual([...seen].length, 2);
+  stop();
+  clearStreamForTests();
+});
+
+test("stale stream cursors are explicit gaps", () => {
+  clearStreamForTests();
+  publishStream("gap-job", { type: "text.delta", delta: "one" }, "attempt-gap", 1);
+  const stale = streamCursor({ attempt_id: "attempt-gap", seq: 99 });
+  assert.throws(
+    () => streamWindow("gap-job", { after: stale }),
+    (error: unknown) => (error as { code?: string }).code === "CURSOR_GAP",
+  );
+  clearStreamForTests();
+});
 test("stream cursor namespace changes with a new attempt", () => {
   clearStreamForTests();
   publishStream("job", { type: "run.started" }, "attempt-one", 1);
@@ -40,4 +71,3 @@ test("stream cursor namespace changes with a new attempt", () => {
   assert.equal(items[0]?.seq, 1);
   clearStreamForTests();
 });
-

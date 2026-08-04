@@ -61,15 +61,23 @@ import {
   validateEnvVars,
 } from "./core.js";
 import { sql } from "./db.js";
+import { normalizeDeltaWatermark } from "./canvas-delta.js";
 import { readEvidenceManifest, readMainSession, readNormalizedStreamPage } from "./evidence.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
 import { registerGateway } from "./gateway.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "./openapi.js";
 import { runner } from "./runtime.js";
 import { syncSkillSource, validateSourceUrl } from "./skill-sources.js";
-import { streamCursor, streamWindow, subscribeStream, STREAM_SUBSCRIBER_QUEUE_MAX } from "./stream-bus.js";
+import {
+  streamCursor,
+  streamItemKey,
+  streamWindow,
+  subscribeStream,
+  STREAM_SUBSCRIBER_QUEUE_MAX,
+} from "./stream-bus.js";
 import { consumeWsTicket, issueWsTicket } from "./ws-tickets.js";
-import { cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
+import { WsSendQueue } from "./ws-send-queue.js";
+import { CursorError, cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
 import { resolveModules } from "./transfer/modules.js";
 import { buildPreview, applyImport } from "./transfer/import.js";
 import { saveImportUpload, loadPackFile, removeFileSafe, sha256Hex, openDeepsonarPack } from "./transfer/pack.js";
@@ -654,38 +662,51 @@ export function registerRoutes(app: FastifyInstance) {
       return;
     }
 
-    const pending: string[] = [];
-    let flushing = false;
-    let closed = false;
-    const flush = () => {
-      if (closed || flushing) return;
-      flushing = true;
+    // Validate an opaque cursor against durable/active evidence before the
+    // in-memory bus snapshot.  A bus restart is allowed to have no matching
+    // frame, but an evidence gap must be explicit rather than a silent reset.
+    if (q.after) {
       try {
-        while (pending.length > 0 && socket.readyState === socket.OPEN) socket.send(pending.shift() as string);
-      } catch {
-        closed = true;
-        try { socket.close(1011, "stream send failed"); } catch { /* ignore */ }
-      } finally {
-        flushing = false;
-      }
-    };
-    const enqueue = (value: unknown) => {
-      if (closed || socket.readyState !== socket.OPEN) return;
-      let encoded: string;
-      try { encoded = JSON.stringify(value); } catch { return; }
-      if (pending.length >= STREAM_SUBSCRIBER_QUEUE_MAX) {
-        closed = true;
-        try { socket.close(1013, "stream backpressure"); } catch { /* ignore */ }
+        await readNormalizedStreamPage(jobId, { after: q.after, limit: 1, live: true });
+      } catch (error) {
+        const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";
+        socket.close(code === "CURSOR_GAP" ? 4410 : 4400, code);
         return;
       }
-      pending.push(encoded);
-      flush();
+    }
+
+    let closed = false;
+    let unsub = () => {};
+    const closeStream = (code: number, reason: string) => {
+      if (closed) return;
+      closed = true;
+      unsub();
+      queue.stop();
+      try { socket.close(code, reason); } catch { /* ignore */ }
+    };
+    const queue = new WsSendQueue(socket, {
+      maxItems: STREAM_SUBSCRIBER_QUEUE_MAX,
+      maxBytes: STREAM_SUBSCRIBER_QUEUE_MAX * 16 * 1024,
+      onClose: () => {
+        closed = true;
+        unsub();
+      },
+    });
+    const enqueue = (value: unknown) => {
+      if (!closed) queue.enqueue(value);
     };
 
-    const initial = streamWindow(jobId, { after: q.after ?? null, limit: pageLimit(q.limit) });
-    enqueue({ ...initial, events: initial.items });
-    let after = initial.next_cursor ?? q.after ?? null;
-    const unsub = subscribeStream(jobId, (item) => {
+    // Subscribe before taking the snapshot.  Anything published during the
+    // synchronous snapshot is held in this pending list and drained after the
+    // initial page, preventing the classic snapshot/subscribe race.
+    const pendingItems: ReturnType<typeof streamWindow>["items"] = [];
+    let snapshotting = true;
+    let after = q.after ?? null;
+    const seen = new Set<string>();
+    const emitLive = (item: (typeof pendingItems)[number]) => {
+      const key = streamItemKey(item);
+      if (seen.has(key)) return;
+      seen.add(key);
       const next = streamCursor(item);
       enqueue({
         items: [item],
@@ -697,9 +718,34 @@ export function registerRoutes(app: FastifyInstance) {
         live: true,
       });
       after = next;
+    };
+    unsub = subscribeStream(jobId, (item) => {
+      if (snapshotting) pendingItems.push(item);
+      else emitLive(item);
     });
+    let initial;
+    try {
+      // The HTTP evidence endpoint validates a durable cursor before opening
+      // this connection.  A valid cursor may still be absent after a restart
+      // because the in-memory bus is best effort, so allow that case here.
+      initial = streamWindow(jobId, {
+        after: q.after ?? null,
+        limit: pageLimit(q.limit),
+        allowMissingCursor: Boolean(q.after),
+      });
+    } catch (error) {
+      const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";
+      closeStream(code === "CURSOR_GAP" ? 4410 : 4400, code);
+      return;
+    }
+    for (const item of initial.items) seen.add(streamItemKey(item));
+    enqueue({ ...initial, events: initial.items });
+    after = initial.next_cursor ?? after;
+    snapshotting = false;
+    for (const item of pendingItems) emitLive(item);
     const cleanup = () => {
       closed = true;
+      queue.stop();
       unsub();
     };
     socket.on("close", cleanup);
@@ -2648,37 +2694,52 @@ export function registerRoutes(app: FastifyInstance) {
     if (!since || !Number.isFinite(Date.parse(since))) {
       return reply.code(400).send({ error: "since must be an ISO timestamp", error_code: "INVALID_WATERMARK" });
     }
-    const [canvas] = await sql`
-      SELECT id, project_id,
-        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id
-          AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count
-      FROM canvases WHERE id = ${id}`;
-    if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
-    const [nodes, edges] = await Promise.all([
-      sql`
-        SELECT id, node_type, title,
-          jsonb_build_object(
-            'summary', LEFT(COALESCE(body_json->>'summary', body_json->>'description', body_json->>'message', ''), 240),
-            'description', LEFT(COALESCE(body_json->>'description', body_json->>'summary', ''), 240),
-            'severity', body_json->>'severity', 'role', body_json->>'role', 'type', body_json->>'type',
-            'last_progress', CASE WHEN jsonb_typeof(body_json->'last_progress') = 'object' THEN body_json->'last_progress' ELSE NULL END
-          ) AS body_json,
-          x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
-        FROM canvas_nodes WHERE canvas_id = ${id} AND updated_at > ${since}::timestamptz ORDER BY updated_at, id`,
-      sql`
-        SELECT id, from_node_id, to_node_id, edge_type
-        FROM canvas_edges WHERE canvas_id = ${id} AND created_at > ${since}::timestamptz ORDER BY created_at, id`,
-    ]);
-    return {
-      canvas_id: id,
-      since,
-      server_time: new Date().toISOString(),
-      upsert_nodes: nodes,
-      upsert_edges: edges,
-      delete_node_ids: [],
-      delete_edge_ids: [],
-      live: Number(canvas.active_count ?? 0) > 0,
-    };
+    const delta = await sql.begin(async (tx) => {
+      // Capture the upper watermark before reading any rows, then bound every
+      // query by it in one transaction.  Updates committed after this point
+      // are intentionally left for the next poll (`since = watermark`).
+      const [upper] = await tx`SELECT clock_timestamp() AS watermark`;
+      const [canvas] = await tx`
+        SELECT id, project_id,
+          (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id
+            AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count
+        FROM canvases WHERE id = ${id}`;
+      if (!canvas) return null;
+      const nodes = await tx`
+          SELECT id, node_type, title,
+            jsonb_build_object(
+              'summary', LEFT(COALESCE(body_json->>'summary', body_json->>'description', body_json->>'message', ''), 240),
+              'description', LEFT(COALESCE(body_json->>'description', body_json->>'summary', ''), 240),
+              'severity', body_json->>'severity', 'role', body_json->>'role', 'type', body_json->>'type',
+              'last_progress', CASE WHEN jsonb_typeof(body_json->'last_progress') = 'object' THEN body_json->'last_progress' ELSE NULL END
+            ) AS body_json,
+            x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
+          FROM canvas_nodes
+          WHERE canvas_id = ${id}
+            AND updated_at > ${since}::timestamptz
+            AND updated_at <= ${upper.watermark}::timestamptz
+          ORDER BY updated_at, id`;
+      const edges = await tx`
+          SELECT id, from_node_id, to_node_id, edge_type
+          FROM canvas_edges
+          WHERE canvas_id = ${id}
+            AND created_at > ${since}::timestamptz
+            AND created_at <= ${upper.watermark}::timestamptz
+          ORDER BY created_at, id`;
+      return {
+        canvas_id: id,
+        since,
+        server_time: normalizeDeltaWatermark(upper.watermark as string | Date),
+        watermark: normalizeDeltaWatermark(upper.watermark as string | Date),
+        upsert_nodes: nodes,
+        upsert_edges: edges,
+        delete_node_ids: [],
+        delete_edge_ids: [],
+        live: Number(canvas.active_count ?? 0) > 0,
+      };
+    });
+    if (!delta) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    return delta;
   });
 
   // ---------- 画布收敛控制（暂停/恢复决策、门控停、清理低优先级 verify） ----------
@@ -3325,15 +3386,24 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/jobs/:id/evidence/stream", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const q = req.query as { cursor?: string; after?: string; limit?: string };
+    const q = req.query as { cursor?: string; after?: string; limit?: string; tail?: string };
     const [job] = await sql`SELECT id, status FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "job not found" });
     const after = q.cursor ?? q.after ?? null;
-    const result = await readNormalizedStreamPage(id, {
-      after,
-      limit: pageLimit(q.limit),
-      live: STREAMABLE_JOB_STATUSES.has(String(job.status)),
-    });
+    let result;
+    try {
+      result = await readNormalizedStreamPage(id, {
+        after,
+        limit: pageLimit(q.limit),
+        tail: q.tail === "1" || q.tail === "true",
+        live: STREAMABLE_JOB_STATUSES.has(String(job.status)),
+      });
+    } catch (error) {
+      if (error instanceof CursorError) {
+        return reply.code(409).send({ error: error.code, error_code: error.code, gap: error.code === "CURSOR_GAP" });
+      }
+      throw error;
+    }
     // `events` is retained as a compatibility alias while `items` is the
     // canonical HTTP/WS envelope field.
     return { ...result, events: result.items };

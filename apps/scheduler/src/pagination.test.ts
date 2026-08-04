@@ -8,10 +8,8 @@ test("pagination cursors are opaque and kind scoped", () => {
   assert.equal(decodeCursor(cursor, "findings"), null);
   assert.equal(decodeCursor("not-a-cursor", "jobs"), null);
 });
-
 test("page limit is capped for bounded list endpoints", () => {
   assert.equal(pageLimit("5000"), 50);
   assert.equal(pageLimit("0"), 50);
   assert.equal(pageLimit("7"), 7);
 });
-

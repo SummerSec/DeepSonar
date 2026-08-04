@@ -2,14 +2,14 @@ import type { SessionBundle } from "@deepsonar/runtime-sandbox";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
-import { gzip, gunzip } from "node:zlib";
+import { createGunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 import { config } from "./config.js";
-import { decodeCursor, encodeCursor, page, pageLimit, type PageEnvelope } from "./pagination.js";
+import { encodeCursor, page, pageLimit, parseCursor, CursorError, type PageEnvelope } from "./pagination.js";
 
 const gzipP = promisify(gzip);
-const gunzipP = promisify(gunzip);
 const otlpQueues = new Map<string, Promise<void>>();
 const otlpPaths = new Map<string, string>();
 
@@ -204,7 +204,8 @@ export async function readMainSession(jobId: string): Promise<{ meta: EvidenceFi
 }
 
 const MAX_STREAM_READ_BYTES = 8 * 1024 * 1024;
-const MAX_STREAM_ARCHIVE_BYTES = 32 * 1024 * 1024;
+const MAX_STREAM_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
+const MAX_STREAM_COMPRESSED_BYTES = 128 * 1024 * 1024;
 
 function streamCursor(record: Record<string, unknown>): string | null {
   const attempt = typeof record.attempt_id === "string" ? record.attempt_id : null;
@@ -214,9 +215,9 @@ function streamCursor(record: Record<string, unknown>): string | null {
     : null;
 }
 
-async function readTail(filePath: string): Promise<Buffer> {
+async function readTail(filePath: string): Promise<{ raw: Buffer; truncated: boolean }> {
   const info = await stat(filePath);
-  if (info.size <= MAX_STREAM_READ_BYTES) return readFile(filePath);
+  if (info.size <= MAX_STREAM_READ_BYTES) return { raw: await readFile(filePath), truncated: false };
   const handle = await open(filePath, "r");
   try {
     const length = MAX_STREAM_READ_BYTES;
@@ -225,29 +226,106 @@ async function readTail(filePath: string): Promise<Buffer> {
     // The first line is usually partial after a tail read; dropping it keeps
     // JSON parsing deterministic and makes the watermark honest.
     const firstNewline = buffer.indexOf(0x0a);
-    return firstNewline >= 0 ? buffer.subarray(firstNewline + 1) : Buffer.alloc(0);
+    return {
+      raw: firstNewline >= 0 ? buffer.subarray(firstNewline + 1) : Buffer.alloc(0),
+      truncated: true,
+    };
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Stream a gzip archive through a bounded tail ring.  Never materialize the
+ * decompressed archive: a hostile compression ratio is stopped at the budget
+ * and reported as truncated so callers can surface a cursor gap explicitly.
+ */
+export async function readGzipTail(filePath: string): Promise<{ raw: Buffer; truncated: boolean }> {
+  const input = createReadStream(filePath, { highWaterMark: 64 * 1024 });
+  const gunzip = createGunzip();
+  const chunks: Buffer[] = [];
+  let tailBytes = 0;
+  let compressedBytes = 0;
+  let decompressedBytes = 0;
+  let truncated = false;
+  let settled = false;
+
+  const pushTail = (chunk: Buffer) => {
+    if (chunk.byteLength >= MAX_STREAM_READ_BYTES) {
+      chunks.length = 0;
+      chunks.push(chunk.subarray(chunk.byteLength - MAX_STREAM_READ_BYTES));
+      tailBytes = MAX_STREAM_READ_BYTES;
+      return;
+    }
+    chunks.push(chunk);
+    tailBytes += chunk.byteLength;
+    while (tailBytes > MAX_STREAM_READ_BYTES && chunks.length > 0) {
+      const first = chunks[0]!;
+      const drop = Math.min(first.byteLength, tailBytes - MAX_STREAM_READ_BYTES);
+      if (drop === first.byteLength) chunks.shift();
+      else chunks[0] = first.subarray(drop);
+      tailBytes -= drop;
+    }
+  };
+
+  const raw = await new Promise<Buffer>((resolve, reject) => {
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve(Buffer.concat(chunks, tailBytes));
+    };
+    input.on("data", (chunk: Buffer) => {
+      compressedBytes += chunk.byteLength;
+      if (compressedBytes > MAX_STREAM_COMPRESSED_BYTES && !truncated) {
+        truncated = true;
+        input.destroy();
+        gunzip.destroy();
+        finish();
+      }
+    });
+    gunzip.on("data", (chunk: Buffer) => {
+      decompressedBytes += chunk.byteLength;
+      pushTail(chunk);
+      if (decompressedBytes > MAX_STREAM_DECOMPRESSED_BYTES && !truncated) {
+        truncated = true;
+        input.destroy();
+        gunzip.destroy();
+        finish();
+      }
+    });
+    gunzip.once("end", () => finish());
+    gunzip.once("error", (error) => {
+      // Destroying a stream after hitting a safety budget emits an abort-like
+      // error; that is an expected bounded read, not a request failure.
+      if (truncated) finish();
+      else finish(error);
+    });
+    input.once("error", (error) => {
+      if (truncated) finish();
+      else finish(error);
+    });
+    input.pipe(gunzip);
+  });
+  return { raw, truncated };
 }
 
 async function parseStreamFile(
   filePath: string,
   attemptHint: string | null,
   compressed: boolean,
-): Promise<Record<string, unknown>[]> {
-  if (compressed) {
-    const archive = await stat(filePath);
-    if (archive.size > MAX_STREAM_ARCHIVE_BYTES) return [];
-  }
-  let raw = compressed ? await readFile(filePath) : await readTail(filePath);
-  if (compressed) {
-    raw = await gunzipP(raw);
-    if (raw.byteLength > MAX_STREAM_READ_BYTES) raw = raw.subarray(raw.byteLength - MAX_STREAM_READ_BYTES);
+): Promise<{ records: Record<string, unknown>[]; truncated: boolean }> {
+  const read = compressed ? await readGzipTail(filePath) : await readTail(filePath);
+  let raw = read.raw;
+  if (read.truncated) {
+    // The first line in a bounded tail can be partial.  Dropping it avoids
+    // fabricating a record and makes the returned gap explicit.
+    const firstNewline = raw.indexOf(0x0a);
+    raw = firstNewline >= 0 ? raw.subarray(firstNewline + 1) : Buffer.alloc(0);
   }
   const fallbackAttempt = attemptHint ?? path.basename(path.dirname(filePath));
   let fallbackSeq = 0;
-  return raw
+  const records = raw
     .toString("utf8")
     .split("\n")
     .filter(Boolean)
@@ -265,16 +343,24 @@ async function parseStreamFile(
         return [];
       }
     });
+  return { records, truncated: read.truncated };
 }
 
-async function evidenceStreamRecords(jobId: string): Promise<{ records: Record<string, unknown>[]; live: boolean }> {
+async function evidenceStreamRecords(jobId: string): Promise<{
+  records: Record<string, unknown>[];
+  live: boolean;
+  truncated: boolean;
+}> {
   const manifest = await readEvidenceManifest(jobId);
   const records: Record<string, unknown>[] = [];
   let hasRaw = false;
+  let truncated = false;
   for (const meta of manifest?.files.filter((file) => file.kind === "stream") ?? []) {
     const filePath = resolveManifestFile(jobId, meta);
     const attempt = meta.path.match(/attempts\/([^/]+)\/stream\.ndjson(?:\.gz)?$/)?.[1] ?? null;
-    records.push(...(await parseStreamFile(filePath, attempt, filePath.endsWith(".gz"))));
+    const parsed = await parseStreamFile(filePath, attempt, filePath.endsWith(".gz"));
+    records.push(...parsed.records);
+    truncated ||= parsed.truncated;
   }
 
   const attemptsRoot = path.join(jobDir(jobId), "attempts");
@@ -293,7 +379,11 @@ async function evidenceStreamRecords(jobId: string): Promise<{ records: Record<s
       }
     }
     rawFiles.sort((a, b) => a.mtime - b.mtime);
-    for (const raw of rawFiles) records.push(...(await parseStreamFile(raw.file, raw.attempt, false)));
+    for (const raw of rawFiles) {
+      const parsed = await parseStreamFile(raw.file, raw.attempt, false);
+      records.push(...parsed.records);
+      truncated ||= parsed.truncated;
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -303,7 +393,7 @@ async function evidenceStreamRecords(jobId: string): Promise<{ records: Record<s
     if (at !== 0) return at;
     return Number(a.seq ?? 0) - Number(b.seq ?? 0);
   });
-  return { records, live: hasRaw || !manifest };
+  return { records, live: hasRaw || !manifest, truncated };
 }
 
 /**
@@ -314,24 +404,19 @@ async function evidenceStreamRecords(jobId: string): Promise<{ records: Record<s
  */
 export async function readNormalizedStreamPage(
   jobId: string,
-  options: { after?: string | null; limit?: number; live?: boolean } = {},
+  options: { after?: string | null; limit?: number; live?: boolean; tail?: boolean } = {},
 ): Promise<PageEnvelope<Record<string, unknown>>> {
-  const { records, live: detectedLive } = await evidenceStreamRecords(jobId);
+  const { records, live: detectedLive, truncated } = await evidenceStreamRecords(jobId);
   const limit = pageLimit(options.limit, 50);
   const after = options.after ?? null;
-  const cursor = decodeCursor(after, "stream");
-  let start = Math.max(0, records.length - limit);
+  const cursor = parseCursor(after, "stream");
+  let start = options.tail && !cursor ? Math.max(0, records.length - limit) : 0;
   if (cursor?.attempt_id && Number.isSafeInteger(cursor.seq)) {
     const found = records.findIndex(
       (record) => record.attempt_id === cursor.attempt_id && Number(record.seq) === cursor.seq,
     );
-    if (found >= 0) start = found + 1;
-    else {
-      const firstAfter = records.findIndex(
-        (record) => record.attempt_id === cursor.attempt_id && Number(record.seq) > (cursor.seq as number),
-      );
-      start = firstAfter >= 0 ? firstAfter : records.length;
-    }
+    if (found < 0) throw new CursorError("CURSOR_GAP");
+    start = found + 1;
   }
   const selected = records.slice(start, start + limit);
   const next = selected.at(-1);
@@ -342,6 +427,8 @@ export async function readNormalizedStreamPage(
     hasMore: start + selected.length < records.length,
     live: options.live ?? detectedLive,
     watermark: nextCursor ?? new Date().toISOString(),
+    truncated,
+    gap: truncated,
   });
 }
 
