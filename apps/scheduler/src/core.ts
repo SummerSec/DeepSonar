@@ -1293,7 +1293,8 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
 
   // hub 循环（§8.3）：
   // - 成功 / verify 回弹：按既有 trigger 唤醒
-  // - 任意终态后若画布已无待跑工作：canvas_idle 自动唤醒 Hub（含 hub 自身空决策结束）
+  // - 非 Hub 终态后若画布已无待跑工作：canvas_idle 自动唤醒 Hub
+  // - Hub 失败由 advanceCanvasAfterTerminalJob 留在 idle，等待人工恢复
   if (status === "succeeded" || forceHubReview) {
     await maybeTriggerHub(tx, job, {
       force: forceHubReview,
@@ -1302,7 +1303,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
     });
   }
   // 无论成功失败：统一推进画布终态。
-  // Root 已 analysis_complete 时优先派 Report；否则按 canvas_idle 规则唤醒 Hub。
+  // Root 已 analysis_complete 时优先派 Report；否则按 canvas_idle 规则推进非 Hub 终态。
   // 这也覆盖 Hub 已提交 complete、但随后 failed 的窗口，避免 Root 永久卡住。
   if (job?.canvas_id) {
     await advanceCanvasAfterTerminalJob(tx, job, status, {
@@ -1365,7 +1366,8 @@ export type CanvasJobTerminalStatus =
  *
  * Hub 的 complete 提案与 mark_job_done 是两条独立事件：如果两者之间执行失败、
  * Reaper 收口或调度器重启，Root 已是 analysis_complete，但不会经过 succeeded finalize。
- * 因此所有终态入口都必须先尝试 Report，再回落到普通 canvas_idle Hub 唤醒。
+ * 因此所有终态入口都必须先尝试 Report，再让可恢复的终态回落到普通
+ * canvas_idle Hub 唤醒。
  * Hub 自身失败是运维恢复边界：不要把 provisioning/执行失败转换成新的
  * canvas_idle Hub，否则同一坏快照会在调度器每次收口时递归制造失败 Job。
  */
