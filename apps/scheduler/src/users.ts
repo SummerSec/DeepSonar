@@ -122,6 +122,17 @@ export async function countUsers(): Promise<number> {
   return (r?.n as number) ?? 0;
 }
 
+/** True only while the public first-run credentials still work for an active admin row. */
+export async function defaultAdminCredentialsActive(): Promise<boolean> {
+  const [row] = await sql`
+    SELECT password_salt, password_hash
+    FROM users
+    WHERE username = ${DEFAULT_ADMIN_USERNAME} AND status = 'active'`;
+  return Boolean(
+    row && verifyPassword(DEFAULT_ADMIN_PASSWORD, row.password_salt as string, row.password_hash as string),
+  );
+}
+
 /**
  * Seed the public first-run admin exactly once. The transaction advisory lock
  * serializes multiple scheduler instances during boot; existing users always

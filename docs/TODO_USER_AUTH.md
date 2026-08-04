@@ -49,6 +49,7 @@ DEEPSONAR_AUTH_REQUIRED=true
 - `POST /auth/change-username` 需要当前密码；用户名按唯一约束校验，冲突返回 `409 USERNAME_TAKEN`。
 - 两种修改都会吊销该用户的全部旧会话，并返回一个新的会话 Token；API Token 不受影响。
 - 首次种子、改密、改登录名都会写入 `audit_logs`，只记录用户名/角色等安全元数据，不写密码、盐、哈希或 Token。
+- `/auth/status.default_admin_credentials_active` 只有默认 `admin` 账号仍使用公开初始口令时才为 `true`；登录页据此显示一次性提示，改名或改密后自动隐藏。
 
 ## 角色权限（摘要）
 

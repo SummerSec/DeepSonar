@@ -791,6 +791,7 @@ export interface AuthStatus {
   auth_required: boolean;
   has_users: boolean;
   bootstrap_available: boolean;
+  default_admin_credentials_active: boolean;
   session_ttl_days: number;
 }
 

@@ -20,6 +20,7 @@ if (!testDatabaseUrl) {
       DEFAULT_ADMIN_PASSWORD,
       DEFAULT_ADMIN_USERNAME,
       createUser,
+      defaultAdminCredentialsActive,
       ensureDefaultAdmin,
       loginUser,
       setUserPassword,
@@ -41,6 +42,7 @@ if (!testDatabaseUrl) {
       assert.ok(row);
       assert.equal(row.role, "admin");
       assert.equal(row.status, "active");
+      assert.equal(await defaultAdminCredentialsActive(), true);
       const originalHash = row.password_hash as string;
       const [auditRow] = await sql`
         SELECT COUNT(*)::int AS n,
@@ -56,6 +58,7 @@ if (!testDatabaseUrl) {
       await setUserPassword(row.id as string, changedPassword);
       const afterPasswordChange = await ensureDefaultAdmin();
       assert.equal(afterPasswordChange.created, false);
+      assert.equal(await defaultAdminCredentialsActive(), false);
       const [afterEnsure] = await sql`SELECT password_hash FROM users WHERE id = ${row.id as string}`;
       assert.notEqual(afterEnsure.password_hash, originalHash);
       await assert.rejects(() => loginUser(DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD));
@@ -64,6 +67,7 @@ if (!testDatabaseUrl) {
       const renamed = "admin.integration";
       const renamedUser = await setUserUsername(row.id as string, renamed);
       assert.equal(renamedUser?.username, renamed);
+      assert.equal(await defaultAdminCredentialsActive(), false);
       await assert.rejects(() => loginUser(DEFAULT_ADMIN_USERNAME, changedPassword));
       await loginUser(renamed, changedPassword);
 
@@ -80,6 +84,7 @@ if (!testDatabaseUrl) {
       // Restore the deterministic fixture for the auth API smoke that follows.
       await setUserUsername(row.id as string, DEFAULT_ADMIN_USERNAME);
       await setUserPassword(row.id as string, DEFAULT_ADMIN_PASSWORD);
+      assert.equal(await defaultAdminCredentialsActive(), true);
     } finally {
       await sql`DELETE FROM user_sessions`;
       await sql.end({ timeout: 5 });

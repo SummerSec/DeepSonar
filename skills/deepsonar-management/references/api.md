@@ -20,7 +20,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /auth/status | 豁免 | 返回 `auth_required`、`has_users`、`bootstrap_available` |
+| GET | /auth/status | 豁免 | 返回 `auth_required`、`has_users`、`bootstrap_available`、`default_admin_credentials_active`（仅默认 admin 仍可用时为 true） |
 | POST | /auth/login | 豁免 | `{username,password}`；返回用户会话 |
 | POST | /auth/bootstrap | 豁免 | 兼容旧版首次引导；默认管理员种子后返回 409 |
 | POST | /auth/logout | projects:read | 吊销当前用户会话 |

@@ -95,6 +95,7 @@ def main() -> None:
     # 4. First-run human account: the scheduler seeds this only when users is empty.
     status = req("GET", "/auth/status")
     assert status["has_users"] and not status["bootstrap_available"], status
+    assert status["default_admin_credentials_active"], status
     human = req("POST", "/auth/login", {"username": "admin", "password": "Deep@Sonar66"})
     human_token = human["token"]
     changed_password = f"{uuid.uuid4().hex}A!"

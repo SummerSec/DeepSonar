@@ -7,6 +7,7 @@ import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
 import {
   countUsers,
   createUser,
+  defaultAdminCredentialsActive,
   listUsers,
   loginUser,
   revokeSession,
@@ -319,6 +320,7 @@ export function registerRoutes(app: FastifyInstance) {
       auth_required: config.auth.required,
       has_users: n > 0,
       bootstrap_available: n === 0,
+      default_admin_credentials_active: await defaultAdminCredentialsActive(),
       session_ttl_days: 7,
     };
   });

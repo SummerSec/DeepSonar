@@ -59,7 +59,33 @@ const OPS: Op[] = [
   { method: "get", path: "/metrics", summary: "Prometheus 指标文本", scope: "admin", tags: ["Meta"] },
 
   // human authentication (API Token auth remains separate)
-  { method: "get", path: "/auth/status", summary: "用户认证状态与首次种子状态", scope: null, tags: ["Auth"] },
+  {
+    method: "get",
+    path: "/auth/status",
+    summary: "用户认证状态与首次种子状态",
+    scope: null,
+    tags: ["Auth"],
+    responses: {
+      "200": {
+        description: "认证与默认管理员提示状态",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["auth_required", "has_users", "bootstrap_available", "default_admin_credentials_active"],
+              properties: {
+                auth_required: { type: "boolean" },
+                has_users: { type: "boolean" },
+                bootstrap_available: { type: "boolean" },
+                default_admin_credentials_active: { type: "boolean" },
+                session_ttl_days: { type: "integer" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
   {
     method: "post",
     path: "/auth/login",
