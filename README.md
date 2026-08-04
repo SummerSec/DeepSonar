@@ -109,6 +109,43 @@ pnpm dev:web                    # Web: http://127.0.0.1:5173
 | `deepsonar-audit` | **audit** | base + Semgrep、Gitleaks、ShellCheck、binutils | 完整应用构建链（如 Maven 起 Spring） |
 | `deepsonar-kali-minimal`（Kali Test） | **test** | Python 3.10–3.14 + `uv`、Temurin JDK 8/11/17、固定 Apache Maven 3.9.16（`/opt/deepsonar/maven`，无预置 `.m2`）、Go、Rust、以及 audit 系 CLI | Kali metapackage/GUI、Gradle、Docker-in-Docker |
 
+#### 官方镜像仓库（中国区 ACR）
+
+`v*` Release 会同步推送到阿里云个人版 ACR（与 GHCR 同一批 digest）。中国区部署优先从这里拉取：
+
+```text
+crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/<image>:<version>
+```
+
+运行时与平台镜像（含 `deepsonar-kali-minimal`，**无需单独流程**，Release 多架构构建稍慢，完成后同一路径可用）：
+
+| 镜像 | 用途 |
+|------|------|
+| `deepsonar-base` | 官方最小运行时 |
+| `deepsonar-audit` | 官方审计运行时 |
+| `deepsonar-kali-minimal` | Test 默认（Kali Test） |
+| `deepsonar-openharmony-test` / `-audit` / `-fuzz` | OpenHarmony 专项（项目 opt-in） |
+| `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` | 平台服务 |
+
+```bash
+REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
+VER=0.1.10   # 换成目标 Release 版本号
+
+for img in \
+  deepsonar-base deepsonar-audit deepsonar-kali-minimal \
+  deepsonar-openharmony-test deepsonar-openharmony-audit deepsonar-openharmony-fuzz \
+  deepsonar-scheduler deepsonar-web deepsonar-image-admission
+do
+  docker pull "$REG/$img:$VER"
+done
+```
+
+也可用发布附件清单批量拉取：`deploy/pull-runtime-images.sh --file runtime-image-registry.json`（ACR 配齐时清单优先写 ACR 的 `name@sha256:…`）。real 模式请把不可变 digest 写入 `DEEPSONAR_OFFICIAL_*_IMAGE`，不要只写可变 tag。白名单需包含 ACR host：
+
+```dotenv
+DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=ghcr.io,docker.io,registry-1.docker.io,crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com
+```
+
 **静态审计 vs 动态验证**
 
 - **只读代码出 Finding**（audit）：多数语言在 `deepsonar-audit` 上即可起步（Semgrep + 读仓）。
