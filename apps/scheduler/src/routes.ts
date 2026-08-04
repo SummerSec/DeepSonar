@@ -85,6 +85,11 @@ import { installWsCloseGuard } from "./ws-early-close.js";
 import { canvasScopeDecision, isUuid, projectScopeAllows } from "./project-scope.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
 import { resolveModules } from "./transfer/modules.js";
+import {
+  buildCanvasDelta,
+  cursorGap,
+  parseCanvasRevision,
+} from "./canvas-delta.js";
 import { buildPreview, applyImport } from "./transfer/import.js";
 import { saveImportUpload, loadPackFile, removeFileSafe, sha256Hex, openDeepsonarPack } from "./transfer/pack.js";
 import {
@@ -2756,34 +2761,48 @@ export function registerRoutes(app: FastifyInstance) {
   /** L0 canvas projection: graph topology and bounded node summaries only. */
   app.get("/canvases/:id/summary", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [canvas] = await sql`
-      SELECT c.id, c.title, c.target_json, c.project_id, c.created_at, c.status, c.archived_at,
-        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
-        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
-           AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
-        (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = c.id) AS started_at,
-        (SELECT CASE
-           WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
-           THEN MAX(j.finished_at) ELSE NULL END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at
-      FROM canvases c WHERE c.id = ${id}`;
-    if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
-    const [nodes, edges] = await Promise.all([
-      sql`
-        SELECT id, node_type, title,
-          jsonb_build_object(
-            'summary', LEFT(COALESCE(body_json->>'summary', body_json->>'description', body_json->>'message', ''), 240),
-            'description', LEFT(COALESCE(body_json->>'description', body_json->>'summary', ''), 240),
-            'severity', body_json->>'severity',
-            'role', body_json->>'role',
-            'type', body_json->>'type',
-            'last_progress', CASE WHEN jsonb_typeof(body_json->'last_progress') = 'object' THEN body_json->'last_progress' ELSE NULL END
-          ) AS body_json,
-          x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
-        FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
-      sql`
-        SELECT id, from_node_id, to_node_id, edge_type
-        FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
-    ]);
+    const result = await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      // Lock the canvas row before reading the projection.  Writers acquire
+      // this same row lock before advancing change_revision, so the returned
+      // upper revision and nodes/edges are one consistent snapshot.
+      const [canvas] = await tx`
+        SELECT c.id, c.title, c.target_json, c.project_id, c.created_at, c.status, c.archived_at,
+          c.change_revision, c.change_floor_revision,
+          (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
+          (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+             AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+          (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = c.id) AS started_at,
+          (SELECT CASE
+             WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
+             THEN MAX(j.finished_at) ELSE NULL END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at
+        FROM canvases c WHERE c.id = ${id} FOR SHARE`;
+      if (!canvas) return null;
+      const [nodes, edges] = await Promise.all([
+        tx`
+          SELECT id, node_type, title,
+            jsonb_build_object(
+              'summary', LEFT(COALESCE(body_json->>'summary', body_json->>'description', body_json->>'message', ''), 240),
+              'description', LEFT(COALESCE(body_json->>'description', body_json->>'summary', ''), 240),
+              'severity', body_json->>'severity',
+              'role', body_json->>'role',
+              'type', body_json->>'type',
+              'last_progress', CASE
+                WHEN jsonb_typeof(body_json->'last_progress') = 'object' THEN jsonb_build_object(
+                  'message', LEFT(COALESCE(body_json->'last_progress'->>'message', ''), 240),
+                  'kind', LEFT(COALESCE(body_json->'last_progress'->>'kind', ''), 64)
+                ) ELSE NULL END
+            ) AS body_json,
+            x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
+          FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
+        tx`
+          SELECT id, from_node_id, to_node_id, edge_type
+          FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
+      ]);
+      return { canvas, nodes, edges };
+    });
+    if (!result) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    const { canvas, nodes, edges } = result;
     return {
       canvas,
       canvas_id: id,
@@ -2791,7 +2810,9 @@ export function registerRoutes(app: FastifyInstance) {
       edges,
       convergence: parseCanvasConvergence(canvas.target_json),
       projection: "L0",
-      watermark: new Date().toISOString(),
+      revision: String(canvas.change_revision ?? 0),
+      floor_revision: String(canvas.change_floor_revision ?? 0),
+      watermark: String(canvas.change_revision ?? 0),
       live: Number(canvas.active_count ?? 0) > 0,
     };
   });
@@ -2807,13 +2828,75 @@ export function registerRoutes(app: FastifyInstance) {
     return { node, projection: "L1" };
   });
 
-  /** Incremental canvas deltas require the durable revision/change-log path. */
-  app.get("/canvases/:id/delta", async (_req, reply) =>
-    reply.code(410).send({
-      error: "canvas delta requires durable revision/change-log support",
-      error_code: "DELTA_CHANGELOG_REQUIRED",
-    }),
-  );
+  /** Durable revision-bounded L0 delta.  The upper revision is frozen while
+   * the transaction reads the log, so concurrent writers are returned by the
+   * next request rather than racing this response. */
+  app.get("/canvases/:id/delta", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const rawSince = String((req.query as { since?: string }).since ?? "");
+    let since: bigint;
+    try {
+      since = parseCanvasRevision(rawSince);
+    } catch {
+      return reply.code(400).send(cursorGap("invalid canvas revision cursor", "INVALID_CURSOR"));
+    }
+
+    try {
+      const result = await sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as typeof sql;
+        const [canvas] = await tx`
+          SELECT id, change_revision, change_floor_revision,
+            EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.canvas_id = canvases.id
+                AND j.status IN ('pending','claimed','provisioning','running','waiting_human')
+            ) AS live
+          FROM canvases WHERE id = ${id} FOR SHARE`;
+        if (!canvas) return null;
+        const upper = BigInt(String(canvas.change_revision ?? 0));
+        const floor = BigInt(String(canvas.change_floor_revision ?? 0));
+        if (since > upper) {
+          return { kind: "future" as const, upper, floor, live: Boolean(canvas.live) };
+        }
+        if (since < floor) {
+          return { kind: "gap" as const, upper, floor, live: Boolean(canvas.live) };
+        }
+        const rows = await tx`
+          SELECT revision, entity_type, entity_id, op, projection_json
+          FROM canvas_changes
+          WHERE canvas_id = ${id}
+            AND revision > ${since.toString()}::bigint
+            AND revision <= ${upper.toString()}::bigint
+          ORDER BY revision ASC`;
+        return {
+          kind: "ok" as const,
+          upper,
+          floor,
+          live: Boolean(canvas.live),
+          delta: buildCanvasDelta(id, since, upper, floor, rows as never),
+        };
+      });
+      if (!result) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+      if (result.kind === "future") {
+        return reply.code(400).send(cursorGap("canvas revision is ahead of the server", "CURSOR_GAP"));
+      }
+      if (result.kind === "gap") {
+        return reply.code(409).send({
+          ...cursorGap("canvas revision is no longer retained; reload L0", "CURSOR_GAP"),
+          current_revision: result.upper.toString(),
+          floor_revision: result.floor.toString(),
+        });
+      }
+      return {
+        ...result.delta,
+        projection: "L0_DELTA",
+        live: result.live,
+      };
+    } catch (error) {
+      req.log.error(error, "canvas delta failed");
+      return reply.code(500).send({ error: "canvas delta failed", error_code: "CANVAS_DELTA_FAILED" });
+    }
+  });
 
   // ---------- 画布收敛控制（暂停/恢复决策、门控停、清理低优先级 verify） ----------
   app.get("/canvases/:id/convergence", async (req, reply) => {

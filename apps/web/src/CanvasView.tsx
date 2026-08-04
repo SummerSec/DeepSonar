@@ -14,9 +14,12 @@ import {
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
 import {
+  applyCanvasDelta,
   CANVAS_SKELETON_REFRESH_MS,
   isCurrentNodeRequest,
   mergeHydratedCanvasData,
+  shouldApplyCanvasDelta,
+  shouldApplyCanvasSummary,
   syncSelectedNode,
 } from "./canvas-sync";
 import {
@@ -45,6 +48,7 @@ const EDGE_STYLE: Record<string, { stroke: string; speed: string }> = {
 
 /** Avoid a main-thread ELK layout spike on large topology snapshots. */
 export const ELK_NODE_THRESHOLD = 200;
+export const CANVAS_DELTA_POLL_MS = 3_000;
 
 type ExpandHandlers = {
   expandNode: (id: string) => void;
@@ -189,27 +193,81 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
   const rf = useRef<ReactFlowInstance | null>(null);
   const hydratedNodesRef = useRef(new Map<string, CanvasNode>());
   const nodeRequestRef = useRef(0);
+  const revisionRef = useRef("0");
+  const syncGenerationRef = useRef(0);
+  const deltaInFlightRef = useRef<number | null>(null);
+  const summaryInFlightRef = useRef<number | null>(null);
   const clearSelected = useCallback(() => {
     nodeRequestRef.current += 1;
     setSelected(null);
   }, []);
 
-  // Keep the active canvas responsive with a bounded L0 skeleton refresh. Full
-  // body_json is fetched only for selected nodes (L1/L2) and retained locally;
-  // durable incremental deltas wait for the revision/change-log migration.
+  // Load L0 once, then apply durable revision-bounded deltas.  A slow summary
+  // refresh is retained only as a consistency fallback (for example after a
+  // retention gap); normal active updates never retransmit the full body set.
   useEffect(() => {
     let alive = true;
-    const load = async () => {
+    const generation = ++syncGenerationRef.current;
+    // A canvas switch starts an independent request generation.  Allow the
+    // new canvas to issue its initial request even if the old one is still in
+    // flight; generation checks below discard the stale response.
+    summaryInFlightRef.current = null;
+    deltaInFlightRef.current = null;
+    const loadSummary = async () => {
+      if (summaryInFlightRef.current === generation) return;
+      summaryInFlightRef.current = generation;
       try {
         const summary = await api.canvasSummary(canvasId);
-        if (!alive) return;
+        if (!alive || generation !== syncGenerationRef.current) return;
+        const responseRevision = summary.revision ?? summary.watermark ?? "0";
+        // A summary is allowed to initialize or advance state, never rewind a
+        // revision already accepted from a faster delta response.
+        if (!shouldApplyCanvasSummary(generation, syncGenerationRef.current, responseRevision, revisionRef.current)) return;
         const next = mergeHydratedCanvasData(summary, hydratedNodesRef.current);
+        revisionRef.current = responseRevision;
         setData(next);
         setSelected((previous) => syncSelectedNode(next, previous));
         onData?.(next);
         setError(null);
       } catch (e) {
         if (alive) setError(String(e));
+      } finally {
+        if (summaryInFlightRef.current === generation) summaryInFlightRef.current = null;
+      }
+    };
+    const loadDelta = async () => {
+      if (deltaInFlightRef.current === generation) return;
+      deltaInFlightRef.current = generation;
+      const since = revisionRef.current;
+      try {
+        const delta = await api.canvasDelta(canvasId, since);
+        if (!alive || !shouldApplyCanvasDelta(
+          generation,
+          syncGenerationRef.current,
+          since,
+          revisionRef.current,
+          delta.upper_revision,
+        )) return;
+        setData((before) => {
+          if (!before) return before;
+          const next = applyCanvasDelta(before, delta, hydratedNodesRef.current);
+          revisionRef.current = delta.upper_revision;
+          setSelected((previous) => syncSelectedNode(next, previous));
+          onData?.(next);
+          return next;
+        });
+        setError(null);
+      } catch (e) {
+        // A retained-window gap is explicit and recoverable: reload only the
+        // bounded L0 summary, then continue from its current revision.
+        const message = String(e);
+        if (/CURSOR_GAP|DELTA_CHANGELOG_REQUIRED|-> 410/u.test(message)) {
+          await loadSummary();
+          return;
+        }
+        if (alive) setError(message);
+      } finally {
+        if (deltaInFlightRef.current === generation) deltaInFlightRef.current = null;
       }
     };
     setData(null);
@@ -219,11 +277,17 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
     hydratedNodesRef.current.clear();
-    void load();
-    const t = setInterval(() => void load(), CANVAS_SKELETON_REFRESH_MS);
+    revisionRef.current = "0";
+    void loadSummary().then(() => {
+      if (alive) void loadDelta();
+    });
+    const deltaTimer = setInterval(() => void loadDelta(), CANVAS_DELTA_POLL_MS);
+    const summaryTimer = setInterval(() => void loadSummary(), CANVAS_SKELETON_REFRESH_MS);
     return () => {
       alive = false;
-      clearInterval(t);
+      syncGenerationRef.current += 1;
+      clearInterval(deltaTimer);
+      clearInterval(summaryTimer);
     };
   }, [canvasId, clearSelected, onData]);
 
