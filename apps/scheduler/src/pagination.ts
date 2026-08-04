@@ -127,13 +127,14 @@ function canonicalTimestamp(value: unknown): value is string {
 }
 
 function positiveBigIntString(value: unknown): string | null {
+  const max = 9_223_372_036_854_775_807n;
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
   }
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) return null;
   try {
     const id = BigInt(value);
-    return id > 0n ? id.toString() : null;
+    return id > 0n && id <= max ? id.toString() : null;
   } catch {
     return null;
   }

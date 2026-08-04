@@ -36,6 +36,10 @@ test("database keyset cursors reject decodable invalid casts before SQL", () => 
     null,
   );
   assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "events", id: "9223372036854775808", created_at: stamp }), "events"),
+    null,
+  );
+  assert.equal(
     decodeCursor(rawCursor({ v: 1, kind: "events", id: "9223372036854775807", created_at: stamp }), "events")?.id,
     "9223372036854775807",
   );
