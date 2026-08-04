@@ -12,7 +12,7 @@ import { allowedModelIds, isProviderKnown, validateCredentialCompatibility } fro
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
-import { expandModules } from "./skill-sources.js";
+import { expandModules, type MissingModule } from "./skill-sources.js";
 import {
   canTransition as canJobTransition,
   transitionJob as applyJobTransition,
@@ -603,8 +603,24 @@ export interface AgentRuntimeSnapshot {
   /** 凭据展示名（创建 Job 时冻结；UI 优先展示此字段而非 UUID） */
   credential_name: string | null;
   credential_provider: string | null;
-  /** 勾选的 Git 模块（["<source_id>:<module_id>"]，展示用；下发内容已展开进 skills/commands） */
+  /** 原始 Git 模块 selector（module/plugin/source）；下发内容已展开进 skills/commands。 */
   modules: string[];
+  /** 保存 RoleConfig 的原始 selector 意图（plugin/source selector 不被展开覆盖）。 */
+  module_selectors: string[];
+  /** 当前 catalog 展开出的具体模块元数据与内容哈希，随 Job 一起冻结。 */
+  expanded_modules: {
+    source_id: string;
+    module_id: string;
+    kind: "skill" | "command";
+    plugin: string;
+    name: string;
+    description: string;
+    content_hash: string;
+  }[];
+  /** Selectors omitted from execution, including deterministic name conflicts. */
+  missing_modules: MissingModule[];
+  /** 所有展开模块内容的确定性哈希；执行期不再读取可变 catalog。 */
+  module_content_hash: string;
   /** §5.1：模块来源版本证据（commit + 内容哈希，随快照冻结） */
   skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
   skills: unknown[];
@@ -2133,13 +2149,20 @@ export async function resolveAgentSnapshotForJob(
     ? cfg.agent_cli.trim()
     : PLATFORM_DEFAULT_AGENT_CLI;
 
-  const modules = (cfg?.modules_json as string[]) ?? [];
-  const expanded = await expandModules(modules);
+  const rawModules = cfg?.modules_json;
+  if (rawModules != null && !Array.isArray(rawModules)) {
+    throw new Error(`RoleConfig.modules_json 必须是字符串数组`);
+  }
+  const modules = (rawModules as string[] | undefined) ?? [];
+  const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
+  const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
+  const expanded = await expandModules(modules, db, {
+    skill_names: manualSkills.map((skill) => skill.name ?? ""),
+    command_names: manualCommands.map((command) => command.name ?? ""),
+  });
   if (expanded.missing.length > 0) {
     console.warn(`[role-config] 模块未下发: ${expanded.missing.join(", ")}`);
   }
-  const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
-  const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
   const skills = [
     ...manualSkills,
     ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name)),
@@ -2220,6 +2243,10 @@ export async function resolveAgentSnapshotForJob(
     credential_name: (llm?.name as string) ?? null,
     credential_provider: (llm?.provider as string) ?? null,
     modules,
+    module_selectors: [...modules],
+    expanded_modules: expanded.resolved_modules,
+    missing_modules: expanded.missing_modules,
+    module_content_hash: expanded.content_hash,
     skill_revisions: expanded.revisions,
     skills,
     commands,

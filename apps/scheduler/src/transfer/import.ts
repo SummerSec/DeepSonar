@@ -2,6 +2,7 @@
  * 项目导入：预览 + create_new / merge_configuration
  */
 import { randomUUID } from "node:crypto";
+import { validateModuleSelectors } from "@deepsonar/shared-types";
 import { validateCredentialRoleConfigBinding } from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
@@ -336,6 +337,10 @@ async function importRoleConfigs(
       if (ex) continue;
     }
 
+    const moduleSelectors = rc.modules_json == null
+      ? []
+      : validateModuleSelectors(rc.modules_json, `RoleConfig ${roleName}.modules_json`);
+
     // upsert 项目覆盖
     await tx`DELETE FROM role_configs WHERE project_id = ${projectId} AND role_id = ${role.id as string}`;
     const [created] = await tx`
@@ -347,7 +352,10 @@ async function importRoleConfigs(
         reasoning: (rc.reasoning as string) ?? null,
         env_keys: (rc.env_keys as string[]) ?? [],
         env_vars_json: ((rc.env_vars as object) ?? {}) as never,
-        modules_json: ((rc.modules_json as unknown) ?? []) as never,
+        // Keep legal plugin/source selectors byte-for-byte through transfer;
+        // they are resolved against the target's current trusted catalog only
+        // when a new Job snapshot is created.
+        modules_json: moduleSelectors as never,
         skills_json: ((rc.skills_json as unknown) ?? []) as never,
         commands_json: ((rc.commands_json as unknown) ?? []) as never,
         mcps_json: ((rc.mcps_json as unknown) ?? []) as never,

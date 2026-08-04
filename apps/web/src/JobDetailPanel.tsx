@@ -239,6 +239,9 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const roleName = snapStr(snapshot, "name");
   const credentialId = snapStr(snapshot, "credential_id");
   const runtimeImageKey = snapRuntimeImageKey(snapshot);
+  const missingModules = Array.isArray(snapshot?.missing_modules)
+    ? snapshot.missing_modules
+    : detail?.missing_modules ?? [];
   const forceExit = async () => {
     if (!detail || !ACTIVE.has(detail.job.status)) return;
     if (
@@ -931,7 +934,13 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                             : snapStr(snapshot, "subagents")
                         }
                       />
+                      <ConfigField label="模块缺失" value={`${missingModules.length} 项`} />
                     </div>
+                    {missingModules.length > 0 && (
+                      <pre className="theme-input-surface mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl border p-3 font-mono text-[11px] leading-5 text-amber-200">
+                        {JSON.stringify(missingModules, null, 2)}
+                      </pre>
+                    )}
                   </div>
                   {typeof snapshot.instructions_markdown === "string" &&
                     snapshot.instructions_markdown.trim() && (

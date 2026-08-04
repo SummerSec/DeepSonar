@@ -546,6 +546,135 @@ function yamlScalar(value: string): string {
   return JSON.stringify(value);
 }
 
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+
+function safeComponentName(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`拒绝 ${label}：名称不能为空`);
+  }
+  if (CONTROL_CHAR_RE.test(value)) {
+    throw new Error(`拒绝 ${label}：名称含 NUL/control 字符`);
+  }
+  const slashed = value.replaceAll("\\", "/");
+  if (
+    slashed.startsWith("/") ||
+    path.posix.isAbsolute(slashed) ||
+    /^[A-Za-z]:/.test(slashed)
+  ) {
+    throw new Error(`拒绝 ${label}：名称不能是绝对路径`);
+  }
+  if (slashed.includes("/")) {
+    throw new Error(`拒绝 ${label}：名称不能包含路径分隔符`);
+  }
+  if (slashed === "." || slashed === "..") {
+    throw new Error(`拒绝 ${label}：名称不能是 . 或 ..`);
+  }
+  return slashed;
+}
+
+function safeRelativeSkillFile(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`拒绝 ${label}：文件路径不能为空`);
+  }
+  if (CONTROL_CHAR_RE.test(value)) {
+    throw new Error(`拒绝 ${label}：文件路径含 NUL/control 字符`);
+  }
+  const slashed = value.replaceAll("\\", "/");
+  if (slashed.startsWith("/") || path.posix.isAbsolute(slashed) || /^[A-Za-z]:/.test(slashed)) {
+    throw new Error(`拒绝 ${label}：文件路径不能是绝对路径`);
+  }
+  const segments = slashed.split("/");
+  if (segments.some((segment) => segment === "..")) {
+    throw new Error(`拒绝 ${label}：文件路径不得包含 ..`);
+  }
+  if (slashed.endsWith("/")) {
+    throw new Error(`拒绝 ${label}：文件路径不能指向目录`);
+  }
+  const normalized = path.posix.normalize(slashed);
+  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`拒绝 ${label}：文件路径归一化后越界`);
+  }
+  return normalized;
+}
+
+function strictChildPath(parent: string, child: string, label: string): string {
+  const root = path.posix.resolve(parent);
+  const resolved = path.posix.resolve(child);
+  if (resolved === root || !resolved.startsWith(`${root}/`)) {
+    throw new Error(`拒绝 ${label}：归一化后不在 ${root} 子树内`);
+  }
+  return resolved;
+}
+
+function commandMaterializationPath(name: unknown): string {
+  const safeName = safeComponentName(name, "command.name");
+  return strictChildPath(
+    `${CLAUDE_DIR}/commands`,
+    path.posix.join(`${CLAUDE_DIR}/commands`, `${safeName}.md`),
+    "command.name",
+  );
+}
+
+function subAgentMaterializationPath(name: unknown): string {
+  const safeName = safeComponentName(name, "subAgent.name");
+  return strictChildPath(
+    `${CLAUDE_DIR}/agents`,
+    path.posix.join(`${CLAUDE_DIR}/agents`, `${safeName}.md`),
+    "subAgent.name",
+  );
+}
+
+function skillMaterializationPath(name: unknown, rel: unknown): string {
+  const safeName = safeComponentName(name, "embedded skill.name");
+  const root = strictChildPath(
+    `${CLAUDE_DIR}/skills`,
+    path.posix.join(`${CLAUDE_DIR}/skills`, safeName),
+    "embedded skill.name",
+  );
+  const safeRel = safeRelativeSkillFile(rel, "embedded skill file");
+  return strictChildPath(root, path.posix.join(root, safeRel), "embedded skill file");
+}
+
+function materializationPaths(
+  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills">,
+): string[] {
+  const paths: string[] = [];
+  for (const command of spec.commands ?? []) {
+    paths.push(commandMaterializationPath(command.name));
+  }
+  for (const sub of spec.subAgents ?? []) {
+    paths.push(subAgentMaterializationPath(sub.name));
+  }
+  for (const skill of spec.skills ?? []) {
+    const safeName = safeComponentName(skill.name, "skill.name");
+    if (!("files" in skill)) continue; // repo skill is installed by the CLI below
+    if (!skill.files || typeof skill.files !== "object" || Array.isArray(skill.files)) {
+      throw new Error(`拒绝 embedded skill ${safeName}：files 必须是对象`);
+    }
+    for (const rel of Object.keys(skill.files)) {
+      paths.push(skillMaterializationPath(safeName, rel));
+    }
+  }
+  return paths;
+}
+
+function duplicatePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const collisions = new Set<string>();
+  for (const target of paths) {
+    if (seen.has(target)) collisions.add(target);
+    seen.add(target);
+  }
+  return [...collisions].sort();
+}
+
+/** Return duplicate normalized local component paths before any upload happens. */
+export function materializationPathCollisions(
+  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills">,
+): string[] {
+  return duplicatePaths(materializationPaths(spec));
+}
+
 /**
  * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
@@ -556,10 +685,17 @@ async function materializeAgentFiles(
   spec: RealAgentSpec,
   cliEnv: Record<string, string>,
 ): Promise<void> {
+  // Validate every component and normalize every target before the first mkdir
+  // or upload. A malformed later component therefore cannot cause partial writes.
+  const paths = materializationPaths(spec);
+  const collisions = duplicatePaths(paths);
+  if (collisions.length > 0) {
+    throw new Error(`拒绝 materialize 组件路径冲突（不会执行覆盖写入）: ${collisions.join(", ")}`);
+  }
   const writes: Array<[string, string]> = [];
   for (const command of spec.commands ?? []) {
     const frontmatter = command.description ? `---\ndescription: ${yamlScalar(command.description)}\n---\n\n` : "";
-    writes.push([`${CLAUDE_DIR}/commands/${command.name}.md`, frontmatter + command.template]);
+    writes.push([commandMaterializationPath(command.name), frontmatter + command.template]);
   }
   for (const sub of spec.subAgents ?? []) {
     const lines = [
@@ -568,12 +704,12 @@ async function materializeAgentFiles(
       ...(sub.model ? [`model: ${yamlScalar(sub.model)}`] : []),
       ...(sub.tools?.length ? [`tools: ${sub.tools.join(", ")}`] : []),
     ];
-    writes.push([`${CLAUDE_DIR}/agents/${sub.name}.md`, `---\n${lines.join("\n")}\n---\n\n${sub.instructions.trim()}\n`]);
+    writes.push([subAgentMaterializationPath(sub.name), `---\n${lines.join("\n")}\n---\n\n${sub.instructions.trim()}\n`]);
   }
   for (const skill of spec.skills ?? []) {
     if (!("files" in skill)) continue; // repo skill 走下方安装命令
     for (const [rel, content] of Object.entries(skill.files)) {
-      writes.push([`${CLAUDE_DIR}/skills/${skill.name}/${rel}`, content]);
+      writes.push([skillMaterializationPath(skill.name, rel), content]);
     }
   }
   for (const [filePath, content] of writes) {

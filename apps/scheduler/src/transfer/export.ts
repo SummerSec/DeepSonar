@@ -3,6 +3,7 @@
  */
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { validateModuleSelectors } from "@deepsonar/shared-types";
 import { sql } from "../db.js";
 import {
   buildManifestSource,
@@ -250,6 +251,9 @@ async function collectRoles(
   const credSeen = new Set<string>();
 
   for (const rc of configs) {
+    const moduleSelectors = rc.modules_json == null
+      ? []
+      : validateModuleSelectors(rc.modules_json, `RoleConfig ${String(rc.role_name)}.modules_json`);
     const { safe, redacted_keys } = filterEnvVars(rc.env_vars_json as Record<string, unknown>);
     for (const k of (rc.env_keys as string[]) ?? []) envKeysAll.add(k);
     Object.assign(envSafeAll, safe);
@@ -258,7 +262,7 @@ async function collectRoles(
     if (modules.includes("skills") && Array.isArray(rc.modules_json)) {
       skillRefs.push({
         role_name: rc.role_name,
-        modules: rc.modules_json,
+        modules: moduleSelectors,
         skill_revisions_note: "content resolved on target via skill-sources sync",
       });
     }
@@ -299,7 +303,7 @@ async function collectRoles(
       env_keys: rc.env_keys,
       env_vars: safe,
       env_vars_redacted: redacted_keys,
-      modules_json: rc.modules_json,
+      modules_json: moduleSelectors,
       skills_json: rc.skills_json,
       commands_json: rc.commands_json,
       mcps_json: rc.mcps_json,
