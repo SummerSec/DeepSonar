@@ -131,6 +131,112 @@ export const TaskNetworkPolicy = z.object({
 });
 export type TaskNetworkPolicy = z.infer<typeof TaskNetworkPolicy>;
 
+// ---------- Scheduler readiness / preflight projection (#35/#36) ----------
+
+/** Stable severity used by the management-plane preflight contract. */
+export const ReadinessSeverity = z.enum(["info", "warning", "error"]);
+export type ReadinessSeverity = z.infer<typeof ReadinessSeverity>;
+
+/** How a readiness check resolved.  `attention` is non-blocking guidance. */
+export const ReadinessState = z.enum(["pass", "attention", "fail"]);
+export type ReadinessState = z.infer<typeof ReadinessState>;
+
+export const ReadinessRoleSummary = z.object({
+  role_id: z.string().uuid(),
+  name: z.string().min(1),
+  title: z.string(),
+  kind: z.enum(["role", "hub", "system"]),
+  config_id: z.string().uuid().nullable(),
+  config_scope: z.enum(["project", "global", "platform_default"]),
+  agent_cli: z.string().nullable(),
+  model: z.string().nullable(),
+  runtime_image_key: z.string().nullable(),
+});
+export type ReadinessRoleSummary = z.infer<typeof ReadinessRoleSummary>;
+
+/** Non-sensitive credential identity.  Secrets, env names and ciphertext are never part of this type. */
+export const ReadinessCredentialSummary = z.object({
+  credential_id: z.string().uuid(),
+  name: z.string(),
+  kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]),
+  provider: z.string(),
+  project_id: z.string().uuid().nullable(),
+  status: z.enum(["active", "disabled", "rotation_required"]),
+  allowed_model_count: z.number().int().nonnegative(),
+});
+export type ReadinessCredentialSummary = z.infer<typeof ReadinessCredentialSummary>;
+
+/** Trusted image identity only; mutable refs and arbitrary OCI text are intentionally omitted. */
+export const ReadinessRuntimeImageSummary = z.object({
+  image_key: z.string(),
+  version_id: z.string().uuid().nullable(),
+  digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
+  source_kind: z.enum(["official", "third_party"]).nullable(),
+  official: z.boolean().nullable(),
+  trust_status: z.string().nullable(),
+  project_enabled: z.boolean().nullable(),
+  admission_scan_id: z.string().uuid().nullable(),
+});
+export type ReadinessRuntimeImageSummary = z.infer<typeof ReadinessRuntimeImageSummary>;
+
+export const ReadinessEvidenceSummary = z.object({
+  kind: z.enum(["credential_test", "model_discovery", "allowlist", "none"]),
+  status: z.enum(["ok", "error", "missing", "stale"]),
+  at: z.string().datetime().nullable(),
+  age_seconds: z.number().nonnegative().nullable(),
+  model_count: z.number().int().nonnegative().nullable(),
+  source: z.enum(["audit_log", "credential_metadata", "not_recorded"]),
+});
+export type ReadinessEvidenceSummary = z.infer<typeof ReadinessEvidenceSummary>;
+
+export const ReadinessFix = z.object({
+  href: z.string().min(1),
+  target: z.string().min(1),
+});
+export type ReadinessFix = z.infer<typeof ReadinessFix>;
+
+export const ReadinessCheck = z.object({
+  code: z.string().regex(/^[A-Z][A-Z0-9_]{2,80}$/),
+  state: ReadinessState,
+  severity: ReadinessSeverity,
+  message: z.string().min(1),
+  fix: ReadinessFix.nullish(),
+  role: ReadinessRoleSummary.nullish(),
+  credential: ReadinessCredentialSummary.nullish(),
+  runtime_image: ReadinessRuntimeImageSummary.nullish(),
+  evidence: ReadinessEvidenceSummary.nullish(),
+});
+export type ReadinessCheck = z.infer<typeof ReadinessCheck>;
+
+export const ReadinessNetworkPolicy = z.object({
+  allow_egress: z.boolean(),
+  source: z.enum(["global", "project", "task_override"]),
+  material_source: z.enum(["workspace_or_offline", "external_or_workspace", "declared", "unspecified"]),
+});
+export type ReadinessNetworkPolicy = z.infer<typeof ReadinessNetworkPolicy>;
+
+export const ReadinessScope = z.object({
+  kind: z.enum(["global", "project"]),
+  project_id: z.string().uuid().nullable(),
+});
+export type ReadinessScope = z.infer<typeof ReadinessScope>;
+
+export const ReadinessResponse = z.object({
+  schema: z.literal("deepsonar.readiness/v1"),
+  ready: z.boolean(),
+  execution_mode: z.enum(["fake", "real"]),
+  scope: ReadinessScope,
+  network_policy: ReadinessNetworkPolicy,
+  checks: z.array(ReadinessCheck),
+  summary: z.object({
+    errors: z.number().int().nonnegative(),
+    warnings: z.number().int().nonnegative(),
+    infos: z.number().int().nonnegative(),
+  }),
+  generated_at: z.string().datetime(),
+});
+export type ReadinessResponse = z.infer<typeof ReadinessResponse>;
+
 /** Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。 */
 export const HubIntentPayload = z.object({
   from: z.array(z.string()).default([]),
