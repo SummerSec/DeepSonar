@@ -145,6 +145,8 @@ const ROUTE_SCOPES: Record<string, string> = {
   "PUT /projects/:id/runtime-images/:imageId": "images:manage",
   "GET /global-settings": "agents:read",
   "PATCH /global-settings": "agents:write",
+  "GET /readiness": "agents:read",
+  "GET /projects/:id/readiness": "agents:read",
   "GET /plane-info": "integrations:read",
   "GET /tokens": "tokens:manage",
   "POST /tokens": "tokens:manage",

@@ -319,6 +319,32 @@ const OPS: Op[] = [
   },
   { method: "get", path: "/projects/{id}/settings", summary: "项目规则与角色启用", scope: "agents:read", tags: ["Settings"] },
   {
+    method: "get",
+    path: "/readiness",
+    summary: "Global task readiness/preflight",
+    description: "Read-only checks for governed Hub/Worker RoleConfig, Credential and CLI/model compatibility, connection/model evidence, trusted real-mode runtime images, and network/material policy. Secrets, env names and arbitrary OCI refs are never returned.",
+    scope: "agents:read",
+    tags: ["Settings"],
+    query: {
+      allow_egress: { type: "string", enum: ["true", "false"], description: "Optional task network override; does not persist or create a task." },
+      material_source: { type: "string", enum: ["workspace_or_offline", "external_or_workspace", "declared", "unspecified"] },
+    },
+    responses: { "200": { $ref: "#/components/schemas/ReadinessResponse" } },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/readiness",
+    summary: "Project task readiness/preflight",
+    description: "Uses the project role enablement list and effective network default; allow_egress simulates one task override only.",
+    scope: "agents:read",
+    tags: ["Settings"],
+    query: {
+      allow_egress: { type: "string", enum: ["true", "false"], description: "Optional task network override; does not persist or create a task." },
+      material_source: { type: "string", enum: ["workspace_or_offline", "external_or_workspace", "declared", "unspecified"] },
+    },
+    responses: { "200": { $ref: "#/components/schemas/ReadinessResponse" } },
+  },
+  {
     method: "patch",
     path: "/projects/{id}/settings",
     summary: "更新项目规则 / 角色启用清单",
@@ -853,6 +879,64 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                 },
               },
             },
+          },
+        },
+        ReadinessResponse: {
+          type: "object",
+          required: ["schema", "ready", "execution_mode", "scope", "network_policy", "checks", "summary", "generated_at"],
+          properties: {
+            schema: { type: "string", const: "deepsonar.readiness/v1" },
+            ready: { type: "boolean" },
+            execution_mode: { type: "string", enum: ["fake", "real"] },
+            scope: {
+              type: "object",
+              required: ["kind", "project_id"],
+              properties: {
+                kind: { type: "string", enum: ["global", "project"] },
+                project_id: { type: "string", format: "uuid", nullable: true },
+              },
+            },
+            network_policy: {
+              type: "object",
+              required: ["allow_egress", "source", "material_source"],
+              properties: {
+                allow_egress: { type: "boolean" },
+                source: { type: "string", enum: ["global", "project", "task_override"] },
+                material_source: { type: "string", enum: ["workspace_or_offline", "external_or_workspace", "declared", "unspecified"] },
+              },
+            },
+            checks: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["code", "state", "severity", "message"],
+                properties: {
+                  code: { type: "string", description: "Stable machine-readable check code" },
+                  state: { type: "string", enum: ["pass", "attention", "fail"] },
+                  severity: { type: "string", enum: ["info", "warning", "error"] },
+                  message: { type: "string" },
+                  fix: {
+                    type: "object",
+                    nullable: true,
+                    properties: { href: { type: "string" }, target: { type: "string" } },
+                  },
+                  role: { type: "object", nullable: true, additionalProperties: true },
+                  credential: { type: "object", nullable: true, additionalProperties: true, description: "Non-sensitive identity only" },
+                  runtime_image: { type: "object", nullable: true, additionalProperties: true, description: "Trusted image key/digest summary only" },
+                  evidence: { type: "object", nullable: true, additionalProperties: true },
+                },
+              },
+            },
+            summary: {
+              type: "object",
+              required: ["errors", "warnings", "infos"],
+              properties: {
+                errors: { type: "integer", minimum: 0 },
+                warnings: { type: "integer", minimum: 0 },
+                infos: { type: "integer", minimum: 0 },
+              },
+            },
+            generated_at: { type: "string", format: "date-time" },
           },
         },
         Scopes: {
