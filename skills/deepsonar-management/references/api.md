@@ -115,7 +115,11 @@ PUT body：
   "reasoning": "low | medium | high | xhigh | null",
   "env_keys": ["..."],
   "env_vars": { "KEY": "value" },
-  "modules": ["<source_id>:<module_id>"],
+  "modules": [
+    "<source_id>:<module_id>",
+    "<source_id>:plugin:<plugin_path>",
+    "<source_id>:source:*"
+  ],
   "skills": [],
   "commands": [],
   "mcps": [],
@@ -134,6 +138,8 @@ PUT body：
 ```
 
 保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。
+
+`source_id` 必须是固定格式 UUID；selector 原样落库。`plugin:` 和 `source:*` 在创建下一 Job 时按当前 trusted/enabled catalog 展开，因此同步后的新增模块会跟随组选择器进入新快照；历史 Job 不会漂移。导入导出会保留合法 selector，路径中的 `..`、绝对路径、空段和未知保留前缀会被拒绝。
 
 常见 400：
 - `runtime_image_key 没有可信版本: <key>` — 市场 catalog 有 key 不等于有 `trust_status=trusted` 的版本；先配置 `DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:...` 重启，或 import+approve。

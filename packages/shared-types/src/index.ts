@@ -154,6 +154,108 @@ export const PlatformToolName = z.enum([
 export type PlatformToolName = z.infer<typeof PlatformToolName>;
 export type PlatformToolConfig = Partial<Record<PlatformToolName, boolean>>;
 
+// ---------- RoleConfig 模块选择器（Issue #33，向后兼容） ----------
+
+/** 模块源 UUID 的固定格式。源 id 在数据库中是 uuid，固定长度让 selector 可无歧义解析。 */
+export const MODULE_SELECTOR_SOURCE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type ModuleSelectorKind = "module" | "plugin" | "source";
+
+export interface ParsedModuleSelector {
+  /** 用户提交的原始字符串；快照和 transfer 必须保留它。 */
+  raw: string;
+  source_id: string;
+  kind: ModuleSelectorKind;
+  module_id?: string;
+  plugin?: string;
+  /** 用于比较/去重的规范形式，不替换 raw。 */
+  canonical: string;
+}
+
+/**
+ * 规范化仓库相对路径。模块源扫描结果来自 POSIX 路径；统一斜杠并去掉无害的
+ * 重复分隔符/`.`，但在归一化前拒绝 `..`、绝对路径和控制字符，避免逃出 catalog 边界。
+ */
+export function normalizeModuleSelectorPath(value: string, field = "module path"): string {
+  if (typeof value !== "string") throw new Error(`${field} 必须是字符串`);
+  if (!value || value !== value.trim()) throw new Error(`${field} 不能为空或包含首尾空白`);
+  if (value.includes("\0") || value.includes(":")) throw new Error(`${field} 含非法路径字符`);
+  const slashed = value.replaceAll("\\", "/");
+  if (slashed.startsWith("/") || /^[A-Za-z]:\//.test(slashed)) throw new Error(`${field} 不能是绝对路径`);
+  const segments = slashed.split("/");
+  if (segments.some((segment) => segment === "..")) throw new Error(`${field} 不得包含 ..`);
+  let decoded = slashed;
+  try {
+    decoded = decodeURIComponent(slashed).replaceAll("\\", "/");
+  } catch {
+    throw new Error(`${field} 含非法 URL 编码`);
+  }
+  if (decoded.startsWith("/") || /^[A-Za-z]:\//.test(decoded) || decoded.split("/").some((segment) => segment === "..")) {
+    throw new Error(`${field} 归一化后越界`);
+  }
+  if (segments.some((segment) => /[\u0000-\u001f\u007f]/.test(segment)) || /[\u0000-\u001f\u007f]/.test(decoded)) {
+    throw new Error(`${field} 含控制字符`);
+  }
+  const normalized = segments.filter((segment) => segment && segment !== ".").join("/");
+  if (!normalized) throw new Error(`${field} 不能为空`);
+  return normalized;
+}
+
+/**
+ * 解析 RoleConfig.modules_json 中的 selector：
+ * - <source_uuid>:<module_path>（历史格式）
+ * - <source_uuid>:plugin:<plugin_path>
+ * - <source_uuid>:source:*
+ */
+export function parseModuleSelector(value: string): ParsedModuleSelector {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) {
+    throw new Error("模块 selector 必须是 1-1024 个字符的字符串");
+  }
+  if (value !== value.trim()) throw new Error("模块 selector 不能包含首尾空白");
+  if (value.length < 37 || value[36] !== ":") throw new Error(`模块 selector 缺少合法 source UUID: ${value}`);
+  const sourceId = value.slice(0, 36);
+  if (!MODULE_SELECTOR_SOURCE_ID_RE.test(sourceId)) {
+    throw new Error(`模块 selector 的 source UUID 非法: ${sourceId}`);
+  }
+  const rest = value.slice(37);
+  const normalizedSourceId = sourceId.toLowerCase();
+  if (rest === "source:*") {
+    return { raw: value, source_id: normalizedSourceId, kind: "source", canonical: `${normalizedSourceId}:source:*` };
+  }
+  if (rest.startsWith("source:")) throw new Error(`模块源 selector 必须是 ${normalizedSourceId}:source:*`);
+  if (rest.startsWith("plugin:")) {
+    const plugin = normalizeModuleSelectorPath(rest.slice("plugin:".length), "plugin path");
+    return {
+      raw: value,
+      source_id: normalizedSourceId,
+      kind: "plugin",
+      plugin,
+      canonical: `${normalizedSourceId}:plugin:${plugin}`,
+    };
+  }
+  if (rest.includes(":")) throw new Error(`模块 selector 含未知保留前缀: ${value}`);
+  const moduleId = normalizeModuleSelectorPath(rest, "module path");
+  return {
+    raw: value,
+    source_id: normalizedSourceId,
+    kind: "module",
+    module_id: moduleId,
+    canonical: `${normalizedSourceId}:${moduleId}`,
+  };
+}
+
+/** 校验并原样返回合法 selector，供 RoleConfig / transfer 复用。 */
+export function validateModuleSelectors(values: unknown, field = "modules"): string[] {
+  if (!Array.isArray(values)) throw new Error(`${field} 必须是字符串数组`);
+  const selectors: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") throw new Error(`${field} 只能包含字符串 selector`);
+    parseModuleSelector(value);
+    selectors.push(value);
+  }
+  return selectors;
+}
+
 /** 一个角色有资格启用的工具；未列出的工具即使配置为 true 也必须拒绝。 */
 export function allowedPlatformTools(
   roleName: string,

@@ -16,6 +16,17 @@ import {
   type RuntimeImageSummary,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
+import {
+  groupModuleOptions,
+  moduleIsIncluded,
+  moduleSelectorFor,
+  pluginSelectorFor,
+  selectorIsActive,
+  sourceSelectorFor,
+  toggleExplicitModule,
+  toggleSelector,
+  type ModulePickerOption,
+} from "./module-selector-state";
 
 /**
  * 角色配置编辑器（§4.2 角色即配置）：全局缺省与项目覆盖共用同一表单。
@@ -62,7 +73,7 @@ interface ConfigForm {
   env_pairs: EnvPair[]; // 非敏感环境变量键值对
   instructions_markdown: string;
   runtime_image_key: string;
-  modules: string[]; // 勾选的 Git 模块（"<source_id>:<module_id>"）
+  modules: string[]; // 原始模块 selector：module / plugin / source
   skills: string; // JSON 文本
   commands: string;
   mcps: string;
@@ -136,14 +147,63 @@ function CredentialPicker({ credentials, value, onChange }: { credentials: Provi
 function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources: SkillSource[]; sourceDetails: Record<string, SkillSourceDetail>; selected: string[]; onChange: (values: string[]) => void }) {
   const [query, setQuery] = useState("");
   const [sourceId, setSourceId] = useState("all");
-  const options = useMemo(() => sources.flatMap((source) => (sourceDetails[source.id]?.catalog_json ?? []).map((module) => ({ ...module, key: `${source.id}:${module.id}`, sourceId: source.id, sourceName: source.name }))), [sources, sourceDetails]);
-  const filtered = options.filter((option) => (sourceId === "all" || option.sourceId === sourceId) && `${option.name} ${option.description} ${option.plugin} ${option.kind} ${option.sourceName}`.toLowerCase().includes(query.trim().toLowerCase()));
-  const selectedOptions = options.filter((option) => selected.includes(option.key));
+  const options = useMemo<ModulePickerOption[]>(
+    () => sources.flatMap((source) => (sourceDetails[source.id]?.catalog_json ?? []).map((module) => ({
+      ...module,
+      key: moduleSelectorFor(source.id, module.id),
+      sourceId: source.id,
+      sourceName: source.name,
+    }))),
+    [sources, sourceDetails],
+  );
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return options.filter((option) =>
+      (sourceId === "all" || option.sourceId === sourceId) &&
+      `${option.name} ${option.description} ${option.plugin} ${option.kind} ${option.sourceName}`.toLowerCase().includes(needle),
+    );
+  }, [options, query, sourceId]);
+  const groups = useMemo(() => groupModuleOptions(options), [options]);
   const visibleKeys = filtered.map((option) => option.key);
-  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selected.includes(key));
-  const toggleOne = (key: string) => onChange(selected.includes(key) ? selected.filter((value) => value !== key) : [...selected, key]);
-  const toggleVisible = () => onChange(allVisibleSelected ? selected.filter((key) => !visibleKeys.includes(key)) : [...new Set([...selected, ...visibleKeys])]);
-  return <div className="module-picker"><div className="module-toolbar"><div className="selector-search flex-1"><MagnifyingGlass size={14} weight="light" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、Command、插件或说明" /></div><select value={sourceId} onChange={(event) => setSourceId(event.target.value)} aria-label="模块来源"><option value="all">全部模块源</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select></div><div className="module-summary"><span><strong>{selected.length}</strong> 个模块已选 · 当前显示 {filtered.length}</span><div><button type="button" onClick={toggleVisible} disabled={visibleKeys.length === 0}>{allVisibleSelected ? "取消当前结果" : "全选当前结果"}</button>{selected.length > 0 && <button type="button" onClick={() => onChange([])}>全部清空</button>}</div></div>{selectedOptions.length > 0 && <div className="selected-modules">{selectedOptions.map((option) => <button type="button" key={option.key} onClick={() => toggleOne(option.key)} title="移除"><span>{option.name}</span><X size={11} /></button>)}</div>}<div className="module-results">{filtered.map((option) => { const checked = selected.includes(option.key); return <label key={option.key} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} onChange={() => toggleOne(option.key)} /><span className="module-check">{checked && <Check size={12} weight="bold" />}</span><span className="min-w-0 flex-1"><strong>{option.name}</strong><small>{option.description || `${option.plugin} 中的 ${option.kind}`}</small></span><span className="module-meta"><em>{option.kind}</em><small>{option.sourceName} / {option.plugin}</small></span></label>; })}{sources.length === 0 && <div className="selector-empty">尚未添加模块源，请先到「模块源」登记并同步仓库。</div>}{sources.length > 0 && filtered.length === 0 && <div className="selector-empty">没有匹配的模块</div>}</div></div>;
+  const allVisibleDirectSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selected.includes(key));
+  const toggleOne = (option: ModulePickerOption) => onChange(toggleExplicitModule(selected, option.sourceId, option.id));
+  const toggleVisible = () => {
+    if (allVisibleDirectSelected) onChange(selected.filter((key) => !visibleKeys.includes(key)));
+    else onChange([...new Set([...selected, ...visibleKeys])]);
+  };
+  const selectedGroupSelectors = selected.filter((value) => value.includes(":plugin:") || value.endsWith(":source:*"));
+  const selectedDirectOptions = options.filter((option) => selected.includes(option.key));
+  const sourceOptions = sources.map((source) => ({
+    source,
+    options: filtered.filter((option) => option.sourceId === source.id),
+    total: options.filter((option) => option.sourceId === source.id).length,
+  })).filter(({ source }) => sourceId === "all" || source.id === sourceId);
+  return <div className="module-picker">
+    <div className="module-toolbar">
+      <div className="selector-search flex-1"><MagnifyingGlass size={14} weight="light" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、Command、插件或说明" /></div>
+      <select value={sourceId} onChange={(event) => setSourceId(event.target.value)} aria-label="模块来源"><option value="all">全部模块源</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
+    </div>
+    <div className="module-summary"><span><strong>{selected.length}</strong> 个选择器已选 · 当前显示 {filtered.length} 个模块</span><div><button type="button" onClick={toggleVisible} disabled={visibleKeys.length === 0}>{allVisibleDirectSelected ? "取消当前结果" : "全选当前结果"}</button>{selected.length > 0 && <button type="button" onClick={() => onChange([])}>全部清空</button>}</div></div>
+    {selectedGroupSelectors.length > 0 && <div className="selected-modules">{selectedGroupSelectors.map((selector) => <button type="button" key={selector} onClick={() => onChange(toggleSelector(selected, selector))} title="取消整组选择"><span>{selector.endsWith(":source:*") ? "整源" : `插件 · ${selector.split(":plugin:")[1] ?? selector}`}</span><X size={11} /></button>)}</div>}
+    {selectedDirectOptions.length > 0 && <div className="selected-modules">{selectedDirectOptions.map((option) => <button type="button" key={option.key} onClick={() => toggleOne(option)} title="移除单个模块"><span>{option.name}</span><X size={11} /></button>)}</div>}
+    <div className="module-results">
+      {sourceOptions.map(({ source, options: sourceVisible, total }) => {
+        const sourceSelector = sourceSelectorFor(source.id);
+        const sourceActive = selectorIsActive(selected, sourceSelector);
+        const sourceGroups = groups.filter((group) => group.sourceId === source.id).map((group) => ({ ...group, options: group.options.filter((option) => sourceVisible.some((item) => item.key === option.key)) })).filter((group) => group.options.length > 0 || !query.trim());
+        return <div key={source.id} className="module-source-group">
+          <div className="module-group-heading"><span><strong>{source.name}</strong><small>{total > 0 ? `${total} 个目录项` : "目录为空，请先同步"}{source.trust_status !== "trusted" ? ` · ${source.trust_status === "quarantined" ? "待审批" : "未启用"}` : ""}</small></span><button type="button" disabled={total === 0} className={sourceActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, sourceSelector))}>{sourceActive ? "取消整源" : "挂载整源"}</button></div>
+          {sourceGroups.map((group) => {
+            const pluginExplicit = selectorIsActive(selected, pluginSelectorFor(group.sourceId, group.plugin));
+            const pluginActive = pluginExplicit || sourceActive;
+            return <div key={group.selector} className="module-plugin-group"><div className="module-group-heading module-plugin-heading"><span><strong>{group.plugin}</strong><small>{group.options.length} 个模块 · {sourceActive ? "随整源包含" : "选择后跟随 sync 新增"}</small></span><button type="button" disabled={sourceActive} className={pluginActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, group.selector))}>{sourceActive ? "随整源" : pluginExplicit ? "取消插件" : "挂载插件"}</button></div>{group.options.map((option) => { const checked = moduleIsIncluded(option, selected); const inherited = checked && !selected.includes(option.key); return <label key={option.key} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={inherited} onChange={() => toggleOne(option)} /><span className="module-check">{checked && <Check size={12} weight="bold" />}</span><span className="min-w-0 flex-1"><strong>{option.name}</strong><small>{option.description || `${option.plugin} 中的 ${option.kind}`}{inherited ? " · 随组包含" : ""}</small></span><span className="module-meta"><em>{option.kind}</em><small>{option.sourceName} / {option.plugin}</small></span></label>; })}</div>;
+          })}
+        </div>;
+      })}
+      {sources.length === 0 && <div className="selector-empty">尚未添加模块源，请先到「模块源」登记并同步仓库。</div>}
+      {sources.length > 0 && filtered.length === 0 && <div className="selector-empty">没有匹配的模块；空目录请先同步，插件/整源选择会在下一 Job 按当前 catalog 展开。</div>}
+    </div>
+  </div>;
 }
 
 export function RoleConfigEditor({
@@ -428,7 +488,7 @@ export function RoleConfigEditor({
         <section className="role-config-section role-config-modules">
           <div className="role-config-section-title"><span>02</span><strong>Agent 模块目录</strong></div>
           <ModulePicker sources={sources} sourceDetails={sourceDetails} selected={form.modules} onChange={(modules) => setForm({ ...form, modules })} />
-          <p className="text-[11px] leading-5 text-zinc-600">目录由「模块源」同步生成。支持跨源搜索、来源过滤、批量勾选和已选项快速移除。</p>
+          <p className="text-[11px] leading-5 text-zinc-600">目录由「模块源」同步生成。可挂载整个插件或模块源；selector 会跟随后续 sync 在下一 Job 自动纳入新增模块，单个模块仍可独立勾选。</p>
         </section>
       </div>
 

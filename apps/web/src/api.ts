@@ -2,6 +2,8 @@
 
 import type { PlatformToolConfig } from "@deepsonar/shared-types";
 
+export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
+
 export interface Project {
   id: string;
   /** 可空：NULL = 纯本地项目（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md） */
@@ -584,6 +586,7 @@ export type RoleConfigInput = {
   env_keys: string[];
   /** 非敏感环境变量（疑似密钥名会被后端拒绝，引导改用 Credential） */
   env_vars: Record<string, string>;
+  /** 原始模块 selector：source:module（兼容）/source:plugin:path/source:source:*。 */
   modules: string[];
   skills: Record<string, unknown>[];
   commands: Record<string, unknown>[];
@@ -609,6 +612,7 @@ export interface RoleConfigView {
   reasoning: ReasoningEffort | null;
   env_keys: string[];
   env_vars_json: Record<string, string>;
+  /** 保存原始 selector 意图；Job 创建时才按当前 trusted catalog 展开。 */
   modules_json: string[];
   skills_json: Record<string, unknown>[];
   commands_json: Record<string, unknown>[];

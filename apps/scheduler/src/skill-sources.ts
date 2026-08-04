@@ -10,8 +10,19 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  parseModuleSelector,
+  type ParsedModuleSelector,
+  validateModuleSelectors,
+} from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+
+export {
+  parseModuleSelector,
+  validateModuleSelectors,
+  type ParsedModuleSelector,
+} from "@deepsonar/shared-types";
 
 const execFileP = promisify(execFile);
 
@@ -113,6 +124,89 @@ function contentHashOf(catalog: SourceModule[]): string {
   return h.digest("hex");
 }
 
+/** 单个展开模块的内容证据；不含可变 catalog 引用。 */
+export interface ExpandedModuleSnapshot {
+  source_id: string;
+  module_id: string;
+  kind: SourceModule["kind"];
+  plugin: string;
+  name: string;
+  description: string;
+  content_hash: string;
+}
+
+function contentHashOfSelected(entries: { source_id: string; module: SourceModule }[]): string {
+  const h = createHash("sha256");
+  for (const entry of [...entries].sort((a, b) => {
+    const ak = `${a.source_id}:${a.module.id}`;
+    const bk = `${b.source_id}:${b.module.id}`;
+    return ak < bk ? -1 : ak > bk ? 1 : 0;
+  })) {
+    h.update(entry.source_id).update("\0").update(entry.module.id).update("\0");
+    h.update(entry.module.kind).update("\0");
+    for (const key of Object.keys(entry.module.files).sort()) {
+      h.update(key).update("\0").update(entry.module.files[key]).update("\0");
+    }
+  }
+  return h.digest("hex");
+}
+
+/**
+ * 在一个已经读取的 trusted catalog 上展开 selector。这个纯函数同时被测试和
+ * DB-backed expandModules 使用，确保 plugin/source 与显式 module 的去重规则一致。
+ */
+export function expandCatalogSelectors(
+  sourceId: string,
+  catalog: SourceModule[],
+  selectors: ParsedModuleSelector[],
+): { modules: { source_id: string; module: SourceModule }[]; missing: string[] } {
+  const byId = new Map(catalog.map((module) => [module.id, module]));
+  const selected = new Map<string, SourceModule>();
+  const missing: string[] = [];
+  for (const selector of selectors) {
+    let matches: SourceModule[];
+    if (selector.kind === "source") {
+      matches = catalog;
+    } else if (selector.kind === "plugin") {
+      matches = catalog.filter((module) => module.plugin === selector.plugin);
+    } else {
+      const module = selector.module_id ? byId.get(selector.module_id) : undefined;
+      matches = module ? [module] : [];
+    }
+    if (matches.length === 0) {
+      const reason = selector.kind === "source"
+        ? "catalog-empty"
+        : selector.kind === "plugin"
+          ? "plugin-not-found"
+          : "module-not-found";
+      missing.push(`${selector.raw}(${reason})`);
+      continue;
+    }
+    for (const module of matches) selected.set(module.id, module);
+  }
+  return {
+    modules: [...selected.values()].map((module) => ({ source_id: sourceId, module })),
+    missing,
+  };
+}
+
+function isCatalogModule(value: unknown): value is SourceModule {
+  if (!value || typeof value !== "object") return false;
+  const module = value as Record<string, unknown>;
+  return (
+    typeof module.id === "string" &&
+    module.id.length > 0 &&
+    (module.kind === "skill" || module.kind === "command") &&
+    typeof module.plugin === "string" &&
+    typeof module.name === "string" &&
+    typeof module.description === "string" &&
+    Boolean(module.files) &&
+    typeof module.files === "object" &&
+    !Array.isArray(module.files) &&
+    Object.values(module.files as Record<string, unknown>).every((content) => typeof content === "string")
+  );
+}
+
 const MODULE_COUNT_CAP = 200;
 
 function scanRepo(repoRoot: string): SourceModule[] {
@@ -194,40 +288,52 @@ export interface SkillRevisionRef {
 }
 
 /**
- * 展开 RoleConfig 勾选的模块（["<source_id>:<module_id>", ...]）
+ * 展开 RoleConfig 的模块选择器（历史 module、plugin、source 三种语法）
  * → agentbox embedded skills / commands，与 RoleConfig 手写 JSON 合并去重（按 name）
  * 非 trusted 或已禁用来源的模块一律跳过（§5.1：quarantined 未经审批不得下发）
  */
 export async function expandModules(
   modules: string[],
+  db: typeof sql = sql,
 ): Promise<{
   skills: Record<string, unknown>[];
   commands: Record<string, unknown>[];
   missing: string[];
   revisions: SkillRevisionRef[];
+  resolved_modules: ExpandedModuleSnapshot[];
+  content_hash: string;
 }> {
   const skills: Record<string, unknown>[] = [];
   const commands: Record<string, unknown>[] = [];
   const missing: string[] = [];
   const revisions: SkillRevisionRef[] = [];
-  if (modules.length === 0) return { skills, commands, missing, revisions };
-
-  const bySource = new Map<string, string[]>();
-  for (const m of modules) {
-    const idx = m.indexOf(":");
-    if (idx <= 0) { missing.push(m); continue; }
-    const list = bySource.get(m.slice(0, idx)) ?? [];
-    list.push(m.slice(idx + 1));
-    bySource.set(m.slice(0, idx), list);
+  const resolvedModules: { source_id: string; module: SourceModule }[] = [];
+  if (modules.length === 0) {
+    return { skills, commands, missing, revisions, resolved_modules: [], content_hash: contentHashOfSelected([]) };
   }
 
-  for (const [sourceId, ids] of bySource) {
-    const [src] = await sql`
+  // Parse before touching the database: malformed selectors must be an explicit
+  // RoleConfig/Job error, never a silently ignored module.
+  const parsed = validateModuleSelectors(modules, "RoleConfig.modules")
+    .map((selector) => parseModuleSelector(selector));
+  const bySource = new Map<string, ParsedModuleSelector[]>();
+  for (const selector of parsed) {
+    const list = bySource.get(selector.source_id) ?? [];
+    list.push(selector);
+    bySource.set(selector.source_id, list);
+  }
+
+  for (const [sourceId, selectors] of bySource) {
+    const [src] = await db`
       SELECT catalog_json, trust_status, enabled, last_commit_sha, last_content_hash
       FROM skill_sources WHERE id = ${sourceId}`;
-    if (!src || (src.trust_status as string) !== "trusted" || !src.enabled) {
+    if (!src) {
+      for (const selector of selectors) missing.push(`${selector.raw}(source-not-found)`);
+      continue;
+    }
+    if ((src.trust_status as string) !== "trusted" || !src.enabled) {
       // 未信任/已禁用来源：整组拒绝下发
-      for (const id of ids) missing.push(`${sourceId}:${id}(source-not-trusted)`);
+      for (const selector of selectors) missing.push(`${selector.raw}(source-not-trusted)`);
       continue;
     }
     revisions.push({
@@ -235,10 +341,18 @@ export async function expandModules(
       commit_sha: (src.last_commit_sha as string) ?? null,
       content_hash: (src.last_content_hash as string) ?? null,
     });
-    const catalog = ((src?.catalog_json as SourceModule[]) ?? []) as SourceModule[];
-    for (const id of ids) {
-      const mod = catalog.find((c) => c.id === id);
-      if (!mod) { missing.push(`${sourceId}:${id}`); continue; }
+    const catalog = Array.isArray(src.catalog_json)
+      ? src.catalog_json.filter(isCatalogModule)
+      : [];
+    if (catalog.length === 0) {
+      for (const selector of selectors) missing.push(`${selector.raw}(catalog-empty)`);
+      continue;
+    }
+    const expanded = expandCatalogSelectors(sourceId, catalog, selectors);
+    missing.push(...expanded.missing);
+    for (const selected of expanded.modules) {
+      resolvedModules.push(selected);
+      const mod = selected.module;
       if (mod.kind === "skill") {
         skills.push({ source: "embedded", name: mod.name, files: mod.files });
       } else {
@@ -246,7 +360,22 @@ export async function expandModules(
       }
     }
   }
-  return { skills, commands, missing, revisions };
+  return {
+    skills,
+    commands,
+    missing,
+    revisions,
+    resolved_modules: resolvedModules.map(({ source_id, module }) => ({
+      source_id,
+      module_id: module.id,
+      kind: module.kind,
+      plugin: module.plugin,
+      name: module.name,
+      description: module.description,
+      content_hash: contentHashOf([module]),
+    })),
+    content_hash: contentHashOfSelected(resolvedModules),
+  };
 }
 
 /**

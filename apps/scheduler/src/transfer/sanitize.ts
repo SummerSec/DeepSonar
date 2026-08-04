@@ -1,4 +1,5 @@
 /** 环境变量 / 文本 Secret 扫描（导出红线） */
+import { validateModuleSelectors } from "@deepsonar/shared-types";
 
 const SENSITIVE_KEY =
   /(password|passwd|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|access[_-]?key|credential)/i;
@@ -38,6 +39,12 @@ function looksLikeSecretValue(s: string): boolean {
 export function sanitizeAgentSnapshot(snap: unknown): Record<string, unknown> {
   if (!snap || typeof snap !== "object") return {};
   const s = { ...(snap as Record<string, unknown>) };
+  if (s.module_selectors !== undefined) {
+    s.module_selectors = validateModuleSelectors(s.module_selectors, "Job.module_selectors");
+  }
+  if (s.modules !== undefined) {
+    s.modules = validateModuleSelectors(s.modules, "Job.modules");
+  }
   delete s.sandbox_id;
   // credential 只保留可映射的逻辑字段
   if (s.credential_id) {

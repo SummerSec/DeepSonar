@@ -4,6 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { validateModuleSelectors } from "@deepsonar/shared-types";
 import { validateCredentialRoleConfigBinding } from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
@@ -154,6 +155,9 @@ export async function runPlatformExport(exportId: string): Promise<void> {
         WHERE rc.project_id IS NULL`;
       const out = [];
       for (const rc of configs) {
+        const moduleSelectors = rc.modules_json == null
+          ? []
+          : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${String(rc.role_name)}.modules_json`);
         const { safe, redacted_keys } = filterEnvVars(rc.env_vars_json as Record<string, unknown>);
         const filesRows = await sql`
           SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${rc.id as string}`;
@@ -171,7 +175,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
           env_keys: rc.env_keys,
           env_vars: safe,
           env_vars_redacted: redacted_keys,
-          modules_json: rc.modules_json,
+          modules_json: moduleSelectors,
           skills_json: rc.skills_json,
           commands_json: rc.commands_json,
           mcps_json: rc.mcps_json,
@@ -481,6 +485,9 @@ export async function applyPlatformImport(
 
         const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
         const model = typeof rc.model === "string" && rc.model ? rc.model : null;
+        const moduleSelectors = rc.modules_json == null
+          ? []
+          : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${roleName}.modules_json`);
 
         await tx`DELETE FROM role_configs WHERE project_id IS NULL AND role_id = ${role.id as string}`;
         const [created] = await tx`
@@ -492,7 +499,9 @@ export async function applyPlatformImport(
             reasoning: (rc.reasoning as string) ?? null,
             env_keys: (rc.env_keys as string[]) ?? [],
             env_vars_json: ((rc.env_vars as object) ?? {}) as never,
-            modules_json: ((rc.modules_json as unknown) ?? []) as never,
+            // Preserve legal plugin/source selectors exactly; resolution waits
+            // for the next Job snapshot on the target catalog.
+            modules_json: moduleSelectors as never,
             skills_json: ((rc.skills_json as unknown) ?? []) as never,
             commands_json: ((rc.commands_json as unknown) ?? []) as never,
             mcps_json: ((rc.mcps_json as unknown) ?? []) as never,

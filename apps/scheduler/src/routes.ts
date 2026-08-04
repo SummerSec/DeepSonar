@@ -1,6 +1,11 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { PlatformToolName, allowedPlatformTools, requiredPlatformTools } from "@deepsonar/shared-types";
+import {
+  PlatformToolName,
+  allowedPlatformTools,
+  parseModuleSelector,
+  requiredPlatformTools,
+} from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit, credentialAuditState } from "./audit.js";
 import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
@@ -1964,6 +1969,13 @@ export function registerRoutes(app: FastifyInstance) {
     if (envErr) return envErr;
     for (const key of body.env_keys) {
       if (!config.runtime.isEnvKeyAllowed(key)) return `env_key 不在白名单: ${key}`;
+    }
+    for (const selector of body.modules) {
+      try {
+        parseModuleSelector(selector);
+      } catch (error) {
+        return `模块 selector 非法（${selector}）: ${error instanceof Error ? error.message : String(error)}`;
+      }
     }
     if (body.runtime_image_key) {
       const [image] = await db`

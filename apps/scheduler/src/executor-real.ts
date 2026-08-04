@@ -535,6 +535,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     network: { allow_egress: allowEgress },
     env_names: Object.keys(env).sort(),
     modules: snapshot.modules,
+    module_selectors: snapshot.module_selectors,
+    expanded_modules: snapshot.expanded_modules,
+    module_content_hash: snapshot.module_content_hash,
     skills: { names: componentNames(snapshot.skills), count: snapshot.skills.length, sha256: jsonHash(snapshot.skills) },
     commands: { names: componentNames(snapshot.commands), count: snapshot.commands.length, sha256: jsonHash(snapshot.commands) },
     mcps: { names: componentNames(mcps), count: mcps.length, sha256: jsonHash(mcps) },
@@ -595,6 +598,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     component_manifest_sha256: jsonHash(componentManifest),
     provider_config_files: componentManifest.provider_files,
     allow_egress: allowEgress,
+    module_selectors: snapshot.module_selectors,
+    module_content_hash: snapshot.module_content_hash,
     skill_revisions: snapshot.skill_revisions,
     recorded_at: new Date().toISOString(),
   };
