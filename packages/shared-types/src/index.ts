@@ -228,6 +228,7 @@ export const ReadinessCredentialSummary = z.object({
   name: z.string(),
   kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]),
   provider: z.string(),
+  provider_valid: z.boolean(),
   project_id: z.string().uuid().nullable(),
   status: z.enum(["active", "disabled", "rotation_required"]),
   allowed_model_count: z.number().int().nonnegative(),

@@ -12,7 +12,7 @@ import {
   type PlatformToolName,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
-import { allowedModelIds, isProviderKnown, validateCredentialCompatibility } from "./credentials.js";
+import { allowedModelIds, isProviderKnown, UNKNOWN_PROVIDER_ERROR, validateCredentialCompatibility } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
@@ -2281,7 +2281,7 @@ export async function resolveAgentSnapshotForJob(
     : [undefined];
   if (llm) {
     const provider = String(llm.provider ?? "");
-    if (!isProviderKnown(provider)) throw new Error(`未知 Credential provider: ${provider}`);
+    if (!isProviderKnown(provider)) throw new Error(UNKNOWN_PROVIDER_ERROR);
     const compatibilityError = validateCredentialCompatibility(agentCli, provider);
     if (compatibilityError) throw new Error(compatibilityError);
     const credProject = (llm.cred_project_id as string | null) ?? null;

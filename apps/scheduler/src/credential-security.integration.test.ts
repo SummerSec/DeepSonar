@@ -49,7 +49,7 @@ if (!testDatabaseUrl) {
     const { migrate, sql } = dbModule;
     endSql = () => sql.end({ timeout: 5 });
     const { registerRoutes } = routesModule;
-    const { encryptSecret } = credentialsModule;
+    const { encryptSecret, fingerprintOf, last4Of, UNKNOWN_PROVIDER_ERROR } = credentialsModule;
     const { runPlatformExport } = platformModule;
     const { loadPackFile, openDeepsonarPack, readJsonl, removeFileSafe } = packModule;
     removeArtifactFile = removeFileSafe;
@@ -273,6 +273,156 @@ if (!testDatabaseUrl) {
       const exportsResponse = await request("GET", "/platform/exports");
       assert.equal(exportsResponse.statusCode, 200, exportsResponse.payload);
       assertNoSecretMaterial(exportsResponse.payload);
+
+      // A legacy row may already be bound to RoleConfigs/Jobs.  Read paths
+      // must project it without deleting or rewriting those rows; an explicit
+      // PATCH is the only repair operation.
+      const legacyProvider = "legacy-provider-secret";
+      const legacySecret = "legacy-runtime-secret";
+      const legacyId = randomUUID();
+      const legacyRoleId = randomUUID();
+      const legacyRoleConfigId = randomUUID();
+      const legacyJobId = randomUUID();
+      const legacyEventId = randomUUID();
+      const legacyEnc = encryptSecret(legacySecret);
+      await sql`
+        INSERT INTO credentials ${sql({
+          id: legacyId,
+          name: "legacy-bound-provider",
+          kind: "llm_provider",
+          provider: legacyProvider,
+          project_id: null,
+          ciphertext: legacyEnc.ciphertext,
+          nonce: legacyEnc.nonce,
+          auth_tag: legacyEnc.auth_tag,
+          public_metadata_json: { base_url: "https://provider.example/v1", allowed_model_ids: ["model-a"] } as never,
+          fingerprint: fingerprintOf(legacySecret),
+          last4: last4Of(legacySecret),
+          created_by: "legacy-fixture",
+        })}`;
+      await sql`
+        INSERT INTO agent_roles (id, name, title, description, builtin, kind)
+        VALUES (${legacyRoleId}, 'legacy_projection', 'Legacy Projection', 'integration fixture', false, 'role')`;
+      await sql`
+        INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
+        VALUES (${legacyRoleConfigId}, ${legacyRoleId}, NULL, 'codex', 'model-a')`;
+      await sql`
+        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
+        VALUES (${legacyRoleConfigId}, ${legacyId}, 'llm')`;
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (${legacyJobId}, ${projectId}, ${canvasId}, 'legacy_projection', 'running',
+          ${sql.json({
+            name: "legacy_projection",
+            agent_cli: "codex",
+            model: "model-a",
+            credential_id: legacyId,
+            credential_name: "legacy-bound-provider",
+            credential_provider: legacyProvider,
+          } as never)},
+          ${sql.json({ runtime_evidence: { credential_provider: legacyProvider } } as never)})`;
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json)
+        VALUES (${legacyJobId}, ${legacyEventId}, 1, 'progress', ${sql.json({ credential_provider: legacyProvider } as never)})`;
+
+      const assertNoLegacyProvider = (value: unknown) => {
+        const text = typeof value === "string" ? value : JSON.stringify(value);
+        assert.equal(text.includes(legacyProvider), false, "legacy provider must not cross an outward boundary");
+      };
+      const [legacyBefore] = await sql<{ provider: string; binding_count: number }[]>`
+        SELECT c.provider, COUNT(rc.credential_id)::int AS binding_count
+        FROM credentials c LEFT JOIN role_credentials rc ON rc.credential_id = c.id
+        WHERE c.id = ${legacyId}
+        GROUP BY c.provider`;
+      assert.equal(legacyBefore?.provider, legacyProvider);
+      assert.equal(legacyBefore?.binding_count, 1);
+
+      const legacyList = await request("GET", "/credentials");
+      const legacyListed = (json(legacyList) as unknown as Record<string, any>[]).find((row) => row.id === legacyId);
+      assert.equal(legacyListed?.provider, "unknown");
+      assert.equal(legacyListed?.provider_valid, false);
+      assertNoLegacyProvider(legacyList.payload);
+
+      const legacyDetail = await request("GET", `/credentials/${legacyId}`);
+      assert.equal(json(legacyDetail).provider, "unknown");
+      assert.equal(json(legacyDetail).provider_valid, false);
+      assertNoLegacyProvider(legacyDetail.payload);
+
+      let upstreamCalls = 0;
+      globalThis.fetch = (async () => {
+        upstreamCalls += 1;
+        throw new Error("legacy provider must not reach upstream");
+      }) as typeof fetch;
+      for (const [method, path] of [
+        ["GET", `/credentials/${legacyId}/models`],
+        ["GET", `/credentials/${legacyId}/compatibility`],
+        ["POST", `/credentials/${legacyId}/models`],
+        ["POST", `/credentials/${legacyId}/test`],
+      ] as const) {
+        const response = await request(method, path, method === "POST" ? {} : undefined);
+        assert.equal(response.statusCode, 400, response.payload);
+        assertNoLegacyProvider(response.payload);
+      }
+      assert.equal(upstreamCalls, 0);
+
+      const jobsList = await request("GET", `/jobs?project_id=${projectId}`);
+      const legacyListedJob = (json(jobsList) as unknown as Record<string, any>[]).find((row) => row.id === legacyJobId);
+      assert.equal(legacyListedJob?.credential_provider, "unknown");
+      assert.equal(legacyListedJob?.credential_provider_valid, false);
+      assertNoLegacyProvider(jobsList.payload);
+      const jobsDetail = await request("GET", `/jobs/${legacyJobId}`);
+      const jobsDetailBody = json(jobsDetail);
+      assert.equal(jobsDetailBody.job.agent_snapshot_json.credential_provider, "unknown");
+      assert.equal(jobsDetailBody.job.agent_snapshot_json.credential_provider_valid, false);
+      assert.equal(jobsDetailBody.job.payload_json.runtime_evidence.credential_provider, "unknown");
+      assert.equal(jobsDetailBody.job.payload_json.runtime_evidence.credential_provider_valid, false);
+      assert.equal(jobsDetailBody.events[0].payload_json.credential_provider, "unknown");
+      assertNoLegacyProvider(jobsDetail.payload);
+      const jobsEvents = await request("GET", `/jobs/${legacyJobId}/events`);
+      assert.equal(json(jobsEvents).items[0].payload_json.credential_provider, "unknown");
+      assertNoLegacyProvider(jobsEvents.payload);
+
+      const globalSettings = await request("GET", "/global-settings");
+      assert.equal(json(globalSettings).active_by_provider.unknown, 1);
+      assertNoLegacyProvider(globalSettings.payload);
+
+      const { runtimeCredentialProviderError } = await import("./executor-real.js");
+      const runtimeError = runtimeCredentialProviderError("codex", legacyProvider, legacyProvider);
+      assert.equal(runtimeError, UNKNOWN_PROVIDER_ERROR);
+      assert.equal(runtimeError?.includes(legacyProvider), false);
+
+      const legacyExportId = randomUUID();
+      await sql`
+        INSERT INTO data_exports (id, project_id, scope, preset, modules_json, options_json, status)
+        VALUES (${legacyExportId}, NULL, 'platform', 'platform_full', ${sql.json(["credentials"] as never)},
+          ${sql.json({ credentials: { mode: "metadata" } } as never)}, 'pending')`;
+      await runPlatformExport(legacyExportId);
+      const [legacyExportRow] = await sql<{ status: string; artifact_uri: string | null }[]>`
+        SELECT status, artifact_uri FROM data_exports WHERE id = ${legacyExportId}`;
+      assert.equal(legacyExportRow?.status, "succeeded");
+      const legacyPack = await openDeepsonarPack(await loadPackFile(legacyExportRow?.artifact_uri ?? ""));
+      const legacyExported = readJsonl(legacyPack.files, "data/credentials.jsonl").find((row) => row.source_id === legacyId);
+      assert.equal(legacyExported?.provider, "unknown");
+      assert.equal(legacyExported?.provider_valid, false);
+      assertNoLegacyProvider([...legacyPack.files.values()].map((value) => value.toString("utf8")).join("\n"));
+      await removeArtifactFile?.(legacyExportRow?.artifact_uri);
+
+      // Active jobs intentionally block a provider migration; once terminal,
+      // explicit repair succeeds and preserves the existing binding.
+      const blockedRepair = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "https://provider.example/v1" } });
+      assert.equal(blockedRepair.statusCode, 409, blockedRepair.payload);
+      await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${legacyJobId}`;
+      const repaired = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "https://provider.example/v1" } });
+      assert.equal(repaired.statusCode, 200, repaired.payload);
+      const [legacyAfter] = await sql<{ provider: string; binding_count: number }[]>`
+        SELECT c.provider, COUNT(rc.credential_id)::int AS binding_count
+        FROM credentials c LEFT JOIN role_credentials rc ON rc.credential_id = c.id
+        WHERE c.id = ${legacyId}
+        GROUP BY c.provider`;
+      assert.equal(legacyAfter?.provider, "openai");
+      assert.equal(legacyAfter?.binding_count, 1);
+      const auditAfterRepair = await request("GET", "/audit-logs");
+      assertNoLegacyProvider(auditAfterRepair.payload);
     } finally {
       globalThis.fetch = originalFetch;
     }

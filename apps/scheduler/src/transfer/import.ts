@@ -3,7 +3,11 @@
  */
 import { randomUUID } from "node:crypto";
 import { validateModuleSelectors } from "@deepsonar/shared-types";
-import { projectCredentialMetadata, validateCredentialRoleConfigBinding } from "../credentials.js";
+import {
+  projectCredentialMetadata,
+  projectCredentialProvider,
+  validateCredentialRoleConfigBinding,
+} from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import {
@@ -25,7 +29,7 @@ export interface PreviewResult {
   counts: Record<string, number>;
   conflicts: { module: string; key: string; message: string }[];
   warnings: string[];
-  credential_mappings_required: { source_id: string; name: string; provider: string }[];
+  credential_mappings_required: { source_id: string; name: string; provider: string; provider_valid?: boolean }[];
   environment_keys_required: string[];
   nonportable_paths: string[];
   disabled_integrations: string[];
@@ -93,11 +97,16 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
     counts: pack.manifest.counts ?? {},
     conflicts,
     warnings,
-    credential_mappings_required: creds.map((c) => ({
-      source_id: String(c.source_id),
-      name: String(c.name ?? ""),
-      provider: String(c.provider ?? ""),
-    })),
+    credential_mappings_required: creds.map((c) => {
+      const provider = typeof c.provider === "string" ? c.provider : "";
+      return {
+        source_id: String(c.source_id),
+        name: String(c.name ?? ""),
+        ...(provider === ""
+          ? { provider, provider_valid: false }
+          : projectCredentialProvider(c.kind, provider)),
+      };
+    }),
     environment_keys_required: [
       ...new Set([...(env?.env_keys ?? []), ...(env?.redacted_keys ?? [])]),
     ],

@@ -34,6 +34,7 @@ import {
   isProviderAllowedForKind,
   last4Of,
   projectCredentialMetadata,
+  projectCredentialProvider,
   sanitizeCredentialMetadata,
   UNKNOWN_PROVIDER_ERROR,
   type CredentialHealthErrorCategory,
@@ -180,7 +181,12 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
   }
   for (const [provider, value] of Object.entries(providerRules as Record<string, unknown>)) {
     if (!isProviderKnown(provider) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
-      ctx.addIssue({ code: "custom", path: ["maxConcurrentByProvider", provider], message: `${provider} 必须是 0-1000 的整数` });
+      const knownProvider = isProviderKnown(provider);
+      ctx.addIssue({
+        code: "custom",
+        path: knownProvider ? ["maxConcurrentByProvider", provider] : ["maxConcurrentByProvider"],
+        message: knownProvider ? `${provider} 必须是 0-1000 的整数` : UNKNOWN_PROVIDER_ERROR,
+      });
     }
   }
 });
@@ -2393,13 +2399,20 @@ export function registerRoutes(app: FastifyInstance) {
     const [cfg] = await sql`SELECT * FROM role_configs WHERE id = ${configId}`;
     if (!cfg) return null;
     const creds = await sql`
-      SELECT rc.credential_id, rc.purpose, c.name, c.provider, c.status, c.project_id
+      SELECT rc.credential_id, rc.purpose, c.name, c.kind, c.provider, c.status, c.project_id
       FROM role_credentials rc JOIN credentials c ON c.id = rc.credential_id
       WHERE rc.role_config_id = ${configId}`;
     const files = await sql`
       SELECT path, content, content_sha256 FROM role_config_files
       WHERE role_config_id = ${configId} ORDER BY path`;
-    return { ...(cfg as Record<string, unknown>), credentials: creds, config_files: files };
+    return {
+      ...(cfg as Record<string, unknown>),
+      credentials: creds.map((credential) => ({
+        ...credential,
+        ...projectCredentialProvider(credential.kind ?? "llm_provider", credential.provider),
+      })),
+      config_files: files,
+    };
   }
 
   app.get("/role-configs/global", async () => {
@@ -2589,7 +2602,11 @@ export function registerRoutes(app: FastifyInstance) {
   const aggregateActive = (rows: Record<string, unknown>[], key: "agent_cli" | "provider") => {
     const out: Record<string, number> = {};
     for (const row of rows) {
-      const name = String(row[key] ?? "");
+      const name = key === "provider"
+        ? row[key] == null || row[key] === ""
+          ? ""
+          : projectCredentialProvider("llm_provider", row[key]).provider
+        : String(row[key] ?? "");
       if (name) out[name] = (out[name] ?? 0) + Number(row.count);
     }
     return out;
@@ -3249,7 +3266,7 @@ export function registerRoutes(app: FastifyInstance) {
           OR (j.created_at = ${cursor?.created_at ?? null}::timestamptz AND j.id < ${cursor?.id ?? null}::uuid))
       ORDER BY j.created_at DESC, j.id DESC
       LIMIT ${paginated ? limit + 1 : limit}`;
-    const items = rows.slice(0, limit);
+    const items = rows.slice(0, limit).map((row) => projectJobProviderFields(row as Record<string, unknown>));
     if (!paginated) return items;
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     const hasMore = rows.length > limit;
@@ -3577,7 +3594,20 @@ export function registerRoutes(app: FastifyInstance) {
       snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) && Array.isArray((snapshot as Record<string, unknown>).missing_modules)
         ? (snapshot as Record<string, unknown>).missing_modules
         : [];
-    return { job, events, findings, missing_modules: missingModules };
+    const safeJob = {
+      ...job,
+      payload_json: projectJobPayload(job.payload_json),
+      agent_snapshot_json: projectJobSnapshot(snapshot),
+    };
+    return {
+      job: safeJob,
+      events: events.map((event) => ({
+        ...event,
+        payload_json: projectJobEventPayload(event.payload_json),
+      })),
+      findings,
+      missing_modules: missingModules,
+    };
   });
 
   /** Keyset event pages keep the heavy timeline out of the Job detail request. */
@@ -3600,7 +3630,10 @@ export function registerRoutes(app: FastifyInstance) {
           OR (created_at = ${cursor?.created_at ?? null}::timestamptz AND id > ${cursor?.id ?? null}::bigint))
       ORDER BY created_at ASC, id ASC
       LIMIT ${limit + 1}`;
-    const items = rows.slice(0, limit);
+    const items = rows.slice(0, limit).map((event) => ({
+      ...event,
+      payload_json: projectJobEventPayload(event.payload_json),
+    }));
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     return page(items, {
       after,
@@ -3961,6 +3994,7 @@ export function registerRoutes(app: FastifyInstance) {
   function credentialView(row: Record<string, unknown>, extras: Record<string, unknown> = {}): Record<string, unknown> {
     const kind = String(row.kind ?? "");
     const provider = String(row.provider ?? "");
+    const providerProjection = projectCredentialProvider(kind, provider);
     const metadata = projectCredentialMetadata(kind, provider, row.public_metadata_json);
     const modelCatalog = normalizeModelCatalog(row.model_catalog_json);
     const healthStatus = row.health_status === "ok" || row.health_status === "error" ? row.health_status : "unknown";
@@ -3968,6 +4002,7 @@ export function registerRoutes(app: FastifyInstance) {
     const healthDetail = safeHealthDetail(row.health_detail);
     return {
       ...row,
+      ...providerProjection,
       public_metadata_json: metadata,
       model_catalog_json: modelCatalog,
       scope: row.project_id ? "project" : "global",
@@ -3981,6 +4016,73 @@ export function registerRoutes(app: FastifyInstance) {
       },
       ...extras,
     };
+  }
+
+  function projectJobProviderFields(row: Record<string, unknown>): Record<string, unknown> {
+    if (row.credential_provider === null || row.credential_provider === undefined || row.credential_provider === "") return row;
+    const projection = projectCredentialProvider("llm_provider", row.credential_provider);
+    return {
+      ...row,
+      credential_provider: projection.provider,
+      credential_provider_valid: projection.provider_valid,
+    };
+  }
+
+  function projectJobEventPayload(value: unknown): unknown {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const payload = { ...(value as Record<string, unknown>) };
+    const raw = payload.credential_provider;
+    if (raw !== null && raw !== undefined && raw !== "") {
+      const projection = projectCredentialProvider("llm_provider", raw);
+      payload.credential_provider = projection.provider;
+      payload.credential_provider_valid = projection.provider_valid;
+    }
+    return payload;
+  }
+
+  function projectJobPayload(value: unknown): unknown {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const payload = { ...(value as Record<string, unknown>) };
+    const evidence = payload.runtime_evidence;
+    if (evidence && typeof evidence === "object" && !Array.isArray(evidence)) {
+      const runtimeEvidence = { ...(evidence as Record<string, unknown>) };
+      const raw = runtimeEvidence.credential_provider;
+      if (raw !== null && raw !== undefined && raw !== "") {
+        const projection = projectCredentialProvider("llm_provider", raw);
+        runtimeEvidence.credential_provider = projection.provider;
+        runtimeEvidence.credential_provider_valid = projection.provider_valid;
+      }
+      payload.runtime_evidence = runtimeEvidence;
+    }
+    return payload;
+  }
+
+  function projectJobSnapshot(value: unknown): unknown {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const snapshot = { ...(value as Record<string, unknown>) };
+    if (!Object.prototype.hasOwnProperty.call(snapshot, "credential_provider")) return snapshot;
+    const raw = snapshot.credential_provider;
+    if (raw === null || raw === undefined || raw === "") return snapshot;
+    const projection = projectCredentialProvider("llm_provider", raw);
+    return {
+      ...snapshot,
+      credential_provider: projection.provider,
+      credential_provider_valid: projection.provider_valid,
+    };
+  }
+
+  function projectCredentialAuditPayload(value: unknown): unknown {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const payload = { ...(value as Record<string, unknown>) };
+    if (payload.provider !== undefined && payload.provider !== null && payload.provider !== "") {
+      Object.assign(payload, projectCredentialProvider(payload.kind ?? "llm_provider", payload.provider));
+    }
+    if (payload.credential_provider !== undefined && payload.credential_provider !== null && payload.credential_provider !== "") {
+      const projection = projectCredentialProvider("llm_provider", payload.credential_provider);
+      payload.credential_provider = projection.provider;
+      payload.credential_provider_valid = projection.provider_valid;
+    }
+    return payload;
   }
 
   async function credentialImpact(id: string): Promise<Record<string, unknown>> {
@@ -4164,7 +4266,13 @@ export function registerRoutes(app: FastifyInstance) {
       resourceType: "credential",
       resourceId: row.id as string,
       projectId: body.project_id ?? null,
-      after: { name: row.name, provider: row.provider, fingerprint: row.fingerprint, last4: row.last4 },
+      after: {
+        name: row.name,
+        kind: row.kind,
+        ...projectCredentialProvider(row.kind, row.provider),
+        fingerprint: row.fingerprint,
+        last4: row.last4,
+      },
     });
     return reply.code(201).send(credentialView(row as Record<string, unknown>));
   });
@@ -4289,6 +4397,7 @@ export function registerRoutes(app: FastifyInstance) {
         impact,
         before: {
           name: existing.name,
+          kind: existing.kind,
           provider: existing.provider,
           project_id: existing.project_id,
           public_metadata_json: existing.public_metadata_json,
@@ -4306,6 +4415,7 @@ export function registerRoutes(app: FastifyInstance) {
       before: credentialAuditState({
         name: result.before.name,
         provider: result.before.provider,
+        kind: result.before.kind,
         projectId: result.before.project_id,
         metadata: result.before.public_metadata_json,
       }),
@@ -4313,6 +4423,7 @@ export function registerRoutes(app: FastifyInstance) {
         ...credentialAuditState({
           name: result.row.name,
           provider: result.row.provider,
+          kind: result.row.kind,
           projectId: result.row.project_id,
           metadata: result.row.public_metadata_json,
         }),
@@ -4346,7 +4457,13 @@ export function registerRoutes(app: FastifyInstance) {
       action: "credential.rotate",
       resourceType: "credential",
       resourceId: id,
-      after: { name: row.name, provider: row.provider, key_version: row.key_version, fingerprint: row.fingerprint },
+      after: {
+        name: row.name,
+        kind: row.kind,
+        ...projectCredentialProvider(row.kind, row.provider),
+        key_version: row.key_version,
+        fingerprint: row.fingerprint,
+      },
     });
     return credentialView(row as Record<string, unknown>);
   });
@@ -4372,6 +4489,9 @@ export function registerRoutes(app: FastifyInstance) {
     const [cred] = await sql`
       SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (!projectCredentialProvider(cred.kind, cred.provider).provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
     const result = await testCredential(cred as never);
     const [updated] = await sql`
       UPDATE credentials SET
@@ -4403,9 +4523,13 @@ export function registerRoutes(app: FastifyInstance) {
     const [cred] = await sql`SELECT id, kind, provider, public_metadata_json, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
+    const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
+    if (!providerProjection.provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
     return {
       credential_id: id,
-      provider: cred.provider,
+      ...providerProjection,
       models: normalizeModelCatalog(cred.model_catalog_json),
       allowed_model_ids: allowedModelIds(projectCredentialMetadata("llm_provider", String(cred.provider), cred.public_metadata_json)),
       fetched_at: cred.model_catalog_fetched_at ?? null,
@@ -4425,6 +4549,10 @@ export function registerRoutes(app: FastifyInstance) {
     const [cred] = await sql`SELECT id, kind, provider, public_metadata_json FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
+    const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
+    if (!providerProjection.provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
     const agentCli = query.agent_cli;
     const model = query.model ?? null;
     const metadata = projectCredentialMetadata(String(cred.kind), String(cred.provider), cred.public_metadata_json);
@@ -4437,7 +4565,7 @@ export function registerRoutes(app: FastifyInstance) {
         : null;
     return {
       credential_id: id,
-      provider: cred.provider,
+      ...providerProjection,
       agent_cli: agentCli,
       model,
       allowed_model_ids: allowed,
@@ -4451,6 +4579,9 @@ export function registerRoutes(app: FastifyInstance) {
     const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
+    if (!projectCredentialProvider(cred.kind, cred.provider).provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
     try {
       const result = await listCredentialModels(cred as never);
       const [updated] = await sql`
@@ -4508,7 +4639,7 @@ export function registerRoutes(app: FastifyInstance) {
   app.get("/audit-logs", async (req) => {
     const q = req.query as { project_id?: string; action?: string; limit?: string };
     const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500);
-    return sql`
+    const rows = await sql`
       SELECT id, at, actor_type, actor_id, action, project_id, resource_type, resource_id,
              request_id, ip, result, error_code, before_json, after_json
       FROM audit_logs
@@ -4516,6 +4647,14 @@ export function registerRoutes(app: FastifyInstance) {
         AND (${q.action ?? null}::text IS NULL OR action = ${q.action ?? null})
       ORDER BY at DESC, id DESC
       LIMIT ${limit}`;
+    return rows.map((row) => {
+      const credentialAudit = row.resource_type === "credential";
+      return {
+        ...row,
+        before_json: credentialAudit ? projectCredentialAuditPayload(row.before_json) : row.before_json,
+        after_json: credentialAudit ? projectCredentialAuditPayload(row.after_json) : row.after_json,
+      };
+    });
   });
 
   // ---------- 指标（§13.1：Prometheus 文本；内部网络抓取，走普通认证） ----------

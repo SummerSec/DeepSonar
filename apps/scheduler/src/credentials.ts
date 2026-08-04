@@ -386,11 +386,46 @@ export const PROVIDER_ENV_MAP: Record<string, { secretKeys: string[]; baseUrlKey
 };
 
 export function isProviderKnown(provider: string): boolean {
-  return provider in PROVIDER_ENV_MAP;
+  return Object.prototype.hasOwnProperty.call(PROVIDER_ENV_MAP, provider);
+}
+
+export const UNKNOWN_PROVIDER_SENTINEL = "unknown";
+
+export interface CredentialProviderProjection {
+  provider: string;
+  provider_valid: boolean;
+}
+
+/**
+ * Project a persisted provider into an outward/runtime-safe value.  Fixed
+ * kinds use the scheduler-owned provider map.  OCI credentials intentionally
+ * use a registry host, so only an exact host in the configured registry
+ * allowlist is considered safe to expose.  Legacy/unknown values become a
+ * stable sentinel and never cross an API, transfer, metric, or runtime error
+ * boundary.
+ */
+export function projectCredentialProvider(kind: unknown, provider: unknown): CredentialProviderProjection {
+  const kindValue = typeof kind === "string" ? kind : "";
+  const raw = typeof provider === "string" ? provider.trim() : "";
+  const configuredRegistries = config.images.allowedRegistries
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const valid = kindValue === "oci_registry"
+    // The UI's OCI credential kind uses the logical provider "docker" while
+    // metadata.registry carries the governed host.  Older imports may instead
+    // store the host in provider; accept either representation only when it is
+    // a configured registry.
+    ? raw === "docker" || configuredRegistries.includes(raw.toLowerCase())
+    : isProviderKnown(raw) && isProviderAllowedForKind(kindValue, raw);
+  return valid
+    ? { provider: raw, provider_valid: true }
+    : { provider: UNKNOWN_PROVIDER_SENTINEL, provider_valid: false };
 }
 
 /** 校验 Agent CLI 与 Credential Provider 的已知兼容关系。返回 null 表示兼容。 */
 export function validateCredentialCompatibility(agentCli: string, provider: string): string | null {
+  if (!isProviderKnown(provider)) return UNKNOWN_PROVIDER_ERROR;
   if (agentCli === "claude-code" && provider !== "anthropic" && provider !== "kimi") {
     return `agent_cli claude-code 仅兼容 anthropic/kimi，不能使用 provider ${provider}`;
   }

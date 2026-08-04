@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import { sql } from "./db.js";
-import { allowedModelIds } from "./credentials.js";
+import { allowedModelIds, projectCredentialProvider } from "./credentials.js";
 
 export interface AuditEntry {
   action: string;
@@ -79,12 +79,19 @@ export function summarizeCredentialMetadata(input: unknown): Record<string, unkn
 export function credentialAuditState(input: {
   name: unknown;
   provider: unknown;
+  kind?: unknown;
   projectId: unknown;
   metadata: unknown;
 }): Record<string, unknown> {
+  const providerProjection = typeof input.provider === "string" && input.provider !== ""
+    ? projectCredentialProvider(input.kind ?? "llm_provider", input.provider)
+    : {
+        provider: typeof input.provider === "string" ? input.provider : null,
+        provider_valid: false,
+      };
   return {
     name: typeof input.name === "string" ? input.name : null,
-    provider: typeof input.provider === "string" ? input.provider : null,
+    ...providerProjection,
     project_id: typeof input.projectId === "string" ? input.projectId : null,
     metadata: summarizeCredentialMetadata(input.metadata),
   };

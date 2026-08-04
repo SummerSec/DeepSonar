@@ -4,6 +4,7 @@ import {
   CredentialMetadataError,
   normalizeModelCatalog,
   projectCredentialMetadata,
+  isProviderKnown,
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
@@ -62,7 +63,7 @@ function modelsUrl(root: string): string {
 
 function modelRequest(cred: CredentialProbe, secret: string): { url: string; headers: Record<string, string> } {
   const mapping = PROVIDER_ENV_MAP[cred.provider];
-  if (!mapping) throw new CredentialProbeError("Provider 未在服务器允许列表", "configuration");
+  if (!isProviderKnown(cred.provider) || !mapping) throw new CredentialProbeError("Provider 未在服务器允许列表", "configuration");
   const metadata = projectCredentialMetadata(cred.kind ?? "llm_provider", cred.provider, cred.public_metadata_json);
   const baseUrl = typeof metadata.base_url === "string"
     ? metadata.base_url
@@ -251,7 +252,7 @@ export async function listCredentialModels(cred: CredentialProbe): Promise<{
  */
 export async function testCredential(cred: CredentialProbe): Promise<CredentialProbeResult> {
   const mapping = PROVIDER_ENV_MAP[cred.provider];
-  if (!mapping) {
+  if (!isProviderKnown(cred.provider) || !mapping) {
     return { ok: false, detail: detailForCategory("configuration"), category: "configuration", fetched_at: now() };
   }
 

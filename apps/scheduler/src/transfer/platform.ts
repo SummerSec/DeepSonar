@@ -5,7 +5,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { validateModuleSelectors } from "@deepsonar/shared-types";
-import { projectCredentialMetadata, validateCredentialRoleConfigBinding } from "../credentials.js";
+import {
+  projectCredentialMetadata,
+  projectCredentialProvider,
+  validateCredentialRoleConfigBinding,
+} from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import {
@@ -192,7 +196,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
                   source_credential_id: b.id,
                   purpose: b.purpose,
                   name: b.name,
-                  provider: b.provider,
+                  ...projectCredentialProvider(b.kind, b.provider),
                 })),
         });
       }
@@ -234,7 +238,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
             source_id: c.id,
             name: c.name,
             kind: c.kind,
-            provider: c.provider,
+            ...projectCredentialProvider(c.kind, c.provider),
             fingerprint: c.fingerprint,
             last4: c.last4,
             public_metadata: projectCredentialMetadata(String(c.kind), String(c.provider), c.public_metadata_json),
@@ -288,7 +292,7 @@ export interface PlatformPreview {
   counts: Record<string, number>;
   warnings: string[];
   conflicts: { module: string; key: string; message: string }[];
-  credential_mappings_required: { source_id: string; name: string; provider: string }[];
+  credential_mappings_required: { source_id: string; name: string; provider: string; provider_valid?: boolean }[];
 }
 
 export async function buildPlatformPreview(importId: string): Promise<PlatformPreview> {
@@ -355,11 +359,16 @@ export async function buildPlatformPreview(importId: string): Promise<PlatformPr
     counts: pack.manifest.counts ?? {},
     warnings,
     conflicts,
-    credential_mappings_required: creds.map((c) => ({
-      source_id: String(c.source_id),
-      name: String(c.name ?? ""),
-      provider: String(c.provider ?? ""),
-    })),
+    credential_mappings_required: creds.map((c) => {
+      const provider = typeof c.provider === "string" ? c.provider : "";
+      return {
+        source_id: String(c.source_id),
+        name: String(c.name ?? ""),
+        ...(provider === ""
+          ? { provider, provider_valid: false }
+          : projectCredentialProvider(c.kind, provider)),
+      };
+    }),
   };
 
   await sql`

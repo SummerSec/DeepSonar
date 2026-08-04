@@ -5,7 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { validateModuleSelectors } from "@deepsonar/shared-types";
 import { sql } from "../db.js";
-import { projectCredentialMetadata } from "../credentials.js";
+import { projectCredentialMetadata, projectCredentialProvider } from "../credentials.js";
 import {
   buildManifestSource,
   ensureTransferDirs,
@@ -283,11 +283,12 @@ async function collectRoles(
       if (credMode === "excluded") continue;
       if (credSeen.has(b.id as string)) continue;
       credSeen.add(b.id as string);
+      const providerProjection = projectCredentialProvider(b.kind, b.provider);
       credMeta.push({
         source_id: b.id,
         name: b.name,
         kind: b.kind,
-        provider: b.provider,
+        ...providerProjection,
         fingerprint: b.fingerprint,
         last4: b.last4,
         public_metadata: projectCredentialMetadata(String(b.kind), String(b.provider), b.public_metadata_json),
@@ -318,7 +319,7 @@ async function collectRoles(
         source_credential_id: b.id,
         purpose: b.purpose,
         name: b.name,
-        provider: b.provider,
+        ...projectCredentialProvider(b.kind, b.provider),
       })),
     });
   }

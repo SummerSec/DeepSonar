@@ -11,7 +11,7 @@ import {
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
-import { allowedModelIds, isProviderKnown, validateCredentialCompatibility } from "./credentials.js";
+import { allowedModelIds, isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
 import { defaultRuntimeImageKey, hostRuntimePlatform, immutableDigest, localImageDigest } from "./runtime-images.js";
 
 const EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -126,11 +126,12 @@ function roleSummary(role: EffectiveRole): ReadinessRoleSummary {
 
 function credentialSummary(row: ReadinessCredentialRow): ReadinessCredentialSummary | null {
   if (!row.credential_id || !row.name || !row.kind || !row.provider || !row.status) return null;
+  const providerProjection = projectCredentialProvider(row.kind, row.provider);
   return {
     credential_id: row.credential_id,
     name: row.name,
     kind: row.kind,
-    provider: row.provider,
+    ...providerProjection,
     project_id: row.project_id,
     status: row.status,
     allowed_model_count: allowedModelIds(row.public_metadata_json).length,
