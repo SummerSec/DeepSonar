@@ -7,6 +7,7 @@ import {
   networkOverrideValue,
   quickStartNetworkQuery,
   quickStartTaskPayload,
+  resolveReadinessFix,
   readinessFailures,
   runQuickStart,
   type QuickStartApi,
@@ -106,6 +107,7 @@ test("readiness failure exposes repair links and prevents task creation", async 
   if (result.kind === "readiness_failed") {
     assert.equal(result.project.name, "本地项目");
     assert.equal(readinessFailures(result.readiness)[0]?.fix?.href, "/settings?tab=credentials");
+    assert.equal(resolveReadinessFix(readinessFailures(result.readiness)[0]?.fix, result.readiness.scope, result.project.id)?.href, "/agents?tab=credentials");
   }
   assert.deepEqual(calls, ["project", "readiness"]);
 });
@@ -127,4 +129,40 @@ test("network advanced override maps only to the governed task boundary", () => 
     content: "goal",
     allow_egress: true,
   });
+});
+
+test("readiness repair actions resolve every global and project route", () => {
+  const globalScope = { kind: "global" as const, project_id: null };
+  const projectScope = { kind: "project" as const, project_id: project.id };
+  const actions = ["credentials", "role_config", "rules", "runtime_images"] as const;
+  const expectedGlobal = {
+    credentials: "/agents?tab=credentials",
+    role_config: "/agents?tab=roles",
+    rules: "/agents?tab=rules",
+    runtime_images: "/images",
+  };
+  const expectedProject = {
+    credentials: "/agents?tab=credentials",
+    role_config: `/projects/${project.id}/settings?tab=roles`,
+    rules: `/projects/${project.id}/settings?tab=rules`,
+    runtime_images: `/projects/${project.id}/images`,
+  };
+  for (const action of actions) {
+    const global = resolveReadinessFix({ action, scope: "global", project_id: null, href: "/stale", target: action }, globalScope);
+    assert.equal(global?.href, expectedGlobal[action]);
+    const projectFix = resolveReadinessFix({ action, scope: "project", project_id: project.id, href: "/stale", target: action }, projectScope);
+    assert.equal(projectFix?.href, expectedProject[action]);
+  }
+  const projectSelection = resolveReadinessFix({ action: "runtime_images", scope: "project", project_id: null, href: "/stale", target: "runtime-images" }, globalScope);
+  assert.equal(projectSelection?.href, "/projects");
+  const projectSelectionWithProjectScope = resolveReadinessFix({ action: "runtime_images", scope: "project", project_id: null, href: "/stale", target: "runtime-images" }, projectScope, project.id);
+  assert.equal(projectSelectionWithProjectScope?.href, "/projects");
+});
+
+test("legacy readiness links normalize to real settings panels", () => {
+  const globalScope = { kind: "global" as const, project_id: null };
+  const projectScope = { kind: "project" as const, project_id: project.id };
+  assert.equal(resolveReadinessFix({ href: "/global-settings", target: "hub-settings" }, projectScope)?.href, `/projects/${project.id}/settings?tab=rules`);
+  assert.equal(resolveReadinessFix({ href: `/projects/${project.id}/settings?tab=credentials`, target: "credentials" }, projectScope)?.href, "/agents?tab=credentials");
+  assert.equal(resolveReadinessFix({ href: "/projects", target: "task-network-policy" }, globalScope)?.href, "/agents?tab=rules");
 });

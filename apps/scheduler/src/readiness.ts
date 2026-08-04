@@ -3,6 +3,7 @@ import {
   type ReadinessCheck,
   type ReadinessCredentialSummary,
   type ReadinessEvidenceSummary,
+  type ReadinessFixAction,
   type ReadinessResponse as ReadinessResponseType,
   type ReadinessRoleSummary,
   type ReadinessRuntimeImageSummary,
@@ -241,7 +242,7 @@ function fail(
   fix: ReadinessCheck["fix"],
   context: Partial<Pick<ReadinessCheck, "role" | "credential" | "runtime_image" | "evidence">> = {},
 ): ReadinessCheck {
-  return { code, state: "fail", severity: "error", message, fix, ...context };
+  return { code, state: "fail", severity: "error", message, fix: normalizeFix(code, fix), ...context };
 }
 
 function attention(
@@ -250,7 +251,7 @@ function attention(
   fix: ReadinessCheck["fix"],
   context: Partial<Pick<ReadinessCheck, "role" | "credential" | "runtime_image" | "evidence">> = {},
 ): ReadinessCheck {
-  return { code, state: "attention", severity: "warning", message, fix, ...context };
+  return { code, state: "attention", severity: "warning", message, fix: normalizeFix(code, fix), ...context };
 }
 
 function pass(
@@ -274,18 +275,110 @@ function effectiveRole(row: ReadinessRoleRow): EffectiveRole {
   };
 }
 
-function credentialFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
-  return {
-    href: projectHref(scope, "/agents?tab=credentials", "/projects/:projectId/settings?tab=credentials"),
-    target: "credentials",
-  };
+function credentialFix(_scope: ReadinessScopeInput): ReadinessCheck["fix"] {
+  return readinessFix("credentials", "global", null, "/agents?tab=credentials", "credentials");
 }
 
 function roleConfigFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
+  const targetScope = scope.projectId ? "project" : "global";
+  const projectId = scope.projectId;
   return {
+    action: "role_config",
+    scope: targetScope,
+    project_id: projectId,
     href: projectHref(scope, "/agents?tab=roles", "/projects/:projectId/settings?tab=roles"),
     target: "role-config",
   };
+}
+
+function readinessFix(
+  action: ReadinessFixAction,
+  scope: "global" | "project",
+  projectId: string | null,
+  href: string,
+  target: string,
+): ReadinessCheck["fix"] {
+  return { action, scope, project_id: projectId, href, target };
+}
+
+function rulesFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
+  const targetScope = scope.projectId ? "project" : "global";
+  return readinessFix(
+    "rules",
+    targetScope,
+    scope.projectId,
+    projectHref(scope, "/agents?tab=rules", "/projects/:projectId/settings?tab=rules"),
+    "rules",
+  );
+}
+
+function runtimeImagesFix(
+  scope: ReadinessScopeInput,
+  targetScope: "global" | "project" = scope.projectId ? "project" : "global",
+): ReadinessCheck["fix"] {
+  const projectId = targetScope === "project" ? scope.projectId : null;
+  const href = targetScope === "project"
+    ? projectId ? `/projects/${projectId}/images` : "/projects"
+    : "/images";
+  return readinessFix("runtime_images", targetScope, projectId, href, "runtime-images");
+}
+
+const ROLE_CONFIG_FIX_CODES = new Set([
+  "HUB_ROLE_UNAVAILABLE",
+  "WORKER_ROLE_UNAVAILABLE",
+  "CREDENTIAL_BINDING_AMBIGUOUS",
+  "CREDENTIAL_MISSING",
+  "CREDENTIAL_MISSING_FAKE",
+  "CREDENTIAL_SCOPE_MISMATCH",
+  "CREDENTIAL_CLI_INCOMPATIBLE",
+  "CREDENTIAL_KIND_INCOMPATIBLE",
+  "MODEL_REQUIRED_BY_ALLOWLIST",
+  "MODEL_NOT_ALLOWED",
+]);
+
+const CREDENTIAL_FIX_CODES = new Set([
+  "CREDENTIAL_PROVIDER_UNKNOWN",
+  "CREDENTIAL_NOT_ACTIVE",
+  "CREDENTIAL_TEST_FAILED",
+  "CREDENTIAL_TEST_FAILED_FAKE",
+  "CREDENTIAL_TEST_EVIDENCE_STALE",
+  "MODEL_DISCOVERY_FAILED",
+  "MODEL_DISCOVERY_EVIDENCE_MISSING",
+  "MODEL_DISCOVERY_EVIDENCE_STALE",
+]);
+
+const RULES_FIX_CODES = new Set([
+  "PROJECT_ARCHIVED",
+  "HUB_DISABLED",
+  "NETWORK_POLICY_MATERIAL_CONFLICT",
+  "MATERIAL_SOURCE_UNSPECIFIED",
+]);
+
+function inferFixAction(code: string): ReadinessFixAction | null {
+  if (ROLE_CONFIG_FIX_CODES.has(code)) return "role_config";
+  if (CREDENTIAL_FIX_CODES.has(code)) return "credentials";
+  if (RULES_FIX_CODES.has(code)) return "rules";
+  if (code.startsWith("RUNTIME_IMAGE_")) return "runtime_images";
+  return null;
+}
+
+function normalizeFix(code: string, fix: ReadinessCheck["fix"]): ReadinessCheck["fix"] {
+  if (!fix) return fix;
+  const action = fix.action ?? inferFixAction(code);
+  if (!action) return fix;
+  const hrefProject = fix.href.match(/^\/projects\/([0-9a-f-]{36})(?:\/|$)/i)?.[1] ?? null;
+  const inferredScope = fix.scope ?? (hrefProject ? "project" : action === "credentials" ? "global" : "global");
+  const projectId = fix.project_id ?? (inferredScope === "project" ? hrefProject : null);
+  const href = action === "credentials"
+    ? "/agents?tab=credentials"
+    : action === "role_config"
+      ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles"
+      : action === "rules"
+        ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/agents?tab=rules"
+        : inferredScope === "project"
+          ? projectId ? `/projects/${projectId}/images` : "/projects"
+          : "/images";
+  return { ...fix, action, scope: inferredScope, project_id: projectId, href };
 }
 
 /**
@@ -317,7 +410,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     checks.push(fail(
       "PROJECT_ARCHIVED",
       "当前项目已归档，不能创建新的任务；请先恢复项目。",
-      { href: `/projects/${input.scope.projectId}/settings`, target: "project-status" },
+      readinessFix("rules", "project", input.scope.projectId, `/projects/${input.scope.projectId}/settings?tab=rules`, "project-status"),
     ));
   }
 
@@ -325,7 +418,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     checks.push(fail(
       "HUB_DISABLED",
       "Hub 已被当前项目或全局规则关闭，一键任务无法生成第一步决策。",
-      { href: projectHref(input.scope, "/global-settings", "/projects/:projectId/settings"), target: "hub-settings" },
+      rulesFix(input.scope),
     ));
   } else {
     checks.push(pass("HUB_ENABLED", "Hub 决策循环已启用。"));
@@ -371,15 +464,15 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       checks.push(fail(
         "CREDENTIAL_BINDING_AMBIGUOUS",
         `RoleConfig ${role.name} 绑定了多个 llm Credential，Scheduler 无法安全选择唯一账号。`,
-        credentialFix(input.scope),
+        roleConfigFix(input.scope),
         { role: summary },
       ));
     }
     const binding = bindings[0];
     if (!binding || !binding.credential_id) {
       checks.push(input.executionMode === "real"
-        ? fail("CREDENTIAL_MISSING", `${role.name} 未绑定 llm Credential，real 模式无法运行。`, credentialFix(input.scope), { role: summary })
-        : attention("CREDENTIAL_MISSING_FAKE", `${role.name} 未绑定 llm Credential；fake 模式可继续，但切换 real 前需要配置账号。`, credentialFix(input.scope), { role: summary }));
+        ? fail("CREDENTIAL_MISSING", `${role.name} 未绑定 llm Credential，real 模式无法运行。`, roleConfigFix(input.scope), { role: summary })
+        : attention("CREDENTIAL_MISSING_FAKE", `${role.name} 未绑定 llm Credential；fake 模式可继续，但切换 real 前需要配置账号。`, roleConfigFix(input.scope), { role: summary }));
     } else {
       const credential = credentialSummary(binding);
       const credentialRef = credential ?? undefined;
@@ -393,7 +486,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
           role.configScope === "global"
             ? `${role.name} 的全局 RoleConfig 只能绑定全局 Credential，不能引用项目凭据。`
             : `${role.name} 绑定的 Credential 属于其他项目，不能用于当前作用域。`,
-          credentialFix(input.scope),
+          roleConfigFix(input.scope),
           { role: summary, credential: credentialRef },
         ));
       } else if (!binding.project_id && role.configScope === "project") {
@@ -410,7 +503,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       } else {
         const compatibility = validateCredentialCompatibility(role.agentCli ?? "", String(binding.provider));
         if (compatibility) {
-          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility, credentialFix(input.scope), { role: summary, credential: credentialRef }));
+          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
         }
       }
       if (binding.status !== "active") {
@@ -425,7 +518,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
         checks.push(fail(
           "CREDENTIAL_KIND_INCOMPATIBLE",
           `${role.name} 的 llm 绑定不是 LLM Provider Credential，Scheduler 不会把其他凭据类型当作模型账号。`,
-          credentialFix(input.scope),
+          roleConfigFix(input.scope),
           { role: summary, credential: credentialRef },
         ));
       }
@@ -473,26 +566,26 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     if (input.executionMode === "fake") {
       checks.push(pass("RUNTIME_IMAGE_SKIPPED_FAKE", `${role.name} 在 fake 模式使用 NoopRunner；real 模式才会校验可信 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     } else if (!image) {
-      checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 不存在或未被 Scheduler 选中。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 不存在或未被 Scheduler 选中。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (!image.image_enabled) {
-      checks.push(fail("RUNTIME_IMAGE_DISABLED", `${role.name} 所需 runtime image ${imageKey} 已被禁用。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_DISABLED", `${role.name} 所需 runtime image ${imageKey} 已被禁用。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (!input.scope.projectId && !(image.official === true && image.project_opt_in === false)) {
       unresolved = true;
-      checks.push(attention("RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED", `${role.name} 的 runtime image 需要具体项目启用；请在项目作用域重新执行 real 预检。`, { href: "/projects", target: "project-runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(attention("RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED", `${role.name} 的 runtime image 需要具体项目启用；请在项目作用域重新执行 real 预检。`, runtimeImagesFix(input.scope, "project"), { role: summary, runtime_image: runtimeSummary }));
     } else if (input.scope.projectId && image.project_enabled === false) {
-      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 已在当前项目显式禁用。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 已在当前项目显式禁用。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (input.scope.projectId && !(image.official === true && image.project_opt_in === false) && image.project_enabled !== true) {
-      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 尚未在当前项目启用。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 尚未在当前项目启用。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (!image.version_id) {
-      checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 没有 Scheduler 可执行的 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 没有 Scheduler 可执行的 trusted 版本。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (image.trust_status !== "trusted") {
-      checks.push(fail("RUNTIME_IMAGE_NOT_TRUSTED", `${role.name} 所需 runtime image ${imageKey} 没有 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_NOT_TRUSTED", `${role.name} 所需 runtime image ${imageKey} 没有 trusted 版本。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (!image.digest || resolvedRuntimeImageDigest(image.resolved_ref) !== image.digest) {
-      checks.push(fail("RUNTIME_IMAGE_DIGEST_INVALID", `${role.name} 的 runtime image 缺少一致的不可变 digest，不能进入 real 沙箱。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_DIGEST_INVALID", `${role.name} 的 runtime image 缺少一致的不可变 digest，不能进入 real 沙箱。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (image.source_kind === "third_party" && !image.admission_scan_id && !image.admission_bypassed) {
-      checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成准入扫描。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+      checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成准入扫描。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (image.source_kind === "third_party" && !image.admission_scan_id && image.admission_bypassed) {
-      checks.push(attention("RUNTIME_IMAGE_ADMISSION_BYPASSED", `${role.name} 使用了运维显式登记的 immutable digest；该版本标记为跳过准入扫描，请确认登记来源。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary, evidence: { kind: "none", status: "missing", at: null, age_seconds: null, model_count: null, source: "not_recorded" } }));
+      checks.push(attention("RUNTIME_IMAGE_ADMISSION_BYPASSED", `${role.name} 使用了运维显式登记的 immutable digest；该版本标记为跳过准入扫描，请确认登记来源。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary, evidence: { kind: "none", status: "missing", at: null, age_seconds: null, model_count: null, source: "not_recorded" } }));
     } else {
       checks.push(pass("RUNTIME_IMAGE_READY", `${role.name} 已解析到 Scheduler 信任的不可变 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     }
@@ -503,7 +596,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     checks.push(fail(
       "NETWORK_POLICY_MATERIAL_CONFLICT",
       "任务声明需要外部材料，但 allow_egress=false；请允许出网或改为工作区/上传/离线材料。",
-      { href: projectHref(input.scope, "/projects", "/projects/:projectId/tasks"), target: "task-network-policy" },
+      rulesFix(input.scope),
     ));
   } else if (materialSource === "unspecified") {
     checks.push(attention(
@@ -511,7 +604,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       input.allowEgress
         ? "任务允许出网，但尚未声明材料来源；Worker 仍需在 prompt 中决定是否访问外部材料。"
         : "任务禁止出网，请在任务描述中明确提供工作区、上传物或离线材料；平台不会替 Worker 下载目标。",
-      { href: projectHref(input.scope, "/projects", "/projects/:projectId/tasks"), target: "task-material-source" },
+      rulesFix(input.scope),
     ));
   } else {
     checks.push(pass(

@@ -22,6 +22,7 @@ import {
   NEW_PROJECT,
   QUICK_START_PRESETS,
   readinessFailures,
+  resolveReadinessFix,
   runQuickStart,
   type NetworkOverride,
 } from "../dashboard-quick-start";
@@ -261,7 +262,20 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
 
             {readiness && !readiness.ready && <div className="intent-launch-readiness" role="alert">
               <div className="intent-launch-alert-title"><ShieldWarning size={18} weight="light" /><div><strong>平台暂时不能启动这个任务</strong><span>预检发现 {failures.length} 项需要处理，项目已保留，你可以修复后重试。</span></div></div>
-              <ul>{failures.slice(0, 5).map((check) => <li key={check.code}><WarningCircle size={14} weight="light" /><span><b>{check.message}</b>{check.fix && (isExternalHref(check.fix.href) ? <a href={check.fix.href} target="_blank" rel="noreferrer">{check.fix.target}<ArrowUpRight size={12} /></a> : <Link to={check.fix.href}>{check.fix.target}<ArrowUpRight size={12} /></Link>)}</span></li>)}</ul>
+              <ul>{failures.slice(0, 5).map((check) => {
+                const repair = resolveReadinessFix(check.fix, readiness.scope, readiness.scope.project_id ?? selectedProject?.id ?? null);
+                return (
+                  <li key={check.code}>
+                    <WarningCircle size={14} weight="light" />
+                    <span>
+                      <b>{check.message}</b>
+                      {repair && (isExternalHref(repair.href)
+                        ? <a href={repair.href} target="_blank" rel="noreferrer">{repair.target}<ArrowUpRight size={12} /></a>
+                        : <Link to={repair.href}>{repair.target}<ArrowUpRight size={12} /></Link>)}
+                    </span>
+                  </li>
+                );
+              })}</ul>
               {failures.length > 5 && <small>还有 {failures.length - 5} 项，请先处理上面的关键问题。</small>}
             </div>}
 

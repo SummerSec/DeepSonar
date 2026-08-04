@@ -3,7 +3,7 @@ import type {
   AuthStatus,
   Project,
 } from "./api";
-import type { ReadinessCheck, ReadinessResponse } from "@deepsonar/shared-types";
+import type { ReadinessCheck, ReadinessFixAction, ReadinessResponse } from "@deepsonar/shared-types";
 
 export const NEW_PROJECT = "__new_project__" as const;
 export const LAST_PROJECT_STORAGE_KEY = "deepsonar:last-project-id";
@@ -97,6 +97,80 @@ export function errorMessage(error: unknown): string {
 
 export function readinessFailures(readiness: ReadinessResponse): ReadinessCheck[] {
   return readiness.checks.filter((check) => check.state === "fail" || check.state === "attention");
+}
+
+const READINESS_FIX_ACTIONS: ReadonlySet<ReadinessFixAction> = new Set([
+  "credentials",
+  "role_config",
+  "rules",
+  "runtime_images",
+]);
+
+function isReadinessFixAction(value: unknown): value is ReadinessFixAction {
+  return typeof value === "string" && READINESS_FIX_ACTIONS.has(value as ReadinessFixAction);
+}
+
+function projectIdFromLegacyHref(href: string): string | null {
+  return href.match(/^\/projects\/([0-9a-f-]{36})(?:\/|$)/i)?.[1] ?? null;
+}
+
+/**
+ * Resolve the Scheduler's stable repair intent to a route that exists in the
+ * current web app.  The legacy href is only used when an older Scheduler did
+ * not provide action metadata; known legacy settings paths are normalized too.
+ */
+export function resolveReadinessFix(
+  fix: ReadinessCheck["fix"],
+  readinessScope: ReadinessResponse["scope"],
+  fallbackProjectId: string | null = null,
+): { href: string; target: string } | null {
+  if (!fix) return null;
+  const action = isReadinessFixAction(fix.action) ? fix.action : null;
+  const targetScope = fix.scope ?? (readinessScope.project_id ? "project" : "global");
+  const projectId = fix.project_id !== undefined
+    ? fix.project_id
+    : readinessScope.project_id ?? fallbackProjectId ?? projectIdFromLegacyHref(fix.href);
+
+  if (action === "credentials") {
+    return { href: "/agents?tab=credentials", target: fix.target };
+  }
+  if (action === "role_config") {
+    return {
+      href: targetScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles",
+      target: fix.target,
+    };
+  }
+  if (action === "rules") {
+    return {
+      href: targetScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/agents?tab=rules",
+      target: fix.target,
+    };
+  }
+  if (action === "runtime_images") {
+    return {
+      href: targetScope === "project" ? (projectId ? `/projects/${projectId}/images` : "/projects") : "/images",
+      target: fix.target,
+    };
+  }
+
+  // Backward compatibility for pre-action Scheduler responses.  Credentials
+  // are always managed globally; project settings only expose roles/rules.
+  if (fix.href === "/global-settings") {
+    return {
+      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/agents?tab=rules",
+      target: fix.target,
+    };
+  }
+  if (fix.href.includes("tab=credentials")) {
+    return { href: "/agents?tab=credentials", target: fix.target };
+  }
+  if (fix.target === "hub-settings" || fix.target === "task-network-policy" || fix.target === "task-material-source") {
+    return {
+      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/agents?tab=rules",
+      target: fix.target,
+    };
+  }
+  return { href: fix.href, target: fix.target };
 }
 
 export function quickStartNetworkQuery(value: NetworkOverride): { allow_egress?: boolean } {

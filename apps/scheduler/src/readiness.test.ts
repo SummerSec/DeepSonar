@@ -319,3 +319,142 @@ test("stale audit evidence is surfaced as a warning, not an online claim", () =>
   assert.equal(staleModels?.evidence?.status, "stale");
   assert.equal(result.checks.some((check) => check.code === "MODEL_DISCOVERY_READY"), false);
 });
+
+test("all actionable readiness checks carry stable repair metadata by scope", () => {
+  const projectVariants = [
+    baseInput({ hubEnabled: false }),
+    baseInput({ roles: baseInput().roles.filter((role) => role.kind !== "hub") }),
+    baseInput({ roles: baseInput().roles.filter((role) => role.kind !== "role") }),
+    baseInput({ credentials: [] }),
+    baseInput({ credentials: [...(baseInput().credentials ?? []), { ...(baseInput().credentials ?? [])[0]!, role_config_id: workerConfigId, purpose: "llm" }] }),
+    baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, project_id: "99999999-9999-4999-8999-999999999999" } : credential) }),
+    baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, provider: "unknown-provider" } : credential) }),
+    baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, provider: "openai" } : credential) }),
+    baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, status: "disabled" } : credential) }),
+    baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, kind: "plane" } : credential) }),
+    baseInput({ roles: baseInput().roles.map((role) => role.name === "audit" ? { ...role, project_model: "" } : role) }),
+    baseInput({ roles: baseInput().roles.map((role) => role.name === "audit" ? { ...role, project_model: "not-allowed" } : role) }),
+    baseInput({ audits: baseInput().audits?.map((audit) => audit.action === "credential.test" ? { ...audit, result: "error" } : audit) }),
+    baseInput({ audits: baseInput().audits?.map((audit) => audit.action === "credential.models_discover" ? { ...audit, result: "error" } : audit) }),
+    baseInput({ audits: baseInput().audits?.filter((audit) => audit.action !== "credential.models_discover") }),
+    baseInput({ audits: baseInput().audits?.map((audit) => ({ ...audit, at: "2026-07-01T00:00:00.000Z" })) }),
+    baseInput({ executionMode: "fake", audits: baseInput().audits?.map((audit) => audit.action === "credential.test" ? { ...audit, result: "error" } : audit) }),
+    baseInput({ executionMode: "fake", credentials: [] }),
+    baseInput({ runtimeImages: [] }),
+    baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, image_enabled: false } : image) }),
+    baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, project_enabled: null } : image) }),
+    baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, trust_status: "quarantined", admission_scan_id: null } : image) }),
+    baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, digest: `sha256:${"c".repeat(64)}` } : image) }),
+    baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, admission_scan_id: null, admission_bypassed: false } : image) }),
+    baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, admission_scan_id: null, admission_bypassed: true } : image) }),
+    baseInput({ allowEgress: false, materialSource: "external_or_workspace" }),
+    baseInput({ materialSource: "unspecified" }),
+    baseInput({ projectStatus: "archived" }),
+  ];
+  const globalVariant = baseInput({
+    scope: { kind: "global", projectId: null },
+    networkSource: "global",
+    roles: baseInput().roles.map((role) => ({
+      ...role,
+      project_config_id: null,
+      project_config_scope: "none" as const,
+      project_agent_cli: null,
+      project_model: null,
+      project_runtime_image_key: null,
+      global_config_id: role.name === "hub_reason" ? hubConfigId : workerConfigId,
+      global_agent_cli: "claude-code",
+      global_model: "claude-sonnet-4-5",
+      global_runtime_image_key: role.name === "hub_reason" ? "deepsonar-base" : "deepsonar-audit",
+    })),
+    credentials: baseInput().credentials?.map((credential) => ({ ...credential, role_config_id: credential.role_config_id === workerConfigId ? workerConfigId : hubConfigId, project_id: null })),
+    runtimeImages: baseInput().runtimeImages?.map((image) => ({ ...image, project_enabled: null })),
+  });
+
+  const results = [
+    ...projectVariants.map((input) => ({ input, result: evaluateReadiness(input) })),
+    { input: globalVariant, result: evaluateReadiness(globalVariant) },
+  ];
+  const expectedActions: Record<string, "credentials" | "role_config" | "rules" | "runtime_images"> = {
+    HUB_DISABLED: "rules",
+    HUB_ROLE_UNAVAILABLE: "role_config",
+    WORKER_ROLE_UNAVAILABLE: "role_config",
+    CREDENTIAL_BINDING_AMBIGUOUS: "role_config",
+    CREDENTIAL_MISSING: "role_config",
+    CREDENTIAL_MISSING_FAKE: "role_config",
+    CREDENTIAL_SCOPE_MISMATCH: "role_config",
+    CREDENTIAL_PROVIDER_UNKNOWN: "credentials",
+    CREDENTIAL_CLI_INCOMPATIBLE: "role_config",
+    CREDENTIAL_NOT_ACTIVE: "credentials",
+    CREDENTIAL_KIND_INCOMPATIBLE: "role_config",
+    CREDENTIAL_TEST_FAILED: "credentials",
+    CREDENTIAL_TEST_FAILED_FAKE: "credentials",
+    CREDENTIAL_TEST_EVIDENCE_STALE: "credentials",
+    MODEL_REQUIRED_BY_ALLOWLIST: "role_config",
+    MODEL_NOT_ALLOWED: "role_config",
+    MODEL_DISCOVERY_FAILED: "credentials",
+    MODEL_DISCOVERY_EVIDENCE_MISSING: "credentials",
+    MODEL_DISCOVERY_EVIDENCE_STALE: "credentials",
+    RUNTIME_IMAGE_UNAVAILABLE: "runtime_images",
+    RUNTIME_IMAGE_DISABLED: "runtime_images",
+    RUNTIME_IMAGE_PROJECT_NOT_ENABLED: "runtime_images",
+    RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED: "runtime_images",
+    RUNTIME_IMAGE_NOT_TRUSTED: "runtime_images",
+    RUNTIME_IMAGE_DIGEST_INVALID: "runtime_images",
+    RUNTIME_IMAGE_ADMISSION_INCOMPLETE: "runtime_images",
+    RUNTIME_IMAGE_ADMISSION_BYPASSED: "runtime_images",
+    NETWORK_POLICY_MATERIAL_CONFLICT: "rules",
+    MATERIAL_SOURCE_UNSPECIFIED: "rules",
+    PROJECT_ARCHIVED: "rules",
+  };
+  const actionableCodes = new Set<string>();
+  for (const { input, result } of results) {
+    for (const check of result.checks.filter((item) => item.state !== "pass")) {
+      if (!check.fix) continue;
+      actionableCodes.add(check.code);
+      assert.ok(check.fix.action, `${check.code} must expose action`);
+      assert.equal(check.fix.action, expectedActions[check.code], `${check.code} repair action`);
+      assert.ok(check.fix.scope, `${check.code} must expose scope`);
+      assert.equal(typeof check.fix.project_id === "string" || check.fix.project_id === null, true, `${check.code} project_id shape`);
+      if (check.fix.scope === "project" && input.scope.projectId) assert.equal(check.fix.project_id, input.scope.projectId);
+    }
+  }
+  const globalScopeResult = results.at(-1)!.result;
+  const projectScopeFix = globalScopeResult.checks.find((check) => check.code === "RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED")?.fix;
+  assert.equal(projectScopeFix?.scope, "project");
+  assert.equal(projectScopeFix?.project_id, null);
+  assert.equal(projectScopeFix?.href, "/projects");
+  for (const code of [
+    "HUB_DISABLED",
+    "HUB_ROLE_UNAVAILABLE",
+    "WORKER_ROLE_UNAVAILABLE",
+    "CREDENTIAL_BINDING_AMBIGUOUS",
+    "CREDENTIAL_MISSING",
+    "CREDENTIAL_MISSING_FAKE",
+    "CREDENTIAL_SCOPE_MISMATCH",
+    "CREDENTIAL_PROVIDER_UNKNOWN",
+    "CREDENTIAL_CLI_INCOMPATIBLE",
+    "CREDENTIAL_NOT_ACTIVE",
+    "CREDENTIAL_KIND_INCOMPATIBLE",
+    "CREDENTIAL_TEST_FAILED",
+    "CREDENTIAL_TEST_FAILED_FAKE",
+    "CREDENTIAL_TEST_EVIDENCE_STALE",
+    "MODEL_REQUIRED_BY_ALLOWLIST",
+    "MODEL_NOT_ALLOWED",
+    "MODEL_DISCOVERY_FAILED",
+    "MODEL_DISCOVERY_EVIDENCE_MISSING",
+    "MODEL_DISCOVERY_EVIDENCE_STALE",
+    "RUNTIME_IMAGE_UNAVAILABLE",
+    "RUNTIME_IMAGE_DISABLED",
+    "RUNTIME_IMAGE_PROJECT_NOT_ENABLED",
+    "RUNTIME_IMAGE_NOT_TRUSTED",
+    "RUNTIME_IMAGE_DIGEST_INVALID",
+    "RUNTIME_IMAGE_ADMISSION_INCOMPLETE",
+    "RUNTIME_IMAGE_ADMISSION_BYPASSED",
+    "RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED",
+    "NETWORK_POLICY_MATERIAL_CONFLICT",
+    "MATERIAL_SOURCE_UNSPECIFIED",
+    "PROJECT_ARCHIVED",
+  ]) {
+    assert.equal(actionableCodes.has(code), true, `${code} should be covered by repair metadata checks`);
+  }
+});
