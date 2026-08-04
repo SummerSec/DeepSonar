@@ -24,6 +24,7 @@ if (!testDatabaseUrl) {
     let endSql: (() => Promise<unknown>) | null = null;
     let removeArtifactFile: ((uri: string | null | undefined) => Promise<void>) | null = null;
     let artifactUri: string | null = null;
+    let projectArtifactUri: string | null = null;
     const originalFetch = globalThis.fetch;
     try {
       await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
@@ -35,13 +36,14 @@ if (!testDatabaseUrl) {
     process.env.AGENT_MODE = "fake";
       process.env.DEEPSONAR_AUTH_REQUIRED = "false";
 
-    const [fastifyModule, websocketModule, dbModule, routesModule, credentialsModule, platformModule, packModule] = await Promise.all([
+    const [fastifyModule, websocketModule, dbModule, routesModule, credentialsModule, platformModule, exportModule, packModule] = await Promise.all([
       import("fastify"),
       import("@fastify/websocket"),
       import("./db.js"),
       import("./routes.js"),
       import("./credentials.js"),
       import("./transfer/platform.js"),
+      import("./transfer/export.js"),
       import("./transfer/pack.js"),
     ]);
     const { default: Fastify } = fastifyModule;
@@ -51,6 +53,7 @@ if (!testDatabaseUrl) {
     const { registerRoutes } = routesModule;
     const { encryptSecret, fingerprintOf, last4Of, UNKNOWN_PROVIDER_ERROR } = credentialsModule;
     const { runPlatformExport } = platformModule;
+    const { runExport } = exportModule;
     const { loadPackFile, openDeepsonarPack, readJsonl, removeFileSafe } = packModule;
     removeArtifactFile = removeFileSafe;
     await migrate();
@@ -284,6 +287,9 @@ if (!testDatabaseUrl) {
       const legacyRoleConfigId = randomUUID();
       const legacyJobId = randomUUID();
       const legacyEventId = randomUUID();
+      const legacyFindingId = randomUUID();
+      const legacyVerificationJobId = randomUUID();
+      const legacyVerificationEventId = randomUUID();
       const legacyEnc = encryptSecret(legacySecret);
       await sql`
         INSERT INTO credentials ${sql({
@@ -320,10 +326,49 @@ if (!testDatabaseUrl) {
             credential_name: "legacy-bound-provider",
             credential_provider: legacyProvider,
           } as never)},
-          ${sql.json({ runtime_evidence: { credential_provider: legacyProvider } } as never)})`;
+          ${sql.json({
+            credential_provider: "payload-root-provider",
+            runtime_evidence: {
+              credential_provider: legacyProvider,
+              provider: "runtime-user-provider",
+            },
+          } as never)})`;
       await sql`
         INSERT INTO events (job_id, event_id, job_seq, type, payload_json)
-        VALUES (${legacyJobId}, ${legacyEventId}, 1, 'progress', ${sql.json({ credential_provider: legacyProvider } as never)})`;
+        VALUES (${legacyJobId}, ${legacyEventId}, 1, 'progress', ${sql.json({
+          credential_provider: legacyProvider,
+          provider: "source-event-provider",
+          nested: { credential_provider: "nested-source-provider" },
+        } as never)})`;
+      await sql`
+        UPDATE jobs SET error = ${`未知 provider: ${legacyProvider}`} WHERE id = ${legacyJobId}`;
+      await sql`
+        INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, summary)
+        VALUES (${legacyFindingId}, ${projectId}, ${legacyJobId}, ${`legacy-${legacyFindingId}`}, 'legacy provider finding', 'medium', 'historical fixture')`;
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, finding_id, parent_job_id, type, status, agent_snapshot_json, payload_json, error)
+        VALUES (${legacyVerificationJobId}, ${projectId}, ${canvasId}, ${legacyFindingId}, ${legacyJobId}, 'verify_finding', 'failed',
+          ${sql.json({
+            name: "verify",
+            agent_cli: "codex",
+            model: "model-a",
+            credential_provider: legacyProvider,
+          } as never)},
+          ${sql.json({
+            credential_provider: "verification-root-provider",
+            runtime_evidence: {
+              credential_provider: legacyProvider,
+              nested: { credential_provider: "nested-user-provider" },
+            },
+          } as never)},
+          ${`Credential provider 已从 ${legacyProvider} 变更为 openai，Job 快照已过期，请刷新 pending Job 或 retry`})`;
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json)
+        VALUES (${legacyVerificationJobId}, ${legacyVerificationEventId}, 1, 'progress', ${sql.json({
+          credential_provider: legacyProvider,
+          provider: "event-user-provider",
+          nested: { credential_provider: "nested-event-provider" },
+        } as never)})`;
 
       const assertNoLegacyProvider = (value: unknown) => {
         const text = typeof value === "string" ? value : JSON.stringify(value);
@@ -369,18 +414,49 @@ if (!testDatabaseUrl) {
       const legacyListedJob = (json(jobsList) as unknown as Record<string, any>[]).find((row) => row.id === legacyJobId);
       assert.equal(legacyListedJob?.credential_provider, "unknown");
       assert.equal(legacyListedJob?.credential_provider_valid, false);
+      assert.equal(legacyListedJob?.error, UNKNOWN_PROVIDER_ERROR);
       assertNoLegacyProvider(jobsList.payload);
       const jobsDetail = await request("GET", `/jobs/${legacyJobId}`);
       const jobsDetailBody = json(jobsDetail);
       assert.equal(jobsDetailBody.job.agent_snapshot_json.credential_provider, "unknown");
       assert.equal(jobsDetailBody.job.agent_snapshot_json.credential_provider_valid, false);
+      assert.equal(jobsDetailBody.job.error, UNKNOWN_PROVIDER_ERROR);
+      assert.equal(jobsDetailBody.job.payload_json.credential_provider, "payload-root-provider");
       assert.equal(jobsDetailBody.job.payload_json.runtime_evidence.credential_provider, "unknown");
       assert.equal(jobsDetailBody.job.payload_json.runtime_evidence.credential_provider_valid, false);
+      assert.equal(jobsDetailBody.job.payload_json.runtime_evidence.provider, "runtime-user-provider");
       assert.equal(jobsDetailBody.events[0].payload_json.credential_provider, "unknown");
+      assert.equal(jobsDetailBody.events[0].payload_json.provider, "source-event-provider");
+      assert.equal(jobsDetailBody.events[0].payload_json.nested.credential_provider, "nested-source-provider");
       assertNoLegacyProvider(jobsDetail.payload);
       const jobsEvents = await request("GET", `/jobs/${legacyJobId}/events`);
       assert.equal(json(jobsEvents).items[0].payload_json.credential_provider, "unknown");
+      assert.equal(json(jobsEvents).items[0].payload_json.provider, "source-event-provider");
       assertNoLegacyProvider(jobsEvents.payload);
+
+      const findingDetail = await request("GET", `/findings/${legacyFindingId}`);
+      assert.equal(findingDetail.statusCode, 200, findingDetail.payload);
+      const findingDetailBody = json(findingDetail);
+      const verificationJob = findingDetailBody.verification_jobs.find((row: Record<string, any>) => row.id === legacyVerificationJobId);
+      assert.equal(verificationJob?.error, UNKNOWN_PROVIDER_ERROR);
+      assert.equal(verificationJob?.payload_json.credential_provider, "verification-root-provider");
+      assert.equal(verificationJob?.payload_json.runtime_evidence.credential_provider, "unknown");
+      assert.equal(verificationJob?.payload_json.runtime_evidence.credential_provider_valid, false);
+      assert.equal(verificationJob?.payload_json.runtime_evidence.nested.credential_provider, "nested-user-provider");
+      const sourceEvent = findingDetailBody.source_events[0];
+      assert.equal(sourceEvent.payload_json.credential_provider, "unknown");
+      assert.equal(sourceEvent.payload_json.provider, "source-event-provider");
+      assert.equal(sourceEvent.payload_json.nested.credential_provider, "nested-source-provider");
+      assertNoLegacyProvider(findingDetail.payload);
+
+      const verificationDetail = await request("GET", `/jobs/${legacyVerificationJobId}`);
+      const verificationDetailBody = json(verificationDetail);
+      assert.equal(verificationDetailBody.job.error, UNKNOWN_PROVIDER_ERROR);
+      assert.equal(verificationDetailBody.job.payload_json.runtime_evidence.credential_provider, "unknown");
+      assert.equal(verificationDetailBody.events[0].payload_json.credential_provider, "unknown");
+      assert.equal(verificationDetailBody.events[0].payload_json.provider, "event-user-provider");
+      assert.equal(verificationDetailBody.events[0].payload_json.nested.credential_provider, "nested-event-provider");
+      assertNoLegacyProvider(verificationDetail.payload);
 
       const globalSettings = await request("GET", "/global-settings");
       assert.equal(json(globalSettings).active_by_provider.unknown, 1);
@@ -407,6 +483,50 @@ if (!testDatabaseUrl) {
       assertNoLegacyProvider([...legacyPack.files.values()].map((value) => value.toString("utf8")).join("\n"));
       await removeArtifactFile?.(legacyExportRow?.artifact_uri);
 
+      const projectExportId = randomUUID();
+      await sql`
+        INSERT INTO data_exports (id, project_id, scope, preset, modules_json, options_json, status)
+        VALUES (${projectExportId}, ${projectId}, 'project', 'custom', ${sql.json(["project", "tasks", "events", "findings"] as never)},
+          ${sql.json({
+            preset: "custom",
+            modules: ["project", "tasks", "events", "findings"],
+            allow_active_jobs: true,
+            credentials: { mode: "excluded" },
+          } as never)}, 'pending')`;
+      await runExport(projectExportId);
+      const [projectExportRow] = await sql<{ status: string; artifact_uri: string | null }[]>`
+        SELECT status, artifact_uri FROM data_exports WHERE id = ${projectExportId}`;
+      assert.equal(projectExportRow?.status, "succeeded");
+      projectArtifactUri = projectExportRow?.artifact_uri ?? null;
+      assert.ok(projectArtifactUri);
+      const projectPack = await openDeepsonarPack(await loadPackFile(projectArtifactUri));
+      const projectJobs = readJsonl(projectPack.files, "data/jobs.jsonl");
+      const exportedLegacyJob = projectJobs.find((row) => row.source_id === legacyJobId);
+      const exportedVerificationJob = projectJobs.find((row) => row.source_id === legacyVerificationJobId);
+      const exportedLegacyPayload = exportedLegacyJob?.payload_json as Record<string, any> | undefined;
+      const exportedVerificationPayload = exportedVerificationJob?.payload_json as Record<string, any> | undefined;
+      assert.equal(exportedLegacyJob?.error, UNKNOWN_PROVIDER_ERROR);
+      assert.equal(exportedLegacyPayload?.credential_provider, "payload-root-provider");
+      assert.equal(exportedLegacyPayload?.runtime_evidence.credential_provider, "unknown");
+      assert.equal(exportedLegacyPayload?.runtime_evidence.provider, "runtime-user-provider");
+      assert.equal(exportedVerificationJob?.error, UNKNOWN_PROVIDER_ERROR);
+      assert.equal(exportedVerificationPayload?.runtime_evidence.credential_provider, "unknown");
+      assert.equal(exportedVerificationPayload?.runtime_evidence.nested.credential_provider, "nested-user-provider");
+      const projectEvents = readJsonl(projectPack.files, "data/events.jsonl");
+      const exportedLegacyEvent = projectEvents.find((row) => row.source_job_id === legacyJobId);
+      const exportedVerificationEvent = projectEvents.find((row) => row.source_job_id === legacyVerificationJobId);
+      const exportedLegacyEventPayload = exportedLegacyEvent?.payload_json as Record<string, any> | undefined;
+      const exportedVerificationEventPayload = exportedVerificationEvent?.payload_json as Record<string, any> | undefined;
+      assert.equal(exportedLegacyEventPayload?.credential_provider, "unknown");
+      assert.equal(exportedLegacyEventPayload?.provider, "source-event-provider");
+      assert.equal(exportedLegacyEventPayload?.nested.credential_provider, "nested-source-provider");
+      assert.equal(exportedVerificationEventPayload?.credential_provider, "unknown");
+      assert.equal(exportedVerificationEventPayload?.provider, "event-user-provider");
+      assert.equal(exportedVerificationEventPayload?.nested.credential_provider, "nested-event-provider");
+      assertNoLegacyProvider([...projectPack.files.values()].map((value) => value.toString("utf8")).join("\n"));
+      await removeArtifactFile?.(projectArtifactUri);
+      projectArtifactUri = null;
+
       // Active jobs intentionally block a provider migration; once terminal,
       // explicit repair succeeds and preserves the existing binding.
       const blockedRepair = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "https://provider.example/v1" } });
@@ -431,6 +551,7 @@ if (!testDatabaseUrl) {
       if (removeArtifactFile) await removeArtifactFile(artifactUri).catch(() => undefined);
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);
+      if (projectArtifactUri && removeArtifactFile) await removeArtifactFile(projectArtifactUri).catch(() => undefined);
       if (databaseCreated) await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch(() => undefined);
       await admin.end().catch(() => undefined);
     }

@@ -33,7 +33,10 @@ import {
   isProviderKnown,
   isProviderAllowedForKind,
   last4Of,
+  projectCredentialProviderError,
   projectCredentialMetadata,
+  projectJobEventPayload,
+  projectJobPayload,
   projectCredentialProvider,
   sanitizeCredentialMetadata,
   UNKNOWN_PROVIDER_ERROR,
@@ -3359,7 +3362,21 @@ export function registerRoutes(app: FastifyInstance) {
                  requirements_json, evidence_snapshot_json, summary, error, created_at, finished_at
           FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt`,
     ]);
-    return { finding, verification_jobs, source_events, comments, links, verification_rounds };
+    return {
+      finding,
+      verification_jobs: verification_jobs.map((verificationJob) => ({
+        ...verificationJob,
+        error: projectCredentialProviderError(verificationJob.error),
+        payload_json: projectJobPayload(verificationJob.payload_json),
+      })),
+      source_events: source_events.map((event) => ({
+        ...event,
+        payload_json: projectJobEventPayload(event.payload_json),
+      })),
+      comments,
+      links,
+      verification_rounds,
+    };
   });
 
   // ---------- 任务报告（Hub complete → analysis_complete → Report） ----------
@@ -3596,6 +3613,7 @@ export function registerRoutes(app: FastifyInstance) {
         : [];
     const safeJob = {
       ...job,
+      error: projectCredentialProviderError(job.error),
       payload_json: projectJobPayload(job.payload_json),
       agent_snapshot_json: projectJobSnapshot(snapshot),
     };
@@ -4019,42 +4037,17 @@ export function registerRoutes(app: FastifyInstance) {
   }
 
   function projectJobProviderFields(row: Record<string, unknown>): Record<string, unknown> {
-    if (row.credential_provider === null || row.credential_provider === undefined || row.credential_provider === "") return row;
+    const projected = {
+      ...row,
+      error: projectCredentialProviderError(row.error),
+    };
+    if (row.credential_provider === null || row.credential_provider === undefined || row.credential_provider === "") return projected;
     const projection = projectCredentialProvider("llm_provider", row.credential_provider);
     return {
-      ...row,
+      ...projected,
       credential_provider: projection.provider,
       credential_provider_valid: projection.provider_valid,
     };
-  }
-
-  function projectJobEventPayload(value: unknown): unknown {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-    const payload = { ...(value as Record<string, unknown>) };
-    const raw = payload.credential_provider;
-    if (raw !== null && raw !== undefined && raw !== "") {
-      const projection = projectCredentialProvider("llm_provider", raw);
-      payload.credential_provider = projection.provider;
-      payload.credential_provider_valid = projection.provider_valid;
-    }
-    return payload;
-  }
-
-  function projectJobPayload(value: unknown): unknown {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-    const payload = { ...(value as Record<string, unknown>) };
-    const evidence = payload.runtime_evidence;
-    if (evidence && typeof evidence === "object" && !Array.isArray(evidence)) {
-      const runtimeEvidence = { ...(evidence as Record<string, unknown>) };
-      const raw = runtimeEvidence.credential_provider;
-      if (raw !== null && raw !== undefined && raw !== "") {
-        const projection = projectCredentialProvider("llm_provider", raw);
-        runtimeEvidence.credential_provider = projection.provider;
-        runtimeEvidence.credential_provider_valid = projection.provider_valid;
-      }
-      payload.runtime_evidence = runtimeEvidence;
-    }
-    return payload;
   }
 
   function projectJobSnapshot(value: unknown): unknown {

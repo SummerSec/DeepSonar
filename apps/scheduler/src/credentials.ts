@@ -397,6 +397,66 @@ export interface CredentialProviderProjection {
 }
 
 /**
+ * Project only the provider errors emitted by older Scheduler versions.  A
+ * persisted Job error is otherwise user/target data and must be returned
+ * verbatim; broad token/provider replacement would destroy useful evidence.
+ *
+ * These templates are the exact server-owned messages that used to interpolate
+ * an unknown provider before the public provider projection was introduced.
+ */
+export function projectCredentialProviderError(value: unknown): unknown {
+  if (typeof value !== "string" || value === UNKNOWN_PROVIDER_ERROR) return value;
+
+  const unknownProvider = (provider: string): boolean => !isProviderKnown(provider.trim());
+  const unknownProviderMessage = /^未知 Credential provider: ([^\r\n]+)$/u.exec(value);
+  if (unknownProviderMessage && unknownProvider(unknownProviderMessage[1])) return UNKNOWN_PROVIDER_ERROR;
+
+  const legacyProviderMessage = /^未知 provider: ([^\r\n]+)$/u.exec(value);
+  if (legacyProviderMessage && unknownProvider(legacyProviderMessage[1])) return UNKNOWN_PROVIDER_ERROR;
+
+  const staleSnapshotMessage = /^Credential provider 已从 ([^\r\n]+) 变更为 ([^\r\n]+)，Job 快照已过期，请刷新 pending Job 或 retry$/u.exec(value);
+  if (staleSnapshotMessage && (unknownProvider(staleSnapshotMessage[1]) || unknownProvider(staleSnapshotMessage[2]))) {
+    return UNKNOWN_PROVIDER_ERROR;
+  }
+
+  const incompatibleCliMessage = /^agent_cli claude-code 仅兼容 anthropic\/kimi，不能使用 provider ([^\r\n]+)$/u.exec(value);
+  if (incompatibleCliMessage && unknownProvider(incompatibleCliMessage[1])) return UNKNOWN_PROVIDER_ERROR;
+
+  return value;
+}
+
+/** Project the Scheduler-owned runtime evidence nested in a Job payload. */
+export function projectJobPayload(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const payload = { ...(value as Record<string, unknown>) };
+  const evidence = payload.runtime_evidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return payload;
+
+  const runtimeEvidence = { ...(evidence as Record<string, unknown>) };
+  const rawProvider = runtimeEvidence.credential_provider;
+  if (rawProvider !== null && rawProvider !== undefined && rawProvider !== "") {
+    const projection = projectCredentialProvider("llm_provider", rawProvider);
+    runtimeEvidence.credential_provider = projection.provider;
+    runtimeEvidence.credential_provider_valid = projection.provider_valid;
+  }
+  payload.runtime_evidence = runtimeEvidence;
+  return payload;
+}
+
+/** Project only the top-level Scheduler-owned provider field in an event. */
+export function projectJobEventPayload(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const payload = { ...(value as Record<string, unknown>) };
+  const rawProvider = payload.credential_provider;
+  if (rawProvider !== null && rawProvider !== undefined && rawProvider !== "") {
+    const projection = projectCredentialProvider("llm_provider", rawProvider);
+    payload.credential_provider = projection.provider;
+    payload.credential_provider_valid = projection.provider_valid;
+  }
+  return payload;
+}
+
+/**
  * Project a persisted provider into an outward/runtime-safe value.  Fixed
  * kinds use the scheduler-owned provider map.  OCI credentials intentionally
  * use a registry host, so only an exact host in the configured registry
