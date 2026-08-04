@@ -2,7 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import type { FastifyInstance } from "fastify";
 import { PlatformToolName, allowedPlatformTools, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
-import { audit } from "./audit.js";
+import { audit, credentialAuditState } from "./audit.js";
 import { ALL_SCOPES, authHook, generateToken } from "./auth.js";
 import {
   countUsers,
@@ -1958,6 +1958,7 @@ export function registerRoutes(app: FastifyInstance) {
     body: z.infer<typeof RoleConfigPutBody>,
     projectId: string | null,
     role: { name: string; kind: "role" | "hub" | "system" },
+    db: typeof sql = sql,
   ): Promise<string | null> {
     const envErr = validateEnvVars(body.env_vars);
     if (envErr) return envErr;
@@ -1965,7 +1966,7 @@ export function registerRoutes(app: FastifyInstance) {
       if (!config.runtime.isEnvKeyAllowed(key)) return `env_key 不在白名单: ${key}`;
     }
     if (body.runtime_image_key) {
-      const [image] = await sql`
+      const [image] = await db`
         SELECT ri.id, ri.official, ri.project_opt_in,
                EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted') AS has_trusted,
                pri.enabled AS project_enabled
@@ -1987,7 +1988,12 @@ export function registerRoutes(app: FastifyInstance) {
       if (body.platform_tools[tool] === false) return `终态必需平台工具不可关闭: ${tool}`;
     }
     for (const c of body.credentials) {
-      const [cred] = await sql`SELECT id, project_id, status, provider, public_metadata_json FROM credentials WHERE id = ${c.credential_id}`;
+      // RoleConfig PUTs run under the same advisory lock as Credential
+      // provider/project/metadata mutations.  Lock each row while reading so
+      // a concurrent Credential PATCH cannot invalidate this validation.
+      const [cred] = await db`
+        SELECT id, project_id, status, provider, public_metadata_json
+        FROM credentials WHERE id = ${c.credential_id} FOR UPDATE`;
       if (!cred) return `Credential 不存在: ${c.credential_id}`;
       if (projectId && cred.project_id && cred.project_id !== projectId) {
         return `Credential ${c.credential_id} 属于其他项目，不能绑定`;
@@ -2022,61 +2028,86 @@ export function registerRoutes(app: FastifyInstance) {
     return null;
   }
 
-  async function upsertRoleConfig(
+  async function upsertRoleConfigInTx(
+    tx: typeof sql,
     roleId: string,
     projectId: string | null,
     body: z.infer<typeof RoleConfigPutBody>,
   ) {
-    return sql.begin(async (tx) => {
-      const [existing] = projectId
-        ? await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id = ${projectId}`
-        : await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id IS NULL`;
-      const row = {
-        role_id: roleId,
-        project_id: projectId,
-        agent_cli: body.agent_cli,
-        model: body.model ?? null,
-        reasoning: body.reasoning ?? null,
-        env_keys: body.env_keys as never,
-        env_vars_json: body.env_vars as never,
-        modules_json: body.modules as never,
-        skills_json: body.skills as never,
-        commands_json: body.commands as never,
-        mcps_json: body.mcps as never,
-        subagents_json: body.subagents as never,
-        platform_tools_json: body.platform_tools as never,
-        instructions_markdown: body.instructions_markdown ?? null,
-        runtime_image_key: body.runtime_image_key ?? null,
-      };
-      let configId: string;
-      if (existing) {
-        configId = existing.id as string;
-        await tx`
-          UPDATE role_configs SET ${tx(row as never)}, version = version + 1, updated_at = now()
-          WHERE id = ${configId}`;
-      } else {
-        const [ins] = await tx`INSERT INTO role_configs ${tx(row as never)} RETURNING id`;
-        configId = ins.id as string;
+    const [existing] = projectId
+      ? await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id = ${projectId}`
+      : await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id IS NULL`;
+    const row = {
+      role_id: roleId,
+      project_id: projectId,
+      agent_cli: body.agent_cli,
+      model: body.model ?? null,
+      reasoning: body.reasoning ?? null,
+      env_keys: body.env_keys as never,
+      env_vars_json: body.env_vars as never,
+      modules_json: body.modules as never,
+      skills_json: body.skills as never,
+      commands_json: body.commands as never,
+      mcps_json: body.mcps as never,
+      subagents_json: body.subagents as never,
+      platform_tools_json: body.platform_tools as never,
+      instructions_markdown: body.instructions_markdown ?? null,
+      runtime_image_key: body.runtime_image_key ?? null,
+    };
+    let configId: string;
+    if (existing) {
+      configId = existing.id as string;
+      await tx`
+        UPDATE role_configs SET ${tx(row as never)}, version = version + 1, updated_at = now()
+        WHERE id = ${configId}`;
+    } else {
+      const [ins] = await tx`INSERT INTO role_configs ${tx(row as never)} RETURNING id`;
+      configId = ins.id as string;
+    }
+    await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId}`;
+    for (const c of body.credentials) {
+      await tx`
+        INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
+        ON CONFLICT DO NOTHING`;
+    }
+    await tx`DELETE FROM role_config_files WHERE role_config_id = ${configId}`;
+    for (const f of body.config_files) {
+      await tx`
+        INSERT INTO role_config_files ${tx({
+          role_config_id: configId,
+          path: f.path,
+          content: f.content,
+          content_sha256: createHash("sha256").update(f.content, "utf8").digest("hex"),
+        })}
+        ON CONFLICT (role_config_id, path) DO UPDATE SET
+          content = EXCLUDED.content, content_sha256 = EXCLUDED.content_sha256, updated_at = now()`;
+    }
+    return configId;
+  }
+
+  /**
+   * Validate and upsert atomically.  Credential PATCH takes this same
+   * advisory lock before locking its credential row, so validation cannot be
+   * invalidated by a concurrent provider/project/metadata mutation.
+   */
+  async function mutateRoleConfig(
+    roleId: string,
+    projectId: string | null,
+    body: z.infer<typeof RoleConfigPutBody>,
+    role: { name: string; kind: "role" | "hub" | "system" },
+  ): Promise<{ configId: string } | { statusCode: number; error: string }> {
+    return sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+      if (projectId && role.kind === "role") {
+        const enabled = await rolesForProject(tx, projectId);
+        if (!enabled.some((r) => r.name === role.name)) {
+          return { statusCode: 409, error: `角色 ${role.name} 未在本项目启用` };
+        }
       }
-      await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId}`;
-      for (const c of body.credentials) {
-        await tx`
-          INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
-          ON CONFLICT DO NOTHING`;
-      }
-      await tx`DELETE FROM role_config_files WHERE role_config_id = ${configId}`;
-      for (const f of body.config_files) {
-        await tx`
-          INSERT INTO role_config_files ${tx({
-            role_config_id: configId,
-            path: f.path,
-            content: f.content,
-            content_sha256: createHash("sha256").update(f.content, "utf8").digest("hex"),
-          })}
-          ON CONFLICT (role_config_id, path) DO UPDATE SET
-            content = EXCLUDED.content, content_sha256 = EXCLUDED.content_sha256, updated_at = now()`;
-      }
-      return configId;
+      const err = await validateRoleConfigBody(body, projectId, role, tx);
+      if (err) return { statusCode: 400, error: err };
+      return { configId: await upsertRoleConfigInTx(tx, roleId, projectId, body) };
     });
   }
 
@@ -2117,12 +2148,12 @@ export function registerRoutes(app: FastifyInstance) {
     const body = RoleConfigPutBody.parse(req.body);
     const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${roleId}`;
     if (!role) return reply.code(404).send({ error: "role not found" });
-    const err = await validateRoleConfigBody(body, null, {
+    const mutation = await mutateRoleConfig(roleId, null, body, {
       name: role.name as string,
       kind: role.kind as "role" | "hub" | "system",
     });
-    if (err) return reply.code(400).send({ error: err });
-    const configId = await upsertRoleConfig(roleId, null, body);
+    if ("error" in mutation) return reply.code(mutation.statusCode).send({ error: mutation.error });
+    const configId = mutation.configId;
     await audit(req, {
       action: "role_config.upsert",
       resourceType: "role_config",
@@ -2162,18 +2193,12 @@ export function registerRoutes(app: FastifyInstance) {
     if (!p) return reply.code(404).send({ error: "project not found" });
     const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${roleId}`;
     if (!role) return reply.code(404).send({ error: "role not found" });
-    if (role.kind === "role") {
-      const enabled = await rolesForProject(sql, id);
-      if (!enabled.some((r) => r.name === role.name)) {
-        return reply.code(409).send({ error: `角色 ${role.name} 未在本项目启用` });
-      }
-    }
-    const err = await validateRoleConfigBody(body, id, {
+    const mutation = await mutateRoleConfig(roleId, id, body, {
       name: role.name as string,
       kind: role.kind as "role" | "hub" | "system",
     });
-    if (err) return reply.code(400).send({ error: err });
-    const configId = await upsertRoleConfig(roleId, id, body);
+    if ("error" in mutation) return reply.code(mutation.statusCode).send({ error: mutation.error });
+    const configId = mutation.configId;
     await audit(req, {
       action: "role_config.upsert",
       resourceType: "role_config",
@@ -3539,12 +3564,19 @@ export function registerRoutes(app: FastifyInstance) {
       resourceType: "credential",
       resourceId: id,
       projectId: (result.row.project_id as string | null) ?? null,
-      before: result.before,
+      before: credentialAuditState({
+        name: result.before.name,
+        provider: result.before.provider,
+        projectId: result.before.project_id,
+        metadata: result.before.public_metadata_json,
+      }),
       after: {
-        name: result.row.name,
-        provider: result.row.provider,
-        project_id: result.row.project_id,
-        public_metadata_json: result.row.public_metadata_json,
+        ...credentialAuditState({
+          name: result.row.name,
+          provider: result.row.provider,
+          projectId: result.row.project_id,
+          metadata: result.row.public_metadata_json,
+        }),
         impact: result.impact,
       },
     });
