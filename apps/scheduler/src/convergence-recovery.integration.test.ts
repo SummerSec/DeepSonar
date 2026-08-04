@@ -261,6 +261,40 @@ if (!testDatabaseUrl) {
       assert.equal(Number(hubCount), 1);
       await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE canvas_id = ${secondCanvasId} AND type = 'hub_reason'`;
 
+      // A failed Hub must stop at the canvas boundary.  The terminal path is
+      // the same one used by dispatcher/reaper/reconcile when provisioning a
+      // frozen runtime image fails; it must not replace the failed Job with a
+      // new canvas_idle Hub on every recovery pass.
+      const failedHubId = await insertJob({
+        projectId: secondProjectId,
+        canvasId: secondCanvasId,
+        type: "hub_reason",
+        status: "running",
+        priority: FIXED_PRIORITY.hub,
+        payload: {
+          scheduling_purpose: "hub",
+          trigger: { kind: "canvas_idle", after_job_type: "hub_reason", after_job_status: "failed" },
+        },
+      });
+      const [{ hubCountBeforeFailure }] = await sql`
+        SELECT COUNT(*)::int AS "hubCountBeforeFailure" FROM jobs
+        WHERE canvas_id = ${secondCanvasId} AND type = 'hub_reason'`;
+      const finalizedFailedHub = await sql.begin(async (tx) =>
+        finalizeJob(tx as unknown as typeof sql, failedHubId, "failed", { error: "frozen image missing" }),
+      );
+      assert.equal(finalizedFailedHub, true);
+      const [{ hubCountAfterFailure }] = await sql`
+        SELECT COUNT(*)::int AS "hubCountAfterFailure" FROM jobs
+        WHERE canvas_id = ${secondCanvasId} AND type = 'hub_reason'`;
+      assert.equal(Number(hubCountAfterFailure), Number(hubCountBeforeFailure));
+      const [{ pendingHubCountAfterFailure }] = await sql`
+        SELECT COUNT(*)::int AS "pendingHubCountAfterFailure" FROM jobs
+        WHERE canvas_id = ${secondCanvasId} AND type = 'hub_reason'
+          AND status IN ('pending', 'claimed', 'provisioning', 'running')`;
+      assert.equal(Number(pendingHubCountAfterFailure), 0);
+      const [failedHub] = await sql`SELECT status FROM jobs WHERE id = ${failedHubId}`;
+      assert.equal(failedHub.status, "failed");
+
       // Hard retry is a destructive management operation.  It takes the same
       // dispatcher-claim advisory lock before the canvas row, so a concurrent
       // claim cannot pass the active check and race the wipe. This transaction
