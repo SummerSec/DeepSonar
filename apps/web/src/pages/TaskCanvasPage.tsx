@@ -253,11 +253,10 @@ export function TaskCanvasPage() {
   const canHardRetry = !hasActiveJob && jobs.length > 0;
   const activeJobs = jobs.filter((j) => ACTIVE_JOB.has(j.status));
   const rootNode = nodes.find((n) => n.node_type === "root");
-  const rootStatus = rootNode?.status ?? null;
-  const reportStatus = nodes.find((n) => n.node_type === "report")?.status ?? null;
-  // The detail endpoint includes canvas.status, while older web typings keep
-  // CanvasLifecycle deliberately small. Read it defensively so archived tasks
-  // use the same projection without changing the shared API contract here.
+  const rootStatus = rootNode?.status ?? meta?.root_status ?? null;
+  const reportStatus = nodes.find((n) => n.node_type === "report")?.status ?? meta?.report_status ?? null;
+  // Keep the scheduler-governed phase fields as a fallback while the L0 node
+  // projection is still loading; the node values win once they are present.
   const canvasStatus = (meta as ({ status?: string } | null))?.status;
   const taskLifecycle = deriveTaskLifecycle({
     status: canvasStatus,

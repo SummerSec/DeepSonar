@@ -167,6 +167,8 @@ export function TasksPage() {
       status: c.status,
       activeCount: c.active_count,
       jobCount: c.job_count,
+      rootStatus: c.root_status,
+      reportStatus: c.report_status,
       endedAt: c.ended_at,
     }).isActive);
     if (filter === "findings") return canvases.filter((c) => c.finding_count > 0);
@@ -178,6 +180,8 @@ export function TasksPage() {
     status: canvas.status,
     activeCount: canvas.active_count,
     jobCount: canvas.job_count,
+    rootStatus: canvas.root_status,
+    reportStatus: canvas.report_status,
     endedAt: canvas.ended_at,
   }).isActive).length;
   const findingCount = canvases.reduce((total, canvas) => total + canvas.finding_count, 0);
@@ -200,6 +204,8 @@ export function TasksPage() {
               status: canvas.status,
               activeCount: canvas.active_count,
               jobCount: canvas.job_count,
+              rootStatus: canvas.root_status,
+              reportStatus: canvas.report_status,
               endedAt: canvas.ended_at,
             });
             const isActive = lifecycle.isActive;

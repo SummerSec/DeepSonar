@@ -82,15 +82,16 @@ function isSuccess(value: string): boolean {
   return ["succeeded", "success", "completed", "complete"].includes(value);
 }
 
-function isReporting(value: string): boolean {
+function isReportGeneration(value: string): boolean {
   return ["reporting", "pending", "generating"].includes(value);
 }
 
 /**
  * Derive the one task lifecycle used by cards, filters, and the workbench.
- * Precedence is intentional: archived > active work > failure > completion >
- * report generation > analysis complete > idle. In particular, a stale root
- * or last Job terminal status can never hide an active Job.
+ * Precedence is intentional: archived > active work > failure > report phase >
+ * analysis complete > completion > terminal fallback > idle. In particular, a
+ * stale root or last Job terminal status can never hide active work, a report
+ * that is still being generated, or a failure.
  */
 export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecycleProjection {
   const jobs = input.jobs ?? [];
@@ -104,16 +105,25 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
   const archived = input.archived === true || normalized(input.status) === "archived";
   const rootStatus = normalized(input.rootStatus);
   const reportStatus = normalized(input.reportStatus);
+  const hasFailure = isFailure(rootStatus) || isFailure(reportStatus);
+  // A root node can be `pending` before its first Job starts; only the report
+  // node's pending/generating statuses mean report generation. The root's
+  // explicit `reporting` phase is also governed by the Scheduler.
+  const hasReportPhase = rootStatus === "reporting" || isReportGeneration(reportStatus);
+  const hasAnalysisComplete = rootStatus === "analysis_complete";
+  const hasCompletion = isSuccess(rootStatus) || isSuccess(reportStatus);
 
   let status: TaskLifecycleStatus;
   if (archived) status = "archived";
   else if (activeCount > 0) status = "running";
-  else if (!hasJobs) status = "idle";
-  else if (isFailure(rootStatus) || isFailure(reportStatus)) status = "failed";
-  else if (isSuccess(rootStatus) || isSuccess(reportStatus)) status = "completed";
-  else if (rootStatus === "analysis_complete") status = "analysis_complete";
-  else if (isReporting(rootStatus) || isReporting(reportStatus)) status = "reporting";
-  else if (input.endedAt) status = "completed";
+  else if (hasFailure) status = "failed";
+  else if (hasReportPhase) status = "reporting";
+  else if (hasAnalysisComplete) status = "analysis_complete";
+  // A governed root/report terminal status is stronger than a missing or
+  // paginated Job count.  The ended_at fallback is deliberately narrower: it
+  // only applies when the scheduler says the canvas had Jobs, so a stale end
+  // timestamp cannot turn an untouched/empty task into a completed one.
+  else if (hasCompletion || (hasJobs && Boolean(input.endedAt))) status = "completed";
   else status = "idle";
 
   return {

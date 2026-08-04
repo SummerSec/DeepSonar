@@ -60,9 +60,57 @@ test("a canvas with no Jobs is idle", () => {
   assert.equal(lifecycle.hasJobs, false);
 });
 
+test("a pending root before first execution is not mislabeled as reporting", () => {
+  assert.equal(deriveTaskLifecycle({ rootStatus: "pending", jobCount: 1 }).status, "idle");
+});
+
 test("report and root failures are surfaced before terminal success", () => {
   assert.equal(deriveTaskLifecycle({ jobCount: 1, rootStatus: "failed" }).status, "failed");
   assert.equal(deriveTaskLifecycle({ jobCount: 1, rootStatus: "succeeded", reportStatus: "failed" }).status, "failed");
+});
+
+test("a failure is not hidden when the canvas has no visible Jobs", () => {
+  assert.equal(deriveTaskLifecycle({ jobCount: 0, rootStatus: "failed" }).status, "failed");
+});
+
+test("report generation outranks a successful root phase", () => {
+  assert.equal(
+    deriveTaskLifecycle({ jobCount: 2, rootStatus: "succeeded", reportStatus: "pending" }).status,
+    "reporting",
+  );
+});
+
+test("ended_at never converts a failed phase into completed", () => {
+  assert.equal(
+    deriveTaskLifecycle({
+      jobCount: 1,
+      rootStatus: "failed",
+      endedAt: "2026-08-04T01:02:03.000Z",
+    }).status,
+    "failed",
+  );
+});
+
+test("list summary root/report fields map to the same task phase as the workbench", () => {
+  const summary = {
+    status: "active",
+    active_count: 0,
+    job_count: 2,
+    root_status: "succeeded",
+    report_status: "pending",
+    ended_at: null,
+  };
+  assert.equal(
+    deriveTaskLifecycle({
+      status: summary.status,
+      activeCount: summary.active_count,
+      jobCount: summary.job_count,
+      rootStatus: summary.root_status,
+      reportStatus: summary.report_status,
+      endedAt: summary.ended_at,
+    }).status,
+    "reporting",
+  );
 });
 
 test("analysis complete and report generation remain explicit phases", () => {
@@ -72,7 +120,7 @@ test("analysis complete and report generation remain explicit phases", () => {
   );
   assert.equal(
     deriveTaskLifecycle({ jobCount: 1, rootStatus: "analysis_complete", reportStatus: "generating" }).status,
-    "analysis_complete",
+    "reporting",
   );
   assert.equal(
     deriveTaskLifecycle({ jobCount: 1, rootStatus: "reporting", reportStatus: "generating" }).status,

@@ -40,6 +40,8 @@ export function TaskList({
               status: c.status,
               activeCount: c.active_count,
               jobCount: c.job_count,
+              rootStatus: c.root_status,
+              reportStatus: c.report_status,
               endedAt: c.ended_at,
             });
             const active = lifecycle.isActive;

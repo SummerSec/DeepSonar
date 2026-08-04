@@ -77,6 +77,10 @@ export interface CanvasLifecycle {
   active_count?: number;
   /** 画布上累计 Job 数量。 */
   job_count?: number;
+  /** 当前根节点阶段（由 Scheduler 从画布投影中治理）。 */
+  root_status?: string | null;
+  /** 当前报告节点阶段（由 Scheduler 从画布投影中治理）。 */
+  report_status?: string | null;
 }
 
 /** 任务画布列表项（一任务一画布；聚合最近一次 job 得任务状态） */
@@ -93,6 +97,9 @@ export interface CanvasSummary {
   ended_at: string | null;
   job_count: number;
   active_count: number;
+  /** 当前根节点/报告阶段，避免列表从 last_job_status 推断任务终态。 */
+  root_status?: string | null;
+  report_status?: string | null;
   finding_count: number;
   confirmed_count: number;
   last_job_id: string | null;
