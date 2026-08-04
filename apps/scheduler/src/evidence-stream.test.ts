@@ -5,7 +5,14 @@ import path from "node:path";
 import { gzip } from "node:zlib";
 import { promisify } from "node:util";
 import test from "node:test";
-import { JobEvidenceWriter, parseStreamFile, readGzipTail, readNormalizedStreamPage } from "./evidence.js";
+import {
+  JobEvidenceWriter,
+  MAX_STREAM_RETAINED_BYTES,
+  parseStreamFile,
+  readGzipTail,
+  readNormalizedStream,
+  readNormalizedStreamPage,
+} from "./evidence.js";
 import { config } from "./config.js";
 import { encodeCursor } from "./pagination.js";
 
@@ -183,6 +190,92 @@ test("cursor attempts beyond early archives are read before the archive budget i
     assert.equal(result.items[0]?.attempt_id, "attempt-current");
     assert.equal(result.items[0]?.seq, 2);
     assert.equal(result.gap, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("retained records stay byte-bounded while tail and cursor prioritize current attempts", async () => {
+  const jobId = "00000000-0000-0000-0000-000000000095";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const attempts = ["archive-a", "archive-b", "archive-c"];
+  const payload = "x".repeat(240 * 1024);
+  try {
+    const files = [];
+    for (const [index, attempt] of attempts.entries()) {
+      const dir = path.join(root, "attempts", attempt);
+      await mkdir(dir, { recursive: true });
+      const lines = Array.from({ length: 30 }, (_, seq) => JSON.stringify({
+        attempt_id: attempt,
+        seq: seq + 1,
+        at: index + 1,
+        payload,
+      })).join("\n") + "\n";
+      const streamPath = path.join(dir, "stream.ndjson.gz");
+      await writeFile(streamPath, await gzipP(Buffer.from(lines)));
+      files.push({
+        name: attempt,
+        path: `attempts/${attempt}/stream.ndjson.gz`,
+        kind: "stream" as const,
+        bytes: Buffer.byteLength(lines),
+        sha256: "",
+      });
+    }
+    const current = path.join(root, "attempts", "attempt-current");
+    await mkdir(current, { recursive: true });
+    await writeFile(
+      path.join(current, "stream.ndjson"),
+      `${JSON.stringify({ attempt_id: "attempt-current", seq: 1, at: 1000, payload: "current" })}\n${JSON.stringify({ attempt_id: "attempt-current", seq: 2, at: 1001, payload: "current-next" })}\n`,
+    );
+    await writeFile(path.join(root, "manifest.json"), JSON.stringify({
+      v: 1,
+      job_id: jobId,
+      cli: "test",
+      session_id: null,
+      created_at: new Date().toISOString(),
+      finalized_at: new Date().toISOString(),
+      files,
+    }));
+
+    const retained = await readNormalizedStream(jobId, { tail: true });
+    const retainedBytes = retained.reduce((total, record) => total + Buffer.byteLength(JSON.stringify(record), "utf8"), 0);
+    assert.ok(retainedBytes <= MAX_STREAM_RETAINED_BYTES);
+    assert.ok(retained.some((record) => record.attempt_id === "attempt-current"));
+
+    const after = encodeCursor({ kind: "stream", attempt_id: "attempt-current", seq: 1 });
+    const cursorPage = await readNormalizedStreamPage(jobId, { after, limit: 1 });
+    assert.equal(cursorPage.items[0]?.attempt_id, "attempt-current");
+    assert.equal(cursorPage.items[0]?.seq, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("tail keeps the newest records when one file exceeds the record cap", async () => {
+  const jobId = "00000000-0000-0000-0000-000000000094";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const attempt = "attempt-many";
+  try {
+    const dir = path.join(root, "attempts", attempt);
+    await mkdir(dir, { recursive: true });
+    const lines = Array.from({ length: 20_050 }, (_, index) => JSON.stringify({
+      attempt_id: attempt,
+      seq: index + 1,
+      at: index + 1,
+      type: "text.delta",
+    })).join("\n") + "\n";
+    await writeFile(path.join(dir, "stream.ndjson"), lines);
+
+    const tail = await readNormalizedStreamPage(jobId, { tail: true, limit: 1 });
+    assert.equal(tail.items[0]?.seq, 20_050);
+    assert.equal(tail.truncated, true);
+    assert.equal(tail.gap, true);
+
+    const cursor = encodeCursor({ kind: "stream", attempt_id: attempt, seq: 20_040 });
+    const suffix = await readNormalizedStreamPage(jobId, { after: cursor, limit: 1 });
+    assert.equal(suffix.items[0]?.seq, 20_041);
+    assert.equal(suffix.truncated, undefined);
+    assert.equal(suffix.gap, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

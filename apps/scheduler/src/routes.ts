@@ -77,7 +77,7 @@ import {
 import { consumeWsTicket, issueWsTicket } from "./ws-tickets.js";
 import { WsSendQueue } from "./ws-send-queue.js";
 import { installWsCloseGuard } from "./ws-early-close.js";
-import { isUuid, projectScopeAllows } from "./project-scope.js";
+import { canvasScopeDecision, isUuid, projectScopeAllows } from "./project-scope.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
 import { resolveModules } from "./transfer/modules.js";
 import { buildPreview, applyImport } from "./transfer/import.js";
@@ -338,14 +338,33 @@ export function registerRoutes(app: FastifyInstance) {
     if (routeUrl.startsWith("/findings/:id") && !isUuid(params.id)) {
       return reply.code(400).send({ error: "invalid finding id", error_code: "INVALID_ID" });
     }
+    if (routeUrl.startsWith("/canvases/:id") && !isUuid(params.id)) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
+    if (routeUrl.startsWith("/tasks/:canvasId") && !isUuid(params.canvasId)) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
     if (routeUrl.startsWith("/canvases/:id/nodes/:nodeId") && !isUuid(params.nodeId)) {
       return reply.code(400).send({ error: "invalid canvas node id", error_code: "INVALID_ID" });
     }
-    const query = (req.query ?? {}) as { project_id?: string };
+    const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
     if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.project_id && !isUuid(query.project_id)) {
       return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
     }
+    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.canvas_id && !isUuid(query.canvas_id)) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
     const actorProjectId = req.actor?.projectId;
+    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.canvas_id) {
+      const [canvas] = await sql`SELECT project_id FROM canvases WHERE id = ${query.canvas_id}`;
+      if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "NOT_FOUND" });
+      if (query.project_id && query.project_id.toLowerCase() !== String(canvas.project_id).toLowerCase()) {
+        return reply.code(403).send({ error: "canvas project mismatch", error_code: "PROJECT_MISMATCH" });
+      }
+      if (canvasScopeDecision(actorProjectId, canvas.project_id as string | null) === "mismatch") {
+        return reply.code(403).send({ error: "token 浠呴檺椤圭洰 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+    }
     if (!actorProjectId) return;
     if (routeUrl.startsWith("/canvases/:id") || routeUrl.startsWith("/tasks/:canvasId")) {
       const canvasId = params.id ?? params.canvasId;

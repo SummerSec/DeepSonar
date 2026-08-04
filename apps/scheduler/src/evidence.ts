@@ -218,7 +218,7 @@ const MAX_STREAM_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 const MAX_STREAM_COMPRESSED_BYTES = 128 * 1024 * 1024;
 const MAX_STREAM_FILES_PER_REQUEST = 32;
 const MAX_STREAM_DECOMPRESSED_TOTAL = 96 * 1024 * 1024;
-const MAX_STREAM_RETAINED_BYTES = 16 * 1024 * 1024;
+export const MAX_STREAM_RETAINED_BYTES = 16 * 1024 * 1024;
 const MAX_STREAM_RECORDS = 20_000;
 const MAX_STREAM_RECORD_BYTES = 256 * 1024;
 
@@ -342,7 +342,13 @@ export async function parseStreamFile(
   filePath: string,
   attemptHint: string | null,
   compressed: boolean,
-): Promise<{ records: Record<string, unknown>[]; truncated: boolean; bytes: number; decompressedBytes: number }> {
+): Promise<{
+  records: Record<string, unknown>[];
+  recordBytes: number[];
+  truncated: boolean;
+  bytes: number;
+  decompressedBytes: number;
+}> {
   const read = compressed ? await readGzipTail(filePath) : await readTail(filePath);
   let raw = read.raw;
   if (read.truncated && !read.aligned) {
@@ -354,6 +360,7 @@ export async function parseStreamFile(
   const fallbackAttempt = attemptHint ?? path.basename(path.dirname(filePath));
   let fallbackSeq = 0;
   let oversized = false;
+  const recordBytes: number[] = [];
   const records = raw
     .toString("utf8")
     .split("\n")
@@ -370,17 +377,20 @@ export async function parseStreamFile(
         const parsed = JSON.parse(line) as Record<string, unknown>;
         const attempt = typeof parsed.attempt_id === "string" ? parsed.attempt_id : fallbackAttempt;
         const seq = Number(parsed.seq);
-        return [{
+        const record = {
           ...parsed,
           attempt_id: attempt,
           seq: Number.isSafeInteger(seq) && seq > 0 ? seq : ++fallbackSeq,
-        }];
+        };
+        recordBytes.push(Buffer.byteLength(JSON.stringify(record), "utf8"));
+        return [record];
       } catch {
         return [];
       }
     });
   return {
     records,
+    recordBytes,
     truncated: read.truncated || oversized,
     bytes: read.raw.byteLength,
     decompressedBytes:
@@ -415,7 +425,9 @@ async function evidenceStreamRecords(
   let truncated = false;
   let retainedBytes = 0;
   let decompressedBytes = 0;
-  const appendFile = async (filePath: string, attempt: string | null, compressed: boolean) => {
+  const cursor = options.cursor;
+  const appendFile = async (candidate: StreamFileCandidate) => {
+    const { filePath, attempt, compressed } = candidate;
     if (parsedPaths.has(filePath)) return;
     if (parsedPaths.size >= MAX_STREAM_FILES_PER_REQUEST || decompressedBytes >= MAX_STREAM_DECOMPRESSED_TOTAL) {
       truncated = true;
@@ -424,17 +436,39 @@ async function evidenceStreamRecords(
     parsedPaths.add(filePath);
     try {
       const parsed = await parseStreamFile(filePath, attempt, compressed);
-      records.push(...parsed.records);
-      retainedBytes += parsed.bytes;
       decompressedBytes += parsed.decompressedBytes;
       truncated ||= parsed.truncated;
       if (decompressedBytes > MAX_STREAM_DECOMPRESSED_TOTAL) truncated = true;
-      if (retainedBytes > MAX_STREAM_RETAINED_BYTES || records.length > MAX_STREAM_RECORDS) {
+      const cursorIndex = cursor && attempt === cursor.attempt_id
+        ? parsed.records.findIndex(
+          (record) => record.attempt_id === cursor.attempt_id && Number(record.seq) === cursor.seq,
+        )
+        : -1;
+      if (cursor && attempt === cursor.attempt_id && cursorIndex < 0) return;
+      const indexes = Array.from({ length: parsed.records.length }, (_, index) => index);
+      const selectedIndexes = cursorIndex >= 0
+        ? indexes.slice(cursorIndex)
+        : options.tail && !options.cursor
+          ? indexes.reverse()
+          : indexes;
+      for (const index of selectedIndexes) {
+        const record = parsed.records[index]!;
+        const bytes = parsed.recordBytes[index] ?? Buffer.byteLength(JSON.stringify(record), "utf8");
+        if (
+          records.length >= MAX_STREAM_RECORDS ||
+          retainedBytes + bytes > MAX_STREAM_RETAINED_BYTES
+        ) {
+          truncated = true;
+          break;
+        }
+        records.push(record);
+        retainedBytes += bytes;
+      }
+      if (records.length >= MAX_STREAM_RECORDS || retainedBytes >= MAX_STREAM_RETAINED_BYTES) {
+        // Reaching any retained bound makes the omitted suffix/prefix an
+        // explicit gap and prevents lower-priority candidates from consuming
+        // more memory after the preferred raw/target attempt was retained.
         truncated = true;
-        // Keep the newest bounded records so tail consumers get useful data;
-        // the explicit gap flag tells cursor consumers not to assume history.
-        if (retainedBytes > MAX_STREAM_RETAINED_BYTES) retainedBytes = MAX_STREAM_RETAINED_BYTES;
-        if (records.length > MAX_STREAM_RECORDS) records.splice(0, records.length - MAX_STREAM_RECORDS);
       }
     } catch (error) {
       // Finalization can gzip+remove a raw file between stat and open. Treat
@@ -517,7 +551,15 @@ async function evidenceStreamRecords(
     for (const candidate of allCandidates) addCandidate(candidate, orderedCandidates);
   }
   for (const candidate of orderedCandidates) {
-    await appendFile(candidate.filePath, candidate.attempt, candidate.compressed);
+    if (
+      retainedBytes >= MAX_STREAM_RETAINED_BYTES ||
+      records.length >= MAX_STREAM_RECORDS ||
+      decompressedBytes >= MAX_STREAM_DECOMPRESSED_TOTAL
+    ) {
+      truncated = true;
+      break;
+    }
+    await appendFile(candidate);
   }
 
   records.sort((a, b) => {
@@ -567,8 +609,12 @@ export async function readNormalizedStreamPage(
   });
 }
 
-export async function readNormalizedStream(jobId: string): Promise<Record<string, unknown>[]> {
-  const result = await evidenceStreamRecords(jobId);
+export async function readNormalizedStream(
+  jobId: string,
+  options: { after?: string | null; tail?: boolean } = {},
+): Promise<Record<string, unknown>[]> {
+  const cursor = parseCursor(options.after ?? null, "stream");
+  const result = await evidenceStreamRecords(jobId, { tail: options.tail, cursor });
   return result.records.slice(-5000);
 }
 
