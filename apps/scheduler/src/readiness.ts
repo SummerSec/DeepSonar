@@ -58,6 +58,7 @@ export interface ReadinessCredentialRow {
 export interface ReadinessRuntimeImageRow {
   image_key: string;
   image_enabled: boolean;
+  project_opt_in: boolean | null;
   source_kind: "official" | "third_party" | null;
   official: boolean | null;
   project_enabled: boolean | null;
@@ -66,6 +67,7 @@ export interface ReadinessRuntimeImageRow {
   resolved_ref: string | null;
   trust_status: string | null;
   admission_scan_id: string | null;
+  admission_bypassed: boolean;
 }
 
 export interface ReadinessAuditRow {
@@ -320,10 +322,15 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       const credential = credentialSummary(binding);
       const credentialRef = credential ?? undefined;
       const expectedProject = input.scope.projectId;
-      if (binding.project_id && (!expectedProject || binding.project_id !== expectedProject)) {
+      const credentialScopeMismatch = role.configScope === "global"
+        ? Boolean(binding.project_id)
+        : Boolean(binding.project_id && (!expectedProject || binding.project_id !== expectedProject));
+      if (credentialScopeMismatch) {
         checks.push(fail(
           "CREDENTIAL_SCOPE_MISMATCH",
-          `${role.name} 绑定的 Credential 属于其他项目，不能用于当前作用域。`,
+          role.configScope === "global"
+            ? `${role.name} 的全局 RoleConfig 只能绑定全局 Credential，不能引用项目凭据。`
+            : `${role.name} 绑定的 Credential 属于其他项目，不能用于当前作用域。`,
           credentialFix(input.scope),
           { role: summary, credential: credentialRef },
         ));
@@ -382,13 +389,19 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
           ? attention("CREDENTIAL_TEST_EVIDENCE_STALE", `${role.name} 没有 24 小时内成功的连接测试证据；服务端不会凭空声称 Provider 在线。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: evidenceSummary("credential_test", testStatus, latestTest, now) })
           : pass("CREDENTIAL_TEST_READY", `${role.name} 有近期成功的 Credential 连接测试证据。`, { role: summary, credential: credentialRef, evidence: evidenceSummary("credential_test", testStatus, latestTest, now) }));
       const modelCount = modelCountFromAudit(latestModels);
+      const modelsAt = latestModels ? new Date(latestModels.at) : null;
+      const modelsFresh = Boolean(modelsAt && Number.isFinite(modelsAt.getTime()) && now.getTime() - modelsAt.getTime() <= EVIDENCE_MAX_AGE_MS);
       const modelStatus: ReadinessEvidenceSummary["status"] = !latestModels
         ? "missing"
-        : latestModels.result === "ok" && modelCount !== null ? "ok" : latestModels.result === "ok" ? "stale" : "error";
+        : latestModels.result !== "ok" ? "error"
+          : !modelsFresh || modelCount === null ? "stale"
+            : "ok";
       checks.push(modelStatus === "error"
         ? attention("MODEL_DISCOVERY_FAILED", `${role.name} 最近一次模型目录获取失败；请重新获取模型或检查 Provider。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: evidenceSummary("model_discovery", modelStatus, latestModels, now, modelCount) })
-        : modelStatus === "missing" || modelStatus === "stale"
+        : modelStatus === "missing"
           ? attention("MODEL_DISCOVERY_EVIDENCE_MISSING", `${role.name} 尚无可验证的模型目录证据；Scheduler 不会把未发现的模型当作在线可用。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: evidenceSummary("model_discovery", modelStatus, latestModels, now, modelCount) })
+          : modelStatus === "stale"
+            ? attention("MODEL_DISCOVERY_EVIDENCE_STALE", `${role.name} 没有 24 小时内成功的模型目录证据；请重新获取模型目录。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: evidenceSummary("model_discovery", modelStatus, latestModels, now, modelCount) })
           : pass("MODEL_DISCOVERY_READY", `${role.name} 有模型目录获取证据（仅记录数量，不回显 Provider 响应）。`, { role: summary, credential: credentialRef, evidence: evidenceSummary("model_discovery", modelStatus, latestModels, now, modelCount) }));
     }
 
@@ -405,14 +418,18 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       checks.push(fail("RUNTIME_IMAGE_NOT_TRUSTED", `${role.name} 所需 runtime image ${imageKey} 没有 trusted 版本。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
     } else if (!image.version_id || !image.digest || !immutableDigest(image.resolved_ref ?? "") || immutableDigest(image.resolved_ref ?? "") !== image.digest) {
       checks.push(fail("RUNTIME_IMAGE_DIGEST_INVALID", `${role.name} 的 runtime image 缺少一致的不可变 digest，不能进入 real 沙箱。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
-    } else if (image.source_kind === "third_party" && (!image.project_enabled || !image.admission_scan_id)) {
-      checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成项目启用或准入扫描。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (input.scope.projectId && !(image.official === true && image.project_opt_in === false) && image.project_enabled !== true) {
+      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 尚未在当前项目启用。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (image.source_kind === "third_party" && !image.admission_scan_id && !image.admission_bypassed) {
+      checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成准入扫描。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary }));
+    } else if (image.source_kind === "third_party" && !image.admission_scan_id && image.admission_bypassed) {
+      checks.push(attention("RUNTIME_IMAGE_ADMISSION_BYPASSED", `${role.name} 使用了运维显式登记的 immutable digest；该版本标记为跳过准入扫描，请确认登记来源。`, { href: projectHref(input.scope, "/images", "/projects/:projectId/images"), target: "runtime-images" }, { role: summary, runtime_image: runtimeSummary, evidence: { kind: "none", status: "missing", at: null, age_seconds: null, model_count: null, source: "not_recorded" } }));
     } else {
       checks.push(pass("RUNTIME_IMAGE_READY", `${role.name} 已解析到 Scheduler 信任的不可变 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     }
   }
 
-  const materialSource = input.materialSource ?? (input.allowEgress ? "external_or_workspace" : "unspecified");
+  const materialSource = input.materialSource ?? "unspecified";
   if (!input.allowEgress && materialSource === "external_or_workspace") {
     checks.push(fail(
       "NETWORK_POLICY_MATERIAL_CONFLICT",
@@ -538,10 +555,11 @@ export async function loadReadiness(
       LIMIT 500`;
   const imageKeys = [...new Set(roles.map((role) => role.project_runtime_image_key ?? role.global_runtime_image_key ?? defaultRuntimeImageKey(role.name)))];
   const images = await db`
-    SELECT ri.image_key, ri.enabled AS image_enabled, ri.source_kind, ri.official,
+    SELECT ri.image_key, ri.enabled AS image_enabled, ri.project_opt_in, ri.source_kind, ri.official,
            pri.enabled AS project_enabled,
            v.id AS version_id, v.digest, v.resolved_ref, v.trust_status,
-           scan.id AS admission_scan_id
+           scan.id AS admission_scan_id,
+           COALESCE(v.scan_summary_json->>'risk', '') = 'bypasses-admission-scan' AS admission_bypassed
     FROM runtime_images ri
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}

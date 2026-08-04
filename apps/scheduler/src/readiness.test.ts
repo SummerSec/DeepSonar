@@ -80,6 +80,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
       {
         image_key: "deepsonar-base",
         image_enabled: true,
+        project_opt_in: false,
         source_kind: "official",
         official: true,
         project_enabled: null,
@@ -88,10 +89,12 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
         resolved_ref: `summersec/deepsonar-base@sha256:${"a".repeat(64)}`,
         trust_status: "trusted",
         admission_scan_id: null,
+        admission_bypassed: false,
       },
       {
         image_key: "deepsonar-audit",
         image_enabled: true,
+        project_opt_in: true,
         source_kind: "third_party",
         official: false,
         project_enabled: true,
@@ -100,6 +103,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
         resolved_ref: `summersec/deepsonar-audit@sha256:${"b".repeat(64)}`,
         trust_status: "trusted",
         admission_scan_id: scanId,
+        admission_bypassed: false,
       },
     ],
     audits: [
@@ -152,6 +156,12 @@ test("fake preflight remains actionable without pretending online evidence exist
   assert.ok(result.checks.some((check) => check.code === "MATERIAL_SOURCE_UNSPECIFIED"));
 });
 
+test("material source stays unspecified until the task declares it", () => {
+  const result = evaluateReadiness(baseInput({ materialSource: undefined }));
+  assert.equal(result.network_policy.material_source, "unspecified");
+  assert.ok(result.checks.some((check) => check.code === "MATERIAL_SOURCE_UNSPECIFIED" && check.severity === "warning"));
+});
+
 test("fake preflight does not block on failed live credential evidence", () => {
   const result = evaluateReadiness(baseInput({
     executionMode: "fake",
@@ -173,6 +183,52 @@ test("task network override is explicit and does not mutate project scope", () =
   assert.equal(result.scope.project_id, projectId);
 });
 
+test("credential scope follows global and project RoleConfig boundaries", () => {
+  const credentials = baseInput().credentials ?? [];
+  const result = evaluateReadiness(baseInput({
+    credentials: credentials.map((credential) => credential.role_config_id === hubConfigId
+      ? { ...credential, project_id: projectId }
+      : { ...credential, project_id: null }),
+  }));
+  assert.equal(result.ready, false);
+  const scopeMismatches = result.checks.filter((check) => check.code === "CREDENTIAL_SCOPE_MISMATCH");
+  assert.ok(scopeMismatches.some((check) => check.role?.name === "hub_reason"));
+  assert.equal(scopeMismatches.some((check) => check.role?.name === "audit"), false);
+});
+
+test("runtime image project opt-in and manual digest admission follow resolver semantics", () => {
+  const officialOptInMissing = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, project_opt_in: true, project_enabled: null }
+      : image),
+  }));
+  assert.equal(officialOptInMissing.ready, false);
+  assert.ok(officialOptInMissing.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
+
+  const officialOptInEnabled = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, project_opt_in: true, project_enabled: true }
+      : image),
+  }));
+  assert.equal(officialOptInEnabled.ready, true);
+
+  const thirdPartyNotEnabled = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"
+      ? { ...image, project_enabled: null }
+      : image),
+  }));
+  assert.equal(thirdPartyNotEnabled.ready, false);
+  assert.ok(thirdPartyNotEnabled.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
+
+  const manualDigest = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"
+      ? { ...image, project_enabled: true, admission_scan_id: null, admission_bypassed: true }
+      : image),
+  }));
+  assert.equal(manualDigest.ready, true);
+  assert.ok(manualDigest.checks.some((check) => check.code === "RUNTIME_IMAGE_ADMISSION_BYPASSED" && check.severity === "warning"));
+});
+
 test("archived projects fail preflight before task creation", () => {
   const result = evaluateReadiness(baseInput({ projectStatus: "archived" }));
   assert.equal(result.ready, false);
@@ -181,10 +237,17 @@ test("archived projects fail preflight before task creation", () => {
 
 test("stale audit evidence is surfaced as a warning, not an online claim", () => {
   const result = evaluateReadiness(baseInput({
-    audits: [{ resource_id: credentialId, action: "credential.test", at: "2026-07-01T00:00:00.000Z", result: "ok", after_json: { ok: true } }],
+    audits: [
+      { resource_id: credentialId, action: "credential.test", at: "2026-07-01T00:00:00.000Z", result: "ok", after_json: { ok: true } },
+      { resource_id: credentialId, action: "credential.models_discover", at: "2026-07-01T00:00:00.000Z", result: "ok", after_json: { model_count: 1 } },
+    ],
   }));
   assert.equal(result.ready, true);
   const stale = result.checks.find((check) => check.code === "CREDENTIAL_TEST_EVIDENCE_STALE");
   assert.ok(stale);
   assert.equal(stale?.evidence?.status, "stale");
+  const staleModels = result.checks.find((check) => check.code === "MODEL_DISCOVERY_EVIDENCE_STALE");
+  assert.ok(staleModels);
+  assert.equal(staleModels?.evidence?.status, "stale");
+  assert.equal(result.checks.some((check) => check.code === "MODEL_DISCOVERY_READY"), false);
 });
