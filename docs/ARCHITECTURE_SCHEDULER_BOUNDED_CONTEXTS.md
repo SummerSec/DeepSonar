@@ -69,7 +69,7 @@ append plus semantic side effects in one transaction.  The terminal path in
 | Dispatcher claim | `deepsonar_dispatch_claim` transaction advisory lock → candidate `jobs` rows (`FOR UPDATE SKIP LOCKED`) | The advisory lock serializes claim/retry and other runtime mutations; keep the candidate page bounded. |
 | Destructive canvas retry | `deepsonar_dispatch_claim` → `canvases` row (`FOR UPDATE`) → Job/runtime rows and canvas nodes | Re-check active Jobs after both locks; never wipe runtime rows from the preflight read. |
 | Event ingress (Job-only) | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → job-only side effects → **commit** | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. |
-| Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → Canvas/Finding/Hub side effects → **commit** | The append and semantic effects are one atomic transaction, so a side-effect failure rolls back the append and dedup marker. A preflight Canvas hint is rechecked after both locks; no reverse lock is taken. |
+| Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → Job/Intent target rows (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → Canvas/Finding/Hub side effects → **commit** | The append and semantic effects are one atomic transaction, so a side-effect failure rolls back the append and dedup marker. The preflight Canvas hint carries its source/target and node snapshots; all are rechecked under the ordered locks. A changed target retries once and then fails closed; no reverse lock is taken. |
 | Convergence terminal/recovery | `canvases` row (`FOR UPDATE`) → `findings` row (`FOR UPDATE`) → `finding_verification_rounds` row (`FOR UPDATE`) → Jobs/nodes | Canvas is the outer convergence lock; Verify and Hub paths use the same canvas-first order. |
 | Report ingress/recovery | `canvases` row → `task_reports` row → report Job/nodes | Matches `report.ts`'s existing `canvas → task_reports → jobs/nodes` contract. |
 | Credential/runtime mutation | `deepsonar_dispatch_claim` → Credential row (`FOR UPDATE`) → dependent RoleConfig/Job reads | Prevents a runtime snapshot from observing a half-applied provider/credential mutation. |
@@ -77,9 +77,11 @@ append plus semantic side effects in one transaction.  The terminal path in
 The same resource must never be acquired in a reverse order in another path.
 In particular, a new lifecycle implementation must not lock a Finding or
 Verification round before its Canvas, and no event side effect may take Canvas
-under a held Job lock.  `finalizeJob` now reads the Job's Canvas target,
-acquires that Canvas, and only then performs the guarded Job update; Verify,
-Hub, and Report work continue underneath that outer Canvas lock.  The
+under a held Job lock.  `finalizeJob` now reads the Job's Canvas target and the
+complete Job/Intent node Canvas set, rejects multi-Canvas or Job/Canvas
+conflicts, acquires the unique Canvas, and only then performs the guarded Job
+update after a locked node-set recheck; Verify, Hub, and Report work continue
+underneath that outer Canvas lock.  The
 event-ingestion callback is invoked only after the ordered locks are held, so
 duplicate replay and a callback failure cannot produce an append/side-effect
 split-brain.  Moving the remaining semantic callback implementations behind
@@ -93,12 +95,15 @@ validation, payload limits, event-id deduplication, and per-Job sequencing.
 `core.ts` remains the compatibility facade and supplies the semantic callback
 until Hub/Verify/Report move behind their own application interfaces.  The
 application performs a read-only Canvas hint preflight, then re-checks the Job
-row after acquiring locks (`Canvas → Job`) and retries once if legacy data was
-reassigned concurrently.  Both the append and callback run before the
+row and the target/Job/Intent node snapshots with row locks after acquiring
+locks (`Canvas → Job → nodes`) and retries once if legacy data was reassigned
+concurrently.  Both the append and callback run before the
 transaction commits; an exception rolls back `event_dedup`, `events`, and all
 side effects without requiring a schema marker.  The integration coverage
 exercises duplicate replay, concurrent sequence allocation, rollback/retry,
-and a concurrent terminal event/finalize path to guard this boundary.
+node re-point races (including fact intent targets), inconsistent multi-Canvas
+terminal rejection, and a concurrent terminal event/finalize path to guard
+this boundary.
 
 ## Lifecycle patch contract
 
