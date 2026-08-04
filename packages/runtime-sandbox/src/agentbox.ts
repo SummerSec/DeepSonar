@@ -119,8 +119,12 @@ async function ensureRestrictedNetwork(): Promise<void> {
 /**
  * internal bridge 不能直达 Docker Desktop 宿主。共享 sidecar 同时连普通 bridge 和
  * internal bridge，但代码只允许把 /gateway 路径转发到唯一上游，不提供 CONNECT 或任意目标代理。
+ *
+ * 返回 sidecar 在 restricted 网上的 IPv4，供沙箱 ExtraHosts 注入：rootless Podman 的
+ * internal bridge 常无嵌入式 DNS，容器名 `deepsonar-gateway-proxy` 解析失败会表现为
+ * Claude Code `Unable to connect to API (ENOTIMP)` / curl Could not resolve host。
  */
-async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<void> {
+async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<string> {
   gatewayProxyReady ??= (async () => {
     const parsed = new URL(upstreamUrl);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -158,7 +162,12 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<v
     }
     const inspect = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<string, unknown>;
     if (!(RESTRICTED_NETWORK in inspect)) {
-      await docker("network", "connect", RESTRICTED_NETWORK, GATEWAY_PROXY);
+      // --alias 让 Docker 嵌入 DNS 能解析容器名；Podman rootless 仍可能无 DNS，见 ExtraHosts。
+      try {
+        await docker("network", "connect", "--alias", GATEWAY_PROXY, RESTRICTED_NETWORK, GATEWAY_PROXY);
+      } catch {
+        await docker("network", "connect", RESTRICTED_NETWORK, GATEWAY_PROXY);
+      }
     }
     let ready = false;
     for (let i = 0; i < 20; i++) {
@@ -175,7 +184,14 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<v
     }
     if (!ready) throw new Error(`${GATEWAY_PROXY} 启动后未通过健康检查`);
   })();
-  return gatewayProxyReady;
+  await gatewayProxyReady;
+  const nets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<
+    string,
+    { IPAddress?: string }
+  >;
+  const ip = nets[RESTRICTED_NETWORK]?.IPAddress?.trim();
+  if (!ip) throw new Error(`${GATEWAY_PROXY} 未接入 ${RESTRICTED_NETWORK} 或缺少 IPv4`);
+  return ip;
 }
 
 /** dockerode createContainer 调用签名（只需要我们注入 HostConfig 的部分） */
@@ -190,7 +206,11 @@ interface CreateContainerOptions {
  * 只对带 deepsonar.job 标签的容器生效，SDK 升级也不影响其他调用方。
  * TODO(SEC-03 余项)：non-root 运行 + read_only_rootfs 需镜像侧配合（/workspace、/tmp 可写卷），留待 OPS。
  */
-function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"]): void {
+function hardenCreateContainer(
+  sandbox: Sandbox,
+  limits: ProvisionInput["limits"],
+  extraHosts: string[] = [],
+): void {
   const adapter = (sandbox as unknown as { adapter?: { client?: {
     createContainer: (opts: CreateContainerOptions) => Promise<unknown>;
   } } }).adapter;
@@ -203,11 +223,17 @@ function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"
   const noNewPrivileges = limits?.noNewPrivileges ?? true;
   client.createContainer = (opts: CreateContainerOptions) => {
     if (opts.Labels?.["deepsonar.job"]) {
+      const prevHosts = Array.isArray(opts.HostConfig?.ExtraHosts)
+        ? (opts.HostConfig!.ExtraHosts as string[])
+        : [];
       opts.HostConfig = {
         ...opts.HostConfig,
         PidsLimit: pidsLimit,
         ...(capDropAll ? { CapDrop: ["ALL"] } : {}),
         ...(noNewPrivileges ? { SecurityOpt: ["no-new-privileges:true"] } : {}),
+        ...(extraHosts.length > 0
+          ? { ExtraHosts: [...new Set([...prevHosts, ...extraHosts])] }
+          : {}),
       };
     }
     return orig(opts);
@@ -216,10 +242,13 @@ function hardenCreateContainer(sandbox: Sandbox, limits: ProvisionInput["limits"
 
 export class AgentboxRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
+    const extraHosts: string[] = [];
     if (input.network === "restricted") {
       await ensureRestrictedNetwork();
       if (!input.gatewayUpstreamUrl) throw new Error("restricted Worker 缺少 Gateway 上游 URL");
-      await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
+      const proxyIp = await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
+      // 固定主机名 → restricted 网 IP，避免 Podman internal 网无 DNS 时 ANTHROPIC_BASE_URL 不可达
+      extraHosts.push(`${GATEWAY_PROXY}:${proxyIp}`);
     }
     const sandbox = new Sandbox("local-docker", {
       image: input.image,
@@ -240,7 +269,7 @@ export class AgentboxRunner implements SandboxRunner {
         autoRemove: true,
       },
     });
-    hardenCreateContainer(sandbox, input.limits);
+    hardenCreateContainer(sandbox, input.limits, extraHosts);
     await sandbox.findOrProvision();
     const id = sandbox.id ?? `unknown-${input.jobId}`;
     sandboxes.set(id, sandbox);
