@@ -146,3 +146,35 @@ export function validateCredentialCompatibility(agentCli: string, provider: stri
   }
   return null;
 }
+
+export interface CredentialRuntimeConsumer {
+  source: string;
+  agentCli: string;
+  model: string | null;
+  projectId: string | null;
+}
+
+/** 校验 Credential 运行语义变更不会破坏既有 RoleConfig 或活动/待运行 Job。 */
+export function validateCredentialRuntimeMutation(input: {
+  provider: string;
+  projectId: string | null;
+  metadata: unknown;
+  consumers: CredentialRuntimeConsumer[];
+}): string | null {
+  if (!isProviderKnown(input.provider)) return `未知 provider: ${input.provider}`;
+  const allowed = allowedModelIds(input.metadata);
+  for (const consumer of input.consumers) {
+    const compatibilityError = validateCredentialCompatibility(consumer.agentCli, input.provider);
+    if (compatibilityError) return `${consumer.source} 不兼容：${compatibilityError}`;
+    if (input.projectId && consumer.projectId !== input.projectId) {
+      return `${consumer.source} 属于${consumer.projectId ? `项目 ${consumer.projectId}` : "全局配置"}，不能使用项目 ${input.projectId} 的 Credential`;
+    }
+    if (allowed.length > 0 && !consumer.model) {
+      return `${consumer.source} 未显式选择模型，不能绑定已启用模型白名单的 Credential`;
+    }
+    if (consumer.model && allowed.length > 0 && !allowed.includes(consumer.model)) {
+      return `${consumer.source} 的模型 ${consumer.model} 不在 Credential allowed_model_ids 白名单`;
+    }
+  }
+  return null;
+}

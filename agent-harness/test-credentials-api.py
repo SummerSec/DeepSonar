@@ -74,6 +74,20 @@ def main():
     req("PATCH", f"/credentials/{cid}", {"provider": "openai"}, expect=400)
     print("claude-code provider 兼容性拒绝 OK")
 
+    # 5.1 运行语义更新：不能用模型白名单破坏未选模型的绑定；普通 metadata 更新需审计
+    req("PATCH", f"/credentials/{cid}", {
+        "metadata": {"allowed_model_ids": ["kimi-k2"]},
+    }, expect=400)
+    updated = req("PATCH", f"/credentials/{cid}", {
+        "name": f"kimi-updated-{tag}",
+        "metadata": {"base_url": "https://api.kimi.example/v2/"},
+    })
+    assert updated["public_metadata_json"]["base_url"] == "https://api.kimi.example/v2"
+    assert updated["impact"]["role_config_count"] == 1
+    logs = req("GET", "/audit-logs?action=credential.update&limit=20")
+    assert any(log.get("resource_id") == cid for log in logs), "Credential 更新必须写审计日志"
+    print("metadata 一致性校验与更新审计 OK")
+
     # 6. 连接测试（假密钥 → 连接失败/401 均可，验证调用路径与无明文回显）
     t = req("POST", f"/credentials/{cid}/test")
     assert "ok" in t and secret not in json.dumps(t)

@@ -218,7 +218,7 @@ docs/               架构与实施文档
 - Agent 只提交 Finding、Fact 或决策提案，调度器是唯一副作用执行者；
 - 被审计代码和外部事件都属于不可信输入；
 - API Token 与模型/Plane 凭据严格分离；
-- Credential 生命周期：同一 `credential_id` 的 secret、`base_url` 和 metadata 在执行期读取即可生效，RoleConfig 无需重新保存。provider 迁移会拒绝仍被 `claimed`、`provisioning`、`running` 或 `waiting_human` Job 引用的凭据，并同步刷新所有 pending Job 快照；失败或终态 Job 保持历史快照，retry 会生成新快照。
+- Credential 生命周期：同一 `credential_id` 的 secret、`base_url` 和 metadata 在执行期读取即可生效，RoleConfig 无需重新保存。provider、项目归属或模型白名单变更会在事务内校验全部绑定及活动/待运行 Job，并记录 `credential.update` 审计；provider 迁移还会拒绝活动 Job 并同步刷新所有 pending Job 快照。失败或终态 Job 保持历史快照，retry 会生成新快照。
 - Agent 只能运行 Job 创建时冻结的已准入 digest，不能从任务内容指定 OCI 引用；
 - real 模式挂载 Docker Socket，等价于较高宿主权限，只能部署在受控主机。
 

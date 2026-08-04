@@ -28,6 +28,7 @@ import {
   isProviderKnown,
   last4Of,
   validateCredentialCompatibility,
+  validateCredentialRuntimeMutation,
   type Encrypted,
 } from "./credentials.js";
 import { listCredentialModels, testCredential } from "./credential-test.js";
@@ -3436,43 +3437,67 @@ export function registerRoutes(app: FastifyInstance) {
       .parse(req.body);
 
     const result = await sql.begin(async (tx) => {
-      if (body.provider !== undefined) {
+      const runtimeFieldsChanged = body.provider !== undefined || body.project_id !== undefined || body.metadata !== undefined;
+      if (runtimeFieldsChanged) {
         await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       }
-      const [existing] = await tx`SELECT id, kind, provider FROM credentials WHERE id = ${id} FOR UPDATE`;
+      const [existing] = await tx`
+        SELECT id, name, kind, provider, project_id, public_metadata_json
+        FROM credentials WHERE id = ${id} FOR UPDATE`;
       if (!existing) return null;
       const providerChanged = body.provider !== undefined && body.provider !== existing.provider;
-      const targetProvider = body.provider ?? "";
-      if (body.provider !== undefined && !isProviderKnown(body.provider)) {
-        return { error: `未知 provider: ${body.provider}` };
-      }
+      const targetProvider = body.provider ?? String(existing.provider);
+      const targetProjectId = body.project_id !== undefined
+        ? body.project_id
+        : (existing.project_id as string | null) ?? null;
+      const targetMetadata = body.metadata !== undefined
+        ? normalizeCredentialMeta(body.metadata)
+        : existing.public_metadata_json;
       const impact = { role_config_count: 0, pending_job_count: 0 };
-      if (providerChanged) {
+      if (providerChanged && existing.kind !== "llm_provider") {
+        return { error: "只有 llm_provider Credential 可以迁移 provider" };
+      }
+      if (runtimeFieldsChanged && existing.kind === "llm_provider") {
         const active = await tx`
           SELECT id FROM jobs
           WHERE status IN ('claimed','provisioning','running','waiting_human')
             AND agent_snapshot_json->>'credential_id' = ${id}
           LIMIT 1`;
-        if (active.length > 0) {
+        if (providerChanged && active.length > 0) {
           return { conflict: true, error: "Credential 仍被活动 Job 引用，不能迁移 provider" };
         }
         const bindings = await tx`
-          SELECT DISTINCT rc.role_config_id, rc.agent_cli
+          SELECT DISTINCT rc.id AS role_config_id, rc.agent_cli, rc.model, rc.project_id
           FROM role_credentials r
           JOIN role_configs rc ON rc.id = r.role_config_id
           WHERE r.credential_id = ${id} AND r.purpose = 'llm'`;
-        for (const binding of bindings) {
-          const compatibilityError = validateCredentialCompatibility(String(binding.agent_cli), targetProvider);
-          if (compatibilityError) return { error: compatibilityError };
-        }
-        const pendingAgentClis = await tx`
-          SELECT DISTINCT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli
+        const runtimeJobs = await tx`
+          SELECT id, status, project_id,
+                 COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
+                 NULLIF(agent_snapshot_json->>'model', '') AS model
           FROM jobs
-          WHERE status = 'pending' AND agent_snapshot_json->>'credential_id' = ${id}`;
-        for (const pendingJob of pendingAgentClis) {
-          const compatibilityError = validateCredentialCompatibility(String(pendingJob.agent_cli), targetProvider);
-          if (compatibilityError) return { error: `pending Job 快照不兼容：${compatibilityError}` };
-        }
+          WHERE status IN ('pending','claimed','provisioning','running','waiting_human')
+            AND agent_snapshot_json->>'credential_id' = ${id}`;
+        const mutationError = validateCredentialRuntimeMutation({
+          provider: targetProvider,
+          projectId: targetProjectId,
+          metadata: targetMetadata,
+          consumers: [
+            ...bindings.map((binding) => ({
+              source: `RoleConfig ${String(binding.role_config_id)}`,
+              agentCli: String(binding.agent_cli),
+              model: typeof binding.model === "string" && binding.model ? binding.model : null,
+              projectId: (binding.project_id as string | null) ?? null,
+            })),
+            ...runtimeJobs.map((job) => ({
+              source: `${job.status === "pending" ? "pending" : "活动"} Job ${String(job.id)}`,
+              agentCli: String(job.agent_cli),
+              model: typeof job.model === "string" && job.model ? job.model : null,
+              projectId: (job.project_id as string | null) ?? null,
+            })),
+          ],
+        });
+        if (mutationError) return { error: mutationError };
         impact.role_config_count = bindings.length;
       }
       const sets: Record<string, unknown> = {};
@@ -3480,11 +3505,10 @@ export function registerRoutes(app: FastifyInstance) {
       if (body.provider !== undefined) sets.provider = body.provider;
       if (body.project_id !== undefined) sets.project_id = body.project_id;
       if (body.metadata !== undefined) {
-        const normalized = normalizeCredentialMeta(body.metadata);
-        if (existing.kind !== "llm_provider" && (allowedModelIds(normalized).length > 0 || credentialConcurrencyPolicy(normalized).maxConcurrent !== null)) {
+        if (existing.kind !== "llm_provider" && (allowedModelIds(targetMetadata).length > 0 || credentialConcurrencyPolicy(targetMetadata).maxConcurrent !== null)) {
           return { error: "只有 llm_provider Credential 可设置模型或运行并发" };
         }
-        sets.public_metadata_json = normalized;
+        sets.public_metadata_json = targetMetadata;
       }
       if (providerChanged) {
         const pending = await tx`
@@ -3496,11 +3520,34 @@ export function registerRoutes(app: FastifyInstance) {
       }
       const [row] = await tx`
         UPDATE credentials SET ${tx(sets as never)} WHERE id = ${id} RETURNING ${CRED_SAFE}`;
-      return { row, impact };
+      return {
+        row,
+        impact,
+        before: {
+          name: existing.name,
+          provider: existing.provider,
+          project_id: existing.project_id,
+          public_metadata_json: existing.public_metadata_json,
+        },
+      };
     });
     if (!result) return reply.code(404).send({ error: "credential not found" });
     if ("conflict" in result && result.conflict) return reply.code(409).send({ error: result.error });
     if ("error" in result) return reply.code(400).send({ error: result.error });
+    await audit(req, {
+      action: "credential.update",
+      resourceType: "credential",
+      resourceId: id,
+      projectId: (result.row.project_id as string | null) ?? null,
+      before: result.before,
+      after: {
+        name: result.row.name,
+        provider: result.row.provider,
+        project_id: result.row.project_id,
+        public_metadata_json: result.row.public_metadata_json,
+        impact: result.impact,
+      },
+    });
     return { ...result.row, impact: result.impact };
   });
 
