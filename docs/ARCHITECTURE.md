@@ -245,6 +245,12 @@ canvas_nodes
 canvas_edges
   id, canvas_id, from_node_id, to_node_id, edge_type, created_at
   -- edge_type: child（任务 root→job）/ produces（job→finding）/ verifies（verify→finding）
+
+canvas_changes
+  canvas_id, revision, entity_type(node|edge|meta), entity_id,
+  op(upsert|delete), projection_json, changed_at
+  -- PK(canvas_id, revision)；canvases.change_revision 单调递增
+  -- canvases.change_floor_revision 标记保留窗口；过旧 delta 游标必须回退 L0
 ```
 
 要点：
@@ -252,6 +258,11 @@ canvas_edges
 - **画布以 nodes/edges 表为真相**（好查询、好索引、好并发）；tldraw document 只做读取时的物化组装，不存整文档
 - `events.event_id` 由宿主从控制工具调用生成（UUID），**所有事件处理幂等**：重复 event_id 直接返回上次结果
 - `findings.fingerprint` 是派生去重和画布合并展示的基础
+- 画布 L0 通过 `GET /canvases/{id}/summary` 取得当前 `revision`，运行中用
+  `GET /canvases/{id}/delta?since=<revision>` 读取 `(since, upper]` 的持久化变更。
+  变更日志在同一 Postgres 事务内锁画布、推进 revision、写入事件时 projection 和
+  tombstone；游标低于 `change_floor_revision` 时返回 `CURSOR_GAP`，客户端只重取
+  有界 L0，不重复传输历史 `body_json`。
 
 ### 6.1 Finding Schema 对齐 SARIF 2.1.0
 
