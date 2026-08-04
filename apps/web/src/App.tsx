@@ -12,7 +12,7 @@ const ProjectLayout = lazy(() => import("./pages/ProjectLayout").then((module) =
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const ProjectDataPage = lazy(() => import("./pages/ProjectDataPage").then((module) => ({ default: module.ProjectDataPage })));
-const TaskCanvasPage = lazy(() => import("./pages/TaskCanvasPage").then((module) => ({ default: module.TaskCanvasPage })));
+const TaskCanvasRoute = lazy(() => import("./pages/TaskCanvasRoute").then((module) => ({ default: module.TaskCanvasRoute })));
 const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
 const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ default: module.LoginPage })));
@@ -109,7 +109,7 @@ export default function App() {
             path="tasks/:canvasId"
             element={
               <Deferred>
-                <TaskCanvasPage />
+                <TaskCanvasRoute />
               </Deferred>
             }
           />

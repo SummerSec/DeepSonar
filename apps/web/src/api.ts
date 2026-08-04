@@ -1,6 +1,6 @@
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
-import type { PlatformToolConfig } from "@deepsonar/shared-types";
+import type { PlatformToolConfig, ReadinessResponse } from "@deepsonar/shared-types";
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
 
@@ -959,6 +959,14 @@ export const api = {
       allow_egress?: boolean;
     },
   ) => send<{ canvas_id: string; job: { id: string; status: string } }>("POST", `/projects/${projectId}/tasks`, t),
+  /** 任务创建前的 Scheduler 权威就绪检查；网络覆盖只作用于本次任务。 */
+  readiness: (projectId: string, opts?: { allow_egress?: boolean; material_source?: string }) =>
+    get<ReadinessResponse>(
+      `/projects/${projectId}/readiness${qs({
+        allow_egress: opts?.allow_egress === undefined ? undefined : String(opts.allow_egress),
+        material_source: opts?.material_source,
+      })}`,
+    ),
   /** 恢复会话：继续执行（恢复 Job / 唤醒 Hub），不删历史 */
   resumeTaskSession: (canvasId: string) =>
     send<{
