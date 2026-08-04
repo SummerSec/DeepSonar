@@ -13,42 +13,25 @@ import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
 import { expandModules } from "./skill-sources.js";
+import {
+  canTransition as canJobTransition,
+  transitionJob as applyJobTransition,
+} from "./domains/job-lifecycle/index.js";
 
-// ---------- 状态机（§3.3）：允许的状态迁移 ----------
-
-const TRANSITIONS: Record<string, string[]> = {
-  pending: ["claimed", "cancelled"],
-  claimed: ["provisioning", "cancelled", "failed"],
-  provisioning: ["running", "failed", "cancelled"],
-  running: ["succeeded", "failed", "timeout", "orphan", "cancelled", "waiting_human"],
-  waiting_human: ["pending", "cancelled", "failed"], // resume → pending 重入队
-  // 终态失败可经 resume-session / resume 复活（继续执行，保留历史）；
-  // cancelled 不可复活；全部重来用 /tasks/:id/retry（清空画布历史后重跑）
-  failed: ["pending"],
-  timeout: ["pending"],
-  orphan: ["pending"],
-  // 绝对终态：succeeded / cancelled
-};
-
-export function canTransition(from: string, to: string): boolean {
-  return (TRANSITIONS[from] ?? []).includes(to);
-}
+// ---------- Job lifecycle compatibility facade ----------
+//
+// Existing callers keep importing these names from core while the bounded
+// context owns the policy and SQL application seam.  Keep this facade narrow
+// until dispatcher/reaper/reconcile migrate explicitly in later slices.
+export const canTransition = canJobTransition;
 
 /**
- * 原子状态迁移（§8.1）：WHERE 显式限定合法源状态。
- * 返回 null = 竞态或非法迁移，调用方不得继续 provision/执行/写完成事件。
+ * Atomic status transition.  A null result still means a race or illegal
+ * source state; callers must not continue provisioning or terminal side
+ * effects when the guarded update did not win.
  */
 export async function transitionJob(jobId: string, to: string, patch: Record<string, unknown> = {}) {
-  const allowedFrom = Object.entries(TRANSITIONS)
-    .filter(([, tos]) => tos.includes(to))
-    .map(([from]) => from);
-  if (allowedFrom.length === 0) throw new Error(`非法目标状态: ${to}`);
-  const sets = { status: to, ...patch };
-  const [row] = await sql`
-    UPDATE jobs SET ${sql(sets)}
-    WHERE id = ${jobId} AND status = ANY(${allowedFrom})
-    RETURNING id, status`;
-  return row ?? null;
+  return applyJobTransition(jobId, to, patch);
 }
 
 export function sha16(s: string): string {
