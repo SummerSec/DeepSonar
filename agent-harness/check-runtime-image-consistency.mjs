@@ -245,7 +245,10 @@ expect(releaseWorkflow.includes("docker/login-action@v3"), "release workflow 缺
 expect(releaseWorkflow.includes("set -euo pipefail"), "release workflow shell 必须启用严格模式");
 expect(releaseWorkflow.includes('owner="${GITHUB_REPOSITORY_OWNER,,}"'), "release workflow 必须输出小写 repository owner");
 expect(releaseWorkflow.includes("owner: ${{ steps.release.outputs.owner }}"), "base-image 必须暴露小写 owner job output");
-expect(releaseWorkflow.includes("needs.base-image.outputs.owner"), "依赖 job 必须使用 base-image 小写 owner output");
+expect(!releaseWorkflow.includes("needs.base-image.outputs.owner"), "依赖 job 不得使用可能为空的 base-image owner job output");
+expect(releaseWorkflow.includes("steps.release.outputs.owner"), "各发布 job 必须在本 job 内使用小写 owner step output");
+expect(releaseWorkflow.includes("解析 registry 命名空间"), "依赖 job 必须本地解析 registry 命名空间");
+expect(releaseWorkflow.includes("steps.release.outputs.image_name"), "Kali job 必须在本 job 内生成完整 GHCR image_name");
 expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow 不得直接使用 github.repository_owner 拼接 OCI 引用");
 if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));

@@ -168,6 +168,17 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -216,7 +227,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-${{ matrix.name }}
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           labels: |
             org.opencontainers.image.title=${{ matrix.title }}
             org.opencontainers.image.description=${{ matrix.description }}
@@ -274,7 +285,7 @@ jobs:
           IMAGE_KEY: deepsonar-${{ matrix.name }}
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
-          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-${{ matrix.name }}
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
           VERSION: ${{ github.ref_name }}
@@ -301,9 +312,20 @@ jobs:
       ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
       ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
-      IMAGE_NAME: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-kali-minimal
     steps:
       - uses: actions/checkout@v4
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+          printf 'image_name=ghcr.io/%s/deepsonar-kali-minimal\n' "$owner" >> "$GITHUB_OUTPUT"
       - name: Free disk for Kali multi-arch
         run: |
           set -euo pipefail
@@ -355,7 +377,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ steps.release.outputs.image_name }}
           labels: |
             org.opencontainers.image.title=DeepSonar Kali Test
             org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
@@ -396,7 +418,7 @@ jobs:
           context: .
           file: deploy/Dockerfile.agent-kali-minimal
           platforms: linux/amd64
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.release.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
@@ -417,7 +439,7 @@ jobs:
           context: .
           file: deploy/Dockerfile.agent-kali-minimal
           platforms: linux/arm64
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.release.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
@@ -427,6 +449,7 @@ jobs:
       - name: Create multi-arch tags
         id: merge
         env:
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
           AMD64_DIGEST: ${{ steps.build-amd64.outputs.digest }}
           ARM64_DIGEST: ${{ steps.build-arm64.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
@@ -472,7 +495,7 @@ jobs:
           IMAGE_KEY: deepsonar-kali-minimal
           DIGEST: ${{ steps.merge.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
-          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-kali-minimal
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-kali-minimal
           ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-kali-minimal
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
           VERSION: ${{ github.ref_name }}
@@ -497,6 +520,17 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -536,7 +570,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-test
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           labels: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Test
             org.opencontainers.image.description=OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。
@@ -581,7 +615,7 @@ jobs:
             ${{ steps.acr-meta.outputs.tags }}
             ${{ steps.dockerhub-meta.outputs.tags }}
           platforms: linux/amd64,linux/arm64
-          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-base:${{ needs.base-image.outputs.version }}
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
@@ -593,10 +627,10 @@ jobs:
           IMAGE_KEY: deepsonar-openharmony-test
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
-          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-test
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-test
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
-          VERSION: ${{ needs.base-image.outputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-test.json
@@ -618,6 +652,17 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -657,7 +702,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-audit
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           labels: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Audit
             org.opencontainers.image.description=OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。
@@ -702,7 +747,7 @@ jobs:
             ${{ steps.acr-meta.outputs.tags }}
             ${{ steps.dockerhub-meta.outputs.tags }}
           platforms: linux/amd64,linux/arm64
-          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-base:${{ needs.base-image.outputs.version }}
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
@@ -714,10 +759,10 @@ jobs:
           IMAGE_KEY: deepsonar-openharmony-audit
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
-          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-audit
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-audit
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
-          VERSION: ${{ needs.base-image.outputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-audit.json
@@ -739,6 +784,17 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -778,7 +834,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-fuzz
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           labels: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
             org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
@@ -823,7 +879,7 @@ jobs:
             ${{ steps.acr-meta.outputs.tags }}
             ${{ steps.dockerhub-meta.outputs.tags }}
           platforms: linux/amd64,linux/arm64
-          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-base:${{ needs.base-image.outputs.version }}
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
@@ -835,10 +891,10 @@ jobs:
           IMAGE_KEY: deepsonar-openharmony-fuzz
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
-          GHCR_REF: ghcr.io/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-fuzz
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-fuzz
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
-          VERSION: ${{ needs.base-image.outputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-fuzz.json
@@ -858,6 +914,17 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           pattern: runtime-image-digest-*
@@ -865,8 +932,8 @@ jobs:
           merge-multiple: true
       - name: 生成 runtime 镜像清单
         env:
-          VERSION: ${{ needs.base-image.outputs.version }}
-          OWNER: ${{ needs.base-image.outputs.owner }}
+          VERSION: ${{ steps.release.outputs.version }}
+          OWNER: ${{ steps.release.outputs.owner }}
         run: |
           set -euo pipefail
           node agent-harness/generate-runtime-image-registry.mjs release-digests deploy/runtime-image-registry.json
