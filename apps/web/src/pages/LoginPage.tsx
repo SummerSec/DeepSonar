@@ -79,12 +79,6 @@ export function LoginPage() {
             尚无用户。创建首位管理员账号后即可登录控制台。
           </p>
         )}
-        {status?.default_admin_credentials_active && (
-          <p className="mb-4 text-[12px] leading-5 text-zinc-500">
-            新库默认管理员：<span className="font-mono text-zinc-300">admin / Deep@Sonar66</span>。生产首次登录后请立即修改账号与密码。
-          </p>
-        )}
-
         <div className="mb-4 flex gap-1 rounded-full bg-black/20 p-1">
           {(status?.bootstrap_available
             ? (["bootstrap", "token"] as const)
