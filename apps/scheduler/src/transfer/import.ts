@@ -2,6 +2,8 @@
  * 项目导入：预览 + create_new / merge_configuration
  */
 import { randomUUID } from "node:crypto";
+import { validateCredentialRoleConfigBinding } from "../credentials.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import {
   loadPackFile,
@@ -314,11 +316,19 @@ async function importRoleConfigs(
   },
   skipExisting = false,
 ) {
+  // Keep imported RoleConfig bindings in the same critical section as the
+  // Credential provider/project/metadata mutation path.  Credential PATCH
+  // takes this lock before its row lock, so imported bindings cannot race its
+  // consumer validation.
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
   const configs = readJsonl(pack.files, "data/role-configs.jsonl");
   for (const rc of configs) {
     const roleName = String(rc.role_name);
     const [role] = await tx`SELECT id FROM agent_roles WHERE name = ${roleName}`;
     if (!role) continue; // 自定义角色未创建时跳过（builtin 名应存在）
+
+    const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+    const model = typeof rc.model === "string" && rc.model ? rc.model : null;
 
     if (skipExisting) {
       const [ex] = await tx`
@@ -332,8 +342,8 @@ async function importRoleConfigs(
       INSERT INTO role_configs ${tx({
         role_id: role.id as string,
         project_id: projectId,
-        agent_cli: (rc.agent_cli as string) ?? "claude-code",
-        model: (rc.model as string) ?? null,
+        agent_cli: agentCli,
+        model,
         reasoning: (rc.reasoning as string) ?? null,
         env_keys: (rc.env_keys as string[]) ?? [],
         env_vars_json: ((rc.env_vars as object) ?? {}) as never,
@@ -371,11 +381,27 @@ async function importRoleConfigs(
     for (const c of creds) {
       const targetCred = id_map.credentials[c.source_credential_id];
       if (!targetCred) continue;
+      const [credential] = await tx`
+        SELECT id, project_id, provider, public_metadata_json
+        FROM credentials WHERE id = ${targetCred} FOR UPDATE`;
+      if (!credential) throw new Error(`Credential 不存在: ${targetCred}`);
+      const purpose = c.purpose ?? "llm";
+      const bindingError = validateCredentialRoleConfigBinding({
+        source: `RoleConfig ${roleName} → Credential ${targetCred}`,
+        purpose,
+        agentCli,
+        model,
+        credentialProjectId: (credential.project_id as string | null) ?? null,
+        roleConfigProjectId: projectId,
+        provider: String(credential.provider ?? ""),
+        metadata: credential.public_metadata_json,
+      });
+      if (bindingError) throw new Error(bindingError);
       await tx`
         INSERT INTO role_credentials ${tx({
           role_config_id: created.id as string,
           credential_id: targetCred,
-          purpose: c.purpose ?? "llm",
+          purpose,
         })}
         ON CONFLICT DO NOTHING`;
     }

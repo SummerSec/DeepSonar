@@ -154,6 +154,17 @@ export interface CredentialRuntimeConsumer {
   projectId: string | null;
 }
 
+export interface CredentialRoleConfigBinding {
+  source: string;
+  purpose: string;
+  agentCli: string;
+  model: string | null;
+  credentialProjectId: string | null;
+  roleConfigProjectId: string | null;
+  provider: string;
+  metadata: unknown;
+}
+
 /** 校验 Credential 运行语义变更不会破坏既有 RoleConfig 或活动/待运行 Job。 */
 export function validateCredentialRuntimeMutation(input: {
   provider: string;
@@ -177,4 +188,24 @@ export function validateCredentialRuntimeMutation(input: {
     }
   }
   return null;
+}
+
+/** Validate one imported/API RoleConfig binding against a Credential snapshot. */
+export function validateCredentialRoleConfigBinding(input: CredentialRoleConfigBinding): string | null {
+  if (input.credentialProjectId && input.credentialProjectId !== input.roleConfigProjectId) {
+    if (!input.roleConfigProjectId) return `全局 RoleConfig 只能绑定全局 Credential（${input.source}）`;
+    return `${input.source} 属于项目 ${input.credentialProjectId}，不能绑定到项目 ${input.roleConfigProjectId}`;
+  }
+  if (input.purpose !== "llm") return null;
+  return validateCredentialRuntimeMutation({
+    provider: input.provider,
+    projectId: input.credentialProjectId,
+    metadata: input.metadata,
+    consumers: [{
+      source: input.source,
+      agentCli: input.agentCli,
+      model: input.model,
+      projectId: input.roleConfigProjectId,
+    }],
+  });
 }
