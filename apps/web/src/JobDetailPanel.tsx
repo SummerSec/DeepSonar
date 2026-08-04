@@ -266,8 +266,8 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
       aria-label="运行详情"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <aside className="theme-drawer flex h-full w-full max-w-[900px] flex-col border-l">
-        <header className="theme-drawer-header theme-divider flex shrink-0 items-center gap-3 border-b px-5 py-4">
+      <aside className="theme-drawer flex h-full min-h-0 w-full max-w-[900px] flex-col border-l">
+        <header className="theme-drawer-header theme-divider flex shrink-0 flex-wrap items-start gap-3 border-b px-5 py-4">
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] uppercase tracking-[.18em] text-zinc-600">
               运行详情
@@ -300,7 +300,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               </div>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
             {detail && ACTIVE.has(detail.job.status) && (
               <button
                 type="button"
@@ -317,7 +317,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               type="button"
               onClick={onClose}
               aria-label="关闭运行详情"
-              className="theme-surface flex size-9 items-center justify-center rounded-full text-zinc-500 ring-1 hover:opacity-90"
+              className="theme-surface flex size-9 items-center justify-center rounded-full text-zinc-500 ring-1 hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acc-400"
             >
               <X size={16} />
             </button>
@@ -362,7 +362,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           </div>
         )}
 
-        <nav className="theme-divider flex shrink-0 gap-1 overflow-x-auto border-b p-2">
+        <nav className="theme-divider flex min-w-0 shrink-0 gap-1 overflow-x-auto border-b p-2">
           {tabs.map(([key, label, count]) => (
             <button
               key={key}

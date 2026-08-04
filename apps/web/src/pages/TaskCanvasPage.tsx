@@ -118,6 +118,9 @@ export function TaskCanvasPage() {
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [findings, setFindings] = useState<FindingSummary[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [jobStatusFilter, setJobStatusFilter] = useState("");
+  const [jobRoleTypeFilter, setJobRoleTypeFilter] = useState("");
+  const [jobKeyword, setJobKeyword] = useState("");
   const [convergence, setConvergence] = useState<CanvasConvergence | null>(null);
   const [convBusy, setConvBusy] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -330,6 +333,23 @@ export function TaskCanvasPage() {
   const visibleFindings = findings.filter(
     (finding) => (!severity || finding.severity === severity) && (!verify || finding.verify_status === verify),
   );
+  const jobRoleTypeOptions = useMemo(
+    () => Array.from(new Set(jobs.flatMap((job) => [job.role_name, job.type].filter((value): value is string => Boolean(value))))).sort(),
+    [jobs],
+  );
+  const visibleJobs = useMemo(() => {
+    const keyword = jobKeyword.trim().toLowerCase();
+    return jobs.filter((job) => {
+      const matchesStatus = !jobStatusFilter || job.status === jobStatusFilter;
+      const matchesRoleType = !jobRoleTypeFilter || job.role_name === jobRoleTypeFilter || job.type === jobRoleTypeFilter;
+      const searchable = [job.id, job.type, job.role_name, job.agent_cli, job.model, job.credential_provider, job.error]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return matchesStatus && matchesRoleType && (!keyword || searchable.includes(keyword));
+    });
+  }, [jobKeyword, jobRoleTypeFilter, jobStatusFilter, jobs]);
+  const hasJobFilters = Boolean(jobStatusFilter || jobRoleTypeFilter || jobKeyword);
 
   const tabs: { key: Tab; label: string; count?: number; icon: typeof Graph }[] = [
     { key: "canvas", label: "过程画布", icon: Graph },
@@ -631,11 +651,25 @@ export function TaskCanvasPage() {
 
         {tab === "jobs" && (
           <div className="h-full overflow-y-auto p-4 sm:p-6">
-            <p className="mb-5 text-[11px] leading-5 text-zinc-600">
+            <div className="mb-4 flex flex-col gap-3 rounded-2xl bg-white/[.018] p-3 ring-1 ring-white/[.045] sm:flex-row sm:flex-wrap sm:items-end">
+              <FilterSelect value={jobStatusFilter} onChange={setJobStatusFilter} placeholder="全部状态" options={Array.from(new Set(jobs.map((job) => job.status))).sort().map((value) => ({ value, label: value }))} label="状态" />
+              <FilterSelect value={jobRoleTypeFilter} onChange={setJobRoleTypeFilter} placeholder="全部角色 / 类型" options={jobRoleTypeOptions.map((value) => ({ value, label: value }))} label="角色 / Job 类型" />
+              <label className="filter-control min-w-0 flex-1 sm:min-w-[14rem]">
+                <span>关键词</span>
+                <input value={jobKeyword} onChange={(event) => setJobKeyword(event.target.value)} placeholder="ID、模型、凭据等" className="theme-input-surface w-full border px-3 py-1.5 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600" />
+              </label>
+              <div className="flex items-center gap-3 sm:ml-auto">
+                <span className="font-mono text-[10px] text-zinc-500">显示 {visibleJobs.length} / {jobs.length}</span>
+                {hasJobFilters && <button type="button" onClick={() => { setJobStatusFilter(""); setJobRoleTypeFilter(""); setJobKeyword(""); }} className="font-mono text-[10px] text-acc-400 transition-colors hover:text-acc-300">清空</button>}
+              </div>
+            </div>
+            <p className="mb-4 text-[11px] leading-5 text-zinc-600">
               只列出挂在本任务画布上的 Job（审计 / 验证等），不含其它任务。
             </p>
             {jobs.length === 0 ? (
               <EmptyState title="本任务暂无运行记录" hint="调度领取后会出现在这里" />
+            ) : visibleJobs.length === 0 ? (
+              <EmptyState title="没有匹配的运行记录" hint="调整状态、角色 / Job 类型或关键词后重试。" action={<button type="button" onClick={() => { setJobStatusFilter(""); setJobRoleTypeFilter(""); setJobKeyword(""); }} className="rounded-full bg-white/[.05] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.08]">清空筛选</button>} />
             ) : (
               <DataTable>
                 <table className="w-full min-w-[800px]">
@@ -651,7 +685,7 @@ export function TaskCanvasPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {jobs.map((j) => (
+                    {visibleJobs.map((j) => (
                       <tr key={j.id} onClick={() => setQuery("job", j.id)} className="cursor-pointer transition-colors hover:bg-ink-850/80">
                         <td className={tdCls}>
                           <StatusBadge status={j.status} />

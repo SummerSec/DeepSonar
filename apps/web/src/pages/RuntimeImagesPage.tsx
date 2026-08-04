@@ -481,8 +481,8 @@ export function RuntimeImagesPage() {
             : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。「同步市场」拉 GitHub Release；不可达时用「手动更新市场」选择本机 runtime-image-registry.json 上传入库。一平台一版本，项目可固定平台 digest。"
         }
         actions={
-          <div className="flex gap-2">
-            <label className="selector-search min-w-[220px]">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+            <label className="selector-search min-w-0 flex-1 sm:min-w-[220px]">
               <MagnifyingGlass size={14} />
               <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索镜像、发布者、key" />
             </label>
@@ -684,10 +684,10 @@ export function RuntimeImagesPage() {
         <div className="grid gap-4 xl:grid-cols-2">
           {rows.filter((image) => imageMatchesPlatform(image, platformFilter)).map((image) => (
             <article key={image.id} className="surface-shell">
-              <div className="surface-core flex h-full flex-col p-5">
-                <div className="flex items-start gap-4">
-                  <span className="rounded-2xl bg-white/[.035] p-3 text-acc-300 ring-1 ring-white/[.06]">
-                    <Cube size={22} weight="light" />
+              <div className="surface-core flex h-full flex-col p-4">
+                <div className="flex items-start gap-3">
+                  <span className="rounded-xl bg-white/[.035] p-2.5 text-acc-300 ring-1 ring-white/[.06]">
+                    <Cube size={20} weight="light" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -707,36 +707,36 @@ export function RuntimeImagesPage() {
                     <p className="mt-1 font-mono text-[9px] text-zinc-600">{image.image_key}</p>
                   </div>
                 </div>
-                <p className="mt-4 min-h-10 text-xs leading-5 text-zinc-500">{image.description || "暂无描述"}</p>
-                <div className="mt-4 grid grid-cols-2 gap-2 border-y border-white/[.045] py-3 text-[10px] sm:grid-cols-3">
-                  <div>
-                    <span className="block font-mono text-zinc-700">AUTHOR</span>
-                    <strong className="mt-1 block font-normal text-zinc-400">{image.publisher}</strong>
+                <p className="mt-3 min-h-8 line-clamp-2 text-[11px] leading-4 text-zinc-500">{image.description || "暂无描述"}</p>
+                <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 border-y border-white/[.045] py-2 text-[10px] sm:grid-cols-3">
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 font-mono text-zinc-700">AUTHOR</span>
+                    <strong className="min-w-0 truncate font-normal text-zinc-400">{image.publisher}</strong>
                   </div>
-                  <div>
-                    <span className="block font-mono text-zinc-700">VERSION</span>
-                    <strong className="mt-1 block font-mono font-normal text-zinc-400">{image.latest_version ?? "—"}</strong>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 font-mono text-zinc-700">VERSION</span>
+                    <strong className="min-w-0 truncate font-mono font-normal text-zinc-400">{image.latest_version ?? "—"}</strong>
                   </div>
-                  <div>
-                    <span className="block font-mono text-zinc-700">SIZE</span>
-                    <strong className="mt-1 block font-mono font-normal text-zinc-400">{sizeLabel(image.size_bytes)}</strong>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 font-mono text-zinc-700">SIZE</span>
+                    <strong className="min-w-0 truncate font-mono font-normal text-zinc-400">{sizeLabel(image.size_bytes)}</strong>
                   </div>
-                  <div>
-                    <span className="block font-mono text-zinc-700">DIGEST</span>
-                    <strong className="mt-1 block font-mono font-normal text-zinc-400" title={image.digest ?? undefined}>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 font-mono text-zinc-700">DIGEST</span>
+                    <strong className="min-w-0 truncate font-mono font-normal text-zinc-400" title={image.digest ?? undefined}>
                       {shortDigest(image.digest)}
                     </strong>
                   </div>
-                  <div>
-                    <span className="block font-mono text-zinc-700">PLATFORMS</span>
-                    <strong className="mt-1 block font-normal text-zinc-400">{platformLabel(image.platforms_json)}</strong>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 font-mono text-zinc-700">PLATFORMS</span>
+                    <strong className="min-w-0 truncate font-normal text-zinc-400">{platformLabel(image.platforms_json)}</strong>
                   </div>
-                  <div>
-                    <span className="block font-mono text-zinc-700">TOOLS</span>
-                    <strong className="mt-1 block font-normal text-zinc-400">{image.tools_json?.length ?? 0} 项</strong>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 font-mono text-zinc-700">TOOLS</span>
+                    <strong className="min-w-0 truncate font-normal text-zinc-400">{image.tools_json?.length ?? 0} 项</strong>
                   </div>
                 </div>
-                <div className="mt-4 flex flex-wrap items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button className="secondary-button" disabled={busy === image.id} onClick={() => open(image.id)}>
                     版本与证据
                   </button>
@@ -831,7 +831,7 @@ export function RuntimeImagesPage() {
             if (event.target === event.currentTarget) setSelected(null);
           }}
         >
-          <aside className="h-full w-full max-w-[620px] overflow-y-auto border-l border-white/[.07] bg-[#0e1214] p-6 shadow-2xl">
+          <aside className="h-full w-full max-w-[620px] overflow-y-auto border-l border-white/[.07] bg-[#0e1214] p-4 shadow-2xl sm:p-6">
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
                 <span className="font-mono text-[9px] tracking-[.16em] text-acc-300">RUNTIME EVIDENCE</span>

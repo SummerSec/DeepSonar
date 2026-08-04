@@ -160,7 +160,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
       aria-label="Finding 详情"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <aside className="theme-drawer flex h-full w-full max-w-[1040px] flex-col border-l">
+      <aside className="theme-drawer flex h-full min-h-0 w-full max-w-[1040px] flex-col border-l">
         {/* Issue header */}
         <header className="theme-drawer-header theme-divider shrink-0 border-b px-5 py-4 sm:px-6">
           <div className="flex items-start gap-3">
@@ -193,7 +193,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
               type="button"
               onClick={onClose}
               aria-label="关闭"
-              className="theme-surface flex size-9 shrink-0 items-center justify-center rounded-full text-zinc-500 ring-1 hover:opacity-90"
+              className="theme-surface flex size-9 shrink-0 items-center justify-center rounded-full text-zinc-500 ring-1 hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acc-400"
             >
               <X size={16} />
             </button>

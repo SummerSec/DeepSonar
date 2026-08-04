@@ -107,7 +107,7 @@ export function AppShell() {
     </aside>
 
     <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>深流循迹</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
-    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><div className="mobile-menu-foot"><span className="deepsonar-live-dot" /> 调度器在线</div></div>
+    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><UserRailFooter collapsed={false} /><div className="mobile-menu-foot"><span className="deepsonar-live-dot" /> 调度器在线</div></div>
     {commandOpen && <CommandMenu projectId={projectId} onClose={() => setCommandOpen(false)} onNavigate={(to) => { navigate(to); setCommandOpen(false); }} />}
     <main id="main-content" className="app-stage"><Outlet /></main>
   </div>;

@@ -430,7 +430,7 @@ export function SettingsPanel({
   const shellCls =
     variant === "page"
       ? "settings-panel flex h-full w-full flex-col bg-transparent"
-      : "theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-30 flex w-[440px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]";
+      : "theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-30 flex w-[calc(100%-1rem)] max-w-[440px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]";
 
   // 全局模式：角色注册表（含运行配置）/ 模块源 / 全局规则；项目模式：规则覆盖 / 角色启用与覆盖 / Plane 集成
   // 项目数据包在项目模块「数据」页；此处项目设置只做策略。平台包仅在全局 Agent 管理。
