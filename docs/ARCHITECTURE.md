@@ -428,13 +428,26 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 - 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
-- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 整图 YAML；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
-- Hub 可下发工作角色输入 = 整图 YAML + 当前意图；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
+- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 服务端 `GraphScope=hub` 投影；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
+- Hub 可下发工作角色输入 = 自包含 intent prompt + 服务端 `GraphScope=agent` 引用邻域；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 true，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED` 可覆盖关闭）、`maxHubRounds`、`maxIntentsPerDecision`；`allowEgress` 同样默认 true，任务创建时可覆盖并冻结到画布
 - **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 需要派发时主动调用 `list_available_roles` 平台工具；工具从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不把角色清单预埋进 prompt，也不维护代码侧固定角色枚举。`submit_hub_decision` 落地时调度器用同一数据库边界再次校验，缺失、停用或 system/hub 角色会令整次决策失败，不做默认回退。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；所有 `kind='role'` 条目（包括内置模板）都可删除或新增。`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单且不可删除，但职责描述和 RoleConfig 均可修改。其中 `audit` 产出 Finding，其余工作角色产出 Fact
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
+
+### 8.5 图上下文预算与读图作用域
+
+调度器在服务端按 Job 类型生成分级图投影，不把整张过程图直接注入每个沙箱：
+
+| Scope | 默认字符硬预算 | 注入内容 |
+|-------|----------------|----------|
+| `hub` | 48,000 | 全 Finding `verify_status` 索引、开放意图、事实索引、近期/触发相关摘要与 hints |
+| `agent` | 16,000 | 自包含 prompt 作为独立主输入；图投影仅提供 intent 元数据、`from` 引用邻域与已确认背景 |
+| `verify` | 24,000 | 目标 Finding 与相关验证证据短字段；硬门权威仍是冻结证据快照 |
+| `report` | 8,000 | 目标与状态元数据；完整输入以 Scheduler 生成的 `report-input.json` 为准 |
+
+预算由 `MAX_GRAPH_YAML_CHARS_HUB/AGENT/VERIFY/REPORT` 配置但由 Scheduler 强制执行。超预算时投影写入顶层 `truncated: true` 与 `omitted` 计数；返回的 `referableIds` 始终来自完整画布，供服务端校验 `intent.from`。每次投影的 scope、字符数、节点计数和截断状态写入 Job runtime evidence，并暴露为 Prometheus 计数器。
 
 ---
 

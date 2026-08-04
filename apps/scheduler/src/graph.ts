@@ -1,152 +1,444 @@
 import { sql } from "./db.js";
+import { config } from "./config.js";
 
-/**
- * 图语义（Cairn 式 fact-intent 二分图，ARCHITECTURE §8.3）：
- * hub_reason 读整张图画决策；角色 agent（explore 等）把发现写成 fact 节点。
- * 本模块负责：图 → prompt 用 YAML 文本；agent 输出 → 结构化解析。
- */
+/** Server-side bounded graph projections for Hub/Worker prompt inputs. */
+export type GraphScope = "hub" | "agent" | "verify" | "report";
+
+export interface GraphSnapshotOptions {
+  intentNodeId?: string | null;
+  intent?: { description?: string; prompt?: string; from?: string[] };
+  findingId?: string | null;
+  relatedNodeIds?: string[];
+  maxYamlChars?: number;
+}
 
 export interface GraphSnapshot {
+  scope: GraphScope;
   goal: string;
   target: Record<string, unknown>;
   yaml: string;
-  /** 图中可被 intent.from 引用的节点 id（fact/finding/root） */
+  /** Full canvas fact/finding/root IDs used for server-side from validation. */
   referableIds: string[];
   openIntentCount: number;
+  yamlChars: number;
+  truncated: boolean;
+  omitted: Record<string, number>;
+  nodeCounts: Record<string, number>;
 }
 
-/** 行式 YAML（LLM 消费用；字符串值 JSON 转义，避免手写 block scalar） */
 function kv(key: string, value: unknown): string {
-  return `${key}: ${JSON.stringify(value ?? null)}`;
+  return key + ": " + JSON.stringify(value ?? null);
 }
 
-export async function buildGraphSnapshot(canvasId: string): Promise<GraphSnapshot> {
+function short(value: unknown, max: number): string {
+  const valueText = String(value ?? "");
+  return valueText.length > max ? valueText.slice(0, Math.max(0, max - 1)) + "…" : valueText;
+}
+
+function boundedJson(value: unknown, max: number): unknown {
+  const raw = JSON.stringify(value ?? null);
+  if (raw.length <= max) return value ?? null;
+  return { truncated: true, preview: short(raw, Math.max(80, max - 64)) };
+}
+
+function budgetFor(scope: GraphScope): number {
+  if (scope === "hub") return config.graph.maxYamlCharsHub;
+  if (scope === "agent") return config.graph.maxYamlCharsAgent;
+  if (scope === "verify") return config.graph.maxYamlCharsVerify;
+  return config.graph.maxYamlCharsReport;
+}
+
+function row(value: Record<string, unknown>): string {
+  return "  - " + JSON.stringify(value);
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+export function graphProjectionMarkers(
+  truncated: boolean,
+  omitted: Record<string, number>,
+): { truncated: string; omitted: string } {
+  return { truncated: kv("truncated", truncated), omitted: kv("omitted", omitted) };
+}
+
+export interface FindingIndexInput {
+  id: string;
+  title?: string | null;
+  severity?: string | null;
+  verify_status?: string | null;
+  verification_attempt?: number | null;
+  missing_evidence?: string[];
+}
+
+/**
+ * Serialize the mandatory Hub Finding index independently of optional graph
+ * sections. The compact fallback is intentionally tested and reusable.
+ */
+export function serializeFindingStatusIndex(
+  findings: readonly FindingIndexInput[],
+  maxChars: number,
+): { lines: string[]; truncated: boolean; omitted: number } {
+  const full = [
+    "findings_index:",
+    ...findings.map((finding) =>
+      row({
+        id: finding.id,
+        title: short(finding.title, 56),
+        severity: finding.severity,
+        verify_status: finding.verify_status,
+        verification_attempt: finding.verification_attempt ?? 0,
+        missing_evidence: (finding.missing_evidence ?? []).slice(0, 2),
+      }),
+    ),
+  ];
+  if (full.join("\n").length <= maxChars) return { lines: full, truncated: false, omitted: 0 };
+  const minimum = [
+    "findings_index:",
+    ...findings.map((finding) => row({ id: finding.id, verify_status: finding.verify_status })),
+  ];
+  if (minimum.join("\n").length <= maxChars) {
+    // The rows are all retained, but optional fields were compressed; expose
+    // that omission explicitly to operators.
+    return { lines: minimum, truncated: true, omitted: findings.length };
+  }
+  return { lines: ["findings_index:"], truncated: true, omitted: findings.length };
+}
+
+/**
+ * Build a bounded projection for one canvas. Optional detail sections are
+ * dropped first; Hub's Finding status index is inserted atomically and falls
+ * back to compact {id, verify_status} rows so every Finding remains visible.
+ */
+export async function buildGraphSnapshot(
+  canvasId: string,
+  scope: GraphScope = "hub",
+  options: GraphSnapshotOptions = {},
+): Promise<GraphSnapshot> {
   const [canvas] = await sql`
     SELECT title, target_json FROM canvases WHERE id = ${canvasId}`;
   const nodes = await sql`
-    SELECT id, node_type, title, body_json, status
+    SELECT id, node_type, title, body_json, status, created_at
     FROM canvas_nodes WHERE canvas_id = ${canvasId}
     ORDER BY created_at`;
   const edges = await sql`
     SELECT from_node_id, to_node_id, edge_type
     FROM canvas_edges WHERE canvas_id = ${canvasId}`;
-
   const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
   const goal = String(target.goal ?? canvas?.title ?? "");
-  const root = nodes.find((n) => n.node_type === "root");
-
-  const facts = nodes.filter((n) => n.node_type === "fact" || n.node_type === "finding");
+  const root = nodes.find((node) => node.node_type === "root");
+  const facts = nodes.filter((node) => node.node_type === "fact" || node.node_type === "finding");
+  const factNodes = nodes.filter((node) => node.node_type === "fact");
   const openIntents = nodes.filter(
-    (n) => n.node_type === "intent" && !["succeeded", "failed", "cancelled"].includes(n.status as string),
+    (node) => node.node_type === "intent" && !["succeeded", "failed", "cancelled"].includes(String(node.status)),
   );
-  const doneIntents = nodes.filter(
-    (n) => n.node_type === "intent" && (n.status as string) === "succeeded",
-  );
-  const hints = nodes.filter((n) => n.node_type === "human");
+  const hints = nodes.filter((node) => node.node_type === "human");
 
-  // intent ← from 边引用（fact → intent）
   const intentFrom = new Map<string, string[]>();
-  for (const e of edges) {
-    if (e.edge_type !== "from") continue;
-    const list = intentFrom.get(e.to_node_id as string) ?? [];
-    list.push(e.from_node_id as string);
-    intentFrom.set(e.to_node_id as string, list);
+  for (const edge of edges) {
+    if (edge.edge_type !== "from") continue;
+    const key = String(edge.to_node_id);
+    intentFrom.set(key, [...(intentFrom.get(key) ?? []), String(edge.from_node_id)]);
   }
-
-  // Finding 表：验证状态与轮次（Hub 回弹决策用）
   const findingRows = await sql`
-    SELECT f.id, f.node_id, f.verify_status
+    SELECT f.id, f.node_id, f.job_id, f.title, f.severity, f.location, f.summary, f.verify_status
     FROM findings f
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId}`;
-  const findingByNode = new Map(findingRows.map((r) => [r.node_id as string, r]));
+  const findingByNode = new Map(findingRows.map((finding) => [String(finding.node_id), finding]));
+  const findingById = new Map(findingRows.map((finding) => [String(finding.id), finding]));
+  const findingIds = findingRows.flatMap((finding) => (typeof finding.id === "string" ? [finding.id] : []));
+  const verificationSummaries =
+    scope === "hub" || scope === "verify"
+      ? await (await import("./verify.js")).findingVerificationSummaries(sql, findingIds)
+      : new Map<string, Record<string, unknown>>();
 
-  const lines: string[] = [];
-  lines.push(kv("goal", goal));
-  lines.push(kv("target", target));
-  lines.push(kv("root_id", root?.id ?? null));
-  lines.push(kv("root_status", root?.status ?? null));
-  lines.push("facts:");
-  for (const f of facts) {
-    const body = (f.body_json ?? {}) as Record<string, unknown>;
-    lines.push(`  - ${kv("id", f.id)}`);
-    lines.push(`    ${kv("kind", f.node_type)}`);
-    lines.push(`    ${kv("title", f.title)}`);
-    lines.push(`    ${kv("status", f.status)}`);
-    if (body.description) lines.push(`    ${kv("description", String(body.description).slice(0, 600))}`);
-    if (body.severity) lines.push(`    ${kv("severity", body.severity)}`);
-    if (body.location) lines.push(`    ${kv("location", body.location)}`);
-    if (body.summary) lines.push(`    ${kv("summary", String(body.summary).slice(0, 400))}`);
-    // 验证证据节点：输出硬门相关完整字段（steps/expected/actual），便于 Hub/Verify 读图
-    const ver = body.verification as Record<string, unknown> | undefined;
-    if (ver) {
-      lines.push(`    ${kv("finding_id", ver.finding_id)}`);
-      lines.push(`    ${kv("evidence_kind", ver.evidence_kind)}`);
-      lines.push(`    ${kv("outcome", ver.outcome)}`);
-      if (ver.subject_revision) lines.push(`    ${kv("subject_revision", ver.subject_revision)}`);
-      if (ver.environment) lines.push(`    ${kv("environment", ver.environment)}`);
-      if (ver.steps) lines.push(`    ${kv("steps", ver.steps)}`);
-      if (ver.expected) lines.push(`    ${kv("expected", String(ver.expected).slice(0, 800))}`);
-      if (ver.actual) lines.push(`    ${kv("actual", String(ver.actual).slice(0, 800))}`);
-      if (ver.artifact_refs) lines.push(`    ${kv("artifact_refs", ver.artifact_refs)}`);
-      if (ver.limitations) lines.push(`    ${kv("limitations", ver.limitations)}`);
+  const nodeCounts = nodes.reduce<Record<string, number>>((acc, node) => {
+    const type = String(node.node_type ?? "unknown");
+    acc[type] = (acc[type] ?? 0) + 1;
+    return acc;
+  }, {});
+  const referableIds = unique([
+    ...facts.map((node) => String(node.id)),
+    ...nodes.filter((node) => node.node_type === "root").map((node) => String(node.id)),
+  ]);
+
+  const maxChars = Math.max(512, options.maxYamlChars ?? budgetFor(scope));
+  const contentLimit = Math.max(256, maxChars - 1_024);
+  const omitted: Record<string, number> = {};
+  let truncated = false;
+  const lines = [
+    kv("scope", scope),
+    kv("truncated", false),
+    kv("omitted", {}),
+    kv("goal", short(goal, 1_200)),
+    kv("target", boundedJson(target, 2_400)),
+    kv("root_id", root?.id ?? null),
+    kv("root_status", root?.status ?? null),
+    kv("node_counts", nodeCounts),
+  ];
+  const size = () => lines.join("\n").length;
+  const omit = (section: string, amount = 1) => {
+    omitted[section] = (omitted[section] ?? 0) + amount;
+    truncated = true;
+  };
+  const fit = (block: string[]): boolean => size() + 1 + block.join("\n").length <= contentLimit;
+  const addOptional = (section: string, block: string[]) => {
+    if (block.length === 0) return;
+    if (fit(block)) {
+      lines.push(...block);
+      return;
     }
-    // Finding 节点：输出验证轮次与缺口
-    if (f.node_type === "finding") {
-      const fr = findingByNode.get(f.id as string);
-      if (fr) {
-        // The canvas node id is a rendering handle; Hub follow-up prompts
-        // must carry the stable findings.id used by verification APIs.
-        lines.push(`    ${kv("finding_id", fr.id)}`);
-        const { findingVerificationSummary } = await import("./verify.js");
-        const summary = await findingVerificationSummary(sql, fr.id as string);
-        lines.push(`    ${kv("verify_status", summary.verify_status)}`);
-        lines.push(`    ${kv("verification_attempt", summary.verification_attempt)}`);
-        lines.push(`    ${kv("latest_outcome", summary.latest_outcome)}`);
-        lines.push(`    ${kv("missing_evidence", summary.missing_evidence)}`);
-        lines.push(`    ${kv("review_evidence_ids", summary.review_evidence_ids)}`);
-        lines.push(`    ${kv("test_evidence_ids", summary.test_evidence_ids)}`);
-        lines.push(`    ${kv("conflicting_evidence_ids", summary.conflicting_evidence_ids)}`);
-      }
+    const header = block[0]?.endsWith(":") ? [block[0]] : [];
+    if (header.length > 0 && fit(header)) lines.push(...header);
+    omit(section, Math.max(1, block.length - header.length));
+  };
+  const addSection = (section: string, rows: string[], mandatory = false) => {
+    const block = [section + ":", ...(rows.length > 0 ? rows : ["  []"])];
+    if (fit(block)) {
+      lines.push(...block);
+      return true;
     }
-  }
-  if (facts.length === 0) lines.push("  []");
-  lines.push("open_intents:");
-  for (const it of openIntents) {
-    const body = (it.body_json ?? {}) as Record<string, unknown>;
-    lines.push(`  - ${kv("id", it.id)}`);
-    lines.push(`    ${kv("role", body.role ?? "explore")}`);
-    lines.push(`    ${kv("status", it.status)}`);
-    lines.push(`    ${kv("description", body.description ?? it.title)}`);
-    lines.push(`    ${kv("from", intentFrom.get(it.id as string) ?? [])}`);
-  }
-  if (openIntents.length === 0) lines.push("  []");
-  if (doneIntents.length > 0) {
-    lines.push("concluded_intents:");
-    for (const it of doneIntents) {
-      lines.push(`  - ${kv("description", ((it.body_json ?? {}) as Record<string, unknown>).description ?? it.title)}`);
+    if (!mandatory) {
+      addOptional(section, block);
+      return false;
     }
-  }
-  if (hints.length > 0) {
-    lines.push("hints:");
-    for (const h of hints) {
-      lines.push(`  - ${kv("content", ((h.body_json ?? {}) as Record<string, unknown>).reason ?? h.title)}`);
+    omit(section, rows.length);
+    return false;
+  };
+
+  if (scope === "hub") {
+    const index = serializeFindingStatusIndex(
+      findingRows.map((finding) => {
+        const summary = verificationSummaries.get(String(finding.id)) ?? {};
+        return {
+          id: String(finding.id),
+          title: (finding.title ?? findingByNode.get(String(finding.node_id))?.title) as string | null,
+          severity: finding.severity as string | null,
+          verify_status: finding.verify_status as string | null,
+          verification_attempt: Number(summary.verification_attempt ?? 0),
+          missing_evidence: Array.isArray(summary.missing_evidence) ? summary.missing_evidence as string[] : [],
+        };
+      }),
+      Math.max(128, contentLimit - size() - 1),
+    );
+    if (fit(index.lines)) {
+      lines.push(...index.lines);
+      if (index.truncated) omit("findings_index", index.omitted);
+    } else {
+      addSection("findings_index", index.lines.slice(1), true);
     }
+
+    addSection(
+      "open_intents",
+      openIntents.map((intent) => {
+        const body = (intent.body_json ?? {}) as Record<string, unknown>;
+        return row({
+          id: intent.id,
+          role: body.role ?? "explore",
+          status: intent.status,
+          description: short(body.description ?? intent.title, 500),
+          from: intentFrom.get(String(intent.id)) ?? [],
+        });
+      }),
+    );
+    addSection(
+      "facts_index",
+      factNodes.map((fact) => {
+        const body = (fact.body_json ?? {}) as Record<string, unknown>;
+        return row({
+          id: fact.id,
+          title: short(fact.title, 140),
+          status: fact.status,
+          location: short(body.location, 140),
+        });
+      }),
+    );
+    const concluded = nodes.filter(
+      (node) =>
+        node.node_type === "intent" &&
+        !["pending", "claimed", "provisioning", "running", "waiting_human"].includes(String(node.status)),
+    );
+    const byStatus: Record<string, number> = {};
+    const byRole: Record<string, number> = {};
+    for (const intent of concluded) {
+      const body = (intent.body_json ?? {}) as Record<string, unknown>;
+      const status = String(intent.status ?? "unknown");
+      const role = String(body.role ?? "unknown");
+      byStatus[status] = (byStatus[status] ?? 0) + 1;
+      byRole[role] = (byRole[role] ?? 0) + 1;
+    }
+    addSection("concluded_intents", [
+      "  " + kv("count", concluded.length),
+      "  " + kv("by_status", byStatus),
+      "  " + kv("by_role", byRole),
+    ]);
+    const related = new Set(options.relatedNodeIds ?? []);
+    const triggerFinding = options.findingId ? findingById.get(String(options.findingId)) : undefined;
+    if (triggerFinding?.node_id) related.add(String(triggerFinding.node_id));
+    for (const intent of openIntents) {
+      for (const id of intentFrom.get(String(intent.id)) ?? []) related.add(id);
+    }
+    const hot = [...facts]
+      .sort((a, b) => {
+        const aHot = related.has(String(a.id)) ? 1 : 0;
+        const bHot = related.has(String(b.id)) ? 1 : 0;
+        if (aHot !== bHot) return bHot - aHot;
+        return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+      })
+      .slice(0, 32);
+    addSection(
+      "recent_or_hot_nodes",
+      hot.map((node) => {
+        const body = (node.body_json ?? {}) as Record<string, unknown>;
+        const finding = findingByNode.get(String(node.id));
+        return row({
+          id: node.id,
+          kind: node.node_type,
+          title: short(node.title, 160),
+          status: node.status,
+          summary: short(body.description ?? body.summary ?? finding?.summary, 420),
+          ...(finding ? { finding_id: finding.id, verify_status: finding.verify_status } : {}),
+        });
+      }),
+    );
+    addSection(
+      "hints",
+      hints.slice(-16).map((hint) => {
+        const body = (hint.body_json ?? {}) as Record<string, unknown>;
+        return row({ id: hint.id, content: short(body.reason ?? hint.title, 520) });
+      }),
+    );
+  } else if (scope === "agent") {
+    const intentNode = options.intentNodeId
+      ? nodes.find((node) => String(node.id) === options.intentNodeId)
+      : undefined;
+    const intentBody = (intentNode?.body_json ?? {}) as Record<string, unknown>;
+    const from = options.intent?.from?.length
+      ? options.intent.from
+      : intentNode
+        ? intentFrom.get(String(intentNode.id)) ?? []
+        : [];
+    addSection("intent", [
+      "  " + kv("id", options.intentNodeId ?? intentNode?.id ?? null),
+      "  " + kv("description", short(options.intent?.description ?? intentBody.description ?? intentNode?.title, 800)),
+      // The complete prompt is already the Worker initialInput. Repeating it
+      // in the graph projection would pay the same context tax twice.
+      "  " + kv("from", from),
+    ]);
+    addSection(
+      "references",
+      from
+        .map((id) => nodes.find((node) => String(node.id) === id))
+        .filter((node) => node && (node.node_type === "fact" || node.node_type === "finding"))
+        .map((node) => {
+          const body = (node?.body_json ?? {}) as Record<string, unknown>;
+          const finding = findingByNode.get(String(node?.id));
+          return row({
+            id: node?.id,
+            kind: node?.node_type,
+            title: short(node?.title, 160),
+            status: node?.status,
+            description: short(body.description ?? body.summary ?? finding?.summary, 520),
+            ...(finding ? { finding_id: finding.id, verify_status: finding.verify_status } : {}),
+          });
+        }),
+    );
+    addSection(
+      "confirmed_background",
+      findingRows
+        .filter((finding) => finding.verify_status === "confirmed")
+        .slice(0, 24)
+        .map((finding) => row({
+          finding_id: finding.id,
+          title: short(finding.title, 160),
+          severity: finding.severity,
+          verify_status: finding.verify_status,
+        })),
+    );
+  } else if (scope === "verify") {
+    const finding = options.findingId ? findingById.get(options.findingId) : undefined;
+    const findingNode = finding?.node_id
+      ? nodes.find((node) => String(node.id) === String(finding.node_id))
+      : undefined;
+    const findingBody = (findingNode?.body_json ?? {}) as Record<string, unknown>;
+    const verification = finding ? verificationSummaries.get(String(finding.id)) ?? {} : {};
+    addSection("finding", [
+      "  " + kv("id", finding?.id ?? options.findingId ?? null),
+      "  " + kv("node_id", finding?.node_id ?? null),
+      "  " + kv("title", short(finding?.title ?? findingNode?.title, 220)),
+      "  " + kv("severity", finding?.severity ?? findingBody.severity ?? null),
+      "  " + kv("verify_status", finding?.verify_status ?? null),
+      "  " + kv("location", short(finding?.location ?? findingBody.location, 360)),
+      "  " + kv("summary", short(finding?.summary ?? findingBody.summary, 1_000)),
+      "  " + kv("verification", verification),
+    ]);
+    addSection(
+      "evidence",
+      factNodes
+        .filter((node) => {
+          const body = (node.body_json ?? {}) as Record<string, unknown>;
+          return String((body.verification as Record<string, unknown> | undefined)?.finding_id ?? "") === String(options.findingId);
+        })
+        .map((node) => {
+          const body = (node.body_json ?? {}) as Record<string, unknown>;
+          const evidence = (body.verification ?? {}) as Record<string, unknown>;
+          return row({
+            id: node.id,
+            title: short(node.title, 160),
+            evidence_kind: evidence.evidence_kind,
+            outcome: evidence.outcome,
+            subject_revision: short(evidence.subject_revision, 220),
+            steps: Array.isArray(evidence.steps) ? evidence.steps.slice(0, 8).map((step) => short(step, 240)) : [],
+            expected: short(evidence.expected, 520),
+            actual: short(evidence.actual, 520),
+            artifact_refs: Array.isArray(evidence.artifact_refs) ? evidence.artifact_refs.slice(0, 8) : [],
+            limitations: Array.isArray(evidence.limitations) ? evidence.limitations.slice(0, 8).map((item) => short(item, 240)) : [],
+          });
+        }),
+    );
+  } else {
+    const counts: Record<string, number> = {};
+    for (const finding of findingRows) {
+      const status = String(finding.verify_status ?? "unknown");
+      counts[status] = (counts[status] ?? 0) + 1;
+    }
+    addSection("report", [
+      "  " + kv("report_input_authoritative", true),
+      "  " + kv("finding_counts_by_verify_status", counts),
+      "  " + kv("note", "完整报告上下文来自 Scheduler 生成的 report-input.json。"),
+    ]);
   }
 
+  const markers = graphProjectionMarkers(truncated, omitted);
+  lines[1] = markers.truncated;
+  lines[2] = markers.omitted;
+  let yaml = lines.join("\n");
+  if (yaml.length > maxChars) {
+    truncated = true;
+    omit("overflow");
+    while (lines.length > 8 && lines.join("\n").length > maxChars - 128) lines.pop();
+    const overflowMarkers = graphProjectionMarkers(true, omitted);
+    lines[1] = overflowMarkers.truncated;
+    lines[2] = overflowMarkers.omitted;
+    yaml = lines.join("\n");
+  }
   return {
+    scope,
     goal,
     target,
-    yaml: lines.join("\n"),
-    referableIds: [
-      ...facts.map((f) => f.id as string),
-      ...nodes.filter((n) => n.node_type === "root").map((n) => n.id as string),
-    ],
+    yaml,
+    referableIds,
     openIntentCount: openIntents.length,
+    yamlChars: yaml.length,
+    truncated,
+    omitted,
+    nodeCounts,
   };
 }
 
-/** 剥 markdown 代码围栏后 JSON.parse；失败返回 null */
+/** Strip markdown fences before JSON.parse; return null on malformed output. */
 export function parseJsonLoose(raw: string): unknown | null {
   const cleaned = raw
     .trim()
@@ -157,7 +449,6 @@ export function parseJsonLoose(raw: string): unknown | null {
   try {
     return JSON.parse(cleaned);
   } catch {
-    // 模型有时在 JSON 前后加解释文字：截取第一个 { 到最后一个 }
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
     if (start >= 0 && end > start) {
@@ -175,7 +466,6 @@ export interface HubIntent {
   from: string[];
   role: string;
   description: string;
-  /** 直接作为 Worker CLI 的本轮 input 注入。 */
   prompt: string;
 }
 
@@ -184,38 +474,36 @@ export interface HubDecision {
   intents?: HubIntent[];
 }
 
-function strArray(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+function strArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-/** 动态系统工具提交的 Hub 决策；role 必须来自本 Job 的可用角色工具结果。 */
+/** Validate a dynamic Hub decision against this Job's available role set. */
 export function parseHubDecision(raw: string, allowedRoles: ReadonlySet<string>): HubDecision | null {
-  const v = parseJsonLoose(raw);
-  if (!v || typeof v !== "object") return null;
-  const o = v as Record<string, unknown>;
-
-  if (o.complete && typeof o.complete === "object") {
-    const c = o.complete as Record<string, unknown>;
-    if (typeof c.description === "string" && c.description.trim()) {
-      return { complete: { from: strArray(c.from), description: c.description } };
+  const value = parseJsonLoose(raw);
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  if (object.complete && typeof object.complete === "object") {
+    const complete = object.complete as Record<string, unknown>;
+    if (typeof complete.description === "string" && complete.description.trim()) {
+      return { complete: { from: strArray(complete.from), description: complete.description } };
     }
   }
-  if (Array.isArray(o.intents)) {
+  if (Array.isArray(object.intents)) {
     const intents: HubIntent[] = [];
-    for (const it of o.intents) {
-      if (!it || typeof it !== "object") continue;
-      const i = it as Record<string, unknown>;
-      if (typeof i.description !== "string" || !i.description.trim()) continue;
-      if (typeof i.prompt !== "string" || !i.prompt.trim()) continue;
-      if (typeof i.role !== "string" || !allowedRoles.has(i.role.trim())) return null;
+    for (const rawIntent of object.intents) {
+      if (!rawIntent || typeof rawIntent !== "object") continue;
+      const intent = rawIntent as Record<string, unknown>;
+      if (typeof intent.description !== "string" || !intent.description.trim()) continue;
+      if (typeof intent.prompt !== "string" || !intent.prompt.trim()) continue;
+      if (typeof intent.role !== "string" || !allowedRoles.has(intent.role.trim())) return null;
       intents.push({
-        from: strArray(i.from),
-        role: i.role.trim(),
-        description: i.description.slice(0, 2_000),
-        prompt: i.prompt.trim().slice(0, 20_000),
+        from: strArray(intent.from),
+        role: intent.role.trim(),
+        description: intent.description.slice(0, 2_000),
+        prompt: intent.prompt.trim().slice(0, 20_000),
       });
     }
-    // 空 intents 不是合法决策：应 complete 或派发至少一个 intent，避免 Hub 空转烧 maxHubRounds
     if (intents.length === 0) return null;
     return { intents };
   }

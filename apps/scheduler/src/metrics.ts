@@ -67,6 +67,8 @@ const HELP: Record<string, string> = {
   deepsonar_api_auth_failed_total: "API auth failures (401/403)",
   deepsonar_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
   deepsonar_plane_sync_errors_total: "Plane sync/writeback errors",
+  deepsonar_graph_snapshots_total: "Bounded graph prompt projections by scope and truncation",
+  deepsonar_graph_yaml_chars_total: "Total characters injected through bounded graph projections by scope",
 };
 
 /** Prometheus text exposition */

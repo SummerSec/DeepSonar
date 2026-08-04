@@ -12,6 +12,7 @@ import { publishStream } from "./stream-bus.js";
 import { CONTROL_MCP_NAME, CONTROL_MCP_SERVER, CONTROL_SEMANTIC_EVENT_TYPES } from "./control-mcp.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
+import { inc } from "./metrics.js";
 
 /**
  * 真实 Agent 执行器（ARCHITECTURE §8）
@@ -309,15 +310,31 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
   if (isHub) env.DEEPSONAR_AVAILABLE_ROLES_JSON = JSON.stringify(availableHubRoleCatalog);
 
-  // Hub 与角色任务通过 input 注入动态任务；长期角色规则进入 AGENTS.md / CLAUDE.md。
-  const isReport = snapshot.name === "report";
-  const graph =
-    canvasId && (isHub || isRole || isAudit || isVerify || isReport)
-      ? await buildGraphSnapshot(canvasId)
-      : null;
   const intent = (payload.intent ?? {}) as { description?: string; prompt?: string };
   const taskGoal = String(taskTarget.goal ?? taskTarget.content ?? taskTarget.title ?? payload.goal ?? payload.content ?? "").trim();
   const workerPrompt = String(intent.prompt ?? taskGoal).trim();
+  // Hub/Worker/Verify/Report each receive a server-side graph projection.
+  const isReport = snapshot.name === "report";
+  const graphScope: import("./graph.js").GraphScope | null =
+    isHub ? "hub" : isVerify ? "verify" : isReport ? "report" : isRole || isAudit ? "agent" : null;
+  const graph =
+    canvasId && graphScope
+      ? await buildGraphSnapshot(canvasId, graphScope, {
+          intentNodeId: (payload.intent_node_id as string | null) ?? null,
+          intent,
+          findingId:
+            (job.finding_id as string | null) ??
+            ((payload.verification_followup as { finding_id?: string } | undefined)?.finding_id ??
+              ((payload.trigger as { finding_id?: string } | undefined)?.finding_id ?? null)),
+          relatedNodeIds: Array.isArray((payload.trigger as { source_node_ids?: unknown[] } | undefined)?.source_node_ids)
+            ? ((payload.trigger as { source_node_ids: string[] }).source_node_ids)
+            : [],
+        })
+      : null;
+  if (graph) {
+    inc("deepsonar_graph_snapshots_total", { scope: graph.scope, truncated: String(graph.truncated) });
+    inc("deepsonar_graph_yaml_chars_total", { scope: graph.scope }, graph.yamlChars);
+  }
   let initialInput: string;
   if (isHub) {
     if (!graph) throw new Error("hub_reason job 缺 canvas_id，无法读图");
@@ -568,6 +585,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     role_config_id: snapshot.role_config_id,
     role_config_version: snapshot.role_config_version,
     input_sha256: sha256(initialInput),
+    graph_scope: graph?.scope ?? null,
+    graph_yaml_chars: graph?.yamlChars ?? 0,
+    graph_truncated: graph?.truncated ?? false,
+    graph_omitted: graph?.omitted ?? {},
+    graph_node_counts: graph?.nodeCounts ?? {},
     system_prompt_sha256: sha256(PLATFORM_SYSTEM_PROMPT),
     instructions_sha256: sha256(instructions),
     component_manifest_sha256: jsonHash(componentManifest),
