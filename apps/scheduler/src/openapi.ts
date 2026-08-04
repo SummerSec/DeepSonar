@@ -934,7 +934,13 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                   fix: {
                     type: "object",
                     nullable: true,
-                    properties: { href: { type: "string" }, target: { type: "string" } },
+                    properties: {
+                      action: { type: "string", enum: ["credentials", "role_config", "rules", "runtime_images"] },
+                      scope: { type: "string", enum: ["global", "project"] },
+                      project_id: { type: "string", format: "uuid", nullable: true },
+                      href: { type: "string" },
+                      target: { type: "string" },
+                    },
                   },
                   role: { type: "object", nullable: true, additionalProperties: true },
                   credential: { type: "object", nullable: true, additionalProperties: true, description: "Non-sensitive identity only" },
