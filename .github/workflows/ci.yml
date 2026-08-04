@@ -71,6 +71,14 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:event-ingestion
 
+      - name: Hub graph reference unit
+        run: pnpm ci:unit:graph-references
+
+      - name: Hub graph reference Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:graph-references
+
       - name: Verify eligibility unit
         run: pnpm ci:unit:verify-eligibility
 
