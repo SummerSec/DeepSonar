@@ -22,8 +22,13 @@ if (!testDatabaseUrl) {
 
     const projectId = randomUUID();
     const canvasId = `event-ingestion-${randomUUID()}`;
+    const movedCanvasId = `event-ingestion-moved-${randomUUID()}`;
     const jobId = randomUUID();
     const legacyJobId = randomUUID();
+    const repointJobId = randomUUID();
+    const factRepointJobId = randomUUID();
+    const multiCanvasJobId = randomUUID();
+    const conflictingCanvasJobId = randomUUID();
     const fixture = {
       jobId,
       projectId,
@@ -37,6 +42,9 @@ if (!testDatabaseUrl) {
     await sql`
       INSERT INTO canvases (id, project_id, title, target_json)
       VALUES (${canvasId}, ${projectId}, 'event-ingestion', ${sql.json({})})`;
+    await sql`
+      INSERT INTO canvases (id, project_id, title, target_json)
+      VALUES (${movedCanvasId}, ${projectId}, 'event-ingestion-moved', ${sql.json({})})`;
     await sql`
       INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
       VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
@@ -57,6 +65,50 @@ if (!testDatabaseUrl) {
     await sql`
       INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
       VALUES (${canvasId}, ${legacyJobId}, 'job', 'legacy job', 'running', ${sql.json({})})`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${repointJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+      )`;
+    const [repointNode] = await sql<{ id: string }[]>`
+      INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+      VALUES (${canvasId}, ${repointJobId}, 'job', 'repoint job', 'running', ${sql.json({})})
+      RETURNING id`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${factRepointJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+      )`;
+    const [factRepointNode] = await sql<{ id: string }[]>`
+      INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+      VALUES (${canvasId}, ${factRepointJobId}, 'intent', 'fact target', 'running', ${sql.json({})})
+      RETURNING id`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${multiCanvasJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+      VALUES
+        (${canvasId}, ${multiCanvasJobId}, 'job', 'multi canvas A', 'running', ${sql.json({})}),
+        (${movedCanvasId}, ${multiCanvasJobId}, 'intent', 'multi canvas B', 'pending', ${sql.json({})})`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${conflictingCanvasJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+      VALUES (${movedCanvasId}, ${conflictingCanvasJobId}, 'job', 'conflicting canvas', 'running', ${sql.json({})})`;
 
     const marker = (tx: typeof sql, eventId: string) =>
       tx`UPDATE canvas_nodes
@@ -90,6 +142,81 @@ if (!testDatabaseUrl) {
       assert.deepEqual(duplicate, { deduped: true });
       assert.equal(callbackCount, 1, "duplicate event must not invoke semantic side effects");
 
+      // Simulate a legacy node re-point between the read-only hint preflight
+      // and transaction start.  The first Canvas lock must fail closed during
+      // the in-transaction node recheck; the retry resolves and writes only
+      // the new Canvas.
+      const repointEventId = randomUUID();
+      fixture.eventIds.push(repointEventId);
+      const repointApp = createEventIngestionApplication(sql, async (tx, _job, envelope) => {
+        await tx`UPDATE canvas_nodes
+          SET body_json = body_json || ${tx.json({ repointed_event_id: envelope.event_id })}, updated_at = now()
+          WHERE id = ${repointNode.id}`;
+      });
+      const originalBegin = sql.begin;
+      let moved = false;
+      sql.begin = (async (callback: unknown) => {
+        if (!moved) {
+          moved = true;
+          await sql`UPDATE canvas_nodes SET canvas_id = ${movedCanvasId} WHERE id = ${repointNode.id}`;
+        }
+        return (originalBegin as unknown as (callback: unknown) => Promise<unknown>).call(sql, callback);
+      }) as never;
+      try {
+        const repointed = await repointApp.ingestEvent(repointJobId, {
+          v: 1,
+          event_id: repointEventId,
+          type: "progress",
+          payload: { message: "repoint" },
+        });
+        assert.deepEqual(repointed, { deduped: false, seq: 1 });
+      } finally {
+        sql.begin = originalBegin;
+      }
+      assert.equal(moved, true, "the simulated re-point must occur between hint preflight and transaction start");
+      const [repointedNode] = await sql<{ canvas_id: string; body_json: { repointed_event_id?: string } }[]>`
+        SELECT canvas_id, body_json FROM canvas_nodes WHERE id = ${repointNode.id}`;
+      assert.equal(repointedNode?.canvas_id, movedCanvasId);
+      assert.equal(repointedNode?.body_json.repointed_event_id, repointEventId);
+      const [oldCanvasNode] = await sql`SELECT id FROM canvas_nodes WHERE id = ${repointNode.id} AND canvas_id = ${canvasId}`;
+      assert.equal(oldCanvasNode, undefined, "the old Canvas must not receive the side effect");
+
+      // Repeat the same race for a fact's explicit intent target.  The target
+      // row is independently revalidated under the locked Canvas before the
+      // callback can write the fact convergence side effect.
+      const factRepointEventId = randomUUID();
+      fixture.eventIds.push(factRepointEventId);
+      const factRepointApp = createEventIngestionApplication(sql, async (tx, _job, envelope) => {
+        await tx`UPDATE canvas_nodes
+          SET body_json = body_json || ${tx.json({ fact_repointed_event_id: envelope.event_id })}, updated_at = now()
+          WHERE id = ${factRepointNode.id}`;
+      });
+      const factOriginalBegin = sql.begin;
+      let factMoved = false;
+      sql.begin = (async (callback: unknown) => {
+        if (!factMoved) {
+          factMoved = true;
+          await sql`UPDATE canvas_nodes SET canvas_id = ${movedCanvasId} WHERE id = ${factRepointNode.id}`;
+        }
+        return (factOriginalBegin as unknown as (callback: unknown) => Promise<unknown>).call(sql, callback);
+      }) as never;
+      try {
+        const factRepointed = await factRepointApp.ingestEvent(factRepointJobId, {
+          v: 1,
+          event_id: factRepointEventId,
+          type: "fact",
+          payload: { intent_node_id: factRepointNode.id, title: "fact", description: "repointed target" },
+        });
+        assert.deepEqual(factRepointed, { deduped: false, seq: 1 });
+      } finally {
+        sql.begin = factOriginalBegin;
+      }
+      assert.equal(factMoved, true, "the fact target re-point must be simulated");
+      const [factRepointedNode] = await sql<{ canvas_id: string; body_json: { fact_repointed_event_id?: string } }[]>`
+        SELECT canvas_id, body_json FROM canvas_nodes WHERE id = ${factRepointNode.id}`;
+      assert.equal(factRepointedNode?.canvas_id, movedCanvasId);
+      assert.equal(factRepointedNode?.body_json.fact_repointed_event_id, factRepointEventId);
+
       // Legacy Jobs can lack canvas_id while their job node still points at a
       // Canvas.  The ingress boundary must discover that Canvas before the Job
       // lock so the real core side effect cannot reintroduce reverse locking.
@@ -111,6 +238,30 @@ if (!testDatabaseUrl) {
       const [legacyTerminalNode] = await sql<{ status: string }[]>`
         SELECT status FROM canvas_nodes WHERE job_id = ${legacyJobId} AND node_type = 'job'`;
       assert.equal(legacyTerminalNode?.status, "succeeded");
+
+      await assert.rejects(
+        sql.begin(async (tx) => {
+          await finalizeJob(tx as unknown as typeof sql, multiCanvasJobId, "succeeded", { summary: "must reject" });
+        }),
+        /multiple convergence canvases/,
+      );
+      const [multiCanvasJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${multiCanvasJobId}`;
+      const multiCanvasNodes = await sql<{ status: string }[]>`
+        SELECT status FROM canvas_nodes WHERE job_id = ${multiCanvasJobId} ORDER BY id`;
+      assert.equal(multiCanvasJob?.status, "running");
+      assert.deepEqual(multiCanvasNodes.map((node) => node.status), ["running", "pending"]);
+
+      await assert.rejects(
+        sql.begin(async (tx) => {
+          await finalizeJob(tx as unknown as typeof sql, conflictingCanvasJobId, "succeeded", { summary: "must reject" });
+        }),
+        /outside canvas/,
+      );
+      const [conflictingJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${conflictingCanvasJobId}`;
+      const [conflictingNode] = await sql<{ status: string }[]>`
+        SELECT status FROM canvas_nodes WHERE job_id = ${conflictingCanvasJobId}`;
+      assert.equal(conflictingJob?.status, "running");
+      assert.equal(conflictingNode?.status, "running");
 
       const concurrentIds = [randomUUID(), randomUUID()];
       fixture.eventIds.push(...concurrentIds);
@@ -197,9 +348,10 @@ if (!testDatabaseUrl) {
         await sql`DELETE FROM event_dedup WHERE event_id = ${eventId}`;
         await sql`DELETE FROM events WHERE event_id = ${eventId}`;
       }
-      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM canvas_edges WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
+      await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await sql`DELETE FROM projects WHERE id = ${projectId}`;
       await sql.end();
     }

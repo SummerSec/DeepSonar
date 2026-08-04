@@ -1170,6 +1170,20 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 
 // ---------- 结束处理 ----------
 
+type TerminalCanvasNodeSnapshot = { id: string; canvas_id: string | null };
+
+function sameTerminalCanvasNodes(
+  left: TerminalCanvasNodeSnapshot[],
+  right: TerminalCanvasNodeSnapshot[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every(
+    (node, index) =>
+      String(node.id) === String(right[index]?.id) &&
+      ((node.canvas_id as string | null) ?? null) === ((right[index]?.canvas_id as string | null) ?? null),
+  );
+}
+
 /**
  * 结束处理（§8.2）：done/failed 只能把 running 改为终态。
  * 迟到事件（job 已 cancelled/timeout/orphan）记录进 events 表但副作用返回 false，
@@ -1184,19 +1198,42 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
     SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
   if (!candidate) return false;
   const candidateJobCanvasId = (candidate.canvas_id as string | null) ?? null;
-  let candidateCanvasId = candidateJobCanvasId;
-  if (!candidateCanvasId) {
-    // Legacy Jobs may have a NULL canvas_id while their job/intent node still
-    // points at the convergence Canvas.  Discover that target before taking
-    // the Job lock so terminal node updates remain Canvas-first as well.
-    const [jobNode] = await tx<{ canvas_id: string | null }[]>`
-      SELECT canvas_id FROM canvas_nodes
-      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
-      ORDER BY created_at ASC
-      LIMIT 1`;
-    candidateCanvasId = (jobNode?.canvas_id as string | null) ?? null;
+  const candidateNodes = await tx<TerminalCanvasNodeSnapshot[]>`
+    SELECT id, canvas_id FROM canvas_nodes
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+    ORDER BY id`;
+  const candidateNodeCanvasIds = [
+    ...new Set(candidateNodes.map((node) => (node.canvas_id as string | null) ?? null)),
+  ];
+  if (candidateNodes.some((node) => !node.canvas_id)) {
+    throw new Error(`job ${jobId} has a Job/Intent node without a Canvas`);
   }
+  if (candidateNodeCanvasIds.length > 1) {
+    throw new Error(`job ${jobId} has multiple convergence canvases`);
+  }
+  if (candidateJobCanvasId && candidateNodeCanvasIds.some((canvasId) => canvasId !== candidateJobCanvasId)) {
+    throw new Error(`job ${jobId} has a job node outside canvas ${candidateJobCanvasId}`);
+  }
+  const candidateCanvasId = candidateJobCanvasId ?? (candidateNodeCanvasIds[0] as string | null | undefined) ?? null;
   if (!(await lockCanvasForConvergence(tx, candidateCanvasId))) return false;
+
+  const [lockedJob] = await tx<{ id: string; canvas_id: string | null }[]>`
+    SELECT id, canvas_id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+  if (!lockedJob) return false;
+  if (((lockedJob.canvas_id as string | null) ?? null) !== candidateJobCanvasId) {
+    throw new Error(`job ${jobId} canvas changed while finalizing`);
+  }
+  const lockedNodes = await tx<TerminalCanvasNodeSnapshot[]>`
+    SELECT id, canvas_id FROM canvas_nodes
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+    ORDER BY id
+    FOR UPDATE`;
+  if (!sameTerminalCanvasNodes(candidateNodes, lockedNodes)) {
+    throw new Error(`job ${jobId} Canvas nodes changed while finalizing`);
+  }
+  if (lockedNodes.some((node) => ((node.canvas_id as string | null) ?? null) !== candidateCanvasId)) {
+    throw new Error(`job ${jobId} Canvas nodes are outside the finalization Canvas`);
+  }
 
   const [updated] = await tx<{ id: string; canvas_id: string | null }[]>`
     UPDATE jobs SET status = ${status}, finished_at = now(), error = ${result?.error ?? null}

@@ -41,12 +41,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+type CanvasNodeSnapshot = {
+  id: string;
+  canvasId: string | null;
+};
+
+type CanvasHintSource = "job" | "fact-intent-node" | "job-node" | "none";
+
 type CanvasHint = {
   /** The immutable Job-owned canvas, when one exists. */
   jobCanvasId: string | null;
   /** A convergence canvas inferred from the Job or an event target node. */
   canvasId: string | null;
+  /** How the lock target was resolved; kept for transaction re-validation. */
+  source: CanvasHintSource;
+  /** A fact's optional intent target, including a missing-row snapshot. */
+  targetNodeId: string | null;
+  targetNode: CanvasNodeSnapshot | null;
+  /** All Job/Intent nodes used by Canvas-aware side effects. */
+  jobNodes: CanvasNodeSnapshot[];
 };
+
+function nodeSnapshot(row: { id: string; canvas_id: string | null }): CanvasNodeSnapshot {
+  return { id: String(row.id), canvasId: (row.canvas_id as string | null) ?? null };
+}
+
+function sameNodeSnapshot(left: CanvasNodeSnapshot | null, right: CanvasNodeSnapshot | null): boolean {
+  return left?.id === right?.id && left?.canvasId === right?.canvasId;
+}
+
+function sameNodeSnapshots(left: CanvasNodeSnapshot[], right: CanvasNodeSnapshot[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((snapshot, index) => sameNodeSnapshot(snapshot, right[index] ?? null));
+}
 
 /**
  * Resolve the lock target without taking a Job lock.  The subsequent
@@ -63,43 +90,85 @@ async function resolveCanvasHint(
   if (!job) throw new Error(`job ${jobId} does not exist`);
 
   const jobCanvasId = (job.canvas_id as string | null) ?? null;
+  const targetNodeId =
+    envelope.type === "fact" && isRecord(envelope.payload) && typeof envelope.payload.intent_node_id === "string"
+      ? envelope.payload.intent_node_id
+      : null;
+
+  let targetNode: CanvasNodeSnapshot | null = null;
   // A fact can target an existing Intent node even when the producing Job is
   // legacy data without canvas_id.  Lock that canvas before the Job row too.
-  if (envelope.type === "fact" && isRecord(envelope.payload)) {
-    const intentNodeId = envelope.payload.intent_node_id;
-    if (typeof intentNodeId === "string" && intentNodeId.length > 0) {
-      const [node] = await db<{ canvas_id: string | null }[]>`
-        SELECT canvas_id FROM canvas_nodes WHERE id = ${intentNodeId}`;
-      if (node?.canvas_id) {
-        const targetCanvasId = node.canvas_id as string;
-        if (jobCanvasId && targetCanvasId !== jobCanvasId) {
-          throw new Error(`event intent node ${intentNodeId} does not belong to job canvas ${jobCanvasId}`);
-        }
-        return { jobCanvasId, canvasId: targetCanvasId };
-      }
-    }
+  if (targetNodeId) {
+    const [node] = await db<{ id: string; canvas_id: string | null }[]>`
+      SELECT id, canvas_id FROM canvas_nodes WHERE id = ${targetNodeId}`;
+    if (node) targetNode = nodeSnapshot(node);
   }
 
-  const jobNodes = await db<{ canvas_id: string | null }[]>`
-    SELECT DISTINCT canvas_id FROM canvas_nodes
-    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
-  const jobNodeCanvasIds = jobNodes
-    .map((node) => (node.canvas_id as string | null) ?? null)
-    .filter((canvasId): canvasId is string => Boolean(canvasId));
-  if (jobCanvasId && jobNodeCanvasIds.some((canvasId) => canvasId !== jobCanvasId)) {
-    throw new Error(`job ${jobId} has a job node outside canvas ${jobCanvasId}`);
+  const jobNodes = await db<{ id: string; canvas_id: string | null }[]>`
+    SELECT id, canvas_id FROM canvas_nodes
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+    ORDER BY id`;
+  const jobNodeSnapshots = jobNodes.map((node) => nodeSnapshot(node));
+  const jobNodeCanvasIds = [...new Set(jobNodeSnapshots.map((node) => node.canvasId))];
+  const targetCanvasId = targetNode?.canvasId ?? null;
+  const resolvedCanvasId = targetCanvasId ?? jobCanvasId ?? jobNodeCanvasIds.find(Boolean) ?? null;
+  if (targetCanvasId && jobCanvasId && targetCanvasId !== jobCanvasId) {
+    throw new Error(`event intent node ${targetNodeId} does not belong to job canvas ${jobCanvasId}`);
+  }
+  if (jobNodeSnapshots.some((node) => !node.canvasId)) {
+    throw new Error(`job ${jobId} has a Job/Intent node without a Canvas`);
+  }
+  if (jobNodeCanvasIds.some((canvasId) => canvasId !== resolvedCanvasId)) {
+    throw new Error(`job ${jobId} has a job node outside canvas ${resolvedCanvasId ?? "<none>"}`);
   }
   if (jobNodeCanvasIds.length > 1) {
     throw new Error(`job ${jobId} has multiple convergence canvases`);
   }
-  if (jobCanvasId) return { jobCanvasId, canvasId: jobCanvasId };
 
-  // Legacy rows may have a NULL Job canvas_id even though the Job already
-  // owns job/intent nodes.  Those side effects still mutate Canvas state, so
-  // discover and lock the node's Canvas instead of falling back to Job-only.
-  if (jobNodeCanvasIds[0]) return { jobCanvasId: null, canvasId: jobNodeCanvasIds[0] };
+  return {
+    jobCanvasId,
+    canvasId: resolvedCanvasId,
+    source: targetCanvasId ? "fact-intent-node" : jobCanvasId ? "job" : jobNodeCanvasIds[0] ? "job-node" : "none",
+    targetNodeId,
+    targetNode,
+    jobNodes: jobNodeSnapshots,
+  };
+}
 
-  return { jobCanvasId: null, canvasId: null };
+async function revalidateCanvasHint(
+  tx: EventIngestionTransaction,
+  jobId: string,
+  hint: CanvasHint,
+): Promise<void> {
+  const [target] = hint.targetNodeId
+    ? await tx<{ id: string; canvas_id: string | null }[]>`
+        SELECT id, canvas_id FROM canvas_nodes WHERE id = ${hint.targetNodeId} FOR UPDATE`
+    : [];
+  const currentTarget = target ? nodeSnapshot(target) : null;
+  if (!sameNodeSnapshot(currentTarget, hint.targetNode)) {
+    throw new RetryCanvasResolution("event target node changed while resolving lock order");
+  }
+
+  const currentJobNodes = (
+    await tx<{ id: string; canvas_id: string | null }[]>`
+      SELECT id, canvas_id FROM canvas_nodes
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+      ORDER BY id
+      FOR UPDATE`
+  ).map((node) => nodeSnapshot(node));
+  if (!sameNodeSnapshots(currentJobNodes, hint.jobNodes)) {
+    throw new RetryCanvasResolution("Job/Intent nodes changed while resolving lock order");
+  }
+
+  if (currentTarget?.canvasId && currentTarget.canvasId !== hint.canvasId) {
+    throw new RetryCanvasResolution("event target node moved to another Canvas");
+  }
+  if (currentJobNodes.some((node) => node.canvasId !== hint.canvasId)) {
+    throw new RetryCanvasResolution("Job/Intent node moved to another Canvas");
+  }
+  if (!hint.canvasId && (currentTarget?.canvasId || currentJobNodes.length > 0)) {
+    throw new RetryCanvasResolution("a Canvas appeared after the lock target preflight");
+  }
 }
 
 async function appendAndApply(
@@ -135,6 +204,7 @@ async function appendAndApply(
     if (!hint.canvasId && actualJobCanvasId) {
       throw new RetryCanvasResolution("Job acquired a canvas after the preflight read");
     }
+    await revalidateCanvasHint(tx, jobId, hint);
 
     const dedup = await tx`
       INSERT INTO event_dedup (event_id, job_id) VALUES (${envelope.event_id}, ${jobId})
