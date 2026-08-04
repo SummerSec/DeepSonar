@@ -98,6 +98,13 @@ test("selected hydrated body survives an unrelated delta", () => {
   const synced = syncSelectedNode(next, selected, hydrated);
   assert.deepEqual(synced?.body_json, { description: "full body", secret: "kept" });
   assert.equal(synced?.status, "running");
+
+  const summaryFallback = mergeHydratedCanvasData({
+    ...next,
+    nodes: next.nodes.map((item) => item.id === "n1" ? { ...item, body_json: { summary: "bounded fallback" } } : item),
+  }, hydrated);
+  const fallbackSelected = syncSelectedNode(summaryFallback, selected, hydrated);
+  assert.deepEqual(fallbackSelected?.body_json, { description: "full body", secret: "kept" });
 });
 
 test("durable delta applies upserts and tombstones while retaining hydrated bodies", () => {
