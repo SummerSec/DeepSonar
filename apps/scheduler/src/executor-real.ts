@@ -102,12 +102,13 @@ export function runtimeCredentialProviderError(
 }
 
 export function semanticToolEventsFor(toolNames: string[]): Record<string, string> {
-  return Object.fromEntries(
-    toolNames.flatMap((toolName) => {
-      const eventType = CONTROL_SEMANTIC_EVENT_TYPES[toolName as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
-      return eventType ? [[`mcp__${CONTROL_MCP_NAME}__${toolName}`, eventType]] : [];
-    }),
-  );
+  const semanticToolEvents = Object.create(null) as Record<string, string>;
+  for (const toolName of toolNames) {
+    if (!Object.prototype.hasOwnProperty.call(CONTROL_SEMANTIC_EVENT_TYPES, toolName)) continue;
+    const eventType = CONTROL_SEMANTIC_EVENT_TYPES[toolName as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
+    semanticToolEvents[`mcp__${CONTROL_MCP_NAME}__${toolName}`] = eventType;
+  }
+  return semanticToolEvents;
 }
 
 /** Normalize module evidence for both the runtime manifest and API payloads.

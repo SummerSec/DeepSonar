@@ -213,10 +213,22 @@ test("runtime rejects stale or incompatible credential providers", () => {
 });
 
 test("semantic tool capture only enables this Job's authorized tools", () => {
-  assert.deepEqual(semanticToolEventsFor(["list_available_roles", "emit_fact", "mark_job_done"]), {
+  const semanticTools = semanticToolEventsFor(["list_available_roles", "emit_fact", "mark_job_done"]);
+  assert.deepEqual({ ...semanticTools }, {
     "mcp__deepsonar-control__emit_fact": "fact",
     "mcp__deepsonar-control__mark_job_done": "done",
   });
+  assert.equal(Object.getPrototypeOf(semanticTools), null);
+});
+
+test("semantic tool map rejects prototype keys", () => {
+  const semanticTools = semanticToolEventsFor(["__proto__", "constructor", "toString", "emit_fact"]);
+  assert.deepEqual({ ...semanticTools }, {
+    "mcp__deepsonar-control__emit_fact": "fact",
+  });
+  for (const name of ["__proto__", "constructor", "toString"]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(semanticTools, `mcp__deepsonar-control__${name}`), false);
+  }
 });
 
 test("request_human 与 done/hub 终态双向互斥且重复 human 稳定拒绝", () => {

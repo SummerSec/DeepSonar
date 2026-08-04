@@ -41,12 +41,13 @@ test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
   assert.deepEqual(events[0], {
     type: "tool.call.started",
     toolName: "mcp__deepsonar-control__emit_fact",
-    callId: "call-1",
+    callId: events[0]?.callId,
     inputShape: { kind: "object", field_count: 2 },
   });
+  assert.match(String(events[0]?.callId), /^control-[0-9a-f]{24}$/);
   assert.deepEqual(events[1], {
     type: "tool.call.completed",
-    callId: "call-1",
+    callId: events[0]?.callId,
     toolName: "mcp__deepsonar-control__emit_fact",
     isError: false,
   });
@@ -208,21 +209,75 @@ test("控制工具映射只接受 own key，原型键不会生成语义事件", 
 
 test("未知控制命名空间工具不发 telemetry 事件且不泄露输入", () => {
   const events: Record<string, unknown>[] = [];
-  const result = mapCliEvent({
+  const unknownCall = {
     type: "assistant",
     message: {
       content: [{
         type: "tool_use",
         id: "unknown-control",
-        name: "mcp__deepsonar-control__unknown",
+        name: "mcp__deepsonar-control__Bearer-namespace-secret",
         input: { description: "Bearer namespace-secret" },
       }],
     },
-  }, (event) => events.push(event));
+  };
+  const result = mapCliEvent(unknownCall, (event) => events.push(event));
   assert.deepEqual(events, []);
   assert.equal(result.warnings[0]?.code, "unknown_control_tool");
   assert.doesNotMatch(JSON.stringify(result.warnings), /namespace-secret/);
+  const unknownResult = mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "unknown-control", is_error: false, content: "Bearer result-secret" }] },
+  }, () => {});
+  assert.deepEqual(unknownResult.semanticEvents, []);
+  assert.deepEqual(events, []);
   assert.doesNotMatch(JSON.stringify(events), /namespace-secret/);
+  assert.doesNotMatch(JSON.stringify(events), /result-secret/);
+});
+
+test("没有匹配 pending 的 control tool_result 不发 telemetry，也不保留原始 callId", () => {
+  const events: Record<string, unknown>[] = [];
+  const result = mapCliEvent({
+    type: "user",
+    message: {
+      content: [{ type: "tool_result", tool_use_id: "Bearer-result-token", is_error: false, content: "secret" }],
+    },
+  }, (event) => events.push(event));
+  assert.deepEqual(events, []);
+  assert.deepEqual(result.semanticEvents, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("control telemetry 用 bounded hash 关联，不记录原始 callId", () => {
+  const rawCallId = "Bearer-call-token";
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: rawCallId, name: "mcp__deepsonar-control__emit_progress", input: { message: "safe" } }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: rawCallId, is_error: true, content: "secret" }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(events.length, 2);
+  assert.match(String(events[0]?.callId), /^control-[0-9a-f]{24}$/);
+  assert.equal(events[0]?.callId, events[1]?.callId);
+  assert.doesNotMatch(JSON.stringify(events), /Bearer-call-token|secret/);
+});
+
+test("超长 control callId 只产生固定长度告警，不进入 telemetry 或 pending", () => {
+  const rawCallId = "Bearer-" + "x".repeat(300);
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  const started = mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: rawCallId, name: "mcp__deepsonar-control__emit_progress", input: { message: "safe" } }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.equal(events.length, 0);
+  assert.equal(started.warnings[0]?.code, "malformed_control_tool_use");
+  assert.equal(started.warnings[0]?.detail, `call_id_length=${rawCallId.length}`);
+  assert.equal(state.pendingToolUses.size, 0);
+  assert.doesNotMatch(JSON.stringify(started.warnings), /Bearer|xxx/);
 });
 
 test("脏运行时行只产生告警，后续合法 tool_use 仍可解析", () => {

@@ -748,6 +748,8 @@ type PendingSemanticTool = {
   event: Record<string, unknown>;
 };
 
+type ObservedToolKind = "control" | "other";
+
 /** Stream-local state for two-phase control tool delivery. */
 export interface SemanticToolState {
   /** Successful call ids only; failed calls are never released as events. */
@@ -756,6 +758,8 @@ export interface SemanticToolState {
   settledToolUseIds: Set<string>;
   /** Assistant control calls awaiting their matching user tool_result. */
   pendingToolUses: Map<string, PendingSemanticTool>;
+  /** Tool uses seen in the stream, used to preserve non-control completion telemetry. */
+  observedToolUses: Map<string, ObservedToolKind>;
   maxPendingToolUses: number;
 }
 
@@ -766,6 +770,7 @@ export function createSemanticToolState(
     seenToolUseIds: new Set(),
     settledToolUseIds: new Set(),
     pendingToolUses: new Map(),
+    observedToolUses: new Map(),
     maxPendingToolUses,
   };
 }
@@ -775,12 +780,16 @@ export function discardPendingSemanticTools(
   state: SemanticToolState,
   onWarning?: (warning: { code: string; detail?: string }) => void,
 ): void {
-  if (state.pendingToolUses.size === 0) return;
+  if (state.pendingToolUses.size === 0) {
+    state.observedToolUses.clear();
+    return;
+  }
   onWarning?.({
     code: "control_tool_pending_discarded",
     detail: `pending_count=${state.pendingToolUses.size}`,
   });
   state.pendingToolUses.clear();
+  state.observedToolUses.clear();
 }
 
 function rememberToolId(set: Set<string>, callId: string): void {
@@ -790,12 +799,30 @@ function rememberToolId(set: Set<string>, callId: string): void {
   if (typeof oldest === "string") set.delete(oldest);
 }
 
+function rememberObservedToolUse(state: SemanticToolState, callId: string, kind: ObservedToolKind): void {
+  state.observedToolUses.set(callId, kind);
+  if (state.observedToolUses.size <= SETTLED_CONTROL_TOOL_LIMIT) return;
+  const oldest = state.observedToolUses.keys().next().value;
+  if (typeof oldest === "string") state.observedToolUses.delete(oldest);
+}
+
 function semanticEventId(callId: string): string {
   const bytes = createHash("sha256").update(`deepsonar-control:${callId}`).digest().subarray(0, 16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x50;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+const MAX_CONTROL_CALL_ID_LENGTH = 256;
+
+/** Correlate control telemetry without persisting an untrusted tool id. */
+function controlTelemetryCallId(callId: string): string {
+  return `control-${createHash("sha256").update(`deepsonar-control-telemetry:${callId}`).digest("hex").slice(0, 24)}`;
+}
+
+function validControlCallId(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_CONTROL_CALL_ID_LENGTH;
 }
 
 function safeRuntimeValueKind(value: unknown): string {
@@ -895,14 +922,25 @@ export function mapCliEvent(
           ? semanticToolEvents[toolName]
           : undefined;
         const isControlNamespace = toolName.startsWith("mcp__deepsonar-control__");
-        if (eventType) {
-          emit({ type: "tool.call.started", toolName, callId, inputShape: safeControlInputShape(block.input) });
+        const controlEventType = isControlNamespace && typeof eventType === "string" ? eventType : undefined;
+        if (controlEventType) {
+          if (validControlCallId(callId)) {
+            rememberObservedToolUse(state, callId, "control");
+            emit({ type: "tool.call.started", toolName, callId: controlTelemetryCallId(callId), inputShape: safeControlInputShape(block.input) });
+          } else {
+            warnings.push({
+              code: "malformed_control_tool_use",
+              detail: callId ? `call_id_length=${callId.length}` : "call_id_missing",
+            });
+          }
         } else if (isControlNamespace) {
+          if (validControlCallId(callId)) rememberObservedToolUse(state, callId, "control");
           warnings.push({ code: "unknown_control_tool", detail: "control_namespace" });
         } else {
           emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
+          if (validControlCallId(callId)) rememberObservedToolUse(state, callId, "other");
         }
-        if (eventType && callId && !state.seenToolUseIds.has(callId) && !state.settledToolUseIds.has(callId) && !state.pendingToolUses.has(callId)) {
+        if (controlEventType && validControlCallId(callId) && !state.seenToolUseIds.has(callId) && !state.settledToolUseIds.has(callId) && !state.pendingToolUses.has(callId)) {
           if (state.pendingToolUses.size >= state.maxPendingToolUses) {
             rememberToolId(state.settledToolUseIds, callId);
             warnings.push({ code: "control_tool_pending_limit", detail: `pending_count=${state.pendingToolUses.size}` });
@@ -926,9 +964,22 @@ export function mapCliEvent(
     for (const block of runtimeContentBlocks(line, "user", warnings)) {
       if (block.type === "tool_result") {
         const callId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
-        if (!callId || state.settledToolUseIds.has(callId)) continue;
+        if (!validControlCallId(callId) || state.settledToolUseIds.has(callId)) continue;
         const pending = state.pendingToolUses.get(callId);
+        // A result without a matching control tool_use is not control telemetry.
+        // Do not let out-of-order/unknown ids poison the bounded replay sets.
+        if (!pending) {
+          const observedKind = state.observedToolUses.get(callId);
+          if (!observedKind) continue;
+          state.observedToolUses.delete(callId);
+          rememberToolId(state.settledToolUseIds, callId);
+          if (observedKind === "other") {
+            emit({ type: "tool.call.completed", callId, isError: block.is_error === true });
+          }
+          continue;
+        }
         state.pendingToolUses.delete(callId);
+        state.observedToolUses.delete(callId);
         rememberToolId(state.settledToolUseIds, callId);
         const hasIsError = Object.prototype.hasOwnProperty.call(block, "is_error");
         const isErrorFlag = hasIsError ? block.is_error : undefined;
@@ -942,11 +993,11 @@ export function mapCliEvent(
         }
         emit({
           type: "tool.call.completed",
-          callId,
-          ...(pending ? { toolName: pending.toolName } : {}),
+          callId: controlTelemetryCallId(callId),
+          toolName: pending.toolName,
           isError,
         });
-        if (pending && !isError) {
+        if (!isError) {
           rememberToolId(state.seenToolUseIds, callId);
           semanticEvents.push(pending.event);
         }
