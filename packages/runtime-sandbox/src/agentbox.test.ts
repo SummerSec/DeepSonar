@@ -118,3 +118,31 @@ test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () 
     [],
   );
 });
+
+test("组件 materialize 在任何写入前拒绝路径穿越与控制字符", () => {
+  const assertRejected = (spec: Parameters<typeof materializationPathCollisions>[0]) => {
+    assert.throws(() => materializationPathCollisions(spec), /拒绝/);
+  };
+
+  assertRejected({ commands: [{ name: "../../x", description: "", template: "" }] });
+  assertRejected({ commands: [{ name: "/tmp/x", description: "", template: "" }] });
+  assertRejected({ commands: [{ name: "..\\x", description: "", template: "" }] });
+  assertRejected({ commands: [{ name: "bad\0name", description: "", template: "" }] });
+  assertRejected({ commands: [{ name: "bad\u0001name", description: "", template: "" }] });
+  assertRejected({ subAgents: [{ name: "C:\\windows", description: "", instructions: "" }] });
+  assertRejected({ skills: [{ source: "embedded", name: "audit", files: { "../AGENTS.md": "escape" } }] });
+  assertRejected({ skills: [{ source: "embedded", name: "audit", files: { "..\\AGENTS.md": "escape" } }] });
+  assertRejected({ skills: [{ source: "embedded", name: "audit", files: { "/tmp/AGENTS.md": "escape" } }] });
+  assertRejected({ skills: [{ source: "embedded", name: "audit", files: { "bad\0.md": "escape" } }] });
+
+  // Ordinary Unicode component/file names remain valid and normalize to a
+  // strict child path under the expected namespace.
+  assert.deepEqual(
+    materializationPathCollisions({
+      commands: [{ name: "审计", description: "", template: "" }],
+      skills: [{ source: "embedded", name: "安全检查", files: { "说明/技能.md": "ok" } }],
+      subAgents: [{ name: "复核", description: "", instructions: "" }],
+    }),
+    [],
+  );
+});

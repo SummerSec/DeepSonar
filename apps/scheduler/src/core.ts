@@ -2154,12 +2154,15 @@ export async function resolveAgentSnapshotForJob(
     throw new Error(`RoleConfig.modules_json 必须是字符串数组`);
   }
   const modules = (rawModules as string[] | undefined) ?? [];
-  const expanded = await expandModules(modules, db);
+  const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
+  const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
+  const expanded = await expandModules(modules, db, {
+    skill_names: manualSkills.map((skill) => skill.name ?? ""),
+    command_names: manualCommands.map((command) => command.name ?? ""),
+  });
   if (expanded.missing.length > 0) {
     console.warn(`[role-config] 模块未下发: ${expanded.missing.join(", ")}`);
   }
-  const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
-  const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
   const skills = [
     ...manualSkills,
     ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name)),

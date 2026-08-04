@@ -145,6 +145,7 @@ export type ModuleMissingReason =
   | "catalog-empty"
   | "plugin-not-found"
   | "module-not-found"
+  | "manual-override"
   | "name-conflict";
 
 /** Structured missing-module evidence frozen into the Job snapshot. */
@@ -167,6 +168,9 @@ export interface MissingModule {
 function missingModuleText(missing: MissingModule): string {
   if (missing.reason === "name-conflict") {
     return `${missing.selector}(name-conflict:${missing.kind}:${missing.name})`;
+  }
+  if (missing.reason === "manual-override") {
+    return `${missing.selector}(manual-override:${missing.kind}:${missing.name})`;
   }
   return `${missing.selector}(${missing.reason})`;
 }
@@ -257,6 +261,43 @@ export function contentHashOfSelected(entries: SelectedModule[]): string {
     }
   }
   return h.digest("hex");
+}
+
+export interface ModuleExpansionOverrides {
+  /** Names from RoleConfig.skills_json that take precedence over catalog skills. */
+  skill_names?: Iterable<string>;
+  /** Names from RoleConfig.commands_json that take precedence over catalog commands. */
+  command_names?: Iterable<string>;
+}
+
+function filterManualOverrides(
+  entries: SelectedModule[],
+  overrides: ModuleExpansionOverrides | undefined,
+): { modules: SelectedModule[]; missing_modules: MissingModule[] } {
+  const manualNames = new Set<string>([
+    ...[...(overrides?.skill_names ?? [])].filter((name) => typeof name === "string" && name.length > 0).map((name) => `skill:${name}`),
+    ...[...(overrides?.command_names ?? [])].filter((name) => typeof name === "string" && name.length > 0).map((name) => `command:${name}`),
+  ]);
+  if (manualNames.size === 0) return { modules: entries, missing_modules: [] };
+
+  const modules: SelectedModule[] = [];
+  const missing_modules: MissingModule[] = [];
+  for (const entry of entries) {
+    const key = `${entry.module.kind}:${entry.module.name}`;
+    if (!manualNames.has(key)) {
+      modules.push(entry);
+      continue;
+    }
+    missing_modules.push({
+      selector: `${entry.source_id}:${entry.module.id}`,
+      source_id: entry.source_id,
+      reason: "manual-override",
+      module_id: entry.module.id,
+      kind: entry.module.kind,
+      name: entry.module.name,
+    });
+  }
+  return { modules, missing_modules };
 }
 
 /**
@@ -418,6 +459,7 @@ export interface SkillRevisionRef {
 export async function expandModules(
   modules: string[],
   db: typeof sql = sql,
+  overrides?: ModuleExpansionOverrides,
 ): Promise<{
   skills: Record<string, unknown>[];
   commands: Record<string, unknown>[];
@@ -490,7 +532,9 @@ export async function expandModules(
   // just within each catalog. Skill/command names use separate namespaces.
   const resolved = resolveModuleNameConflicts(selectedModules);
   missing_modules.push(...resolved.missing_modules);
-  for (const selected of resolved.modules) {
+  const manualFiltered = filterManualOverrides(resolved.modules, overrides);
+  missing_modules.push(...manualFiltered.missing_modules);
+  for (const selected of manualFiltered.modules) {
     const mod = selected.module;
     if (mod.kind === "skill") {
       skills.push({ source: "embedded", name: mod.name, files: mod.files });
@@ -505,7 +549,7 @@ export async function expandModules(
     missing,
     missing_modules,
     revisions,
-    resolved_modules: resolved.modules.map(({ source_id, module }) => ({
+    resolved_modules: manualFiltered.modules.map(({ source_id, module }) => ({
       source_id,
       module_id: module.id,
       kind: module.kind,
@@ -514,7 +558,7 @@ export async function expandModules(
       description: module.description,
       content_hash: contentHashOf([module]),
     })),
-    content_hash: contentHashOfSelected(resolved.modules),
+    content_hash: contentHashOfSelected(manualFiltered.modules),
   };
 }
 

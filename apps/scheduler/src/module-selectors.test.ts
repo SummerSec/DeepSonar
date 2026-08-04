@@ -150,6 +150,40 @@ test("expandModules returns structured missing evidence for the frozen snapshot"
   assert.match(expanded.missing[0] ?? "", /name-conflict/);
 });
 
+test("manual same-kind overrides remove catalog modules from final snapshot evidence", async () => {
+  const source = catalog([
+    { id: "plugin-a/skill", plugin: "plugin-a", kind: "skill", name: "shared", description: "catalog skill", files: { "SKILL.md": "catalog skill bytes" } },
+    { id: "plugin-a/command", plugin: "plugin-a", kind: "command", name: "shared", description: "catalog command", files: { "command.md": "catalog command bytes" } },
+  ]);
+  const fakeDb = (async () => [{
+    catalog_json: source,
+    trust_status: "trusted",
+    enabled: true,
+    last_commit_sha: "abc123",
+    last_content_hash: "catalog-hash",
+  }]) as unknown as Parameters<typeof expandModules>[1];
+
+  const expanded = await expandModules([`${SOURCE}:source:*`], fakeDb, { skill_names: ["shared"] });
+  assert.deepEqual(expanded.skills, []);
+  assert.deepEqual(expanded.commands, [{ name: "shared", description: "catalog command", template: "catalog command bytes" }]);
+  assert.deepEqual(expanded.resolved_modules.map((module) => ({ kind: module.kind, name: module.name })), [
+    { kind: "command", name: "shared" },
+  ]);
+  assert.deepEqual(
+    expanded.missing_modules.map((missing) => ({ reason: missing.reason, kind: missing.kind, name: missing.name })),
+    [{ reason: "manual-override", kind: "skill", name: "shared" }],
+  );
+  assert.equal(
+    expanded.content_hash,
+    contentHashOfSelected([{ source_id: SOURCE, module: source[1]! }]),
+  );
+
+  const commandOverride = await expandModules([`${SOURCE}:source:*`], fakeDb, { command_names: ["shared"] });
+  assert.deepEqual(commandOverride.skills, [{ source: "embedded", name: "shared", files: { "SKILL.md": "catalog skill bytes" } }]);
+  assert.deepEqual(commandOverride.commands, []);
+  assert.equal(commandOverride.missing_modules[0]?.reason, "manual-override");
+});
+
 test("transfer validation preserves legal selector bytes and rejects malicious selectors", () => {
   const selectors = [`${SOURCE}:plugin:whitebox/injection`, `${SOURCE}:source:*`, `${SOURCE}:whitebox/authz`];
   assert.deepEqual(validateModuleSelectors(selectors), selectors);

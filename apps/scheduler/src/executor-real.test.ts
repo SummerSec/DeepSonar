@@ -7,6 +7,7 @@ import {
   runtimeCredentialProviderError,
   semanticToolEventsFor,
 } from "./executor-real.js";
+import { expandModules } from "./skill-sources.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
@@ -29,6 +30,47 @@ test("module evidence carries structured omissions and defaults old snapshots to
   });
   assert.deepEqual(current.missing_modules, missing);
   assert.deepEqual(moduleEvidenceFromSnapshot({}).missing_modules, []);
+});
+
+test("manual catalog override is reflected in the frozen evidence set", async () => {
+  const sourceId = "11111111-1111-4111-8111-111111111111";
+  const catalog = [
+    {
+      id: "plugin-a/skill",
+      kind: "skill" as const,
+      plugin: "plugin-a",
+      name: "shared",
+      description: "catalog skill",
+      files: { "SKILL.md": "catalog skill bytes" },
+    },
+    {
+      id: "plugin-a/command",
+      kind: "command" as const,
+      plugin: "plugin-a",
+      name: "shared",
+      description: "catalog command",
+      files: { "command.md": "catalog command bytes" },
+    },
+  ];
+  const fakeDb = (async () => [{
+    catalog_json: catalog,
+    trust_status: "trusted",
+    enabled: true,
+    last_commit_sha: "abc123",
+    last_content_hash: "catalog-hash",
+  }]) as unknown as Parameters<typeof expandModules>[1];
+  const expanded = await expandModules([`${sourceId}:source:*`], fakeDb, { skill_names: ["shared"] });
+  const evidence = moduleEvidenceFromSnapshot({
+    modules: [`${sourceId}:source:*`],
+    module_selectors: [`${sourceId}:source:*`],
+    expanded_modules: expanded.resolved_modules,
+    missing_modules: expanded.missing_modules,
+    module_content_hash: expanded.content_hash,
+    skill_revisions: expanded.revisions,
+  });
+  assert.deepEqual(evidence.expanded_modules.map((module) => module.kind), ["command"]);
+  assert.equal(evidence.module_content_hash, expanded.content_hash);
+  assert.equal(evidence.missing_modules[0]?.reason, "manual-override");
 });
 
 function factEvent(payload: unknown): EventEnvelope {
