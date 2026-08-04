@@ -189,6 +189,72 @@ test("忽略非控制工具", () => {
   assert.deepEqual(result.semanticEvents, []);
 });
 
+test("300 字符 Bash tool id 保持原始 telemetry 且以 hash 关联完成事件", () => {
+  const rawCallId = "B".repeat(300);
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: rawCallId, name: "Bash", input: { command: "pwd" } }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: rawCallId, is_error: false, content: "ok" }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+
+  assert.deepEqual(events, [
+    { type: "tool.call.started", toolName: "Bash", callId: rawCallId, input: { command: "pwd" } },
+    { type: "tool.call.completed", callId: rawCallId, isError: false },
+  ]);
+  assert.equal(state.observedNonControlToolUseHashes.size, 0);
+  assert.equal(state.settledNonControlToolUseHashes.size, 1);
+  assert.equal([...state.settledNonControlToolUseHashes][0]?.length, 64);
+});
+
+test("已知 control tool 重放只产生一对 hashed telemetry 和一个语义事件", () => {
+  const rawCallId = "control-replay-call";
+  const events: Record<string, unknown>[] = [];
+  const semanticEvents: Record<string, unknown>[] = [];
+  const warnings: Array<{ code: string; detail?: string }> = [];
+  const state = createSemanticToolState();
+  const toolUse = {
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: rawCallId, name: "mcp__deepsonar-control__emit_progress", input: { message: "safe" } }] },
+  };
+  const toolResult = {
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: rawCallId, is_error: false, content: "ok" }] },
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const started = mapCliEvent(toolUse, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    semanticEvents.push(...started.semanticEvents);
+    warnings.push(...started.warnings);
+    const completed = mapCliEvent(toolResult, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    semanticEvents.push(...completed.semanticEvents);
+    warnings.push(...completed.warnings);
+  }
+
+  assert.deepEqual(events, [
+    {
+      type: "tool.call.started",
+      toolName: "mcp__deepsonar-control__emit_progress",
+      callId: events[0]?.callId,
+      inputShape: { kind: "object", field_count: 1 },
+    },
+    {
+      type: "tool.call.completed",
+      callId: events[0]?.callId,
+      toolName: "mcp__deepsonar-control__emit_progress",
+      isError: false,
+    },
+  ]);
+  assert.match(String(events[0]?.callId), /^control-[0-9a-f]{24}$/);
+  assert.equal(events[0]?.callId, events[1]?.callId);
+  assert.equal(semanticEvents.length, 1);
+  assert.equal(semanticEvents[0]?.type, "progress");
+  assert.deepEqual(warnings, []);
+});
+
 test("控制工具映射只接受 own key，原型键不会生成语义事件", () => {
   for (const [index, name] of ["__proto__", "constructor", "toString"].entries()) {
     const state = createSemanticToolState();
