@@ -5,6 +5,7 @@ import {
   CANVAS_SKELETON_REFRESH_MS,
   isCurrentNodeRequest,
   mergeHydratedCanvasData,
+  shouldApplyHydratedNode,
   isRevisionAtLeast,
   shouldApplyCanvasDelta,
   shouldApplyCanvasSummary,
@@ -49,6 +50,9 @@ test("out-of-order L1 hydration applies only the latest request", () => {
   const requestId = 3;
   const generationAfterClose = requestId + 1;
   assert.equal(isCurrentNodeRequest(requestId, generationAfterClose), false);
+  assert.equal(shouldApplyHydratedNode(2, 2, "4", "4", 3, 3), true);
+  assert.equal(shouldApplyHydratedNode(2, 2, "4", "5", 3, 3), false);
+  assert.equal(shouldApplyHydratedNode(1, 2, "4", "4", 3, 3), false);
 });
 
 test("revision sync ignores out-of-order delta/summary responses and canvas switches", () => {
@@ -69,6 +73,31 @@ test("L0 refresh updates or clears the selected node", () => {
   };
   assert.equal(syncSelectedNode(refreshed, selected)?.title, "updated");
   assert.equal(syncSelectedNode({ ...refreshed, nodes: [] }, selected), null);
+});
+
+test("selected hydrated body survives an unrelated delta", () => {
+  const selected = node("n1", { description: "full body", secret: "kept" });
+  const current: CanvasData = {
+    canvas_id: "canvas-1",
+    revision: "3",
+    nodes: [selected, node("n2", { summary: "old" })],
+    edges: [],
+  };
+  const hydrated = new Map([["n1", selected]]);
+  const next = applyCanvasDelta(current, {
+    canvas_id: "canvas-1",
+    since: "3",
+    upper_revision: "4",
+    floor_revision: "0",
+    upsert_nodes: [{ ...node("n2", { summary: "new" }), status: "succeeded" }],
+    delete_node_ids: [],
+    upsert_edges: [],
+    delete_edge_ids: [],
+    upsert_meta: [],
+  }, hydrated);
+  const synced = syncSelectedNode(next, selected, hydrated);
+  assert.deepEqual(synced?.body_json, { description: "full body", secret: "kept" });
+  assert.equal(synced?.status, "running");
 });
 
 test("durable delta applies upserts and tombstones while retaining hydrated bodies", () => {
@@ -97,4 +126,26 @@ test("durable delta applies upserts and tombstones while retaining hydrated bodi
   assert.deepEqual(next.nodes.find((item) => item.id === "n1")?.body_json, { description: "full body", raw: "kept" });
   assert.deepEqual(next.edges, []);
   assert.equal(hydrated.has("n2"), false);
+});
+
+test("tombstones win if a delta envelope contains both operations", () => {
+  const current: CanvasData = {
+    canvas_id: "canvas-1",
+    revision: "1",
+    nodes: [node("n1", { summary: "old" })],
+    edges: [{ id: "e1", from_node_id: "n1", to_node_id: "n1", edge_type: "child" }],
+  };
+  const next = applyCanvasDelta(current, {
+    canvas_id: "canvas-1",
+    since: "1",
+    upper_revision: "3",
+    floor_revision: "0",
+    upsert_nodes: [node("n1", { summary: "resurrect" })],
+    delete_node_ids: ["n1"],
+    upsert_edges: [{ id: "e1", from_node_id: "n1", to_node_id: "n1", edge_type: "next" }],
+    delete_edge_ids: ["e1"],
+    upsert_meta: [],
+  });
+  assert.deepEqual(next.nodes, []);
+  assert.deepEqual(next.edges, []);
 });

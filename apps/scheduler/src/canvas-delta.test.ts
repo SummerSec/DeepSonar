@@ -45,14 +45,17 @@ test("event-time projections are bounded before entering the delta wire", () => 
   });
 });
 
-test("delta preserves revision order and deletion tombstones", () => {
-  const result = buildCanvasDelta("c1", 4n, 7n, 0n, [
+test("delta preserves each entity's final revision state", () => {
+  const result = buildCanvasDelta("c1", 4n, 9n, 0n, [
     { revision: "5", entity_type: "node", entity_id: "n1", op: "upsert", projection_json: { id: "n1", node_type: "fact", title: "one", body_json: {} } },
     { revision: "6", entity_type: "node", entity_id: "n1", op: "delete", projection_json: { id: "n1" } },
     { revision: "7", entity_type: "edge", entity_id: "e1", op: "delete", projection_json: { id: "e1" } },
+    { revision: "8", entity_type: "edge", entity_id: "e1", op: "upsert", projection_json: { id: "e1", from_node_id: "n1", to_node_id: "n2", edge_type: "next" } },
+    { revision: "9", entity_type: "node", entity_id: "n2", op: "upsert", projection_json: { id: "n2", node_type: "fact", title: "two", body_json: {} } },
   ]);
-  assert.equal(result.upper_revision, "7");
-  assert.equal(result.upsert_nodes[0]?.id, "n1");
+  assert.equal(result.upper_revision, "9");
+  assert.deepEqual(result.upsert_nodes.map((node) => node.id), ["n2"]);
   assert.deepEqual(result.delete_node_ids, ["n1"]);
-  assert.deepEqual(result.delete_edge_ids, ["e1"]);
+  assert.deepEqual(result.upsert_edges.map((edge) => edge.id), ["e1"]);
+  assert.deepEqual(result.delete_edge_ids, []);
 });

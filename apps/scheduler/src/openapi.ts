@@ -38,6 +38,7 @@ interface Op {
   tags: string[];
   body?: Record<string, unknown>;
   query?: Record<string, unknown>;
+  requiredQuery?: readonly string[];
   responses?: Record<string, unknown>;
 }
 
@@ -219,11 +220,8 @@ const OPS: Op[] = [
     summary: "按 durable revision 读取画布 L0 增量（过旧游标返回 CURSOR_GAP）",
     scope: "tasks:read",
     tags: ["Tasks"],
-    query: {
-      type: "object",
-      required: ["since"],
-      properties: { since: { type: "string", pattern: "^[0-9]+$" } },
-    },
+    query: { since: { type: "string", pattern: "^[0-9]+$" } },
+    requiredQuery: ["since"],
   },
   { method: "get", path: "/canvases/{id}/nodes/{nodeId}", summary: "画布节点 L1 详情", scope: "tasks:read", tags: ["Tasks"] },
   { method: "post", path: "/tasks/{canvasId}/resume-session", summary: "恢复会话（继续执行，不删历史）", scope: "jobs:control", tags: ["Tasks"] },
@@ -732,7 +730,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       ...Object.entries(op.query ?? {}).map(([name, schema]) => ({
         name,
         in: "query" as const,
-        required: false,
+        required: op.requiredQuery?.includes(name) ?? false,
         schema,
       })),
     ];

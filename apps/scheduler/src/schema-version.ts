@@ -23,7 +23,7 @@ export const TRUSTED_V13_CATALOG_SHA256 =
 
 /** SHA-256 of the normalized public catalog for the checked-in v14 baseline. */
 export const TRUSTED_V14_CATALOG_SHA256 =
-  "e8eae7b190a18fe4053f6bd1e6db9f558a18777020c4d5d667583b30d435b658";
+  "db4969eeedb23525cf99fecb37e08f040023c8d3fe01c3e1d57fd6102982cd32";
 
 /** Versioned normalized-catalog pins used before and after every migration. */
 export const TRUSTED_CATALOG_SHA256_BY_VERSION: Readonly<Record<number, string>> = {

@@ -7,6 +7,20 @@ export function isCurrentNodeRequest(requestId: number, currentRequestId: number
   return requestId === currentRequestId;
 }
 
+/** A node detail response may only land in the revision/generation it read. */
+export function shouldApplyHydratedNode(
+  responseGeneration: number,
+  currentGeneration: number,
+  requestRevision: string,
+  currentRevision: string,
+  requestId: number,
+  currentRequestId: number,
+): boolean {
+  return responseGeneration === currentGeneration
+    && requestRevision === currentRevision
+    && isCurrentNodeRequest(requestId, currentRequestId);
+}
+
 /** Compare decimal revision strings without losing bigint precision. */
 export function isRevisionAtLeast(candidate: string, current: string): boolean {
   try {
@@ -37,6 +51,10 @@ export function shouldApplyCanvasSummary(
   return responseGeneration === currentGeneration && isRevisionAtLeast(responseRevision, currentRevision);
 }
 
+export function mergeHydratedNodeData(summary: CanvasNode, hydrated: CanvasNode): CanvasNode {
+  return { ...hydrated, ...summary, body_json: hydrated.body_json };
+}
+
 /** Merge a fresh bounded projection without discarding hydrated L1/L2 bodies. */
 export function mergeHydratedCanvasData(
   summary: CanvasData,
@@ -47,7 +65,7 @@ export function mergeHydratedCanvasData(
     ...summary,
     nodes: summary.nodes.map((node) => {
       const full = hydrated.get(node.id);
-      return full ? { ...full, ...node, body_json: full.body_json } : node;
+      return full ? mergeHydratedNodeData(node, full) : node;
     }),
   };
 }
@@ -65,13 +83,18 @@ export function applyCanvasDelta(
   const nodesById = new Map(current.nodes.map((node) => [node.id, node]));
   for (const id of deletedNodes) nodesById.delete(id);
   for (const node of delta.upsert_nodes) {
+    // Older or hand-built envelopes may contain both operations.  A tombstone
+    // is authoritative, so never let an upsert resurrect the entity.
+    if (deletedNodes.has(node.id)) continue;
     const full = hydrated.get(node.id);
-    nodesById.set(node.id, full ? { ...full, ...node, body_json: full.body_json } : node);
+    nodesById.set(node.id, full ? mergeHydratedNodeData(node, full) : node);
   }
 
   const edgesById = new Map(current.edges.map((edge) => [edge.id, edge]));
   for (const id of deletedEdges) edgesById.delete(id);
-  for (const edge of delta.upsert_edges) edgesById.set(edge.id, edge);
+  for (const edge of delta.upsert_edges) {
+    if (!deletedEdges.has(edge.id)) edgesById.set(edge.id, edge);
+  }
 
   let canvas = current.canvas;
   for (const meta of delta.upsert_meta) {
@@ -93,7 +116,14 @@ export function applyCanvasDelta(
 }
 
 /** Keep the sidebar selection aligned with the latest L0 node projection. */
-export function syncSelectedNode(data: CanvasData, selected: CanvasNode | null): CanvasNode | null {
+export function syncSelectedNode(
+  data: CanvasData,
+  selected: CanvasNode | null,
+  hydrated: ReadonlyMap<string, CanvasNode> = new Map(),
+): CanvasNode | null {
   if (!selected) return null;
-  return data.nodes.find((node) => node.id === selected.id) ?? null;
+  const latest = data.nodes.find((node) => node.id === selected.id);
+  if (!latest) return null;
+  const full = hydrated.get(latest.id);
+  return full ? mergeHydratedNodeData(latest, full) : latest;
 }

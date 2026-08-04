@@ -16,8 +16,9 @@ import { api, type CanvasData, type CanvasNode } from "./api";
 import {
   applyCanvasDelta,
   CANVAS_SKELETON_REFRESH_MS,
-  isCurrentNodeRequest,
   mergeHydratedCanvasData,
+  mergeHydratedNodeData,
+  shouldApplyHydratedNode,
   shouldApplyCanvasDelta,
   shouldApplyCanvasSummary,
   syncSelectedNode,
@@ -226,7 +227,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
         const next = mergeHydratedCanvasData(summary, hydratedNodesRef.current);
         revisionRef.current = responseRevision;
         setData(next);
-        setSelected((previous) => syncSelectedNode(next, previous));
+        setSelected((previous) => syncSelectedNode(next, previous, hydratedNodesRef.current));
         onData?.(next);
         setError(null);
       } catch (e) {
@@ -252,7 +253,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
           if (!before) return before;
           const next = applyCanvasDelta(before, delta, hydratedNodesRef.current);
           revisionRef.current = delta.upper_revision;
-          setSelected((previous) => syncSelectedNode(next, previous));
+          setSelected((previous) => syncSelectedNode(next, previous, hydratedNodesRef.current));
           onData?.(next);
           return next;
         });
@@ -573,14 +574,34 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       setSelected(found);
       if (!found) return;
       const requestId = ++nodeRequestRef.current;
+      const requestGeneration = syncGenerationRef.current;
+      const requestRevision = revisionRef.current;
       void api.canvasNode(canvasId, found.id).then((result) => {
-        if (!isCurrentNodeRequest(requestId, nodeRequestRef.current)) return;
-        hydratedNodesRef.current.set(result.node.id, result.node);
-        setSelected(result.node);
+        if (!shouldApplyHydratedNode(
+          requestGeneration,
+          syncGenerationRef.current,
+          requestRevision,
+          revisionRef.current,
+          requestId,
+          nodeRequestRef.current,
+        )) return;
         setData((before) => {
           if (!before) return before;
-          const nodes = before.nodes.map((item) => item.id === result.node.id ? result.node : item);
+          if (!shouldApplyHydratedNode(
+            requestGeneration,
+            syncGenerationRef.current,
+            requestRevision,
+            revisionRef.current,
+            requestId,
+            nodeRequestRef.current,
+          )) return before;
+          const latest = before.nodes.find((item) => item.id === result.node.id);
+          if (!latest) return before;
+          const hydrated = mergeHydratedNodeData(latest, result.node);
+          hydratedNodesRef.current.set(result.node.id, hydrated);
+          const nodes = before.nodes.map((item) => item.id === result.node.id ? hydrated : item);
           const next = { ...before, nodes };
+          setSelected(hydrated);
           onData?.(next);
           return next;
         });

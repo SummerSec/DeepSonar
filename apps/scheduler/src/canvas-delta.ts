@@ -121,7 +121,12 @@ export type CanvasDeltaWire = {
   upsert_meta: Record<string, unknown>[];
 };
 
-/** Reduce rows in revision order into the stable delta envelope. */
+/** Reduce rows in revision order into the stable delta envelope.
+ *
+ * A single entity can be changed more than once between cursors.  Keep only
+ * its final operation so an upsert followed by a delete cannot resurrect the
+ * entity when the wire envelope is applied by clients (and vice versa).
+ */
 export function buildCanvasDelta(canvasId: string, since: bigint, upper: bigint, floor: bigint, rows: CanvasDeltaRow[]): CanvasDeltaWire {
   const delta: CanvasDeltaWire = {
     canvas_id: canvasId,
@@ -134,24 +139,36 @@ export function buildCanvasDelta(canvasId: string, since: bigint, upper: bigint,
     delete_edge_ids: [],
     upsert_meta: [],
   };
+  const nodes = new Map<string, { op: CanvasDeltaRow["op"]; value?: Record<string, unknown> }>();
+  const edges = new Map<string, { op: CanvasDeltaRow["op"]; value?: Record<string, unknown> }>();
+  const metaChanges = new Map<string, Record<string, unknown>>();
   for (const row of rows) {
     if (row.entity_type === "node") {
-      if (row.op === "delete") delta.delete_node_ids.push(row.entity_id);
+      if (row.op === "delete") nodes.set(row.entity_id, { op: "delete" });
       else {
         const node = projectCanvasNode(row.projection_json);
-        if (node) delta.upsert_nodes.push(node);
+        if (node) nodes.set(row.entity_id, { op: "upsert", value: node });
       }
     } else if (row.entity_type === "edge") {
-      if (row.op === "delete") delta.delete_edge_ids.push(row.entity_id);
+      if (row.op === "delete") edges.set(row.entity_id, { op: "delete" });
       else {
         const edge = projectCanvasEdge(row.projection_json);
-        if (edge) delta.upsert_edges.push(edge);
+        if (edge) edges.set(row.entity_id, { op: "upsert", value: edge });
       }
     } else if (row.op === "upsert") {
-      const meta = projectCanvasMeta(row.projection_json);
-      if (meta) delta.upsert_meta.push(meta);
+      const projection = projectCanvasMeta(row.projection_json);
+      if (projection) metaChanges.set(row.entity_id, projection);
     }
   }
+  for (const [id, change] of nodes) {
+    if (change.op === "delete") delta.delete_node_ids.push(id);
+    else if (change.value) delta.upsert_nodes.push(change.value);
+  }
+  for (const [id, change] of edges) {
+    if (change.op === "delete") delta.delete_edge_ids.push(id);
+    else if (change.value) delta.upsert_edges.push(change.value);
+  }
+  delta.upsert_meta.push(...metaChanges.values());
   return delta;
 }
 

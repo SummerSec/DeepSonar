@@ -83,6 +83,37 @@ if (!testDatabaseUrl) {
       assert.equal(newUpsert.op, "upsert");
       assert.equal(Number(beforeMove.change_revision) + 1, Number((await sql`SELECT change_revision FROM canvases WHERE id = ${canvasId}`)[0].change_revision));
 
+      // Regression: two transactions can arrive here while each already
+      // holds the other canvas lock.  NOWAIT must fail fast with lock_not_available
+      // rather than waiting for a 40P01 deadlock.
+      let locked = 0;
+      let releaseBarrier: () => void = () => {};
+      const barrier = new Promise<void>((resolve) => { releaseBarrier = resolve; });
+      const moveFromPrimary = sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as typeof sql;
+        await tx.unsafe("SET LOCAL statement_timeout = '2000ms'");
+        await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+        locked += 1;
+        if (locked === 2) releaseBarrier();
+        await barrier;
+        await tx`UPDATE canvas_nodes SET canvas_id = ${otherCanvasId} WHERE id = ${nodeIds[2]}`;
+      });
+      const moveFromOther = sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as typeof sql;
+        await tx.unsafe("SET LOCAL statement_timeout = '2000ms'");
+        await tx`SELECT id FROM canvases WHERE id = ${otherCanvasId} FOR UPDATE`;
+        locked += 1;
+        if (locked === 2) releaseBarrier();
+        await barrier;
+        await tx`UPDATE canvas_nodes SET canvas_id = ${canvasId} WHERE id = ${movedId}`;
+      });
+      const moveResults = await Promise.allSettled([moveFromPrimary, moveFromOther]);
+      const moveErrors = moveResults
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason as { code?: string });
+      assert.equal(moveErrors.some((error) => error.code === "40P01"), false);
+      assert.ok(moveErrors.some((error) => error.code === "55P03"));
+
       // Reader upper-bound and node projection share one canvas lock.  The
       // writer waits for the reader, then its revision is visible only through
       // a subsequent delta range.

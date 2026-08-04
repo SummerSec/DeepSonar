@@ -166,14 +166,16 @@ BEGIN
   END;
 
   IF TG_OP = 'UPDATE' AND old_canvas_id IS DISTINCT FROM new_canvas_id THEN
-    -- Moving an entity touches two canvases.  Always acquire locks in lexical
-    -- order so opposite-direction moves cannot deadlock each other.
+    -- A caller may already hold either canvas lock before this trigger runs.
+    -- Lexical ordering alone cannot prevent a cycle in that case, so acquire
+    -- the second lock with NOWAIT and let the caller retry on 55P03 instead of
+    -- waiting for PostgreSQL's deadlock detector (40P01).
     IF old_canvas_id < new_canvas_id THEN
-      PERFORM 1 FROM canvases WHERE id = old_canvas_id FOR UPDATE;
-      PERFORM 1 FROM canvases WHERE id = new_canvas_id FOR UPDATE;
+      PERFORM 1 FROM canvases WHERE id = old_canvas_id FOR UPDATE NOWAIT;
+      PERFORM 1 FROM canvases WHERE id = new_canvas_id FOR UPDATE NOWAIT;
     ELSE
-      PERFORM 1 FROM canvases WHERE id = new_canvas_id FOR UPDATE;
-      PERFORM 1 FROM canvases WHERE id = old_canvas_id FOR UPDATE;
+      PERFORM 1 FROM canvases WHERE id = new_canvas_id FOR UPDATE NOWAIT;
+      PERFORM 1 FROM canvases WHERE id = old_canvas_id FOR UPDATE NOWAIT;
     END IF;
     PERFORM deepsonar_canvas_append_change(old_canvas_id, entity_type, old_entity_id, 'delete', old_projection);
     PERFORM deepsonar_canvas_append_change(new_canvas_id, entity_type, new_entity_id, 'upsert', new_projection);
