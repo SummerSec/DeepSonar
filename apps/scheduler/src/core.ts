@@ -25,6 +25,7 @@ import {
   assertHubDecisionCanvasReferences,
   parseHubDecisionPayload,
   type HubDecision,
+  type HubReferenceLookup,
 } from "./graph.js";
 
 type Tx = typeof sql;
@@ -892,18 +893,24 @@ type CanvasEdgeInput = {
   edgeType: string;
 };
 
-/**
- * Insert a deduplicated edge batch without reading each candidate edge. The
- * event-ingestion transaction already serializes a canvas, and the NOT EXISTS
- * guard preserves the idempotency of insertEdgeIfAbsent for earlier events.
- */
-async function insertEdgesIfAbsentBatch(tx: Tx, edges: readonly CanvasEdgeInput[]) {
+type HubEdgeBatchInsert = (tx: Tx, edges: readonly CanvasEdgeInput[]) => Promise<void>;
+
+function dedupeCanvasEdges(edges: readonly CanvasEdgeInput[]): CanvasEdgeInput[] {
   const unique = new Map<string, CanvasEdgeInput>();
   for (const edge of edges) {
     const key = `${edge.canvasId}\u0000${edge.fromId}\u0000${edge.toId}\u0000${edge.edgeType}`;
     unique.set(key, edge);
   }
-  const values = [...unique.values()];
+  return [...unique.values()];
+}
+
+/**
+ * Insert a deduplicated edge batch without reading each candidate edge. The
+ * event-ingestion transaction already serializes a canvas, and the NOT EXISTS
+ * guard preserves the idempotency of insertEdgeIfAbsent for earlier events.
+ */
+export async function insertEdgesIfAbsentBatch(tx: Tx, edges: readonly CanvasEdgeInput[]) {
+  const values = dedupeCanvasEdges(edges);
   if (values.length === 0) return;
 
   let rows = tx`(${values[0]!.canvasId}, ${values[0]!.fromId}::uuid, ${values[0]!.toId}::uuid, ${values[0]!.edgeType})`;
@@ -923,7 +930,18 @@ async function insertEdgesIfAbsentBatch(tx: Tx, edges: readonly CanvasEdgeInput[
     )`;
 }
 
-async function applySideEffects(tx: Tx, jobId: string, type: string, payload: unknown) {
+export interface CoreSideEffectServices {
+  hubReferenceLookup?: HubReferenceLookup;
+  hubEdgeBatchInsert?: HubEdgeBatchInsert;
+}
+
+export async function applySideEffects(
+  tx: Tx,
+  jobId: string,
+  type: string,
+  payload: unknown,
+  services: CoreSideEffectServices = {},
+) {
   // Parse Hub references before the event/application can perform any write.
   // Event-ingestion wraps this callback in the same transaction, so a later
   // rejection rolls back the event, jobs, nodes, and edges as one decision.
@@ -1054,7 +1072,12 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
     if (!canvasId) return;
     // Resolve every submitted reference, including intents beyond the runtime
     // dispatch cap, before role/job/payload/edge side effects begin.
-    const referenceNodes = await assertHubDecisionCanvasReferences(tx, canvasId, p);
+    const referenceNodes = await assertHubDecisionCanvasReferences(tx, canvasId, p, services.hubReferenceLookup);
+    const insertHubEdges: HubEdgeBatchInsert = async (edgeTx, edges) => {
+      const uniqueEdges = dedupeCanvasEdges(edges);
+      if (uniqueEdges.length === 0) return;
+      await (services.hubEdgeBatchInsert ?? insertEdgesIfAbsentBatch)(edgeTx, uniqueEdges);
+    };
     const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
     if (p.complete?.description) {
@@ -1090,7 +1113,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           const src = referenceNodes.get(fid);
           if (src) edges.push({ canvasId, fromId: src.id, toId: root.id as string, edgeType: "to" });
         }
-        await insertEdgesIfAbsentBatch(tx, edges);
+        await insertHubEdges(tx, edges);
       }
       return;
     }
@@ -1201,7 +1224,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         if (src) hubEdges.push({ canvasId, fromId: src.id, toId: intentNode.id as string, edgeType: "from" });
       }
     }
-    await insertEdgesIfAbsentBatch(tx, hubEdges);
+    await insertHubEdges(tx, hubEdges);
     return;
   }
 

@@ -16,7 +16,8 @@ if (!testDatabaseUrl) {
     process.env.AGENT_MODE = "fake";
 
     const { migrate, sql } = await import("./db.js");
-    const { ingestEvent } = await import("./core.js");
+    const { applySideEffects, ingestEvent, insertEdgesIfAbsentBatch } = await import("./core.js");
+    const { queryHubReferenceNodes } = await import("./graph.js");
     await migrate();
 
     const projectId = randomUUID();
@@ -119,6 +120,113 @@ if (!testDatabaseUrl) {
       const [{ eventCount }] = await sql<{ eventCount: number }[]>`
         SELECT COUNT(*)::int AS "eventCount" FROM events WHERE job_id = ${jobId}`;
       assert.equal(eventCount, 1);
+
+      const [factOne] = await sql<{ id: string }[]>`
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, 'fact', 'fact one', 'open', ${sql.json({})})
+        RETURNING id`;
+      const [factTwo] = await sql<{ id: string }[]>`
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, 'fact', 'fact two', 'open', ${sql.json({})})
+        RETURNING id`;
+      const completePayload = {
+        complete: {
+          from: [factOne.id, factOne.id, factTwo.id],
+          description: "完成批量引用",
+        },
+      };
+      await sql`UPDATE jobs SET status = 'succeeded' WHERE parent_job_id = ${jobId}`;
+      await sql`UPDATE jobs SET status = 'succeeded' WHERE id = ${jobId}`;
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, parent_job_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (${randomUUID()}, ${projectId}, ${canvasId}, ${jobId}, 'review', 'succeeded', ${sql.json(validSnapshot)}, ${sql.json({})})`;
+      let lookupCalls = 0;
+      let lookedUpIds: string[] = [];
+      let batchInsertCalls = 0;
+      const batchEdgeSizes: number[] = [];
+      const services = {
+        hubReferenceLookup: async (tx: typeof sql, targetCanvasId: string, ids: readonly string[]) => {
+          lookupCalls += 1;
+          lookedUpIds = [...ids];
+          return queryHubReferenceNodes(tx, targetCanvasId, ids);
+        },
+        hubEdgeBatchInsert: async (
+          tx: typeof sql,
+          edges: readonly { canvasId: string; fromId: string; toId: string; edgeType: string }[],
+        ) => {
+          batchInsertCalls += 1;
+          batchEdgeSizes.push(edges.length);
+          return insertEdgesIfAbsentBatch(tx, edges);
+        },
+      };
+      await sql.begin(async (rawTx) => {
+        await applySideEffects(rawTx as unknown as typeof sql, jobId, "hub_decision", completePayload, services);
+      });
+      assert.equal(lookupCalls, 1, "core should perform one batched reference lookup");
+      assert.deepEqual(lookedUpIds, [factOne.id, factTwo.id], "duplicate references should be queried once");
+      const [{ completeEdges }] = await sql<{ completeEdges: number }[]>`
+        SELECT COUNT(*)::int AS "completeEdges" FROM canvas_edges
+        WHERE canvas_id = ${canvasId}
+          AND to_node_id = ${rootId}
+          AND edge_type = 'to'
+          AND from_node_id = ANY(${[factOne.id, factTwo.id]}::uuid[])`;
+      assert.equal(completeEdges, 2, "complete should create one edge per unique reference");
+      assert.equal(batchInsertCalls, 1);
+      assert.deepEqual(batchEdgeSizes, [2]);
+
+      await sql.begin(async (rawTx) => {
+        await applySideEffects(rawTx as unknown as typeof sql, jobId, "hub_decision", completePayload, services);
+      });
+      assert.equal(lookupCalls, 2, "each core event should still use one batch lookup");
+      assert.equal(batchInsertCalls, 2, "replay should use one batch insert");
+      const [{ duplicateEdges }] = await sql<{ duplicateEdges: number }[]>`
+        SELECT COUNT(*)::int AS "duplicateEdges" FROM canvas_edges
+        WHERE canvas_id = ${canvasId}
+          AND to_node_id = ${rootId}
+          AND edge_type = 'to'
+          AND from_node_id = ANY(${[factOne.id, factTwo.id]}::uuid[])`;
+      assert.equal(duplicateEdges, 2, "replaying a decision must not duplicate edges");
+
+      const intentsPayload = {
+        intents: [
+          { from: [factOne.id, factOne.id], role: "review", description: "意图一", prompt: "执行一" },
+          { from: [factTwo.id], role: "review", description: "意图二", prompt: "执行二" },
+        ],
+      };
+      await sql.begin(async (rawTx) => {
+        await applySideEffects(rawTx as unknown as typeof sql, jobId, "hub_decision", intentsPayload, services);
+      });
+      assert.equal(lookupCalls, 3, "multiple intents should share one reference snapshot");
+      assert.equal(batchInsertCalls, 3);
+      assert.deepEqual(batchEdgeSizes, [2, 2, 2]);
+      const [{ intentEdges }] = await sql<{ intentEdges: number }[]>`
+        SELECT COUNT(*)::int AS "intentEdges"
+        FROM canvas_edges e
+        JOIN canvas_nodes n ON n.id = e.to_node_id
+        WHERE e.canvas_id = ${canvasId}
+          AND e.edge_type = 'from'
+          AND n.node_type = 'intent'
+          AND e.from_node_id = ANY(${[factOne.id, factTwo.id]}::uuid[])`;
+      assert.equal(intentEdges, 2, "multiple intents should create one edge per unique source");
+
+      await sql.begin(async (rawTx) => {
+        await applySideEffects(rawTx as unknown as typeof sql, jobId, "hub_decision", intentsPayload, services);
+      });
+      assert.equal(lookupCalls, 4, "duplicate intents still use one batch lookup");
+      assert.equal(batchInsertCalls, 3, "duplicate intents with no new edges are a batch no-op");
+
+      await sql`UPDATE jobs SET status = 'succeeded' WHERE parent_job_id = ${jobId}`;
+      await sql.begin(async (rawTx) => {
+        await applySideEffects(
+          rawTx as unknown as typeof sql,
+          jobId,
+          "hub_decision",
+          { complete: { from: [], description: "空引用完成" } },
+          services,
+        );
+      });
+      assert.equal(lookupCalls, 4, "empty references should skip the membership read");
+      assert.equal(batchInsertCalls, 3, "empty references must not issue an INSERT batch");
     } finally {
       await sql`DELETE FROM canvas_edges WHERE canvas_id IN (${canvasId}, ${otherCanvasId})`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id IN (${canvasId}, ${otherCanvasId})`;

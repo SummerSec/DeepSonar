@@ -485,6 +485,12 @@ export interface HubReferenceNode {
   node_type: "root" | "fact" | "finding";
 }
 
+export type HubReferenceLookup = (
+  tx: typeof sql,
+  canvasId: string,
+  ids: readonly string[],
+) => Promise<HubReferenceNode[]>;
+
 type ReferencePath = { path: string; value: unknown };
 
 function objectValue(value: unknown): Record<string, unknown> | null {
@@ -586,6 +592,13 @@ export function assertHubDecisionReferableIds(
   return decision;
 }
 
+/** The single bounded membership query used by the core Hub reference service. */
+export const queryHubReferenceNodes: HubReferenceLookup = async (tx, canvasId, ids) => tx<HubReferenceNode[]>`
+  SELECT id, node_type FROM canvas_nodes
+  WHERE id = ANY(${ids}::uuid[])
+    AND canvas_id = ${canvasId}
+    AND node_type = ANY(${["root", "fact", "finding"]})`;
+
 /**
  * Resolve referable IDs in one bounded Scheduler query before inserting
  * jobs/edges. The returned read-only map is the validated snapshot that core
@@ -596,14 +609,11 @@ export async function assertHubDecisionCanvasReferences(
   tx: typeof sql,
   canvasId: string,
   decision: HubDecision,
+  lookup: HubReferenceLookup = queryHubReferenceNodes,
 ): Promise<ReadonlyMap<string, HubReferenceNode>> {
   const ids = [...new Set(refsOf(decision).map((ref) => ref.value))];
   if (ids.length === 0) return new Map();
-  const rows = await tx<HubReferenceNode[]>`
-    SELECT id, node_type FROM canvas_nodes
-    WHERE id = ANY(${ids}::uuid[])
-      AND canvas_id = ${canvasId}
-      AND node_type = ANY(${["root", "fact", "finding"]})`;
+  const rows = await lookup(tx, canvasId, ids);
   const validated = new Map(rows.map((row) => [String(row.id), {
     id: String(row.id),
     node_type: row.node_type,
