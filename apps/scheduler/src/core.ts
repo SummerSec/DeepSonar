@@ -21,6 +21,11 @@ import {
   createEventIngestionApplication,
   type EventIngestionResult,
 } from "./domains/event-ingestion/index.js";
+import {
+  assertHubDecisionCanvasReferences,
+  parseHubDecisionPayload,
+  type HubDecision,
+} from "./graph.js";
 
 type Tx = typeof sql;
 export type IngestResult = EventIngestionResult;
@@ -881,6 +886,10 @@ async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId
 }
 
 async function applySideEffects(tx: Tx, jobId: string, type: string, payload: unknown) {
+  // Parse Hub references before the event/application can perform any write.
+  // Event-ingestion wraps this callback in the same transaction, so a later
+  // rejection rolls back the event, jobs, nodes, and edges as one decision.
+  const hubDecision: HubDecision | null = type === "hub_decision" ? parseHubDecisionPayload(payload) : null;
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job) throw new Error(`job ${jobId} 不存在`);
 
@@ -1002,12 +1011,12 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
 
   if (type === "hub_decision") {
     // hub 读图后的决策：complete=目标达成；intents=派发角色 job（§8.3）
-    const p = payload as {
-      complete?: { from?: string[]; description?: string };
-      intents?: { from?: string[]; role?: string; description?: string; prompt?: string }[];
-    };
+    const p = hubDecision!;
     const canvasId = (job.canvas_id as string) ?? null;
     if (!canvasId) return;
+    // Resolve every submitted reference, including intents beyond the runtime
+    // dispatch cap, before role/job/payload/edge side effects begin.
+    await assertHubDecisionCanvasReferences(tx, canvasId, p);
     const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
     if (p.complete?.description) {
@@ -1038,7 +1047,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
           UPDATE canvas_nodes SET status = 'analysis_complete',
             body_json = body_json || ${tx.json({ conclusion: p.complete.description })}, updated_at = now()
           WHERE id = ${root.id}`;
-        for (const fid of p.complete.from ?? []) {
+        for (const fid of p.complete.from) {
           const [src] = await tx`
             SELECT id FROM canvas_nodes WHERE id = ${fid} AND canvas_id = ${canvasId}`;
           if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, root.id as string, "to");
@@ -1116,7 +1125,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
             intent: {
               description: it.description,
               prompt: it.prompt.trim(),
-              from: it.from ?? [],
+              from: it.from,
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
             ...(verificationFollowup
@@ -1147,7 +1156,7 @@ async function applySideEffects(tx: Tx, jobId: string, type: string, payload: un
         UPDATE jobs SET payload_json = payload_json || ${tx.json({ intent_node_id: intentNode.id })}
         WHERE id = ${roleJob.id}`;
       // 'from' 边：被引用事实 → 新意图（Cairn Intent.from）
-      for (const fid of it.from ?? []) {
+      for (const fid of it.from) {
         const [src] = await tx`
           SELECT id FROM canvas_nodes WHERE id = ${fid} AND canvas_id = ${canvasId}`;
         if (src) await insertEdgeIfAbsent(tx, canvasId, src.id as string, intentNode.id as string, "from");

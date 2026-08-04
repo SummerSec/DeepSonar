@@ -55,6 +55,7 @@ Finding 1 ── * finding_verification_rounds
 纪律：
 
 - **Agent 只提案**：`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human`；是否 verify、是否 report 由调度器决定。
+- **图引用硬约束**：Hub 的 `intents[].from` / `complete.from` 必须使用同画布 `root`/`fact`/`finding` 节点的 canonical UUID（YAML `root_id` 的值）；字段名、别名、占位符或跨画布 ID 会使整次决策被拒绝。
 - **Hub 不可下发** `verify` / `report`；须先 `list_available_roles`。
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。

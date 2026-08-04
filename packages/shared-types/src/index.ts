@@ -237,14 +237,39 @@ export const ReadinessResponse = z.object({
 });
 export type ReadinessResponse = z.infer<typeof ReadinessResponse>;
 
+/** Canonical UUID used for graph node references crossing the Agent boundary. */
+export const CANONICAL_UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+export const GraphNodeReference = z
+  .string()
+  .uuid()
+  .regex(new RegExp(CANONICAL_UUID_PATTERN, "i"));
+export type GraphNodeReference = z.infer<typeof GraphNodeReference>;
+
 /** Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。 */
-export const HubIntentPayload = z.object({
-  from: z.array(z.string()).default([]),
-  role: z.string().min(1).max(64),
-  description: z.string().min(1).max(2_000),
-  prompt: z.string().min(1).max(20_000),
-});
+export const HubIntentPayload = z
+  .object({
+    from: z.array(GraphNodeReference),
+    role: z.string().min(1).max(64),
+    description: z.string().min(1).max(2_000),
+    prompt: z.string().min(1).max(20_000),
+  })
+  .strict();
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
+
+export const HubCompletePayload = z
+  .object({
+    from: z.array(GraphNodeReference),
+    description: z.string().min(1).max(10_000),
+  })
+  .strict();
+export type HubCompletePayload = z.infer<typeof HubCompletePayload>;
+
+/** Complete and intents are mutually exclusive at the decision boundary. */
+export const HubDecisionPayload = z.union([
+  z.object({ complete: HubCompletePayload }).strict(),
+  z.object({ intents: z.array(HubIntentPayload).min(1).max(100) }).strict(),
+]);
+export type HubDecisionPayload = z.infer<typeof HubDecisionPayload>;
 
 // ---------- DeepSonar 平台工具（RoleConfig 可按 Job 开关） ----------
 

@@ -125,7 +125,7 @@ function resultContract(
 ): string {
   const enabled = new Set(toolNames);
   if (isHub) {
-    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete 或 intents 二选一，role 必须原样命中工具结果；随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
+    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete 或 intents 二选一，from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果；随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
   }
   if (isVerify) {
     return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human（兼容 false_positive→rework）。confirmed 仍须有独立 review + 完整 test 证据，否则调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
@@ -369,7 +369,7 @@ ${taskGoal}
 画布（YAML）：
 ${graph.yaml}
 
-约束：最多 ${rules.maxIntentsPerDecision} 个意图；不要重复开放或已完成意图；from 只能引用图中 root/fact/finding id。
+  约束：最多 ${rules.maxIntentsPerDecision} 个意图；不要重复开放或已完成意图；from 只能引用当前 YAML 中 root_id/fact/finding 对应的 UUID 值（不要填写字段名 root_id、别名或占位符）。
 role 只能原样使用 list_available_roles 本轮返回的 name；不得使用记忆、固定清单或猜测的角色，不得派发 system/hub 角色。
 任务出网策略：${networkPolicy.allow_egress ? "Worker 允许访问外部网络" : "Worker 禁止访问模型网关之外的网络"}。
 Hub 不下载材料。Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
@@ -443,7 +443,7 @@ Finding：${trigger.finding_id ?? "未知"}
 2. 若仍有 pending/verifying → 派发补证或推动验证，不得 complete；
 3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并 request_human。`;
     } else if (["user_task", "plane_issue", "external_event"].includes(trigger?.kind ?? "")) {
-      initialInput += "\n\n这是首次决策轮次；没有执行证据时不得直接 complete，初始 intent 可从 root_id 出发。";
+      initialInput += "\n\n这是首次决策轮次；没有执行证据时不得直接 complete，初始 intent 可从 YAML root_id 的 UUID 值出发，不要填写 root_id 字段名。";
       if (trigger?.kind === "external_event") {
         initialInput += "\n这是外部事件触发；先判断风险和所需动作，不要把事件字段机械当成人工指令。";
       }
@@ -691,6 +691,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       if (Boolean(p.complete) === Array.isArray(p.intents)) {
         throw new Error("submit_hub_decision 必须且只能提供 complete 或 intents 之一");
       }
+      const decision = parseHubDecision(JSON.stringify(event.payload), availableHubRoleNames, graph?.referableIds);
+      if (!decision) throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
       if (semanticState.hub) throw new Error("submit_hub_decision 每个 Job 只能调用一次");
       semanticState.hub = { eventId, payload: event.payload };
       return;
@@ -820,7 +822,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let hubNote = "";
   if (isHub) {
     const decision = semanticState.hub
-      ? parseHubDecision(JSON.stringify(semanticState.hub.payload), availableHubRoleNames)
+      ? parseHubDecision(JSON.stringify(semanticState.hub.payload), availableHubRoleNames, graph?.referableIds)
       : null;
     if (!decision) {
       throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");

@@ -1,5 +1,10 @@
 import { sql } from "./db.js";
 import { config } from "./config.js";
+import {
+  GraphNodeReference,
+  HubDecisionPayload as HubDecisionPayloadSchema,
+} from "@deepsonar/shared-types";
+import { ControlInputError, invalidNodeReference } from "./control-input.js";
 
 /** Server-side bounded graph projections for Hub/Worker prompt inputs. */
 export type GraphScope = "hub" | "agent" | "verify" | "report";
@@ -474,38 +479,133 @@ export interface HubDecision {
   intents?: HubIntent[];
 }
 
-function strArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+type ReferencePath = { path: string; value: unknown };
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function inspectReferenceFields(value: unknown): ReferencePath | null {
+  const object = objectValue(value);
+  if (!object) return null;
+
+  if ("complete" in object) {
+    const complete = objectValue(object.complete);
+    if (!complete) return { path: "complete.from", value: undefined };
+    if (!("from" in complete)) return { path: "complete.from", value: undefined };
+    if (!Array.isArray(complete.from)) return { path: "complete.from", value: complete.from };
+    for (let index = 0; index < complete.from.length; index += 1) {
+      if (!GraphNodeReference.safeParse(complete.from[index]).success) {
+        return { path: `complete.from.${index}`, value: complete.from[index] };
+      }
+    }
+  }
+
+  if ("intents" in object) {
+    if (!Array.isArray(object.intents)) return { path: "intents", value: object.intents };
+    for (let index = 0; index < object.intents.length; index += 1) {
+      const intent = objectValue(object.intents[index]);
+      if (!intent || !("from" in intent)) return { path: `intents.${index}.from`, value: undefined };
+      if (!Array.isArray(intent.from)) return { path: `intents.${index}.from`, value: intent.from };
+      for (let refIndex = 0; refIndex < intent.from.length; refIndex += 1) {
+        if (!GraphNodeReference.safeParse(intent.from[refIndex]).success) {
+          return { path: `intents.${index}.from.${refIndex}`, value: intent.from[refIndex] };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function refsOf(decision: HubDecision): Array<{ path: string; value: string }> {
+  const refs: Array<{ path: string; value: string }> = [];
+  for (const [index, value] of (decision.complete?.from ?? []).entries()) {
+    refs.push({ path: `complete.from.${index}`, value });
+  }
+  for (const [intentIndex, intent] of (decision.intents ?? []).entries()) {
+    for (const [refIndex, value] of intent.from.entries()) {
+      refs.push({ path: `intents.${intentIndex}.from.${refIndex}`, value });
+    }
+  }
+  return refs;
+}
+
+/** Validate shape and canonical graph references before any side effect. */
+export function parseHubDecisionPayload(
+  value: unknown,
+  referableIds?: ReadonlySet<string> | readonly string[],
+): HubDecision {
+  const invalidShapeRef = inspectReferenceFields(value);
+  if (invalidShapeRef) throw invalidNodeReference(invalidShapeRef.path, invalidShapeRef.value);
+
+  const parsed = HubDecisionPayloadSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error("Hub decision 必须且只能提供 complete 或 intents 之一，且字段必须完整");
+  }
+
+  const decision: HubDecision = "complete" in parsed.data
+    ? { complete: parsed.data.complete }
+    : {
+        intents: parsed.data.intents.map((intent) => ({
+          ...intent,
+          role: intent.role.trim(),
+          description: intent.description.trim(),
+          prompt: intent.prompt.trim(),
+        })),
+      };
+
+  if (referableIds !== undefined) assertHubDecisionReferableIds(decision, referableIds);
+  return decision;
+}
+
+/** Reject references that are not nodes visible/referable in this canvas. */
+export function assertHubDecisionReferableIds(
+  decision: HubDecision,
+  referableIds: ReadonlySet<string> | readonly string[],
+): HubDecision {
+  const allowed = referableIds instanceof Set ? referableIds : new Set(referableIds);
+  for (const ref of refsOf(decision)) {
+    if (!allowed.has(ref.value)) throw invalidNodeReference(ref.path, ref.value);
+  }
+  return decision;
+}
+
+/** Resolve referable IDs in the Scheduler transaction before inserting jobs/edges. */
+export async function assertHubDecisionCanvasReferences(
+  tx: typeof sql,
+  canvasId: string,
+  decision: HubDecision,
+): Promise<HubDecision> {
+  const ids = [...new Set(refsOf(decision).map((ref) => ref.value))];
+  if (ids.length === 0) return decision;
+  const allowed = new Set<string>();
+  for (const id of ids) {
+    const [row] = await tx`
+      SELECT id FROM canvas_nodes
+      WHERE id = ${id} AND canvas_id = ${canvasId}
+        AND node_type = ANY(${["root", "fact", "finding"]})
+      LIMIT 1`;
+    if (row) allowed.add(String(row.id));
+  }
+  return assertHubDecisionReferableIds(decision, allowed);
 }
 
 /** Validate a dynamic Hub decision against this Job's available role set. */
-export function parseHubDecision(raw: string, allowedRoles: ReadonlySet<string>): HubDecision | null {
+export function parseHubDecision(
+  raw: string,
+  allowedRoles: ReadonlySet<string>,
+  referableIds?: ReadonlySet<string> | readonly string[],
+): HubDecision | null {
   const value = parseJsonLoose(raw);
   if (!value || typeof value !== "object") return null;
-  const object = value as Record<string, unknown>;
-  if (object.complete && typeof object.complete === "object") {
-    const complete = object.complete as Record<string, unknown>;
-    if (typeof complete.description === "string" && complete.description.trim()) {
-      return { complete: { from: strArray(complete.from), description: complete.description } };
-    }
+  let decision: HubDecision;
+  try {
+    decision = parseHubDecisionPayload(value, referableIds);
+  } catch (error) {
+    if (error instanceof ControlInputError) throw error;
+    return null;
   }
-  if (Array.isArray(object.intents)) {
-    const intents: HubIntent[] = [];
-    for (const rawIntent of object.intents) {
-      if (!rawIntent || typeof rawIntent !== "object") continue;
-      const intent = rawIntent as Record<string, unknown>;
-      if (typeof intent.description !== "string" || !intent.description.trim()) continue;
-      if (typeof intent.prompt !== "string" || !intent.prompt.trim()) continue;
-      if (typeof intent.role !== "string" || !allowedRoles.has(intent.role.trim())) return null;
-      intents.push({
-        from: strArray(intent.from),
-        role: intent.role.trim(),
-        description: intent.description.slice(0, 2_000),
-        prompt: intent.prompt.trim().slice(0, 20_000),
-      });
-    }
-    if (intents.length === 0) return null;
-    return { intents };
-  }
-  return null;
+  if (decision.intents && decision.intents.some((intent) => !allowedRoles.has(intent.role))) return null;
+  return decision;
 }
