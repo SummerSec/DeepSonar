@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { runRealAgent } from "@deepsonar/runtime-sandbox";
-import { EventEnvelope, FindingPayload, allowedPlatformTools, type PlatformToolName } from "@deepsonar/shared-types";
+import { EventEnvelope, FactPayload, FindingPayload, allowedPlatformTools, type PlatformToolName } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { ingestEvent, PLATFORM_DEFAULT_AGENT_CLI, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
@@ -35,6 +35,41 @@ function sha256(value: string): string {
 
 function jsonHash(value: unknown): string {
   return sha256(JSON.stringify(value ?? null));
+}
+
+/**
+ * Normalize an emit_fact event at the real-agent boundary before it enters
+ * Scheduler convergence. FactPayload is the shared schema authority: in
+ * particular, malformed verification evidence must fail the event instead of
+ * being silently treated as an ordinary fact.
+ */
+export async function ingestFactSemanticEvent(
+  event: EventEnvelope,
+  intentNodeId: string | null,
+  ingest: (event: EventEnvelope) => Promise<void>,
+): Promise<void> {
+  let fact: ReturnType<typeof FactPayload.parse>;
+  try {
+    fact = FactPayload.parse(event.payload);
+  } catch {
+    throw new Error("emit_fact 参数非法");
+  }
+
+  const title = fact.title.trim();
+  const description = fact.description.trim();
+  if (!title || !description) throw new Error("emit_fact 参数非法");
+
+  await ingest({
+    ...event,
+    payload: {
+      // Keep the existing association behavior: the job payload, rather than
+      // agent-provided event content, owns the intent node id.
+      intent_node_id: intentNodeId,
+      title,
+      description,
+      ...(fact.verification ? { verification: fact.verification } : {}),
+    },
+  });
 }
 
 function resultContract(
@@ -562,19 +597,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     if (event.type === "fact") {
       if (!isRole) throw new Error(`${snapshot.name} 无权调用 emit_fact`);
       if (factCount >= 100) throw new Error("单 Job fact 超过 100 条上限");
-      const p = event.payload as { title?: unknown; description?: unknown };
-      if (typeof p.title !== "string" || !p.title.trim() || p.title.length > 200 ||
-          typeof p.description !== "string" || !p.description.trim() || p.description.length > 10_000) {
-        throw new Error("emit_fact 参数非法");
-      }
-      await ingestEvent(jobId, {
-        ...event,
-        payload: {
-          intent_node_id: (payload.intent_node_id as string) ?? null,
-          title: p.title.trim(),
-          description: p.description.trim(),
+      await ingestFactSemanticEvent(
+        event,
+        (payload.intent_node_id as string) ?? null,
+        async (normalized) => {
+          await ingestEvent(jobId, normalized);
         },
-      });
+      );
       factCount++;
       return;
     }
