@@ -571,9 +571,9 @@ root/source → intent(round 1) → fact|finding
 
 ### B.5.4 Hub 决策与边的配合（产品）
 
-- 首轮允许 `from: [root]` 并行开槽。
-- rework/后续轮必须引用触发它的 Finding/Fact；当前快照中的 4 条 `finding→intent` 是正确样例。普通扩展探索可继续引用 root，但 Hub prompt 应要求说明原因。
-- 三层校验按分支定义，不能笼统写成“target 必须 intent”：`buildGraphSnapshot` 只把 source 为同画布 root/fact/finding、target 为现存 intent 的 `from` 边放入 intent 引用；`parseHubDecision` 只校验 `intents[].from`/`complete.from` 均属于 referableIds（此时新 target 尚不存在）；副作用阶段对 `intents[]` 创建 intent target 并写 `from`，对 `complete` 则把合法 source 以 `to` 连到 root。布局与折叠不得改变 referableIds 或 Hub 输入集合。
+- 首轮允许使用 YAML `root_id` 对应的 canonical UUID 作为 `from` 并行开槽，不得填写字段名 `root`/`root_id`。
+- rework/后续轮必须引用触发它的 Finding/Fact canonical UUID；当前快照中的 4 条 `finding→intent` 是正确样例。普通扩展探索可继续引用 root UUID，但 Hub prompt 应要求说明原因。
+- 三层校验按分支定义，不能笼统写成“target 必须 intent”：`buildGraphSnapshot` 只把 source 为同画布 root/fact/finding、target 为现存 intent 的 `from` 边放入 intent 引用；`parseHubDecision` 只接受 `intents[].from`/`complete.from` 的 canonical UUID，并校验其属于 referableIds（此时新 target 尚不存在）；副作用阶段对 `intents[]` 创建 intent target 并写 `from`，对 `complete` 则把合法 source 以 `to` 连到 root。布局与折叠不得改变 referableIds 或 Hub 输入集合。
 
 ### B.5.5 数据兼容与边界
 

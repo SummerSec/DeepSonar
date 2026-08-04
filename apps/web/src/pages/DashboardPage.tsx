@@ -2,6 +2,7 @@ import { ArrowRight, ArrowUpRight, Pulse, Warning, Waveform } from "@phosphor-ic
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type FindingSummary, type JobSummary, type Project } from "../api";
+import { DashboardLaunchRail } from "../components/DashboardLaunchRail";
 import { EmptyState, PageHeader, PageSkeleton, SectionHeading, SeverityBadge, StatCard, StatusBadge, formatTime, relativeTime } from "../ui";
 
 const ACTIVE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
@@ -48,9 +49,12 @@ export function DashboardPage() {
 
   return (
     <div className="page-scroll">
-      <PageHeader title="运行态势" eyebrow="CONTROL PLANE / LIVE" subtitle="先处理需要你决策的事项，再查看系统吞吐。任务的执行、证据与报告始终归档在同一工作台。" actions={
-        <Link to="/projects" className="primary-button group"><span className="primary-button-label">{projects.length ? "进入项目" : "创建首个项目"}</span><span className="button-orb" aria-hidden="true"><ArrowUpRight size={15} weight="light" /></span></Link>
-      } />
+      <PageHeader title="运行态势" eyebrow="CONTROL PLANE / LIVE" subtitle="先处理需要你决策的事项，再查看系统吞吐。任务的执行、证据与报告始终归档在同一工作台。" />
+
+      <DashboardLaunchRail
+        projects={projects}
+        onProjectCreated={(project) => setProjects((before) => before.some((item) => item.id === project.id) ? before : [project, ...before])}
+      />
 
       <div className="metrics-strip">
         <StatCard index={0} label="进行中的运行" value={activeJobs.length} accent="#6fbbe8" hint="含等待、准备与执行中" />

@@ -204,7 +204,21 @@ export const ReadinessEvidenceSummary = z.object({
 });
 export type ReadinessEvidenceSummary = z.infer<typeof ReadinessEvidenceSummary>;
 
+/** Stable repair intent consumed by the web console.  Keep href/target for
+ * older clients, but never require them to infer a route from presentation
+ * text.  Scheduler responses always include action/scope/project_id. */
+export const ReadinessFixAction = z.enum([
+  "credentials",
+  "role_config",
+  "rules",
+  "runtime_images",
+]);
+export type ReadinessFixAction = z.infer<typeof ReadinessFixAction>;
+
 export const ReadinessFix = z.object({
+  action: ReadinessFixAction.optional(),
+  scope: z.enum(["global", "project"]).optional(),
+  project_id: z.string().uuid().nullable().optional(),
   href: z.string().min(1),
   target: z.string().min(1),
 });
@@ -252,14 +266,113 @@ export const ReadinessResponse = z.object({
 });
 export type ReadinessResponse = z.infer<typeof ReadinessResponse>;
 
+/** Canonical UUID used for graph node references crossing the Agent boundary. */
+export const CANONICAL_UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+export const GraphNodeReference = z
+  .string()
+  .uuid()
+  .regex(new RegExp(CANONICAL_UUID_PATTERN, "i"));
+export type GraphNodeReference = z.infer<typeof GraphNodeReference>;
+
+/**
+ * Hard limits for references crossing the Hub/Scheduler boundary. A limit on
+ * each `from` list prevents one intent from creating an unexpectedly large
+ * query, while the total unique limit prevents many small intents from
+ * bypassing that protection.
+ */
+export const HUB_REFERENCE_LIMITS = {
+  perFrom: 64,
+  totalUnique: 256,
+} as const;
+
+export interface HubReferenceBudgetViolation {
+  path: Array<string | number>;
+  count: number;
+  limit: number;
+  kind: "per_from" | "total_unique";
+}
+
+/** Find the first reference-budget violation without assuming valid payload shape. */
+export function hubReferenceBudgetViolation(value: unknown): HubReferenceBudgetViolation | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const groups: Array<{ path: Array<string | number>; refs: unknown[] }> = [];
+  const complete = input.complete;
+  if (complete && typeof complete === "object" && !Array.isArray(complete)) {
+    const from = (complete as Record<string, unknown>).from;
+    if (Array.isArray(from)) groups.push({ path: ["complete", "from"], refs: from });
+  }
+  const intents = input.intents;
+  if (Array.isArray(intents)) {
+    for (const [index, intent] of intents.entries()) {
+      if (!intent || typeof intent !== "object" || Array.isArray(intent)) continue;
+      const from = (intent as Record<string, unknown>).from;
+      if (Array.isArray(from)) groups.push({ path: ["intents", index, "from"], refs: from });
+    }
+  }
+  for (const group of groups) {
+    if (group.refs.length > HUB_REFERENCE_LIMITS.perFrom) {
+      return {
+        path: group.path,
+        count: group.refs.length,
+        limit: HUB_REFERENCE_LIMITS.perFrom,
+        kind: "per_from",
+      };
+    }
+  }
+  const unique = new Set<string>();
+  for (const group of groups) {
+    for (const ref of group.refs) {
+      if (typeof ref === "string") unique.add(ref);
+    }
+  }
+  if (unique.size > HUB_REFERENCE_LIMITS.totalUnique) {
+    return {
+      path: ["intents"],
+      count: unique.size,
+      limit: HUB_REFERENCE_LIMITS.totalUnique,
+      kind: "total_unique",
+    };
+  }
+  return null;
+}
+
+const HubReferenceList = z.array(GraphNodeReference).max(HUB_REFERENCE_LIMITS.perFrom);
+
 /** Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。 */
-export const HubIntentPayload = z.object({
-  from: z.array(z.string()).default([]),
-  role: z.string().min(1).max(64),
-  description: z.string().min(1).max(2_000),
-  prompt: z.string().min(1).max(20_000),
-});
+export const HubIntentPayload = z
+  .object({
+    from: HubReferenceList,
+    role: z.string().min(1).max(64),
+    description: z.string().min(1).max(2_000),
+    prompt: z.string().min(1).max(20_000),
+  })
+  .strict();
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
+
+export const HubCompletePayload = z
+  .object({
+    from: HubReferenceList,
+    description: z.string().min(1).max(10_000),
+  })
+  .strict();
+export type HubCompletePayload = z.infer<typeof HubCompletePayload>;
+
+/** Complete and intents are mutually exclusive at the decision boundary. */
+export const HubDecisionPayload = z.union([
+  z.object({ complete: HubCompletePayload }).strict(),
+  z.object({ intents: z.array(HubIntentPayload).min(1).max(100) }).strict(),
+]).superRefine((value, ctx) => {
+  const violation = hubReferenceBudgetViolation(value);
+  if (!violation || violation.kind !== "total_unique") return;
+  ctx.addIssue({
+    code: "custom",
+    path: violation.path,
+    message: `Hub reference count exceeds the total unique limit of ${violation.limit}`,
+    params: { kind: violation.kind, limit: violation.limit, count: violation.count },
+  });
+});
+export type HubDecisionPayload = z.infer<typeof HubDecisionPayload>;
 
 // ---------- DeepSonar 平台工具（RoleConfig 可按 Job 开关） ----------
 
