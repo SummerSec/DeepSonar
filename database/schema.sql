@@ -892,8 +892,8 @@ INSERT INTO global_settings (id, rules_json) VALUES (
     "auditTimeoutSec": 7200,
     "verifyTimeoutSec": 3600,
     "hubEnabled": true,
-    "maxHubRounds": 100,
-    "maxIntentsPerDecision": 10,
+    "maxHubRounds": 20,
+    "maxIntentsPerDecision": 6,
     "allowEgress": true
   }'::jsonb
 ) ON CONFLICT DO NOTHING;

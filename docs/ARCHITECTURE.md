@@ -543,8 +543,8 @@ PLANE_BASE_URL=
 PLANE_API_TOKEN=
 PLANE_READY_STATE=Ready
 
-MAX_GLOBAL_JOBS=6              # global_settings 未配置时的启动默认
-MAX_JOBS_PER_PROJECT=2         # global_settings 未配置时的启动默认
+MAX_GLOBAL_JOBS=12             # global_settings 未配置时的启动默认
+MAX_JOBS_PER_PROJECT=4         # global_settings 未配置时的启动默认
 
 DEFAULT_AUDIT_TIMEOUT_SEC=7200
 DEFAULT_VERIFY_TIMEOUT_SEC=3600

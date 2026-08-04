@@ -75,8 +75,8 @@ export const config = {
   },
 
   limits: {
-    maxGlobalJobs: int("MAX_GLOBAL_JOBS", 6),
-    maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 2),
+    maxGlobalJobs: int("MAX_GLOBAL_JOBS", 12),
+    maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 4),
     maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 60),
     maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 12),
     maxAutoRetries: int("MAX_AUTO_RETRIES", 6),
@@ -106,8 +106,8 @@ export const config = {
   /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */
   hub: {
     enabled: bool("DEEPSONAR_HUB_ENABLED", true),
-    maxRounds: int("DEEPSONAR_HUB_MAX_ROUNDS", 100),
-    maxIntents: int("DEEPSONAR_HUB_MAX_INTENTS", 10),
+    maxRounds: int("DEEPSONAR_HUB_MAX_ROUNDS", 20),
+    maxIntents: int("DEEPSONAR_HUB_MAX_INTENTS", 6),
   },
 
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */

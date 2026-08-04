@@ -64,13 +64,43 @@ function localCheckStyle(value: boolean | null | undefined): string {
 
 function registrySourceLabel(registry: RuntimeImageRegistry): string {
   const source = registry.source;
-  if (typeof source === "string") return source;
+  if (typeof source === "string") {
+    if (source === "remote") return "remote（GitHub Release）";
+    if (source === "bundled") return "bundled（内置回退）";
+    if (source === "upload") return "手动更新市场";
+    return source;
+  }
   if (source && typeof source === "object") {
     return source.kind ?? source.url ?? "未说明";
   }
   const metadataSource = registry.metadata?.source;
   return typeof metadataSource === "string" ? metadataSource : "未说明";
 }
+
+function platformLabel(platforms: string[] | null | undefined): string {
+  if (!platforms?.length) return "—";
+  return platforms.join(" · ");
+}
+
+function versionMatchesPlatform(version: RuntimeImageVersion, platform: string | null): boolean {
+  if (!platform) return true;
+  const platforms = version.platforms_json ?? [];
+  if (platforms.length === 0) return true;
+  return platforms.includes(platform);
+}
+
+function imageMatchesPlatform(image: RuntimeImageSummary, platform: string | null): boolean {
+  if (!platform) return true;
+  const platforms = image.platforms_json ?? [];
+  if (platforms.length === 0) return true;
+  return platforms.includes(platform);
+}
+
+const PLATFORM_FILTERS = [
+  { id: null as string | null, label: "全部平台" },
+  { id: "linux/amd64", label: "linux/amd64" },
+  { id: "linux/arm64", label: "linux/arm64" },
+];
 
 function LocalCandidatePanel({
   candidate,
@@ -171,8 +201,11 @@ export function RuntimeImagesPage() {
   const [localPanel, setLocalPanel] = useState<string | null>(null);
   const [localRefs, setLocalRefs] = useState<Record<string, string>>({});
   const [localCandidates, setLocalCandidates] = useState<Record<string, RuntimeImageLocalCandidate | null>>({});
+  const [platformFilter, setPlatformFilter] = useState<string | null>(null);
+  const [projectVersionPick, setProjectVersionPick] = useState<Record<string, string>>({});
 
   const canAdoptLocal = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:approve")));
+  const canManageCatalog = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:manage") || me.actor?.scopes.includes("images:approve")));
 
   const reload = async (keepSelected = true) => {
     try {
@@ -317,6 +350,33 @@ export function RuntimeImagesPage() {
     }
   };
 
+  /** 手动更新市场：选择本地 runtime-image-registry.json 上传并写入 DB */
+  const applyRegistryFile = async (file: File | null) => {
+    if (!file) return;
+    setBusy("registry-apply");
+    setError(null);
+    try {
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        throw new Error("文件不是合法 JSON");
+      }
+      if (!parsed || typeof parsed !== "object" || (parsed as { schema?: string }).schema !== "deepsonar.registry/v1") {
+        throw new Error("请选择 runtime-image-registry.json（schema 须为 deepsonar.registry/v1）");
+      }
+      const result = await api.applyRuntimeImagesRegistry(parsed as RuntimeImageRegistry);
+      setRegistry(result.registry);
+      setNotice(`手动更新市场完成：${result.product_count} 个产品，${result.version_count} 个版本（已写入数据库）`);
+      await reload(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const pullRegistry = async () => {
     setBusy("registry-pull");
     try {
@@ -418,7 +478,7 @@ export function RuntimeImagesPage() {
         subtitle={
           projectId
             ? "为项目启用已准入镜像，并固定角色可选择的可信版本。任务表单仍不暴露镜像参数。"
-            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。同步只访问固定的 SummerSec GitHub Release 清单；私有目录不可达时回退内置 last-known-good，不接受任意 registry URL。"
+            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。「同步市场」拉 GitHub Release；不可达时用「手动更新市场」选择本机 runtime-image-registry.json 上传入库。一平台一版本，项目可固定平台 digest。"
         }
         actions={
           <div className="flex gap-2">
@@ -428,9 +488,27 @@ export function RuntimeImagesPage() {
             </label>
             {!projectId && (
               <>
-                <button className="secondary-button" disabled={busy !== null} onClick={syncRegistry}>
+                <button className="secondary-button" disabled={busy !== null} onClick={syncRegistry} title="从 GitHub Release 自动拉取官方清单（失败则用内置回退）">
                   <ArrowsClockwise size={14} /> 同步市场
                 </button>
+                <label
+                  className={`secondary-button cursor-pointer ${busy !== null || !canManageCatalog ? "pointer-events-none opacity-50" : ""}`}
+                  title="手动更新市场：选择本机 runtime-image-registry.json 上传并登记到数据库"
+                >
+                  <DownloadSimple size={14} className="rotate-180" />
+                  {busy === "registry-apply" ? "更新中…" : "手动更新市场"}
+                  <input
+                    type="file"
+                    accept="application/json,.json"
+                    className="hidden"
+                    disabled={busy !== null || !canManageCatalog}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      event.target.value = "";
+                      void applyRegistryFile(file);
+                    }}
+                  />
+                </label>
                 <button className="secondary-button" disabled={busy !== null || pullStatus?.status === "running" || pullStatus?.status === "queued"} onClick={pullRegistry}>
                   <Cube size={14} /> 异步拉取
                 </button>
@@ -444,6 +522,23 @@ export function RuntimeImagesPage() {
           </div>
         }
       />
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[10px] tracking-[.14em] text-zinc-600">PLATFORM</span>
+        {PLATFORM_FILTERS.map((item) => (
+          <button
+            key={item.label}
+            type="button"
+            className={platformFilter === item.id ? "primary-button !py-1 !text-[11px]" : "secondary-button !py-1 !text-[11px]"}
+            onClick={() => setPlatformFilter(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+        <span className="ml-1 text-[11px] text-zinc-600">
+          一平台一版本；项目可固定某个平台 digest
+        </span>
+      </div>
 
       {error && (
         <div className="mb-4 rounded-xl border border-red-400/20 bg-red-400/[.07] px-4 py-3 text-sm text-red-300">{error}</div>
@@ -583,11 +678,11 @@ export function RuntimeImagesPage() {
         </section>
       )}
 
-      {rows.length === 0 ? (
-        <EmptyState title="没有匹配的运行镜像" hint="第三方镜像必须先导入隔离区并完成准入" />
+      {rows.filter((image) => imageMatchesPlatform(image, platformFilter)).length === 0 ? (
+        <EmptyState title="没有匹配的运行镜像" hint={platformFilter ? `当前平台筛选：${platformFilter}` : "第三方镜像必须先导入隔离区并完成准入"} />
       ) : (
         <div className="grid gap-4 xl:grid-cols-2">
-          {rows.map((image) => (
+          {rows.filter((image) => imageMatchesPlatform(image, platformFilter)).map((image) => (
             <article key={image.id} className="surface-shell">
               <div className="surface-core flex h-full flex-col p-5">
                 <div className="flex items-start gap-4">
@@ -634,7 +729,7 @@ export function RuntimeImagesPage() {
                   </div>
                   <div>
                     <span className="block font-mono text-zinc-700">PLATFORMS</span>
-                    <strong className="mt-1 block font-normal text-zinc-400">{image.platforms_json?.join(" · ") || "—"}</strong>
+                    <strong className="mt-1 block font-normal text-zinc-400">{platformLabel(image.platforms_json)}</strong>
                   </div>
                   <div>
                     <span className="block font-mono text-zinc-700">TOOLS</span>
@@ -656,13 +751,26 @@ export function RuntimeImagesPage() {
                     </button>
                   )}
                   {projectId && image.trust_status === "trusted" && (
-                    <button
-                      className={image.project_enabled ? "secondary-button" : "primary-button"}
-                      disabled={busy === image.id}
-                      onClick={() => bind(image, !image.project_enabled, image.selected_version_id)}
-                    >
-                      {image.project_enabled ? "停用" : "启用"}
-                    </button>
+                    <>
+                      <button
+                        className={image.project_enabled ? "secondary-button" : "primary-button"}
+                        disabled={busy === image.id}
+                        onClick={() => bind(
+                          image,
+                          !image.project_enabled,
+                          image.project_enabled
+                            ? image.selected_version_id
+                            : (projectVersionPick[image.id] || image.selected_version_id || image.latest_version_id),
+                        )}
+                      >
+                        {image.project_enabled ? "停用" : "启用"}
+                      </button>
+                      {image.project_enabled && (
+                        <span className="font-mono text-[9px] text-zinc-500">
+                          固定：{image.selected_version_id ? "已选版本" : "自动（按平台）"}
+                        </span>
+                      )}
+                    </>
                   )}
                   {!image.latest_version && (
                     <span className="font-mono text-[9px] text-amber-400/90">无版本 · 不可选</span>
@@ -786,27 +894,78 @@ export function RuntimeImagesPage() {
                   <span className="text-emerald-300">可信版本优先：</span>disabled 版本的扫描/停用诊断仍保留在下方，不会遮蔽当前可用的 trusted 版本。
                 </div>
               )}
-              {selected.versions.length === 0 ? (
+              {projectId && selected.versions.some((v) => v.trust_status === "trusted") && (
+                <div className="rounded-xl border border-acc-400/20 bg-acc-400/[.05] p-3">
+                  <div className="font-mono text-[9px] tracking-[.14em] text-acc-300">PIN PLATFORM VERSION</div>
+                  <p className="mt-1 text-[11px] leading-5 text-zinc-500">
+                    为项目固定某一平台的可信 digest。不固定时，调度器按宿主 arch 自动选择。
+                  </p>
+                  <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                    <select
+                      className="field-input min-w-0 flex-1 font-mono text-[12px]"
+                      value={projectVersionPick[selected.image.id] ?? selected.image.selected_version_id ?? ""}
+                      onChange={(event) => setProjectVersionPick((current) => ({
+                        ...current,
+                        [selected.image.id]: event.target.value,
+                      }))}
+                    >
+                      <option value="">自动（按平台匹配）</option>
+                      {selected.versions
+                        .filter((v) => v.trust_status === "trusted" && versionMatchesPlatform(v, platformFilter))
+                        .map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.version} · {platformLabel(v.platforms_json)} · {shortDigest(v.digest)}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      className="primary-button shrink-0"
+                      disabled={busy === selected.image.id}
+                      onClick={() => {
+                        const picked = projectVersionPick[selected.image.id] || selected.image.selected_version_id || null;
+                        void bind(selected.image, true, picked || null);
+                      }}
+                    >
+                      固定到项目
+                    </button>
+                  </div>
+                </div>
+              )}
+              {selected.versions.filter((version) => versionMatchesPlatform(version, platformFilter)).length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-white/[.1] bg-white/[.02] px-4 py-8 text-center">
-                  <p className="text-[13px] text-zinc-300">还没有任何版本</p>
+                  <p className="text-[13px] text-zinc-300">
+                    {selected.versions.length === 0 ? "还没有任何版本" : `没有匹配 ${platformFilter} 的版本`}
+                  </p>
                   <p className="mt-2 text-[12px] leading-5 text-zinc-600">
-                    {selected.image.official
-                      ? "所以看不到「批准」——批准作用在具体 version 上。请先用上方「登记官方 digest」，或配置环境变量后重启调度器。"
-                      : "请先「导入镜像」进入隔离区，等准入 Worker 扫描成功后，才会出现「批准 / 提升」。"}
+                    {selected.versions.length === 0
+                      ? (selected.image.official
+                        ? "所以看不到「批准」——批准作用在具体 version 上。请先用上方「登记官方 digest」，或配置环境变量后重启调度器。"
+                        : "请先「导入镜像」进入隔离区，等准入 Worker 扫描成功后，才会出现「批准 / 提升」。")
+                      : "切换顶部 PLATFORM 筛选，或清除筛选查看全部平台版本。"}
                   </p>
                 </div>
               ) : (
                 [...selected.versions]
+                  .filter((version) => versionMatchesPlatform(version, platformFilter))
                   .sort((left, right) => Number(right.trust_status === "trusted") - Number(left.trust_status === "trusted") || Number(right.promoted_at !== null) - Number(left.promoted_at !== null))
                   .map((version) => {
                   const approve = canApproveVersion(version);
+                  const isPinned = projectId && selected.image.selected_version_id === version.id;
                   return (
-                    <section key={version.id} className="rounded-2xl border border-white/[.065] bg-white/[.025] p-4">
+                    <section key={version.id} className={`rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : "border-white/[.065] bg-white/[.025]"}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <strong className="font-mono text-sm font-normal text-zinc-200">{version.version}</strong>
                         <TrustBadge status={version.trust_status} />
+                        {version.platforms_json?.map((platform) => (
+                          <span key={platform} className="rounded-full bg-sky-400/[.1] px-2 py-0.5 font-mono text-[8px] tracking-[.08em] text-sky-300">
+                            {platform}
+                          </span>
+                        ))}
                         {version.promoted_at && (
                           <span className="font-mono text-[8px] text-acc-400">PROMOTED</span>
+                        )}
+                        {isPinned && (
+                          <span className="font-mono text-[8px] text-acc-300">PROJECT PIN</span>
                         )}
                       </div>
                       <p className="mt-3 break-all font-mono text-[9px] leading-4 text-zinc-600">
@@ -823,6 +982,7 @@ export function RuntimeImagesPage() {
                         ))}
                       </div>
                       <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-zinc-500">
+                        <span>平台 {platformLabel(version.platforms_json)}</span>
                         <span>签名 {version.signature_json ? "已验证" : "—"}</span>
                         <span>SBOM {version.sbom_json ? "已生成" : "—"}</span>
                         <span>扫描 {formatTime(version.scanned_at)}</span>
@@ -877,8 +1037,12 @@ export function RuntimeImagesPage() {
                           </>
                         )}
                         {projectId && version.trust_status === "trusted" && (
-                          <button className="primary-button" onClick={() => bind(selected.image, true, version.id)}>
-                            项目使用此版本
+                          <button
+                            className={isPinned ? "secondary-button" : "primary-button"}
+                            disabled={busy === selected.image.id}
+                            onClick={() => bind(selected.image, true, version.id)}
+                          >
+                            {isPinned ? "已固定此平台版本" : "项目使用此平台版本"}
                           </button>
                         )}
                       </div>

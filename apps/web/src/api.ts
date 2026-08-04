@@ -536,7 +536,7 @@ export interface RuntimeImageRegistry {
   }>;
   /** 目录获取诊断；旧服务端没有这些字段时仍可正常渲染。 */
   metadata?: Record<string, unknown> | null;
-  source?: string | { kind?: string; url?: string; fetched_at?: string; [key: string]: unknown } | null;
+  source?: "remote" | "bundled" | "upload" | string | { kind?: string; url?: string; fetched_at?: string; [key: string]: unknown } | null;
   fallback?: boolean;
   error?: string | null;
   checked_at?: string;
@@ -1176,6 +1176,9 @@ export const api = {
     get<RuntimeImageSummary[]>(`/runtime-images${qs({ project_id: projectId, search })}`),
   runtimeImagesRegistry: () => get<RuntimeImageRegistry>("/runtime-images/registry"),
   syncRuntimeImagesRegistry: () => send<RuntimeImageCatalogSyncResult>("POST", "/runtime-images/registry/sync"),
+  /** 手动上传 runtime-image-registry.json 并写入市场（schema deepsonar.registry/v1） */
+  applyRuntimeImagesRegistry: (registry: RuntimeImageRegistry | Record<string, unknown>) =>
+    send<RuntimeImageCatalogSyncResult>("POST", "/runtime-images/registry/apply", registry),
   pullRuntimeImagesRegistry: () => send<{ task: RuntimeImagePullTask }>("POST", "/runtime-images/registry/pull"),
   runtimeImagesPullStatus: () => get<RuntimeImagePullTask>("/runtime-images/registry/pull-status"),
   runtimeImage: (id: string) => get<RuntimeImageDetail>(`/runtime-images/${id}`),

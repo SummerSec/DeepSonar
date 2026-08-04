@@ -27,6 +27,8 @@ const descriptor = {
   ghcr_ref: ghcrRef,
   size_bytes: size.size_bytes,
   platform_size_bytes: size.platform_size_bytes,
+  // 多架构 index 下各平台 child manifest digest；生成清单时一平台一版本
+  platform_digests: size.platform_digests ?? {},
 };
 if (process.env.ACR_CONFIGURED === "true") {
   if (!process.env.ACR_REF) throw new Error("ACR 已配置但缺少 ACR_REF");

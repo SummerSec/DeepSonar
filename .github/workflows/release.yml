@@ -1142,6 +1142,9 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 需要 fetch 默认分支以便把发布清单回写进仓库（bundled 回退用）
+          fetch-depth: 0
       - id: release
         name: 解析 registry 命名空间
         shell: bash
@@ -1174,6 +1177,32 @@ jobs:
           name: runtime-image-registry
           path: deploy/runtime-image-registry.json
           if-no-files-found: error
+      - name: 回写 bundled 清单到默认分支
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          registry_file="deploy/runtime-image-registry.json"
+          [[ -f "$registry_file" ]]
+          node agent-harness/generate-runtime-image-registry.mjs --check "$registry_file"
+          tmp_registry="$(mktemp)"
+          cp "$registry_file" "$tmp_registry"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout -B "bot/sync-runtime-registry-v${VERSION}" "origin/${DEFAULT_BRANCH}"
+          cp "$tmp_registry" "$registry_file"
+          rm -f "$tmp_registry"
+          git add -- "$registry_file"
+          if git diff --cached --quiet -- "$registry_file"; then
+            echo "默认分支上的 $registry_file 已是本次发布内容，跳过回写"
+            exit 0
+          fi
+          git commit -m "chore(release): sync runtime-image-registry.json for v${VERSION}"
+          # 只更新清单文件；推到默认分支不会再次触发本 workflow（仅 tag 触发）
+          git push origin "HEAD:${DEFAULT_BRANCH}"
+          echo "已将 $registry_file 回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
       - name: 打包 Management Skill
         shell: bash
         run: |

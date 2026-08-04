@@ -2,6 +2,8 @@
 
 `.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony Test / Audit / Fuzz 镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。
 
+同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` **提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json for vX.Y.Z`），用于更新内置 bundled 回退清单。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。若默认分支开启了「禁止 GITHUB_TOKEN 直推」类保护规则，需为 Actions 放行或改用可写 PAT。
+
 ## 可选发布凭据
 
 Docker Hub 运行时镜像使用以下 GitHub Actions Secrets：
@@ -22,7 +24,16 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 ## 清单与校验
 
-清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像 `build-push-action` 输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit 与 OpenHarmony Fuzz 六项。发布步骤通过 OCI index/manifest 记录各平台压缩层大小，并以单个平台最大压缩大小写入 `size_bytes`。静态模板只保存镜像市场元数据，不伪造版本或 digest。Scheduler 定时读取官方 GitHub Release 的最新清单；新正式版本成为默认 promoted 版本，旧版本只保留给显式项目 pin 与历史 Job 快照。
+清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit 与 OpenHarmony Fuzz 六项。
+
+**一平台一版本**：多架构发布时，每个 `linux/amd64` / `linux/arm64` 各占一条 `versions[]` 记录（`version` 形如 `0.1.10-linux-amd64`），`image_ref` 使用该平台的 child manifest digest（可回退到 multi-arch index digest），`size_bytes` 为该平台压缩层大小。Scheduler 解析 Job 时按宿主 arch 优先匹配 `platforms`。
+
+**真实 digest 只来自本次 Release 的构建输出**，不会手写伪造。发布成功后：
+
+1. GitHub Release 附件（Scheduler 优先拉取的 remote 目录）  
+2. 仓库内 `deploy/runtime-image-registry.json`（bundled 回退，由 workflow 自动回写默认分支）
+
+Scheduler 定时读取官方 GitHub Release 的最新清单；失败时回退仓库内置清单。新正式版本成为默认 promoted 版本，旧版本只保留给显式项目 pin 与历史 Job 快照。
 
 GHCR 包说明来自 OCI 元数据。Dockerfile 为单平台 manifest 写入 `org.opencontainers.image.title`、`description`、`source` 与 `licenses`；Release workflow 同时把这些值写入多架构 image index annotation。修改说明后必须重新发布镜像，既有 digest 的包页面不会被原地改写。
 

@@ -13,6 +13,7 @@ const OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS = new Set(["github.com", "api.github
 const OFFICIAL_RUNTIME_IMAGE_REGISTRY_AUTH_HOSTS = new Set(["github.com", "api.github.com"]);
 const RUNTIME_IMAGE_REGISTRY_MAX_BYTES = 1024 * 1024;
 const RUNTIME_IMAGE_REGISTRY_CACHE_MS = 5 * 60_000;
+const RUNTIME_IMAGE_REGISTRY_RETRY_MS = 60_000;
 const RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES = 8 * 1024;
 const RUNTIME_IMAGE_INSPECT_MAX_BYTES = 512 * 1024;
 const RUNTIME_IMAGE_INSPECT_TIMEOUT_MS = 10_000;
@@ -42,7 +43,7 @@ export interface RuntimeImageRegistry {
   schema: typeof RUNTIME_IMAGE_REGISTRY_SCHEMA;
   images: RuntimeImageRegistryImage[];
   /** 仅由 Scheduler 加在 GET /runtime-images/registry 响应上的可观察来源元数据。 */
-  source?: "remote" | "bundled";
+  source?: "remote" | "bundled" | "upload";
   fallback?: boolean;
   error?: string | null;
   checked_at?: string;
@@ -53,6 +54,14 @@ export interface RuntimeImageCatalogSyncResult {
   product_count: number;
   version_count: number;
   synced_at: string;
+}
+
+export function shouldReconcileRuntimeImagePromotions(registry: RuntimeImageRegistry): boolean {
+  return registry.fallback !== true;
+}
+
+export function runtimeImageRegistryNextSyncDelayMs(syncIntervalMs: number, fallback: boolean): number {
+  return fallback ? Math.min(syncIntervalMs, RUNTIME_IMAGE_REGISTRY_RETRY_MS) : syncIntervalMs;
 }
 
 export interface RuntimeImagePullItem {
@@ -111,8 +120,12 @@ export function immutableDigest(imageRef: string): string | null {
 }
 
 export function localImageDigest(imageRef: string): string | null {
-  const match = imageRef.trim().match(/^sha256:[0-9a-f]{64}$/);
-  return match?.[0] ?? null;
+  const trimmed = imageRef.trim();
+  const withPrefix = trimmed.match(/^sha256:[0-9a-f]{64}$/);
+  if (withPrefix) return withPrefix[0];
+  // podman `docker image inspect --format {{.Id}}` 常返回无 sha256: 前缀的 64 hex
+  const bare = trimmed.match(/^[0-9a-f]{64}$/);
+  return bare ? `sha256:${bare[0]}` : null;
 }
 
 /**
@@ -606,14 +619,22 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
   };
 }
 
-export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogSyncResult> {
-  const loadedRegistry = await loadRuntimeImageRegistry({ refreshRemote: true });
-  const envOverrides = envOfficialOverrides();
+/**
+ * 将一份已解析的官方清单写入 DB（bootstrap / 远程同步 / 运维手动上传共用）。
+ * env 覆盖仅在「清单里该产品 versions 为空」时补位，不会覆盖已有 digest。
+ */
+export async function applyOfficialRuntimeCatalog(
+  loadedRegistry: RuntimeImageRegistry,
+  options: { applyEnvOverrides?: boolean } = {},
+): Promise<RuntimeImageCatalogSyncResult> {
+  const reconcilePromotions = shouldReconcileRuntimeImagePromotions(loadedRegistry);
+  const applyEnv = options.applyEnvOverrides !== false;
+  const envOverrides = applyEnv ? envOfficialOverrides() : [];
   const envOnlyKeys = new Set(envOverrides.flatMap((override) => {
     const sourceImage = loadedRegistry.images.find((item) => item.image_key === override.image_key);
     return sourceImage && sourceImage.versions.length === 0 ? [override.image_key] : [];
   }));
-  const registry = registryWithEnvOverrides(loadedRegistry);
+  const registry = applyEnv ? registryWithEnvOverrides(loadedRegistry) : loadedRegistry;
   for (const item of registry.images) {
     const [image] = await sql`
       INSERT INTO runtime_images ${sql({
@@ -635,12 +656,13 @@ export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogS
         resolved_ref: version.image_ref, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
         platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
         size_bytes: version.size_bytes ?? null, scan_summary_json: { source, contract: "declared" } as never,
-        trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(), promoted_at: new Date(),
+        trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(),
+        promoted_at: reconcilePromotions || envOnly ? new Date() : null,
       } as never;
-      if (envOnly) {
-        // An operator-provided env digest is an explicit bootstrap hint. It may
-        // fill an empty catalog but must never resurrect a disabled/revoked
-        // version or steal the promoted slot on a later sync.
+      if (envOnly || !reconcilePromotions) {
+        // An operator-provided env digest or bundled fallback may fill an empty
+        // catalog, but neither may resurrect a disabled/revoked version or
+        // replace the promoted remote version on a later sync.
         await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
@@ -675,14 +697,11 @@ export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogS
       }
     }
     const digests = item.versions.map((version) => immutableDigest(version.image_ref)).filter((value): value is string => Boolean(value));
-    const trustedRows = await sql`SELECT digest FROM runtime_image_versions
-      WHERE runtime_image_id = ${image.id} AND trust_status = 'trusted'`;
-    const trustedDigests = new Set(trustedRows.map((row) => row.digest as string));
-    const promotedDigest = digests.find((digest) => trustedDigests.has(digest)) ?? null;
-    if (promotedDigest) {
+    // 同一发布可有多平台版本：凡本次清单中的 digest 均标记 promoted（解析 Job 时再按宿主 arch 优选）
+    if ((reconcilePromotions || envOnlyKeys.has(item.image_key)) && digests.length > 0) {
       await sql`
         UPDATE runtime_image_versions
-        SET promoted_at = CASE WHEN digest = ${promotedDigest} THEN COALESCE(promoted_at, now()) ELSE NULL END,
+        SET promoted_at = CASE WHEN digest = ANY(${digests}) THEN COALESCE(promoted_at, now()) ELSE NULL END,
             updated_at = now()
         WHERE runtime_image_id = ${image.id} AND trust_status = 'trusted'`;
     }
@@ -701,18 +720,59 @@ export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogS
   };
 }
 
+/** 从 GitHub Release / bundled 拉取官方清单并写入 DB。 */
+export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogSyncResult> {
+  const loadedRegistry = await loadRuntimeImageRegistry({ refreshRemote: true });
+  return applyOfficialRuntimeCatalog(loadedRegistry, { applyEnvOverrides: true });
+}
+
+/**
+ * 运维手动上传 runtime-image-registry.json：校验 schema 后直接入库。
+ * 不走 env 覆盖，避免上传清单与部署 env 互相踩踏。
+ */
+export async function applyUploadedRuntimeCatalog(raw: unknown): Promise<RuntimeImageCatalogSyncResult> {
+  const registry = parseRegistry(raw);
+  // 标记来源，便于前端 CATALOG PROVENANCE 展示
+  const tagged: RuntimeImageRegistry = {
+    ...registry,
+    source: "upload",
+    fallback: false,
+    error: null,
+    checked_at: new Date().toISOString(),
+  };
+  remoteRegistryCache = { registry: tagged, checked_at: Date.now(), error: null };
+  return applyOfficialRuntimeCatalog(tagged, { applyEnvOverrides: false });
+}
+
 export function startRuntimeImageRegistrySync(): () => void {
   let running = false;
-  const timer = setInterval(() => {
-    if (running) return;
+  let stopped = false;
+  let timer: NodeJS.Timeout | null = null;
+  const syncIntervalMs = config.images.registrySyncSec * 1000;
+  const schedule = (delayMs: number) => {
+    if (stopped) return;
+    timer = setTimeout(run, delayMs);
+    timer.unref();
+  };
+  const run = () => {
+    if (running || stopped) return;
     running = true;
     void syncOfficialRuntimeCatalog()
-      .then((result) => console.log(`[runtime-images] 官方清单已自动同步：${result.version_count} 个当前版本`))
-      .catch((error) => console.warn(`[runtime-images] 官方清单自动同步失败: ${error instanceof Error ? error.message : String(error)}`))
+      .then((result) => {
+        console.log(`[runtime-images] 官方清单已自动同步：${result.version_count} 个当前版本`);
+        schedule(runtimeImageRegistryNextSyncDelayMs(syncIntervalMs, result.registry.fallback === true));
+      })
+      .catch((error) => {
+        console.warn(`[runtime-images] 官方清单自动同步失败: ${error instanceof Error ? error.message : String(error)}`);
+        schedule(runtimeImageRegistryNextSyncDelayMs(syncIntervalMs, true));
+      })
       .finally(() => { running = false; });
-  }, config.images.registrySyncSec * 1000);
-  timer.unref();
-  return () => clearInterval(timer);
+  };
+  schedule(runtimeImageRegistryNextSyncDelayMs(syncIntervalMs, true));
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
 }
 
 export function runtimeImagePullStatus(): RuntimeImagePullTask | null {
@@ -836,6 +896,12 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
  * 创建 Job 时选择一次并冻结；Executor 不再读取目录或 tag。
  * 未绑定市场镜像时使用平台治理的最小 Base 作为系统沙箱底座，而不是允许 Agent 指定引用。
  */
+function hostRuntimePlatform(): string {
+  // Node: x64 → linux/amd64；arm64 → linux/arm64
+  const arch = process.arch === "x64" ? "amd64" : process.arch;
+  return `linux/${arch}`;
+}
+
 export async function resolveRuntimeImageForJob(
   db: typeof sql,
   projectId: string,
@@ -843,6 +909,7 @@ export async function resolveRuntimeImageForJob(
   configuredKey: string | null,
 ): Promise<RuntimeImageSnapshot> {
   const imageKey = configuredKey || defaultRuntimeImageKey(roleName);
+  const hostPlatform = hostRuntimePlatform();
   const [row] = await db`
     SELECT ri.id AS runtime_image_id, ri.image_key, ri.source_kind, ri.official,
            riv.id AS runtime_image_version_id, riv.resolved_ref, riv.digest,
@@ -856,7 +923,15 @@ export async function resolveRuntimeImageForJob(
       WHERE v.runtime_image_id = ri.id
         AND v.trust_status = 'trusted'
         AND (pri.selected_version_id IS NULL OR v.id = pri.selected_version_id)
-      ORDER BY v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
+      ORDER BY
+        CASE
+          WHEN v.platforms_json @> ${sql.json([hostPlatform])} THEN 0
+          WHEN v.platforms_json IS NULL OR jsonb_array_length(v.platforms_json) = 0 THEN 1
+          ELSE 2
+        END,
+        v.promoted_at DESC NULLS LAST,
+        v.approved_at DESC NULLS LAST,
+        v.created_at DESC
       LIMIT 1
     ) riv ON true
     LEFT JOIN LATERAL (

@@ -25,6 +25,7 @@ const result = await maxCompressedPlatformSize(
 assert.deepEqual(result, {
   size_bytes: 425,
   platform_size_bytes: { "linux/amd64": 350, "linux/arm64": 425 },
+  platform_digests: { "linux/amd64": amd64Digest, "linux/arm64": arm64Digest },
 });
 await assert.rejects(
   () => maxCompressedPlatformSize(root, ["linux/s390x"], async () => ({ layers: [] })),

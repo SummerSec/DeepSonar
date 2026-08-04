@@ -147,8 +147,8 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
       },
     ]),
   );
-  assert.equal(global.maxGlobalJobs, 6);
-  assert.equal(global.maxJobsPerProject, 2);
+  assert.equal(global.maxGlobalJobs, 12);
+  assert.equal(global.maxJobsPerProject, 4);
   assert.equal(asConcurrencyLimit("not-a-number", 6), 6);
 
   const project = await rulesForProject(

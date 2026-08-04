@@ -27,13 +27,20 @@ export function compressedLayerSize(manifest) {
   ), 0);
 }
 
-export async function maxCompressedPlatformSize(rootManifest, expectedPlatforms, loadManifest) {
+export async function maxCompressedPlatformSize(rootManifest, expectedPlatforms, loadManifest, rootDigest = null) {
   if (!Array.isArray(expectedPlatforms) || expectedPlatforms.length === 0) {
     throw new Error("必须提供至少一个目标平台");
   }
   if (Array.isArray(rootManifest?.layers)) {
     if (expectedPlatforms.length !== 1) throw new Error("单平台 manifest 不能满足多个目标平台");
-    return { size_bytes: compressedLayerSize(rootManifest), platform_size_bytes: { [expectedPlatforms[0]]: compressedLayerSize(rootManifest) } };
+    const size = compressedLayerSize(rootManifest);
+    const platform = expectedPlatforms[0];
+    const digest = typeof rootDigest === "string" && /^sha256:[0-9a-f]{64}$/.test(rootDigest) ? rootDigest : null;
+    return {
+      size_bytes: size,
+      platform_size_bytes: { [platform]: size },
+      platform_digests: digest ? { [platform]: digest } : {},
+    };
   }
   if (!Array.isArray(rootManifest?.manifests)) {
     throw new Error("OCI manifest 既不是单平台镜像，也不是多平台 index");
@@ -51,14 +58,20 @@ export async function maxCompressedPlatformSize(rootManifest, expectedPlatforms,
   if (missing.length > 0) throw new Error(`OCI index 缺少目标平台: ${missing.join(", ")}`);
 
   const platformSizeBytes = {};
+  const platformDigests = {};
   for (const platform of expectedPlatforms) {
     const descriptor = descriptors.get(platform);
+    if (!/^sha256:[0-9a-f]{64}$/.test(descriptor.digest)) {
+      throw new Error(`OCI index 平台 ${platform} digest 无效: ${descriptor.digest}`);
+    }
+    platformDigests[platform] = descriptor.digest;
     const manifest = await loadManifest(descriptor.digest);
     platformSizeBytes[platform] = compressedLayerSize(manifest);
   }
   return {
     size_bytes: Math.max(...Object.values(platformSizeBytes)),
     platform_size_bytes: platformSizeBytes,
+    platform_digests: platformDigests,
   };
 }
 
@@ -81,8 +94,14 @@ export async function inspectPublishedImageSize(imageRef, platforms) {
   };
   const root = await inspectRaw(imageRef);
   const repository = imageRef.replace(/@sha256:[0-9a-f]{64}$/, "");
+  const rootDigest = imageRef.match(/@(sha256:[0-9a-f]{64})$/)?.[1] ?? null;
   if (repository === imageRef && Array.isArray(root?.manifests)) {
     throw new Error("多平台镜像检查必须使用 @sha256 不可变引用");
   }
-  return maxCompressedPlatformSize(root, platforms, async (digest) => inspectRaw(`${repository}@${digest}`));
+  return maxCompressedPlatformSize(
+    root,
+    platforms,
+    async (digest) => inspectRaw(`${repository}@${digest}`),
+    rootDigest,
+  );
 }

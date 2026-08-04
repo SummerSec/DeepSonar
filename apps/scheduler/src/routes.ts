@@ -77,6 +77,7 @@ import {
 } from "./transfer/platform.js";
 import { processExportRow } from "./transfer/worker.js";
 import {
+  applyUploadedRuntimeCatalog,
   immutableDigest,
   inspectLocalRuntimeImage,
   localImageDigest,
@@ -1335,6 +1336,34 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(200).send(result);
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : "读取或同步运行时镜像注册表失败" });
+    }
+  });
+
+  /** 运维手动上传 runtime-image-registry.json，校验后写入市场（不依赖 GitHub 可达性） */
+  app.post("/runtime-images/registry/apply", async (req, reply) => {
+    try {
+      const body = req.body;
+      // 允许直接贴清单对象，或包一层 { registry: ... }
+      const raw = body && typeof body === "object" && body !== null && "registry" in (body as object)
+        && (body as { registry?: unknown }).registry !== undefined
+        ? (body as { registry: unknown }).registry
+        : body;
+      const result = await applyUploadedRuntimeCatalog(raw);
+      await audit(req, {
+        action: "runtime_image.registry_apply",
+        resourceType: "runtime_image_catalog",
+        after: {
+          product_count: result.product_count,
+          version_count: result.version_count,
+          synced_at: result.synced_at,
+          source: "upload",
+        },
+      });
+      return reply.code(200).send(result);
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : "上传的运行时镜像注册表无效",
+      });
     }
   });
 
