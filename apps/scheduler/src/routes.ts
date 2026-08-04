@@ -27,16 +27,25 @@ import { renderMetrics } from "./metrics.js";
 import { config } from "./config.js";
 import {
   allowedModelIds,
-  credentialConcurrencyPolicy,
+  normalizeModelCatalog,
   encryptSecret,
   fingerprintOf,
   isProviderKnown,
+  isProviderAllowedForKind,
   last4Of,
+  projectCredentialProviderError,
+  projectCredentialMetadata,
+  projectJobEventPayload,
+  projectJobPayload,
+  projectCredentialProvider,
+  sanitizeCredentialMetadata,
+  UNKNOWN_PROVIDER_ERROR,
+  type CredentialHealthErrorCategory,
   validateCredentialCompatibility,
   validateCredentialRuntimeMutation,
   type Encrypted,
 } from "./credentials.js";
-import { listCredentialModels, testCredential } from "./credential-test.js";
+import { CredentialProbeError, listCredentialModels, testCredential } from "./credential-test.js";
 import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
@@ -175,7 +184,12 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
   }
   for (const [provider, value] of Object.entries(providerRules as Record<string, unknown>)) {
     if (!isProviderKnown(provider) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
-      ctx.addIssue({ code: "custom", path: ["maxConcurrentByProvider", provider], message: `${provider} 必须是 0-1000 的整数` });
+      const knownProvider = isProviderKnown(provider);
+      ctx.addIssue({
+        code: "custom",
+        path: knownProvider ? ["maxConcurrentByProvider", provider] : ["maxConcurrentByProvider"],
+        message: knownProvider ? `${provider} 必须是 0-1000 的整数` : UNKNOWN_PROVIDER_ERROR,
+      });
     }
   }
 });
@@ -2388,13 +2402,20 @@ export function registerRoutes(app: FastifyInstance) {
     const [cfg] = await sql`SELECT * FROM role_configs WHERE id = ${configId}`;
     if (!cfg) return null;
     const creds = await sql`
-      SELECT rc.credential_id, rc.purpose, c.name, c.provider, c.status, c.project_id
+      SELECT rc.credential_id, rc.purpose, c.name, c.kind, c.provider, c.status, c.project_id
       FROM role_credentials rc JOIN credentials c ON c.id = rc.credential_id
       WHERE rc.role_config_id = ${configId}`;
     const files = await sql`
       SELECT path, content, content_sha256 FROM role_config_files
       WHERE role_config_id = ${configId} ORDER BY path`;
-    return { ...(cfg as Record<string, unknown>), credentials: creds, config_files: files };
+    return {
+      ...(cfg as Record<string, unknown>),
+      credentials: creds.map((credential) => ({
+        ...credential,
+        ...projectCredentialProvider(credential.kind ?? "llm_provider", credential.provider),
+      })),
+      config_files: files,
+    };
   }
 
   app.get("/role-configs/global", async () => {
@@ -2584,7 +2605,11 @@ export function registerRoutes(app: FastifyInstance) {
   const aggregateActive = (rows: Record<string, unknown>[], key: "agent_cli" | "provider") => {
     const out: Record<string, number> = {};
     for (const row of rows) {
-      const name = String(row[key] ?? "");
+      const name = key === "provider"
+        ? row[key] == null || row[key] === ""
+          ? ""
+          : projectCredentialProvider("llm_provider", row[key]).provider
+        : String(row[key] ?? "");
       if (name) out[name] = (out[name] ?? 0) + Number(row.count);
     }
     return out;
@@ -3244,7 +3269,7 @@ export function registerRoutes(app: FastifyInstance) {
           OR (j.created_at = ${cursor?.created_at ?? null}::timestamptz AND j.id < ${cursor?.id ?? null}::uuid))
       ORDER BY j.created_at DESC, j.id DESC
       LIMIT ${paginated ? limit + 1 : limit}`;
-    const items = rows.slice(0, limit);
+    const items = rows.slice(0, limit).map((row) => projectJobProviderFields(row as Record<string, unknown>));
     if (!paginated) return items;
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     const hasMore = rows.length > limit;
@@ -3337,7 +3362,21 @@ export function registerRoutes(app: FastifyInstance) {
                  requirements_json, evidence_snapshot_json, summary, error, created_at, finished_at
           FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt`,
     ]);
-    return { finding, verification_jobs, source_events, comments, links, verification_rounds };
+    return {
+      finding,
+      verification_jobs: verification_jobs.map((verificationJob) => ({
+        ...verificationJob,
+        error: projectCredentialProviderError(verificationJob.error),
+        payload_json: projectJobPayload(verificationJob.payload_json),
+      })),
+      source_events: source_events.map((event) => ({
+        ...event,
+        payload_json: projectJobEventPayload(event.payload_json),
+      })),
+      comments,
+      links,
+      verification_rounds,
+    };
   });
 
   // ---------- 任务报告（Hub complete → analysis_complete → Report） ----------
@@ -3572,7 +3611,21 @@ export function registerRoutes(app: FastifyInstance) {
       snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) && Array.isArray((snapshot as Record<string, unknown>).missing_modules)
         ? (snapshot as Record<string, unknown>).missing_modules
         : [];
-    return { job, events, findings, missing_modules: missingModules };
+    const safeJob = {
+      ...job,
+      error: projectCredentialProviderError(job.error),
+      payload_json: projectJobPayload(job.payload_json),
+      agent_snapshot_json: projectJobSnapshot(snapshot),
+    };
+    return {
+      job: safeJob,
+      events: events.map((event) => ({
+        ...event,
+        payload_json: projectJobEventPayload(event.payload_json),
+      })),
+      findings,
+      missing_modules: missingModules,
+    };
   });
 
   /** Keyset event pages keep the heavy timeline out of the Job detail request. */
@@ -3595,7 +3648,10 @@ export function registerRoutes(app: FastifyInstance) {
           OR (created_at = ${cursor?.created_at ?? null}::timestamptz AND id > ${cursor?.id ?? null}::bigint))
       ORDER BY created_at ASC, id ASC
       LIMIT ${limit + 1}`;
-    const items = rows.slice(0, limit);
+    const items = rows.slice(0, limit).map((event) => ({
+      ...event,
+      payload_json: projectJobEventPayload(event.payload_json),
+    }));
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     return page(items, {
       after,
@@ -3934,7 +3990,10 @@ export function registerRoutes(app: FastifyInstance) {
   // ---------- Provider Credential（§6.2/§6.4：加密存储，与 API Token 严格分离） ----------
   // 列表/详情永不返回密文；明文只在创建/轮换请求体里进、运行时解密用
   const CRED_SAFE = sql`id, name, kind, provider, project_id, key_version, public_metadata_json,
-                        fingerprint, last4, status, last_used_at, rotated_at, created_at, created_by`;
+                        fingerprint, last4, status, last_used_at, rotated_at,
+                        last_tested_at, health_status, health_error_category,
+                        health_detail, model_catalog_json, model_catalog_fetched_at,
+                        created_at, created_by`;
 
   const CredentialBody = z.object({
     name: z.string().trim().min(1).max(100),
@@ -3944,6 +4003,168 @@ export function registerRoutes(app: FastifyInstance) {
     project_id: z.string().uuid().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
   });
+
+  function safeHealthDetail(value: unknown): string | null {
+    if (typeof value !== "string" || value.length > 300 || /[\u0000-\u001f\u007f]/u.test(value)) return null;
+    return value;
+  }
+
+  function credentialView(row: Record<string, unknown>, extras: Record<string, unknown> = {}): Record<string, unknown> {
+    const kind = String(row.kind ?? "");
+    const provider = String(row.provider ?? "");
+    const providerProjection = projectCredentialProvider(kind, provider);
+    const metadata = projectCredentialMetadata(kind, provider, row.public_metadata_json);
+    const modelCatalog = normalizeModelCatalog(row.model_catalog_json);
+    const healthStatus = row.health_status === "ok" || row.health_status === "error" ? row.health_status : "unknown";
+    const healthErrorCategory = typeof row.health_error_category === "string" ? row.health_error_category : null;
+    const healthDetail = safeHealthDetail(row.health_detail);
+    return {
+      ...row,
+      ...providerProjection,
+      public_metadata_json: metadata,
+      model_catalog_json: modelCatalog,
+      scope: row.project_id ? "project" : "global",
+      health: {
+        status: healthStatus,
+        last_tested_at: row.last_tested_at ?? null,
+        error_category: healthErrorCategory,
+        detail: healthDetail,
+        model_catalog: modelCatalog,
+        model_catalog_fetched_at: row.model_catalog_fetched_at ?? null,
+      },
+      ...extras,
+    };
+  }
+
+  function projectJobProviderFields(row: Record<string, unknown>): Record<string, unknown> {
+    const projected = {
+      ...row,
+      error: projectCredentialProviderError(row.error),
+    };
+    if (row.credential_provider === null || row.credential_provider === undefined || row.credential_provider === "") return projected;
+    const projection = projectCredentialProvider("llm_provider", row.credential_provider);
+    return {
+      ...projected,
+      credential_provider: projection.provider,
+      credential_provider_valid: projection.provider_valid,
+    };
+  }
+
+  function projectJobSnapshot(value: unknown): unknown {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const snapshot = { ...(value as Record<string, unknown>) };
+    if (!Object.prototype.hasOwnProperty.call(snapshot, "credential_provider")) return snapshot;
+    const raw = snapshot.credential_provider;
+    if (raw === null || raw === undefined || raw === "") return snapshot;
+    const projection = projectCredentialProvider("llm_provider", raw);
+    return {
+      ...snapshot,
+      credential_provider: projection.provider,
+      credential_provider_valid: projection.provider_valid,
+    };
+  }
+
+  function projectCredentialAuditPayload(value: unknown): unknown {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const payload = { ...(value as Record<string, unknown>) };
+    if (payload.provider !== undefined && payload.provider !== null && payload.provider !== "") {
+      Object.assign(payload, projectCredentialProvider(payload.kind ?? "llm_provider", payload.provider));
+    }
+    if (payload.credential_provider !== undefined && payload.credential_provider !== null && payload.credential_provider !== "") {
+      const projection = projectCredentialProvider("llm_provider", payload.credential_provider);
+      payload.credential_provider = projection.provider;
+      payload.credential_provider_valid = projection.provider_valid;
+    }
+    return payload;
+  }
+
+  async function credentialImpact(id: string): Promise<Record<string, unknown>> {
+    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, terminalJobs] = await Promise.all([
+      sql<{ count: number }[]>`
+        SELECT COUNT(DISTINCT role_config_id)::int AS count
+        FROM role_credentials WHERE credential_id = ${id}`,
+      sql`
+        SELECT DISTINCT rc.id AS role_config_id, rc.project_id, rc2.purpose,
+               ar.name AS role_name, p.name AS project_name
+        FROM role_credentials rc2
+        JOIN role_configs rc ON rc.id = rc2.role_config_id
+        JOIN agent_roles ar ON ar.id = rc.role_id
+        LEFT JOIN projects p ON p.id = rc.project_id
+        WHERE rc2.credential_id = ${id}
+        ORDER BY rc.project_id NULLS FIRST, ar.name
+        LIMIT 50`,
+      sql<{ pending_unclaimed: number; active_frozen: number; terminal_historical: number }[]>`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_unclaimed,
+          COUNT(*) FILTER (WHERE status IN ('claimed','provisioning','running','waiting_human'))::int AS active_frozen,
+          COUNT(*) FILTER (WHERE status NOT IN ('pending','claimed','provisioning','running','waiting_human'))::int AS terminal_historical
+        FROM jobs WHERE agent_snapshot_json->>'credential_id' = ${id}`,
+      sql`
+        SELECT j.id, j.status, j.project_id, p.name AS project_name,
+               j.agent_snapshot_json->>'name' AS role_name,
+               j.agent_snapshot_json->>'model' AS model,
+               j.created_at
+        FROM jobs j
+        LEFT JOIN projects p ON p.id = j.project_id
+        WHERE j.agent_snapshot_json->>'credential_id' = ${id} AND j.status = 'pending'
+        ORDER BY j.created_at DESC
+        LIMIT 50`,
+      sql`
+        SELECT j.id, j.status, j.project_id, p.name AS project_name,
+               j.agent_snapshot_json->>'name' AS role_name,
+               j.agent_snapshot_json->>'model' AS model,
+               j.created_at
+        FROM jobs j
+        LEFT JOIN projects p ON p.id = j.project_id
+        WHERE j.agent_snapshot_json->>'credential_id' = ${id}
+          AND j.status IN ('claimed','provisioning','running','waiting_human')
+        ORDER BY j.created_at DESC
+        LIMIT 50`,
+      sql`
+        SELECT j.id, j.status, j.project_id, p.name AS project_name,
+               j.agent_snapshot_json->>'name' AS role_name,
+               j.agent_snapshot_json->>'model' AS model,
+               j.created_at
+        FROM jobs j
+        LEFT JOIN projects p ON p.id = j.project_id
+        WHERE j.agent_snapshot_json->>'credential_id' = ${id}
+          AND j.status NOT IN ('pending','claimed','provisioning','running','waiting_human')
+        ORDER BY j.created_at DESC
+        LIMIT 50`,
+    ]);
+    const counts = jobCount[0] ?? { pending_unclaimed: 0, active_frozen: 0, terminal_historical: 0 };
+    const item = (job: Record<string, unknown>) => ({
+      id: job.id,
+      status: job.status,
+      project_id: job.project_id,
+      project_name: job.project_name,
+      role_name: job.role_name,
+      model: job.model,
+      created_at: job.created_at,
+    });
+    const pending = pendingJobs.map(item);
+    const active = activeJobs.map(item);
+    const terminal = terminalJobs.map(item);
+    return {
+      credential_id: id,
+      role_configs: {
+        count: Number(bindingCount[0]?.count ?? 0),
+        items: bindings.map((binding) => ({
+          role_config_id: binding.role_config_id,
+          scope: binding.project_id ? "project" : "global",
+          project_id: binding.project_id,
+          project_name: binding.project_name,
+          role_name: binding.role_name,
+          purpose: binding.purpose,
+        })),
+      },
+      jobs: {
+        pending_unclaimed: { count: Number(counts.pending_unclaimed ?? 0), items: pending },
+        active_frozen: { count: Number(counts.active_frozen ?? 0), items: active },
+        terminal_historical: { count: Number(counts.terminal_historical ?? 0), items: terminal },
+      },
+    };
+  }
 
   app.get("/credentials", async () => {
     const [rows, usage] = await Promise.all([
@@ -3956,59 +4177,57 @@ export function registerRoutes(app: FastifyInstance) {
             AND agent_snapshot_json->>'credential_id' IS NOT NULL
           GROUP BY 1, 2`,
     ]);
+    const bindingCounts = await sql<{ credential_id: string; count: number }[]>`
+      SELECT credential_id, COUNT(DISTINCT role_config_id)::int AS count
+      FROM role_credentials GROUP BY credential_id`;
+    const bindingCountByCredential = new Map(bindingCounts.map((row) => [String(row.credential_id), Number(row.count)]));
     return rows.map((row) => {
       const own = usage.filter((item) => item.credential_id === row.id);
-      return {
-        ...row,
+      return credentialView(row as Record<string, unknown>, {
+        bound_role_config_count: bindingCountByCredential.get(String(row.id)) ?? 0,
         active_count: own.reduce((total, item) => total + Number(item.count), 0),
         active_by_model: Object.fromEntries(own.filter((item) => item.model).map((item) => [String(item.model), Number(item.count)])),
-      };
+      });
     });
   });
 
-  /** 规范化 public metadata：base_url 去尾斜杠，空串删除 key */
-  function normalizeCredentialMeta(raw: Record<string, unknown>): Record<string, unknown> {
-    const meta = { ...raw };
-    if (typeof meta.base_url === "string") {
-      const u = meta.base_url.trim().replace(/\/+$/, "");
-      if (u) meta.base_url = u;
-      else delete meta.base_url;
-    }
-    if (meta.allowed_model_ids !== undefined) {
-      const parsed = z.array(z.string().trim().min(1).max(200)).max(200).parse(meta.allowed_model_ids);
-      meta.allowed_model_ids = [...new Set(parsed)];
-    }
-    if (meta.max_concurrent !== undefined && meta.max_concurrent !== null && meta.max_concurrent !== "") {
-      meta.max_concurrent = z.coerce.number().int().min(0).max(1000).parse(meta.max_concurrent);
-    } else {
-      delete meta.max_concurrent;
-    }
-    const allowed = allowedModelIds(meta);
-    if (allowed.length > 0) {
-      const rawLimits = meta.model_concurrency && typeof meta.model_concurrency === "object" && !Array.isArray(meta.model_concurrency)
-        ? meta.model_concurrency as Record<string, unknown>
-        : {};
-      meta.model_concurrency = Object.fromEntries(allowed.map((model) => [
-        model,
-        z.coerce.number().int().min(0).max(1000).parse(rawLimits[model] ?? 1),
-      ]));
-    } else {
-      delete meta.model_concurrency;
-    }
-    return meta;
+  app.get("/credentials/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [row] = await sql`SELECT ${CRED_SAFE} FROM credentials WHERE id = ${id}`;
+    if (!row) return reply.code(404).send({ error: "credential not found" });
+    const impact = await credentialImpact(id);
+    return credentialView(row as Record<string, unknown>, {
+      bound_role_config_count: (impact.role_configs as { count: number }).count,
+      impact,
+    });
+  });
+
+  app.get("/credentials/:id/impact", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [row] = await sql`SELECT id FROM credentials WHERE id = ${id}`;
+    if (!row) return reply.code(404).send({ error: "credential not found" });
+    return credentialImpact(id);
+  });
+
+  /** Persist only the server-owned public metadata projection. */
+  function normalizeCredentialMeta(raw: Record<string, unknown>, kind: string, provider: string): Record<string, unknown> {
+    return sanitizeCredentialMetadata(raw, { kind, provider, mode: "reject" });
   }
 
   app.post("/credentials", async (req, reply) => {
     const body = CredentialBody.parse(req.body);
-    if (body.kind !== "oci_registry" && !isProviderKnown(body.provider)) {
-      return reply.code(400).send({ error: `未知 provider: ${body.provider}（固定映射表外的 provider 不允许登记）` });
+    if (!isProviderAllowedForKind(body.kind, body.provider) || (body.kind !== "oci_registry" && !isProviderKnown(body.provider))) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
-    if (body.kind !== "llm_provider" && (allowedModelIds(body.metadata).length > 0 || credentialConcurrencyPolicy(body.metadata).maxConcurrent !== null)) {
-      return reply.code(400).send({ error: "只有 llm_provider Credential 可设置模型或运行并发" });
+    let metadata: Record<string, unknown>;
+    try {
+      metadata = normalizeCredentialMeta(body.metadata, body.kind, body.provider);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "metadata 非法" });
     }
     if (body.kind === "oci_registry") {
-      const registry = typeof body.metadata.registry === "string" ? body.metadata.registry.trim().toLowerCase() : "";
-      const username = typeof body.metadata.username === "string" ? body.metadata.username.trim() : "";
+      const registry = typeof metadata.registry === "string" ? metadata.registry : "";
+      const username = typeof metadata.username === "string" ? metadata.username : "";
       if (!registry || !username || !config.images.isRegistryAllowed(`${registry}/probe`)) {
         return reply.code(400).send({ error: "OCI Registry Credential 必须提供允许列表内的 metadata.registry 与 metadata.username" });
       }
@@ -4028,7 +4247,7 @@ export function registerRoutes(app: FastifyInstance) {
         ciphertext: enc.ciphertext,
         nonce: enc.nonce,
         auth_tag: enc.auth_tag,
-        public_metadata_json: normalizeCredentialMeta(body.metadata) as never,
+        public_metadata_json: metadata as never,
         fingerprint: fingerprintOf(body.secret),
         last4: last4Of(body.secret),
         created_by: req.actor?.name ?? null,
@@ -4040,9 +4259,15 @@ export function registerRoutes(app: FastifyInstance) {
       resourceType: "credential",
       resourceId: row.id as string,
       projectId: body.project_id ?? null,
-      after: { name: row.name, provider: row.provider, fingerprint: row.fingerprint, last4: row.last4 },
+      after: {
+        name: row.name,
+        kind: row.kind,
+        ...projectCredentialProvider(row.kind, row.provider),
+        fingerprint: row.fingerprint,
+        last4: row.last4,
+      },
     });
-    return reply.code(201).send(row);
+    return reply.code(201).send(credentialView(row as Record<string, unknown>));
   });
 
   // 非敏感字段可改：名称 / 项目归属 / public metadata（如 base_url）；provider 可安全迁移
@@ -4076,9 +4301,18 @@ export function registerRoutes(app: FastifyInstance) {
       const targetProjectId = body.project_id !== undefined
         ? body.project_id
         : (existing.project_id as string | null) ?? null;
-      const targetMetadata = body.metadata !== undefined
-        ? normalizeCredentialMeta(body.metadata)
-        : existing.public_metadata_json;
+      if (!isProviderAllowedForKind(String(existing.kind), targetProvider)
+        || (existing.kind !== "oci_registry" && !isProviderKnown(targetProvider))) {
+        return { error: UNKNOWN_PROVIDER_ERROR };
+      }
+      let targetMetadata: Record<string, unknown>;
+      try {
+        targetMetadata = body.metadata !== undefined
+          ? normalizeCredentialMeta(body.metadata, String(existing.kind), targetProvider)
+          : projectCredentialMetadata(String(existing.kind), targetProvider, existing.public_metadata_json);
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : "metadata 非法" };
+      }
       const impact = { role_config_count: 0, pending_job_count: 0 };
       if (providerChanged && existing.kind !== "llm_provider") {
         return { error: "只有 llm_provider Credential 可以迁移 provider" };
@@ -4131,10 +4365,15 @@ export function registerRoutes(app: FastifyInstance) {
       if (body.provider !== undefined) sets.provider = body.provider;
       if (body.project_id !== undefined) sets.project_id = body.project_id;
       if (body.metadata !== undefined) {
-        if (existing.kind !== "llm_provider" && (allowedModelIds(targetMetadata).length > 0 || credentialConcurrencyPolicy(targetMetadata).maxConcurrent !== null)) {
-          return { error: "只有 llm_provider Credential 可设置模型或运行并发" };
-        }
         sets.public_metadata_json = targetMetadata;
+      }
+      if (body.provider !== undefined || body.metadata !== undefined) {
+        sets.health_status = "unknown";
+        sets.health_error_category = null;
+        sets.health_detail = null;
+        sets.last_tested_at = null;
+        sets.model_catalog_json = [];
+        sets.model_catalog_fetched_at = null;
       }
       if (providerChanged) {
         const pending = await tx`
@@ -4151,6 +4390,7 @@ export function registerRoutes(app: FastifyInstance) {
         impact,
         before: {
           name: existing.name,
+          kind: existing.kind,
           provider: existing.provider,
           project_id: existing.project_id,
           public_metadata_json: existing.public_metadata_json,
@@ -4168,6 +4408,7 @@ export function registerRoutes(app: FastifyInstance) {
       before: credentialAuditState({
         name: result.before.name,
         provider: result.before.provider,
+        kind: result.before.kind,
         projectId: result.before.project_id,
         metadata: result.before.public_metadata_json,
       }),
@@ -4175,13 +4416,14 @@ export function registerRoutes(app: FastifyInstance) {
         ...credentialAuditState({
           name: result.row.name,
           provider: result.row.provider,
+          kind: result.row.kind,
           projectId: result.row.project_id,
           metadata: result.row.public_metadata_json,
         }),
         impact: result.impact,
       },
     });
-    return { ...result.row, impact: result.impact };
+    return credentialView(result.row as Record<string, unknown>, { impact: result.impact });
   });
 
   app.post("/credentials/:id/rotate", async (req, reply) => {
@@ -4197,7 +4439,10 @@ export function registerRoutes(app: FastifyInstance) {
       UPDATE credentials SET
         ciphertext = ${enc.ciphertext}, nonce = ${enc.nonce}, auth_tag = ${enc.auth_tag},
         fingerprint = ${fingerprintOf(body.secret)}, last4 = ${last4Of(body.secret)},
-        rotated_at = now(), status = 'active', key_version = key_version + 1
+        rotated_at = now(), status = 'active', key_version = key_version + 1,
+        health_status = 'unknown', health_error_category = NULL, health_detail = NULL,
+        last_tested_at = NULL, model_catalog_json = '[]'::jsonb,
+        model_catalog_fetched_at = NULL
       WHERE id = ${id}
       RETURNING ${CRED_SAFE}`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
@@ -4205,9 +4450,15 @@ export function registerRoutes(app: FastifyInstance) {
       action: "credential.rotate",
       resourceType: "credential",
       resourceId: id,
-      after: { name: row.name, provider: row.provider, key_version: row.key_version, fingerprint: row.fingerprint },
+      after: {
+        name: row.name,
+        kind: row.kind,
+        ...projectCredentialProvider(row.kind, row.provider),
+        key_version: row.key_version,
+        fingerprint: row.fingerprint,
+      },
     });
-    return row;
+    return credentialView(row as Record<string, unknown>);
   });
 
   app.post("/credentials/:id/status", async (req, reply) => {
@@ -4222,15 +4473,33 @@ export function registerRoutes(app: FastifyInstance) {
       resourceId: id,
       after: { name: row.name, status: row.status },
     });
-    return row;
+    return credentialView(row as Record<string, unknown>);
   });
 
   // 连接测试：用解密后的凭据对 provider 做一次轻量调用（明文不出进程）
   app.post("/credentials/:id/test", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
+    const [cred] = await sql`
+      SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (!projectCredentialProvider(cred.kind, cred.provider).provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
     const result = await testCredential(cred as never);
+    const [updated] = await sql`
+      UPDATE credentials SET
+        last_tested_at = ${result.fetched_at},
+        health_status = ${result.ok ? "ok" : "error"},
+        health_error_category = ${result.ok ? null : (result.category ?? "unknown")},
+        health_detail = ${result.detail.slice(0, 300)}
+      WHERE id = ${id}
+        AND key_version = ${cred.key_version}
+        AND provider = ${cred.provider}
+        AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+      RETURNING id`;
+    if (!updated) {
+      return reply.code(409).send({ error: "Credential 在测试期间已变更，请重试" });
+    }
     await audit(req, {
       action: "credential.test",
       resourceType: "credential",
@@ -4241,13 +4510,86 @@ export function registerRoutes(app: FastifyInstance) {
     return result;
   });
 
+  // Persisted model catalog read (no Provider call, no secret material).
+  app.get("/credentials/:id/models", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [cred] = await sql`SELECT id, kind, provider, public_metadata_json, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${id}`;
+    if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
+    const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
+    if (!providerProjection.provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
+    return {
+      credential_id: id,
+      ...providerProjection,
+      models: normalizeModelCatalog(cred.model_catalog_json),
+      allowed_model_ids: allowedModelIds(projectCredentialMetadata("llm_provider", String(cred.provider), cred.public_metadata_json)),
+      fetched_at: cred.model_catalog_fetched_at ?? null,
+    };
+  });
+
+  // Server-owned compatibility projection for model selectors.  The actual
+  // RoleConfig write path still calls the same shared validator under lock.
+  app.get("/credentials/:id/compatibility", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const queryResult = z.object({
+      agent_cli: z.enum(["claude-code", "open-code", "codex"]).default("claude-code"),
+      model: z.string().trim().min(1).max(200).optional(),
+    }).safeParse(req.query);
+    if (!queryResult.success) return reply.code(400).send({ error: "兼容性查询参数非法" });
+    const query = queryResult.data;
+    const [cred] = await sql`SELECT id, kind, provider, public_metadata_json FROM credentials WHERE id = ${id}`;
+    if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
+    const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
+    if (!providerProjection.provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
+    const agentCli = query.agent_cli;
+    const model = query.model ?? null;
+    const metadata = projectCredentialMetadata(String(cred.kind), String(cred.provider), cred.public_metadata_json);
+    const compatibilityError = validateCredentialCompatibility(agentCli, String(cred.provider));
+    const allowed = allowedModelIds(metadata);
+    const modelError = model && allowed.length > 0 && !allowed.includes(model)
+      ? `模型 ${model} 不在 Credential allowed_model_ids 白名单`
+      : !model && allowed.length > 0
+        ? "Credential 已启用模型白名单，请显式选择模型"
+        : null;
+    return {
+      credential_id: id,
+      ...providerProjection,
+      agent_cli: agentCli,
+      model,
+      allowed_model_ids: allowed,
+      compatible: !compatibilityError && !modelError,
+      error: compatibilityError ?? modelError,
+    };
+  });
+
   app.post("/credentials/:id/models", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
+    if (!projectCredentialProvider(cred.kind, cred.provider).provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
     try {
       const result = await listCredentialModels(cred as never);
+      const [updated] = await sql`
+        UPDATE credentials SET
+          last_tested_at = ${result.fetched_at}, health_status = 'ok',
+          health_error_category = NULL,
+          health_detail = ${`模型目录获取成功（${result.models.length} 个）`},
+          model_catalog_json = ${sql.json(normalizeModelCatalog(result.models) as never)},
+          model_catalog_fetched_at = ${result.fetched_at}
+        WHERE id = ${id}
+          AND key_version = ${cred.key_version}
+          AND provider = ${cred.provider}
+          AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+        RETURNING id`;
+      if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
       await audit(req, {
         action: "credential.models_discover",
         resourceType: "credential",
@@ -4257,7 +4599,24 @@ export function registerRoutes(app: FastifyInstance) {
       });
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const validCategories = new Set<CredentialHealthErrorCategory>([
+        "configuration", "authentication", "authorization", "rate_limited", "timeout",
+        "network", "upstream", "invalid_response", "unknown",
+      ]);
+      const categoryCandidate = error instanceof CredentialProbeError ? error.category : "unknown";
+      const category = validCategories.has(categoryCandidate) ? categoryCandidate : "unknown";
+      const message = error instanceof CredentialProbeError ? error.message.slice(0, 300) : "模型目录获取失败";
+      const [updated] = await sql`
+        UPDATE credentials SET
+          last_tested_at = now(), health_status = 'error',
+          health_error_category = ${category as CredentialHealthErrorCategory},
+          health_detail = ${message}
+        WHERE id = ${id}
+          AND key_version = ${cred.key_version}
+          AND provider = ${cred.provider}
+          AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+        RETURNING id`;
+      if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
       await audit(req, {
         action: "credential.models_discover",
         resourceType: "credential",
@@ -4265,7 +4624,7 @@ export function registerRoutes(app: FastifyInstance) {
         result: "error",
         errorCode: "MODEL_DISCOVERY_FAILED",
       });
-      return reply.code(502).send({ error: message });
+      return reply.code(502).send({ error: message, error_category: category });
     }
   });
 
@@ -4273,7 +4632,7 @@ export function registerRoutes(app: FastifyInstance) {
   app.get("/audit-logs", async (req) => {
     const q = req.query as { project_id?: string; action?: string; limit?: string };
     const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500);
-    return sql`
+    const rows = await sql`
       SELECT id, at, actor_type, actor_id, action, project_id, resource_type, resource_id,
              request_id, ip, result, error_code, before_json, after_json
       FROM audit_logs
@@ -4281,6 +4640,14 @@ export function registerRoutes(app: FastifyInstance) {
         AND (${q.action ?? null}::text IS NULL OR action = ${q.action ?? null})
       ORDER BY at DESC, id DESC
       LIMIT ${limit}`;
+    return rows.map((row) => {
+      const credentialAudit = row.resource_type === "credential";
+      return {
+        ...row,
+        before_json: credentialAudit ? projectCredentialAuditPayload(row.before_json) : row.before_json,
+        after_json: credentialAudit ? projectCredentialAuditPayload(row.after_json) : row.after_json,
+      };
+    });
   });
 
   // ---------- 指标（§13.1：Prometheus 文本；内部网络抓取，走普通认证） ----------

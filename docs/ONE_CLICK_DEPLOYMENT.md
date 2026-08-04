@@ -264,7 +264,7 @@ PostgreSQL、托管 PostgreSQL SQL 控制台、审阅和 CI。手工初始化：
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
 ```
 
-当前支持的增量链是 v12 → v13，迁移文件位于 `database/migrations/`，由
+当前支持的增量链是 v12 → v15，迁移文件位于 `database/migrations/`，由
 `schema_migrations` 账本记录原始 UTF-8 字节 SHA-256、执行结果和错误。成功的 migration
 与 `schema_meta.version` 在同一事务提交；失败会回滚并追加失败审计行，重启可安全重试；
 历史文件 checksum 漂移、编号不连续、v12 之前或未知结构都会 fail closed。每次结构变更
@@ -307,7 +307,7 @@ git pull
 .\deploy\deploy.ps1 up
 ```
 
-脚本会重新构建镜像。Scheduler 会在启动时持锁执行 v12→v13 migration；迁移失败则回滚且
+脚本会重新构建镜像。Scheduler 会在启动时持锁执行 v12→v15 migration；迁移失败则回滚且
 不会推进版本，修复发布包后重启即可重试。升级前必须完成备份和隔离恢复演练。
 
 升级前必须备份：

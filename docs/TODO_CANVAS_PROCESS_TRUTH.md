@@ -178,7 +178,7 @@ CREATE INDEX canvas_broadcasts_status_idx ON canvas_broadcasts (delivery_status,
 - 应用层在同一事务校验 source node、source job、target job 均属于 `canvas_id`；现有表结构无法用单列 FK 表达该跨表一致性。
 - `source_job_id`/`target_job_id` 不级联删除，避免清理 Job 时静默抹掉审计链；归档不删账本。只有明确硬删整个画布时，按“broadcasts → edges/nodes → jobs/canvas”的受控顺序清理，并在审计日志记录。
 - 现有 `wipeCanvasRuntimeData` 的删除顺序必须在 v13 同批修改：先删 `canvas_broadcasts`，再删 edges/nodes、jobs、canvas。硬删 smoke 要覆盖“有广播行”和“无广播行”两种画布；否则新 FK 会直接阻断现有硬删路径。
-- **schema 变更**：bump `SCHEMA_VERSION`（当前 v12 → v13），更新空库基线；按本仓库当前启动纪律，旧库版本不匹配时重建，不能假设存在增量迁移。发布前必须先让当前任务收敛或明确取消，做数据库备份并验证项目导出/恢复路径；不能在运行中 Job 存在时直接重建。
+- **schema 变更**：bump `SCHEMA_VERSION`（当前 v12 → v15），更新空库基线；按本仓库当前启动纪律，旧库版本不匹配时重建，不能假设存在增量迁移。发布前必须先让当前任务收敛或明确取消，做数据库备份并验证项目导出/恢复路径；不能在运行中 Job 存在时直接重建。
 
 ### 不采用的备选：写入目标 Job 的 `events`
 

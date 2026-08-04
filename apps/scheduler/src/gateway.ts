@@ -13,7 +13,12 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { audit } from "./audit.js";
 import { config } from "./config.js";
-import { decryptSecret, isProviderKnown, PROVIDER_ENV_MAP } from "./credentials.js";
+import {
+  decryptSecret,
+  projectCredentialProvider,
+  PROVIDER_ENV_MAP,
+  UNKNOWN_PROVIDER_ERROR,
+} from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { appendOtlpEnvelope } from "./evidence.js";
@@ -229,13 +234,15 @@ export function registerGateway(app: FastifyInstance): void {
       if (!cred || (cred.status as string) !== "active") {
         return deny(reply, 502, "绑定的凭据不可用", "credential_inactive");
       }
-      if (!isProviderKnown(cred.provider as string)) {
-        return deny(reply, 502, `未知 provider: ${String(cred.provider)}`, "unknown_provider");
+      const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
+      if (!providerProjection.provider_valid) {
+        return deny(reply, 502, UNKNOWN_PROVIDER_ERROR, "unknown_provider");
       }
+      const safeProvider = providerProjection.provider;
       const secret = decryptSecret(cred as never);
       const meta = (cred.public_metadata_json ?? {}) as { base_url?: string };
       const baseUrl =
-        meta.base_url ?? PROVIDER_ENV_MAP[cred.provider as string]?.defaultBaseUrl ?? "https://api.anthropic.com";
+        meta.base_url ?? PROVIDER_ENV_MAP[safeProvider]?.defaultBaseUrl ?? "https://api.anthropic.com";
       const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
       const url = `${baseUrl.replace(/\/$/, "")}/${upstreamPath}${qs}`;
 
@@ -244,7 +251,7 @@ export function registerGateway(app: FastifyInstance): void {
       const headers: Record<string, string> = {
         "content-type": (req.headers["content-type"] as string) ?? "application/json",
         accept: (req.headers.accept as string) ?? "application/json",
-        ...upstreamAuthHeaders(cred.provider as string, secret),
+        ...upstreamAuthHeaders(safeProvider, secret),
       };
       // 透传 anthropic-version 等协议头（过滤 hop-by-hop 与安全头）
       for (const [k, v] of Object.entries(req.headers)) {
@@ -260,11 +267,11 @@ export function registerGateway(app: FastifyInstance): void {
           signal: AbortSignal.timeout(config.gateway.upstreamTimeoutMs),
         });
       } catch (e) {
-        inc("deepsonar_provider_errors_total", { provider: cred.provider as string });
+        inc("deepsonar_provider_errors_total", { provider: safeProvider });
         return deny(reply, 502, `上游不可达: ${e instanceof Error ? e.message : e}`, "upstream_unreachable");
       }
-      inc("deepsonar_model_requests_total", { provider: cred.provider as string });
-      if (upstream.status >= 500) inc("deepsonar_provider_errors_total", { provider: cred.provider as string });
+      inc("deepsonar_model_requests_total", { provider: safeProvider });
+      if (upstream.status >= 500) inc("deepsonar_provider_errors_total", { provider: safeProvider });
 
       // 响应直通：非流式缓存全文以解析 usage；流式边转发边扫描
       const isSse = (upstream.headers.get("content-type") ?? "").includes("text/event-stream");
@@ -298,7 +305,7 @@ export function registerGateway(app: FastifyInstance): void {
         reply.raw.end();
       }
       if (scanned > 0) {
-        inc("deepsonar_model_tokens_total", { provider: cred.provider as string }, scanned);
+        inc("deepsonar_model_tokens_total", { provider: safeProvider }, scanned);
         await sql`UPDATE job_tokens SET used_tokens = used_tokens + ${scanned} WHERE id = ${jt.id}`;
       }
     },

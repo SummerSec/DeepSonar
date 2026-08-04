@@ -3,7 +3,11 @@
  */
 import { randomUUID } from "node:crypto";
 import { validateModuleSelectors } from "@deepsonar/shared-types";
-import { validateCredentialRoleConfigBinding } from "../credentials.js";
+import {
+  projectCredentialMetadata,
+  projectCredentialProvider,
+  validateCredentialRoleConfigBinding,
+} from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import {
@@ -25,7 +29,7 @@ export interface PreviewResult {
   counts: Record<string, number>;
   conflicts: { module: string; key: string; message: string }[];
   warnings: string[];
-  credential_mappings_required: { source_id: string; name: string; provider: string }[];
+  credential_mappings_required: { source_id: string; name: string; provider: string; provider_valid?: boolean }[];
   environment_keys_required: string[];
   nonportable_paths: string[];
   disabled_integrations: string[];
@@ -73,6 +77,18 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
     warnings.push("活动 Job 将归档为 cancelled，不会自动继续执行");
   }
 
+  // Credential metadata in an old package is untrusted input.  It is not
+  // imported as a secret, but still sanitize it before any preview/manifest
+  // projection and make lossy cleanup visible to the operator.
+  let sanitizedCredentialMetadata = 0;
+  for (const credential of creds) {
+    const safe = projectCredentialMetadata(String(credential.kind ?? ""), String(credential.provider ?? ""), credential.public_metadata);
+    if (JSON.stringify(safe) !== JSON.stringify(credential.public_metadata ?? {})) sanitizedCredentialMetadata += 1;
+  }
+  if (sanitizedCredentialMetadata > 0) {
+    warnings.push(`已清理 ${sanitizedCredentialMetadata} 条 Credential 的不安全 legacy metadata；不会原样写入目标库`);
+  }
+
   const preview: PreviewResult = {
     compatible: true,
     source: pack.manifest.source,
@@ -81,11 +97,16 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
     counts: pack.manifest.counts ?? {},
     conflicts,
     warnings,
-    credential_mappings_required: creds.map((c) => ({
-      source_id: String(c.source_id),
-      name: String(c.name ?? ""),
-      provider: String(c.provider ?? ""),
-    })),
+    credential_mappings_required: creds.map((c) => {
+      const provider = typeof c.provider === "string" ? c.provider : "";
+      return {
+        source_id: String(c.source_id),
+        name: String(c.name ?? ""),
+        ...(provider === ""
+          ? { provider, provider_valid: false }
+          : projectCredentialProvider(c.kind, provider)),
+      };
+    }),
     environment_keys_required: [
       ...new Set([...(env?.env_keys ?? []), ...(env?.redacted_keys ?? [])]),
     ],

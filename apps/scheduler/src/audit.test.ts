@@ -18,7 +18,7 @@ test("Credential metadata audit summary excludes arbitrary sensitive values", ()
   const summary = summarizeCredentialMetadata(metadata);
   const serialized = JSON.stringify(summary);
   assert.equal(serialized.includes(secret), false);
-  assert.match(String(summary.metadata_sha256), /^[0-9a-f]{64}$/);
+  assert.match(String(summary.metadata_shape_sha256), /^[0-9a-f]{64}$/);
   assert.equal(summary.metadata_key_count, 8);
   assert.equal(summary.base_url_present, true);
   assert.equal(summary.allowed_model_ids_present, true);
@@ -54,5 +54,5 @@ test("credential.update audit state keeps useful identity and metadata change ev
   const afterMetadata = after.metadata as Record<string, unknown>;
   assert.equal(afterMetadata.metadata_key_count, 2);
   assert.equal(afterMetadata.max_concurrent, 8);
-  assert.notEqual(beforeMetadata.metadata_sha256, afterMetadata.metadata_sha256);
+  assert.notEqual(beforeMetadata.metadata_shape_sha256, afterMetadata.metadata_shape_sha256);
 });

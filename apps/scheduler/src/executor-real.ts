@@ -18,7 +18,13 @@ import { config } from "./config.js";
 import { ingestEvent, PLATFORM_DEFAULT_AGENT_CLI, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload } from "./graph.js";
-import { PROVIDER_ENV_MAP, allowedModelIds, validateCredentialCompatibility } from "./credentials.js";
+import {
+  PROVIDER_ENV_MAP,
+  UNKNOWN_PROVIDER_ERROR,
+  allowedModelIds,
+  projectCredentialProvider,
+  validateCredentialCompatibility,
+} from "./credentials.js";
 import { JobEvidenceWriter } from "./evidence.js";
 import { mintJobToken } from "./gateway.js";
 import { publishStream } from "./stream-bus.js";
@@ -95,6 +101,10 @@ export function runtimeCredentialProviderError(
   snapshotProvider: string | null,
   currentProvider: string,
 ): string | null {
+  if (!projectCredentialProvider("llm_provider", currentProvider).provider_valid) return UNKNOWN_PROVIDER_ERROR;
+  if (snapshotProvider && !projectCredentialProvider("llm_provider", snapshotProvider).provider_valid) {
+    return UNKNOWN_PROVIDER_ERROR;
+  }
   if (snapshotProvider && snapshotProvider !== currentProvider) {
     return `Credential provider 已从 ${snapshotProvider} 变更为 ${currentProvider}，Job 快照已过期，请刷新 pending Job 或 retry`;
   }
@@ -361,7 +371,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     const providerError = runtimeCredentialProviderError(provider, snapshot.credential_provider, currentCredentialProvider);
     if (providerError) throw new Error(providerError);
     const mapping = PROVIDER_ENV_MAP[currentCredentialProvider];
-    if (!mapping) throw new Error(`未知 provider: ${String(cred.provider)}`);
+    if (!mapping) throw new Error(UNKNOWN_PROVIDER_ERROR);
     const credentialModels = allowedModelIds(cred.public_metadata_json);
     if (model && credentialModels.length > 0 && !credentialModels.includes(model)) {
       throw new Error(`模型 ${model} 不在 Credential ${cred.id} 的 allowed_model_ids 白名单`);
@@ -674,7 +684,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     agent_provider: provider,
     model: model ?? null,
     credential_id: snapshot.credential_id,
-    credential_provider: snapshot.credential_provider,
+    ...(snapshot.credential_provider === null || snapshot.credential_provider === undefined || snapshot.credential_provider === ""
+      ? { credential_provider: snapshot.credential_provider }
+      : (() => {
+          const projection = projectCredentialProvider("llm_provider", snapshot.credential_provider);
+          return { credential_provider: projection.provider, credential_provider_valid: projection.provider_valid };
+        })()),
     role_config_id: snapshot.role_config_id,
     role_config_version: snapshot.role_config_version,
     input_sha256: sha256(initialInput),

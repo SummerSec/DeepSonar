@@ -6,6 +6,13 @@ import { createHash } from "node:crypto";
 import { validateModuleSelectors } from "@deepsonar/shared-types";
 import { sql } from "../db.js";
 import {
+  projectCredentialMetadata,
+  projectCredentialProvider,
+  projectCredentialProviderError,
+  projectJobEventPayload,
+  projectJobPayload,
+} from "../credentials.js";
+import {
   buildManifestSource,
   ensureTransferDirs,
   toJsonl,
@@ -282,14 +289,15 @@ async function collectRoles(
       if (credMode === "excluded") continue;
       if (credSeen.has(b.id as string)) continue;
       credSeen.add(b.id as string);
+      const providerProjection = projectCredentialProvider(b.kind, b.provider);
       credMeta.push({
         source_id: b.id,
         name: b.name,
         kind: b.kind,
-        provider: b.provider,
+        ...providerProjection,
         fingerprint: b.fingerprint,
         last4: b.last4,
-        public_metadata: b.public_metadata_json,
+        public_metadata: projectCredentialMetadata(String(b.kind), String(b.provider), b.public_metadata_json),
         secret_included: false,
       });
     }
@@ -317,7 +325,7 @@ async function collectRoles(
         source_credential_id: b.id,
         purpose: b.purpose,
         name: b.name,
-        provider: b.provider,
+        ...projectCredentialProvider(b.kind, b.provider),
       })),
     });
   }
@@ -412,12 +420,12 @@ async function collectTasks(
         type: j.type,
         status: j.status,
         priority: j.priority,
-        payload_json: j.payload_json,
+        payload_json: projectJobPayload(j.payload_json),
         agent_snapshot_json: sanitizeAgentSnapshot(j.agent_snapshot_json),
         timeout_sec: j.timeout_sec,
         followup_depth: j.followup_depth,
         transcript_uri: j.transcript_uri,
-        error: j.error,
+        error: projectCredentialProviderError(j.error),
         started_at: j.started_at,
         finished_at: j.finished_at,
         created_at: j.created_at,
@@ -509,7 +517,7 @@ async function collectTasks(
           event_id: e.event_id,
           job_seq: e.job_seq,
           type: e.type,
-          payload_json: e.payload_json,
+          payload_json: projectJobEventPayload(e.payload_json),
           created_at: e.created_at,
         })),
       ),

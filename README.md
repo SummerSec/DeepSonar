@@ -167,7 +167,7 @@ python agent-harness/test-local-project-api.py
 
 - 当前完整建库入口：[database/schema.sql](database/schema.sql)
 - Schema 使用说明：[database/README.md](database/README.md)
-- 当前支持 v12 → v13 增量 migration；Scheduler 在 reserved session 上持有 session advisory lock，空库套用最新完整基线
+- 当前支持 v12 → v15 增量 migration；Scheduler 在 reserved session 上持有 session advisory lock，空库套用最新完整基线
 - `schema_migrations` 记录原始字节 checksum、成功/失败结果；旧版本、未知结构或 checksum 漂移会 fail closed
 - 升级前必须执行 `pg_dump -Fc` 并在隔离实例完成恢复演练；失败 migration 回滚且可在重启后安全重试
 - `database/schema.sql` 是全新外部数据库初始化、审阅和 CI 校验的唯一结构基线

@@ -1,5 +1,6 @@
 /** 环境变量 / 文本 Secret 扫描（导出红线） */
 import { validateModuleSelectors } from "@deepsonar/shared-types";
+import { projectCredentialProvider } from "../credentials.js";
 
 const SENSITIVE_KEY =
   /(password|passwd|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|access[_-]?key|credential)/i;
@@ -46,12 +47,22 @@ export function sanitizeAgentSnapshot(snap: unknown): Record<string, unknown> {
     s.modules = validateModuleSelectors(s.modules, "Job.modules");
   }
   delete s.sandbox_id;
+  if (s.credential_provider !== undefined && s.credential_provider !== null && s.credential_provider !== "") {
+    const projection = projectCredentialProvider("llm_provider", s.credential_provider);
+    s.credential_provider = projection.provider;
+    s.credential_provider_valid = projection.provider_valid;
+  }
   // credential 只保留可映射的逻辑字段
   if (s.credential_id) {
+    const providerProjection = s.credential_provider === undefined
+      || s.credential_provider === null
+      || s.credential_provider === ""
+      ? { provider: s.credential_provider ?? null }
+      : projectCredentialProvider("llm_provider", s.credential_provider);
     s.credential_ref = {
       source_id: s.credential_id,
       name: s.credential_name ?? null,
-      provider: s.credential_provider ?? null,
+      ...providerProjection,
     };
   }
   delete s.credential_id;

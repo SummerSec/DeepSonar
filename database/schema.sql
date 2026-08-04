@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 14);
+INSERT INTO schema_meta (id, version) VALUES ('global', 15);
 
 -- Scheduler migration ledger.  Failed attempts are retained for audit; only
 -- successful rows are unique per version and participate in the applied
@@ -40,6 +40,10 @@ VALUES (13, '0013_add_schema_migrations.sql',
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (14, '0014_add_canvas_change_log.sql',
         'c9776b4ca0225927b47207a3278c07053c56d6e83f8a2d374e40484d7b34c42d',
+        'succeeded');
+INSERT INTO schema_migrations (version, filename, checksum, result)
+VALUES (15, '0015_credential_health_metadata.sql',
+        '9de5ad157cfcfa0add0beabf17fe9ebf6d7c858b8518b444eeea2d7a7fcd11d6',
         'succeeded');
 
 CREATE TABLE projects (
@@ -393,9 +397,26 @@ CREATE TABLE credentials (
   rotated_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   created_by text,
+  last_tested_at timestamptz,
+  health_status text NOT NULL DEFAULT 'unknown',
+  health_error_category text,
+  health_detail text,
+  model_catalog_json jsonb NOT NULL DEFAULT '[]',
+  model_catalog_fetched_at timestamptz,
   CONSTRAINT credentials_kind_check CHECK (kind IN ('llm_provider', 'plane', 'git', 'oci_registry')),
   CONSTRAINT credentials_status_check
-    CHECK (status IN ('active', 'disabled', 'rotation_required'))
+    CHECK (status IN ('active', 'disabled', 'rotation_required')),
+  CONSTRAINT credentials_health_status_check
+    CHECK (health_status IN ('unknown', 'ok', 'error')),
+  CONSTRAINT credentials_health_error_category_check
+    CHECK (health_error_category IS NULL OR health_error_category IN (
+      'configuration', 'authentication', 'authorization', 'rate_limited',
+      'timeout', 'network', 'upstream', 'invalid_response', 'unknown'
+    )),
+  CONSTRAINT credentials_health_detail_check
+    CHECK (health_detail IS NULL OR (length(health_detail) <= 300 AND health_detail !~ '[[:cntrl:]]')),
+  CONSTRAINT credentials_model_catalog_check
+    CHECK (jsonb_typeof(model_catalog_json) = 'array' AND jsonb_array_length(model_catalog_json) <= 200)
 );
 
 -- 短期 Job Token（§6.3 Model Gateway：沙箱不持有长期 Provider Key，明文只注入本 Job 沙箱 env）

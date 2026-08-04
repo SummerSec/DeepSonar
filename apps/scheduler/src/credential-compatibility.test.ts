@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  UNKNOWN_PROVIDER_ERROR,
+  projectCredentialProviderError,
   validateCredentialCompatibility,
   validateCredentialRoleConfigBinding,
   validateCredentialRuntimeMutation,
@@ -19,6 +21,18 @@ test("其他 CLI 不施加未经证实的 provider 限制", () => {
   assert.equal(validateCredentialCompatibility("open-code", "openai"), null);
   assert.equal(validateCredentialCompatibility("codex", "openrouter"), null);
   assert.equal(validateCredentialCompatibility("custom-cli", "openai"), null);
+});
+
+test("legacy server provider errors are projected without rewriting arbitrary target errors", () => {
+  const legacy = "legacy-provider-secret";
+  assert.equal(projectCredentialProviderError(`未知 provider: ${legacy}`), UNKNOWN_PROVIDER_ERROR);
+  assert.equal(projectCredentialProviderError(`未知 Credential provider: ${legacy}`), UNKNOWN_PROVIDER_ERROR);
+  assert.equal(
+    projectCredentialProviderError(`Credential provider 已从 ${legacy} 变更为 openai，Job 快照已过期，请刷新 pending Job 或 retry`),
+    UNKNOWN_PROVIDER_ERROR,
+  );
+  assert.equal(projectCredentialProviderError(`target reported ${legacy}`), `target reported ${legacy}`);
+  assert.equal(projectCredentialProviderError("未知 provider: openai"), "未知 provider: openai");
 });
 
 test("Credential 运行语义变更拒绝破坏既有消费者", () => {
