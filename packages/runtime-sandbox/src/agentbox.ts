@@ -509,6 +509,17 @@ function shellQuote(value: string): string {
 
 const RUNTIME_DIR = "/workspace/.deepsonar";
 const CLAUDE_DIR = "/workspace/.claude";
+const RUNTIME_HOME = `${RUNTIME_DIR}/home`;
+const CLAUDE_CONFIG_DIR = `${RUNTIME_DIR}/claude`;
+
+/** 系统拥有的可写 CLI 环境；不依赖镜像继承的 HOME（非 root 镜像常仍错误指向 /root）。 */
+export function runtimeCliEnv(env: Record<string, string>): Record<string, string> {
+  return {
+    ...env,
+    HOME: RUNTIME_HOME,
+    CLAUDE_CONFIG_DIR,
+  };
+}
 
 /** claude CLI --mcp-config 格式（与 SDK buildClaudeMcpConfig 等价） */
 function buildMcpConfigJson(mcps: AgentMcpConfig[]): string {
@@ -540,7 +551,11 @@ function yamlScalar(value: string): string {
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
  * embedded skills → .claude/skills/<name>/<files>；repo skills 需出网安装，尽力而为。
  */
-async function materializeAgentFiles(sandbox: Sandbox, spec: RealAgentSpec): Promise<void> {
+async function materializeAgentFiles(
+  sandbox: Sandbox,
+  spec: RealAgentSpec,
+  cliEnv: Record<string, string>,
+): Promise<void> {
   const writes: Array<[string, string]> = [];
   for (const command of spec.commands ?? []) {
     const frontmatter = command.description ? `---\ndescription: ${yamlScalar(command.description)}\n---\n\n` : "";
@@ -571,7 +586,7 @@ async function materializeAgentFiles(sandbox: Sandbox, spec: RealAgentSpec): Pro
     if ("files" in skill || !skill.repo) continue;
     const res = await sandbox.run(
       `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent claude -y`,
-      { timeoutMs: 120_000 },
+      { timeoutMs: 120_000, env: cliEnv },
     ).catch(() => null);
     if (!res || res.exitCode !== 0) console.warn(`[real-agent] repo skill 安装失败: ${skill.name}`);
   }
@@ -682,7 +697,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
 
   // 2. agentbox 只当沙箱用：直接驱动 claude CLI（stream-json），不走 SDK daemon/relay。
   //    该路径已在容器内验证：--mcp-config 注册本地控制 MCP，权限模式完全开放（§16）。
-  await materializeAgentFiles(sandbox, spec);
+  const cliEnv = runtimeCliEnv(spec.env);
+  await sandbox.run(`mkdir -p -- ${shellQuote(RUNTIME_HOME)} ${shellQuote(CLAUDE_CONFIG_DIR)}`);
+  await materializeAgentFiles(sandbox, spec, cliEnv);
   const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;
   await sandbox.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
   let systemPromptPath: string | null = null;
@@ -698,7 +715,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   if (spec.reasoning) command += ` --effort ${shellQuote(spec.reasoning)}`;
   if (systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(systemPromptPath)})"`;
 
-  const exec = await sandbox.runAsync(command, { cwd: "/workspace", env: spec.env });
+  const exec = await sandbox.runAsync(command, { cwd: "/workspace", env: cliEnv });
   // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
   // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
   let stdinClosed = false;
@@ -828,7 +845,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const session = sessionId
     ? await CLI_SESSION_ADAPTERS[spec.provider].exportSession(
         {
-          run: (command) => sandbox.run(command, { timeoutMs: 20_000 }),
+          run: (command) => sandbox.run(command, { timeoutMs: 20_000, env: cliEnv }),
           readText: (filePath) => readSandboxFileText(sandbox, filePath),
         },
         sessionId,
@@ -839,6 +856,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         captureError: error instanceof Error ? error.message : String(error),
       }))
     : undefined;
+  await sandbox.run(`rm -rf -- ${shellQuote(CLAUDE_CONFIG_DIR)} ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
   const cleanupPaths = [...(spec.resultFiles ?? [])]

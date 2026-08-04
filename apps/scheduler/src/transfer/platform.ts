@@ -4,6 +4,8 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { validateCredentialRoleConfigBinding } from "../credentials.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import {
   buildManifestSource,
@@ -396,6 +398,10 @@ export async function applyPlatformImport(
     await sql.begin(async (txRaw) => {
       const tx = txRaw as Tx;
 
+      // Global RoleConfig imports share the same critical section as
+      // Credential provider/project/metadata mutations.
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+
       // global rules
       const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/global-rules.json");
       if (rulesFile?.rules) {
@@ -473,13 +479,16 @@ export async function applyPlatformImport(
         const [role] = await tx`SELECT id FROM agent_roles WHERE name = ${roleName}`;
         if (!role) continue;
 
+        const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+        const model = typeof rc.model === "string" && rc.model ? rc.model : null;
+
         await tx`DELETE FROM role_configs WHERE project_id IS NULL AND role_id = ${role.id as string}`;
         const [created] = await tx`
           INSERT INTO role_configs ${tx({
             role_id: role.id as string,
             project_id: null,
-            agent_cli: (rc.agent_cli as string) ?? "claude-code",
-            model: (rc.model as string) ?? null,
+            agent_cli: agentCli,
+            model,
             reasoning: (rc.reasoning as string) ?? null,
             env_keys: (rc.env_keys as string[]) ?? [],
             env_vars_json: ((rc.env_vars as object) ?? {}) as never,
@@ -514,11 +523,27 @@ export async function applyPlatformImport(
         for (const b of binds) {
           const target = credMap[b.source_credential_id];
           if (!target) continue;
+          const [credential] = await tx`
+            SELECT id, project_id, provider, public_metadata_json
+            FROM credentials WHERE id = ${target} FOR UPDATE`;
+          if (!credential) throw new Error(`Credential 不存在: ${target}`);
+          const purpose = b.purpose ?? "llm";
+          const bindingError = validateCredentialRoleConfigBinding({
+            source: `全局 RoleConfig ${roleName} → Credential ${target}`,
+            purpose,
+            agentCli,
+            model,
+            credentialProjectId: (credential.project_id as string | null) ?? null,
+            roleConfigProjectId: null,
+            provider: String(credential.provider ?? ""),
+            metadata: credential.public_metadata_json,
+          });
+          if (bindingError) throw new Error(bindingError);
           await tx`
             INSERT INTO role_credentials ${tx({
               role_config_id: created.id as string,
               credential_id: target,
-              purpose: b.purpose ?? "llm",
+              purpose,
             })}
             ON CONFLICT DO NOTHING`;
         }

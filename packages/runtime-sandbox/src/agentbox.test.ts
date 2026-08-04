@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mapCliEvent, DEFAULT_SEMANTIC_TOOL_EVENTS } from "./agentbox.js";
+import { mapCliEvent, DEFAULT_SEMANTIC_TOOL_EVENTS, runtimeCliEnv } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 
 test("把控制 MCP tool_use 转换为版本化语义事件", () => {
@@ -78,4 +78,12 @@ test("Claude session 使用动态 CLAUDE_CONFIG_DIR 或 HOME", async () => {
   assert.match(command, /base="\$\{CLAUDE_CONFIG_DIR:-\$\{HOME:-\/root\}\/\.claude\}\/projects"/);
   assert.match(command, /find "\$base"/);
   assert.equal(bundle.artifacts.length, 0);
+});
+
+test("Claude CLI 使用工作区内可写 HOME 与配置目录", () => {
+  assert.deepEqual(runtimeCliEnv({ ANTHROPIC_BASE_URL: "http://gateway" }), {
+    ANTHROPIC_BASE_URL: "http://gateway",
+    HOME: "/workspace/.deepsonar/home",
+    CLAUDE_CONFIG_DIR: "/workspace/.deepsonar/claude",
+  });
 });

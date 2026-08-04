@@ -219,8 +219,10 @@ export function CredentialsPanel() {
       const impact = result.impact;
       const impactNotice = providerChanged && impact
         ? `Provider 迁移成功，已刷新 ${impact.pending_job_count} 个 pending Job 快照，影响 ${impact.role_config_count} 个 RoleConfig。`
-        : "";
-      setNotice(`已更新 Credential 配置；并发与模型策略只影响后续 claim，不终止已运行 Job。${impactNotice ? ` ${impactNotice}` : ""}`);
+        : impact
+          ? `已校验 ${impact.role_config_count} 个 RoleConfig 及其活动或待运行 Job，未发现运行语义冲突。`
+          : "";
+      setNotice(`已更新 Credential 配置；模型与并发策略影响后续 claim，密钥和上游地址由 Gateway 实时读取。${impactNotice ? ` ${impactNotice}` : ""}`);
       load();
     } catch (e) {
       setError(String(e));
