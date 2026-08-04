@@ -709,6 +709,11 @@ export function registerRoutes(app: FastifyInstance) {
       socket.close(4400, "missing job_id");
       return;
     }
+    if (!isUuid(jobId)) {
+      closeGuard.dispose();
+      socket.close(4400, "invalid job_id");
+      return;
+    }
     const actor = consumeWsTicket(q.ticket ?? "", jobId);
     if (!actor) {
       closeGuard.dispose();
