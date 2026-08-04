@@ -478,6 +478,8 @@ export interface RealAgentSpec {
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
   onEvent?: (event: Record<string, unknown>) => void;
+  /** 非语义运行流告警；告警不会进入控制事件或写库。 */
+  onWarning?: (warning: { code: string; detail?: string }) => void;
 }
 
 export interface RealAgentResult {
@@ -746,6 +748,29 @@ function semanticEventId(callId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** Parse one CLI stream line without letting malformed/legacy control-file
+ * text poison the following structured line. */
+export function parseRuntimeLine(line: string): {
+  parsed?: Record<string, unknown>;
+  warning?: { code: "malformed_runtime_line" | "forbidden_control_file"; detail: string };
+} {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { warning: { code: "malformed_runtime_line", detail: `line_length=${line.length}` } };
+    }
+    return { parsed: parsed as Record<string, unknown> };
+  } catch {
+    const forbidden = /\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(line);
+    return {
+      warning: {
+        code: forbidden ? "forbidden_control_file" : "malformed_runtime_line",
+        detail: `line_length=${line.length}`,
+      },
+    };
+  }
+}
+
 export function mapCliEvent(
   line: Record<string, unknown>,
   emit: (e: Record<string, unknown>) => void,
@@ -914,18 +939,28 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         const line = stdoutBuffer.slice(0, idx).trim();
         stdoutBuffer = stdoutBuffer.slice(idx + 1);
         if (!line) continue;
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue; // CLI 的非 JSON 噪音行
+        const parsedLine = parseRuntimeLine(line);
+        if (!parsedLine.parsed) {
+          if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
+          continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
         }
+        const parsed = parsedLine.parsed;
         const outcome = mapCliEvent(parsed, (e) => {
           spec.onEvent?.(e);
+          if (e.type === "tool.call.started") {
+            const input = e.input && typeof e.input === "object" ? e.input as Record<string, unknown> : {};
+            const command = typeof input.command === "string" ? input.command : "";
+            if (/\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(command)) {
+              spec.onWarning?.({ code: "forbidden_control_file", detail: `command_length=${command.length}` });
+            }
+          }
           if (e.type === "text.delta" && typeof e.delta === "string") {
             progressBuffer += e.delta as string;
           }
         }, semanticToolEvents, seenToolUseIds);
+        if (!["system", "assistant", "user", "result"].includes(String(parsed.type))) {
+          spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
+        }
         for (const event of outcome.semanticEvents) {
           try {
             await spec.onSemanticEvent?.(event);

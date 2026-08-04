@@ -4,6 +4,7 @@ import { EventEnvelope } from "@deepsonar/shared-types";
 import {
   ingestFactSemanticEvent,
   moduleEvidenceFromSnapshot,
+  normalizeLegacyControlInstructions,
   runtimeCredentialProviderError,
   semanticToolEventsFor,
 } from "./executor-real.js";
@@ -11,6 +12,12 @@ import { expandModules } from "./skill-sources.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("legacy RoleConfig acknowledgement wording is normalized at runtime", () => {
+  const normalized = normalizeLegacyControlInstructions(`成功响应包含 ${"accepted"} ${"event"}；收到 isError 后重试。`);
+  assert.match(normalized, /schema_validated \/ pending_scheduler_validation/);
+  assert.doesNotMatch(normalized, /accepted\s+event/i);
+});
 
 test("module evidence carries structured omissions and defaults old snapshots to []", () => {
   const missing = [{
@@ -143,7 +150,11 @@ test("real fact ingress rejects malformed verification before convergence", asyn
   await assert.rejects(
     () =>
       ingestFactSemanticEvent(
-        factEvent({
+        {
+          v: 1,
+          event_id: "00000000-0000-4000-8000-000000000014",
+          type: "fact",
+          payload: {
           title: "Malformed evidence",
           description: "This must not be ingested.",
           verification: {
@@ -152,7 +163,8 @@ test("real fact ingress rejects malformed verification before convergence", asyn
             outcome: "supports",
             subject_revision: "app@abc123",
           },
-        }),
+          },
+        },
         intentNodeId,
         async () => {
           accepted++;

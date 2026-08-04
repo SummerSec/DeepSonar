@@ -78,7 +78,7 @@ def main() -> None:
         for c in global_configs
         if c.get("role_name") not in {"verify", "report"}
     ]), global_configs
-    assert all("accepted event" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
+    assert all("schema_validated / pending_scheduler_validation" in (c.get("instructions_markdown") or "") for c in global_configs), global_configs
     assert all(c.get("platform_tools_json") == {} for c in global_configs), global_configs
     by_role = {c["role_name"]: c.get("instructions_markdown") or "" for c in global_configs}
     for role in ("explore", "analyze", "review", "test", "code"):

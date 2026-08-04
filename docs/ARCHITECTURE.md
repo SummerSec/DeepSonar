@@ -377,8 +377,10 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 **事件通道**：事件不经过沙箱网络，经 agentbox-sdk 控制通道回传调度器侧：
 
 - SDK normalized event stream → 文本/进度 → `progress` 事件
-- 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、校验白名单工具并返回成功，不写文件、不连接调度器
+- 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、执行同源严格 schema 校验并返回 `schema_validated / pending_scheduler_validation`，不声称业务已落库，不写文件、不连接调度器
 - 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块捕获 `emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`，转换为 `{v:1,event_id(UUID),type,payload}` 后串行 `await onSemanticEvent`
+- 宿主与 `EventEnvelope`/`core.applySideEffects` 再次严格校验；需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
+- 非 JSON/未知 runtime 行和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；不恢复可写事件文件队列
 - 同一 `tool_use.id` 只生成一次语义事件；`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
 - Claude CLI 的 `HOME` 与 `CLAUDE_CONFIG_DIR` 固定到 `/workspace/.deepsonar/` 下的 Job 专属可写目录，不信任镜像继承的 `/root`；原始 Session 归档复用同一环境，读回内存后立即清理，随后再销毁一次性沙箱
 - 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限

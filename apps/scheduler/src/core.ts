@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
+  DonePayload,
+  FactPayload,
+  FindingPayload,
+  HumanPayload,
+  ProgressPayload,
   resolvePlatformTools,
-  type EventEnvelope,
-  type FindingPayload,
+  type EventEnvelopeInput,
   type PlatformToolConfig,
   type PlatformToolName,
 } from "@deepsonar/shared-types";
@@ -27,6 +31,7 @@ import {
   type HubDecision,
   type HubReferenceLookup,
 } from "./graph.js";
+import { ControlInputError, invalidControlPayload, invalidRole, invalidVerification } from "./control-input.js";
 
 type Tx = typeof sql;
 export type IngestResult = EventIngestionResult;
@@ -848,7 +853,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
 
 // ---------- 事件摄入（幂等 + job_seq + 按类型落地副作用） ----------
 
-export async function ingestEvent(jobId: string, envelope: EventEnvelope): Promise<IngestResult> {
+export async function ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<IngestResult> {
   return eventIngestionApplication.ingestEvent(jobId, envelope);
 }
 
@@ -942,6 +947,26 @@ export async function applySideEffects(
   payload: unknown,
   services: CoreSideEffectServices = {},
 ) {
+  // Re-parse every payload at the side-effect boundary.  Callers normally
+  // arrive through EventEnvelope, but tests, recovery and future adapters may
+  // invoke this function directly; no untrusted shape may reach SQL.
+  const parsePayload = <T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } }, value: unknown, code: string, label: string): T => {
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) throw new ControlInputError(code as never, `${label} 参数不符合严格契约。`);
+    return parsed.data;
+  };
+  const validatedPayload =
+    type === "progress"
+      ? parsePayload(ProgressPayload, payload, "invalid_progress", "emit_progress")
+      : type === "finding"
+        ? parsePayload(FindingPayload, payload, "invalid_payload", "emit_finding")
+        : type === "fact"
+          ? parsePayload(FactPayload, payload, "invalid_payload", "emit_fact")
+          : type === "done"
+            ? parsePayload(DonePayload, payload, "invalid_done", "mark_job_done")
+            : type === "human"
+              ? parsePayload(HumanPayload, payload, "invalid_human", "request_human")
+              : payload;
   // Parse Hub references before the event/application can perform any write.
   // Event-ingestion wraps this callback in the same transaction, so a later
   // rejection rolls back the event, jobs, nodes, and edges as one decision.
@@ -950,7 +975,7 @@ export async function applySideEffects(
   if (!job) throw new Error(`job ${jobId} 不存在`);
 
   if (type === "progress") {
-    const p = payload as { message?: string; percent?: number };
+    const p = validatedPayload as { message: string; percent?: number };
     await tx`
       UPDATE canvas_nodes SET body_json = body_json || ${tx.json({ last_progress: p })}, updated_at = now()
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
@@ -959,7 +984,7 @@ export async function applySideEffects(
   }
 
   if (type === "finding") {
-    const f = payload as FindingPayload;
+    const f = validatedPayload as FindingPayload;
     const fingerprint = sha16(
       [f.title.trim().toLowerCase(), (f.location ?? "").trim(), (f.rule_id ?? "").trim()].join("|"),
     );
@@ -1016,7 +1041,7 @@ export async function applySideEffects(
 
   if (type === "fact") {
     // 角色 agent 的发现 → fact 节点（§8.3：agent 只负责把发现写入画布）
-    const p = payload as {
+    const p = validatedPayload as {
       intent_node_id?: string;
       title?: string;
       description?: string;
@@ -1060,7 +1085,10 @@ export async function applySideEffects(
     // 结构化验证证据：仅 Hub 回弹补证 Job 绑定 finding 时接受
     if (p.verification) {
       const { attachVerificationEvidence } = await import("./verify.js");
-      await attachVerificationEvidence(tx, job, node.id as string, canvasId, p.verification);
+      const attached = await attachVerificationEvidence(tx, job, node.id as string, canvasId, p.verification);
+      if (!attached) {
+        throw invalidVerification("verification 证据未能附着到当前绑定 Finding；本次 fact 已拒绝。", "verification");
+      }
     }
     return;
   }
@@ -1125,7 +1153,7 @@ export async function applySideEffects(
     const hubEdges: CanvasEdgeInput[] = [];
     for (const it of intents) {
       if (!it.role || !enabledNames.has(it.role)) {
-        throw new Error(`Hub 派发了不可用角色: ${it.role ?? "<missing>"}`);
+        throw invalidRole(it.role ?? "<missing>", "intents.role");
       }
     }
 
@@ -1145,10 +1173,8 @@ export async function applySideEffects(
     }
 
     for (const it of intents) {
-      if (!it.description?.trim() || !it.prompt?.trim()) continue;
       if (roles.length === 0) {
-        console.warn(`[hub] 项目 ${job.project_id} 无启用角色，跳过意图派发`);
-        break;
+        throw invalidRole(it.role, "intents.role");
       }
       const title = it.description.trim().slice(0, 120);
       // 去重：同画布已有同标题的未结论 intent → 跳过（hub 重复派发护栏）
@@ -1229,12 +1255,12 @@ export async function applySideEffects(
   }
 
   if (type === "done") {
-    await finalizeJob(tx, jobId, "succeeded", payload as { summary?: string });
+    await finalizeJob(tx, jobId, "succeeded", validatedPayload as { summary?: string; verdict?: string; missing_evidence?: string[] });
     return;
   }
 
   if (type === "human") {
-    const p = payload as { reason?: string };
+    const p = validatedPayload as { reason: string };
     await tx`
       UPDATE jobs SET status = 'waiting_human' WHERE id = ${jobId} AND status = 'running'`;
     const [jobNode] = await tx`

@@ -4,6 +4,7 @@ import {
   mapCliEvent,
   DEFAULT_SEMANTIC_TOOL_EVENTS,
   materializationPathCollisions,
+  parseRuntimeLine,
   runtimeCliEnv,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
@@ -66,6 +67,20 @@ test("忽略非控制工具", () => {
     message: { content: [{ type: "tool_use", id: "other-1", name: "Bash", input: { command: "pwd" } }] },
   }, () => {});
   assert.deepEqual(result.semanticEvents, []);
+});
+
+test("脏运行时行只产生告警，后续合法 tool_use 仍可解析", () => {
+  const malformed = parseRuntimeLine("Authorization: Bearer supersecret; echo test > .deepsonar/control-events.jsonl");
+  assert.equal(malformed.parsed, undefined);
+  assert.equal(malformed.warning?.code, "forbidden_control_file");
+  assert.doesNotMatch(malformed.warning?.detail ?? "", /supersecret/);
+  const valid = parseRuntimeLine(JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "after-dirty", name: "mcp__deepsonar-control__emit_progress", input: { message: "继续" } }] },
+  }));
+  assert.ok(valid.parsed);
+  const events = mapCliEvent(valid.parsed!, () => {});
+  assert.equal(events.semanticEvents.length, 1);
 });
 
 test("Claude session 使用动态 CLAUDE_CONFIG_DIR 或 HOME", async () => {
