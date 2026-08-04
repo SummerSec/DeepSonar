@@ -105,6 +105,7 @@ import {
   startRuntimeImagePull,
   syncOfficialRuntimeCatalog,
 } from "./runtime-images.js";
+import { loadReadiness, type ReadinessMaterialSource } from "./readiness.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -263,6 +264,11 @@ const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_cred
 const ProjectRuntimeImageBody = z.object({
   enabled: z.boolean().default(true),
   version_id: z.string().uuid().nullish(),
+});
+
+const ReadinessQuery = z.object({
+  allow_egress: z.enum(["true", "false"]).optional(),
+  material_source: z.enum(["workspace_or_offline", "external_or_workspace", "declared", "unspecified"]).optional(),
 });
 
 /** 清空任务画布上的运行数据（jobs / findings / 图节点等），保留 canvas 行本身。 */
@@ -2628,6 +2634,49 @@ export function registerRoutes(app: FastifyInstance) {
   });
 
   // ---------- 项目设置：运行规则 + 角色启停 ----------
+  // ---------- Readiness / preflight projection (#35/#36, read-only) ----------
+  // The projection reads only Scheduler-owned rows. Query values are a small
+  // enum/boolean overlay for the task form; secrets, env names and OCI refs
+  // are never accepted or returned here.
+  function parseReadinessQuery(req: { query?: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): z.infer<typeof ReadinessQuery> | null {
+    const parsed = ReadinessQuery.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: "invalid readiness query", details: parsed.error.issues });
+      return null;
+    }
+    return parsed.data;
+  }
+
+  async function readinessResponse(
+    req: { query?: unknown },
+    reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+    projectId?: string,
+  ) {
+    const query = parseReadinessQuery(req, reply);
+    if (!query) return;
+    if (projectId && !z.string().uuid().safeParse(projectId).success) {
+      return reply.code(400).send({ error: "invalid project id" });
+    }
+    try {
+      return await loadReadiness(sql, {
+        projectId,
+        allowEgress: query.allow_egress === undefined ? undefined : query.allow_egress === "true",
+        materialSource: query.material_source as ReadinessMaterialSource | undefined,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "project not found") {
+        return reply.code(404).send({ error: "project not found" });
+      }
+      throw error;
+    }
+  }
+
+  app.get("/readiness", async (req, reply) => readinessResponse(req, reply));
+  app.get("/projects/:id/readiness", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    return readinessResponse(req, reply, id);
+  });
+
   app.get("/projects/:id/settings", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
