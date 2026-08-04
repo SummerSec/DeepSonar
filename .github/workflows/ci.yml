@@ -56,6 +56,11 @@ jobs:
 
       - run: pnpm -r build
 
+      - name: Incremental migration chain (fresh, v12 upgrade, rollback/retry, concurrency)
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:unit:migrations
+
       - name: Dispatcher claim Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}

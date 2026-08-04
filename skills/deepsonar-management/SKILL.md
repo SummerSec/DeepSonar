@@ -206,14 +206,14 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 | 可信镜像版本 | `runtime_image_versions.trust_status=trusted` 且 `image_ref` 含 `@sha256:` |
 | 官方 digest 引导 | `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`（tag 不会被静默信任） |
 | 本地镜像存在 | Docker 已有对应 digest（可 `docker tag` 别名） |
-| schema 版本 | `schema_meta.version` 必须等于 `apps/scheduler/src/db.ts` 的 `SCHEMA_VERSION`；**无增量迁移**，不符则重建库 |
+| schema 版本 | 当前支持 v12 → v13；Scheduler 持 session advisory lock 执行连续 migration，校验 `schema_migrations` checksum；v12 之前、未知结构或漂移会 fail closed |
 | 鉴权 | `DEEPSONAR_AUTH_REQUIRED=true` 时需 Bearer；应急用 `DEEPSONAR_ADMIN_TOKEN`（不落库） |
 | 证据目录 | `BLOB_DIR`（默认 `./data/blobs`）可写；改 `apps/scheduler/src` 会触发 tsx watch 重载 |
 
 ## 运维踩坑（本 skill 经验沉淀）
 
 1. **清业务数据不要 `TRUNCATE projects CASCADE`**：会连带清空 `credentials` / `role_configs`（FK）。应显式列出业务表，**保留** `credentials`、`agent_roles`、`role_configs`、`skill_sources`、`runtime_images*`、`users`、`schema_meta`、`global_settings`。平台导出包（`.deepsonarpack`）**不含凭据明文**，清掉后只能从 `.env`/密钥管理重新 `credentials create`。
-2. **git pull 后 schema  bump**：调度器启动若报「当前数据库不是 schema vN」，只能 `DROP SCHEMA public CASCADE` + 重启让空库套 `database/schema.sql`，再恢复凭据与 RoleConfig。
+2. **git pull 后 schema bump**：先 `pg_dump -Fc` 并在隔离实例恢复校验；v12→v13 由 Scheduler 自动迁移。只有 v12 之前、未知结构或账本 checksum 漂移时才停止并按恢复文档处理，禁止直接 `DROP SCHEMA`。
 3. **RoleConfig PUT 400 `runtime_image_key 没有可信版本`**：市场 catalog 有 key 不等于有 trusted version。先 bootstrap 官方 digest 或 import+approve。
 4. **多模型分配**：`credentials models` 看各 Provider 真实目录；hub 与 worker 可不同凭证。Job 快照在创建时冻结，改 RoleConfig **不影响**已创建 job。
 5. **tsx watch 改 src 会重载**：running job → `orphan`（「调度器重启」）；`jobs resume`（也支持 waiting_human）回 pending 并重算固定 priority class。排障时先确认无 running job 再改代码，或接受重跑。

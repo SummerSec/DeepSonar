@@ -14,29 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 13);
-
--- Scheduler migration ledger.  Failed attempts are retained for audit; only
--- successful rows are unique per version and participate in the applied
--- migration chain.
-CREATE TABLE schema_migrations (
-  id bigserial PRIMARY KEY,
-  version int NOT NULL,
-  filename text NOT NULL,
-  checksum text NOT NULL,
-  applied_at timestamptz NOT NULL DEFAULT now(),
-  result text NOT NULL,
-  error text,
-  CONSTRAINT schema_migrations_checksum_check CHECK (checksum ~ '^[0-9a-f]{64}$'),
-  CONSTRAINT schema_migrations_result_check CHECK (result IN ('succeeded', 'failed'))
-);
-CREATE UNIQUE INDEX schema_migrations_applied_version_uniq
-  ON schema_migrations (version) WHERE result = 'succeeded';
-CREATE INDEX schema_migrations_version_idx ON schema_migrations (version, applied_at DESC);
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (13, '0013_add_schema_migrations.sql',
-        'b975ebaa56faafa7a8b43848a64f821ac04da0f02c2b7022fa1dddd18be216fc',
-        'succeeded');
+INSERT INTO schema_meta (id, version) VALUES ('global', 12);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

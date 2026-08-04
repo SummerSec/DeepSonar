@@ -84,7 +84,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 ### 数据与迁移
 
-- **Schema**：`database/schema.sql` 是唯一结构基线（版本号在 `schema_meta` 与 `db.ts` 的 `SCHEMA_VERSION`）；Scheduler 只对空库执行，无增量迁移，版本不符直接拒绝启动——结构变更后改基线、bump 版本、重建数据库。
+- **Schema**：`database/schema.sql` 是全新数据库的最新压平基线（当前 v13）；现有受支持的 v12 库由 Scheduler 按 `database/migrations/` 连续编号链升级。启动时校验 `schema_migrations` 原始 UTF-8 字节 checksum、持 session advisory lock，并在失败后记录可重试审计。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
 - **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
 - **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。
@@ -101,7 +101,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - **设计变更**：先对齐 `DESIGN.md`；结构性/安全相关再改 `docs/ARCHITECTURE.md`，并更新 `DESIGN.md` §11 与相关 Issue。
 - 全仓库 TypeScript ESM；`shared-types`（zod schema）是前后端/事件 payload 单源，改 schema 从这里改。
 - 新增 job 类型 = 字符串新值 +（如需真实执行）在 `agent_roles` 注册，无需迁移；dispatcher 的 `isRealType` 自动识别。
-- 改表 = 改 `database/schema.sql` 并同步 bump `db.ts` 的 `SCHEMA_VERSION`；无增量迁移，版本不符调度器拒绝启动，直接清库重建验证。
+- 改表 = 新增不可变的下一个 `database/migrations/NNNN_*.sql`、更新 `database/schema.sql` 最新 fresh 基线并同步 bump `SCHEMA_VERSION`；同时补 fresh 与上一受支持版本链的结构等价/失败重试测试，禁止清库代替升级。
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
 - RoleConfig `modules` 现为 `"<source_id>:<module_id>"` 逐条勾选（整插件挂载见 #33）。
