@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import postgres from "postgres";
 import {
   discoverMigrations,
+  catalogFingerprint,
   MIGRATE_LOCK_ID,
   MIGRATIONS_DIR,
   parseTableManifest,
@@ -16,7 +17,13 @@ import {
   sha256Utf8,
   type MigrationConnection,
 } from "./migration-runner.js";
-import { SCHEMA_VERSION, SUPPORTED_BASELINE_VERSION, TRUSTED_V12_BASELINE_SHA256 } from "./schema-version.js";
+import {
+  SCHEMA_VERSION,
+  SUPPORTED_BASELINE_VERSION,
+  TRUSTED_V12_BASELINE_SHA256,
+  TRUSTED_V12_CATALOG_SHA256,
+  TRUSTED_V13_CATALOG_SHA256,
+} from "./schema-version.js";
 
 test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", async () => {
   const migrations = discoverMigrations();
@@ -28,6 +35,8 @@ test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", asyn
   assert.equal(SCHEMA_VERSION, 13);
   assert.equal(SUPPORTED_BASELINE_VERSION, 12);
   assert.equal(TRUSTED_V12_BASELINE_SHA256.length, 64);
+  assert.match(TRUSTED_V12_CATALOG_SHA256, /^[0-9a-f]{64}$/);
+  assert.match(TRUSTED_V13_CATALOG_SHA256, /^[0-9a-f]{64}$/);
 });
 
 test("migration discovery rejects gaps and malformed filenames", async () => {
@@ -42,6 +51,12 @@ test("migration discovery rejects gaps and malformed filenames", async () => {
     await writeFile(path.join(directory, "0013_transaction.sql"), "BEGIN; SELECT 1; COMMIT;", "utf8");
     assert.throws(() => discoverMigrations(directory), /transaction control/i);
     await rm(path.join(directory, "0013_transaction.sql"));
+    await writeFile(path.join(directory, "0013_abort.sql"), "ABORT; SELECT 1;", "utf8");
+    assert.throws(() => discoverMigrations(directory), /transaction control/i);
+    await rm(path.join(directory, "0013_abort.sql"));
+    await writeFile(path.join(directory, "0013_prepare.sql"), "PREPARE TRANSACTION 'tx';", "utf8");
+    assert.throws(() => discoverMigrations(directory), /transaction control/i);
+    await rm(path.join(directory, "0013_prepare.sql"));
     await writeFile(path.join(directory, "0013_bom.sql"), Buffer.from([0xef, 0xbb, 0xbf, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x31, 0x3b]));
     assert.throws(() => discoverMigrations(directory), /BOM/i);
   } finally {
@@ -93,64 +108,6 @@ async function columns(db: ReturnType<typeof postgres>): Promise<string[]> {
   return rows.map((row) => `${row.table_name}.${row.column_name}`);
 }
 
-async function catalogFingerprint(db: ReturnType<typeof postgres>): Promise<string> {
-  const columnRows = await db<Record<string, unknown>[]>`
-    SELECT c.table_name, c.column_name, c.ordinal_position, c.data_type, c.udt_name,
-           c.is_nullable, c.column_default
-    FROM information_schema.columns c
-    JOIN information_schema.tables t
-      ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-    WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
-    ORDER BY c.table_name, c.ordinal_position
-  `;
-  const constraintRows = await db<Record<string, unknown>[]>`
-    SELECT n.nspname AS schema_name, c.relname AS table_name, con.conname AS constraint_name,
-           con.contype AS constraint_type, pg_get_constraintdef(con.oid, true) AS definition
-    FROM pg_constraint con
-    JOIN pg_class c ON c.oid = con.conrelid
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-    ORDER BY n.nspname, c.relname, con.conname
-  `;
-  const indexRows = await db<Record<string, unknown>[]>`
-    SELECT schemaname, tablename, indexname, indexdef
-    FROM pg_indexes
-    WHERE schemaname = 'public'
-    ORDER BY schemaname, tablename, indexname
-  `;
-  const extensionRows = await db<Record<string, unknown>[]>`
-    SELECT e.extname, e.extversion
-    FROM pg_extension e
-    ORDER BY e.extname
-  `;
-  const routineRows = await db<Record<string, unknown>[]>`
-    SELECT n.nspname AS schema_name, p.proname AS routine_name,
-           pg_get_function_identity_arguments(p.oid) AS identity_arguments,
-           p.prokind, pg_get_functiondef(p.oid) AS definition
-    FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')
-    ORDER BY n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), p.oid
-  `;
-  const triggerRows = await db<Record<string, unknown>[]>`
-    SELECT n.nspname AS schema_name, c.relname AS table_name, t.tgname AS trigger_name,
-           pg_get_triggerdef(t.oid, true) AS definition
-    FROM pg_trigger t
-    JOIN pg_class c ON c.oid = t.tgrelid
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND NOT t.tgisinternal
-    ORDER BY n.nspname, c.relname, t.tgname
-  `;
-  return JSON.stringify({
-    columns: columnRows,
-    constraints: constraintRows,
-    indexes: indexRows,
-    extensions: extensionRows,
-    routines: routineRows,
-    triggers: triggerRows,
-  });
-}
-
 test("fresh v13 and v12 upgrade have equivalent table/column structure", {
   skip: !testDatabaseUrl,
 }, async () => {
@@ -165,14 +122,39 @@ test("fresh v13 and v12 upgrade have equivalent table/column structure", {
     await withMigrationLock(freshDb);
     assert.deepEqual(await withMigrationLock(freshDb), []);
     await applyBaseline(upgradedDb);
+    assert.equal(
+      await catalogFingerprint(upgradedDb as unknown as MigrationConnection, { excludeTables: ["schema_migrations"] }),
+      TRUSTED_V12_CATALOG_SHA256,
+    );
     await withMigrationLock(upgradedDb);
     assert.deepEqual(await columns(freshDb), await columns(upgradedDb));
-    assert.equal(await catalogFingerprint(freshDb), await catalogFingerprint(upgradedDb));
+    assert.equal(
+      await catalogFingerprint(freshDb as unknown as MigrationConnection),
+      TRUSTED_V13_CATALOG_SHA256,
+    );
+    assert.equal(
+      await catalogFingerprint(upgradedDb as unknown as MigrationConnection),
+      TRUSTED_V13_CATALOG_SHA256,
+    );
     await upgradedDb`DROP INDEX canvases_project_idx`;
-    assert.notEqual(await catalogFingerprint(freshDb), await catalogFingerprint(upgradedDb));
+    assert.notEqual(
+      await catalogFingerprint(freshDb as unknown as MigrationConnection),
+      await catalogFingerprint(upgradedDb as unknown as MigrationConnection),
+    );
+    await assert.rejects(
+      withMigrationLock(upgradedDb),
+      /catalog fingerprint mismatch/i,
+    );
     await upgradedDb`CREATE INDEX canvases_project_idx ON canvases (project_id, status, created_at DESC)`;
     await upgradedDb`ALTER TABLE canvases DROP CONSTRAINT canvases_status_check`;
-    assert.notEqual(await catalogFingerprint(freshDb), await catalogFingerprint(upgradedDb));
+    assert.notEqual(
+      await catalogFingerprint(freshDb as unknown as MigrationConnection),
+      await catalogFingerprint(upgradedDb as unknown as MigrationConnection),
+    );
+    await assert.rejects(
+      withMigrationLock(upgradedDb),
+      /catalog fingerprint mismatch/i,
+    );
     const [meta] = await upgradedDb<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
     assert.equal(meta?.version, SCHEMA_VERSION);
   } finally {
@@ -184,7 +166,7 @@ test("fresh v13 and v12 upgrade have equivalent table/column structure", {
   }
 });
 
-test("an intermediate v13 database can continue through a future v14 chain", {
+test("a v12 database with legacy or future successful ledger rows fails before v13 DDL", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -192,11 +174,49 @@ test("an intermediate v13 database can continue through a future v14 chain", {
   const admin = postgres(adminUrl.toString(), { max: 1 });
   const target = await createDatabase(admin);
   const db = postgres(target.url, { max: 2 });
+  try {
+    await applyBaseline(db);
+    await db.unsafe(await readFile(path.join(MIGRATIONS_DIR, "0013_add_schema_migrations.sql"), "utf8"));
+    await db.unsafe(`
+      INSERT INTO schema_migrations (version, filename, checksum, result)
+      VALUES (12, 'legacy.sql', '${"a".repeat(64)}', 'succeeded'),
+             (14, 'future.sql', '${"b".repeat(64)}', 'succeeded');
+    `);
+    await assert.rejects(withMigrationLock(db), /successful version 12|outside the applied range/i);
+    const [meta] = await db<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
+    assert.equal(meta?.version, SUPPORTED_BASELINE_VERSION);
+    const [v13] = await db<{ count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM schema_migrations
+      WHERE version = 13 AND result = 'succeeded'
+    `;
+    assert.equal(v13?.count, 0);
+  } finally {
+    await db.end();
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
+    await admin.end();
+  }
+});
+
+test("an intermediate v13 database can continue through a future v14 chain", {
+  skip: !testDatabaseUrl,
+}, async () => {
+  const adminUrl = new URL(testDatabaseUrl as string);
+  adminUrl.pathname = "/postgres";
+  const admin = postgres(adminUrl.toString(), { max: 1 });
+  const target = await createDatabase(admin);
+  const expected = await createDatabase(admin);
+  const db = postgres(target.url, { max: 2 });
+  const expectedDb = postgres(expected.url, { max: 2 });
   const directory = await mkdtemp(path.join(os.tmpdir(), "deepsonar-future-migrations-"));
   const futureSchemaFile = path.join(os.tmpdir(), `deepsonar-schema-v14-${process.pid}-${Date.now()}.sql`);
   try {
     await applyBaseline(db);
     await withMigrationLock(db);
+    await applyBaseline(expectedDb);
+    await withMigrationLock(expectedDb);
+    await expectedDb`ALTER TABLE schema_migrations ADD COLUMN migration14_marker text`;
+    const expectedCatalogFingerprint = await catalogFingerprint(expectedDb as unknown as MigrationConnection);
     const source13 = path.join(MIGRATIONS_DIR, "0013_add_schema_migrations.sql");
     const body13 = await readFile(source13, "utf8");
     const body14 = "ALTER TABLE schema_migrations ADD COLUMN migration14_marker text;\n";
@@ -218,6 +238,7 @@ test("an intermediate v13 database can continue through a future v14 chain", {
         schemaFile: futureSchemaFile,
         migrationsDirectory: directory,
         targetVersion: 14,
+        expectedCatalogFingerprint,
       }),
       /checksum drift/i,
     );
@@ -227,6 +248,7 @@ test("an intermediate v13 database can continue through a future v14 chain", {
       schemaFile: futureSchemaFile,
       migrationsDirectory: directory,
       targetVersion: 14,
+      expectedCatalogFingerprint,
     });
     assert.deepEqual(applied, ["database/migrations/0014_add_migration_marker.sql"]);
     const [meta] = await db<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
@@ -238,9 +260,11 @@ test("an intermediate v13 database can continue through a future v14 chain", {
     assert.equal(marker?.column_name, "migration14_marker");
   } finally {
     await db.end();
+    await expectedDb.end();
     await rm(futureSchemaFile, { force: true });
     await rm(directory, { recursive: true, force: true });
     await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${expected.name}"`);
     await admin.end();
   }
 });

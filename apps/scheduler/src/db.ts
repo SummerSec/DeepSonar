@@ -24,12 +24,32 @@ export const sql = postgres(config.databaseUrl, {
  * Scheduler race the migration.
  */
 export async function migrate(): Promise<string[]> {
-  const db = await sql.reserve();
-  await db`SELECT pg_advisory_lock(${MIGRATE_LOCK_ID})`;
+  return migrateOnReservedSession(() => sql.reserve() as unknown as Promise<ReservedMigrationConnection>);
+}
+
+export type ReservedMigrationConnection = MigrationConnection & {
+  release: () => void | Promise<void>;
+};
+
+/**
+ * Run migrations while keeping the session advisory lock and reserved pool
+ * connection paired.  Exported separately so lock-acquisition failures can be
+ * tested without opening a real database connection.
+ */
+export async function migrateOnReservedSession(
+  reserve: () => Promise<ReservedMigrationConnection>,
+  migrateRunner: (db: MigrationConnection) => Promise<string[]> = runMigrations,
+): Promise<string[]> {
+  const db = await reserve();
+  let lockAcquired = false;
   try {
-    return await runMigrations(db as unknown as MigrationConnection);
+    await db`SELECT pg_advisory_lock(${MIGRATE_LOCK_ID})`;
+    lockAcquired = true;
+    return await migrateRunner(db);
   } finally {
-    await db`SELECT pg_advisory_unlock(${MIGRATE_LOCK_ID})`.catch(() => {});
-    db.release();
+    if (lockAcquired) {
+      await db`SELECT pg_advisory_unlock(${MIGRATE_LOCK_ID})`.catch(() => {});
+    }
+    await db.release();
   }
 }

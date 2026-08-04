@@ -7,7 +7,9 @@ import {
   FIRST_MIGRATION_VERSION,
   SCHEMA_VERSION,
   SUPPORTED_BASELINE_VERSION,
+  TRUSTED_V12_CATALOG_SHA256,
   TRUSTED_V12_BASELINE_SHA256,
+  TRUSTED_V13_CATALOG_SHA256,
 } from "./schema-version.js";
 
 /** The subset of postgres.js used by the migration runner. */
@@ -161,7 +163,11 @@ function stripSqlCommentsAndStrings(sql: string): string {
 
 function assertNoTransactionControl(body: string, label: string): void {
   const sanitized = stripSqlCommentsAndStrings(body);
-  if (/(?:^|;)\s*(?:BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|END)\b/im.test(sanitized)) {
+  if (
+    /(?:^|;)\s*(?:BEGIN|COMMIT|ROLLBACK|ABORT|START\s+TRANSACTION|END|PREPARE\s+TRANSACTION)\b/im.test(
+      sanitized,
+    )
+  ) {
     throw new Error(`${label} contains top-level transaction control; the runner owns BEGIN/COMMIT/ROLLBACK`);
   }
 }
@@ -383,6 +389,118 @@ async function readDatabaseManifest(db: MigrationConnection): Promise<TableManif
     manifest.set(row.table_name, columns);
   }
   return manifest;
+}
+
+type CatalogFingerprintOptions = {
+  /** Tables intentionally added by the migration ledger during a v12 upgrade. */
+  excludeTables?: readonly string[];
+};
+
+type CatalogRow = Record<string, unknown>;
+
+function canonicalCatalogRows(rows: CatalogRow[]): CatalogRow[] {
+  return rows
+    .map((row) => Object.fromEntries(Object.entries(row).sort(([left], [right]) => compareStable(left, right))))
+    .sort((left, right) => compareStable(JSON.stringify(left), JSON.stringify(right)));
+}
+
+function compareStable(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+function filterCatalogRows(rows: CatalogRow[], tableKeys: readonly string[], excludedTables: Set<string>): CatalogRow[] {
+  if (excludedTables.size === 0) return rows;
+  return rows.filter((row) => {
+    for (const key of tableKeys) {
+      const value = row[key];
+      if (typeof value === "string" && excludedTables.has(value)) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Hash stable, normalized public-catalog metadata.  Deliberately excludes
+ * OIDs, owners, timestamps, and other installation-specific values so a
+ * fresh baseline and an incremental upgrade produce the same fingerprint.
+ */
+export async function catalogFingerprint(
+  db: MigrationConnection,
+  options: CatalogFingerprintOptions = {},
+): Promise<string> {
+  const excludedTables = new Set(options.excludeTables ?? []);
+  const tableRows = await db<CatalogRow>`
+    SELECT table_schema AS schema_name, table_name, table_type
+    FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+  `;
+  const columnRows = await db<CatalogRow>`
+    SELECT c.table_schema AS schema_name, c.table_name, c.column_name, c.ordinal_position,
+           c.data_type, c.udt_name, c.is_nullable, c.column_default,
+           c.character_maximum_length, c.numeric_precision, c.numeric_scale,
+           c.datetime_precision, c.is_identity, c.identity_generation,
+           c.is_generated, c.generation_expression
+    FROM information_schema.columns c
+    JOIN information_schema.tables t
+      ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+    WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+  `;
+  const constraintRows = await db<CatalogRow>`
+    SELECT n.nspname AS schema_name, c.relname AS table_name, con.conname AS constraint_name,
+           con.contype AS constraint_type, pg_get_constraintdef(con.oid, true) AS definition
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+  `;
+  const indexRows = await db<CatalogRow>`
+    SELECT schemaname AS schema_name, tablename AS table_name, indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+  `;
+  const extensionRows = await db<CatalogRow>`
+    SELECT e.extname, e.extversion
+    FROM pg_extension e
+  `;
+  const routineRows = await db<CatalogRow>`
+    SELECT n.nspname AS schema_name, p.proname AS routine_name,
+           pg_get_function_identity_arguments(p.oid) AS identity_arguments,
+           p.prokind, pg_get_functiondef(p.oid) AS definition
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')
+  `;
+  const triggerRows = await db<CatalogRow>`
+    SELECT n.nspname AS schema_name, c.relname AS table_name, t.tgname AS trigger_name,
+           pg_get_triggerdef(t.oid, true) AS definition
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND NOT t.tgisinternal
+  `;
+  const normalized = {
+    algorithm: "deepsonar-catalog-v1",
+    tables: canonicalCatalogRows(filterCatalogRows(tableRows, ["table_name"], excludedTables)),
+    columns: canonicalCatalogRows(filterCatalogRows(columnRows, ["table_name"], excludedTables)),
+    constraints: canonicalCatalogRows(filterCatalogRows(constraintRows, ["table_name"], excludedTables)),
+    indexes: canonicalCatalogRows(filterCatalogRows(indexRows, ["table_name"], excludedTables)),
+    extensions: canonicalCatalogRows(extensionRows),
+    routines: canonicalCatalogRows(routineRows),
+    triggers: canonicalCatalogRows(filterCatalogRows(triggerRows, ["table_name"], excludedTables)),
+  };
+  return sha256Utf8(Buffer.from(JSON.stringify(normalized), "utf8"));
+}
+
+async function assertCatalogFingerprint(
+  db: MigrationConnection,
+  expected: string,
+  label: string,
+  options: CatalogFingerprintOptions = {},
+): Promise<void> {
+  const actual = await catalogFingerprint(db, options);
+  if (actual !== expected) {
+    throw new Error(`database ${label} catalog fingerprint mismatch: expected ${expected}, actual ${actual}`);
+  }
 }
 
 async function assertStructure(
@@ -619,12 +737,18 @@ export async function runMigrations(
     migrationsDirectory?: string;
     /** Internal test/release hook for validating a future target chain. */
     targetVersion?: number;
+    /** Internal future-chain hook; required when targetVersion exceeds v13. */
+    expectedCatalogFingerprint?: string;
   } = {},
 ): Promise<string[]> {
   const targetVersion = options.targetVersion ?? SCHEMA_VERSION;
   if (targetVersion < FIRST_MIGRATION_VERSION) {
     throw new Error(`target schema v${targetVersion} is below the first migration version`);
   }
+  if (options.expectedCatalogFingerprint && targetVersion <= SCHEMA_VERSION) {
+    throw new Error("expectedCatalogFingerprint is only valid for a future target schema");
+  }
+  const expectedCatalog = options.expectedCatalogFingerprint ?? TRUSTED_V13_CATALOG_SHA256;
   const schemaFile = options.schemaFile ?? SCHEMA_FILE;
   const v12BaselineFile = options.v12BaselineFile ?? V12_BASELINE_FILE;
   const migrations = discoverMigrations(options.migrationsDirectory ?? MIGRATIONS_DIR, targetVersion);
@@ -638,6 +762,7 @@ export async function runMigrations(
     await db.unsafe(latestBody);
     const latestManifest = parseTableManifest(latestBody);
     await assertStructure(db, latestManifest, `fresh baseline v${targetVersion}`);
+    await assertCatalogFingerprint(db, expectedCatalog, `fresh baseline v${targetVersion}`);
     await assertAppliedLedger(db, migrations, targetVersion);
     return ["database/schema.sql"];
   }
@@ -660,6 +785,7 @@ export async function runMigrations(
 
   if (currentVersion === targetVersion) {
     await assertStructure(db, parseTableManifest(latestBody), `schema v${targetVersion}`);
+    await assertCatalogFingerprint(db, expectedCatalog, `schema v${targetVersion}`);
     await assertAppliedLedger(db, migrations, targetVersion);
     return [];
   }
@@ -667,16 +793,30 @@ export async function runMigrations(
   if (currentVersion === SUPPORTED_BASELINE_VERSION) {
     const v12Manifest = parseTableManifest(trustedV12);
     await assertStructure(db, v12Manifest, "trusted schema v12", new Set(["schema_migrations"]));
+    await assertCatalogFingerprint(db, TRUSTED_V12_CATALOG_SHA256, "trusted schema v12", {
+      excludeTables: ["schema_migrations"],
+    });
   } else {
     // A database already beyond v12 is a valid intermediate source.  Its
-    // ledger is the authority for the migrations already committed; verify
-    // every row before applying the next contiguous file.
-    await assertAppliedLedgerThrough(db, migrations, currentVersion, targetVersion);
+    // v13 is the only known intermediate catalog; verify it before applying
+    // the next contiguous file.  Future source versions need their own
+    // versioned fingerprint before this scheduler can safely execute them.
+    if (currentVersion === SCHEMA_VERSION) {
+      await assertCatalogFingerprint(db, TRUSTED_V13_CATALOG_SHA256, "schema v13");
+    }
   }
 
   // The ledger is prepared outside the migration transaction so a failed DDL
   // can be recorded after PostgreSQL rolls its transaction back.
   await ensureMigrationLedger(db);
+  // The v12 ledger DDL should now have the canonical v13 catalog shape before
+  // any migration is allowed to run.  This also rejects a pre-existing ledger
+  // table whose names happen to match but whose constraints/indexes drifted.
+  await assertCatalogFingerprint(db, TRUSTED_V13_CATALOG_SHA256, "schema v13 ledger");
+  // This check intentionally happens after creating/verifying the ledger but
+  // before the first migration DDL.  A v12 database carrying a successful
+  // future/legacy row must fail closed without partially applying v13.
+  await assertAppliedLedgerThrough(db, migrations, currentVersion, targetVersion);
   let version = currentVersion;
   const applied: string[] = [];
   for (const migration of migrations) {
@@ -691,6 +831,7 @@ export async function runMigrations(
     throw new Error(`migration chain stopped at v${version}; expected v${targetVersion}`);
   }
   await assertStructure(db, parseTableManifest(latestBody), `schema v${targetVersion}`);
+  await assertCatalogFingerprint(db, expectedCatalog, `schema v${targetVersion}`);
   await assertAppliedLedger(db, migrations, targetVersion);
   return applied;
 }
