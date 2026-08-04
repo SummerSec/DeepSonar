@@ -138,3 +138,11 @@ export const PROVIDER_ENV_MAP: Record<string, { secretKeys: string[]; baseUrlKey
 export function isProviderKnown(provider: string): boolean {
   return provider in PROVIDER_ENV_MAP;
 }
+
+/** 校验 Agent CLI 与 Credential Provider 的已知兼容关系。返回 null 表示兼容。 */
+export function validateCredentialCompatibility(agentCli: string, provider: string): string | null {
+  if (agentCli === "claude-code" && provider !== "anthropic" && provider !== "kimi") {
+    return `agent_cli claude-code 仅兼容 anthropic/kimi，不能使用 provider ${provider}`;
+  }
+  return null;
+}

@@ -17,6 +17,9 @@ const PROVIDERS: { value: string; label: string; baseUrlHint?: string }[] = [
   { value: "git", label: "Git（私有仓库）" },
   { value: "docker-registry", label: "OCI Registry", baseUrlHint: "registry host，如 ghcr.io" },
 ];
+const LLM_PROVIDER_OPTIONS = PROVIDERS.filter((providerOption) =>
+  ["anthropic", "kimi", "openai", "openrouter"].includes(providerOption.value),
+);
 
 const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
   active: { text: "启用", cls: "text-run-400" },
@@ -43,6 +46,7 @@ export function CredentialsPanel() {
   const [rotateSecret, setRotateSecret] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [editProvider, setEditProvider] = useState("anthropic");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editMaxConcurrent, setEditMaxConcurrent] = useState("");
   const [editModelLimits, setEditModelLimits] = useState<Record<string, string>>({});
@@ -134,6 +138,7 @@ export function CredentialsPanel() {
     setRotatingId(null);
     setEditingId(c.id);
     setEditName(c.name);
+    setEditProvider(c.provider);
     setEditBaseUrl(metaBaseUrl(c));
     setEditMaxConcurrent(metaMaxConcurrent(c)?.toString() ?? "");
     const limits = metaModelLimits(c);
@@ -203,13 +208,19 @@ export function CredentialsPanel() {
       }
       if (editMaxConcurrent === "") delete nextMeta.max_concurrent;
       else nextMeta.max_concurrent = Math.max(0, Number(editMaxConcurrent));
-      await api.updateCredential(id, {
+      const providerChanged = current?.kind === "llm_provider" && editProvider !== current.provider;
+      const result = await api.updateCredential(id, {
         name: editName.trim(),
+        ...(current?.kind === "llm_provider" ? { provider: editProvider } : {}),
         project_id: editProjectId || null,
         metadata: nextMeta,
       });
       setEditingId(null);
-      setNotice("已更新 Credential 总并发与模型策略；只影响后续 claim，不终止已运行 Job。");
+      const impact = result.impact;
+      const impactNotice = providerChanged && impact
+        ? `Provider 迁移成功，已刷新 ${impact.pending_job_count} 个 pending Job 快照，影响 ${impact.role_config_count} 个 RoleConfig。`
+        : "";
+      setNotice(`已更新 Credential 配置；并发与模型策略只影响后续 claim，不终止已运行 Job。${impactNotice ? ` ${impactNotice}` : ""}`);
       load();
     } catch (e) {
       setError(String(e));
@@ -444,7 +455,7 @@ export function CredentialsPanel() {
               {editingId === c.id && (
                 <div className="mt-2 flex flex-col gap-2 rounded-md border border-ink-700 bg-ink-900/50 p-2">
                   <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-zinc-500">
-                    编辑非敏感字段 · provider 不可改
+                    编辑非敏感字段 · provider 仅 LLM Credential 可改
                   </div>
                   <input
                     value={editName}
@@ -461,6 +472,23 @@ export function CredentialsPanel() {
                     className="min-w-0 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
                     spellCheck={false}
                   />
+                  {c.kind === "llm_provider" && (
+                    <>
+                      <select
+                        value={editProvider}
+                        onChange={(e) => setEditProvider(e.target.value)}
+                        className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-zinc-200 outline-none"
+                        aria-label="Provider"
+                      >
+                        {LLM_PROVIDER_OPTIONS.map((providerOption) => (
+                          <option key={providerOption.value} value={providerOption.value}>{providerOption.label}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] leading-5 text-amber-300/80">
+                        Provider 迁移在存在活动 Job 时会被拒绝；迁移成功后，pending Job 快照会刷新。
+                      </div>
+                    </>
+                  )}
                   {c.kind === "llm_provider" && (() => {
                     const catalog = modelCatalog(c.id, metaAllowedModels(c));
                     const needle = modelQuery.trim().toLowerCase();

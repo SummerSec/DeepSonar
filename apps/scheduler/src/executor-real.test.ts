@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEnvelope } from "@deepsonar/shared-types";
-import { ingestFactSemanticEvent } from "./executor-real.js";
+import { ingestFactSemanticEvent, runtimeCredentialProviderError, semanticToolEventsFor } from "./executor-real.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
@@ -94,4 +94,23 @@ test("real fact ingress rejects malformed verification before convergence", asyn
     /emit_fact 参数非法/,
   );
   assert.equal(accepted, 0);
+});
+
+test("runtime rejects stale or incompatible credential providers", () => {
+  assert.equal(runtimeCredentialProviderError("claude-code", "anthropic", "anthropic"), null);
+  assert.match(
+    runtimeCredentialProviderError("claude-code", "openai", "anthropic") ?? "",
+    /Job 快照已过期/,
+  );
+  assert.match(
+    runtimeCredentialProviderError("claude-code", "openai", "openai") ?? "",
+    /claude-code.*anthropic\/kimi/,
+  );
+});
+
+test("semantic tool capture only enables this Job's authorized tools", () => {
+  assert.deepEqual(semanticToolEventsFor(["list_available_roles", "emit_fact", "mark_job_done"]), {
+    "mcp__deepsonar-control__emit_fact": "fact",
+    "mcp__deepsonar-control__mark_job_done": "done",
+  });
 });

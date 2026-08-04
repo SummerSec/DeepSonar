@@ -424,6 +424,13 @@ export interface ProviderCredential {
   active_by_model: Record<string, number>;
 }
 
+export interface CredentialUpdateResponse extends ProviderCredential {
+  impact?: {
+    role_config_count: number;
+    pending_job_count: number;
+  };
+}
+
 export type RuntimeImageTrustStatus = "quarantined" | "scanning" | "trusted" | "disabled" | "rejected" | "revoked";
 
 export interface RuntimeImageSummary {
@@ -1245,15 +1252,16 @@ export const api = {
     project_id?: string | null;
     metadata?: Record<string, unknown>;
   }) => send<ProviderCredential>("POST", "/credentials", c),
-  /** 更新非敏感字段（名称 / 项目 / base_url 等 metadata）；密钥仍走 rotate */
+  /** 更新非敏感字段（名称 / provider / 项目 / base_url 等 metadata）；密钥仍走 rotate */
   updateCredential: (
     id: string,
     patch: {
       name?: string;
+      provider?: string;
       project_id?: string | null;
       metadata?: Record<string, unknown>;
     },
-  ) => send<ProviderCredential>("PATCH", `/credentials/${id}`, patch),
+  ) => send<CredentialUpdateResponse>("PATCH", `/credentials/${id}`, patch),
   rotateCredential: (id: string, secret: string) =>
     send<ProviderCredential>("POST", `/credentials/${id}/rotate`, { secret }),
   setCredentialStatus: (id: string, status: "active" | "disabled" | "rotation_required") =>

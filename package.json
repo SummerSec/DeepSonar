@@ -20,6 +20,8 @@
     "ci:integration:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.integration.test.ts",
     "ci:unit:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.test.ts",
     "ci:unit:executor-real": "pnpm --filter @deepsonar/scheduler exec tsx --test src/executor-real.test.ts",
+    "ci:unit:credential-compatibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/credential-compatibility.test.ts",
+    "ci:unit:runtime-sandbox": "pnpm --filter @deepsonar/scheduler exec tsx --test ../../packages/runtime-sandbox/src/agentbox.test.ts",
     "ci:integration:users-auth": "pnpm --filter @deepsonar/scheduler exec tsx --test src/users.integration.test.ts",
     "ci:integration:convergence-recovery": "pnpm --filter @deepsonar/scheduler exec tsx --test src/convergence-recovery.integration.test.ts",
     "ci:integration:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.integration.test.ts",

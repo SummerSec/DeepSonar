@@ -250,7 +250,7 @@ canvas_edges
 要点：
 
 - **画布以 nodes/edges 表为真相**（好查询、好索引、好并发）；tldraw document 只做读取时的物化组装，不存整文档
-- `events.event_id` 由 harness 生成（UUID），**所有事件处理幂等**：重复 event_id 直接返回上次结果
+- `events.event_id` 由宿主从控制工具调用生成（UUID），**所有事件处理幂等**：重复 event_id 直接返回上次结果
 - `findings.fingerprint` 是派生去重和画布合并展示的基础
 
 ### 6.1 Finding Schema 对齐 SARIF 2.1.0
@@ -366,10 +366,11 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 **事件通道**：事件不经过沙箱网络，经 agentbox-sdk 控制通道回传调度器侧：
 
 - SDK normalized event stream → 文本/进度 → `progress` 事件
-- 系统按 Job 动态注入本地 `deepsonar-control` MCP；Agent 在执行中可多次调用 `emit_fact` / `emit_finding`，每条事件立即进入本地控制队列
-- 调度器通过 agentbox 文件控制通道增量读取并校验队列；Hub 决策、人工请求与 done 同样通过动态工具提交，不使用固定结果文件契约
+- 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、校验白名单工具并返回成功，不写文件、不连接调度器
+- 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块捕获 `emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`，转换为 `{v:1,event_id(UUID),type,payload}` 后串行 `await onSemanticEvent`
+- 同一 `tool_use.id` 只生成一次语义事件；`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
 - 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
-- 终态后立即删除控制队列，随后销毁该 Job 的独立沙箱
+- 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
 - 沙箱内不注入调度器数据库或 API 凭据；Provider Credential 只换成短期 Job Token
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
 

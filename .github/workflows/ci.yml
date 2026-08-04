@@ -67,6 +67,12 @@ jobs:
       - name: Real executor fact verification unit
         run: pnpm ci:unit:executor-real
 
+      - name: Credential and CLI compatibility unit
+        run: pnpm ci:unit:credential-compatibility
+
+      - name: Runtime sandbox semantic tool unit
+        run: pnpm ci:unit:runtime-sandbox
+
       - name: Default human admin and account integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}

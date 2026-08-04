@@ -5,11 +5,11 @@ import { config } from "./config.js";
 import { ingestEvent, PLATFORM_DEFAULT_AGENT_CLI, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecision } from "./graph.js";
-import { PROVIDER_ENV_MAP, allowedModelIds } from "./credentials.js";
+import { PROVIDER_ENV_MAP, allowedModelIds, validateCredentialCompatibility } from "./credentials.js";
 import { JobEvidenceWriter } from "./evidence.js";
 import { mintJobToken } from "./gateway.js";
 import { publishStream } from "./stream-bus.js";
-import { CONTROL_EVENT_FILE, CONTROL_MCP_NAME, CONTROL_MCP_SERVER } from "./control-mcp.js";
+import { CONTROL_MCP_NAME, CONTROL_MCP_SERVER, CONTROL_SEMANTIC_EVENT_TYPES } from "./control-mcp.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
 
@@ -31,6 +31,26 @@ const PLATFORM_SYSTEM_PROMPT = `你在 DeepSonar 的一次性 Worker 沙箱中�
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+export function runtimeCredentialProviderError(
+  agentCli: string,
+  snapshotProvider: string | null,
+  currentProvider: string,
+): string | null {
+  if (snapshotProvider && snapshotProvider !== currentProvider) {
+    return `Credential provider 已从 ${snapshotProvider} 变更为 ${currentProvider}，Job 快照已过期，请刷新 pending Job 或 retry`;
+  }
+  return validateCredentialCompatibility(agentCli, currentProvider);
+}
+
+export function semanticToolEventsFor(toolNames: string[]): Record<string, string> {
+  return Object.fromEntries(
+    toolNames.flatMap((toolName) => {
+      const eventType = CONTROL_SEMANTIC_EVENT_TYPES[toolName as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
+      return eventType ? [[`mcp__${CONTROL_MCP_NAME}__${toolName}`, eventType]] : [];
+    }),
+  );
 }
 
 function jsonHash(value: unknown): string {
@@ -244,7 +264,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     if (!cred || (cred.status as string) !== "active") {
       throw new Error(`RoleConfig 绑定的凭据不可用（${cred ? "status=" + String(cred.status) : "不存在"}）`);
     }
-    const mapping = PROVIDER_ENV_MAP[cred.provider as string];
+    const currentCredentialProvider = String(cred.provider);
+    const providerError = runtimeCredentialProviderError(provider, snapshot.credential_provider, currentCredentialProvider);
+    if (providerError) throw new Error(providerError);
+    const mapping = PROVIDER_ENV_MAP[currentCredentialProvider];
     if (!mapping) throw new Error(`未知 provider: ${String(cred.provider)}`);
     const credentialModels = allowedModelIds(cred.public_metadata_json);
     if (model && credentialModels.length > 0 && !credentialModels.includes(model)) {
@@ -283,7 +306,6 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     void sql`UPDATE credentials SET last_used_at = now() WHERE id = ${cred.id as string}`.catch(() => {});
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
-  env.DEEPSONAR_CONTROL_EVENT_FILE = CONTROL_EVENT_FILE;
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
   if (isHub) env.DEEPSONAR_AVAILABLE_ROLES_JSON = JSON.stringify(availableHubRoleCatalog);
 
@@ -523,7 +545,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     "/workspace/CLAUDE.md": instructions,
     "/workspace/.deepsonar/runtime-manifest.json": JSON.stringify(componentManifest, null, 2),
     "/workspace/.deepsonar/control-mcp.mjs": CONTROL_MCP_SERVER,
-    [CONTROL_EVENT_FILE]: "",
   };
   for (const file of snapshot.config_files) {
     workspaceFiles[`/workspace/${file.path}`] = file.content;
@@ -673,7 +694,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       mcps: mcps as never,
       subAgents: snapshot.subagents as never,
       workspaceFiles,
-      semanticEventFile: CONTROL_EVENT_FILE,
+      semanticToolEvents: semanticToolEventsFor(controlToolNames),
       onSemanticEvent,
       onRunReady: canvasId
         ? ({ sendMessage }) => subscribeCanvasUpdates(canvasId, jobId, sendMessage)

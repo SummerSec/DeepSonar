@@ -47,7 +47,7 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工�
 - `mark_job_done` → `done` 事件
 - `request_human` → `human` 事件
 
-MCP 只写本地控制队列，调度器通过 agentbox 控制通道增量读取，不需要 Scheduler API/数据库凭据，也不受 Worker 目标出网策略影响。沙箱内权限完全开放（`approvalMode: "auto"`），安全边界 = 网络策略 + 一次性容器。
+MCP 只暴露本 Job 获准的控制工具；调度器直接从 Agent CLI 的结构化 `tool_use` 控制流捕获语义事件，不写 Worker 可修改的结果队列，不需要 Scheduler API/数据库凭据，也不受 Worker 目标出网策略影响。沙箱内权限完全开放（`approvalMode: "auto"`），安全边界 = 网络策略 + 一次性容器。
 
 同一画布产生新 Fact/Finding 时，数据库 `NOTIFY` 唤醒调度器；调度器使用 `Agent.attach(...).sendMessage(...)` 给仍在运行的其他 Agent CLI 追加一条增量通知。首次 prompt 仍是完整任务，追加消息只携带提交后的新画布数据。
 

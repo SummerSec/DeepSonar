@@ -1,20 +1,21 @@
 /**
  * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络：只读查询返回调度器在启动
- * 本 Job 时动态下发的数据；语义提案追加到 control-events.jsonl，由宿主经控制通道增量读取。
+ * 本 Job 时动态下发的数据；语义提案由宿主从 Claude stream-json 的 tool_use 块捕获。
  */
 export const CONTROL_MCP_NAME = "deepsonar-control";
-export const CONTROL_EVENT_FILE = "/workspace/.deepsonar/control-events.jsonl";
+export const CONTROL_SEMANTIC_EVENT_TYPES = {
+  emit_progress: "progress",
+  emit_fact: "fact",
+  emit_finding: "finding",
+  submit_hub_decision: "hub_decision",
+  mark_job_done: "done",
+  request_human: "human",
+} as const;
 
-export const CONTROL_MCP_SERVER = String.raw`import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
-import readline from "node:readline";
+export const CONTROL_MCP_SERVER = String.raw`import readline from "node:readline";
 
-const outputFile = process.env.DEEPSONAR_CONTROL_EVENT_FILE;
 const allowed = new Set(JSON.parse(process.env.DEEPSONAR_CONTROL_TOOL_NAMES || "[]"));
 const availableRoles = JSON.parse(process.env.DEEPSONAR_AVAILABLE_ROLES_JSON || "[]");
-if (!outputFile) throw new Error("DEEPSONAR_CONTROL_EVENT_FILE is required");
-mkdirSync(dirname(outputFile), { recursive: true });
 
 const definitions = {
   list_available_roles: {
@@ -47,24 +48,8 @@ const definitions = {
   }
 };
 
-const eventType = {
-  emit_progress: "progress",
-  emit_fact: "fact",
-  emit_finding: "finding",
-  submit_hub_decision: "hub_decision",
-  mark_job_done: "done",
-  request_human: "human"
-};
-
 function reply(message) {
   process.stdout.write(JSON.stringify(message) + "\n");
-}
-
-function append(name, args) {
-  if (!allowed.has(name) || !definitions[name]) throw new Error("tool not allowed for this Job: " + name);
-  const event = { v: 1, event_id: randomUUID(), type: eventType[name], payload: args || {} };
-  appendFileSync(outputFile, JSON.stringify(event) + "\n", { encoding: "utf8", mode: 0o600 });
-  return event.event_id;
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -86,8 +71,7 @@ rl.on("line", (line) => {
       if (name === "list_available_roles") {
         reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: JSON.stringify({ roles: availableRoles }) }] } });
       } else {
-        const id = append(name, request.params?.arguments);
-        reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "accepted event " + id }] } });
+        reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "accepted event" }] } });
       }
     } else if (request.method === "resources/list") {
       reply({ jsonrpc: "2.0", id: request.id, result: { resources: [] } });

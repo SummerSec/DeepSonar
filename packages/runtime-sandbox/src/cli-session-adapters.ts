@@ -74,8 +74,9 @@ const claudeAdapter: AgentCliSessionAdapter = {
   cli: "claude-code",
   async exportSession(runtime, sessionId) {
     const command =
-      `find /root/.claude/projects -type f \\( -name ${sh(`${sessionId}.jsonl`)} ` +
-      `-o -path ${sh(`*/${sessionId}/subagents/*.jsonl`)} \\) -print 2>/dev/null`;
+      `base="\${CLAUDE_CONFIG_DIR:-\${HOME:-/root}/.claude}/projects"; ` +
+      `if [ -d "$base" ]; then find "$base" -type f \\( -name ${sh(`${sessionId}.jsonl`)} ` +
+      `-o -path ${sh(`*/${sessionId}/subagents/*.jsonl`)} \\) -print 2>/dev/null; fi`;
     const result = await runtime.run(command);
     if (result.exitCode !== 0 && !result.stdout.trim()) {
       return { cli: "claude-code", sessionId, artifacts: [], captureError: result.stderr.trim() || "Claude Session 扫描失败" };

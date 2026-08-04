@@ -4,8 +4,8 @@
  * 要点：
  * - agentbox 只作沙箱（容器生命周期 + exec + 文件上下行）；Agent 由 claude CLI
  *   以 stream-json 模式直接在沙箱内驱动，不走 SDK daemon/relay。
- * - 语义事件由每 Job 动态注入的本地 MCP 写入控制队列，宿主通过 exec 增量读取；
- *   不经过沙箱目标网络，也不向 Worker 暴露 Scheduler 地址或凭据。
+ * - 语义事件由宿主从 Claude stream-json 的 assistant tool_use 块捕获；
+ *   不经过沙箱目标网络，也不依赖 Agent 可写文件。
  */
 import { Sandbox } from "agentbox-sdk";
 import type {
@@ -460,8 +460,8 @@ export interface RealAgentSpec {
   workspaceFiles?: Record<string, string>;
   /** 运行后要读回的文件 */
   resultFiles?: string[];
-  /** 本地控制 MCP 的 NDJSON 队列；宿主通过 exec 增量读取，不属于 Agent 结果文件。 */
-  semanticEventFile?: string;
+  /** 控制 MCP 工具名到宿主语义事件类型的映射。 */
+  semanticToolEvents?: Record<string, string>;
   /** 每条完整语义事件到达时串行调用。 */
   onSemanticEvent?: (event: Record<string, unknown>) => void | Promise<void>;
   /** Run 建立后注册外部增量消息源；消息经 stdin stream-json 注入同一会话。 */
@@ -578,14 +578,40 @@ async function materializeAgentFiles(sandbox: Sandbox, spec: RealAgentSpec): Pro
 }
 
 /** claude stream-json 一行 → 规范化事件（保持 executor/前端既有形状） */
-function mapCliEvent(
+export const DEFAULT_SEMANTIC_TOOL_EVENTS: Record<string, string> = {
+  "mcp__deepsonar-control__emit_progress": "progress",
+  "mcp__deepsonar-control__emit_fact": "fact",
+  "mcp__deepsonar-control__emit_finding": "finding",
+  "mcp__deepsonar-control__submit_hub_decision": "hub_decision",
+  "mcp__deepsonar-control__mark_job_done": "done",
+  "mcp__deepsonar-control__request_human": "human",
+};
+
+function semanticEventId(callId: string): string {
+  const bytes = createHash("sha256").update(`deepsonar-control:${callId}`).digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export function mapCliEvent(
   line: Record<string, unknown>,
   emit: (e: Record<string, unknown>) => void,
-): { finalText?: string; isError?: boolean; errorDetail?: string; sessionId?: string } {
+  semanticToolEvents: Record<string, string> = DEFAULT_SEMANTIC_TOOL_EVENTS,
+  seenToolUseIds = new Set<string>(),
+): {
+  finalText?: string;
+  isError?: boolean;
+  errorDetail?: string;
+  sessionId?: string;
+  semanticEvents: Array<Record<string, unknown>>;
+} {
+  const semanticEvents: Array<Record<string, unknown>> = [];
   const type = line.type as string;
   if (type === "system" && line.subtype === "init") {
     emit({ type: "run.started", sessionId: line.session_id });
-    return { sessionId: typeof line.session_id === "string" ? line.session_id : undefined };
+    return { sessionId: typeof line.session_id === "string" ? line.session_id : undefined, semanticEvents };
   }
   if (type === "assistant") {
     const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
@@ -596,9 +622,21 @@ function mapCliEvent(
         emit({ type: "reasoning.delta", delta: block.thinking });
       } else if (block.type === "tool_use") {
         emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
+        const toolName = typeof block.name === "string" ? block.name : "";
+        const callId = typeof block.id === "string" ? block.id : "";
+        const eventType = semanticToolEvents[toolName];
+        if (eventType && callId && !seenToolUseIds.has(callId)) {
+          seenToolUseIds.add(callId);
+          semanticEvents.push({
+            v: 1,
+            event_id: semanticEventId(callId),
+            type: eventType,
+            payload: block.input && typeof block.input === "object" ? block.input : {},
+          });
+        }
       }
     }
-    return {};
+    return { semanticEvents };
   }
   if (type === "user") {
     const content = (line.message as { content?: unknown[] } | undefined)?.content ?? [];
@@ -607,15 +645,15 @@ function mapCliEvent(
         emit({ type: "tool.call.completed", callId: block.tool_use_id });
       }
     }
-    return {};
+    return { semanticEvents };
   }
   if (type === "result") {
     const text = typeof line.result === "string" ? line.result : "";
     const isError = line.is_error === true || (line.subtype as string) !== "success";
     emit({ type: "run.completed", text: text || (line.subtype as string) });
-    return { finalText: text, isError, errorDetail: isError ? text || `claude result: ${String(line.subtype)}` : undefined };
+    return { finalText: text, isError, errorDetail: isError ? text || `claude result: ${String(line.subtype)}` : undefined, semanticEvents };
   }
-  return {};
+  return { semanticEvents };
 }
 
 export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
@@ -680,40 +718,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   };
   await writeUserMessage(spec.input);
   const disposeMessageSource = await spec.onRunReady?.({ sendMessage: writeUserMessage });
-
-  // 本地 MCP 只写沙箱内队列。宿主在 Agent 运行期间增量读取，
-  // 因而 fact/finding/progress 可以实时入库，且与 Worker 的目标出网策略完全解耦。
-  let pollSemanticEvents = Boolean(spec.semanticEventFile && spec.onSemanticEvent);
-  let semanticLineCount = 0;
   let semanticError: string | undefined;
-  const drainSemanticEvents = async () => {
-    if (!spec.semanticEventFile || !spec.onSemanticEvent || semanticError) return;
-    try {
-      const text = await readSandboxFileText(sandbox, spec.semanticEventFile);
-      if (text === null) return; // 文件尚未由 MCP 首次创建属于正常状态
-      if (text.length > 2 * 1024 * 1024) throw new Error("语义事件队列超过 2 MiB 上限");
-      const lines = text.split("\n");
-      // 最后一行永远跳过：以 \n 结尾时是空串，否则是写了一半的行（下轮重读）
-      const completeCount = lines.length - 1;
-      for (let i = semanticLineCount; i < completeCount; i++) {
-        const line = lines[i]?.trim();
-        semanticLineCount = i + 1;
-        if (!line) continue;
-        const event = JSON.parse(line) as Record<string, unknown>;
-        await spec.onSemanticEvent(event);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // 文件尚未由 MCP 首次创建属于正常状态；其他解析/处理错误会终止本 Job。
-      if (!/not found|no such file|does not exist/i.test(message)) semanticError = message;
-    }
-  };
-  const semanticPoller = (async () => {
-    while (pollSemanticEvents) {
-      await drainSemanticEvents();
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-  })();
+  const seenToolUseIds = new Set<string>();
+  const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
@@ -765,12 +772,18 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
           if (e.type === "text.delta" && typeof e.delta === "string") {
             progressBuffer += e.delta as string;
           }
-        });
+        }, semanticToolEvents, seenToolUseIds);
+        for (const event of outcome.semanticEvents) {
+          try {
+            await spec.onSemanticEvent?.(event);
+          } catch (error) {
+            semanticError = error instanceof Error ? error.message : String(error);
+            throw error;
+          }
+        }
         if (outcome.sessionId) sessionId = outcome.sessionId;
         if (outcome.finalText !== undefined) {
           finalText = outcome.finalText;
-          // agent 常在调用 mark_job_done 后立即结束回合：先补一轮 drain 再查门禁
-          await drainSemanticEvents();
           if (spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
             nudgesLeft--;
             await writeUserMessage(
@@ -793,9 +806,6 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   } catch (e) {
     if (!runError) runError = e instanceof Error ? e.message : String(e);
   } finally {
-    pollSemanticEvents = false;
-    await semanticPoller;
-    await drainSemanticEvents();
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
 
@@ -831,7 +841,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     : undefined;
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
-  const cleanupPaths = [...(spec.resultFiles ?? []), ...(spec.semanticEventFile ? [spec.semanticEventFile] : [])]
+  const cleanupPaths = [...(spec.resultFiles ?? [])]
     .filter((p) => p.startsWith("/workspace/"));
   if (cleanupPaths.length > 0) {
     await sandbox.run(`rm -f -- ${cleanupPaths.map((p) => shellQuote(p)).join(" ")}`).catch(() => {});

@@ -27,6 +27,7 @@ import {
   fingerprintOf,
   isProviderKnown,
   last4Of,
+  validateCredentialCompatibility,
   type Encrypted,
 } from "./credentials.js";
 import { listCredentialModels, testCredential } from "./credential-test.js";
@@ -1985,12 +1986,16 @@ export function registerRoutes(app: FastifyInstance) {
       if (body.platform_tools[tool] === false) return `终态必需平台工具不可关闭: ${tool}`;
     }
     for (const c of body.credentials) {
-      const [cred] = await sql`SELECT id, project_id, status, public_metadata_json FROM credentials WHERE id = ${c.credential_id}`;
+      const [cred] = await sql`SELECT id, project_id, status, provider, public_metadata_json FROM credentials WHERE id = ${c.credential_id}`;
       if (!cred) return `Credential 不存在: ${c.credential_id}`;
       if (projectId && cred.project_id && cred.project_id !== projectId) {
         return `Credential ${c.credential_id} 属于其他项目，不能绑定`;
       }
       if (!projectId && cred.project_id) return `全局 RoleConfig 只能绑定全局 Credential`;
+      if (c.purpose === "llm") {
+        const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(cred.provider ?? ""));
+        if (compatibilityError) return compatibilityError;
+      }
       if (c.purpose === "llm" && body.model) {
         const allowed = allowedModelIds(cred.public_metadata_json);
         if (allowed.length > 0 && !allowed.includes(body.model)) {
@@ -3413,42 +3418,90 @@ export function registerRoutes(app: FastifyInstance) {
     return reply.code(201).send(row);
   });
 
-  // 非敏感字段可改：名称 / 项目归属 / public metadata（如 base_url）
-  // 密钥仍只能走 rotate；provider/kind 创建后不可改（避免绑定语义漂移）
+  // 非敏感字段可改：名称 / 项目归属 / public metadata（如 base_url）；provider 可安全迁移
+  // 密钥仍只能走 rotate；kind 创建后不可改
   app.patch("/credentials/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z
       .object({
         name: z.string().trim().min(1).max(100).optional(),
+        provider: z.string().trim().min(1).max(50).optional(),
         project_id: z.string().uuid().nullable().optional(),
         /** 整体替换 public_metadata_json（非密钥：base_url 等）；传 {} 可清空 */
         metadata: z.record(z.string(), z.unknown()).optional(),
       })
-      .refine((b) => b.name !== undefined || b.project_id !== undefined || b.metadata !== undefined, {
-        message: "至少提供 name / project_id / metadata 之一",
+      .refine((b) => b.name !== undefined || b.provider !== undefined || b.project_id !== undefined || b.metadata !== undefined, {
+        message: "至少提供 name / provider / project_id / metadata 之一",
       })
       .parse(req.body);
 
-    const sets: Record<string, unknown> = {};
-    if (body.name !== undefined) sets.name = body.name;
-    if (body.project_id !== undefined) sets.project_id = body.project_id;
-    if (body.metadata !== undefined) {
-      const [existing] = await sql`SELECT kind FROM credentials WHERE id = ${id}`;
-      if (!existing) return reply.code(404).send({ error: "credential not found" });
-      const normalized = normalizeCredentialMeta(body.metadata);
-      if (existing.kind !== "llm_provider" && (allowedModelIds(normalized).length > 0 || credentialConcurrencyPolicy(normalized).maxConcurrent !== null)) {
-        return reply.code(400).send({ error: "只有 llm_provider Credential 可设置模型或运行并发" });
+    const result = await sql.begin(async (tx) => {
+      if (body.provider !== undefined) {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       }
-      sets.public_metadata_json = normalized;
-    }
-    if (Object.keys(sets).length === 0) {
-      return reply.code(400).send({ error: "没有可更新的字段" });
-    }
-
-    const [row] = await sql`
-      UPDATE credentials SET ${sql(sets as never)} WHERE id = ${id} RETURNING ${CRED_SAFE}`;
-    if (!row) return reply.code(404).send({ error: "credential not found" });
-    return row;
+      const [existing] = await tx`SELECT id, kind, provider FROM credentials WHERE id = ${id} FOR UPDATE`;
+      if (!existing) return null;
+      const providerChanged = body.provider !== undefined && body.provider !== existing.provider;
+      const targetProvider = body.provider ?? "";
+      if (body.provider !== undefined && !isProviderKnown(body.provider)) {
+        return { error: `未知 provider: ${body.provider}` };
+      }
+      const impact = { role_config_count: 0, pending_job_count: 0 };
+      if (providerChanged) {
+        const active = await tx`
+          SELECT id FROM jobs
+          WHERE status IN ('claimed','provisioning','running','waiting_human')
+            AND agent_snapshot_json->>'credential_id' = ${id}
+          LIMIT 1`;
+        if (active.length > 0) {
+          return { conflict: true, error: "Credential 仍被活动 Job 引用，不能迁移 provider" };
+        }
+        const bindings = await tx`
+          SELECT DISTINCT rc.role_config_id, rc.agent_cli
+          FROM role_credentials r
+          JOIN role_configs rc ON rc.id = r.role_config_id
+          WHERE r.credential_id = ${id} AND r.purpose = 'llm'`;
+        for (const binding of bindings) {
+          const compatibilityError = validateCredentialCompatibility(String(binding.agent_cli), targetProvider);
+          if (compatibilityError) return { error: compatibilityError };
+        }
+        const pendingAgentClis = await tx`
+          SELECT DISTINCT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli
+          FROM jobs
+          WHERE status = 'pending' AND agent_snapshot_json->>'credential_id' = ${id}`;
+        for (const pendingJob of pendingAgentClis) {
+          const compatibilityError = validateCredentialCompatibility(String(pendingJob.agent_cli), targetProvider);
+          if (compatibilityError) return { error: `pending Job 快照不兼容：${compatibilityError}` };
+        }
+        impact.role_config_count = bindings.length;
+      }
+      const sets: Record<string, unknown> = {};
+      if (body.name !== undefined) sets.name = body.name;
+      if (body.provider !== undefined) sets.provider = body.provider;
+      if (body.project_id !== undefined) sets.project_id = body.project_id;
+      if (body.metadata !== undefined) {
+        const normalized = normalizeCredentialMeta(body.metadata);
+        if (existing.kind !== "llm_provider" && (allowedModelIds(normalized).length > 0 || credentialConcurrencyPolicy(normalized).maxConcurrent !== null)) {
+          return { error: "只有 llm_provider Credential 可设置模型或运行并发" };
+        }
+        sets.public_metadata_json = normalized;
+      }
+      if (providerChanged) {
+        const pending = await tx`
+          UPDATE jobs
+          SET agent_snapshot_json = jsonb_set(agent_snapshot_json, '{credential_provider}', to_jsonb(${targetProvider}::text), true)
+          WHERE status = 'pending' AND agent_snapshot_json->>'credential_id' = ${id}
+          RETURNING id`;
+        impact.pending_job_count = pending.length;
+      }
+      const [row] = await tx`
+        UPDATE credentials SET ${tx(sets as never)} WHERE id = ${id} RETURNING ${CRED_SAFE}`;
+      return { row, impact };
+    });
+    if (!result) return reply.code(404).send({ error: "credential not found" });
+    if ("conflict" in result && result.conflict) return reply.code(409).send({ error: result.error });
+    if ("error" in result) return reply.code(400).send({ error: result.error });
+    return { ...result.row, impact: result.impact };
   });
 
   app.post("/credentials/:id/rotate", async (req, reply) => {

@@ -8,7 +8,7 @@ import {
   type PlatformToolName,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
-import { allowedModelIds, isProviderKnown } from "./credentials.js";
+import { allowedModelIds, isProviderKnown, validateCredentialCompatibility } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
@@ -680,24 +680,28 @@ export async function createJob(input: CreateJobInput) {
   }
   const payload = { ...schedulingPayload, scheduling_purpose: purpose };
   try {
-    // 冻结角色运行快照：配置变更只影响之后创建的 Job。
-    const snapshot = await resolveAgentSnapshotForJob(sql, input.projectId, input.type);
-    const [job] = await sql`
-      INSERT INTO jobs ${sql({
-        project_id: input.projectId,
-        canvas_id: input.canvasId ?? null,
-        plane_issue_id: input.planeIssueId ?? null,
-        agent_snapshot_json: snapshot as never,
-        parent_job_id: input.parentJobId ?? null,
-        finding_id: input.findingId ?? null,
-        type: input.type,
-        priority,
-        payload_json: payload as never,
-        timeout_sec: input.timeoutSec ?? config.timeouts.auditSec,
-        followup_depth: input.followupDepth ?? 0,
-        ingress_key: input.ingressKey ?? null,
-      })}
-      RETURNING *`;
+    // 快照读取与 Job 插入必须处于同一事务；Credential provider 迁移会等待本事务结束，
+    // 避免生成“快照是旧 provider、执行期已是新 provider”的竞态 Job。
+    const job = await sql.begin(async (tx) => {
+      const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, input.projectId, input.type);
+      const [created] = await tx`
+        INSERT INTO jobs ${tx({
+          project_id: input.projectId,
+          canvas_id: input.canvasId ?? null,
+          plane_issue_id: input.planeIssueId ?? null,
+          agent_snapshot_json: snapshot as never,
+          parent_job_id: input.parentJobId ?? null,
+          finding_id: input.findingId ?? null,
+          type: input.type,
+          priority,
+          payload_json: payload as never,
+          timeout_sec: input.timeoutSec ?? config.timeouts.auditSec,
+          followup_depth: input.followupDepth ?? 0,
+          ingress_key: input.ingressKey ?? null,
+        })}
+        RETURNING *`;
+      return created;
+    });
     inc("deepsonar_jobs_created_total", { type: input.type });
     return { job, duplicated: false };
   } catch (e: unknown) {
@@ -2105,6 +2109,9 @@ export async function resolveAgentSnapshotForJob(
     ? [undefined]
     : await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`;
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
+  const agentCli = typeof cfg?.agent_cli === "string" && cfg.agent_cli.trim()
+    ? cfg.agent_cli.trim()
+    : PLATFORM_DEFAULT_AGENT_CLI;
 
   const modules = (cfg?.modules_json as string[]) ?? [];
   const expanded = await expandModules(modules);
@@ -2128,9 +2135,14 @@ export async function resolveAgentSnapshotForJob(
         FROM role_credentials rc
         JOIN credentials c ON c.id = rc.credential_id
         WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
-        LIMIT 1`
+        LIMIT 1
+        FOR SHARE OF c`
     : [undefined];
   if (llm) {
+    const provider = String(llm.provider ?? "");
+    if (!isProviderKnown(provider)) throw new Error(`未知 Credential provider: ${provider}`);
+    const compatibilityError = validateCredentialCompatibility(agentCli, provider);
+    if (compatibilityError) throw new Error(compatibilityError);
     const credProject = (llm.cred_project_id as string | null) ?? null;
     if (cfg?.project_id != null && credProject && credProject !== projectId) {
       throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
@@ -2175,9 +2187,7 @@ export async function resolveAgentSnapshotForJob(
   return {
     name: roleName,
     role_kind: roleKind,
-    agent_cli: typeof cfg?.agent_cli === "string" && cfg.agent_cli.trim()
-      ? cfg.agent_cli.trim()
-      : PLATFORM_DEFAULT_AGENT_CLI,
+    agent_cli: agentCli,
     model: typeof cfg?.model === "string" && cfg.model.trim()
       ? cfg.model.trim()
       : PLATFORM_DEFAULT_AGENT_MODEL,

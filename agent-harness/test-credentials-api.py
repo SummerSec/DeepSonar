@@ -70,18 +70,22 @@ def main():
     assert cfg["credentials"][0]["credential_id"] == cid
     print("RoleConfig 绑定 OK:", role["name"], "→", cfg["credentials"][0]["provider"])
 
-    # 5. 连接测试（假密钥 → 连接失败/401 均可，验证调用路径与无明文回显）
+    # 5. provider PATCH schema：claude-code 绑定的 Credential 禁止迁移到 openai
+    req("PATCH", f"/credentials/{cid}", {"provider": "openai"}, expect=400)
+    print("claude-code provider 兼容性拒绝 OK")
+
+    # 6. 连接测试（假密钥 → 连接失败/401 均可，验证调用路径与无明文回显）
     t = req("POST", f"/credentials/{cid}/test")
     assert "ok" in t and secret not in json.dumps(t)
     print("连接测试路径 OK:", t["ok"], t["detail"][:60])
 
-    # 6. 禁用 → executor 视角不可用；再启用
+    # 7. 禁用 → executor 视角不可用；再启用
     req("POST", f"/credentials/{cid}/status", {"status": "disabled"})
     assert next(x for x in req("GET", "/credentials") if x["id"] == cid)["status"] == "disabled"
     req("POST", f"/credentials/{cid}/status", {"status": "active"})
     print("禁用/启用 OK")
 
-    # 7. 轮换：指纹/last4 变化，key_version+1，旧明文彻底消失
+    # 8. 轮换：指纹/last4 变化，key_version+1，旧明文彻底消失
     new_secret = f"sk-rotated-{uuid.uuid4().hex}"
     r = req("POST", f"/credentials/{cid}/rotate", {"secret": new_secret})
     assert r["last4"] == new_secret[-4:] and r["key_version"] == 2 and r["fingerprint"] != c["fingerprint"]
@@ -89,7 +93,7 @@ def main():
     assert secret not in row and new_secret not in row
     print("轮换 OK: v2，指纹已变")
 
-    # 8. 解绑：RoleConfig 整体 PUT，credentials=[]
+    # 9. 解绑：RoleConfig 整体 PUT，credentials=[]
     role_config["credentials"] = []
     cfg = req("PUT", f"/role-configs/global/{role_id}", role_config)
     assert cfg["credentials"] == []

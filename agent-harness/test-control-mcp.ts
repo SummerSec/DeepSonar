@@ -1,9 +1,5 @@
-/** 本地控制 MCP 协议冒烟：验证动态工具列表与 fact/done NDJSON 事件。 */
+/** 本地控制 MCP 协议冒烟：验证动态工具列表与控制工具成功响应。 */
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { readFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { CONTROL_MCP_SERVER } from "../apps/scheduler/src/control-mcp.js";
 import { parseHubDecision } from "../apps/scheduler/src/graph.js";
 import { platformToolGuide } from "../apps/scheduler/src/platform-tools.js";
@@ -61,11 +57,9 @@ for (const invalid of [
   }
 }
 
-const eventFile = join(tmpdir(), `deepsonar-control-mcp-${randomUUID()}.jsonl`);
 const child = spawn(process.execPath, ["--input-type=module", "-e", CONTROL_MCP_SERVER], {
   env: {
     ...process.env,
-    DEEPSONAR_CONTROL_EVENT_FILE: eventFile,
     DEEPSONAR_CONTROL_TOOL_NAMES: JSON.stringify(["list_available_roles", "emit_fact", "mark_job_done"]),
     DEEPSONAR_AVAILABLE_ROLES_JSON: JSON.stringify([
       { name: "review", title: "复核", description: "独立复核证据" },
@@ -109,27 +103,16 @@ await new Promise<void>((resolve, reject) => {
 });
 child.kill();
 
-try {
-  const rpcReplies = replies.trim().split("\n").map((line) => JSON.parse(line));
-  const roleReply = rpcReplies.find((reply) => reply.id === 3);
-  const rolePayload = JSON.parse(roleReply?.result?.content?.[0]?.text ?? "null");
-  if (rolePayload?.roles?.[0]?.name !== "review") {
-    throw new Error(`unexpected available roles response: ${JSON.stringify(rolePayload)}`);
-  }
-  const events = readFileSync(eventFile, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  if (events.length !== 2 || events[0]?.type !== "fact" || events[1]?.type !== "done") {
-    throw new Error(`unexpected events: ${JSON.stringify(events)}`);
-  }
-  console.log(
-    JSON.stringify({
-      replies: replies.trim().split("\n").length,
-      events: events.map((event) => event.type),
-      guide: "complete",
-    }),
-  );
-} finally {
-  unlinkSync(eventFile);
+const rpcReplies = replies.trim().split("\n").map((line) => JSON.parse(line));
+const roleReply = rpcReplies.find((reply) => reply.id === 3);
+const rolePayload = JSON.parse(roleReply?.result?.content?.[0]?.text ?? "null");
+if (rolePayload?.roles?.[0]?.name !== "review") {
+  throw new Error(`unexpected available roles response: ${JSON.stringify(rolePayload)}`);
 }
+for (const id of [4, 5]) {
+  const reply = rpcReplies.find((item) => item.id === id);
+  if (reply?.result?.content?.[0]?.text !== "accepted event") {
+    throw new Error(`unexpected control tool response: ${JSON.stringify(reply)}`);
+  }
+}
+console.log(JSON.stringify({ replies: rpcReplies.length, semanticEvents: 0, guide: "complete" }));
