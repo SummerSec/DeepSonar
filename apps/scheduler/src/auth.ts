@@ -87,6 +87,9 @@ const ROUTE_SCOPES: Record<string, string> = {
   "DELETE /projects/:id/integrations/plane": "integrations:write",
   "POST /projects/:id/integrations/plane/sync": "integrations:write",
   "GET /canvases/:id": "tasks:read",
+  "GET /canvases/:id/summary": "tasks:read",
+  "GET /canvases/:id/delta": "tasks:read",
+  "GET /canvases/:id/nodes/:nodeId": "tasks:read",
   "POST /tasks/:canvasId/retry": "jobs:control",
   "POST /tasks/:canvasId/resume-session": "jobs:control",
   "POST /tasks/:canvasId/archive": "tasks:write",
@@ -95,6 +98,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /jobs": "tasks:write",
   "GET /jobs": "tasks:read",
   "GET /jobs/:id": "tasks:read",
+  "GET /jobs/:id/events": "tasks:read",
   "GET /jobs/:id/evidence": "tasks:read",
   "GET /jobs/:id/evidence/session": "tasks:read",
   "GET /jobs/:id/evidence/session/download": "tasks:read",
@@ -153,6 +157,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   // /auth/me / logout：任意已认证主体（user / api_token / bootstrap）
   "POST /auth/change-password": "projects:read",
   "POST /auth/change-username": "projects:read",
+  "POST /auth/ws-ticket": "tasks:read",
   "GET /users": "admin",
   "POST /users": "admin",
   "PATCH /users/:id": "admin",
@@ -192,6 +197,9 @@ const EXEMPT = new Set([
   "/auth/status",
   "/auth/login",
   "/auth/bootstrap",
+  // Browser WebSocket upgrades cannot reliably carry an Authorization header;
+  // the route consumes a short-lived one-use ticket in its handler instead.
+  "/ws",
 ]);
 
 /** 前缀豁免：Model Gateway 用 Job Token 自鉴权，不走平台 Bearer */

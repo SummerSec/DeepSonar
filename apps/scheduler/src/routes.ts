@@ -61,13 +61,24 @@ import {
   validateEnvVars,
 } from "./core.js";
 import { sql } from "./db.js";
-import { readEvidenceManifest, readMainSession, readNormalizedStream } from "./evidence.js";
+import { readEvidenceManifest, readMainSession, readNormalizedStreamPage } from "./evidence.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
 import { registerGateway } from "./gateway.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "./openapi.js";
 import { runner } from "./runtime.js";
 import { syncSkillSource, validateSourceUrl } from "./skill-sources.js";
-import { streamBuffer, subscribeStream } from "./stream-bus.js";
+import {
+  streamCursor,
+  streamItemKey,
+  streamWindow,
+  subscribeStream,
+  STREAM_SUBSCRIBER_QUEUE_MAX,
+} from "./stream-bus.js";
+import { consumeWsTicket, issueWsTicket } from "./ws-tickets.js";
+import { WsSendQueue } from "./ws-send-queue.js";
+import { installWsCloseGuard } from "./ws-early-close.js";
+import { canvasScopeDecision, isUuid, projectScopeAllows } from "./project-scope.js";
+import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "./pagination.js";
 import { resolveModules } from "./transfer/modules.js";
 import { buildPreview, applyImport } from "./transfer/import.js";
 import { saveImportUpload, loadPackFile, removeFileSafe, sha256Hex, openDeepsonarPack } from "./transfer/pack.js";
@@ -117,6 +128,8 @@ const SkillSourceBody = z.object({
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject"]);
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code"]);
+const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
+const STREAMABLE_JOB_STATUSES = new Set(["running", "waiting_human"]);
 
 /**
  * Validate scheduler concurrency knobs at the API boundary. Other rule keys
@@ -313,6 +326,79 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
 export function registerRoutes(app: FastifyInstance) {
   // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
   app.addHook("onRequest", authHook);
+  // Central ownership guard for project-scoped tokens. Resource UUIDs are not
+  // authorization: resolve their project_id server-side before any handler
+  // reads or mutates a canvas/job, and constrain unqualified list queries.
+  app.addHook("preHandler", async (req, reply) => {
+    const routeUrl = req.routeOptions?.url ?? "";
+    const params = (req.params ?? {}) as Record<string, string | undefined>;
+    if (routeUrl.startsWith("/jobs/:id") && !isUuid(params.id)) {
+      return reply.code(400).send({ error: "invalid job id", error_code: "INVALID_ID" });
+    }
+    if (routeUrl.startsWith("/findings/:id") && !isUuid(params.id)) {
+      return reply.code(400).send({ error: "invalid finding id", error_code: "INVALID_ID" });
+    }
+    if (routeUrl.startsWith("/canvases/:id") && !isUuid(params.id)) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
+    if (routeUrl.startsWith("/tasks/:canvasId") && !isUuid(params.canvasId)) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
+    if (routeUrl.startsWith("/canvases/:id/nodes/:nodeId") && !isUuid(params.nodeId)) {
+      return reply.code(400).send({ error: "invalid canvas node id", error_code: "INVALID_ID" });
+    }
+    const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
+    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.project_id && !isUuid(query.project_id)) {
+      return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
+    }
+    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.canvas_id && !isUuid(query.canvas_id)) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
+    const actorProjectId = req.actor?.projectId;
+    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.canvas_id) {
+      const [canvas] = await sql`SELECT project_id FROM canvases WHERE id = ${query.canvas_id}`;
+      if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "NOT_FOUND" });
+      if (query.project_id && query.project_id.toLowerCase() !== String(canvas.project_id).toLowerCase()) {
+        return reply.code(403).send({ error: "canvas project mismatch", error_code: "PROJECT_MISMATCH" });
+      }
+      if (canvasScopeDecision(actorProjectId, canvas.project_id as string | null) === "mismatch") {
+        return reply.code(403).send({ error: "token 浠呴檺椤圭洰 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+    }
+    if (!actorProjectId) return;
+    if (routeUrl.startsWith("/canvases/:id") || routeUrl.startsWith("/tasks/:canvasId")) {
+      const canvasId = params.id ?? params.canvasId;
+      if (!canvasId) return;
+      const [canvas] = await sql`SELECT project_id FROM canvases WHERE id = ${canvasId}`;
+      if (canvas && !projectScopeAllows(actorProjectId, canvas.project_id as string | null)) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+      return;
+    }
+    if (routeUrl.startsWith("/jobs/:id")) {
+      const jobId = params.id;
+      if (!jobId) return;
+      const [job] = await sql`SELECT project_id FROM jobs WHERE id = ${jobId}`;
+      if (job && !projectScopeAllows(actorProjectId, job.project_id as string | null)) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+      return;
+    }
+    if (routeUrl.startsWith("/findings/:id")) {
+      const findingId = params.id;
+      if (!findingId) return;
+      const [finding] = await sql`SELECT project_id FROM findings WHERE id = ${findingId}`;
+      if (finding && !projectScopeAllows(actorProjectId, finding.project_id as string | null)) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+      return;
+    }
+    if (routeUrl === "/jobs" || routeUrl === "/findings") {
+      if (query.project_id && query.project_id !== actorProjectId) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+    }
+  });
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
   registerGateway(app);
@@ -327,6 +413,31 @@ export function registerRoutes(app: FastifyInstance) {
       default_admin_credentials_active: await defaultAdminCredentialsActive(),
       session_ttl_days: 7,
     };
+  });
+
+  /**
+   * Exchange the normal Bearer/session credential for a one-use browser WS
+   * ticket.  The returned opaque value is scoped to one running Job and expires
+   * in seconds; long-lived API tokens never enter the WebSocket URL.
+   */
+  app.post("/auth/ws-ticket", async (req, reply) => {
+    const body = z.object({ job_id: z.string().uuid() }).parse(req.body ?? {});
+    const actor = req.actor;
+    if (!actor) return reply.code(401).send({ error: "缺少认证主体", error_code: "AUTH_REQUIRED" });
+    const [job] = await sql`SELECT id, project_id, status FROM jobs WHERE id = ${body.job_id}`;
+    if (!job) return reply.code(404).send({ error: "job not found", error_code: "JOB_NOT_FOUND" });
+    if (actor.projectId && actor.projectId !== job.project_id) {
+      return reply.code(403).send({ error: "token 仅限项目 " + actor.projectId, error_code: "PROJECT_MISMATCH" });
+    }
+    if (!STREAMABLE_JOB_STATUSES.has(String(job.status))) {
+      return reply.code(409).send({
+        error: "job is not running",
+        error_code: "JOB_NOT_RUNNING",
+        status: job.status,
+      });
+    }
+    const ticket = issueWsTicket(body.job_id, actor);
+    return { ...ticket, job_id: body.job_id };
   });
 
   app.post("/auth/bootstrap", async (req, reply) => {
@@ -595,20 +706,159 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // ---------- Agent 实时流（WS /ws?job_id=...） ----------
-  // 连接后先补发环形缓冲（晚加入也能看到上下文），随后实时推送
-  app.get("/ws", { websocket: true }, (socket, req) => {
-    const jobId = (req.query as { job_id?: string }).job_id;
+  // ---------- Agent 实时流（WS /ws?job_id=...&ticket=...） ----------
+  // Browser upgrades consume a short-lived one-use ticket.  A small outbound
+  // queue bounds memory; when a slow client cannot keep up we close with 1013
+  // so the UI can backfill over HTTP and reconnect.
+  app.get("/ws", { websocket: true }, async (socket, req) => {
+    // Install this before the first database/evidence await.  The client can
+    // close while those reads are in flight; the guard then prevents a late
+    // subscribe and invokes the stream cleanup once it exists.
+    let cleanup: () => void = () => {};
+    const closeGuard = installWsCloseGuard(socket, () => cleanup());
+    const abortIfClosed = () => {
+      if (closeGuard.isOpen()) return false;
+      closeGuard.dispose();
+      return true;
+    };
+    const q = req.query as { job_id?: string; ticket?: string; after?: string; limit?: string };
+    const jobId = q.job_id?.trim();
     if (!jobId) {
-      socket.close(4000, "missing job_id");
+      closeGuard.dispose();
+      socket.close(4400, "missing job_id");
       return;
     }
-    for (const item of streamBuffer(jobId)) socket.send(JSON.stringify(item));
-    const unsub = subscribeStream(jobId, (item) => {
-      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(item));
+    if (!isUuid(jobId)) {
+      closeGuard.dispose();
+      socket.close(4400, "invalid job_id");
+      return;
+    }
+    const actor = consumeWsTicket(q.ticket ?? "", jobId);
+    if (!actor) {
+      closeGuard.dispose();
+      socket.close(4401, "invalid or expired websocket ticket");
+      return;
+    }
+    if (abortIfClosed()) return;
+    const [job] = await sql`SELECT id, project_id, status FROM jobs WHERE id = ${jobId}`;
+    if (abortIfClosed()) return;
+    if (!job) {
+      closeGuard.dispose();
+      socket.close(4404, "job not found");
+      return;
+    }
+    if (actor.projectId && actor.projectId !== job.project_id) {
+      closeGuard.dispose();
+      socket.close(4403, "project scope denied");
+      return;
+    }
+    if (!STREAMABLE_JOB_STATUSES.has(String(job.status))) {
+      closeGuard.dispose();
+      socket.close(4409, "job is not running");
+      return;
+    }
+
+    // Validate an opaque cursor against durable/active evidence before the
+    // in-memory bus snapshot.  A bus restart is allowed to have no matching
+    // frame, but an evidence gap must be explicit rather than a silent reset.
+    if (q.after) {
+      try {
+        await readNormalizedStreamPage(jobId, { after: q.after, limit: 1, live: true });
+      } catch (error) {
+        const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";
+        closeGuard.dispose();
+        socket.close(code === "CURSOR_GAP" ? 4410 : 4400, code);
+        return;
+      }
+      if (abortIfClosed()) return;
+    }
+
+    let closed = false;
+    let unsub = () => {};
+    let queue: WsSendQueue;
+    let cleaned = false;
+    cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      closed = true;
+      queue?.stop();
+      unsub();
+      closeGuard.dispose();
+    };
+    const closeStream = (code: number, reason: string) => {
+      if (cleaned) return;
+      cleanup();
+      try { socket.close(code, reason); } catch { /* ignore */ }
+    };
+    queue = new WsSendQueue(socket, {
+      maxItems: STREAM_SUBSCRIBER_QUEUE_MAX,
+      maxBytes: STREAM_SUBSCRIBER_QUEUE_MAX * 16 * 1024,
+      onClose: () => cleanup(),
     });
-    socket.on("close", unsub);
-    socket.on("error", unsub);
+    const enqueue = (value: unknown) => {
+      if (!closed) queue.enqueue(value);
+    };
+
+    if (abortIfClosed()) return;
+
+    // Subscribe before taking the snapshot.  Anything published during the
+    // synchronous snapshot is held in this pending list and drained after the
+    // initial page, preventing the classic snapshot/subscribe race.
+    const pendingItems: ReturnType<typeof streamWindow>["items"] = [];
+    let snapshotting = true;
+    let after = q.after ?? null;
+    const seen = new Set<string>();
+    const emitLive = (item: (typeof pendingItems)[number]) => {
+      const key = streamItemKey(item);
+      if (seen.has(key)) return;
+      seen.add(key);
+      const next = streamCursor(item);
+      enqueue({
+        items: [item],
+        events: [item],
+        after,
+        next_cursor: next,
+        has_more: false,
+        watermark: next,
+        live: true,
+      });
+      after = next;
+    };
+    unsub = subscribeStream(jobId, (item) => {
+      if (snapshotting) pendingItems.push(item);
+      else emitLive(item);
+    });
+    // Check again immediately after subscribing.  No await occurs between
+    // this check and subscribe, but a close event may already have been
+    // observed by the early guard while setup was finishing.
+    if (abortIfClosed()) {
+      cleanup();
+      return;
+    }
+    let initial;
+    try {
+      // The HTTP evidence endpoint validates a durable cursor before opening
+      // this connection.  A valid cursor may still be absent after a restart
+      // because the in-memory bus is best effort, so allow that case here.
+      initial = streamWindow(jobId, {
+        after: q.after ?? null,
+        limit: pageLimit(q.limit),
+        allowMissingCursor: Boolean(q.after),
+      });
+    } catch (error) {
+      const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";
+      closeStream(code === "CURSOR_GAP" ? 4410 : 4400, code);
+      return;
+    }
+    if (abortIfClosed()) {
+      cleanup();
+      return;
+    }
+    for (const item of initial.items) seen.add(streamItemKey(item));
+    enqueue({ ...initial, events: initial.items });
+    after = initial.next_cursor ?? after;
+    snapshotting = false;
+    for (const item of pendingItems) emitLive(item);
   });
 
   // ---------- 项目绑定（§7 POST /projects/sync） ----------
@@ -2491,6 +2741,68 @@ export function registerRoutes(app: FastifyInstance) {
     };
   });
 
+  /** L0 canvas projection: graph topology and bounded node summaries only. */
+  app.get("/canvases/:id/summary", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`
+      SELECT c.id, c.title, c.target_json, c.project_id, c.created_at, c.status, c.archived_at,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+           AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+        (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = c.id) AS started_at,
+        (SELECT CASE
+           WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
+           THEN MAX(j.finished_at) ELSE NULL END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at
+      FROM canvases c WHERE c.id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    const [nodes, edges] = await Promise.all([
+      sql`
+        SELECT id, node_type, title,
+          jsonb_build_object(
+            'summary', LEFT(COALESCE(body_json->>'summary', body_json->>'description', body_json->>'message', ''), 240),
+            'description', LEFT(COALESCE(body_json->>'description', body_json->>'summary', ''), 240),
+            'severity', body_json->>'severity',
+            'role', body_json->>'role',
+            'type', body_json->>'type',
+            'last_progress', CASE WHEN jsonb_typeof(body_json->'last_progress') = 'object' THEN body_json->'last_progress' ELSE NULL END
+          ) AS body_json,
+          x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
+        FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
+      sql`
+        SELECT id, from_node_id, to_node_id, edge_type
+        FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
+    ]);
+    return {
+      canvas,
+      canvas_id: id,
+      nodes,
+      edges,
+      convergence: parseCanvasConvergence(canvas.target_json),
+      projection: "L0",
+      watermark: new Date().toISOString(),
+      live: Number(canvas.active_count ?? 0) > 0,
+    };
+  });
+
+  /** L1 on-demand hydration for one node; large body_json never enters L0. */
+  app.get("/canvases/:id/nodes/:nodeId", async (req, reply) => {
+    const { id, nodeId } = req.params as { id: string; nodeId: string };
+    const [node] = await sql`
+      SELECT id, canvas_id, node_type, title, body_json, x, y, w, h, status,
+             body_json->>'verification_status' AS verification_status, job_id, updated_at
+      FROM canvas_nodes WHERE id = ${nodeId} AND canvas_id = ${id}`;
+    if (!node) return reply.code(404).send({ error: "canvas node not found", error_code: "NODE_NOT_FOUND" });
+    return { node, projection: "L1" };
+  });
+
+  /** Incremental canvas deltas require the durable revision/change-log path. */
+  app.get("/canvases/:id/delta", async (_req, reply) =>
+    reply.code(410).send({
+      error: "canvas delta requires durable revision/change-log support",
+      error_code: "DELTA_CHANGELOG_REQUIRED",
+    }),
+  );
+
   // ---------- 画布收敛控制（暂停/恢复决策、门控停、清理低优先级 verify） ----------
   app.get("/canvases/:id/convergence", async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -2711,13 +3023,21 @@ export function registerRoutes(app: FastifyInstance) {
     return reply.code(201).send(job);
   });
 
-  app.get("/jobs", async (req) => {
-    const q = req.query as { project_id?: string; status?: string };
+  app.get("/jobs", async (req, reply) => {
+    const q = req.query as { project_id?: string; status?: string; canvas_id?: string; cursor?: string; after?: string; limit?: string };
     // 联表项目名 / 画布标题；从冻结快照抽出 CLI / 模型 / 角色，列表实时展示
     // agent_snapshot_json 在 createJob 时冻结，列表侧不二次解析 RoleConfig
-    const projectId = q.project_id?.trim() || null;
+    const projectId = q.project_id?.trim() || req.actor?.projectId || null;
     const status = q.status?.trim() || null;
-    return sql`
+    const canvasId = q.canvas_id?.trim() || null;
+    const after = q.cursor ?? q.after ?? null;
+    const paginated = Boolean(canvasId || after || q.limit || q.cursor);
+    const cursor = after ? decodeCursor(after, "jobs") : null;
+    if (after && (!cursor?.created_at || !cursor.id)) {
+      return reply.code(400).send({ error: "invalid jobs cursor", error_code: "INVALID_CURSOR" });
+    }
+    const limit = paginated ? pageLimit(q.limit) : 200;
+    const rows = await sql`
       SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
              p.name AS project_name, c.title AS canvas_title,
@@ -2731,26 +3051,50 @@ export function registerRoutes(app: FastifyInstance) {
       LEFT JOIN canvases c ON c.id = j.canvas_id
       WHERE (${projectId}::uuid IS NULL OR j.project_id = ${projectId}::uuid)
         AND (${status}::text IS NULL OR j.status = ${status})
-      ORDER BY j.created_at DESC
-      LIMIT 200`;
+        AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId})
+        AND (${cursor?.created_at ?? null}::timestamptz IS NULL
+          OR j.created_at < ${cursor?.created_at ?? null}::timestamptz
+          OR (j.created_at = ${cursor?.created_at ?? null}::timestamptz AND j.id < ${cursor?.id ?? null}::uuid))
+      ORDER BY j.created_at DESC, j.id DESC
+      LIMIT ${paginated ? limit + 1 : limit}`;
+    const items = rows.slice(0, limit);
+    if (!paginated) return items;
+    const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
+    const hasMore = rows.length > limit;
+    return page(items, {
+      after,
+      nextCursor: hasMore && last ? cursorForRow("jobs", last) : null,
+      hasMore,
+      live: false,
+    });
   });
 
   // ---------- Findings 清单（可按项目 / 画布 / severity / 验证状态筛选） ----------
   // canvas_id：只看「本次任务」产出，不混入同项目其它任务
-  app.get("/findings", async (req) => {
+  app.get("/findings", async (req, reply) => {
     const q = req.query as {
       project_id?: string;
       severity?: string;
       verify_status?: string;
       disposition?: string;
       canvas_id?: string;
+      cursor?: string;
+      after?: string;
+      limit?: string;
     };
-    const projectId = q.project_id || null;
+    const projectId = q.project_id || req.actor?.projectId || null;
     const severity = q.severity || null;
     const verifyStatus = q.verify_status || null;
     const canvasId = q.canvas_id || null;
     const disposition = q.disposition || null;
-    return sql`
+    const after = q.cursor ?? q.after ?? null;
+    const paginated = Boolean(canvasId || after || q.limit || q.cursor);
+    const cursor = after ? decodeCursor(after, "findings") : null;
+    if (after && (!cursor?.created_at || !cursor.id)) {
+      return reply.code(400).send({ error: "invalid findings cursor", error_code: "INVALID_CURSOR" });
+    }
+    const limit = paginated ? pageLimit(q.limit) : 500;
+    const rows = await sql`
       SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
              f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
              f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
@@ -2763,8 +3107,21 @@ export function registerRoutes(app: FastifyInstance) {
         AND (${verifyStatus}::text IS NULL OR f.verify_status = ${verifyStatus})
         AND (${disposition}::text IS NULL OR f.disposition = ${disposition})
         AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId})
-      ORDER BY f.created_at DESC
-      LIMIT 500`;
+        AND (${cursor?.created_at ?? null}::timestamptz IS NULL
+          OR f.created_at < ${cursor?.created_at ?? null}::timestamptz
+          OR (f.created_at = ${cursor?.created_at ?? null}::timestamptz AND f.id < ${cursor?.id ?? null}::uuid))
+      ORDER BY f.created_at DESC, f.id DESC
+      LIMIT ${paginated ? limit + 1 : limit}`;
+    const items = rows.slice(0, limit);
+    if (!paginated) return items;
+    const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
+    const hasMore = rows.length > limit;
+    return page(items, {
+      after,
+      nextCursor: hasMore && last ? cursorForRow("findings", last) : null,
+      hasMore,
+      live: false,
+    });
   });
 
   const DISPOSITIONS = ["open", "accepted", "confirmed_vuln", "rejected_fp", "resolved", "archived"] as const;
@@ -3020,10 +3377,40 @@ export function registerRoutes(app: FastifyInstance) {
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "not found" });
     const [events, findings] = await Promise.all([
-      sql`SELECT id, job_seq, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 1000`,
+      sql`SELECT id, job_seq, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 50`,
       sql`SELECT id, fingerprint, title, severity, location, verify_status FROM findings WHERE job_id = ${id}`,
     ]);
     return { job, events, findings };
+  });
+
+  /** Keyset event pages keep the heavy timeline out of the Job detail request. */
+  app.get("/jobs/:id/events", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { cursor?: string; after?: string; limit?: string };
+    const [job] = await sql`SELECT id FROM jobs WHERE id = ${id}`;
+    if (!job) return reply.code(404).send({ error: "job not found", error_code: "JOB_NOT_FOUND" });
+    const after = q.cursor ?? q.after ?? null;
+    const cursor = after ? decodeCursor(after, "events") : null;
+    if (after && (!cursor?.created_at || !cursor.id)) {
+      return reply.code(400).send({ error: "invalid events cursor", error_code: "INVALID_CURSOR" });
+    }
+    const limit = pageLimit(q.limit);
+    const rows = await sql`
+      SELECT id, job_seq, type, payload_json, created_at
+      FROM events WHERE job_id = ${id}
+        AND (${cursor?.created_at ?? null}::timestamptz IS NULL
+          OR created_at > ${cursor?.created_at ?? null}::timestamptz
+          OR (created_at = ${cursor?.created_at ?? null}::timestamptz AND id > ${cursor?.id ?? null}::bigint))
+      ORDER BY created_at ASC, id ASC
+      LIMIT ${limit + 1}`;
+    const items = rows.slice(0, limit);
+    const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
+    return page(items, {
+      after,
+      nextCursor: rows.length > limit && last ? cursorForRow("events", last) : null,
+      hasMore: rows.length > limit,
+      live: false,
+    });
   });
 
   app.get("/jobs/:id/evidence", async (req, reply) => {
@@ -3060,9 +3447,31 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/jobs/:id/evidence/stream", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [job] = await sql`SELECT id FROM jobs WHERE id = ${id}`;
+    const q = req.query as { cursor?: string; after?: string; limit?: string; tail?: string };
+    const [job] = await sql`SELECT id, status FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "job not found" });
-    return { events: await readNormalizedStream(id) };
+    const after = q.cursor ?? q.after ?? null;
+    let result;
+    try {
+      result = await readNormalizedStreamPage(id, {
+        after,
+        limit: pageLimit(q.limit),
+        tail: q.tail === "1" || q.tail === "true",
+        live: STREAMABLE_JOB_STATUSES.has(String(job.status)),
+      });
+    } catch (error) {
+      if (error instanceof CursorError) {
+        return reply.code(cursorErrorHttpStatus(error.code)).send({
+          error: error.code,
+          error_code: error.code,
+          gap: error.code === "CURSOR_GAP",
+        });
+      }
+      throw error;
+    }
+    // `events` is retained as a compatibility alias while `items` is the
+    // canonical HTTP/WS envelope field.
+    return { ...result, events: result.items };
   });
 
   // 只有 pending 可调整优先级（运行中/终态改优先级无意义）

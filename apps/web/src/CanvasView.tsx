@@ -14,6 +14,12 @@ import {
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode } from "./api";
 import {
+  CANVAS_SKELETON_REFRESH_MS,
+  isCurrentNodeRequest,
+  mergeHydratedCanvasData,
+  syncSelectedNode,
+} from "./canvas-sync";
+import {
   buildOutgoing,
   computeNodeDepths,
   computeVisibleIds,
@@ -36,6 +42,9 @@ const EDGE_STYLE: Record<string, { stroke: string; speed: string }> = {
   from: { stroke: "#657279", speed: "3.2s" }, // 事实 → 意图（Cairn Intent.from）
   to: { stroke: "var(--color-acc-400)", speed: "2.5s" }, // 意图 → 事实（Cairn Intent.to）
 };
+
+/** Avoid a main-thread ELK layout spike on large topology snapshots. */
+export const ELK_NODE_THRESHOLD = 200;
 
 type ExpandHandlers = {
   expandNode: (id: string) => void;
@@ -159,7 +168,7 @@ function Legend() {
   );
 }
 
-export function CanvasView({ canvasId }: { canvasId: string }) {
+export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (data: CanvasData) => void }) {
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,28 +187,45 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
   /** 用户强制收起（覆盖默认 depth 展开） */
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const rf = useRef<ReactFlowInstance | null>(null);
+  const hydratedNodesRef = useRef(new Map<string, CanvasNode>());
+  const nodeRequestRef = useRef(0);
+  const clearSelected = useCallback(() => {
+    nodeRequestRef.current += 1;
+    setSelected(null);
+  }, []);
 
-  // §6.4：MVP 轮询刷新（5s）；WS 二期
+  // Keep the active canvas responsive with a bounded L0 skeleton refresh. Full
+  // body_json is fetched only for selected nodes (L1/L2) and retained locally;
+  // durable incremental deltas wait for the revision/change-log migration.
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      api
-        .canvas(canvasId)
-        .then((d) => alive && (setData(d), setError(null)))
-        .catch((e) => alive && setError(String(e)));
+    const load = async () => {
+      try {
+        const summary = await api.canvasSummary(canvasId);
+        if (!alive) return;
+        const next = mergeHydratedCanvasData(summary, hydratedNodesRef.current);
+        setData(next);
+        setSelected((previous) => syncSelectedNode(next, previous));
+        onData?.(next);
+        setError(null);
+      } catch (e) {
+        if (alive) setError(String(e));
+      }
+    };
     setData(null);
-    setSelected(null);
+    clearSelected();
     setElkPos(null);
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
-    load();
-    const t = setInterval(load, 5000);
+    hydratedNodesRef.current.clear();
+    void load();
+    const t = setInterval(() => void load(), CANVAS_SKELETON_REFRESH_MS);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, [canvasId]);
+  }, [canvasId, clearSelected, onData]);
 
   // 节点消失时清理手动覆盖，避免悬空 id 堆积
   useEffect(() => {
@@ -365,9 +391,10 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
   }, [data, layoutKey]);
 
-  // elkjs：对当前展示子图重算最优分层布局
+  // elkjs：对小型当前展示子图重算最优分层布局。大图使用服务端持久化
+  // 坐标，避免一次性把数百节点/边交给 ELK 阻塞主线程。
   useEffect(() => {
-    if (layoutSubgraph.nodes.length === 0) {
+    if (layoutSubgraph.nodes.length === 0 || layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD) {
       setElkPos(null);
       return;
     }
@@ -388,7 +415,7 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
 
   const fallbackPos = useMemo(
     () =>
-      layoutSubgraph.nodes.length > 0
+      layoutSubgraph.nodes.length > 0 && layoutSubgraph.nodes.length <= ELK_NODE_THRESHOLD
         ? layoutNodes(layoutSubgraph.nodes, layoutSubgraph.edges)
         : null,
     [layoutSubgraph],
@@ -480,11 +507,27 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
     (_: unknown, node: Node) => {
       const found = data?.nodes.find((n) => n.id === node.id) ?? null;
       setSelected(found);
+      if (!found) return;
+      const requestId = ++nodeRequestRef.current;
+      void api.canvasNode(canvasId, found.id).then((result) => {
+        if (!isCurrentNodeRequest(requestId, nodeRequestRef.current)) return;
+        hydratedNodesRef.current.set(result.node.id, result.node);
+        setSelected(result.node);
+        setData((before) => {
+          if (!before) return before;
+          const nodes = before.nodes.map((item) => item.id === result.node.id ? result.node : item);
+          const next = { ...before, nodes };
+          onData?.(next);
+          return next;
+        });
+      }).catch(() => {
+        // L0 summary remains usable when an optional L1 hydration races a deleted node.
+      });
     },
-    [data],
+    [canvasId, data, onData],
   );
 
-  if (error)
+  if (!data && error)
     return (
       <div className="flex h-full items-center justify-center">
         <div className="rounded-[10px] border border-red-900/60 bg-red-950/40 px-6 py-4 text-sm text-red-300">
@@ -511,6 +554,11 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
 
   return (
     <div className="relative h-full w-full">
+      {error && (
+        <div className="absolute right-4 top-4 z-20 rounded-md border border-red-900/60 bg-red-950/80 px-3 py-2 font-mono text-[10px] text-red-300">
+          同步失败：{error}
+        </div>
+      )}
       <ReactFlow
         nodes={visibleNodes}
         edges={visibleEdges}
@@ -556,6 +604,9 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
                 {depthHiddenCount > 0 ? ` · 藏 ${depthHiddenCount}` : ""}
                 {manualOverrideHint}
               </span>
+              {layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD && (
+                <span className="font-mono text-[10px] text-amber-300">大图使用服务端坐标（跳过 ELK）</span>
+              )}
               {filterActive && (
                 <button
                   type="button"
@@ -756,9 +807,9 @@ export function CanvasView({ canvasId }: { canvasId: string }) {
       */}
       {selected &&
         (selected.job_id && ["intent", "job"].includes(selected.node_type) ? (
-          <JobDetailPanel jobId={selected.job_id} onClose={() => setSelected(null)} />
+          <JobDetailPanel jobId={selected.job_id} onClose={clearSelected} />
         ) : (
-          <Sidebar node={selected} onClose={() => setSelected(null)} />
+          <Sidebar node={selected} onClose={clearSelected} />
         ))}
     </div>
   );
