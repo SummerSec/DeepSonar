@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { HUB_REFERENCE_LIMITS } from "@deepsonar/shared-types";
 import { ControlInputError } from "./control-input.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -54,14 +55,15 @@ if (!testDatabaseUrl) {
         ? { complete: { from, description: "完成" } }
         : { intents: [{ from, role: "review", description: "复核", prompt: "执行复核" }] };
 
-    const attempt = async (payload: unknown, label: string) => {
+    const attempt = async (payload: unknown, label: string, expectedCode = "invalid_node_ref") => {
       const eventId = randomUUID();
       await assert.rejects(
         () => ingestEvent(jobId, { v: 1, event_id: eventId, type: "hub_decision", payload }),
         (error: unknown) => {
           assert.ok(error instanceof ControlInputError, `${label}: expected ControlInputError`);
-          assert.equal(error.code, "invalid_node_ref", label);
-          assert.match(error.message, /YAML root_id/);
+          assert.equal(error.code, expectedCode, label);
+          if (expectedCode === "invalid_node_ref") assert.match(error.message, /YAML root_id/);
+          else assert.match(error.message, /invalid_reference_budget|引用数量/);
           assert.doesNotMatch(error.message, /invalid input syntax for type uuid/i);
           return true;
         },
@@ -81,6 +83,26 @@ if (!testDatabaseUrl) {
       await attempt(decision([otherRootId]), "cross-canvas UUID");
       await attempt(decision(["root_id"], true), "complete.from field name");
       await attempt(decision(undefined), "missing from");
+      await attempt(
+        decision(Array.from({ length: HUB_REFERENCE_LIMITS.perFrom + 1 }, () => rootId)),
+        "per-from reference budget",
+        "invalid_reference_budget",
+      );
+      const totalBudgetRefs = Array.from({ length: HUB_REFERENCE_LIMITS.totalUnique + 1 }, () => randomUUID());
+      const totalBudgetIntents = [];
+      for (let offset = 0; offset < totalBudgetRefs.length; offset += HUB_REFERENCE_LIMITS.perFrom) {
+        totalBudgetIntents.push({
+          from: totalBudgetRefs.slice(offset, offset + HUB_REFERENCE_LIMITS.perFrom),
+          role: "review",
+          description: `intent-${offset}`,
+          prompt: "run",
+        });
+      }
+      await attempt(
+        { intents: totalBudgetIntents },
+        "total unique reference budget",
+        "invalid_reference_budget",
+      );
 
       const [validResult] = await sql<{ id: string }[]>`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)

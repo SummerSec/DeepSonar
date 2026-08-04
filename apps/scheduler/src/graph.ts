@@ -2,9 +2,10 @@ import { sql } from "./db.js";
 import { config } from "./config.js";
 import {
   GraphNodeReference,
+  hubReferenceBudgetViolation,
   HubDecisionPayload as HubDecisionPayloadSchema,
 } from "@deepsonar/shared-types";
-import { ControlInputError, invalidNodeReference } from "./control-input.js";
+import { ControlInputError, invalidNodeReference, invalidReferenceBudget } from "./control-input.js";
 
 /** Server-side bounded graph projections for Hub/Worker prompt inputs. */
 export type GraphScope = "hub" | "agent" | "verify" | "report";
@@ -539,6 +540,15 @@ export function parseHubDecisionPayload(
   const invalidShapeRef = inspectReferenceFields(value);
   if (invalidShapeRef) throw invalidNodeReference(invalidShapeRef.path, invalidShapeRef.value);
 
+  const budgetViolation = hubReferenceBudgetViolation(value);
+  if (budgetViolation) {
+    throw invalidReferenceBudget(
+      budgetViolation.path.join("."),
+      budgetViolation.count,
+      budgetViolation.limit,
+    );
+  }
+
   const parsed = HubDecisionPayloadSchema.safeParse(value);
   if (!parsed.success) {
     throw new Error("Hub decision 必须且只能提供 complete 或 intents 之一，且字段必须完整");
@@ -579,15 +589,12 @@ export async function assertHubDecisionCanvasReferences(
 ): Promise<HubDecision> {
   const ids = [...new Set(refsOf(decision).map((ref) => ref.value))];
   if (ids.length === 0) return decision;
-  const allowed = new Set<string>();
-  for (const id of ids) {
-    const [row] = await tx`
-      SELECT id FROM canvas_nodes
-      WHERE id = ${id} AND canvas_id = ${canvasId}
-        AND node_type = ANY(${["root", "fact", "finding"]})
-      LIMIT 1`;
-    if (row) allowed.add(String(row.id));
-  }
+  const rows = await tx<{ id: string }[]>`
+    SELECT id FROM canvas_nodes
+    WHERE id = ANY(${ids}::uuid[])
+      AND canvas_id = ${canvasId}
+      AND node_type = ANY(${["root", "fact", "finding"]})`;
+  const allowed = new Set(rows.map((row) => String(row.id)));
   return assertHubDecisionReferableIds(decision, allowed);
 }
 

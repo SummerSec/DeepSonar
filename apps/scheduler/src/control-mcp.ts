@@ -1,5 +1,9 @@
-import { CANONICAL_UUID_PATTERN } from "@deepsonar/shared-types";
-import { CONTROL_INPUT_ERROR_CODES, INVALID_NODE_REF_MESSAGE } from "./control-input.js";
+import { CANONICAL_UUID_PATTERN, HUB_REFERENCE_LIMITS } from "@deepsonar/shared-types";
+import {
+  CONTROL_INPUT_ERROR_CODES,
+  INVALID_NODE_REF_MESSAGE,
+  INVALID_REFERENCE_BUDGET_MESSAGE,
+} from "./control-input.js";
 
 /**
  * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络：只读查询返回调度器在启动
@@ -22,6 +26,10 @@ const availableRoles = JSON.parse(process.env.DEEPSONAR_AVAILABLE_ROLES_JSON || 
 const CANONICAL_UUID_PATTERN = ${JSON.stringify(CANONICAL_UUID_PATTERN)};
 const INVALID_NODE_REF_CODE = ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidNodeRef)};
 const INVALID_NODE_REF_MESSAGE = ${JSON.stringify(INVALID_NODE_REF_MESSAGE)};
+const INVALID_REFERENCE_BUDGET_CODE = ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidReferenceBudget)};
+const INVALID_REFERENCE_BUDGET_MESSAGE = ${JSON.stringify(INVALID_REFERENCE_BUDGET_MESSAGE)};
+const MAX_REFERENCES_PER_FROM = ${HUB_REFERENCE_LIMITS.perFrom};
+const MAX_UNIQUE_REFERENCES = ${HUB_REFERENCE_LIMITS.totalUnique};
 const NODE_REF_RE = new RegExp(CANONICAL_UUID_PATTERN, "i");
 
 const definitions = {
@@ -43,7 +51,7 @@ const definitions = {
   },
   submit_hub_decision: {
     description: "提交本轮 Hub 的 complete 或 intents 决策，二者必须且只能提供一个。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值，不能填写字段名 root_id、别名或占位符。",
-    inputSchema: { type: "object", oneOf: [{ required: ["complete"] }, { required: ["intents"] }], properties: { complete: { type: "object", properties: { from: { type: "array", items: { type: "string", format: "uuid", pattern: CANONICAL_UUID_PATTERN } }, description: { type: "string", minLength: 1, maxLength: 10000 } }, required: ["from", "description"], additionalProperties: false }, intents: { type: "array", minItems: 1, maxItems: 100, items: { type: "object", properties: { from: { type: "array", items: { type: "string", format: "uuid", pattern: CANONICAL_UUID_PATTERN } }, role: { type: "string", minLength: 1, maxLength: 64 }, description: { type: "string", minLength: 1, maxLength: 2000 }, prompt: { type: "string", minLength: 1, maxLength: 20000 } }, required: ["from", "role", "description", "prompt"], additionalProperties: false } } }, additionalProperties: false }
+    inputSchema: { type: "object", oneOf: [{ required: ["complete"] }, { required: ["intents"] }], properties: { complete: { type: "object", properties: { from: { type: "array", maxItems: MAX_REFERENCES_PER_FROM, items: { type: "string", format: "uuid", pattern: CANONICAL_UUID_PATTERN } }, description: { type: "string", minLength: 1, maxLength: 10000 } }, required: ["from", "description"], additionalProperties: false }, intents: { type: "array", minItems: 1, maxItems: 100, items: { type: "object", properties: { from: { type: "array", maxItems: MAX_REFERENCES_PER_FROM, items: { type: "string", format: "uuid", pattern: CANONICAL_UUID_PATTERN } }, role: { type: "string", minLength: 1, maxLength: 64 }, description: { type: "string", minLength: 1, maxLength: 2000 }, prompt: { type: "string", minLength: 1, maxLength: 20000 } }, required: ["from", "role", "description", "prompt"], additionalProperties: false } } }, additionalProperties: false }
   },
   mark_job_done: {
     description: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
@@ -65,6 +73,10 @@ function invalidNodeRef(path, value) {
   return { code: INVALID_NODE_REF_CODE, text: "[" + INVALID_NODE_REF_CODE + "] " + INVALID_NODE_REF_MESSAGE + " 字段 " + path + " 收到 " + (rendered ?? String(value)) + "。" };
 }
 
+function invalidReferenceBudget(path, count, limit) {
+  return { code: INVALID_REFERENCE_BUDGET_CODE, text: "[" + INVALID_REFERENCE_BUDGET_CODE + "] " + INVALID_REFERENCE_BUDGET_MESSAGE + " 字段 " + path + " 收到 " + count + " 项，最多 " + limit + " 项。" };
+}
+
 function validateHubDecision(input) {
   const args = input && typeof input === "object" ? input : {};
   const hasComplete = Object.prototype.hasOwnProperty.call(args, "complete");
@@ -78,6 +90,9 @@ function validateHubDecision(input) {
     if (!complete || typeof complete !== "object" || !Array.isArray(complete.from)) {
       return invalidNodeRef("complete.from", complete && complete.from);
     }
+    if (complete.from.length > MAX_REFERENCES_PER_FROM) {
+      return invalidReferenceBudget("complete.from", complete.from.length, MAX_REFERENCES_PER_FROM);
+    }
     references.push(["complete.from", complete.from]);
   } else {
     if (!Array.isArray(args.intents)) return invalidNodeRef("intents", args.intents);
@@ -86,15 +101,23 @@ function validateHubDecision(input) {
       if (!intent || typeof intent !== "object" || !Array.isArray(intent.from)) {
         return invalidNodeRef("intents." + index + ".from", intent && intent.from);
       }
+      if (intent.from.length > MAX_REFERENCES_PER_FROM) {
+        return invalidReferenceBudget("intents." + index + ".from", intent.from.length, MAX_REFERENCES_PER_FROM);
+      }
       references.push(["intents." + index + ".from", intent.from]);
     }
   }
+  const uniqueReferences = new Set();
   for (const [path, refs] of references) {
     for (let index = 0; index < refs.length; index += 1) {
       if (typeof refs[index] !== "string" || !NODE_REF_RE.test(refs[index])) {
         return invalidNodeRef(path + "." + index, refs[index]);
       }
+      uniqueReferences.add(refs[index]);
     }
+  }
+  if (uniqueReferences.size > MAX_UNIQUE_REFERENCES) {
+    return invalidReferenceBudget("intents", uniqueReferences.size, MAX_UNIQUE_REFERENCES);
   }
   return null;
 }
