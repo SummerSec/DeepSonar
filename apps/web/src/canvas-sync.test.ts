@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyCanvasDelta,
   CANVAS_SKELETON_REFRESH_MS,
+  hasCompleteCanvasLifecycleRollup,
   isCurrentNodeRequest,
   mergeHydratedCanvasData,
   shouldApplyHydratedNode,
@@ -11,7 +12,7 @@ import {
   shouldApplyCanvasSummary,
   syncSelectedNode,
 } from "./canvas-sync.js";
-import type { CanvasData, CanvasNode } from "./api.js";
+import type { CanvasData, CanvasDelta, CanvasNode } from "./api.js";
 
 const node = (id: string, body_json: Record<string, unknown>, x = 0): CanvasNode => ({
   id,
@@ -94,6 +95,12 @@ test("selected hydrated body survives an unrelated delta", () => {
     upsert_edges: [],
     delete_edge_ids: [],
     upsert_meta: [],
+    active_count: 0,
+    job_count: 2,
+    started_at: "2026-08-04T00:00:00.000Z",
+    ended_at: null,
+    root_status: "running",
+    report_status: null,
   }, hydrated);
   const synced = syncSelectedNode(next, selected, hydrated);
   assert.deepEqual(synced?.body_json, { description: "full body", secret: "kept" });
@@ -125,6 +132,12 @@ test("durable delta applies upserts and tombstones while retaining hydrated bodi
     upsert_edges: [],
     delete_edge_ids: ["e1"],
     upsert_meta: [],
+    active_count: 0,
+    job_count: 2,
+    started_at: "2026-08-04T00:00:00.000Z",
+    ended_at: "2026-08-04T00:01:00.000Z",
+    root_status: "succeeded",
+    report_status: null,
   }, hydrated);
   assert.equal(next.revision, "5");
   assert.deepEqual(next.nodes.map((item) => item.id), ["n1", "n3"]);
@@ -152,7 +165,180 @@ test("tombstones win if a delta envelope contains both operations", () => {
     upsert_edges: [{ id: "e1", from_node_id: "n1", to_node_id: "n1", edge_type: "next" }],
     delete_edge_ids: ["e1"],
     upsert_meta: [],
+    active_count: 0,
+    job_count: 1,
+    started_at: "2026-08-04T00:00:00.000Z",
+    ended_at: "2026-08-04T00:01:00.000Z",
+    root_status: "succeeded",
+    report_status: null,
   });
   assert.deepEqual(next.nodes, []);
   assert.deepEqual(next.edges, []);
+});
+
+test("terminal delta overwrites active lifecycle rollup without a summary refresh", () => {
+  const current: CanvasData = {
+    canvas_id: "canvas-1",
+    canvas: {
+      id: "canvas-1",
+      title: "Task",
+      target_json: {},
+      created_at: "2026-08-04T00:00:00.000Z",
+      active_count: 1,
+      job_count: 1,
+      started_at: "2026-08-04T00:00:01.000Z",
+      ended_at: null,
+      root_status: "running",
+      report_status: null,
+    },
+    revision: "1",
+    nodes: [],
+    edges: [],
+  };
+  const next = applyCanvasDelta(current, {
+    canvas_id: "canvas-1",
+    since: "1",
+    upper_revision: "2",
+    floor_revision: "0",
+    upsert_nodes: [],
+    delete_node_ids: [],
+    upsert_edges: [],
+    delete_edge_ids: [],
+    upsert_meta: [],
+    active_count: 0,
+    job_count: 1,
+    started_at: "2026-08-04T00:00:01.000Z",
+    ended_at: "2026-08-04T00:01:00.000Z",
+    root_status: "succeeded",
+    report_status: "succeeded",
+  });
+  assert.equal(next.canvas?.active_count, 0);
+  assert.equal(next.canvas?.ended_at, "2026-08-04T00:01:00.000Z");
+  assert.equal(next.canvas?.root_status, "succeeded");
+  assert.equal(next.canvas?.report_status, "succeeded");
+});
+
+test("delta lifecycle rollup explicitly clears stale nullable fields", () => {
+  const current: CanvasData = {
+    canvas_id: "canvas-1",
+    canvas: {
+      id: "canvas-1",
+      title: "Task",
+      target_json: {},
+      created_at: "2026-08-04T00:00:00.000Z",
+      active_count: 2,
+      job_count: 2,
+      started_at: "2026-08-04T00:00:01.000Z",
+      ended_at: "2026-08-04T00:01:00.000Z",
+      root_status: "succeeded",
+      report_status: "succeeded",
+    },
+    nodes: [],
+    edges: [],
+  };
+  const next = applyCanvasDelta(current, {
+    canvas_id: "canvas-1",
+    since: "0",
+    upper_revision: "1",
+    floor_revision: "0",
+    upsert_nodes: [],
+    delete_node_ids: [],
+    upsert_edges: [],
+    delete_edge_ids: [],
+    upsert_meta: [],
+    active_count: 0,
+    job_count: 0,
+    started_at: null,
+    ended_at: null,
+    root_status: null,
+    report_status: null,
+  });
+  assert.equal(next.canvas?.active_count, 0);
+  assert.equal(next.canvas?.job_count, 0);
+  assert.equal(next.canvas?.started_at, null);
+  assert.equal(next.canvas?.ended_at, null);
+  assert.equal(next.canvas?.root_status, null);
+  assert.equal(next.canvas?.report_status, null);
+});
+
+test("legacy delta without lifecycle fields preserves the current rollup", () => {
+  const current: CanvasData = {
+    canvas_id: "canvas-1",
+    canvas: {
+      id: "canvas-1",
+      title: "Task",
+      target_json: {},
+      created_at: "2026-08-04T00:00:00.000Z",
+      active_count: 1,
+      job_count: 2,
+      started_at: "2026-08-04T00:00:01.000Z",
+      ended_at: null,
+      root_status: "running",
+      report_status: "pending",
+    },
+    revision: "1",
+    nodes: [],
+    edges: [],
+  };
+  const legacyDelta = {
+    canvas_id: "canvas-1",
+    since: "1",
+    upper_revision: "2",
+    floor_revision: "0",
+    upsert_nodes: [],
+    delete_node_ids: [],
+    upsert_edges: [],
+    delete_edge_ids: [],
+    upsert_meta: [],
+  } satisfies Record<string, unknown>;
+  assert.equal(hasCompleteCanvasLifecycleRollup(legacyDelta), false);
+  const next = applyCanvasDelta(current, legacyDelta as unknown as CanvasDelta);
+  assert.deepEqual(next.canvas, current.canvas);
+});
+
+test("partial or invalid lifecycle rollups are rejected without clearing active state", () => {
+  const current: CanvasData = {
+    canvas_id: "canvas-1",
+    canvas: {
+      id: "canvas-1",
+      title: "Task",
+      target_json: {},
+      created_at: "2026-08-04T00:00:00.000Z",
+      active_count: 2,
+      job_count: 3,
+      started_at: "2026-08-04T00:00:01.000Z",
+      ended_at: null,
+      root_status: "running",
+      report_status: null,
+    },
+    revision: "1",
+    nodes: [],
+    edges: [],
+  };
+  const partialDelta = {
+    canvas_id: "canvas-1",
+    since: "1",
+    upper_revision: "2",
+    floor_revision: "0",
+    upsert_nodes: [],
+    delete_node_ids: [],
+    upsert_edges: [],
+    delete_edge_ids: [],
+    upsert_meta: [],
+    active_count: 0,
+    job_count: 3,
+    started_at: null,
+    ended_at: null,
+    root_status: "succeeded",
+  } satisfies Record<string, unknown>;
+  assert.equal(hasCompleteCanvasLifecycleRollup(partialDelta), false);
+  assert.deepEqual(applyCanvasDelta(current, partialDelta as unknown as CanvasDelta).canvas, current.canvas);
+
+  const invalidDelta = {
+    ...partialDelta,
+    report_status: null,
+    active_count: -1,
+  } satisfies Record<string, unknown>;
+  assert.equal(hasCompleteCanvasLifecycleRollup(invalidDelta), false);
+  assert.deepEqual(applyCanvasDelta(current, invalidDelta as unknown as CanvasDelta).canvas, current.canvas);
 });

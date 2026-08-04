@@ -2756,6 +2756,12 @@ export function registerRoutes(app: FastifyInstance) {
            THEN MAX(j.finished_at)
            ELSE NULL
          END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at,
+        (SELECT n.status FROM canvas_nodes n
+         WHERE n.canvas_id = c.id AND n.node_type = 'root'
+         ORDER BY n.updated_at DESC LIMIT 1) AS root_status,
+        (SELECT n.status FROM canvas_nodes n
+         WHERE n.canvas_id = c.id AND n.node_type = 'report'
+         ORDER BY n.updated_at DESC LIMIT 1) AS report_status,
         (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding') AS finding_count,
         (SELECT COUNT(*)::int FROM canvas_nodes n WHERE n.canvas_id = c.id AND n.node_type = 'finding' AND n.status = 'confirmed') AS confirmed_count,
         lj.last_job_id, lj.last_job_status, lj.last_job_priority, lj.last_job_at
@@ -2787,7 +2793,13 @@ export function registerRoutes(app: FastifyInstance) {
            WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
            THEN MAX(j.finished_at)
            ELSE NULL
-         END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at
+         END FROM jobs j WHERE j.canvas_id = c.id) AS ended_at,
+        (SELECT n.status FROM canvas_nodes n
+         WHERE n.canvas_id = c.id AND n.node_type = 'root'
+         ORDER BY n.updated_at DESC LIMIT 1) AS root_status,
+        (SELECT n.status FROM canvas_nodes n
+         WHERE n.canvas_id = c.id AND n.node_type = 'report'
+         ORDER BY n.updated_at DESC LIMIT 1) AS report_status
       FROM canvases c WHERE c.id = ${id}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const [nodes, edges] = await Promise.all([
@@ -2818,6 +2830,12 @@ export function registerRoutes(app: FastifyInstance) {
       const [canvas] = await tx`
         SELECT c.id, c.title, c.target_json, c.project_id, c.created_at, c.status, c.archived_at,
           c.change_revision, c.change_floor_revision,
+          (SELECT n.status FROM canvas_nodes n
+           WHERE n.canvas_id = c.id AND n.node_type = 'root'
+           ORDER BY n.updated_at DESC LIMIT 1) AS root_status,
+          (SELECT n.status FROM canvas_nodes n
+           WHERE n.canvas_id = c.id AND n.node_type = 'report'
+           ORDER BY n.updated_at DESC LIMIT 1) AS report_status,
           (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
           (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
              AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
@@ -2895,6 +2913,19 @@ export function registerRoutes(app: FastifyInstance) {
         const tx = txRaw as unknown as typeof sql;
         const [canvas] = await tx`
           SELECT id, change_revision, change_floor_revision,
+            (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id) AS job_count,
+            (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id
+               AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+            (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = canvases.id) AS started_at,
+            (SELECT CASE
+               WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
+               THEN MAX(j.finished_at) ELSE NULL END FROM jobs j WHERE j.canvas_id = canvases.id) AS ended_at,
+            (SELECT n.status FROM canvas_nodes n
+             WHERE n.canvas_id = canvases.id AND n.node_type = 'root'
+             ORDER BY n.updated_at DESC LIMIT 1) AS root_status,
+            (SELECT n.status FROM canvas_nodes n
+             WHERE n.canvas_id = canvases.id AND n.node_type = 'report'
+             ORDER BY n.updated_at DESC LIMIT 1) AS report_status,
             EXISTS (
               SELECT 1 FROM jobs j
               WHERE j.canvas_id = canvases.id
@@ -2922,6 +2953,12 @@ export function registerRoutes(app: FastifyInstance) {
           upper,
           floor,
           live: Boolean(canvas.live),
+          active_count: Number(canvas.active_count ?? 0),
+          job_count: Number(canvas.job_count ?? 0),
+          started_at: canvas.started_at,
+          ended_at: canvas.ended_at,
+          root_status: canvas.root_status,
+          report_status: canvas.report_status,
           delta: buildCanvasDelta(id, since, upper, floor, rows as never),
         };
       });
@@ -2940,6 +2977,12 @@ export function registerRoutes(app: FastifyInstance) {
         ...result.delta,
         projection: "L0_DELTA",
         live: result.live,
+        active_count: result.active_count,
+        job_count: result.job_count,
+        started_at: result.started_at,
+        ended_at: result.ended_at,
+        root_status: result.root_status,
+        report_status: result.report_status,
       };
     } catch (error) {
       req.log.error(error, "canvas delta failed");

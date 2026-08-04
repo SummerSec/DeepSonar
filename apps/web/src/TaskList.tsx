@@ -1,5 +1,6 @@
 import { Crosshair } from "@phosphor-icons/react";
 import type { CanvasSummary } from "./api";
+import { deriveTaskLifecycle } from "./task-lifecycle";
 
 /** 画布目标的自然语言单行展示。 */
 export function targetLine(target: Record<string, unknown> | undefined): string {
@@ -35,7 +36,15 @@ export function TaskList({
         )}
         <div className="flex flex-col gap-1.5">
           {canvases.map((c) => {
-            const active = c.active_count > 0;
+            const lifecycle = deriveTaskLifecycle({
+              status: c.status,
+              activeCount: c.active_count,
+              jobCount: c.job_count,
+              rootStatus: c.root_status,
+              reportStatus: c.report_status,
+              endedAt: c.ended_at,
+            });
+            const active = lifecycle.isActive;
             const selected = c.id === selectedId;
             return (
               <button
@@ -75,7 +84,7 @@ export function TaskList({
                       {c.confirmed_count}/{c.finding_count} 确认
                     </span>
                   )}
-                  {active && <span className="ml-auto text-run-400">{c.active_count} 活跃</span>}
+                  {active && <span className="ml-auto text-run-400">{lifecycle.activeCount} 活跃</span>}
                 </div>
               </button>
             );

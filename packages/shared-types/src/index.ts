@@ -65,6 +65,21 @@ export type VerificationEvidence = z.infer<typeof VerificationEvidence>;
 export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact", "report"]);
 export type NodeType = z.infer<typeof NodeType>;
 
+/**
+ * Authoritative task/canvas lifecycle rollup returned by every canvas
+ * projection.  The Scheduler owns these values; clients must overwrite them
+ * on every delta, including explicit zero/null values.
+ */
+export const CanvasLifecycleRollup = z.object({
+  active_count: z.number().int().nonnegative(),
+  job_count: z.number().int().nonnegative(),
+  started_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+  root_status: z.string().nullable(),
+  report_status: z.string().nullable(),
+});
+export type CanvasLifecycleRollup = z.infer<typeof CanvasLifecycleRollup>;
+
 export const EdgeType = z.enum([
   "child",
   "produces",
