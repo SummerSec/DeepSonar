@@ -260,7 +260,7 @@ rl.on("line", (line) => {
           jsonrpc: "2.0",
           id: request.id,
           result: {
-            content: [{ type: "text", text: "[" + UNKNOWN_TOOL_CODE + "] 未知控制工具：" + String(name) }],
+            content: [{ type: "text", text: "[" + UNKNOWN_TOOL_CODE + "] 未知控制工具" }],
             isError: true,
             error_code: UNKNOWN_TOOL_CODE,
           },

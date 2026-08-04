@@ -142,7 +142,7 @@ send(16, "tools/call", {
   arguments: { reason: "  " },
 });
 send(17, "tools/call", {
-  name: "not_a_tool",
+  name: "ghp_unknown_secret_should_not_echo",
   arguments: {},
 });
 
@@ -200,6 +200,10 @@ if (invalidRefText.includes("ghp_super_secret_should_not_echo")) {
 assertError(14, "unknown_field");
 assertError(16, "invalid_human");
 assertError(17, "unknown_tool");
+const unknownToolText = rpcReplies.find((reply) => reply.id === 17)?.result?.content?.[0]?.text ?? "";
+if (unknownToolText.includes("ghp_unknown_secret_should_not_echo")) {
+  throw new Error("MCP unknown_tool echoed an untrusted tool name");
+}
 if (rpcReplies.some((reply) => /accepted\s+event/i.test(String(reply?.result?.content?.[0]?.text ?? "")))) {
   throw new Error("legacy MCP success response leaked from control MCP");
 }
