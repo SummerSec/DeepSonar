@@ -110,6 +110,14 @@ export const config = {
     maxIntents: int("DEEPSONAR_HUB_MAX_INTENTS", 6),
   },
 
+  /** Server-side graph prompt budgets (Issue #30). */
+  graph: {
+    maxYamlCharsHub: int("MAX_GRAPH_YAML_CHARS_HUB", 48_000),
+    maxYamlCharsAgent: int("MAX_GRAPH_YAML_CHARS_AGENT", 16_000),
+    maxYamlCharsVerify: int("MAX_GRAPH_YAML_CHARS_VERIFY", 24_000),
+    maxYamlCharsReport: int("MAX_GRAPH_YAML_CHARS_REPORT", 8_000),
+  },
+
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */
   gateway: {
     /** 沙箱内可达的网关地址（容器→宿主；compose 内为服务名） */

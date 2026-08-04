@@ -302,14 +302,15 @@ Scheduler 负责：
 type GraphScope = "hub" | "agent" | "verify" | "report";
 ```
 
+所有作用域均由 Scheduler 查询层执行并受字符预算硬限制（默认 hub 48 KB、agent 16 KB、verify 24 KB、report 8 KB）。超预算写入 YAML 顶层 `truncated: true` 和 `omitted` 计数；`referableIds` 仍从完整画布返回，仅用于服务端 intent.from 校验。
+
 ### 6.1 Hub
 
-可读完整画布：
+可读完整画布的索引投影（不是无界正文）：
 
-- 所有 Fact 和 Finding 及其验证状态；
-- 所有开放、完成和失败的 Intent；
-- Verify、Human、Report 状态；
-- 人工提示和任务目标。
+- 所有 Finding 的 `verify_status` 索引（完成门禁必需）；
+- 所有开放 Intent、事实索引和结论意图聚合；
+- 近期/触发相关节点摘要、人工提示和任务目标。
 
 Hub 据此决定继续派发普通角色、请求 Fact 验证或宣布分析完成。
 

@@ -60,6 +60,79 @@ function verificationState(
 
 const VALID_OUTCOMES = new Set(["supports", "refutes", "inconclusive"]);
 
+type EvidenceNodeRow = Record<string, unknown>;
+
+/** Single source of truth for the review/test evidence hard gate. */
+export function buildEvidenceSnapshot(
+  rows: readonly EvidenceNodeRow[],
+  originJobId: string | null,
+): EvidenceSnapshot {
+  const review: Array<Record<string, unknown>> = [];
+  const test: Array<Record<string, unknown>> = [];
+  const conflicting: string[] = [];
+  for (const row of rows) {
+    const body = (row.body_json ?? {}) as Record<string, unknown>;
+    const verification = (body.verification ?? {}) as Record<string, unknown>;
+    const kind = String(verification.evidence_kind ?? "");
+    const outcome = String(verification.outcome ?? "");
+    const jobId = (row.job_id as string | null) ?? null;
+    if (!jobId || (originJobId && jobId === originJobId)) continue;
+    if (!VALID_OUTCOMES.has(outcome)) continue;
+    const base = {
+      node_id: row.id as string,
+      job_id: jobId,
+      job_type: row.job_type as string | null,
+      job_status: row.job_status as string,
+      outcome,
+      subject_revision: verification.subject_revision ?? null,
+      steps: verification.steps ?? null,
+      expected: verification.expected ?? null,
+      actual: verification.actual ?? null,
+      artifact_refs: verification.artifact_refs ?? null,
+      limitations: verification.limitations ?? null,
+      environment: verification.environment ?? null,
+      title: row.title as string,
+      description: (body.description as string) ?? null,
+    };
+    if (kind === "review") {
+      if (outcome === "inconclusive") continue;
+      if (outcome === "refutes") conflicting.push(String(row.id));
+      if (outcome === "supports" || outcome === "refutes") review.push(base);
+    } else if (kind === "test") {
+      const steps = Array.isArray(verification.steps) ? verification.steps : [];
+      const hasRevision = typeof verification.subject_revision === "string" && verification.subject_revision.trim().length > 0;
+      const hasActual =
+        (typeof verification.actual === "string" && verification.actual.trim().length > 0) ||
+        (Array.isArray(verification.artifact_refs) && verification.artifact_refs.length > 0);
+      const hasSteps = steps.length > 0;
+      const hasExpected = typeof verification.expected === "string" && verification.expected.trim().length > 0;
+      if (!hasRevision || !hasSteps || !hasExpected || !hasActual) continue;
+      if (outcome === "inconclusive") continue;
+      if (outcome === "refutes") conflicting.push(String(row.id));
+      if (outcome === "supports" || outcome === "refutes") test.push(base);
+    }
+  }
+  const reviewJobs = new Set(review.map((row) => row.job_id as string));
+  const testJobs = new Set(test.map((row) => row.job_id as string));
+  const independent = review.length > 0 && test.length > 0 && [...reviewJobs].some((id) => !testJobs.has(id));
+  const supportsTest = test.some((row) => row.outcome === "supports");
+  const missing: string[] = [];
+  if (review.length === 0) missing.push("independent_review");
+  if (test.length === 0) missing.push("runtime_test");
+  if (review.length > 0 && test.length > 0 && !independent) missing.push("independent_jobs");
+  if (test.length > 0 && !supportsTest) missing.push("supporting_test");
+  if (conflicting.length > 0) missing.push("unresolved_conflict");
+  const qualified = missing.length === 0 && independent && supportsTest && conflicting.length === 0;
+  return {
+    review,
+    test,
+    missing,
+    conflicting_node_ids: conflicting,
+    qualified,
+    reason: qualified ? undefined : "evidence_gate_failed:" + missing.join(","),
+  };
+}
+
 /**
  * 收集绑定到 Finding 的合格 review/test 证据节点。
  * - 排除原始 Finding Job 与自证
@@ -80,83 +153,7 @@ export async function collectEvidenceSnapshot(
       AND n.body_json->'verification'->>'finding_id' = ${findingId}
       AND j.status = 'succeeded'`;
 
-  const review: Array<Record<string, unknown>> = [];
-  const test: Array<Record<string, unknown>> = [];
-  const conflicting: string[] = [];
-
-  for (const n of nodes) {
-    const verRaw = ((n.body_json as Record<string, unknown>)?.verification ?? {}) as Record<string, unknown>;
-    const kind = String(verRaw.evidence_kind ?? "");
-    const outcome = String(verRaw.outcome ?? "");
-    const jobId = (n.job_id as string | null) ?? null;
-    // 同一 Job 自证 / 原始 Finding Job 产出不计
-    if (!jobId || (originJobId && jobId === originJobId)) continue;
-    // 非法 outcome 不计（不再用 !== inconclusive 放宽）
-    if (!VALID_OUTCOMES.has(outcome)) continue;
-
-    const base = {
-      node_id: n.id as string,
-      job_id: jobId,
-      job_type: n.job_type as string | null,
-      job_status: n.job_status as string,
-      outcome,
-      subject_revision: verRaw.subject_revision ?? null,
-      steps: verRaw.steps ?? null,
-      expected: verRaw.expected ?? null,
-      actual: verRaw.actual ?? null,
-      artifact_refs: verRaw.artifact_refs ?? null,
-      limitations: verRaw.limitations ?? null,
-      environment: verRaw.environment ?? null,
-      title: n.title as string,
-      description: ((n.body_json as Record<string, unknown>)?.description as string) ?? null,
-    };
-
-    if (kind === "review") {
-      // review：仅 supports/refutes 计入确认门槛；inconclusive 忽略
-      if (outcome === "inconclusive") continue;
-      if (outcome === "refutes") conflicting.push(n.id as string);
-      if (outcome === "supports" || outcome === "refutes") review.push(base);
-    } else if (kind === "test") {
-      const steps = Array.isArray(verRaw.steps) ? verRaw.steps : [];
-      const hasRevision = typeof verRaw.subject_revision === "string" && verRaw.subject_revision.trim().length > 0;
-      const hasActual =
-        (typeof verRaw.actual === "string" && verRaw.actual.trim().length > 0) ||
-        (Array.isArray(verRaw.artifact_refs) && verRaw.artifact_refs.length > 0);
-      const hasSteps = steps.length > 0;
-      const hasExpected = typeof verRaw.expected === "string" && verRaw.expected.trim().length > 0;
-      // test 必须字段完整才计为合格（subject_revision 仅要求非空可审计，不强绑任务冻结 commit）
-      if (!hasRevision || !hasSteps || !hasExpected || !hasActual) continue;
-      if (outcome === "inconclusive") continue;
-      if (outcome === "refutes") conflicting.push(n.id as string);
-      if (outcome === "supports" || outcome === "refutes") test.push(base);
-    }
-  }
-
-  // 独立：review 与 test 须来自不同 Job
-  const reviewJobs = new Set(review.map((r) => r.job_id as string));
-  const testJobs = new Set(test.map((t) => t.job_id as string));
-  const independent =
-    review.length > 0 &&
-    test.length > 0 &&
-    [...reviewJobs].some((rj) => ![...testJobs].includes(rj));
-
-  const supportsTest = test.some((t) => t.outcome === "supports");
-  const missing: string[] = [];
-  if (review.length === 0) missing.push("independent_review");
-  if (test.length === 0) missing.push("runtime_test");
-  if (review.length > 0 && test.length > 0 && !independent) missing.push("independent_jobs");
-  if (test.length > 0 && !supportsTest) missing.push("supporting_test");
-  if (conflicting.length > 0) missing.push("unresolved_conflict");
-
-  const qualified = missing.length === 0 && independent && supportsTest && conflicting.length === 0;
-  return {
-    review,
-    test,
-    missing,
-    conflicting_node_ids: conflicting,
-    qualified,
-    reason: qualified ? undefined : `evidence_gate_failed:${missing.join(",")}`,
-  };
+  return buildEvidenceSnapshot(nodes as unknown as EvidenceNodeRow[], originJobId);
 }
 
 /** 创建下一轮 verify_finding（幂等：已有活跃 verify 则跳过）。 */
@@ -1341,38 +1338,84 @@ async function clearAutoStopped(tx: Tx, canvasId: string) {
 }
 
 /** 导出给 graph 的 Finding 验证摘要 */
+/**
+ * Batch Finding verification summaries for graph projections.
+ * Findings, latest rounds and evidence nodes are loaded in three queries.
+ */
+export async function findingVerificationSummaries(
+  tx: Tx,
+  findingIds: readonly string[],
+): Promise<Map<string, Record<string, unknown>>> {
+  const ids = [...new Set(findingIds.filter((id) => typeof id === "string" && id.trim()))];
+  const result = new Map<string, Record<string, unknown>>();
+  if (ids.length === 0) return result;
+  const findings = await tx`
+    SELECT id, verify_status, job_id, raw_json
+    FROM findings WHERE id = ANY(${ids as unknown as string[]}::uuid[])`;
+  const rounds = await tx`
+    SELECT DISTINCT ON (finding_id)
+      finding_id, attempt, status, final_outcome, proposed_verdict, verify_job_id,
+      requirements_json, summary, error
+    FROM finding_verification_rounds
+    WHERE finding_id = ANY(${ids as unknown as string[]}::uuid[])
+    ORDER BY finding_id, attempt DESC`;
+  const evidenceRows = await tx`
+    SELECT n.id, n.job_id, n.body_json, n.title, j.type AS job_type, j.status AS job_status
+    FROM canvas_nodes n
+    JOIN jobs j ON j.id = n.job_id
+    WHERE n.node_type = 'fact'
+      AND n.body_json ? 'verification'
+      AND n.body_json->'verification'->>'finding_id' = ANY(${ids as unknown as string[]}::text[])
+      AND j.status = 'succeeded'`;
+  const roundByFinding = new Map(rounds.map((row) => [String(row.finding_id), row]));
+  const evidenceByFinding = new Map<string, EvidenceNodeRow[]>();
+  for (const row of evidenceRows) {
+    const body = (row.body_json ?? {}) as Record<string, unknown>;
+    const findingId = String(((body.verification ?? {}) as Record<string, unknown>).finding_id ?? "");
+    if (!findingId) continue;
+    const list = evidenceByFinding.get(findingId) ?? [];
+    list.push(row as EvidenceNodeRow);
+    evidenceByFinding.set(findingId, list);
+  }
+  for (const finding of findings) {
+    const findingId = String(finding.id);
+    const round = roundByFinding.get(findingId);
+    const evidence = buildEvidenceSnapshot(evidenceByFinding.get(findingId) ?? [], (finding.job_id as string) ?? null);
+    const state = ((finding.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined) ?? {};
+    const requirements = (round?.requirements_json as Record<string, unknown> | undefined) ?? {};
+    result.set(findingId, {
+      verify_status: finding.verify_status ?? "pending",
+      eligibility: state.eligibility ?? requirements.eligibility ?? (round?.verify_job_id ? "eligible" : "waiting_evidence"),
+      verification_attempt: round?.attempt ?? 0,
+      latest_outcome: round?.final_outcome ?? round?.status ?? null,
+      proposed_verdict: round?.proposed_verdict ?? null,
+      missing_evidence: evidence.missing,
+      review_evidence_ids: evidence.review.map((item) => item.node_id),
+      test_evidence_ids: evidence.test.map((item) => item.node_id),
+      conflicting_evidence_ids: evidence.conflicting_node_ids,
+      summary: round?.summary ?? null,
+      error: round?.error ?? null,
+    });
+  }
+  return result;
+}
+
+/** Single-Finding compatibility wrapper backed by the batch implementation. */
 export async function findingVerificationSummary(
   tx: Tx,
   findingId: string,
 ): Promise<Record<string, unknown>> {
-  const [finding] = await tx`SELECT verify_status, job_id, raw_json FROM findings WHERE id = ${findingId}`;
-  const [round] = await tx`
-    SELECT attempt, status, final_outcome, proposed_verdict, verify_job_id, requirements_json, evidence_snapshot_json, summary, error
-    FROM finding_verification_rounds
-    WHERE finding_id = ${findingId}
-    ORDER BY attempt DESC LIMIT 1`;
-  const evidence = await collectEvidenceSnapshot(
-    tx,
-    findingId,
-    (finding?.job_id as string) ?? null,
+  return (
+    (await findingVerificationSummaries(tx, [findingId])).get(findingId) ?? {
+      verify_status: "pending",
+      verification_attempt: 0,
+      latest_outcome: null,
+      missing_evidence: ["independent_review", "runtime_test"],
+      review_evidence_ids: [],
+      test_evidence_ids: [],
+      conflicting_evidence_ids: [],
+    }
   );
-  return {
-    verify_status: finding?.verify_status ?? "pending",
-    eligibility:
-      ((finding?.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined)
-        ?.eligibility ??
-      ((round?.requirements_json as Record<string, unknown> | undefined)?.eligibility ??
-        (round?.verify_job_id ? "eligible" : "waiting_evidence")),
-    verification_attempt: round?.attempt ?? 0,
-    latest_outcome: round?.final_outcome ?? round?.status ?? null,
-    proposed_verdict: round?.proposed_verdict ?? null,
-    missing_evidence: evidence.missing,
-    review_evidence_ids: evidence.review.map((r) => r.node_id),
-    test_evidence_ids: evidence.test.map((t) => t.node_id),
-    conflicting_evidence_ids: evidence.conflicting_node_ids,
-    summary: round?.summary ?? null,
-    error: round?.error ?? null,
-  };
 }
 
 void TERMINAL_JOB;
