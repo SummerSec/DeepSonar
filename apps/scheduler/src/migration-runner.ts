@@ -514,6 +514,28 @@ function catalogFingerprintForVersion(
   return expected;
 }
 
+/** The ledger bootstrap is the first migration's catalog, never the target's. */
+export type LedgerCatalogVersionPolicy = {
+  supportedBaselineVersion: number;
+  firstMigrationVersion: number;
+  latestSchemaVersion: number;
+};
+
+export function ledgerCatalogVersionForTarget(
+  currentVersion: number,
+  targetVersion: number,
+  policy: LedgerCatalogVersionPolicy = {
+    supportedBaselineVersion: SUPPORTED_BASELINE_VERSION,
+    firstMigrationVersion: FIRST_MIGRATION_VERSION,
+    latestSchemaVersion: SCHEMA_VERSION,
+  },
+): number {
+  if (targetVersion < policy.firstMigrationVersion || policy.latestSchemaVersion < policy.firstMigrationVersion) {
+    throw new Error(`target schema v${targetVersion} is below the first migration version`);
+  }
+  return currentVersion === policy.supportedBaselineVersion ? policy.firstMigrationVersion : currentVersion;
+}
+
 async function assertStructure(
   db: MigrationConnection,
   expected: TableManifest,
@@ -822,7 +844,7 @@ export async function runMigrations(
   // later intermediate versions use their own versioned catalog pin.  This
   // rejects a pre-existing ledger table whose names happen to match but whose
   // constraints/indexes drifted before any migration DDL runs.
-  const ledgerCatalogVersion = currentVersion === SUPPORTED_BASELINE_VERSION ? SCHEMA_VERSION : currentVersion;
+  const ledgerCatalogVersion = ledgerCatalogVersionForTarget(currentVersion, targetVersion);
   const ledgerCatalog = catalogFingerprintForVersion(expectedCatalogByVersion, ledgerCatalogVersion, "ledger");
   await assertCatalogFingerprint(db, ledgerCatalog, `schema v${ledgerCatalogVersion} ledger`);
   // This check intentionally happens after creating/verifying the ledger but

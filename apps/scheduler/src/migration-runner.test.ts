@@ -8,6 +8,7 @@ import postgres from "postgres";
 import {
   discoverMigrations,
   catalogFingerprint,
+  ledgerCatalogVersionForTarget,
   MIGRATE_LOCK_ID,
   MIGRATIONS_DIR,
   parseTableManifest,
@@ -40,6 +41,14 @@ test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", asyn
   assert.match(TRUSTED_V13_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SUPPORTED_BASELINE_VERSION], TRUSTED_V12_CATALOG_SHA256);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SCHEMA_VERSION], TRUSTED_V13_CATALOG_SHA256);
+  assert.equal(
+    ledgerCatalogVersionForTarget(SUPPORTED_BASELINE_VERSION, 15, {
+      supportedBaselineVersion: 12,
+      firstMigrationVersion: 13,
+      latestSchemaVersion: 15,
+    }),
+    13,
+  );
 });
 
 test("migration discovery rejects gaps and malformed filenames", async () => {
@@ -209,8 +218,10 @@ test("versioned catalog pins continue v13 through v14 and v15 chains", {
   const admin = postgres(adminUrl.toString(), { max: 1 });
   const target = await createDatabase(admin);
   const expected = await createDatabase(admin);
+  const bootstrap = await createDatabase(admin);
   const db = postgres(target.url, { max: 2 });
   const expectedDb = postgres(expected.url, { max: 2 });
+  const bootstrapDb = postgres(bootstrap.url, { max: 2 });
   const directory = await mkdtemp(path.join(os.tmpdir(), "deepsonar-future-migrations-"));
   const futureSchemaFile = path.join(os.tmpdir(), `deepsonar-schema-v14-${process.pid}-${Date.now()}.sql`);
   const directory15 = await mkdtemp(path.join(os.tmpdir(), "deepsonar-future-migrations-v15-"));
@@ -279,6 +290,23 @@ test("versioned catalog pins continue v13 through v14 and v15 chains", {
         `        'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (14, '0014_add_migration_marker.sql', '${checksum14}', 'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (15, '0015_add_migration_marker.sql', '${checksum15}', 'succeeded');\n\nCREATE TABLE projects`,
       );
     await writeFile(futureSchemaFile15, futureLatest15, "utf8");
+    await applyBaseline(bootstrapDb);
+    const appliedBootstrap = await withMigrationLock(bootstrapDb, {
+      schemaFile: futureSchemaFile15,
+      migrationsDirectory: directory15,
+      targetVersion: 15,
+      expectedCatalogFingerprints: {
+        14: expectedCatalogFingerprint,
+        15: expectedCatalogFingerprint15,
+      },
+    });
+    assert.deepEqual(appliedBootstrap, [
+      "database/migrations/0013_add_schema_migrations.sql",
+      "database/migrations/0014_add_migration_marker.sql",
+      "database/migrations/0015_add_migration_marker.sql",
+    ]);
+    const [bootstrapMeta] = await bootstrapDb<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
+    assert.equal(bootstrapMeta?.version, 15);
     await assert.rejects(
       withMigrationLock(db, {
         schemaFile: futureSchemaFile15,
@@ -308,12 +336,14 @@ test("versioned catalog pins continue v13 through v14 and v15 chains", {
   } finally {
     await db.end();
     await expectedDb.end();
+    await bootstrapDb.end();
     await rm(futureSchemaFile, { force: true });
     await rm(directory, { recursive: true, force: true });
     await rm(futureSchemaFile15, { force: true });
     await rm(directory15, { recursive: true, force: true });
     await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
     await admin.unsafe(`DROP DATABASE IF EXISTS "${expected.name}"`);
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${bootstrap.name}"`);
     await admin.end();
   }
 });
