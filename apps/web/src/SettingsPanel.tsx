@@ -1,5 +1,6 @@
 import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   api,
   type EffectiveRules,
@@ -29,6 +30,15 @@ import { MarkdownView } from "./MarkdownView";
  */
 
 type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users" | "account";
+
+const PROJECT_TAB_KEYS: readonly Tab[] = ["rules", "roles", "plane"];
+const GLOBAL_TAB_KEYS: readonly Tab[] = ["roles", "sources", "rules", "account", "users", "transfer", "credentials", "tokens"];
+
+/** Resolve a URL tab without allowing project pages to expose global-only tabs. */
+export function resolveSettingsTab(projectId: string | null, requested: string | null): Tab {
+  const allowed = projectId ? PROJECT_TAB_KEYS : GLOBAL_TAB_KEYS;
+  return requested && (allowed as readonly string[]).includes(requested) ? requested as Tab : "roles";
+}
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
@@ -66,6 +76,7 @@ export function SettingsPanel({
   variant?: "drawer" | "page";
 }) {
   const [tab, setTab] = useState<Tab>("roles");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
   const [rules, setRules] = useState<EffectiveRules | null>(null);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
@@ -154,6 +165,10 @@ export function SettingsPanel({
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(reload, [projectId]);
+
+  useEffect(() => {
+    setTab(resolveSettingsTab(projectId, searchParams.get("tab")));
+  }, [projectId, searchParams]);
 
   const flash = (m: string) => {
     setMsg(m);
@@ -450,7 +465,7 @@ export function SettingsPanel({
         { key: "credentials", label: "凭据" },
         { key: "tokens", label: "API Token" },
       ];
-  const activeTab = tabList.some((t) => t.key === tab) ? tab : tabList[0].key;
+  const activeTab = resolveSettingsTab(projectId, searchParams.get("tab") ?? tab);
 
   return (
     <aside className={shellCls}>
@@ -474,7 +489,12 @@ export function SettingsPanel({
         {tabList.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => {
+              setTab(t.key);
+              const next = new URLSearchParams(searchParams);
+              next.set("tab", t.key);
+              setSearchParams(next, { replace: true });
+            }}
             aria-current={activeTab === t.key ? "page" : undefined}
             className={`shrink-0 px-3 py-2 text-[11px] transition-colors ${
               activeTab === t.key ? "is-active text-zinc-100" : "text-zinc-600 hover:text-zinc-300"

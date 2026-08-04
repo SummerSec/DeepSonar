@@ -204,7 +204,21 @@ export const ReadinessEvidenceSummary = z.object({
 });
 export type ReadinessEvidenceSummary = z.infer<typeof ReadinessEvidenceSummary>;
 
+/** Stable repair intent consumed by the web console.  Keep href/target for
+ * older clients, but never require them to infer a route from presentation
+ * text.  Scheduler responses always include action/scope/project_id. */
+export const ReadinessFixAction = z.enum([
+  "credentials",
+  "role_config",
+  "rules",
+  "runtime_images",
+]);
+export type ReadinessFixAction = z.infer<typeof ReadinessFixAction>;
+
 export const ReadinessFix = z.object({
+  action: ReadinessFixAction.optional(),
+  scope: z.enum(["global", "project"]).optional(),
+  project_id: z.string().uuid().nullable().optional(),
   href: z.string().min(1),
   target: z.string().min(1),
 });
