@@ -63,14 +63,14 @@ matrix is intentionally explicit about the one currently non-compliant path:
 the legacy `core.ts` `ingestEvent`/`applySideEffects` transaction still holds a
 Job row while dispatching some Canvas-aware side effects.  That is migration
 debt, not a canonical order, and must be removed before event-ingestion is
-claimed complete.
+claimed complete.  Never acquire Canvas under an already-held Job lock.
 
 | Operation | Canonical acquisition order | Contract |
 | --- | --- | --- |
 | Dispatcher claim | `deepsonar_dispatch_claim` transaction advisory lock → candidate `jobs` rows (`FOR UPDATE SKIP LOCKED`) | The advisory lock serializes claim/retry and other runtime mutations; keep the candidate page bounded. |
 | Destructive canvas retry | `deepsonar_dispatch_claim` → `canvases` row (`FOR UPDATE`) → Job/runtime rows and canvas nodes | Re-check active Jobs after both locks; never wipe runtime rows from the preflight read. |
 | Event ingress (Job-only) | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → **commit** | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. Any Canvas/Finding/Hub work starts a new Canvas-first convergence transaction after this boundary. |
-| Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → convergence child locks | Read the Job's Canvas id before entering the transaction if needed; never acquire Canvas under an already-held Job lock. |
+| Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → **commit** → new Canvas-first convergence transaction | Read the Job's Canvas id before entering the transaction if needed; never acquire Finding/Round child locks while the Job-first append transaction is open. |
 | Convergence terminal/recovery | `canvases` row (`FOR UPDATE`) → `findings` row (`FOR UPDATE`) → `finding_verification_rounds` row (`FOR UPDATE`) → Jobs/nodes | Canvas is the outer convergence lock; Verify and Hub paths use the same canvas-first order. |
 | Report ingress/recovery | `canvases` row → `task_reports` row → report Job/nodes | Matches `report.ts`'s existing `canvas → task_reports → jobs/nodes` contract. |
 | Credential/runtime mutation | `deepsonar_dispatch_claim` → Credential row (`FOR UPDATE`) → dependent RoleConfig/Job reads | Prevents a runtime snapshot from observing a half-applied provider/credential mutation. |
@@ -84,18 +84,17 @@ behind the canvas-first lifecycle application boundary is a follow-up slice and
 must be accompanied by a deadlock/regression test.  The current
 `ingestEvent`/`applySideEffects` Job-first transaction has the same explicit
 follow-up debt: split the Job-only event append from Canvas-aware convergence,
-or acquire Canvas before the Job row for the Canvas-aware variant.
+or move the complete Canvas-aware append to a Canvas-first transaction and keep
+all Finding/Round work after the append boundary.
 
-## Lifecycle patch compatibility debt
+## Lifecycle patch contract
 
-The SQL adapter currently preserves the historical merge order
-`{ status: to, ...patch }`.  Consequently a caller that supplies
-`patch.status` can override the requested target.  This first slice keeps that
-behavior to avoid an API/behavior change; all existing internal callers pass
-only metadata fields (`started_at`, lease, error, and similar) and do not use
-the override.  A follow-up seam hardening change should reject or strip
-`patch.status`, add a regression test, and then migrate any external callers
-before making the application interface public.
+The application seam rejects a `patch.status` property before invoking its
+executor.  The target is supplied by the explicit `to` argument, so a metadata
+patch cannot override the guarded state transition.  Existing internal callers
+pass only metadata fields (`started_at`, lease, error, and similar); the
+characterization test keeps this boundary explicit before the interface is
+adopted by additional contexts.
 
 ## Migration rules
 

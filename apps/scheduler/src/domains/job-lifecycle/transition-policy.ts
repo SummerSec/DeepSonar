@@ -80,5 +80,8 @@ export interface JobTransitionPlan {
 export function planJobTransition(to: string, patch: Record<string, unknown> = {}): JobTransitionPlan {
   const allowedFrom = allowedSourcesForTarget(to);
   if (allowedFrom.length === 0) throw new Error(`非法目标状态: ${to}`);
+  if (Object.prototype.hasOwnProperty.call(patch, "status")) {
+    throw new Error("Job transition patch must not include status; pass the target status separately");
+  }
   return { to, allowedFrom, patch };
 }

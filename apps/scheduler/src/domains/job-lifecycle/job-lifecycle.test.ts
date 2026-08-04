@@ -86,6 +86,20 @@ test("application seam passes policy-approved guards and patch to one atomic exe
   });
 });
 
+test("patch.status cannot override the target and never reaches persistence", async () => {
+  let calls = 0;
+  const app = createJobLifecycleApplication(async () => {
+    calls += 1;
+    return { id: "unexpected", status: "succeeded" };
+  });
+
+  await assert.rejects(
+    () => app.transitionJob("job-status-patch", "running", { status: "succeeded" }),
+    /patch must not include status/,
+  );
+  assert.equal(calls, 0);
+});
+
 test("unknown targets fail before persistence and stale terminal events are idempotent", async () => {
   const calls: JobTransitionRequest[] = [];
   let status = "running";
@@ -113,7 +127,9 @@ test("unknown targets fail before persistence and stale terminal events are idem
 
 test("lock-order contract keeps Canvas-aware event ingress out of Job-first transactions", () => {
   assert.match(architectureDoc, /Event ingress \(Job-only\).*commit/s);
-  assert.match(architectureDoc, /never acquire Canvas under an already-held Job lock/);
+  assert.match(architectureDoc, /never acquire Canvas under an already-held Job lock/i);
+  assert.match(architectureDoc, /Canvas-aware target.*commit.*new Canvas-first convergence transaction/s);
+  assert.match(architectureDoc, /never acquire Finding\/Round child locks while the Job-first append transaction is open/);
   assert.match(architectureDoc, /ingestEvent.*applySideEffects.*migration\s+debt/s);
-  assert.match(architectureDoc, /patch\.status.*override/);
+  assert.match(architectureDoc, /rejects a `patch\.status` property/);
 });
