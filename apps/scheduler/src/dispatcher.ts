@@ -977,13 +977,21 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
   if (!canvasId) return;
   const [{ next_x }] = await sql<[{ next_x: number }]>`
     SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+  const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null } | null;
   const [node] = await sql`
     INSERT INTO canvas_nodes ${sql({
       canvas_id: canvasId,
       job_id: jobId,
       node_type: "job",
       title: `${job.type} #${(jobId as string).slice(0, 8)}`,
-      body_json: { type: job.type, payload: job.payload_json } as never,
+      body_json: {
+        type: job.type,
+        role: job.type,
+        payload: job.payload_json,
+        ...(roleSnapshot?.role_kind === "role" && roleSnapshot.ui_color
+          ? { ui_color: roleSnapshot.ui_color }
+          : {}),
+      } as never,
       x: next_x,
       y: 300,
       status: "running",

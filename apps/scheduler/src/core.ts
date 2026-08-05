@@ -32,6 +32,7 @@ import {
   type HubReferenceLookup,
 } from "./graph.js";
 import { ControlInputError, invalidControlPayload, invalidRole, invalidVerification } from "./control-input.js";
+import { normalizeRoleUiColor } from "./role-colors.js";
 
 type Tx = typeof sql;
 export type IngestResult = EventIngestionResult;
@@ -555,6 +556,7 @@ export interface RoleDef {
   title: string;
   description: string;
   builtin: boolean;
+  ui_color: string | null;
 }
 
 /**
@@ -564,7 +566,7 @@ export interface RoleDef {
  */
 export async function rolesForProject(db: typeof sql, projectId: string): Promise<RoleDef[]> {
   const [all, [p]] = await Promise.all([
-    db`SELECT id, name, title, description, builtin FROM agent_roles
+    db`SELECT id, name, title, description, builtin, ui_color FROM agent_roles
        WHERE kind = 'role' ORDER BY builtin DESC, name`,
     db`SELECT config_json FROM projects WHERE id = ${projectId}`,
   ]);
@@ -602,6 +604,8 @@ export interface AgentRuntimeSnapshot {
   name: string;
   /** 角色类别随 Job 冻结；决定 Hub/可下发角色/系统角色的运行契约。 */
   role_kind: "role" | "hub" | "system";
+  /** Scheduler-owned worker-role color; null for fixed semantic roles. */
+  ui_color: string | null;
   agent_cli: string;
   model: string | null;
   /** 思考/推理强度（下一 job 生效，随快照冻结） */
@@ -1235,7 +1239,14 @@ export async function applySideEffects(
           job_id: roleJob.id as string,
           node_type: "intent",
           title,
-          body_json: { role, description: it.description } as never,
+          // Freeze the scheduler-selected worker color with the intent so
+          // historical canvases do not change when a role is later edited or
+          // deleted.  System/Hub snapshots intentionally carry null here.
+          body_json: {
+            role,
+            description: it.description,
+            ...(snapshot.ui_color ? { ui_color: snapshot.ui_color } : {}),
+          } as never,
           x: 1220,
           y: next_y,
           status: "pending",
@@ -2234,7 +2245,7 @@ export async function resolveAgentSnapshotForJob(
 ): Promise<AgentRuntimeSnapshot> {
   warnIgnoredLegacyAgentDefaults();
   const roleName = roleNameForJobType(jobType);
-  const [role] = await db`SELECT id, name, description, kind FROM agent_roles WHERE name = ${roleName}`;
+  const [role] = await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`;
   if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);
 
   const [projectCfg] = await db`
@@ -2328,6 +2339,7 @@ export async function resolveAgentSnapshotForJob(
   return {
     name: roleName,
     role_kind: roleKind,
+    ui_color: roleKind === "role" ? normalizeRoleUiColor(role.ui_color) : null,
     agent_cli: agentCli,
     model: typeof cfg?.model === "string" && cfg.model.trim()
       ? cfg.model.trim()

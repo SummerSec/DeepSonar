@@ -60,8 +60,8 @@ if (!testDatabaseUrl) {
 
       const roleId = randomUUID();
       await sql`
-        INSERT INTO agent_roles (id, name, title, kind)
-        VALUES (${roleId}, ${`scope-role-${roleId}`}, 'scope role', 'role')`;
+        INSERT INTO agent_roles (id, name, title, kind, ui_color)
+        VALUES (${roleId}, ${`scope-role-${roleId}`}, 'scope role', 'role', '#c084fc')`;
       const globalRoleConfigId = randomUUID();
       const ownRoleConfigId = randomUUID();
       const otherRoleConfigId = randomUUID();

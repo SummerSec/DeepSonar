@@ -45,11 +45,18 @@ if (!testDatabaseUrl) {
         INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
         VALUES
           (${canvasId}, ${job.id}, 'root', 'root', 'running', ${sql.json({ summary: 'active' })}),
-          (${canvasId}, ${job.id}, 'report', 'report', 'pending', ${sql.json({ summary: 'pending' })})`;
+          (${canvasId}, ${job.id}, 'report', 'report', 'pending', ${sql.json({ summary: 'pending' })}),
+          (${canvasId}, ${job.id}, 'job', 'review job', 'running', ${sql.json({
+            type: 'review', role: 'review', ui_color: '#ABCDEF', summary: 'role job',
+          })}),
+          (${canvasId}, ${job.id}, 'intent', 'review intent', 'pending', ${sql.json({
+            role: 'review', ui_color: 'not-a-color', summary: 'role intent',
+          })})`;
 
       const listActive = (await read(`/projects/${projectId}/canvases?status=all`))[0] as Record<string, any>;
       const detailActive = (await read(`/canvases/${canvasId}`)).canvas as Record<string, any>;
-      const summaryActive = (await read(`/canvases/${canvasId}/summary`)).canvas as Record<string, any>;
+      const summaryResponse = await read(`/canvases/${canvasId}/summary`);
+      const summaryActive = summaryResponse.canvas as Record<string, any>;
       const deltaActive = await read(`/canvases/${canvasId}/delta?since=0`);
       for (const response of [listActive, detailActive, summaryActive, deltaActive]) {
         assert.deepEqual(lifecycle(response), {
@@ -61,7 +68,25 @@ if (!testDatabaseUrl) {
           report_status: "pending",
         });
       }
+      const summaryRoleJob = summaryResponse.nodes.find((node: Record<string, any>) => node.node_type === "job");
+      const summaryRoleIntent = summaryResponse.nodes.find((node: Record<string, any>) => node.node_type === "intent");
+      assert.equal(summaryRoleJob.body_json.ui_color, "#abcdef");
+      assert.equal(Object.hasOwn(summaryRoleIntent.body_json, "ui_color"), false);
+      const deltaRoleJob = deltaActive.upsert_nodes.find((node: Record<string, any>) => node.node_type === "job");
+      const deltaRoleIntent = deltaActive.upsert_nodes.find((node: Record<string, any>) => node.node_type === "intent");
+      assert.equal(deltaRoleJob.body_json.ui_color, "#abcdef");
+      assert.equal(Object.hasOwn(deltaRoleIntent.body_json, "ui_color"), false);
       const activeRevision = deltaActive.upper_revision;
+
+      const [roleJobNode] = await sql`
+        SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'job'`;
+      await sql`
+        UPDATE canvas_nodes SET body_json = ${sql.json({
+          type: 'review', role: 'review', ui_color: '#FEDCBA', summary: 'role job updated',
+        })} WHERE id = ${roleJobNode.id}`;
+      const colorDelta = await read(`/canvases/${canvasId}/delta?since=${activeRevision}`);
+      const colorRoleJob = colorDelta.upsert_nodes.find((node: Record<string, any>) => node.node_type === "job");
+      assert.equal(colorRoleJob.body_json.ui_color, "#fedcba");
 
       await sql`UPDATE jobs SET status = 'succeeded', finished_at = '2026-08-05T01:05:00.000Z' WHERE id = ${job.id}`;
       await sql`UPDATE canvas_nodes SET status = 'succeeded' WHERE canvas_id = ${canvasId} AND node_type IN ('root', 'report')`;

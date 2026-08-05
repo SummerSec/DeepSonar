@@ -64,8 +64,8 @@ if (!testDatabaseUrl) {
         VALUES (${ownProjectId}, ${`canvas-${ownProjectId}`}, 'scope own'),
                (${otherProjectId}, ${`canvas-${otherProjectId}`}, 'scope other')`;
       await sql`
-        INSERT INTO agent_roles (id, name, title, description, kind)
-        VALUES (${roleId}, ${roleName}, 'scope role', 'before', 'role')`;
+        INSERT INTO agent_roles (id, name, title, description, kind, ui_color)
+        VALUES (${roleId}, ${roleName}, 'scope role', 'before', 'role', '#c084fc')`;
       await sql`
         UPDATE projects
         SET config_json = ${sql.json({ roles: { enabled: [roleName] } } as never)}

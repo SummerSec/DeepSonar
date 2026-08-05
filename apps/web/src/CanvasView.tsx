@@ -34,18 +34,12 @@ import {
 } from "./graph-depth";
 import { elkLayout, layoutNodes, NODE_W } from "./layout";
 import { JobDetailPanel } from "./JobDetailPanel";
-import { nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
+import { EDGE_STYLE } from "./edge-style";
+import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
 import { Sidebar } from "./Sidebar";
 
-/** 边语义色与流速；颜色表达关系，动画表达方向。 */
-const EDGE_STYLE: Record<string, { stroke: string; speed: string }> = {
-  child: { stroke: "#59656b", speed: "4.8s" },
-  produces: { stroke: "#91a0a7", speed: "2.8s" },
-  verifies: { stroke: "#6fbbe8", speed: "1.8s" },
-  next: { stroke: "#748087", speed: "2.2s" },
-  from: { stroke: "#657279", speed: "3.2s" }, // 事实 → 意图（Cairn Intent.from）
-  to: { stroke: "var(--color-acc-400)", speed: "2.5s" }, // 意图 → 事实（Cairn Intent.to）
-};
+/** 边类型只控制线型/流速；颜色始终取源节点最终展示色。 */
+export { EDGE_STYLE } from "./edge-style";
 
 /** Avoid a main-thread ELK layout spike on large topology snapshots. */
 export const ELK_NODE_THRESHOLD = 200;
@@ -67,6 +61,7 @@ function toFlow(
   outgoing: Map<string, string[]>,
   handlers: ExpandHandlers,
 ): { nodes: Node[]; edges: Edge[] } {
+  const nodeColors = new Map(data.nodes.map((node) => [node.id, nodeDisplayColor(node)]));
   return {
     nodes: data.nodes.map((n) => {
       const depth = depths.get(n.id) ?? 1;
@@ -92,6 +87,7 @@ function toFlow(
     }),
     edges: data.edges.map((e) => {
       const st = EDGE_STYLE[e.edge_type] ?? EDGE_STYLE.child;
+      const sourceColor = nodeColors.get(e.from_node_id) ?? SEMANTIC_STYLE.note.color;
       return {
         id: e.id,
         source: e.from_node_id,
@@ -100,12 +96,13 @@ function toFlow(
         animated: true,
         className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
         style: {
-          stroke: st.stroke,
+          stroke: sourceColor,
           strokeWidth: 1.8,
           opacity: 0.9,
+          strokeDasharray: st.dash || undefined,
           "--deepsonar-edge-speed": st.speed,
         } as CSSProperties,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: st.stroke },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: sourceColor },
       };
     }),
   };
@@ -125,12 +122,12 @@ function Legend() {
     "human",
   ];
   const edgeItems = [
-    { color: EDGE_STYLE.produces.stroke, label: "produces" },
-    { color: EDGE_STYLE.verifies.stroke, label: "verifies" },
-    { color: EDGE_STYLE.next.stroke, label: "next" },
-    { color: EDGE_STYLE.from.stroke, label: "from" },
-    { color: EDGE_STYLE.to.stroke, label: "to" },
-    { color: EDGE_STYLE.child.stroke, label: "child" },
+    { dash: EDGE_STYLE.produces.dash, label: "produces" },
+    { dash: EDGE_STYLE.verifies.dash, label: "verifies" },
+    { dash: EDGE_STYLE.next.dash, label: "next" },
+    { dash: EDGE_STYLE.from.dash, label: "from" },
+    { dash: EDGE_STYLE.to.dash, label: "to" },
+    { dash: EDGE_STYLE.child.dash, label: "child" },
   ];
   return (
     <div
@@ -161,9 +158,23 @@ function Legend() {
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/[.05] pt-1.5">
           <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">边</span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block size-2 rounded-full" style={{ background: SEMANTIC_STYLE.subagent.color }} />
+            <span className="font-mono text-[9px] text-zinc-500">颜色 = 源节点</span>
+          </span>
           {edgeItems.map((it) => (
             <span key={it.label} className="flex items-center gap-1.5">
-              <span className="inline-block h-px w-3 rounded" style={{ background: it.color }} />
+              <svg aria-hidden="true" className="h-2 w-5 overflow-visible" viewBox="0 0 20 2">
+                <line
+                  x1="0"
+                  y1="1"
+                  x2="20"
+                  y2="1"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeDasharray={it.dash || undefined}
+                />
+              </svg>
               <span className="font-mono text-[9px] text-zinc-500">{it.label}</span>
             </span>
           ))}
@@ -665,7 +676,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
           zoomable
           nodeColor={(node) => {
             const canvasNode = (node.data as { canvas?: CanvasNode }).canvas;
-            return canvasNode ? SEMANTIC_STYLE[semanticNodeKind(canvasNode)].color : "#2a2a31";
+            return canvasNode ? nodeDisplayColor(canvasNode) : "#2a2a31";
           }}
           nodeStrokeColor="#3f3f48"
           position="top-right"

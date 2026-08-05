@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  boundedCanvasBody,
   buildCanvasDelta,
   parseCanvasRevision,
   projectCanvasEdge,
   projectCanvasNode,
 } from "./canvas-delta.js";
+
+test("bounded L0 bodies preserve normalized role colors and drop invalid colors", () => {
+  assert.equal(boundedCanvasBody({ ui_color: "#ABCDEF" }).ui_color, "#abcdef");
+  assert.equal(Object.hasOwn(boundedCanvasBody({ ui_color: "blue" }), "ui_color"), false);
+  assert.equal(Object.hasOwn(boundedCanvasBody({ ui_color: "#12345" }), "ui_color"), false);
+});
 
 test("canvas revision cursor accepts canonical non-negative decimal strings", () => {
   assert.equal(parseCanvasRevision("0"), 0n);

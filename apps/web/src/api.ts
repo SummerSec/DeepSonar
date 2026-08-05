@@ -395,6 +395,7 @@ export interface AgentRole {
   description: string;
   builtin: boolean;
   kind: "hub" | "system" | "role";
+  ui_color: string | null;
 }
 
 /** 项目视角的角色启用状态。 */

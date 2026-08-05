@@ -128,6 +128,7 @@ import {
   syncOfficialRuntimeCatalog,
 } from "./runtime-images.js";
 import { loadReadiness, type ReadinessMaterialSource } from "./readiness.js";
+import { allocateRoleUiColor } from "./role-colors.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -2608,7 +2609,7 @@ export function registerRoutes(app: FastifyInstance) {
 
   // ---------- 角色注册表：hub 可下发的 agent 类型，全局注册 + 项目级启用 ----------
   app.get("/agent-roles", async () =>
-    sql`SELECT id, name, title, description, builtin, kind, created_at, updated_at
+    sql`SELECT id, name, title, description, builtin, kind, ui_color, created_at, updated_at
         FROM agent_roles ORDER BY kind DESC, builtin DESC, name`,
   );
 
@@ -2621,14 +2622,22 @@ export function registerRoutes(app: FastifyInstance) {
     }
     const body = RoleBody.parse(req.body);
     try {
-      const [row] = await sql`
-        INSERT INTO agent_roles ${sql({ ...body, builtin: false, kind: "role" })}
-        RETURNING id, name, title, description, builtin, kind`;
+      const row = await sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as typeof sql;
+        // Serialize the used-color read with the INSERT.  Deleting a role
+        // naturally releases its color because no tombstone is retained.
+        const uiColor = await allocateRoleUiColor(tx);
+        const [created] = await tx`
+          INSERT INTO agent_roles ${tx({ ...body, builtin: false, kind: "role", ui_color: uiColor })}
+          RETURNING id, name, title, description, builtin, kind, ui_color`;
+        return created;
+      });
+      if (!row) throw new Error("角色创建失败：未返回新角色");
       await audit(req, {
         action: "role.create",
         resourceType: "agent_role",
         resourceId: row.id as string,
-        after: { name: row.name, title: row.title },
+        after: { name: row.name, title: row.title, ui_color: row.ui_color },
       });
       return row;
     } catch (e: unknown) {
@@ -2651,7 +2660,7 @@ export function registerRoutes(app: FastifyInstance) {
     const [row] = await sql`
       UPDATE agent_roles SET ${sql(body)}, updated_at = now()
       WHERE id = ${id}
-      RETURNING id, name, title, description, builtin, kind`;
+      RETURNING id, name, title, description, builtin, kind, ui_color`;
     if (!row) return reply.code(404).send({ error: "role not found" });
     await audit(req, {
       action: "role.update",
@@ -2698,10 +2707,10 @@ export function registerRoutes(app: FastifyInstance) {
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
     const enabled = ((cfg.roles as Record<string, unknown> | undefined)?.enabled ?? null) as string[] | null;
     const all = await sql`
-      SELECT id, name, title, description, builtin, kind FROM agent_roles
+      SELECT id, name, title, description, builtin, kind, ui_color FROM agent_roles
       WHERE kind = 'role' ORDER BY builtin DESC, name`;
     const set = enabled == null ? null : new Set(enabled);
-    return (all as unknown as { name: string; builtin: boolean }[]).map((r) => ({
+    return (all as unknown as { name: string; builtin: boolean; ui_color: string | null }[]).map((r) => ({
       ...r,
       enabled: set == null ? r.builtin : set.has(r.name),
       default_enabled: enabled == null,
@@ -2991,7 +3000,11 @@ export function registerRoutes(app: FastifyInstance) {
                   'message', LEFT(COALESCE(body_json->'last_progress'->>'message', ''), 240),
                   'kind', LEFT(COALESCE(body_json->'last_progress'->>'kind', ''), 64)
                 ) ELSE NULL END
-            ) AS body_json,
+            ) || CASE
+              WHEN body_json->>'ui_color' ~ '^#[0-9A-Fa-f]{6}$'
+              THEN jsonb_build_object('ui_color', lower(body_json->>'ui_color'))
+              ELSE '{}'::jsonb
+            END AS body_json,
             x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
           FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
         tx`

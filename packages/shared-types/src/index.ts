@@ -2,6 +2,49 @@ import { z } from "zod";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
 
+/** Scheduler-governed role colors.  Keep this palette in the shared package
+ * so the API, canvas renderer, and transfer surfaces agree on the same
+ * syntax and reserved semantic colors. */
+export const ROLE_UI_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+export const ROLE_UI_COLOR_RESERVED = [
+  "#2dd4bf", // task
+  "#38bdf8", // intent
+  "#a78bfa", // hub
+  "#fb7185", // finding
+  "#f59e0b", // legacy subagent fallback
+  "#34d399", // verify
+  "#22d3ee", // fact
+  "#818cf8", // report
+  "#f97316", // human
+  "#94a3b8", // note
+] as const;
+export const ROLE_UI_COLOR_ASSIGNABLE = [
+  "#e879f9",
+  "#facc15",
+  "#a3e635",
+  "#4ade80",
+  "#fb923c",
+  "#f472b6",
+  "#c084fc",
+  "#93c5fd",
+  "#bef264",
+  "#67e8f9",
+  "#fda4af",
+  "#d8b4fe",
+  "#fdba74",
+  "#86efac",
+  "#fde047",
+  "#5eead4",
+  "#c4b5fd",
+  "#f9a8d4",
+  "#7dd3fc",
+  "#d9f99d",
+  "#f0abfc",
+  "#fed7aa",
+  "#bbf7d0",
+  "#fef08a",
+] as const;
+
 // ---------- 枚举（一律字符串，不用 DB enum，见 ARCHITECTURE §17.1） ----------
 
 export const JobStatus = z.enum([

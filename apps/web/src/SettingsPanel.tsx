@@ -1,4 +1,5 @@
 import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
+import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -352,6 +353,14 @@ export function SettingsPanel({
           )}
           {projectId ? (
             <span className="flex items-center gap-1.5">
+              {r.kind === "role" && typeof r.ui_color === "string" && ROLE_UI_COLOR_PATTERN.test(r.ui_color) && (
+                <span
+                  className="inline-block size-2.5 rounded-full ring-1 ring-white/20"
+                  style={{ background: r.ui_color }}
+                  title={`工作角色专色 ${r.ui_color}`}
+                  aria-label={`工作角色专色 ${r.ui_color}`}
+                />
+              )}
               <span className="font-mono text-[13px] font-medium text-zinc-100">{r.name}</span>
               <span className="text-[11px] text-zinc-500">{r.title}</span>
             </span>
@@ -370,6 +379,14 @@ export function SettingsPanel({
               className="flex items-center gap-1.5 text-left"
               title="编辑角色职责"
             >
+              {r.kind === "role" && typeof r.ui_color === "string" && ROLE_UI_COLOR_PATTERN.test(r.ui_color) && (
+                <span
+                  className="inline-block size-2.5 rounded-full ring-1 ring-white/20"
+                  style={{ background: r.ui_color }}
+                  title={`工作角色专色 ${r.ui_color}`}
+                  aria-label={`工作角色专色 ${r.ui_color}`}
+                />
+              )}
               <span className="font-mono text-[13px] font-medium text-zinc-100">{r.name}</span>
               <span className="text-[11px] text-zinc-500">{r.title}</span>
               <PencilSimple size={12} className="text-zinc-600" />
