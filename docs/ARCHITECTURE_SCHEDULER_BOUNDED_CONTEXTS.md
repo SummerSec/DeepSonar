@@ -13,7 +13,7 @@ reaching through its implementation module.
 
 | Context | Owns | Does not own |
 | --- | --- | --- |
-| `job-lifecycle` | Job status policy and the guarded `jobs` status update; claim/provision/run/finalize/resume/cancel/retry orchestration will migrate here incrementally. | Canvas convergence, Finding verdicts, Report artifacts, RoleConfig/runtime resolution. |
+| `job-lifecycle` | Job status policy plus guarded application operations for claim, execution failure, timeout/orphan/reconcile recovery, cancel (single/bulk), resume, and runtime-image cancellation. | Canvas convergence, Finding verdicts, Report artifacts, RoleConfig/runtime resolution. |
 | `event-ingestion` | Event envelope validation, event-id deduplication, per-Job sequencing, and dispatching semantic side effects. | The policy for a Job status transition. |
 | `hub-orchestration` | Hub eligibility, intent validation, round budgets, idle/complete progression. | Direct Job status writes; it requests a lifecycle transition. |
 | `finding-verification` | Verification rounds, evidence gates, rework/needs-human/confirmed decisions. | Dispatcher claims and Report state. |
@@ -34,10 +34,10 @@ PostgreSQL adapter in `application.ts`:
 dispatcher / routes / reaper / reconcile
                  |
                  v
-       core.ts compatibility facade
-                 |
-                 v
  job-lifecycle application seam -----> PostgreSQL adapter (`db.ts`)
+                 ^
+                 |
+       core.ts compatibility facade (remaining convergence writers)
                  |
                  v
        pure transition policy (no imports)
@@ -45,9 +45,12 @@ dispatcher / routes / reaper / reconcile
 
 The policy has no Scheduler or database imports.  The application seam accepts
 an executor callback, so the legal/illegal transition matrix and stale-terminal
-behavior can be characterized without a live database.  The SQL adapter keeps
-the existing linearization point: `UPDATE jobs ... WHERE status = ANY(...)`.
-A `null` update is a lost race/no-op and callers must not run follow-up work.
+behavior can be characterized without a live database.  Its SQL adapter also
+owns explicit legacy recovery and bulk cancellation guards; callers inject
+their existing transaction client when a larger lock sequence is in progress.
+The generic transition keeps the existing linearization point:
+`UPDATE jobs ... WHERE status = ANY(...)`.  A `null` update is a lost race/no-op
+and callers must not run follow-up work.
 
 The compatibility facade deliberately exports the historical
 `core.ts` `canTransition` and `transitionJob` names.  No route, event, OpenAPI,
@@ -132,11 +135,10 @@ The CI gate now executes the following baseline:
    (recursive; `*.test.ts` files and the canonical adapter are excluded); an
    unclassified `UPDATE jobs ... SET status` fails the test.  The generic
    `job-lifecycle/application.ts` SQL CAS is checked separately as the
-   canonical adapter.  It also records the intentional legacy bulk-writer
-   exceptions: Reaper handles `claimed/provisioning/running → timeout`, while
-   boot reconcile handles `claimed/provisioning → pending`; these combinations
-   are outside the pure transition policy and must be closed behind the
-   lifecycle application seam in a later slice.
+   canonical adapter.  It records the intentional legacy recovery exceptions
+   (Reaper `claimed/provisioning/running → timeout` and boot reconcile
+   `claimed/provisioning → pending`) as application-owned operations rather
+   than pretending they are pure policy edges.
 3. The Fastify registrar and OpenAPI operation manifests in
    `route-surface.manifest.ts`, exercised by `route-surface.test.ts`.  The
    test observes the actual `onRoute` registrations, so a later registrar split
@@ -151,6 +153,25 @@ orchestration, Finding verification, report convergence, and role/runtime
 snapshot), keeping `core.ts` as a compatibility facade until each caller has
 an application seam.  Each slice must add characterization for its moved
 terminal/recovery path before changing lock order or side-effect sequencing.
+
+## Issue #37 Phase 1 — Job lifecycle callers migrated
+
+Phase 1 closes the lifecycle-owned status-writer boundary without changing the
+schema, HTTP surface, or side-effect ordering.  `dispatcher.ts`, `reaper.ts`,
+`reconcile.ts`, and the lifecycle routes in `routes.ts` now call explicit
+application methods from `domains/job-lifecycle/application.ts`; the SQL adapter
+receives the caller's `postgres` transaction client where applicable.  Reaper's
+multi-source execution timeout and reconcile's multi-source provision requeue
+remain named recovery methods because they are scheduler-recovery decisions,
+not pure policy edges.  Canvas archive/delete, canvas cancel-active, and
+runtime-image revocation use bulk `UPDATE ... RETURNING` operations so side
+effects run only for rows that won the CAS.
+
+The Phase 0 inventory intentionally still lists these direct writers in
+`core.ts`: `request_human` (`running → waiting_human`), `finalizeJob`
+(`running → succeeded/failed`), and Verify priority drain (`pending →
+cancelled`).  They are coupled to Canvas/Finding/Report convergence and remain
+for the next slices; Phase 1 does not claim Issue #37 is complete.
 
 ## Migration rules
 

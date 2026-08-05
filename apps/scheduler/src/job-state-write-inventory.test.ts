@@ -11,10 +11,10 @@ type JobStateWriteEntry = {
 };
 
 /**
- * Phase-0 inventory of the legacy direct Job status writers.  The IDs are
- * semantic boundaries, not source line numbers.  A later bounded-context
- * slice may move an operation, but it must either preserve the operation's
- * guard or update this characterization with an intentional review.
+ * Phase-1 inventory of the intentionally retained direct Job status writers.
+ * Lifecycle-owned callers now route through domains/job-lifecycle/application;
+ * only semantic-human, finalize, and priority-drain writes remain in core.ts
+ * until their convergence/event-ingestion slices are moved.
  */
 const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
   {
@@ -37,83 +37,6 @@ const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
     targets: ["cancelled"],
     purpose: "priority drain cancels pending non-gate Verify Jobs",
     pattern: /UPDATE\s+jobs\s+j\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?FROM\s+findings\s+f[\s\S]*?j\.status\s*=\s*'pending'/,
-  },
-  {
-    id: "dispatcher.claim",
-    file: "dispatcher.ts",
-    targets: ["claimed"],
-    purpose: "dispatcher claims a pending Job",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'claimed'[\s\S]*?WHERE\s+id\s*=\s*\$\{job\.id\s+as\s+string\}[\s\S]*?status\s*=\s*'pending'/,
-  },
-  {
-    id: "dispatcher.execution-failure",
-    file: "dispatcher.ts",
-    targets: ["failed"],
-    purpose: "dispatcher exception path fails only active claim/provision/run Jobs",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'failed'[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}[\s\S]*?status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*,\s*'running'\s*\)/,
-  },
-  {
-    id: "reaper.execution-timeout",
-    file: "reaper.ts",
-    targets: ["timeout"],
-    purpose: "Reaper marks over-time active Jobs as timeout",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'timeout'[\s\S]*?WHERE\s+status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*,\s*'running'\s*\)[\s\S]*?started_at\s+IS\s+NOT\s+NULL/,
-  },
-  {
-    id: "reaper.provision-timeout",
-    file: "reaper.ts",
-    targets: ["failed"],
-    purpose: "Reaper fails Jobs stuck in claim/provisioning",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'failed'[\s\S]*?WHERE\s+status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*\)[\s\S]*?claimed_at\s+IS\s+NOT\s+NULL/,
-  },
-  {
-    id: "reaper.lease-orphan",
-    file: "reaper.ts",
-    targets: ["orphan"],
-    purpose: "Reaper marks expired running leases orphan",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'orphan'[\s\S]*?WHERE\s+status\s*=\s*'running'[\s\S]*?lease_expires_at\s+IS\s+NOT\s+NULL/,
-  },
-  {
-    id: "reconcile.provision-requeue",
-    file: "reconcile.ts",
-    targets: ["pending"],
-    purpose: "boot reconcile requeues Jobs interrupted during provisioning",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'pending'[\s\S]*?WHERE\s+status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*\)/,
-  },
-  {
-    id: "reconcile.running-orphan",
-    file: "reconcile.ts",
-    targets: ["orphan"],
-    purpose: "boot reconcile closes Jobs that were running at scheduler restart",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'orphan'[\s\S]*?WHERE\s+status\s*=\s*'running'/,
-  },
-  {
-    id: "routes.archive-cancel-active",
-    file: "routes.ts",
-    targets: ["cancelled"],
-    purpose: "task archive/delete cancels active Jobs before destructive cleanup",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?COALESCE\(error,\s*'task archived\/deleted'\)[\s\S]*?WHERE\s+id\s*=\s*\$\{id\}[\s\S]*?status\s+IN\s*\(\s*'pending'/,
-  },
-  {
-    id: "routes.runtime-image-revocation",
-    file: "routes.ts",
-    targets: ["cancelled"],
-    purpose: "revoking a runtime image cancels Jobs frozen to that image",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?agent_snapshot_json\s+#>>\s*'\{runtime_image,runtime_image_version_id\}'[\s\S]*?status\s+IN\s*\(\s*'pending'/,
-  },
-  {
-    id: "routes.job-cancel",
-    file: "routes.ts",
-    targets: ["cancelled"],
-    purpose: "single-job cancel route performs an active-state CAS",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?lease_expires_at\s*=\s*NULL[\s\S]*?WHERE\s+id\s*=\s*\$\{id\}[\s\S]*?status\s+IN\s*\(\s*'pending'/,
-  },
-  {
-    id: "routes.canvas-cancel-active",
-    file: "routes.ts",
-    targets: ["cancelled"],
-    purpose: "canvas cancel-active route cancels each still-active Job",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}[\s\S]*?status\s+IN\s*\(\s*'pending'/,
   },
 ] as const;
 

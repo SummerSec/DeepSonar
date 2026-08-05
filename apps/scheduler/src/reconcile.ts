@@ -1,6 +1,7 @@
 import { forceRemoveContainer, listDeepSonarContainers } from "@deepsonar/runtime-sandbox";
 import { sql } from "./db.js";
 import { planeWriteback } from "./plane-sync.js";
+import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
@@ -11,6 +12,7 @@ import { planeWriteback } from "./plane-sync.js";
  * 必须在 dispatcher/reaper 启动前执行完，避免新调度与旧残留交错。
  */
 export async function reconcileOnBoot(): Promise<void> {
+  const lifecycle = createSqlJobLifecycleApplication();
   const containers = await listDeepSonarContainers();
   const activeJobs = await sql`
     SELECT id, status, sandbox_id FROM jobs WHERE status IN ('claimed','provisioning','running')`;
@@ -25,44 +27,38 @@ export async function reconcileOnBoot(): Promise<void> {
   }
 
   // 2. provision 途中中断 → 重置回 pending（无副作用，安全重排）
-  const reset = await sql`
-    UPDATE jobs SET status = 'pending', claimed_at = NULL, lease_expires_at = NULL
-    WHERE status IN ('claimed','provisioning')
-    RETURNING id`;
+  const reset = await lifecycle.reconcileProvisioning();
   if (reset.length > 0) {
     console.warn(`[reconcile] ${reset.length} 个 provision 途中 job 已重置回 pending`);
   }
 
   // 3. running 中断 → orphan + 销毁残留容器 + 画布节点同步 + Plane 回写
-  const orphaned = await sql`
-    UPDATE jobs SET status = 'orphan', finished_at = now(),
-                    error = COALESCE(error, '') || '调度器重启（执行中断）'
-    WHERE status = 'running'
-    RETURNING id, sandbox_id, type, canvas_id, project_id, priority, error`;
+  const orphaned = await lifecycle.reconcileRunning();
   const containerByJob = new Map(containers.map((c) => [c.jobId, c.containerId]));
   for (const j of orphaned) {
-    const cid = (j.sandbox_id as string | null) ?? containerByJob.get(j.id as string);
+    const jobId = j.id as string;
+    const cid = (j.sandbox_id as string | null) ?? containerByJob.get(jobId);
     if (cid) {
       await forceRemoveContainer(cid)
         .catch((e) => console.error(`[reconcile] 容器回收失败 ${cid}:`, e instanceof Error ? e.message : e));
     }
     await sql`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
-      WHERE job_id = ${j.id} AND node_type = ANY(${["job", "intent", "report"]})`;
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
     // §6.3：orphan 即吊销短期模型 Token
     const { revokeJobTokens } = await import("./gateway.js");
-    await revokeJobTokens(j.id as string, "orphan_reconcile").catch(() => {});
+    await revokeJobTokens(jobId, "orphan_reconcile").catch(() => {});
 
     // 启动恢复也必须执行与实时终态入口相同的业务收口，不能只改 jobs 表。
     if (j.type === "verify_finding") {
       const { recoverVerifyJobTerminal } = await import("./core.js");
-      await recoverVerifyJobTerminal(j.id as string, "orphan", (j.error as string) ?? null).catch((e) =>
+      await recoverVerifyJobTerminal(jobId, "orphan", (j.error as string) ?? null).catch((e) =>
         console.error(`[reconcile] verify recovery failed:`, e),
       );
     } else if (j.type === "report") {
       const { finalizeReportJob } = await import("./report.js");
       await sql.begin(async (tx) => {
-        await finalizeReportJob(tx as unknown as typeof sql, j.id as string, {
+        await finalizeReportJob(tx as unknown as typeof sql, jobId, {
           failed: true,
           error: (j.error as string) ?? "orphan_reconcile",
         });
@@ -85,7 +81,7 @@ export async function reconcileOnBoot(): Promise<void> {
         );
       }).catch((e) => console.error(`[reconcile] terminal canvas advance failed:`, e));
     }
-    await planeWriteback(j.id as string).catch(() => {});
+    await planeWriteback(jobId).catch(() => {});
   }
   if (orphaned.length > 0) {
     console.warn(`[reconcile] ${orphaned.length} 个 running job 已标记 orphan（可 resume）`);

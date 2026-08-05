@@ -129,7 +129,7 @@ pending → claimed → provisioning → running
 | 读图预算 / GraphScope | #30 | **部分已落地**（scope + 字符预算）；索引层/Worker 邻域与可观测性可继续收紧 |
 | Finding 追踪链 + 画布只看链路 | #31 | 服务端 `trace`；`traceFinding` 聚焦 |
 | 整插件 / 整源挂载 | #33 | `modules` selector：`plugin:` / `source:*` |
-| Scheduler bounded contexts / characterization | #37 | **Phase 0 guardrails**：lifecycle fixtures, direct Job status-write inventory, and route/OpenAPI surface manifests are CI-gated; later slices move one context at a time and close only after all callers migrate behind application seams |
+| Scheduler bounded contexts / characterization | #37 | **Phase 1 lifecycle callers migrated**：dispatcher/reaper/reconcile and lifecycle routes use the Job lifecycle application/ports seam (including explicit recovery exceptions and atomic bulk cancel); Phase 0 inventory retains only core semantic-human/finalize/priority-drain writers. Event-ingestion/Hub/Finding/Report convergence slices remain open; do not close #37 |
 | 实时流 + 运行中过程流 | #38 | WS 鉴权；inflight 读 `stream.ndjson` |
 | 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`canvas_changes` durable revision/tombstone；`delta?since=<revision>`，游标过旧显式回退 L0 |
 | 分层共享资产 | #41 | platform / project / finding 只读注入；人工+Agent publish |

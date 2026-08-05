@@ -78,7 +78,6 @@ import {
   rulesForProject,
   scanConfigContent,
   triggerHubFromHumanComment,
-  transitionJob,
   validateConfigFilePath,
   validateEnvVars,
 } from "./core.js";
@@ -129,6 +128,7 @@ import {
 } from "./runtime-images.js";
 import { loadReadiness, type ReadinessMaterialSource } from "./readiness.js";
 import { allocateRoleUiColor } from "./role-colors.js";
+import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -339,20 +339,17 @@ async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
 
 /** 取消画布上全部活动 job（归档/删除前兜底）。 */
 async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
-  const active = await sql`
-    SELECT id, sandbox_id, type FROM jobs
-    WHERE canvas_id = ${canvasId}
-      AND status IN ('pending','claimed','provisioning','running','waiting_human')`;
+  const active = await createSqlJobLifecycleApplication().cancelJobsOnCanvas(
+    canvasId,
+    "task archived/deleted",
+    true,
+    false,
+  );
   if (active.length === 0) return 0;
   const { revokeJobTokens } = await import("./gateway.js");
   const { recoverVerifyJobTerminal } = await import("./core.js");
   for (const job of active) {
     const id = job.id as string;
-    await sql`
-      UPDATE jobs SET status = 'cancelled', finished_at = now(),
-        error = COALESCE(error, 'task archived/deleted')
-      WHERE id = ${id}
-        AND status IN ('pending','claimed','provisioning','running','waiting_human')`;
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
     }
@@ -1167,7 +1164,7 @@ export function registerRoutes(app: FastifyInstance) {
         AND status IN ('failed','timeout','orphan','waiting_human')
       ORDER BY created_at DESC LIMIT 1`;
     if (resumable) {
-      const row = await transitionJob(resumable.id as string, "pending", {
+      const row = await createSqlJobLifecycleApplication().transitionJob(resumable.id as string, "pending", {
         error: null,
         lease_expires_at: null,
         claimed_at: null,
@@ -2180,11 +2177,10 @@ export function registerRoutes(app: FastifyInstance) {
       WHERE id = ${id} RETURNING *`;
 
     if (body.status === "revoked") {
-      const affected = await sql`
-        UPDATE jobs SET status = 'cancelled', finished_at = now(), error = ${`runtime image revoked: ${body.reason}`}
-        WHERE agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
-          AND status IN ('pending','claimed','provisioning','running','waiting_human')
-        RETURNING id, sandbox_id`;
+      const affected = await createSqlJobLifecycleApplication().cancelJobsForRuntimeImageVersion(
+        id,
+        `runtime image revoked: ${body.reason}`,
+      );
       for (const job of affected) {
         if (job.sandbox_id) await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
       }
@@ -3928,13 +3924,7 @@ export function registerRoutes(app: FastifyInstance) {
     const reason =
       body.reason?.trim() ||
       (body.force ? "强制退出" : "cancelled");
-    const [job] = await sql`
-      UPDATE jobs SET status = 'cancelled', finished_at = now(),
-        error = ${reason},
-        lease_expires_at = NULL,
-        heartbeat_at = NULL
-      WHERE id = ${id} AND status IN ('pending','claimed','provisioning','running','waiting_human')
-      RETURNING id, status, sandbox_id, project_id, type, canvas_id`;
+    const job = await createSqlJobLifecycleApplication().cancelJob(id, reason);
     if (!job) return reply.code(409).send({ error: "job 不在可取消状态" });
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch((e) => {
@@ -3974,22 +3964,12 @@ export function registerRoutes(app: FastifyInstance) {
     const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const reason = body.reason?.trim() || "强制退出全部活动 Job";
-    const active = await sql`
-      SELECT id, sandbox_id, type FROM jobs
-      WHERE canvas_id = ${canvasId}
-        AND status IN ('pending','claimed','provisioning','running','waiting_human')`;
+    const active = await createSqlJobLifecycleApplication().cancelJobsOnCanvas(canvasId, reason);
     const { revokeJobTokens } = await import("./gateway.js");
     const { recoverVerifyJobTerminal } = await import("./core.js");
     let cancelled = 0;
     for (const job of active) {
       const jobId = job.id as string;
-      const [row] = await sql`
-        UPDATE jobs SET status = 'cancelled', finished_at = now(),
-          error = ${reason}, lease_expires_at = NULL, heartbeat_at = NULL
-        WHERE id = ${jobId}
-          AND status IN ('pending','claimed','provisioning','running','waiting_human')
-        RETURNING id`;
-      if (!row) continue;
       cancelled += 1;
       if (job.sandbox_id) {
         await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
@@ -4018,7 +3998,7 @@ export function registerRoutes(app: FastifyInstance) {
   // 走原子状态机；清空上一轮执行痕迹；画布节点回到 pending 等再运行
   app.post("/jobs/:id/resume", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const row = await transitionJob(id, "pending", {
+    const row = await createSqlJobLifecycleApplication().transitionJob(id, "pending", {
       error: null,
       lease_expires_at: null,
       claimed_at: null,

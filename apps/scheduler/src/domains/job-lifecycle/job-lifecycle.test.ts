@@ -125,6 +125,76 @@ test("unknown targets fail before persistence and stale terminal events are idem
   ]);
 });
 
+test("application seam exposes explicit recovery and bulk ports without bypassing callers", async () => {
+  const calls: string[] = [];
+  const app = createJobLifecycleApplication({
+    transitionJob: async (request) => ({ id: request.jobId, status: request.to }),
+    claimPendingJob: async (id) => {
+      calls.push(`claim:${id}`);
+      return { id, status: "claimed" };
+    },
+    failExecution: async (id, error) => {
+      calls.push(`fail:${id}:${error}`);
+      return { id, status: "failed", error };
+    },
+    reapExecutionTimeout: async () => {
+      calls.push("reap-timeout");
+      return [{ id: "timeout" }];
+    },
+    reapProvisionTimeout: async (seconds) => {
+      calls.push(`reap-provision:${seconds}`);
+      return [{ id: "provision" }];
+    },
+    reapLeaseOrphans: async () => {
+      calls.push("reap-orphan");
+      return [{ id: "orphan" }];
+    },
+    reconcileProvisioning: async () => {
+      calls.push("reconcile-provision");
+      return [{ id: "reset" }];
+    },
+    reconcileRunning: async () => {
+      calls.push("reconcile-running");
+      return [{ id: "orphan" }];
+    },
+    cancelJob: async (id, error) => {
+      calls.push(`cancel:${id}:${error}`);
+      return { id, status: "cancelled" };
+    },
+    cancelJobsOnCanvas: async (id, error, preserve) => {
+      calls.push(`canvas-cancel:${id}:${error}:${String(preserve)}`);
+      return [{ id: "canvas-job" }];
+    },
+    cancelJobsForRuntimeImageVersion: async (id, error) => {
+      calls.push(`image-cancel:${id}:${error}`);
+      return [{ id: "image-job" }];
+    },
+  });
+
+  assert.equal((await app.claimPendingJob("claim"))?.status, "claimed");
+  assert.equal((await app.failExecution("fail", "boom"))?.status, "failed");
+  assert.deepEqual(await app.reapExecutionTimeout(), [{ id: "timeout" }]);
+  assert.deepEqual(await app.reapProvisionTimeout(7), [{ id: "provision" }]);
+  assert.deepEqual(await app.reapLeaseOrphans(), [{ id: "orphan" }]);
+  assert.deepEqual(await app.reconcileProvisioning(), [{ id: "reset" }]);
+  assert.deepEqual(await app.reconcileRunning(), [{ id: "orphan" }]);
+  assert.equal((await app.cancelJob("cancel", "reason"))?.status, "cancelled");
+  assert.deepEqual(await app.cancelJobsOnCanvas("canvas", "reason", true), [{ id: "canvas-job" }]);
+  assert.deepEqual(await app.cancelJobsForRuntimeImageVersion("image", "revoked"), [{ id: "image-job" }]);
+  assert.deepEqual(calls, [
+    "claim:claim",
+    "fail:fail:boom",
+    "reap-timeout",
+    "reap-provision:7",
+    "reap-orphan",
+    "reconcile-provision",
+    "reconcile-running",
+    "cancel:cancel:reason",
+    "canvas-cancel:canvas:reason:true",
+    "image-cancel:image:revoked",
+  ]);
+});
+
 test("lock-order contract keeps Canvas-aware event ingress out of Job-first transactions", () => {
   assert.match(architectureDoc, /Event ingress \(Job-only\).*job-only side effects.*commit/s);
   assert.match(architectureDoc, /never acquire Canvas under an already-held Job lock/i);
