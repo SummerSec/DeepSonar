@@ -142,7 +142,7 @@ pending → claimed → provisioning → running
 | Scheduler bounded contexts / characterization | #37 | **Incrementally extracted**：lifecycle, event-ingestion, Hub, finding-verification, report-convergence, and role-runtime-snapshot each expose an application/ports seam. Finding/report/runtime adapters preserve the legacy SQL implementations and transaction behavior while callers migrate; report and read-only Finding routes are registered by domain registrars. Core remains the compatibility composition facade and preserves Canvas-first locking. |
 | 实时流 + 运行中过程流 | #38 | WS 鉴权；inflight 读 `stream.ndjson` |
 | 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`canvas_changes` durable revision/tombstone；`delta?since=<revision>`，游标过旧显式回退 L0 |
-| 分层共享资产 | #41 | platform / project / finding 只读注入；人工+Agent publish |
+| 分层共享资产 | #41 | **Runtime foundation landed**：仅接受带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，并固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`；fresh/warm attach 后均校验实际 mount。资产元数据/API、Job 快照、人工与 Agent publish、分层策略及 UI 仍待实现。 |
 | 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
 | 双轨报告 | #43 | **已完成**：任务收敛后保留一份 Task Report；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report，支持手动刷新/重试并限制单 Finding 同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | profile 可配置；任务>项目>全局；运行中显著标识；CVSS 主流版+可演进 |

@@ -9,8 +9,68 @@ import {
   normalizeRuntimeErrorDetails,
   parseRuntimeLine,
   runtimeCliEnv,
+  assertSharedAssetsContainerMount,
+  assertSharedAssetsVolumeOwnership,
+  sharedAssetsVolumeBinds,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+
+test("shared assets accept only Scheduler-owned named volumes and always mount read-only", () => {
+  assert.deepEqual(sharedAssetsVolumeBinds(undefined), []);
+  assert.deepEqual(sharedAssetsVolumeBinds({ volumeName: "deepsonar-assets-123e4567-e89b-12d3-a456-426614174000" }), [
+    "deepsonar-assets-123e4567-e89b-12d3-a456-426614174000:/workspace/.deepsonar/shared:ro",
+  ]);
+  for (const volumeName of ["/host/assets", "C:\\assets", "other-volume", "deepsonar-assets-../secret", "deepsonar-assets-name:rw"]) {
+    assert.throws(
+      () => sharedAssetsVolumeBinds({ volumeName }),
+      /Scheduler-owned deepsonar-assets/,
+    );
+  }
+});
+
+test("shared assets volume ownership is bound to the exact Job", () => {
+  const volume = {
+    Name: "deepsonar-assets-job-1",
+    Driver: "local",
+    Scope: "local",
+    Labels: {
+      "deepsonar.shared_assets.managed": "true",
+      "deepsonar.shared_assets.job": "job-1",
+    },
+  };
+  assert.doesNotThrow(() => assertSharedAssetsVolumeOwnership(volume, "deepsonar-assets-job-1", "job-1"));
+  assert.throws(
+    () => assertSharedAssetsVolumeOwnership(volume, "deepsonar-assets-job-1", "job-2"),
+    /Scheduler-managed volume for this Job/,
+  );
+  assert.throws(
+    () => assertSharedAssetsVolumeOwnership({ ...volume, Labels: {} }, "deepsonar-assets-job-1", "job-1"),
+    /Scheduler-managed volume for this Job/,
+  );
+});
+
+test("warm attach accepts only the exact read-only shared assets mount", () => {
+  const expected = {
+    Mounts: [{
+      Type: "volume",
+      Name: "deepsonar-assets-job-1",
+      Destination: "/workspace/.deepsonar/shared",
+      RW: false,
+    }],
+  };
+  assert.doesNotThrow(() => assertSharedAssetsContainerMount(expected, "deepsonar-assets-job-1"));
+  for (const invalid of [
+    { ...expected, Mounts: [{ ...expected.Mounts[0], RW: true }] },
+    { ...expected, Mounts: [{ ...expected.Mounts[0], Name: "deepsonar-assets-foreign" }] },
+    { ...expected, Mounts: [{ ...expected.Mounts[0], Type: "bind" }] },
+    { Mounts: [] },
+  ]) {
+    assert.throws(
+      () => assertSharedAssetsContainerMount(invalid, "deepsonar-assets-job-1"),
+      /frozen read-only volume/,
+    );
+  }
+});
 
 test("rate-limit error details keep only server-owned bounded metadata", () => {
   const normalized = normalizeRuntimeErrorDetails({
