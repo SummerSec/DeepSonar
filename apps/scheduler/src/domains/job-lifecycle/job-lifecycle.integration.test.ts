@@ -93,6 +93,15 @@ if (!testDatabaseUrl) {
         { status: "pending", claimed_at: null, lease_expires_at: null },
       );
 
+      const bootRunningId = await insertJob("running");
+      const bootOrphaned = await app.reconcileRunning();
+      assert.equal(bootOrphaned.some((row) => row.id === bootRunningId), true);
+      const [bootRow] = await sql`SELECT status, error FROM jobs WHERE id = ${bootRunningId}`;
+      assert.deepEqual(
+        { status: bootRow.status, error: bootRow.error },
+        { status: "orphan", error: "调度器重启（执行中断）" },
+      );
+
       const runtimeVersionId = randomUUID();
       const runtimeImageJob = await insertJob("running");
       await sql`
