@@ -24,6 +24,7 @@ export {
   RUNTIME_IMAGE_REGISTRY_SCHEMA_V1,
   RUNTIME_IMAGE_REGISTRY_SCHEMA_V2,
   SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
+  validateRuntimeImageRegistryPolicy,
 } from "./runtime-image-registry-contract.js";
 export type {
   ParsedOciDigestRef,
@@ -118,6 +119,17 @@ export function defaultRuntimeImageKey(roleName: string): string {
 export function immutableDigest(imageRef: string): string | null {
   const match = imageRef.trim().match(/@(sha256:[0-9a-f]{64})$/);
   return match?.[1] ?? null;
+}
+
+/** Return the digest visible to the legacy GitHub-backed runtime consumer. */
+export function legacyProjectedRegistryDigest(version: RuntimeImageRegistryVersion): string | null {
+  if (!version.image_ref) return null;
+  return version.digest ?? immutableDigest(version.image_ref);
+}
+
+/** Collect only digests that have an actual legacy GitHub projection. */
+export function legacyProjectedRegistryDigests(versions: readonly RuntimeImageRegistryVersion[]): string[] {
+  return [...new Set(versions.map(legacyProjectedRegistryDigest).filter((value): value is string => Boolean(value)))];
 }
 
 export function localImageDigest(imageRef: string): string | null {
@@ -308,9 +320,9 @@ function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
 }
 
 /**
- * Runtime-facing wrapper.  The default policy is server-owned and has no ACR
- * hosts, so an ACR v2 ref is rejected unless a caller explicitly supplies a
- * policy constructed by the server.
+ * Runtime-facing wrapper.  The default policy is server-owned and pins ACR to
+ * the exact published endpoint, so another ACR ref is rejected
+ * unless a caller explicitly supplies a policy constructed by the server.
  */
 export function parseRegistry(
   raw: unknown,
@@ -618,6 +630,7 @@ export async function applyOfficialRuntimeCatalog(
       WHERE runtime_images.official = true
       RETURNING id`;
     if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
+    const appliedDigests = new Set<string>();
     for (const version of item.versions) {
       const imageRef = version.image_ref;
       // v2 may carry only Docker Hub/ACR refs.  Until the channel selector is
@@ -672,8 +685,9 @@ export async function applyOfficialRuntimeCatalog(
               THEN EXCLUDED.approved_at ELSE runtime_image_versions.approved_at END,
             updated_at = now()`;
       }
+      appliedDigests.add(digest);
     }
-    const digests = item.versions.map((version) => version.digest ?? immutableDigest(version.image_ref ?? "")).filter((value): value is string => Boolean(value));
+    const digests = [...appliedDigests];
     // 同一发布可有多平台版本：凡本次清单中的 digest 均标记 promoted（解析 Job 时再按宿主 arch 优选）
     if ((reconcilePromotions || envOnlyKeys.has(item.image_key)) && digests.length > 0) {
       await sql`

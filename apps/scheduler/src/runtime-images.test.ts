@@ -3,10 +3,12 @@ import test from "node:test";
 import {
   createServerOwnedRuntimeImageRegistryPolicy,
   hostRuntimePlatform,
+  legacyProjectedRegistryDigests,
   parseOciDigestRef,
   parseRuntimeImageRegistry,
   runtimeImageRegistryNextSyncDelayMs,
   shouldReconcileRuntimeImagePromotions,
+  validateRuntimeImageRegistryPolicy,
   type RuntimeImageRegistry,
 } from "./runtime-images.js";
 
@@ -35,6 +37,7 @@ test("宿主架构映射为运行时镜像平台", () => {
 });
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
+const BUILTIN_ACR_HOST = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com";
 const baseImage = {
   image_key: "deepsonar-base",
   name: "DeepSonar Base",
@@ -61,6 +64,43 @@ test("v1 single image_ref is normalized to a known channel without changing the 
   assert.equal(version.digest, DIGEST);
   assert.deepEqual(version.registry_refs!, { github: version.image_ref });
   assert.equal(parseRuntimeImageRegistry({ schema_version: 1, images: [] }).schema, "deepsonar.registry/v1");
+});
+
+test("the current official ACR-only v1 endpoint is accepted, while arbitrary ACR hosts stay rejected", () => {
+  const make = (host: string) => ({
+    schema: "deepsonar.registry/v1",
+    images: [{
+      ...baseImage,
+      versions: [{ version: "0.1.0-linux-amd64", image_ref: `${host}/summersec/deepsonar-base@${DIGEST}`, platforms: ["linux/amd64"], size_bytes: 42 }],
+    }],
+  });
+  const normalized = parseRuntimeImageRegistry(make(BUILTIN_ACR_HOST));
+  assert.deepEqual(normalized.images[0]!.versions[0]!.registry_refs, {
+    "aliyun-acr": `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`,
+  });
+  assert.throws(() => parseRuntimeImageRegistry(make("crpi-other.cn-hangzhou.personal.cr.aliyuncs.com")), /policy|allowed/i);
+  assert.throws(() => parseRuntimeImageRegistry(make("registry.cn-hangzhou.aliyuncs.com")), /policy|allowed/i);
+});
+
+test("GitHub and Docker Hub policy authority cannot be overridden or smuggled through a direct parser policy", () => {
+  assert.throws(() => createServerOwnedRuntimeImageRegistryPolicy({
+    github: { hosts: ["evil.example.com"], namespaces: ["summersec"] },
+  } as never), /server-owned|overridden|fixed/i);
+  const builtin = createServerOwnedRuntimeImageRegistryPolicy();
+  assert.ok(Object.isFrozen(builtin));
+  assert.ok(Object.isFrozen(builtin.github));
+  assert.throws(() => validateRuntimeImageRegistryPolicy({
+    ...builtin,
+    github: { hosts: ["evil.example.com"], namespaces: ["summersec"] },
+  } as never), /server-owned|overridden|fixed/i);
+  assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v1", images: [] }, {
+    ...builtin,
+    dockerhub: { hosts: ["docker.io", "docker.example.com"], namespaces: ["summersec"] },
+  } as never), /server-owned|overridden|fixed/i);
+  assert.throws(() => validateRuntimeImageRegistryPolicy({
+    ...builtin,
+    ["aliyun-acr"]: { hosts: [BUILTIN_ACR_HOST, BUILTIN_ACR_HOST], namespaces: ["summersec"] },
+  } as never), /duplicate|ambiguous|policy/i);
 });
 
 test("v2 keeps one canonical digest/platform/size and only emits available channel refs", () => {
@@ -111,7 +151,7 @@ test("missing v2 GitHub channel stays unavailable instead of falling back to Doc
   assert.equal(version.registry_refs!.dockerhub, `docker.io/summersec/deepsonar-base@${DIGEST}`);
 });
 
-test("ACR requires an explicit server-owned host and namespace policy", () => {
+test("non-builtin ACR requires an explicit server-owned host and namespace policy", () => {
   const payload = {
     schema: "deepsonar.registry/v2",
     images: [{
@@ -148,6 +188,51 @@ test("v2 rejects channel/host mismatch, digest mismatch, duplicate refs, and unk
       { version: "0.1.1", digest: DIGEST, platforms: ["linux/arm64"], size_bytes: 42, registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` } },
     ] }],
   }), /duplicate/i);
+});
+
+test("registry references are globally unique except the proven v1 disjoint-platform alias", () => {
+  const ref = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  const makeV1 = (images: unknown[]) => ({ schema: "deepsonar.registry/v1", images });
+  const image = (imageKey: string, versions: unknown[]) => ({ ...baseImage, image_key: imageKey, versions });
+  const version = (platforms?: string[]) => ({ version: `0.1.0-${platforms?.[0] ?? "unknown"}`, image_ref: ref, ...(platforms ? { platforms } : {}) });
+
+  const compatible = parseRuntimeImageRegistry(makeV1([image("deepsonar-base", [
+    version(["linux/amd64"]),
+    version(["linux/arm64"]),
+  ])]));
+  assert.equal(compatible.images[0]!.versions.length, 2);
+  assert.throws(() => parseRuntimeImageRegistry(makeV1([image("deepsonar-base", [
+    version(["linux/amd64"]),
+    { ...version(["linux/amd64"]), version: "0.1.0-linux-amd64-duplicate" },
+  ])])), /duplicate/i);
+  assert.throws(() => parseRuntimeImageRegistry(makeV1([image("deepsonar-base", [
+    { version: "0.1.0-a", image_ref: ref },
+    { version: "0.1.0-b", image_ref: ref },
+  ])])), /duplicate/i);
+  assert.throws(() => parseRuntimeImageRegistry(makeV1([
+    image("deepsonar-base", [version(["linux/amd64"])]),
+    image("deepsonar-audit", [version(["linux/arm64"]) ]),
+  ])), /duplicate/i);
+});
+
+test("promotion digest projection excludes Docker Hub-only versions", () => {
+  const dockerOnly = {
+    version: "0.1.0",
+    digest: DIGEST,
+    registry_refs: { dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}` },
+    platforms: ["linux/amd64"],
+    size_bytes: 42,
+  };
+  const github = {
+    ...dockerOnly,
+    image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+    registry_refs: {
+      github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+      dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}`,
+    },
+  };
+  assert.deepEqual(legacyProjectedRegistryDigests([dockerOnly]), []);
+  assert.deepEqual(legacyProjectedRegistryDigests([dockerOnly, github]), [DIGEST]);
 });
 
 test("OCI digest parser rejects URL/userinfo/port/tag/query/traversal/uppercase ambiguity", () => {

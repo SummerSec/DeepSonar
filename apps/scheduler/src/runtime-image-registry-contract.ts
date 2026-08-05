@@ -28,15 +28,20 @@ export interface RuntimeImageRegistryChannelPolicy {
 export type RuntimeImageRegistryPolicy = Readonly<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelPolicy>>;
 
 /**
- * The only built-in official policy.  ACR is intentionally empty: accepting
- * an ACR hostname requires the server to construct/pass an explicit policy.
+ * The only built-in official policy.  ACR is pinned to the exact currently
+ * published official endpoint; accepting another ACR hostname requires the
+ * server to construct/pass an explicit policy.
  * `registry-1.docker.io` is not an official channel alias; Docker Hub uses
- * the canonical `docker.io` host here.
+ * the canonical `docker.io` host here.  The ACR endpoint is the exact
+ * currently published official endpoint; it is not a wildcard.
  */
 export const SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY: RuntimeImageRegistryPolicy = Object.freeze({
   github: Object.freeze({ hosts: Object.freeze(["ghcr.io"]), namespaces: Object.freeze(["summersec"]) }),
   dockerhub: Object.freeze({ hosts: Object.freeze(["docker.io"]), namespaces: Object.freeze(["summersec"]) }),
-  "aliyun-acr": Object.freeze({ hosts: Object.freeze([] as string[]), namespaces: Object.freeze([] as string[]) }),
+  "aliyun-acr": Object.freeze({
+    hosts: Object.freeze(["crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"]),
+    namespaces: Object.freeze(["summersec"]),
+  }),
 });
 
 export interface ParsedOciDigestRef {
@@ -86,8 +91,6 @@ export interface RuntimeImageRegistry {
 }
 
 export interface RuntimeImageRegistryPolicyInput {
-  github?: RuntimeImageRegistryChannelPolicy;
-  dockerhub?: RuntimeImageRegistryChannelPolicy;
   "aliyun-acr"?: RuntimeImageRegistryChannelPolicy;
 }
 
@@ -105,6 +108,10 @@ function copyPolicyEntry(channel: RuntimeImageRegistryChannel, entry: RuntimeIma
   if (!entry || typeof entry !== "object" || !Array.isArray(entry.hosts) || !Array.isArray(entry.namespaces)) {
     invalid(`${channel} policy must explicitly provide hosts and namespaces`);
   }
+  const entryKeys = Reflect.ownKeys(entry);
+  if (entryKeys.length !== 2 || !entryKeys.every((key) => key === "hosts" || key === "namespaces")) {
+    invalid(`${channel} policy contains unknown fields`);
+  }
   const hosts = entry.hosts.map((host) => {
     if (typeof host !== "string" || !isCanonicalHost(host)) invalid(`${channel} policy host is not canonical`);
     return host;
@@ -119,24 +126,15 @@ function copyPolicyEntry(channel: RuntimeImageRegistryChannel, entry: RuntimeIma
   return Object.freeze({ hosts: Object.freeze([...hosts]), namespaces: Object.freeze([...namespaces]) });
 }
 
-/**
- * Construct a server-owned policy.  The built-in GitHub/Docker Hub policy is
- * fixed; callers must explicitly pass an ACR policy before any ACR ref can be
- * accepted.  This function does not read Agent/Hub/task input.
- */
-export function createServerOwnedRuntimeImageRegistryPolicy(input: RuntimeImageRegistryPolicyInput = {}): RuntimeImageRegistryPolicy {
-  const acr = input["aliyun-acr"];
-  const policy = {
-    github: copyPolicyEntry("github", input.github ?? SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY.github),
-    dockerhub: copyPolicyEntry("dockerhub", input.dockerhub ?? SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY.dockerhub),
-    "aliyun-acr": acr
-      ? copyPolicyEntry("aliyun-acr", acr)
-      : SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY["aliyun-acr"],
-  } satisfies RuntimeImageRegistryPolicy;
+function assertPolicyOwnership(policy: RuntimeImageRegistryPolicy): void {
   const ownership = new Map<string, RuntimeImageRegistryChannel>();
   for (const channel of RUNTIME_IMAGE_REGISTRY_CHANNELS) {
-    for (const host of policy[channel].hosts) {
-      for (const namespace of policy[channel].namespaces) {
+    const entry = policy[channel];
+    if ((entry.hosts.length === 0) !== (entry.namespaces.length === 0)) {
+      invalid(`${channel} policy must provide both hosts and namespaces, or leave both empty`);
+    }
+    for (const host of entry.hosts) {
+      for (const namespace of entry.namespaces) {
         const key = `${host}/${namespace}`;
         const previous = ownership.get(key);
         if (previous && previous !== channel) invalid(`policy host/namespace is ambiguous between ${previous} and ${channel}`);
@@ -144,7 +142,55 @@ export function createServerOwnedRuntimeImageRegistryPolicy(input: RuntimeImageR
       }
     }
   }
-  return Object.freeze(policy);
+}
+
+/**
+ * Validate and deep-freeze a complete server-owned policy before it reaches
+ * any catalog parser.  GitHub and Docker Hub are fixed authorities; only ACR
+ * may be supplied by a server-side caller.
+ */
+export function validateRuntimeImageRegistryPolicy(policy: RuntimeImageRegistryPolicy): RuntimeImageRegistryPolicy {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) invalid("policy must be an object");
+  const policyKeys = Reflect.ownKeys(policy);
+  if (policyKeys.length !== RUNTIME_IMAGE_REGISTRY_CHANNELS.length
+    || !RUNTIME_IMAGE_REGISTRY_CHANNELS.every((channel) => policyKeys.includes(channel))) {
+    invalid("policy must contain exactly github, dockerhub, and aliyun-acr channels");
+  }
+  const normalized = {
+    github: copyPolicyEntry("github", policy.github),
+    dockerhub: copyPolicyEntry("dockerhub", policy.dockerhub),
+    "aliyun-acr": copyPolicyEntry("aliyun-acr", policy["aliyun-acr"]),
+  } satisfies RuntimeImageRegistryPolicy;
+  const builtinGithub = SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY.github;
+  const builtinDockerhub = SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY.dockerhub;
+  if (normalized.github.hosts.join("\u0000") !== builtinGithub.hosts.join("\u0000")
+    || normalized.github.namespaces.join("\u0000") !== builtinGithub.namespaces.join("\u0000")) {
+    invalid("github policy is server-owned and cannot be overridden");
+  }
+  if (normalized.dockerhub.hosts.join("\u0000") !== builtinDockerhub.hosts.join("\u0000")
+    || normalized.dockerhub.namespaces.join("\u0000") !== builtinDockerhub.namespaces.join("\u0000")) {
+    invalid("dockerhub policy is server-owned and cannot be overridden");
+  }
+  assertPolicyOwnership(normalized);
+  return Object.freeze(normalized);
+}
+
+/**
+ * Construct a server-owned policy.  The built-in GitHub/Docker Hub policy is
+ * fixed; callers may explicitly replace the built-in ACR endpoint with another
+ * server-approved policy.  This function does not read Agent/Hub/task input.
+ */
+export function createServerOwnedRuntimeImageRegistryPolicy(input: RuntimeImageRegistryPolicyInput = {}): RuntimeImageRegistryPolicy {
+  if (!input || typeof input !== "object" || Array.isArray(input)) invalid("policy input must be an object");
+  const inputKeys = Reflect.ownKeys(input);
+  if (inputKeys.some((key) => key !== "aliyun-acr")) {
+    invalid("github and dockerhub policies are server-owned and cannot be overridden");
+  }
+  return validateRuntimeImageRegistryPolicy({
+    github: SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY.github,
+    dockerhub: SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY.dockerhub,
+    "aliyun-acr": input["aliyun-acr"] ?? SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY["aliyun-acr"],
+  });
 }
 
 function isCanonicalHost(value: string): boolean {
@@ -352,12 +398,18 @@ export function parseRuntimeImageRegistry(
   raw: unknown,
   policy: RuntimeImageRegistryPolicy = SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
 ): RuntimeImageRegistry {
+  const validatedPolicy = validateRuntimeImageRegistryPolicy(policy);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) invalid("registry must be an object");
   const value = raw as Record<string, unknown>;
   const schemaVersion = detectSchema(value);
   if (!Array.isArray(value.images)) invalid("registry images must be an array");
   const source = parseMetadataSource(value.source);
   const seenImages = new Set<string>();
+  const seenNormalizedRefs = new Map<string, {
+    schemaVersion: 1 | 2;
+    imageKey: string;
+    platforms: Set<string> | null;
+  }>();
   const images = value.images.map((entry, imageIndex): RuntimeImageRegistryImage => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) invalid(`images[${imageIndex}] is invalid`);
     const image = entry as Record<string, unknown>;
@@ -366,19 +418,34 @@ export function parseRuntimeImageRegistry(
     seenImages.add(base.image_key);
     if (!Array.isArray(image.versions)) invalid(`${base.image_key} versions must be an array`);
     const seenVersions = new Set<string>();
-    const seenNormalizedRefs = new Set<string>();
     const versions = image.versions.map((entryVersion, versionIndex): RuntimeImageRegistryVersion => {
       if (!entryVersion || typeof entryVersion !== "object" || Array.isArray(entryVersion)) invalid(`${base.image_key} versions[${versionIndex}] is invalid`);
       const parsed = schemaVersion === 1
-        ? parseV1Version(entryVersion as Record<string, unknown>, base.image_key, versionIndex, policy)
-        : parseV2Version(entryVersion as Record<string, unknown>, base.image_key, versionIndex, policy);
+        ? parseV1Version(entryVersion as Record<string, unknown>, base.image_key, versionIndex, validatedPolicy)
+        : parseV2Version(entryVersion as Record<string, unknown>, base.image_key, versionIndex, validatedPolicy);
       if (seenVersions.has(parsed.version)) invalid(`${base.image_key} contains duplicate version ${parsed.version}`);
       seenVersions.add(parsed.version);
-      if (schemaVersion === 2) {
-        for (const ref of Object.values(parsed.registry_refs ?? {})) {
-          if (seenNormalizedRefs.has(ref)) invalid(`${base.image_key} contains duplicate normalized registry refs`);
-          seenNormalizedRefs.add(ref);
+      for (const ref of Object.values(parsed.registry_refs ?? {})) {
+        const existing = seenNormalizedRefs.get(ref);
+        if (!existing) {
+          seenNormalizedRefs.set(ref, {
+            schemaVersion,
+            imageKey: base.image_key,
+            platforms: parsed.platforms ? new Set(parsed.platforms) : null,
+          });
+          continue;
         }
+        // The legacy v1 generator historically emitted one version per
+        // platform while both entries pointed at the same multi-platform
+        // manifest digest. Preserve exactly that compatibility alias, but
+        // reject every other duplicate spelling or ownership boundary.
+        const currentPlatforms = parsed.platforms;
+        if (schemaVersion !== 1 || existing.schemaVersion !== 1 || existing.imageKey !== base.image_key
+          || !existing.platforms || !currentPlatforms || currentPlatforms.length === 0
+          || currentPlatforms.some((platform) => existing.platforms!.has(platform))) {
+          invalid(`${base.image_key} contains duplicate normalized registry ref (${ref})`);
+        }
+        for (const platform of currentPlatforms) existing.platforms.add(platform);
       }
       return parsed;
     });
