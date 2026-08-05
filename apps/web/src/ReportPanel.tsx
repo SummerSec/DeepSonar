@@ -23,6 +23,14 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   const guard = guardRef.current;
   guard.update(canvasId, report?.id ?? null, report?.status ?? null);
 
+  // Invalidate every pending callback when the panel leaves the tree. React
+  // StrictMode may replay this layout effect, so setup re-arms only a guard
+  // disposed by the preceding development-only cleanup.
+  useLayoutEffect(() => {
+    guard.reactivate(canvasId, report?.id ?? null, report?.status ?? null);
+    return () => guard.dispose();
+  }, [guard]);
+
   // Clear all canvas-scoped state before the new canvas can paint. The guard
   // is updated during render, so late promises are invalidated even before
   // this layout effect runs.

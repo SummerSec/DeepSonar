@@ -47,3 +47,38 @@ test("only the newest overlapping poll request can update state", () => {
   assert.equal(guard.isCurrentPoll(first), false);
   assert.equal(guard.isCurrentPoll(second), true);
 });
+
+test("dispose invalidates every pending callback after unmount", async () => {
+  const guard = new ReportPanelAsyncGuard("canvas-a");
+  const context = guard.update("canvas-a", "report-a", "succeeded");
+  const poll = guard.beginPoll();
+  let appliedReports: string[] = [];
+  let downloadErrors: string[] = [];
+  let retryCompletions: string[] = [];
+
+  const lateCallbacks = [
+    new Promise<void>((resolve) => setTimeout(() => {
+      if (guard.isCurrentPoll(poll)) appliedReports.push("report-a");
+      resolve();
+    }, 5)),
+    new Promise<void>((resolve) => setTimeout(() => {
+      if (guard.isCurrentContext(context)) downloadErrors.push("download-a");
+      resolve();
+    }, 5)),
+    new Promise<void>((resolve) => setTimeout(() => {
+      if (guard.isCurrentCanvas(context)) retryCompletions.push("retry-a");
+      resolve();
+    }, 5)),
+  ];
+
+  guard.dispose();
+  assert.equal(guard.isCurrentPoll(poll), false);
+  assert.equal(guard.isCurrentContext(context), false);
+  assert.equal(guard.isCurrentCanvas(context), false);
+  assert.notEqual(guard.currentContext, context);
+
+  await Promise.all(lateCallbacks);
+  assert.deepEqual(appliedReports, []);
+  assert.deepEqual(downloadErrors, []);
+  assert.deepEqual(retryCompletions, []);
+});
