@@ -129,6 +129,10 @@ snapshots.
 
 ## Slice C boundary
 
-The Web UI and further pull/resolution presentation remain later #70 work;
-the API and server-side fail-closed selector are implemented here. Issue #70
-remains open for those later slices.
+The Web UI exposes the platform-global `selected_channel` as a fixed
+`github`/`dockerhub`/`aliyun-acr` selector on the marketplace page. It keeps
+that source choice separate from the CPU architecture/platform filter,
+requires `images:manage` for mutation, surfaces loading/403/mutation states,
+and refreshes the registry metadata and marketplace rows after a successful
+switch. It does not accept arbitrary registry URLs or source input. Together
+with exact-channel pull and immutable Job snapshots, this completes Issue #70.
