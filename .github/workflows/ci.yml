@@ -59,6 +59,11 @@ jobs:
       - name: Scheduler Job lifecycle characterization
         run: pnpm ci:unit:job-lifecycle
 
+      - name: Scheduler Job lifecycle PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:job-lifecycle
+
       - name: Scheduler bounded-context characterization guardrails
         run: pnpm ci:unit:scheduler-characterization
 

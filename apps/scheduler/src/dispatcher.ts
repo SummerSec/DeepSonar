@@ -8,7 +8,6 @@ import {
   PLATFORM_DEFAULT_AGENT_CLI,
   recoverVerifyJobTerminal,
   rolesForProject,
-  transitionJob,
   type AgentRuntimeSnapshot,
   type ProjectRules,
 } from "./core.js";
@@ -18,6 +17,7 @@ import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner } from "./runtime.js";
+import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -372,6 +372,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
   // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
   const claimedJobs = await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+    const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
     // global_settings.effective_rules is the sole dispatcher authority;
     // environment defaults are resolved inside globalRules before claim.
     const rules = await globalRules(tx as unknown as typeof sql);
@@ -498,10 +499,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
           rules,
         );
         if (skipReason) continue;
-        const [row] = await tx`
-          UPDATE jobs SET status = 'claimed', claimed_at = now()
-          WHERE id = ${job.id as string} AND status = 'pending'
-          RETURNING id`;
+        const row = await lifecycle.claimPendingJob(job.id as string);
         if (!row) continue;
         claimed.push({ id: row.id as string });
         projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
@@ -530,6 +528,7 @@ export async function dispatchOnce(): Promise<number> {
 
 async function runJob(jobId: string) {
   let handle: { sandboxId: string } | null = null;
+  const lifecycle = createSqlJobLifecycleApplication();
   try {
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
     if (!job) return;
@@ -553,7 +552,7 @@ async function runJob(jobId: string) {
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
     const runtimeImage = snapshot.runtime_image?.image_ref;
     if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
-    if (!(await transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
+    if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
     handle = await withTimeout(
       runner.provision({
         jobId,
@@ -572,7 +571,7 @@ async function runJob(jobId: string) {
 
     // running：开 lease（竞态守卫：此时被 cancel 则放弃执行，直接走 finally 回收）
     const lease = new Date(Date.now() + config.timeouts.leaseTtlSec * 1000);
-    if (!(await transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
+    if (!(await lifecycle.transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
       return;
     }
     startLeaseRenewal(jobId, handle);
@@ -604,10 +603,8 @@ async function runJob(jobId: string) {
       : rawMessage;
     inc("deepsonar_jobs_failed_total", { reason: "exception" });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
-    const failed = await sql`
-      UPDATE jobs SET status = 'failed', finished_at = now(), error = ${msg}
-      WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')
-      RETURNING id, type`;
+    const failedRow = await createSqlJobLifecycleApplication().failExecution(jobId, msg);
+    const failed = failedRow ? [failedRow] : [];
     await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
     if (failed[0]?.type === "verify_finding") {
       await recoverVerifyJobTerminal(jobId, "failed", msg).catch((err) =>

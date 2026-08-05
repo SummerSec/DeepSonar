@@ -40,34 +40,38 @@ test("characterization fixtures preserve claim, execution, recovery, and termina
   }
 });
 
-function directStatusStatement(file: string, status: string): string {
-  const source = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
-  const marker = `UPDATE jobs SET status = '${status}'`;
-  const start = source.indexOf(marker);
-  assert.notEqual(start, -1, `${file} must keep its ${status} direct writer`);
-  const end = source.indexOf("`;", start);
-  assert.notEqual(end, -1, `${file} ${status} writer must remain a complete SQL statement`);
-  return source.slice(start, end);
-}
+test("legacy recovery exceptions are modeled behind the lifecycle application seam", () => {
+  const lifecycleSource = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
+  const reaperSource = readFileSync(new URL("../../reaper.ts", import.meta.url), "utf8");
+  const reconcileSource = readFileSync(new URL("../../reconcile.ts", import.meta.url), "utf8");
+  const dispatcherSource = readFileSync(new URL("../../dispatcher.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("../../routes.ts", import.meta.url), "utf8");
 
-test("legacy bulk recovery writers retain intentional policy-exception guards", () => {
-  // These multi-source CAS operations intentionally predate the pure policy:
-  // one Reaper statement handles three active sources, and boot reconcile
-  // requeues two provisioning sources in one statement.  The source guards,
-  // rather than a copied transition matrix, are the characterization target.
+  // These multi-source CAS operations intentionally remain outside the pure
+  // matrix: Reaper handles three active sources for execution timeout, while
+  // boot reconcile requeues two provisioning sources in one operation.  The
+  // source guards and metadata patches are now owned by application methods.
   assert.equal(canTransition("claimed", "timeout"), false);
   assert.equal(canTransition("provisioning", "timeout"), false);
-  const reaperTimeout = directStatusStatement("reaper.ts", "timeout");
-  assert.match(reaperTimeout, /WHERE\s+status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*,\s*'running'\s*\)/);
-  assert.match(reaperTimeout, /started_at\s+IS\s+NOT\s+NULL/);
-  assert.match(reaperTimeout, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);
+  assert.match(lifecycleSource, /reapExecutionTimeout/);
+  assert.match(lifecycleSource, /status IN \('claimed','provisioning','running'\)/);
+  assert.match(lifecycleSource, /started_at\s+IS\s+NOT\s+NULL/);
+  assert.match(lifecycleSource, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);
+  assert.match(reaperSource, /createSqlJobLifecycleApplication\(\)/);
+  assert.doesNotMatch(reaperSource, /UPDATE\s+jobs\s+SET\s+status/);
 
   assert.equal(canTransition("claimed", "pending"), false);
   assert.equal(canTransition("provisioning", "pending"), false);
-  const reconcilePending = directStatusStatement("reconcile.ts", "pending");
-  assert.match(reconcilePending, /WHERE\s+status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*\)/);
-  assert.match(reconcilePending, /claimed_at\s*=\s*NULL/);
-  assert.match(reconcilePending, /lease_expires_at\s*=\s*NULL/);
+  assert.match(lifecycleSource, /reconcileProvisioning/);
+  assert.match(lifecycleSource, /WHERE\s+status\s+IN\s*\('claimed','provisioning'\)/);
+  assert.match(lifecycleSource, /claimed_at\s*=\s*NULL/);
+  assert.match(lifecycleSource, /lease_expires_at\s*=\s*NULL/);
+  assert.match(reconcileSource, /createSqlJobLifecycleApplication\(\)/);
+  assert.doesNotMatch(reconcileSource, /UPDATE\s+jobs\s+SET\s+status/);
+  assert.match(dispatcherSource, /createSqlJobLifecycleApplication\(\)/);
+  assert.doesNotMatch(dispatcherSource, /UPDATE\s+jobs\s+SET\s+status/);
+  assert.match(routesSource, /createSqlJobLifecycleApplication\(\)/);
+  assert.doesNotMatch(routesSource, /UPDATE\s+jobs\s+SET\s+status/);
 });
 
 test("characterization fixture keeps transition metadata separate from persisted status", () => {
