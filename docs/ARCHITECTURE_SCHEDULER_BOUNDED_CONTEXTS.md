@@ -128,10 +128,15 @@ The CI gate now executes the following baseline:
    lifecycle tests).
 2. The semantic direct-status-write inventory in
    `job-state-write-inventory.test.ts`.  It enumerates the guarded status
-   writers in `core.ts`, `dispatcher.ts`, `reaper.ts`, `reconcile.ts`, and
-   `routes.ts`; an unclassified `UPDATE jobs ... SET status` fails the test.
-   The generic `job-lifecycle/application.ts` SQL CAS is checked separately as
-   the canonical adapter.
+   writers in every production TypeScript module under `apps/scheduler/src`
+   (recursive; test/fixture files are excluded); an unclassified `UPDATE jobs
+   ... SET status` fails the test.  The generic
+   `job-lifecycle/application.ts` SQL CAS is checked separately as the
+   canonical adapter.  It also records the intentional legacy bulk-writer
+   exceptions: Reaper handles `claimed/provisioning/running → timeout`, while
+   boot reconcile handles `claimed/provisioning → pending`; these combinations
+   are outside the pure transition policy and must be closed behind the
+   lifecycle application seam in a later slice.
 3. The Fastify registrar and OpenAPI operation manifests in
    `route-surface.manifest.ts`, exercised by `route-surface.test.ts`.  The
    test observes the actual `onRoute` registrations, so a later registrar split

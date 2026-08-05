@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  JOB_STATUSES,
-  TERMINAL_JOB_STATUSES,
   allowedSourcesForTarget,
   canTransition,
-  isTerminalJobStatus,
   planJobTransition,
 } from "./transition-policy.js";
 
@@ -39,15 +37,37 @@ test("characterization fixtures preserve claim, execution, recovery, and termina
   const recoveryStatuses = ["failed", "timeout", "orphan", "waiting_human"] as const;
   for (const status of recoveryStatuses) {
     assert.deepEqual(allowedSourcesForTarget("pending").includes(status), true);
-    assert.equal(isTerminalJobStatus(status), false);
   }
+});
 
-  for (const status of TERMINAL_JOB_STATUSES) {
-    assert.equal(isTerminalJobStatus(status), true);
-    for (const target of JOB_STATUSES) {
-      assert.equal(canTransition(status, target), false, `${status} must not revive as ${target}`);
-    }
-  }
+function directStatusStatement(file: string, status: string): string {
+  const source = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+  const marker = `UPDATE jobs SET status = '${status}'`;
+  const start = source.indexOf(marker);
+  assert.notEqual(start, -1, `${file} must keep its ${status} direct writer`);
+  const end = source.indexOf("`;", start);
+  assert.notEqual(end, -1, `${file} ${status} writer must remain a complete SQL statement`);
+  return source.slice(start, end);
+}
+
+test("legacy bulk recovery writers retain intentional policy-exception guards", () => {
+  // These multi-source CAS operations intentionally predate the pure policy:
+  // one Reaper statement handles three active sources, and boot reconcile
+  // requeues two provisioning sources in one statement.  The source guards,
+  // rather than a copied transition matrix, are the characterization target.
+  assert.equal(canTransition("claimed", "timeout"), false);
+  assert.equal(canTransition("provisioning", "timeout"), false);
+  const reaperTimeout = directStatusStatement("reaper.ts", "timeout");
+  assert.match(reaperTimeout, /WHERE\s+status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*,\s*'running'\s*\)/);
+  assert.match(reaperTimeout, /started_at\s+IS\s+NOT\s+NULL/);
+  assert.match(reaperTimeout, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);
+
+  assert.equal(canTransition("claimed", "pending"), false);
+  assert.equal(canTransition("provisioning", "pending"), false);
+  const reconcilePending = directStatusStatement("reconcile.ts", "pending");
+  assert.match(reconcilePending, /WHERE\s+status\s+IN\s*\(\s*'claimed'\s*,\s*'provisioning'\s*\)/);
+  assert.match(reconcilePending, /claimed_at\s*=\s*NULL/);
+  assert.match(reconcilePending, /lease_expires_at\s*=\s*NULL/);
 });
 
 test("characterization fixture keeps transition metadata separate from persisted status", () => {

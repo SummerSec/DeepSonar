@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 type JobStateWriteEntry = {
@@ -28,7 +27,7 @@ const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
   {
     id: "core.finalize-running-terminal",
     file: "core.ts",
-    targets: ["succeeded", "failed", "timeout", "orphan", "cancelled"],
+    targets: ["succeeded", "failed"],
     purpose: "finalizeJob performs the guarded running-to-terminal CAS",
     pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*\$\{status\}[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s*'running'/,
   },
@@ -118,10 +117,40 @@ const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
   },
 ] as const;
 
-const INVENTORY_FILES = ["core.ts", "dispatcher.ts", "reaper.ts", "reconcile.ts", "routes.ts"] as const;
+const SOURCE_ROOT = new URL(".", import.meta.url);
+const CANONICAL_LIFECYCLE_ADAPTER = "domains/job-lifecycle/application.ts";
+
+function isTestFixturePath(relativePath: string): boolean {
+  const pathParts = relativePath.split("/");
+  return pathParts.some((part) => /^(?:__fixtures__|fixtures|test-fixtures)$/i.test(part)) || /\.fixture\.ts$/i.test(relativePath);
+}
+
+function productionSourceFiles(): string[] {
+  const files: string[] = [];
+  const walk = (directory: URL, relativeDirectory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!isTestFixturePath(relativePath)) walk(new URL(`${entry.name}/`, directory), relativePath);
+        continue;
+      }
+      if (
+        entry.isFile() &&
+        /\.ts$/i.test(entry.name) &&
+        !/\.test\.ts$/i.test(entry.name) &&
+        relativePath !== CANONICAL_LIFECYCLE_ADAPTER &&
+        !isTestFixturePath(relativePath)
+      ) {
+        files.push(relativePath);
+      }
+    }
+  };
+  walk(SOURCE_ROOT, "");
+  return files.sort();
+}
 
 function sourceFor(file: string): string {
-  return readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+  return readFileSync(new URL(file, SOURCE_ROOT), "utf8");
 }
 
 function directStatusUpdateSegments(source: string): { index: number; text: string }[] {
@@ -146,16 +175,13 @@ function directStatusUpdateSegments(source: string): { index: number; text: stri
 }
 
 test("direct Job status writers stay enumerated by semantic bounded-context inventory", () => {
-  assert.deepEqual(
-    [...new Set(JOB_STATE_WRITE_INVENTORY.map((entry) => entry.file))].sort(),
-    [...INVENTORY_FILES].sort(),
-  );
-
-  const expectedIndexesByFile = new Map<string, number[]>();
-  for (const file of INVENTORY_FILES) {
+  const discoveredFiles: string[] = [];
+  for (const file of productionSourceFiles()) {
     const source = sourceFor(file);
     const entries = JOB_STATE_WRITE_INVENTORY.filter((entry) => entry.file === file);
     const segments = directStatusUpdateSegments(source);
+    if (segments.length === 0) continue;
+    discoveredFiles.push(file);
     const expectedIndexes: number[] = [];
     for (const entry of entries) {
       const matches = segments.filter((segment) => entry.pattern.test(segment.text));
@@ -164,14 +190,29 @@ test("direct Job status writers stay enumerated by semantic bounded-context inve
       assert.ok(entry.purpose.length > 0, `${entry.id} must explain its boundary`);
       expectedIndexes.push(matches[0].index);
     }
-    expectedIndexesByFile.set(file, expectedIndexes.sort((a, b) => a - b));
     assert.deepEqual(
       segments.map((segment) => segment.index).sort((a, b) => a - b),
       expectedIndexes.sort((a, b) => a - b),
       `${file} has an unclassified or missing direct Job status writer`,
     );
   }
-  assert.equal(expectedIndexesByFile.size, INVENTORY_FILES.length);
+  assert.deepEqual(
+    [...new Set(JOB_STATE_WRITE_INVENTORY.map((entry) => entry.file))].sort(),
+    discoveredFiles.sort(),
+    "inventory files must cover every production direct Job status writer",
+  );
+  const finalizeEntry = JOB_STATE_WRITE_INVENTORY.find((entry) => entry.id === "core.finalize-running-terminal");
+  assert.ok(finalizeEntry);
+  const finalizeSignature = sourceFor("core.ts").match(
+    /export\s+async\s+function\s+finalizeJob\([\s\S]*?\bstatus:\s*((?:"[^"]+"\s*\|\s*)+"[^"]+")/,
+  );
+  assert.ok(finalizeSignature, "finalizeJob must keep an explicit status union");
+  const finalizeStatuses = [...finalizeSignature[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(
+    finalizeEntry.targets,
+    finalizeStatuses,
+    "finalize inventory targets must match the finalizeJob status union",
+  );
 });
 
 test("job-lifecycle SQL seam remains the sole generic transition adapter", () => {
@@ -181,7 +222,9 @@ test("job-lifecycle SQL seam remains the sole generic transition adapter", () =>
   assert.match(source, /planJobTransition\(to, patch\)/);
 });
 
-test("inventory paths are limited to the Scheduler Job lifecycle owners", () => {
-  const files = [...new Set(JOB_STATE_WRITE_INVENTORY.map((entry) => basename(entry.file)))];
-  assert.deepEqual(files, ["core.ts", "dispatcher.ts", "reaper.ts", "reconcile.ts", "routes.ts"]);
+test("inventory paths point to production Scheduler modules", () => {
+  const productionFiles = new Set(productionSourceFiles());
+  for (const entry of JOB_STATE_WRITE_INVENTORY) {
+    assert.ok(productionFiles.has(entry.file), `${entry.file} must be a production Scheduler module`);
+  }
 });
