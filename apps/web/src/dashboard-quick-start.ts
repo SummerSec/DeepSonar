@@ -177,7 +177,7 @@ export function resolveReadinessFix(
     : readinessScope.project_id ?? fallbackProjectId ?? projectIdFromLegacyHref(fix.href);
 
   if (action === "credentials") {
-    return { href: "/agents?tab=credentials", target: fix.target };
+    return { href: "/settings/credentials", target: fix.target };
   }
   if (action === "role_config") {
     return {
@@ -187,7 +187,7 @@ export function resolveReadinessFix(
   }
   if (action === "rules") {
     return {
-      href: targetScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/agents?tab=rules",
+      href: targetScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/settings/platform?tab=rules",
       target: fix.target,
     };
   }
@@ -202,16 +202,16 @@ export function resolveReadinessFix(
   // are always managed globally; project settings only expose roles/rules.
   if (fix.href === "/global-settings") {
     return {
-      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/agents?tab=rules",
+      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/settings/platform?tab=rules",
       target: fix.target,
     };
   }
   if (fix.href.includes("tab=credentials")) {
-    return { href: "/agents?tab=credentials", target: fix.target };
+    return { href: "/settings/credentials", target: fix.target };
   }
   if (fix.target === "hub-settings" || fix.target === "task-network-policy" || fix.target === "task-material-source") {
     return {
-      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/agents?tab=rules",
+      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/settings/platform?tab=rules",
       target: fix.target,
     };
   }

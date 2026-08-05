@@ -1,9 +1,10 @@
 import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
+  type AuthMe,
   type EffectiveRules,
   type GlobalRoleConfigEntry,
   type ProjectRole,
@@ -15,6 +16,8 @@ import {
   type SkillSource,
   type SkillSourceDetail,
 } from "./api";
+import { useAuth } from "./auth";
+import { canAccessAnyScope } from "./permissions";
 
 import { TokensPanel } from "./TokensPanel";
 import { CredentialsPanel } from "./CredentialsPanel";
@@ -31,14 +34,49 @@ import { MarkdownView } from "./MarkdownView";
  */
 
 type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users" | "account";
+export type GlobalSettingsSection = "agents" | "modules" | "access" | "credentials" | "platform";
 
 const PROJECT_TAB_KEYS: readonly Tab[] = ["rules", "roles", "plane"];
 const GLOBAL_TAB_KEYS: readonly Tab[] = ["roles", "sources", "rules", "account", "users", "transfer", "credentials", "tokens"];
+const GLOBAL_SECTION_TABS: Record<GlobalSettingsSection, readonly Tab[]> = {
+  agents: ["roles"],
+  modules: ["sources"],
+  access: ["account", "users", "tokens"],
+  credentials: ["credentials"],
+  platform: ["rules", "transfer"],
+};
+const GLOBAL_TAB_SCOPES: Partial<Record<Tab, readonly string[]>> = {
+  roles: ["agents:read"],
+  sources: ["skills:read"],
+  rules: ["agents:read"],
+  account: ["projects:read"],
+  users: ["admin"],
+  transfer: ["exports:read", "imports:read"],
+  credentials: ["agents:read"],
+  tokens: ["tokens:manage"],
+};
+
+export function settingsTabsForActor(section: GlobalSettingsSection, me: AuthMe | null): readonly Tab[] {
+  return GLOBAL_SECTION_TABS[section].filter((tab) => canAccessAnyScope(me, GLOBAL_TAB_SCOPES[tab] ?? ["admin"]));
+}
 
 /** Resolve a URL tab without allowing project pages to expose global-only tabs. */
 export function resolveSettingsTab(projectId: string | null, requested: string | null): Tab {
   const allowed = projectId ? PROJECT_TAB_KEYS : GLOBAL_TAB_KEYS;
   return requested && (allowed as readonly string[]).includes(requested) ? requested as Tab : "roles";
+}
+
+export function resolveSettingsSectionTab(section: GlobalSettingsSection, requested: string | null): Tab {
+  const allowed = GLOBAL_SECTION_TABS[section];
+  return requested && (allowed as readonly string[]).includes(requested) ? requested as Tab : allowed[0]!;
+}
+
+export function settingsSectionDataNeeds(projectId: string | null, section: GlobalSettingsSection) {
+  return {
+    agent: Boolean(projectId || section === "agents"),
+    modules: Boolean(projectId || section === "agents" || section === "modules"),
+    roleCredentialBindings: Boolean(projectId || section === "agents"),
+  };
 }
 
 const inputCls =
@@ -69,14 +107,19 @@ export function SettingsPanel({
   projectId,
   onClose,
   variant = "drawer",
+  globalSection = "agents",
 }: {
   /** null = 全局 Agent 管理模式（无项目级绑定/规则/角色启用） */
   projectId: string | null;
   onClose?: () => void;
   /** drawer=浮层侧栏；page=独立设置页 */
   variant?: "drawer" | "page";
+  /** 全局页按产品职责限制可见 tab；项目页忽略此参数。 */
+  globalSection?: GlobalSettingsSection;
 }) {
-  const [tab, setTab] = useState<Tab>("roles");
+  const { me } = useAuth();
+  const visibleGlobalTabs = useMemo(() => settingsTabsForActor(globalSection, me), [globalSection, me]);
+  const [tab, setTab] = useState<Tab>(() => projectId ? "roles" : resolveSettingsSectionTab(globalSection, null));
   const [searchParams, setSearchParams] = useSearchParams();
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
   const [rules, setRules] = useState<EffectiveRules | null>(null);
@@ -100,13 +143,17 @@ export function SettingsPanel({
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
   const reload = () => {
+    if (!projectId && visibleGlobalTabs.length === 0) return;
     setAgentLoadError(null);
     const showAgentLoadError = (label: string, error: unknown) => {
       const detail = error instanceof Error ? error.message : String(error);
       setAgentLoadError(`${label}加载失败：${detail}`);
     };
-    // 全局缺省配置清单两种模式都要：全局模式直接编辑，项目模式用来预填覆盖表单
-    api.globalRoleConfigs().then(setGlobalConfigs).catch((error) => showAgentLoadError("全局 Agent 配置", error));
+    const dataNeeds = settingsSectionDataNeeds(projectId, globalSection);
+    const canLoadTab = (key: Tab) => Boolean(projectId || visibleGlobalTabs.includes(key));
+    if (dataNeeds.agent && canLoadTab("roles")) {
+      api.globalRoleConfigs().then(setGlobalConfigs).catch((error) => showAgentLoadError("全局 Agent 配置", error));
+    }
     if (projectId) {
       // 项目模式：角色带启用态 + 角色配置来源（项目覆盖/全局缺省/未配置）
       api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error));
@@ -122,7 +169,7 @@ export function SettingsPanel({
           setRules(s.effective_rules);
         })
         .catch(() => {});
-    } else {
+    } else if (globalSection === "agents" && canLoadTab("roles")) {
       // 全局模式：纯角色注册表（无启用态/绑定）+ 全局规则默认值
       api
         .agentRoles()
@@ -132,20 +179,14 @@ export function SettingsPanel({
           ),
         )
         .catch((error) => showAgentLoadError("内置 Agent", error));
-      api
-        .globalSettings()
-        .then((g) => {
-          setRules(g.effective_rules);
-          setCliActive(g.active_by_agent_cli ?? {});
-        })
-        .catch(() => {});
+    } else if (globalSection === "platform" && canLoadTab("rules")) {
+      api.globalSettings().then((g) => {
+        setRules(g.effective_rules);
+        setCliActive(g.active_by_agent_cli ?? {});
+      }).catch(() => {});
     }
-    api
-      .credentials()
-      .then(setCredentials)
-      .catch(() => {});
-    api
-      .skillSources()
+    if (dataNeeds.roleCredentialBindings && canLoadTab("roles")) api.credentials().then(setCredentials).catch(() => {});
+    if (dataNeeds.modules && canAccessAnyScope(me, ["skills:read"]) && (canLoadTab("roles") || canLoadTab("sources"))) api.skillSources()
       .then(async (list) => {
         setSources(list);
         // 拉各源目录（模块勾选列表用）
@@ -165,11 +206,15 @@ export function SettingsPanel({
       .catch(() => {});
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(reload, [projectId]);
+  useEffect(reload, [globalSection, projectId, visibleGlobalTabs]);
 
   useEffect(() => {
-    setTab(resolveSettingsTab(projectId, searchParams.get("tab")));
-  }, [projectId, searchParams]);
+    setTab(projectId
+      ? resolveSettingsTab(projectId, searchParams.get("tab"))
+      : visibleGlobalTabs.includes(searchParams.get("tab") as Tab)
+        ? searchParams.get("tab") as Tab
+        : visibleGlobalTabs[0] ?? resolveSettingsSectionTab(globalSection, null));
+  }, [globalSection, projectId, searchParams, visibleGlobalTabs]);
 
   const flash = (m: string) => {
     setMsg(m);
@@ -466,23 +511,26 @@ export function SettingsPanel({
 
   // 全局模式：角色注册表（含运行配置）/ 模块源 / 全局规则；项目模式：规则覆盖 / 角色启用与覆盖 / Plane 集成
   // 项目数据包在项目模块「数据」页；此处项目设置只做策略。平台包仅在全局 Agent 管理。
+  const globalTabList: { key: Tab; label: string }[] = [
+    { key: "roles", label: "角色注册表" },
+    { key: "sources", label: "模块源" },
+    { key: "rules", label: "调度策略" },
+    { key: "account", label: "我的账号" },
+    { key: "users", label: "用户" },
+    { key: "transfer", label: "平台数据" },
+    { key: "credentials", label: "Provider 凭据" },
+    { key: "tokens", label: "API Token" },
+  ];
   const tabList: { key: Tab; label: string }[] = projectId
     ? [
         { key: "rules", label: "规则配置" },
         { key: "roles", label: "角色配置" },
         { key: "plane", label: "Plane 集成" },
       ]
-    : [
-        { key: "roles", label: "角色注册表" },
-        { key: "sources", label: "模块源" },
-        { key: "rules", label: "全局规则" },
-        { key: "account", label: "我的账号" },
-        { key: "users", label: "用户" },
-        { key: "transfer", label: "平台导入导出" },
-        { key: "credentials", label: "凭据" },
-        { key: "tokens", label: "API Token" },
-      ];
-  const activeTab = resolveSettingsTab(projectId, searchParams.get("tab") ?? tab);
+    : globalTabList.filter((item) => visibleGlobalTabs.includes(item.key));
+  const activeTab = projectId
+    ? resolveSettingsTab(projectId, searchParams.get("tab") ?? tab)
+    : tabList.find((item) => item.key === (searchParams.get("tab") ?? tab))?.key ?? tabList[0]?.key ?? null;
 
   return (
     <aside className={shellCls}>
@@ -524,6 +572,9 @@ export function SettingsPanel({
       </div>
 
       <div className={`settings-content flex-1 overflow-y-auto py-5 ${variant === "page" ? "w-full px-5 sm:px-9" : "px-4"}`}>
+        {!projectId && tabList.length === 0 && (
+          <div role="alert" className="border border-amber-300/20 bg-amber-300/[.05] px-4 py-3 text-[12px] text-amber-200">当前身份没有访问此配置域的权限。</div>
+        )}
         {agentLoadError && (
           <div role="alert" className="mb-4 flex items-start gap-3 rounded-[10px] border border-red-400/20 bg-red-400/[.06] px-4 py-3 text-[12px] leading-relaxed text-red-200">
             <span className="min-w-0 flex-1">{agentLoadError}</span>

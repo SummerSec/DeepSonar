@@ -1,17 +1,28 @@
-import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Cube, Folder, Gear, MagnifyingGlass, Moon, Palette, Queue, Robot, SignOut, Sun, User, X } from "@phosphor-icons/react";
+import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Cube, Database, Folder, Gear, Key, MagnifyingGlass, Moon, Palette, Queue, Robot, ShieldCheck, SignOut, Storefront, Sun, User, X } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { DeepSonarMark } from "../components/DeepSonarMark";
+import { canAccessAnyScope } from "../permissions";
 
-const NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
+const WORKSPACE_NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
   { to: "/", end: true, label: "态势", caption: "全局风险与运行", icon: ChartBar },
   { to: "/projects", end: false, label: "项目", caption: "审计工作空间", icon: Folder },
-  { to: "/findings", end: false, label: "发现", caption: "跨项目证据", icon: Bug },
-  { to: "/jobs", end: false, label: "运行", caption: "调度与恢复", icon: Queue },
-  { to: "/agents", end: false, label: "Agent", caption: "角色与能力", icon: Robot },
-  { to: "/images", end: false, label: "镜像", caption: "可信运行环境", icon: Cube },
+];
+const CAPABILITY_NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon; scopes: string[] }[] = [
+  { to: "/agents", end: false, label: "Agent", caption: "角色与能力", icon: Robot, scopes: ["agents:read"] },
+  { to: "/agent-market", end: false, label: "Agent 市场", caption: "模板与模块", icon: Storefront, scopes: ["agents:read"] },
+  { to: "/images", end: false, label: "镜像", caption: "可信运行环境", icon: Cube, scopes: ["images:read"] },
+];
+const PLATFORM_NAV: { to: string; label: string; caption: string; icon: Icon; scopes: string[] }[] = [
+  { to: "/settings/access", label: "安全与访问", caption: "账号、用户与 Token", icon: ShieldCheck, scopes: ["tokens:manage"] },
+  { to: "/settings/credentials", label: "凭据", caption: "Provider 密钥边界", icon: Key, scopes: ["agents:read"] },
+  { to: "/settings/platform", label: "平台数据", caption: "调度策略与配置包", icon: Database, scopes: ["agents:read", "exports:read"] },
+];
+const SECONDARY_COMMANDS = [
+  { label: "跨项目发现", caption: "全局证据检索", to: "/findings", icon: Bug, group: "跨项目检索" },
+  { label: "跨项目运行", caption: "调度与恢复队列", to: "/jobs", icon: Queue, group: "跨项目检索" },
 ];
 const PROJECT_TABS: { seg: string; label: string; caption: string; icon: Icon }[] = [
   { seg: "tasks", label: "任务工作台", caption: "意图与交付闭环", icon: Crosshair },
@@ -37,7 +48,9 @@ function initialAccentTheme(): AccentTheme {
 }
 
 function MainNav({ projectId, onNavigate }: { projectId?: string; onNavigate?: () => void }) {
-  return <nav className="app-nav" aria-label="主导航"><div className="nav-group-label">WORKSPACE</div>{NAV.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={17} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}{projectId && <div className="project-nav"><div className="nav-group-label">CURRENT PROJECT</div>{PROJECT_TABS.map((item) => <NavLink key={item.seg} to={`/projects/${projectId}/${item.seg}`} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item compact ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={16} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}</div>}</nav>;
+  const { me } = useAuth();
+  const capabilityNav = CAPABILITY_NAV.filter((item) => canAccessAnyScope(me, item.scopes));
+  return <nav className="app-nav" aria-label="主导航"><div className="nav-group-label">WORKSPACE</div>{WORKSPACE_NAV.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={17} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}{capabilityNav.length > 0 && <div className="project-nav"><div className="nav-group-label">CAPABILITY</div>{capabilityNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={17} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}</div>}{projectId && <div className="project-nav"><div className="nav-group-label">CURRENT PROJECT</div>{PROJECT_TABS.map((item) => <NavLink key={item.seg} to={`/projects/${projectId}/${item.seg}`} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item compact ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={16} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}</div>}</nav>;
 }
 
 export function AppShell() {
@@ -121,6 +134,7 @@ function UserRailFooter({ collapsed }: { collapsed: boolean }) {
       <div className="rail-user is-dev" title="开发模式 · 鉴权关闭">
         {!collapsed && <span>开发模式 · 鉴权关闭</span>}
         {collapsed && <span className="rail-user-dot" aria-hidden />}
+        <button type="button" title="平台设置" className="rail-user-logout" onClick={() => navigate("/settings/access")}><Gear size={14} /></button>
       </div>
     );
   }
@@ -135,6 +149,14 @@ function UserRailFooter({ collapsed }: { collapsed: boolean }) {
           <div className="truncate font-mono text-[9px] text-zinc-600">{role}</div>
         </div>
       )}
+      <button
+        type="button"
+        title="账号与安全"
+        className="rail-user-logout"
+        onClick={() => navigate("/settings/access?tab=account")}
+      >
+        <Gear size={14} />
+      </button>
       <button
         type="button"
         title="退出登录"
@@ -178,13 +200,19 @@ function ThemePicker({ value, collapsed, onChange }: { value: AccentTheme; colla
 }
 
 function CommandMenu({ projectId, onClose, onNavigate }: { projectId?: string; onClose: () => void; onNavigate: (to: string) => void }) {
+  const { me } = useAuth();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const capabilityNav = CAPABILITY_NAV.filter((item) => canAccessAnyScope(me, item.scopes));
+  const platformNav = PLATFORM_NAV.filter((item) => canAccessAnyScope(me, item.scopes));
   const commands = useMemo(() => [
-    ...NAV.map((item) => ({ label: item.label, caption: item.caption, to: item.to, icon: item.icon, group: "全局" })),
+    ...WORKSPACE_NAV.map((item) => ({ label: item.label, caption: item.caption, to: item.to, icon: item.icon, group: "工作空间" })),
+    ...capabilityNav.map((item) => ({ label: item.label, caption: item.caption, to: item.to, icon: item.icon, group: "能力" })),
+    ...SECONDARY_COMMANDS,
+    ...platformNav.map((item) => ({ ...item, group: "平台治理" })),
     ...(projectId ? PROJECT_TABS.map((item) => ({ label: item.label, caption: item.caption, to: `/projects/${projectId}/${item.seg}`, icon: item.icon, group: "当前项目" })) : []),
-  ], [projectId]);
+  ], [capabilityNav, platformNav, projectId]);
   const filtered = commands.filter((item) => `${item.label}${item.caption}${item.group}`.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => setActive(0), [query]);

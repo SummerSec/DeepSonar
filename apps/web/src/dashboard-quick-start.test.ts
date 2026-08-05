@@ -132,7 +132,7 @@ test("readiness failure exposes repair links and prevents task creation", async 
   if (result.kind === "readiness_failed") {
     assert.equal(result.project.name, "本地项目");
     assert.equal(readinessFailures(result.readiness)[0]?.fix?.href, "/settings?tab=credentials");
-    assert.equal(resolveReadinessFix(readinessFailures(result.readiness)[0]?.fix, result.readiness.scope, result.project.id)?.href, "/agents?tab=credentials");
+    assert.equal(resolveReadinessFix(readinessFailures(result.readiness)[0]?.fix, result.readiness.scope, result.project.id)?.href, "/settings/credentials");
   }
   assert.deepEqual(calls, ["project", "readiness"]);
 });
@@ -161,13 +161,13 @@ test("readiness repair actions resolve every global and project route", () => {
   const projectScope = { kind: "project" as const, project_id: project.id };
   const actions = ["credentials", "role_config", "rules", "runtime_images"] as const;
   const expectedGlobal = {
-    credentials: "/agents?tab=credentials",
+    credentials: "/settings/credentials",
     role_config: "/agents?tab=roles",
-    rules: "/agents?tab=rules",
+    rules: "/settings/platform?tab=rules",
     runtime_images: "/images",
   };
   const expectedProject = {
-    credentials: "/agents?tab=credentials",
+    credentials: "/settings/credentials",
     role_config: `/projects/${project.id}/settings?tab=roles`,
     rules: `/projects/${project.id}/settings?tab=rules`,
     runtime_images: `/projects/${project.id}/images`,
@@ -188,6 +188,6 @@ test("legacy readiness links normalize to real settings panels", () => {
   const globalScope = { kind: "global" as const, project_id: null };
   const projectScope = { kind: "project" as const, project_id: project.id };
   assert.equal(resolveReadinessFix({ href: "/global-settings", target: "hub-settings" }, projectScope)?.href, `/projects/${project.id}/settings?tab=rules`);
-  assert.equal(resolveReadinessFix({ href: `/projects/${project.id}/settings?tab=credentials`, target: "credentials" }, projectScope)?.href, "/agents?tab=credentials");
-  assert.equal(resolveReadinessFix({ href: "/projects", target: "task-network-policy" }, globalScope)?.href, "/agents?tab=rules");
+  assert.equal(resolveReadinessFix({ href: `/projects/${project.id}/settings?tab=credentials`, target: "credentials" }, projectScope)?.href, "/settings/credentials");
+  assert.equal(resolveReadinessFix({ href: "/projects", target: "task-network-policy" }, globalScope)?.href, "/settings/platform?tab=rules");
 });
