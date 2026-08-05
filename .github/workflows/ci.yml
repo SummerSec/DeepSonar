@@ -95,6 +95,11 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:report-download
 
+      - name: Per-Finding report PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:finding-report
+
       - name: Incremental migration chain (fresh, v12 upgrade, rollback/retry, concurrency)
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}

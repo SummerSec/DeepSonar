@@ -9,6 +9,9 @@ import { sql } from "./db.js";
 import { invalidVerification } from "./control-input.js";
 
 type Tx = typeof sql;
+type SavepointTx = Tx & {
+  savepoint<T>(callback: (tx: Tx) => T | Promise<T>): Promise<T>;
+};
 
 async function core() {
   return import("./core.js");
@@ -746,6 +749,16 @@ export async function closeVerifyRound(
 
   if (final === "confirmed") {
     await setFindingStatus(tx, findingId, "confirmed", finding.node_id as string | null, "confirmed");
+    // A report is a read-only derivative. Dispatch failures must never roll
+    // back the technical confirmation or block the Verify state machine.
+    try {
+      const { maybeDispatchFindingReport } = await import("./report.js");
+      await (tx as SavepointTx).savepoint((reportTx) =>
+        maybeDispatchFindingReport(reportTx, findingId)
+      );
+    } catch (error) {
+      console.error(`[verify] finding ${findingId} report dispatch failed:`, error);
+    }
     return {
       outcome: "confirmed",
       forceHub: true,

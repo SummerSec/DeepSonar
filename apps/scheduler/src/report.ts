@@ -2,7 +2,7 @@
  * 任务级最终报告：收敛后幂等派发 Report Job，确定性输入 + 产物校验 + SARIF。
  * 见 docs/TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md §5
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
@@ -19,6 +19,13 @@ function reportDir(canvasId: string): string {
   const safe = canvasId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
   return path.join(config.storage.blobDir, "reports", safe || "unknown");
 }
+
+function findingReportDir(findingId: string, version: number): string {
+  const safe = findingId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
+  return path.join(config.storage.blobDir, "finding-reports", safe || "unknown", `v${version}`);
+}
+
+const ACTIVE_REPORT_STATUSES = ["pending", "generating"];
 
 export interface ReportInputFinding {
   id: string;
@@ -46,6 +53,147 @@ export interface ReportInput {
   needs_human_findings: ReportInputFinding[];
   scope_and_coverage: Record<string, unknown>;
   evidence: unknown[];
+}
+
+export interface FindingReportInput {
+  scope: "finding";
+  report_version: number;
+  frozen_at: string;
+  input_budget_chars: number;
+  input_truncated: boolean;
+  project: { id: string; name: string };
+  task: { canvas_id: string; title: string };
+  finding: {
+    id: string;
+    fingerprint: string;
+    title: string;
+    severity: string;
+    location: string | null;
+    summary: string | null;
+    verify_status: "confirmed";
+    source_job_id: string;
+    details: Record<string, unknown>;
+  };
+  verification_rounds: Array<{
+    attempt: number;
+    status: string;
+    proposed_verdict: string | null;
+    final_outcome: string | null;
+    summary: string | null;
+    error: string | null;
+    created_at: unknown;
+    finished_at: unknown;
+  }>;
+  evidence: {
+    review: unknown[];
+    test: unknown[];
+    missing: string[];
+    omitted: { review: number; test: number; rounds: number };
+  };
+  limitations: string[];
+}
+
+function allowlistedFindingDetails(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const source = raw as Record<string, unknown>;
+  const allowed = ["category", "rule_id", "impact", "reproduction", "remediation", "references", "tags"];
+  return Object.fromEntries(allowed.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
+}
+
+function shortReportText(value: unknown, max: number): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function compactReportValue(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") return shortReportText(value, 2_000);
+  if (depth >= 4) return "[truncated]";
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => compactReportValue(item, depth + 1));
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, 30)
+        .map(([key, item]) => [key, compactReportValue(item, depth + 1)]),
+    );
+  }
+  return shortReportText(value, 2_000);
+}
+
+function enforceFindingReportInputBudget(input: FindingReportInput): FindingReportInput {
+  const maxChars = Math.max(4_000, config.graph.maxFindingReportInputChars);
+  input.input_budget_chars = maxChars;
+  if (JSON.stringify(input).length <= maxChars) return input;
+
+  const review = input.evidence.review.slice(0, 20).map((row) => compactReportValue(row));
+  const runtimeTest = input.evidence.test.slice(0, 20).map((row) => compactReportValue(row));
+  const rounds = input.verification_rounds.slice(-20).map((round) => ({
+    ...round,
+    summary: shortReportText(round.summary, 2_000),
+    error: shortReportText(round.error, 2_000),
+  }));
+  const omitted = {
+    review: Math.max(0, input.evidence.review.length - review.length),
+    test: Math.max(0, input.evidence.test.length - runtimeTest.length),
+    rounds: Math.max(0, input.verification_rounds.length - rounds.length),
+  };
+  const candidate: FindingReportInput = {
+    ...input,
+    input_truncated: true,
+    project: { ...input.project, name: shortReportText(input.project.name, 500) ?? "" },
+    task: { ...input.task, title: shortReportText(input.task.title, 500) ?? "" },
+    finding: {
+      ...input.finding,
+      title: shortReportText(input.finding.title, 500) ?? "",
+      location: shortReportText(input.finding.location, 1_000),
+      summary: shortReportText(input.finding.summary, 4_000),
+      details: compactReportValue(input.finding.details) as Record<string, unknown>,
+    },
+    verification_rounds: rounds,
+    evidence: {
+      review,
+      test: runtimeTest,
+      missing: input.evidence.missing.slice(0, 50).map((item) => shortReportText(item, 500) ?? ""),
+      omitted,
+    },
+    limitations: [...new Set([
+      ...input.limitations.slice(0, 50).map((item) => shortReportText(item, 500) ?? ""),
+      `input_truncated:max_chars=${maxChars}`,
+    ])],
+  };
+
+  while (JSON.stringify(candidate).length > maxChars && (review.length > 0 || runtimeTest.length > 0)) {
+    if (review.length >= runtimeTest.length && review.length > 0) {
+      review.pop();
+      omitted.review += 1;
+    } else {
+      runtimeTest.pop();
+      omitted.test += 1;
+    }
+  }
+  while (JSON.stringify(candidate).length > maxChars && rounds.length > 1) {
+    rounds.shift();
+    omitted.rounds += 1;
+  }
+  if (JSON.stringify(candidate).length > maxChars) {
+    candidate.finding.details = {};
+    candidate.finding.summary = shortReportText(candidate.finding.summary, 500);
+    candidate.verification_rounds = rounds.slice(-1).map((round) => ({
+      ...round,
+      summary: shortReportText(round.summary, 500),
+      error: shortReportText(round.error, 500),
+    }));
+    omitted.rounds += Math.max(0, rounds.length - candidate.verification_rounds.length);
+    candidate.evidence.review = [];
+    candidate.evidence.test = [];
+    omitted.review = input.evidence.review.length;
+    omitted.test = input.evidence.test.length;
+  }
+  if (JSON.stringify(candidate).length > maxChars) {
+    throw new Error(`finding report input exceeds ${maxChars} characters after truncation`);
+  }
+  return candidate;
 }
 
 /** 从数据库确定性生成报告输入（不含 Agent 创作内容）。 */
@@ -130,6 +278,79 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     },
     evidence: [],
   };
+}
+
+/** Freeze one confirmed Finding and its verification evidence for a versioned report. */
+export async function buildFindingReportInput(
+  findingId: string,
+  version: number,
+  db: typeof sql = sql,
+): Promise<FindingReportInput> {
+  const [finding] = await db`
+    SELECT f.id, f.project_id, f.fingerprint, f.title, f.severity, f.location,
+           f.summary, f.verify_status, f.raw_json, f.job_id,
+           j.canvas_id, c.title AS canvas_title, p.name AS project_name
+    FROM findings f
+    JOIN jobs j ON j.id = f.job_id
+    JOIN canvases c ON c.id = j.canvas_id
+    JOIN projects p ON p.id = f.project_id
+    WHERE f.id = ${findingId}`;
+  if (!finding) throw new Error(`finding not found: ${findingId}`);
+  if (finding.verify_status !== "confirmed") {
+    throw new Error(`finding ${findingId} is not confirmed`);
+  }
+
+  const rounds = await db`
+    SELECT attempt, status, proposed_verdict, final_outcome, evidence_snapshot_json,
+           summary, error, created_at, finished_at
+    FROM finding_verification_rounds
+    WHERE finding_id = ${findingId}
+    ORDER BY attempt ASC`;
+  const confirmedRound = [...rounds].reverse().find((round) => round.final_outcome === "confirmed");
+  const snapshot = (confirmedRound?.evidence_snapshot_json ?? {}) as {
+    review?: unknown[];
+    test?: unknown[];
+    missing?: string[];
+  };
+
+  const input: FindingReportInput = {
+    scope: "finding",
+    report_version: version,
+    frozen_at: new Date().toISOString(),
+    input_budget_chars: Math.max(4_000, config.graph.maxFindingReportInputChars),
+    input_truncated: false,
+    project: { id: String(finding.project_id), name: String(finding.project_name) },
+    task: { canvas_id: String(finding.canvas_id), title: String(finding.canvas_title) },
+    finding: {
+      id: String(finding.id),
+      fingerprint: String(finding.fingerprint),
+      title: String(finding.title),
+      severity: String(finding.severity),
+      location: (finding.location as string | null) ?? null,
+      summary: (finding.summary as string | null) ?? null,
+      verify_status: "confirmed",
+      source_job_id: String(finding.job_id),
+      details: allowlistedFindingDetails(finding.raw_json),
+    },
+    verification_rounds: rounds.map((round) => ({
+      attempt: Number(round.attempt),
+      status: String(round.status),
+      proposed_verdict: (round.proposed_verdict as string | null) ?? null,
+      final_outcome: (round.final_outcome as string | null) ?? null,
+      summary: (round.summary as string | null) ?? null,
+      error: (round.error as string | null) ?? null,
+      created_at: round.created_at,
+      finished_at: round.finished_at,
+    })),
+    evidence: {
+      review: snapshot.review ?? [],
+      test: snapshot.test ?? [],
+      missing: snapshot.missing ?? [],
+      omitted: { review: 0, test: 0, rounds: 0 },
+    },
+    limitations: snapshot.missing ?? [],
+  };
+  return enforceFindingReportInputBudget(input);
 }
 
 /** SARIF 2.1.0 子集：仅 confirmed Finding。 */
@@ -238,6 +459,140 @@ function defaultMarkdown(input: ReportInput): string {
   lines.push("---");
   lines.push("_本报告由 DeepSonar 调度器在分析收敛后自动生成；SARIF 仅含 confirmed Finding。_");
   return lines.join("\n");
+}
+
+function defaultFindingMarkdown(input: FindingReportInput): string {
+  const f = input.finding;
+  const lines = [
+    `# [${f.severity}] ${f.title}`,
+    "",
+    `- Finding ID: \`${f.id}\``,
+    `- Fingerprint: \`${f.fingerprint}\``,
+    `- Project: ${input.project.name}`,
+    `- Task: ${input.task.title}`,
+    `- Verification: confirmed`,
+    `- Report version: ${input.report_version}`,
+  ];
+  if (f.location) lines.push(`- Location: \`${f.location}\``);
+  lines.push("", "## Summary", "", f.summary || "No summary was recorded.");
+  lines.push("", "## Verification", "");
+  for (const round of input.verification_rounds) {
+    lines.push(`- Round ${round.attempt}: ${round.final_outcome ?? round.status}${round.summary ? ` - ${round.summary}` : ""}`);
+  }
+  lines.push("", "## Evidence snapshot", "", `- Review evidence: ${input.evidence.review.length}`);
+  lines.push(`- Test evidence: ${input.evidence.test.length}`);
+  if (input.input_truncated) {
+    lines.push(`- Input truncated to ${input.input_budget_chars} characters`);
+    lines.push(`- Omitted: review=${input.evidence.omitted.review}, test=${input.evidence.omitted.test}, rounds=${input.evidence.omitted.rounds}`);
+  }
+  if (input.limitations.length > 0) lines.push(`- Limitations: ${input.limitations.join(", ")}`);
+  if (Object.keys(f.details).length > 0) {
+    lines.push("", "## Structured details", "", "```json", JSON.stringify(f.details, null, 2), "```");
+  }
+  lines.push("", "---", `_Frozen at ${input.frozen_at}; this report does not change Finding state._`);
+  return lines.join("\n");
+}
+
+export interface FindingReportDispatchResult {
+  dispatched: boolean;
+  reason?: string;
+  report_id?: string;
+  job_id?: string;
+  version?: number;
+}
+
+/**
+ * Create one versioned report Job for a confirmed Finding.
+ * The Finding row is the serialization lock, so automatic and manual triggers
+ * cannot create overlapping active versions.
+ */
+export async function maybeDispatchFindingReport(
+  tx: Tx,
+  findingId: string,
+  opts: { force?: boolean } = {},
+): Promise<FindingReportDispatchResult> {
+  const [finding] = await tx`
+    SELECT f.id, f.project_id, f.verify_status, j.canvas_id
+    FROM findings f
+    JOIN jobs j ON j.id = f.job_id
+    WHERE f.id = ${findingId}
+    FOR UPDATE OF f`;
+  if (!finding) return { dispatched: false, reason: "no_finding" };
+  if (finding.verify_status !== "confirmed") return { dispatched: false, reason: "not_confirmed" };
+  if (!finding.canvas_id) return { dispatched: false, reason: "no_canvas" };
+
+  const [latest] = await tx`
+    SELECT id, version, status, report_job_id
+    FROM finding_reports
+    WHERE finding_id = ${findingId}
+    ORDER BY version DESC
+    LIMIT 1
+    FOR UPDATE`;
+  if (latest && ACTIVE_REPORT_STATUSES.includes(String(latest.status))) {
+    return {
+      dispatched: false,
+      reason: "report_in_flight",
+      report_id: String(latest.id),
+      job_id: latest.report_job_id ? String(latest.report_job_id) : undefined,
+      version: Number(latest.version),
+    };
+  }
+  if (latest?.status === "succeeded" && !opts.force) {
+    return { dispatched: false, reason: "already_succeeded", report_id: String(latest.id), version: Number(latest.version) };
+  }
+
+  const projectId = String(finding.project_id);
+  const canvasId = String(finding.canvas_id);
+  const version = Number(latest?.version ?? 0) + 1;
+  const { fixedPriorityForJob, resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
+  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
+  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
+  const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
+  const inputJson = JSON.stringify(input);
+  const inputSha = sha256(inputJson);
+  const dir = findingReportDir(findingId, version);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "report-input.json"), inputJson, "utf8");
+  const inputUri = path.posix.join("finding-reports", findingId, `v${version}`, "report-input.json");
+  const reportId = randomUUID();
+  const ingressKey = `finding-report:${findingId}:v${version}`;
+
+  const [job] = await tx`
+    INSERT INTO jobs ${tx({
+      project_id: projectId,
+      canvas_id: canvasId,
+      finding_id: findingId,
+      agent_snapshot_json: snapshot as never,
+      type: "report",
+      priority: fixedPriorityForJob({ type: "report", purpose: "report" }),
+      ingress_key: ingressKey,
+      payload_json: {
+        scheduling_purpose: "report",
+        kind: "finding_report",
+        finding_id: findingId,
+        finding_report_id: reportId,
+        report_version: version,
+        report_input_uri: inputUri,
+      } as never,
+      timeout_sec: rules.auditTimeoutSec,
+      followup_depth: 0,
+    })}
+    RETURNING id`;
+  if (!job?.id) return { dispatched: false, reason: "insert_failed" };
+  await tx`
+    INSERT INTO finding_reports ${tx({
+      id: reportId,
+      finding_id: findingId,
+      canvas_id: canvasId,
+      project_id: projectId,
+      version,
+      report_job_id: job.id,
+      status: "generating",
+      input_uri: inputUri,
+      input_sha256: inputSha,
+    })}`;
+  await tx`SELECT pg_notify('deepsonar_jobs', ${`finding_report:${findingId}`})`;
+  return { dispatched: true, report_id: reportId, job_id: String(job.id), version };
 }
 
 /**
@@ -512,6 +867,62 @@ export async function maybeDispatchReport(
   return { dispatched: true };
 }
 
+async function finalizeFindingReportJob(
+  tx: Tx,
+  job: Record<string, unknown>,
+  opts: { summary?: string | null; markdown?: string | null; error?: string | null; failed?: boolean },
+): Promise<void> {
+  const jobId = String(job.id);
+  const [report] = await tx`
+    SELECT * FROM finding_reports WHERE report_job_id = ${jobId} FOR UPDATE`;
+  if (!report) return;
+  if (opts.failed) {
+    await tx`
+      UPDATE finding_reports SET status = 'failed', error = ${opts.error ?? "report_failed"}, updated_at = now()
+      WHERE id = ${report.id as string}`;
+    return;
+  }
+
+  try {
+    const inputBytes = await readReportBlob(String(report.input_uri));
+    const input = JSON.parse(inputBytes.toString("utf8")) as FindingReportInput;
+    if (input.scope !== "finding" || input.finding.id !== report.finding_id || input.report_version !== report.version) {
+      throw new Error(`finding report ${report.id as string} input identity mismatch`);
+    }
+    if (sha256(inputBytes) !== report.input_sha256) {
+      throw new Error(`finding report ${report.id as string} input checksum mismatch`);
+    }
+
+    let markdown = (opts.markdown?.trim() || opts.summary?.trim() || "").trim();
+    if (markdown.length < 20 || (!markdown.includes(input.finding.id) && !markdown.includes(input.finding.title))) {
+      markdown = defaultFindingMarkdown(input);
+    }
+    const dir = findingReportDir(input.finding.id, input.report_version);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "report.md"), markdown, "utf8");
+    const markdownUri = path.posix.join("finding-reports", input.finding.id, `v${input.report_version}`, "report.md");
+    const summary = {
+      finding_id: input.finding.id,
+      fingerprint: input.finding.fingerprint,
+      severity: input.finding.severity,
+      verification_attempts: input.verification_rounds.length,
+      report_version: input.report_version,
+      frozen_at: input.frozen_at,
+      generated_at: new Date().toISOString(),
+    };
+    await tx`
+      UPDATE finding_reports SET
+        status = 'succeeded', summary_json = ${tx.json(summary as never)},
+        markdown_uri = ${markdownUri}, markdown_sha256 = ${sha256(markdown)},
+        error = null, updated_at = now()
+      WHERE id = ${report.id as string}`;
+  } catch (error) {
+    await tx`
+      UPDATE finding_reports SET status = 'failed', error = ${error instanceof Error ? error.message : String(error)}, updated_at = now()
+      WHERE id = ${report.id as string}`;
+  }
+}
+
 /**
  * Report Job 成功：写产物、校验、Root → succeeded。
  * fake/real 均可调用；markdown 可来自 Agent summary 或确定性模板。
@@ -529,6 +940,12 @@ export async function finalizeReportJob(
   // canvas -> task_reports -> jobs/nodes.
   const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
   if (!canvas) return;
+
+  const payload = (job.payload_json ?? {}) as Record<string, unknown>;
+  if (payload.kind === "finding_report") {
+    await finalizeFindingReportJob(tx, job as Record<string, unknown>, opts);
+    return;
+  }
 
   if (opts.failed) {
     await tx`
@@ -633,6 +1050,26 @@ export async function getTaskReportById(id: string) {
   return row ?? null;
 }
 
+export async function getFindingReport(findingId: string) {
+  const [row] = await sql`
+    SELECT * FROM finding_reports WHERE finding_id = ${findingId} ORDER BY version DESC LIMIT 1`;
+  return row ?? null;
+}
+
+export async function getFindingReportById(id: string) {
+  const [row] = await sql`SELECT * FROM finding_reports WHERE id = ${id}`;
+  return row ?? null;
+}
+
+export async function createFindingReport(
+  findingId: string,
+  force = true,
+): Promise<FindingReportDispatchResult> {
+  return sql.begin(async (txRaw) =>
+    maybeDispatchFindingReport(txRaw as unknown as Tx, findingId, { force })
+  );
+}
+
 /**
  * 显式重试失败报告。
  * - 已 succeeded：幂等拒绝，**绝不**降级 Root
@@ -702,5 +1139,3 @@ export async function retryReport(canvasId: string): Promise<{ ok: boolean; reas
     return { ok: r.dispatched, reason: r.reason };
   });
 }
-
-

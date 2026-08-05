@@ -154,7 +154,7 @@ loop:
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
-  7. Hub 派发 audit 等角色；每个 Finding 一律自动进入多轮 verify，rework 强制回弹 Hub 补证；全部 Finding 收敛为 confirmed/needs_human 后自动生成 Report
+  7. Hub 派发 audit 等角色；每个 Finding 一律自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；全部 Finding 收敛为 confirmed/needs_human 后保留并生成任务总 Report
 ```
 
 ### 4.3 审计 → 验证链（单一决策点）
@@ -164,7 +164,9 @@ loop:
 3. 派生前按 `fingerprint` 去重；同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
 4. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
 5. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
-6. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。全部 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 自动派生唯一 Report
+6. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
+7. 全部 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 幂等派发该画布唯一任务总 Report。任务报告汇总全部 Finding，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
+8. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
 
 ### 4.4 Scheduler bounded contexts（Issue #37，渐进迁移）
 
@@ -491,6 +493,8 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 预算由 `MAX_GRAPH_YAML_CHARS_HUB/AGENT/VERIFY/REPORT` 配置但由 Scheduler 强制执行。超预算时投影写入顶层 `truncated: true` 与 `omitted` 计数；返回的 `referableIds` 始终来自完整画布，供服务端校验 `intent.from`。每次投影的 scope、字符数、节点计数和截断状态写入 Job runtime evidence，并暴露为 Prometheus 计数器。
 
+`report` Job 的 `payload_json.kind` 区分 `task_report` 与 `finding_report`。前者绑定画布 Root 的 `analysis_complete → reporting → succeeded` 生命周期并消费 Scheduler 生成的任务级 `report-input.json`；后者只绑定一条已确认 Finding，消费带 SHA-256 校验的冻结输入，不推进 Root，也不改变 Finding 的 `verify_status`。单 Finding 输入由 `MAX_FINDING_REPORT_INPUT_CHARS`（默认 40000）限制；截断时冻结 JSON 显式记录 `input_truncated`、预算与各类省略计数，Executor 在注入模型前再次执行同一上限。
+
 ---
 
 ## 9. 安全与资源策略
@@ -559,7 +563,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - [x] 普通 Worker `request_human` / `resume` 与 Verify `needs_human` 收口分流
 - [ ] Plane 可选自动建子 Issue
 
-**验收**：任意严重度 Finding 自动出现验证节点；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；全部 Finding 收敛后自动生成完整报告。
+**验收**：任意严重度 Finding 自动出现验证节点；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；每条 `confirmed` Finding 有独立版本化报告；全部 Finding 收敛后自动生成任务总报告。
 
 ### Phase 4 — 多项目与打磨（持续）
 

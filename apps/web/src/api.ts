@@ -944,6 +944,32 @@ export interface TaskReport {
   updated_at: string;
 }
 
+export interface FindingReport {
+  id: string;
+  finding_id: string;
+  canvas_id: string;
+  project_id: string;
+  version: number;
+  report_job_id: string | null;
+  status: "pending" | "generating" | "succeeded" | "failed";
+  input_uri: string;
+  input_sha256: string;
+  summary_json: {
+    finding_id?: string;
+    fingerprint?: string;
+    severity?: string;
+    verification_attempts?: number;
+    report_version?: number;
+    frozen_at?: string;
+    generated_at?: string;
+  };
+  markdown_uri: string | null;
+  markdown_sha256: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: authHeaders() });
   if (!res.ok) {
@@ -1383,6 +1409,12 @@ export const api = {
     canvas_id: opts?.canvas_id,
   })}`)),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
+  findingReport: (id: string) => get<FindingReport>(`/findings/${id}/report`),
+  createFindingReport: (id: string) =>
+    send<{ dispatched: boolean; reason?: string; report_id?: string; job_id?: string; version?: number }>(
+      "POST",
+      `/findings/${id}/report`,
+    ),
   setFindingDisposition: (
     id: string,
     body: { disposition: FindingDisposition; note?: string },

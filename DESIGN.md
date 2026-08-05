@@ -30,6 +30,8 @@ Job     1 ── * events（语义）
 Job     1 ──  transcript / evidence（冷存储）
 Finding * ── 1 project + job + optional node
 Finding 1 ── * finding_verification_rounds
+Canvas  1 ── 1 task_reports（任务总报告）
+Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 ```
 
 | 概念 | 说明 |
@@ -39,6 +41,8 @@ Finding 1 ── * finding_verification_rounds
 | **Intent** | Hub 下发；与角色 Job 1:1；`prompt` 直接注入 Worker CLI |
 | **Fact** | 工作角色增量产出；可带 verification 证据块 |
 | **Finding** | 审计假设 → 全量进 verify 生命周期 → confirmed / needs_human / … |
+| **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
+| **Task report** | 画布收敛后生成的任务总报告；汇总全部 Finding，SARIF 仅含 `confirmed` |
 | **Root** | 画布根；阶段如 `analysis_complete` / `reporting` / `succeeded` |
 
 ## 4. 控制闭环（Hub）
@@ -48,8 +52,9 @@ Finding 1 ── * finding_verification_rounds
     → intents（角色 + 完整 prompt）
     → Worker emit_fact / emit_finding
     → finalizeJob → 再 hub_reason
+    → 每个 Finding confirmed → 独立版本化 Finding Report（冻结输入）
     → 全部 Finding ∈ {confirmed, needs_human} 且无活跃工作
-    → Hub complete → Report（系统角色）
+    → Hub complete → Task Report（系统角色）
 ```
 
 纪律：
@@ -63,6 +68,7 @@ Finding 1 ── * finding_verification_rounds
 - **Hub 不可下发** `verify` / `report`；须先 `list_available_roles`。
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
+- **双轨报告（#43）**：收敛门通过后，Scheduler 为每个画布幂等派发一个 Task Report；每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。Finding 报告输入写入 `report-input.json` 并记录 checksum，`pending/generating` 期间每个 Finding 只允许一个活跃版本；手动刷新/重试创建下一版本，失败只更新报告行，不改变 Finding 状态。
 
 ## 5. Job 与并发
 
@@ -138,7 +144,7 @@ pending → claimed → provisioning → running
 | 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`canvas_changes` durable revision/tombstone；`delta?since=<revision>`，游标过旧显式回退 L0 |
 | 分层共享资产 | #41 | platform / project / finding 只读注入；人工+Agent publish |
 | 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
-| 双轨报告 | #43 | 任务总报告 + 每条 confirmed 单报告 |
+| 双轨报告 | #43 | **已完成**：任务收敛后保留一份 Task Report；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report，支持手动刷新/重试并限制单 Finding 同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | profile 可配置；任务>项目>全局；运行中显著标识；CVSS 主流版+可演进 |
 | 任务卡片状态 | #46 | 任务级相位与 `active_count` 同源 |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
@@ -153,7 +159,7 @@ pending → claimed → provisioning → running
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一结构基线（无增量迁移；改则 bump `SCHEMA_VERSION`） |
+| `database/schema.sql` | 最新 fresh 基线；现有库通过连续 `database/migrations/` 升级，改表须 bump `SCHEMA_VERSION` |
 | `docs/ARCHITECTURE.md` | 完整架构与威胁建模 |
 | `deploy/` | 生产与 real 模式编排 |
 
