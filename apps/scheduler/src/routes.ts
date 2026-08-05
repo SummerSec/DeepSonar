@@ -2412,13 +2412,24 @@ export function registerRoutes(app: FastifyInstance) {
     });
   }
 
-  async function roleConfigView(configId: string): Promise<Record<string, unknown> | null> {
+  /**
+   * Return a RoleConfig with Credential bindings projected for the caller's
+   * project.  The RoleConfig row itself is only reached through an endpoint
+   * whose scope has already been checked, but legacy/malformed bindings can
+   * still point at a Credential owned by another project.  Never expose that
+   * binding (or its project/name/provider/status metadata) to a project token.
+   */
+  async function roleConfigView(
+    configId: string,
+    actorProjectId: string | null = null,
+  ): Promise<Record<string, unknown> | null> {
     const [cfg] = await sql`SELECT * FROM role_configs WHERE id = ${configId}`;
     if (!cfg) return null;
     const creds = await sql`
       SELECT rc.credential_id, rc.purpose, c.name, c.kind, c.provider, c.status, c.project_id
       FROM role_credentials rc JOIN credentials c ON c.id = rc.credential_id
-      WHERE rc.role_config_id = ${configId}`;
+      WHERE rc.role_config_id = ${configId}
+        AND (${actorProjectId}::uuid IS NULL OR c.project_id IS NULL OR c.project_id = ${actorProjectId})`;
     const files = await sql`
       SELECT path, content, content_sha256 FROM role_config_files
       WHERE role_config_id = ${configId} ORDER BY path`;
@@ -2432,14 +2443,15 @@ export function registerRoutes(app: FastifyInstance) {
     };
   }
 
-  app.get("/role-configs/global", async () => {
+  app.get("/role-configs/global", async (req) => {
+    const actorProjectId = req.actor?.projectId ?? null;
     const rows = await sql`
       SELECT rc.id, r.name AS role_name, r.title AS role_title, r.kind AS role_kind
       FROM role_configs rc JOIN agent_roles r ON r.id = rc.role_id
       WHERE rc.project_id IS NULL ORDER BY r.name`;
     const out: Record<string, unknown>[] = [];
     for (const row of rows) {
-      const view = await roleConfigView(row.id as string);
+      const view = await roleConfigView(row.id as string, actorProjectId);
       if (!view) continue;
       out.push({
         ...view,
@@ -2468,6 +2480,7 @@ export function registerRoutes(app: FastifyInstance) {
         FROM role_credentials rcb
         JOIN credentials c ON c.id = rcb.credential_id
         WHERE rcb.role_config_id = rc.id AND rcb.purpose = 'llm'
+          AND (${projectScope}::uuid IS NULL OR c.project_id IS NULL OR c.project_id = ${projectScope})
         ORDER BY c.created_at DESC
         LIMIT 1
       ) c ON true
@@ -2488,6 +2501,12 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.put("/role-configs/global/:roleId", async (req, reply) => {
     const { roleId } = req.params as { roleId: string };
+    if (req.actor?.projectId) {
+      return reply.code(403).send({
+        error: "project-scoped actors may modify only their own project RoleConfigs",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
     const body = RoleConfigPutBody.parse(req.body);
     const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${roleId}`;
     if (!role) return reply.code(404).send({ error: "role not found" });
@@ -2503,11 +2522,18 @@ export function registerRoutes(app: FastifyInstance) {
       resourceId: configId,
       after: { role: role.name, scope: "global", credentials: body.credentials.length, files: body.config_files.length },
     });
-    return roleConfigView(configId);
+    return roleConfigView(configId, req.actor?.projectId ?? null);
   });
 
   app.get("/projects/:id/role-configs", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
+    if (actorProjectId && actorProjectId !== id) {
+      return reply.code(403).send({
+        error: "project-scoped actors may read only their own project RoleConfigs",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
     const [p] = await sql`SELECT id FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const rows = await sql`
@@ -2524,13 +2550,20 @@ export function registerRoutes(app: FastifyInstance) {
     return Promise.all(rows.map(async (row) => ({
       ...row,
       project_config: row.project_config_id
-        ? await roleConfigView(row.project_config_id as string)
+        ? await roleConfigView(row.project_config_id as string, actorProjectId)
         : null,
     })));
   });
 
   app.put("/projects/:id/role-configs/:roleId", async (req, reply) => {
     const { id, roleId } = req.params as { id: string; roleId: string };
+    const actorProjectId = req.actor?.projectId ?? null;
+    if (actorProjectId && actorProjectId !== id) {
+      return reply.code(403).send({
+        error: "project-scoped actors may modify only their own project RoleConfigs",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
     const body = RoleConfigPutBody.parse(req.body);
     const [p] = await sql`SELECT id FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
@@ -2549,11 +2582,18 @@ export function registerRoutes(app: FastifyInstance) {
       projectId: id,
       after: { role: role.name, scope: "project", credentials: body.credentials.length, files: body.config_files.length },
     });
-    return roleConfigView(configId);
+    return roleConfigView(configId, actorProjectId);
   });
 
   app.delete("/projects/:id/role-configs/:roleId", async (req, reply) => {
     const { id, roleId } = req.params as { id: string; roleId: string };
+    const actorProjectId = req.actor?.projectId ?? null;
+    if (actorProjectId && actorProjectId !== id) {
+      return reply.code(403).send({
+        error: "project-scoped actors may modify only their own project RoleConfigs",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
     const [row] = await sql`
       DELETE FROM role_configs WHERE role_id = ${roleId} AND project_id = ${id} RETURNING id`;
     if (!row) return reply.code(404).send({ error: "该项目没有此角色的覆盖配置" });
@@ -2573,6 +2613,12 @@ export function registerRoutes(app: FastifyInstance) {
   );
 
   app.post("/agent-roles", async (req, reply) => {
+    if (req.actor?.projectId) {
+      return reply.code(403).send({
+        error: "project-scoped actors may not modify the global role registry",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
     const body = RoleBody.parse(req.body);
     try {
       const [row] = await sql`
@@ -2595,6 +2641,12 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.patch("/agent-roles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (req.actor?.projectId) {
+      return reply.code(403).send({
+        error: "project-scoped actors may not modify the global role registry",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
     const body = RolePatchBody.parse(req.body);
     const [row] = await sql`
       UPDATE agent_roles SET ${sql(body)}, updated_at = now()
@@ -2615,6 +2667,12 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.delete("/agent-roles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (req.actor?.projectId) {
+      return reply.code(403).send({
+        error: "project-scoped actors may not modify the global role registry",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
     const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${id}`;
     if (!role) return reply.code(404).send({ error: "role not found" });
     if (role.kind !== "role") {

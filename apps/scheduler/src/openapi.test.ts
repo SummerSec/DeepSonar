@@ -49,3 +49,20 @@ test("credential batch and picker OpenAPI contracts are strict and typed", () =>
     assert.ok((paths["/credentials/batch-bind"]?.post as Record<string, any>).responses[status]);
   }
 });
+
+test("RoleConfig and role registry OpenAPI documents project-scope boundaries", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  assert.ok(schemas.Error?.properties?.error_code);
+  for (const [path, method] of [
+    ["/role-configs/global/{roleId}", "put"],
+    ["/agent-roles", "post"],
+    ["/agent-roles/{id}", "patch"],
+    ["/agent-roles/{id}", "delete"],
+  ] as const) {
+    assert.match(String(paths[path]?.[method]?.description), /PROJECT_SCOPE_FORBIDDEN/);
+  }
+  assert.match(String(paths["/role-configs/global"]?.get?.description), /Credential/);
+  assert.match(String(paths["/role-configs/bindable"]?.get?.description), /跨项目绑定/);
+});

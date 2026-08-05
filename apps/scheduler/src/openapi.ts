@@ -44,7 +44,10 @@ interface Op {
 
 const ErrorSchema = {
   type: "object",
-  properties: { error: { type: "string", description: "人类可读错误信息" } },
+  properties: {
+    error: { type: "string", description: "人类可读错误信息" },
+    error_code: { type: "string", description: "稳定机器可读错误代码（若该错误提供）" },
+  },
   required: ["error"],
 };
 
@@ -411,11 +414,19 @@ const OPS: Op[] = [
   },
 
   // roles
-  { method: "get", path: "/agent-roles", summary: "角色注册表", scope: "agents:read", tags: ["Roles"] },
+  {
+    method: "get",
+    path: "/agent-roles",
+    summary: "角色注册表",
+    description: "读取全局角色注册表。项目限定 token 可读取注册表，但不能创建、修改或删除角色（写操作返回 403 PROJECT_SCOPE_FORBIDDEN）。",
+    scope: "agents:read",
+    tags: ["Roles"],
+  },
   {
     method: "post",
     path: "/agent-roles",
     summary: "创建角色",
+    description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["Roles"],
     body: {
@@ -428,16 +439,38 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "patch", path: "/agent-roles/{id}", summary: "更新角色（name 不可改）", scope: "agents:write", tags: ["Roles"] },
-  { method: "delete", path: "/agent-roles/{id}", summary: "删除 Hub 可下发角色（系统/Hub 角色 409）", scope: "agents:write", tags: ["Roles"] },
+  {
+    method: "patch",
+    path: "/agent-roles/{id}",
+    summary: "更新角色（name 不可改）",
+    description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["Roles"],
+  },
+  {
+    method: "delete",
+    path: "/agent-roles/{id}",
+    summary: "删除 Hub 可下发角色（系统/Hub 角色 409）",
+    description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["Roles"],
+  },
   { method: "get", path: "/projects/{id}/roles", summary: "项目视角角色启用清单", scope: "agents:read", tags: ["Roles"] },
 
   // role-configs
-  { method: "get", path: "/role-configs/global", summary: "全局 RoleConfig 清单", scope: "agents:read", tags: ["RoleConfig"] },
+  {
+    method: "get",
+    path: "/role-configs/global",
+    summary: "全局 RoleConfig 清单",
+    description: "项目限定 token 可读取全局 RoleConfig，但响应中的 Credential 绑定仅包含全局或该 token 所属项目的 Credential；异常跨项目绑定按未绑定处理。",
+    scope: "agents:read",
+    tags: ["RoleConfig"],
+  },
   {
     method: "get",
     path: "/role-configs/bindable",
     summary: "统一 Provider 绑定选择器（全局/项目 RoleConfig 元数据）",
+    description: "项目限定 token 只能看到全局与本项目 RoleConfig；Credential 元数据也只返回全局或本项目绑定，异常跨项目绑定不返回 Credential 字段。",
     scope: "agents:read",
     tags: ["RoleConfig", "Credentials"],
     responses: {
@@ -451,15 +484,24 @@ const OPS: Op[] = [
     method: "put",
     path: "/role-configs/global/{roleId}",
     summary: "全局 RoleConfig upsert（声明式全量替换）",
+    description: "仅 unscoped/admin actor 可写全局 RoleConfig；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
   },
-  { method: "get", path: "/projects/{id}/role-configs", summary: "项目 RoleConfig 来源清单", scope: "agents:read", tags: ["RoleConfig"] },
+  {
+    method: "get",
+    path: "/projects/{id}/role-configs",
+    summary: "项目 RoleConfig 来源清单",
+    description: "项目限定 token 只能读取所属项目；RoleConfig Credential 绑定仅包含全局或该项目 Credential。",
+    scope: "agents:read",
+    tags: ["RoleConfig"],
+  },
   {
     method: "put",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "项目 RoleConfig 覆盖 upsert",
+    description: "项目限定 token 只能写所属项目 RoleConfig；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
@@ -468,6 +510,7 @@ const OPS: Op[] = [
     method: "delete",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "删除项目覆盖，回落全局",
+    description: "项目限定 token 只能删除所属项目 RoleConfig 覆盖；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["RoleConfig"],
   },
