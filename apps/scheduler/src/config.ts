@@ -26,6 +26,11 @@ function int(name: string, dflt: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
+/** Bounded positive integer configuration; invalid or out-of-range values use the safe default. */
+function boundedInt(name: string, dflt: number, max: number): number {
+  const v = Number(process.env[name]);
+  return Number.isSafeInteger(v) && v > 0 && v <= max ? v : dflt;
+}
 function bool(name: string, dflt: boolean): boolean {
   const v = process.env[name];
   if (v === undefined || v === "") return dflt;
@@ -169,6 +174,13 @@ export const config = {
 
   events: {
     payloadMaxKb: int("EVENT_PAYLOAD_MAX_KB", 256),
+    /** Persistent per-Job semantic-event fixed-window budgets (Issue #57). */
+    rateLimitWindowSec: boundedInt("EVENT_RATE_LIMIT_WINDOW_SEC", 60, 3600),
+    rateLimitProgressPerWindow: boundedInt("EVENT_RATE_LIMIT_PROGRESS_PER_WINDOW", 30, 10_000),
+    rateLimitStandardPerWindow: boundedInt("EVENT_RATE_LIMIT_STANDARD_PER_WINDOW", 120, 10_000),
+    // Reserved terminal bucket keeps done/human semantics available even when
+    // progress is noisy. It is intentionally independent, not a shared pool.
+    rateLimitTerminalPerWindow: boundedInt("EVENT_RATE_LIMIT_TERMINAL_PER_WINDOW", 8, 1000),
   },
 
   /** Job 原始 Session、normalized stream 与 OTLP 冷存储。 */

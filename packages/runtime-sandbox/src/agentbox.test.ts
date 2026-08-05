@@ -6,10 +6,35 @@ import {
   createSemanticToolState,
   discardPendingSemanticTools,
   materializationPathCollisions,
+  normalizeRuntimeErrorDetails,
   parseRuntimeLine,
   runtimeCliEnv,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+
+test("rate-limit error details keep only server-owned bounded metadata", () => {
+  const normalized = normalizeRuntimeErrorDetails({
+    code: "event_rate_limited",
+    stack: "secret stack",
+    metadata: {
+      bucket: "progress",
+      retry_after_sec: 4,
+      limit: 30,
+      window_seconds: 60,
+      secret: "Bearer should not cross the sandbox result boundary",
+      huge: "x".repeat(10000),
+    },
+  });
+  assert.deepEqual(normalized, {
+    code: "event_rate_limited",
+    metadata: { bucket: "progress", retry_after_sec: 4, limit: 30, window_seconds: 60 },
+  });
+  assert.equal(normalizeRuntimeErrorDetails({ code: "invalid_node_ref", metadata: { secret: "drop" } }), undefined);
+  assert.deepEqual(normalizeRuntimeErrorDetails({
+    code: "event_rate_limited",
+    metadata: { bucket: "not-a-bucket", retry_after_sec: 0, limit: 10001, window_seconds: 3601 },
+  }), { code: "event_rate_limited" });
+});
 
 test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
   const events: Record<string, unknown>[] = [];

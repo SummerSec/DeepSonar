@@ -4,6 +4,11 @@ import {
   type EventEnvelopeInput,
 } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
+import {
+  consumeEventRateLimit,
+  EventRateLimitError,
+  type EventRateLimitPolicy,
+} from "./rate-limit.js";
 
 /** The Scheduler SQL facade and a transaction callback share this shape. */
 export type EventIngestionDatabase = typeof sql;
@@ -32,6 +37,11 @@ export interface EventIngestionApplication {
 
 export interface EventIngestionOptions {
   maxPayloadBytes?: number;
+  rateLimit?: Partial<EventRateLimitPolicy>;
+  /** Scheduler-owned low-cardinality observation for authoritative rejects. */
+  onRateLimited?: (error: EventRateLimitError, jobId: string) => void;
+  /** Override only in deterministic tests; production uses PostgreSQL time. */
+  clock?: () => Date;
 }
 
 class RetryCanvasResolution extends Error {
@@ -178,6 +188,7 @@ async function appendAndApply(
   envelope: EventEnvelope,
   hint: CanvasHint,
   sideEffects: EventSideEffects,
+  options: EventIngestionOptions,
 ): Promise<EventIngestionResult> {
   return db.begin(async (rawTx) => {
     const tx = rawTx as unknown as EventIngestionTransaction;
@@ -212,6 +223,20 @@ async function appendAndApply(
       ON CONFLICT (event_id) DO NOTHING
       RETURNING event_id`;
     if (dedup.length === 0) return { deduped: true };
+
+    // The durable bucket is consumed only after the idempotency gate. A replay
+    // therefore returns above without touching quota, while a rejected first
+    // delivery rolls back this dedup marker together with every later write.
+    const now = options.clock
+      ? options.clock()
+      : (await tx<{ now: Date }[]>`SELECT statement_timestamp() AS now`)[0]?.now;
+    if (!now) throw new Error("event rate-limit clock unavailable");
+    try {
+      await consumeEventRateLimit(tx, jobId, envelope.type, new Date(now), options.rateLimit);
+    } catch (error) {
+      if (error instanceof EventRateLimitError) options.onRateLimited?.(error, jobId);
+      throw error;
+    }
 
     const [{ next }] = await tx<[{ next: number }]>`
       SELECT COALESCE(MAX(job_seq), 0) + 1 AS next FROM events WHERE job_id = ${jobId}`;
@@ -253,7 +278,7 @@ export function createEventIngestionApplication(
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const hint = await resolveCanvasHint(db, jobId, envelope);
         try {
-          return await appendAndApply(db, jobId, envelope, hint, sideEffects);
+          return await appendAndApply(db, jobId, envelope, hint, sideEffects, options);
         } catch (error) {
           if (error instanceof RetryCanvasResolution && attempt === 0) continue;
           throw error;

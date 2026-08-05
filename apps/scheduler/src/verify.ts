@@ -953,9 +953,28 @@ export async function attachVerificationEvidence(
   }
 
   const [finding] = await tx`
-    SELECT id, node_id, project_id FROM findings WHERE id = ${ver.finding_id}`;
+    SELECT id, node_id, project_id, job_id FROM findings WHERE id = ${ver.finding_id}`;
   if (!finding?.node_id) {
     throw invalidVerification("verification.finding_id 不存在或尚未生成 Finding 节点。", "verification.finding_id");
+  }
+
+  // Re-check all ownership links at the authoritative write boundary. The
+  // follow-up payload is scheduler-owned, but a forged internal call could
+  // still point it at a Finding from another project or at the producing Job
+  // itself. Neither may attach independent evidence.
+  if (String(finding.project_id) !== String(job.project_id)) {
+    throw invalidVerification("verification.finding_id 不属于当前 Job 所在项目。", "verification.finding_id");
+  }
+  const [originJob] = await tx`
+    SELECT id, project_id FROM jobs WHERE id = ${finding.job_id}`;
+  if (!originJob || String(originJob.project_id) !== String(finding.project_id)) {
+    throw invalidVerification("verification.finding_id 的原始 Job 绑定无效。", "verification.finding_id");
+  }
+  if (finding.job_id && String(finding.job_id) === String(job.id)) {
+    throw invalidVerification("验证证据 Job 不能与 Finding 的原始 Job 相同。", "verification.finding_id");
+  }
+  if (job.finding_id && String(job.finding_id) !== String(ver.finding_id)) {
+    throw invalidVerification("当前 Job 绑定的 Finding 与 verification.finding_id 不一致。", "verification.finding_id");
   }
 
   // 确认 finding 属于当前画布
@@ -963,6 +982,12 @@ export async function attachVerificationEvidence(
     SELECT canvas_id FROM canvas_nodes WHERE id = ${finding.node_id as string}`;
   if (!fn || fn.canvas_id !== canvasId) {
     throw invalidVerification("verification.finding_id 不属于当前任务画布。", "verification.finding_id");
+  }
+
+  const [evidenceNode] = await tx`
+    SELECT id, canvas_id, job_id FROM canvas_nodes WHERE id = ${nodeId} FOR UPDATE`;
+  if (!evidenceNode || evidenceNode.canvas_id !== canvasId || String(evidenceNode.job_id) !== String(job.id)) {
+    throw invalidVerification("验证事实节点不属于当前 Job/Canvas。", "verification");
   }
 
   const edgeType = ver.evidence_kind === "review" ? "reviewed_by" : "tested_by";
@@ -984,7 +1009,7 @@ export async function attachVerificationEvidence(
         source_role: String(job.type),
       },
     })}
-    WHERE id = ${nodeId}
+    WHERE id = ${nodeId} AND job_id = ${job.id as string} AND canvas_id = ${canvasId}
     RETURNING id`;
   if (updated.length === 0) throw invalidVerification("验证事实节点不存在，证据未附着。", "verification");
 

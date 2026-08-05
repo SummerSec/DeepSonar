@@ -14,6 +14,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidProgress: "invalid_progress",
   invalidDone: "invalid_done",
   invalidHuman: "invalid_human",
+  jobNotRunning: "job_not_running",
   forbiddenControlFile: "forbidden_control_file",
   invalidReferenceBudget: "invalid_reference_budget",
 } as const;

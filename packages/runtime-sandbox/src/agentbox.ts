@@ -488,6 +488,55 @@ export interface RealAgentResult {
   /** CLI 原始 Session；由 provider 专属 Adapter 在沙箱销毁前读回。 */
   session?: SessionBundle;
   error?: string;
+  /** Scheduler-owned semantic failure details; never carries arbitrary Error fields. */
+  errorDetails?: RuntimeErrorDetails;
+}
+
+export interface RuntimeErrorDetails {
+  code: "event_rate_limited";
+  metadata?: {
+    bucket?: "progress" | "standard" | "terminal";
+    retry_after_sec?: number;
+    limit?: number;
+    window_seconds?: number;
+  };
+}
+
+const RATE_LIMIT_BUCKETS = new Set(["progress", "standard", "terminal"]);
+
+function boundedRateLimitNumber(value: unknown, max: number): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= max
+    ? value as number
+    : undefined;
+}
+
+/**
+ * Preserve only the Scheduler-owned rate-limit code and bounded metadata when
+ * a semantic callback crosses the generic sandbox result boundary.  Error
+ * stacks, arbitrary properties, and payload-bearing metadata are discarded.
+ */
+export function normalizeRuntimeErrorDetails(error: unknown): RuntimeErrorDetails | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const candidate = error as { code?: unknown; metadata?: unknown };
+  if (candidate.code !== "event_rate_limited") return undefined;
+  const metadata = candidate.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return { code: "event_rate_limited" };
+  }
+  const source = metadata as Record<string, unknown>;
+  const normalized: NonNullable<RuntimeErrorDetails["metadata"]> = {};
+  if (typeof source.bucket === "string" && RATE_LIMIT_BUCKETS.has(source.bucket)) {
+    normalized.bucket = source.bucket as "progress" | "standard" | "terminal";
+  }
+  const retryAfter = boundedRateLimitNumber(source.retry_after_sec, 3600);
+  if (retryAfter !== undefined) normalized.retry_after_sec = retryAfter;
+  const limit = boundedRateLimitNumber(source.limit, 10000);
+  if (limit !== undefined) normalized.limit = limit;
+  const windowSeconds = boundedRateLimitNumber(source.window_seconds, 3600);
+  if (windowSeconds !== undefined) normalized.window_seconds = windowSeconds;
+  return Object.keys(normalized).length > 0
+    ? { code: "event_rate_limited", metadata: normalized }
+    : { code: "event_rate_limited" };
 }
 
 /**
@@ -1126,6 +1175,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let finalText = "";
   let sessionId = "";
   let runError: string | undefined;
+  let semanticErrorDetails: RuntimeErrorDetails | undefined;
   let nudgesLeft = 3;
   // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
   const closeStdin = () => {
@@ -1184,6 +1234,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             await spec.onSemanticEvent?.(event);
           } catch (error) {
             semanticError = error instanceof Error ? error.message : String(error);
+            semanticErrorDetails = normalizeRuntimeErrorDetails(error);
             throw error;
           }
         }
@@ -1264,5 +1315,6 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       : runError
         ? { error: runError }
         : {}),
+    ...(semanticErrorDetails ? { errorDetails: semanticErrorDetails } : {}),
   };
 }

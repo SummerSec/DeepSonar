@@ -64,7 +64,8 @@ if (!testDatabaseUrl) {
           assert.ok(error instanceof ControlInputError, `${label}: expected ControlInputError`);
           assert.equal(error.code, expectedCode, label);
           if (expectedCode === "invalid_node_ref") assert.match(error.message, /YAML root_id/);
-          else assert.match(error.message, /invalid_reference_budget|引用数量/);
+          else if (expectedCode === "invalid_reference_budget") assert.match(error.message, /invalid_reference_budget|引用数量/);
+          else assert.match(error.message, new RegExp(expectedCode));
           assert.doesNotMatch(error.message, /invalid input syntax for type uuid/i);
           return true;
         },
@@ -104,6 +105,17 @@ if (!testDatabaseUrl) {
         "total unique reference budget",
         "invalid_reference_budget",
       );
+      const beyondCapIntents = Array.from({ length: 7 }, (_, index) => ({
+        from: [rootId],
+        role: index === 6 ? "role-that-is-not-enabled" : "review",
+        description: `cap intent ${index}`,
+        prompt: "run enough detail",
+      }));
+      await attempt(
+        { intents: beyondCapIntents },
+        "invalid role beyond max intent cap",
+        "invalid_role",
+      );
 
       const [validResult] = await sql<{ id: string }[]>`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
@@ -136,7 +148,11 @@ if (!testDatabaseUrl) {
         },
       };
       await sql`UPDATE jobs SET status = 'succeeded' WHERE parent_job_id = ${jobId}`;
-      await sql`UPDATE jobs SET status = 'succeeded' WHERE id = ${jobId}`;
+      // Direct core application is still an authoritative semantic ingress;
+      // keep the Hub Job running for each legal decision. Non-running late
+      // events are covered by the event-authorization integration instead of
+      // bypassing the production status guard here.
+      await sql`UPDATE jobs SET status = 'running' WHERE id = ${jobId}`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, parent_job_id, type, status, agent_snapshot_json, payload_json)
         VALUES (${randomUUID()}, ${projectId}, ${canvasId}, ${jobId}, 'review', 'succeeded', ${sql.json(validSnapshot)}, ${sql.json({})})`;

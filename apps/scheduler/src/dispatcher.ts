@@ -593,7 +593,15 @@ async function runJob(jobId: string) {
       });
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const rawMessage = e instanceof Error ? e.message : String(e);
+    const details = e && typeof e === "object" && "code" in e
+      ? (e as { code?: unknown; metadata?: { bucket?: unknown; retry_after_sec?: unknown; limit?: unknown } })
+      : null;
+    // Preserve a stable, low-cardinality observation for rate-limit failures
+    // after the executor boundary. Do not serialize event payload content.
+    const msg = details?.code === "event_rate_limited"
+      ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
+      : rawMessage;
     inc("deepsonar_jobs_failed_total", { reason: "exception" });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
     const failed = await sql`
