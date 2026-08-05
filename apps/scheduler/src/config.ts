@@ -121,6 +121,7 @@ export const config = {
     maxYamlCharsAgent: int("MAX_GRAPH_YAML_CHARS_AGENT", 16_000),
     maxYamlCharsVerify: int("MAX_GRAPH_YAML_CHARS_VERIFY", 24_000),
     maxYamlCharsReport: int("MAX_GRAPH_YAML_CHARS_REPORT", 8_000),
+    maxFindingReportInputChars: int("MAX_FINDING_REPORT_INPUT_CHARS", 40_000),
   },
 
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */

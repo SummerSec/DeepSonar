@@ -345,6 +345,26 @@ async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
   await tx`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
 }
 
+async function recoverCancelledDerivedJob(
+  job: Record<string, unknown>,
+  reason: string,
+): Promise<void> {
+  const jobId = String(job.id);
+  if (job.type === "verify_finding") {
+    const { recoverVerifyJobTerminal } = await import("./core.js");
+    await recoverVerifyJobTerminal(jobId, "cancelled", reason);
+    return;
+  }
+  if (job.type === "report") {
+    const { finalizeReportJob } = await import("./report.js");
+    await sql.begin((tx) => finalizeReportJob(
+      tx as unknown as typeof sql,
+      jobId,
+      { failed: true, error: reason },
+    ));
+  }
+}
+
 /** 取消画布上全部活动 job（归档/删除前兜底）。 */
 async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
   const active = await createSqlJobLifecycleApplication().cancelJobsOnCanvas(
@@ -355,7 +375,6 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
   );
   if (active.length === 0) return 0;
   const { revokeJobTokens } = await import("./gateway.js");
-  const { recoverVerifyJobTerminal } = await import("./core.js");
   for (const job of active) {
     const id = job.id as string;
     if (job.sandbox_id) {
@@ -365,9 +384,7 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
-    if (job.type === "verify_finding") {
-      await recoverVerifyJobTerminal(id, "cancelled", "task archived/deleted").catch(() => {});
-    }
+    await recoverCancelledDerivedJob(job, "task archived/deleted").catch(() => {});
   }
   return active.length;
 }
@@ -425,10 +442,13 @@ export function registerRoutes(app: FastifyInstance) {
       const reportId = params.id;
       if (!reportId) return;
       const [report] = await sql`
-        SELECT tr.project_id AS report_project_id, c.project_id AS canvas_project_id
-        FROM task_reports tr
-        JOIN canvases c ON c.id = tr.canvas_id
-        WHERE tr.id = ${reportId}`;
+        SELECT COALESCE(tr.project_id, fr.project_id) AS report_project_id,
+               c.project_id AS canvas_project_id
+        FROM (SELECT 1) anchor
+        LEFT JOIN task_reports tr ON tr.id = ${reportId}
+        LEFT JOIN finding_reports fr ON fr.id = ${reportId}
+        LEFT JOIN canvases c ON c.id = COALESCE(tr.canvas_id, fr.canvas_id)
+        WHERE tr.id IS NOT NULL OR fr.id IS NOT NULL`;
       if (report && (
         !projectScopeAllows(actorProjectId, report.report_project_id as string | null)
         || !projectScopeAllows(actorProjectId, report.canvas_project_id as string | null)
@@ -3606,10 +3626,40 @@ export function registerRoutes(app: FastifyInstance) {
     return report;
   });
 
+  app.get("/findings/:id/report", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { getFindingReport } = await import("./report.js");
+    const report = await getFindingReport(id);
+    if (!report) return reply.code(404).send({ error: "finding report not found" });
+    return report;
+  });
+
+  app.post("/findings/:id/report", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [finding] = await sql`SELECT id, project_id, verify_status FROM findings WHERE id = ${id}`;
+    if (!finding) return reply.code(404).send({ error: "finding not found" });
+    if (finding.verify_status !== "confirmed") {
+      return reply.code(409).send({ error: "finding_not_confirmed", verify_status: finding.verify_status });
+    }
+    const { createFindingReport } = await import("./report.js");
+    const result = await createFindingReport(id, true);
+    await audit(req, {
+      action: "finding.report.create",
+      resourceType: "finding",
+      resourceId: id,
+      projectId: finding.project_id as string,
+      after: result,
+    });
+    if (!result.dispatched && !["report_in_flight", "already_succeeded"].includes(result.reason ?? "")) {
+      return reply.code(409).send(result);
+    }
+    return result;
+  });
+
   app.get("/reports/:id/markdown", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { getTaskReportById, readReportBlob } = await import("./report.js");
-    const report = await getTaskReportById(id);
+    const { getTaskReportById, getFindingReportById, readReportBlob } = await import("./report.js");
+    const report = await getTaskReportById(id) ?? await getFindingReportById(id);
     if (!report) return reply.code(404).send({ error: "report not found" });
     if (report.status !== "succeeded" || !report.markdown_uri) {
       return reply.code(409).send({ error: "report not ready", status: report.status });
@@ -4012,12 +4062,9 @@ export function registerRoutes(app: FastifyInstance) {
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
-    if (job.type === "verify_finding") {
-      const { recoverVerifyJobTerminal } = await import("./core.js");
-      await recoverVerifyJobTerminal(id, "cancelled", reason).catch((e) =>
-        console.error(`[cancel] verify recovery failed:`, e),
-      );
-    }
+    await recoverCancelledDerivedJob(job, reason).catch((e) =>
+      console.error(`[cancel] derived job recovery failed:`, e),
+    );
     await planeWriteback(id).catch(() => {});
     await audit(req, {
       action: body.force ? "job.force_cancel" : "job.cancel",
@@ -4041,7 +4088,6 @@ export function registerRoutes(app: FastifyInstance) {
     const reason = body.reason?.trim() || "强制退出全部活动 Job";
     const active = await createSqlJobLifecycleApplication().cancelJobsOnCanvas(canvasId, reason);
     const { revokeJobTokens } = await import("./gateway.js");
-    const { recoverVerifyJobTerminal } = await import("./core.js");
     let cancelled = 0;
     for (const job of active) {
       const jobId = job.id as string;
@@ -4053,9 +4099,7 @@ export function registerRoutes(app: FastifyInstance) {
       await sql`
         UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
-      if (job.type === "verify_finding") {
-        await recoverVerifyJobTerminal(jobId, "cancelled", reason).catch(() => {});
-      }
+      await recoverCancelledDerivedJob(job, reason).catch(() => {});
       await planeWriteback(jobId).catch(() => {});
     }
     await audit(req, {

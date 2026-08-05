@@ -36,6 +36,7 @@ GET /exports/:id
 GET /exports/:id/download
 GET /findings
 GET /findings/:id
+GET /findings/:id/report
 GET /gateway/*
 GET /global-settings
 GET /health
@@ -110,6 +111,7 @@ POST /credentials/batch-bind
 POST /exports/:id/cancel
 POST /findings/:id/comments
 POST /findings/:id/links
+POST /findings/:id/report
 POST /gateway/*
 POST /imports
 POST /imports/:id/apply
@@ -178,6 +180,7 @@ GET /credentials/{id}/models
 GET /credentials/providers
 GET /findings
 GET /findings/{id}
+GET /findings/{id}/report
 GET /global-settings
 GET /health
 GET /jobs
@@ -232,6 +235,7 @@ POST /credentials/{id}/rotate
 POST /credentials/{id}/status
 POST /credentials/{id}/test
 POST /credentials/batch-bind
+POST /findings/{id}/report
 POST /jobs
 POST /jobs/{id}/cancel
 POST /jobs/{id}/resume

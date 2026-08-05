@@ -56,6 +56,17 @@ test("Hub eligibility blocks active Hub, role, and waiting-human work", () => {
   assert.equal(graphEligibilityReason(base, {}), null);
   assert.equal(graphEligibilityReason({ type: "report" }, { pendingReportOlder: true }), "report_pending_older");
   assert.equal(graphEligibilityReason({ type: "report" }, { rootStatus: "analysis_complete" }), null);
+  assert.equal(
+    graphEligibilityReason({ type: "report", payload_json: { kind: "finding_report" } }, { rootStatus: "running" }),
+    null,
+  );
+  assert.equal(
+    graphEligibilityReason(
+      { type: "report", payload_json: { kind: "finding_report" } },
+      { rootStatus: "running", activeCanvasJob: true },
+    ),
+    "report_gate",
+  );
 });
 
 test("evidence-wait wakeup is edge-triggered and does not churn", () => {

@@ -1,7 +1,10 @@
 import {
+  ArrowsClockwise,
   ArrowRight,
   ArrowSquareOut,
   ChatCircle,
+  DownloadSimple,
+  FileText,
   Link as LinkIcon,
   Trash,
   TreeStructure,
@@ -15,6 +18,7 @@ import {
   type FindingDetail,
   type FindingDisposition,
   type FindingLink,
+  type FindingReport,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
 import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
@@ -106,6 +110,10 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
   const [linkTitle, setLinkTitle] = useState("");
   const [linkType, setLinkType] = useState<FindingLink["link_type"]>("related");
   const [showLinkForm, setShowLinkForm] = useState(false);
+  const [findingReport, setFindingReport] = useState<FindingReport | null>(null);
+  const [reportMarkdown, setReportMarkdown] = useState<string | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     setError(null);
@@ -133,6 +141,50 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
       alive = false;
     };
   }, [findingId]);
+
+  const reportEligible = detail?.finding.verify_status === "confirmed";
+  useEffect(() => {
+    setFindingReport(null);
+    setReportMarkdown(null);
+    setReportError(null);
+    if (!reportEligible) {
+      return;
+    }
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const report = await api.findingReport(findingId);
+        if (!stopped) {
+          setFindingReport(report);
+          setReportError(null);
+        }
+      } catch (error) {
+        if (stopped) return;
+        if (String(error).includes("404")) setFindingReport(null);
+        else setReportError(String(error));
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [findingId, reportEligible]);
+
+  useEffect(() => {
+    if (findingReport?.status !== "succeeded") {
+      setReportMarkdown(null);
+      return;
+    }
+    let stopped = false;
+    api.reportMarkdown(findingReport.id)
+      .then((markdown) => !stopped && setReportMarkdown(markdown))
+      .catch((error) => !stopped && setReportError(String(error)));
+    return () => {
+      stopped = true;
+    };
+  }, [findingReport?.id, findingReport?.status]);
 
   const flash = (m: string) => {
     setMsg(m);
@@ -216,6 +268,21 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const generateFindingReport = async () => {
+    setReportBusy(true);
+    setReportError(null);
+    try {
+      await api.createFindingReport(findingId);
+      const report = await api.findingReport(findingId);
+      setFindingReport(report);
+      flash(findingReport ? "已创建新的报告版本" : "报告已开始生成");
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setReportBusy(false);
     }
   };
 
@@ -307,6 +374,67 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                     )}
                   </div>
                 </section>
+
+                {reportEligible && (
+                  <section className="theme-surface mt-6 rounded-xl ring-1" aria-label="Finding 报告">
+                    <div className="theme-divider flex flex-wrap items-center gap-2 border-b px-4 py-3">
+                      <FileText size={15} className="text-acc-400" />
+                      <h2 className="text-[14px] font-medium text-zinc-200">独立报告</h2>
+                      {findingReport && (
+                        <>
+                          <StatusBadge status={findingReport.status} />
+                          <span className="font-mono text-[10px] text-zinc-600">v{findingReport.version}</span>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void generateFindingReport()}
+                        disabled={reportBusy || findingReport?.status === "pending" || findingReport?.status === "generating"}
+                        className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-acc-500 px-3 py-1.5 text-[11px] font-medium text-ink-950 disabled:opacity-40"
+                      >
+                        <ArrowsClockwise size={12} className={reportBusy ? "animate-spin" : ""} />
+                        {findingReport ? "刷新报告" : "生成报告"}
+                      </button>
+                    </div>
+                    <div className="px-4 py-4">
+                      {reportError && <p role="alert" className="mb-3 text-[12px] text-red-300">{reportError}</p>}
+                      {!findingReport && (
+                        <p className="text-[12px] leading-5 text-zinc-500">确认完成后会自动生成；也可立即手动创建。</p>
+                      )}
+                      {(findingReport?.status === "pending" || findingReport?.status === "generating") && (
+                        <div className="flex items-center gap-2 text-[12px] text-zinc-400">
+                          <ArrowsClockwise size={13} className="animate-spin text-acc-400" />
+                          正在基于冻结证据生成报告
+                        </div>
+                      )}
+                      {findingReport?.status === "failed" && (
+                        <div className="text-[12px] text-red-300">
+                          生成失败{findingReport.error ? `：${findingReport.error}` : ""}
+                        </div>
+                      )}
+                      {findingReport?.status === "succeeded" && (
+                        <>
+                          <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-white/[.06] pb-3">
+                            <span className="font-mono text-[10px] text-zinc-600">
+                              冻结 {formatTime(findingReport.summary_json.frozen_at ?? findingReport.created_at)}
+                            </span>
+                            <span className="font-mono text-[10px] text-zinc-600">
+                              Verify {findingReport.summary_json.verification_attempts ?? 0} 轮
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void api.downloadReport(findingReport.id, "markdown").catch((error) => setReportError(String(error)))}
+                              className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-acc-300 ring-1 ring-acc-400/20 hover:bg-acc-500/[.07]"
+                            >
+                              <DownloadSimple size={12} /> 下载 Markdown
+                            </button>
+                          </div>
+                          {reportMarkdown ? <MarkdownView markdown={reportMarkdown} /> : <p className="text-[12px] text-zinc-600">正在读取报告正文…</p>}
+                        </>
+                      )}
+                    </div>
+                  </section>
+                )}
 
                 <section className="mt-6" aria-label="验证追踪">
                   <div className="mb-4 flex flex-wrap items-center gap-2">

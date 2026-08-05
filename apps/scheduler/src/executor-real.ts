@@ -609,7 +609,21 @@ ${graph ? `任务画布（YAML 摘要）：\n${graph.yaml}` : "（无画布快�
     } catch {
       throw new Error(`report job ${jobId} 的 report-input.json 不是合法 JSON`);
     }
-    initialInput = `根据调度器提供的确定性任务数据撰写最终报告。不要创建新 Finding，不要改变验证结论。
+    const findingScoped = payload.kind === "finding_report";
+    if (findingScoped && inputBlock.length > Math.max(4_000, config.graph.maxFindingReportInputChars)) {
+      throw new Error(`report job ${jobId} 的单 Finding 输入超过服务端预算`);
+    }
+    initialInput = findingScoped
+      ? `根据调度器冻结的单条 Finding 数据撰写独立 Markdown 报告。不要创建新 Finding，不要改变验证结论，也不要从画布或模型常识补造证据。
+
+## 确定性单 Finding 报告输入（report-input.json）
+以下 JSON 是该报告版本的唯一权威输入。报告应覆盖标题、严重度、位置、验证轮次与证据、影响、复现、修复建议、限制和 residual risk；输入缺少某项时应明确标为未知，不得编造。
+\`\`\`json
+${inputBlock}
+\`\`\`
+
+在 mark_job_done.summary 中给出完整 Markdown 正文，并引用 Finding id 或标题。`
+      : `根据调度器提供的确定性任务数据撰写最终报告。不要创建新 Finding，不要改变验证结论。
 
 任务目标：${taskGoal || "未提供"}
 统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} total=${payload.findings_total ?? "?"}

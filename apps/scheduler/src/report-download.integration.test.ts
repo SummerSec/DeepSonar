@@ -34,6 +34,9 @@ if (!testDatabaseUrl) {
     const otherCanvasId = randomUUID();
     const ownReportId = randomUUID();
     const otherReportId = randomUUID();
+    const sourceJobId = randomUUID();
+    const findingId = randomUUID();
+    const findingReportId = randomUUID();
 
     try {
       await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
@@ -63,11 +66,14 @@ if (!testDatabaseUrl) {
       await migrate();
       await mkdir(path.join(blobDir, "reports", ownCanvasId), { recursive: true });
       await mkdir(path.join(blobDir, "reports", otherCanvasId), { recursive: true });
+      await mkdir(path.join(blobDir, "finding-reports", findingId, "v1"), { recursive: true });
       const markdown = "# own report\n\nbytes must remain markdown\n";
+      const findingMarkdown = "# finding report\n\nrequires findings read scope\n";
       const sarif = '{"version":"2.1.0","runs":[]}\n';
       await writeFile(path.join(blobDir, "reports", ownCanvasId, "report.md"), markdown, "utf8");
       await writeFile(path.join(blobDir, "reports", ownCanvasId, "report.sarif.json"), sarif, "utf8");
       await writeFile(path.join(blobDir, "reports", otherCanvasId, "report.md"), "# other\n", "utf8");
+      await writeFile(path.join(blobDir, "finding-reports", findingId, "v1", "report.md"), findingMarkdown, "utf8");
 
       const app = Fastify({ logger: false });
       await app.register(websocket);
@@ -94,6 +100,25 @@ if (!testDatabaseUrl) {
             ${path.posix.join("reports", ownCanvasId, "report.sarif.json")}),
           (${otherReportId}, ${otherCanvasId}, ${otherProjectId}, 'succeeded', ${sql.json({})},
             ${path.posix.join("reports", otherCanvasId, "report.md")}, NULL)`;
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
+        VALUES (${sourceJobId}, ${ownProjectId}, ${ownCanvasId}, 'audit', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
+      await sql`
+        INSERT INTO findings (
+          id, project_id, job_id, fingerprint, title, severity, verify_status, raw_json
+        ) VALUES (
+          ${findingId}, ${ownProjectId}, ${sourceJobId}, 'report-download-finding',
+          'Finding report scope', 'high', 'confirmed', ${sql.json({})}
+        )`;
+      await sql`
+        INSERT INTO finding_reports (
+          id, finding_id, canvas_id, project_id, version, status,
+          input_uri, input_sha256, summary_json, markdown_uri, markdown_sha256
+        ) VALUES (
+          ${findingReportId}, ${findingId}, ${ownCanvasId}, ${ownProjectId}, 1, 'succeeded',
+          ${path.posix.join("finding-reports", findingId, "v1", "report-input.json")}, ${"0".repeat(64)},
+          ${sql.json({})}, ${path.posix.join("finding-reports", findingId, "v1", "report.md")}, ${"0".repeat(64)}
+        )`;
 
       const insertToken = async (name: string, scopes: string[], projectId?: string) => {
         const token = generateToken();
@@ -104,6 +129,7 @@ if (!testDatabaseUrl) {
       };
       const ownRead = await insertToken("report-own-read", ["tasks:read"], ownProjectId);
       const ownControl = await insertToken("report-own-control", ["tasks:read", "jobs:control"], ownProjectId);
+      const ownFindingRead = await insertToken("report-own-finding-read", ["findings:read"], ownProjectId);
       const ownWrongScope = await insertToken("report-own-wrong-scope", ["projects:read"], ownProjectId);
 
       const inject = (method: "GET" | "POST", url: string, headers?: Record<string, string>) =>
@@ -117,6 +143,20 @@ if (!testDatabaseUrl) {
       assert.match(markdownResponse.headers["content-type"] ?? "", /^text\/markdown/);
       assert.equal(markdownResponse.headers["content-disposition"], `attachment; filename="report-${ownReportId}.md"`);
       assert.equal(markdownResponse.payload, markdown);
+
+      assert.equal(
+        (await inject("GET", `/reports/${findingReportId}/markdown`, ownRead)).statusCode,
+        403,
+        "tasks:read must not download a Finding report",
+      );
+      const findingMarkdownResponse = await inject("GET", `/reports/${findingReportId}/markdown`, ownFindingRead);
+      assert.equal(findingMarkdownResponse.statusCode, 200, findingMarkdownResponse.payload);
+      assert.equal(findingMarkdownResponse.payload, findingMarkdown);
+      assert.equal(
+        (await inject("GET", `/reports/${ownReportId}/markdown`, ownFindingRead)).statusCode,
+        403,
+        "findings:read must not download a task report",
+      );
 
       const sarifResponse = await inject("GET", `/reports/${ownReportId}/sarif`, ownRead);
       assert.equal(sarifResponse.statusCode, 200, sarifResponse.payload);

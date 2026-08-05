@@ -388,6 +388,21 @@ const OPS: Op[] = [
   },
   {
     method: "get",
+    path: "/findings/{id}/report",
+    summary: "读取最新单 Finding 报告元数据",
+    scope: "findings:read",
+    tags: ["Reports"],
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/report",
+    summary: "为 confirmed Finding 生成或刷新版本化报告",
+    description: "同一 Finding 最多一个活动报告；刷新追加版本，不改写 Finding 技术状态。",
+    scope: "jobs:control",
+    tags: ["Reports"],
+  },
+  {
+    method: "get",
     path: "/canvases/{id}/report",
     summary: "画布任务报告元数据",
     scope: "tasks:read",
@@ -414,7 +429,7 @@ const OPS: Op[] = [
     path: "/reports/{id}/markdown",
     summary: "下载 Markdown 报告",
     description: "仅返回服务端已生成的 Markdown 文件；响应为 attachment，不是 JSON。",
-    scope: "tasks:read",
+    scope: "tasks:read | findings:read",
     tags: ["Reports"],
     responses: {
       "200": {

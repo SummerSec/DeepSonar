@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 18);
+INSERT INTO schema_meta (id, version) VALUES ('global', 19);
 
 -- Scheduler migration ledger.  Failed attempts are retained for audit; only
 -- successful rows are unique per version and participate in the applied
@@ -56,6 +56,10 @@ VALUES (17, '0017_add_event_rate_limits.sql',
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (18, '0018_runtime_registry_channels.sql',
         '4e3d2b318a23c0f11275d605e9c8988e9d2f6cd3f05b83acb784714d9b7bf02b',
+        'succeeded');
+INSERT INTO schema_migrations (version, filename, checksum, result)
+VALUES (19, '0019_finding_reports.sql',
+        '416094907ae8c04b7a36f4b0e381ceb23a4fd8408f322012793b8ffbc6568500',
         'succeeded');
 
 CREATE TABLE projects (
@@ -304,6 +308,33 @@ CREATE TABLE task_reports (
     CHECK (status IN ('pending', 'generating', 'succeeded', 'failed'))
 );
 CREATE INDEX task_reports_project_idx ON task_reports (project_id, created_at DESC);
+
+-- 单 Finding 版本化报告；与 task_reports 双轨，默认读取最新版本。
+CREATE TABLE finding_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  canvas_id text NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id),
+  version integer NOT NULL,
+  report_job_id uuid REFERENCES jobs(id) ON DELETE SET NULL,
+  status text NOT NULL DEFAULT 'pending',
+  input_uri text NOT NULL,
+  input_sha256 text NOT NULL,
+  summary_json jsonb NOT NULL DEFAULT '{}',
+  markdown_uri text,
+  markdown_sha256 text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT finding_reports_version_check CHECK (version >= 1),
+  CONSTRAINT finding_reports_status_check
+    CHECK (status IN ('pending', 'generating', 'succeeded', 'failed')),
+  UNIQUE (finding_id, version)
+);
+CREATE INDEX finding_reports_finding_idx ON finding_reports (finding_id, version DESC);
+CREATE INDEX finding_reports_project_idx ON finding_reports (project_id, created_at DESC);
+CREATE UNIQUE INDEX finding_reports_one_active_idx
+  ON finding_reports (finding_id) WHERE status IN ('pending', 'generating');
 
 CREATE TABLE canvas_nodes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

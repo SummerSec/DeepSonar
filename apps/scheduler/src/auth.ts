@@ -91,7 +91,11 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /canvases/:id/delta": "tasks:read",
   "GET /canvases/:id/nodes/:nodeId": "tasks:read",
   "GET /canvases/:id/report": "tasks:read",
-  "GET /reports/:id/markdown": "tasks:read",
+  "GET /findings/:id/report": "findings:read",
+  "POST /findings/:id/report": "jobs:control",
+  // Internal resolver marker: authHook maps it to tasks:read or findings:read
+  // after resolving the report scope. It is not an assignable token scope.
+  "GET /reports/:id/markdown": "report:read",
   "GET /reports/:id/sarif": "tasks:read",
   "POST /canvases/:id/report/retry": "jobs:control",
   "POST /tasks/:canvasId/retry": "jobs:control",
@@ -343,7 +347,19 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
     void sql`UPDATE api_tokens SET last_used_at = now(), last_ip = ${req.ip} WHERE id = ${actor.id}`.catch(() => {});
   }
 
-  const scope = requiredScope(req.method, routeUrl);
+  let scope = requiredScope(req.method, routeUrl);
+  if (scope === "report:read") {
+    const reportId = (req.params as { id?: string } | undefined)?.id;
+    const [report] = reportId
+      ? await sql`
+          SELECT fr.id AS finding_report_id
+          FROM (SELECT 1) anchor
+          LEFT JOIN task_reports tr ON tr.id::text = ${reportId}
+          LEFT JOIN finding_reports fr ON fr.id::text = ${reportId}
+          WHERE tr.id IS NOT NULL OR fr.id IS NOT NULL`
+      : [];
+    scope = report?.finding_report_id ? "findings:read" : "tasks:read";
+  }
   if (config.auth.required && !hasScope(actor, scope)) {
     return denyAudited(403, `scope 不足：需要 ${scope ?? "认证"}`, "insufficient_scope");
   }

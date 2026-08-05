@@ -170,7 +170,7 @@ export async function loadGraphEligibilityBatch(
 
 /** Pure graph-stage gate kept separate from numeric ordering/resource caps. */
 export function graphEligibilityReason(
-  job: Pick<DispatchCandidate, "type">,
+  job: Pick<DispatchCandidate, "type" | "payload_json">,
   state: GraphEligibilityState,
 ): string | null {
   const type = String(job.type ?? "");
@@ -186,7 +186,11 @@ export function graphEligibilityReason(
   if (type === "verify_finding" && state.waitingEvidence) return "waiting_evidence";
   if (type === "report") {
     if (state.pendingReportOlder) return "report_pending_older";
-    if (state.activeCanvasJob || !["analysis_complete", "reporting"].includes(String(state.rootStatus))) {
+    const payload = job.payload_json && typeof job.payload_json === "object"
+      ? job.payload_json as Record<string, unknown>
+      : {};
+    const findingScoped = payload.kind === "finding_report";
+    if (state.activeCanvasJob || (!findingScoped && !["analysis_complete", "reporting"].includes(String(state.rootStatus)))) {
       return "report_gate";
     }
   }
