@@ -1,4 +1,4 @@
-# v0.1.0 运行时镜像发布
+# v0.1.0 运行时镜像发布（Issue #70 Slice B）
 
 `.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony Test / Audit / Fuzz 镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。
 
@@ -18,7 +18,7 @@ Docker Hub 运行时镜像使用以下 GitHub Actions Secrets：
 - `ALIYUN_REGISTRY_USERNAME`
 - `ALIYUN_REGISTRY_PASSWORD`
 
-ACR 标签与 GHCR/Docker Hub 标签在同一次 buildx 多平台发布中生成。四项 ACR Secret 齐全时，最终 runtime registry 清单优先写入 ACR 的 `name@sha256:<manifest-digest>`；否则写入 GHCR 的相同真实 digest。工作流不会硬编码任何凭据。
+ACR、GHCR 与 Docker Hub 标签在同一次 buildx 多平台发布中生成。清单保留每个已发布目的地的不可变引用和 inspect 证据；没有配置的可选目的地明确记录 unavailable，不会用 ACR/GHCR 优先级猜测替代。工作流不会硬编码任何凭据。
 
 ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直接使用。公网访问请按最小范围配置，仅开放必要仓库和拉取权限；不要为发布账号授予超出镜像推送所需范围的权限。
 
@@ -26,7 +26,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit 与 OpenHarmony Fuzz 六项。
 
-**一平台一版本**：多架构发布时，每个 `linux/amd64` / `linux/arm64` 各占一条 `versions[]` 记录（`version` 形如 `0.1.10-linux-amd64`），`image_ref` 使用该平台的 child manifest digest（可回退到 multi-arch index digest），`size_bytes` 为该平台压缩层大小。Scheduler 解析 Job 时按宿主 arch 优先匹配 `platforms`。
+**一版本多平台**：v2 多架构发布时，每个产品在 `versions[]` 只有一条 canonical 记录，`platforms` 同时列出 `linux/amd64` / `linux/arm64`，`digest` 是共享 manifest/index digest，`size_bytes` 为目标平台压缩层大小上限。旧 v1 清单仍按一平台一版本兼容解析；Scheduler 当前只消费 v2 的 GitHub `image_ref` 投影。
 
 **真实 digest 只来自本次 Release 的构建输出**，不会手写伪造。发布成功后：
 
@@ -43,3 +43,30 @@ GHCR 包说明来自 OCI 元数据。Dockerfile 为单平台 manifest 写入 `or
 node agent-harness/check-runtime-image-consistency.mjs
 git diff --check
 ```
+
+## Slice B release contract
+
+The release workflow is the source of truth for the v2 catalog. It publishes
+each image to configured destinations in this order: Aliyun ACR, GHCR, then
+Docker Hub. ACR and Docker Hub are optional; missing credentials produce an
+explicit unavailable channel record rather than a guessed reference.
+The official ACR endpoint is fixed to
+`crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec`; a
+different host/namespace is rejected by the server-owned catalog policy.
+
+Every destination that is published is checked with
+`docker buildx imagetools inspect`. Its registry-reported `Digest:` must equal
+the build canonical digest before `record-runtime-image-digest.mjs` writes a
+descriptor. Copy operations retry with bounded exponential backoff. If any
+configured channel exhausts retries, the workflow sets
+`CHANNEL_PUBLISH_FAILED`; the recorder fails closed and the release job cannot
+generate a partial catalog. The old raw-JSON hash shortcut is not valid OCI
+evidence.
+
+Descriptors contain `registry_records` (availability, immutable ref,
+`inspect_digest`, provenance/reason) and are merged into one
+`deepsonar.registry/v2` version per product with all target platforms. The
+release uploads `runtime-image-registry-v2.json` and synchronizes the bundled
+v2 fallback. The current Scheduler remains GitHub-projection-only: a
+Docker-Hub/ACR-only v2 version is intentionally skipped by apply/pull and does
+not silently replace a stale GitHub promotion.

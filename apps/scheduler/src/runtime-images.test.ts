@@ -151,6 +151,34 @@ test("missing v2 GitHub channel stays unavailable instead of falling back to Doc
   assert.equal(version.registry_refs!.dockerhub, `docker.io/summersec/deepsonar-base@${DIGEST}`);
 });
 
+test("v2 unavailable channel evidence is explicit and cannot smuggle a ref", () => {
+  const baseVersion = {
+    version: "0.1.0",
+    digest: DIGEST,
+    platforms: ["linux/amd64"],
+    size_bytes: 42,
+    registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
+    registry_evidence: {
+      github: {
+        available: true,
+        ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+        inspect_digest: DIGEST,
+        provenance: "build-push+inspect",
+      },
+      dockerhub: { available: false, provenance: "unavailable", reason: "credentials_missing" },
+    },
+  };
+  const normalized = parseRuntimeImageRegistry({ schema: "deepsonar.registry/v2", images: [{ ...baseImage, versions: [baseVersion] }] });
+  assert.equal(normalized.images[0]!.versions[0]!.registry_evidence!.dockerhub!.available, false);
+  assert.throws(() => parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v2",
+    images: [{ ...baseImage, versions: [{ ...baseVersion, registry_evidence: {
+      ...baseVersion.registry_evidence,
+      dockerhub: { available: false, provenance: "unavailable", reason: "credentials_missing", ref: "docker.io/summersec/invalid" },
+    } }] }],
+  }), /unavailable evidence|ref|inspect/i);
+});
+
 test("non-builtin ACR requires an explicit server-owned host and namespace policy", () => {
   const payload = {
     schema: "deepsonar.registry/v2",

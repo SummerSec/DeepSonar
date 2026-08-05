@@ -1,5 +1,8 @@
 {
-  "schema": "deepsonar.registry/v1",
+  "schema": "deepsonar.registry/v2",
+  "schema_version": 2,
+  "source": "bundled",
+  "fallback": true,
   "images": [
     {
       "image_key": "deepsonar-base",
@@ -11,20 +14,14 @@
       "default_role": "base",
       "versions": [
         {
-          "version": "0.1.6-linux-amd64",
-          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3",
-          "platforms": [
-            "linux/amd64"
-          ],
-          "size_bytes": 215224931
-        },
-        {
-          "version": "0.1.6-linux-arm64",
-          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3",
-          "platforms": [
-            "linux/arm64"
-          ],
-          "size_bytes": 215224931
+          "version": "0.1.6",
+          "digest": "sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 215224931,
+          "registry_refs": {
+            "github": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3"
+          },
+          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3"
         }
       ]
     },
@@ -38,20 +35,14 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.1.6-linux-amd64",
-          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b",
-          "platforms": [
-            "linux/amd64"
-          ],
-          "size_bytes": 348303740
-        },
-        {
-          "version": "0.1.6-linux-arm64",
-          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b",
-          "platforms": [
-            "linux/arm64"
-          ],
-          "size_bytes": 348303740
+          "version": "0.1.6",
+          "digest": "sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 348303740,
+          "registry_refs": {
+            "github": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b"
+          },
+          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b"
         }
       ]
     },
@@ -65,20 +56,14 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.6-linux-amd64",
-          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22",
-          "platforms": [
-            "linux/amd64"
-          ],
-          "size_bytes": 1214541172
-        },
-        {
-          "version": "0.1.6-linux-arm64",
-          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22",
-          "platforms": [
-            "linux/arm64"
-          ],
-          "size_bytes": 1214541172
+          "version": "0.1.6",
+          "digest": "sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 1214541172,
+          "registry_refs": {
+            "github": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22"
+          },
+          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22"
         }
       ]
     },
@@ -92,27 +77,21 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.6-linux-amd64",
-          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890",
-          "platforms": [
-            "linux/amd64"
-          ],
-          "size_bytes": 341721931
-        },
-        {
-          "version": "0.1.6-linux-arm64",
-          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890",
-          "platforms": [
-            "linux/arm64"
-          ],
-          "size_bytes": 341721931
+          "version": "0.1.6",
+          "digest": "sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890",
+          "platforms": ["linux/amd64", "linux/arm64"],
+          "size_bytes": 341721931,
+          "registry_refs": {
+            "github": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890"
+          },
+          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890"
         }
       ]
     },
     {
       "image_key": "deepsonar-openharmony-audit",
       "name": "DeepSonar OpenHarmony Audit",
-      "description": "OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan；项目显式启用后供 audit 覆盖",
+      "description": "OpenHarmony 高危静态审计环境：Clang、clang-tidy、cppcheck、sparse 与 ASan/UBSan；项目显式启用后供 audit 覆盖",
       "publisher": "SummerSec",
       "source_kind": "official",
       "project_opt_in": true,

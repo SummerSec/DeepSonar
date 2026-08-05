@@ -15,6 +15,17 @@ export type RuntimeImageRegistrySchema =
 export const RUNTIME_IMAGE_REGISTRY_CHANNELS = ["github", "dockerhub", "aliyun-acr"] as const;
 export type RuntimeImageRegistryChannel = typeof RUNTIME_IMAGE_REGISTRY_CHANNELS[number];
 
+/** Release-time evidence retained alongside v2 refs.  Catalog consumers only
+ * use `registry_refs`; these fields prove that each emitted ref was inspected
+ * at its destination and that unavailable optional channels were not guessed. */
+export interface RuntimeImageRegistryChannelEvidence {
+  available: boolean;
+  ref?: string;
+  inspect_digest?: string;
+  provenance: string;
+  reason?: string;
+}
+
 export const RUNTIME_IMAGE_REGISTRY_METADATA_SOURCES = ["remote", "bundled", "upload"] as const;
 export type RuntimeImageRegistryMetadataSource = typeof RUNTIME_IMAGE_REGISTRY_METADATA_SOURCES[number];
 
@@ -63,6 +74,8 @@ export interface RuntimeImageRegistryVersion {
   size_bytes?: number;
   /** Available channel references; an omitted key means that channel is unavailable. */
   registry_refs?: Partial<Record<RuntimeImageRegistryChannel, string>>;
+  /** Optional release evidence for every emitted channel reference. */
+  registry_evidence?: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>>;
   tools_manifest_sha256?: string;
 }
 
@@ -310,6 +323,54 @@ function parseToolsManifest(value: unknown, imageKey: string, version: string): 
   return value;
 }
 
+function parseRegistryEvidence(
+  value: unknown,
+  imageKey: string,
+  version: string,
+  digest: string,
+  refs: Partial<Record<RuntimeImageRegistryChannel, string>>,
+  policy: RuntimeImageRegistryPolicy,
+): Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid(`${imageKey} ${version} registry_evidence must be an object`);
+  const evidence: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>> = {};
+  for (const [rawChannel, rawEntry] of Object.entries(value as Record<string, unknown>)) {
+    if (!RUNTIME_IMAGE_REGISTRY_CHANNELS.includes(rawChannel as RuntimeImageRegistryChannel)) invalid(`${imageKey} ${version} registry_evidence has an unknown channel`);
+    const channel = rawChannel as RuntimeImageRegistryChannel;
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) invalid(`${imageKey} ${version} ${channel} registry_evidence is invalid`);
+    const entry = rawEntry as Record<string, unknown>;
+    if (Object.keys(entry).some((key) => !["available", "ref", "inspect_digest", "provenance", "reason"].includes(key))) {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence contains unknown fields`);
+    }
+    const available = entry.available;
+    if (available === false) {
+      if (entry.ref !== undefined || entry.inspect_digest !== undefined) invalid(`${imageKey} ${version} ${channel} unavailable evidence must not contain a ref or inspect_digest`);
+      if (typeof entry.reason !== "string" || entry.reason.trim() === "") invalid(`${imageKey} ${version} ${channel} unavailable evidence needs a reason`);
+      if (entry.provenance !== "unavailable") invalid(`${imageKey} ${version} ${channel} unavailable evidence provenance must be unavailable`);
+      evidence[channel] = { available: false, provenance: "unavailable", reason: entry.reason };
+      continue;
+    }
+    if (available !== true || typeof entry.ref !== "string" || typeof entry.inspect_digest !== "string"
+      || typeof entry.provenance !== "string" || entry.provenance.trim() === "" || entry.provenance === "unavailable") {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence must contain available/ref/inspect_digest/provenance`);
+    }
+    const parsed = parseOciDigestRef(entry.ref);
+    if (!policyMatches(channel, parsed, policy) || refs[channel] !== parsed.normalized) {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence ref does not equal registry_refs`);
+    }
+    if (entry.inspect_digest !== digest || !DIGEST_RE.test(entry.inspect_digest)) {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence inspect_digest does not equal canonical digest`);
+    }
+    evidence[channel] = {
+      available: true,
+      ref: parsed.normalized,
+      inspect_digest: entry.inspect_digest,
+      provenance: entry.provenance,
+    };
+  }
+  return evidence;
+}
+
 function parseV1Version(item: Record<string, unknown>, imageKey: string, index: number, policy: RuntimeImageRegistryPolicy): RuntimeImageRegistryVersion {
   const version = typeof item.version === "string" && item.version.length > 0 ? item.version : "";
   if (!version) invalid(`${imageKey} versions[${index}] version is invalid`);
@@ -365,6 +426,7 @@ function parseV2Version(item: Record<string, unknown>, imageKey: string, index: 
       invalid(`${imageKey} ${version} image_ref must equal registry_refs.github when present`);
     }
   }
+  const registryEvidence = parseRegistryEvidence(item.registry_evidence, imageKey, version, digest, refs, policy);
   const toolsManifest = parseToolsManifest(item.tools_manifest_sha256, imageKey, version);
   return {
     version,
@@ -373,6 +435,7 @@ function parseV2Version(item: Record<string, unknown>, imageKey: string, index: 
     platforms,
     size_bytes: sizeBytes,
     registry_refs: refs,
+    ...(registryEvidence ? { registry_evidence: registryEvidence } : {}),
     ...(toolsManifest ? { tools_manifest_sha256: toolsManifest } : {}),
   };
 }

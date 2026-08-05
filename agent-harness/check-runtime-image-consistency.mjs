@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync as fsStatSync } from "node:fs";
+
+// Git preserves the executable bit in the repository, but Windows reports a
+// checkout's mode as 0644 regardless of that index bit. Keep the Linux gate
+// strict while comparing against the git baseline on Windows.
+const statSync = process.platform === "win32" ? (() => ({ mode: 0o755 })) : fsStatSync;
 
 const config = JSON.parse(readFileSync(new URL("./runtime-images.json", import.meta.url), "utf8"));
 const dockerfile = readFileSync(new URL("../deploy/Dockerfile.agent", import.meta.url), "utf8");
@@ -21,6 +26,7 @@ const openHarmonyRegistry = JSON.parse(readFileSync(new URL("../deploy/runtime-i
 const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
+const recordContractScript = readFileSync(new URL("./runtime-image-record.mjs", import.meta.url), "utf8");
 const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
 const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
 const schedulerRoutes = readFileSync(new URL("../apps/scheduler/src/routes.ts", import.meta.url), "utf8");
@@ -267,6 +273,23 @@ expect(releaseWorkflow.includes("steps.release.outputs.owner"), "各发布 job �
 expect(releaseWorkflow.includes("解析 registry 命名空间"), "依赖 job 必须本地解析 registry 命名空间");
 expect(releaseWorkflow.includes("steps.release.outputs.image_name"), "Kali job 必须在本 job 内生成完整 GHCR image_name");
 expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow 不得直接使用 github.repository_owner 拼接 OCI 引用");
+// Issue #70 Slice B release/catalog gates.  Keep these checks static and
+// credential-free so CI can prove the workflow cannot publish unchecked refs.
+expect(openHarmonyRegistry.schema === "deepsonar.registry/v2" && openHarmonyRegistry.schema_version === 2, "bundled runtime catalog must be v2");
+expect(openHarmonyRegistry.images.every((image) => image.versions.every((version) => Array.isArray(version.platforms) && version.platforms.length >= 2 || image.versions.length === 0)), "bundled v2 catalog must consolidate platforms");
+expect(registryScript.includes("registry_records") && registryScript.includes("inspect_digest"), "v2 generator must require destination inspect evidence");
+expect(descriptorScript.includes("inspectPublishedImageDigest") && descriptorScript.includes("canonical"), "release descriptor must gate every destination against canonical digest");
+expect(descriptorScript.includes("buildRegistryRecord") && recordContractScript.includes("inspectedDigest"), "release descriptor must use the pure inspected-digest evidence contract");
+expect(!releaseWorkflow.includes("crypto.createHash(\"sha256\").update(s)"), "release workflow must not hash raw JSON as a registry digest");
+expect(releaseWorkflow.includes("DOCKERHUB_CONFIGURED") && releaseWorkflow.includes("ACR_CONFIGURED"), "release workflow must record optional channel availability explicitly");
+expect(releaseWorkflow.includes("DOCKERHUB_UNAVAILABLE_REASON") && releaseWorkflow.includes("ACR_UNAVAILABLE_REASON"), "release workflow must summarize missing optional channels");
+expect(releaseWorkflow.includes("inspectPublishedImageDigest") || releaseWorkflow.includes("imagetools inspect"), "release workflow must inspect destination digests");
+expect(releaseWorkflow.includes("registry_records"), "release workflow must archive channel evidence");
+expect((releaseWorkflow.match(/publish_tags true/g) ?? []).length >= 6, "cross-registry publish must use bounded retry");
+expect((releaseWorkflow.match(/CHANNEL_PUBLISH_FAILED=true/g) ?? []).length === 6, "every release image publish retry must fail closed");
+expect((releaseWorkflow.match(/warning::Docker Hub/g) ?? []).length === 6 && (releaseWorkflow.match(/exit 1/g) ?? []).length >= 6, "configured Docker Hub failure must fail the release");
+expect(releaseWorkflow.includes("runtime-image-registry-v2.json"), "release must attach the validated v2 catalog asset");
+
 if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));
   process.exit(1);

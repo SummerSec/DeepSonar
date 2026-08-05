@@ -46,12 +46,15 @@ mapfile -t image_refs < <(node - "$registry_path" <<'NODE'
 const fs = require("node:fs");
 const file = process.argv[2];
 const registry = JSON.parse(fs.readFileSync(file, "utf8"));
-if (registry.schema !== "deepsonar.registry/v1" || !Array.isArray(registry.images)) {
+if (!((registry.schema === "deepsonar.registry/v1" || registry.schema === "deepsonar.registry/v2") && Array.isArray(registry.images))) {
   throw new Error("注册表 schema 无效");
 }
 for (const image of registry.images) {
   if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
   for (const version of image.versions) {
+    // v2's legacy projection is explicit. Channel-only Docker Hub/ACR
+    // versions are skipped until channel-aware pull selection exists.
+    if (registry.schema === "deepsonar.registry/v2" && !version.image_ref) continue;
     if (!/^.+@sha256:[0-9a-f]{64}$/.test(version.image_ref)) {
       throw new Error(`${image.image_key} ${version.version} 不是不可变 digest`);
     }

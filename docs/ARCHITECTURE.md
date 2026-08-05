@@ -432,7 +432,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
 
-官方运行时市场只从固定 HTTPS 信任边界内的 GitHub Release `latest` 清单同步。Scheduler 启动时同步一次，并按 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC` 定时刷新；远端不可用时回退随部署内置的清单。正式发布清单存在版本时，环境变量镜像引用仅作为无版本场景的启动兜底，不能覆盖正式最新版本。同步后每个官方镜像只有清单首个版本保持 `promoted_at`，历史版本继续保留，供项目显式固定与既有 Job 不可变快照追溯。
+官方运行时市场只从固定 HTTPS 信任边界内的 GitHub Release `latest` 清单同步。Scheduler 启动时同步一次，并按 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC` 定时刷新；远端不可用时回退随部署内置的清单。正式发布清单存在版本时，环境变量镜像引用仅作为无版本场景的启动兜底，不能覆盖正式最新版本。同步后每个官方镜像只有清单首个版本保持 `promoted_at`，历史版本继续保留，供项目显式固定与既有 Job 不可变快照追溯。Issue #70 Slice B 的 v2 发布清单由 release workflow 以 ACR→GHCR→Docker Hub 顺序生成；每个已发布目的地必须通过真实 `docker buildx imagetools inspect` 并与 canonical digest 相等，`registry_evidence` 记录 inspect/provenance，配置目的地发布失败则清单生成 fail-closed。当前 apply/pull 仍只消费 GitHub `image_ref` 投影；没有该投影的 channel-only 版本会跳过且不会把旧 GitHub promoted 行重新提升。
 
 RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表示“系统沙箱”：Scheduler 使用平台治理的最小 Base 底座创建沙箱，并在 Job 快照中记录其不可变 digest，但 RoleConfig 本身保持未绑定状态。Test 与 Audit 可默认绑定专项 Kali/Audit 镜像；其余内置角色默认使用系统沙箱。该选项不允许 Agent、Hub 或任务内容提供任意镜像引用。
 

@@ -139,7 +139,7 @@ registry_version_keys() {
   node - "$1" <<'NODE'
 const fs = require("node:fs");
 const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-if (registry.schema !== "deepsonar.registry/v1" || !Array.isArray(registry.images)) {
+if (!((registry.schema === "deepsonar.registry/v1" || registry.schema === "deepsonar.registry/v2") && Array.isArray(registry.images))) {
   throw new Error("注册表 schema 无效");
 }
 const builtinKeys = new Set([
@@ -154,6 +154,9 @@ const keys = new Set();
 for (const image of registry.images) {
   if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
   for (const version of image.versions) {
+    // v2 channel-only entries have no legacy image_ref and are intentionally
+    // unavailable to this legacy prepare path.
+    if (registry.schema === "deepsonar.registry/v2" && !version.image_ref) continue;
     if (!/^.+@sha256:[0-9a-f]{64}$/.test(version.image_ref)) throw new Error(`${image.image_key} 存在非不可变 digest`);
     if (builtinKeys.has(image.image_key)) keys.add(image.image_key);
   }
@@ -178,7 +181,7 @@ registry_first_ref() {
 const fs = require("node:fs");
 const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const image = registry.images.find((item) => item.image_key === process.argv[3]);
-const ref = image?.versions?.[0]?.image_ref;
+const ref = image?.versions?.find((version) => typeof version?.image_ref === "string")?.image_ref;
 if (ref) process.stdout.write(ref);
 NODE
 }

@@ -153,7 +153,7 @@ DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
 
 角色使用的 `agent_cli`、`model` 和 `env_vars` 不在部署环境变量中选择；请在 Agents / RoleConfig UI 或 API 中配置，创建 Job 时由 Scheduler 冻结快照。`AGENT_MODE` 仍只表示 fake/real 基础设施运行模式。Provider 凭据必须存入 Settings / Credentials，再绑定到 RoleConfig；长期密钥不会下发给沙箱。
 
-正式 `v*` Release 还会把三类运行时发布到同一个 Docker Hub 仓库 `docker.io/sumsec/deepsonar`：
+正式 `v*` Release 会为六项官方运行时生成 v2 清单，并按 ACR（已配置时）→ GHCR → Docker Hub 顺序复制到各目的地。Docker Hub 使用同一个仓库 `docker.io/sumsec/deepsonar`：
 
 ```text
 sumsec/deepsonar:base-<version>
@@ -161,7 +161,7 @@ sumsec/deepsonar:audit-<version>
 sumsec/deepsonar:kali-minimal-<version>
 ```
 
-在 GitHub 仓库 `Settings → Secrets and variables → Actions` 中配置 `DOCKERHUB_USERNAME=sumsec` 与具有 Read & Write 权限的 `DOCKERHUB_TOKEN`。未配置时 Release 仍发布 GHCR，但会跳过 Docker Hub。部署配置最终仍应使用发布后解析出的 `docker.io/sumsec/deepsonar@sha256:<digest>`，不能把可变 tag 冻结进 Job。
+在 GitHub 仓库 `Settings → Secrets and variables → Actions` 中配置 `DOCKERHUB_USERNAME=sumsec` 与具有 Read & Write 权限的 `DOCKERHUB_TOKEN`。未配置时 Release 仍发布 GHCR，并在 `registry_evidence` 中记录 Docker Hub unavailable。每个已发布目的地都必须通过 `imagetools inspect`，最终部署配置使用发布后解析出的 `name@sha256:<digest>`，不能把可变 tag 冻结进 Job。
 
 3. 若要从独立的“镜像市场”页导入第三方镜像，还要将 Cosign、Syft、Trivy、ClamAV 扫描器引用配成 `name@sha256:digest`，并校对 `DEEPSONAR_ALLOWED_IMAGE_REGISTRIES`。扫描器未固定时 Worker 会拒绝准入，不会退回 tag。
 
@@ -384,6 +384,19 @@ docker images
 ### 10.5 如何彻底删除数据
 
 部署脚本故意不提供自动清库参数。确认备份且明确不再需要数据后，才手工执行 Compose `down --volumes`。该操作不可恢复，会删除 PostgreSQL 和 Blob volume。
+
+### Issue #70 Slice B catalog note
+
+Official runtime releases now emit `deepsonar.registry/v2`. The release
+workflow publishes ACR (if configured), GHCR, then Docker Hub, inspects every
+published destination, and requires one canonical digest across channels.
+Optional channels are represented as unavailable evidence when credentials or
+publication are absent; they are never guessed or selected as a fallback.
+`runtime-image-registry-v2.json` is attached to the GitHub Release and the
+bundled `deploy/runtime-image-registry.json` is synchronized from the same
+validated payload. Current Scheduler apply/pull paths intentionally consume
+only the GitHub projection (`image_ref`); a channel-only v2 item is skipped and
+cannot resurrect an old promoted GitHub row.
 
 ## 11. 上线检查表
 

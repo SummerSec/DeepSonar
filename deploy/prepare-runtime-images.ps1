@@ -180,6 +180,8 @@ function Get-ImageVersion {
   param([object]$Image)
   $versions = @($Image.versions)
   if ($versions.Count -eq 0) { return $null }
+  # v2 keeps the legacy GitHub projection in image_ref. Channel-only entries
+  # are intentionally skipped until channel-aware pull selection exists.
   $immutable = $versions | Where-Object { [string]$_.image_ref -match '@sha256:[0-9a-fA-F]{64}$' }
   return @($immutable)[0]
 }
