@@ -83,6 +83,20 @@ test("base_url rejects userinfo/query/fragment and only allows http(s)", () => {
   }
 });
 
+test("provider catalog is authoritative for base_url capability", () => {
+  assert.throws(
+    () => sanitizeCredentialMetadata({ base_url: "https://openrouter.ai/api/v1" }, { kind: "llm_provider", provider: "openrouter" }),
+    /metadata key/,
+  );
+  assert.deepEqual(
+    projectCredentialMetadata("llm_provider", "openrouter", {
+      base_url: "https://legacy.example/v1",
+      allowed_model_ids: ["model-a"],
+    }),
+    { allowed_model_ids: ["model-a"] },
+  );
+});
+
 test("legacy projection drops unsafe/unknown metadata without echoing it", () => {
   const secret = "sk-legacy-secret";
   const projected = projectCredentialMetadata("llm_provider", "anthropic", {

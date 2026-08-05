@@ -92,6 +92,7 @@ export const CREDENTIAL_METADATA_STRING_MAX_LENGTH = 500;
 const SECRET_LIKE_METADATA_KEY = /(password|passwd|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|access[_-]?key|credential|bearer)/i;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 const LLM_METADATA_KEYS = new Set(["base_url", "allowed_model_ids", "model_concurrency", "max_concurrent"]);
+const LLM_METADATA_KEYS_NO_BASE_URL = new Set(["allowed_model_ids", "model_concurrency", "max_concurrent"]);
 const OCI_METADATA_KEYS = new Set(["registry", "username"]);
 
 export class CredentialMetadataError extends Error {
@@ -105,9 +106,31 @@ export class CredentialMetadataError extends Error {
  * input and must not be copied into API error text or error metadata. */
 export const UNKNOWN_PROVIDER_ERROR = "未知 provider（固定映射表外的 provider 不允许登记）";
 
+/** Scheduler-owned Provider catalog. Keep capability flags beside the runtime
+ * mapping so API/UI choices cannot drift from credential-test behavior. */
+export const PROVIDER_CATALOG = [
+  { provider: "anthropic", label: "Anthropic", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
+  { provider: "kimi", label: "Kimi for Coding", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
+  { provider: "openai", label: "OpenAI compatible", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: true },
+  { provider: "openrouter", label: "OpenRouter", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: false },
+  { provider: "plane", label: "Plane", kind: "plane", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
+  { provider: "git", label: "Git repository", kind: "git", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
+  { provider: "docker", label: "OCI Registry", kind: "oci_registry", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
+] as const;
+
+export function providerCatalogEntry(kind: string, provider: string): (typeof PROVIDER_CATALOG)[number] | null {
+  return PROVIDER_CATALOG.find((entry) => entry.kind === kind && entry.provider === provider) ?? null;
+}
+
+export function providerSupportsBaseUrl(kind: string, provider: string): boolean {
+  return providerCatalogEntry(kind, provider)?.supports_base_url === true;
+}
+
 /** Public metadata keys supported for a Credential kind/provider pair. */
 export function credentialMetadataKeys(kind: string, provider: string): ReadonlySet<string> {
-  if (kind === "llm_provider" && ["anthropic", "kimi", "openai", "openrouter"].includes(provider)) return LLM_METADATA_KEYS;
+  if (kind === "llm_provider" && providerCatalogEntry(kind, provider)) {
+    return providerSupportsBaseUrl(kind, provider) ? LLM_METADATA_KEYS : LLM_METADATA_KEYS_NO_BASE_URL;
+  }
   if (kind === "oci_registry") return OCI_METADATA_KEYS;
   // Plane/Git credentials currently carry no provider-specific public fields.
   // Keeping the set explicit means future fields must be reviewed here first.
@@ -116,7 +139,7 @@ export function credentialMetadataKeys(kind: string, provider: string): Readonly
 
 /** Provider/kind pairs accepted by Credential routes. */
 export function isProviderAllowedForKind(kind: string, provider: string): boolean {
-  if (kind === "llm_provider") return ["anthropic", "kimi", "openai", "openrouter"].includes(provider);
+  if (kind === "llm_provider") return providerCatalogEntry(kind, provider) !== null;
   if (kind === "plane") return provider === "plane";
   if (kind === "git") return provider === "git";
   // OCI provider is the registry host itself and is checked against the
@@ -328,6 +351,27 @@ export function allowedModelIds(metadata: unknown): string[] {
   const raw = (metadata as { allowed_model_ids?: unknown } | null)?.allowed_model_ids;
   if (!Array.isArray(raw)) return [];
   return [...new Set(raw.filter((v): v is string => typeof v === "string").map((v) => v.trim()).filter(Boolean))];
+}
+
+/**
+ * Scheduler-owned model catalog capability. LLM providers currently expose a
+ * governed catalog endpoint, so a non-empty successful catalog is required
+ * before binding. Non-LLM credentials are explicitly out of that gate; this
+ * helper keeps that exception visible instead of silently treating failures as
+ * an empty/unknown catalog.
+ */
+export type CredentialModelCatalogCapability = "required" | "unsupported";
+
+const MODEL_CATALOG_CAPABILITY: Record<string, CredentialModelCatalogCapability> = {
+  anthropic: "required",
+  kimi: "required",
+  openai: "required",
+  openrouter: "required",
+};
+
+export function credentialModelCatalogCapability(kind: string, provider: string): CredentialModelCatalogCapability {
+  if (kind !== "llm_provider") return "unsupported";
+  return MODEL_CATALOG_CAPABILITY[provider] ?? "unsupported";
 }
 
 export interface CredentialConcurrencyPolicy {

@@ -44,7 +44,10 @@ interface Op {
 
 const ErrorSchema = {
   type: "object",
-  properties: { error: { type: "string", description: "人类可读错误信息" } },
+  properties: {
+    error: { type: "string", description: "人类可读错误信息" },
+    error_code: { type: "string", description: "稳定机器可读错误代码（若该错误提供）" },
+  },
   required: ["error"],
 };
 
@@ -112,7 +115,41 @@ const OPS: Op[] = [
     },
   },
   { method: "post", path: "/auth/logout", summary: "注销当前用户会话", scope: "projects:read", tags: ["Auth"] },
-  { method: "get", path: "/auth/me", summary: "当前认证主体", scope: "projects:read", tags: ["Auth"] },
+  {
+    method: "get",
+    path: "/auth/me",
+    summary: "当前认证主体",
+    scope: "projects:read",
+    tags: ["Auth"],
+    responses: {
+      "200": {
+        description: "Current actor and user projection",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                auth_required: { type: "boolean" },
+                authenticated: { type: "boolean" },
+                actor: {
+                  type: "object",
+                  nullable: true,
+                  properties: {
+                    type: { type: "string" },
+                    name: { type: "string" },
+                    role: { type: "string", nullable: true },
+                    project_id: { type: "string", format: "uuid", nullable: true },
+                    scopes: { type: "array", items: { type: "string" } },
+                  },
+                },
+                user: { type: "object", nullable: true, additionalProperties: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
   {
     method: "post",
     path: "/auth/change-password",
@@ -377,11 +414,19 @@ const OPS: Op[] = [
   },
 
   // roles
-  { method: "get", path: "/agent-roles", summary: "角色注册表", scope: "agents:read", tags: ["Roles"] },
+  {
+    method: "get",
+    path: "/agent-roles",
+    summary: "角色注册表",
+    description: "读取全局角色注册表。项目限定 token 可读取注册表，但不能创建、修改或删除角色（写操作返回 403 PROJECT_SCOPE_FORBIDDEN）。",
+    scope: "agents:read",
+    tags: ["Roles"],
+  },
   {
     method: "post",
     path: "/agent-roles",
     summary: "创建角色",
+    description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["Roles"],
     body: {
@@ -394,25 +439,69 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "patch", path: "/agent-roles/{id}", summary: "更新角色（name 不可改）", scope: "agents:write", tags: ["Roles"] },
-  { method: "delete", path: "/agent-roles/{id}", summary: "删除 Hub 可下发角色（系统/Hub 角色 409）", scope: "agents:write", tags: ["Roles"] },
+  {
+    method: "patch",
+    path: "/agent-roles/{id}",
+    summary: "更新角色（name 不可改）",
+    description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["Roles"],
+  },
+  {
+    method: "delete",
+    path: "/agent-roles/{id}",
+    summary: "删除 Hub 可下发角色（系统/Hub 角色 409）",
+    description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["Roles"],
+  },
   { method: "get", path: "/projects/{id}/roles", summary: "项目视角角色启用清单", scope: "agents:read", tags: ["Roles"] },
 
   // role-configs
-  { method: "get", path: "/role-configs/global", summary: "全局 RoleConfig 清单", scope: "agents:read", tags: ["RoleConfig"] },
+  {
+    method: "get",
+    path: "/role-configs/global",
+    summary: "全局 RoleConfig 清单",
+    description: "项目限定 token 可读取全局 RoleConfig，但响应中的 Credential 绑定仅包含全局或该 token 所属项目的 Credential；异常跨项目绑定按未绑定处理。",
+    scope: "agents:read",
+    tags: ["RoleConfig"],
+  },
+  {
+    method: "get",
+    path: "/role-configs/bindable",
+    summary: "统一 Provider 绑定选择器（全局/项目 RoleConfig 元数据）",
+    description: "项目限定 token 只能看到全局与本项目 RoleConfig；Credential 元数据也只返回全局或本项目绑定，异常跨项目绑定不返回 Credential 字段。",
+    scope: "agents:read",
+    tags: ["RoleConfig", "Credentials"],
+    responses: {
+      "200": {
+        description: "Bindable RoleConfig metadata",
+        content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/BindableRoleConfig" } } } },
+      },
+    },
+  },
   {
     method: "put",
     path: "/role-configs/global/{roleId}",
     summary: "全局 RoleConfig upsert（声明式全量替换）",
+    description: "仅 unscoped/admin actor 可写全局 RoleConfig；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
   },
-  { method: "get", path: "/projects/{id}/role-configs", summary: "项目 RoleConfig 来源清单", scope: "agents:read", tags: ["RoleConfig"] },
+  {
+    method: "get",
+    path: "/projects/{id}/role-configs",
+    summary: "项目 RoleConfig 来源清单",
+    description: "项目限定 token 只能读取所属项目；RoleConfig Credential 绑定仅包含全局或该项目 Credential。",
+    scope: "agents:read",
+    tags: ["RoleConfig"],
+  },
   {
     method: "put",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "项目 RoleConfig 覆盖 upsert",
+    description: "项目限定 token 只能写所属项目 RoleConfig；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
@@ -421,6 +510,7 @@ const OPS: Op[] = [
     method: "delete",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "删除项目覆盖，回落全局",
+    description: "项目限定 token 只能删除所属项目 RoleConfig 覆盖；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["RoleConfig"],
   },
@@ -628,6 +718,19 @@ const OPS: Op[] = [
 
   // credentials
   { method: "get", path: "/credentials", summary: "凭据列表（无密文）", scope: "agents:read", tags: ["Credentials"] },
+  {
+    method: "get",
+    path: "/credentials/providers",
+    summary: "Server-owned Provider/account catalog",
+    scope: "agents:read",
+    tags: ["Credentials"],
+    responses: {
+      "200": {
+        description: "Authoritative provider catalog",
+        content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ProviderAccountCatalogItem" } } } },
+      },
+    },
+  },
   { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录与绑定影响；无密文）", scope: "agents:read", tags: ["Credentials"] },
   { method: "get", path: "/credentials/{id}/impact", summary: "凭据只读影响投影（RoleConfig / pending / active / historical Job）", scope: "agents:read", tags: ["Credentials"] },
   {
@@ -697,8 +800,8 @@ const OPS: Op[] = [
       properties: { status: { type: "string", enum: ["active", "disabled", "rotation_required"] } },
     },
   },
-  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:read", tags: ["Credentials"] },
-  { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:read", tags: ["Credentials"] },
+  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:write", tags: ["Credentials"] },
+  { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:write", tags: ["Credentials"] },
   { method: "get", path: "/credentials/{id}/models", summary: "读取已持久化的安全模型目录", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "get",
@@ -709,6 +812,41 @@ const OPS: Op[] = [
     query: {
       agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex"] },
       model: { type: "string", minLength: 1, maxLength: 200 },
+    },
+  },
+  {
+    method: "post",
+    path: "/credentials/batch-bind",
+    summary: "Atomically bind or migrate one account across multiple RoleConfigs",
+    description: "Validates provider/CLI/model compatibility under the dispatcher lock. Running/frozen Jobs are never changed. effect=new_jobs_only leaves pending snapshots frozen; effect=refresh_pending updates only pending snapshots.",
+    scope: "agents:write",
+    tags: ["Credentials", "RoleConfig"],
+    body: { $ref: "#/components/schemas/CredentialBatchBindingRequest" },
+    responses: {
+      "200": {
+        description: "Applied atomically",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingImpact" } } },
+      },
+      "400": {
+        description: "Invalid provider or request; no binding mutation is applied",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
+      },
+      "409": {
+        description: "Credential health/catalog/model gate failed; no binding mutation is applied",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
+      },
+      "403": {
+        description: "Project scope or binding target is not permitted; no mutation is applied",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
+      },
+      "404": {
+        description: "Credential or RoleConfig target was not found",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
+      },
+      "500": {
+        description: "Transaction failed or stored idempotency result is invalid",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
+      },
     },
   },
 
@@ -894,6 +1032,133 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             detail: { type: "string", nullable: true, maxLength: 300 },
             model_catalog: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
             model_catalog_fetched_at: { type: "string", format: "date-time", nullable: true },
+          },
+        },
+        ProviderAccountCatalogItem: {
+          type: "object",
+          additionalProperties: false,
+          required: ["provider", "label", "kind", "auth_methods", "compatible_agent_cli", "supports_base_url"],
+          properties: {
+            provider: { type: "string", maxLength: 50 },
+            label: { type: "string" },
+            kind: { type: "string", enum: ["llm_provider", "plane", "git", "oci_registry"] },
+            auth_methods: { type: "array", items: { type: "string", enum: ["api_key", "oauth", "cli_login"] } },
+            compatible_agent_cli: { type: "array", items: { type: "string" } },
+            supports_base_url: { type: "boolean" },
+          },
+        },
+        BindableRoleConfig: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "model", "version",
+            "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "scope", "can_bind",
+            "credential_provider_valid",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            role_id: { type: "string", format: "uuid" },
+            role_name: { type: "string" },
+            role_title: { type: "string", nullable: true },
+            project_id: { type: "string", format: "uuid", nullable: true },
+            project_name: { type: "string", nullable: true },
+            agent_cli: { type: "string" },
+            model: { type: "string", nullable: true },
+            version: { type: "integer" },
+            credential_id: { type: "string", format: "uuid", nullable: true },
+            credential_name: { type: "string", nullable: true },
+            credential_kind: { type: "string", nullable: true },
+            credential_provider: { type: "string", nullable: true },
+            credential_status: { type: "string", nullable: true },
+            scope: { type: "string", enum: ["global", "project"] },
+            can_bind: { type: "boolean" },
+            credential_provider_valid: { type: "boolean", nullable: true },
+          },
+        },
+        CredentialBatchBindingRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["credential_id", "role_config_ids", "idempotency_key"],
+          properties: {
+            credential_id: { type: "string", format: "uuid" },
+            role_config_ids: { type: "array", minItems: 1, maxItems: 100, uniqueItems: true, items: { type: "string", format: "uuid" } },
+            mode: { type: "string", enum: ["bind", "migrate"], default: "bind" },
+            source_credential_id: { type: "string", format: "uuid" },
+            model: { type: "string", nullable: true, maxLength: 200 },
+            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"], default: "new_jobs_only" },
+            idempotency_key: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" },
+          },
+        },
+        CredentialBatchBindingImpact: {
+          type: "object",
+          additionalProperties: false,
+          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "role_configs"],
+          properties: {
+            mode: { type: "string", enum: ["bind", "migrate"] },
+            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"] },
+            credential_id: { type: "string", format: "uuid" },
+            source_credential_id: { type: "string", format: "uuid", nullable: true },
+            role_config_count: { type: "integer", minimum: 0 },
+            pending_job_count: { type: "integer", minimum: 0 },
+            refreshed_pending_job_count: { type: "integer", minimum: 0 },
+            active_frozen_job_count: { type: "integer", minimum: 0 },
+            terminal_historical_job_count: { type: "integer", minimum: 0 },
+            role_configs: {
+              type: "array",
+              maxItems: 100,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["role_config_id", "role_name", "scope", "project_id", "model"],
+                properties: {
+                  role_config_id: { type: "string", format: "uuid" },
+                  role_name: { type: "string" },
+                  scope: { type: "string", enum: ["global", "project"] },
+                  project_id: { type: "string", format: "uuid", nullable: true },
+                  model: { type: "string", nullable: true },
+                },
+              },
+            },
+          },
+        },
+        CredentialBatchBindingError: {
+          type: "object",
+          additionalProperties: false,
+          required: ["error_code", "error"],
+          properties: {
+            error_code: {
+              type: "string",
+              enum: [
+                "BATCH_REQUEST_INVALID",
+                "BATCH_TRANSACTION_FAILED",
+                "CREDENTIAL_NOT_FOUND",
+                "CREDENTIAL_KIND_INVALID",
+                "CREDENTIAL_NOT_ACTIVE",
+                "CREDENTIAL_PROVIDER_INVALID",
+                "CREDENTIAL_CLI_INCOMPATIBLE",
+                "CREDENTIAL_HEALTH_REQUIRED",
+                "CREDENTIAL_MODEL_CATALOG_REQUIRED",
+                "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED",
+                "CREDENTIAL_MODEL_REQUIRED",
+                "CREDENTIAL_MODEL_NOT_CURRENT",
+                "ROLE_CONFIG_NOT_FOUND",
+                "ROLE_CONFIG_SOURCE_MISMATCH",
+                "PROJECT_SCOPE_FORBIDDEN",
+                "IDEMPOTENCY_KEY_REUSED",
+              ],
+            },
+            error: { type: "string", minLength: 1, maxLength: 300 },
+            field: { type: "string", minLength: 1, maxLength: 80 },
+            repair: {
+              type: "object",
+              additionalProperties: false,
+              required: ["action", "credential_id"],
+              properties: {
+                action: { type: "string", enum: ["activate_credential", "repair_provider", "test_connection", "discover_models", "choose_model", "choose_project_credential", "choose_project_role_config"] },
+                credential_id: { type: "string", format: "uuid" },
+                role_config_id: { type: "string", format: "uuid" },
+              },
+            },
           },
         },
         ReasoningEffort: { type: "string", enum: [...ReasoningEnum], nullable: true },

@@ -117,6 +117,20 @@ if (!testDatabaseUrl) {
       const credentialId = String(json(created).id);
       assert.ok(credentialId);
 
+      const rejectedOpenRouterCreate = await request("POST", "/credentials", {
+        name: "openrouter-base-url-rejected",
+        kind: "llm_provider",
+        provider: "openrouter",
+        secret,
+        metadata: { base_url: "https://openrouter.example/v1" },
+      });
+      assert.equal(rejectedOpenRouterCreate.statusCode, 400, rejectedOpenRouterCreate.payload);
+      const rejectedOpenRouterPatch = await request("PATCH", `/credentials/${credentialId}`, {
+        provider: "openrouter",
+        metadata: { base_url: "https://openrouter.example/v1" },
+      });
+      assert.equal(rejectedOpenRouterPatch.statusCode, 400, rejectedOpenRouterPatch.payload);
+
       const rejectedPatch = await request("PATCH", `/credentials/${credentialId}`, {
         metadata: { base_url: "https://provider.example/v1", token: secret },
       });

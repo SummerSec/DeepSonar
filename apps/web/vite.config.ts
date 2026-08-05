@@ -11,7 +11,7 @@ export default defineConfig({
     proxy: {
       // 调度器 API（ARCHITECTURE §7）+ /ws 实时流（§6.2）
       "/api": {
-        target: "http://localhost:3100",
+        target: process.env.DEEPSONAR_WEB_API_TARGET ?? "http://localhost:3100",
         changeOrigin: true,
         ws: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
