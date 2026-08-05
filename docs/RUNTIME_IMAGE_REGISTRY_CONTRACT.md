@@ -1,12 +1,10 @@
-# Official runtime-image registry contract (Issue #70, Slices A+B)
+# Official runtime-image registry contract (Issue #70, Slices A+B+C)
 
 Slices A+B define the catalog trust boundary and the release evidence that
-feeds it. They do not implement channel selection or channel-aware
-pull/resolution, and they do not change the database schema. The
-legacy/current Scheduler consumer projects only the GitHub reference
-(`registry_refs.github`) and explicitly skips a version with no GitHub
-projection; it never replaces that unavailable version with a Docker Hub or
-ACR reference.
+feeds it. Slice C adds a Scheduler-owned global channel selector and makes
+pull/resolution consume that channel exactly. A missing reference on the
+selected channel is a hard failure; the Scheduler never substitutes a Docker
+Hub, ACR, or GitHub reference from another channel.
 
 ## v2 shape
 
@@ -113,8 +111,24 @@ one-platform-per-version multi-arch alias). Same-platform, missing-platform,
 cross-image, and all v2 duplicates fail closed. A v2 publisher must merge those
 platforms into one canonical version.
 
-## Slice B boundary
+## Slice C channel selector
 
-This slice intentionally does not implement DB/admin channel settings,
-channel-aware selection/pull/resolution, or Web UI changes. Those belong to the
-later #70 slices; Issue #70 remains open.
+The singleton `global_settings.runtime_registry_channel` defaults to `github`
+and is changed only through the authenticated Scheduler API:
+
+| Method | Path | Scope | Contract |
+| --- | --- | --- | --- |
+| GET | `/runtime-images/registry` | `images:read` | Returns the parsed catalog plus `selected_channel`. |
+| PATCH | `/runtime-images/registry/channel` | `images:manage` | Strict body `{ "channel": "github"\|"dockerhub"\|"aliyun-acr" }`; extra fields, query overrides, and environment overrides are rejected. Project-scoped tokens receive `403 PROJECT_SCOPE_FORBIDDEN`. |
+
+The channel update is audited as
+`runtime_image.registry_channel_update`. Job creation reads the selector under
+the transaction lock and freezes the selected channel and immutable digest/ref
+in `agent_snapshot_json`; changing the selector never rewrites existing Job
+snapshots.
+
+## Slice C boundary
+
+The Web UI and further pull/resolution presentation remain later #70 work;
+the API and server-side fail-closed selector are implemented here. Issue #70
+remains open for those later slices.

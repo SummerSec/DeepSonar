@@ -167,7 +167,8 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | --- | --- | --- | --- |
 | GET | /runtime-images | images:read | 市场列表；`?search=` / `?project_id=` |
 | GET | /runtime-images/:id | images:read | 产品、不可变版本、工具清单、SBOM/签名和扫描历史 |
-| GET | /runtime-images/registry | images:read | 官方目录；保留 `schema/images`，并附 `source`、`fallback`、`error`、`checked_at` 诊断 |
+| GET | /runtime-images/registry | images:read | 官方目录；保留 `schema/images`，并附 `selected_channel`（`github`\|`dockerhub`\|`aliyun-acr`）、`source`、`fallback`、`error`、`checked_at` 诊断 |
+| PATCH | /runtime-images/registry/channel | images:manage | 严格 body `{channel: github\|dockerhub\|aliyun-acr}`；只允许全局/admin actor，项目限定 token 返回 `403 PROJECT_SCOPE_FORBIDDEN`；审计 `runtime_image.registry_channel_update` |
 | POST | /runtime-images/:id/detect-local | images:read | `{image_ref}`；读取本机 Docker 元数据并返回候选（不会改变信任状态） |
 | POST | /runtime-images/:id/adopt-local | images:approve | `{image_ref, expected_image_id}`；仅官方产品的 adoptable 候选可由管理员二次确认采用；第三方仍走准入扫描 |
 | POST | /runtime-images/import | images:manage | `{image_key,name,publisher,image_ref,description?,source_url?,version?,registry_credential_id?}`；返回 202 |

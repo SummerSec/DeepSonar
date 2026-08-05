@@ -123,8 +123,13 @@ import {
   localImageDigest,
   runtimeImagePullStatus,
   runtimeImageRegistryWithOverrides,
+  readRuntimeRegistryChannel,
+  RuntimeImageChannelUnavailableError,
   startRuntimeImagePull,
   syncOfficialRuntimeCatalog,
+  updateRuntimeRegistryChannel,
+  RUNTIME_IMAGE_REGISTRY_CHANNELS,
+  type RuntimeImageRegistryChannel,
 } from "./runtime-images.js";
 import { loadReadiness, type ReadinessMaterialSource } from "./readiness.js";
 import { allocateRoleUiColor } from "./role-colors.js";
@@ -270,6 +275,9 @@ const RuntimeImageStatusBody = z.object({
   status: z.enum(["trusted", "rejected", "disabled", "revoked"]),
   reason: z.string().trim().min(1).max(2_000).optional(),
 });
+export const RuntimeImageRegistryChannelBody = z.object({
+  channel: z.enum(RUNTIME_IMAGE_REGISTRY_CHANNELS),
+}).strict();
 /** 官方 catalog 条目登记不可变 digest 为 trusted（等价启动时 bootstrapOfficialRuntimeImages） */
 const OfficialRuntimeImageDigestBody = z.object({
   image_ref: z.string().trim().min(3).max(500),
@@ -1623,20 +1631,30 @@ export function registerRoutes(app: FastifyInstance) {
     const projectId = query.project_id ?? null;
     const search = query.search?.trim() ? `%${query.search.trim()}%` : null;
     const hostPlatform = hostRuntimePlatform();
+    const selectedChannel = await readRuntimeRegistryChannel(sql);
     return sql`
       SELECT ri.id, ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url,
              ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.created_at, ri.updated_at,
              pri.enabled AS project_enabled, pri.selected_version_id,
              latest.id AS latest_version_id, latest.version AS latest_version,
-             latest.digest, latest.resolved_ref, latest.platforms_json, latest.tools_json,
+             CASE WHEN ri.official THEN latest.channel_digest ELSE latest.digest END AS digest,
+             CASE WHEN ri.official THEN latest.channel_resolved_ref ELSE latest.resolved_ref END AS resolved_ref,
+             CASE WHEN ri.official THEN latest.registry_channel ELSE NULL END AS registry_channel,
+             latest.platforms_json, latest.tools_json,
              latest.tools_manifest_sha256, latest.trust_status, latest.scan_summary_json,
              latest.size_bytes, latest.scanned_at, latest.approved_at, latest.promoted_at
       FROM runtime_images ri
       LEFT JOIN project_runtime_images pri
         ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
       LEFT JOIN LATERAL (
-        SELECT v.* FROM runtime_image_versions v
+        SELECT v.*, selected_ref.digest AS channel_digest,
+               selected_ref.resolved_ref AS channel_resolved_ref,
+               selected_ref.channel AS registry_channel
+        FROM runtime_image_versions v
+        LEFT JOIN runtime_image_version_refs selected_ref
+          ON selected_ref.version_id = v.id AND selected_ref.channel = ${selectedChannel}
         WHERE v.runtime_image_id = ri.id
+          AND (NOT ri.official OR selected_ref.id IS NOT NULL)
         ORDER BY CASE v.trust_status WHEN 'trusted' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,
                  CASE
                    WHEN v.platforms_json @> ${sql.json([hostPlatform])} THEN 0
@@ -1651,7 +1669,52 @@ export function registerRoutes(app: FastifyInstance) {
       ORDER BY ri.official DESC, ri.name`;
   });
 
-  app.get("/runtime-images/registry", async () => runtimeImageRegistryWithOverrides());
+  app.get("/runtime-images/registry", async () => {
+    const [registry, selectedChannel] = await Promise.all([
+      runtimeImageRegistryWithOverrides(),
+      readRuntimeRegistryChannel(sql),
+    ]);
+    return { ...registry, selected_channel: selectedChannel };
+  });
+
+  app.patch("/runtime-images/registry/channel", async (req, reply) => {
+    if (req.actor?.projectId) {
+      return reply.code(403).send({
+        error: "project-scoped actors may not modify the global runtime registry channel",
+        error_code: "PROJECT_SCOPE_FORBIDDEN",
+      });
+    }
+    const parsed = RuntimeImageRegistryChannelBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid runtime registry channel",
+        error_code: "RUNTIME_REGISTRY_CHANNEL_INVALID",
+        details: parsed.error.issues,
+      });
+    }
+    try {
+      const result = await sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as typeof sql;
+        return updateRuntimeRegistryChannel(tx, parsed.data.channel as RuntimeImageRegistryChannel);
+      });
+      await audit(req, {
+        action: "runtime_image.registry_channel_update",
+        resourceType: "global_settings",
+        resourceId: "global",
+        before: { selected_channel: result.previous_channel },
+        after: { selected_channel: result.channel },
+      });
+      return reply.code(200).send({
+        selected_channel: result.channel,
+        previous_channel: result.previous_channel,
+      });
+    } catch (error) {
+      return reply.code(500).send({
+        error: error instanceof Error ? error.message : "runtime registry channel update failed",
+        error_code: "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED",
+      });
+    }
+  });
 
   app.post("/runtime-images/registry/sync", async (req, reply) => {
     try {
@@ -1707,6 +1770,15 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(202).send({ task });
     } catch (error) {
       const message = error instanceof Error ? error.message : "启动镜像拉取失败";
+      if (error instanceof RuntimeImageChannelUnavailableError) {
+        return reply.code(error.statusCode).send({
+          error: message,
+          error_code: error.code,
+          channel: error.channel,
+          ...(error.imageKey ? { image_key: error.imageKey } : {}),
+          task: runtimeImagePullStatus(),
+        });
+      }
       return reply.code(message.includes("已有运行中") || message.includes("没有可拉取") ? 409 : 503).send({ error: message, task: runtimeImagePullStatus() });
     }
   });

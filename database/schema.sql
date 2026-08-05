@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 17);
+INSERT INTO schema_meta (id, version) VALUES ('global', 18);
 
 -- Scheduler migration ledger.  Failed attempts are retained for audit; only
 -- successful rows are unique per version and participate in the applied
@@ -52,6 +52,10 @@ VALUES (16, '0016_role_ui_colors.sql',
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (17, '0017_add_event_rate_limits.sql',
         'd3c3bc4ab679e3524878f4408699d5c968522066e2a99d21952db4f6b03803a6',
+        'succeeded');
+INSERT INTO schema_migrations (version, filename, checksum, result)
+VALUES (18, '0018_runtime_registry_channels.sql',
+        '4e3d2b318a23c0f11275d605e9c8988e9d2f6cd3f05b83acb784714d9b7bf02b',
         'succeeded');
 
 CREATE TABLE projects (
@@ -399,7 +403,10 @@ CREATE TABLE global_settings (
   id text PRIMARY KEY DEFAULT 'global',
   rules_json jsonb NOT NULL DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT global_settings_id_check CHECK (id = 'global')
+  runtime_registry_channel text NOT NULL DEFAULT 'github',
+  CONSTRAINT global_settings_id_check CHECK (id = 'global'),
+  CONSTRAINT global_settings_runtime_registry_channel_check
+    CHECK (runtime_registry_channel IN ('github', 'dockerhub', 'aliyun-acr'))
 );
 
 CREATE TABLE api_tokens (
@@ -537,7 +544,7 @@ CREATE TABLE runtime_image_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   runtime_image_id uuid NOT NULL REFERENCES runtime_images(id) ON DELETE CASCADE,
   version text NOT NULL,
-  image_ref text NOT NULL,
+  image_ref text,
   resolved_ref text,
   digest text,
   contract_version text NOT NULL DEFAULT 'deepsonar.runtime.contract/v1',
@@ -574,6 +581,36 @@ CREATE UNIQUE INDEX runtime_image_versions_digest_uniq
   ON runtime_image_versions (runtime_image_id, digest) WHERE digest IS NOT NULL;
 CREATE INDEX runtime_image_versions_market_idx
   ON runtime_image_versions (runtime_image_id, trust_status, promoted_at DESC, created_at DESC);
+
+CREATE TABLE runtime_image_version_refs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  version_id uuid NOT NULL REFERENCES runtime_image_versions(id) ON DELETE CASCADE,
+  channel text NOT NULL,
+  image_ref text NOT NULL,
+  resolved_ref text NOT NULL,
+  digest text NOT NULL,
+  evidence_json jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT runtime_image_version_refs_channel_check
+    CHECK (channel IN ('github', 'dockerhub', 'aliyun-acr')),
+  CONSTRAINT runtime_image_version_refs_image_ref_check
+    CHECK (image_ref ~ '^[a-z0-9][a-z0-9.-]*/[^@[:space:]]+@sha256:[0-9a-f]{64}$'),
+  CONSTRAINT runtime_image_version_refs_resolved_ref_check
+    CHECK (resolved_ref ~ '(^sha256:[0-9a-f]{64}$|^[a-z0-9][a-z0-9.-]*/[^@[:space:]]+@sha256:[0-9a-f]{64}$)'),
+  CONSTRAINT runtime_image_version_refs_digest_check
+    CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
+  CONSTRAINT runtime_image_version_refs_image_digest_match_check
+    CHECK (substring(image_ref from '@(sha256:[0-9a-f]{64})$') = digest),
+  CONSTRAINT runtime_image_version_refs_resolved_digest_match_check
+    CHECK (
+      (resolved_ref ~ '^sha256:[0-9a-f]{64}$' AND resolved_ref = digest)
+      OR substring(resolved_ref from '@(sha256:[0-9a-f]{64})$') = digest
+    ),
+  UNIQUE (version_id, channel)
+);
+CREATE INDEX runtime_image_version_refs_channel_digest_idx
+  ON runtime_image_version_refs (channel, digest);
 
 CREATE TABLE runtime_image_scans (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

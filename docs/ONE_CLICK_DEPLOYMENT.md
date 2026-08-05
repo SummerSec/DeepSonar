@@ -385,7 +385,7 @@ docker images
 
 部署脚本故意不提供自动清库参数。确认备份且明确不再需要数据后，才手工执行 Compose `down --volumes`。该操作不可恢复，会删除 PostgreSQL 和 Blob volume。
 
-### Issue #70 Slice B catalog note
+### Issue #70 runtime catalog note
 
 Official runtime releases now emit `deepsonar.registry/v2`. The release
 workflow publishes ACR (if configured), GHCR, then Docker Hub, inspects every
@@ -394,9 +394,11 @@ Optional channels are represented as unavailable evidence when credentials or
 publication are absent; they are never guessed or selected as a fallback.
 `runtime-image-registry-v2.json` is attached to the GitHub Release and the
 bundled `deploy/runtime-image-registry.json` is synchronized from the same
-validated payload. Current Scheduler apply/pull paths intentionally consume
-only the GitHub projection (`image_ref`); a channel-only v2 item is skipped and
-cannot resurrect an old promoted GitHub row.
+validated payload. Scheduler Slice C stores a global selected channel through
+`PATCH /runtime-images/registry/channel` and apply/pull consume only that
+channel's immutable reference. A v2 item without a reference for the selected
+channel is skipped or fails closed; it cannot resurrect an old promoted row or
+rewrite an existing Job snapshot.
 
 ## 11. 上线检查表
 

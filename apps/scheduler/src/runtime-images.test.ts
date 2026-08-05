@@ -6,6 +6,7 @@ import {
   legacyProjectedRegistryDigests,
   parseOciDigestRef,
   parseRuntimeImageRegistry,
+  runtimeImageRefForChannel,
   runtimeImageRegistryNextSyncDelayMs,
   shouldReconcileRuntimeImagePromotions,
   validateRuntimeImageRegistryPolicy,
@@ -56,6 +57,14 @@ function evidenceFor(refs: Record<string, string>) {
 
 const acrPolicy = createServerOwnedRuntimeImageRegistryPolicy({
   "aliyun-acr": { hosts: ["registry.cn-hangzhou.aliyuncs.com"], namespaces: ["summersec"] },
+});
+
+test("legacy official env refs resolve only through their matching registry channel", () => {
+  const githubRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  const version = { version: "configured", image_ref: githubRef, digest: DIGEST };
+  assert.equal(runtimeImageRefForChannel(version, "github"), githubRef);
+  assert.equal(runtimeImageRefForChannel(version, "dockerhub"), null);
+  assert.equal(runtimeImageRefForChannel(version, "aliyun-acr"), null);
 });
 
 test("v1 single image_ref is normalized to a known channel without changing the legacy projection", () => {

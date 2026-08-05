@@ -6,10 +6,14 @@ import { promisify } from "node:util";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
+  parseOciDigestRef,
   parseRuntimeImageRegistry,
+  RUNTIME_IMAGE_REGISTRY_CHANNELS,
   RUNTIME_IMAGE_REGISTRY_SCHEMA_V1,
   SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
   type RuntimeImageRegistry as RuntimeImageRegistryContract,
+  type RuntimeImageRegistryChannel,
+  type RuntimeImageRegistryChannelEvidence,
   type RuntimeImageRegistryPolicy,
   type RuntimeImageRegistryVersion as RuntimeImageRegistryVersionContract,
 } from "./runtime-image-registry-contract.js";
@@ -99,6 +103,87 @@ export interface RuntimeImageSnapshot {
   contract_version: string;
   source_kind: "official" | "third_party" | "fake";
   trust_status: "trusted" | "fake";
+  /** Official channel selected by the platform at Job creation time. */
+  registry_channel?: RuntimeImageRegistryChannel | null;
+}
+
+export class RuntimeImageChannelUnavailableError extends Error {
+  readonly code = "RUNTIME_IMAGE_CHANNEL_UNAVAILABLE" as const;
+  /** Routes may map this typed fail-closed condition to HTTP 409. */
+  readonly statusCode = 409 as const;
+  readonly channel: RuntimeImageRegistryChannel;
+  readonly imageKey?: string;
+
+  constructor(channel: RuntimeImageRegistryChannel, imageKey?: string) {
+    super(
+      imageKey
+        ? `runtime image channel ${channel} has no trusted reference for ${imageKey}`
+        : `runtime image channel ${channel} has no trusted reference`,
+    );
+    this.name = "RuntimeImageChannelUnavailableError";
+    this.channel = channel;
+    this.imageKey = imageKey;
+  }
+}
+
+function isRuntimeImageRegistryChannel(value: unknown): value is RuntimeImageRegistryChannel {
+  return RUNTIME_IMAGE_REGISTRY_CHANNELS.includes(value as RuntimeImageRegistryChannel);
+}
+
+function legacyChannelForRef(value: string): RuntimeImageRegistryChannel | null {
+  try {
+    const parsed = parseOciDigestRef(value);
+    const namespace = parsed.path.split("/")[0];
+    for (const channel of RUNTIME_IMAGE_REGISTRY_CHANNELS) {
+      const policy = SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY[channel];
+      if (policy.hosts.includes(parsed.host) && policy.namespaces.includes(namespace ?? "")) return channel;
+    }
+  } catch {
+    // Legacy rows may contain local/third-party refs; those must not be
+    // reclassified as an official registry channel.
+  }
+  return null;
+}
+
+/** Read the platform-global channel.  Callers creating Jobs should invoke this
+ * through their transaction so the selected value is frozen with the snapshot. */
+export async function readRuntimeRegistryChannel(
+  db: typeof sql,
+  lock: "share" | "update" = "share",
+): Promise<RuntimeImageRegistryChannel> {
+  const [row] = lock === "update"
+    ? await db`SELECT runtime_registry_channel FROM global_settings WHERE id = 'global' FOR UPDATE`
+    : await db`SELECT runtime_registry_channel FROM global_settings WHERE id = 'global' FOR SHARE`;
+  const channel = row?.runtime_registry_channel;
+  if (!isRuntimeImageRegistryChannel(channel)) {
+    throw new Error("global runtime registry channel is invalid");
+  }
+  return channel;
+}
+
+/**
+ * Update the platform-global channel on a caller-owned transaction.  The
+ * singleton row is locked before validation/update so a concurrent Job
+ * snapshot sees either the old or the new channel, never a torn setting.
+ */
+export async function updateRuntimeRegistryChannel(
+  db: typeof sql,
+  channel: RuntimeImageRegistryChannel,
+): Promise<{ previous_channel: RuntimeImageRegistryChannel; channel: RuntimeImageRegistryChannel }> {
+  if (!isRuntimeImageRegistryChannel(channel)) {
+    throw new Error("runtime registry channel must be github, dockerhub, or aliyun-acr");
+  }
+  const [current] = await db`
+    SELECT runtime_registry_channel FROM global_settings WHERE id = 'global' FOR UPDATE`;
+  const previous = current?.runtime_registry_channel;
+  if (!isRuntimeImageRegistryChannel(previous)) {
+    throw new Error("global runtime registry channel is invalid");
+  }
+  await db`
+    UPDATE global_settings
+    SET runtime_registry_channel = ${channel}, updated_at = now()
+    WHERE id = 'global'`;
+  return { previous_channel: previous, channel };
 }
 
 /**
@@ -132,6 +217,19 @@ export function legacyProjectedRegistryDigest(version: RuntimeImageRegistryVersi
 /** Collect only digests that have an actual legacy GitHub projection. */
 export function legacyProjectedRegistryDigests(versions: readonly RuntimeImageRegistryVersion[]): string[] {
   return [...new Set(versions.map(legacyProjectedRegistryDigest).filter((value): value is string => Boolean(value)))];
+}
+
+/** Resolve exactly the requested channel.  Callers must not substitute a
+ * different host when this returns null. */
+export function runtimeImageRefForChannel(
+  version: RuntimeImageRegistryVersion,
+  channel: RuntimeImageRegistryChannel,
+): string | null {
+  const ref = version.registry_refs?.[channel];
+  if (typeof ref === "string") return ref;
+  return version.image_ref && legacyChannelForRef(version.image_ref) === channel
+    ? version.image_ref
+    : null;
 }
 
 export function localImageDigest(imageRef: string): string | null {
@@ -518,19 +616,64 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
     if (!image || image.versions.length > 0) continue;
     const digest = immutableDigest(override.image_ref)!;
     if (!image.versions.some((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest)) {
-      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, digest, platforms: ["linux/amd64", "linux/arm64"] });
+      const channel = legacyChannelForRef(override.image_ref);
+      image.versions.push({
+        version: `configured-${digest.slice(7, 19)}`,
+        image_ref: override.image_ref,
+        digest,
+        ...(channel ? { registry_refs: { [channel]: override.image_ref } } : {}),
+        platforms: ["linux/amd64", "linux/arm64"],
+      });
     }
   }
   const trustedVersions = await sql`
     SELECT ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url, ri.project_opt_in,
-           v.version, v.image_ref, v.resolved_ref, v.tools_manifest_sha256, v.platforms_json, v.size_bytes
+           v.version, v.image_ref, v.resolved_ref, v.digest, v.tools_manifest_sha256, v.platforms_json, v.size_bytes,
+           COALESCE((
+             SELECT jsonb_object_agg(r.channel, jsonb_build_object(
+               'image_ref', r.image_ref,
+               'resolved_ref', r.resolved_ref,
+               'digest', r.digest,
+               'evidence', r.evidence_json
+             ))
+             FROM runtime_image_version_refs r
+             WHERE r.version_id = v.id
+           ), '{}'::jsonb) AS refs_json
     FROM runtime_images ri
     JOIN runtime_image_versions v ON v.runtime_image_id = ri.id
     WHERE ri.official = true AND v.trust_status = 'trusted'`;
   for (const row of trustedVersions) {
-    const imageRef = (row.resolved_ref as string | null) ?? (row.image_ref as string | null);
-    const digest = imageRef ? immutableDigest(imageRef) : null;
+    const rowImageRef = typeof row.image_ref === "string" ? row.image_ref : null;
+    const rowResolvedRef = typeof row.resolved_ref === "string" ? row.resolved_ref : null;
+    const legacyRefCandidates = [rowImageRef, rowResolvedRef]
+      .filter((value): value is string => typeof value === "string" && Boolean(immutableDigest(value)));
+    const legacyImageRef = legacyRefCandidates[0] ?? null;
+    const mappedLegacyRef = legacyRefCandidates.find((value) => legacyChannelForRef(value) !== null) ?? null;
+    const digest = (row.digest as string | null)
+      ?? legacyRefCandidates.map((value) => immutableDigest(value)).find((value): value is string => Boolean(value))
+      ?? null;
     if (!digest) continue;
+    const refs: Partial<Record<RuntimeImageRegistryChannel, string>> = {};
+    const evidence: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>> = {};
+    const refsJson = row.refs_json && typeof row.refs_json === "object" ? row.refs_json as Record<string, unknown> : {};
+    for (const channel of RUNTIME_IMAGE_REGISTRY_CHANNELS) {
+      const raw = refsJson[channel];
+      if (!raw || typeof raw !== "object") continue;
+      const entry = raw as Record<string, unknown>;
+      if (typeof entry.image_ref !== "string") continue;
+      refs[channel] = entry.image_ref;
+      if (entry.evidence && typeof entry.evidence === "object") {
+        evidence[channel] = entry.evidence as never;
+      }
+    }
+    if (Object.keys(refs).length === 0 && mappedLegacyRef) {
+      // Compatibility rows written before v18 are projected only when their
+      // immutable host is a server-owned channel.  Local/third-party rows are
+      // intentionally left without official refs and remain resolver-owned by
+      // their legacy source_kind path.
+      const legacyChannel = legacyChannelForRef(mappedLegacyRef);
+      if (legacyChannel) refs[legacyChannel] = mappedLegacyRef;
+    }
     let image = images.find((item) => item.image_key === row.image_key);
     if (!image) {
       image = {
@@ -554,13 +697,18 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
     if (!existingVersion) {
       image.versions.push({
         version: row.version as string,
-        image_ref: imageRef as string,
+        ...(legacyImageRef ? { image_ref: legacyImageRef } : {}),
         digest,
+        ...(Object.keys(refs).length > 0 ? { registry_refs: refs } : {}),
+        ...(Object.keys(evidence).length > 0 ? { registry_evidence: evidence as never } : {}),
         ...(typeof row.tools_manifest_sha256 === "string" ? { tools_manifest_sha256: row.tools_manifest_sha256 } : {}),
         ...(Array.isArray(row.platforms_json) ? { platforms: row.platforms_json as string[] } : {}),
         ...(sizeBytes !== null && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0 ? { size_bytes: sizeBytes } : {}),
       });
     } else {
+      if (legacyImageRef && !existingVersion.image_ref) existingVersion.image_ref = legacyImageRef;
+      if (Object.keys(refs).length > 0) existingVersion.registry_refs = { ...(existingVersion.registry_refs ?? {}), ...refs };
+      if (Object.keys(evidence).length > 0) existingVersion.registry_evidence = { ...(existingVersion.registry_evidence ?? {}), ...evidence } as never;
       if (!existingVersion.tools_manifest_sha256 && typeof row.tools_manifest_sha256 === "string") {
         existingVersion.tools_manifest_sha256 = row.tools_manifest_sha256;
       }
@@ -590,7 +738,14 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
     if (!image || image.versions.length > 0) continue;
     const digest = immutableDigest(override.image_ref)!;
     if (!image.versions.some((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest)) {
-      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, digest, platforms: ["linux/amd64", "linux/arm64"] });
+      const channel = legacyChannelForRef(override.image_ref);
+      image.versions.push({
+        version: `configured-${digest.slice(7, 19)}`,
+        image_ref: override.image_ref,
+        digest,
+        ...(channel ? { registry_refs: { [channel]: override.image_ref } } : {}),
+        platforms: ["linux/amd64", "linux/arm64"],
+      });
     }
   }
   return {
@@ -634,18 +789,24 @@ export async function applyOfficialRuntimeCatalog(
     if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
     const appliedDigests = new Set<string>();
     for (const version of item.versions) {
-      const imageRef = version.image_ref;
-      // v2 may carry only Docker Hub/ACR refs.  Until the channel selector is
-      // implemented, the legacy DB consumer intentionally exposes only the
-      // GitHub projection and skips versions without it (no fake fallback).
-      if (!imageRef) continue;
-      const digest = version.digest ?? immutableDigest(imageRef);
+      const legacyChannel = version.image_ref ? legacyChannelForRef(version.image_ref) : null;
+      const refs = version.registry_refs
+        ?? (version.image_ref && legacyChannel ? { [legacyChannel]: version.image_ref } : {});
+      const channels = RUNTIME_IMAGE_REGISTRY_CHANNELS.filter((channel) => typeof refs[channel] === "string") as RuntimeImageRegistryChannel[];
+      const firstRef = channels.length > 0 ? refs[channels[0]!]! : null;
+      const digest = version.digest ?? (firstRef ? immutableDigest(firstRef) : null);
       if (!digest) continue;
+      // Public v2 catalogs require inspected GitHub evidence and therefore a
+      // legacy image_ref projection. Keep this defensive guard for callers
+      // that construct an already-parsed channel-only object: demote stale
+      // legacy promotion state below, but never create an unusable version
+      // row that cannot be selected by legacy consumers.
+      if (!version.image_ref) continue;
       const envOnly = envOnlyKeys.has(item.image_key);
       const source = envOnly ? "env-configured" : "static-registry";
       const values = {
-        runtime_image_id: image.id, version: version.version, image_ref: imageRef,
-        resolved_ref: imageRef, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
+        runtime_image_id: image.id, version: version.version, image_ref: version.image_ref ?? null,
+        resolved_ref: version.image_ref ?? null, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
         platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
         size_bytes: version.size_bytes ?? null, scan_summary_json: { source, contract: "declared" } as never,
         trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(),
@@ -655,7 +816,7 @@ export async function applyOfficialRuntimeCatalog(
         // An operator-provided env digest or bundled fallback may fill an empty
         // catalog, but neither may resurrect a disabled/revoked version or
         // replace the promoted remote version on a later sync.
-        await sql`
+        const [saved] = await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
             image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
@@ -664,13 +825,33 @@ export async function applyOfficialRuntimeCatalog(
               THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
             tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
             size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
-            updated_at = now()`;
+            updated_at = now()
+          RETURNING id`;
+        if (!saved?.id) continue;
+        await sql`DELETE FROM runtime_image_version_refs WHERE version_id = ${saved.id} AND channel <> ALL(${channels})`;
+        for (const channel of channels) {
+          await sql`
+            INSERT INTO runtime_image_version_refs ${sql({
+              version_id: saved.id,
+              channel,
+              image_ref: refs[channel]!,
+              resolved_ref: refs[channel]!,
+              digest,
+              evidence_json: (version.registry_evidence?.[channel] ?? {}) as never,
+            } as never)}
+            ON CONFLICT (version_id, channel) DO UPDATE SET
+              image_ref = EXCLUDED.image_ref,
+              resolved_ref = EXCLUDED.resolved_ref,
+              digest = EXCLUDED.digest,
+              evidence_json = EXCLUDED.evidence_json,
+              updated_at = now()`;
+        }
       } else {
         // A digest present in the trusted official catalog is authoritative for
         // that exact digest: it can repair a previously disabled/quarantined
         // catalog row, but revoked rows stay revoked until an administrator
         // explicitly changes them.
-        await sql`
+        const [saved] = await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
             image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
@@ -685,7 +866,27 @@ export async function applyOfficialRuntimeCatalog(
               THEN EXCLUDED.approved_by ELSE runtime_image_versions.approved_by END,
             approved_at = CASE WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
               THEN EXCLUDED.approved_at ELSE runtime_image_versions.approved_at END,
-            updated_at = now()`;
+            updated_at = now()
+          RETURNING id`;
+        if (!saved?.id) continue;
+        await sql`DELETE FROM runtime_image_version_refs WHERE version_id = ${saved.id} AND channel <> ALL(${channels})`;
+        for (const channel of channels) {
+          await sql`
+            INSERT INTO runtime_image_version_refs ${sql({
+              version_id: saved.id,
+              channel,
+              image_ref: refs[channel]!,
+              resolved_ref: refs[channel]!,
+              digest,
+              evidence_json: (version.registry_evidence?.[channel] ?? {}) as never,
+            } as never)}
+            ON CONFLICT (version_id, channel) DO UPDATE SET
+              image_ref = EXCLUDED.image_ref,
+              resolved_ref = EXCLUDED.resolved_ref,
+              digest = EXCLUDED.digest,
+              evidence_json = EXCLUDED.evidence_json,
+              updated_at = now()`;
+        }
       }
       appliedDigests.add(digest);
     }
@@ -698,12 +899,8 @@ export async function applyOfficialRuntimeCatalog(
             updated_at = now()
         WHERE runtime_image_id = ${image.id} AND trust_status = 'trusted'`;
     }
-    // A trusted remote v2 catalog may contain only Docker Hub/ACR refs while
-    // the legacy Scheduler projection still reads `image_ref` (GitHub).  Do
-    // not leave the previous GitHub version promoted in that case: an empty
-    // legacy projection is authoritative and must fail closed instead of
-    // silently resolving a stale digest.  Environment-only overrides remain
-    // governed by the branch above and are intentionally not demoted here.
+    // A trusted remote catalog with no refs for this product must fail closed;
+    // selected-channel resolution below will never fall back to another host.
     if (reconcilePromotions && digests.length === 0 && !envOnlyKeys.has(item.image_key)) {
       await sql`
         UPDATE runtime_image_versions
@@ -827,13 +1024,25 @@ export async function startRuntimeImagePull(): Promise<RuntimeImagePullTask> {
     throw new Error("已有运行中的镜像拉取任务");
   }
   const registry = await runtimeImageRegistryWithOverrides();
-  const items = registry.images.flatMap((image) => image.versions.flatMap((version) => version.image_ref ? [{
-    image_key: image.image_key,
-    image_ref: version.image_ref,
-    status: "queued" as const,
-    error: null,
-  }] : []));
-  if (items.length === 0) throw new Error("当前市场清单没有可拉取的不可变版本，请先同步或登记官方 digest");
+  const channel = await readRuntimeRegistryChannel(sql);
+  const items: RuntimeImagePullItem[] = [];
+  for (const image of registry.images) {
+    if (image.versions.length === 0) continue;
+    let availableForImage = 0;
+    for (const version of image.versions) {
+      const imageRef = runtimeImageRefForChannel(version, channel);
+      if (!imageRef) continue;
+      availableForImage += 1;
+      items.push({ image_key: image.image_key, image_ref: imageRef, status: "queued", error: null });
+    }
+    // An official version may be present on another channel, but pulling must
+    // never silently cross over to it.  Fail closed when this product has no
+    // selected-channel ref at all.
+    if (availableForImage === 0 && image.versions.some((version) => Object.keys(version.registry_refs ?? {}).length > 0)) {
+      throw new RuntimeImageChannelUnavailableError(channel, image.image_key);
+    }
+  }
+  if (items.length === 0) throw new RuntimeImageChannelUnavailableError(channel);
   const task: RuntimeImagePullTask = {
     task_id: createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24),
     status: "queued", started_at: null, finished_at: null, total: items.length, completed: 0, items,
@@ -917,10 +1126,20 @@ export async function resolveRuntimeImageForJob(
   configuredKey: string | null,
 ): Promise<RuntimeImageSnapshot> {
   const imageKey = configuredKey || defaultRuntimeImageKey(roleName);
+  // Fake/NoopRunner jobs intentionally do not require a trusted image or a
+  // published registry channel.  Preserve that compatibility path before
+  // touching channel-aware database state.
+  if (config.runtime.agentMode === "fake") return fakeSnapshot(imageKey);
   const hostPlatform = hostRuntimePlatform();
+  // This read is intentionally performed by the same transaction that inserts
+  // the Job.  The row lock serializes channel changes with snapshot creation.
+  const selectedChannel = await readRuntimeRegistryChannel(db, "share");
   const [row] = await db`
     SELECT ri.id AS runtime_image_id, ri.image_key, ri.source_kind, ri.official,
-           riv.id AS runtime_image_version_id, riv.resolved_ref, riv.digest,
+           riv.id AS runtime_image_version_id,
+           CASE WHEN ri.official THEN selected_ref.resolved_ref ELSE riv.resolved_ref END AS resolved_ref,
+           CASE WHEN ri.official THEN selected_ref.digest ELSE riv.digest END AS digest,
+           CASE WHEN ri.official THEN selected_ref.channel ELSE NULL END AS registry_channel,
            riv.tools_manifest_sha256, riv.contract_version,
            scan.id AS admission_scan_id
     FROM runtime_images ri
@@ -928,8 +1147,11 @@ export async function resolveRuntimeImageForJob(
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
     JOIN LATERAL (
       SELECT v.* FROM runtime_image_versions v
+      LEFT JOIN runtime_image_version_refs selected_ref
+        ON selected_ref.version_id = v.id AND selected_ref.channel = ${selectedChannel}
       WHERE v.runtime_image_id = ri.id
         AND v.trust_status = 'trusted'
+        AND (NOT ri.official OR selected_ref.id IS NOT NULL)
         AND (pri.selected_version_id IS NULL OR v.id = pri.selected_version_id)
       ORDER BY
         CASE
@@ -943,6 +1165,12 @@ export async function resolveRuntimeImageForJob(
       LIMIT 1
     ) riv ON true
     LEFT JOIN LATERAL (
+      SELECT r.channel, r.resolved_ref, r.digest
+      FROM runtime_image_version_refs r
+      WHERE r.version_id = riv.id AND r.channel = ${selectedChannel}
+      LIMIT 1
+    ) selected_ref ON true
+    LEFT JOIN LATERAL (
       SELECT s.id FROM runtime_image_scans s
       WHERE s.runtime_image_version_id = riv.id AND s.status = 'succeeded'
       ORDER BY s.finished_at DESC NULLS LAST LIMIT 1
@@ -952,7 +1180,28 @@ export async function resolveRuntimeImageForJob(
       AND (CASE WHEN ri.official AND NOT ri.project_opt_in THEN COALESCE(pri.enabled, true) ELSE COALESCE(pri.enabled, false) END)`;
 
   if (!row) {
-    if (config.runtime.agentMode === "fake") return fakeSnapshot(imageKey);
+    const [image] = await db`
+      SELECT ri.official, ri.enabled, ri.project_opt_in,
+             COALESCE(pri.enabled, NULL) AS project_enabled,
+             EXISTS (
+               SELECT 1 FROM runtime_image_versions v
+               WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
+             ) AS has_trusted,
+             EXISTS (
+               SELECT 1
+               FROM runtime_image_versions v
+               JOIN runtime_image_version_refs r ON r.version_id = v.id AND r.channel = ${selectedChannel}
+               WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
+             ) AS has_selected_ref
+      FROM runtime_images ri
+      LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+      WHERE ri.image_key = ${imageKey}`;
+    const projectAvailable = image?.official && !image.project_opt_in
+      ? image.project_enabled !== false
+      : image?.project_enabled === true;
+    if (image?.official && image.enabled && projectAvailable && image.has_trusted && !image.has_selected_ref) {
+      throw new RuntimeImageChannelUnavailableError(selectedChannel, imageKey);
+    }
     throw new Error(`角色 ${roleName} 没有可用的可信运行镜像版本（key=${imageKey}）；请先准入 digest 并为项目启用`);
   }
   const resolvedRef = row.resolved_ref as string | null;
@@ -972,5 +1221,6 @@ export async function resolveRuntimeImageForJob(
     contract_version: row.contract_version as string,
     source_kind: row.source_kind as "official" | "third_party",
     trust_status: "trusted",
+    ...(row.registry_channel ? { registry_channel: row.registry_channel as RuntimeImageRegistryChannel } : {}),
   };
 }

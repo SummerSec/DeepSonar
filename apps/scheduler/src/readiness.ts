@@ -12,7 +12,13 @@ import { config } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
 import { allowedModelIds, isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
-import { defaultRuntimeImageKey, hostRuntimePlatform, immutableDigest, localImageDigest } from "./runtime-images.js";
+import {
+  defaultRuntimeImageKey,
+  hostRuntimePlatform,
+  immutableDigest,
+  localImageDigest,
+  readRuntimeRegistryChannel,
+} from "./runtime-images.js";
 
 const EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -717,10 +723,14 @@ export async function loadReadiness(
       ORDER BY at DESC
       LIMIT 500`;
   const imageKeys = [...new Set(roles.map((role) => role.project_runtime_image_key ?? role.global_runtime_image_key ?? defaultRuntimeImageKey(role.name)))];
+  const selectedChannel = await readRuntimeRegistryChannel(db);
   const images = await db`
     SELECT ri.image_key, ri.enabled AS image_enabled, ri.project_opt_in, ri.source_kind, ri.official,
            pri.enabled AS project_enabled,
-           v.id AS version_id, v.digest, v.resolved_ref, v.trust_status,
+           v.id AS version_id,
+           CASE WHEN ri.official THEN v.channel_digest ELSE v.digest END AS digest,
+           CASE WHEN ri.official THEN v.channel_resolved_ref ELSE v.resolved_ref END AS resolved_ref,
+           v.trust_status,
            v.platforms_json, v.promoted_at, v.approved_at, v.created_at,
            scan.id AS admission_scan_id,
            COALESCE(v.scan_summary_json->>'risk', '') = 'bypasses-admission-scan' AS admission_bypassed
@@ -728,9 +738,14 @@ export async function loadReadiness(
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
     LEFT JOIN LATERAL (
-      SELECT v.* FROM runtime_image_versions v
+      SELECT v.*, selected_ref.digest AS channel_digest,
+             selected_ref.resolved_ref AS channel_resolved_ref
+      FROM runtime_image_versions v
+      LEFT JOIN runtime_image_version_refs selected_ref
+        ON selected_ref.version_id = v.id AND selected_ref.channel = ${selectedChannel}
       WHERE v.runtime_image_id = ri.id
         AND v.trust_status = 'trusted'
+        AND (NOT ri.official OR selected_ref.id IS NOT NULL)
         AND (pri.selected_version_id IS NULL OR v.id = pri.selected_version_id)
         AND ri.enabled = true
         AND (CASE WHEN ri.official AND NOT ri.project_opt_in THEN COALESCE(pri.enabled, true) ELSE COALESCE(pri.enabled, false) END)
