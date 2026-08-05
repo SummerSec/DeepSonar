@@ -47,6 +47,13 @@ const baseImage = {
   project_opt_in: false,
 };
 
+const REGISTRY_CHANNELS = ["github", "dockerhub", "aliyun-acr"] as const;
+function evidenceFor(refs: Record<string, string>) {
+  return Object.fromEntries(REGISTRY_CHANNELS.map((channel) => refs[channel]
+    ? [channel, { available: true, ref: refs[channel], inspect_digest: DIGEST, provenance: channel === "github" ? "build-push+inspect" : "cross-registry-copy+inspect" }]
+    : [channel, { available: false, provenance: "unavailable", reason: "credentials_missing" }])) as Record<string, unknown>;
+}
+
 const acrPolicy = createServerOwnedRuntimeImageRegistryPolicy({
   "aliyun-acr": { hosts: ["registry.cn-hangzhou.aliyuncs.com"], namespaces: ["summersec"] },
 });
@@ -104,6 +111,11 @@ test("GitHub and Docker Hub policy authority cannot be overridden or smuggled th
 });
 
 test("v2 keeps one canonical digest/platform/size and only emits available channel refs", () => {
+  const refs = {
+    github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+    dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}`,
+    "aliyun-acr": `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${DIGEST}`,
+  };
   const normalized = parseRuntimeImageRegistry({
     schema_version: 2,
     schema: "deepsonar.registry/v2",
@@ -115,11 +127,8 @@ test("v2 keeps one canonical digest/platform/size and only emits available chann
         digest: DIGEST,
         platforms: ["linux/amd64", "linux/arm64"],
         size_bytes: 42,
-        registry_refs: {
-          github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
-          dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}`,
-          "aliyun-acr": `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${DIGEST}`,
-        },
+        registry_refs: refs,
+        registry_evidence: evidenceFor(refs),
       }],
     }],
   }, acrPolicy);
@@ -131,8 +140,8 @@ test("v2 keeps one canonical digest/platform/size and only emits available chann
   assert.equal(normalized.source, "remote");
 });
 
-test("missing v2 GitHub channel stays unavailable instead of falling back to Docker Hub", () => {
-  const normalized = parseRuntimeImageRegistry({
+test("v2 requires inspected GitHub evidence before a channel can be consumed", () => {
+  assert.throws(() => parseRuntimeImageRegistry({
     schema: "deepsonar.registry/v2",
     images: [{
       ...baseImage,
@@ -144,11 +153,66 @@ test("missing v2 GitHub channel stays unavailable instead of falling back to Doc
         registry_refs: { dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}` },
       }],
     }],
-  });
-  const version = normalized.images[0]!.versions[0]!;
-  assert.equal(version.image_ref, undefined);
-  assert.equal(version.registry_refs!.github, undefined);
-  assert.equal(version.registry_refs!.dockerhub, `docker.io/summersec/deepsonar-base@${DIGEST}`);
+  }), /registry_evidence|github/i);
+});
+
+test("v2 unavailable channel evidence is explicit and cannot smuggle a ref", () => {
+  const baseVersion = {
+    version: "0.1.0",
+    digest: DIGEST,
+    platforms: ["linux/amd64"],
+    size_bytes: 42,
+    registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
+    registry_evidence: {
+      github: {
+        available: true,
+        ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+        inspect_digest: DIGEST,
+        provenance: "build-push+inspect",
+      },
+      dockerhub: { available: false, provenance: "unavailable", reason: "credentials_missing" },
+      "aliyun-acr": { available: false, provenance: "unavailable", reason: "credentials_missing" },
+    },
+  };
+  const normalized = parseRuntimeImageRegistry({ schema: "deepsonar.registry/v2", images: [{ ...baseImage, versions: [baseVersion] }] });
+  assert.equal(normalized.images[0]!.versions[0]!.registry_evidence!.dockerhub!.available, false);
+  assert.throws(() => parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v2",
+    images: [{ ...baseImage, versions: [{ ...baseVersion, registry_evidence: {
+      ...baseVersion.registry_evidence,
+      dockerhub: { available: false, provenance: "unavailable", reason: "credentials_missing", ref: "docker.io/summersec/invalid" },
+    } }] }],
+  }), /unavailable evidence|ref|inspect/i);
+});
+
+test("v2 catalog exact keys, project_opt_in types, and evidence/ref state fail closed", () => {
+  const version = {
+    version: "0.1.0",
+    digest: DIGEST,
+    platforms: ["linux/amd64"],
+    size_bytes: 42,
+    registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
+    registry_evidence: {
+      github: {
+        available: true,
+        ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+        inspect_digest: DIGEST,
+        provenance: "build-push+inspect",
+      },
+      dockerhub: { available: false, provenance: "unavailable", reason: "credentials_missing" },
+      "aliyun-acr": { available: false, provenance: "unavailable", reason: "credentials_missing" },
+    },
+  };
+  const payload = () => ({ schema: "deepsonar.registry/v2", images: [{ ...baseImage, versions: [structuredClone(version)] }] });
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), untrusted_extra: true }), /unknown fields/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), images: [{ ...baseImage, untrusted_extra: true, versions: [structuredClone(version)] }] }), /unknown fields/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), images: [{ ...baseImage, versions: [{ ...structuredClone(version), untrusted_extra: true }] }] }), /unknown fields/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), images: [{ ...baseImage, versions: [{ ...structuredClone(version), registry_evidence: { ...structuredClone(version.registry_evidence), github: { ...version.registry_evidence.github, untrusted_extra: true } } }] }] }), /unknown fields/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), images: [{ ...baseImage, project_opt_in: "false", versions: [structuredClone(version)] }] }), /project_opt_in.*boolean/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), fallback: true }), /unknown fields/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), images: [{ ...baseImage, versions: [{ ...structuredClone(version), registry_evidence: { ...structuredClone(version.registry_evidence), github: { available: false, provenance: "unavailable", reason: "credentials_missing" } } }] }] }), /unavailable evidence|registry_refs/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), images: [{ ...baseImage, versions: [{ ...structuredClone(version), registry_evidence: { ...structuredClone(version.registry_evidence), github: { ...version.registry_evidence.github, provenance: "fixture+inspect" } } }] }] }), /provenance/i);
+  assert.throws(() => parseRuntimeImageRegistry({ ...payload(), images: [{ ...baseImage, versions: [{ ...structuredClone(version), registry_evidence: { ...structuredClone(version.registry_evidence), dockerhub: { available: false, provenance: "unavailable", reason: "credentials missing" } } }] }] }), /reason/i);
 });
 
 test("non-builtin ACR requires an explicit server-owned host and namespace policy", () => {
@@ -161,7 +225,14 @@ test("non-builtin ACR requires an explicit server-owned host and namespace polic
         digest: DIGEST,
         platforms: ["linux/amd64"],
         size_bytes: 42,
-        registry_refs: { "aliyun-acr": `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${DIGEST}` },
+        registry_refs: {
+          github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+          "aliyun-acr": `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${DIGEST}`,
+        },
+        registry_evidence: evidenceFor({
+          github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
+          "aliyun-acr": `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${DIGEST}`,
+        }),
       }],
     }],
   };
@@ -174,7 +245,7 @@ test("v2 rejects channel/host mismatch, digest mismatch, duplicate refs, and unk
     schema: "deepsonar.registry/v2",
     images: [{
       ...baseImage,
-      versions: [{ version: "0.1.0", digest, platforms: ["linux/amd64"], size_bytes: 42, registry_refs }],
+      versions: [{ version: "0.1.0", digest, platforms: ["linux/amd64"], size_bytes: 42, registry_refs, registry_evidence: evidenceFor(registry_refs) }],
     }],
   });
   assert.throws(() => parseRuntimeImageRegistry(make({ dockerhub: `ghcr.io/summersec/deepsonar-base@${DIGEST}` })), /policy|allowed/i);
@@ -184,8 +255,8 @@ test("v2 rejects channel/host mismatch, digest mismatch, duplicate refs, and unk
   assert.throws(() => parseRuntimeImageRegistry({
     ...make({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }),
     images: [{ ...baseImage, versions: [
-      { version: "0.1.0", digest: DIGEST, platforms: ["linux/amd64"], size_bytes: 42, registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` } },
-      { version: "0.1.1", digest: DIGEST, platforms: ["linux/arm64"], size_bytes: 42, registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` } },
+      { version: "0.1.0", digest: DIGEST, platforms: ["linux/amd64"], size_bytes: 42, registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }, registry_evidence: evidenceFor({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }) },
+      { version: "0.1.1", digest: DIGEST, platforms: ["linux/arm64"], size_bytes: 42, registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }, registry_evidence: evidenceFor({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }) },
     ] }],
   }), /duplicate/i);
 });

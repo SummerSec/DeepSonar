@@ -17,6 +17,12 @@ env:
   REGISTRY: ghcr.io
   DOCKERHUB_IMAGE: docker.io/sumsec/deepsonar
 
+# Slice B release evidence: record-runtime-image-digest writes canonical
+# `registry_records` only after inspecting each available channel.  The
+# DOCKERHUB_CONFIGURED/ACR_CONFIGURED flags and *_UNAVAILABLE_REASON values
+# make skipped optional channels explicit; an available-channel publish
+# failure sets CHANNEL_PUBLISH_FAILED and aborts catalog generation.
+
 jobs:
   base-image:
     runs-on: ubuntu-latest
@@ -146,6 +152,7 @@ jobs:
               if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
                 return 1
               fi
               echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
@@ -172,8 +179,9 @@ jobs:
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
           if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
-            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
-            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
       - name: 保存 base manifest digest
         env:
@@ -181,8 +189,12 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base
-          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-base
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
@@ -336,6 +348,7 @@ jobs:
               if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
                 return 1
               fi
               echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
@@ -362,24 +375,27 @@ jobs:
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
           if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
-            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
-            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
       - name: 保存运行时 manifest digest
-        if: ${{ matrix.dockerhub_tag != '' }}
         env:
           IMAGE_KEY: deepsonar-${{ matrix.name }}
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
-          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs "release-digests/${{ matrix.name }}.json"
       - uses: actions/upload-artifact@v4
-        if: ${{ matrix.dockerhub_tag != '' }}
         with:
           name: runtime-image-digest-${{ matrix.name }}
           path: release-digests/${{ matrix.name }}.json
@@ -554,6 +570,7 @@ jobs:
               fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
                 return 1
               fi
               echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
@@ -591,6 +608,14 @@ jobs:
           docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
           # 取 GHCR 首个标签的 multi-arch index digest
           primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          # Inspect the GHCR destination before copying to another registry.
+          # The Docker Hub source must be immutable; a mutable tag could move
+          # between the GHCR publish and the cross-registry copy.
+          digest="$(docker buildx imagetools inspect "$primary" \
+            | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+            | head -n1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          immutable_primary="${primary}@${digest}"
           if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
             dockerhub_tag_args=()
             while IFS= read -r tag; do
@@ -598,20 +623,12 @@ jobs:
               dockerhub_tag_args+=(-t "$tag")
             done <<< "$DOCKERHUB_TAGS"
             [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
-            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"; then
-              echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
-              echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
+              echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+              echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
             fi
           fi
-          digest="$(docker buildx imagetools inspect --raw "$primary" | node -e '
-            let s=""; process.stdin.on("data", d => s += d);
-            process.stdin.on("end", () => {
-              const crypto = require("node:crypto");
-              const digest = "sha256:" + crypto.createHash("sha256").update(s).digest("hex");
-              if (!/^sha256:[0-9a-f]{64}$/.test(digest)) process.exit(2);
-              process.stdout.write(digest);
-            });
-          ')"
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           {
             printf 'primary=%s\n' "$primary"
@@ -623,8 +640,12 @@ jobs:
           DIGEST: ${{ steps.merge.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-kali-minimal
-          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-kali-minimal
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -761,6 +782,7 @@ jobs:
               if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
                 return 1
               fi
               echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
@@ -787,8 +809,9 @@ jobs:
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
           if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
-            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
-            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
       - name: 保存 OpenHarmony manifest digest
         env:
@@ -796,8 +819,12 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
-          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-test
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
@@ -934,6 +961,7 @@ jobs:
               if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
                 return 1
               fi
               echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
@@ -960,8 +988,9 @@ jobs:
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
           if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
-            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
-            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
       - name: 保存 OpenHarmony Audit manifest digest
         env:
@@ -969,8 +998,12 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
-          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-audit
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
@@ -1107,6 +1140,7 @@ jobs:
               if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
               if (( attempt >= max_attempts )); then
                 echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
                 return 1
               fi
               echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
@@ -1133,8 +1167,9 @@ jobs:
           if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
           if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref"; then
-            echo "::warning::Docker Hub 标签发布失败，已保留 ACR/GHCR 发布结果并继续生成官方清单。"
-            echo "Docker Hub 标签复制重试耗尽；ACR/GHCR 发布结果不受影响。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
       - name: 保存 OpenHarmony Fuzz manifest digest
         env:
@@ -1142,8 +1177,12 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
-          ACR_REF: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-fuzz
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
@@ -1194,10 +1233,17 @@ jobs:
         run: |
           set -euo pipefail
           node agent-harness/generate-runtime-image-registry.mjs --check deploy/runtime-image-registry.json
+      - name: 准备 v2 Release asset
+        run: |
+          set -euo pipefail
+          cp deploy/runtime-image-registry.json runtime-image-registry-v2.json
+          node agent-harness/generate-runtime-image-registry.mjs --check runtime-image-registry-v2.json
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-registry
-          path: deploy/runtime-image-registry.json
+          path: |
+            deploy/runtime-image-registry.json
+            runtime-image-registry-v2.json
           if-no-files-found: error
       - name: 回写 bundled 清单到默认分支
         env:
@@ -1237,4 +1283,5 @@ jobs:
           files: |
             deepsonar-management-skill-*.tar.gz
             deploy/runtime-image-registry.json
+            runtime-image-registry-v2.json
           generate_release_notes: true

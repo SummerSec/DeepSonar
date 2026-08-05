@@ -14,6 +14,23 @@ export type RuntimeImageRegistrySchema =
 
 export const RUNTIME_IMAGE_REGISTRY_CHANNELS = ["github", "dockerhub", "aliyun-acr"] as const;
 export type RuntimeImageRegistryChannel = typeof RUNTIME_IMAGE_REGISTRY_CHANNELS[number];
+export type RuntimeImageRegistryChannelProvenance = "build-push+inspect" | "cross-registry-copy+inspect" | "unavailable";
+export const RUNTIME_IMAGE_REGISTRY_AVAILABLE_PROVENANCE: Readonly<Record<RuntimeImageRegistryChannel, Exclude<RuntimeImageRegistryChannelProvenance, "unavailable">>> = Object.freeze({
+  github: "build-push+inspect",
+  dockerhub: "cross-registry-copy+inspect",
+  "aliyun-acr": "cross-registry-copy+inspect",
+});
+
+/** Release-time evidence retained alongside v2 refs.  Catalog consumers only
+ * use `registry_refs`; these fields prove that each emitted ref was inspected
+ * at its destination and that unavailable optional channels were not guessed. */
+export interface RuntimeImageRegistryChannelEvidence {
+  available: boolean;
+  ref?: string;
+  inspect_digest?: string;
+  provenance: RuntimeImageRegistryChannelProvenance;
+  reason?: string;
+}
 
 export const RUNTIME_IMAGE_REGISTRY_METADATA_SOURCES = ["remote", "bundled", "upload"] as const;
 export type RuntimeImageRegistryMetadataSource = typeof RUNTIME_IMAGE_REGISTRY_METADATA_SOURCES[number];
@@ -63,6 +80,8 @@ export interface RuntimeImageRegistryVersion {
   size_bytes?: number;
   /** Available channel references; an omitted key means that channel is unavailable. */
   registry_refs?: Partial<Record<RuntimeImageRegistryChannel, string>>;
+  /** Optional release evidence for every emitted channel reference. */
+  registry_evidence?: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>>;
   tools_manifest_sha256?: string;
 }
 
@@ -99,9 +118,15 @@ const HOST_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const PATH_SEGMENT_RE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const PLATFORM_RE = /^[a-z0-9]+\/[a-z0-9][a-z0-9._-]*$/;
 const IMAGE_KEY_RE = /^[a-z][a-z0-9-]{1,62}$/;
+const UNAVAILABLE_REASON_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function invalid(message: string): never {
   throw new Error(`runtime image registry contract: ${message}`);
+}
+
+function assertKnownKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) invalid(`${label} contains unknown fields: ${unknown.join(", ")}`);
 }
 
 function copyPolicyEntry(channel: RuntimeImageRegistryChannel, entry: RuntimeImageRegistryChannelPolicy | undefined): RuntimeImageRegistryChannelPolicy {
@@ -265,11 +290,15 @@ function parseMetadataSource(value: unknown): RuntimeImageRegistryMetadataSource
 }
 
 function parseImageBase(image: Record<string, unknown>, imageIndex: number): Omit<RuntimeImageRegistryImage, "versions"> {
+  assertKnownKeys(image, ["image_key", "name", "description", "publisher", "source_kind", "source_url", "project_opt_in", "default_role", "versions"], `images[${imageIndex}]`);
   const key = typeof image.image_key === "string" ? image.image_key : "";
   if (!IMAGE_KEY_RE.test(key) || typeof image.name !== "string" || typeof image.description !== "string"
     || typeof image.publisher !== "string" || image.source_kind !== "official") {
     invalid(`images[${imageIndex}] fields are invalid`);
   }
+  if (image.project_opt_in !== undefined && typeof image.project_opt_in !== "boolean") invalid(`images[${imageIndex}] project_opt_in must be boolean`);
+  if (image.source_url !== undefined && typeof image.source_url !== "string") invalid(`images[${imageIndex}] source_url must be a string`);
+  if (image.default_role !== undefined && typeof image.default_role !== "string") invalid(`images[${imageIndex}] default_role must be a string`);
   return {
     image_key: key,
     name: image.name,
@@ -310,7 +339,58 @@ function parseToolsManifest(value: unknown, imageKey: string, version: string): 
   return value;
 }
 
+function parseRegistryEvidence(
+  value: unknown,
+  imageKey: string,
+  version: string,
+  digest: string,
+  refs: Partial<Record<RuntimeImageRegistryChannel, string>>,
+  policy: RuntimeImageRegistryPolicy,
+): Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid(`${imageKey} ${version} registry_evidence must be an object`);
+  const evidence: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>> = {};
+  for (const [rawChannel, rawEntry] of Object.entries(value as Record<string, unknown>)) {
+    if (!RUNTIME_IMAGE_REGISTRY_CHANNELS.includes(rawChannel as RuntimeImageRegistryChannel)) invalid(`${imageKey} ${version} registry_evidence has an unknown channel`);
+    const channel = rawChannel as RuntimeImageRegistryChannel;
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) invalid(`${imageKey} ${version} ${channel} registry_evidence is invalid`);
+    const entry = rawEntry as Record<string, unknown>;
+    if (Object.keys(entry).some((key) => !["available", "ref", "inspect_digest", "provenance", "reason"].includes(key))) {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence contains unknown fields`);
+    }
+    const available = entry.available;
+    if (available === false) {
+      if (entry.ref !== undefined || entry.inspect_digest !== undefined) invalid(`${imageKey} ${version} ${channel} unavailable evidence must not contain a ref or inspect_digest`);
+      if (refs[channel] !== undefined) invalid(`${imageKey} ${version} ${channel} unavailable evidence cannot coexist with registry_refs`);
+      if (typeof entry.reason !== "string" || !UNAVAILABLE_REASON_RE.test(entry.reason) || entry.reason.trim() !== entry.reason) invalid(`${imageKey} ${version} ${channel} unavailable evidence reason is invalid`);
+      if (entry.provenance !== "unavailable") invalid(`${imageKey} ${version} ${channel} unavailable evidence provenance must be unavailable`);
+      evidence[channel] = { available: false, provenance: "unavailable", reason: entry.reason };
+      continue;
+    }
+    if (available !== true || typeof entry.ref !== "string" || typeof entry.inspect_digest !== "string"
+      || entry.provenance !== RUNTIME_IMAGE_REGISTRY_AVAILABLE_PROVENANCE[channel]) {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence must contain available/ref/inspect_digest/provenance`);
+    }
+    const parsed = parseOciDigestRef(entry.ref);
+    if (!policyMatches(channel, parsed, policy) || refs[channel] !== parsed.normalized) {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence ref does not equal registry_refs`);
+    }
+    if (entry.inspect_digest !== digest || !DIGEST_RE.test(entry.inspect_digest)) {
+      invalid(`${imageKey} ${version} ${channel} registry_evidence inspect_digest does not equal canonical digest`);
+    }
+    if (entry.reason !== undefined) invalid(`${imageKey} ${version} ${channel} available evidence must not contain reason`);
+    evidence[channel] = {
+      available: true,
+      ref: parsed.normalized,
+      inspect_digest: entry.inspect_digest,
+      provenance: RUNTIME_IMAGE_REGISTRY_AVAILABLE_PROVENANCE[channel],
+    };
+  }
+  return evidence;
+}
+
 function parseV1Version(item: Record<string, unknown>, imageKey: string, index: number, policy: RuntimeImageRegistryPolicy): RuntimeImageRegistryVersion {
+  assertKnownKeys(item, ["version", "image_ref", "platforms", "size_bytes", "tools_manifest_sha256"], `${imageKey} versions[${index}]`);
   const version = typeof item.version === "string" && item.version.length > 0 ? item.version : "";
   if (!version) invalid(`${imageKey} versions[${index}] version is invalid`);
   // The v1 loader historically trimmed image_ref before checking the digest;
@@ -333,6 +413,7 @@ function parseV1Version(item: Record<string, unknown>, imageKey: string, index: 
 }
 
 function parseV2Version(item: Record<string, unknown>, imageKey: string, index: number, policy: RuntimeImageRegistryPolicy): RuntimeImageRegistryVersion {
+  assertKnownKeys(item, ["version", "digest", "platforms", "size_bytes", "registry_refs", "image_ref", "registry_evidence", "tools_manifest_sha256"], `${imageKey} versions[${index}]`);
   const version = typeof item.version === "string" && item.version.length > 0 ? item.version : "";
   if (!version) invalid(`${imageKey} versions[${index}] version is invalid`);
   const digest = typeof item.digest === "string" && DIGEST_RE.test(item.digest) ? item.digest : "";
@@ -365,6 +446,14 @@ function parseV2Version(item: Record<string, unknown>, imageKey: string, index: 
       invalid(`${imageKey} ${version} image_ref must equal registry_refs.github when present`);
     }
   }
+  const registryEvidence = parseRegistryEvidence(item.registry_evidence, imageKey, version, digest, refs, policy);
+  if (!registryEvidence || Object.keys(registryEvidence).length !== RUNTIME_IMAGE_REGISTRY_CHANNELS.length
+    || RUNTIME_IMAGE_REGISTRY_CHANNELS.some((channel) => registryEvidence[channel] === undefined)) {
+    invalid(`${imageKey} ${version} registry_evidence must contain exactly github, dockerhub, and aliyun-acr channels`);
+  }
+  if (registryEvidence.github?.available !== true) {
+    invalid(`${imageKey} ${version} github registry_evidence must be available and inspected`);
+  }
   const toolsManifest = parseToolsManifest(item.tools_manifest_sha256, imageKey, version);
   return {
     version,
@@ -373,6 +462,7 @@ function parseV2Version(item: Record<string, unknown>, imageKey: string, index: 
     platforms,
     size_bytes: sizeBytes,
     registry_refs: refs,
+    ...(registryEvidence ? { registry_evidence: registryEvidence } : {}),
     ...(toolsManifest ? { tools_manifest_sha256: toolsManifest } : {}),
   };
 }
@@ -401,6 +491,7 @@ export function parseRuntimeImageRegistry(
   const validatedPolicy = validateRuntimeImageRegistryPolicy(policy);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) invalid("registry must be an object");
   const value = raw as Record<string, unknown>;
+  assertKnownKeys(value, ["schema", "schema_version", "images", "source"], "registry");
   const schemaVersion = detectSchema(value);
   if (!Array.isArray(value.images)) invalid("registry images must be an array");
   const source = parseMetadataSource(value.source);

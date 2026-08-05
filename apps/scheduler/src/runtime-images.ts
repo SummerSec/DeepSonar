@@ -30,6 +30,8 @@ export type {
   ParsedOciDigestRef,
   RuntimeImageRegistryChannel,
   RuntimeImageRegistryChannelPolicy,
+  RuntimeImageRegistryChannelEvidence,
+  RuntimeImageRegistryChannelProvenance,
   RuntimeImageRegistryMetadataSource,
   RuntimeImageRegistryPolicy,
 } from "./runtime-image-registry-contract.js";
@@ -695,6 +697,18 @@ export async function applyOfficialRuntimeCatalog(
         SET promoted_at = CASE WHEN digest = ANY(${digests}) THEN COALESCE(promoted_at, now()) ELSE NULL END,
             updated_at = now()
         WHERE runtime_image_id = ${image.id} AND trust_status = 'trusted'`;
+    }
+    // A trusted remote v2 catalog may contain only Docker Hub/ACR refs while
+    // the legacy Scheduler projection still reads `image_ref` (GitHub).  Do
+    // not leave the previous GitHub version promoted in that case: an empty
+    // legacy projection is authoritative and must fail closed instead of
+    // silently resolving a stale digest.  Environment-only overrides remain
+    // governed by the branch above and are intentionally not demoted here.
+    if (reconcilePromotions && digests.length === 0 && !envOnlyKeys.has(item.image_key)) {
+      await sql`
+        UPDATE runtime_image_versions
+        SET promoted_at = NULL, updated_at = now()
+        WHERE runtime_image_id = ${image.id}`;
     }
     // A disabled version (including an env override) remains a diagnostic
     // candidate only; clear any stale promotion marker so it cannot look like

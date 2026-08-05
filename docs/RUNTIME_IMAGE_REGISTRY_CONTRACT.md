@@ -1,11 +1,12 @@
-# Official runtime-image registry contract (Issue #70, Slice A)
+# Official runtime-image registry contract (Issue #70, Slices A+B)
 
-Slice A defines the catalog trust boundary. It does not implement channel
-selection or channel-aware pull/resolution, and it does not change the
-database schema. The legacy/current Scheduler consumer projects only the
-GitHub reference (`registry_refs.github`) and explicitly skips a version with
-no GitHub projection; it never replaces that unavailable version with a
-Docker Hub or ACR reference.
+Slices A+B define the catalog trust boundary and the release evidence that
+feeds it. They do not implement channel selection or channel-aware
+pull/resolution, and they do not change the database schema. The
+legacy/current Scheduler consumer projects only the GitHub reference
+(`registry_refs.github`) and explicitly skips a version with no GitHub
+projection; it never replaces that unavailable version with a Docker Hub or
+ACR reference.
 
 ## v2 shape
 
@@ -21,16 +22,68 @@ The payload uses `schema: "deepsonar.registry/v2"` (or
   "registry_refs": {
     "github": "ghcr.io/summersec/deepsonar-base@sha256:<same digest>",
     "dockerhub": "docker.io/summersec/deepsonar-base@sha256:<same digest>"
+  },
+  "registry_evidence": {
+    "github": {
+      "available": true,
+      "ref": "ghcr.io/summersec/deepsonar-base@sha256:<same digest>",
+      "inspect_digest": "sha256:<same digest>",
+      "provenance": "build-push+inspect"
+    },
+    "dockerhub": {
+      "available": false,
+      "provenance": "unavailable",
+      "reason": "credentials_missing"
+    },
+    "aliyun-acr": {
+      "available": false,
+      "provenance": "unavailable",
+      "reason": "credentials_missing"
+    }
   }
 }
 ```
 
 `registry_refs` keys are exactly `github`, `dockerhub`, and `aliyun-acr`.
-Omitting a key means that channel is unavailable. Every present reference is
-an immutable OCI digest reference whose normalized digest exactly equals the
+Omitting a key means that channel is unavailable. `registry_evidence` is
+required and must contain exactly those three channel entries; an available
+entry must match a present `registry_refs` value and the canonical digest, while
+an unavailable optional entry must contain only `available:false`,
+`provenance:"unavailable"`, and a non-empty reason. The release baseline
+requires GitHub evidence to be available and inspected. Every present reference
+is an immutable OCI digest reference whose normalized digest exactly equals the
 canonical `digest`; normalized references may not be duplicated. Metadata
 provenance (`remote`, `bundled`, or `upload`) is a separate top-level field and
-is not an OCI channel.
+is not an OCI channel. Scheduler-owned `fallback`, `error`, and `checked_at`
+fields are added after parsing and are not accepted from a catalog upload.
+Available provenance is fixed to `build-push+inspect` for GitHub and
+`cross-registry-copy+inspect` for Docker Hub/ACR. Unavailable reasons are
+bounded single-line tokens (1-128 ASCII characters).
+
+## Release evidence and channel availability
+
+The `v*` release workflow publishes in the fixed order ACR (when configured),
+GHCR, then Docker Hub (when configured). Cross-registry copies use bounded
+exponential retries. A configured-channel failure sets
+`CHANNEL_PUBLISH_FAILED`; `record-runtime-image-digest.mjs` then refuses to
+write a descriptor, so the release cannot generate or upload a partial
+catalog. Docker Hub and ACR credentials are optional: an unavailable channel
+is represented by `registry_records.<channel>` with `available:false`,
+`provenance:"unavailable"`, and a reason. No placeholder host or canonical
+digest is emitted for an unavailable channel.
+
+For every available channel the recorder runs
+`docker buildx imagetools inspect` against the destination reference and
+requires its human-readable `Digest:` to equal the build canonical digest.
+Only that inspected digest reference is emitted. The recorder also records
+the GHCR platform descriptor/size evidence used by the size gate. The release
+job merges six descriptors into one v2 version per image (all platforms in a
+single `versions[]` entry), validates the result, uploads
+`runtime-image-registry-v2.json` as a release asset, and updates the bundled
+v2 fallback. The parser requires inspected GitHub evidence for a public v2
+catalog; the Scheduler's apply path also defensively demotes a stale legacy
+GitHub promotion if an internally supplied channel-only item has no
+`image_ref`, rather than selecting another channel.
 
 The pure validator lives in
 `apps/scheduler/src/runtime-image-registry-contract.ts`. Its OCI parser rejects
@@ -60,9 +113,8 @@ one-platform-per-version multi-arch alias). Same-platform, missing-platform,
 cross-image, and all v2 duplicates fail closed. A v2 publisher must merge those
 platforms into one canonical version.
 
-## Slice A boundary
+## Slice B boundary
 
-This slice intentionally does not implement release destination publication or
-digest verification, metadata mirroring, DB/admin channel settings,
+This slice intentionally does not implement DB/admin channel settings,
 channel-aware selection/pull/resolution, or Web UI changes. Those belong to the
 later #70 slices; Issue #70 remains open.

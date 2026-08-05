@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 
+const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
 function positiveSize(value, label) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${label} size 无效: ${value}`);
@@ -104,4 +106,65 @@ export async function inspectPublishedImageSize(imageRef, platforms) {
     async (digest) => inspectRaw(`${repository}@${digest}`),
     rootDigest,
   );
+}
+
+/**
+ * Resolve the root manifest/index digest reported by buildx for an immutable
+ * or tag reference.  The raw JSON representation is not itself a digest
+ * proof: annotations and JSON serialization can change its byte hash.  Keep
+ * this parser tied to the human-readable `Digest:` line emitted by
+ * `imagetools inspect`, which is the registry's actual descriptor digest.
+ */
+export function parsePublishedImageDigest(output) {
+  const match = String(output ?? "").match(/^\s*Digest:\s*(sha256:[0-9a-f]{64})\s*$/im);
+  if (!match || !DIGEST_RE.test(match[1])) {
+    throw new Error("docker buildx imagetools inspect 缺少实际 manifest/index Digest");
+  }
+  return match[1];
+}
+
+export async function inspectPublishedImageDigest(imageRef) {
+  let lastError;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const output = execFileSync(
+        "docker",
+        ["buildx", "imagetools", "inspect", imageRef],
+        { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, windowsHide: true },
+      );
+      return parsePublishedImageDigest(output);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 5) {
+        const delayMs = attempt * 2_000;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
+/** Return an immutable repository reference using the digest actually seen. */
+export function immutablePublishedImageRef(imageRef, digest) {
+  if (typeof imageRef !== "string" || !DIGEST_RE.test(digest)) {
+    throw new Error("发布镜像引用或实际 digest 无效");
+  }
+  const value = imageRef.trim();
+  if (!value || value !== imageRef || value.includes("@sha256:")) {
+    // An existing digest is accepted only when it is the exact inspect input;
+    // callers still compare the returned digest with their canonical value.
+    if (!value || value !== imageRef) throw new Error("发布镜像引用包含空白");
+    const at = value.lastIndexOf("@");
+    if (at <= 0 || !DIGEST_RE.test(value.slice(at + 1))) throw new Error("发布镜像引用不是合法 OCI 引用");
+    return `${value.slice(0, at)}@${digest}`;
+  }
+  const at = value.lastIndexOf("@");
+  if (at >= 0) throw new Error("发布镜像引用只能包含一个 digest 分隔符");
+  const slash = value.lastIndexOf("/");
+  const colon = value.lastIndexOf(":");
+  const repository = colon > slash ? value.slice(0, colon) : value;
+  if (!repository || repository.includes("//") || repository.includes("://")) {
+    throw new Error("发布镜像引用的 repository 无效");
+  }
+  return `${repository}@${digest}`;
 }

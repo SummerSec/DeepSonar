@@ -55,8 +55,16 @@ jobs:
       - name: Runtime image registry contract unit
         run: pnpm ci:unit:runtime-images
 
+      - name: Runtime image destination evidence unit
+        run: pnpm ci:unit:runtime-image-record
+
       - name: Runtime image registry generator compatibility
         run: pnpm ci:unit:runtime-registry
+
+      - name: Runtime image promotion reconciliation (channel-only v2 fixture)
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:runtime-image-promotions
 
       - run: pnpm -r typecheck
 
