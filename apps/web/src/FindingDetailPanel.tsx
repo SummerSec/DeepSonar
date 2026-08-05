@@ -55,6 +55,7 @@ const GAP_LABEL: Record<string, string> = {
   evidence_edge_missing: "证据存在，但画布结构化边缺失",
   trace_node_missing: "冻结链路中的节点已不在当前画布",
   trace_truncated: "链路超过安全展示上限，当前为截断视图",
+  unqualified_evidence: "存在未通过 Verify 门禁的证据尝试，已保留在流向图中",
 };
 
 const FLOW_NODE_LABEL: Record<string, string> = {

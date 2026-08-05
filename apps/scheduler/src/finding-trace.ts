@@ -239,10 +239,28 @@ export async function loadFindingTrace(
   const evidenceJobIds = [...new Set([...review, ...test].map((item) => item.job_id))];
   const verifyJobIds = boundedVerifyJobs.map((job) => String(job.id));
   const hubJobIds = exactHubs.map((job) => String(job.id));
-  const anchorNodeIds = [
+  const structuralAnchorIds = [
     ...(typeof finding.node_id === "string" ? [finding.node_id] : []),
     ...evidenceNodeIds,
   ];
+  const structuralNeighbors = structuralAnchorIds.length > 0
+    ? await tx`
+        SELECT DISTINCT n.id
+        FROM canvas_edges e
+        JOIN canvas_nodes n ON n.canvas_id = e.canvas_id AND (
+          (e.from_node_id = ANY(${structuralAnchorIds}::uuid[]) AND n.id = e.to_node_id)
+          OR (e.to_node_id = ANY(${structuralAnchorIds}::uuid[]) AND n.id = e.from_node_id)
+        )
+        WHERE e.canvas_id = ${canvasId}
+          AND n.node_type IN ('intent', 'fact')
+        ORDER BY n.id
+        LIMIT 501`
+    : [];
+  traceTruncated ||= structuralNeighbors.length > 500;
+  const anchorNodeIds = [...new Set([
+    ...structuralAnchorIds,
+    ...(structuralNeighbors as JsonRecord[]).slice(0, 500).map((node) => String(node.id)),
+  ])];
   const relatedJobNodes = await tx`
     SELECT id, node_type, job_id, title, body_json, status, created_at
     FROM canvas_nodes
@@ -326,6 +344,13 @@ export async function loadFindingTrace(
     !gaps.includes("evidence_edge_missing")
   ) gaps.push("evidence_edge_missing");
   if (anchorNodeIds.some((id) => !nodeIds.has(id))) gaps.push("trace_node_missing");
+  const qualifiedTraceEvidence = new Set(evidenceNodeIds);
+  const hasUnqualifiedEvidence = boundedRelatedJobNodes.some((node) => {
+    if (node.node_type !== "fact" || qualifiedTraceEvidence.has(String(node.id))) return false;
+    const verification = record(record(node.body_json).verification);
+    return verification.finding_id === findingId;
+  });
+  if (hasUnqualifiedEvidence) gaps.push("unqualified_evidence");
 
   const sourceJobNode = boundedSourceJobNodes.find((node) => node.node_type === "job")
     ?? boundedSourceJobNodes.find((node) => node.node_type === "intent")

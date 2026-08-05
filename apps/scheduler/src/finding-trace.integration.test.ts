@@ -51,6 +51,7 @@ if (!testDatabaseUrl) {
       const verifyJobId = randomUUID();
       const exactHubJobId = randomUUID();
       const promptOnlyHubJobId = randomUUID();
+      const pendingIntentJobId = randomUUID();
       const findingId = randomUUID();
       const sourceJobNodeId = randomUUID();
       const findingNodeId = randomUUID();
@@ -60,6 +61,7 @@ if (!testDatabaseUrl) {
       const testNodeId = randomUUID();
       const verifyNodeId = randomUUID();
       const hubNodeId = randomUUID();
+      const pendingIntentNodeId = randomUUID();
       const unrelatedFactNodeId = randomUUID();
 
       await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'trace project')`;
@@ -72,7 +74,8 @@ if (!testDatabaseUrl) {
           (${testJobId}, ${projectId}, ${canvasId}, 'test', 'succeeded', ${sql.json({})}, ${sql.json({})}, now() - interval '4 minutes'),
           (${verifyJobId}, ${projectId}, ${canvasId}, 'verify_finding', 'succeeded', ${sql.json({})}, ${sql.json({})}, now() - interval '3 minutes'),
           (${exactHubJobId}, ${projectId}, ${canvasId}, 'hub_reason', 'succeeded', ${sql.json({ trigger: { kind: 'confirmed_finding', finding_id: findingId } })}, ${sql.json({})}, now() - interval '2 minutes'),
-          (${promptOnlyHubJobId}, ${projectId}, ${canvasId}, 'hub_reason', 'succeeded', ${sql.json({ trigger: { kind: 'manual' }, prompt: `inspect ${findingId}` })}, ${sql.json({})}, now() - interval '1 minute')`;
+          (${promptOnlyHubJobId}, ${projectId}, ${canvasId}, 'hub_reason', 'succeeded', ${sql.json({ trigger: { kind: 'manual' }, prompt: `inspect ${findingId}` })}, ${sql.json({})}, now() - interval '1 minute'),
+          (${pendingIntentJobId}, ${projectId}, ${canvasId}, 'analyze', 'pending', ${sql.json({})}, ${sql.json({})}, now())`;
       await sql`
         INSERT INTO findings (id, project_id, job_id, node_id, fingerprint, title, severity, verify_status, raw_json)
         VALUES (${findingId}, ${projectId}, ${sourceJobId}, ${findingNodeId}, 'trace-fingerprint', 'Trace finding', 'high', 'confirmed', ${sql.json({})})`;
@@ -88,6 +91,7 @@ if (!testDatabaseUrl) {
           (${testNodeId}, ${canvasId}, ${testJobId}, 'fact', 'test evidence', ${sql.json({ verification: { finding_id: findingId, evidence_kind: 'test', outcome: 'supports' } })}, 'verified', now() - interval '4 minutes'),
           (${verifyNodeId}, ${canvasId}, ${verifyJobId}, 'job', 'verify', ${sql.json({ type: 'verify_finding' })}, 'succeeded', now() - interval '3 minutes'),
           (${hubNodeId}, ${canvasId}, ${exactHubJobId}, 'job', 'hub', ${sql.json({ type: 'hub_reason' })}, 'succeeded', now() - interval '2 minutes'),
+          (${pendingIntentNodeId}, ${canvasId}, ${pendingIntentJobId}, 'intent', 'pending follow-up intent', ${sql.json({ role: 'analyze' })}, 'pending', now()),
           (${unrelatedFactNodeId}, ${canvasId}, ${sourceJobId}, 'fact', 'unrelated source fact', ${sql.json({ description: 'must stay outside the trace' })}, 'verified', now() - interval '1 minute')`;
       const edgeRows = await sql`
         INSERT INTO canvas_edges (canvas_id, from_node_id, to_node_id, edge_type)
@@ -99,7 +103,8 @@ if (!testDatabaseUrl) {
           (${canvasId}, ${testIntentNodeId}, ${testNodeId}, 'to'),
           (${canvasId}, ${findingNodeId}, ${reviewNodeId}, 'reviewed_by'),
           (${canvasId}, ${findingNodeId}, ${testNodeId}, 'tested_by'),
-          (${canvasId}, ${findingNodeId}, ${verifyNodeId}, 'verifies')
+          (${canvasId}, ${findingNodeId}, ${verifyNodeId}, 'verifies'),
+          (${canvasId}, ${findingNodeId}, ${pendingIntentNodeId}, 'from')
         RETURNING id`;
       await sql`
         INSERT INTO canvas_edges (canvas_id, from_node_id, to_node_id, edge_type)
@@ -135,6 +140,7 @@ if (!testDatabaseUrl) {
       assert.deepEqual(body.trace.gaps, []);
       assert.ok(body.trace.node_ids.includes(reviewIntentNodeId));
       assert.ok(body.trace.node_ids.includes(testIntentNodeId));
+      assert.ok(body.trace.node_ids.includes(pendingIntentNodeId));
       assert.ok(!body.trace.node_ids.includes(unrelatedFactNodeId));
       assert.deepEqual(new Set(body.trace.edge_ids), new Set(edgeRows.map((row) => String(row.id))));
       assert.deepEqual(
@@ -146,6 +152,7 @@ if (!testDatabaseUrl) {
           `${reviewIntentNodeId}:to:${reviewNodeId}`,
           `${findingNodeId}:from:${testIntentNodeId}`,
           `${testIntentNodeId}:to:${testNodeId}`,
+          `${findingNodeId}:from:${pendingIntentNodeId}`,
         ]),
       );
       assert.ok(!response.payload.includes(`inspect ${findingId}`), "trace response must not leak Hub prompt text");

@@ -220,20 +220,29 @@ export function TaskCanvasPage() {
       return;
     }
     let alive = true;
+    let requestSequence = 0;
     setFindingTrace(null);
-    api.finding(traceFinding)
-      .then((detail) => {
-        if (!alive) return;
-        if (detail.trace.source.canvas_id !== canvasId) {
-          setError("Finding 不属于当前任务画布");
-          return;
-        }
-        setFindingTrace(detail.trace);
-        setError(null);
-      })
-      .catch((e) => alive && setError(String(e)));
+    const loadTrace = () => {
+      const request = ++requestSequence;
+      api.finding(traceFinding)
+        .then((detail) => {
+          if (!alive || request !== requestSequence) return;
+          if (detail.trace.source.canvas_id !== canvasId) {
+            setError("Finding 不属于当前任务画布");
+            return;
+          }
+          setFindingTrace(detail.trace);
+          setError(null);
+        })
+        .catch((e) => {
+          if (alive && request === requestSequence) setError(String(e));
+        });
+    };
+    loadTrace();
+    const timer = window.setInterval(loadTrace, 5000);
     return () => {
       alive = false;
+      window.clearInterval(timer);
     };
   }, [canvasId, traceFinding]);
 
