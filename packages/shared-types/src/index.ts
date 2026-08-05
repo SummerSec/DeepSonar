@@ -213,7 +213,9 @@ export const DonePayload = z
   .object({
     summary: nonEmptyText(10000),
     verdict: VerifyVerdict.optional(),
-    missing_evidence: z.array(z.string().min(1).max(200)).max(8).optional(),
+    // Keep evidence labels canonical at the shared boundary: surrounding
+    // whitespace is removed, while blank/whitespace-only entries are rejected.
+    missing_evidence: z.array(z.string().trim().min(1).max(200).regex(/\S/)).max(8).optional(),
   })
   .strict();
 export type DonePayload = z.infer<typeof DonePayload>;

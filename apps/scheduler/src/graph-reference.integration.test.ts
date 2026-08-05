@@ -64,7 +64,8 @@ if (!testDatabaseUrl) {
           assert.ok(error instanceof ControlInputError, `${label}: expected ControlInputError`);
           assert.equal(error.code, expectedCode, label);
           if (expectedCode === "invalid_node_ref") assert.match(error.message, /YAML root_id/);
-          else assert.match(error.message, /invalid_reference_budget|引用数量/);
+          else if (expectedCode === "invalid_reference_budget") assert.match(error.message, /invalid_reference_budget|引用数量/);
+          else assert.match(error.message, new RegExp(expectedCode));
           assert.doesNotMatch(error.message, /invalid input syntax for type uuid/i);
           return true;
         },
@@ -103,6 +104,17 @@ if (!testDatabaseUrl) {
         { intents: totalBudgetIntents },
         "total unique reference budget",
         "invalid_reference_budget",
+      );
+      const beyondCapIntents = Array.from({ length: 7 }, (_, index) => ({
+        from: [rootId],
+        role: index === 6 ? "role-that-is-not-enabled" : "review",
+        description: `cap intent ${index}`,
+        prompt: "run enough detail",
+      }));
+      await attempt(
+        { intents: beyondCapIntents },
+        "invalid role beyond max intent cap",
+        "invalid_role",
       );
 
       const [validResult] = await sql<{ id: string }[]>`

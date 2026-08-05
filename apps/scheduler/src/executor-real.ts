@@ -61,6 +61,38 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
+/** Preserve the Scheduler-owned rate-limit code/metadata at the real-agent
+ * boundary without copying untrusted event payloads into logs. */
+function observeSemanticIngestionError(error: unknown, jobId: string): void {
+  if (!error || typeof error !== "object") return;
+  const candidate = error as {
+    code?: unknown;
+    metadata?: { bucket?: unknown; retry_after_sec?: unknown; limit?: unknown };
+  };
+  if (candidate.code !== "event_rate_limited") return;
+  const bucket = typeof candidate.metadata?.bucket === "string" ? candidate.metadata.bucket : "unknown";
+  inc("deepsonar_event_rate_limited_total", { bucket });
+  console.warn("[real-agent] semantic event rejected by Scheduler rate limiter", {
+    job_id: jobId,
+    code: candidate.code,
+    bucket,
+    retry_after_sec: candidate.metadata?.retry_after_sec,
+    limit: candidate.metadata?.limit,
+  });
+}
+
+async function ingestSemanticEventObserved(
+  jobId: string,
+  event: EventEnvelopeInput,
+): Promise<void> {
+  try {
+    await ingestEvent(jobId, event);
+  } catch (error) {
+    observeSemanticIngestionError(error, jobId);
+    throw error;
+  }
+}
+
 export function assertSemanticTerminalExclusivity(
   state: { done: unknown; hub: unknown; human: unknown },
   eventType: "done" | "hub_decision" | "human",
@@ -307,7 +339,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   if (!job) throw new Error(`job ${jobId} 不存在`);
 
   const emit = (t: string, payload: unknown) =>
-    ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t as never, payload });
+    ingestSemanticEventObserved(jobId, { v: 1, event_id: randomUUID(), type: t as never, payload });
 
   const payload = job.payload_json as Record<string, unknown>;
   const canvasId = (job.canvas_id as string) ?? null;
@@ -756,7 +788,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     }
     if (event.type === "progress") {
       const p = ProgressPayload.parse(event.payload);
-      await ingestEvent(jobId, { ...event, payload: { message: p.message.trim(), ...(typeof p.percent === "number" ? { percent: p.percent } : {}) } });
+      await ingestSemanticEventObserved(jobId, { ...event, payload: { message: p.message.trim(), ...(typeof p.percent === "number" ? { percent: p.percent } : {}) } });
       return;
     }
     if (event.type === "fact") {
@@ -766,7 +798,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         event,
         (payload.intent_node_id as string) ?? null,
         async (normalized) => {
-          await ingestEvent(jobId, normalized);
+          await ingestSemanticEventObserved(jobId, normalized);
         },
       );
       factCount++;
@@ -775,7 +807,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     if (event.type === "finding") {
       if (!isAudit) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 emit_finding`);
       if (findingCount >= 20) throw toolBoundaryError("toolLimit", "单 Job Finding 超过 20 条上限");
-      await ingestEvent(jobId, { ...event, payload: FindingPayload.parse(event.payload) });
+      await ingestSemanticEventObserved(jobId, { ...event, payload: FindingPayload.parse(event.payload) });
       findingCount++;
       return;
     }
@@ -920,7 +952,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if (result.error) throw new Error(`agent 运行失败: ${result.error}`);
 
   if (semanticState.human) {
-    await ingestEvent(jobId, {
+    await ingestSemanticEventObserved(jobId, {
       v: 1,
       event_id: semanticState.human.eventId,
       type: "human",
@@ -942,12 +974,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       const invalid = decision.intents.find((intent) => !availableHubRoleNames.has(intent.role));
       throw invalidRole(invalid?.role);
     } else if (decision.complete) {
-      await ingestEvent(jobId, { v: 1, event_id: semanticState.hub!.eventId, type: "hub_decision", payload: { complete: decision.complete } });
+      await ingestSemanticEventObserved(jobId, { v: 1, event_id: semanticState.hub!.eventId, type: "hub_decision", payload: { complete: decision.complete } });
       hubNote = `（结论：${decision.complete.description.slice(0, 80)}）`;
     } else {
       const intents = (decision.intents ?? []).slice(0, rules.maxIntentsPerDecision);
       if (intents.length > 0) {
-        await ingestEvent(jobId, { v: 1, event_id: semanticState.hub!.eventId, type: "hub_decision", payload: { intents } });
+        await ingestSemanticEventObserved(jobId, { v: 1, event_id: semanticState.hub!.eventId, type: "hub_decision", payload: { intents } });
         hubNote = `（派发 ${intents.length} 个意图）`;
       } else {
         hubNote = "（无新意图）";
@@ -959,7 +991,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if (isVerify && !["confirmed", "rework", "needs_human", "false_positive"].includes(verdict ?? "")) {
     throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human）");
   }
-  await ingestEvent(jobId, {
+  await ingestSemanticEventObserved(jobId, {
     v: 1,
     event_id: semanticState.done.eventId,
     type: "done",

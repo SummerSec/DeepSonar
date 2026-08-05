@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 16);
+INSERT INTO schema_meta (id, version) VALUES ('global', 17);
 
 -- Scheduler migration ledger.  Failed attempts are retained for audit; only
 -- successful rows are unique per version and participate in the applied
@@ -48,6 +48,10 @@ VALUES (15, '0015_credential_health_metadata.sql',
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (16, '0016_role_ui_colors.sql',
         '8d7982c44d7c292f87835a1478cd46763b27644fe488741f6ebaf61cbe233844',
+        'succeeded');
+INSERT INTO schema_migrations (version, filename, checksum, result)
+VALUES (17, '0017_add_event_rate_limits.sql',
+        'd3c3bc4ab679e3524878f4408699d5c968522066e2a99d21952db4f6b03803a6',
         'succeeded');
 
 CREATE TABLE projects (
@@ -162,6 +166,21 @@ CREATE TABLE events (
   CONSTRAINT events_job_event_uniq UNIQUE (job_id, event_id)
 );
 CREATE INDEX events_job_idx ON events (job_id, id);
+
+-- Durable per-Job fixed-window semantic-event budgets.  Scheduler ingestion
+-- locks one row instead of scanning events; progress and terminal/control
+-- counters are independent so progress cannot starve done/human semantics.
+CREATE TABLE job_event_rate_limits (
+  job_id uuid PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  window_started_at timestamptz NOT NULL,
+  progress_count int NOT NULL DEFAULT 0,
+  standard_count int NOT NULL DEFAULT 0,
+  terminal_count int NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_event_rate_limits_counts_check CHECK (
+    progress_count >= 0 AND standard_count >= 0 AND terminal_count >= 0
+  )
+);
 
 CREATE TABLE findings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

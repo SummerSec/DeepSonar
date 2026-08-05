@@ -28,11 +28,16 @@ if (!testDatabaseUrl) {
     const repointJobId = randomUUID();
     const factRepointJobId = randomUUID();
     const verificationJobId = randomUUID();
+    const terminalVerifyJobId = randomUUID();
     const verificationFindingId = randomUUID();
     const multiCanvasJobId = randomUUID();
     const conflictingCanvasJobId = randomUUID();
     const reportOnlyJobId = randomUUID();
     const reportConflictJobId = randomUUID();
+    const foreignProjectId = randomUUID();
+    const foreignCanvasId = `event-ingestion-foreign-${randomUUID()}`;
+    const foreignOriginJobId = randomUUID();
+    const foreignFindingId = randomUUID();
     const fixture = {
       jobId,
       projectId,
@@ -44,14 +49,38 @@ if (!testDatabaseUrl) {
       INSERT INTO projects (id, canvas_id, name, config_json)
       VALUES (${projectId}, ${canvasId}, 'event-ingestion', ${sql.json({ rules: { hubEnabled: false } })})`;
     await sql`
+      INSERT INTO projects (id, canvas_id, name, config_json)
+      VALUES (${foreignProjectId}, ${foreignCanvasId}, 'event-ingestion-foreign', ${sql.json({ rules: { hubEnabled: false } })})`;
+    await sql`
       INSERT INTO canvases (id, project_id, title, target_json)
       VALUES (${canvasId}, ${projectId}, 'event-ingestion', ${sql.json({})})`;
     await sql`
       INSERT INTO canvases (id, project_id, title, target_json)
       VALUES (${movedCanvasId}, ${projectId}, 'event-ingestion-moved', ${sql.json({})})`;
     await sql`
+      INSERT INTO canvases (id, project_id, title, target_json)
+      VALUES (${foreignCanvasId}, ${foreignProjectId}, 'event-ingestion-foreign', ${sql.json({})})`;
+    await sql`
       INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
       VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
+    const [foreignFindingNode] = await sql<{ id: string }[]>`
+      INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+      VALUES (${foreignCanvasId}, 'finding', 'foreign finding', 'open', ${sql.json({ severity: 'high' })})
+      RETURNING id`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${foreignOriginJobId}, ${foreignProjectId}, ${foreignCanvasId}, 'audit_module', 'succeeded',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO findings (
+        id, project_id, job_id, node_id, fingerprint, title, severity, summary, raw_json
+      ) VALUES (
+        ${foreignFindingId}, ${foreignProjectId}, ${foreignOriginJobId}, ${foreignFindingNode.id},
+        ${`foreign-${foreignFindingId}`}, 'foreign finding', 'high', 'foreign project evidence target', ${sql.json({})}
+      )`;
     await sql`
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
@@ -109,6 +138,13 @@ if (!testDatabaseUrl) {
         ${verificationJobId}, ${projectId}, ${canvasId}, ${verificationFindingId}, 'test', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })},
         ${sql.json({ verification_followup: { finding_id: verificationFindingId } })}
+      )`;
+    await sql`
+      INSERT INTO jobs (
+        id, project_id, canvas_id, finding_id, type, status, agent_snapshot_json, payload_json
+      ) VALUES (
+        ${terminalVerifyJobId}, ${projectId}, ${canvasId}, ${verificationFindingId}, 'verify_finding', 'running',
+        ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
       INSERT INTO jobs (
@@ -217,6 +253,61 @@ if (!testDatabaseUrl) {
       assert.equal(rolledBackFactEvent, undefined);
       assert.equal(rolledBackFactDedup, undefined);
 
+      // The current Job, its scheduler-owned follow-up target, and the
+      // Finding's project/origin Job must agree.  A foreign-project Finding is
+      // rejected before its evidence node can commit.
+      const foreignProjectEventId = randomUUID();
+      fixture.eventIds.push(foreignProjectEventId);
+      await assert.rejects(
+        ingestEvent(verificationJobId, {
+          v: 1,
+          event_id: foreignProjectEventId,
+          type: "fact",
+          payload: {
+            title: "foreign project evidence",
+            description: "must roll back",
+            verification: {
+              finding_id: foreignFindingId,
+              evidence_kind: "test",
+              outcome: "supports",
+              subject_revision: "foreign@test",
+              steps: ["run"],
+              expected: "reject",
+              actual: "accepted",
+            },
+          },
+        }),
+        (error: unknown) => error instanceof Error && /invalid_verification/.test(error.message),
+      );
+      const [foreignRollbackFact] = await sql`
+        SELECT 1 FROM canvas_nodes WHERE job_id = ${verificationJobId} AND title = 'foreign project evidence'`;
+      assert.equal(foreignRollbackFact, undefined);
+
+      // A test Job cannot masquerade as a review evidence producer.
+      const wrongKindEventId = randomUUID();
+      fixture.eventIds.push(wrongKindEventId);
+      await assert.rejects(
+        ingestEvent(verificationJobId, {
+          v: 1,
+          event_id: wrongKindEventId,
+          type: "fact",
+          payload: {
+            title: "wrong evidence kind",
+            description: "must roll back",
+            verification: {
+              finding_id: verificationFindingId,
+              evidence_kind: "review",
+              outcome: "supports",
+              subject_revision: "app@test",
+            },
+          },
+        }),
+        (error: unknown) => error instanceof Error && /invalid_verification/.test(error.message),
+      );
+      const [wrongKindRollbackFact] = await sql`
+        SELECT 1 FROM canvas_nodes WHERE job_id = ${verificationJobId} AND title = 'wrong evidence kind'`;
+      assert.equal(wrongKindRollbackFact, undefined);
+
       // A correctly bound test Job may attach structured evidence to its new
       // fact node.  The finding edge and verification body must commit with
       // the event, proving the strict host boundary accepts valid input.
@@ -257,6 +348,43 @@ if (!testDatabaseUrl) {
           AND to_node_id = ${verifiedFact?.id}
           AND edge_type = 'tested_by'`;
       assert.ok(verificationEdge, "valid verification must create a tested_by edge");
+
+      // Terminal preconditions are enforced again by core/ingest, not only by
+      // executor-real's semantic buffer: verify requires verdict, while a
+      // regular role must not smuggle verifier-only fields into done.
+      const verifyMissingVerdictId = randomUUID();
+      fixture.eventIds.push(verifyMissingVerdictId);
+      await assert.rejects(
+        ingestEvent(terminalVerifyJobId, {
+          v: 1,
+          event_id: verifyMissingVerdictId,
+          type: "done",
+          payload: { summary: "missing verdict" },
+        }),
+        (error: unknown) => error instanceof Error && /invalid_done/.test(error.message),
+      );
+      const verifyWhitespaceEvidenceId = randomUUID();
+      fixture.eventIds.push(verifyWhitespaceEvidenceId);
+      await assert.rejects(
+        ingestEvent(terminalVerifyJobId, {
+          v: 1,
+          event_id: verifyWhitespaceEvidenceId,
+          type: "done",
+          payload: { summary: "whitespace evidence", verdict: "rework", missing_evidence: ["   "] },
+        }),
+        (error: unknown) => error instanceof Error,
+      );
+      const nonVerifyVerdictId = randomUUID();
+      fixture.eventIds.push(nonVerifyVerdictId);
+      await assert.rejects(
+        ingestEvent(verificationJobId, {
+          v: 1,
+          event_id: nonVerifyVerdictId,
+          type: "done",
+          payload: { summary: "unexpected verdict", verdict: "confirmed" },
+        }),
+        (error: unknown) => error instanceof Error && /invalid_done/.test(error.message),
+      );
 
       // Simulate a legacy node re-point between the read-only hint preflight
       // and transaction start.  The first Canvas lock must fail closed during
@@ -498,6 +626,12 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await sql`DELETE FROM canvas_edges WHERE canvas_id = ${foreignCanvasId}`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${foreignCanvasId}`;
+      await sql`DELETE FROM findings WHERE project_id = ${foreignProjectId}`;
+      await sql`DELETE FROM jobs WHERE project_id = ${foreignProjectId}`;
+      await sql`DELETE FROM canvases WHERE project_id = ${foreignProjectId}`;
+      await sql`DELETE FROM projects WHERE id = ${foreignProjectId}`;
       await sql.end();
     }
   });

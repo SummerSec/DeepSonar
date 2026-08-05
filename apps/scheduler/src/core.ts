@@ -65,7 +65,15 @@ const eventIngestionApplication = createEventIngestionApplication(
   async (tx, jobId, envelope) => {
     await applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload);
   },
-  { maxPayloadBytes: config.events.payloadMaxKb * 1024 },
+  {
+    maxPayloadBytes: config.events.payloadMaxKb * 1024,
+    rateLimit: {
+      windowSeconds: config.events.rateLimitWindowSec,
+      progressPerWindow: config.events.rateLimitProgressPerWindow,
+      standardPerWindow: config.events.rateLimitStandardPerWindow,
+      terminalPerWindow: config.events.rateLimitTerminalPerWindow,
+    },
+  },
 );
 
 // ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
@@ -978,6 +986,42 @@ export async function applySideEffects(
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job) throw new Error(`job ${jobId} 不存在`);
 
+  if (type === "done") {
+    // The real executor performs the same check before buffering terminal
+    // state, but ingestion is the authority for direct/recovery callers too.
+    // Keep verify's verdict contract and non-verify's clean terminal payload
+    // enforced inside the outer event transaction.
+    const done = validatedPayload as {
+      verdict?: string;
+      missing_evidence?: string[];
+    };
+    const isVerifyJob = job.type === "verify_finding" || job.type === "verify";
+    if (isVerifyJob && !done.verdict) {
+      throw new ControlInputError("invalid_done", "verify Job 的 mark_job_done 必须提供 verdict。", "verdict");
+    }
+    if (!isVerifyJob && (done.verdict !== undefined || done.missing_evidence !== undefined)) {
+      throw new ControlInputError(
+        "invalid_done",
+        "非 verify Job 的 mark_job_done 不得提供 verdict 或 missing_evidence。",
+        done.verdict !== undefined ? "verdict" : "missing_evidence",
+      );
+    }
+    if (isVerifyJob && done.verdict === "rework" && (!done.missing_evidence || done.missing_evidence.length === 0)) {
+      throw new ControlInputError(
+        "invalid_done",
+        "verdict=rework 必须列出至少一项 missing_evidence。",
+        "missing_evidence",
+      );
+    }
+    if (isVerifyJob && done.verdict !== "rework" && done.missing_evidence !== undefined) {
+      throw new ControlInputError(
+        "invalid_done",
+        "只有 verdict=rework 才能提供 missing_evidence。",
+        "missing_evidence",
+      );
+    }
+  }
+
   if (type === "progress") {
     const p = validatedPayload as { message: string; percent?: number };
     await tx`
@@ -1153,13 +1197,17 @@ export async function applySideEffects(
     // 项目启用的角色（hub 可下发清单）；一个都没启用则不再派生
     const roles = await rolesForProject(tx as unknown as typeof sql, job.project_id as string);
     const enabledNames = new Set(roles.map((r) => r.name));
-    const intents = (p.intents ?? []).slice(0, rules.maxIntentsPerDecision);
-    const hubEdges: CanvasEdgeInput[] = [];
-    for (const it of intents) {
+    const submittedIntents = p.intents ?? [];
+    // Validate the complete proposal before applying the runtime dispatch
+    // cap. Otherwise an invalid role after maxIntentsPerDecision could be
+    // silently truncated and the same internal call would appear accepted.
+    for (const it of submittedIntents) {
       if (!it.role || !enabledNames.has(it.role)) {
         throw invalidRole(it.role ?? "<missing>", "intents.role");
       }
     }
+    const intents = submittedIntents.slice(0, rules.maxIntentsPerDecision);
+    const hubEdges: CanvasEdgeInput[] = [];
 
     const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
       kind?: string;
@@ -1167,7 +1215,7 @@ export async function applySideEffects(
       missing_evidence?: string[];
     };
     if (["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")) {
-      for (const it of intents) {
+      for (const it of submittedIntents) {
         if (it.role !== "review" && it.role !== "test") {
           throw new Error(
             `Verify 补证只允许派发 review/test，收到 ${it.role ?? "<missing>"}`,
