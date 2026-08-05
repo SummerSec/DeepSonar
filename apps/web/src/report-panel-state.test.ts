@@ -8,6 +8,7 @@ test("canvas changes invalidate late poll and download completions", async () =>
   const pollA = guard.beginPoll();
 
   let appliedReports: string[] = [];
+  let markdownResults: string[] = [];
   let downloadErrors: string[] = [];
   const latePoll = new Promise<void>((resolve) => {
     setTimeout(() => {
@@ -62,6 +63,10 @@ test("dispose invalidates every pending callback after unmount", async () => {
       resolve();
     }, 5)),
     new Promise<void>((resolve) => setTimeout(() => {
+      if (guard.isCurrentContext(context)) markdownResults.push("markdown-a");
+      resolve();
+    }, 5)),
+    new Promise<void>((resolve) => setTimeout(() => {
       if (guard.isCurrentContext(context)) downloadErrors.push("download-a");
       resolve();
     }, 5)),
@@ -79,6 +84,7 @@ test("dispose invalidates every pending callback after unmount", async () => {
 
   await Promise.all(lateCallbacks);
   assert.deepEqual(appliedReports, []);
+  assert.deepEqual(markdownResults, []);
   assert.deepEqual(downloadErrors, []);
   assert.deepEqual(retryCompletions, []);
 });
