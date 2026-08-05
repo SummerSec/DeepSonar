@@ -9,7 +9,7 @@ import {
   Target,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type Project } from "../api";
 import { useAuth } from "../auth";
@@ -28,9 +28,14 @@ import {
 } from "../dashboard-quick-start";
 import { PrimaryButton } from "../ui";
 
-interface DashboardLaunchRailProps {
+interface IntentLaunchRailProps {
   projects: Project[];
+  /** Keep the new-project choice explicit when opened from ProjectsPage. */
+  forcedNewProject?: boolean;
   onProjectCreated?: (project: Project) => void;
+  onCancel?: () => void;
+  /** Cold-start has no existing project to return to. */
+  canCancel?: boolean;
 }
 
 type LaunchStage = "describe" | "preflight" | "handoff";
@@ -61,7 +66,7 @@ function StepRail({ stage }: { stage: LaunchStage }) {
   return (
     <ol className="intent-launch-steps" aria-label="开始任务进度">
       {steps.map((label, index) => (
-        <li key={label} className={index < current ? "is-complete" : index === current ? "is-current" : ""}>
+        <li key={label} className={index < current ? "is-complete" : index === current ? "is-current" : ""} aria-current={index === current ? "step" : undefined}>
           <span className="intent-launch-step-mark" aria-hidden="true">{index < current ? <Check size={11} weight="bold" /> : `0${index + 1}`}</span>
           <span>{label}</span>
           {index < steps.length - 1 && <span className="intent-launch-step-line" aria-hidden="true" />}
@@ -71,11 +76,16 @@ function StepRail({ stage }: { stage: LaunchStage }) {
   );
 }
 
-export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLaunchRailProps) {
+export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectCreated, onCancel, canCancel = false }: IntentLaunchRailProps) {
   const navigate = useNavigate();
   const { status, me } = useAuth();
+  const instanceId = useId().replace(/:/g, "");
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const selectionTouchedRef = useRef(false);
+  const previousForcedRef = useRef(forcedNewProject);
   const activeProjects = useMemo(() => projects.filter((project) => project.status === "active"), [projects]);
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState(forcedNewProject ? NEW_PROJECT : "");
+  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
   const [preset, setPreset] = useState<(typeof QUICK_START_PRESETS)[number]["id"]>("custom");
@@ -96,14 +106,29 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
   const permissionLoading = status === null && me === null;
 
   useEffect(() => {
+    if (forcedNewProject && !previousForcedRef.current) selectionTouchedRef.current = false;
+    previousForcedRef.current = forcedNewProject;
+    if (forcedNewProject && !selectionTouchedRef.current && !createdProjectId) {
+      setSelectedProjectId(NEW_PROJECT);
+      return;
+    }
+    if (createdProjectId && activeProjects.some((project) => project.id === createdProjectId)) {
+      setSelectedProjectId(createdProjectId);
+      return;
+    }
     if (selectedProjectId === NEW_PROJECT && !activeProjects.length) return;
     if (selectedProjectId && (selectedProjectId === NEW_PROJECT || activeProjects.some((project) => project.id === selectedProjectId))) return;
     const remembered = readLastProjectId();
     const preferred = activeProjects.find((project) => project.id === remembered) ?? activeProjects[0];
     setSelectedProjectId(preferred?.id ?? NEW_PROJECT);
-  }, [activeProjects, selectedProjectId]);
+  }, [activeProjects, createdProjectId, forcedNewProject, selectedProjectId]);
+
+  useEffect(() => {
+    if (!permissionLoading && canStart) titleInputRef.current?.focus();
+  }, [canStart, permissionLoading]);
 
   const selectProject = (id: string) => {
+    selectionTouchedRef.current = true;
     setSelectedProjectId(id);
     setReadiness(null);
     setOperationError(null);
@@ -134,7 +159,7 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
     setOperationError(null);
     setTechnicalError(null);
     setPermissionDenied(false);
-    const creatingProject = isCreatingProject;
+    const creatingProject = isCreatingProject && !createdProjectId;
     let createdProject: Project | null = null;
     try {
       const result = await runQuickStart(
@@ -149,7 +174,9 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
           createProject: async (input) => {
             const project = await api.createProject(input);
             createdProject = project;
+            setCreatedProjectId(project.id);
             onProjectCreated?.(project);
+            selectionTouchedRef.current = true;
             setSelectedProjectId(project.id);
             return project;
           },
@@ -192,16 +219,20 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
   const failures = readiness ? readinessFailures(readiness) : [];
 
   return (
-    <section className="intent-launch-rail surface-shell deepsonar-reveal" aria-labelledby="intent-launch-title">
+    <section className="intent-launch-rail surface-shell deepsonar-reveal" aria-labelledby={`intent-launch-title-${instanceId}`}>
       <div className="intent-launch-core surface-core">
         <div className="intent-launch-header">
           <div>
             <div className="eyebrow"><span style={{ background: "var(--accent)" }} />QUICK START / INTENT LAUNCH</div>
-            <h2 id="intent-launch-title">从一句目标开始</h2>
+            <h2 id={`intent-launch-title-${instanceId}`}>从一句目标开始</h2>
             <p>只描述你想解决的事情。Hub、角色、凭据与运行时由平台预检并决定，快捷入口不会绕过治理边界。</p>
           </div>
           <div className="intent-launch-signal" aria-hidden="true"><Sparkle size={22} weight="light" /><span>LOCAL TRUTH</span></div>
         </div>
+
+        {canCancel && onCancel && <button type="button" className="intent-launch-cancel" onClick={onCancel} disabled={busy}>
+          取消快捷启动
+        </button>}
 
         <StepRail stage={stage} />
 
@@ -216,35 +247,35 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
           <form className="intent-launch-form" onSubmit={submit}>
             <div className="intent-launch-form-grid">
               <div className="intent-launch-field intent-launch-field-wide">
-                <label htmlFor="quick-start-title">任务标题 <span>必填</span></label>
-                <input id="quick-start-title" value={title} onChange={(event) => { setTitle(event.target.value); setPreset("custom"); }} maxLength={200} placeholder="例如：确认登录边界是否存在越权路径" required autoComplete="off" />
+                <label htmlFor={`quick-start-title-${instanceId}`}>任务标题 <span>必填</span></label>
+                <input ref={titleInputRef} id={`quick-start-title-${instanceId}`} value={title} onChange={(event) => { setTitle(event.target.value); setPreset("custom"); }} maxLength={200} placeholder="例如：确认登录边界是否存在越权路径" required autoComplete="off" />
               </div>
               <div className="intent-launch-field intent-launch-field-wide">
-                <label htmlFor="quick-start-goal">目标与背景 <span>必填</span></label>
-                <textarea id="quick-start-goal" value={goal} onChange={(event) => { setGoal(event.target.value); setPreset("custom"); }} maxLength={20_000} rows={4} placeholder="告诉平台要解决什么、已知边界是什么，以及什么证据能让你相信结果。" required />
+                <label htmlFor={`quick-start-goal-${instanceId}`}>目标与背景 <span>必填</span></label>
+                <textarea id={`quick-start-goal-${instanceId}`} value={goal} onChange={(event) => { setGoal(event.target.value); setPreset("custom"); }} maxLength={20_000} rows={4} placeholder="告诉平台要解决什么、已知边界是什么，以及什么证据能让你相信结果。" required />
               </div>
             </div>
 
             <div className="intent-launch-presets" aria-label="目标预设">
               <span className="intent-launch-field-caption">快速填入意图</span>
               <div className="intent-launch-preset-list">
-                {QUICK_START_PRESETS.map((item) => <button key={item.id} type="button" className={preset === item.id ? "is-selected" : ""} onClick={() => choosePreset(item.id)}>{item.label}</button>)}
+                {QUICK_START_PRESETS.map((item) => <button key={item.id} type="button" className={preset === item.id ? "is-selected" : ""} aria-pressed={preset === item.id} onClick={() => choosePreset(item.id)}>{item.label}</button>)}
               </div>
               <span className="intent-launch-preset-note">预设只填充标题与目标，不会选择角色、镜像或凭据。</span>
             </div>
 
             <div className="intent-launch-form-grid intent-launch-context-grid">
               <div className="intent-launch-field">
-                <label htmlFor="quick-start-project">项目空间 <span>默认归属</span></label>
-                <select id="quick-start-project" value={selectedProjectId || NEW_PROJECT} onChange={(event) => selectProject(event.target.value)}>
+                <label htmlFor={`quick-start-project-${instanceId}`}>项目空间 <span>默认归属</span></label>
+                <select id={`quick-start-project-${instanceId}`} value={selectedProjectId || NEW_PROJECT} onChange={(event) => selectProject(event.target.value)}>
                   {activeProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                   <option value={NEW_PROJECT}>{activeProjects.length ? "＋ 新建一个项目空间" : "＋ 现在创建第一个项目空间"}</option>
                 </select>
                 <small>{selectedProject ? `上次使用或当前默认 · ${selectedProject.name}` : "没有可用项目，将在这里创建一个本地项目空间"}</small>
               </div>
               {isCreatingProject && <div className="intent-launch-field">
-                <label htmlFor="quick-start-new-project">新项目名称 <span>必填</span></label>
-                <input id="quick-start-new-project" value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} maxLength={120} placeholder="例如：登录边界复核" required autoComplete="off" />
+                <label htmlFor={`quick-start-new-project-${instanceId}`}>新项目名称 <span>必填</span></label>
+                <input id={`quick-start-new-project-${instanceId}`} value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} maxLength={120} placeholder="例如：登录边界复核" required autoComplete="off" />
                 <input className="intent-launch-secondary-input" value={newProjectDescription} onChange={(event) => setNewProjectDescription(event.target.value)} maxLength={500} placeholder="一句话说明（可选）" autoComplete="off" aria-label="项目说明，可选" />
               </div>}
             </div>
@@ -254,7 +285,7 @@ export function DashboardLaunchRail({ projects, onProjectCreated }: DashboardLau
               <div className="intent-launch-advanced-body">
                 <fieldset>
                   <legend>本次任务网络策略</legend>
-                  {(["inherit", "allow", "deny"] as NetworkOverride[]).map((value) => <label key={value} className={networkOverride === value ? "is-selected" : ""}><input type="radio" name="quick-start-network" value={value} checked={networkOverride === value} onChange={() => setNetworkOverride(value)} /><span>{networkOverrideLabel(value)}</span></label>)}
+                  {(["inherit", "allow", "deny"] as NetworkOverride[]).map((value) => <label key={value} className={networkOverride === value ? "is-selected" : ""}><input type="radio" name={`quick-start-network-${instanceId}`} value={value} checked={networkOverride === value} onChange={() => setNetworkOverride(value)} /><span>{networkOverrideLabel(value)}</span></label>)}
                 </fieldset>
                 <p>默认继承项目设置。覆盖只写入本次任务快照，不能指定镜像、凭据或 Agent 角色。</p>
               </div>

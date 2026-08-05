@@ -33,6 +33,7 @@
     "ci:integration:convergence-recovery": "pnpm --filter @deepsonar/scheduler exec tsx --test src/convergence-recovery.integration.test.ts",
     "ci:integration:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.integration.test.ts",
     "ci:unit:web-report-download": "pnpm --filter @deepsonar/web exec tsx --test src/api-download.test.ts src/report-panel-state.test.ts",
+    "ci:unit:web-quick-start": "pnpm --filter @deepsonar/web test:quick-start",
     "ci:unit:report-download-openapi": "pnpm --filter @deepsonar/scheduler exec tsx --test src/report-download.openapi.test.ts",
     "ci:integration:report-download": "pnpm --filter @deepsonar/scheduler exec tsx --test src/report-download.integration.test.ts",
     "ci:smoke:roles": "python agent-harness/test-roles-api.py",

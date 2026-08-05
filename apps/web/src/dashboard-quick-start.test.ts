@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AuthMe, AuthStatus, Project } from "./api.js";
 import {
+  hasActiveProjects,
   hasQuickStartWritePermission,
+  hasNewProjectIntent,
   isPermissionError,
   networkOverrideValue,
+  newProjectIntentSearch,
   quickStartNetworkQuery,
   quickStartTaskPayload,
   resolveReadinessFix,
   readinessFailures,
   runQuickStart,
+  shouldShowQuickStartRail,
   type QuickStartApi,
 } from "./dashboard-quick-start.js";
 import type { ReadinessResponse } from "@deepsonar/shared-types";
@@ -52,6 +56,27 @@ const authStatus: AuthStatus = {
   default_admin_credentials_active: false,
   session_ttl_days: 7,
 };
+
+test("new-project intent query is deterministic and preserves unrelated params", () => {
+  const search = newProjectIntentSearch("?source=projects&intent=old", true);
+  assert.equal(search, "?source=projects&intent=new-project");
+  assert.equal(hasNewProjectIntent(search), true);
+  assert.equal(newProjectIntentSearch(search, false), "?source=projects");
+  assert.equal(hasNewProjectIntent("?source=projects"), false);
+});
+
+test("quick-start rail uses the full project list: explicit intent overrides load error, implicit cold-start does not", () => {
+  const active = [{ status: "active" as const }];
+  const archived = [{ status: "archived" as const }];
+  assert.equal(hasActiveProjects(active), true);
+  assert.equal(hasActiveProjects(archived), false);
+  assert.equal(shouldShowQuickStartRail({ projects: active, loaded: true, loadError: null, forced: false }), false);
+  assert.equal(shouldShowQuickStartRail({ projects: [], loaded: true, loadError: null, forced: false }), true);
+  assert.equal(shouldShowQuickStartRail({ projects: archived, loaded: true, loadError: null, forced: false }), true);
+  assert.equal(shouldShowQuickStartRail({ projects: [], loaded: false, loadError: null, forced: false }), false);
+  assert.equal(shouldShowQuickStartRail({ projects: [], loaded: true, loadError: new Error("offline"), forced: false }), false);
+  assert.equal(shouldShowQuickStartRail({ projects: active, loaded: true, loadError: new Error("stale"), forced: true }), true);
+});
 
 test("empty quick-start input requires an inline project before any API call", async () => {
   const calls: string[] = [];
