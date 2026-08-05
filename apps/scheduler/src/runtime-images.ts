@@ -5,9 +5,38 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import {
+  parseRuntimeImageRegistry,
+  RUNTIME_IMAGE_REGISTRY_SCHEMA_V1,
+  SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
+  type RuntimeImageRegistry as RuntimeImageRegistryContract,
+  type RuntimeImageRegistryPolicy,
+  type RuntimeImageRegistryVersion as RuntimeImageRegistryVersionContract,
+} from "./runtime-image-registry-contract.js";
+
+export {
+  createServerOwnedRuntimeImageRegistryPolicy,
+  legacyRuntimeImageRef,
+  parseOciDigestRef,
+  parseRuntimeImageRegistry,
+  RUNTIME_IMAGE_REGISTRY_CHANNELS,
+  RUNTIME_IMAGE_REGISTRY_METADATA_SOURCES,
+  RUNTIME_IMAGE_REGISTRY_SCHEMA_V1,
+  RUNTIME_IMAGE_REGISTRY_SCHEMA_V2,
+  SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
+  validateRuntimeImageRegistryPolicy,
+} from "./runtime-image-registry-contract.js";
+export type {
+  ParsedOciDigestRef,
+  RuntimeImageRegistryChannel,
+  RuntimeImageRegistryChannelPolicy,
+  RuntimeImageRegistryMetadataSource,
+  RuntimeImageRegistryPolicy,
+} from "./runtime-image-registry-contract.js";
 
 export const RUNTIME_IMAGE_CONTRACT = "deepsonar.runtime.contract/v1";
-export const RUNTIME_IMAGE_REGISTRY_SCHEMA = "deepsonar.registry/v1";
+/** Legacy schema constant retained for existing callers; v2 is accepted by the parser. */
+export const RUNTIME_IMAGE_REGISTRY_SCHEMA = RUNTIME_IMAGE_REGISTRY_SCHEMA_V1;
 const OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL = "https://github.com/SummerSec/DeepSonar/releases/latest/download/runtime-image-registry.json";
 const OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS = new Set(["github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"]);
 const OFFICIAL_RUNTIME_IMAGE_REGISTRY_AUTH_HOSTS = new Set(["github.com", "api.github.com"]);
@@ -19,35 +48,8 @@ const RUNTIME_IMAGE_INSPECT_MAX_BYTES = 512 * 1024;
 const RUNTIME_IMAGE_INSPECT_TIMEOUT_MS = 10_000;
 const execFileP = promisify(execFile);
 
-export interface RuntimeImageRegistryVersion {
-  version: string;
-  image_ref: string;
-  tools_manifest_sha256?: string;
-  platforms?: string[];
-  size_bytes?: number;
-}
-
-export interface RuntimeImageRegistryImage {
-  image_key: string;
-  name: string;
-  description: string;
-  publisher: string;
-  source_kind: "official";
-  source_url?: string;
-  project_opt_in: boolean;
-  default_role?: string;
-  versions: RuntimeImageRegistryVersion[];
-}
-
-export interface RuntimeImageRegistry {
-  schema: typeof RUNTIME_IMAGE_REGISTRY_SCHEMA;
-  images: RuntimeImageRegistryImage[];
-  /** 仅由 Scheduler 加在 GET /runtime-images/registry 响应上的可观察来源元数据。 */
-  source?: "remote" | "bundled" | "upload";
-  fallback?: boolean;
-  error?: string | null;
-  checked_at?: string;
-}
+export type RuntimeImageRegistryVersion = RuntimeImageRegistryVersionContract;
+export type RuntimeImageRegistry = RuntimeImageRegistryContract;
 
 export interface RuntimeImageCatalogSyncResult {
   registry: RuntimeImageRegistry;
@@ -117,6 +119,17 @@ export function defaultRuntimeImageKey(roleName: string): string {
 export function immutableDigest(imageRef: string): string | null {
   const match = imageRef.trim().match(/@(sha256:[0-9a-f]{64})$/);
   return match?.[1] ?? null;
+}
+
+/** Return the digest visible to the legacy GitHub-backed runtime consumer. */
+export function legacyProjectedRegistryDigest(version: RuntimeImageRegistryVersion): string | null {
+  if (!version.image_ref) return null;
+  return version.digest ?? immutableDigest(version.image_ref);
+}
+
+/** Collect only digests that have an actual legacy GitHub projection. */
+export function legacyProjectedRegistryDigests(versions: readonly RuntimeImageRegistryVersion[]): string[] {
+  return [...new Set(versions.map(legacyProjectedRegistryDigest).filter((value): value is string => Boolean(value)))];
 }
 
 export function localImageDigest(imageRef: string): string | null {
@@ -306,49 +319,16 @@ function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
   };
 }
 
-function parseRegistry(raw: unknown): RuntimeImageRegistry {
-  if (!raw || typeof raw !== "object") throw new Error("runtime-image-registry.json 必须是对象");
-  const value = raw as Record<string, unknown>;
-  if (value.schema !== RUNTIME_IMAGE_REGISTRY_SCHEMA || !Array.isArray(value.images)) {
-    throw new Error(`runtime-image-registry.json schema 必须为 ${RUNTIME_IMAGE_REGISTRY_SCHEMA}`);
-  }
-  const images = value.images.map((entry, imageIndex): RuntimeImageRegistryImage => {
-    if (!entry || typeof entry !== "object") throw new Error(`注册表 images[${imageIndex}] 无效`);
-    const image = entry as Record<string, unknown>;
-    const key = typeof image.image_key === "string" ? image.image_key : "";
-    const versionsRaw = image.versions;
-    if (!/^[a-z][a-z0-9-]{1,62}$/.test(key) || typeof image.name !== "string" || typeof image.description !== "string"
-      || typeof image.publisher !== "string" || image.source_kind !== "official" || !Array.isArray(versionsRaw)) {
-      throw new Error(`注册表 images[${imageIndex}] 字段无效`);
-    }
-    const versions = versionsRaw.map((version, versionIndex) => {
-      if (!version || typeof version !== "object") throw new Error(`注册表 ${key} versions[${versionIndex}] 无效`);
-      const item = version as Record<string, unknown>;
-      const imageRef = typeof item.image_ref === "string" ? item.image_ref.trim() : "";
-      if (!item.version || typeof item.version !== "string" || !immutableDigest(imageRef)) {
-        throw new Error(`注册表 ${key} versions[${versionIndex}] 必须使用 @sha256:64hex`);
-      }
-      return {
-        version: item.version,
-        image_ref: imageRef as string,
-        ...(typeof item.tools_manifest_sha256 === "string" ? { tools_manifest_sha256: item.tools_manifest_sha256 } : {}),
-        ...(Array.isArray(item.platforms) && item.platforms.every((v) => typeof v === "string") ? { platforms: item.platforms as string[] } : {}),
-        ...(typeof item.size_bytes === "number" ? { size_bytes: item.size_bytes } : {}),
-      };
-    });
-    return {
-      image_key: key,
-      name: typeof image.name === "string" ? image.name : key,
-      description: typeof image.description === "string" ? image.description : "",
-      publisher: typeof image.publisher === "string" ? image.publisher : "",
-      source_kind: "official",
-      ...(typeof image.source_url === "string" ? { source_url: image.source_url } : {}),
-      project_opt_in: image.project_opt_in === true,
-      ...(typeof image.default_role === "string" ? { default_role: image.default_role } : {}),
-      versions,
-    };
-  });
-  return { schema: RUNTIME_IMAGE_REGISTRY_SCHEMA, images };
+/**
+ * Runtime-facing wrapper.  The default policy is server-owned and pins ACR to
+ * the exact published endpoint, so another ACR ref is rejected
+ * unless a caller explicitly supplies a policy constructed by the server.
+ */
+export function parseRegistry(
+  raw: unknown,
+  policy: RuntimeImageRegistryPolicy = SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
+): RuntimeImageRegistry {
+  return parseRuntimeImageRegistry(raw, policy);
 }
 
 async function loadBundledRuntimeImageRegistry(): Promise<RuntimeImageRegistry> {
@@ -535,8 +515,8 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
     const digest = immutableDigest(override.image_ref)!;
-    if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
-      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, platforms: ["linux/amd64", "linux/arm64"] });
+    if (!image.versions.some((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest)) {
+      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, digest, platforms: ["linux/amd64", "linux/arm64"] });
     }
   }
   const trustedVersions = await sql`
@@ -568,11 +548,12 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       : typeof row.size_bytes === "string" && /^\d+$/.test(row.size_bytes)
         ? Number(row.size_bytes)
         : null;
-    const existingVersion = image.versions.find((version) => immutableDigest(version.image_ref) === digest);
+    const existingVersion = image.versions.find((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest);
     if (!existingVersion) {
       image.versions.push({
         version: row.version as string,
         image_ref: imageRef as string,
+        digest,
         ...(typeof row.tools_manifest_sha256 === "string" ? { tools_manifest_sha256: row.tools_manifest_sha256 } : {}),
         ...(Array.isArray(row.platforms_json) ? { platforms: row.platforms_json as string[] } : {}),
         ...(sizeBytes !== null && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0 ? { size_bytes: sizeBytes } : {}),
@@ -590,7 +571,8 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
     }
   }
   return {
-    schema: RUNTIME_IMAGE_REGISTRY_SCHEMA,
+    schema: registry.schema,
+    ...(registry.schema_version ? { schema_version: registry.schema_version } : {}),
     images,
     ...(registry.source ? { source: registry.source } : {}),
     ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
@@ -605,12 +587,13 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
     const digest = immutableDigest(override.image_ref)!;
-    if (!image.versions.some((version) => immutableDigest(version.image_ref) === digest)) {
-      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, platforms: ["linux/amd64", "linux/arm64"] });
+    if (!image.versions.some((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest)) {
+      image.versions.push({ version: `configured-${digest.slice(7, 19)}`, image_ref: override.image_ref, digest, platforms: ["linux/amd64", "linux/arm64"] });
     }
   }
   return {
-    schema: RUNTIME_IMAGE_REGISTRY_SCHEMA,
+    schema: registry.schema,
+    ...(registry.schema_version ? { schema_version: registry.schema_version } : {}),
     images,
     ...(registry.source ? { source: registry.source } : {}),
     ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
@@ -647,13 +630,20 @@ export async function applyOfficialRuntimeCatalog(
       WHERE runtime_images.official = true
       RETURNING id`;
     if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
+    const appliedDigests = new Set<string>();
     for (const version of item.versions) {
-      const digest = immutableDigest(version.image_ref)!;
+      const imageRef = version.image_ref;
+      // v2 may carry only Docker Hub/ACR refs.  Until the channel selector is
+      // implemented, the legacy DB consumer intentionally exposes only the
+      // GitHub projection and skips versions without it (no fake fallback).
+      if (!imageRef) continue;
+      const digest = version.digest ?? immutableDigest(imageRef);
+      if (!digest) continue;
       const envOnly = envOnlyKeys.has(item.image_key);
       const source = envOnly ? "env-configured" : "static-registry";
       const values = {
-        runtime_image_id: image.id, version: version.version, image_ref: version.image_ref,
-        resolved_ref: version.image_ref, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
+        runtime_image_id: image.id, version: version.version, image_ref: imageRef,
+        resolved_ref: imageRef, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
         platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
         size_bytes: version.size_bytes ?? null, scan_summary_json: { source, contract: "declared" } as never,
         trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(),
@@ -695,8 +685,9 @@ export async function applyOfficialRuntimeCatalog(
               THEN EXCLUDED.approved_at ELSE runtime_image_versions.approved_at END,
             updated_at = now()`;
       }
+      appliedDigests.add(digest);
     }
-    const digests = item.versions.map((version) => immutableDigest(version.image_ref)).filter((value): value is string => Boolean(value));
+    const digests = [...appliedDigests];
     // 同一发布可有多平台版本：凡本次清单中的 digest 均标记 promoted（解析 Job 时再按宿主 arch 优选）
     if ((reconcilePromotions || envOnlyKeys.has(item.image_key)) && digests.length > 0) {
       await sql`
@@ -730,8 +721,11 @@ export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogS
  * 运维手动上传 runtime-image-registry.json：校验 schema 后直接入库。
  * 不走 env 覆盖，避免上传清单与部署 env 互相踩踏。
  */
-export async function applyUploadedRuntimeCatalog(raw: unknown): Promise<RuntimeImageCatalogSyncResult> {
-  const registry = parseRegistry(raw);
+export async function applyUploadedRuntimeCatalog(
+  raw: unknown,
+  policy: RuntimeImageRegistryPolicy = SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
+): Promise<RuntimeImageCatalogSyncResult> {
+  const registry = parseRegistry(raw, policy);
   // 标记来源，便于前端 CATALOG PROVENANCE 展示
   const tagged: RuntimeImageRegistry = {
     ...registry,
@@ -819,12 +813,12 @@ export async function startRuntimeImagePull(): Promise<RuntimeImagePullTask> {
     throw new Error("已有运行中的镜像拉取任务");
   }
   const registry = await runtimeImageRegistryWithOverrides();
-  const items = registry.images.flatMap((image) => image.versions.map((version) => ({
+  const items = registry.images.flatMap((image) => image.versions.flatMap((version) => version.image_ref ? [{
     image_key: image.image_key,
     image_ref: version.image_ref,
     status: "queued" as const,
     error: null,
-  })));
+  }] : []));
   if (items.length === 0) throw new Error("当前市场清单没有可拉取的不可变版本，请先同步或登记官方 digest");
   const task: RuntimeImagePullTask = {
     task_id: createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24),

@@ -17,6 +17,8 @@
     "ci:smoke:convergence": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-scheduler-convergence.ts",
     "ci:test:lifecycle": "pnpm --filter @deepsonar/web test:lifecycle",
     "ci:unit:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.test.ts",
+    "ci:unit:runtime-images": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images.test.ts",
+    "ci:unit:runtime-registry": "node agent-harness/test-runtime-registry-generator.mjs",
     "ci:unit:job-lifecycle": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/job-lifecycle/job-lifecycle.test.ts src/domains/job-lifecycle/job-lifecycle.characterization.test.ts",
     "ci:integration:job-lifecycle": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/job-lifecycle/job-lifecycle.integration.test.ts",
     "ci:unit:scheduler-characterization": "pnpm --filter @deepsonar/scheduler exec tsx --test src/job-state-write-inventory.test.ts src/route-surface.test.ts",

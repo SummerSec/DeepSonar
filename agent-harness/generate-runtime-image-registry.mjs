@@ -6,7 +6,7 @@ const parse = (path) => JSON.parse(readFileSync(path, "utf8"));
 /** 版本号：semver 或 semver-linux-amd64（一平台一版本） */
 const VERSION_RE = /^v?\d+\.\d+\.\d+(-[a-z0-9][a-z0-9.-]*)?$/;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
-const IMAGE_REF_RE = /^.+@sha256:[0-9a-f]{64}$/;
+const GHCR_REF_RE = /^ghcr\.io\/summersec\/[a-z0-9][a-z0-9._-]*@sha256:[0-9a-f]{64}$/;
 
 const EXPECTED_KEYS = [
   "deepsonar-base",
@@ -43,8 +43,8 @@ function assertRegistry(registry) {
     const seenPlatforms = new Set();
     for (const version of versions) {
       if (!VERSION_RE.test(version.version)) throw new Error(`${key} 版本号无效: ${version.version}`);
-      if (!IMAGE_REF_RE.test(version.image_ref)) {
-        throw new Error(`${key} image_ref 必须是不可变 manifest digest`);
+      if (!GHCR_REF_RE.test(version.image_ref)) {
+        throw new Error(`${key} image_ref 必须是固定 GHCR 不可变 manifest digest`);
       }
       if (!Array.isArray(version.platforms) || version.platforms.length !== 1) {
         throw new Error(`${key} 每个 version 必须恰好包含一个 platform（一平台一版本）`);
@@ -73,12 +73,12 @@ export function expandDescriptorVersions(descriptor, {
   if (platforms.length === 0) throw new Error(`${descriptor.image_key} 缺少 platforms`);
   const baseVersion = version || descriptor.version;
   if (!baseVersion) throw new Error(`${descriptor.image_key} 缺少 version`);
-  const refBase = imageRefBase
-    || descriptor.acr_ref
-    || descriptor.ghcr_ref
-    || null;
-  if (!refBase || !IMAGE_REF_RE.test(refBase)) {
+  const refBase = descriptor.ghcr_ref || null;
+  if (!refBase || !GHCR_REF_RE.test(refBase)) {
     throw new Error(`${descriptor.image_key} 缺少目标 registry 引用`);
+  }
+  if (imageRefBase !== undefined && imageRefBase !== refBase) {
+    throw new Error(`${descriptor.image_key} v1 requires the fixed GHCR reference`);
   }
   const repository = repositoryFromRef(refBase);
   const platformDigests = descriptor.platform_digests && typeof descriptor.platform_digests === "object"
@@ -129,13 +129,11 @@ function main(argv = process.argv.slice(2)) {
     if (!DIGEST_RE.test(descriptor.digest)) throw new Error(`${key} digest 无效`);
     descriptors.set(key, descriptor);
   }
-  const acrConfigured = ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]
-    .every((name) => Boolean(process.env[name]));
   const releaseVersion = process.env.VERSION;
   if (!releaseVersion) throw new Error("缺少环境变量 VERSION");
   const images = template.images.filter((image) => EXPECTED_KEYS.includes(image.image_key)).map((image) => {
     const descriptor = descriptors.get(image.image_key);
-    const imageRefBase = acrConfigured ? descriptor.acr_ref : descriptor.ghcr_ref;
+    const imageRefBase = descriptor.ghcr_ref;
     if (!imageRefBase) throw new Error(`${image.image_key} 缺少目标 registry 引用`);
     return {
       ...image,
@@ -148,7 +146,7 @@ function main(argv = process.argv.slice(2)) {
   const registry = { schema: "deepsonar.registry/v1", images };
   assertRegistry(registry);
   writeFileSync(outputPath, `${JSON.stringify(registry, null, 2)}\n`);
-  console.log(`已生成发布清单：${outputPath}（${acrConfigured ? "ACR" : "GHCR"}，一平台一版本）`);
+  console.log(`已生成发布清单：${outputPath}（GHCR v1；多通道引用由 v2 发布，一平台一版本）`);
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

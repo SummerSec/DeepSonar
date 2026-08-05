@@ -137,6 +137,7 @@ pending → claimed → provisioning → running
 | 双轨报告 | #43 | 任务总报告 + 每条 confirmed 单报告 |
 | 通用 Finding + CVSS | #44 | profile 可配置；任务>项目>全局；运行中显著标识；CVSS 主流版+可演进 |
 | 任务卡片状态 | #46 | 任务级相位与 `active_count` 同源 |
+| 官方运行镜像多 channel catalog | #70 | **Slice A 已落地**：v2 canonical digest/platform/size + `registry_refs` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 目的地校验、DB/admin 配置、channel selector、pull/resolution 与 UI 留待后续 slice，Issue #70 保持开放 |
 
 ## 12. 仓库地图
 

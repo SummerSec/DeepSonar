@@ -52,6 +52,12 @@ jobs:
       - name: Runtime image definition consistency
         run: pnpm ci:images
 
+      - name: Runtime image registry contract unit
+        run: pnpm ci:unit:runtime-images
+
+      - name: Runtime image registry generator compatibility
+        run: pnpm ci:unit:runtime-registry
+
       - run: pnpm -r typecheck
 
       - run: pnpm -r build
