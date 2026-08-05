@@ -25,9 +25,16 @@ test("batch binding schema rejects duplicate targets and incomplete migrations",
     credential_id: credentialId,
     role_config_ids: [roleConfigId],
     effect: "refresh_pending",
+    idempotency_key: "static-valid-1",
   });
   assert.equal(valid.mode, "bind");
   assert.equal(valid.effect, "refresh_pending");
+  assert.throws(() => CredentialBatchBindingRequest.parse({
+    credential_id: credentialId,
+    role_config_ids: [roleConfigId],
+    idempotency_key: "static-valid-1",
+    unexpected: true,
+  }));
 });
 
 test("batch route documents one transaction and never rewrites active snapshots", () => {
@@ -63,4 +70,7 @@ test("batch route has server-owned health and model-catalog gates before mutatio
   assert.match(route, /return gateFailure\(409, "CREDENTIAL_HEALTH_REQUIRED"/);
   assert.match(route, /return gateFailure\(409, "CREDENTIAL_MODEL_CATALOG_REQUIRED"/);
   assert.match(route, /return gateFailure\(409, "CREDENTIAL_MODEL_NOT_CURRENT"/);
+  assert.match(route, /idempotency_key/);
+  assert.match(route, /IDEMPOTENCY_KEY_REUSED/);
+  assert.match(route, /BATCH_TRANSACTION_FAILED/);
 });

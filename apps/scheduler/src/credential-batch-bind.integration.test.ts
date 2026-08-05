@@ -125,6 +125,7 @@ if (!testDatabaseUrl) {
           role_config_ids: [configId],
           mode: "migrate",
           source_credential_id: sourceId,
+          idempotency_key: "batch-bind-migrate-1",
         },
       });
       assert.equal(bindResponse.statusCode, 200, bindResponse.payload);
@@ -140,6 +141,38 @@ if (!testDatabaseUrl) {
       assert.equal(pendingAfterBind.agent_snapshot_json.credential_id, sourceId, "new_jobs_only keeps pending frozen");
       assert.equal(activeAfterBind.agent_snapshot_json.credential_id, sourceId, "running snapshot remains immutable");
 
+      const [configAfterFirstBind] = await sql`SELECT version FROM role_configs WHERE id = ${configId}`;
+      const retryResponse = await app.inject({
+        method: "POST",
+        url: "/credentials/batch-bind",
+        payload: {
+          credential_id: targetId,
+          role_config_ids: [configId],
+          mode: "migrate",
+          source_credential_id: sourceId,
+          idempotency_key: "batch-bind-migrate-1",
+        },
+      });
+      assert.equal(retryResponse.statusCode, 200, retryResponse.payload);
+      assert.deepEqual(JSON.parse(retryResponse.payload), bindImpact);
+      const [configAfterRetry] = await sql`SELECT version FROM role_configs WHERE id = ${configId}`;
+      assert.equal(configAfterRetry.version, configAfterFirstBind.version, "successful retry must not bump RoleConfig version");
+      const [batchAuditsAfterRetry] = await sql`SELECT COUNT(*)::int AS count FROM audit_logs WHERE request_id LIKE ${"%batch-bind-migrate-1"}`;
+      assert.equal(batchAuditsAfterRetry.count, 1, "successful retry must not append a duplicate batch audit");
+
+      const conflictingRetry = await app.inject({
+        method: "POST",
+        url: "/credentials/batch-bind",
+        payload: {
+          credential_id: refreshTargetId,
+          role_config_ids: [configId],
+          mode: "bind",
+          idempotency_key: "batch-bind-migrate-1",
+        },
+      });
+      assert.equal(conflictingRetry.statusCode, 409, conflictingRetry.payload);
+      assert.equal(JSON.parse(conflictingRetry.payload).error_code, "IDEMPOTENCY_KEY_REUSED");
+
       const refreshResponse = await app.inject({
         method: "POST",
         url: "/credentials/batch-bind",
@@ -149,6 +182,7 @@ if (!testDatabaseUrl) {
           mode: "migrate",
           source_credential_id: refreshSourceId,
           effect: "refresh_pending",
+          idempotency_key: "batch-refresh-migrate-1",
         },
       });
       assert.equal(refreshResponse.statusCode, 200, refreshResponse.payload);
@@ -162,7 +196,7 @@ if (!testDatabaseUrl) {
       const failedHealthResponse = await app.inject({
         method: "POST",
         url: "/credentials/batch-bind",
-        payload: { credential_id: failedHealthId, role_config_ids: [configId], mode: "bind" },
+          payload: { credential_id: failedHealthId, role_config_ids: [configId], mode: "bind", idempotency_key: "batch-failed-health-1" },
       });
       assert.equal(failedHealthResponse.statusCode, 409, failedHealthResponse.payload);
       assert.equal(JSON.parse(failedHealthResponse.payload).error_code, "CREDENTIAL_HEALTH_REQUIRED");
@@ -172,7 +206,7 @@ if (!testDatabaseUrl) {
       const missingCatalogResponse = await app.inject({
         method: "POST",
         url: "/credentials/batch-bind",
-        payload: { credential_id: missingCatalogId, role_config_ids: [configId], mode: "bind" },
+          payload: { credential_id: missingCatalogId, role_config_ids: [configId], mode: "bind", idempotency_key: "batch-missing-catalog-1" },
       });
       assert.equal(missingCatalogResponse.statusCode, 409, missingCatalogResponse.payload);
       assert.equal(JSON.parse(missingCatalogResponse.payload).error_code, "CREDENTIAL_MODEL_CATALOG_REQUIRED");
@@ -186,9 +220,14 @@ if (!testDatabaseUrl) {
           credential_id: incompatibleTargetId,
           role_config_ids: [configId, incompatibleConfigId],
           mode: "bind",
+          idempotency_key: "batch-atomic-failure-1",
         },
       });
       assert.equal(atomicFailure.statusCode, 409, atomicFailure.payload);
+      const atomicFailureBody = JSON.parse(atomicFailure.payload) as { error_code?: string; repair?: { action?: string; role_config_id?: string } };
+      assert.equal(atomicFailureBody.error_code, "CREDENTIAL_CLI_INCOMPATIBLE");
+      assert.equal(atomicFailureBody.repair?.action, "choose_model");
+      assert.ok(atomicFailureBody.repair?.role_config_id);
       const [bindingAfterFailure] = await sql`SELECT credential_id FROM role_credentials WHERE role_config_id = ${configId} AND purpose = 'llm'`;
       assert.equal(bindingAfterFailure.credential_id, targetId, "compatibility failure rolls back every target");
     } finally {

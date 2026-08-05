@@ -3,6 +3,9 @@ import type { FastifyInstance } from "fastify";
 import {
   PlatformToolName,
   allowedPlatformTools,
+  CredentialBatchBindingImpact,
+  CredentialBatchBindingErrorCode,
+  CredentialBatchBindingRepairAction,
   CredentialBatchBindingRequest,
   parseModuleSelector,
   requiredPlatformTools,
@@ -40,6 +43,8 @@ import {
   projectJobEventPayload,
   projectJobPayload,
   projectCredentialProvider,
+  providerSupportsBaseUrl,
+  PROVIDER_CATALOG,
   sanitizeCredentialMetadata,
   UNKNOWN_PROVIDER_ERROR,
   type CredentialHealthErrorCategory,
@@ -395,7 +400,7 @@ export function registerRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: "canvas project mismatch", error_code: "PROJECT_MISMATCH" });
       }
       if (canvasScopeDecision(actorProjectId, canvas.project_id as string | null) === "mismatch") {
-        return reply.code(403).send({ error: "token 浠呴檺椤圭洰 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
       }
     }
     if (!actorProjectId) return;
@@ -567,7 +572,7 @@ export function registerRoutes(app: FastifyInstance) {
         auth_required: config.auth.required,
         authenticated: !config.auth.required,
         actor: actor
-          ? { type: actor.type, name: actor.name, role: actor.role ?? null, scopes: actor.scopes }
+          ? { type: actor.type, name: actor.name, role: actor.role ?? null, project_id: actor.projectId, scopes: actor.scopes }
           : null,
         user: null,
       };
@@ -577,14 +582,14 @@ export function registerRoutes(app: FastifyInstance) {
       return {
         auth_required: config.auth.required,
         authenticated: true,
-        actor: { type: actor.type, name: actor.name, role: actor.role ?? null, scopes: actor.scopes },
+        actor: { type: actor.type, name: actor.name, role: actor.role ?? null, project_id: actor.projectId, scopes: actor.scopes },
         user: row ? toPublicUser(row as Record<string, unknown>) : null,
       };
     }
     return {
       auth_required: config.auth.required,
       authenticated: true,
-      actor: { type: actor.type, name: actor.name, role: null, scopes: actor.scopes },
+      actor: { type: actor.type, name: actor.name, role: null, project_id: actor.projectId, scopes: actor.scopes },
       user: null,
     };
   });
@@ -923,7 +928,13 @@ export function registerRoutes(app: FastifyInstance) {
     return project;
   });
 
-  app.get("/projects", async () => sql`SELECT * FROM projects ORDER BY created_at DESC`);
+  app.get("/projects", async (req) => {
+    const actorProjectId = req.actor?.projectId ?? null;
+    return sql`
+      SELECT * FROM projects
+      WHERE (${actorProjectId}::uuid IS NULL OR id = ${actorProjectId})
+      ORDER BY created_at DESC`;
+  });
 
   // ---------- 本地项目 CRUD（阶段 A：Plane 可选化，本地库为唯一真相） ----------
   // 创建不再生成历史项目级 root 画布（deprecated canvas_id 仅占位，任务创建时才铸任务画布）
@@ -2460,11 +2471,12 @@ export function registerRoutes(app: FastifyInstance) {
         ORDER BY c.created_at DESC
         LIMIT 1
       ) c ON true
-      WHERE (${projectScope}::uuid IS NULL OR rc.project_id = ${projectScope})
+      WHERE (${projectScope}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${projectScope})
       ORDER BY rc.project_id NULLS FIRST, r.name`;
     return rows.map((row) => ({
       ...row,
       scope: row.project_id ? "project" : "global",
+      can_bind: !projectScope || String(row.project_id ?? "") === projectScope,
       credential_provider: row.credential_provider
         ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider
         : null,
@@ -4121,23 +4133,17 @@ export function registerRoutes(app: FastifyInstance) {
    * accepts an arbitrary provider string from a task/Agent.
    */
   app.get("/credentials/providers", async () => {
-    const catalog = [
-      { provider: "anthropic", label: "Anthropic", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
-      { provider: "kimi", label: "Kimi for Coding", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
-      { provider: "openai", label: "OpenAI compatible", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: true },
-      { provider: "openrouter", label: "OpenRouter", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: false },
-      { provider: "plane", label: "Plane", kind: "plane", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
-      { provider: "git", label: "Git repository", kind: "git", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
-      { provider: "docker", label: "OCI Registry", kind: "oci_registry", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
-    ] as const;
-    return catalog;
+    return PROVIDER_CATALOG;
   });
 
-  async function credentialImpact(id: string): Promise<Record<string, unknown>> {
+  async function credentialImpact(id: string, actorProjectId: string | null = null): Promise<Record<string, unknown>> {
     const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, terminalJobs] = await Promise.all([
       sql<{ count: number }[]>`
-        SELECT COUNT(DISTINCT role_config_id)::int AS count
-        FROM role_credentials WHERE credential_id = ${id}`,
+        SELECT COUNT(DISTINCT rc2.role_config_id)::int AS count
+        FROM role_credentials rc2
+        JOIN role_configs rc ON rc.id = rc2.role_config_id
+        WHERE rc2.credential_id = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})`,
       sql`
         SELECT DISTINCT rc.id AS role_config_id, rc.project_id, rc2.purpose,
                ar.name AS role_name, p.name AS project_name
@@ -4146,6 +4152,7 @@ export function registerRoutes(app: FastifyInstance) {
         JOIN agent_roles ar ON ar.id = rc.role_id
         LEFT JOIN projects p ON p.id = rc.project_id
         WHERE rc2.credential_id = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})
         ORDER BY rc.project_id NULLS FIRST, ar.name
         LIMIT 50`,
       sql<{ pending_unclaimed: number; active_frozen: number; terminal_historical: number }[]>`
@@ -4153,7 +4160,9 @@ export function registerRoutes(app: FastifyInstance) {
           COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_unclaimed,
           COUNT(*) FILTER (WHERE status IN ('claimed','provisioning','running','waiting_human'))::int AS active_frozen,
           COUNT(*) FILTER (WHERE status NOT IN ('pending','claimed','provisioning','running','waiting_human'))::int AS terminal_historical
-        FROM jobs WHERE agent_snapshot_json->>'credential_id' = ${id}`,
+        FROM jobs
+        WHERE agent_snapshot_json->>'credential_id' = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})`,
       sql`
         SELECT j.id, j.status, j.project_id, p.name AS project_name,
                j.agent_snapshot_json->>'name' AS role_name,
@@ -4161,7 +4170,9 @@ export function registerRoutes(app: FastifyInstance) {
                j.created_at
         FROM jobs j
         LEFT JOIN projects p ON p.id = j.project_id
-        WHERE j.agent_snapshot_json->>'credential_id' = ${id} AND j.status = 'pending'
+        WHERE j.agent_snapshot_json->>'credential_id' = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR j.project_id = ${actorProjectId})
+          AND j.status = 'pending'
         ORDER BY j.created_at DESC
         LIMIT 50`,
       sql`
@@ -4172,6 +4183,7 @@ export function registerRoutes(app: FastifyInstance) {
         FROM jobs j
         LEFT JOIN projects p ON p.id = j.project_id
         WHERE j.agent_snapshot_json->>'credential_id' = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR j.project_id = ${actorProjectId})
           AND j.status IN ('claimed','provisioning','running','waiting_human')
         ORDER BY j.created_at DESC
         LIMIT 50`,
@@ -4183,6 +4195,7 @@ export function registerRoutes(app: FastifyInstance) {
         FROM jobs j
         LEFT JOIN projects p ON p.id = j.project_id
         WHERE j.agent_snapshot_json->>'credential_id' = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR j.project_id = ${actorProjectId})
           AND j.status NOT IN ('pending','claimed','provisioning','running','waiting_human')
         ORDER BY j.created_at DESC
         LIMIT 50`,
@@ -4221,20 +4234,28 @@ export function registerRoutes(app: FastifyInstance) {
     };
   }
 
-  app.get("/credentials", async () => {
+  app.get("/credentials", async (req) => {
+    const actorProjectId = req.actor?.projectId ?? null;
     const [rows, usage] = await Promise.all([
-      sql`SELECT ${CRED_SAFE} FROM credentials ORDER BY created_at DESC`,
+      sql`
+        SELECT ${CRED_SAFE} FROM credentials
+        WHERE (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})
+        ORDER BY created_at DESC`,
       sql`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
                  agent_snapshot_json->>'model' AS model,
                  COUNT(*)::int AS count
           FROM jobs
           WHERE status IN ('claimed','provisioning','running')
+            AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
             AND agent_snapshot_json->>'credential_id' IS NOT NULL
           GROUP BY 1, 2`,
     ]);
     const bindingCounts = await sql<{ credential_id: string; count: number }[]>`
-      SELECT credential_id, COUNT(DISTINCT role_config_id)::int AS count
-      FROM role_credentials GROUP BY credential_id`;
+      SELECT rc2.credential_id, COUNT(DISTINCT rc2.role_config_id)::int AS count
+      FROM role_credentials rc2
+      JOIN role_configs rc ON rc.id = rc2.role_config_id
+      WHERE (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})
+      GROUP BY rc2.credential_id`;
     const bindingCountByCredential = new Map(bindingCounts.map((row) => [String(row.credential_id), Number(row.count)]));
     return rows.map((row) => {
       const own = usage.filter((item) => item.credential_id === row.id);
@@ -4248,9 +4269,13 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/credentials/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [row] = await sql`SELECT ${CRED_SAFE} FROM credentials WHERE id = ${id}`;
+    const actorProjectId = req.actor?.projectId ?? null;
+    const [row] = await sql`
+      SELECT ${CRED_SAFE} FROM credentials
+      WHERE id = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
-    const impact = await credentialImpact(id);
+    const impact = await credentialImpact(id, actorProjectId);
     return credentialView(row as Record<string, unknown>, {
       bound_role_config_count: (impact.role_configs as { count: number }).count,
       impact,
@@ -4259,9 +4284,13 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/credentials/:id/impact", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [row] = await sql`SELECT id FROM credentials WHERE id = ${id}`;
+    const actorProjectId = req.actor?.projectId ?? null;
+    const [row] = await sql`
+      SELECT id FROM credentials
+      WHERE id = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
-    return credentialImpact(id);
+    return credentialImpact(id, actorProjectId);
   });
 
   /**
@@ -4272,48 +4301,115 @@ export function registerRoutes(app: FastifyInstance) {
    */
   app.post("/credentials/batch-bind", async (req, reply) => {
     const parsed = CredentialBatchBindingRequest.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "invalid batch credential binding request" });
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error_code: "BATCH_REQUEST_INVALID",
+        error: "invalid batch credential binding request",
+        field: parsed.error.issues[0]?.path.join(".") || "body",
+      });
+    }
     const body = parsed.data;
     if (body.mode === "bind" && body.source_credential_id) {
-      return reply.code(400).send({ error: "source_credential_id is only valid for migration" });
+      return reply.code(400).send({
+        error_code: "BATCH_REQUEST_INVALID",
+        error: "source_credential_id is only valid for migration",
+        field: "source_credential_id",
+      });
     }
+    const actorProjectId = req.actor?.projectId ?? null;
     const roleConfigIds = [...new Set(body.role_config_ids)].sort();
     const credentialIds = [body.credential_id, ...(body.source_credential_id ? [body.source_credential_id] : [])].sort();
     const sourceCredentialId = body.mode === "migrate" ? body.source_credential_id ?? null : null;
+    const actorKey = `${req.actor?.type ?? "anonymous"}:${req.actor?.id ?? req.actor?.name ?? "anonymous"}`;
+    const idempotencyRequestId = `credential-batch:${actorKey}:${body.idempotency_key}`;
+    const idempotencyPayload = {
+      credential_id: body.credential_id,
+      role_config_ids: roleConfigIds,
+      mode: body.mode,
+      source_credential_id: body.source_credential_id ?? null,
+      model: body.model ?? null,
+      effect: body.effect,
+    };
+    const idempotencyPayloadSha256 = createHash("sha256")
+      .update(JSON.stringify(idempotencyPayload), "utf8")
+      .digest("hex");
 
-    type BindingGateErrorCode =
-      | "CREDENTIAL_NOT_ACTIVE"
-      | "CREDENTIAL_PROVIDER_INVALID"
-      | "CREDENTIAL_HEALTH_REQUIRED"
-      | "CREDENTIAL_MODEL_CATALOG_REQUIRED"
-      | "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED"
-      | "CREDENTIAL_MODEL_REQUIRED"
-      | "CREDENTIAL_MODEL_NOT_CURRENT";
+    type BindingErrorCode = z.infer<typeof CredentialBatchBindingErrorCode>;
     type BatchFailure = {
       ok: false;
       statusCode: number;
-      body: { error_code?: BindingGateErrorCode; error: string; repair?: { action: string; credential_id: string; role_config_id?: string } };
+      body: {
+        error_code: BindingErrorCode;
+        error: string;
+        field?: string;
+        repair?: { action: z.infer<typeof CredentialBatchBindingRepairAction>; credential_id: string; role_config_id?: string };
+      };
     };
     const gateFailure = (
       statusCode: number,
-      error_code: BindingGateErrorCode,
+      error_code: BindingErrorCode,
       error: string,
       credentialId: string,
-      action: string,
+      action?: z.infer<typeof CredentialBatchBindingRepairAction>,
       roleConfigId?: string,
+      field?: string,
     ): BatchFailure => ({
       ok: false,
       statusCode,
-      body: { error_code, error, repair: { action, credential_id: credentialId, ...(roleConfigId ? { role_config_id: roleConfigId } : {}) } },
+      body: {
+        error_code,
+        error,
+        ...(field ? { field } : {}),
+        ...(action ? { repair: { action, credential_id: credentialId, ...(roleConfigId ? { role_config_id: roleConfigId } : {}) } } : {}),
+      },
     });
     type BatchSuccess = {
       ok: true;
       impact: Record<string, unknown>;
       audit: { projectIds: string[]; targetName: string; sourceId: string | null };
     };
-    const result = await sql.begin(async (txRaw): Promise<BatchFailure | BatchSuccess> => {
+    let result: BatchFailure | BatchSuccess;
+    try {
+      result = await sql.begin(async (txRaw): Promise<BatchFailure | BatchSuccess> => {
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+
+      const [prior] = await tx`
+        SELECT action, after_json
+        FROM audit_logs
+        WHERE request_id = ${idempotencyRequestId}
+          AND action IN ('credential.batch_bind', 'credential.batch_migrate')
+        ORDER BY id DESC
+        LIMIT 1`;
+      if (prior) {
+        const priorAfter = prior.after_json && typeof prior.after_json === "object"
+          ? prior.after_json as Record<string, unknown>
+          : {};
+        if (priorAfter.idempotency_payload_sha256 !== idempotencyPayloadSha256) {
+          return {
+            ok: false,
+            statusCode: 409,
+            body: {
+              error_code: "IDEMPOTENCY_KEY_REUSED",
+              error: "idempotency_key was already used with a different binding payload",
+              field: "idempotency_key",
+            },
+          };
+        }
+        const replay = CredentialBatchBindingImpact.safeParse(priorAfter.impact);
+        if (!replay.success) {
+          return {
+            ok: false,
+            statusCode: 500,
+            body: { error_code: "BATCH_TRANSACTION_FAILED", error: "stored idempotency result is invalid" },
+          };
+        }
+        return {
+          ok: true,
+          impact: replay.data,
+          audit: { projectIds: [], targetName: "", sourceId: replay.data.source_credential_id },
+        };
+      }
 
       const credentials = await tx`
         SELECT id, name, kind, provider, project_id, status, public_metadata_json,
@@ -4323,9 +4419,12 @@ export function registerRoutes(app: FastifyInstance) {
         ORDER BY id
         FOR UPDATE`;
       const target = credentials.find((credential) => String(credential.id) === body.credential_id);
-      if (!target) return { ok: false, statusCode: 404, body: { error: "target credential not found" } };
+      if (!target) return gateFailure(404, "CREDENTIAL_NOT_FOUND", "target credential not found", body.credential_id, undefined, undefined, "credential_id");
+      if (actorProjectId && target.project_id && String(target.project_id) !== actorProjectId) {
+        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "target credential belongs to another project", body.credential_id, "choose_project_credential");
+      }
       if (String(target.kind) !== "llm_provider") {
-        return { ok: false, statusCode: 400, body: { error: "batch binding requires an LLM Provider credential" } };
+        return gateFailure(400, "CREDENTIAL_KIND_INVALID", "batch binding requires an LLM Provider credential", body.credential_id, undefined, undefined, "credential_id");
       }
       const targetProjection = projectCredentialProvider(target.kind, target.provider);
       if (!targetProjection.provider_valid || !isProviderKnown(String(target.provider))) {
@@ -4349,7 +4448,13 @@ export function registerRoutes(app: FastifyInstance) {
         ? credentials.find((credential) => String(credential.id) === body.source_credential_id)
         : undefined;
       if (body.mode === "migrate" && !source) {
-        return { ok: false, statusCode: 404, body: { error: "source credential not found" } };
+        return gateFailure(404, "CREDENTIAL_NOT_FOUND", "source credential not found", body.source_credential_id ?? body.credential_id, undefined, undefined, "source_credential_id");
+      }
+      if (source && actorProjectId && source.project_id && String(source.project_id) !== actorProjectId) {
+        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "source credential belongs to another project", String(source.id), "choose_project_credential");
+      }
+      if (source?.project_id && target.project_id && String(source.project_id) !== String(target.project_id)) {
+        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "source and target project credentials must belong to the same project", String(source.id), "choose_project_credential");
       }
 
       const configs = await tx`
@@ -4361,13 +4466,15 @@ export function registerRoutes(app: FastifyInstance) {
         ORDER BY rc.id
         FOR UPDATE OF rc`;
       if (configs.length !== roleConfigIds.length) {
-        return { ok: false, statusCode: 404, body: { error: "one or more RoleConfigs were not found" } };
+        return gateFailure(404, "ROLE_CONFIG_NOT_FOUND", "one or more RoleConfigs were not found", body.credential_id, "choose_project_role_config");
       }
-      if (req.actor?.projectId && configs.some((config) => String(config.project_id ?? "") !== req.actor?.projectId)) {
-        return { ok: false, statusCode: 403, body: { error: `token limited to project ${req.actor.projectId}` } };
+      if (actorProjectId && configs.some((config) => String(config.project_id ?? "") !== actorProjectId)) {
+        const offending = configs.find((config) => String(config.project_id ?? "") !== actorProjectId);
+        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "project-scoped actors may bind only their own project RoleConfigs", body.credential_id, "choose_project_role_config", offending ? String(offending.id) : undefined);
       }
       if (String(target.project_id ?? "") && configs.some((config) => String(config.project_id ?? "") !== String(target.project_id))) {
-        return { ok: false, statusCode: 400, body: { error: "project credential can only bind RoleConfigs in the same project" } };
+        const offending = configs.find((config) => String(config.project_id ?? "") !== String(target.project_id));
+        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "project credential can only bind RoleConfigs in the same project", body.credential_id, "choose_project_role_config", offending ? String(offending.id) : undefined);
       }
 
       const existingBindings = await tx`
@@ -4385,14 +4492,14 @@ export function registerRoutes(app: FastifyInstance) {
         const configId = String(configRow.id);
         const currentCredentialId = llmByConfig.get(configId) ?? null;
         if (body.mode === "migrate" && currentCredentialId !== body.source_credential_id) {
-          return { ok: false, statusCode: 409, body: { error: `RoleConfig ${configId} is not bound to the source credential` } };
+          return gateFailure(409, "ROLE_CONFIG_SOURCE_MISMATCH", `RoleConfig ${configId} is not bound to the source credential`, body.credential_id, "choose_project_role_config", configId);
         }
         const model = normalizedModel === undefined
           ? (typeof configRow.model === "string" && configRow.model.trim() ? configRow.model.trim() : null)
           : normalizedModel;
         const compatibilityError = validateCredentialCompatibility(String(configRow.agent_cli), String(target.provider));
         if (compatibilityError) {
-          return { ok: false, statusCode: 409, body: { error: `RoleConfig ${configId}: ${compatibilityError}` } };
+          return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${compatibilityError}`, body.credential_id, "choose_model", configId);
         }
         const allowed = allowedModelIds(target.public_metadata_json);
         const modelForGate = model ?? PLATFORM_DEFAULT_AGENT_MODEL;
@@ -4405,7 +4512,6 @@ export function registerRoutes(app: FastifyInstance) {
       }
 
       const refreshedPending: string[] = [];
-      const projectIds = [...new Set(configs.map((config) => String(config.project_id ?? "")).filter(Boolean))];
       for (const configRow of configs) {
         const configId = String(configRow.id);
         const model = normalizedModel === undefined
@@ -4454,56 +4560,79 @@ export function registerRoutes(app: FastifyInstance) {
           COUNT(*) FILTER (WHERE status NOT IN ('pending','claimed','provisioning','running','waiting_human'))::int AS terminal_historical_job_count
         FROM jobs
         WHERE agent_snapshot_json->>'role_config_id' = ANY(${roleConfigIds}::text[])`;
-      return {
-        ok: true,
-        impact: {
-          mode: body.mode,
-          effect: body.effect,
-          credential_id: body.credential_id,
-          source_credential_id: body.source_credential_id ?? null,
-          role_config_count: configs.length,
-          pending_job_count: Number(stats?.pending_job_count ?? 0),
-          refreshed_pending_job_count: refreshedPending.length,
-          active_frozen_job_count: Number(stats?.active_frozen_job_count ?? 0),
-          terminal_historical_job_count: Number(stats?.terminal_historical_job_count ?? 0),
-          role_configs: configs.map((config) => ({
-            role_config_id: config.id,
-            role_name: config.role_name,
-            scope: config.project_id ? "project" : "global",
-            project_id: config.project_id ?? null,
-            model: normalizedModel === undefined ? config.model ?? null : normalizedModel,
-          })),
-        },
-        audit: { projectIds, targetName: String(target.name), sourceId: body.source_credential_id ?? null },
-      };
-    });
-
-    if (!result.ok) return reply.code(result.statusCode).send(result.body);
-    await audit(req, {
-      action: result.audit.sourceId ? "credential.batch_migrate" : "credential.batch_bind",
-      resourceType: "credential",
-      resourceId: body.credential_id,
-      projectId: result.audit.projectIds.length === 1 ? result.audit.projectIds[0] : null,
-      after: {
+      const impact = {
         mode: body.mode,
         effect: body.effect,
-        role_config_count: result.impact.role_config_count,
-        pending_job_count: result.impact.pending_job_count,
-        refreshed_pending_job_count: result.impact.refreshed_pending_job_count,
-        active_frozen_job_count: result.impact.active_frozen_job_count,
-        terminal_historical_job_count: result.impact.terminal_historical_job_count,
-      },
-    });
-    return result.impact;
+        credential_id: body.credential_id,
+        source_credential_id: body.source_credential_id ?? null,
+        role_config_count: configs.length,
+        pending_job_count: Number(stats?.pending_job_count ?? 0),
+        refreshed_pending_job_count: refreshedPending.length,
+        active_frozen_job_count: Number(stats?.active_frozen_job_count ?? 0),
+        terminal_historical_job_count: Number(stats?.terminal_historical_job_count ?? 0),
+        role_configs: configs.map((config) => ({
+          role_config_id: config.id,
+          role_name: config.role_name,
+          scope: config.project_id ? "project" : "global",
+          project_id: config.project_id ?? null,
+          model: normalizedModel === undefined ? config.model ?? null : normalizedModel,
+        })),
+      };
+      const impactParsed = CredentialBatchBindingImpact.parse(impact);
+      const projectIds = [...new Set(configs.map((config) => String(config.project_id ?? "")).filter(Boolean))];
+      await tx`
+        INSERT INTO audit_logs ${tx({
+          actor_type: req.actor?.type ?? "anonymous",
+          actor_id: req.actor?.name ?? "anonymous",
+          action: body.mode === "migrate" ? "credential.batch_migrate" : "credential.batch_bind",
+          project_id: projectIds.length === 1 ? projectIds[0] : null,
+          resource_type: "credential",
+          resource_id: body.credential_id,
+          request_id: idempotencyRequestId,
+          ip: req.ip ?? null,
+          user_agent: (req.headers["user-agent"] as string)?.slice(0, 300) ?? null,
+          after_json: tx.json({ idempotency_payload_sha256: idempotencyPayloadSha256, impact: impactParsed } as never),
+          result: "ok",
+          error_code: null,
+        })}`;
+      return {
+        ok: true,
+        impact: impactParsed,
+        audit: { projectIds, targetName: String(target.name), sourceId: body.source_credential_id ?? null },
+      };
+      });
+    } catch (error) {
+      req.log.error({ err: error }, "credential batch binding transaction failed");
+      return reply.code(500).send({
+        error_code: "BATCH_TRANSACTION_FAILED",
+        error: "credential batch binding transaction failed",
+      });
+    }
+
+    if (!result.ok) return reply.code(result.statusCode).send(result.body);
+    return CredentialBatchBindingImpact.parse(result.impact);
   });
 
   /** Persist only the server-owned public metadata projection. */
   function normalizeCredentialMeta(raw: Record<string, unknown>, kind: string, provider: string): Record<string, unknown> {
-    return sanitizeCredentialMetadata(raw, { kind, provider, mode: "reject" });
+    const metadata = sanitizeCredentialMetadata(raw, { kind, provider, mode: "reject" });
+    if (Object.prototype.hasOwnProperty.call(metadata, "base_url") && !providerSupportsBaseUrl(kind, provider)) {
+      throw new Error("Provider catalog disallows base_url for this provider");
+    }
+    return metadata;
+  }
+
+  function credentialMutableToActor(projectId: unknown, actorProjectId: string | null): boolean {
+    return !actorProjectId || (projectId !== null && projectId !== undefined && String(projectId) === actorProjectId);
   }
 
   app.post("/credentials", async (req, reply) => {
     const body = CredentialBody.parse(req.body);
+    const actorProjectId = req.actor?.projectId ?? null;
+    if (actorProjectId && body.project_id && body.project_id !== actorProjectId) {
+      return reply.code(403).send({ error: "project-scoped actors must create credentials in their own project", error_code: "PROJECT_MISMATCH" });
+    }
+    const effectiveProjectId = actorProjectId ?? body.project_id ?? null;
     if (!isProviderAllowedForKind(body.kind, body.provider) || (body.kind !== "oci_registry" && !isProviderKnown(body.provider))) {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
@@ -4531,7 +4660,7 @@ export function registerRoutes(app: FastifyInstance) {
         name: body.name,
         kind: body.kind,
         provider: body.provider,
-        project_id: body.project_id ?? null,
+        project_id: effectiveProjectId,
         ciphertext: enc.ciphertext,
         nonce: enc.nonce,
         auth_tag: enc.auth_tag,
@@ -4546,7 +4675,7 @@ export function registerRoutes(app: FastifyInstance) {
       action: "credential.create",
       resourceType: "credential",
       resourceId: row.id as string,
-      projectId: body.project_id ?? null,
+      projectId: effectiveProjectId,
       after: {
         name: row.name,
         kind: row.kind,
@@ -4562,6 +4691,7 @@ export function registerRoutes(app: FastifyInstance) {
   // 密钥仍只能走 rotate；kind 创建后不可改
   app.patch("/credentials/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
     const body = z
       .object({
         name: z.string().trim().min(1).max(100).optional(),
@@ -4584,11 +4714,17 @@ export function registerRoutes(app: FastifyInstance) {
         SELECT id, name, kind, provider, project_id, public_metadata_json
         FROM credentials WHERE id = ${id} FOR UPDATE`;
       if (!existing) return null;
+      if (!credentialMutableToActor(existing.project_id, actorProjectId)) {
+        return { scope: true, error: "project-scoped actors may modify only their own project credentials" };
+      }
       const providerChanged = body.provider !== undefined && body.provider !== existing.provider;
       const targetProvider = body.provider ?? String(existing.provider);
       const targetProjectId = body.project_id !== undefined
         ? body.project_id
         : (existing.project_id as string | null) ?? null;
+      if (actorProjectId && targetProjectId !== actorProjectId) {
+        return { scope: true, error: "project-scoped actors may keep credentials only in their own project" };
+      }
       if (!isProviderAllowedForKind(String(existing.kind), targetProvider)
         || (existing.kind !== "oci_registry" && !isProviderKnown(targetProvider))) {
         return { error: UNKNOWN_PROVIDER_ERROR };
@@ -4686,6 +4822,7 @@ export function registerRoutes(app: FastifyInstance) {
       };
     });
     if (!result) return reply.code(404).send({ error: "credential not found" });
+    if ("scope" in result && result.scope) return reply.code(403).send({ error: result.error, error_code: "PROJECT_MISMATCH" });
     if ("conflict" in result && result.conflict) return reply.code(409).send({ error: result.error });
     if ("error" in result) return reply.code(400).send({ error: result.error });
     await audit(req, {
@@ -4716,7 +4853,13 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.post("/credentials/:id/rotate", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
     const body = z.object({ secret: z.string().min(1).max(4096) }).parse(req.body);
+    const [existing] = await sql`SELECT id, project_id FROM credentials WHERE id = ${id}`;
+    if (!existing) return reply.code(404).send({ error: "credential not found" });
+    if (!credentialMutableToActor(existing.project_id, actorProjectId)) {
+      return reply.code(403).send({ error: "project-scoped actors may rotate only their own project credentials", error_code: "PROJECT_MISMATCH" });
+    }
     let enc: Encrypted;
     try {
       enc = encryptSecret(body.secret);
@@ -4732,8 +4875,15 @@ export function registerRoutes(app: FastifyInstance) {
         last_tested_at = NULL, model_catalog_json = '[]'::jsonb,
         model_catalog_fetched_at = NULL
       WHERE id = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
       RETURNING ${CRED_SAFE}`;
-    if (!row) return reply.code(404).send({ error: "credential not found" });
+    if (!row) {
+      const [current] = await sql`SELECT id, project_id FROM credentials WHERE id = ${id}`;
+      if (current && !credentialMutableToActor(current.project_id, actorProjectId)) {
+        return reply.code(403).send({ error: "credential project scope changed during rotation", error_code: "PROJECT_MISMATCH" });
+      }
+      return reply.code(409).send({ error: "credential changed during rotation; retry", error_code: "CREDENTIAL_CHANGED" });
+    }
     await audit(req, {
       action: "credential.rotate",
       resourceType: "credential",
@@ -4751,10 +4901,25 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.post("/credentials/:id/status", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
     const body = z.object({ status: z.enum(["active", "disabled", "rotation_required"]) }).parse(req.body);
+    const [existing] = await sql`SELECT id, project_id FROM credentials WHERE id = ${id}`;
+    if (!existing) return reply.code(404).send({ error: "credential not found" });
+    if (!credentialMutableToActor(existing.project_id, actorProjectId)) {
+      return reply.code(403).send({ error: "project-scoped actors may change status only for their own project credentials", error_code: "PROJECT_MISMATCH" });
+    }
     const [row] = await sql`
-      UPDATE credentials SET status = ${body.status} WHERE id = ${id} RETURNING ${CRED_SAFE}`;
-    if (!row) return reply.code(404).send({ error: "credential not found" });
+      UPDATE credentials SET status = ${body.status}
+      WHERE id = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
+      RETURNING ${CRED_SAFE}`;
+    if (!row) {
+      const [current] = await sql`SELECT id, project_id FROM credentials WHERE id = ${id}`;
+      if (current && !credentialMutableToActor(current.project_id, actorProjectId)) {
+        return reply.code(403).send({ error: "credential project scope changed during status update", error_code: "PROJECT_MISMATCH" });
+      }
+      return reply.code(409).send({ error: "credential changed during status update; retry", error_code: "CREDENTIAL_CHANGED" });
+    }
     await audit(req, {
       action: "credential.status",
       resourceType: "credential",
@@ -4767,9 +4932,13 @@ export function registerRoutes(app: FastifyInstance) {
   // 连接测试：用解密后的凭据对 provider 做一次轻量调用（明文不出进程）
   app.post("/credentials/:id/test", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
     const [cred] = await sql`
       SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (!credentialMutableToActor(cred.project_id, actorProjectId)) {
+      return reply.code(403).send({ error: "project-scoped actors may test only their own project credentials", error_code: "PROJECT_MISMATCH" });
+    }
     if (!projectCredentialProvider(cred.kind, cred.provider).provider_valid) {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
@@ -4784,6 +4953,7 @@ export function registerRoutes(app: FastifyInstance) {
         AND key_version = ${cred.key_version}
         AND provider = ${cred.provider}
         AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+        AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
       RETURNING id`;
     if (!updated) {
       return reply.code(409).send({ error: "Credential 在测试期间已变更，请重试" });
@@ -4801,7 +4971,12 @@ export function registerRoutes(app: FastifyInstance) {
   // Persisted model catalog read (no Provider call, no secret material).
   app.get("/credentials/:id/models", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [cred] = await sql`SELECT id, kind, provider, public_metadata_json, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${id}`;
+    const actorProjectId = req.actor?.projectId ?? null;
+    const [cred] = await sql`
+      SELECT id, project_id, kind, provider, public_metadata_json, model_catalog_json, model_catalog_fetched_at
+      FROM credentials
+      WHERE id = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
     const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
@@ -4821,13 +4996,18 @@ export function registerRoutes(app: FastifyInstance) {
   // RoleConfig write path still calls the same shared validator under lock.
   app.get("/credentials/:id/compatibility", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
     const queryResult = z.object({
       agent_cli: z.enum(["claude-code", "open-code", "codex"]).default("claude-code"),
       model: z.string().trim().min(1).max(200).optional(),
     }).safeParse(req.query);
     if (!queryResult.success) return reply.code(400).send({ error: "兼容性查询参数非法" });
     const query = queryResult.data;
-    const [cred] = await sql`SELECT id, kind, provider, public_metadata_json FROM credentials WHERE id = ${id}`;
+    const [cred] = await sql`
+      SELECT id, project_id, kind, provider, public_metadata_json
+      FROM credentials
+      WHERE id = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
     const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
@@ -4857,8 +5037,12 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.post("/credentials/:id/models", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
     const [cred] = await sql`SELECT * FROM credentials WHERE id = ${id}`;
     if (!cred) return reply.code(404).send({ error: "credential not found" });
+    if (!credentialMutableToActor(cred.project_id, actorProjectId)) {
+      return reply.code(403).send({ error: "project-scoped actors may refresh only their own project credentials", error_code: "PROJECT_MISMATCH" });
+    }
     if (cred.kind !== "llm_provider") return reply.code(400).send({ error: "该 Credential 不是 LLM Provider" });
     if (!projectCredentialProvider(cred.kind, cred.provider).provider_valid) {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
@@ -4876,6 +5060,7 @@ export function registerRoutes(app: FastifyInstance) {
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
           AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+          AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
         RETURNING id`;
       if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
       await audit(req, {
@@ -4903,6 +5088,7 @@ export function registerRoutes(app: FastifyInstance) {
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
           AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+          AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
         RETURNING id`;
       if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
       await audit(req, {

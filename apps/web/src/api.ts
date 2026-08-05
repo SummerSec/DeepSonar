@@ -510,6 +510,8 @@ export interface BindableRoleConfig {
   credential_provider: string | null;
   credential_provider_valid: boolean | null;
   credential_status: string | null;
+  /** Project-scoped actors may inspect global RoleConfigs but cannot mutate/bind them. */
+  can_bind: boolean;
 }
 
 export interface ApiTokenCreated extends ApiToken {
@@ -956,6 +958,7 @@ export interface AuthMe {
     type: string;
     name: string;
     role: string | null;
+    project_id?: string | null;
     scopes: string[];
   } | null;
   user: PublicUser | null;

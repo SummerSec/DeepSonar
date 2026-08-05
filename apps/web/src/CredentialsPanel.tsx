@@ -1,6 +1,6 @@
 import { ArrowsClockwise, Check, Key, MagnifyingGlass, PencilSimple, Plugs, Prohibit } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type CredentialModels, type Project, type ProviderCredential } from "./api";
+import { api, type CredentialModels, type Project, type ProviderAccountCatalogItemView, type ProviderCredential } from "./api";
 import { ProviderAccountFlow } from "./ProviderAccountFlow";
 
 /**
@@ -31,6 +31,7 @@ const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
 export function CredentialsPanel() {
   const [creds, setCreds] = useState<ProviderCredential[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [providerCatalog, setProviderCatalog] = useState<ProviderAccountCatalogItemView[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
@@ -76,6 +77,7 @@ export function CredentialsPanel() {
       setSelectedIds((current) => new Set([...current].filter((id) => list.some((credential) => credential.id === id))));
     }).catch((e) => setError(String(e)));
     api.projects().then(setProjects).catch(() => {});
+    api.credentialProviders().then(setProviderCatalog).catch(() => {});
   };
   useEffect(load, []);
 
@@ -161,7 +163,8 @@ export function CredentialsPanel() {
       const current = creds.find((c) => c.id === id);
       const nextMeta: Record<string, unknown> = { ...(current?.public_metadata_json ?? {}) };
       const url = editBaseUrl.trim().replace(/\/+$/, "");
-      if (url) nextMeta.base_url = url;
+      const supportsBaseUrl = providerCatalog.find((item) => item.provider === editProvider)?.supports_base_url === true;
+      if (url && supportsBaseUrl) nextMeta.base_url = url;
       else delete nextMeta.base_url;
       const models = Object.keys(editModelLimits).sort();
       if (models.length) {
@@ -375,6 +378,7 @@ export function CredentialsPanel() {
                   <input
                     value={editBaseUrl}
                     onChange={(e) => setEditBaseUrl(e.target.value)}
+                    disabled={providerCatalog.find((item) => item.provider === editProvider)?.supports_base_url !== true}
                     placeholder={PROVIDERS.find((p) => p.value === c.provider)?.baseUrlHint
                       ? `base_url：${PROVIDERS.find((p) => p.value === c.provider)?.baseUrlHint}`
                       : "base_url（留空=用 provider 默认）"}
@@ -385,7 +389,7 @@ export function CredentialsPanel() {
                     <>
                       <select
                         value={editProvider}
-                        onChange={(e) => setEditProvider(e.target.value)}
+                        onChange={(e) => { const provider = e.target.value; setEditProvider(provider); if (providerCatalog.find((item) => item.provider === provider)?.supports_base_url !== true) setEditBaseUrl(""); }}
                         className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-zinc-200 outline-none"
                         aria-label="Provider"
                       >

@@ -30,3 +30,22 @@ test("credential OpenAPI exposes safe metadata, health and impact/model APIs", (
     enum: ["unknown", "ok", "error"],
   });
 });
+
+test("credential batch and picker OpenAPI contracts are strict and typed", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, unknown>>;
+  const providers = paths["/credentials/providers"]?.get as Record<string, any>;
+  const bindable = paths["/role-configs/bindable"]?.get as Record<string, any>;
+  assert.equal(providers.responses["200"].content["application/json"].schema.type, "array");
+  assert.equal(bindable.responses["200"].content["application/json"].schema.type, "array");
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  assert.equal(schemas.ProviderAccountCatalogItem.additionalProperties, false);
+  assert.equal(schemas.CredentialBatchBindingRequest.additionalProperties, false);
+  assert.ok((schemas.CredentialBatchBindingRequest.required as string[]).includes("idempotency_key"));
+  assert.equal(schemas.CredentialBatchBindingImpact.additionalProperties, false);
+  assert.equal(schemas.CredentialBatchBindingError.additionalProperties, false);
+  assert.equal(schemas.CredentialBatchBindingImpact.properties.role_configs.items.additionalProperties, false);
+  for (const status of ["400", "403", "404", "409", "500"]) {
+    assert.ok((paths["/credentials/batch-bind"]?.post as Record<string, any>).responses[status]);
+  }
+});

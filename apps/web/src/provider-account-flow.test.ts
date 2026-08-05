@@ -13,6 +13,10 @@ test("Provider account flow keeps the happy path on one surface", () => {
     "credentialCompatibility",
     "bindableRoleConfigs",
     "bindCredentialsBatch",
+    "authMe",
+    "can_bind",
+    "supports_base_url",
+    "idempotency_key",
     "new_jobs_only",
     "refresh_pending",
     "refreshed_pending_job_count",
@@ -22,6 +26,8 @@ test("Provider account flow keeps the happy path on one surface", () => {
   }
   assert.match(flow, /setCreateSecret\(\"\"\)/);
   assert.match(flow, /(?:active|running) snapshots remain frozen/);
+  assert.match(flow, /disabled=\{!roleConfig\.can_bind\}/);
+  assert.match(flow, /Project-scoped actors can create accounts only in their own project/);
 });
 
 test("CredentialsPanel does not render the legacy duplicate create surface", () => {

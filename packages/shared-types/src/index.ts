@@ -244,7 +244,7 @@ export const ProviderAccountCatalogItem = z.object({
   auth_methods: z.array(z.enum(["api_key", "oauth", "cli_login"])).min(1),
   compatible_agent_cli: z.array(z.string().min(1).max(50)),
   supports_base_url: z.boolean(),
-});
+}).strict();
 export type ProviderAccountCatalogItem = z.infer<typeof ProviderAccountCatalogItem>;
 
 /** One transaction applies an account binding/migration to many RoleConfigs. */
@@ -255,6 +255,7 @@ export const CredentialBatchBindingRequest = z.object({
   source_credential_id: z.string().uuid().optional(),
   model: z.string().trim().min(1).max(200).nullable().optional(),
   effect: z.enum(["new_jobs_only", "refresh_pending"]).default("new_jobs_only"),
+  idempotency_key: z.string().trim().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/u),
 }).superRefine((value, ctx) => {
   if (new Set(value.role_config_ids).size !== value.role_config_ids.length) {
     ctx.addIssue({ code: "custom", path: ["role_config_ids"], message: "role_config_ids must be unique" });
@@ -265,7 +266,7 @@ export const CredentialBatchBindingRequest = z.object({
   if (value.source_credential_id && value.source_credential_id === value.credential_id) {
     ctx.addIssue({ code: "custom", path: ["source_credential_id"], message: "source and target credentials must differ" });
   }
-});
+}).strict();
 export type CredentialBatchBindingRequest = z.infer<typeof CredentialBatchBindingRequest>;
 
 export const CredentialBatchBindingImpact = z.object({
@@ -285,30 +286,51 @@ export const CredentialBatchBindingImpact = z.object({
     project_id: z.string().uuid().nullable(),
     model: z.string().nullable(),
   })).max(100),
-});
+}).strict();
 export type CredentialBatchBindingImpact = z.infer<typeof CredentialBatchBindingImpact>;
 
 /** Stable, server-owned repair guidance returned before a binding transaction mutates state. */
 export const CredentialBatchBindingErrorCode = z.enum([
+  "BATCH_REQUEST_INVALID",
+  "BATCH_TRANSACTION_FAILED",
+  "CREDENTIAL_NOT_FOUND",
+  "CREDENTIAL_KIND_INVALID",
   "CREDENTIAL_NOT_ACTIVE",
   "CREDENTIAL_PROVIDER_INVALID",
+  "CREDENTIAL_CLI_INCOMPATIBLE",
   "CREDENTIAL_HEALTH_REQUIRED",
   "CREDENTIAL_MODEL_CATALOG_REQUIRED",
   "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED",
   "CREDENTIAL_MODEL_REQUIRED",
   "CREDENTIAL_MODEL_NOT_CURRENT",
+  "ROLE_CONFIG_NOT_FOUND",
+  "ROLE_CONFIG_SOURCE_MISMATCH",
+  "PROJECT_SCOPE_FORBIDDEN",
+  "IDEMPOTENCY_KEY_REUSED",
 ]);
 export type CredentialBatchBindingErrorCode = z.infer<typeof CredentialBatchBindingErrorCode>;
+
+export const CredentialBatchBindingRepairAction = z.enum([
+  "activate_credential",
+  "repair_provider",
+  "test_connection",
+  "discover_models",
+  "choose_model",
+  "choose_project_credential",
+  "choose_project_role_config",
+]);
+export type CredentialBatchBindingRepairAction = z.infer<typeof CredentialBatchBindingRepairAction>;
 
 export const CredentialBatchBindingError = z.object({
   error_code: CredentialBatchBindingErrorCode,
   error: z.string().min(1).max(300),
+  field: z.string().min(1).max(80).optional(),
   repair: z.object({
-    action: z.enum(["activate_credential", "repair_provider", "test_connection", "discover_models", "choose_model"]),
+    action: CredentialBatchBindingRepairAction,
     credential_id: z.string().uuid(),
     role_config_id: z.string().uuid().optional(),
   }).optional(),
-});
+}).strict();
 export type CredentialBatchBindingError = z.infer<typeof CredentialBatchBindingError>;
 
 /** Trusted image identity only; mutable refs and arbitrary OCI text are intentionally omitted. */

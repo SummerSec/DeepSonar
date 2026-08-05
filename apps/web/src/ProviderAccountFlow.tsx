@@ -21,6 +21,10 @@ import {
 
 type FlowStep = "account" | "model" | "roles" | "effect";
 
+function newBatchIdempotencyKey(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `provider-batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const cliLabel: Record<string, string> = {
   "claude-code": "Claude Code",
   "open-code": "OpenCode",
@@ -67,6 +71,7 @@ export function ProviderAccountFlow({
   const [roleConfigs, setRoleConfigs] = useState<BindableRoleConfig[]>([]);
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
   const [selectedRoleIds, setSelectedRoleIds] = useState<Set<string>>(() => new Set());
+  const [actorProjectId, setActorProjectId] = useState<string | null>(null);
   const [sourceCredentialId, setSourceCredentialId] = useState("");
   const [mode, setMode] = useState<"bind" | "migrate">("bind");
   const [effect, setEffect] = useState<"new_jobs_only" | "refresh_pending">("new_jobs_only");
@@ -87,6 +92,7 @@ export function ProviderAccountFlow({
   const [createProjectId, setCreateProjectId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [catalogError, setCatalogError] = useState("");
+  const [batchIdempotencyKey, setBatchIdempotencyKey] = useState(newBatchIdempotencyKey);
 
   const selectedCredential = credentials.find((credential) => credential.id === selectedCredentialId) ?? null;
   const models = useMemo(() => modelIds(selectedCredential), [selectedCredential]);
@@ -100,6 +106,7 @@ export function ProviderAccountFlow({
   }, [credentials, selectedRoles]);
   const targetProvider = selectedCredential?.provider ?? "";
   const targetCatalog = catalog.find((item) => item.provider === targetProvider) ?? null;
+  const createCatalog = catalog.find((item) => item.provider === createProvider) ?? null;
   const currentCatalog = useMemo(() => rawModelCatalog(selectedCredential), [selectedCredential]);
   const connectionHealthy = Boolean(
     selectedCredential
@@ -136,11 +143,25 @@ export function ProviderAccountFlow({
     if (!selectedModel || !models.includes(selectedModel)) return true;
     return false;
   });
+  const unbindableSelectedRoles = selectedRoles.filter((roleConfig) => !roleConfig.can_bind);
 
   useEffect(() => {
+    api.authMe().then((me) => setActorProjectId(me.actor?.project_id ?? null)).catch(() => setActorProjectId(null));
     api.credentialProviders().then(setCatalog).catch(() => {});
     api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    setCreateProjectId(actorProjectId ?? "");
+  }, [actorProjectId]);
+
+  useEffect(() => {
+    setSelectedRoleIds((current) => {
+      const allowed = new Set(roleConfigs.filter((roleConfig) => roleConfig.can_bind).map((roleConfig) => roleConfig.id));
+      const next = new Set([...current].filter((id) => allowed.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [roleConfigs]);
 
   useEffect(() => {
     if (!selectedCredentialId && credentials.length > 0) {
@@ -173,6 +194,10 @@ export function ProviderAccountFlow({
 
   const createAccount = async () => {
     if (!createName.trim() || !createSecret.trim()) return;
+    if (actorProjectId && createProjectId !== actorProjectId) {
+      setError("Project-scoped actors can create accounts only in their own project.");
+      return;
+    }
     setBusy(true);
     setError("");
     setNotice("");
@@ -182,8 +207,10 @@ export function ProviderAccountFlow({
         kind: "llm_provider",
         provider: createProvider,
         secret: createSecret,
-        project_id: createProjectId || null,
-        metadata: createBaseUrl.trim() ? { base_url: createBaseUrl.trim().replace(/\/+$/u, "") } : {},
+        project_id: actorProjectId ?? (createProjectId || null),
+        metadata: createCatalog?.supports_base_url && createBaseUrl.trim()
+          ? { base_url: createBaseUrl.trim().replace(/\/+$/u, "") }
+          : {},
       });
       setCreateSecret("");
       setCreateName("");
@@ -238,6 +265,8 @@ export function ProviderAccountFlow({
   };
 
   const toggleRole = (id: string) => {
+    const roleConfig = roleConfigs.find((item) => item.id === id);
+    if (!roleConfig?.can_bind) return;
     setSelectedRoleIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -271,6 +300,7 @@ export function ProviderAccountFlow({
     setImpact(null);
     try {
       if (bindingGateReason) throw new Error(bindingGateReason);
+      if (unbindableSelectedRoles.length > 0) throw new Error("Project-scoped actors may bind only their own project RoleConfigs.");
       if (mode === "migrate" && !sourceCredentialId) throw new Error("Choose the source account to migrate");
       if (incompatibleRoles.length > 0) throw new Error("One or more selected RoleConfigs are incompatible; choose a compatible model or account");
       const checks = await Promise.all(selectedRoles.map((roleConfig) =>
@@ -285,12 +315,14 @@ export function ProviderAccountFlow({
         ...(mode === "migrate" ? { source_credential_id: sourceCredentialId } : {}),
         ...(model === "__keep__" ? {} : { model: model || null }),
         effect,
+        idempotency_key: batchIdempotencyKey,
       });
       setImpact(result);
       setNotice(effect === "refresh_pending"
         ? `Applied atomically. ${result.refreshed_pending_job_count} pending snapshot(s) refreshed; running snapshots remain frozen.`
         : "Applied atomically for new jobs. Existing pending and running snapshots remain frozen.");
       setStep("effect");
+      setBatchIdempotencyKey(newBatchIdempotencyKey());
       api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
       onChanged();
     } catch (e) {
@@ -345,14 +377,19 @@ export function ProviderAccountFlow({
             <div className="provider-flow-create">
               <div className="provider-flow-create-grid">
                 <input value={createName} onChange={(event) => setCreateName(event.target.value)} className="theme-input-surface" placeholder="Account label, e.g. team-anthropic" aria-label="Account label" />
-                <select value={createProvider} onChange={(event) => setCreateProvider(event.target.value)} className="theme-input-surface" aria-label="Provider">
+                <select value={createProvider} onChange={(event) => { const provider = event.target.value; setCreateProvider(provider); if (!catalog.find((item) => item.provider === provider)?.supports_base_url) setCreateBaseUrl(""); }} className="theme-input-surface" aria-label="Provider">
                   {(catalog.length ? catalog.filter((item) => item.kind === "llm_provider") : [{ provider: "anthropic", label: "Anthropic" }]).map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}
                 </select>
               </div>
               <input value={createSecret} onChange={(event) => setCreateSecret(event.target.value)} type="password" className="theme-input-surface" placeholder="API key (shown only for create/rotate)" aria-label="API key" />
               <div className="provider-flow-create-grid">
-                <input value={createBaseUrl} onChange={(event) => setCreateBaseUrl(event.target.value)} className="theme-input-surface" placeholder="Optional compatible base URL" aria-label="Base URL" />
-                <select value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)} className="theme-input-surface" aria-label="Account scope"><option value="">Global account</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+                <input value={createBaseUrl} onChange={(event) => setCreateBaseUrl(event.target.value)} disabled={!createCatalog?.supports_base_url} className="theme-input-surface" placeholder={createCatalog?.supports_base_url ? "Optional compatible base URL" : "Base URL is not supported for this provider"} aria-label="Base URL" />
+                <select value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)} disabled={Boolean(actorProjectId)} className="theme-input-surface" aria-label="Account scope">
+                  {!actorProjectId && <option value="">Global account</option>}
+                  {actorProjectId
+                    ? <option value={actorProjectId}>Project account</option>
+                    : projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
               </div>
               <button type="button" onClick={createAccount} disabled={busy || !createName.trim() || !createSecret.trim()} className="provider-flow-apply"><LockKey size={14} /> Encrypt and add account</button>
             </div>
@@ -423,11 +460,11 @@ export function ProviderAccountFlow({
             const incompatible = Boolean(selectedCredential && targetCatalog && !targetCatalog.compatible_agent_cli.includes(roleConfig.agent_cli));
             return (
               <label key={roleConfig.id} className={`provider-flow-role ${selected ? "is-selected" : ""}`}>
-                <input type="checkbox" checked={selected} onChange={() => toggleRole(roleConfig.id)} />
+                <input type="checkbox" checked={selected} disabled={!roleConfig.can_bind} onChange={() => toggleRole(roleConfig.id)} title={!roleConfig.can_bind ? "Global RoleConfig is visible but project actors may bind only own project RoleConfigs" : undefined} />
                 <span className="provider-flow-role-check" aria-hidden><Check size={11} weight="bold" /></span>
                 <span className="provider-flow-role-main"><strong>{roleConfig.role_title || roleConfig.role_name}</strong><small>{roleConfig.scope === "project" ? roleConfig.project_name ?? "Project" : "Global default"} · {cliLabel[roleConfig.agent_cli] ?? roleConfig.agent_cli}</small></span>
                 <span className="provider-flow-role-model">{roleConfig.model ?? "default model"}</span>
-                <span className={`provider-flow-role-status ${incompatible ? "is-warning" : ""}`} title={incompatible ? `Choose a Provider compatible with ${cliLabel[roleConfig.agent_cli] ?? roleConfig.agent_cli}` : undefined}>{incompatible ? "CLI mismatch · repair" : roleConfig.credential_name ? `bound · ${roleConfig.credential_name}` : "unbound"}</span>
+                <span className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind ? "is-warning" : ""}`} title={!roleConfig.can_bind ? "Global RoleConfig is visible but project actors may bind only own project RoleConfigs" : incompatible ? `Choose a Provider compatible with ${cliLabel[roleConfig.agent_cli] ?? roleConfig.agent_cli}` : undefined}>{!roleConfig.can_bind ? "read-only · project scope" : incompatible ? "CLI mismatch · repair" : roleConfig.credential_name ? `bound · ${roleConfig.credential_name}` : "unbound"}</span>
               </label>
             );
           })}
@@ -455,7 +492,7 @@ export function ProviderAccountFlow({
           </div>
         </div>
         {incompatibleRoles.length > 0 && selectedRoleIds.size > 0 && <div className="provider-flow-warning"><Warning size={14} /> {incompatibleRoles.length} selected RoleConfig{incompatibleRoles.length === 1 ? " is" : "s are"} incompatible. Choose a compatible account/model before applying.</div>}
-        <button type="button" onClick={apply} disabled={busy || !selectedCredential || selectedRoleIds.size === 0 || Boolean(bindingGateReason) || incompatibleRoles.length > 0} className="provider-flow-apply">
+        <button type="button" onClick={apply} disabled={busy || !selectedCredential || selectedRoleIds.size === 0 || Boolean(bindingGateReason) || incompatibleRoles.length > 0 || unbindableSelectedRoles.length > 0} className="provider-flow-apply">
           {busy ? "Checking compatibility…" : <><GitBranch size={15} /> Apply to selected RoleConfigs</>}
         </button>
       </div>
