@@ -177,8 +177,8 @@ if (!testDatabaseUrl) {
       await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'credential security')`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${canvasId}, ${projectId}, 'credential security', ${sql.json({})})`;
       await sql`
-        INSERT INTO agent_roles (id, name, title, description, builtin, kind)
-        VALUES (${roleId}, 'security_test', 'Security Test', 'integration fixture', false, 'role')`;
+        INSERT INTO agent_roles (id, name, title, description, builtin, kind, ui_color)
+        VALUES (${roleId}, 'security_test', 'Security Test', 'integration fixture', false, 'role', '#c084fc')`;
       await sql`
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
         VALUES (${roleConfigId}, ${roleId}, NULL, 'claude-code', 'model-a')`;
@@ -321,8 +321,8 @@ if (!testDatabaseUrl) {
           created_by: "legacy-fixture",
         })}`;
       await sql`
-        INSERT INTO agent_roles (id, name, title, description, builtin, kind)
-        VALUES (${legacyRoleId}, 'legacy_projection', 'Legacy Projection', 'integration fixture', false, 'role')`;
+        INSERT INTO agent_roles (id, name, title, description, builtin, kind, ui_color)
+        VALUES (${legacyRoleId}, 'legacy_projection', 'Legacy Projection', 'integration fixture', false, 'role', '#93c5fd')`;
       await sql`
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
         VALUES (${legacyRoleConfigId}, ${legacyRoleId}, NULL, 'codex', 'model-a')`;

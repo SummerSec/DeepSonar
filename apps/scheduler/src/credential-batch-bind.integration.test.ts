@@ -54,9 +54,9 @@ if (!testDatabaseUrl) {
       const roleId = randomUUID();
       const incompatibleRoleId = randomUUID();
       await sql`
-        INSERT INTO agent_roles (id, name, title, kind)
-        VALUES (${roleId}, ${`batch-role-${roleId}`}, 'batch role', 'role'),
-               (${incompatibleRoleId}, ${`batch-incompatible-${incompatibleRoleId}`}, 'batch incompatible', 'role')`;
+        INSERT INTO agent_roles (id, name, title, kind, ui_color)
+        VALUES (${roleId}, ${`batch-role-${roleId}`}, 'batch role', 'role', '#c084fc'),
+               (${incompatibleRoleId}, ${`batch-incompatible-${incompatibleRoleId}`}, 'batch incompatible', 'role', '#93c5fd')`;
       const configId = randomUUID();
       const incompatibleConfigId = randomUUID();
       const refreshConfigId = randomUUID();
