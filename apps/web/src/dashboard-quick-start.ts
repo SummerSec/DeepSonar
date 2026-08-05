@@ -7,8 +7,53 @@ import type { ReadinessCheck, ReadinessFixAction, ReadinessResponse } from "@dee
 
 export const NEW_PROJECT = "__new_project__" as const;
 export const LAST_PROJECT_STORAGE_KEY = "deepsonar:last-project-id";
+export const QUICK_START_INTENT_PARAM = "intent";
+export const QUICK_START_INTENT_VALUE = "new-project";
 
 export type NetworkOverride = "inherit" | "allow" | "deny";
+
+/**
+ * The project page owns the quick-start entry point. Keep the URL contract
+ * small and deterministic so refresh/back never depends on React state or a
+ * draft stored in the browser.
+ */
+export function hasNewProjectIntent(search: string | URLSearchParams): boolean {
+  const params = typeof search === "string" ? new URLSearchParams(search) : search;
+  return params.get(QUICK_START_INTENT_PARAM) === QUICK_START_INTENT_VALUE;
+}
+
+export function newProjectIntentSearch(search: string | URLSearchParams, enabled: boolean): string {
+  const params = typeof search === "string" ? new URLSearchParams(search) : new URLSearchParams(search);
+  if (enabled) {
+    params.set(QUICK_START_INTENT_PARAM, QUICK_START_INTENT_VALUE);
+  } else {
+    params.delete(QUICK_START_INTENT_PARAM);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export function hasActiveProjects(projects: readonly Pick<Project, "status">[]): boolean {
+  return projects.some((project) => project.status === "active");
+}
+
+export interface QuickStartVisibilityInput {
+  projects: readonly Pick<Project, "status">[];
+  loaded: boolean;
+  loadError: unknown | null;
+  forced: boolean;
+}
+
+/**
+ * Explicit intent always wins. Automatic cold-start is only safe after a
+ * successful project-list response; an empty array caused by a load failure
+ * must not be mistaken for an empty account.
+ */
+export function shouldShowQuickStartRail(input: QuickStartVisibilityInput): boolean {
+  if (input.forced) return true;
+  if (!input.loaded || input.loadError) return false;
+  return !hasActiveProjects(input.projects);
+}
 
 export const QUICK_START_PRESETS = [
   {

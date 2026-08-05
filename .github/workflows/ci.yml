@@ -59,6 +59,9 @@ jobs:
       - name: Authenticated report download web unit
         run: pnpm ci:unit:web-report-download
 
+      - name: Projects intent launch web unit
+        run: pnpm ci:unit:web-quick-start
+
       - name: Report download OpenAPI unit
         run: pnpm ci:unit:report-download-openapi
 

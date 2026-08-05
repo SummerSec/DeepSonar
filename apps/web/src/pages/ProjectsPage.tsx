@@ -10,8 +10,14 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
+import { IntentLaunchRail } from "../components/IntentLaunchRail";
+import {
+  hasNewProjectIntent,
+  newProjectIntentSearch,
+  shouldShowQuickStartRail,
+} from "../dashboard-quick-start";
 import {
   EmptyState,
   FilterSelect,
@@ -33,12 +39,10 @@ export function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
-  const [creating, setCreating] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "" });
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", description: "" });
 
@@ -67,6 +71,36 @@ export function ProjectsPage() {
   const archivedCount = projects.filter((p) => p.status === "archived").length;
   const activeCount = projects.filter((p) => p.status === "active").length;
   const planeCount = projects.filter((p) => p.plane_project_id).length;
+  const explicitNewProject = hasNewProjectIntent(searchParams);
+  const showIntentRail = shouldShowQuickStartRail({
+    projects,
+    loaded: !loading,
+    loadError: error,
+    forced: explicitNewProject,
+  });
+
+  // Promote a successful cold-start into the same URL-backed intent used by
+  // the explicit button. This keeps the rail mounted after its first project
+  // is created, including readiness/task failures, without persisting drafts.
+  useEffect(() => {
+    if (loading || error || explicitNewProject || activeCount > 0) return;
+    setSearchParams(newProjectIntentSearch(searchParams, true), { replace: true });
+  }, [activeCount, error, explicitNewProject, loading, searchParams, setSearchParams]);
+
+  const openNewProjectIntent = () => {
+    setSearchParams(newProjectIntentSearch(searchParams, true));
+  };
+
+  const cancelNewProjectIntent = () => {
+    if (!activeCount) return;
+    setSearchParams(newProjectIntentSearch(searchParams, false), { replace: true });
+  };
+
+  const handleProjectCreated = (project: Project) => {
+    setProjects((before) => before.some((item) => item.id === project.id)
+      ? before.map((item) => item.id === project.id ? project : item)
+      : [project, ...before]);
+  };
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -81,22 +115,6 @@ export function ProjectsPage() {
     });
   }, [projects, query, statusFilter, sourceFilter]);
 
-  const create = async () => {
-    if (!form.name.trim()) return flash("请先填写项目名称");
-    setSubmitting(true);
-    try {
-      await api.createProject({ name: form.name.trim(), description: form.description.trim() });
-      setForm({ name: "", description: "" });
-      setCreating(false);
-      flash("项目已创建，现在可以下达第一项任务");
-      await reload();
-    } catch (e) {
-      flash(`创建失败：${e instanceof Error ? e.message : e}`);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   if (loading) return <PageSkeleton rows={3} />;
 
   return (
@@ -106,12 +124,22 @@ export function ProjectsPage() {
         eyebrow="WORKSPACES"
         subtitle="一个项目承载稳定的代码边界、Agent 配置和长期证据；每次具体目标则作为独立任务进入同一条闭环。"
         actions={
-          <PrimaryButton onClick={() => setCreating(true)}>
+          <PrimaryButton onClick={openNewProjectIntent}>
             <Plus size={15} weight="bold" />
             新建项目
           </PrimaryButton>
         }
       />
+
+      {showIntentRail && (
+        <IntentLaunchRail
+          projects={projects}
+          forcedNewProject
+          canCancel={activeCount > 0}
+          onCancel={cancelNewProjectIntent}
+          onProjectCreated={handleProjectCreated}
+        />
+      )}
 
       <div className="mb-4 flex flex-wrap gap-2">
         {[
@@ -190,61 +218,6 @@ export function ProjectsPage() {
         </div>
       )}
 
-      {creating && (
-        <div className="surface-shell mb-4 deepsonar-reveal">
-          <form
-            className="surface-core grid gap-4 p-4 lg:grid-cols-[minmax(180px,.6fr)_minmax(280px,1.4fr)_auto] lg:items-end"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void create();
-            }}
-          >
-            <div>
-              <div className="eyebrow">
-                <span />
-                NEW WORKSPACE
-              </div>
-              <h2 className="mt-2 text-[15px] font-medium text-zinc-100">定义长期边界</h2>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <label>
-                <span className="mb-1 block font-mono text-[9px] tracking-[.14em] text-zinc-600">
-                  项目名称 *
-                </span>
-                <input
-                  autoFocus
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className={inputCls}
-                  placeholder="例如：身份与权限审计"
-                  maxLength={120}
-                />
-              </label>
-              <label>
-                <span className="mb-1 block font-mono text-[9px] tracking-[.14em] text-zinc-600">
-                  一句话说明
-                </span>
-                <input
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  className={inputCls}
-                  placeholder="代码边界或业务目标（可选）"
-                  maxLength={500}
-                />
-              </label>
-            </div>
-            <div className="flex gap-2 lg:justify-end">
-              <SecondaryButton type="button" onClick={() => setCreating(false)}>
-                取消
-              </SecondaryButton>
-              <PrimaryButton type="submit" busy={submitting}>
-                创建
-              </PrimaryButton>
-            </div>
-          </form>
-        </div>
-      )}
-
       {filtered.length === 0 && !error ? (
         <EmptyState
           title={
@@ -260,9 +233,7 @@ export function ProjectsPage() {
               : "项目只定义长期边界；创建后你可以立即用自然语言下达第一项任务。"
           }
           action={
-            !projects.length ? (
-              <PrimaryButton onClick={() => setCreating(true)}>开始创建</PrimaryButton>
-            ) : query || statusFilter !== "all" || sourceFilter !== "all" ? (
+            showIntentRail ? undefined : query || statusFilter !== "all" || sourceFilter !== "all" ? (
               <SecondaryButton
                 type="button"
                 onClick={() => {

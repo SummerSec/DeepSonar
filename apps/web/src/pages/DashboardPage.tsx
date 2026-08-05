@@ -2,7 +2,6 @@ import { ArrowRight, ArrowUpRight, Pulse, Warning, Waveform } from "@phosphor-ic
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type FindingSummary, type JobSummary, type Project } from "../api";
-import { DashboardLaunchRail } from "../components/DashboardLaunchRail";
 import { EmptyState, PageHeader, PageSkeleton, SectionHeading, SeverityBadge, StatCard, StatusBadge, formatTime, relativeTime } from "../ui";
 
 const ACTIVE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
@@ -33,6 +32,7 @@ export function DashboardPage() {
   const failedJobs = jobs.filter((job) => FAILURE.has(job.status));
   const criticalFindings = findings.filter((finding) => ["critical", "high"].includes(finding.severity));
   const humanJobs = jobs.filter((job) => job.status === "waiting_human");
+  const activeProjectCount = projects.filter((project) => project.status === "active").length;
   const attentionCount = humanJobs.length + failedJobs.length + criticalFindings.filter((f) => f.verify_status !== "confirmed").length;
   const focusItems = useMemo(() => [
     ...humanJobs.map((j) => ({ id: j.id, type: "人工介入", title: j.canvas_title ?? j.type, meta: j.project_name ?? "未知项目", tone: "#e8bd70", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : "/jobs" })),
@@ -51,16 +51,14 @@ export function DashboardPage() {
     <div className="page-scroll">
       <PageHeader title="运行态势" eyebrow="CONTROL PLANE / LIVE" subtitle="先处理需要你决策的事项，再查看系统吞吐。任务的执行、证据与报告始终归档在同一工作台。" />
 
-      <DashboardLaunchRail
-        projects={projects}
-        onProjectCreated={(project) => setProjects((before) => before.some((item) => item.id === project.id) ? before : [project, ...before])}
-      />
-
       <div className="metrics-strip">
         <StatCard index={0} label="进行中的运行" value={activeJobs.length} accent="#6fbbe8" hint="含等待、准备与执行中" />
         <StatCard index={1} label="高风险发现" value={criticalFindings.length} accent="#ec8c5d" hint={`全部 ${findings.length} 条`} />
         <StatCard index={2} label="需要关注" value={attentionCount} accent={attentionCount ? "#e8bd70" : undefined} hint="人工、异常与待验证" />
-        <StatCard index={3} label="活跃项目" value={projects.filter((p) => p.status === "active").length} hint={`${projects.length} 个项目空间`} />
+        <div className="relative">
+          <StatCard index={3} label="活跃项目" value={activeProjectCount} hint={activeProjectCount ? `${projects.length} 个项目空间` : undefined} />
+          {!activeProjectCount && <Link to="/projects" className="absolute inset-x-5 bottom-4 inline-flex items-center gap-1 text-[10px] text-acc-300 transition-colors hover:text-acc-200">前往项目空间 <ArrowUpRight size={11} /></Link>}
+        </div>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
