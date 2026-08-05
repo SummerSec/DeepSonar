@@ -4,7 +4,7 @@ import { PageHeader } from "../ui";
 
 /**
  * 项目数据模块：本项目的 .deepsonarpack 导入/导出。
- * 平台级配置请到「Agent 管理 → 平台导入导出」。
+ * 平台级配置请到「平台数据与调度」。
  */
 export function ProjectDataPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -16,7 +16,7 @@ export function ProjectDataPage() {
         <PageHeader
           title="项目数据"
           eyebrow="PROJECT DATA"
-          subtitle="导出或导入本项目的配置与任务历史。全局规则、角色注册表与 Skill 源请在 Agent 管理中的平台导入导出处理。"
+          subtitle="导出或导入本项目的配置与任务历史。全局规则与平台配置包请到平台数据与调度处理。"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-10 sm:px-9">

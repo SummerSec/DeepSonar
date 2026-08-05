@@ -98,7 +98,7 @@ export function TransferPanel({
       const p = await api.previewImport(row.id);
       const packIsPlatform = p.kind === "platform";
 
-      // 入口与包类型必须一致：项目数据只在项目模块，平台配置只在 Agent 管理
+      // 入口与包类型必须一致：项目数据只在项目模块，平台配置只在平台数据页
       if (isPlatform && !packIsPlatform) {
         await api.deleteImport(row.id).catch(() => {});
         flash("这是项目数据包。请到对应项目 → 数据 页面导入。");
@@ -106,7 +106,7 @@ export function TransferPanel({
       }
       if (!isPlatform && packIsPlatform) {
         await api.deleteImport(row.id).catch(() => {});
-        flash("这是平台配置包。请到 Agent 管理 → 平台导入导出。");
+        flash("这是平台配置包。请到平台数据与调度。");
         return;
       }
 
@@ -276,7 +276,7 @@ export function TransferPanel({
         <p className="mb-3 text-[12px] leading-5 text-zinc-600">
           {isPlatform
             ? "仅接受平台配置包（deepsonar-platform-export）。项目包请到项目 → 数据。"
-            : "仅接受本项目数据包（deepsonar-project-export）。平台包请到 Agent 管理 → 平台导入导出。"}
+            : "仅接受本项目数据包（deepsonar-project-export）。平台包请到平台数据与调度。"}
         </p>
         <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-white/[.04] px-3 py-1.5 text-[13px] text-zinc-300 ring-1 ring-white/[.08] hover:bg-white/[.07]">
           <UploadSimple size={14} />

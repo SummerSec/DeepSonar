@@ -5,6 +5,7 @@ import { AppShell } from "./layout/AppShell";
 import { PageSkeleton } from "./ui";
 
 const AgentsPage = lazy(() => import("./pages/AgentsPage").then((module) => ({ default: module.AgentsPage })));
+const AgentMarketplacePage = lazy(() => import("./pages/AgentMarketplacePage").then((module) => ({ default: module.AgentMarketplacePage })));
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
 const JobsPage = lazy(() => import("./pages/JobsPage").then((module) => ({ default: module.JobsPage })));
@@ -17,6 +18,7 @@ const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ def
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
 const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ default: module.LoginPage })));
 const RuntimeImagesPage = lazy(() => import("./pages/RuntimeImagesPage").then((module) => ({ default: module.RuntimeImagesPage })));
+const PlatformSettingsPage = lazy(() => import("./pages/PlatformSettingsPage").then((module) => ({ default: module.PlatformSettingsPage })));
 
 function Deferred({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
@@ -81,10 +83,27 @@ export default function App() {
           }
         />
         <Route
+          path="agent-market"
+          element={
+            <Deferred>
+              <AgentMarketplacePage />
+            </Deferred>
+          }
+        />
+        <Route
           path="images"
           element={
             <Deferred>
               <RuntimeImagesPage />
+            </Deferred>
+          }
+        />
+        <Route path="settings" element={<Navigate to="/settings/access" replace />} />
+        <Route
+          path="settings/:section"
+          element={
+            <Deferred>
+              <PlatformSettingsPage />
             </Deferred>
           }
         />

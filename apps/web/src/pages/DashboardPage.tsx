@@ -35,8 +35,8 @@ export function DashboardPage() {
   const activeProjectCount = projects.filter((project) => project.status === "active").length;
   const attentionCount = humanJobs.length + failedJobs.length + criticalFindings.filter((f) => f.verify_status !== "confirmed").length;
   const focusItems = useMemo(() => [
-    ...humanJobs.map((j) => ({ id: j.id, type: "人工介入", title: j.canvas_title ?? j.type, meta: j.project_name ?? "未知项目", tone: "#e8bd70", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : "/jobs" })),
-    ...failedJobs.map((j) => ({ id: j.id, type: "运行异常", title: j.canvas_title ?? j.type, meta: `${j.project_name ?? "未知项目"} · ${j.status}`, tone: "#ed6a7f", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : "/jobs" })),
+    ...humanJobs.map((j) => ({ id: j.id, type: "人工介入", title: j.canvas_title ?? j.type, meta: j.project_name ?? "未知项目", tone: "#e8bd70", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : `/projects/${j.project_id}/tasks` })),
+    ...failedJobs.map((j) => ({ id: j.id, type: "运行异常", title: j.canvas_title ?? j.type, meta: `${j.project_name ?? "未知项目"} · ${j.status}`, tone: "#ed6a7f", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : `/projects/${j.project_id}/tasks` })),
     ...criticalFindings.filter((f) => f.verify_status !== "confirmed").map((f) => ({ id: f.id, type: "高风险待验证", title: f.title, meta: f.project_name ?? "未知项目", tone: "#ec8c5d", to: f.canvas_id ? `/projects/${f.project_id}/tasks/${f.canvas_id}` : `/projects/${f.project_id}/findings` })),
   ].slice(0, 5), [humanJobs, failedJobs, criticalFindings]);
 
@@ -64,7 +64,7 @@ export function DashboardPage() {
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
         <section className="surface-shell deepsonar-reveal xl:col-span-7" style={{ animationDelay: "180ms" }}>
           <div className="surface-core min-h-[350px] p-5 sm:p-6">
-            <div className="flex items-start justify-between gap-4"><div><div className="eyebrow"><span style={{ background: attentionCount ? "#e8bd70" : "#65e6b4" }} />ATTENTION QUEUE</div><h2 className="mt-4 text-xl font-medium tracking-[-0.03em] text-zinc-100">{attentionCount ? "优先处理这些事项" : "当前没有阻塞项"}</h2><p className="mt-1 text-[12px] text-zinc-500">只展示会影响风险闭环或任务推进的事件</p></div><SectionLink to="/jobs">打开运行队列</SectionLink></div>
+            <div className="flex items-start justify-between gap-4"><div><div className="eyebrow"><span style={{ background: attentionCount ? "#e8bd70" : "#65e6b4" }} />ATTENTION QUEUE</div><h2 className="mt-4 text-xl font-medium tracking-[-0.03em] text-zinc-100">{attentionCount ? "优先处理这些事项" : "当前没有阻塞项"}</h2><p className="mt-1 text-[12px] text-zinc-500">只展示会影响风险闭环或任务推进的事件</p></div><SectionLink to="/projects">进入项目工作台</SectionLink></div>
             {focusItems.length ? (
               <div className="mt-6 flex flex-col gap-2">
                 {focusItems.map((item, index) => <Link key={`${item.type}-${item.id}`} to={item.to} className="group flex items-center gap-4 rounded-2xl bg-white/[.025] px-4 py-3.5 transition-all hover:bg-white/[.05]" style={{ animationDelay: `${240 + index * 55}ms` }}><span className="grid size-9 shrink-0 place-items-center rounded-full" style={{ color: item.tone, background: `color-mix(in srgb, ${item.tone} 10%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${item.tone} 18%, transparent)` }}><Warning size={15} weight="light" /></span><span className="min-w-0 flex-1"><strong className="block truncate text-[13px] font-medium text-zinc-200">{item.title}</strong><small className="mt-0.5 block truncate text-[10px] text-zinc-600">{item.type} · {item.meta}</small></span><ArrowUpRight size={15} weight="light" className="text-zinc-700 transition-transform group-hover:translate-x-1 group-hover:-translate-y-0.5 group-hover:text-zinc-300" /></Link>)}
@@ -81,7 +81,7 @@ export function DashboardPage() {
         </section>
       </div>
 
-      <SectionHeading title="风险证据" meta="按最近产出排序" action={<SectionLink to="/findings">查看全部发现</SectionLink>} />
+      <SectionHeading title="风险证据" meta="按最近产出排序" action={<SectionLink to="/projects">进入项目查看</SectionLink>} />
       {findings.length ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{findings.slice(0, 6).map((finding, index) => <Link key={finding.id} to={finding.canvas_id ? `/projects/${finding.project_id}/tasks/${finding.canvas_id}` : `/projects/${finding.project_id}/findings`} className="surface-shell group deepsonar-reveal" style={{ animationDelay: `${index * 55}ms` }}><article className="surface-core flex min-h-[154px] flex-col p-4"><div className="flex items-start justify-between gap-3"><SeverityBadge severity={finding.severity} /><span className="font-mono text-[9px] text-zinc-700">{relativeTime(finding.created_at)}</span></div><h3 className="mt-4 line-clamp-2 text-[13px] font-medium leading-6 text-zinc-200 transition-colors group-hover:text-white">{finding.title}</h3><div className="mt-auto flex items-center gap-2 pt-4 text-[10px] text-zinc-600"><span className="truncate">{finding.project_name}</span><span>·</span><span className="truncate font-mono">{finding.location || finding.verify_status}</span></div></article></Link>)}</div> : <EmptyState title="还没有风险证据" hint="审计 Agent 产出的发现会先进入验证闭环，再沉淀为可追踪证据。" />}
 
       <SectionHeading title="项目空间" meta="任务与证据的长期归属" action={<SectionLink to="/projects">管理全部项目</SectionLink>} />

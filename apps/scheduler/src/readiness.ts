@@ -283,7 +283,7 @@ function effectiveRole(row: ReadinessRoleRow): EffectiveRole {
 }
 
 function credentialFix(_scope: ReadinessScopeInput): ReadinessCheck["fix"] {
-  return readinessFix("credentials", "global", null, "/agents?tab=credentials", "credentials");
+  return readinessFix("credentials", "global", null, "/settings/credentials", "credentials");
 }
 
 function roleConfigFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
@@ -314,7 +314,7 @@ function rulesFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
     "rules",
     targetScope,
     scope.projectId,
-    projectHref(scope, "/agents?tab=rules", "/projects/:projectId/settings?tab=rules"),
+    projectHref(scope, "/settings/platform?tab=rules", "/projects/:projectId/settings?tab=rules"),
     "rules",
   );
 }
@@ -377,11 +377,11 @@ function normalizeFix(code: string, fix: ReadinessCheck["fix"]): ReadinessCheck[
   const inferredScope = fix.scope ?? (hrefProject ? "project" : action === "credentials" ? "global" : "global");
   const projectId = fix.project_id ?? (inferredScope === "project" ? hrefProject : null);
   const href = action === "credentials"
-    ? "/agents?tab=credentials"
+    ? "/settings/credentials"
     : action === "role_config"
       ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles"
       : action === "rules"
-        ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/agents?tab=rules"
+        ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/settings/platform?tab=rules"
         : inferredScope === "project"
           ? projectId ? `/projects/${projectId}/images` : "/projects"
           : "/images";
