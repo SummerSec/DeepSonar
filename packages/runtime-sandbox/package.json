@@ -2,6 +2,7 @@
   "name": "@deepsonar/runtime-sandbox",
   "version": "0.1.11",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",

@@ -1,6 +1,7 @@
 {
   "name": "deepsonar",
   "private": true,
+  "license": "UNLICENSED",
   "version": "0.1.11",
   "type": "module",
   "packageManager": "pnpm@9.15.9",

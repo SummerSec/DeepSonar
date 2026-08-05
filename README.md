@@ -234,4 +234,6 @@ docs/               架构与实施文档
 
 ## License
 
-[MIT](LICENSE)
+DeepSonar 当前版本为专有源码。使用、复制、修改、分发、再许可或销售前，均须取得 SummerSec 的事先书面授权；可通过 [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) 申请。
+
+本变更仅适用于包含当前授权声明的仓库版本，不追溯改变此前已按 MIT License 发布的历史版本。第三方依赖与随附工具仍适用各自的许可证。详见 [LICENSE](LICENSE) 与 [第三方声明](THIRD_PARTY_NOTICES.md)。

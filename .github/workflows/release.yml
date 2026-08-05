@@ -92,12 +92,12 @@ jobs:
           labels: |
             org.opencontainers.image.title=DeepSonar Base
             org.opencontainers.image.description=Explore、Analyze、Code、Hub、Verify 与系统沙箱使用的 DeepSonar 官方最小运行时。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           annotations: |
             org.opencontainers.image.title=DeepSonar Base
             org.opencontainers.image.description=Explore、Analyze、Code、Hub、Verify 与系统沙箱使用的 DeepSonar 官方最小运行时。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
@@ -288,12 +288,12 @@ jobs:
           labels: |
             org.opencontainers.image.title=${{ matrix.title }}
             org.opencontainers.image.description=${{ matrix.description }}
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar
           annotations: |
             org.opencontainers.image.title=${{ matrix.title }}
             org.opencontainers.image.description=${{ matrix.description }}
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar
           tags: |
             type=semver,pattern={{version}}
@@ -483,12 +483,12 @@ jobs:
           labels: |
             org.opencontainers.image.title=DeepSonar Kali Test
             org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           annotations: |
             org.opencontainers.image.title=DeepSonar Kali Test
             org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
@@ -588,7 +588,7 @@ jobs:
             --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。"
             --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
             --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
-            --annotation "index:org.opencontainers.image.licenses=MIT"
+            --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
           )
           if [[ "$ACR_CONFIGURED" == "true" ]]; then
             acr_tag_args=()
@@ -722,12 +722,12 @@ jobs:
           labels: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Test
             org.opencontainers.image.description=OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           annotations: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Test
             org.opencontainers.image.description=OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
@@ -901,12 +901,12 @@ jobs:
           labels: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Audit
             org.opencontainers.image.description=OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           annotations: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Audit
             org.opencontainers.image.description=OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
@@ -1080,12 +1080,12 @@ jobs:
           labels: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
             org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           annotations: |
             org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
             org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |
             type=semver,pattern={{version}}
@@ -1280,6 +1280,8 @@ jobs:
       - name: 发布 Release 与附件
         uses: softprops/action-gh-release@v2
         with:
+          body: |
+            > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/${{ github.ref_name }}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/${{ github.ref_name }}/THIRD_PARTY_NOTICES.md).
           files: |
             deepsonar-management-skill-*.tar.gz
             deploy/runtime-image-registry.json

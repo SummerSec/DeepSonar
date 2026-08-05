@@ -2,6 +2,7 @@
   "name": "@deepsonar/image-admission",
   "version": "0.1.11",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "start": "node dist/index.js",
