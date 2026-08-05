@@ -174,6 +174,41 @@ if (!testDatabaseUrl) {
         const malformedJsonJob = await makeJob("review", "running", snapshot);
         await assertRejectedWithoutWrites(malformedJsonJob, "progress", "tool_not_allowed");
       }
+      const emptyTypeJob = await makeJob("", "running", {});
+      await assertRejectedWithoutWrites(emptyTypeJob, "progress", "tool_not_allowed");
+      const unknownWithoutNameJob = await makeJob("custom_missing_name", "running", {});
+      await assertRejectedWithoutWrites(unknownWithoutNameJob, "progress", "tool_not_allowed");
+      const customType = "custom_authorized_role";
+      const customMatchingJob = await makeJob(customType, "running", {
+        name: customType,
+        role_kind: "role",
+        platform_tools: ["emit_progress", "emit_fact", "mark_job_done"],
+      });
+      const customFact = await ingestEvent(customMatchingJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "fact",
+        payload: { title: "custom authorized fact", description: "custom snapshot contract" },
+      });
+      assert.equal(customFact.deduped, false);
+      const customDone = await ingestEvent(customMatchingJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "done",
+        payload: { summary: "custom authorized done" },
+      });
+      assert.equal(customDone.deduped, false);
+      const customMismatchJob = await makeJob("custom_name_mismatch", "running", {
+        name: "different_custom_role",
+        role_kind: "role",
+        platform_tools: ["emit_progress", "emit_fact", "mark_job_done"],
+      });
+      await assertRejectedWithoutWrites(customMismatchJob, "fact", "tool_not_allowed");
+      const customMissingToolsJob = await makeJob("custom_missing_tools", "running", {
+        name: "custom_missing_tools",
+        role_kind: "role",
+      });
+      await assertRejectedWithoutWrites(customMissingToolsJob, "fact", "tool_not_allowed");
 
       const verifyHumanJob = await makeJob("verify_finding", "running", {
         name: "verify",

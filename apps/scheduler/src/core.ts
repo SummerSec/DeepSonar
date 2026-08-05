@@ -975,6 +975,24 @@ const RESERVED_SNAPSHOT_NAMES: Readonly<Record<string, SemanticRoleKind>> = {
   report: "system",
 };
 
+// Older/imported snapshots may omit `name` for these built-in and historical
+// Job types. Unknown/custom roles must carry their frozen canonical name; a
+// missing name cannot be inferred safely from arbitrary DB content.
+const SNAPSHOT_NAME_FALLBACK_TYPES = new Set([
+  "explore",
+  "analyze",
+  "review",
+  "test",
+  "code",
+  "audit",
+  "audit_module",
+  "hub_reason",
+  "hub",
+  "verify",
+  "verify_finding",
+  "report",
+]);
+
 function semanticRoleNamesEquivalent(typeName: string, snapshotName: string): boolean {
   // Hub snapshots emitted by older/runtime adapters used `hub` while the
   // persisted system Job type is `hub_reason`, and vice versa.
@@ -1003,14 +1021,51 @@ function semanticJobContract(job: Record<string, unknown>): {
   }
   const snapshot = rawSnapshot as Record<string, unknown>;
   const jobType = String(job.type ?? "").trim().toLowerCase();
+  if (!jobType) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "Job type 不能为空。",
+      "type",
+    );
+  }
   const typeName = roleNameForJobType(jobType);
   // The persisted Job type is the Scheduler's authority for the role kind.
   // Snapshot role_kind/name are checked against it, never allowed to upgrade a
   // normal worker (for example, `review`) into a Hub.
   const kind: SemanticRoleKind = RESERVED_SNAPSHOT_NAMES[typeName] ?? "role";
-  const rawName = typeof snapshot.name === "string" && snapshot.name.trim()
-    ? roleNameForJobType(snapshot.name.trim().toLowerCase())
+  const hasSnapshotName = Object.prototype.hasOwnProperty.call(snapshot, "name");
+  if (hasSnapshotName && (typeof snapshot.name !== "string" || !snapshot.name.trim())) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "Job 快照 name 必须是非空字符串。",
+      "name",
+    );
+  }
+  const rawName = hasSnapshotName
+    ? roleNameForJobType((snapshot.name as string).trim().toLowerCase())
     : null;
+  const canFallbackSnapshotName = SNAPSHOT_NAME_FALLBACK_TYPES.has(jobType);
+  if (!rawName && !canFallbackSnapshotName) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "未知 Job type 必须在冻结快照中提供 canonical name。",
+      "name",
+    );
+  }
+  if (!canFallbackSnapshotName && !Object.prototype.hasOwnProperty.call(snapshot, "role_kind")) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "未知 Job type 必须在冻结快照中提供 role_kind。",
+      "role_kind",
+    );
+  }
+  if (!canFallbackSnapshotName && !Object.prototype.hasOwnProperty.call(snapshot, "platform_tools")) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "未知 Job type 必须在冻结快照中提供 platform_tools。",
+      "platform_tools",
+    );
+  }
   if (rawName && !semanticRoleNamesEquivalent(typeName, rawName)) {
     throw new ControlInputError(
       "tool_not_allowed",
