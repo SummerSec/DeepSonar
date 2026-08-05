@@ -1,8 +1,10 @@
 import {
+  ArrowRight,
   ArrowSquareOut,
   ChatCircle,
   Link as LinkIcon,
   Trash,
+  TreeStructure,
   X,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -38,6 +40,56 @@ function SidebarField({ label, children }: { label: string; children: ReactNode 
     <div className="theme-divider border-b py-3 last:border-0">
       <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[.14em] text-zinc-600">{label}</div>
       <div className="text-[13px] leading-5 text-zinc-300">{children}</div>
+    </div>
+  );
+}
+
+const GAP_LABEL: Record<string, string> = {
+  missing_review: "缺少独立复核证据",
+  missing_test: "缺少运行实测证据",
+  hub_unlinked: "Hub 未留下结构化 Finding 关联",
+  source_node_missing: "来源 Finding 节点缺失",
+  non_independent_evidence: "复核与实测证据不独立",
+  missing_supporting_test: "缺少支持结论的实测证据",
+  unresolved_conflict: "存在未解决的冲突证据",
+  evidence_edge_missing: "证据存在，但画布结构化边缺失",
+  trace_node_missing: "冻结链路中的节点已不在当前画布",
+  trace_truncated: "链路超过安全展示上限，当前为截断视图",
+};
+
+const FLOW_NODE_LABEL: Record<string, string> = {
+  intent: "Intent",
+  fact: "Fact",
+  finding: "Finding",
+  job: "Job",
+  hub: "Hub",
+};
+
+function TraceRow({
+  label,
+  title,
+  status,
+  at,
+  children,
+}: {
+  label: string;
+  title: string;
+  status?: string | null;
+  at: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="relative grid grid-cols-[18px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
+      <span className="relative z-[1] mt-1.5 size-2 rounded-full bg-acc-400 ring-4 ring-[var(--surface)]" />
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[10px] uppercase text-zinc-500">{label}</span>
+          {status && <StatusBadge status={status} />}
+          <span className="ml-auto font-mono text-[10px] text-zinc-600">{formatTime(at)}</span>
+        </div>
+        <div className="mt-1 break-words text-[13px] text-zinc-200">{title}</div>
+        {children && <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[11px]">{children}</div>}
+      </div>
     </div>
   );
 }
@@ -91,6 +143,20 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
   const links: FindingLink[] = detail?.links ?? [];
   const isConfirmed =
     f?.verify_status === "confirmed" || f?.disposition === "confirmed_vuln";
+  const traceUrl = (nodeId?: string | null) => {
+    if (!f?.canvas_id) return "#";
+    const params = new URLSearchParams({ traceFinding: findingId });
+    if (nodeId) params.set("focusNode", nodeId);
+    return `/projects/${f.project_id}/tasks/${f.canvas_id}?${params.toString()}`;
+  };
+  const jobUrl = (jobId: string) =>
+    f?.canvas_id ? `/projects/${f.project_id}/tasks/${f.canvas_id}?tab=jobs&job=${jobId}` : "#";
+  const flowNodes = new Map((detail?.trace.flow.nodes ?? []).map((node) => [node.node_id, node]));
+  const linkedFlowNodeIds = new Set(
+    (detail?.trace.flow.edges ?? []).flatMap((edge) => [edge.from_node_id, edge.to_node_id]),
+  );
+  const unlinkedIntents = (detail?.trace.flow.nodes ?? [])
+    .filter((node) => node.node_type === "intent" && !linkedFlowNodeIds.has(node.node_id));
 
   const setDisposition = async (disposition: FindingDisposition) => {
     setBusy(true);
@@ -239,6 +305,144 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       </div>
                     )}
                   </div>
+                </section>
+
+                <section className="mt-6" aria-label="验证追踪">
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <TreeStructure size={16} className="text-acc-400" />
+                    <h2 className="text-[14px] font-medium text-zinc-200">验证追踪</h2>
+                    <span className="font-mono text-[10px] text-zinc-600">
+                      {detail.trace.node_ids.length} 节点 · {detail.trace.rounds.length} 轮
+                    </span>
+                    {f.canvas_id && (
+                      <Link
+                        to={traceUrl()}
+                        className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-acc-300 ring-1 ring-acc-400/20 hover:bg-acc-500/[.07]"
+                      >
+                        在画布中查看链路 <ArrowRight size={12} />
+                      </Link>
+                    )}
+                  </div>
+
+                  <div className="relative pl-1 before:absolute before:bottom-2 before:left-[7px] before:top-2 before:w-px before:bg-white/[.07]">
+                    <TraceRow
+                      label="发现"
+                      title={`${detail.trace.source.job_type} 产生 Finding`}
+                      status={detail.trace.source.job_status}
+                      at={detail.trace.source.at}
+                    >
+                      <Link to={jobUrl(detail.trace.source.job_id)} className="text-acc-300 hover:underline">
+                        来源 Job #{shortId(detail.trace.source.job_id)}
+                      </Link>
+                      {detail.trace.source.node_id && (
+                        <Link to={traceUrl(detail.trace.source.node_id)} className="text-zinc-400 hover:text-zinc-200">
+                          Finding 节点
+                        </Link>
+                      )}
+                    </TraceRow>
+
+                    {detail.trace.evidence.review.map((item) => (
+                      <TraceRow key={`review-${item.node_id}`} label="独立复核" title={item.title} status={item.outcome} at={item.at}>
+                        <Link to={jobUrl(item.job_id)} className="text-acc-300 hover:underline">
+                          {item.job_type} Job #{shortId(item.job_id)}
+                        </Link>
+                        <Link to={traceUrl(item.node_id)} className="text-zinc-400 hover:text-zinc-200">证据节点</Link>
+                      </TraceRow>
+                    ))}
+
+                    {detail.trace.evidence.test.map((item) => (
+                      <TraceRow key={`test-${item.node_id}`} label="运行实测" title={item.title} status={item.outcome} at={item.at}>
+                        <Link to={jobUrl(item.job_id)} className="text-acc-300 hover:underline">
+                          {item.job_type} Job #{shortId(item.job_id)}
+                        </Link>
+                        <Link to={traceUrl(item.node_id)} className="text-zinc-400 hover:text-zinc-200">证据节点</Link>
+                      </TraceRow>
+                    ))}
+
+                    {detail.trace.rounds.map((round) => (
+                      <TraceRow
+                        key={`round-${round.attempt}`}
+                        label={`Verify #${round.attempt}`}
+                        title={round.summary || round.outcome || round.proposed_verdict || "等待验证"}
+                        status={round.outcome || round.status}
+                        at={round.finished_at || round.at}
+                      >
+                        {round.verify_job_id && (
+                          <Link to={jobUrl(round.verify_job_id)} className="text-acc-300 hover:underline">
+                            Verify Job #{shortId(round.verify_job_id)}
+                          </Link>
+                        )}
+                        {round.missing.length > 0 && (
+                          <span className="text-amber-300">缺口：{round.missing.join("、")}</span>
+                        )}
+                      </TraceRow>
+                    ))}
+
+                    {detail.trace.hubs.map((hub) => (
+                      <TraceRow
+                        key={hub.job_id}
+                        label="Hub"
+                        title={`结构化触发：${hub.trigger_kind}`}
+                        status={hub.status}
+                        at={hub.at}
+                      >
+                        <Link to={jobUrl(hub.job_id)} className="text-acc-300 hover:underline">
+                          Hub Job #{shortId(hub.job_id)} · exact
+                        </Link>
+                        {hub.node_id && <Link to={traceUrl(hub.node_id)} className="text-zinc-400 hover:text-zinc-200">Hub 节点</Link>}
+                      </TraceRow>
+                    ))}
+                  </div>
+
+                  <div className="mt-5 border-t border-white/[.06] pt-4">
+                    <h3 className="font-mono text-[10px] uppercase text-zinc-500">Fact / Intent 流向</h3>
+                    {detail.trace.flow.edges.length > 0 ? (
+                      <div className="mt-3 flex flex-col gap-2">
+                        {detail.trace.flow.edges.map((edge) => {
+                          const from = flowNodes.get(edge.from_node_id);
+                          const to = flowNodes.get(edge.to_node_id);
+                          return (
+                            <div key={edge.edge_id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-lg bg-white/[.018] px-3 py-2 ring-1 ring-white/[.045]">
+                              <Link to={traceUrl(edge.from_node_id)} className="min-w-0 hover:text-acc-300">
+                                <span className="block font-mono text-[9px] text-zinc-600">{FLOW_NODE_LABEL[from?.node_type ?? ""] ?? from?.node_type ?? "节点"}</span>
+                                <span className="block truncate text-[11px] text-zinc-300" title={from?.title}>{from?.title || shortId(edge.from_node_id)}</span>
+                              </Link>
+                              <span className="flex flex-col items-center gap-0.5 text-zinc-600">
+                                <ArrowRight size={13} />
+                                <span className="font-mono text-[8px]">{edge.edge_type}</span>
+                              </span>
+                              <Link to={traceUrl(edge.to_node_id)} className="min-w-0 text-right hover:text-acc-300">
+                                <span className="block font-mono text-[9px] text-zinc-600">{FLOW_NODE_LABEL[to?.node_type ?? ""] ?? to?.node_type ?? "节点"}</span>
+                                <span className="block truncate text-[11px] text-zinc-300" title={to?.title}>{to?.title || shortId(edge.to_node_id)}</span>
+                              </Link>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-[11px] text-zinc-600">当前记录没有可验证的结构化流向边。</p>
+                    )}
+                    {unlinkedIntents.length > 0 && (
+                      <div className="mt-3 rounded-lg bg-amber-400/[.04] px-3 py-2 ring-1 ring-amber-300/10">
+                        <div className="font-mono text-[9px] text-amber-300">未形成结构化边的 Intent</div>
+                        {unlinkedIntents.map((intent) => (
+                          <Link key={intent.node_id} to={traceUrl(intent.node_id)} className="mt-1 block truncate text-[11px] text-zinc-400 hover:text-zinc-200">
+                            {intent.role ? `${intent.role} · ` : ""}{intent.title}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {detail.trace.gaps.length > 0 && (
+                    <div className="mt-4 flex flex-wrap gap-2 border-t border-white/[.06] pt-3">
+                      {detail.trace.gaps.map((gap) => (
+                        <span key={gap} className="rounded-md bg-amber-400/[.06] px-2 py-1 text-[11px] text-amber-200 ring-1 ring-amber-300/15">
+                          {GAP_LABEL[gap] ?? gap}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </section>
 
                 {/* Activity / comments timeline */}

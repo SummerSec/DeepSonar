@@ -18,6 +18,7 @@ import {
   type CanvasConvergence,
   type CanvasData,
   type CanvasNode,
+  type FindingTrace,
   type FindingSummary,
   type JobSummary,
 } from "../api";
@@ -57,6 +58,21 @@ function parseConvergenceFromTarget(target: Record<string, unknown> | undefined)
     paused_at: typeof conv.paused_at === "string" ? conv.paused_at : undefined,
     auto_stopped: Boolean(conv.auto_stopped),
   };
+}
+
+async function loadFindingIndex(canvasId: string): Promise<FindingSummary[]> {
+  const rows: FindingSummary[] = [];
+  const seenCursors = new Set<string>();
+  let after: string | null = null;
+  for (let pageNumber = 0; pageNumber < 80; pageNumber += 1) {
+    const page = await api.findingsPage({ canvas_id: canvasId, after, limit: 50 });
+    rows.push(...page.items);
+    if (!page.has_more || !page.next_cursor) return rows;
+    if (seenCursors.has(page.next_cursor)) throw new Error("Finding 索引游标没有前进");
+    seenCursors.add(page.next_cursor);
+    after = page.next_cursor;
+  }
+  throw new Error("Finding 索引超过 4000 条安全上限");
 }
 
 /** 待人工处理事实卡片：needs_human 的 fact 节点，人工确认 / 明确排除（§5.2-6） */
@@ -107,10 +123,13 @@ export function TaskCanvasPage() {
   const verify = searchParams.get("verify") ?? "";
   const selectedFinding = searchParams.get("finding");
   const selectedJob = searchParams.get("job");
+  const traceFinding = searchParams.get("traceFinding");
+  const focusNode = searchParams.get("focusNode");
 
   const [meta, setMeta] = useState<CanvasData["canvas"] | null>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [findings, setFindings] = useState<FindingSummary[]>([]);
+  const [findingIndex, setFindingIndex] = useState<FindingSummary[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [findingsCursor, setFindingsCursor] = useState<string | null>(null);
   const [findingsHasMore, setFindingsHasMore] = useState(false);
@@ -132,6 +151,7 @@ export function TaskCanvasPage() {
   const [scopeOpen, setScopeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [findingTrace, setFindingTrace] = useState<FindingTrace | null>(null);
 
   // Lifecycle counters remain live while the task is open, independent of API polling.
   useEffect(() => {
@@ -143,6 +163,7 @@ export function TaskCanvasPage() {
     if (!canvasId || !projectId) return;
     let stop = false;
     setFindings([]);
+    setFindingIndex([]);
     setFindingsCursor(null);
     setFindingsHasMore(false);
     setJobs([]);
@@ -153,6 +174,13 @@ export function TaskCanvasPage() {
     setNodes([]);
     setConvergence(null);
     setError(null);
+    loadFindingIndex(canvasId)
+      .then((rows) => {
+        if (!stop) setFindingIndex(rows);
+      })
+      .catch((e) => {
+        if (!stop) setError(String(e));
+      });
     const tick = () => {
       Promise.all([
         api.findingsPage({ canvas_id: canvasId, limit: 50 }),
@@ -185,6 +213,29 @@ export function TaskCanvasPage() {
       clearInterval(t);
     };
   }, [canvasId, projectId]);
+
+  useEffect(() => {
+    if (!traceFinding || !canvasId) {
+      setFindingTrace(null);
+      return;
+    }
+    let alive = true;
+    setFindingTrace(null);
+    api.finding(traceFinding)
+      .then((detail) => {
+        if (!alive) return;
+        if (detail.trace.source.canvas_id !== canvasId) {
+          setError("Finding 不属于当前任务画布");
+          return;
+        }
+        setFindingTrace(detail.trace);
+        setError(null);
+      })
+      .catch((e) => alive && setError(String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [canvasId, traceFinding]);
 
   const onCanvasData = useCallback((canvas: CanvasData) => {
     setMeta(canvas.canvas ?? null);
@@ -377,10 +428,19 @@ export function TaskCanvasPage() {
     setSearchParams(sp, { replace: true });
   };
 
-  const setQuery = (key: "severity" | "verify" | "finding" | "job", value: string | null) => {
+  const setQuery = (key: "severity" | "verify" | "finding" | "job" | "traceFinding" | "focusNode", value: string | null) => {
     const sp = new URLSearchParams(searchParams);
     if (value) sp.set(key, value);
     else sp.delete(key);
+    setSearchParams(sp, { replace: true });
+  };
+
+  const focusFindingTrace = (findingId: string) => {
+    const sp = new URLSearchParams(searchParams);
+    sp.delete("tab");
+    sp.delete("finding");
+    sp.delete("focusNode");
+    sp.set("traceFinding", findingId);
     setSearchParams(sp, { replace: true });
   };
 
@@ -392,6 +452,14 @@ export function TaskCanvasPage() {
   );
   const visibleFindings = findings.filter(
     (finding) => (!severity || finding.severity === severity) && (!verify || finding.verify_status === verify),
+  );
+  const findingIdByNodeId = useMemo(
+    () => new Map(
+      [...findingIndex, ...findings]
+        .filter((finding) => finding.node_id)
+        .map((finding) => [finding.node_id as string, finding.id]),
+    ),
+    [findingIndex, findings],
   );
   const jobRoleTypeOptions = useMemo(
     () => Array.from(new Set(jobs.flatMap((job) => [job.role_name, job.type].filter((value): value is string => Boolean(value))))).sort(),
@@ -636,7 +704,20 @@ export function TaskCanvasPage() {
 
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 min-h-0 flex-1 overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
         <div className={`h-full min-h-0 ${tab === "canvas" ? "" : "invisible pointer-events-none absolute inset-0"}`}>
-          <CanvasView canvasId={canvasId} onData={onCanvasData} />
+          <CanvasView
+            canvasId={canvasId}
+            onData={onCanvasData}
+            trace={findingTrace}
+            focusNodeId={focusNode}
+            findingIdByNodeId={findingIdByNodeId}
+            onTraceFinding={focusFindingTrace}
+            onExitTrace={() => {
+              const sp = new URLSearchParams(searchParams);
+              sp.delete("traceFinding");
+              sp.delete("focusNode");
+              setSearchParams(sp, { replace: true });
+            }}
+          />
         </div>
 
         {tab === "report" && <ReportPanel canvasId={canvasId} />}

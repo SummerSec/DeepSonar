@@ -122,6 +122,7 @@ pending → claimed → provisioning → running
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
 - **任务是否在跑：以 `active_count` / 活跃 Job 为准**；勿把 `last_job_status=succeeded` 当成任务已完成（#46）
 - 画布只读；Finding 详情偏 GitHub Issue（disposition + 评论可唤醒 Hub）
+- Finding 详情直接展示服务端统一的验证追踪（来源、review/test Fact、Intent/Fact 有向流、Verify 轮次与 exact Hub）；可用 `traceFinding` 深链在画布中淡化或隐藏非链路节点，并按 `focusNode` 定位单个证据节点。弱关联不从 prompt 推断，未连边 Intent 与证据缺口显式呈现。
 
 ## 11. 已共识演进（未完全落地）
 
@@ -130,7 +131,7 @@ pending → claimed → provisioning → running
 | 主题 | Issue | 设计要点 |
 |------|-------|----------|
 | 读图预算 / GraphScope | #30 | **部分已落地**（scope + 字符预算）；索引层/Worker 邻域与可观测性可继续收紧 |
-| Finding 追踪链 + 画布只看链路 | #31 | 服务端 `trace`；`traceFinding` 聚焦 |
+| Finding 追踪链 + 画布只看链路 | #31 | **已完成**：`GET /findings/:id` 提供结构化、限界的 `trace`；详情主路径消费 evidence/rounds/Fact-Intent flow/gaps；画布支持 `traceFinding` + `focusNode` 深链、淡化/隐藏与 Finding 节点入口 |
 | 整插件 / 整源挂载 | #33 | `modules` selector：`plugin:` / `source:*` |
 | Scheduler bounded contexts / characterization | #37 | **Phase 1 lifecycle callers migrated; Phase 2 Hub orchestration extracted**：dispatcher/reaper/reconcile and lifecycle routes use the Job lifecycle application/ports seam (including recovery exceptions and atomic bulk cancel); `domains/hub-orchestration` now owns Hub eligibility, evidence-edge wakeups, idle/terminal recovery, human-comment wakeups, and `maxHubRounds` guardrails. Core remains the composition/compatibility facade and preserves the Canvas-first lock order; Finding verification, Report convergence, runtime snapshots, and route registration remain open. Do not close #37 |
 | 实时流 + 运行中过程流 | #38 | WS 鉴权；inflight 读 `stream.ndjson` |

@@ -44,7 +44,7 @@ export interface CanvasEdge {
   id: string;
   from_node_id: string;
   to_node_id: string;
-  edge_type: "child" | "produces" | "verifies" | "next" | "from" | "to";
+  edge_type: "child" | "produces" | "verifies" | "reviewed_by" | "tested_by" | "next" | "from" | "to";
 }
 
 export interface CanvasData {
@@ -369,8 +369,82 @@ export interface FindingDetail {
     created_at: string;
   }>;
   source_events: JobEvent[];
+  verification_rounds: FindingTraceRound[];
+  trace: FindingTrace;
   comments?: FindingComment[];
   links?: FindingLink[];
+}
+
+export interface FindingTraceEvidence {
+  node_id: string;
+  job_id: string;
+  job_type: string;
+  job_status: string;
+  outcome: string;
+  title: string;
+  at: string;
+}
+
+export interface FindingTraceRound {
+  attempt: number;
+  status: string;
+  outcome: string | null;
+  verify_job_id: string | null;
+  missing: string[];
+  summary: string | null;
+  proposed_verdict: string | null;
+  at: string;
+  finished_at: string | null;
+}
+
+export interface FindingTrace {
+  source: {
+    job_id: string;
+    job_type: string;
+    job_status: string;
+    node_id: string | null;
+    job_node_id: string | null;
+    canvas_id: string;
+    at: string;
+  };
+  evidence: { review: FindingTraceEvidence[]; test: FindingTraceEvidence[] };
+  rounds: FindingTraceRound[];
+  intents: Array<{
+    node_id: string;
+    role: string;
+    status: string | null;
+    job_id: string;
+    description: string;
+    at: string;
+  }>;
+  hubs: Array<{
+    job_id: string;
+    node_id: string | null;
+    trigger_kind: string;
+    status: string;
+    at: string;
+    confidence: "exact";
+  }>;
+  flow: {
+    nodes: Array<{
+      node_id: string;
+      node_type: string;
+      title: string;
+      status: string | null;
+      job_id: string | null;
+      role: string | null;
+      at: string;
+    }>;
+    edges: Array<{
+      edge_id: string;
+      from_node_id: string;
+      to_node_id: string;
+      edge_type: string;
+    }>;
+  };
+  gaps: string[];
+  node_ids: string[];
+  edge_ids: string[];
 }
 
 export interface CanvasConvergence {
