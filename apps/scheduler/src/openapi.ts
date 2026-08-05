@@ -417,7 +417,7 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/agent-roles",
-    summary: "角色注册表",
+    summary: "角色注册表（含调度器分配色）",
     description: "读取全局角色注册表。项目限定 token 可读取注册表，但不能创建、修改或删除角色（写操作返回 403 PROJECT_SCOPE_FORBIDDEN）。",
     scope: "agents:read",
     tags: ["Roles"],
@@ -425,7 +425,7 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/agent-roles",
-    summary: "创建角色",
+    summary: "创建角色（颜色由调度器分配）",
     description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["Roles"],

@@ -16,6 +16,7 @@ import {
   UserCircle,
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
+import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
 import type { CanvasNode } from "./api";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
@@ -76,6 +77,19 @@ export const SEMANTIC_STYLE: Record<
   note: { label: "说明", short: "NOTE", color: "#94a3b8", hint: "过程说明" },
 };
 
+/** Frozen role color wins over the semantic fallback for role intent/job
+ * nodes. Unknown/legacy nodes intentionally fall back to the fixed semantic
+ * color rather than reading mutable role configuration from the client. */
+export function nodeDisplayColor(n: CanvasNode): string {
+  const semantic = semanticNodeKind(n);
+  const frozen = n.body_json?.ui_color;
+  if ((semantic === "subagent" || semantic === "intent") &&
+      typeof frozen === "string" && ROLE_UI_COLOR_PATTERN.test(frozen)) {
+    return frozen.toLowerCase();
+  }
+  return SEMANTIC_STYLE[semantic].color;
+}
+
 /** 运行中状态：状态点带呼吸脉冲 */
 const LIVE_STATUS = new Set(["running", "claimed", "provisioning", "active", "generating"]);
 
@@ -110,6 +124,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const n = data.canvas;
   const semantic = semanticNodeKind(n);
   const style = SEMANTIC_STYLE[semantic];
+  const displayColor = nodeDisplayColor(n);
   const status = n.status ?? "";
   const statusColor = STATUS_COLOR[status] ?? "#71717a";
   const severity = (n.body_json?.severity as string) ?? null;
@@ -150,7 +165,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
 
   const glow =
     LIVE_STATUS.has(status) && (semantic === "intent" || semantic === "subagent" || semantic === "hub" || semantic === "verify")
-      ? `0 0 18px color-mix(in srgb, ${style.color} 28%, transparent)`
+      ? `0 0 18px color-mix(in srgb, ${displayColor} 28%, transparent)`
       : undefined;
 
   const reportStatusIcon =
@@ -176,9 +191,9 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
     <div
       className={`deepsonar-node deepsonar-node--${semantic} w-full overflow-hidden rounded-[16px] ${typeBorder}`}
       style={{
-        border: `1.5px solid color-mix(in srgb, ${style.color} 55%, transparent)`,
-        boxShadow: glow ?? `0 0 0 1px color-mix(in srgb, ${style.color} 18%, transparent)`,
-        background: `linear-gradient(135deg, color-mix(in srgb, ${style.color} 16%, #0c1012) 0%, #0c1012 48%)`,
+        border: `1.5px solid color-mix(in srgb, ${displayColor} 55%, transparent)`,
+        boxShadow: glow ?? `0 0 0 1px color-mix(in srgb, ${displayColor} 18%, transparent)`,
+        background: `linear-gradient(135deg, color-mix(in srgb, ${displayColor} 16%, #0c1012) 0%, #0c1012 48%)`,
       }}
       data-kind={semantic}
       title={`${style.label} · ${style.hint}`}
@@ -188,7 +203,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
       {/* 左侧类型色条：扫一眼就能分类型 */}
       <div
         className="absolute inset-y-0 left-0 w-[5px]"
-        style={{ background: style.color }}
+        style={{ background: displayColor }}
         aria-hidden
       />
 
@@ -199,9 +214,9 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
             <span
               className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg"
               style={{
-                color: style.color,
-                background: `color-mix(in srgb, ${style.color} 18%, transparent)`,
-                boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${style.color} 40%, transparent)`,
+                color: displayColor,
+                background: `color-mix(in srgb, ${displayColor} 18%, transparent)`,
+                boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${displayColor} 40%, transparent)`,
               }}
             >
               {reportStatusIcon ?? kindIcon(semantic, 15)}
@@ -211,9 +226,9 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                 <span
                   className="rounded-md px-1.5 py-0.5 font-mono text-[11px] font-semibold tracking-wide"
                   style={{
-                    color: style.color,
-                    background: `color-mix(in srgb, ${style.color} 16%, transparent)`,
-                    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${style.color} 45%, transparent)`,
+                    color: displayColor,
+                    background: `color-mix(in srgb, ${displayColor} 16%, transparent)`,
+                    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${displayColor} 45%, transparent)`,
                   }}
                 >
                   {style.label}
@@ -223,9 +238,9 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                   <span
                     className="max-w-[7.5rem] truncate rounded border px-1 py-0.5 font-mono text-[10px] uppercase tracking-wider"
                     style={{
-                      color: style.color,
-                      borderColor: `${style.color}55`,
-                      background: `color-mix(in srgb, ${style.color} 10%, transparent)`,
+                      color: displayColor,
+                      borderColor: `${displayColor}55`,
+                      background: `color-mix(in srgb, ${displayColor} 10%, transparent)`,
                     }}
                     title={roleOrType}
                   >

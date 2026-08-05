@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 15);
+INSERT INTO schema_meta (id, version) VALUES ('global', 16);
 
 -- Scheduler migration ledger.  Failed attempts are retained for audit; only
 -- successful rows are unique per version and participate in the applied
@@ -44,6 +44,10 @@ VALUES (14, '0014_add_canvas_change_log.sql',
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (15, '0015_credential_health_metadata.sql',
         '9de5ad157cfcfa0add0beabf17fe9ebf6d7c858b8518b444eeea2d7a7fcd11d6',
+        'succeeded');
+INSERT INTO schema_migrations (version, filename, checksum, result)
+VALUES (16, '0016_role_ui_colors.sql',
+        'ec758c08a4e25e45c9c940117f4b5c896fa5ca49dfc85e9a529c0db4609a6901',
         'succeeded');
 
 CREATE TABLE projects (
@@ -352,8 +356,14 @@ CREATE TABLE agent_roles (
   builtin boolean NOT NULL DEFAULT false,
   kind text NOT NULL DEFAULT 'role',
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  ui_color text,
+  CONSTRAINT agent_roles_ui_color_check
+    CHECK (ui_color IS NULL OR ui_color ~ '^#[0-9A-Fa-f]{6}$')
 );
+CREATE UNIQUE INDEX agent_roles_role_ui_color_uniq
+  ON agent_roles (lower(ui_color))
+  WHERE kind = 'role' AND ui_color IS NOT NULL;
 
 CREATE TABLE global_settings (
   id text PRIMARY KEY DEFAULT 'global',
@@ -759,6 +769,7 @@ BEGIN
       'severity', body->>'severity',
       'role', body->>'role',
       'type', body->>'type',
+      'ui_color', body->>'ui_color',
       'last_progress', progress
     ),
     'x', COALESCE((p_node->>'x')::real, 0),
@@ -892,16 +903,16 @@ INSERT INTO runtime_data_layers (layer_key, name, tool_name, description, enable
   ('osv-db', 'OSV Offline Database', 'osv-scanner', '可选的离线 OSV 数据层；未审批版本不得挂载到运行时', false)
 ON CONFLICT (layer_key) DO NOTHING;
 
-INSERT INTO agent_roles (name, title, description, builtin, kind) VALUES
-  ('explore', '探索', '围绕任务意图收集新的、可验证的事实与证据', true, 'role'),
-  ('analyze', '分析', '关联已有事实，追踪数据流、评估影响并形成有证据的分析结论', true, 'role'),
-  ('review', '复核', '复核图中疑似风险是否成立、是否可利用，产出带证据的复核事实', true, 'role'),
-  ('test', '测试', '默认在精简 Kali 多语言环境中搭建测试或 PoC，记录复现条件与结果', true, 'role'),
-  ('code', '代码', '在任务明确要求时修改代码，并提供变更与验证证据', true, 'role'),
-  ('audit', '审计', '根据任务目标自行确定材料获取方式和审计范围，产出结构化 Finding', true, 'role'),
-  ('hub_reason', '决策中枢', '读取任务画布并判断完成度；未完成时选择角色并编写完整 Worker prompt；不可下发 verify/report', true, 'hub'),
-  ('verify', '验证', '系统角色：默认在最小基础环境中验证 Finding；只提交 confirmed/rework/needs_human 提案，Scheduler 证据硬门后才可写 confirmed；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发', true, 'system'),
-  ('report', '报告', '系统角色：整合全部 Finding，分栏 confirmed 与 needs_human 撰写任务总报告；Hub 不可下发', true, 'system')
+INSERT INTO agent_roles (name, title, description, builtin, kind, ui_color) VALUES
+  ('explore', '探索', '围绕任务意图收集新的、可验证的事实与证据', true, 'role', '#4ade80'),
+  ('analyze', '分析', '关联已有事实，追踪数据流、评估影响并形成有证据的分析结论', true, 'role', '#e879f9'),
+  ('review', '复核', '复核图中疑似风险是否成立、是否可利用，产出带证据的复核事实', true, 'role', '#fb923c'),
+  ('test', '测试', '默认在精简 Kali 多语言环境中搭建测试或 PoC，记录复现条件与结果', true, 'role', '#f472b6'),
+  ('code', '代码', '在任务明确要求时修改代码，并提供变更与验证证据', true, 'role', '#a3e635'),
+  ('audit', '审计', '根据任务目标自行确定材料获取方式和审计范围，产出结构化 Finding', true, 'role', '#facc15'),
+  ('hub_reason', '决策中枢', '读取任务画布并判断完成度；未完成时选择角色并编写完整 Worker prompt；不可下发 verify/report', true, 'hub', NULL),
+  ('verify', '验证', '系统角色：默认在最小基础环境中验证 Finding；只提交 confirmed/rework/needs_human 提案，Scheduler 证据硬门后才可写 confirmed；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发', true, 'system', NULL),
+  ('report', '报告', '系统角色：整合全部 Finding，分栏 confirmed 与 needs_human 撰写任务总报告；Hub 不可下发', true, 'system', NULL)
 ON CONFLICT (name) DO NOTHING;
 
 -- 首次建库内置一组可编辑的长期指令模板。平台会在每个 Job 中把模板与通用运行契约

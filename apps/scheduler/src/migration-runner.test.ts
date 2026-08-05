@@ -26,34 +26,38 @@ import {
   TRUSTED_V13_CATALOG_SHA256,
   TRUSTED_V14_CATALOG_SHA256,
   TRUSTED_V15_CATALOG_SHA256,
+  TRUSTED_V16_CATALOG_SHA256,
   TRUSTED_CATALOG_SHA256_BY_VERSION,
 } from "./schema-version.js";
 
 test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", async () => {
   const migrations = discoverMigrations();
-  assert.deepEqual(migrations.map((migration) => migration.version), [13, 14, 15]);
+  assert.deepEqual(migrations.map((migration) => migration.version), [13, 14, 15, 16]);
   assert.equal(migrations[0]?.filename, "0013_add_schema_migrations.sql");
   assert.equal(migrations[1]?.filename, "0014_add_canvas_change_log.sql");
   assert.equal(migrations[2]?.filename, "0015_credential_health_metadata.sql");
+  assert.equal(migrations[3]?.filename, "0016_role_ui_colors.sql");
   assert.match(migrations[0]?.checksum ?? "", /^[0-9a-f]{64}$/);
   assert.equal(parseTableManifest(readTrustedV12Baseline()).has("schema_migrations"), false);
   assert.equal(parseTableManifest(await readFile(SCHEMA_FILE, "utf8")).has("schema_migrations"), true);
-  assert.equal(SCHEMA_VERSION, 15);
+  assert.equal(SCHEMA_VERSION, 16);
   assert.equal(SUPPORTED_BASELINE_VERSION, 12);
   assert.equal(TRUSTED_V12_BASELINE_SHA256.length, 64);
   assert.match(TRUSTED_V12_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.match(TRUSTED_V13_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.match(TRUSTED_V14_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.match(TRUSTED_V15_CATALOG_SHA256, /^[0-9a-f]{64}$/);
+  assert.match(TRUSTED_V16_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SUPPORTED_BASELINE_VERSION], TRUSTED_V12_CATALOG_SHA256);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[13], TRUSTED_V13_CATALOG_SHA256);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[14], TRUSTED_V14_CATALOG_SHA256);
-  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SCHEMA_VERSION], TRUSTED_V15_CATALOG_SHA256);
+  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[15], TRUSTED_V15_CATALOG_SHA256);
+  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SCHEMA_VERSION], TRUSTED_V16_CATALOG_SHA256);
   assert.equal(
-    ledgerCatalogVersionForTarget(SUPPORTED_BASELINE_VERSION, 15, {
+    ledgerCatalogVersionForTarget(SUPPORTED_BASELINE_VERSION, 16, {
       supportedBaselineVersion: 12,
       firstMigrationVersion: 13,
-      latestSchemaVersion: 15,
+      latestSchemaVersion: 16,
     }),
     13,
   );
@@ -128,7 +132,12 @@ async function columns(db: ReturnType<typeof postgres>): Promise<string[]> {
   return rows.map((row) => `${row.table_name}.${row.column_name}`);
 }
 
-test("fresh v15 and v12 upgrade have equivalent table/column structure", {
+async function roleColors(db: ReturnType<typeof postgres>): Promise<{ name: string; ui_color: string | null }[]> {
+  return db<{ name: string; ui_color: string | null }[]>`
+    SELECT name, ui_color FROM agent_roles WHERE kind = 'role' ORDER BY name`;
+}
+
+test("fresh v16 and v12 upgrade have equivalent table/column structure", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -164,13 +173,23 @@ test("fresh v15 and v12 upgrade have equivalent table/column structure", {
     `;
     assert.deepEqual(legacy?.public_metadata_json, { allowed_model_ids: ["gpt-safe"] });
     assert.deepEqual(await columns(freshDb), await columns(upgradedDb));
+    const freshRoleColors = await roleColors(freshDb);
+    const upgradedRoleColors = await roleColors(upgradedDb);
+    assert.deepEqual(upgradedRoleColors, freshRoleColors);
+    assert.ok(freshRoleColors.length > 0);
+    assert.ok(freshRoleColors.every((role) => /^#[0-9a-f]{6}$/i.test(role.ui_color ?? "")));
+    const reserved = new Set([
+      "#2dd4bf", "#38bdf8", "#a78bfa", "#fb7185", "#f59e0b",
+      "#34d399", "#22d3ee", "#818cf8", "#f97316", "#94a3b8",
+    ]);
+    assert.ok(freshRoleColors.every((role) => !reserved.has((role.ui_color ?? "").toLowerCase())));
     assert.equal(
       await catalogFingerprint(freshDb as unknown as MigrationConnection),
-      TRUSTED_V15_CATALOG_SHA256,
+      TRUSTED_V16_CATALOG_SHA256,
     );
     assert.equal(
       await catalogFingerprint(upgradedDb as unknown as MigrationConnection),
-      TRUSTED_V15_CATALOG_SHA256,
+      TRUSTED_V16_CATALOG_SHA256,
     );
     await upgradedDb`DROP INDEX canvases_project_idx`;
     assert.notEqual(
@@ -234,7 +253,7 @@ test("a v12 database with legacy or future successful ledger rows fails before v
   }
 });
 
-test("versioned catalog pins continue v15 through a future v16 chain", {
+test("versioned catalog pins continue v16 through a future v17 chain", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -247,7 +266,7 @@ test("versioned catalog pins continue v15 through a future v16 chain", {
   const expectedDb = postgres(expected.url, { max: 2 });
   const bootstrapDb = postgres(bootstrap.url, { max: 2 });
   const directory = await mkdtemp(path.join(os.tmpdir(), "deepsonar-future-migrations-"));
-  const futureSchemaFile = path.join(os.tmpdir(), `deepsonar-schema-v16-${process.pid}-${Date.now()}.sql`);
+  const futureSchemaFile = path.join(os.tmpdir(), `deepsonar-schema-v17-${process.pid}-${Date.now()}.sql`);
   try {
     await applyBaseline(db);
     await withMigrationLock(db);
@@ -260,27 +279,30 @@ test("versioned catalog pins continue v15 through a future v16 chain", {
     const source15 = path.join(MIGRATIONS_DIR, "0015_credential_health_metadata.sql");
     const body15 = await readFile(source15, "utf8");
     const migration15Checksum = sha256Utf8(Buffer.from(body15, "utf8"));
-    const body16 = "ALTER TABLE schema_migrations ADD COLUMN migration16_marker text;\n";
-    const checksum16 = sha256Utf8(Buffer.from(body16, "utf8"));
-    await expectedDb`ALTER TABLE schema_migrations ADD COLUMN migration16_marker text`;
+    const source16 = path.join(MIGRATIONS_DIR, "0016_role_ui_colors.sql");
+    const body16 = await readFile(source16, "utf8");
+    const body17 = "ALTER TABLE schema_migrations ADD COLUMN migration17_marker text;\n";
+    const checksum17 = sha256Utf8(Buffer.from(body17, "utf8"));
+    await expectedDb`ALTER TABLE schema_migrations ADD COLUMN migration17_marker text`;
     const expectedCatalogFingerprint16 = await catalogFingerprint(expectedDb as unknown as MigrationConnection);
     await writeFile(path.join(directory, "0013_add_schema_migrations.sql"), body13, "utf8");
     await writeFile(path.join(directory, "0014_add_canvas_change_log.sql"), body14, "utf8");
     await writeFile(path.join(directory, "0015_credential_health_metadata.sql"), body15, "utf8");
-    await writeFile(path.join(directory, "0016_add_migration_marker.sql"), body16, "utf8");
+    await writeFile(path.join(directory, "0016_role_ui_colors.sql"), body16, "utf8");
+    await writeFile(path.join(directory, "0017_add_migration_marker.sql"), body17, "utf8");
     const latest = await readFile(SCHEMA_FILE, "utf8");
     const futureLatest = latest
-      .replace("INSERT INTO schema_meta (id, version) VALUES ('global', 15);", "INSERT INTO schema_meta (id, version) VALUES ('global', 16);")
-      .replace("  error text,\n", "  error text,\n  migration16_marker text,\n")
-      .replace("        'succeeded');\n\nCREATE TABLE projects", `        'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (16, '0016_add_migration_marker.sql', '${checksum16}', 'succeeded');\n\nCREATE TABLE projects`);
+      .replace("INSERT INTO schema_meta (id, version) VALUES ('global', 16);", "INSERT INTO schema_meta (id, version) VALUES ('global', 17);")
+      .replace("  error text,\n", "  error text,\n  migration17_marker text,\n")
+      .replace("        'succeeded');\n\nCREATE TABLE projects", `        'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (17, '0017_add_migration_marker.sql', '${checksum17}', 'succeeded');\n\nCREATE TABLE projects`);
     await writeFile(futureSchemaFile, futureLatest, "utf8");
     await db`UPDATE schema_migrations SET checksum = ${"0".repeat(64)} WHERE version = 15 AND result = 'succeeded'`;
     await assert.rejects(
       withMigrationLock(db, {
         schemaFile: futureSchemaFile,
         migrationsDirectory: directory,
-        targetVersion: 16,
-        expectedCatalogFingerprints: { 16: expectedCatalogFingerprint16 },
+        targetVersion: 17,
+        expectedCatalogFingerprints: { 17: expectedCatalogFingerprint16 },
       }),
       /checksum drift/i,
     );
@@ -288,33 +310,34 @@ test("versioned catalog pins continue v15 through a future v16 chain", {
     const applied = await withMigrationLock(db, {
       schemaFile: futureSchemaFile,
       migrationsDirectory: directory,
-      targetVersion: 16,
-      expectedCatalogFingerprints: { 16: expectedCatalogFingerprint16 },
+      targetVersion: 17,
+      expectedCatalogFingerprints: { 17: expectedCatalogFingerprint16 },
     });
-    assert.deepEqual(applied, ["database/migrations/0016_add_migration_marker.sql"]);
+    assert.deepEqual(applied, ["database/migrations/0017_add_migration_marker.sql"]);
     const [meta] = await db<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
-    assert.equal(meta?.version, 16);
+    assert.equal(meta?.version, 17);
     const [marker] = await db<{ column_name: string }[]>`
       SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'schema_migrations' AND column_name = 'migration16_marker'
+      WHERE table_schema = 'public' AND table_name = 'schema_migrations' AND column_name = 'migration17_marker'
     `;
-    assert.equal(marker?.column_name, "migration16_marker");
+    assert.equal(marker?.column_name, "migration17_marker");
 
     await applyBaseline(bootstrapDb);
     const appliedBootstrap = await withMigrationLock(bootstrapDb, {
       schemaFile: futureSchemaFile,
       migrationsDirectory: directory,
-      targetVersion: 16,
-      expectedCatalogFingerprints: { 16: expectedCatalogFingerprint16 },
+      targetVersion: 17,
+      expectedCatalogFingerprints: { 17: expectedCatalogFingerprint16 },
     });
     assert.deepEqual(appliedBootstrap, [
       "database/migrations/0013_add_schema_migrations.sql",
       "database/migrations/0014_add_canvas_change_log.sql",
       "database/migrations/0015_credential_health_metadata.sql",
-      "database/migrations/0016_add_migration_marker.sql",
+      "database/migrations/0016_role_ui_colors.sql",
+      "database/migrations/0017_add_migration_marker.sql",
     ]);
     const [bootstrapMeta] = await bootstrapDb<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
-    assert.equal(bootstrapMeta?.version, 16);
+    assert.equal(bootstrapMeta?.version, 17);
   } finally {
     await db.end();
     await expectedDb.end();
@@ -342,10 +365,12 @@ test("failed migration rolls back, leaves an audit row, and retries", {
     const source = path.join(MIGRATIONS_DIR, "0013_add_schema_migrations.sql");
     const source14 = path.join(MIGRATIONS_DIR, "0014_add_canvas_change_log.sql");
     const source15 = path.join(MIGRATIONS_DIR, "0015_credential_health_metadata.sql");
+    const source16 = path.join(MIGRATIONS_DIR, "0016_role_ui_colors.sql");
     const bad = await readFile(source, "utf8");
     await writeFile(path.join(directory, "0013_add_schema_migrations.sql"), `${bad}\nTHIS IS NOT SQL;\n`, "utf8");
     await cp(source14, path.join(directory, "0014_add_canvas_change_log.sql"));
     await cp(source15, path.join(directory, "0015_credential_health_metadata.sql"));
+    await cp(source16, path.join(directory, "0016_role_ui_colors.sql"));
     const failedDb = await db.reserve();
     await failedDb`SELECT pg_advisory_lock(${MIGRATE_LOCK_ID})`;
     try {
@@ -382,7 +407,7 @@ test("failed migration rolls back, leaves an audit row, and retries", {
   }
 });
 
-test("concurrent migration startups apply v15 once", {
+test("concurrent migration startups apply v16 once", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -394,7 +419,7 @@ test("concurrent migration startups apply v15 once", {
   try {
     await applyBaseline(first);
     await Promise.all([withMigrationLock(first), withMigrationLock(second)]);
-    const rows = await first<{ count: number }[]>`SELECT count(*)::int AS count FROM schema_migrations WHERE version = 15 AND result = 'succeeded'`;
+    const rows = await first<{ count: number }[]>`SELECT count(*)::int AS count FROM schema_migrations WHERE version = 16 AND result = 'succeeded'`;
     assert.equal(rows[0]?.count, 1);
   } finally {
     await first.end();

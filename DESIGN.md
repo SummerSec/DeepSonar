@@ -115,6 +115,7 @@ pending → claimed → provisioning → running
 
 - 任务列表 / 任务工作台（画布 · Findings · Jobs · 报告）
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
+- 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
 - **任务是否在跑：以 `active_count` / 活跃 Job 为准**；勿把 `last_job_status=succeeded` 当成任务已完成（#46）
 - 画布只读；Finding 详情偏 GitHub Issue（disposition + 评论可唤醒 Hub）
 

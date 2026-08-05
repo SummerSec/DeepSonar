@@ -233,7 +233,7 @@ async function collectRoles(
   >;
 
   const roleRows = await sql`
-    SELECT r.id, r.name, r.title, r.description, r.builtin, r.kind
+    SELECT r.id, r.name, r.title, r.description, r.builtin, r.kind, r.ui_color
     FROM agent_roles r
     WHERE r.kind = 'role' OR r.name IN (
       SELECT ar.name FROM agent_roles ar

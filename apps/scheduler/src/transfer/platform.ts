@@ -11,6 +11,11 @@ import {
   validateCredentialRoleConfigBinding,
 } from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
+import {
+  ROLE_COLOR_ADVISORY_KEY,
+  normalizeRoleUiColor,
+  resolveImportedRoleUiColor,
+} from "../role-colors.js";
 import { sql } from "../db.js";
 import {
   buildManifestSource,
@@ -146,7 +151,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
 
     if (modules.includes("agent_roles")) {
       const roles = await sql`
-        SELECT name, title, description, builtin, kind FROM agent_roles ORDER BY kind DESC, name`;
+        SELECT name, title, description, builtin, kind, ui_color FROM agent_roles ORDER BY kind DESC, name`;
       files.push({ path: "data/agent-roles.jsonl", content: toJsonl(roles) });
       counts.agent_roles = roles.length;
     }
@@ -422,6 +427,9 @@ export async function applyPlatformImport(
       // Global RoleConfig imports share the same critical section as
       // Credential provider/project/metadata mutations.
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+      // Role colors are allocated/remapped under a second transaction-scoped
+      // lock so concurrent imports cannot preserve the same source hint.
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${ROLE_COLOR_ADVISORY_KEY}))`;
 
       // global rules
       const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/global-rules.json");
@@ -438,19 +446,55 @@ export async function applyPlatformImport(
 
       // agent roles
       const roles = readJsonl(pack.files, "data/agent-roles.jsonl");
+      type ExistingRole = {
+        id: string;
+        name: string;
+        builtin: boolean;
+        kind: string;
+        ui_color: string | null;
+      };
+      const existingRoles = (await tx`SELECT id, name, builtin, kind, ui_color FROM agent_roles`) as ExistingRole[];
+      const roleByName = new Map(existingRoles.map((entry) => [entry.name, entry] as const));
+      const usedRoleColors = new Set<string>();
+      for (const entry of existingRoles) {
+        if (entry.kind !== "role") continue;
+        const color = normalizeRoleUiColor(entry.ui_color);
+        if (color) usedRoleColors.add(color);
+      }
       let roleN = 0;
       for (const r of roles) {
         const name = String(r.name);
-        const [ex] = await tx`SELECT id, builtin, kind FROM agent_roles WHERE name = ${name}`;
+        const ex = roleByName.get(name);
         if (ex) {
-          // builtin 只允许改 title/description；自定义可更新
-          await tx`
-            UPDATE agent_roles SET
-              title = ${String(r.title ?? "")},
-              description = ${String(r.description ?? "")},
-              updated_at = now()
-            WHERE name = ${name}`;
+          if (ex.kind === "role") {
+            // Remove this role's old color before resolving its replacement;
+            // this lets a round-trip import keep its own legal color while
+            // still remapping collisions with every other role.
+            const previous = normalizeRoleUiColor(ex.ui_color);
+            if (previous) usedRoleColors.delete(previous);
+            const resolved = resolveImportedRoleUiColor(r.ui_color, ex.ui_color, usedRoleColors);
+            usedRoleColors.add(resolved);
+            await tx`
+              UPDATE agent_roles SET
+                title = ${String(r.title ?? "")},
+                description = ${String(r.description ?? "")},
+                ui_color = ${resolved},
+                updated_at = now()
+              WHERE id = ${ex.id}`;
+            ex.ui_color = resolved;
+          } else {
+            // System / hub roles use fixed semantic canvas colors and remain
+            // uncolored in the role registry regardless of pack contents.
+            await tx`
+              UPDATE agent_roles SET
+                title = ${String(r.title ?? "")},
+                description = ${String(r.description ?? "")},
+                updated_at = now()
+              WHERE id = ${ex.id}`;
+          }
         } else if (!r.builtin) {
+          const resolved = resolveImportedRoleUiColor(r.ui_color, null, usedRoleColors);
+          usedRoleColors.add(resolved);
           await tx`
             INSERT INTO agent_roles ${tx({
               name,
@@ -458,6 +502,7 @@ export async function applyPlatformImport(
               description: String(r.description ?? ""),
               builtin: false,
               kind: "role",
+              ui_color: resolved,
             })}`;
         }
         // builtin 缺失则跳过（应由 schema 基线提供）
