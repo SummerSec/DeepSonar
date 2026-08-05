@@ -6,6 +6,7 @@ import {
   FindingPayload,
   HumanPayload,
   ProgressPayload,
+  allowedPlatformTools,
   resolvePlatformTools,
   type EventEnvelopeInput,
   type PlatformToolConfig,
@@ -72,6 +73,9 @@ const eventIngestionApplication = createEventIngestionApplication(
       progressPerWindow: config.events.rateLimitProgressPerWindow,
       standardPerWindow: config.events.rateLimitStandardPerWindow,
       terminalPerWindow: config.events.rateLimitTerminalPerWindow,
+    },
+    onRateLimited: (error) => {
+      inc("deepsonar_event_rate_limited_total", { bucket: error.bucket });
     },
   },
 );
@@ -952,6 +956,166 @@ export interface CoreSideEffectServices {
   hubEdgeBatchInsert?: HubEdgeBatchInsert;
 }
 
+const SEMANTIC_TOOL_BY_EVENT: Readonly<Record<string, PlatformToolName>> = {
+  progress: "emit_progress",
+  finding: "emit_finding",
+  fact: "emit_fact",
+  hub_decision: "submit_hub_decision",
+  done: "mark_job_done",
+  human: "request_human",
+};
+
+type SemanticRoleKind = "role" | "hub" | "system";
+
+const RESERVED_SNAPSHOT_NAMES: Readonly<Record<string, SemanticRoleKind>> = {
+  hub: "hub",
+  hub_reason: "hub",
+  verify: "system",
+  verify_finding: "system",
+  report: "system",
+};
+
+function semanticRoleNamesEquivalent(typeName: string, snapshotName: string): boolean {
+  // Hub snapshots emitted by older/runtime adapters used `hub` while the
+  // persisted system Job type is `hub_reason`, and vice versa.
+  if ((typeName === "hub_reason" && snapshotName === "hub") || (typeName === "hub" && snapshotName === "hub_reason")) {
+    return true;
+  }
+  return typeName === snapshotName;
+}
+
+function isSemanticRoleKind(value: unknown): value is SemanticRoleKind {
+  return value === "role" || value === "hub" || value === "system";
+}
+
+function semanticJobContract(job: Record<string, unknown>): {
+  name: string;
+  kind: SemanticRoleKind;
+  platformTools: string[] | null;
+} {
+  const rawSnapshot = job.agent_snapshot_json;
+  if (!rawSnapshot || typeof rawSnapshot !== "object" || Array.isArray(rawSnapshot)) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "Job 快照必须是 JSON object。",
+      "agent_snapshot_json",
+    );
+  }
+  const snapshot = rawSnapshot as Record<string, unknown>;
+  const jobType = String(job.type ?? "").trim().toLowerCase();
+  const typeName = roleNameForJobType(jobType);
+  // The persisted Job type is the Scheduler's authority for the role kind.
+  // Snapshot role_kind/name are checked against it, never allowed to upgrade a
+  // normal worker (for example, `review`) into a Hub.
+  const kind: SemanticRoleKind = RESERVED_SNAPSHOT_NAMES[typeName] ?? "role";
+  const rawName = typeof snapshot.name === "string" && snapshot.name.trim()
+    ? roleNameForJobType(snapshot.name.trim().toLowerCase())
+    : null;
+  if (rawName && !semanticRoleNamesEquivalent(typeName, rawName)) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "Job 快照角色名称与 Scheduler Job 类型不一致。",
+      "name",
+    );
+  }
+  const snapshotReservedKind = rawName ? RESERVED_SNAPSHOT_NAMES[rawName] : undefined;
+  if (snapshotReservedKind && snapshotReservedKind !== kind) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      "Job 快照角色与 Scheduler Job 类型不一致。",
+      "role_kind",
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(snapshot, "role_kind")) {
+    if (!isSemanticRoleKind(snapshot.role_kind) || snapshot.role_kind !== kind) {
+      throw new ControlInputError(
+        "tool_not_allowed",
+        "Job 快照 role_kind 与 Scheduler Job 类型不一致。",
+        "role_kind",
+      );
+    }
+  }
+  const name = kind === "hub" || kind === "system" ? typeName : (rawName ?? typeName);
+  let platformTools: string[] | null = null;
+  if (Object.prototype.hasOwnProperty.call(snapshot, "platform_tools")) {
+    if (!Array.isArray(snapshot.platform_tools) || snapshot.platform_tools.some((tool) => typeof tool !== "string")) {
+      throw new ControlInputError(
+        "tool_not_allowed",
+        "Job 快照 platform_tools 格式无效。",
+        "platform_tools",
+      );
+    }
+    platformTools = snapshot.platform_tools as string[];
+  }
+  return { name, kind, platformTools };
+}
+
+/**
+ * Re-apply the frozen Job tool contract at the authoritative ingest boundary.
+ * The real executor performs the same check while buffering MCP events, but
+ * direct/fake/recovery callers must not be able to skip it.
+ */
+function assertSemanticToolAuthority(job: Record<string, unknown>, type: string): void {
+  const requiredTool = SEMANTIC_TOOL_BY_EVENT[type];
+  if (!requiredTool) return;
+  const contract = semanticJobContract(job);
+  const staticAllowed = allowedPlatformTools(contract.name, contract.kind);
+  let roleAllowed = staticAllowed.includes(requiredTool);
+  if (type === "finding") roleAllowed = roleAllowed && contract.kind === "role" && contract.name === "audit";
+  if (type === "fact") roleAllowed = roleAllowed && contract.kind === "role" && contract.name !== "audit";
+  if (type === "hub_decision") roleAllowed = roleAllowed && contract.kind === "hub";
+  const snapshotAllowed = contract.platformTools === null || contract.platformTools.includes(requiredTool);
+  if (!roleAllowed || !snapshotAllowed) {
+    throw new ControlInputError(
+      "tool_not_allowed",
+      `${requiredTool} is not authorized for this Job`,
+      requiredTool,
+    );
+  }
+}
+
+/** Semantic events are accepted only while the Scheduler still owns a
+ * running Job.  The event-ingestion transaction has already locked this row;
+ * the check therefore rolls back the current dedup marker, quota row, event,
+ * and any Canvas side effects when a terminal/late callback arrives. */
+function assertSemanticJobRunning(job: Record<string, unknown>, type: string): void {
+  if (!SEMANTIC_TOOL_BY_EVENT[type]) return;
+  if (job.status !== "running") {
+    throw new ControlInputError(
+      "job_not_running",
+      "语义事件只能提交给 status=running 的 Job。",
+      "status",
+    );
+  }
+}
+
+/**
+ * Terminal/control events are serialized by the Job lock acquired upstream.
+ * A Hub decision may be followed by exactly one done event; human is mutually
+ * exclusive with both, and each event type is single-shot per Job.
+ */
+async function assertTerminalEventHistory(tx: Tx, jobId: string, type: string): Promise<void> {
+  if (!(type in SEMANTIC_TOOL_BY_EVENT) || !["done", "human", "hub_decision"].includes(type)) return;
+  const rows = await tx<{ type: string }[]>`
+    SELECT type FROM events
+    WHERE job_id = ${jobId} AND type IN ('done', 'human', 'hub_decision')
+    ORDER BY job_seq`;
+  const doneCount = rows.filter((row) => row.type === "done").length;
+  const humanCount = rows.filter((row) => row.type === "human").length;
+  const hubCount = rows.filter((row) => row.type === "hub_decision").length;
+  if (doneCount > 1 || humanCount > 1 || hubCount > 1) {
+    throw new ControlInputError("duplicate_tool_call", "同一 Job 的终态工具每类只能提交一次。", type);
+  }
+  if (humanCount > 0 && (doneCount > 0 || hubCount > 0)) {
+    throw new ControlInputError("duplicate_tool_call", "request_human 不得与 mark_job_done 或 submit_hub_decision 同时提交。", type);
+  }
+  const hubIndex = rows.findIndex((row) => row.type === "hub_decision");
+  const doneIndex = rows.findIndex((row) => row.type === "done");
+  if (hubIndex >= 0 && doneIndex >= 0 && hubIndex > doneIndex) {
+    throw new ControlInputError("duplicate_tool_call", "Hub 决策必须先于 mark_job_done 提交。", type);
+  }
+}
+
 export async function applySideEffects(
   tx: Tx,
   jobId: string,
@@ -983,8 +1147,11 @@ export async function applySideEffects(
   // Event-ingestion wraps this callback in the same transaction, so a later
   // rejection rolls back the event, jobs, nodes, and edges as one decision.
   const hubDecision: HubDecision | null = type === "hub_decision" ? parseHubDecisionPayload(payload) : null;
-  const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+  const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId} FOR UPDATE`;
   if (!job) throw new Error(`job ${jobId} 不存在`);
+  assertSemanticJobRunning(job as Record<string, unknown>, type);
+  assertSemanticToolAuthority(job as Record<string, unknown>, type);
+  await assertTerminalEventHistory(tx, jobId, type);
 
   if (type === "done") {
     // The real executor performs the same check before buffering terminal
@@ -1359,7 +1526,9 @@ function sameTerminalCanvasNodes(
 
 /**
  * 结束处理（§8.2）：done/failed 只能把 running 改为终态。
- * 迟到事件（job 已 cancelled/timeout/orphan）记录进 events 表但副作用返回 false，
+ * 语义事件入口在同一摄入事务提交前拒绝非 running Job（稳定
+ * `job_not_running`，对外全事务回滚）；仅相同 event_id 的 dedup replay
+ * 会在该门槛前直接返回。
  * 终态永不被迟到事件覆盖。
  */
 export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "failed", result?: { summary?: string; error?: string; verdict?: string }) {
@@ -1413,7 +1582,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
     WHERE id = ${jobId} AND status = 'running'
     RETURNING id, canvas_id`;
   if (!updated) {
-    console.warn(`[finalize] job ${jobId} 已不在 running，忽略迟到 ${status} 事件副作用`);
+    console.warn(`[finalize] job ${jobId} 已不在 running，跳过重复 ${status} 终态提交`);
     return false;
   }
   if (((updated.canvas_id as string | null) ?? null) !== candidateJobCanvasId) {

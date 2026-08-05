@@ -504,7 +504,7 @@ RETURNING *;
 - `done` 只能将 `running` 改为 `succeeded`；
 - `failed` 只能从允许状态进入；
 - `cancelled/timeout/orphan` 是不可被迟到事件覆盖的终态；
-- 迟到 Event 可以记录，但 Side Effect 必须返回 `ignored_terminal_state`；
+- 迟到 Event 在同一摄入事务提交前以稳定 `job_not_running` 拒绝并全事务回滚（仅相同 `event_id` 的 dedup replay 早返回）；
 - 每次执行引入 `attempt_id` 或独立 Job，Event 必须绑定准确执行尝试。
 
 ### 8.3 Provision、执行与取消

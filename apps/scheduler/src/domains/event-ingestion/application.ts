@@ -6,6 +6,7 @@ import {
 import { sql } from "../../db.js";
 import {
   consumeEventRateLimit,
+  EventRateLimitError,
   type EventRateLimitPolicy,
 } from "./rate-limit.js";
 
@@ -37,6 +38,8 @@ export interface EventIngestionApplication {
 export interface EventIngestionOptions {
   maxPayloadBytes?: number;
   rateLimit?: Partial<EventRateLimitPolicy>;
+  /** Scheduler-owned low-cardinality observation for authoritative rejects. */
+  onRateLimited?: (error: EventRateLimitError, jobId: string) => void;
   /** Override only in deterministic tests; production uses PostgreSQL time. */
   clock?: () => Date;
 }
@@ -228,7 +231,12 @@ async function appendAndApply(
       ? options.clock()
       : (await tx<{ now: Date }[]>`SELECT statement_timestamp() AS now`)[0]?.now;
     if (!now) throw new Error("event rate-limit clock unavailable");
-    await consumeEventRateLimit(tx, jobId, envelope.type, new Date(now), options.rateLimit);
+    try {
+      await consumeEventRateLimit(tx, jobId, envelope.type, new Date(now), options.rateLimit);
+    } catch (error) {
+      if (error instanceof EventRateLimitError) options.onRateLimited?.(error, jobId);
+      throw error;
+    }
 
     const [{ next }] = await tx<[{ next: number }]>`
       SELECT COALESCE(MAX(job_seq), 0) + 1 AS next FROM events WHERE job_id = ${jobId}`;

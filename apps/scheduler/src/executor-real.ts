@@ -61,36 +61,14 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
-/** Preserve the Scheduler-owned rate-limit code/metadata at the real-agent
- * boundary without copying untrusted event payloads into logs. */
-function observeSemanticIngestionError(error: unknown, jobId: string): void {
-  if (!error || typeof error !== "object") return;
-  const candidate = error as {
-    code?: unknown;
-    metadata?: { bucket?: unknown; retry_after_sec?: unknown; limit?: unknown };
-  };
-  if (candidate.code !== "event_rate_limited") return;
-  const bucket = typeof candidate.metadata?.bucket === "string" ? candidate.metadata.bucket : "unknown";
-  inc("deepsonar_event_rate_limited_total", { bucket });
-  console.warn("[real-agent] semantic event rejected by Scheduler rate limiter", {
-    job_id: jobId,
-    code: candidate.code,
-    bucket,
-    retry_after_sec: candidate.metadata?.retry_after_sec,
-    limit: candidate.metadata?.limit,
-  });
-}
-
 async function ingestSemanticEventObserved(
   jobId: string,
   event: EventEnvelopeInput,
 ): Promise<void> {
-  try {
-    await ingestEvent(jobId, event);
-  } catch (error) {
-    observeSemanticIngestionError(error, jobId);
-    throw error;
-  }
+  // The authoritative ingestion application records rate-limit metrics for
+  // every caller (real, fake, recovery, and direct); this wrapper only keeps
+  // the real-agent call sites uniform across semantic event types.
+  await ingestEvent(jobId, event);
 }
 
 /** Rebuild only the Scheduler-owned stable error shape after the sandbox's string result boundary. */

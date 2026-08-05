@@ -19,6 +19,7 @@
     "ci:unit:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.test.ts",
     "ci:integration:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.integration.test.ts",
     "ci:integration:event-ingestion": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/event-ingestion.integration.test.ts",
+    "ci:integration:event-authorization": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/authorization.integration.test.ts",
     "ci:unit:event-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/rate-limit.test.ts",
     "ci:integration:event-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/rate-limit.integration.test.ts",
     "ci:unit:graph-references": "pnpm --filter @deepsonar/scheduler exec tsx --test src/graph-reference.test.ts src/graph-budget.test.ts",

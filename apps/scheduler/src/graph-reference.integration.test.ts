@@ -148,7 +148,11 @@ if (!testDatabaseUrl) {
         },
       };
       await sql`UPDATE jobs SET status = 'succeeded' WHERE parent_job_id = ${jobId}`;
-      await sql`UPDATE jobs SET status = 'succeeded' WHERE id = ${jobId}`;
+      // Direct core application is still an authoritative semantic ingress;
+      // keep the Hub Job running for each legal decision. Non-running late
+      // events are covered by the event-authorization integration instead of
+      // bypassing the production status guard here.
+      await sql`UPDATE jobs SET status = 'running' WHERE id = ${jobId}`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, parent_job_id, type, status, agent_snapshot_json, payload_json)
         VALUES (${randomUUID()}, ${projectId}, ${canvasId}, ${jobId}, 'review', 'succeeded', ${sql.json(validSnapshot)}, ${sql.json({})})`;

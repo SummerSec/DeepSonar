@@ -18,6 +18,7 @@ if (!testDatabaseUrl) {
     const { migrate, sql } = await import("../../db.js");
     const { createEventIngestionApplication } = await import("./application.js");
     const { finalizeJob, ingestEvent } = await import("../../core.js");
+    const { ControlInputError } = await import("../../control-input.js");
     await migrate();
 
     const projectId = randomUUID();
@@ -113,7 +114,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${factRepointJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${factRepointJobId}, ${projectId}, NULL, 'review', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     const [factRepointNode] = await sql<{ id: string }[]>`
@@ -588,7 +589,10 @@ if (!testDatabaseUrl) {
       assert.equal(retried.seq, 4);
 
       // Compete the Canvas-first done event with a direct finalize path. Both
-      // paths must complete; a Job-first finalize would deadlock here.
+      // paths must settle without deadlock; exactly one is allowed to win the
+      // Job lock. A direct finalize winner makes the event fail closed before
+      // its append/quota writes, while an ingest winner makes direct finalize
+      // return false for the already-succeeded Job.
       const terminalJobId = randomUUID();
       await sql`
         INSERT INTO jobs (
@@ -609,12 +613,33 @@ if (!testDatabaseUrl) {
         payload: { summary: "event" },
       });
       const results = await Promise.race([
-        Promise.all([finalizeDirect, finalizeEvent]),
+        Promise.allSettled([finalizeDirect, finalizeEvent]),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Canvas/Job lock-order deadlock")), 5000)),
       ]);
-      assert.equal(results[1].deduped, false);
+      const [directResult, eventResult] = results;
+      assert.equal(directResult.status, "fulfilled", "direct finalize must settle");
+      if (eventResult.status === "fulfilled") {
+        assert.deepEqual(eventResult.value, { deduped: false, seq: 1 }, "ingest winner commits the event");
+        assert.equal((directResult.value as boolean), false, "direct finalize loses after ingest winner");
+      } else {
+        assert.ok(eventResult.reason instanceof ControlInputError, "late ingest must use the stable control error");
+        assert.equal(eventResult.reason.code, "job_not_running");
+        assert.equal((directResult.value as boolean), true, "direct finalize winner must commit");
+      }
+      const [terminalEvent] = await sql`SELECT 1 FROM events WHERE event_id = ${terminalEventId}`;
+      const [terminalDedup] = await sql`SELECT 1 FROM event_dedup WHERE event_id = ${terminalEventId}`;
+      const [terminalQuota] = await sql`SELECT 1 FROM job_event_rate_limits WHERE job_id = ${terminalJobId}`;
+      if (eventResult.status === "fulfilled") {
+        assert.ok(terminalEvent);
+        assert.ok(terminalDedup);
+        assert.ok(terminalQuota);
+      } else {
+        assert.equal(terminalEvent, undefined, "direct finalize winner must not leave a late event");
+        assert.equal(terminalDedup, undefined, "direct finalize winner must not leave dedup");
+        assert.equal(terminalQuota, undefined, "direct finalize winner must not consume event quota");
+      }
       const [terminal] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${terminalJobId}`;
-      assert.ok(["succeeded", "failed"].includes(String(terminal?.status)));
+      assert.equal(terminal?.status, "succeeded");
     } finally {
       for (const eventId of fixture.eventIds) {
         await sql`DELETE FROM event_dedup WHERE event_id = ${eventId}`;
@@ -622,13 +647,19 @@ if (!testDatabaseUrl) {
       }
       await sql`DELETE FROM canvas_edges WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM task_reports WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ${projectId})`;
       await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
+      await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await sql`DELETE FROM projects WHERE id = ${projectId}`;
       await sql`DELETE FROM canvas_edges WHERE canvas_id = ${foreignCanvasId}`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${foreignCanvasId}`;
+      await sql`DELETE FROM task_reports WHERE project_id = ${foreignProjectId}`;
+      await sql`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ${foreignProjectId})`;
       await sql`DELETE FROM findings WHERE project_id = ${foreignProjectId}`;
+      await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM projects WHERE id = ${foreignProjectId}`;

@@ -319,7 +319,11 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 `progress_count`、`standard_count` 或独立的 `terminal_count`。超过额度时抛出稳定
 `event_rate_limited`（含 `retry_after_sec`、bucket、limit），并由外层事务回滚 dedup、
 事件、节点、边和状态副作用；重复 `event_id` 直接返回 deduped，不占额度。计数行随
-数据库保留，跨 Scheduler 进程/重启仍有效，窗口回拨不会倒退。
+数据库保留，跨 Scheduler 进程/重启仍有效，窗口回拨不会倒退。`core.applySideEffects` 还会
+按 Scheduler-owned Job 类型/冻结快照重算工具授权，并要求 Job 为 `status=running`；终态、
+角色种类或快照工具不一致时回滚当前 dedup、额度、事件和图副作用。项目数据导入/恢复是
+历史审计写入，可按 manifest 批量恢复既有 `events` 而不消耗运行时额度；恢复完成后的新
+Job 事件仍必须经过本摄入硬门。
 
 - **JSONB 不建 GIN 全索引**；某路径高频查询后按 §17.2 expand 提升为列再加索引
 - 模糊搜索用 **pg_trgm** 而非 tsvector：CJK 分词不友好；trigram 对中英混排与代码路径子串（`auth/login.php:42`）都合适
@@ -386,7 +390,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - SDK normalized event stream → 文本/进度 → `progress` 事件
 - 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、执行同源严格 schema 校验并返回 `schema_validated / pending_scheduler_validation`，不声称业务已落库，不写文件、不连接调度器
 - 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块只登记 bounded pending；收到同一 `tool_use_id` 的合法非错误 `user.tool_result`（`is_error` 省略或为 `false`）后才转换为 `{v:1,event_id(UUID),type,payload}`，串行 `await onSemanticEvent`。显式错误或畸形 `is_error` 结果丢弃 pending，Agent 可用新的 call id 重试；重复结果/重放不重复释放。
-- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`core.applySideEffects` 仍在写入前再次校验。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
+- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`core.applySideEffects` 仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
 - 非 JSON/未知 runtime 行、未知控制命名空间工具和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；控制工具的 normalized telemetry 仅保留 toolName/callId 与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列
 - 同一 `tool_use.id` 只有合法非错误 `tool_result` 才生成一次语义事件；pending 有上限，Job 终态会丢弃残留并记低基数告警。`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
 - Claude CLI 的 `HOME` 与 `CLAUDE_CONFIG_DIR` 固定到 `/workspace/.deepsonar/` 下的 Job 专属可写目录，不信任镜像继承的 `/root`；原始 Session 归档复用同一环境，读回内存后立即清理，随后再销毁一次性沙箱
@@ -409,7 +413,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
-平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权。`mark_job_done` 对所有角色，以及 `list_available_roles`、`submit_hub_decision` 对 Hub 是不可关闭的决策/终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。
+平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权；`core.applySideEffects` 是 fake/direct/recovery 路径的最终授权边界。`mark_job_done` 对所有角色，以及 `list_available_roles`、`submit_hub_decision` 对 Hub 是不可关闭的决策/终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。
 
 ### 8.2 可信运行镜像与独立市场
 

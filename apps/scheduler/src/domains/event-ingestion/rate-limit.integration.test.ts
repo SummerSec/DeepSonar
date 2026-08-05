@@ -53,9 +53,14 @@ if (!testDatabaseUrl) {
       terminalPerWindow: 1,
     };
     let sideEffectCount = 0;
+    const rateLimitObservations: string[] = [];
     const app = createEventIngestionApplication(sql, async () => {
       sideEffectCount += 1;
-    }, { rateLimit: policy, clock: () => now });
+    }, {
+      rateLimit: policy,
+      clock: () => now,
+      onRateLimited: (error) => rateLimitObservations.push(error.bucket),
+    });
 
     try {
       const firstId = randomUUID();
@@ -85,6 +90,7 @@ if (!testDatabaseUrl) {
         },
       );
       assert.equal(sideEffectCount, 2, "rejected event must not run side effects");
+      assert.deepEqual(rateLimitObservations, ["progress"], "rate-limit observation is emitted once for the rejected first delivery");
       const [limitedEvent] = await sql`SELECT 1 FROM events WHERE event_id = ${limitedId}`;
       const [limitedDedup] = await sql`SELECT 1 FROM event_dedup WHERE event_id = ${limitedId}`;
       assert.equal(limitedEvent, undefined, "rate rejection must roll back event row");
@@ -109,6 +115,7 @@ if (!testDatabaseUrl) {
       const [terminalCounter] = await sql<{ terminal_count: number }[]>`
         SELECT terminal_count FROM job_event_rate_limits WHERE job_id = ${jobId}`;
       assert.equal(terminalCounter?.terminal_count, 1);
+      assert.deepEqual(rateLimitObservations, ["progress", "terminal"]);
 
       // Five callers race from independent Scheduler-like transactions; the
       // row lock allows exactly two progress events through, never more.
@@ -122,6 +129,7 @@ if (!testDatabaseUrl) {
       assert.ok(concurrentResults.filter((result) => result.status === "rejected").every(
         (result) => result.status === "rejected" && result.reason instanceof EventRateLimitError,
       ));
+      assert.equal(rateLimitObservations.filter((bucket) => bucket === "progress").length, 4);
       const [concurrentCounter] = await sql<{ progress_count: number }[]>`
         SELECT progress_count FROM job_event_rate_limits WHERE job_id = ${concurrentJobId}`;
       assert.equal(concurrentCounter?.progress_count, 2);

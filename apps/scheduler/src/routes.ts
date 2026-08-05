@@ -3915,7 +3915,7 @@ export function registerRoutes(app: FastifyInstance) {
     return job;
   });
 
-  // 取消 / 强制退出（§8.3）：置 cancel 终态 + 立即停容器 + 画布节点同步；迟到 done 由 finalizeJob 守卫忽略
+  // 取消 / 强制退出（§8.3）：置 cancel 终态 + 立即停容器 + 画布节点同步；后续语义事件在摄入门禁以 job_not_running 拒绝
   app.post("/jobs/:id/cancel", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z
