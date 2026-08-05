@@ -288,7 +288,9 @@ test("job-lifecycle SQL seam remains the sole generic transition adapter", () =>
   assert.match(source, /UPDATE\s+jobs\s+SET\s+\$\{db\(sets\)\}/);
   assert.match(source, /WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s+ANY\(\$\{allowedFrom\}\)/);
   assert.match(source, /planJobTransition\(to, patch\)/);
-  const dynamicSetFiles = productionSourceFiles().filter((file) => /\bUPDATE\s+(?:(?:[a-z_][a-z0-9_$]*)\.)?jobs\b[\s\S]{0,200}\bSET\s+\$\{/i.test(sourceFor(file)));
+  const dynamicSetFiles = productionSourceFiles().filter((file) =>
+    directStatusUpdateSegments(sourceFor(file)).some((segment) => /\bSET\s+\$\{/.test(segment.text)),
+  );
   assert.deepEqual(dynamicSetFiles, [], "generic dynamic jobs SET must remain in the canonical lifecycle adapter");
 });
 
