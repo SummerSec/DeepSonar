@@ -8,7 +8,6 @@ test("canvas changes invalidate late poll and download completions", async () =>
   const pollA = guard.beginPoll();
 
   let appliedReports: string[] = [];
-  let markdownResults: string[] = [];
   let downloadErrors: string[] = [];
   const latePoll = new Promise<void>((resolve) => {
     setTimeout(() => {
@@ -54,6 +53,7 @@ test("dispose invalidates every pending callback after unmount", async () => {
   const context = guard.update("canvas-a", "report-a", "succeeded");
   const poll = guard.beginPoll();
   let appliedReports: string[] = [];
+  let markdownResults: string[] = [];
   let downloadErrors: string[] = [];
   let retryCompletions: string[] = [];
 
