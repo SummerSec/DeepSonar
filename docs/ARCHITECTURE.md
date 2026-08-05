@@ -450,7 +450,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 true，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED` 可覆盖关闭）、`maxHubRounds`、`maxIntentsPerDecision`；`allowEgress` 同样默认 true，任务创建时可覆盖并冻结到画布
 - **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 需要派发时主动调用 `list_available_roles` 平台工具；工具从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不把角色清单预埋进 prompt，也不维护代码侧固定角色枚举。`submit_hub_decision` 落地时调度器用同一数据库边界再次校验，缺失、停用或 system/hub 角色会令整次决策失败，不做默认回退。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；所有 `kind='role'` 条目（包括内置模板）都可删除或新增。`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单且不可删除，但职责描述和 RoleConfig 均可修改。其中 `audit` 产出 Finding，其余工作角色产出 Fact
-- **角色颜色（Schema v16）**：`agent_roles.ui_color` 仅允许 `#RRGGBB`，由 Scheduler 在创建事务内持 `deepsonar_role_color_allocator` advisory lock，从非语义保留色的共享调色板分配；调色板耗尽后用稳定、去重的 HSL 候选。删除角色会释放颜色，导入包里的颜色只是提示，保留色/冲突色/缺失色会在同一锁内重映射；system / hub 角色始终为 `NULL`。角色 Job 创建时把最终色冻结进 intent/job `body_json`，旧节点安全回退语义色；前端边 stroke/marker 取源节点最终色，`edge_type` 只控制 dash 与动画速度。
+- **角色颜色（Schema v16）**：`agent_roles.ui_color` 仅允许 `#RRGGBB`，由 Scheduler 在创建事务内持 `deepsonar_role_color_allocator` advisory lock，从非语义保留色的共享调色板分配；调色板耗尽后先用稳定、最大间距的 HSL 候选，再用覆盖完整 `2^24` 色域的确定性 RGB 置换，跳过保留色、已占用色和过暗颜色，色域真正耗尽才失败。删除角色会释放颜色，导入包里的颜色只是提示，保留色/冲突色/缺失色会在同一锁内重映射；system / hub 角色始终为 `NULL`。角色 Job 创建时把最终色冻结进 intent/job `body_json`，旧节点安全回退语义色；前端边 stroke/marker 取源节点最终色，`edge_type` 只控制 dash 与动画速度。
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
 

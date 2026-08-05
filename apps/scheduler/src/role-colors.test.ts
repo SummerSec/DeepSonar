@@ -9,6 +9,14 @@ import {
   resolveImportedRoleUiColor,
 } from "./role-colors.js";
 
+function relativeLuminance(value: string): number {
+  const channels = [1, 3, 5].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16) / 255);
+  const linear = channels.map((channel) =>
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+  return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+}
+
 test("role color allocator picks an injectable unused palette slot", () => {
   const first = pickRoleUiColor([], () => 0);
   const last = pickRoleUiColor([], () => 0.999999);
@@ -38,10 +46,11 @@ test("role color allocator has deterministic maximally-separated HSL fallback", 
 
 test("role color allocator stays unique beyond the finite palette", () => {
   const used: string[] = [];
-  for (let index = 0; index < ROLE_UI_COLOR_ASSIGNABLE.length + 16; index += 1) {
+  for (let index = 0; index < 1500; index += 1) {
     const color = pickRoleUiColor(used, () => 0);
     assert.equal(ROLE_UI_COLOR_PATTERN.test(color), true);
     assert.equal(ROLE_UI_COLOR_RESERVED.includes(color as never), false);
+    assert.ok(relativeLuminance(color) >= 0.3);
     assert.equal(used.includes(color), false);
     used.push(color);
   }

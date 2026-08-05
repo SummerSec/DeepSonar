@@ -47,7 +47,7 @@ VALUES (15, '0015_credential_health_metadata.sql',
         'succeeded');
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (16, '0016_role_ui_colors.sql',
-        '4e1c77118e6226217b3c0f3ebf346e5fc3798ee2d0feb213c4d3ec7c0bdac2cf',
+        '8d7982c44d7c292f87835a1478cd46763b27644fe488741f6ebaf61cbe233844',
         'succeeded');
 
 CREATE TABLE projects (

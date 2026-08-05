@@ -242,12 +242,11 @@ test("v16 backfill fixes built-in colors before custom roles and stays unique be
         WHERE id = 'global'`;
     }
 
-    const customNames = Array.from({ length: 40 }, (_, index) => index === 0 ? "aaa" : `custom_${String(index).padStart(2, "0")}`);
-    for (const name of customNames) {
-      await db`
-        INSERT INTO agent_roles (name, title, description, builtin, kind)
-        VALUES (${name}, ${name}, '', false, 'role')`;
-    }
+    const customNames = Array.from({ length: 801 }, (_, index) => index === 0 ? "aaa" : `custom_${String(index).padStart(3, "0")}`);
+    await db`
+      INSERT INTO agent_roles (name, title, description, builtin, kind)
+      SELECT name, name, '', false, 'role'
+      FROM unnest(${customNames}::text[]) AS input(name)`;
     await withMigrationLock(db);
 
     const colors = await db<{ name: string; kind: string; ui_color: string | null }[]>`
@@ -267,10 +266,10 @@ test("v16 backfill fixes built-in colors before custom roles and stays unique be
       "#34d399", "#22d3ee", "#818cf8", "#f97316", "#94a3b8",
     ]);
     const customColors = customNames.map((name) => byName.get(name)?.ui_color ?? "");
-    assert.equal(customColors.length, 40);
+    assert.equal(customColors.length, 801);
     assert.ok(customColors.every((color) => /^#[0-9a-f]{6}$/i.test(color)));
     assert.ok(customColors.every((color) => !reserved.has(color.toLowerCase())));
-    assert.equal(new Set(colors.filter((row) => row.kind === "role").map((row) => row.ui_color)).size, 46);
+    assert.equal(new Set(colors.filter((row) => row.kind === "role").map((row) => row.ui_color)).size, 807);
     assert.ok(colors.filter((row) => row.kind !== "role").every((row) => row.ui_color === null));
   } finally {
     await db.end();

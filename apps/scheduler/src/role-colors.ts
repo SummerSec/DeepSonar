@@ -9,6 +9,12 @@ export { ROLE_UI_COLOR_ASSIGNABLE, ROLE_UI_COLOR_PATTERN, ROLE_UI_COLOR_RESERVED
 
 /** The allocator lock is held for the whole role INSERT transaction. */
 export const ROLE_COLOR_ADVISORY_KEY = "deepsonar_role_color_allocator";
+const RGB_COLOR_SPACE = 0x1000000;
+// An odd step is coprime with 2^24, so the permutation visits every RGB value
+// exactly once before repeating. Keep the value below 2^24 for safe number
+// arithmetic when multiplied by a 24-bit scan index.
+const RGB_PERMUTATION_STEP = 0x9e377b;
+const MIN_ROLE_COLOR_LUMINANCE = 0.3;
 
 type RoleColorDb = postgres.Sql;
 
@@ -60,6 +66,23 @@ function rgbDistance(left: string, right: string): number {
   return Math.hypot(lr - rr, lg - rg, lb - rb);
 }
 
+function relativeLuminance(value: string): number {
+  const channels = [1, 3, 5].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16) / 255);
+  const linear = channels.map((channel) =>
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+  return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+}
+
+function isReadableRoleColor(value: string): boolean {
+  return relativeLuminance(value) >= MIN_ROLE_COLOR_LUMINANCE;
+}
+
+function rgbPermutationColor(index: number): string {
+  const value = ((index + 1) * RGB_PERMUTATION_STEP) % RGB_COLOR_SPACE;
+  return `#${value.toString(16).padStart(6, "0")}`;
+}
+
 /**
  * Select a role color from the shared palette.  `random` is injectable so
  * route/integration tests can force a specific slot without mocking globals.
@@ -94,7 +117,7 @@ export function pickRoleUiColor(
   // keeps each fallback maximally separated from already occupied colors.
   for (let index = 0; index < 720; index += 1) {
     const candidate = hslToHex(index * 137.507764, 0.72, 0.62);
-    if (reserved.has(candidate) || used.has(candidate)) continue;
+    if (reserved.has(candidate) || used.has(candidate) || !isReadableRoleColor(candidate)) continue;
     const score = occupied.length === 0
       ? Number.POSITIVE_INFINITY
       : Math.min(...occupied.map((color) => rgbDistance(candidate, color)));
@@ -104,9 +127,16 @@ export function pickRoleUiColor(
   }
   if (best) return best.color;
 
-  // There are only 24 reserved colors and 720 candidates, so this is a
-  // defensive impossible-state fallback. It still obeys the #RRGGBB contract.
-  return "#ffffff";
+  // HSL rounding eventually produces a finite set of duplicate candidates.
+  // Continue with a complete deterministic RGB permutation instead of ever
+  // returning an unchecked fixed color. The loop is bounded by the actual
+  // #RRGGBB space and throws only when that space is genuinely exhausted.
+  for (let index = 0; index < RGB_COLOR_SPACE; index += 1) {
+    const candidate = rgbPermutationColor(index);
+    if (reserved.has(candidate) || used.has(candidate) || !isReadableRoleColor(candidate)) continue;
+    return candidate;
+  }
+  throw new Error("role color space exhausted");
 }
 
 /**

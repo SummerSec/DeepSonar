@@ -35,6 +35,22 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
+CREATE OR REPLACE FUNCTION deepsonar_role_generated_rgb_color(p_index bigint) RETURNS text AS $$
+DECLARE
+  color_space bigint := 16777216; -- 2^24 (#RRGGBB)
+  permutation_step bigint := 10368891; -- 0x9e377b, odd and coprime with 2^24
+  value bigint := mod((p_index + 1) * permutation_step, color_space);
+  red int := (value / 65536)::int;
+  green int := ((value / 256) % 256)::int;
+  blue int := (value % 256)::int;
+BEGIN
+  RETURN format('#%02s%02s%02s',
+    lpad(to_hex(red), 2, '0'),
+    lpad(to_hex(green), 2, '0'),
+    lpad(to_hex(blue), 2, '0'));
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
 DO $$
 DECLARE
   palette text[] := ARRAY[
@@ -49,7 +65,8 @@ DECLARE
   ];
   item record;
   candidate text;
-  ordinal int;
+  candidate_rgb bytea;
+  ordinal bigint;
 BEGIN
   -- Keep the six built-in worker colors stable regardless of custom role
   -- names (for example a legacy role named `aaa` must not shift `analyze`).
@@ -69,21 +86,36 @@ BEGIN
     AND ar.ui_color IS NULL;
 
   FOR item IN
-    SELECT id, row_number() OVER (ORDER BY name, id)::int AS ordinal
+    SELECT id, row_number() OVER (ORDER BY name, id)::bigint AS ordinal
     FROM agent_roles
     WHERE kind = 'role' AND ui_color IS NULL
     ORDER BY name, id
   LOOP
     -- Start at palette slot one for every custom role and skip occupied
-    -- slots.  This makes the remaining palette independent of custom-name
-    -- sort order while preserving deterministic custom assignment.
+    -- slots. After the 720 rounded HSL candidates, the bounded RGB
+    -- permutation covers the full #RRGGBB space without a fixed-color fallback.
+    -- This keeps assignment independent of custom-name sort order while
+    -- preserving deterministic custom assignment.
     ordinal := 1;
     LOOP
       candidate := CASE
-        WHEN ordinal <= cardinality(palette) THEN palette[ordinal]
-        ELSE deepsonar_role_generated_color(ordinal)
+        WHEN ordinal <= cardinality(palette) THEN palette[ordinal::int]
+        WHEN ordinal <= cardinality(palette) + 720
+          THEN deepsonar_role_generated_color((ordinal - cardinality(palette))::int)
+        WHEN ordinal <= cardinality(palette) + 720 + 16777216
+          THEN deepsonar_role_generated_rgb_color(ordinal - cardinality(palette) - 720 - 1)
+        ELSE NULL
       END;
-      EXIT WHEN NOT (lower(candidate) = ANY(reserved))
+      IF candidate IS NULL THEN
+        RAISE EXCEPTION 'role color space exhausted while assigning role %', item.id;
+      END IF;
+      candidate_rgb := decode(substr(candidate, 2), 'hex');
+      EXIT WHEN (
+          0.2126 * get_byte(candidate_rgb, 0)
+          + 0.7152 * get_byte(candidate_rgb, 1)
+          + 0.0722 * get_byte(candidate_rgb, 2)
+        ) / 255.0 >= 0.30
+        AND NOT (lower(candidate) = ANY(reserved))
         AND NOT EXISTS (
           SELECT 1 FROM agent_roles occupied
           WHERE occupied.kind = 'role' AND lower(occupied.ui_color) = lower(candidate)
@@ -111,6 +143,7 @@ ALTER TABLE agent_roles
     );
 
 DROP FUNCTION deepsonar_role_generated_color(int);
+DROP FUNCTION deepsonar_role_generated_rgb_color(bigint);
 
 CREATE UNIQUE INDEX agent_roles_role_ui_color_uniq
   ON agent_roles (lower(ui_color))
