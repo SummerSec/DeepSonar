@@ -56,6 +56,12 @@ jobs:
 
       - run: pnpm -r build
 
+      - name: Scheduler Job lifecycle characterization
+        run: pnpm ci:unit:job-lifecycle
+
+      - name: Scheduler bounded-context characterization guardrails
+        run: pnpm ci:unit:scheduler-characterization
+
       - name: Authenticated report download web unit
         run: pnpm ci:unit:web-report-download
 
