@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { runRealAgent } from "@deepsonar/runtime-sandbox";
+import { normalizeRuntimeErrorDetails, runRealAgent } from "@deepsonar/runtime-sandbox";
 import {
   DonePayload,
   ControlEventEnvelope,
@@ -91,6 +91,17 @@ async function ingestSemanticEventObserved(
     observeSemanticIngestionError(error, jobId);
     throw error;
   }
+}
+
+/** Rebuild only the Scheduler-owned stable error shape after the sandbox's string result boundary. */
+export function reconstructAgentRunError(
+  message: string,
+  details?: { code?: unknown; metadata?: unknown },
+): Error {
+  const error = new Error(`agent 运行失败: ${message}`);
+  const normalized = normalizeRuntimeErrorDetails(details);
+  if (normalized) Object.assign(error, normalized);
+  return error;
 }
 
 export function assertSemanticTerminalExclusivity(
@@ -949,7 +960,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const evidence = await evidenceWriter.finalize(result.error);
   await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
 
-  if (result.error) throw new Error(`agent 运行失败: ${result.error}`);
+  if (result.error) throw reconstructAgentRunError(result.error, result.errorDetails);
 
   if (semanticState.human) {
     await ingestSemanticEventObserved(jobId, {

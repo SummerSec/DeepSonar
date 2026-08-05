@@ -6,6 +6,7 @@ import {
   assertSemanticTerminalExclusivity,
   moduleEvidenceFromSnapshot,
   normalizeLegacyControlInstructions,
+  reconstructAgentRunError,
   runtimeCredentialProviderError,
   semanticToolEventsFor,
 } from "./executor-real.js";
@@ -13,6 +14,28 @@ import { expandModules } from "./skill-sources.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("real executor round-trips only controlled rate-limit details after string failure", () => {
+  const error = reconstructAgentRunError("语义事件处理失败: [event_rate_limited]", {
+    code: "event_rate_limited",
+    metadata: {
+      bucket: "progress",
+      retry_after_sec: 4,
+      limit: 30,
+      window_seconds: 60,
+      secret: "drop",
+    },
+  });
+  assert.equal((error as Error & { code?: string }).code, "event_rate_limited");
+  assert.deepEqual((error as Error & { metadata?: unknown }).metadata, {
+    bucket: "progress",
+    retry_after_sec: 4,
+    limit: 30,
+    window_seconds: 60,
+  });
+  assert.doesNotMatch(JSON.stringify(error), /secret|drop/i);
+  assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
+});
 
 test("ControlEventEnvelope rejects Scheduler-owned fact and Finding fields", () => {
   const base = { v: 1 as const, event_id: "00000000-0000-4000-8000-000000000013" };
