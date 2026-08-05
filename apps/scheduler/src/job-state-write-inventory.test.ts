@@ -120,26 +120,20 @@ const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
 const SOURCE_ROOT = new URL(".", import.meta.url);
 const CANONICAL_LIFECYCLE_ADAPTER = "domains/job-lifecycle/application.ts";
 
-function isTestFixturePath(relativePath: string): boolean {
-  const pathParts = relativePath.split("/");
-  return pathParts.some((part) => /^(?:__fixtures__|fixtures|test-fixtures)$/i.test(part)) || /\.fixture\.ts$/i.test(relativePath);
-}
-
 function productionSourceFiles(): string[] {
   const files: string[] = [];
   const walk = (directory: URL, relativeDirectory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (!isTestFixturePath(relativePath)) walk(new URL(`${entry.name}/`, directory), relativePath);
+        walk(new URL(`${entry.name}/`, directory), relativePath);
         continue;
       }
       if (
         entry.isFile() &&
         /\.ts$/i.test(entry.name) &&
         !/\.test\.ts$/i.test(entry.name) &&
-        relativePath !== CANONICAL_LIFECYCLE_ADAPTER &&
-        !isTestFixturePath(relativePath)
+        relativePath !== CANONICAL_LIFECYCLE_ADAPTER
       ) {
         files.push(relativePath);
       }
@@ -153,26 +147,100 @@ function sourceFor(file: string): string {
   return readFileSync(new URL(file, SOURCE_ROOT), "utf8");
 }
 
+function skipQuotedString(source: string, start: number, quote: "'" | '"'): number {
+  for (let cursor = start + 1; cursor < source.length; cursor += 1) {
+    if (source[cursor] === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (source[cursor] === quote) return cursor;
+  }
+  return source.length;
+}
+
+function skipTemplateLiteral(source: string, start: number): number {
+  for (let cursor = start + 1; cursor < source.length; cursor += 1) {
+    if (source[cursor] === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (source[cursor] === "`") return cursor;
+    if (source[cursor] === "$" && source[cursor + 1] === "{") {
+      cursor = findInterpolationEnd(source, cursor + 2);
+    }
+  }
+  return source.length;
+}
+
+function findInterpolationEnd(source: string, start: number): number {
+  let depth = 1;
+  for (let cursor = start; cursor < source.length; cursor += 1) {
+    const character = source[cursor];
+    if (character === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      cursor = skipQuotedString(source, cursor, character);
+      continue;
+    }
+    if (character === "`") {
+      cursor = skipTemplateLiteral(source, cursor);
+      continue;
+    }
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return cursor;
+    }
+  }
+  return source.length;
+}
+
+function findTemplateLiteralEnd(source: string, start: number): number {
+  for (let cursor = start; cursor < source.length; cursor += 1) {
+    const character = source[cursor];
+    if (character === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (character === "$" && source[cursor + 1] === "{") {
+      cursor = findInterpolationEnd(source, cursor + 2);
+      continue;
+    }
+    if (character === "`") return cursor;
+  }
+  return source.length;
+}
+
 function directStatusUpdateSegments(source: string): { index: number; text: string }[] {
-  const starts = [...source.matchAll(/UPDATE\s+jobs\b/gi)]
+  const starts = [...source.matchAll(/\bUPDATE\s+(?:(?:[a-z_][a-z0-9_$]*)\.)?jobs\b/gi)]
     .map((match) => match.index ?? -1)
     .filter((index) => index >= 0);
-  return starts
-    .map((index, offset) => {
-      // Production SQL templates close with ``;``.  Using that semantic
-      // statement boundary avoids matching an identifier from the next
-      // handler (or from a nested JavaScript template interpolation).
-      const statementEnd = source.indexOf("`;", index);
-      return {
-        index,
-        text: source.slice(index, statementEnd >= 0 ? statementEnd + 2 : starts[offset + 1] ?? source.length),
-      };
-    })
-    .filter((segment) => {
-      const setClause = /UPDATE\s+jobs(?:\s+[a-z][a-z0-9_]*)?\s+SET(?<set>[\s\S]*?)\bWHERE\b/i.exec(segment.text);
-      return /\bstatus\s*=/.test(setClause?.groups?.set ?? "");
-    });
+  return starts.flatMap((index) => {
+    const statementEnd = findTemplateLiteralEnd(source, index);
+    const text = source.slice(index, statementEnd);
+    const setClause = /UPDATE\s+(?:(?:[a-z_][a-z0-9_$]*)\.)?jobs(?:\s+(?:AS\s+)?[a-z_][a-z0-9_$]*)?\s+SET(?<set>[\s\S]*?)(?:\bWHERE\b|$)/i.exec(text);
+    const setText = setClause?.groups?.set ?? "";
+    return /\bstatus\s*=/.test(setText) || /\bSET\s+\$\{/.test(text) ? [{ index, text }] : [];
+  });
 }
+
+test("direct status scanner handles qualified, aliased, nested, and unguarded SQL", () => {
+  const source = [
+    "await sql`UPDATE public.jobs AS j SET status = 'succeeded'`",
+    "await sql`UPDATE jobs AS j SET status = 'failed'`",
+    "await sql`UPDATE jobs SET status = 'timeout', error = ${`nested ${label}`}`",
+    "await sql`UPDATE jobs SET payload_json = ${payload}`",
+  ].join("\n");
+  const segments = directStatusUpdateSegments(source);
+  assert.deepEqual(
+    segments.map((segment) => segment.index),
+    ["UPDATE public.jobs", "UPDATE jobs AS j", "UPDATE jobs SET status = 'timeout'"].map((marker) => source.indexOf(marker)),
+  );
+  assert.equal(directStatusUpdateSegments("await sql`UPDATE jobs SET ${db(sets)}`").length, 1);
+});
 
 test("direct Job status writers stay enumerated by semantic bounded-context inventory", () => {
   const discoveredFiles: string[] = [];
@@ -220,6 +288,8 @@ test("job-lifecycle SQL seam remains the sole generic transition adapter", () =>
   assert.match(source, /UPDATE\s+jobs\s+SET\s+\$\{db\(sets\)\}/);
   assert.match(source, /WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s+ANY\(\$\{allowedFrom\}\)/);
   assert.match(source, /planJobTransition\(to, patch\)/);
+  const dynamicSetFiles = productionSourceFiles().filter((file) => /\bUPDATE\s+(?:(?:[a-z_][a-z0-9_$]*)\.)?jobs\b[\s\S]{0,200}\bSET\s+\$\{/i.test(sourceFor(file)));
+  assert.deepEqual(dynamicSetFiles, [], "generic dynamic jobs SET must remain in the canonical lifecycle adapter");
 });
 
 test("inventory paths point to production Scheduler modules", () => {

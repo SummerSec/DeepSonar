@@ -129,8 +129,8 @@ The CI gate now executes the following baseline:
 2. The semantic direct-status-write inventory in
    `job-state-write-inventory.test.ts`.  It enumerates the guarded status
    writers in every production TypeScript module under `apps/scheduler/src`
-   (recursive; test/fixture files are excluded); an unclassified `UPDATE jobs
-   ... SET status` fails the test.  The generic
+   (recursive; `*.test.ts` files and the canonical adapter are excluded); an
+   unclassified `UPDATE jobs ... SET status` fails the test.  The generic
    `job-lifecycle/application.ts` SQL CAS is checked separately as the
    canonical adapter.  It also records the intentional legacy bulk-writer
    exceptions: Reaper handles `claimed/provisioning/running → timeout`, while
