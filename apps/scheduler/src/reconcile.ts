@@ -2,6 +2,9 @@ import { forceRemoveContainer, listDeepSonarContainers } from "@deepsonar/runtim
 import { sql } from "./db.js";
 import { planeWriteback } from "./plane-sync.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
+import { revokeJobTokens } from "./gateway.js";
+import { finalizeReportJob } from "./report.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
@@ -46,17 +49,14 @@ export async function reconcileOnBoot(): Promise<void> {
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
     // §6.3：orphan 即吊销短期模型 Token
-    const { revokeJobTokens } = await import("./gateway.js");
     await revokeJobTokens(jobId, "orphan_reconcile").catch(() => {});
 
     // 启动恢复也必须执行与实时终态入口相同的业务收口，不能只改 jobs 表。
     if (j.type === "verify_finding") {
-      const { recoverVerifyJobTerminal } = await import("./core.js");
       await recoverVerifyJobTerminal(jobId, "orphan", (j.error as string) ?? null).catch((e) =>
         console.error(`[reconcile] verify recovery failed:`, e),
       );
     } else if (j.type === "report") {
-      const { finalizeReportJob } = await import("./report.js");
       await sql.begin(async (tx) => {
         await finalizeReportJob(tx as unknown as typeof sql, jobId, {
           failed: true,
@@ -66,7 +66,6 @@ export async function reconcileOnBoot(): Promise<void> {
     }
 
     if (j.canvas_id && j.type !== "report") {
-      const { advanceCanvasAfterTerminalJob } = await import("./core.js");
       await sql.begin(async (tx) => {
         await advanceCanvasAfterTerminalJob(
           tx as unknown as typeof sql,

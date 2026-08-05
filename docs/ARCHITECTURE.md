@@ -178,7 +178,7 @@ Scheduler 的领域代码按 application/ports seam 渐进拆分，PostgreSQL �
 
 Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verification round；同一事务内才会写入 Hub Job、节点和 `next` 边。失败 Hub 会清除等待证据的 edge marker 并停在人工恢复边界，不递归生成相同快照的 Hub。`maxHubRounds` 只统计 `hub_reason.status = succeeded`，耗尽时复用 Verify 完成门；未通过完成门则设置 `auto_stopped`，不派发空图 Report。
 
-`core.ts` 暂时保留兼容 facade，供既有 dispatcher/reaper/reconcile/routes 调用；Hub 业务实现不再由 facade 承载。Finding verification、Report convergence、runtime snapshot 与 routes registrar 仍是 #37 的后续切片。
+`core.ts` 暂时保留兼容 facade，供既有 dispatcher/reaper/reconcile/routes 调用；Hub 业务实现不再由 facade 承载。Finding verification、Report convergence 与 role/runtime snapshot 现在通过各自的 application/ports seam 暴露，保留 legacy adapter 以确保外部行为与事务边界不变。Report 与只读 Finding/verification API 由 `domains/*/routes.ts` registrar 注册；共享鉴权和项目作用域 hook 仍由顶层 `routes.ts` 组装。内部 cycle-dodging dynamic imports 已移除，跨域依赖通过静态 import 和显式 adapter 可审查。
 
 **护栏**（同时是防注入措施，见 §9）：
 

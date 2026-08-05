@@ -1,4 +1,5 @@
 import { sql } from "./db.js";
+import { findingVerificationSummaries } from "./verify.js";
 import { config } from "./config.js";
 import {
   GraphNodeReference,
@@ -163,7 +164,7 @@ export async function buildGraphSnapshot(
   const findingIds = findingRows.flatMap((finding) => (typeof finding.id === "string" ? [finding.id] : []));
   const verificationSummaries =
     scope === "hub" || scope === "verify"
-      ? await (await import("./verify.js")).findingVerificationSummaries(sql, findingIds)
+      ? await findingVerificationSummaries(sql, findingIds)
       : new Map<string, Record<string, unknown>>();
 
   const nodeCounts = nodes.reduce<Record<string, number>>((acc, node) => {

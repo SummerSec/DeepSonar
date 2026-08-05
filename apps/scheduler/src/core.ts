@@ -7,17 +7,24 @@ import {
   HumanPayload,
   ProgressPayload,
   allowedPlatformTools,
-  resolvePlatformTools,
   type EventEnvelopeInput,
-  type PlatformToolConfig,
   type PlatformToolName,
+  type VerificationEvidence,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
-import { allowedModelIds, isProviderKnown, UNKNOWN_PROVIDER_ERROR, validateCredentialCompatibility } from "./credentials.js";
+import { isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
-import { resolveRuntimeImageForJob, type RuntimeImageSnapshot } from "./runtime-images.js";
-import { expandModules, type MissingModule } from "./skill-sources.js";
+import {
+  PLATFORM_DEFAULT_AGENT_CLI,
+  PLATFORM_DEFAULT_AGENT_MODEL,
+  RUNTIME_TEST_TOOLCHAIN_POLICY,
+  createRoleRuntimeSnapshotApplication,
+  roleNameForJobType as roleNameForRuntimeType,
+  withRuntimeTestToolchainPolicy,
+  type AgentRuntimeSnapshot,
+  type ReasoningEffort,
+} from "./domains/role-runtime-snapshot/index.js";
 import {
   canTransition as canJobTransition,
   transitionJob as applyJobTransition,
@@ -34,6 +41,7 @@ import {
   type HubJobRecord,
   type HubTriggerOptions,
   type HubCanvasJobTerminalStatus,
+  type HubAnalysisCompleteGate,
 } from "./domains/hub-orchestration/index.js";
 import {
   assertHubDecisionCanvasReferences,
@@ -42,7 +50,29 @@ import {
   type HubReferenceLookup,
 } from "./graph.js";
 import { ControlInputError, invalidControlPayload, invalidRole, invalidVerification } from "./control-input.js";
-import { normalizeRoleUiColor } from "./role-colors.js";
+import * as findingVerificationLegacy from "./verify.js";
+import * as reportConvergenceLegacy from "./report.js";
+import { revokeJobTokens } from "./gateway.js";
+import {
+  createFindingVerificationApplication,
+  type FindingVerificationLegacyPort,
+} from "./domains/finding-verification/index.js";
+import { createReportConvergenceApplication } from "./domains/report-convergence/index.js";
+
+export {
+  PLATFORM_DEFAULT_AGENT_CLI,
+  PLATFORM_DEFAULT_AGENT_MODEL,
+  RUNTIME_TEST_TOOLCHAIN_POLICY,
+  withRuntimeTestToolchainPolicy,
+} from "./domains/role-runtime-snapshot/index.js";
+export const roleNameForJobType = roleNameForRuntimeType;
+export type { AgentRuntimeSnapshot, ReasoningEffort } from "./domains/role-runtime-snapshot/index.js";
+
+const findingVerificationApplication = createFindingVerificationApplication(
+  findingVerificationLegacy as unknown as FindingVerificationLegacyPort,
+);
+const reportConvergenceApplication = createReportConvergenceApplication(reportConvergenceLegacy);
+const roleRuntimeSnapshotApplication = createRoleRuntimeSnapshotApplication();
 
 type Tx = typeof sql;
 export type IngestResult = EventIngestionResult;
@@ -597,84 +627,11 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
   return rows.filter((r) => set.has(r.name));
 }
 
-// ---------- 角色运行快照：RoleConfig / 平台缺省 → Job 创建时冻结 ----------
-
-/** 与 agentbox-sdk AgentReasoningEffort 对齐；null = provider 默认 */
-export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
-
-/**
- * Platform-owned agent defaults. These are code-level compatibility values,
- * deliberately independent from AGENT_PROVIDER/AGENT_MODEL and never replaced
- * by process environment at RoleConfig or Job execution time.
- */
-export const PLATFORM_DEFAULT_AGENT_CLI = "claude-code";
-export const PLATFORM_DEFAULT_AGENT_MODEL: string | null = null;
-
-let legacyAgentDefaultsWarningEmitted = false;
-function warnIgnoredLegacyAgentDefaults(): void {
-  if (legacyAgentDefaultsWarningEmitted) return;
-  const hasLegacyValues = ["AGENT_PROVIDER", "AGENT_MODEL"].some((name) => process.env[name] !== undefined);
-  if (!hasLegacyValues) return;
-  legacyAgentDefaultsWarningEmitted = true;
-  console.warn("[role-config] legacy AGENT_PROVIDER/AGENT_MODEL are ignored; configure agent_cli/model/env_vars in RoleConfig");
-}
-
-export interface AgentRuntimeSnapshot {
-  name: string;
-  /** 角色类别随 Job 冻结；决定 Hub/可下发角色/系统角色的运行契约。 */
-  role_kind: "role" | "hub" | "system";
-  /** Scheduler-owned worker-role color; null for fixed semantic roles. */
-  ui_color: string | null;
-  agent_cli: string;
-  model: string | null;
-  /** 思考/推理强度（下一 job 生效，随快照冻结） */
-  reasoning: ReasoningEffort | null;
-  /** RoleConfig 内声明的非敏感环境变量。 */
-  env_vars: Record<string, string>;
-  env_keys: string[];
-  /** 绑定的 Provider Credential（§6.2）：快照只存 id/name/provider，密钥运行时解密，不进快照 */
-  credential_id: string | null;
-  /** 凭据展示名（创建 Job 时冻结；UI 优先展示此字段而非 UUID） */
-  credential_name: string | null;
-  credential_provider: string | null;
-  /** 原始 Git 模块 selector（module/plugin/source）；下发内容已展开进 skills/commands。 */
-  modules: string[];
-  /** 保存 RoleConfig 的原始 selector 意图（plugin/source selector 不被展开覆盖）。 */
-  module_selectors: string[];
-  /** 当前 catalog 展开出的具体模块元数据与内容哈希，随 Job 一起冻结。 */
-  expanded_modules: {
-    source_id: string;
-    module_id: string;
-    kind: "skill" | "command";
-    plugin: string;
-    name: string;
-    description: string;
-    content_hash: string;
-  }[];
-  /** Selectors omitted from execution, including deterministic name conflicts. */
-  missing_modules: MissingModule[];
-  /** 所有展开模块内容的确定性哈希；执行期不再读取可变 catalog。 */
-  module_content_hash: string;
-  /** §5.1：模块来源版本证据（commit + 内容哈希，随快照冻结） */
-  skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
-  skills: unknown[];
-  commands: unknown[];
-  mcps: unknown[];
-  subagents: unknown[];
-  /** 角色长期职责，随 Job 冻结并渲染为 /workspace/AGENTS.md 与 CLAUDE.md。 */
-  role_description: string;
-  /** RoleConfig 自定义的长期指令；任务内容不得写入这里。 */
-  instructions_markdown: string | null;
-  /** 本 Job 实际授权的平台工具；由 RoleConfig 在创建 Job 时冻结。 */
-  platform_tools: PlatformToolName[];
-  /** Provider 项目配置文件，随 Job 冻结后写入 /workspace。 */
-  config_files: { path: string; content: string; content_sha256: string }[];
-  role_config_id: string | null;
-  role_config_version: number | null;
-  runtime_image_key: string | null;
-  /** 已在 Job 创建时冻结的不可变可信镜像；Executor 只能使用 image_ref。 */
-  runtime_image: RuntimeImageSnapshot;
-}
+// ---------- Role/runtime snapshot compatibility facade ----------
+//
+// The role-runtime-snapshot context owns RoleConfig resolution and immutable
+// runtime-image selection.  Keep the historical core exports while callers
+// migrate to the explicit context entrypoint.
 
 // ---------- Job 创建（含 Plane issue 防双跑唯一约束） ----------
 
@@ -931,20 +888,16 @@ const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
   fixedPriorityForJob: (input) => fixedPriorityForJob(input),
   insertEdgeIfAbsent,
   settleCanvasFindingsAtGuardrail: async (tx, canvasId, reason) => {
-    const { settleCanvasFindingsAtGuardrail } = await import("./verify.js");
-    return settleCanvasFindingsAtGuardrail(tx, canvasId, reason);
+    return findingVerificationApplication.settleCanvasFindingsAtGuardrail(tx, canvasId, reason);
   },
   evaluateAnalysisCompleteGate: async (tx, canvasId, options) => {
-    const { evaluateAnalysisCompleteGate } = await import("./verify.js");
-    return evaluateAnalysisCompleteGate(tx, canvasId, options);
+    return findingVerificationApplication.evaluateAnalysisCompleteGate(tx, canvasId, options) as Promise<HubAnalysisCompleteGate>;
   },
   hasSucceededRoleWork: async (tx, canvasId) => {
-    const { hasSucceededRoleWork } = await import("./verify.js");
-    return hasSucceededRoleWork(tx, canvasId);
+    return findingVerificationApplication.hasSucceededRoleWork(tx, canvasId);
   },
   maybeDispatchReport: async (tx, canvasId) => {
-    const { maybeDispatchReport } = await import("./report.js");
-    return maybeDispatchReport(tx, canvasId);
+    return reportConvergenceApplication.maybeDispatchReport(tx, canvasId);
   },
 });
 
@@ -1345,8 +1298,7 @@ export async function applySideEffects(
     }
 
     // 规则引擎：所有 Finding 自动进入 Verify（§4.3；severity 只影响优先级）
-    const { evaluateFollowup } = await import("./verify.js");
-    await evaluateFollowup(tx, job, finding);
+    await findingVerificationApplication.evaluateFollowup(tx, job, finding);
     return;
   }
 
@@ -1356,7 +1308,7 @@ export async function applySideEffects(
       intent_node_id?: string;
       title?: string;
       description?: string;
-      verification?: import("@deepsonar/shared-types").VerificationEvidence;
+      verification?: VerificationEvidence;
     };
     if (!p.description) return;
     let canvasId = (job.canvas_id as string) ?? null;
@@ -1395,8 +1347,7 @@ export async function applySideEffects(
     }
     // 结构化验证证据：仅 Hub 回弹补证 Job 绑定 finding 时接受
     if (p.verification) {
-      const { attachVerificationEvidence } = await import("./verify.js");
-      const attached = await attachVerificationEvidence(tx, job, node.id as string, canvasId, p.verification);
+      const attached = await findingVerificationApplication.attachVerificationEvidence(tx, job, node.id as string, canvasId, p.verification);
       if (!attached) {
         throw invalidVerification("verification 证据未能附着到当前绑定 Finding；本次 fact 已拒绝。", "verification");
       }
@@ -1423,8 +1374,7 @@ export async function applySideEffects(
       // Hub complete 只是提案：统一完成门（排除当前仍 running 的 Hub 做门检）
       // **不在此处派 Report**：当前 Hub 尚未 mark_job_done；由 finalizeJob 在 Hub succeeded 后派发，
       // 避免 exclude 后抢跑 Report，也避免 Hub 崩溃时报告先于 Hub 终态。
-      const { evaluateAnalysisCompleteGate } = await import("./verify.js");
-      const gate = await evaluateAnalysisCompleteGate(tx, canvasId, { excludeJobId: jobId });
+      const gate = await findingVerificationApplication.evaluateAnalysisCompleteGate(tx, canvasId, { excludeJobId: jobId });
       if (!gate.ok) {
         const detail =
           gate.problems.length > 0
@@ -1509,8 +1459,7 @@ export async function applySideEffects(
       const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
         trigger.kind ?? "",
       );
-      const { buildVerificationFollowupPayload } = await import("./verify.js");
-      const verificationFollowup = buildVerificationFollowupPayload(trigger, it.from, role);
+      const verificationFollowup = findingVerificationApplication.buildVerificationFollowupPayload(trigger, it.from, role);
       // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
       const applyHubFollowup = hubFollowup && !verificationFollowup;
       const schedulingPurpose: SchedulingPurpose = verificationFollowup
@@ -1689,7 +1638,6 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
     WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
 
   // §6.3：job 终态立即吊销短期模型 Token（容器残留也调不动模型；网关另按 job 状态逐请求兜底）
-  const { revokeJobTokens } = await import("./gateway.js");
   await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
@@ -1707,11 +1655,10 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
 
   // Report Job：成功写产物并把 Root 置 succeeded；失败保持 reporting
   if (job?.type === "report") {
-    const { finalizeReportJob } = await import("./report.js");
     if (status === "succeeded") {
-      await finalizeReportJob(tx, jobId, { summary: result?.summary ?? null });
+      await reportConvergenceApplication.finalizeReportJob(tx, jobId, { summary: result?.summary ?? null });
     } else {
-      await finalizeReportJob(tx, jobId, { failed: true, error: result?.error ?? "report_failed" });
+      await reportConvergenceApplication.finalizeReportJob(tx, jobId, { failed: true, error: result?.error ?? "report_failed" });
     }
     return true;
   }
@@ -1735,8 +1682,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
 
   // verify_finding：统一收口（证据硬门 + 回弹 / needs_human / confirmed）
   if (job?.type === "verify_finding" && job.finding_id) {
-    const { closeVerifyRound } = await import("./verify.js");
-    const closed = await closeVerifyRound(tx, jobId, {
+    const closed = await findingVerificationApplication.closeVerifyRound(tx, jobId, {
       jobStatus: status === "succeeded" ? "succeeded" : "failed",
       proposedVerdict: result?.verdict,
       summary: result?.summary,
@@ -1749,8 +1695,7 @@ export async function finalizeJob(tx: Tx, jobId: string, status: "succeeded" | "
     }
   } else if (job && isVerificationFollowup) {
     // 补证成功或失败：等同组全部终态后再验 / 再回弹（不 force Hub）
-    const { maybeReverifyAfterFollowup } = await import("./verify.js");
-    await maybeReverifyAfterFollowup(tx, job);
+    await findingVerificationApplication.maybeReverifyAfterFollowup(tx, job);
   }
 
   // hub 循环（§8.3）：
@@ -1790,8 +1735,7 @@ export async function recoverVerifyJobTerminal(
     const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (!job || job.type !== "verify_finding" || !job.finding_id) return;
     if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;
-    const { closeVerifyRound } = await import("./verify.js");
-    const closed = await closeVerifyRound(tx, jobId, {
+    const closed = await findingVerificationApplication.closeVerifyRound(tx, jobId, {
       jobStatus,
       error: error ?? null,
       summary: null,
@@ -1956,187 +1900,11 @@ export function scanConfigContent(content: string): string | null {
   return null;
 }
 
-/** 系统 Job 类型对应的角色配置名。 */
-export function roleNameForJobType(jobType: string): string {
-  if (jobType === "audit_module") return "audit";
-  if (jobType === "verify_finding") return "verify";
-  if (jobType === "report") return "report";
-  return jobType;
-}
-
-/**
- * Dynamic test Jobs must consume the toolchain frozen into the selected
- * runtime image.  This policy is appended at snapshot time (rather than only
- * seeded in schema.sql) so existing databases and custom RoleConfigs receive
- * the same guard without overwriting operator-authored instructions.
- */
-export const RUNTIME_TEST_TOOLCHAIN_POLICY = `### Runtime test toolchain (Scheduler policy)
-
-This Job uses a Scheduler-selected, trusted runtime image. Before testing, read the frozen runtime manifest and verify only the preinstalled tools required by the target language: Java uses "command -v java" and "java -version"; Maven projects additionally use "command -v mvn" and "mvn -v" (and the versioned "java8"/"java11"/"java17" commands when required); Python uses the required "python3.x"/"uv" commands; Go uses "command -v go" and "go version"; Rust uses "command -v rustc"/"rustc --version" and "command -v cargo"/"cargo --version".
-
-- Do **not** install or download JDK, Maven, Gradle, SDKMAN, or compiler toolchains in the sandbox. Do not use apt-get, curl/wget archives, ./mvnw, or equivalent bootstrap fallbacks for those tools.
-- Project dependencies may be fetched only when the frozen DEEPSONAR_ALLOW_EGRESS policy permits it; dependency downloads are not a substitute for the prebuilt toolchain.
-- If a required preinstalled command is missing, stop the dynamic attempt and submit structured inconclusive/needs-human evidence. Never claim a confirmed Finding from a static description alone.
-- Record the runtime image key/digest, tool versions, target revision, exact steps, expected result, actual result, and limitations in emit_fact.verification for runtime-test evidence.`;
-
-export function withRuntimeTestToolchainPolicy(
-  roleName: string,
-  instructions: string | null,
-  resolvedRuntimeImageKey: string | null,
-): string | null {
-  // Test always performs runtime work. Verify receives the same guard only
-  // when its project RoleConfig explicitly opts into a non-Base image; the
-  // global Base Verify path remains suitable for static evidence review.
-  const dynamicVerify =
-    roleName === "verify" &&
-    resolvedRuntimeImageKey !== null &&
-    resolvedRuntimeImageKey !== "deepsonar-base";
-  if (roleName !== "test" && !dynamicVerify) return instructions;
-  const base = instructions?.trim() ?? "";
-  if (base.includes("### Runtime test toolchain (Scheduler policy)")) return base;
-  return `${base}${base ? "\n\n" : ""}${RUNTIME_TEST_TOOLCHAIN_POLICY}`;
-}
-
-/**
- * 解析 RoleConfig 并冻结为 Executor 运行快照。
- * 项目级 → 全局 → 平台缺省，无论哪一层都会产生完整快照。
- */
+/** Compatibility facade for the extracted role/runtime snapshot context. */
 export async function resolveAgentSnapshotForJob(
   db: typeof sql,
   projectId: string,
   jobType: string,
 ): Promise<AgentRuntimeSnapshot> {
-  warnIgnoredLegacyAgentDefaults();
-  const roleName = roleNameForJobType(jobType);
-  const [role] = await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`;
-  if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);
-
-  const [projectCfg] = await db`
-    SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`;
-  const [globalCfg] = projectCfg
-    ? [undefined]
-    : await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`;
-  const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
-  const agentCli = typeof cfg?.agent_cli === "string" && cfg.agent_cli.trim()
-    ? cfg.agent_cli.trim()
-    : PLATFORM_DEFAULT_AGENT_CLI;
-
-  const rawModules = cfg?.modules_json;
-  if (rawModules != null && !Array.isArray(rawModules)) {
-    throw new Error(`RoleConfig.modules_json 必须是字符串数组`);
-  }
-  const modules = (rawModules as string[] | undefined) ?? [];
-  const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
-  const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
-  const expanded = await expandModules(modules, db, {
-    skill_names: manualSkills.map((skill) => skill.name ?? ""),
-    command_names: manualCommands.map((command) => command.name ?? ""),
-  });
-  if (expanded.missing.length > 0) {
-    console.warn(`[role-config] 模块未下发: ${expanded.missing.join(", ")}`);
-  }
-  const skills = [
-    ...manualSkills,
-    ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name)),
-  ];
-  const commands = [
-    ...manualCommands,
-    ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name)),
-  ];
-
-  const [llm] = cfg
-    ? await db`
-        SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id, c.public_metadata_json
-        FROM role_credentials rc
-        JOIN credentials c ON c.id = rc.credential_id
-        WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
-        LIMIT 1
-        FOR SHARE OF c`
-    : [undefined];
-  if (llm) {
-    const provider = String(llm.provider ?? "");
-    if (!isProviderKnown(provider)) throw new Error(UNKNOWN_PROVIDER_ERROR);
-    const compatibilityError = validateCredentialCompatibility(agentCli, provider);
-    if (compatibilityError) throw new Error(compatibilityError);
-    const credProject = (llm.cred_project_id as string | null) ?? null;
-    if (cfg?.project_id != null && credProject && credProject !== projectId) {
-      throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
-    }
-    if (cfg?.project_id == null && credProject) {
-      throw new Error(`全局 RoleConfig 只能绑定全局 Credential`);
-    }
-    if ((llm.status as string) !== "active") {
-      throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
-    }
-    const configuredModel = typeof cfg?.model === "string" && cfg.model.trim()
-      ? cfg.model.trim()
-      : PLATFORM_DEFAULT_AGENT_MODEL;
-    const allowed = allowedModelIds(llm.public_metadata_json);
-    if (allowed.length > 0 && !configuredModel) {
-      throw new Error(`Credential ${llm.id} 已启用模型白名单，RoleConfig 必须显式选择模型`);
-    }
-    if (configuredModel && allowed.length > 0 && !allowed.includes(configuredModel)) {
-      throw new Error(`模型 ${configuredModel} 不在 Credential ${llm.id} 的 allowed_model_ids 白名单`);
-    }
-  }
-  const configFiles = cfg
-    ? await db`
-        SELECT path, content, content_sha256 FROM role_config_files
-        WHERE role_config_id = ${cfg.id as string} ORDER BY path`
-    : [];
-
-  const reasoningRaw = (cfg?.reasoning as string | null) ?? null;
-  const reasoning: ReasoningEffort | null =
-    reasoningRaw === "low" || reasoningRaw === "medium" || reasoningRaw === "high" || reasoningRaw === "xhigh"
-      ? reasoningRaw
-      : null;
-  const roleKind = role.kind as "role" | "hub" | "system";
-  const platformTools = resolvePlatformTools(
-    roleName,
-    roleKind,
-    (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {},
-  );
-  const runtimeImageKey = (cfg?.runtime_image_key as string) ?? null;
-  const runtimeImage = await resolveRuntimeImageForJob(db, projectId, roleName, runtimeImageKey);
-
-  return {
-    name: roleName,
-    role_kind: roleKind,
-    ui_color: roleKind === "role" ? normalizeRoleUiColor(role.ui_color) : null,
-    agent_cli: agentCli,
-    model: typeof cfg?.model === "string" && cfg.model.trim()
-      ? cfg.model.trim()
-      : PLATFORM_DEFAULT_AGENT_MODEL,
-    reasoning,
-    env_vars: cfg?.env_vars_json && typeof cfg.env_vars_json === "object"
-      ? cfg.env_vars_json as Record<string, string>
-      : {},
-    env_keys: (cfg?.env_keys as string[]) ?? [],
-    credential_id: (llm?.id as string) ?? null,
-    credential_name: (llm?.name as string) ?? null,
-    credential_provider: (llm?.provider as string) ?? null,
-    modules,
-    module_selectors: [...modules],
-    expanded_modules: expanded.resolved_modules,
-    missing_modules: expanded.missing_modules,
-    module_content_hash: expanded.content_hash,
-    skill_revisions: expanded.revisions,
-    skills,
-    commands,
-    mcps: (cfg?.mcps_json as unknown[]) ?? [],
-    subagents: (cfg?.subagents_json as unknown[]) ?? [],
-    role_description: (role.description as string) ?? roleName,
-    instructions_markdown: withRuntimeTestToolchainPolicy(
-      roleName,
-      (cfg?.instructions_markdown as string) ?? null,
-      runtimeImage.image_key,
-    ),
-    platform_tools: platformTools,
-    config_files: configFiles as unknown as { path: string; content: string; content_sha256: string }[],
-    role_config_id: (cfg?.id as string) ?? null,
-    role_config_version: (cfg?.version as number) ?? null,
-    // null 表示 RoleConfig 未绑定市场镜像；runtime_image 仍记录系统沙箱实际使用的不可变底座。
-    runtime_image_key: runtimeImageKey,
-    runtime_image: runtimeImage,
-  };
+  return roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(db as never, projectId, jobType) as Promise<AgentRuntimeSnapshot>;
 }

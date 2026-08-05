@@ -7,6 +7,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import {
+  fixedPriorityForJob,
+  maybeTriggerHub,
+  patchCanvasConvergence,
+  resolveAgentSnapshotForJob,
+  rulesForProject,
+} from "./core.js";
+import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 
 type Tx = typeof sql;
@@ -544,7 +552,6 @@ export async function maybeDispatchFindingReport(
   const projectId = String(finding.project_id);
   const canvasId = String(finding.canvas_id);
   const version = Number(latest?.version ?? 0) + 1;
-  const { fixedPriorityForJob, resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
   const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
@@ -636,7 +643,6 @@ async function bounceReportGateToHub(
       updated_at = now()
     WHERE canvas_id = ${canvasId} AND status IN ('pending', 'generating')`;
 
-  const { fixedPriorityForJob, maybeTriggerHub, patchCanvasConvergence } = await import("./core.js");
   await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
     auto_stopped: false,
     paused_reason: undefined,
@@ -718,7 +724,6 @@ export async function maybeDispatchReport(
   const projectId = canvas.project_id as string;
 
   // 统一完成门：Finding 收敛 + 角色工作 + 无活跃 Job（可排除当前 Hub）
-  const { careSeverityMeta, evaluateAnalysisCompleteGate } = await import("./verify.js");
   const careMeta = await careSeverityMeta(tx, projectId);
   const gate = await evaluateAnalysisCompleteGate(tx, canvasId, {
     excludeJobId: opts?.excludeJobId ?? null,
@@ -752,7 +757,6 @@ export async function maybeDispatchReport(
     }
   }
 
-  const { fixedPriorityForJob, resolveAgentSnapshotForJob, rulesForProject } = await import("./core.js");
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   let snapshot: unknown;
   try {

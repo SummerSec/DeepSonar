@@ -34,7 +34,10 @@ const schedulerRoutes = readFileSync(new URL("../apps/scheduler/src/routes.ts", 
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const schedulerCore = readFileSync(new URL("../apps/scheduler/src/core.ts", import.meta.url), "utf8");
+const schedulerRuntimeSnapshot = readFileSync(
+  new URL("../apps/scheduler/src/domains/role-runtime-snapshot/application.ts", import.meta.url),
+  "utf8",
+);
 const schedulerDispatcher = readFileSync(new URL("../apps/scheduler/src/dispatcher.ts", import.meta.url), "utf8");
 const schema = readFileSync(new URL("../database/schema.sql", import.meta.url), "utf8");
 const roleSmoke = readFileSync(new URL("./test-runtime-images-api.py", import.meta.url), "utf8");
@@ -119,8 +122,8 @@ expect(mavenSmoke.includes('target/classes:$commons_jar'), "Maven smoke must run
 expect(ciWorkflow.includes("test-maven-package.mjs"), "CI must run the Maven package smoke");
 expect(schedulerRuntimeImages.includes('test: "deepsonar-kali-minimal"'), "Scheduler Test default must resolve to Kali Test");
 expect(schedulerRuntimeImages.includes('verify: "deepsonar-base"'), "Scheduler Verify default must remain Base");
-expect(schedulerCore.includes("Runtime test toolchain (Scheduler policy)"), "Test snapshots must carry the prebuilt toolchain policy");
-expect(schedulerCore.includes("Do **not** install or download JDK, Maven"), "Test snapshots must prohibit runtime JDK/Maven bootstrap");
+expect(schedulerRuntimeSnapshot.includes("Runtime test toolchain (Scheduler policy)"), "Test snapshots must carry the prebuilt toolchain policy");
+expect(schedulerRuntimeSnapshot.includes("Do **not** install or download JDK, Maven"), "Test snapshots must prohibit runtime JDK/Maven bootstrap");
 expect(schedulerDispatcher.includes("禁止 apt-get、下载 JDK/Maven"), "runtime_test intents must prohibit JDK/Maven downloads");
 expect(schema.includes("WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'"), "schema Test RoleConfig default must select Kali Test");
 expect(schema.includes("Runtime test 工具链纪律"), "schema Test instructions must document prebuilt toolchain policy");

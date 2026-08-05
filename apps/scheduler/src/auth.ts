@@ -4,6 +4,7 @@ import { audit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
+import { resolveSessionToken } from "./users.js";
 
 /**
  * 平台 API Token 鉴权（§6.1/SEC-01）
@@ -287,7 +288,6 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
     actor = { type: "bootstrap_admin", id: null, name: "bootstrap_admin", projectId: null, scopes: ["admin"] };
   } else if (token.startsWith("deepsonar_user_")) {
     // 用户会话
-    const { resolveSessionToken } = await import("./users.js");
     const sess = await resolveSessionToken(token);
     if (!sess) {
       if (!config.auth.required) {

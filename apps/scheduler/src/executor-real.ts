@@ -17,7 +17,7 @@ import {
 import { config } from "./config.js";
 import { ingestEvent, PLATFORM_DEFAULT_AGENT_CLI, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
 import { sql } from "./db.js";
-import { buildGraphSnapshot, parseHubDecisionPayload } from "./graph.js";
+import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope } from "./graph.js";
 import {
   PROVIDER_ENV_MAP,
   UNKNOWN_PROVIDER_ERROR,
@@ -27,6 +27,8 @@ import {
 } from "./credentials.js";
 import { JobEvidenceWriter } from "./evidence.js";
 import { mintJobToken } from "./gateway.js";
+import { collectEvidenceSnapshot } from "./verify.js";
+import { readReportBlob } from "./report.js";
 import { publishStream } from "./stream-bus.js";
 import { CONTROL_MCP_NAME, CONTROL_MCP_SERVER, CONTROL_SEMANTIC_EVENT_TYPES } from "./control-mcp.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
@@ -438,7 +440,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const workerPrompt = String(intent.prompt ?? taskGoal).trim();
   // Hub/Worker/Verify/Report each receive a server-side graph projection.
   const isReport = snapshot.name === "report";
-  const graphScope: import("./graph.js").GraphScope | null =
+  const graphScope: GraphScope | null =
     isHub ? "hub" : isVerify ? "verify" : isReport ? "report" : isRole || isAudit ? "agent" : null;
   const graph =
     canvasId && graphScope
@@ -562,7 +564,6 @@ ${graph.yaml}`;
     const findingId = (job.finding_id as string | null) ?? null;
     let evidenceBlock = "（无绑定 Finding 或尚无合格证据快照）";
     if (findingId) {
-      const { collectEvidenceSnapshot } = await import("./verify.js");
       const [frow] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
       const snap = await collectEvidenceSnapshot(sql, findingId, (frow?.job_id as string) ?? null);
       evidenceBlock = JSON.stringify(
@@ -601,7 +602,6 @@ ${graph ? `任务画布（YAML 摘要）：\n${graph.yaml}` : "（无画布快�
     if (!inputUri) {
       throw new Error(`report job ${jobId} 缺少 report_input_uri`);
     }
-    const { readReportBlob } = await import("./report.js");
     const inputBlock = (await readReportBlob(inputUri)).toString("utf8");
     if (!inputBlock.trim()) throw new Error(`report job ${jobId} 的 report-input.json 为空`);
     try {
