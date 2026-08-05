@@ -114,6 +114,39 @@ pass only metadata fields (`started_at`, lease, error, and similar); the
 characterization test keeps this boundary explicit before the interface is
 adopted by additional contexts.
 
+## Issue #37 Phase 0 — characterization and guardrails
+
+Phase 0 is a behavior-preservation slice.  It does not move production logic,
+change the database schema, or change an HTTP response.  Its purpose is to make
+the current Scheduler composition measurable before bounded-context slices
+start moving callers.
+
+The CI gate now executes the following baseline:
+
+1. The pure Job lifecycle matrix and terminal/recovery fixtures in
+   `domains/job-lifecycle/*characterization.test.ts` (alongside the existing
+   lifecycle tests).
+2. The semantic direct-status-write inventory in
+   `job-state-write-inventory.test.ts`.  It enumerates the guarded status
+   writers in `core.ts`, `dispatcher.ts`, `reaper.ts`, `reconcile.ts`, and
+   `routes.ts`; an unclassified `UPDATE jobs ... SET status` fails the test.
+   The generic `job-lifecycle/application.ts` SQL CAS is checked separately as
+   the canonical adapter.
+3. The Fastify registrar and OpenAPI operation manifests in
+   `route-surface.manifest.ts`, exercised by `route-surface.test.ts`.  The
+   test observes the actual `onRoute` registrations, so a later registrar split
+   cannot silently drop an endpoint.  The current documented/undocumented
+   OpenAPI surface is captured intentionally; changing either surface requires
+   an explicit manifest diff.
+
+Phase 0 closes when these checks are green in the repository CI gate and the
+manifest contains no unexplained route or status-writer drift.  Subsequent
+slices may then move one bounded context at a time (event-ingestion, Hub
+orchestration, Finding verification, report convergence, and role/runtime
+snapshot), keeping `core.ts` as a compatibility facade until each caller has
+an application seam.  Each slice must add characterization for its moved
+terminal/recovery path before changing lock order or side-effect sequencing.
+
 ## Migration rules
 
 1. Add a narrow application method before moving a caller; leave a
