@@ -15,6 +15,8 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [downloading, setDownloading] = useState<"markdown" | "sarif" | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   // 轮询报告状态（生成中会变化，5s 一轮）
   useEffect(() => {
@@ -141,6 +143,17 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   // 成功：结构化摘要卡片 + Markdown + 下载 + 哈希
   const s = report.summary_json ?? {};
   const bySev = s.confirmed_by_severity ?? {};
+  const handleDownload = async (format: "markdown" | "sarif") => {
+    setDownloadError(null);
+    setDownloading(format);
+    try {
+      await api.downloadReport(report.id, format);
+    } catch (e) {
+      setDownloadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(null);
+    }
+  };
   return (
     <div className="h-full overflow-y-auto p-5">
       <div className="mx-auto flex max-w-4xl flex-col gap-4">
@@ -183,20 +196,27 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
 
         {/* 下载与完整性哈希 */}
         <div className="flex flex-wrap items-center gap-2 rounded-[20px] bg-white/[.025] px-4 py-3 ring-1 ring-white/[.055]">
-          <a
-            href={`/api/reports/${report.id}/markdown`}
-            download
+          <button
+            type="button"
+            onClick={() => void handleDownload("markdown")}
+            disabled={downloading !== null}
             className="flex items-center gap-1.5 rounded-full bg-white/[.035] px-3 py-2 font-mono text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-colors hover:bg-acc-500/[.07] hover:text-acc-300"
           >
-            <FileArrowDown size={13} /> 下载 Markdown
-          </a>
-          <a
-            href={`/api/reports/${report.id}/sarif`}
-            download
+            <FileArrowDown size={13} /> {downloading === "markdown" ? "下载中…" : "下载 Markdown"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleDownload("sarif")}
+            disabled={downloading !== null}
             className="flex items-center gap-1.5 rounded-full bg-white/[.035] px-3 py-2 font-mono text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-colors hover:bg-acc-500/[.07] hover:text-acc-300"
           >
-            <DownloadSimple size={13} /> 下载 SARIF
-          </a>
+            <DownloadSimple size={13} /> {downloading === "sarif" ? "下载中…" : "下载 SARIF"}
+          </button>
+          {downloadError && (
+            <div role="alert" className="basis-full text-[12px] text-red-300">
+              报告下载失败：{downloadError}
+            </div>
+          )}
           {report.markdown_sha256 && (
             <span
               className="ml-auto truncate font-mono text-[11px] text-zinc-600"

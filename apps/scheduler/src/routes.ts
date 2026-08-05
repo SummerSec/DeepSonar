@@ -160,6 +160,11 @@ const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code"]);
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 const STREAMABLE_JOB_STATUSES = new Set(["running", "waiting_human"]);
 
+function reportDownloadFilename(reportId: string, extension: "md" | "sarif"): string {
+  const safeId = reportId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "unknown";
+  return `report-${safeId}.${extension}`;
+}
+
 /**
  * Validate scheduler concurrency knobs at the API boundary. Other rule keys
  * remain open-ended for backwards compatibility, while these limits must be
@@ -377,6 +382,9 @@ export function registerRoutes(app: FastifyInstance) {
     if (routeUrl.startsWith("/findings/:id") && !isUuid(params.id)) {
       return reply.code(400).send({ error: "invalid finding id", error_code: "INVALID_ID" });
     }
+    if (routeUrl.startsWith("/reports/:id") && !isUuid(params.id)) {
+      return reply.code(400).send({ error: "invalid report id", error_code: "INVALID_ID" });
+    }
     if (routeUrl.startsWith("/canvases/:id") && !isUuid(params.id)) {
       return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
     }
@@ -405,6 +413,25 @@ export function registerRoutes(app: FastifyInstance) {
       }
     }
     if (!actorProjectId) return;
+    if (routeUrl.startsWith("/reports/:id/")) {
+      // Report ids are not authorization boundaries. Resolve the report's
+      // project through task_reports -> canvases before serving any artifact;
+      // a project-scoped token must never read another project's report blob.
+      const reportId = params.id;
+      if (!reportId) return;
+      const [report] = await sql`
+        SELECT tr.project_id AS report_project_id, c.project_id AS canvas_project_id
+        FROM task_reports tr
+        JOIN canvases c ON c.id = tr.canvas_id
+        WHERE tr.id = ${reportId}`;
+      if (report && (
+        !projectScopeAllows(actorProjectId, report.report_project_id as string | null)
+        || !projectScopeAllows(actorProjectId, report.canvas_project_id as string | null)
+      )) {
+        return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
+      }
+      return;
+    }
     if (routeUrl.startsWith("/canvases/:id") || routeUrl.startsWith("/tasks/:canvasId")) {
       const canvasId = params.id ?? params.canvasId;
       if (!canvasId) return;
@@ -3518,7 +3545,10 @@ export function registerRoutes(app: FastifyInstance) {
     }
     try {
       const buf = await readReportBlob(report.markdown_uri as string);
-      return reply.type("text/markdown; charset=utf-8").send(buf.toString("utf8"));
+      return reply
+        .type("text/markdown; charset=utf-8")
+        .header("content-disposition", `attachment; filename="${reportDownloadFilename(id, "md")}"`)
+        .send(buf);
     } catch {
       return reply.code(404).send({ error: "markdown blob missing" });
     }
@@ -3534,7 +3564,13 @@ export function registerRoutes(app: FastifyInstance) {
     }
     try {
       const buf = await readReportBlob(report.sarif_uri as string);
-      return reply.type("application/json").send(JSON.parse(buf.toString("utf8")));
+      // Keep the previous validity gate while preserving the exact generated
+      // SARIF bytes for the attachment response.
+      JSON.parse(buf.toString("utf8"));
+      return reply
+        .type("application/sarif+json; charset=utf-8")
+        .header("content-disposition", `attachment; filename="${reportDownloadFilename(id, "sarif")}"`)
+        .send(buf);
     } catch {
       return reply.code(404).send({ error: "sarif blob missing" });
     }

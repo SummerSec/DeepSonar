@@ -81,8 +81,8 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | --- | --- | --- | --- |
 | GET | /findings | findings:read | Finding 列表；`?project_id=` / `?canvas_id=` |
 | GET | /canvases/:id/report | tasks:read | 任务报告元数据（status / markdown_uri / sarif_uri） |
-| GET | /reports/:id/markdown | tasks:read | **非 JSON**，text/markdown |
-| GET | /reports/:id/sarif | tasks:read | **非 JSON**，application/sarif+json |
+| GET | /reports/:id/markdown | tasks:read | **非 JSON attachment**，`text/markdown; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.md"` |
+| GET | /reports/:id/sarif | tasks:read | **非 JSON attachment**，`application/sarif+json; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.sarif"` |
 | POST | /canvases/:id/report/retry | jobs:control | 仅 `failed` 可重试，否则 409 |
 
 ### 设置（规则与角色启停）

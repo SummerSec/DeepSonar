@@ -828,6 +828,78 @@ async function get<T>(path: string): Promise<T> {
 }
 
 /**
+ * Keep browser downloads on the same authenticated fetch path as every other
+ * API request.  Native links cannot attach the Bearer token kept in
+ * localStorage, and would also happily save a JSON 401/403 response as a
+ * report file.
+ */
+export function safeDownloadFilename(candidate: string | null | undefined, fallback: string): string {
+  const value = candidate?.trim() ?? "";
+  if (!value || value === "." || value === ".." || /[\u0000-\u001f\u007f\\/:*?"<>|]/.test(value)) return fallback;
+  // Strip bidi controls and keep the resulting name bounded before handing it
+  // to the browser's download attribute.
+  const clean = value.replace(/[\u202a-\u202e\u2066-\u2069]/g, "").trim();
+  return clean && clean !== "." && clean !== ".." ? clean.slice(0, 240) : fallback;
+}
+
+/** Parse RFC 6266 filename / filename* without allowing path traversal. */
+export function parseContentDispositionFilename(disposition: string, fallback: string): string {
+  const encoded = disposition.match(/(?:^|;)\s*filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;]*)/i)?.[1];
+  if (encoded) {
+    try {
+      return safeDownloadFilename(decodeURIComponent(encoded.trim().replace(/^"|"$/g, "")), fallback);
+    } catch {
+      return fallback;
+    }
+  }
+  const quoted = disposition.match(/(?:^|;)\s*filename\s*=\s*"([^"]*)"/i)?.[1];
+  const unquoted = disposition.match(/(?:^|;)\s*filename\s*=\s*([^;\s]+)/i)?.[1];
+  return safeDownloadFilename(quoted ?? unquoted, fallback);
+}
+
+async function responseErrorDetail(res: Response): Promise<string> {
+  let detail = "";
+  try {
+    const contentType = res.headers.get("content-type") ?? "";
+    if (contentType.toLowerCase().includes("json")) {
+      const body = (await res.json()) as { error?: string; message?: string; error_code?: string };
+      detail = [body.error_code, body.error ?? body.message].filter(Boolean).join(": ");
+    } else {
+      detail = (await res.text()).trim();
+    }
+  } catch {
+    // Some proxies return an empty or malformed body for auth failures.
+  }
+  if (res.status === 401) return detail ? `登录已失效或未登录：${detail}` : "登录已失效或未登录，请重新登录后再下载";
+  if (res.status === 403) return detail ? `当前账号无权下载该报告：${detail}` : "当前账号无权下载该报告";
+  return detail || `下载请求失败（HTTP ${res.status}）`;
+}
+
+/** Fetch an authenticated binary and trigger a local browser download. */
+export async function downloadAuthenticatedFile(path: string, fallbackFilename: string): Promise<void> {
+  const safeFallback = safeDownloadFilename(fallbackFilename, "download");
+  const res = await fetch(`/api${path}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await responseErrorDetail(res));
+  const blob = await res.blob();
+  const filename = parseContentDispositionFilename(res.headers.get("content-disposition") ?? "", safeFallback);
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body?.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    // Let the browser start the navigation before releasing the object URL;
+    // revoking synchronously can cancel downloads in Chromium/WebKit.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }
+}
+
+/**
  * 浏览器侧鉴权材料（DEEPSONAR_AUTH_REQUIRED 时 Web 调 API 用）。
  * 用户会话与平台 API Token 分 key 存放，避免设置页把会话 secret 当成「可编辑本机令牌」摊开。
  * 请求优先级：会话 token > API Token。
@@ -1136,17 +1208,10 @@ export const api = {
     get<PageEnvelope<JobEvent>>(`/jobs/${jobId}/events${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
   jobSession: (jobId: string) => get<{ meta: EvidenceFileMeta; text: string; truncated: boolean }>(`/jobs/${jobId}/evidence/session`),
   downloadJobSession: async (jobId: string): Promise<void> => {
-    const res = await fetch(`/api/jobs/${jobId}/evidence/session/download`, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`session download -> ${res.status}`);
-    const blob = await res.blob();
-    const disposition = res.headers.get("content-disposition") ?? "";
-    const name = disposition.match(/filename="([^"]+)"/)?.[1] ?? `${jobId}.jsonl`;
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = name;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    await downloadAuthenticatedFile(
+      `/jobs/${encodeURIComponent(jobId)}/evidence/session/download`,
+      safeDownloadFilename(`${jobId}.jsonl`, "session.jsonl"),
+    );
   },
   jobsPage: (opts?: { project_id?: string; canvas_id?: string; status?: string; after?: string | null; limit?: number }) =>
     get<PageEnvelope<JobSummary>>(`/jobs${qs({ project_id: opts?.project_id, canvas_id: opts?.canvas_id, status: opts?.status, after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
@@ -1245,12 +1310,18 @@ export const api = {
   canvasReport: (canvasId: string) => get<TaskReport>(`/canvases/${canvasId}/report`),
   retryReport: (canvasId: string) =>
     send<{ ok: boolean; report_id: string }>("POST", `/canvases/${canvasId}/report/retry`),
-  /** 报告 Markdown 正文（text/markdown；SARIF/下载直接用 /api/reports/:id/{markdown,sarif} 链接） */
+  /** 报告 Markdown 正文（text/markdown；带认证头） */
   reportMarkdown: async (reportId: string): Promise<string> => {
-    const res = await fetch(`/api/reports/${reportId}/markdown`, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`markdown -> ${res.status}`);
+    const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/markdown`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(await responseErrorDetail(res));
     return res.text();
   },
+  /** 报告二进制下载（Bearer 不进 URL，成功后才触发 Blob 下载）。 */
+  downloadReport: (reportId: string, format: "markdown" | "sarif"): Promise<void> =>
+    downloadAuthenticatedFile(
+      `/reports/${encodeURIComponent(reportId)}/${format}`,
+      `report-${safeDownloadFilename(reportId, "unknown")}.${format === "markdown" ? "md" : "sarif"}`,
+    ),
   /** 人工处理 Fact 验证状态（needs_human 的人工确认/明确排除） */
   setFactVerification: (nodeId: string, status: "verified" | "rejected" | "needs_human", note?: string) =>
     send<{ id: string; canvas_id: string; title: string }>(
