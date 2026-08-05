@@ -1,9 +1,11 @@
 import { ArrowsClockwise, Cube, DownloadSimple, MagnifyingGlass, Plus, SealCheck, ShieldWarning } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useAuth } from "../auth";
 import {
   api,
+  isSupportedRuntimeImageRegistryEnvelope,
+  runtimeImageRegistryCatalog,
   type ProviderCredential,
   type RuntimeImageDetail,
   type RuntimeImageLocalCandidate,
@@ -11,6 +13,7 @@ import {
   type RuntimeImageTrustStatus,
   type RuntimeImageVersion,
   type RuntimeImageRegistry,
+  type RuntimeImageRegistryChannel,
   type RuntimeImagePullTask,
 } from "../api";
 import { EmptyState, PageHeader, PageSkeleton, formatTime } from "../ui";
@@ -101,6 +104,31 @@ const PLATFORM_FILTERS = [
   { id: "linux/amd64", label: "linux/amd64" },
   { id: "linux/arm64", label: "linux/arm64" },
 ];
+
+const REGISTRY_CHANNEL_OPTIONS: ReadonlyArray<{
+  id: RuntimeImageRegistryChannel;
+  label: string;
+  host: string;
+}> = [
+  { id: "github", label: "GitHub Container Registry", host: "ghcr.io" },
+  { id: "dockerhub", label: "Docker Hub", host: "docker.io" },
+  { id: "aliyun-acr", label: "阿里云 ACR", host: "cr.aliyuncs.com" },
+];
+
+function registryChannelLabel(channel: RuntimeImageRegistryChannel): string {
+  return REGISTRY_CHANNEL_OPTIONS.find((option) => option.id === channel)?.label ?? channel;
+}
+
+function registryChannelMutationError(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (/\b403\b|PROJECT_SCOPE_FORBIDDEN|AUTH_SCOPE_REQUIRED|images:manage|权限|forbidden/i.test(message)) {
+    return "当前账号无权切换官方仓库通道（需要 images:manage 权限）";
+  }
+  if (/\b401\b|unauthori[sz]ed|登录已失效|鉴权/i.test(message)) {
+    return "登录已失效或未登录，请重新登录后再切换官方仓库通道";
+  }
+  return message ? `切换官方仓库通道失败：${message}` : "切换官方仓库通道失败，请稍后重试";
+}
 
 function LocalCandidatePanel({
   candidate,
@@ -195,6 +223,10 @@ export function RuntimeImagesPage() {
   const [officialRef, setOfficialRef] = useState("");
   const [officialVersion, setOfficialVersion] = useState("");
   const [registry, setRegistry] = useState<RuntimeImageRegistry | null>(null);
+  const [registryLoading, setRegistryLoading] = useState(false);
+  const [registryLoadError, setRegistryLoadError] = useState<string | null>(null);
+  const [channelStatus, setChannelStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
+  const [channelMessage, setChannelMessage] = useState<string | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [manualForm, setManualForm] = useState({ image_key: "", name: "", description: "", publisher: "", image_ref: "", version: "" });
   const [pullStatus, setPullStatus] = useState<RuntimeImagePullTask | null>(null);
@@ -203,21 +235,49 @@ export function RuntimeImagesPage() {
   const [localCandidates, setLocalCandidates] = useState<Record<string, RuntimeImageLocalCandidate | null>>({});
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [projectVersionPick, setProjectVersionPick] = useState<Record<string, string>>({});
+  const marketplaceRequestGeneration = useRef(0);
 
   const canAdoptLocal = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:approve")));
   const canManageCatalog = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:manage") || me.actor?.scopes.includes("images:approve")));
+  const canManageRegistryChannel = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:manage")));
 
   const reload = async (keepSelected = true) => {
+    const generation = ++marketplaceRequestGeneration.current;
     try {
       const list = await api.runtimeImages(projectId, search || undefined);
+      if (generation !== marketplaceRequestGeneration.current) return;
       setRows(list);
-      if (keepSelected && selected) setSelected(await api.runtimeImage(selected.image.id));
+      if (keepSelected && selected) {
+        const detail = await api.runtimeImage(selected.image.id);
+        if (generation !== marketplaceRequestGeneration.current) return;
+        setSelected(detail);
+      }
       setError(null);
     } catch (cause) {
+      if (generation !== marketplaceRequestGeneration.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      if (generation === marketplaceRequestGeneration.current) setLoading(false);
     }
+  };
+
+  /** Refresh both the selected-channel metadata and the image rows after a catalog mutation. */
+  const refreshMarketplace = async () => {
+    const generation = ++marketplaceRequestGeneration.current;
+    const [nextRegistry, list] = await Promise.all([
+      api.runtimeImagesRegistry(),
+      api.runtimeImages(projectId, search || undefined),
+    ]);
+    if (generation !== marketplaceRequestGeneration.current) return;
+    setRegistry(nextRegistry);
+    setRegistryLoadError(null);
+    setRows(list);
+    if (selected) {
+      const detail = await api.runtimeImage(selected.image.id);
+      if (generation !== marketplaceRequestGeneration.current) return;
+      setSelected(detail);
+    }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -230,7 +290,35 @@ export function RuntimeImagesPage() {
       .catch(() => {});
   }, []);
   useEffect(() => {
-    if (!projectId) api.runtimeImagesRegistry().then(setRegistry).catch((cause) => setError(cause instanceof Error ? `获取市场清单失败：${cause.message}` : "获取市场清单失败"));
+    if (projectId) {
+      setRegistry(null);
+      setRegistryLoading(false);
+      setRegistryLoadError(null);
+      setChannelStatus("idle");
+      setChannelMessage(null);
+      return;
+    }
+    let active = true;
+    setRegistryLoading(true);
+    setRegistryLoadError(null);
+    void api.runtimeImagesRegistry()
+      .then((value) => {
+        if (!active) return;
+        setRegistry(value);
+      })
+      .catch((cause) => {
+        if (!active) return;
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setRegistryLoadError(/\b403\b|PROJECT_SCOPE_FORBIDDEN|images:read|权限|forbidden/i.test(message)
+          ? "无法读取官方仓库通道（需要 images:read 权限）"
+          : `获取市场清单失败：${message || "请稍后重试"}`);
+      })
+      .finally(() => {
+        if (active) setRegistryLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [projectId]);
   useEffect(() => {
     if (projectId) return;
@@ -326,7 +414,8 @@ export function RuntimeImagesPage() {
 
   const exportRegistry = () => {
     if (!registry) return;
-    const blob = new Blob([JSON.stringify(registry, null, 2)], { type: "application/json" });
+    const catalog = runtimeImageRegistryCatalog(registry);
+    const blob = new Blob([JSON.stringify(catalog, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -339,12 +428,42 @@ export function RuntimeImagesPage() {
     setBusy("registry-sync");
     try {
       const result = await api.syncRuntimeImagesRegistry();
-      setRegistry(result.registry);
+      await refreshMarketplace();
       setNotice(`市场同步完成：${result.product_count} 个产品，${result.version_count} 个版本`);
       setError(null);
-      await reload(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const updateRegistryChannel = async (channel: RuntimeImageRegistryChannel) => {
+    if (!registry || channel === registry.selected_channel) return;
+    if (!canManageRegistryChannel) {
+      setChannelStatus("error");
+      setChannelMessage("当前账号无权切换官方仓库通道（需要 images:manage 权限）");
+      return;
+    }
+    setBusy("registry-channel");
+    setChannelStatus("pending");
+    setChannelMessage("正在切换官方仓库通道…");
+    setError(null);
+    try {
+      const result = await api.setRuntimeImagesRegistryChannel(channel);
+      setRegistry((current) => current ? { ...current, selected_channel: result.selected_channel } : current);
+      try {
+        await refreshMarketplace();
+        setChannelStatus("success");
+        setChannelMessage(`已切换至 ${registryChannelLabel(result.selected_channel)}，市场数据已刷新`);
+      } catch (refreshCause) {
+        const refreshMessage = refreshCause instanceof Error ? refreshCause.message : String(refreshCause);
+        setChannelStatus("error");
+        setChannelMessage(`已切换至 ${registryChannelLabel(result.selected_channel)}，但市场数据刷新失败：${refreshMessage || "请手动刷新"}`);
+      }
+    } catch (cause) {
+      setChannelStatus("error");
+      setChannelMessage(registryChannelMutationError(cause));
     } finally {
       setBusy(null);
     }
@@ -363,13 +482,12 @@ export function RuntimeImagesPage() {
       } catch {
         throw new Error("文件不是合法 JSON");
       }
-      if (!parsed || typeof parsed !== "object" || (parsed as { schema?: string }).schema !== "deepsonar.registry/v1") {
-        throw new Error("请选择 runtime-image-registry.json（schema 须为 deepsonar.registry/v1）");
+      if (!isSupportedRuntimeImageRegistryEnvelope(parsed)) {
+        throw new Error("请选择 runtime-image-registry.json（schema 或 schema_version 须为 v1/v2）");
       }
-      const result = await api.applyRuntimeImagesRegistry(parsed as RuntimeImageRegistry);
-      setRegistry(result.registry);
+      const result = await api.applyRuntimeImagesRegistry(parsed);
+      await refreshMarketplace();
       setNotice(`手动更新市场完成：${result.product_count} 个产品，${result.version_count} 个版本（已写入数据库）`);
-      await reload(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -478,7 +596,7 @@ export function RuntimeImagesPage() {
         subtitle={
           projectId
             ? "为项目启用已准入镜像，并固定角色可选择的可信版本。任务表单仍不暴露镜像参数。"
-            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。「同步市场」拉 GitHub Release；不可达时用「手动更新市场」选择本机 runtime-image-registry.json 上传入库。一平台一版本，项目可固定平台 digest。"
+            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。「同步市场」刷新受治理目录；不可达时用「手动更新市场」选择本机 runtime-image-registry.json 上传入库。一平台一版本，项目可固定平台 digest。"
         }
         actions={
           <div className="flex w-full flex-wrap gap-2 sm:w-auto">
@@ -488,7 +606,7 @@ export function RuntimeImagesPage() {
             </label>
             {!projectId && (
               <>
-                <button className="secondary-button" disabled={busy !== null} onClick={syncRegistry} title="从 GitHub Release 自动拉取官方清单（失败则用内置回退）">
+                <button className="secondary-button" disabled={busy !== null} onClick={syncRegistry} title="刷新服务器配置的受治理官方目录（失败则用内置回退）">
                   <ArrowsClockwise size={14} /> 同步市场
                 </button>
                 <label
@@ -524,7 +642,7 @@ export function RuntimeImagesPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[10px] tracking-[.14em] text-zinc-600">PLATFORM</span>
+        <span className="font-mono text-[10px] tracking-[.14em] text-zinc-600">CPU PLATFORM</span>
         {PLATFORM_FILTERS.map((item) => (
           <button
             key={item.label}
@@ -535,7 +653,7 @@ export function RuntimeImagesPage() {
             {item.label}
           </button>
         ))}
-        <span className="ml-1 text-[11px] text-zinc-600">
+        <span className="ml-1 w-full text-[11px] text-zinc-600 sm:w-auto">
           一平台一版本；项目可固定某个平台 digest
         </span>
       </div>
@@ -547,20 +665,52 @@ export function RuntimeImagesPage() {
         <div className="mb-4 rounded-xl border border-emerald-400/20 bg-emerald-400/[.07] px-4 py-3 text-sm text-emerald-300">{notice}</div>
       )}
 
-      {!projectId && registry && (
+      {!projectId && (
         <section className="surface-shell mb-5">
-          <div className="surface-core flex flex-wrap items-center gap-x-6 gap-y-3 p-4">
-            <div>
+          <div className="surface-core grid gap-5 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,1.2fr)]">
+            <div className="min-w-0">
               <div className="font-mono text-[10px] tracking-[.16em] text-zinc-600">CATALOG PROVENANCE</div>
-              <div className="mt-1 text-sm text-zinc-200">来源：{registrySourceLabel(registry)}</div>
+              <div className="mt-1 text-sm text-zinc-200">
+                目录来源：{registry ? registrySourceLabel(registry) : registryLoading ? "加载中…" : "暂不可用"}
+              </div>
+              <div className="mt-2 text-xs text-zinc-500">
+                {registry?.fallback ? <span className="text-amber-300">当前为内置回退清单</span> : registry ? <span className="text-emerald-300">当前为受信目录</span> : registryLoadError ? <span className="text-red-300">{registryLoadError}</span> : <span>等待清单响应</span>}
+                {registry?.error && <span className="ml-2 text-amber-200/80">诊断：{registry.error}</span>}
+              </div>
+              {(registry?.checked_at || (registry?.metadata && typeof registry.metadata.fetched_at === "string" && registry.metadata.fetched_at)) && (
+                <span className="mt-2 block font-mono text-[10px] text-zinc-700">checked {registry.checked_at ?? String(registry.metadata?.fetched_at)}</span>
+              )}
             </div>
-            <div className="text-xs text-zinc-500">
-              {registry.fallback ? <span className="text-amber-300">当前为内置回退清单</span> : <span className="text-emerald-300">当前为受信目录</span>}
-              {registry.error && <span className="ml-2 text-amber-200/80">诊断：{registry.error}</span>}
+            <div className="min-w-0">
+              <label htmlFor="runtime-registry-channel" className="font-mono text-[10px] tracking-[.16em] text-zinc-600">
+                OFFICIAL REGISTRY CHANNEL
+              </label>
+              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <select
+                  id="runtime-registry-channel"
+                  className="field-input min-w-0 flex-1 font-mono text-[12px]"
+                  value={registry?.selected_channel ?? ""}
+                  disabled={!registry || registryLoading || busy !== null || !canManageRegistryChannel}
+                  aria-describedby="runtime-registry-channel-status"
+                  onChange={(event) => void updateRegistryChannel(event.target.value as RuntimeImageRegistryChannel)}
+                >
+                  {!registry && <option value="">{registryLoading ? "加载通道…" : "无法读取通道"}</option>}
+                  {REGISTRY_CHANNEL_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label} · {option.host}
+                    </option>
+                  ))}
+                </select>
+                {channelStatus === "pending" && <span className="shrink-0 font-mono text-[10px] text-sky-300">切换中…</span>}
+                {channelStatus === "success" && <span className="shrink-0 font-mono text-[10px] text-emerald-300">已更新</span>}
+              </div>
+              <p id="runtime-registry-channel-status" className={`mt-2 text-[11px] leading-5 ${channelStatus === "error" ? "text-red-300" : channelStatus === "success" ? "text-emerald-300" : "text-zinc-500"}`}>
+                {channelMessage ?? "选择服务器治理的官方镜像仓库；不会接受自定义 URL，也不会改变下方 CPU / 平台筛选。"}
+              </p>
+              {!canManageRegistryChannel && (
+                <p className="mt-1 text-[11px] leading-5 text-amber-300/80">当前账号只能查看通道；切换需要管理员或 images:manage 权限。</p>
+              )}
             </div>
-            {(registry.checked_at || (registry.metadata && typeof registry.metadata.fetched_at === "string" && registry.metadata.fetched_at)) && (
-              <span className="font-mono text-[10px] text-zinc-700">checked {registry.checked_at ?? String(registry.metadata?.fetched_at)}</span>
-            )}
           </div>
         </section>
       )}

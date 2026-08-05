@@ -658,17 +658,33 @@ export interface RuntimeImageLocalAdoptionResult {
   inspection?: RuntimeImageLocalCandidate;
 }
 
+export const RUNTIME_IMAGE_REGISTRY_CHANNELS = ["github", "dockerhub", "aliyun-acr"] as const;
+export type RuntimeImageRegistryChannel = typeof RUNTIME_IMAGE_REGISTRY_CHANNELS[number];
+
+export interface RuntimeImageRegistryVersion {
+  version: string;
+  /** Legacy/current reference retained for v1 catalogs. */
+  image_ref?: string;
+  digest?: string;
+  platforms?: string[];
+  size_bytes?: number;
+  registry_refs?: Partial<Record<RuntimeImageRegistryChannel, string>>;
+  tools_manifest_sha256?: string;
+}
+
 export interface RuntimeImageRegistry {
-  schema: "deepsonar.registry/v1";
+  schema: "deepsonar.registry/v1" | "deepsonar.registry/v2";
+  schema_version?: 1 | 2;
   images: Array<{
     image_key: string;
     name: string;
     description: string;
     publisher: string;
     source_kind: "official";
+    source_url?: string;
     project_opt_in: boolean;
     default_role?: string;
-    versions: Array<{ version: string; image_ref: string; tools_manifest_sha256?: string; platforms?: string[]; size_bytes?: number }>;
+    versions: RuntimeImageRegistryVersion[];
   }>;
   /** 目录获取诊断；旧服务端没有这些字段时仍可正常渲染。 */
   metadata?: Record<string, unknown> | null;
@@ -676,10 +692,52 @@ export interface RuntimeImageRegistry {
   fallback?: boolean;
   error?: string | null;
   checked_at?: string;
+  selected_channel: RuntimeImageRegistryChannel;
+}
+
+export interface RuntimeImageRegistryChannelUpdate {
+  selected_channel: RuntimeImageRegistryChannel;
+  previous_channel: RuntimeImageRegistryChannel;
+}
+
+export type RuntimeImageRegistryCatalog = Omit<
+  RuntimeImageRegistry,
+  "metadata" | "fallback" | "error" | "checked_at" | "selected_channel"
+>;
+
+/** Project a GET response back to the strict catalog payload accepted by apply. */
+export function runtimeImageRegistryCatalog(registry: RuntimeImageRegistry): RuntimeImageRegistryCatalog {
+  const {
+    metadata: _metadata,
+    fallback: _fallback,
+    error: _error,
+    checked_at: _checkedAt,
+    selected_channel: _selectedChannel,
+    ...catalog
+  } = registry;
+  return catalog;
+}
+
+export function isSupportedRuntimeImageRegistryEnvelope(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const envelope = value as { schema?: unknown; schema_version?: unknown };
+  const schemaVersion = envelope.schema === "deepsonar.registry/v1"
+    ? 1
+    : envelope.schema === "deepsonar.registry/v2"
+      ? 2
+      : undefined;
+  const numericVersion = envelope.schema_version === 1 || envelope.schema_version === 2
+    ? envelope.schema_version
+    : undefined;
+  if (envelope.schema !== undefined && schemaVersion === undefined) return false;
+  if (envelope.schema_version !== undefined && numericVersion === undefined) return false;
+  if (schemaVersion === undefined && numericVersion === undefined) return false;
+  return schemaVersion === undefined || numericVersion === undefined || schemaVersion === numericVersion;
 }
 
 export interface RuntimeImageCatalogSyncResult {
-  registry: RuntimeImageRegistry;
+  /** Sync/apply responses return the catalog payload; read selected_channel from the GET response. */
+  registry: Omit<RuntimeImageRegistry, "selected_channel">;
   product_count: number;
   version_count: number;
   synced_at: string;
@@ -1438,8 +1496,10 @@ export const api = {
   runtimeImages: (projectId?: string, search?: string) =>
     get<RuntimeImageSummary[]>(`/runtime-images${qs({ project_id: projectId, search })}`),
   runtimeImagesRegistry: () => get<RuntimeImageRegistry>("/runtime-images/registry"),
+  setRuntimeImagesRegistryChannel: (channel: RuntimeImageRegistryChannel) =>
+    send<RuntimeImageRegistryChannelUpdate>("PATCH", "/runtime-images/registry/channel", { channel }),
   syncRuntimeImagesRegistry: () => send<RuntimeImageCatalogSyncResult>("POST", "/runtime-images/registry/sync"),
-  /** 手动上传 runtime-image-registry.json 并写入市场（schema deepsonar.registry/v1） */
+  /** 手动上传 runtime-image-registry.json 并写入市场（schema deepsonar.registry/v1/v2） */
   applyRuntimeImagesRegistry: (registry: RuntimeImageRegistry | Record<string, unknown>) =>
     send<RuntimeImageCatalogSyncResult>("POST", "/runtime-images/registry/apply", registry),
   pullRuntimeImagesRegistry: () => send<{ task: RuntimeImagePullTask }>("POST", "/runtime-images/registry/pull"),
