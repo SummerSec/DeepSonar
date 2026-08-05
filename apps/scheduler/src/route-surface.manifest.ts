@@ -85,6 +85,7 @@ PATCH /global-settings
 PATCH /jobs/:id/priority
 PATCH /projects/:id
 PATCH /projects/:id/settings
+PATCH /runtime-images/registry/channel
 PATCH /users/:id
 POST /agent-roles
 POST /auth/bootstrap
@@ -244,6 +245,7 @@ POST /runtime-images/{id}/detect-local
 POST /runtime-images/{id}/official-digest
 POST /runtime-images/import
 POST /runtime-images/manual-digest
+PATCH /runtime-images/registry/channel
 POST /runtime-images/registry/pull
 POST /runtime-images/registry/sync
 POST /runtime-image-versions/{id}/rescan

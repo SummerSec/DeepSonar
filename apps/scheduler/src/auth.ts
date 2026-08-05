@@ -136,6 +136,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "DELETE /projects/:id/role-configs/:roleId": "agents:write",
   "GET /runtime-images": "images:read",
   "GET /runtime-images/registry": "images:read",
+  "PATCH /runtime-images/registry/channel": "images:manage",
   "POST /runtime-images/registry/sync": "images:manage",
   "POST /runtime-images/registry/pull": "images:manage",
   "GET /runtime-images/registry/pull-status": "images:read",
@@ -227,6 +228,11 @@ function requiredScope(method: string, routeUrl: string): string | null {
   const key = `${method} ${routeUrl}`;
   if (key in ROUTE_SCOPES) return ROUTE_SCOPES[key];
   return method === "GET" ? null : "admin";
+}
+
+/** Expose the route-scope lookup for contract tests and generated API checks. */
+export function requiredScopeForRoute(method: string, routeUrl: string): string | null {
+  return requiredScope(method, routeUrl);
 }
 
 function hasScope(actor: Actor, scope: string | null): boolean {

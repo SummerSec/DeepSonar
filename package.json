@@ -19,6 +19,7 @@
     "ci:unit:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.test.ts",
     "ci:unit:runtime-images": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images.test.ts",
     "ci:integration:runtime-image-promotions": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images-promotions.integration.test.ts",
+    "ci:integration:runtime-image-channels": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images-channel.integration.test.ts",
     "ci:unit:runtime-image-record": "node agent-harness/test-runtime-image-record.mjs",
     "ci:unit:runtime-registry": "node agent-harness/test-runtime-registry-generator.mjs",
     "ci:unit:job-lifecycle": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/job-lifecycle/job-lifecycle.test.ts src/domains/job-lifecycle/job-lifecycle.characterization.test.ts",

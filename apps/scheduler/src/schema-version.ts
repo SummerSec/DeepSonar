@@ -5,7 +5,7 @@
  * explicit: accepting an arbitrary older database would make a migration
  * chain look complete when it is not.
  */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 export const SUPPORTED_BASELINE_VERSION = 12;
 export const FIRST_MIGRATION_VERSION = SUPPORTED_BASELINE_VERSION + 1;
 
@@ -37,6 +37,10 @@ export const TRUSTED_V16_CATALOG_SHA256 =
 export const TRUSTED_V17_CATALOG_SHA256 =
   "c33dc180f7e945d2d366edb23f1f8b7b501a7444e68a86033c6bd498928f73be";
 
+/** SHA-256 of the normalized public catalog for the checked-in v18 baseline. */
+export const TRUSTED_V18_CATALOG_SHA256 =
+  "cce8cad1012d0abef2d317db11a70f82addaf63c79d8b325912a33bfe43a8292";
+
 /** Versioned normalized-catalog pins used before and after every migration. */
 export const TRUSTED_CATALOG_SHA256_BY_VERSION: Readonly<Record<number, string>> = {
   [SUPPORTED_BASELINE_VERSION]: TRUSTED_V12_CATALOG_SHA256,
@@ -44,5 +48,6 @@ export const TRUSTED_CATALOG_SHA256_BY_VERSION: Readonly<Record<number, string>>
   14: TRUSTED_V14_CATALOG_SHA256,
   15: TRUSTED_V15_CATALOG_SHA256,
   16: TRUSTED_V16_CATALOG_SHA256,
-  [SCHEMA_VERSION]: TRUSTED_V17_CATALOG_SHA256,
+  17: TRUSTED_V17_CATALOG_SHA256,
+  [SCHEMA_VERSION]: TRUSTED_V18_CATALOG_SHA256,
 };

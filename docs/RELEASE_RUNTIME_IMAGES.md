@@ -75,7 +75,9 @@ Available provenance is fixed to `build-push+inspect` for GitHub and
 `cross-registry-copy+inspect` for Docker Hub/ACR; unavailable reasons are
 bounded single-line tokens.
 release uploads `runtime-image-registry-v2.json` and synchronizes the bundled
-v2 fallback. The current Scheduler remains GitHub-projection-only; if an
-internal channel-only item reaches apply without a legacy `image_ref`, it is
-skipped and any stale GitHub promotion is demoted rather than replaced by
-another channel.
+v2 fallback. Scheduler Slice C stores a platform-global selected channel
+(`github`, `dockerhub`, or `aliyun-acr`) and consumes only that channel's
+immutable reference for apply, pull, and Job snapshots. If an internal
+channel-only item has no reference for the selected channel, it is skipped or
+fails closed; the Scheduler never substitutes another channel or rewrites an
+existing Job snapshot.

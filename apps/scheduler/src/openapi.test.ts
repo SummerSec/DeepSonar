@@ -66,3 +66,34 @@ test("RoleConfig and role registry OpenAPI documents project-scope boundaries", 
   assert.match(String(paths["/role-configs/global"]?.get?.description), /Credential/);
   assert.match(String(paths["/role-configs/bindable"]?.get?.description), /跨项目绑定/);
 });
+
+test("runtime registry channel OpenAPI is strict and project-scope aware", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const registry = paths["/runtime-images/registry"]?.get as Record<string, any>;
+  const channel = paths["/runtime-images/registry/channel"]?.patch as Record<string, any>;
+  const pull = paths["/runtime-images/registry/pull"]?.post as Record<string, any>;
+  const channels = ["github", "dockerhub", "aliyun-acr"];
+
+  assert.deepEqual(registry.responses["200"].content["application/json"].schema.required, ["schema", "images", "selected_channel"]);
+  assert.deepEqual(registry.responses["200"].content["application/json"].schema.properties.selected_channel, {
+    type: "string",
+    enum: channels,
+  });
+  assert.equal(channel["x-deepsonar-scope"], "images:manage");
+  assert.deepEqual(channel.requestBody.content["application/json"].schema, {
+    type: "object",
+    additionalProperties: false,
+    required: ["channel"],
+    properties: { channel: { type: "string", enum: channels } },
+  });
+  assert.match(String(channel.description), /PROJECT_SCOPE_FORBIDDEN/);
+  assert.match(String(channel.description), /github.*dockerhub.*aliyun-acr/);
+  assert.match(String(channel.responses["403"].content["application/json"].schema.properties.error_code.enum), /PROJECT_SCOPE_FORBIDDEN/);
+  assert.match(String(channel.responses["500"].content["application/json"].schema.properties.error_code.enum), /RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED/);
+  assert.match(String(pull.description), /RUNTIME_IMAGE_CHANNEL_UNAVAILABLE/);
+  assert.deepEqual(
+    pull.responses["409"].content["application/json"].schema.properties.error_code.enum,
+    ["RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"],
+  );
+});

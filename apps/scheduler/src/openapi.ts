@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_SCOPES } from "./auth.js";
 import { config } from "./config.js";
+import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,33 @@ const ErrorSchema = {
     error_code: { type: "string", description: "稳定机器可读错误代码（若该错误提供）" },
   },
   required: ["error"],
+};
+
+const RuntimeRegistryChannelErrorSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["error", "error_code"],
+  properties: {
+    error: { type: "string", minLength: 1 },
+    error_code: {
+      type: "string",
+      enum: ["RUNTIME_REGISTRY_CHANNEL_INVALID", "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED", "PROJECT_SCOPE_FORBIDDEN"],
+    },
+    details: { type: "array", items: { type: "object", additionalProperties: true } },
+  },
+};
+
+const RuntimeImageChannelUnavailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["error", "error_code", "channel", "task"],
+  properties: {
+    error: { type: "string", minLength: 1 },
+    error_code: { type: "string", enum: ["RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"] },
+    channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+    image_key: { type: "string", minLength: 1 },
+    task: { type: "object", nullable: true, additionalProperties: true },
+  },
 };
 
 const ReasoningEnum = ["low", "medium", "high", "xhigh"] as const;
@@ -607,7 +635,67 @@ const OPS: Op[] = [
     summary: "获取静态注册表及官方环境覆盖的最新清单",
     scope: "images:read",
     tags: ["Runtime Images"],
-    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 source=remote|bundled、fallback、error（脱敏）和 checked_at 元数据。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
+    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 selected_channel=github|dockerhub|aliyun-acr、source=remote|bundled、fallback、error（脱敏）和 checked_at 元数据。selected_channel 由平台全局设置决定，不接受 query、env 或请求体覆盖。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
+    responses: {
+      "200": {
+        description: "注册表清单与平台选中的官方分发通道",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["schema", "images", "selected_channel"],
+              properties: {
+                schema: { type: "string", enum: ["deepsonar.registry/v1", "deepsonar.registry/v2"] },
+                schema_version: { type: "integer", enum: [1, 2] },
+                images: { type: "array", items: { type: "object", additionalProperties: true } },
+                selected_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                source: { type: "string", enum: ["remote", "bundled", "upload"] },
+                fallback: { type: "boolean" },
+                error: { type: "string", nullable: true },
+                checked_at: { type: "string", format: "date-time" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/runtime-images/registry/channel",
+    summary: "切换官方运行时镜像分发通道",
+    description: "仅 unscoped/admin actor 可修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。请求体严格为 {channel}，只能选择 github、dockerhub 或 aliyun-acr；不接受额外字段，也不支持 query、env 或请求级覆盖。历史 Job 快照不会被改写。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["channel"],
+      properties: {
+        channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+      },
+    },
+    responses: {
+      "200": {
+        description: "通道已切换",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["selected_channel", "previous_channel"],
+              properties: {
+                selected_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                previous_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+              },
+            },
+          },
+        },
+      },
+      "400": { description: "通道请求体无效", content: { "application/json": { schema: RuntimeRegistryChannelErrorSchema } } },
+      "403": { description: "项目限定 token 不得修改全局通道", content: { "application/json": { schema: RuntimeRegistryChannelErrorSchema } } },
+      "500": { description: "全局通道更新失败", content: { "application/json": { schema: RuntimeRegistryChannelErrorSchema } } },
+    },
   },
   {
     method: "post",
@@ -621,9 +709,15 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/registry/pull",
     summary: "异步拉取同步后的远程不可变镜像",
-    description: "按 registry 清单顺序后台执行无 shell 的 docker pull，仅拉取 name@sha256:64hex 远程引用；本地 raw image ID 不会进入任务。",
+    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。",
     scope: "images:manage",
     tags: ["Runtime Images"],
+    responses: {
+      "409": {
+        description: "所选官方镜像通道没有可用的可信不可变引用",
+        content: { "application/json": { schema: RuntimeImageChannelUnavailableSchema } },
+      },
+    },
   },
   {
     method: "get",
@@ -1099,6 +1193,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       },
       schemas: {
         Error: ErrorSchema,
+        RuntimeRegistryChannelError: RuntimeRegistryChannelErrorSchema,
         CredentialMetadata: {
           type: "object",
           additionalProperties: false,

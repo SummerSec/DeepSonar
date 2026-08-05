@@ -669,6 +669,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     system_tool_guide: toolGuide,
     system_mcp: { name: CONTROL_MCP_NAME, script_sha256: sha256(CONTROL_MCP_SERVER) },
     result_contract: contract,
+    runtime_image: {
+      image: snapshot.runtime_image.image_ref,
+      digest: snapshot.runtime_image.image_digest,
+      registry_channel: snapshot.runtime_image.registry_channel ?? null,
+    },
     semantic_event_transport: "local_mcp_over_agentbox_control_channel",
     canvas_update_delivery: "agent_attach_sendMessage",
     interfaces: {
@@ -698,6 +703,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const runtimeEvidence: Record<string, unknown> = {
     image: runtimeImage,
     image_digest: snapshot.runtime_image.image_digest,
+    registry_channel: snapshot.runtime_image.registry_channel ?? null,
     runtime_image_id: snapshot.runtime_image.runtime_image_id,
     runtime_image_version_id: snapshot.runtime_image.runtime_image_version_id,
     tools_manifest_sha256: snapshot.runtime_image.tools_manifest_sha256,
