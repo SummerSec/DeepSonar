@@ -1,4 +1,4 @@
-import { Prohibit, SealCheck, Stop, X } from "@phosphor-icons/react";
+import { Prohibit, SealCheck, Stop, TreeStructure, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api, type CanvasNode, type JobDetail } from "./api";
 import { LiveStream } from "./LiveStream";
@@ -44,7 +44,15 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 /** 节点详情侧栏：概览 / 实时流（WS）/ 事件时间线 */
-export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => void }) {
+export function Sidebar({
+  node,
+  onClose,
+  onTraceFinding,
+}: {
+  node: CanvasNode;
+  onClose: () => void;
+  onTraceFinding?: () => void;
+}) {
   const [job, setJob] = useState<JobDetail | null>(null);
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [forceBusy, setForceBusy] = useState(false);
@@ -150,6 +158,17 @@ export function Sidebar({ node, onClose }: { node: CanvasNode; onClose: () => vo
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {onTraceFinding && (
+            <button
+              type="button"
+              onClick={onTraceFinding}
+              title="只看此 Finding 的验证链路"
+              className="inline-flex items-center gap-1 rounded-md border border-acc-500/25 px-2 py-1 font-mono text-[11px] text-acc-300 transition-colors hover:bg-acc-500/[.08]"
+            >
+              <TreeStructure size={12} />
+              查看链路
+            </button>
+          )}
           {canForceExit && (
             <button
               type="button"

@@ -378,7 +378,14 @@ const OPS: Op[] = [
       verify_status: { type: "string" },
     },
   },
-  { method: "get", path: "/findings/{id}", summary: "Finding 完整详情与验证链", scope: "findings:read", tags: ["Findings"] },
+  {
+    method: "get",
+    path: "/findings/{id}",
+    summary: "Finding 完整详情与结构化验证追踪",
+    description: "trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。",
+    scope: "findings:read",
+    tags: ["Findings"],
+  },
   {
     method: "get",
     path: "/canvases/{id}/report",

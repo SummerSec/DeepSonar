@@ -3575,8 +3575,10 @@ export function registerRoutes(app: FastifyInstance) {
           FROM finding_links WHERE finding_id = ${id} ORDER BY created_at`,
       sql`SELECT id, attempt, verify_job_id, status, proposed_verdict, final_outcome,
                  requirements_json, evidence_snapshot_json, summary, error, created_at, finished_at
-          FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt`,
+          FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt LIMIT 1001`,
     ]);
+    const { loadFindingTrace } = await import("./finding-trace.js");
+    const trace = await loadFindingTrace(sql, finding, verification_rounds);
     return {
       finding,
       verification_jobs: verification_jobs.map((verificationJob) => ({
@@ -3590,7 +3592,8 @@ export function registerRoutes(app: FastifyInstance) {
       })),
       comments,
       links,
-      verification_rounds,
+      verification_rounds: verification_rounds.slice(0, 1000),
+      trace,
     };
   });
 

@@ -289,6 +289,7 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
   const [status, setStatus] = useState("正在申请实时流凭证…");
 
   useEffect(() => {
+    if (!active) return;
     let alive = true;
     let ws: WebSocket | null = null;
     let retryTimer: number | undefined;
@@ -398,7 +399,7 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       ws?.close();
     };
-  }, [jobId]);
+  }, [active, jobId]);
 
   if (!active) return null;
 

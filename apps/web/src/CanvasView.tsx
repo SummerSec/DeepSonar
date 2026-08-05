@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { CaretDown, CaretUp, Funnel, TreeStructure, X } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, Eye, EyeSlash, Funnel, TreeStructure, X } from "@phosphor-icons/react";
 import {
   Background,
   BackgroundVariant,
@@ -12,7 +12,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { api, type CanvasData, type CanvasNode } from "./api";
+import { api, type CanvasData, type CanvasNode, type FindingTrace } from "./api";
 import {
   applyCanvasDelta,
   CANVAS_SKELETON_REFRESH_MS,
@@ -37,6 +37,7 @@ import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
 import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
 import { Sidebar } from "./Sidebar";
+import { findingTraceIds, traceDisplayIds, type TraceFocusMode } from "./finding-trace-focus";
 
 /** 边类型只控制线型/流速；颜色始终取源节点最终展示色。 */
 export { EDGE_STYLE } from "./edge-style";
@@ -60,6 +61,9 @@ function toFlow(
   collapsedIds: ReadonlySet<string>,
   outgoing: Map<string, string[]>,
   handlers: ExpandHandlers,
+  focusNodeIds: ReadonlySet<string>,
+  focusEdgeIds: ReadonlySet<string>,
+  focusMode: TraceFocusMode,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodeColors = new Map(data.nodes.map((node) => [node.id, nodeDisplayColor(node)]));
   return {
@@ -83,6 +87,9 @@ function toFlow(
         },
         draggable: false,
         connectable: false,
+        style: focusNodeIds.size > 0 && focusMode === "dim" && !focusNodeIds.has(n.id)
+          ? { opacity: 0.16 }
+          : undefined,
       };
     }),
     edges: data.edges.map((e) => {
@@ -98,7 +105,7 @@ function toFlow(
         style: {
           stroke: sourceColor,
           strokeWidth: 1.8,
-          opacity: 0.9,
+          opacity: focusNodeIds.size > 0 && focusMode === "dim" && !focusEdgeIds.has(e.id) ? 0.08 : 0.9,
           strokeDasharray: st.dash || undefined,
           "--deepsonar-edge-speed": st.speed,
         } as CSSProperties,
@@ -184,7 +191,23 @@ function Legend() {
   );
 }
 
-export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (data: CanvasData) => void }) {
+export function CanvasView({
+  canvasId,
+  onData,
+  trace,
+  focusNodeId,
+  findingIdByNodeId,
+  onTraceFinding,
+  onExitTrace,
+}: {
+  canvasId: string;
+  onData?: (data: CanvasData) => void;
+  trace?: FindingTrace | null;
+  focusNodeId?: string | null;
+  findingIdByNodeId?: ReadonlyMap<string, string>;
+  onTraceFinding?: (findingId: string) => void;
+  onExitTrace?: () => void;
+}) {
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,7 +218,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
   const [statusFilter, setStatusFilter] = useState("");
   const [query, setQuery] = useState("");
   const [showContext, setShowContext] = useState(true);
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(() =>
+    typeof window === "undefined" || window.matchMedia("(min-width: 640px)").matches,
+  );
+  const [traceMode, setTraceMode] = useState<TraceFocusMode>("hide");
   /** 全局深度上限；默认前 3 层。全开 = graphMax；隐藏 = 回到 3 并清空手动覆盖 */
   const [maxDepth, setMaxDepth] = useState(DEFAULT_MAX_DEPTH);
   /** 用户强制展开（覆盖默认 depth 折叠） */
@@ -209,10 +235,45 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
   const syncGenerationRef = useRef(0);
   const deltaInFlightRef = useRef<number | null>(null);
   const summaryInFlightRef = useRef<number | null>(null);
+  const focusedNodeRef = useRef("");
+  const focusedViewportRef = useRef("");
   const clearSelected = useCallback(() => {
     nodeRequestRef.current += 1;
     setSelected(null);
   }, []);
+
+  useEffect(() => {
+    if (!focusNodeId || !data) return;
+    const found = data.nodes.find((node) => node.id === focusNodeId);
+    if (!found) return;
+    const focusKey = `${canvasId}:${focusNodeId}`;
+    if (focusedNodeRef.current === focusKey) return;
+    focusedNodeRef.current = focusKey;
+    setSelected(found);
+    const requestId = ++nodeRequestRef.current;
+    const requestGeneration = syncGenerationRef.current;
+    const requestRevision = revisionRef.current;
+    void api.canvasNode(canvasId, found.id).then((result) => {
+      if (!shouldApplyHydratedNode(
+        requestGeneration,
+        syncGenerationRef.current,
+        requestRevision,
+        revisionRef.current,
+        requestId,
+        nodeRequestRef.current,
+      )) return;
+      const hydrated = mergeHydratedNodeData(found, result.node);
+      hydratedNodesRef.current.set(found.id, hydrated);
+      setSelected(hydrated);
+    }).catch(() => {});
+  }, [canvasId, data, focusNodeId]);
+
+  useEffect(() => {
+    if (!focusNodeId) {
+      focusedNodeRef.current = "";
+      focusedViewportRef.current = "";
+    }
+  }, [focusNodeId]);
 
   // Load L0 once, then apply durable revision-bounded deltas.  A slow summary
   // refresh is retained only as a consistency fallback (for example after a
@@ -239,7 +300,6 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
         revisionRef.current = responseRevision;
         setData(next);
         setSelected((previous) => syncSelectedNode(next, previous, hydratedNodesRef.current));
-        onData?.(next);
         setError(null);
       } catch (e) {
         if (alive) setError(String(e));
@@ -265,7 +325,6 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
           const next = applyCanvasDelta(before, delta, hydratedNodesRef.current);
           revisionRef.current = delta.upper_revision;
           setSelected((previous) => syncSelectedNode(next, previous, hydratedNodesRef.current));
-          onData?.(next);
           return next;
         });
         setError(null);
@@ -284,6 +343,8 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     };
     setData(null);
     clearSelected();
+    focusedNodeRef.current = "";
+    focusedViewportRef.current = "";
     setElkPos(null);
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
@@ -302,6 +363,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       clearInterval(summaryTimer);
     };
   }, [canvasId, clearSelected, onData]);
+
+  useEffect(() => {
+    if (data) onData?.(data);
+  }, [data, onData]);
 
   // 节点消失时清理手动覆盖，避免悬空 id 堆积
   useEffect(() => {
@@ -392,7 +457,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
    * 最终展示集合 = 深度门控 ∩ 属性筛选（可含一跳上下文）。
    * 布局只对这批节点算，筛选/展开/画布增删都会触发重排。
    */
-  const { displayIds, matchedCount } = useMemo(() => {
+  const { displayIds: baseDisplayIds, matchedCount } = useMemo(() => {
     if (!data) return { displayIds: new Set<string>(), matchedCount: 0 };
 
     if (!filterActive) {
@@ -444,28 +509,39 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     statusFilter,
   ]);
 
+  const traceIds = useMemo(() => findingTraceIds(trace, data), [data, trace]);
+  const traceActive = Boolean(trace && traceIds.nodeIds.size > 0);
+  const displayIds = useMemo(
+    () => traceActive ? traceDisplayIds(baseDisplayIds, traceIds.nodeIds, traceMode) : baseDisplayIds,
+    [baseDisplayIds, traceActive, traceIds.nodeIds, traceMode],
+  );
+
   // 布局签名：展示节点/边集合变化 → 重算（含筛选、深度、展开收起、图生长）
   const layoutKey = useMemo(() => {
     if (!data || displayIds.size === 0) return "";
     const nids = [...displayIds].sort().join(",");
     const eids = data.edges
-      .filter((e) => displayIds.has(e.from_node_id) && displayIds.has(e.to_node_id))
+      .filter((e) =>
+        displayIds.has(e.from_node_id) &&
+        displayIds.has(e.to_node_id) &&
+        (!traceActive || traceMode === "dim" || traceIds.edgeIds.has(e.id)))
       .map((e) => e.id)
       .sort()
       .join(",");
     return `${nids}|${eids}`;
-  }, [data, displayIds]);
+  }, [data, displayIds, traceActive, traceIds.edgeIds, traceMode]);
 
   const layoutSubgraph = useMemo(() => {
     if (!data || !layoutKey) return { nodes: [] as CanvasNode[], edges: [] as CanvasData["edges"] };
     return {
       nodes: data.nodes.filter((n) => displayIds.has(n.id)),
-      edges: data.edges.filter(
-        (e) => displayIds.has(e.from_node_id) && displayIds.has(e.to_node_id),
-      ),
+      edges: data.edges.filter((e) =>
+        displayIds.has(e.from_node_id) &&
+        displayIds.has(e.to_node_id) &&
+        (!traceActive || traceMode === "dim" || traceIds.edgeIds.has(e.id))),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
-  }, [data, layoutKey]);
+  }, [data, layoutKey, traceActive, traceIds.edgeIds, traceMode]);
 
   // elkjs：对小型当前展示子图重算最优分层布局。大图使用服务端持久化
   // 坐标，避免一次性把数百节点/边交给 ELK 阻塞主线程。
@@ -509,7 +585,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       ...data,
       nodes: data.nodes.filter((n) => displayIds.has(n.id)),
       edges: data.edges.filter(
-        (e) => displayIds.has(e.from_node_id) && displayIds.has(e.to_node_id),
+        (e) =>
+          displayIds.has(e.from_node_id) &&
+          displayIds.has(e.to_node_id) &&
+          (!traceActive || traceMode === "dim" || traceIds.edgeIds.has(e.id)),
       ),
     };
     const flow = toFlow(
@@ -522,6 +601,9 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       collapsedIds,
       outgoing,
       handlers,
+      traceActive ? traceIds.nodeIds : new Set<string>(),
+      traceActive ? traceIds.edgeIds : new Set<string>(),
+      traceMode,
     );
     return { visibleNodes: flow.nodes, visibleEdges: flow.edges };
   }, [
@@ -535,6 +617,10 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     fallbackPos,
     handlers,
     outgoing,
+    traceActive,
+    traceIds.edgeIds,
+    traceIds.nodeIds,
+    traceMode,
   ]);
 
   const totalNodeCount = data?.nodes.length ?? 0;
@@ -572,12 +658,32 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
     if (visibleNodes.length > 0 && sig !== prevLayoutSig.current) {
       prevLayoutSig.current = sig;
       const t = setTimeout(
-        () => rf.current?.fitView({ padding: 0.18, maxZoom: 1.05, duration: 320 }),
+        () => rf.current?.fitView({
+          padding: 0.18,
+          maxZoom: 1.05,
+          duration: 320,
+          nodes: traceActive
+            ? visibleNodes.filter((node) => traceIds.nodeIds.has(node.id))
+            : undefined,
+        }),
         80,
       );
       return () => clearTimeout(t);
     }
-  }, [elkPos, layoutKey, visibleNodes.length]);
+  }, [elkPos, layoutKey, traceActive, traceIds.nodeIds, visibleNodes]);
+
+  useEffect(() => {
+    if (!focusNodeId || !traceActive) return;
+    const node = visibleNodes.find((item) => item.id === focusNodeId);
+    if (!node) return;
+    const focusKey = `${canvasId}:${focusNodeId}:${layoutKey}:${elkPos ? "elk" : "fallback"}`;
+    if (focusedViewportRef.current === focusKey) return;
+    focusedViewportRef.current = focusKey;
+    const timer = window.setTimeout(() => {
+      void rf.current?.fitView({ nodes: [node], padding: 0.7, maxZoom: 1.2, duration: 320 });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [canvasId, elkPos, focusNodeId, layoutKey, traceActive, visibleNodes]);
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
@@ -613,14 +719,13 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
           const nodes = before.nodes.map((item) => item.id === result.node.id ? hydrated : item);
           const next = { ...before, nodes };
           setSelected(hydrated);
-          onData?.(next);
           return next;
         });
       }).catch(() => {
         // L0 summary remains usable when an optional L1 hydration races a deleted node.
       });
     },
-    [canvasId, data, onData],
+    [canvasId, data],
   );
 
   if (!data && error)
@@ -655,6 +760,45 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
           同步失败：{error}
         </div>
       )}
+      {traceActive && (
+        <div className="surface-shell absolute left-4 top-4 z-20 max-w-[calc(100%-2rem)] rounded-[14px] p-1">
+          <div className="surface-core flex flex-wrap items-center gap-2 rounded-[10px] px-3 py-2">
+            <TreeStructure size={15} className="text-acc-400" />
+            <span className="text-[12px] font-medium text-zinc-200">Finding 验证链路</span>
+            <span className="hidden font-mono text-[10px] text-zinc-500 sm:inline">
+              {traceIds.nodeIds.size} 节点 · {traceIds.edgeIds.size} 边
+            </span>
+            <div className="ml-auto inline-flex rounded-lg bg-black/25 p-0.5 ring-1 ring-white/[.07]">
+              <button
+                type="button"
+                onClick={() => setTraceMode("dim")}
+                aria-pressed={traceMode === "dim"}
+                title="淡化非链路节点"
+                className={`inline-flex size-7 items-center justify-center rounded-md ${traceMode === "dim" ? "bg-white/[.1] text-acc-300" : "text-zinc-500"}`}
+              >
+                <Eye size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setTraceMode("hide")}
+                aria-pressed={traceMode === "hide"}
+                title="隐藏非链路节点"
+                className={`inline-flex size-7 items-center justify-center rounded-md ${traceMode === "hide" ? "bg-white/[.1] text-acc-300" : "text-zinc-500"}`}
+              >
+                <EyeSlash size={14} />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={onExitTrace}
+              className="inline-flex size-7 items-center justify-center rounded-md text-zinc-500 ring-1 ring-white/[.08] hover:text-white"
+              title="退出链路聚焦"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      )}
       <ReactFlow
         nodes={visibleNodes}
         edges={visibleEdges}
@@ -685,7 +829,7 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
       </ReactFlow>
 
       <div
-        className="surface-shell absolute left-4 top-4 z-10 w-[calc(100%-2rem)] max-w-[980px] rounded-[20px] p-1 xl:w-[calc(100%-13rem)]"
+        className={`surface-shell absolute left-4 ${traceActive ? "top-20 hidden sm:block" : "top-4"} z-10 w-[calc(100%-2rem)] max-w-[980px] rounded-[20px] p-1 xl:w-[calc(100%-13rem)]`}
         style={{ position: "absolute" }}
       >
         {filtersOpen ? (
@@ -905,7 +1049,15 @@ export function CanvasView({ canvasId, onData }: { canvasId: string; onData?: (d
         (selected.job_id && ["intent", "job"].includes(selected.node_type) ? (
           <JobDetailPanel jobId={selected.job_id} onClose={clearSelected} />
         ) : (
-          <Sidebar node={selected} onClose={clearSelected} />
+          <Sidebar
+            node={selected}
+            onClose={clearSelected}
+            onTraceFinding={
+              selected.node_type === "finding" && findingIdByNodeId?.get(selected.id) && onTraceFinding
+                ? () => onTraceFinding(findingIdByNodeId.get(selected.id) as string)
+                : undefined
+            }
+          />
         ))}
     </div>
   );
