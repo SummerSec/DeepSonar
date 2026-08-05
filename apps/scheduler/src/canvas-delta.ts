@@ -1,3 +1,5 @@
+import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
+
 /** The bounded body fields shared by the L0 summary and durable deltas. */
 export function boundedCanvasBody(value: unknown): Record<string, unknown> {
   const body = value && typeof value === "object" && !Array.isArray(value)
@@ -24,7 +26,7 @@ export function boundedCanvasBody(value: unknown): Record<string, unknown> {
         kind: typeof rawProgress.kind === "string" ? rawProgress.kind.slice(0, 64) : "",
       }
     : null;
-  return {
+  const bounded: Record<string, unknown> = {
     summary: summary.slice(0, 240),
     description: description.slice(0, 240),
     severity: typeof body.severity === "string" ? body.severity : null,
@@ -32,6 +34,10 @@ export function boundedCanvasBody(value: unknown): Record<string, unknown> {
     type: typeof body.type === "string" ? body.type : null,
     last_progress: lastProgress,
   };
+  if (typeof body.ui_color === "string" && ROLE_UI_COLOR_PATTERN.test(body.ui_color)) {
+    bounded.ui_color = body.ui_color.toLowerCase();
+  }
+  return bounded;
 }
 
 type ProjectionRecord = Record<string, unknown>;

@@ -489,6 +489,7 @@ export async function applyPlatformImport(
               UPDATE agent_roles SET
                 title = ${String(r.title ?? "")},
                 description = ${String(r.description ?? "")},
+                ui_color = NULL,
                 updated_at = now()
               WHERE id = ${ex.id}`;
           }
@@ -503,6 +504,19 @@ export async function applyPlatformImport(
               builtin: false,
               kind: "role",
               ui_color: resolved,
+            })}`;
+        } else if (r.kind === "system" || r.kind === "hub") {
+          // A platform pack may be restored into a catalog missing one of the
+          // governed semantic roles.  Recreate it with an explicit NULL color;
+          // semantic colors belong to the canvas renderer, never to imports.
+          await tx`
+            INSERT INTO agent_roles ${tx({
+              name,
+              title: String(r.title ?? name),
+              description: String(r.description ?? ""),
+              builtin: true,
+              kind: r.kind,
+              ui_color: null,
             })}`;
         }
         // builtin 缺失则跳过（应由 schema 基线提供）

@@ -8,10 +8,6 @@
 ALTER TABLE agent_roles
   ADD COLUMN ui_color text;
 
-ALTER TABLE agent_roles
-  ADD CONSTRAINT agent_roles_ui_color_check
-    CHECK (ui_color IS NULL OR ui_color ~ '^#[0-9A-Fa-f]{6}$');
-
 CREATE OR REPLACE FUNCTION deepsonar_role_generated_color(p_index int) RETURNS text AS $$
 DECLARE
   hue double precision := (mod((p_index::numeric * 137.507764::numeric), 360::numeric)::double precision) / 360;
@@ -55,13 +51,33 @@ DECLARE
   candidate text;
   ordinal int;
 BEGIN
+  -- Keep the six built-in worker colors stable regardless of custom role
+  -- names (for example a legacy role named `aaa` must not shift `analyze`).
+  UPDATE agent_roles AS ar
+  SET ui_color = fixed.ui_color,
+      updated_at = now()
+  FROM (VALUES
+    ('analyze', '#e879f9'),
+    ('audit', '#facc15'),
+    ('code', '#a3e635'),
+    ('explore', '#4ade80'),
+    ('review', '#fb923c'),
+    ('test', '#f472b6')
+  ) AS fixed(name, ui_color)
+  WHERE ar.kind = 'role'
+    AND ar.name = fixed.name
+    AND ar.ui_color IS NULL;
+
   FOR item IN
     SELECT id, row_number() OVER (ORDER BY name, id)::int AS ordinal
     FROM agent_roles
     WHERE kind = 'role' AND ui_color IS NULL
     ORDER BY name, id
   LOOP
-    ordinal := item.ordinal;
+    -- Start at palette slot one for every custom role and skip occupied
+    -- slots.  This makes the remaining palette independent of custom-name
+    -- sort order while preserving deterministic custom assignment.
+    ordinal := 1;
     LOOP
       candidate := CASE
         WHEN ordinal <= cardinality(palette) THEN palette[ordinal]
@@ -78,6 +94,21 @@ BEGIN
   END LOOP;
 END;
 $$;
+
+ALTER TABLE agent_roles
+  ADD CONSTRAINT agent_roles_ui_color_check
+    CHECK (
+      (
+        kind = 'role'
+        AND ui_color IS NOT NULL
+        AND ui_color ~ '^#[0-9A-Fa-f]{6}$'
+        AND lower(ui_color) <> ALL (ARRAY[
+          '#2dd4bf', '#38bdf8', '#a78bfa', '#fb7185', '#f59e0b',
+          '#34d399', '#22d3ee', '#818cf8', '#f97316', '#94a3b8'
+        ]::text[])
+      )
+      OR (kind <> 'role' AND ui_color IS NULL)
+    );
 
 DROP FUNCTION deepsonar_role_generated_color(int);
 
@@ -110,9 +141,12 @@ BEGIN
       'severity', body->>'severity',
       'role', body->>'role',
       'type', body->>'type',
-      'ui_color', body->>'ui_color',
       'last_progress', progress
-    ),
+    ) || CASE
+      WHEN body->>'ui_color' ~ '^#[0-9A-Fa-f]{6}$'
+      THEN jsonb_build_object('ui_color', lower(body->>'ui_color'))
+      ELSE '{}'::jsonb
+    END,
     'x', COALESCE((p_node->>'x')::real, 0),
     'y', COALESCE((p_node->>'y')::real, 0),
     'w', COALESCE((p_node->>'w')::real, 240),

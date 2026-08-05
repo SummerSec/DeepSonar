@@ -47,7 +47,7 @@ VALUES (15, '0015_credential_health_metadata.sql',
         'succeeded');
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (16, '0016_role_ui_colors.sql',
-        'ec758c08a4e25e45c9c940117f4b5c896fa5ca49dfc85e9a529c0db4609a6901',
+        '4e1c77118e6226217b3c0f3ebf346e5fc3798ee2d0feb213c4d3ec7c0bdac2cf',
         'succeeded');
 
 CREATE TABLE projects (
@@ -359,7 +359,18 @@ CREATE TABLE agent_roles (
   updated_at timestamptz NOT NULL DEFAULT now(),
   ui_color text,
   CONSTRAINT agent_roles_ui_color_check
-    CHECK (ui_color IS NULL OR ui_color ~ '^#[0-9A-Fa-f]{6}$')
+    CHECK (
+      (
+        kind = 'role'
+        AND ui_color IS NOT NULL
+        AND ui_color ~ '^#[0-9A-Fa-f]{6}$'
+        AND lower(ui_color) <> ALL (ARRAY[
+          '#2dd4bf', '#38bdf8', '#a78bfa', '#fb7185', '#f59e0b',
+          '#34d399', '#22d3ee', '#818cf8', '#f97316', '#94a3b8'
+        ]::text[])
+      )
+      OR (kind <> 'role' AND ui_color IS NULL)
+    )
 );
 CREATE UNIQUE INDEX agent_roles_role_ui_color_uniq
   ON agent_roles (lower(ui_color))
@@ -769,9 +780,12 @@ BEGIN
       'severity', body->>'severity',
       'role', body->>'role',
       'type', body->>'type',
-      'ui_color', body->>'ui_color',
       'last_progress', progress
-    ),
+    ) || CASE
+      WHEN body->>'ui_color' ~ '^#[0-9A-Fa-f]{6}$'
+      THEN jsonb_build_object('ui_color', lower(body->>'ui_color'))
+      ELSE '{}'::jsonb
+    END,
     'x', COALESCE((p_node->>'x')::real, 0),
     'y', COALESCE((p_node->>'y')::real, 0),
     'w', COALESCE((p_node->>'w')::real, 240),

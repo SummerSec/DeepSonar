@@ -90,13 +90,31 @@ if (!testDatabaseUrl) {
         SELECT kind, ui_color FROM agent_roles WHERE kind IN ('hub', 'system')`;
       assert.ok(semanticRoles.length > 0);
       assert.ok(semanticRoles.every((row) => row.ui_color === null));
+      const invariantError = (error: unknown): boolean => (error as { code?: string }).code === "23514";
+      await assert.rejects(
+        sql`INSERT INTO agent_roles (name, title, description, builtin, kind, ui_color)
+            VALUES (${`${rolePrefix}_dirty_system`}, 'dirty', '', false, 'system', '#abcdef')`,
+        invariantError,
+      );
+      await assert.rejects(
+        sql`INSERT INTO agent_roles (name, title, description, builtin, kind, ui_color)
+            VALUES (${`${rolePrefix}_dirty_null`}, 'dirty', '', false, 'role', NULL)`,
+        invariantError,
+      );
+      await assert.rejects(
+        sql`INSERT INTO agent_roles (name, title, description, builtin, kind, ui_color)
+            VALUES (${`${rolePrefix}_dirty_reserved`}, 'dirty', '', false, 'role', ${ROLE_UI_COLOR_RESERVED[0]})`,
+        invariantError,
+      );
 
       const importExisting = `${rolePrefix}_import_existing`;
       const importNew = `${rolePrefix}_import_new`;
-      createdNames.push(importExisting, importNew);
+      const importSystem = `${rolePrefix}_import_system`;
+      const importHub = `${rolePrefix}_import_hub`;
+      createdNames.push(importExisting, importNew, importSystem, importHub);
       await sql`
         INSERT INTO agent_roles (name, title, description, builtin, kind, ui_color)
-        VALUES (${importExisting}, ${importExisting}, '', false, 'role', ${ROLE_UI_COLOR_RESERVED[0]})`;
+        VALUES (${importExisting}, ${importExisting}, '', false, 'role', '#abcdef')`;
 
       const manifest = buildPlatformManifest({
         preset: "custom",
@@ -134,6 +152,22 @@ if (!testDatabaseUrl) {
             kind: "hub",
             ui_color: ROLE_UI_COLOR_RESERVED[1],
           },
+          {
+            name: importSystem,
+            title: importSystem,
+            description: "new system",
+            builtin: true,
+            kind: "system",
+            ui_color: ROLE_UI_COLOR_RESERVED[2],
+          },
+          {
+            name: importHub,
+            title: importHub,
+            description: "new hub",
+            builtin: true,
+            kind: "hub",
+            ui_color: ROLE_UI_COLOR_RESERVED[3],
+          },
         ].map((row) => JSON.stringify(row)).join("\n") + "\n",
       }];
       packPath = path.join(os.tmpdir(), `${rolePrefix}.deepsonarpack`);
@@ -158,12 +192,19 @@ if (!testDatabaseUrl) {
       assert.equal(ROLE_UI_COLOR_RESERVED.includes(newAfter.ui_color as never), false);
       assert.notEqual(existingAfter.ui_color, ROLE_UI_COLOR_ASSIGNABLE[0]);
       assert.notEqual(newAfter.ui_color, ROLE_UI_COLOR_RESERVED[0]);
+      assert.equal(existingAfter.ui_color, "#abcdef");
       const [hubAfter] = await sql<{ ui_color: string | null }[]>`
         SELECT ui_color FROM agent_roles WHERE name = 'hub_reason'`;
       assert.equal(hubAfter?.ui_color, null);
+      const importedSemantic = await sql<{ name: string; kind: string; ui_color: string | null }[]>`
+        SELECT name, kind, ui_color FROM agent_roles WHERE name = ANY(${[importSystem, importHub]})`;
+      assert.deepEqual(importedSemantic.map((row) => [row.name, row.kind, row.ui_color]).sort(), [
+        [importHub, "hub", null],
+        [importSystem, "system", null],
+      ].sort());
     } finally {
       if (importId) await sql`DELETE FROM data_imports WHERE id = ${importId}`;
-      await sql`DELETE FROM agent_roles WHERE name = ANY(${createdNames.concat([`${rolePrefix}_import_existing`, `${rolePrefix}_import_new`])})`;
+      await sql`DELETE FROM agent_roles WHERE name = ANY(${createdNames})`;
       await app.close();
       await sql.end({ timeout: 5 });
       if (packPath) await rm(packPath, { force: true });

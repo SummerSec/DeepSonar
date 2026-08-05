@@ -221,6 +221,64 @@ test("fresh v16 and v12 upgrade have equivalent table/column structure", {
   }
 });
 
+test("v16 backfill fixes built-in colors before custom roles and stays unique beyond the palette", {
+  skip: !testDatabaseUrl,
+}, async () => {
+  const adminUrl = new URL(testDatabaseUrl as string);
+  adminUrl.pathname = "/postgres";
+  const admin = postgres(adminUrl.toString(), { max: 1 });
+  const target = await createDatabase(admin);
+  const db = postgres(target.url, { max: 2 });
+  try {
+    await applyBaseline(db);
+    const migrations = discoverMigrations();
+    for (const migration of migrations.filter((entry) => entry.version <= 15)) {
+      await db.unsafe(migration.body);
+      await db`
+        INSERT INTO schema_migrations (version, filename, checksum, result)
+        VALUES (${migration.version}, ${migration.filename}, ${migration.checksum}, 'succeeded')`;
+      await db`
+        UPDATE schema_meta SET version = ${migration.version}, applied_at = now()
+        WHERE id = 'global'`;
+    }
+
+    const customNames = Array.from({ length: 40 }, (_, index) => index === 0 ? "aaa" : `custom_${String(index).padStart(2, "0")}`);
+    for (const name of customNames) {
+      await db`
+        INSERT INTO agent_roles (name, title, description, builtin, kind)
+        VALUES (${name}, ${name}, '', false, 'role')`;
+    }
+    await withMigrationLock(db);
+
+    const colors = await db<{ name: string; kind: string; ui_color: string | null }[]>`
+      SELECT name, kind, ui_color FROM agent_roles ORDER BY kind, name`;
+    const byName = new Map(colors.map((row) => [row.name, row]));
+    const builtins = {
+      analyze: "#e879f9",
+      audit: "#facc15",
+      code: "#a3e635",
+      explore: "#4ade80",
+      review: "#fb923c",
+      test: "#f472b6",
+    };
+    for (const [name, color] of Object.entries(builtins)) assert.equal(byName.get(name)?.ui_color, color);
+    const reserved = new Set([
+      "#2dd4bf", "#38bdf8", "#a78bfa", "#fb7185", "#f59e0b",
+      "#34d399", "#22d3ee", "#818cf8", "#f97316", "#94a3b8",
+    ]);
+    const customColors = customNames.map((name) => byName.get(name)?.ui_color ?? "");
+    assert.equal(customColors.length, 40);
+    assert.ok(customColors.every((color) => /^#[0-9a-f]{6}$/i.test(color)));
+    assert.ok(customColors.every((color) => !reserved.has(color.toLowerCase())));
+    assert.equal(new Set(colors.filter((row) => row.kind === "role").map((row) => row.ui_color)).size, 46);
+    assert.ok(colors.filter((row) => row.kind !== "role").every((row) => row.ui_color === null));
+  } finally {
+    await db.end();
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
+    await admin.end();
+  }
+});
+
 test("a v12 database with legacy or future successful ledger rows fails before v13 DDL", {
   skip: !testDatabaseUrl,
 }, async () => {

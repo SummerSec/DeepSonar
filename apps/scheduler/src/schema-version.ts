@@ -31,7 +31,7 @@ export const TRUSTED_V15_CATALOG_SHA256 =
 
 /** SHA-256 of the normalized public catalog for the checked-in v16 baseline. */
 export const TRUSTED_V16_CATALOG_SHA256 =
-  "d9765a8eab6e9bab1f6b822300ec494a4a1f47f2b3cc5a48a82b06920a1dc848";
+  "9bd9c71fb87bee7907ac45c07003af168fe632560e0c9802ceef8885deefc20f";
 
 /** Versioned normalized-catalog pins used before and after every migration. */
 export const TRUSTED_CATALOG_SHA256_BY_VERSION: Readonly<Record<number, string>> = {

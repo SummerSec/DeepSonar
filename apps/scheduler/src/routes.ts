@@ -3000,7 +3000,11 @@ export function registerRoutes(app: FastifyInstance) {
                   'message', LEFT(COALESCE(body_json->'last_progress'->>'message', ''), 240),
                   'kind', LEFT(COALESCE(body_json->'last_progress'->>'kind', ''), 64)
                 ) ELSE NULL END
-            ) AS body_json,
+            ) || CASE
+              WHEN body_json->>'ui_color' ~ '^#[0-9A-Fa-f]{6}$'
+              THEN jsonb_build_object('ui_color', lower(body_json->>'ui_color'))
+              ELSE '{}'::jsonb
+            END AS body_json,
             x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
           FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
         tx`
