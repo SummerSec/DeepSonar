@@ -2,7 +2,6 @@
   "schema": "deepsonar.registry/v2",
   "schema_version": 2,
   "source": "bundled",
-  "fallback": true,
   "images": [
     {
       "image_key": "deepsonar-base",
@@ -21,7 +20,12 @@
           "registry_refs": {
             "github": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3"
+          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3",
+          "registry_evidence": {
+            "github": { "available": true, "ref": "ghcr.io/summersec/deepsonar-base@sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3", "inspect_digest": "sha256:2c764b900380981e750708bb979274165aa17e33c12779a6478dda7f54d640d3", "provenance": "build-push+inspect" },
+            "dockerhub": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" },
+            "aliyun-acr": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" }
+          }
         }
       ]
     },
@@ -42,7 +46,12 @@
           "registry_refs": {
             "github": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b"
+          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b",
+          "registry_evidence": {
+            "github": { "available": true, "ref": "ghcr.io/summersec/deepsonar-audit@sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b", "inspect_digest": "sha256:0b79179e6809af773328b14493442ab1152c7bc6c54c71128669c13197eb1a4b", "provenance": "build-push+inspect" },
+            "dockerhub": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" },
+            "aliyun-acr": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" }
+          }
         }
       ]
     },
@@ -63,7 +72,12 @@
           "registry_refs": {
             "github": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22"
+          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22",
+          "registry_evidence": {
+            "github": { "available": true, "ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22", "inspect_digest": "sha256:039b636e339dfd1dc2c9d66b161c5437369223969f7bd8282da64cd966ca9e22", "provenance": "build-push+inspect" },
+            "dockerhub": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" },
+            "aliyun-acr": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" }
+          }
         }
       ]
     },
@@ -84,7 +98,12 @@
           "registry_refs": {
             "github": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890"
+          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890",
+          "registry_evidence": {
+            "github": { "available": true, "ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890", "inspect_digest": "sha256:e37d0b1dba6e311a76b93353842807ce543fcb887e3f1817ac693bee7f617890", "provenance": "build-push+inspect" },
+            "dockerhub": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" },
+            "aliyun-acr": { "available": false, "provenance": "unavailable", "reason": "optional_channel_not_bundled" }
+          }
         }
       ]
     },

@@ -50,6 +50,24 @@ if (!testDatabaseUrl) {
               dockerhub: `docker.io/summersec/${imageKey}@${newDigest}`,
               "aliyun-acr": `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${newDigest}`,
             },
+            // This fixture exercises the Scheduler's defensive demotion path
+            // after a channel-only catalog has already crossed the parser.
+            // Public release catalogs still require available GitHub evidence.
+            registry_evidence: {
+              github: { available: false, provenance: "unavailable", reason: "channel_not_published" },
+              dockerhub: {
+                available: true,
+                ref: `docker.io/summersec/${imageKey}@${newDigest}`,
+                inspect_digest: newDigest,
+                provenance: "cross-registry-copy+inspect",
+              },
+              "aliyun-acr": {
+                available: true,
+                ref: `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${newDigest}`,
+                inspect_digest: newDigest,
+                provenance: "cross-registry-copy+inspect",
+              },
+            },
           }],
         }],
       });

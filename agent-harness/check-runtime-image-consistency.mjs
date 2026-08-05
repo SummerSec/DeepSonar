@@ -28,6 +28,7 @@ const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml",
 const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
 const recordContractScript = readFileSync(new URL("./runtime-image-record.mjs", import.meta.url), "utf8");
 const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
+const schedulerRegistryContract = readFileSync(new URL("../apps/scheduler/src/runtime-image-registry-contract.ts", import.meta.url), "utf8");
 const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
 const schedulerRoutes = readFileSync(new URL("../apps/scheduler/src/routes.ts", import.meta.url), "utf8");
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
@@ -278,6 +279,12 @@ expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow ä
 expect(openHarmonyRegistry.schema === "deepsonar.registry/v2" && openHarmonyRegistry.schema_version === 2, "bundled runtime catalog must be v2");
 expect(openHarmonyRegistry.images.every((image) => image.versions.every((version) => Array.isArray(version.platforms) && version.platforms.length >= 2 || image.versions.length === 0)), "bundled v2 catalog must consolidate platforms");
 expect(registryScript.includes("registry_records") && registryScript.includes("inspect_digest"), "v2 generator must require destination inspect evidence");
+expect(registryScript.includes("registry_records must include ${channel} evidence"), "every release descriptor must carry all three channel outcomes");
+expect(registryScript.includes("registry_evidence must contain exactly all three channels"), "v2 generator must require exactly three channel evidence entries");
+expect(registryScript.includes("must contain exactly the six official image keys"), "release/bundled registry checks must require all six official products");
+expect(schedulerRegistryContract.includes("assertKnownKeys") && schedulerRegistryContract.includes("project_opt_in must be boolean"), "Scheduler catalog parser must reject unknown fields and invalid project_opt_in types");
+expect(schedulerRegistryContract.includes("RUNTIME_IMAGE_REGISTRY_AVAILABLE_PROVENANCE") && schedulerRegistryContract.includes("UNAVAILABLE_REASON_RE"), "Scheduler catalog parser must bound provenance and unavailable reasons");
+expect(recordContractScript.includes("AVAILABLE_PROVENANCE") && recordContractScript.includes("REASON_RE"), "release record verifier must use fixed provenance and bounded reasons");
 expect(descriptorScript.includes("inspectPublishedImageDigest") && descriptorScript.includes("canonical"), "release descriptor must gate every destination against canonical digest");
 expect(descriptorScript.includes("buildRegistryRecord") && recordContractScript.includes("inspectedDigest"), "release descriptor must use the pure inspected-digest evidence contract");
 expect(!releaseWorkflow.includes("crypto.createHash(\"sha256\").update(s)"), "release workflow must not hash raw JSON as a registry digest");
@@ -289,6 +296,11 @@ expect((releaseWorkflow.match(/publish_tags true/g) ?? []).length >= 6, "cross-r
 expect((releaseWorkflow.match(/CHANNEL_PUBLISH_FAILED=true/g) ?? []).length === 6, "every release image publish retry must fail closed");
 expect((releaseWorkflow.match(/warning::Docker Hub/g) ?? []).length === 6 && (releaseWorkflow.match(/exit 1/g) ?? []).length >= 6, "configured Docker Hub failure must fail the release");
 expect(releaseWorkflow.includes("runtime-image-registry-v2.json"), "release must attach the validated v2 catalog asset");
+expect(!openHarmonyRegistry.fallback && !openHarmonyRegistry.error && !openHarmonyRegistry.checked_at, "bundled catalog must not accept Scheduler-owned fallback/error/checked_at metadata");
+const kaliDigestInspectIndex = releaseWorkflow.indexOf('digest="$(docker buildx imagetools inspect "$primary"');
+const kaliImmutableCopyIndex = releaseWorkflow.indexOf('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"');
+expect(kaliDigestInspectIndex >= 0 && kaliImmutableCopyIndex > kaliDigestInspectIndex, "Kali Docker Hub copy must use a GHCR digest inspected before the cross-registry copy");
+expect(!releaseWorkflow.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"'), "Kali Docker Hub copy must not use the mutable GHCR tag");
 
 if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));

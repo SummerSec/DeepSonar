@@ -8,6 +8,12 @@ const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const PLATFORM_RE = /^[a-z0-9]+\/[a-z0-9][a-z0-9._-]*$/;
 const IMAGE_KEY_RE = /^[a-z][a-z0-9-]{1,62}$/;
 const CHANNELS = ["github", "dockerhub", "aliyun-acr"];
+const AVAILABLE_PROVENANCE = {
+  github: "build-push+inspect",
+  dockerhub: "cross-registry-copy+inspect",
+  "aliyun-acr": "cross-registry-copy+inspect",
+};
+const UNAVAILABLE_REASON_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REF_POLICIES = {
   github: { host: "ghcr.io", namespace: "summersec" },
   dockerhub: { host: "docker.io", namespace: "summersec" },
@@ -28,6 +34,11 @@ const EXPECTED_KEYS = [
 
 function fail(message) {
   throw new Error(`runtime registry: ${message}`);
+}
+
+function assertKnownKeys(value, allowed, label) {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) fail(`${label} contains unknown fields: ${unknown.join(", ")}`);
 }
 
 function assertDigest(value, label) {
@@ -92,7 +103,7 @@ function assertEvidenceRecord(channel, record, digest, label) {
   const available = record.available;
   if (available === false) {
     if ("ref" in record || "inspect_digest" in record) fail(`${label} unavailable 不得声明 ref/inspect_digest`);
-    if (typeof record.reason !== "string" || record.reason.trim() === "") fail(`${label} unavailable 缺少 reason`);
+    if (typeof record.reason !== "string" || !UNAVAILABLE_REASON_RE.test(record.reason) || record.reason.trim() !== record.reason) fail(`${label} unavailable reason is invalid`);
     if (typeof record.provenance !== "string" || record.provenance !== "unavailable") fail(`${label} unavailable provenance 必须为 unavailable`);
     return { available: false, reason: record.reason, provenance: "unavailable" };
   }
@@ -101,9 +112,7 @@ function assertEvidenceRecord(channel, record, digest, label) {
   assertDigest(record.inspect_digest, `${label}.inspect_digest`);
   if (record.inspect_digest !== digest) fail(`${label} inspect_digest 与 canonical digest 不一致`);
   const normalized = assertChannelRef(channel, record.ref, digest, `${label}.ref`);
-  if (typeof record.provenance !== "string" || record.provenance.trim() === "" || record.provenance === "unavailable") {
-    fail(`${label} available 缺少 provenance`);
-  }
+  if (record.provenance !== AVAILABLE_PROVENANCE[channel]) fail(`${label} available provenance is invalid for ${channel}`);
   if (keys.includes("reason")) {
     fail(`${label} evidence 含未知字段`);
   }
@@ -111,6 +120,9 @@ function assertEvidenceRecord(channel, record, digest, label) {
 }
 
 function recordsForDescriptor(descriptor) {
+  if (descriptor.registry_records !== undefined && descriptor.registry_evidence !== undefined) {
+    fail(`${descriptor.image_key} must provide only one of registry_records or registry_evidence`);
+  }
   const records = descriptor.registry_records ?? descriptor.registry_evidence;
   if (!records || typeof records !== "object" || Array.isArray(records)) {
     fail(`${descriptor.image_key} 缺少 registry_records（每个 channel 必须有 inspect/availability 证据）`);
@@ -119,10 +131,10 @@ function recordsForDescriptor(descriptor) {
   if (unknown.length > 0) fail(`${descriptor.image_key} registry_records 含未知 channel: ${unknown.join(", ")}`);
   const normalized = {};
   for (const channel of CHANNELS) {
-    if (records[channel] === undefined) continue;
+    if (records[channel] === undefined) fail(`${descriptor.image_key} registry_records must include ${channel} evidence`);
     normalized[channel] = assertEvidenceRecord(channel, records[channel], descriptor.digest, `${descriptor.image_key}.${channel}`);
   }
-  if (!Object.values(normalized).some((record) => record.available)) fail(`${descriptor.image_key} 没有可用且已 inspect 的 registry channel`);
+  if (!normalized.github?.available) fail(`${descriptor.image_key} github evidence must be available and inspected`);
 
   if (descriptor.registry_refs !== undefined) {
     if (!descriptor.registry_refs || typeof descriptor.registry_refs !== "object" || Array.isArray(descriptor.registry_refs)) fail(`${descriptor.image_key} registry_refs 无效`);
@@ -132,20 +144,38 @@ function recordsForDescriptor(descriptor) {
         fail(`${descriptor.image_key}.${channel} registry_refs 必须等于实际 inspect ref`);
       }
     }
+    for (const channel of CHANNELS) {
+      const present = descriptor.registry_refs[channel] !== undefined;
+      if (present !== normalized[channel].available) fail(`${descriptor.image_key}.${channel} registry_refs must omit only unavailable channels`);
+    }
   }
   return normalized;
 }
 
 function assertDescriptor(descriptor, expectedKey) {
   if (!descriptor || typeof descriptor !== "object" || Array.isArray(descriptor)) fail(`${expectedKey} descriptor 无效`);
+  assertKnownKeys(descriptor, [
+    "image_key", "version", "digest", "platforms", "size_bytes", "platform_size_bytes", "platform_digests",
+    "registry_records", "registry_evidence", "registry_refs", "ghcr_ref", "acr_ref", "tools_manifest_sha256",
+  ], `${expectedKey} descriptor`);
   if (descriptor.image_key !== expectedKey) fail(`${expectedKey} descriptor image_key 不匹配`);
   assertDigest(descriptor.digest, `${expectedKey}`);
   assertPlatforms(descriptor.platforms, expectedKey, true);
   assertSize(descriptor.size_bytes, expectedKey, true);
   if (descriptor.platform_size_bytes !== undefined) {
     if (!descriptor.platform_size_bytes || typeof descriptor.platform_size_bytes !== "object" || Array.isArray(descriptor.platform_size_bytes)) fail(`${expectedKey} platform_size_bytes 无效`);
+    for (const platform of Object.keys(descriptor.platform_size_bytes)) {
+      if (!descriptor.platforms.includes(platform)) fail(`${expectedKey} platform_size_bytes contains unknown platform ${platform}`);
+    }
     for (const platform of descriptor.platforms) {
       if (descriptor.platform_size_bytes[platform] !== undefined) assertSize(descriptor.platform_size_bytes[platform], `${expectedKey}.${platform}`, true);
+    }
+  }
+  if (descriptor.platform_digests !== undefined) {
+    if (!descriptor.platform_digests || typeof descriptor.platform_digests !== "object" || Array.isArray(descriptor.platform_digests)) fail(`${expectedKey} platform_digests 无效`);
+    for (const platform of Object.keys(descriptor.platform_digests)) {
+      if (!descriptor.platforms.includes(platform)) fail(`${expectedKey} platform_digests contains unknown platform ${platform}`);
+      assertDigest(descriptor.platform_digests[platform], `${expectedKey}.${platform}`);
     }
   }
   if (descriptor.version !== undefined) assertVersion(descriptor.version, expectedKey);
@@ -231,6 +261,10 @@ function buildV2Version(descriptor, records, releaseVersion) {
 
 function assertImageBase(image, index) {
   if (!image || typeof image !== "object" || Array.isArray(image)) fail(`images[${index}] 无效`);
+  assertKnownKeys(image, ["image_key", "name", "description", "publisher", "source_kind", "source_url", "project_opt_in", "default_role", "versions"], `images[${index}]`);
+  if (typeof image.project_opt_in !== "boolean") fail(`images[${index}] project_opt_in must be boolean`);
+  if (image.source_url !== undefined && typeof image.source_url !== "string") fail(`images[${index}] source_url must be a string`);
+  if (image.default_role !== undefined && typeof image.default_role !== "string") fail(`images[${index}] default_role must be a string`);
   if (!IMAGE_KEY_RE.test(image.image_key) || typeof image.name !== "string" || typeof image.description !== "string" || typeof image.publisher !== "string" || image.source_kind !== "official") {
     fail(`images[${index}] fields 无效`);
   }
@@ -239,13 +273,16 @@ function assertImageBase(image, index) {
 
 function assertV1Registry(registry) {
   if (!Array.isArray(registry.images)) fail("v1 registry images 必须是数组");
+  if (registry.images.length !== EXPECTED_KEYS.length) fail("v1 registry must contain exactly the six official image keys");
   const seenImages = new Set();
+  const seenRefs = new Map();
   for (const [index, image] of registry.images.entries()) {
     assertImageBase(image, index);
     if (seenImages.has(image.image_key)) fail(`重复 image_key ${image.image_key}`);
     seenImages.add(image.image_key);
     const seenVersions = new Set();
     for (const [versionIndex, version] of image.versions.entries()) {
+      assertKnownKeys(version, ["version", "image_ref", "platforms", "size_bytes", "tools_manifest_sha256"], `${image.image_key}.versions[${versionIndex}]`);
       assertVersion(version.version, `${image.image_key}.versions[${versionIndex}]`);
       if (seenVersions.has(version.version)) fail(`${image.image_key} 重复 version ${version.version}`);
       seenVersions.add(version.version);
@@ -254,12 +291,22 @@ function assertV1Registry(registry) {
       const platforms = assertPlatforms(version.platforms, `${image.image_key}.${version.version}`, false);
       if (platforms && platforms.length !== 1) fail(`${image.image_key} v1 每个 version 只能有一个 platform`);
       assertSize(version.size_bytes, `${image.image_key}.${version.version}`, false);
+      const existing = seenRefs.get(parsed.normalized);
+      if (!existing) {
+        seenRefs.set(parsed.normalized, { imageKey: image.image_key, platforms: platforms ? new Set(platforms) : null });
+      } else if (existing.imageKey !== image.image_key || !existing.platforms || !platforms || platforms.some((platform) => existing.platforms.has(platform))) {
+        fail(`${image.image_key} contains duplicate normalized registry ref (${parsed.normalized})`);
+      } else {
+        for (const platform of platforms) existing.platforms.add(platform);
+      }
     }
   }
+  if (EXPECTED_KEYS.some((key) => !seenImages.has(key))) fail("v1 registry must contain exactly the six official image keys");
 }
 
 function assertV2Registry(registry) {
   if (!Array.isArray(registry.images)) fail("v2 registry images 必须是数组");
+  if (registry.images.length !== EXPECTED_KEYS.length) fail("v2 registry must contain exactly the six official image keys");
   const seenImages = new Set();
   const seenRefs = new Set();
   for (const [index, image] of registry.images.entries()) {
@@ -269,6 +316,7 @@ function assertV2Registry(registry) {
     const seenVersions = new Set();
     for (const [versionIndex, version] of image.versions.entries()) {
       const label = `${image.image_key}.versions[${versionIndex}]`;
+      assertKnownKeys(version, ["version", "digest", "platforms", "size_bytes", "registry_refs", "image_ref", "registry_evidence", "tools_manifest_sha256"], label);
       assertVersion(version.version, label);
       if (seenVersions.has(version.version)) fail(`${image.image_key} 重复 version ${version.version}`);
       seenVersions.add(version.version);
@@ -286,29 +334,40 @@ function assertV2Registry(registry) {
       if (version.image_ref !== undefined) {
         if (!version.registry_refs.github || version.image_ref !== version.registry_refs.github) fail(`${label} image_ref 必须等于 registry_refs.github`);
       }
-      if (version.registry_evidence !== undefined) {
+      if (!version.registry_evidence || typeof version.registry_evidence !== "object" || Array.isArray(version.registry_evidence)) fail(`${label} registry_evidence is required`);
+      if (Object.keys(version.registry_evidence).length !== CHANNELS.length || CHANNELS.some((channel) => version.registry_evidence[channel] === undefined)) {
+        fail(`${label} registry_evidence must contain exactly all three channels`);
+      }
+      if (version.registry_evidence.github?.available !== true) fail(`${label} github registry_evidence must be available and inspected`);
+      {
         if (!version.registry_evidence || typeof version.registry_evidence !== "object" || Array.isArray(version.registry_evidence)) fail(`${label} registry_evidence 无效`);
         for (const channel of Object.keys(version.registry_evidence)) {
           if (!CHANNELS.includes(channel)) fail(`${label} registry_evidence 含未知 channel`);
           const evidence = version.registry_evidence[channel];
+          if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) fail(`${label}.${channel} registry_evidence is invalid`);
+          assertKnownKeys(evidence, ["available", "ref", "inspect_digest", "provenance", "reason"], `${label}.${channel} registry_evidence`);
           if (evidence?.available === false) {
             if (evidence.ref !== undefined || evidence.inspect_digest !== undefined
-              || evidence.provenance !== "unavailable" || typeof evidence.reason !== "string" || evidence.reason.trim() === "") {
+              || evidence.provenance !== "unavailable" || typeof evidence.reason !== "string" || !UNAVAILABLE_REASON_RE.test(evidence.reason) || evidence.reason.trim() !== evidence.reason) {
               fail(`${label}.${channel} unavailable registry_evidence is invalid`);
             }
+            if (version.registry_refs[channel] !== undefined) fail(`${label}.${channel} unavailable evidence cannot coexist with registry_refs`);
             continue;
           }
-          if (evidence.available !== true || evidence.ref !== version.registry_refs[channel] || evidence.inspect_digest !== version.digest) {
+          if (evidence.available !== true || evidence.ref !== version.registry_refs[channel] || evidence.inspect_digest !== version.digest
+            || evidence.provenance !== AVAILABLE_PROVENANCE[channel] || evidence.reason !== undefined) {
             fail(`${label}.${channel} registry_evidence 未通过实际 digest 证明`);
           }
         }
       }
     }
   }
+  if (EXPECTED_KEYS.some((key) => !seenImages.has(key))) fail("v2 registry must contain exactly the six official image keys");
 }
 
 export function assertRegistry(registry) {
   if (!registry || typeof registry !== "object" || Array.isArray(registry)) fail("registry 必须是对象");
+  assertKnownKeys(registry, ["schema", "schema_version", "images", "source"], "registry");
   const schema = registry.schema;
   const schemaVersion = registry.schema_version;
   const isV1 = schema === "deepsonar.registry/v1" || schemaVersion === 1;
@@ -359,7 +418,6 @@ function main(argv = process.argv.slice(2)) {
     schema_version: 2,
     images,
     source: "remote",
-    checked_at: new Date().toISOString(),
   };
   assertRegistry(registry);
   writeFileSync(outputPath, `${JSON.stringify(registry, null, 2)}\n`);

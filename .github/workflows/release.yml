@@ -608,6 +608,14 @@ jobs:
           docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
           # 取 GHCR 首个标签的 multi-arch index digest
           primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          # Inspect the GHCR destination before copying to another registry.
+          # The Docker Hub source must be immutable; a mutable tag could move
+          # between the GHCR publish and the cross-registry copy.
+          digest="$(docker buildx imagetools inspect "$primary" \
+            | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+            | head -n1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          immutable_primary="${primary}@${digest}"
           if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
             dockerhub_tag_args=()
             while IFS= read -r tag; do
@@ -615,19 +623,12 @@ jobs:
               dockerhub_tag_args+=(-t "$tag")
             done <<< "$DOCKERHUB_TAGS"
             [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
-            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"; then
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
               echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
               echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
           fi
-          # The registry's descriptor digest is the human-readable `Digest:`
-          # value. Hashing --raw JSON is not a digest proof: annotations and
-          # JSON serialization can change without changing the manifest.
-          digest="$(docker buildx imagetools inspect "$primary" \
-            | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
-            | head -n1)"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           {
             printf 'primary=%s\n' "$primary"

@@ -29,17 +29,36 @@ The payload uses `schema: "deepsonar.registry/v2"` (or
       "ref": "ghcr.io/summersec/deepsonar-base@sha256:<same digest>",
       "inspect_digest": "sha256:<same digest>",
       "provenance": "build-push+inspect"
+    },
+    "dockerhub": {
+      "available": false,
+      "provenance": "unavailable",
+      "reason": "credentials_missing"
+    },
+    "aliyun-acr": {
+      "available": false,
+      "provenance": "unavailable",
+      "reason": "credentials_missing"
     }
   }
 }
 ```
 
 `registry_refs` keys are exactly `github`, `dockerhub`, and `aliyun-acr`.
-Omitting a key means that channel is unavailable. Every present reference is
-an immutable OCI digest reference whose normalized digest exactly equals the
+Omitting a key means that channel is unavailable. `registry_evidence` is
+required and must contain exactly those three channel entries; an available
+entry must match a present `registry_refs` value and the canonical digest, while
+an unavailable optional entry must contain only `available:false`,
+`provenance:"unavailable"`, and a non-empty reason. The release baseline
+requires GitHub evidence to be available and inspected. Every present reference
+is an immutable OCI digest reference whose normalized digest exactly equals the
 canonical `digest`; normalized references may not be duplicated. Metadata
 provenance (`remote`, `bundled`, or `upload`) is a separate top-level field and
-is not an OCI channel.
+is not an OCI channel. Scheduler-owned `fallback`, `error`, and `checked_at`
+fields are added after parsing and are not accepted from a catalog upload.
+Available provenance is fixed to `build-push+inspect` for GitHub and
+`cross-registry-copy+inspect` for Docker Hub/ACR. Unavailable reasons are
+bounded single-line tokens (1-128 ASCII characters).
 
 ## Release evidence and channel availability
 
@@ -61,9 +80,10 @@ the GHCR platform descriptor/size evidence used by the size gate. The release
 job merges six descriptors into one v2 version per image (all platforms in a
 single `versions[]` entry), validates the result, uploads
 `runtime-image-registry-v2.json` as a release asset, and updates the bundled
-v2 fallback. A v2 item with only Docker Hub/ACR evidence has no legacy
-`image_ref`; current Scheduler apply/pull paths skip it and demote any stale
-GitHub promotion rather than selecting another channel.
+v2 fallback. The parser requires inspected GitHub evidence for a public v2
+catalog; the Scheduler's apply path also defensively demotes a stale legacy
+GitHub promotion if an internally supplied channel-only item has no
+`image_ref`, rather than selecting another channel.
 
 The pure validator lives in
 `apps/scheduler/src/runtime-image-registry-contract.ts`. Its OCI parser rejects

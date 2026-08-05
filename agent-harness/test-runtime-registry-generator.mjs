@@ -78,17 +78,8 @@ try {
   }
   execFileSync(process.execPath, [generator, "--check", outputPath], { stdio: "pipe" });
 
-  // Missing optional credentials are represented by omission, never by a
-  // host plus the canonical digest.
-  writeDescriptors({ optional: "none" });
-  runGenerator();
-  const ghcrOnly = JSON.parse(readFileSync(outputPath, "utf8"));
-  for (const image of ghcrOnly.images) {
-    assert.deepEqual(Object.keys(image.versions[0].registry_refs), ["github"]);
-    assert.equal(image.versions[0].registry_evidence.dockerhub, undefined);
-  }
-
-  // Explicit unavailable records survive the release merge without refs.
+  // Every descriptor carries all three channel outcomes. Missing optional
+  // credentials are explicit unavailable records, never silent omission.
   writeDescriptors({ optional: "unavailable" });
   runGenerator();
   const unavailable = JSON.parse(readFileSync(outputPath, "utf8"));
@@ -128,21 +119,65 @@ try {
     };
   });
 
+  assertGenerationFails(/provenance/i, (descriptor, imageKey) => {
+    if (imageKey === "deepsonar-base") descriptor.registry_records.dockerhub.provenance = "build-push+inspect";
+  });
+  assertGenerationFails(/reason/i, (descriptor, imageKey) => {
+    if (imageKey === "deepsonar-base") descriptor.registry_records.dockerhub = { available: false, provenance: "unavailable", reason: "credentials missing" };
+  });
+  assertGenerationFails(/must include.*evidence|registry_records/i, (descriptor, imageKey) => {
+    if (imageKey === "deepsonar-base") delete descriptor.registry_records.dockerhub;
+  });
+  assertGenerationFails(/unknown fields/i, (descriptor, imageKey) => {
+    if (imageKey === "deepsonar-base") descriptor.untrusted_extra = true;
+  });
+
+  const assertRegistryCheckFails = (message, mutate) => {
+    writeDescriptors();
+    runGenerator();
+    const candidate = JSON.parse(readFileSync(outputPath, "utf8"));
+    mutate(candidate);
+    writeFileSync(outputPath, `${JSON.stringify(candidate)}\n`);
+    assert.throws(() => execFileSync(process.execPath, [generator, "--check", outputPath], { stdio: "pipe" }), message);
+  };
+  assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.untrusted_extra = true; });
+  assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.images[0].untrusted_extra = true; });
+  assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.images[0].versions[0].untrusted_extra = true; });
+  assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.github.untrusted_extra = true; });
+  assertRegistryCheckFails(/registry_evidence|provenance/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.github.provenance = "cross-registry-copy+inspect"; });
+  assertRegistryCheckFails(/registry_evidence|unavailable|reason/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.dockerhub.reason = "credentials missing"; });
+  assertRegistryCheckFails(/exactly the six official image keys/i, (candidate) => { candidate.images.pop(); });
+  assertRegistryCheckFails(/unavailable evidence cannot coexist|registry_evidence/i, (candidate) => {
+    const version = candidate.images[0].versions[0];
+    version.registry_evidence.dockerhub = { available: false, provenance: "unavailable", reason: "credentials_missing" };
+  });
+
   // --check remains able to read a historical v1 catalog.
   const v1Path = path.join(tempRoot, "legacy-v1.json");
   writeFileSync(v1Path, JSON.stringify({
     schema: "deepsonar.registry/v1",
-    images: [{
-      image_key: "deepsonar-base",
-      name: "DeepSonar Base",
-      description: "base",
-      publisher: "SummerSec",
-      source_kind: "official",
-      project_opt_in: false,
-      versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/deepsonar-base@${digest}`, platforms: ["linux/amd64"], size_bytes: 42 }],
-    }],
+    images: template.images.map((image) => ({
+      ...image,
+      versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/${image.image_key}@${digest}`, platforms: ["linux/amd64"], size_bytes: 42 }],
+    })),
   }));
   execFileSync(process.execPath, [generator, "--check", v1Path], { stdio: "pipe" });
+
+  const duplicateV1Path = path.join(tempRoot, "legacy-v1-duplicate.json");
+  const duplicateImages = JSON.parse(readFileSync(v1Path, "utf8"));
+  duplicateImages.images[1].versions[0].image_ref = duplicateImages.images[0].versions[0].image_ref;
+  writeFileSync(duplicateV1Path, JSON.stringify(duplicateImages));
+  assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateV1Path], { stdio: "pipe" }), /duplicate/i);
+  const duplicateAliasPath = path.join(tempRoot, "legacy-v1-overlap.json");
+  const duplicateAlias = JSON.parse(readFileSync(v1Path, "utf8"));
+  duplicateAlias.images[0].versions.push({ version: "0.1.1-linux-amd64", image_ref: duplicateAlias.images[0].versions[0].image_ref, platforms: ["linux/amd64"], size_bytes: 42 });
+  writeFileSync(duplicateAliasPath, JSON.stringify(duplicateAlias));
+  assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateAliasPath], { stdio: "pipe" }), /duplicate/i);
+  const duplicateMissingPlatformPath = path.join(tempRoot, "legacy-v1-missing-platform.json");
+  const duplicateMissingPlatform = JSON.parse(readFileSync(v1Path, "utf8"));
+  duplicateMissingPlatform.images[0].versions.push({ version: "0.1.1", image_ref: duplicateMissingPlatform.images[0].versions[0].image_ref });
+  writeFileSync(duplicateMissingPlatformPath, JSON.stringify(duplicateMissingPlatform));
+  assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateMissingPlatformPath], { stdio: "pipe" }), /duplicate/i);
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

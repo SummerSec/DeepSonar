@@ -1,6 +1,13 @@
 import { immutablePublishedImageRef } from "./oci-image-size.mjs";
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const CHANNELS = ["github", "dockerhub", "aliyun-acr"];
+const AVAILABLE_PROVENANCE = {
+  github: "build-push+inspect",
+  dockerhub: "cross-registry-copy+inspect",
+  "aliyun-acr": "cross-registry-copy+inspect",
+};
+const REASON_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 /**
  * Turn one release destination inspection into auditable evidence.
@@ -20,6 +27,7 @@ export function buildRegistryRecord({
   unavailableReason,
 }) {
   if (typeof channel !== "string" || channel.trim() === "") throw new Error("registry channel is required");
+  if (!CHANNELS.includes(channel)) throw new Error(`${channel} registry channel is unknown`);
   if (typeof canonicalDigest !== "string" || !DIGEST_RE.test(canonicalDigest)) {
     throw new Error(`${channel} canonical digest is invalid`);
   }
@@ -27,8 +35,9 @@ export function buildRegistryRecord({
   if (configured !== true) {
     if (hasReference) throw new Error(`${channel} unavailable must not provide a reference`);
     const reason = typeof unavailableReason === "string" && unavailableReason.trim() !== ""
-      ? unavailableReason.trim()
+      ? unavailableReason
       : `${channel}_not_configured`;
+    if (!REASON_RE.test(reason) || reason.trim() !== reason) throw new Error(`${channel} unavailable reason is invalid`);
     return { available: false, provenance: "unavailable", reason };
   }
   if (!hasReference) throw new Error(`${channel} configured but missing destination reference`);
@@ -43,6 +52,6 @@ export function buildRegistryRecord({
     available: true,
     ref: immutablePublishedImageRef(reference, inspectedDigest),
     inspect_digest: inspectedDigest,
-    provenance: channel === "github" ? "build-push+inspect" : "cross-registry-copy+inspect",
+    provenance: AVAILABLE_PROVENANCE[channel],
   };
 }

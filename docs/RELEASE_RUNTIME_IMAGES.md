@@ -66,7 +66,16 @@ evidence.
 Descriptors contain `registry_records` (availability, immutable ref,
 `inspect_digest`, provenance/reason) and are merged into one
 `deepsonar.registry/v2` version per product with all target platforms. The
+descriptor must carry all three channel outcomes; generated v2
+`registry_evidence` contains exactly `github`, `dockerhub`, and `aliyun-acr`,
+with GitHub available and inspected for the public release baseline. Scheduler
+adds `fallback`, `error`, and `checked_at` after parsing; those fields are not
+accepted as upload-controlled catalog input.
+Available provenance is fixed to `build-push+inspect` for GitHub and
+`cross-registry-copy+inspect` for Docker Hub/ACR; unavailable reasons are
+bounded single-line tokens.
 release uploads `runtime-image-registry-v2.json` and synchronizes the bundled
-v2 fallback. The current Scheduler remains GitHub-projection-only: a
-Docker-Hub/ACR-only v2 version is intentionally skipped by apply/pull and does
-not silently replace a stale GitHub promotion.
+v2 fallback. The current Scheduler remains GitHub-projection-only; if an
+internal channel-only item reaches apply without a legacy `image_ref`, it is
+skipped and any stale GitHub promotion is demoted rather than replaced by
+another channel.

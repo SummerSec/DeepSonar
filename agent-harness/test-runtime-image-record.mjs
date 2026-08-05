@@ -61,5 +61,19 @@ assert.throws(() => buildRegistryRecord({
   reference: "docker.io/summersec/deepsonar-base:0.1.0",
   canonicalDigest: digest,
 }), /inspect did not return a digest/i);
+assert.throws(() => buildRegistryRecord({
+  channel: "dockerhub",
+  configured: false,
+  reference: "",
+  canonicalDigest: digest,
+  unavailableReason: "credentials missing",
+}), /reason is invalid/i);
+assert.throws(() => buildRegistryRecord({
+  channel: "unknown",
+  configured: false,
+  reference: "",
+  canonicalDigest: digest,
+  unavailableReason: "credentials_missing",
+}), /channel is unknown/i);
 
 console.log("runtime image record equality, mismatch, inspect failure, unavailable, and reference fixtures passed");

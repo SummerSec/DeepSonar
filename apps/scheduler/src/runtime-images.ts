@@ -31,6 +31,7 @@ export type {
   RuntimeImageRegistryChannel,
   RuntimeImageRegistryChannelPolicy,
   RuntimeImageRegistryChannelEvidence,
+  RuntimeImageRegistryChannelProvenance,
   RuntimeImageRegistryMetadataSource,
   RuntimeImageRegistryPolicy,
 } from "./runtime-image-registry-contract.js";
