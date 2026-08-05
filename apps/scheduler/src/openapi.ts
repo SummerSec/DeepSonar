@@ -351,10 +351,87 @@ const OPS: Op[] = [
     },
   },
   { method: "get", path: "/findings/{id}", summary: "Finding 完整详情与验证链", scope: "findings:read", tags: ["Findings"] },
-  { method: "get", path: "/canvases/{id}/report", summary: "画布任务报告元数据", scope: "tasks:read", tags: ["Reports"] },
-  { method: "get", path: "/reports/{id}/markdown", summary: "下载 Markdown 报告", scope: "tasks:read", tags: ["Reports"] },
-  { method: "get", path: "/reports/{id}/sarif", summary: "下载 SARIF 报告", scope: "tasks:read", tags: ["Reports"] },
-  { method: "post", path: "/canvases/{id}/report/retry", summary: "失败报告重试", scope: "jobs:control", tags: ["Reports"] },
+  {
+    method: "get",
+    path: "/canvases/{id}/report",
+    summary: "画布任务报告元数据",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["id", "canvas_id", "project_id", "status"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          canvas_id: { type: "string" },
+          project_id: { type: "string", format: "uuid" },
+          status: { type: "string", enum: ["pending", "generating", "succeeded", "failed"] },
+          markdown_uri: { type: "string", nullable: true },
+          sarif_uri: { type: "string", nullable: true },
+          summary_json: { type: "object", additionalProperties: true },
+          error: { type: "string", nullable: true },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/reports/{id}/markdown",
+    summary: "下载 Markdown 报告",
+    description: "仅返回服务端已生成的 Markdown 文件；响应为 attachment，不是 JSON。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        description: "Markdown attachment",
+        headers: {
+          "Content-Disposition": {
+            description: "安全的 report-<id>.md 下载文件名",
+            schema: { type: "string" },
+          },
+        },
+        content: { "text/markdown": { schema: { type: "string", format: "binary" } } },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/reports/{id}/sarif",
+    summary: "下载 SARIF 报告",
+    description: "仅返回服务端已生成的 SARIF 2.1.0 文件；响应为 attachment，不是 JSON。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        description: "SARIF attachment",
+        headers: {
+          "Content-Disposition": {
+            description: "安全的 report-<id>.sarif 下载文件名",
+            schema: { type: "string" },
+          },
+        },
+        content: { "application/sarif+json": { schema: { type: "string", format: "binary" } } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/report/retry",
+    summary: "失败报告重试",
+    scope: "jobs:control",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["ok"],
+        properties: { ok: { type: "boolean" }, report_id: { type: "string", format: "uuid" } },
+      },
+      "409": {
+        description: "报告尚未失败、已经成功或不满足重试门禁",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  },
 
   // settings
   { method: "get", path: "/global-settings", summary: "全局规则", scope: "agents:read", tags: ["Settings"] },
@@ -906,6 +983,14 @@ function pathParams(p: string): Array<{ name: string; in: "path"; required: true
   });
 }
 
+function isFullResponse(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  // A JSON Schema may itself carry `description`; only response-specific
+  // members distinguish a complete OpenAPI Response Object here.
+  return "content" in record || "headers" in record;
+}
+
 /** 构建 OpenAPI 3.0 文档对象 */
 export function buildOpenApiDocument(): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -921,6 +1006,18 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         schema,
       })),
     ];
+    const declaredResponses = op.responses ?? {};
+    const declaredSuccess = declaredResponses["200"];
+    const successResponse = isFullResponse(declaredSuccess)
+      ? declaredSuccess
+      : {
+          description: "成功",
+          content: {
+            "application/json": {
+              schema: declaredSuccess ?? { type: "object", additionalProperties: true },
+            },
+          },
+        };
     const operation: Record<string, unknown> = {
       summary: op.summary,
       description: op.description,
@@ -930,20 +1027,13 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       security: op.scope === null ? [] : [{ bearerAuth: [] }],
       "x-deepsonar-scope": op.scope === null ? "exempt" : op.scope,
       responses: {
-        "200": {
-          description: "成功",
-          content: {
-            "application/json": {
-              schema: op.responses?.["200"] ?? { type: "object", additionalProperties: true },
-            },
-          },
-        },
+        "200": successResponse,
         "400": { description: "参数错误", content: { "application/json": { schema: ErrorSchema } } },
         "401": { description: "未认证", content: { "application/json": { schema: ErrorSchema } } },
         "403": { description: "权限不足", content: { "application/json": { schema: ErrorSchema } } },
         "404": { description: "不存在", content: { "application/json": { schema: ErrorSchema } } },
         "409": { description: "冲突", content: { "application/json": { schema: ErrorSchema } } },
-        ...(op.responses ?? {}),
+        ...Object.fromEntries(Object.entries(declaredResponses).filter(([status]) => status !== "200")),
       },
     };
     if (op.body) {
