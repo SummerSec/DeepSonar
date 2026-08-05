@@ -1,6 +1,13 @@
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
-import type { CanvasLifecycleRollup, PlatformToolConfig, ReadinessResponse } from "@deepsonar/shared-types";
+import type {
+  CanvasLifecycleRollup,
+  CredentialBatchBindingImpact,
+  CredentialBatchBindingRequest,
+  ProviderAccountCatalogItem,
+  PlatformToolConfig,
+  ReadinessResponse,
+} from "@deepsonar/shared-types";
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
 
@@ -472,6 +479,39 @@ export interface CredentialModels {
   fetched_at: string;
 }
 
+export interface CredentialImpact {
+  credential_id: string;
+  role_configs: { count: number; items: Array<Record<string, unknown>> };
+  jobs: {
+    pending_unclaimed: { count: number; items: Array<Record<string, unknown>> };
+    active_frozen: { count: number; items: Array<Record<string, unknown>> };
+    terminal_historical: { count: number; items: Array<Record<string, unknown>> };
+  };
+}
+
+export type ProviderAccountCatalogItemView = ProviderAccountCatalogItem;
+export type CredentialBatchBindingInput = CredentialBatchBindingRequest;
+export type CredentialBatchBindingResult = CredentialBatchBindingImpact;
+
+export interface BindableRoleConfig {
+  id: string;
+  role_id: string;
+  role_name: string;
+  role_title: string;
+  project_id: string | null;
+  project_name: string | null;
+  scope: "global" | "project";
+  agent_cli: "claude-code" | "open-code" | "codex";
+  model: string | null;
+  version: number;
+  credential_id: string | null;
+  credential_name: string | null;
+  credential_kind: ProviderCredential["kind"] | null;
+  credential_provider: string | null;
+  credential_provider_valid: boolean | null;
+  credential_status: string | null;
+}
+
 export interface ApiTokenCreated extends ApiToken {
   /** 仅此一次可见，请立即复制保存 */
   token: string;
@@ -487,6 +527,7 @@ export interface ProviderCredential {
   project_id: string | null;
   key_version: number;
   public_metadata_json: Record<string, unknown>;
+  model_catalog_json?: string[];
   fingerprint: string;
   last4: string;
   status: "active" | "disabled" | "rotation_required";
@@ -494,6 +535,17 @@ export interface ProviderCredential {
   rotated_at: string | null;
   created_at: string;
   created_by: string | null;
+  scope?: "global" | "project";
+  provider_valid?: boolean;
+  bound_role_config_count?: number;
+  health?: {
+    status: "unknown" | "ok" | "error";
+    last_tested_at: string | null;
+    error_category: string | null;
+    detail: string | null;
+    model_catalog: string[];
+    model_catalog_fetched_at: string | null;
+  };
   active_count: number;
   active_by_model: Record<string, number>;
 }
@@ -1373,6 +1425,9 @@ export const api = {
   rotateToken: (id: string) => send<ApiTokenCreated>("POST", `/tokens/${id}/rotate`),
   /** Provider Credential（§6.4，与 API Token 分离） */
   credentials: () => get<ProviderCredential[]>("/credentials"),
+  credentialImpact: (id: string) => get<CredentialImpact>(`/credentials/${id}/impact`),
+  credentialProviders: () => get<ProviderAccountCatalogItemView[]>("/credentials/providers"),
+  bindableRoleConfigs: () => get<BindableRoleConfig[]>("/role-configs/bindable"),
   createCredential: (c: {
     name: string;
     kind?: string;
@@ -1396,9 +1451,25 @@ export const api = {
   setCredentialStatus: (id: string, status: "active" | "disabled" | "rotation_required") =>
     send<ProviderCredential>("POST", `/credentials/${id}/status`, { status }),
   testCredential: (id: string) =>
-    send<{ ok: boolean; detail: string }>("POST", `/credentials/${id}/test`),
+    send<{ ok: boolean; detail: string; category?: string; fetched_at?: string }>("POST", `/credentials/${id}/test`),
   credentialModels: (id: string) =>
     send<CredentialModels>("POST", `/credentials/${id}/models`),
+  credentialCompatibility: (id: string, agent_cli: string, model?: string | null) => {
+    const query = new URLSearchParams({ agent_cli });
+    if (model) query.set("model", model);
+    return get<{
+      credential_id: string;
+      provider: string;
+      provider_valid: boolean;
+      agent_cli: string;
+      model: string | null;
+      allowed_model_ids: string[];
+      compatible: boolean;
+      error: string | null;
+    }>(`/credentials/${id}/compatibility?${query.toString()}`);
+  },
+  bindCredentialsBatch: (input: CredentialBatchBindingInput) =>
+    send<CredentialBatchBindingResult>("POST", "/credentials/batch-bind", input),
   health: () => get<{ ok: boolean; ts: number }>("/health"),
   /** API schema 文档（OpenAPI 3 JSON；调度器豁免鉴权） */
   openApi: () => get<Record<string, unknown>>("/openapi.json"),

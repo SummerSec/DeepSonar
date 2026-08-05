@@ -400,6 +400,7 @@ const OPS: Op[] = [
 
   // role-configs
   { method: "get", path: "/role-configs/global", summary: "全局 RoleConfig 清单", scope: "agents:read", tags: ["RoleConfig"] },
+  { method: "get", path: "/role-configs/bindable", summary: "统一 Provider 绑定选择器（全局/项目 RoleConfig 元数据）", scope: "agents:read", tags: ["RoleConfig", "Credentials"] },
   {
     method: "put",
     path: "/role-configs/global/{roleId}",
@@ -628,6 +629,7 @@ const OPS: Op[] = [
 
   // credentials
   { method: "get", path: "/credentials", summary: "凭据列表（无密文）", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials/providers", summary: "Server-owned Provider/account catalog", scope: "agents:read", tags: ["Credentials"] },
   { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录与绑定影响；无密文）", scope: "agents:read", tags: ["Credentials"] },
   { method: "get", path: "/credentials/{id}/impact", summary: "凭据只读影响投影（RoleConfig / pending / active / historical Job）", scope: "agents:read", tags: ["Credentials"] },
   {
@@ -709,6 +711,29 @@ const OPS: Op[] = [
     query: {
       agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex"] },
       model: { type: "string", minLength: 1, maxLength: 200 },
+    },
+  },
+  {
+    method: "post",
+    path: "/credentials/batch-bind",
+    summary: "Atomically bind or migrate one account across multiple RoleConfigs",
+    description: "Validates provider/CLI/model compatibility under the dispatcher lock. Running/frozen Jobs are never changed. effect=new_jobs_only leaves pending snapshots frozen; effect=refresh_pending updates only pending snapshots.",
+    scope: "agents:write",
+    tags: ["Credentials", "RoleConfig"],
+    body: { $ref: "#/components/schemas/CredentialBatchBindingRequest" },
+    responses: {
+      "200": {
+        description: "Applied atomically",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingImpact" } } },
+      },
+      "400": {
+        description: "Invalid provider or request; no binding mutation is applied",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
+      },
+      "409": {
+        description: "Credential health/catalog/model gate failed; no binding mutation is applied",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
+      },
     },
   },
 
@@ -894,6 +919,74 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             detail: { type: "string", nullable: true, maxLength: 300 },
             model_catalog: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
             model_catalog_fetched_at: { type: "string", format: "date-time", nullable: true },
+          },
+        },
+        ProviderAccountCatalogItem: {
+          type: "object",
+          required: ["provider", "label", "kind", "auth_methods", "compatible_agent_cli", "supports_base_url"],
+          properties: {
+            provider: { type: "string", maxLength: 50 },
+            label: { type: "string" },
+            kind: { type: "string", enum: ["llm_provider", "plane", "git", "oci_registry"] },
+            auth_methods: { type: "array", items: { type: "string", enum: ["api_key", "oauth", "cli_login"] } },
+            compatible_agent_cli: { type: "array", items: { type: "string" } },
+            supports_base_url: { type: "boolean" },
+          },
+        },
+        CredentialBatchBindingRequest: {
+          type: "object",
+          required: ["credential_id", "role_config_ids"],
+          properties: {
+            credential_id: { type: "string", format: "uuid" },
+            role_config_ids: { type: "array", minItems: 1, maxItems: 100, uniqueItems: true, items: { type: "string", format: "uuid" } },
+            mode: { type: "string", enum: ["bind", "migrate"], default: "bind" },
+            source_credential_id: { type: "string", format: "uuid" },
+            model: { type: "string", nullable: true, maxLength: 200 },
+            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"], default: "new_jobs_only" },
+          },
+        },
+        CredentialBatchBindingImpact: {
+          type: "object",
+          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "role_configs"],
+          properties: {
+            mode: { type: "string", enum: ["bind", "migrate"] },
+            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"] },
+            credential_id: { type: "string", format: "uuid" },
+            source_credential_id: { type: "string", format: "uuid", nullable: true },
+            role_config_count: { type: "integer", minimum: 0 },
+            pending_job_count: { type: "integer", minimum: 0 },
+            refreshed_pending_job_count: { type: "integer", minimum: 0 },
+            active_frozen_job_count: { type: "integer", minimum: 0 },
+            terminal_historical_job_count: { type: "integer", minimum: 0 },
+            role_configs: { type: "array", maxItems: 100, items: { type: "object", additionalProperties: true } },
+          },
+        },
+        CredentialBatchBindingError: {
+          type: "object",
+          required: ["error_code", "error"],
+          properties: {
+            error_code: {
+              type: "string",
+              enum: [
+                "CREDENTIAL_NOT_ACTIVE",
+                "CREDENTIAL_PROVIDER_INVALID",
+                "CREDENTIAL_HEALTH_REQUIRED",
+                "CREDENTIAL_MODEL_CATALOG_REQUIRED",
+                "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED",
+                "CREDENTIAL_MODEL_REQUIRED",
+                "CREDENTIAL_MODEL_NOT_CURRENT",
+              ],
+            },
+            error: { type: "string", minLength: 1, maxLength: 300 },
+            repair: {
+              type: "object",
+              required: ["action", "credential_id"],
+              properties: {
+                action: { type: "string", enum: ["activate_credential", "repair_provider", "test_connection", "discover_models", "choose_model"] },
+                credential_id: { type: "string", format: "uuid" },
+                role_config_id: { type: "string", format: "uuid" },
+              },
+            },
           },
         },
         ReasoningEffort: { type: "string", enum: [...ReasoningEnum], nullable: true },

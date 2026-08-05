@@ -330,6 +330,27 @@ export function allowedModelIds(metadata: unknown): string[] {
   return [...new Set(raw.filter((v): v is string => typeof v === "string").map((v) => v.trim()).filter(Boolean))];
 }
 
+/**
+ * Scheduler-owned model catalog capability. LLM providers currently expose a
+ * governed catalog endpoint, so a non-empty successful catalog is required
+ * before binding. Non-LLM credentials are explicitly out of that gate; this
+ * helper keeps that exception visible instead of silently treating failures as
+ * an empty/unknown catalog.
+ */
+export type CredentialModelCatalogCapability = "required" | "unsupported";
+
+const MODEL_CATALOG_CAPABILITY: Record<string, CredentialModelCatalogCapability> = {
+  anthropic: "required",
+  kimi: "required",
+  openai: "required",
+  openrouter: "required",
+};
+
+export function credentialModelCatalogCapability(kind: string, provider: string): CredentialModelCatalogCapability {
+  if (kind !== "llm_provider") return "unsupported";
+  return MODEL_CATALOG_CAPABILITY[provider] ?? "unsupported";
+}
+
 export interface CredentialConcurrencyPolicy {
   /** Credential 下所有模型共享的总并发；null 表示不单独限制。 */
   maxConcurrent: number | null;

@@ -1,6 +1,7 @@
 import { ArrowsClockwise, Check, Key, MagnifyingGlass, PencilSimple, Plugs, Prohibit } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type CredentialModels, type Project, type ProviderCredential } from "./api";
+import { ProviderAccountFlow } from "./ProviderAccountFlow";
 
 /**
  * Provider Credential 管理（§6.2/§6.4）：LLM/Plane/Git 上游密钥的加密登记。
@@ -36,12 +37,6 @@ export function CredentialsPanel() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
-  const [name, setName] = useState("");
-  const [provider, setProvider] = useState("anthropic");
-  const [secret, setSecret] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [registryUsername, setRegistryUsername] = useState("");
-  const [projectId, setProjectId] = useState("");
   const [rotatingId, setRotatingId] = useState<string | null>(null);
   const [rotateSecret, setRotateSecret] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -83,36 +78,6 @@ export function CredentialsPanel() {
     api.projects().then(setProjects).catch(() => {});
   };
   useEffect(load, []);
-
-  const create = async () => {
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      await api.createCredential({
-        name: name.trim(),
-        kind: provider === "docker-registry" ? "oci_registry" : provider === "plane" ? "plane" : provider === "git" ? "git" : "llm_provider",
-        provider: provider === "docker-registry" ? "docker" : provider,
-        secret: secret.trim(),
-        project_id: projectId || null,
-        metadata: provider === "docker-registry"
-          ? { registry: baseUrl.trim().replace(/^https?:\/\//, "").replace(/\/+$/, ""), username: registryUsername.trim() }
-          : baseUrl.trim() ? { base_url: baseUrl.trim().replace(/\/+$/, "") } : {},
-      });
-      setName("");
-      setSecret("");
-      setBaseUrl("");
-      setRegistryUsername("");
-      setNotice(provider === "docker-registry"
-        ? "OCI Registry 凭据已加密登记；密钥不可回显，只能轮换。"
-        : "已加密登记。请在凭据编辑区获取模型或手动填写模型 ID，并配置 Credential / Model 并发。");
-      load();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const rotate = async (id: string) => {
     setBusy(true);
@@ -288,72 +253,14 @@ export function CredentialsPanel() {
     }
   };
 
-  const hint = PROVIDERS.find((p) => p.value === provider)?.baseUrlHint;
-
   return (
     <div className="flex flex-col gap-4 p-4 text-[13px]">
+      <ProviderAccountFlow credentials={creds} projects={projects} onChanged={load} />
       <div className="text-[13px] leading-relaxed text-zinc-500">
         上游服务密钥（LLM / Plane / Git）经 AES-256-GCM 加密落库，主密钥由调度器的{" "}
         <code className="font-mono text-zinc-400">DEEPSONAR_MASTER_KEY_FILE</code> 持有。
         密钥提交后不可回看、只能轮换；名称与{" "}
         <code className="font-mono text-zinc-400">base_url</code> 等非敏感元数据可随时修改。
-      </div>
-
-      {/* 登记 */}
-      <div className="rounded-[10px] border border-ink-700 bg-ink-850/60 p-3">
-        <div className="mb-2 flex items-center gap-1.5 font-mono text-[12px] uppercase tracking-[0.12em] text-zinc-500">
-          <Key size={13} /> 登记 Credential
-        </div>
-        <div className="mb-2 flex gap-2">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="名称，如 kimi-main"
-            className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 text-zinc-200 outline-none focus:border-acc-500"
-          />
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-zinc-200 outline-none"
-          >
-            {PROVIDERS.map((p) => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-        </div>
-        <input
-          value={secret}
-          onChange={(e) => setSecret(e.target.value)}
-          type="password"
-          placeholder="密钥原文（提交后立即加密，不可再查看）"
-          className="mb-2 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
-        />
-        <div className="mb-2 flex gap-2">
-          <input
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={provider === "docker-registry" ? `registry：${hint}` : hint ? `base_url：${hint}` : "base_url（可选，非密钥元数据）"}
-            className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none"
-          />
-          <select
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className="w-36 rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-zinc-200 outline-none"
-          >
-            <option value="">全局</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        </div>
-        {provider === "docker-registry" && <input value={registryUsername} onChange={(event) => setRegistryUsername(event.target.value)} placeholder="Registry 用户名（非敏感元数据）" className="mb-2 w-full rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500" />}
-        <button
-          onClick={create}
-          disabled={busy || !name.trim() || !secret.trim() || (provider === "docker-registry" && (!baseUrl.trim() || !registryUsername.trim()))}
-          className="rounded-md bg-acc-500 px-3 py-1.5 font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:opacity-40"
-        >
-          加密登记
-        </button>
       </div>
 
       {notice && <div className="break-all text-[12px] text-run-400">{notice}</div>}

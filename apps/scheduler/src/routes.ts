@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import {
   PlatformToolName,
   allowedPlatformTools,
+  CredentialBatchBindingRequest,
   parseModuleSelector,
   requiredPlatformTools,
 } from "@deepsonar/shared-types";
@@ -27,6 +28,7 @@ import { renderMetrics } from "./metrics.js";
 import { config } from "./config.js";
 import {
   allowedModelIds,
+  credentialModelCatalogCapability,
   normalizeModelCatalog,
   encryptSecret,
   fingerprintOf,
@@ -52,6 +54,7 @@ import {
   CONFIG_FILE_MAX_TOTAL,
   DISPATCH_CLAIM_ADVISORY_KEY,
   PLATFORM_DEFAULT_AGENT_CLI,
+  PLATFORM_DEFAULT_AGENT_MODEL,
   createJob,
   drainNonGateVerifies,
   ensureCanvasForTask,
@@ -2437,6 +2440,40 @@ export function registerRoutes(app: FastifyInstance) {
     return out;
   });
 
+  /** Unified binding picker for the Provider account flow. It intentionally
+   * returns only RoleConfig identity/health metadata, never secret material. */
+  app.get("/role-configs/bindable", async (req) => {
+    const projectScope = req.actor?.projectId ?? null;
+    const rows = await sql`
+      SELECT rc.id, rc.role_id, r.name AS role_name, r.title AS role_title,
+             rc.project_id, p.name AS project_name, rc.agent_cli, rc.model, rc.version,
+             c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
+             c.provider AS credential_provider, c.status AS credential_status
+      FROM role_configs rc
+      JOIN agent_roles r ON r.id = rc.role_id
+      LEFT JOIN projects p ON p.id = rc.project_id
+      LEFT JOIN LATERAL (
+        SELECT c.id, c.name, c.kind, c.provider, c.status
+        FROM role_credentials rcb
+        JOIN credentials c ON c.id = rcb.credential_id
+        WHERE rcb.role_config_id = rc.id AND rcb.purpose = 'llm'
+        ORDER BY c.created_at DESC
+        LIMIT 1
+      ) c ON true
+      WHERE (${projectScope}::uuid IS NULL OR rc.project_id = ${projectScope})
+      ORDER BY rc.project_id NULLS FIRST, r.name`;
+    return rows.map((row) => ({
+      ...row,
+      scope: row.project_id ? "project" : "global",
+      credential_provider: row.credential_provider
+        ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider
+        : null,
+      credential_provider_valid: row.credential_provider
+        ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider_valid
+        : null,
+    }));
+  });
+
   app.put("/role-configs/global/:roleId", async (req, reply) => {
     const { roleId } = req.params as { roleId: string };
     const body = RoleConfigPutBody.parse(req.body);
@@ -4078,6 +4115,24 @@ export function registerRoutes(app: FastifyInstance) {
     return payload;
   }
 
+  /**
+   * Provider choices are a scheduler-owned catalog.  The web console may
+   * render these choices, but it never decides the secret environment key or
+   * accepts an arbitrary provider string from a task/Agent.
+   */
+  app.get("/credentials/providers", async () => {
+    const catalog = [
+      { provider: "anthropic", label: "Anthropic", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
+      { provider: "kimi", label: "Kimi for Coding", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
+      { provider: "openai", label: "OpenAI compatible", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: true },
+      { provider: "openrouter", label: "OpenRouter", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: false },
+      { provider: "plane", label: "Plane", kind: "plane", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
+      { provider: "git", label: "Git repository", kind: "git", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
+      { provider: "docker", label: "OCI Registry", kind: "oci_registry", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
+    ] as const;
+    return catalog;
+  });
+
   async function credentialImpact(id: string): Promise<Record<string, unknown>> {
     const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, terminalJobs] = await Promise.all([
       sql<{ count: number }[]>`
@@ -4207,6 +4262,239 @@ export function registerRoutes(app: FastifyInstance) {
     const [row] = await sql`SELECT id FROM credentials WHERE id = ${id}`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
     return credentialImpact(id);
+  });
+
+  /**
+   * Bind or migrate one Provider account to many global/project RoleConfigs.
+   * The complete operation is serialized with dispatcher claim and committed
+   * as one transaction. Running/frozen Jobs are never mutated; callers may
+   * explicitly choose to refresh pending snapshots only.
+   */
+  app.post("/credentials/batch-bind", async (req, reply) => {
+    const parsed = CredentialBatchBindingRequest.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid batch credential binding request" });
+    const body = parsed.data;
+    if (body.mode === "bind" && body.source_credential_id) {
+      return reply.code(400).send({ error: "source_credential_id is only valid for migration" });
+    }
+    const roleConfigIds = [...new Set(body.role_config_ids)].sort();
+    const credentialIds = [body.credential_id, ...(body.source_credential_id ? [body.source_credential_id] : [])].sort();
+    const sourceCredentialId = body.mode === "migrate" ? body.source_credential_id ?? null : null;
+
+    type BindingGateErrorCode =
+      | "CREDENTIAL_NOT_ACTIVE"
+      | "CREDENTIAL_PROVIDER_INVALID"
+      | "CREDENTIAL_HEALTH_REQUIRED"
+      | "CREDENTIAL_MODEL_CATALOG_REQUIRED"
+      | "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED"
+      | "CREDENTIAL_MODEL_REQUIRED"
+      | "CREDENTIAL_MODEL_NOT_CURRENT";
+    type BatchFailure = {
+      ok: false;
+      statusCode: number;
+      body: { error_code?: BindingGateErrorCode; error: string; repair?: { action: string; credential_id: string; role_config_id?: string } };
+    };
+    const gateFailure = (
+      statusCode: number,
+      error_code: BindingGateErrorCode,
+      error: string,
+      credentialId: string,
+      action: string,
+      roleConfigId?: string,
+    ): BatchFailure => ({
+      ok: false,
+      statusCode,
+      body: { error_code, error, repair: { action, credential_id: credentialId, ...(roleConfigId ? { role_config_id: roleConfigId } : {}) } },
+    });
+    type BatchSuccess = {
+      ok: true;
+      impact: Record<string, unknown>;
+      audit: { projectIds: string[]; targetName: string; sourceId: string | null };
+    };
+    const result = await sql.begin(async (txRaw): Promise<BatchFailure | BatchSuccess> => {
+      const tx = txRaw as unknown as typeof sql;
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+
+      const credentials = await tx`
+        SELECT id, name, kind, provider, project_id, status, public_metadata_json,
+               health_status, last_tested_at, model_catalog_json, model_catalog_fetched_at
+        FROM credentials
+        WHERE id = ANY(${credentialIds}::uuid[])
+        ORDER BY id
+        FOR UPDATE`;
+      const target = credentials.find((credential) => String(credential.id) === body.credential_id);
+      if (!target) return { ok: false, statusCode: 404, body: { error: "target credential not found" } };
+      if (String(target.kind) !== "llm_provider") {
+        return { ok: false, statusCode: 400, body: { error: "batch binding requires an LLM Provider credential" } };
+      }
+      const targetProjection = projectCredentialProvider(target.kind, target.provider);
+      if (!targetProjection.provider_valid || !isProviderKnown(String(target.provider))) {
+        return gateFailure(400, "CREDENTIAL_PROVIDER_INVALID", UNKNOWN_PROVIDER_ERROR, body.credential_id, "repair_provider");
+      }
+      if (String(target.status) !== "active") {
+        return gateFailure(409, "CREDENTIAL_NOT_ACTIVE", "Target credential must be active before binding. Activate it, then test the connection again.", body.credential_id, "activate_credential");
+      }
+      if (String(target.health_status) !== "ok" || !target.last_tested_at) {
+        return gateFailure(409, "CREDENTIAL_HEALTH_REQUIRED", "A successful latest connection test is required before binding. Test the connection and retry.", body.credential_id, "test_connection");
+      }
+      const modelCatalogCapability = credentialModelCatalogCapability(String(target.kind), String(target.provider));
+      const modelCatalog = normalizeModelCatalog(target.model_catalog_json);
+      if (modelCatalogCapability === "unsupported") {
+        return gateFailure(409, "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED", "This Provider has no server-owned model catalog capability; binding is not permitted until the Scheduler adds an explicit capability.", body.credential_id, "discover_models");
+      }
+      if (!target.model_catalog_fetched_at || modelCatalog.length === 0) {
+        return gateFailure(409, "CREDENTIAL_MODEL_CATALOG_REQUIRED", "A successful non-empty model catalog is required before binding. Refresh the model catalog and retry.", body.credential_id, "discover_models");
+      }
+      const source = body.source_credential_id
+        ? credentials.find((credential) => String(credential.id) === body.source_credential_id)
+        : undefined;
+      if (body.mode === "migrate" && !source) {
+        return { ok: false, statusCode: 404, body: { error: "source credential not found" } };
+      }
+
+      const configs = await tx`
+        SELECT rc.id, rc.role_id, rc.project_id, rc.agent_cli, rc.model, rc.version,
+               ar.name AS role_name
+        FROM role_configs rc
+        JOIN agent_roles ar ON ar.id = rc.role_id
+        WHERE rc.id = ANY(${roleConfigIds}::uuid[])
+        ORDER BY rc.id
+        FOR UPDATE OF rc`;
+      if (configs.length !== roleConfigIds.length) {
+        return { ok: false, statusCode: 404, body: { error: "one or more RoleConfigs were not found" } };
+      }
+      if (req.actor?.projectId && configs.some((config) => String(config.project_id ?? "") !== req.actor?.projectId)) {
+        return { ok: false, statusCode: 403, body: { error: `token limited to project ${req.actor.projectId}` } };
+      }
+      if (String(target.project_id ?? "") && configs.some((config) => String(config.project_id ?? "") !== String(target.project_id))) {
+        return { ok: false, statusCode: 400, body: { error: "project credential can only bind RoleConfigs in the same project" } };
+      }
+
+      const existingBindings = await tx`
+        SELECT rc.role_config_id, rc.credential_id, rc.purpose
+        FROM role_credentials rc
+        WHERE rc.role_config_id = ANY(${roleConfigIds}::uuid[])
+        ORDER BY rc.role_config_id, rc.purpose, rc.credential_id`;
+      const llmByConfig = new Map<string, string>();
+      for (const binding of existingBindings) {
+        if (binding.purpose === "llm") llmByConfig.set(String(binding.role_config_id), String(binding.credential_id));
+      }
+
+      const normalizedModel = body.model === undefined ? undefined : body.model?.trim() || null;
+      for (const configRow of configs) {
+        const configId = String(configRow.id);
+        const currentCredentialId = llmByConfig.get(configId) ?? null;
+        if (body.mode === "migrate" && currentCredentialId !== body.source_credential_id) {
+          return { ok: false, statusCode: 409, body: { error: `RoleConfig ${configId} is not bound to the source credential` } };
+        }
+        const model = normalizedModel === undefined
+          ? (typeof configRow.model === "string" && configRow.model.trim() ? configRow.model.trim() : null)
+          : normalizedModel;
+        const compatibilityError = validateCredentialCompatibility(String(configRow.agent_cli), String(target.provider));
+        if (compatibilityError) {
+          return { ok: false, statusCode: 409, body: { error: `RoleConfig ${configId}: ${compatibilityError}` } };
+        }
+        const allowed = allowedModelIds(target.public_metadata_json);
+        const modelForGate = model ?? PLATFORM_DEFAULT_AGENT_MODEL;
+        if (!modelForGate) {
+          return gateFailure(409, "CREDENTIAL_MODEL_REQUIRED", `RoleConfig ${configId} must choose a model before binding`, body.credential_id, "choose_model", configId);
+        }
+        if (!modelCatalog.includes(modelForGate) || (allowed.length > 0 && !allowed.includes(modelForGate))) {
+          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId} model ${modelForGate} is not in the current Provider catalog and allowlist`, body.credential_id, "choose_model", configId);
+        }
+      }
+
+      const refreshedPending: string[] = [];
+      const projectIds = [...new Set(configs.map((config) => String(config.project_id ?? "")).filter(Boolean))];
+      for (const configRow of configs) {
+        const configId = String(configRow.id);
+        const model = normalizedModel === undefined
+          ? (typeof configRow.model === "string" && configRow.model.trim() ? configRow.model.trim() : null)
+          : normalizedModel;
+        const nextVersion = Number(configRow.version ?? 0) + 1;
+        await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId} AND purpose = 'llm'`;
+        await tx`
+          INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: body.credential_id, purpose: "llm" })}
+          ON CONFLICT DO NOTHING`;
+        await tx`
+          UPDATE role_configs SET
+            model = ${model}, version = ${nextVersion}, updated_at = now()
+          WHERE id = ${configId}`;
+        if (body.effect === "refresh_pending") {
+          const pending = await tx`
+            SELECT id FROM jobs
+            WHERE status = 'pending'
+              AND agent_snapshot_json->>'role_config_id' = ${configId}
+              AND (${sourceCredentialId}::uuid IS NULL
+                   OR agent_snapshot_json->>'credential_id' = ${sourceCredentialId})
+            FOR UPDATE`;
+          if (pending.length > 0) {
+            await tx`
+              UPDATE jobs SET agent_snapshot_json =
+                jsonb_set(
+                  jsonb_set(
+                    jsonb_set(
+                      jsonb_set(
+                        jsonb_set(agent_snapshot_json, '{credential_id}', to_jsonb(${body.credential_id}::text), true),
+                        '{credential_name}', to_jsonb(${String(target.name)}::text), true),
+                      '{credential_provider}', to_jsonb(${String(target.provider)}::text), true),
+                    '{model}', to_jsonb(${model ?? PLATFORM_DEFAULT_AGENT_MODEL}::text), true),
+                  '{role_config_version}', to_jsonb(${nextVersion}::int), true)
+              WHERE id = ANY(${pending.map((job) => job.id)}::uuid[])
+                AND status = 'pending'`;
+            refreshedPending.push(...pending.map((job) => String(job.id)));
+          }
+        }
+      }
+
+      const [stats] = await tx`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_job_count,
+          COUNT(*) FILTER (WHERE status IN ('claimed','provisioning','running','waiting_human'))::int AS active_frozen_job_count,
+          COUNT(*) FILTER (WHERE status NOT IN ('pending','claimed','provisioning','running','waiting_human'))::int AS terminal_historical_job_count
+        FROM jobs
+        WHERE agent_snapshot_json->>'role_config_id' = ANY(${roleConfigIds}::text[])`;
+      return {
+        ok: true,
+        impact: {
+          mode: body.mode,
+          effect: body.effect,
+          credential_id: body.credential_id,
+          source_credential_id: body.source_credential_id ?? null,
+          role_config_count: configs.length,
+          pending_job_count: Number(stats?.pending_job_count ?? 0),
+          refreshed_pending_job_count: refreshedPending.length,
+          active_frozen_job_count: Number(stats?.active_frozen_job_count ?? 0),
+          terminal_historical_job_count: Number(stats?.terminal_historical_job_count ?? 0),
+          role_configs: configs.map((config) => ({
+            role_config_id: config.id,
+            role_name: config.role_name,
+            scope: config.project_id ? "project" : "global",
+            project_id: config.project_id ?? null,
+            model: normalizedModel === undefined ? config.model ?? null : normalizedModel,
+          })),
+        },
+        audit: { projectIds, targetName: String(target.name), sourceId: body.source_credential_id ?? null },
+      };
+    });
+
+    if (!result.ok) return reply.code(result.statusCode).send(result.body);
+    await audit(req, {
+      action: result.audit.sourceId ? "credential.batch_migrate" : "credential.batch_bind",
+      resourceType: "credential",
+      resourceId: body.credential_id,
+      projectId: result.audit.projectIds.length === 1 ? result.audit.projectIds[0] : null,
+      after: {
+        mode: body.mode,
+        effect: body.effect,
+        role_config_count: result.impact.role_config_count,
+        pending_job_count: result.impact.pending_job_count,
+        refreshed_pending_job_count: result.impact.refreshed_pending_job_count,
+        active_frozen_job_count: result.impact.active_frozen_job_count,
+        terminal_historical_job_count: result.impact.terminal_historical_job_count,
+      },
+    });
+    return result.impact;
   });
 
   /** Persist only the server-owned public metadata projection. */
