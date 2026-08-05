@@ -166,13 +166,25 @@ loop:
 5. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
 6. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。全部 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 自动派生唯一 Report
 
+### 4.4 Scheduler bounded contexts（Issue #37，渐进迁移）
+
+Scheduler 的领域代码按 application/ports seam 渐进拆分，PostgreSQL 仍是唯一执行状态权威；终态/恢复调用方把已开启的事务 client 传入 application，application 不自行开启嵌套事务，也不改变外层锁顺序。人工评论入口由该 bounded context 自己拥有一个明确的外层事务。当前已落地的边界为：
+
+- `domains/job-lifecycle`：Job 状态迁移、claim、恢复、取消与重试的 CAS 写入；
+- `domains/event-ingestion`：event envelope 校验、幂等、`job_seq` 与固定窗口限流；
+- `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger、idle/terminal 推进、人工评论唤醒、`maxHubRounds` 收口。
+
+Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verification round；同一事务内才会写入 Hub Job、节点和 `next` 边。失败 Hub 会清除等待证据的 edge marker 并停在人工恢复边界，不递归生成相同快照的 Hub。`maxHubRounds` 只统计 `hub_reason.status = succeeded`，耗尽时复用 Verify 完成门；未通过完成门则设置 `auto_stopped`，不派发空图 Report。
+
+`core.ts` 暂时保留兼容 facade，供既有 dispatcher/reaper/reconcile/routes 调用；Hub 业务实现不再由 facade 承载。Finding verification、Report convergence、runtime snapshot 与 routes registrar 仍是 #37 的后续切片。
+
 **护栏**（同时是防注入措施，见 §9）：
 
 - 每 Job 最大 followup 数 `MAX_FOLLOWUPS_PER_JOB`（默认 60）
 - 派生深度上限 `MAX_FOLLOWUP_DEPTH`（默认 12；verify 的结果仍由规则引擎约束，不由 Agent 自行派生）
 - 超出验证轮次、派生深度或 Hub 轮次护栏 → Finding 收口为 `needs_human` 并记录 human blocker；随后仍可进入报告的待人工章节
 
-### 4.4 人工介入与恢复
+### 4.5 人工介入与恢复
 
 - `request_human` → Job 转 `waiting_human`，Plane 标 Blocked，画布出 human 节点
 - 人处理完后调用 `POST /jobs/{id}/resume` → Job 重新入队（`pending`），恢复上下文从 events/findings 表重建

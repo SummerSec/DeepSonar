@@ -27,6 +27,15 @@ import {
   type EventIngestionResult,
 } from "./domains/event-ingestion/index.js";
 import {
+  createHubOrchestrationApplication,
+  shouldWakeEvidenceHub as hubShouldWakeEvidenceHub,
+  type HubHumanCommentInput,
+  type HubHumanCommentResult,
+  type HubJobRecord,
+  type HubTriggerOptions,
+  type HubCanvasJobTerminalStatus,
+} from "./domains/hub-orchestration/index.js";
+import {
   assertHubDecisionCanvasReferences,
   parseHubDecisionPayload,
   type HubDecision,
@@ -287,10 +296,8 @@ export function priorityMatchesJob(input: SchedulingPriorityInput, priority: num
   return Number.isInteger(priority) && priority === fixedPriorityForJob(input);
 }
 
-/** Evidence-wait Hub wakeups are edge-triggered by the evidence snapshot. */
-export function shouldWakeEvidenceHub(lastSignature: string | null | undefined, currentSignature: string): boolean {
-  return currentSignature.trim().length > 0 && lastSignature !== currentSignature;
-}
+/** Compatibility facade; the Hub bounded context owns this edge-trigger policy. */
+export const shouldWakeEvidenceHub = hubShouldWakeEvidenceHub;
 
 const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
 
@@ -906,6 +913,40 @@ async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId
       edge_type: edgeType,
     })}`;
 }
+
+/**
+ * Hub orchestration application.  Core remains the composition root for this
+ * slice: the bounded context owns eligibility/trigger/round-budget SQL while
+ * these adapters preserve the existing Scheduler lock and side-effect seams.
+ */
+const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
+  rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
+  lockCanvasForConvergence,
+  readCanvasConvergence: async (tx, canvasId) => readCanvasConvergence(tx as unknown as typeof sql, canvasId),
+  patchCanvasConvergence: async (tx, canvasId, patch) =>
+    patchCanvasConvergence(tx as unknown as typeof sql, canvasId, patch),
+  careSeverities,
+  resolveAgentSnapshotForJob: async (tx, projectId, type) =>
+    resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, type),
+  fixedPriorityForJob: (input) => fixedPriorityForJob(input),
+  insertEdgeIfAbsent,
+  settleCanvasFindingsAtGuardrail: async (tx, canvasId, reason) => {
+    const { settleCanvasFindingsAtGuardrail } = await import("./verify.js");
+    return settleCanvasFindingsAtGuardrail(tx, canvasId, reason);
+  },
+  evaluateAnalysisCompleteGate: async (tx, canvasId, options) => {
+    const { evaluateAnalysisCompleteGate } = await import("./verify.js");
+    return evaluateAnalysisCompleteGate(tx, canvasId, options);
+  },
+  hasSucceededRoleWork: async (tx, canvasId) => {
+    const { hasSucceededRoleWork } = await import("./verify.js");
+    return hasSucceededRoleWork(tx, canvasId);
+  },
+  maybeDispatchReport: async (tx, canvasId) => {
+    const { maybeDispatchReport } = await import("./report.js");
+    return maybeDispatchReport(tx, canvasId);
+  },
+});
 
 type CanvasEdgeInput = {
   canvasId: string;
@@ -1775,578 +1816,28 @@ export async function recoverVerifyJobTerminal(
   });
 }
 
-export type CanvasJobTerminalStatus =
-  | "succeeded"
-  | "failed"
-  | "timeout"
-  | "orphan"
-  | "cancelled";
+/** Compatibility facade for the extracted Hub orchestration application. */
+export type CanvasJobTerminalStatus = HubCanvasJobTerminalStatus;
 
-/**
- * 任意非 Report Job 进入终态后的统一画布推进。
- *
- * Hub 的 complete 提案与 mark_job_done 是两条独立事件：如果两者之间执行失败、
- * Reaper 收口或调度器重启，Root 已是 analysis_complete，但不会经过 succeeded finalize。
- * 因此所有终态入口都必须先尝试 Report，再让可恢复的终态回落到普通
- * canvas_idle Hub 唤醒。
- * Hub 自身失败是运维恢复边界：不要把 provisioning/执行失败转换成新的
- * canvas_idle Hub，否则同一坏快照会在调度器每次收口时递归制造失败 Job。
- */
 export async function advanceCanvasAfterTerminalJob(
   tx: Tx,
-  job: Record<string, unknown>,
+  job: HubJobRecord,
   terminalStatus: CanvasJobTerminalStatus,
-  opts: {
-    sourceNodeIds?: string[];
-    trigger?: Record<string, unknown>;
-  } = {},
+  opts: { sourceNodeIds?: string[]; trigger?: Record<string, unknown> } = {},
 ): Promise<"report" | "hub" | "noop"> {
-  const canvasId = job.canvas_id as string | null;
-  if (!canvasId || job.type === "report") return "noop";
-
-  if (!(await lockCanvasForConvergence(tx, canvasId))) return "noop";
-
-  const [root] = await tx`
-    SELECT status FROM canvas_nodes
-    WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
-  if (root?.status === "analysis_complete" || root?.status === "reporting") {
-    const { maybeDispatchReport } = await import("./report.js");
-    await maybeDispatchReport(tx, canvasId);
-    return "report";
-  }
-
-  // A failed Hub must not leave the evidence-wait edge-trigger marker armed;
-  // the next idle wake may retry the decision without changing evidence.
-  if (job.type === "hub_reason" && terminalStatus !== "succeeded") {
-    await tx`
-      UPDATE finding_verification_rounds r
-      SET requirements_json = requirements_json - 'hub_evidence_signature'
-      FROM findings f
-      JOIN jobs origin ON origin.id = f.job_id
-      WHERE r.finding_id = f.id
-        AND origin.canvas_id = ${canvasId}
-        AND r.status = 'pending'
-        AND r.requirements_json->>'eligibility' = 'waiting_evidence'`;
-    // A failed Hub leaves the canvas idle for explicit operator recovery.  It
-    // must not immediately enqueue another canvas_idle Hub with the same
-    // frozen runtime snapshot; dispatcher/reaper/reconcile all converge here.
-    return "noop";
-  }
-
-  await maybeTriggerHub(tx, job, {
-    force: false,
-    sourceNodeIds: opts.sourceNodeIds ?? [],
-    trigger: opts.trigger ?? {
-      kind: "canvas_idle",
-      after_job_id: job.id,
-      after_job_type: job.type,
-      after_job_status: terminalStatus,
-    },
-    idleWake: true,
-  });
-  return "hub";
+  return hubOrchestrationApplication.advanceCanvasAfterTerminalJob(tx, job, terminalStatus, opts);
 }
 
-/**
- * 是否存在阻塞 Hub 的活跃 verify。
- * severities 非空时只统计这些 severity；空数组 = 任意 severity 的活跃 verify 都阻塞。
- */
-async function hasActiveBlockingVerify(
-  tx: Tx,
-  canvasId: string,
-  severities: string[],
-): Promise<boolean> {
-  if (severities.length === 0) {
-    const rows = await tx`
-      SELECT 1 FROM jobs
-      WHERE canvas_id = ${canvasId} AND type = 'verify_finding'
-        AND status IN ('pending','claimed','provisioning','running')
-      LIMIT 1`;
-    return rows.length > 0;
-  }
-  const rows = await tx`
-    SELECT 1 FROM jobs j
-    JOIN findings f ON f.id = j.finding_id
-    WHERE j.canvas_id = ${canvasId} AND j.type = 'verify_finding'
-      AND j.status IN ('pending','claimed','provisioning','running')
-      AND lower(f.severity) = ANY(${severities})
-    LIMIT 1`;
-  return rows.length > 0;
-}
-
-async function hasActiveRoleJobs(tx: Tx, canvasId: string): Promise<boolean> {
-  const rows = await tx`
-    SELECT 1 FROM jobs
-    WHERE canvas_id = ${canvasId}
-      AND type NOT IN ('hub_reason', 'verify_finding', 'report')
-      AND status IN ('pending','claimed','provisioning','running','waiting_human')
-    LIMIT 1`;
-  return rows.length > 0;
-}
-
-/**
- * Find the oldest Verify round waiting for independent evidence.  This is a
- * graph eligibility record, not a Job status: no verify Job is runnable until
- * the round has both review and test evidence.
- */
-async function waitingEvidenceRound(tx: Tx, canvasId: string): Promise<{
-  id: string;
-  finding_id: string;
-  origin_job_id: string | null;
-  missing: string[];
-  evidence_signature: string;
-  hub_evidence_signature: string | null;
-  node_id: string | null;
-} | null> {
-  const rows = await tx`
-    SELECT r.id, r.finding_id, r.requirements_json, r.evidence_snapshot_json,
-           f.job_id AS origin_job_id, f.node_id
-    FROM finding_verification_rounds r
-    JOIN findings f ON f.id = r.finding_id
-    JOIN jobs origin ON origin.id = f.job_id
-    WHERE origin.canvas_id = ${canvasId}
-      AND r.status = 'pending'
-      AND r.verify_job_id IS NULL
-      AND r.requirements_json->>'eligibility' = 'waiting_evidence'
-    ORDER BY r.created_at ASC, r.id ASC
-    FOR UPDATE OF r`;
-  for (const row of rows) {
-    const req = (row.requirements_json ?? {}) as Record<string, unknown>;
-    const snap = (row.evidence_snapshot_json ?? {}) as Record<string, unknown>;
-    const ids = (key: string) =>
-      Array.isArray(snap[key])
-        ? (snap[key] as Array<Record<string, unknown>>).map((item) => String(item.node_id ?? "")).filter(Boolean).sort()
-        : [];
-    const missing = Array.isArray(req.missing)
-      ? (req.missing as unknown[]).map(String).filter(Boolean).sort()
-      : [];
-    const evidence_signature = JSON.stringify({ review: ids("review"), test: ids("test"), missing });
-    const hub_evidence_signature = (req.hub_evidence_signature as string | null) ?? null;
-    // Skip rounds whose current evidence edge has already been consumed, so
-    // an older stalled finding cannot starve a newer waiting round.
-    if (!shouldWakeEvidenceHub(hub_evidence_signature, evidence_signature)) continue;
-    return {
-      id: row.id as string,
-      finding_id: row.finding_id as string,
-      origin_job_id: (row.origin_job_id as string | null) ?? null,
-      missing,
-      evidence_signature,
-      hub_evidence_signature,
-      node_id: (row.node_id as string | null) ?? null,
-    };
-  }
-  return null;
-}
-
-async function hasWaitingEvidenceRound(tx: Tx, canvasId: string): Promise<boolean> {
-  const rows = await tx`
-    SELECT 1
-    FROM finding_verification_rounds r
-    JOIN findings f ON f.id = r.finding_id
-    JOIN jobs origin ON origin.id = f.job_id
-    WHERE origin.canvas_id = ${canvasId}
-      AND r.status = 'pending'
-      AND r.verify_job_id IS NULL
-      AND r.requirements_json->>'eligibility' = 'waiting_evidence'
-    LIMIT 1`;
-  return rows.length > 0;
-}
-
-/** 画布上是否还有需要运行的工作节点（角色 / verify / hub / report）。 */
-async function hasActiveRunnableJobs(
-  tx: Tx,
-  canvasId: string,
-  excludeJobId?: string | null,
-): Promise<boolean> {
-  if (excludeJobId) {
-    const rows = await tx`
-      SELECT 1 FROM jobs
-      WHERE canvas_id = ${canvasId}
-        AND id <> ${excludeJobId}
-        AND status IN ('pending','claimed','provisioning','running','waiting_human')
-      LIMIT 1`;
-    return rows.length > 0;
-  }
-  const rows = await tx`
-    SELECT 1 FROM jobs
-    WHERE canvas_id = ${canvasId}
-      AND status IN ('pending','claimed','provisioning','running','waiting_human')
-    LIMIT 1`;
-  return rows.length > 0;
-}
-
-/** Root 是否已进入分析完成 / 报告 / 成功终态（不再需要 Hub 自驱）。 */
-async function rootAnalysisFinished(tx: Tx, canvasId: string): Promise<boolean> {
-  const [root] = await tx`
-    SELECT status FROM canvas_nodes
-    WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
-  return ["analysis_complete", "reporting", "succeeded"].includes(String(root?.status ?? ""));
-}
-
-/**
- * 触发 Hub 读图决策。
- *
- * 唤醒条件（满足门禁后）：
- * 1. force / manual：显式回弹或人工
- * 2. idleWake：画布上没有待跑 job 节点时自动唤醒（§画布空闲 → Hub）
- * 3. 普通 graph_progress：角色/verify 推进后、关注级 verify 不阻塞时
- *
- * 不再在「关注级 verify 收敛」时 auto_stopped 停掉 Hub——空闲时应继续决策直到 complete。
- */
 export async function maybeTriggerHub(
   tx: Tx,
-  job: Record<string, unknown> | undefined,
-  options: {
-    force?: boolean;
-    sourceNodeIds?: string[];
-    trigger?: Record<string, unknown>;
-    /** 人工 run-hub-now：忽略 hub_paused / auto_stopped */
-    manual?: boolean;
-    /**
-     * 画布空闲唤醒：无待跑 job 时入队 Hub。
-     * 允许在 hub_reason 终态后调用（避免 hub 空决策后画布卡死）。
-     */
-    idleWake?: boolean;
-  } = {},
-) {
-  if (!job?.canvas_id) return;
-  // 非 idle 路径：hub 自身终态不在这里递归；idle 路径专门处理「无待跑节点」
-  if (job.type === "hub_reason" && !options.idleWake && !options.manual && !options.force) return;
-
-  const canvasId = job.canvas_id as string;
-  const projectId = job.project_id as string | undefined;
-  if (!projectId) return;
-
-  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
-  if (!rules.hubEnabled && !options.force && !options.manual) return;
-
-  // Serialize the Hub eligibility check and INSERT per canvas. Without a
-  // row lock, two concurrent terminal events can both observe "no active
-  // Hub" and enqueue duplicate pending decisions that then block one another
-  // in the dispatcher.
-  if (!(await lockCanvasForConvergence(tx, canvasId))) return;
-
-  // 分析已完成 / 报告中：不再唤醒 Hub
-  if (await rootAnalysisFinished(tx, canvasId)) {
-    return;
-  }
-
-  const convergence = await readCanvasConvergence(tx, canvasId);
-  if (!options.manual) {
-    if (convergence.hub_paused) {
-      console.info(`[hub] 画布 ${canvasId} 已暂停决策（hub_paused），跳过`);
-      return;
-    }
-    // force / idleWake（画布无待跑工作）可清 auto_stopped 继续自驱
-    if (convergence.auto_stopped && !options.force && !options.idleWake) {
-      console.info(`[hub] 画布 ${canvasId} 已自动停止自驱（auto_stopped），跳过`);
-      return;
-    }
-    if (convergence.auto_stopped && (options.force || options.idleWake)) {
-      await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
-        auto_stopped: false,
-        paused_reason: undefined,
-        paused_at: undefined,
-      });
-    }
-  }
-
-  // 已有活跃 Hub → 不重复入队
-  const activeHub = await tx`
-    SELECT 1 FROM jobs
-    WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
-      AND status IN ('pending', 'claimed', 'provisioning', 'running')
-    LIMIT 1`;
-  if (activeHub.length > 0) return;
-
-  // idle 唤醒：必须确认画布上没有其它待跑节点（排除刚结束的 job）
-  if (options.idleWake) {
-    if (await hasActiveRunnableJobs(tx, canvasId, (job.id as string) ?? null)) {
-      return;
-    }
-  } else if (!options.manual && !options.force) {
-    // 普通路径：仍有角色 job 在跑则等它们结束（结束时会再触发）
-    if (await hasActiveRoleJobs(tx, canvasId)) return;
-  }
-
-  // Graph eligibility is distinct from queue ordering.  A waiting-evidence
-  // round wakes Hub exactly once per evidence snapshot; repeated role
-  // completions with no new evidence do not create decision churn.
-  const waiting = await waitingEvidenceRound(tx, canvasId);
-  let waitingWake: { id: string; evidence_signature: string } | null = null;
-  let trigger = options.trigger ?? {
-    kind: options.idleWake ? "canvas_idle" : "graph_progress",
-  };
-  if (waiting && !options.manual) {
-    if (!shouldWakeEvidenceHub(waiting.hub_evidence_signature, waiting.evidence_signature)) return;
-    trigger = {
-      kind: "verify_rework",
-      finding_id: waiting.finding_id,
-      missing_evidence: waiting.missing,
-      summary: "Verify 缺少独立 review/test 证据，先派发补证工作",
-      evidence_signature: waiting.evidence_signature,
-    };
-    // Arm the edge-trigger marker only after all Hub eligibility/guardrail
-    // gates pass and the Hub row is about to be inserted. Otherwise a
-    // blocked care-severity Verify or max-round guard could consume the
-    // evidence edge without ever creating the compensating Hub Job.
-    waitingWake = { id: waiting.id, evidence_signature: waiting.evidence_signature };
-  } else if (!waiting && !options.manual && (await hasWaitingEvidenceRound(tx, canvasId))) {
-    // There is still a waiting round, but its current evidence edge has
-    // already been consumed. Keep the graph idle instead of creating a
-    // generic graph_progress Hub on every unrelated completion.
-    return;
-  }
-
-  // 关注级别 verify 阻塞非 force/manual 的 Hub（severity 只影响等待门，不决定是否验证）
-  const waitSeverities = careSeverities(rules.minVerifySeverity);
-  if (!options.manual && !options.force) {
-    if (await hasActiveBlockingVerify(tx, canvasId, waitSeverities)) return;
-  }
-
-  // 预算只统计真正产出决策的轮次：failed/orphan 轮没有读图决策，
-  // 计入预算会让排障/运维期的失败把 maxHubRounds 烧光。
-  const [{ count }] = await tx<[{ count: number }]>`
-    SELECT COUNT(*)::int AS count FROM jobs
-    WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
-  if (count >= rules.maxHubRounds) {
-    console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
-    // 护栏耗尽：pending/verifying → needs_human；仅当与 Hub complete 相同的统一完成门通过时才 Report
-    const {
-      settleCanvasFindingsAtGuardrail,
-      evaluateAnalysisCompleteGate,
-      hasSucceededRoleWork,
-    } = await import("./verify.js");
-    await settleCanvasFindingsAtGuardrail(tx, canvasId, "max_hub_rounds").catch((e) =>
-      console.error(`[hub] settle findings at maxHubRounds failed:`, e),
-    );
-    const gate = await evaluateAnalysisCompleteGate(tx, canvasId, {
-      excludeJobId: (job.id as string) ?? null,
-    });
-    if (gate.ok) {
-      await tx`
-        UPDATE canvas_nodes SET status = 'analysis_complete',
-          body_json = body_json || ${tx.json({
-            conclusion: `Hub 决策轮次达上限 ${rules.maxHubRounds}；未完成 Finding 已收口为 needs_human，自动进入报告。`,
-            guardrail: "max_hub_rounds",
-          })},
-          updated_at = now()
-        WHERE canvas_id = ${canvasId} AND node_type = 'root'
-          AND status IS DISTINCT FROM 'succeeded'
-          AND status IS DISTINCT FROM 'reporting'`;
-      const { maybeDispatchReport } = await import("./report.js");
-      await maybeDispatchReport(tx, canvasId).catch((e) =>
-        console.error(`[hub] auto report after maxHubRounds failed:`, e),
-      );
-    } else {
-      // 无角色工作 / 仍未收敛：停自驱并标人工，绝不空图成功报告
-      const noRole = !(await hasSucceededRoleWork(tx, canvasId));
-      await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
-        auto_stopped: true,
-        paused_reason: noRole
-          ? `max_hub_rounds_no_role_work:${rules.maxHubRounds}`
-          : `max_hub_rounds_incomplete:${rules.maxHubRounds}`,
-        paused_at: new Date().toISOString(),
-      });
-      console.warn(
-        `[hub] maxHubRounds 后未过完成门 (${gate.blockers.join(",")})，auto_stopped，不派发 Report`,
-      );
-    }
-    return;
-  }
-
-  if (waitingWake) {
-    await tx`
-      UPDATE finding_verification_rounds
-      SET requirements_json = requirements_json || ${tx.json({ hub_evidence_signature: waitingWake.evidence_signature } as never)}
-      WHERE id = ${waitingWake.id}`;
-  }
-
-  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "hub_reason");
-  const [hubJob] = await tx`
-    INSERT INTO jobs ${tx({
-      project_id: projectId,
-      canvas_id: canvasId,
-      agent_snapshot_json: snapshot as never,
-      type: "hub_reason",
-      priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
-      payload_json: { trigger, scheduling_purpose: "hub" } as never,
-      timeout_sec: rules.auditTimeoutSec,
-      followup_depth: 0,
-    })}
-    RETURNING id`;
-
-  // Hub 任务入队时立即上图；next 边表达“这些结论触发了下一轮 Agent 决策”。
-  const [{ next_x }] = await tx<[{ next_x: number }]>`
-    SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes
-    WHERE canvas_id = ${canvasId}`;
-  const title =
-    options.force || options.manual
-      ? "Hub 风险验收"
-      : options.idleWake
-        ? "Hub 空闲唤醒"
-        : "Hub 决策";
-  const [hubNode] = await tx`
-    INSERT INTO canvas_nodes ${tx({
-      canvas_id: canvasId,
-      job_id: hubJob.id as string,
-      node_type: "job",
-      title,
-      body_json: { type: "hub_reason", trigger } as never,
-      x: next_x,
-      y: 300,
-      status: "pending",
-    })}
-    RETURNING id`;
-
-  let sourceNodeIds = options.sourceNodeIds ?? [];
-  if (sourceNodeIds.length === 0 && job.id) {
-    const sources = await tx`
-      SELECT id FROM canvas_nodes
-      WHERE canvas_id = ${canvasId} AND job_id = ${job.id as string}
-        AND node_type = ANY(${["fact", "finding", "intent", "job"]})`;
-    sourceNodeIds = sources.map((source) => source.id as string);
-  }
-  if (sourceNodeIds.length === 0) {
-    const [root] = await tx`
-      SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
-    if (root) sourceNodeIds = [root.id as string];
-  }
-  for (const sourceNodeId of sourceNodeIds) {
-    await insertEdgeIfAbsent(
-      tx,
-      canvasId,
-      sourceNodeId,
-      hubNode.id as string,
-      "next",
-    );
-  }
-
-  console.info(
-    `[hub] 画布 ${canvasId} 入队 Hub ${hubJob.id} trigger=${String((trigger as { kind?: string }).kind ?? "graph_progress")}` +
-      (options.idleWake ? " (idleWake)" : "") +
-      (options.force ? " (force)" : ""),
-  );
+  job: HubJobRecord | undefined,
+  options: HubTriggerOptions = {},
+): Promise<void> {
+  return hubOrchestrationApplication.maybeTriggerHub(tx, job, options);
 }
 
-/**
- * 人类对已确认 Finding 发表评论后：上图画布 + 唤醒 Hub 决策是否开新一轮。
- * - 仅 verify_status=confirmed（或 disposition=confirmed_vuln）触发
- * - 清除 auto_stopped，使自驱可继续
- * - 仍尊重 hub_paused（人工暂停时不抢跑）
- */
-export async function triggerHubFromHumanComment(input: {
-  findingId: string;
-  commentId: string;
-  commentBody: string;
-  authorName: string;
-}): Promise<{ hub_queued: boolean; reason?: string; canvas_id?: string; hub_job_id?: string }> {
-  const [finding] = await sql`
-    SELECT f.id, f.project_id, f.verify_status, f.disposition, f.title, f.node_id, f.job_id,
-           j.canvas_id, j.priority
-    FROM findings f
-    JOIN jobs j ON j.id = f.job_id
-    WHERE f.id = ${input.findingId}`;
-  if (!finding) return { hub_queued: false, reason: "finding_not_found" };
-
-  const confirmed =
-    finding.verify_status === "confirmed" || finding.disposition === "confirmed_vuln";
-  if (!confirmed) {
-    return { hub_queued: false, reason: "not_confirmed", canvas_id: finding.canvas_id as string };
-  }
-  if (!finding.canvas_id) {
-    return { hub_queued: false, reason: "no_canvas" };
-  }
-
-  const canvasId = finding.canvas_id as string;
-  const projectId = finding.project_id as string;
-  const preview = input.commentBody.trim().slice(0, 500);
-
-  let hubJobId: string | undefined;
-  await sql.begin(async (txRaw) => {
-    const tx = txRaw as unknown as Tx;
-
-    // 画布 human 节点：进入 Hub 读图 hints，供决策参考
-    const [findingNode] = finding.node_id
-      ? await tx`SELECT id, x, y FROM canvas_nodes WHERE id = ${finding.node_id as string}`
-      : [null];
-    const x = findingNode ? (findingNode.x as number) + 40 : 200;
-    const y = findingNode ? (findingNode.y as number) + 160 : 400;
-    const [humanNode] = await tx`
-      INSERT INTO canvas_nodes ${tx({
-        canvas_id: canvasId,
-        job_id: null,
-        node_type: "human",
-        title: `人工评论：${String(finding.title).slice(0, 80)}`,
-        body_json: {
-          reason: preview,
-          kind: "finding_comment",
-          finding_id: input.findingId,
-          comment_id: input.commentId,
-          author: input.authorName,
-        } as never,
-        x,
-        y,
-        status: "open",
-      })}
-      RETURNING id`;
-    if (findingNode) {
-      await insertEdgeIfAbsent(tx, canvasId, findingNode.id as string, humanNode.id as string, "next");
-    }
-
-    // 允许在「关注级别已收敛」后因人工反馈再决策
-    await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
-      auto_stopped: false,
-      paused_reason: undefined,
-      paused_at: undefined,
-    });
-
-    const before = await tx`
-      SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
-        AND status IN ('pending','claimed','provisioning','running') LIMIT 1`;
-
-    await maybeTriggerHub(
-      tx,
-      {
-        id: finding.job_id,
-        project_id: projectId,
-        canvas_id: canvasId,
-        type: "human_comment",
-        priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
-      },
-      {
-        force: true,
-        sourceNodeIds: [humanNode.id as string, ...(findingNode ? [findingNode.id as string] : [])],
-        trigger: {
-          kind: "human_comment",
-          finding_id: input.findingId,
-          comment_id: input.commentId,
-          author: input.authorName,
-          comment_preview: preview,
-          finding_title: finding.title,
-        },
-      },
-    );
-
-    const after = await tx`
-      SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
-        AND status IN ('pending','claimed','provisioning','running')
-      ORDER BY created_at DESC LIMIT 1`;
-    if (after[0] && (!before[0] || before[0].id !== after[0].id)) {
-      hubJobId = after[0].id as string;
-      await tx`
-        UPDATE canvas_nodes SET title = 'Hub 人工反馈决策', updated_at = now()
-        WHERE job_id = ${hubJobId} AND node_type = 'job'`;
-    }
-  });
-
-  if (!hubJobId) {
-    // 可能因 hub_paused / 已有活跃 hub / 轮次上限 未入队
-    const conv = await readCanvasConvergence(sql, canvasId);
-    if (conv.hub_paused) return { hub_queued: false, reason: "hub_paused", canvas_id: canvasId };
-    return { hub_queued: false, reason: "hub_not_queued", canvas_id: canvasId };
-  }
-  return { hub_queued: true, canvas_id: canvasId, hub_job_id: hubJobId };
+export async function triggerHubFromHumanComment(input: HubHumanCommentInput): Promise<HubHumanCommentResult> {
+  return hubOrchestrationApplication.triggerHubFromHumanComment(input);
 }
 
 /** 取消画布上非门控 severity 的 pending verify（drain-priority） */
