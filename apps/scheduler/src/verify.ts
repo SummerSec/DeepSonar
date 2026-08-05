@@ -2,20 +2,27 @@
  * Finding 多轮 Verify：自动派生、证据硬门、统一收口、Hub 回弹与再验。
  * 见 docs/TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md
  *
- * 注意：通过动态 import("./core.js") 访问 core，避免与 core → verify 形成静态环。
+ * Core owns composition and supplies the transaction-aware convergence helpers.
+ * The static imports make this dependency visible to the bounded-context map.
  */
 import { VerificationEvidence, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
 import { invalidVerification } from "./control-input.js";
+import {
+  careSeverities,
+  fixedPriorityForJob,
+  lockCanvasForConvergence,
+  patchCanvasConvergence,
+  recoverVerifyJobTerminal,
+  resolveAgentSnapshotForJob,
+  rulesForProject,
+} from "./core.js";
+import { maybeDispatchFindingReport } from "./report.js";
 
 type Tx = typeof sql;
 type SavepointTx = Tx & {
   savepoint<T>(callback: (tx: Tx) => T | Promise<T>): Promise<T>;
 };
-
-async function core() {
-  return import("./core.js");
-}
 
 const ACTIVE_JOB = ["pending", "claimed", "provisioning", "running", "waiting_human"] as const;
 const TERMINAL_JOB = ["succeeded", "failed", "timeout", "cancelled", "orphan"] as const;
@@ -174,7 +181,6 @@ export async function createVerifyRound(
   },
 ): Promise<{ jobId: string; roundId: string; attempt: number } | null> {
   const findingId = opts.finding.id as string;
-  const { fixedPriorityForJob, lockCanvasForConvergence, rulesForProject, resolveAgentSnapshotForJob } = await core();
   if (!(await lockCanvasForConvergence(tx, opts.canvasId))) return null;
   const rules = await rulesForProject(tx as unknown as typeof sql, opts.projectId);
 
@@ -416,7 +422,6 @@ export async function normalizePendingVerificationRounds(
   for (const candidate of missingJobRounds) {
     const outcome = await db.begin(async (txRaw) => {
       const tx = txRaw as unknown as Tx;
-      const { lockCanvasForConvergence } = await core();
       if (!(await lockCanvasForConvergence(tx, (candidate.origin_canvas_id as string | null) ?? null))) return "gone" as const;
       const [round] = await tx`
         SELECT id, finding_id, status, verify_job_id, requirements_json
@@ -470,7 +475,6 @@ export async function normalizePendingVerificationRounds(
   for (const stale of staleJobs) {
     const status = String(stale.job_status) as (typeof TERMINAL_JOB)[number];
     if (status === "failed" || status === "timeout" || status === "orphan" || status === "cancelled") {
-      const { recoverVerifyJobTerminal } = await core();
       await recoverVerifyJobTerminal(
         stale.verify_job_id as string,
         status,
@@ -484,7 +488,6 @@ export async function normalizePendingVerificationRounds(
     // scheduling another attempt on every restart.
     const repaired = await db.begin(async (txRaw) => {
       const tx = txRaw as unknown as Tx;
-      const { lockCanvasForConvergence } = await core();
       if (!(await lockCanvasForConvergence(tx, (stale.canvas_id as string | null) ?? null))) return false;
       const [round] = await tx`
         SELECT id, finding_id FROM finding_verification_rounds
@@ -532,7 +535,6 @@ export async function evaluateFollowup(
   job: Record<string, unknown>,
   finding: Record<string, unknown>,
 ): Promise<void> {
-  const { lockCanvasForConvergence, rulesForProject } = await core();
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   const canvasId = (job.canvas_id as string) ?? null;
   const findingId = finding.id as string;
@@ -571,7 +573,6 @@ export async function settleCanvasFindingsAtGuardrail(
   canvasId: string,
   reason: string,
 ): Promise<{ settled: number }> {
-  const { lockCanvasForConvergence } = await core();
   if (!(await lockCanvasForConvergence(tx, canvasId))) return { settled: 0 };
   const rows = await tx`
     SELECT f.id, f.node_id, f.verify_status
@@ -619,7 +620,6 @@ export async function closeVerifyRound(
     return { outcome: "skipped", forceHub: false };
   }
 
-  const { lockCanvasForConvergence } = await core();
   if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) {
     return { outcome: "skipped", forceHub: false };
   }
@@ -659,7 +659,6 @@ export async function closeVerifyRound(
   const originJobId = (finding.job_id as string) ?? null;
   const evidence = await collectEvidenceSnapshot(tx, findingId, originJobId);
   const canvasId = (job.canvas_id as string) ?? null;
-  const { rulesForProject } = await core();
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
   // 基础设施失败 / 取消
@@ -752,7 +751,6 @@ export async function closeVerifyRound(
     // A report is a read-only derivative. Dispatch failures must never roll
     // back the technical confirmation or block the Verify state machine.
     try {
-      const { maybeDispatchFindingReport } = await import("./report.js");
       await (tx as SavepointTx).savepoint((reportTx) =>
         maybeDispatchFindingReport(reportTx, findingId)
       );
@@ -824,7 +822,6 @@ export async function maybeReverifyAfterFollowup(
   if (!canvasId) return;
   const selfJobId = String(job.id ?? "");
 
-  const { lockCanvasForConvergence } = await core();
   if (!(await lockCanvasForConvergence(tx, canvasId))) return;
 
   // 串行化同一 Finding 的补证收口（关键：拿锁后再看 active）
@@ -869,7 +866,6 @@ export async function maybeReverifyAfterFollowup(
     JSON.stringify(evidence.review.map((r) => r.node_id).sort()) +
     JSON.stringify(evidence.test.map((t) => t.node_id).sort());
 
-  const { rulesForProject } = await core();
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   const attempt = Number(prev?.attempt ?? 0);
 
@@ -1049,7 +1045,6 @@ export async function careSeverityMeta(
   tx: Tx,
   projectId: string,
 ): Promise<{ careSeverities: string[]; minVerifySeverity: string }> {
-  const { rulesForProject, careSeverities } = await core();
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   return {
     careSeverities: careSeverities(rules.minVerifySeverity).map((s) => s.toLowerCase()),
@@ -1376,7 +1371,6 @@ async function ensureHumanBlocker(
 }
 
 async function clearAutoStopped(tx: Tx, canvasId: string) {
-  const { patchCanvasConvergence } = await core();
   await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
     auto_stopped: false,
     paused_reason: undefined,

@@ -18,6 +18,8 @@ import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner } from "./runtime.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import { finalizeReportJob } from "./report.js";
+import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -616,7 +618,6 @@ async function runJob(jobId: string) {
       );
     }
     if (failed[0]?.type === "report") {
-      const { finalizeReportJob } = await import("./report.js");
       await sql.begin(async (tx) => {
         await finalizeReportJob(tx as unknown as typeof sql, jobId, { failed: true, error: msg });
       }).catch(() => {});
@@ -698,7 +699,6 @@ async function executeFake(jobId: string, type: string) {
     const findingId = vjob?.finding_id as string | null;
     let canConfirm = false;
     if (findingId) {
-      const { collectEvidenceSnapshot } = await import("./verify.js");
       const [f] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
       const snap = await collectEvidenceSnapshot(sql, findingId, (f?.job_id as string) ?? null);
       canConfirm = snap.qualified;
@@ -819,7 +819,6 @@ async function executeFake(jobId: string, type: string) {
       }
       if (trigger.kind === "confirmed_finding") {
         // 已确认后：全部 Finding 收敛（confirmed|needs_human）才 complete
-        const { canvasFindingsConverged } = await import("./verify.js");
         const care = await canvasFindingsConverged(sql, canvasId);
         if (care.ok) {
           const refs = await sql`
@@ -856,7 +855,6 @@ async function executeFake(jobId: string, type: string) {
         return;
       }
       // 默认 / canvas_idle：全部 Finding 收敛则 complete，否则 explore/补证
-      const { canvasFindingsConverged } = await import("./verify.js");
       const careGate = await canvasFindingsConverged(sql, canvasId);
       const facts = await sql`
         SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact' ORDER BY created_at`;

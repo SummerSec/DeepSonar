@@ -3,6 +3,10 @@ import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { runner } from "./runtime.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
+import { revokeJobTokens } from "./gateway.js";
+import { finalizeReportJob } from "./report.js";
+import { planeWriteback } from "./plane-sync.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -35,7 +39,6 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     else if (isProvision) inc("deepsonar_jobs_failed_total", { reason: "provision_stuck" });
     else inc("deepsonar_jobs_orphan_total");
     // §6.3：终局判定即吊销短期模型 Token
-    const { revokeJobTokens } = await import("./gateway.js");
     await revokeJobTokens(jobId, "reaper").catch(() => {});
     // 失败不能只改 jobs 表而留下 running 画布节点（§8.3：job/intent 节点同步终态）
     await sql`
@@ -45,14 +48,12 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     // verify 收口：不得遗留 verifying；report 失败保持 Root reporting
     const [meta] = await sql`SELECT type, error, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (meta?.type === "verify_finding") {
-      const { recoverVerifyJobTerminal } = await import("./core.js");
       const status = isTimeout ? "timeout" : isProvision ? "failed" : "orphan";
       await recoverVerifyJobTerminal(jobId, status, (meta.error as string) ?? null).catch((e) =>
         console.error(`[reaper] verify recovery failed:`, e),
       );
     }
     if (meta?.type === "report") {
-      const { finalizeReportJob } = await import("./report.js");
       await sql.begin(async (tx) => {
         await finalizeReportJob(tx as unknown as typeof sql, jobId, {
           failed: true,
@@ -62,7 +63,6 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     }
     // 任意非 Report job 被 reaper 收口后统一推进：analysis_complete → Report，否则空闲唤醒 Hub。
     if (meta?.canvas_id && meta.type !== "report") {
-      const { advanceCanvasAfterTerminalJob } = await import("./core.js");
       await sql.begin(async (txRaw) => {
         const tx = txRaw as unknown as typeof sql;
         await advanceCanvasAfterTerminalJob(
@@ -79,7 +79,6 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
       }).catch((e) => console.error(`[reaper] terminal canvas advance failed:`, e));
     }
 
-    const { planeWriteback } = await import("./plane-sync.js");
     await planeWriteback(jobId).catch(() => {});
   }
 

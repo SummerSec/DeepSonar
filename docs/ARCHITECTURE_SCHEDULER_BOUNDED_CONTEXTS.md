@@ -16,13 +16,14 @@ reaching through its implementation module.
 | `job-lifecycle` | Job status policy plus guarded application operations for claim, execution failure, timeout/orphan/reconcile recovery, cancel (single/bulk), resume, and runtime-image cancellation. | Canvas convergence, Finding verdicts, Report artifacts, RoleConfig/runtime resolution. |
 | `event-ingestion` | Event envelope validation, event-id deduplication, per-Job sequencing, and dispatching semantic side effects. | The policy for a Job status transition. |
 | `hub-orchestration` | Hub eligibility, intent validation, round budgets, idle/complete progression. | Direct Job status writes; it requests a lifecycle transition. |
-| `finding-verification` | Verification rounds, evidence gates, rework/needs-human/confirmed decisions. | Dispatcher claims and Report state. |
-| `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, and report failure recovery. | Agent runtime snapshots or generic Job transition rules. |
+| `finding-verification` | Verification rounds, evidence gates, rework/needs-human/confirmed decisions. `application.ts` exposes the close/evidence/gate seam; `routes.ts` owns read-only Finding and verification projections. | Dispatcher claims and Report state. |
+| `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, report failure recovery, and report/download route registration. | Agent runtime snapshots or generic Job transition rules. |
 | `role-runtime-snapshot` | RoleConfig, credential/CLI compatibility, skills, and immutable runtime-image snapshots. | Canvas/Finding convergence and Job terminal decisions. |
 
-The route layer is an adapter over these application interfaces.  `core.ts`
-currently remains the compatibility composition root while the other contexts
-move out in later Issue #37 slices.
+The route layer is an adapter over these application interfaces. `core.ts`
+remains the compatibility composition root while callers migrate. Legacy
+implementations are injected through explicit ports so the application seams
+can be tested without a database and transaction ownership remains visible.
 
 ## Lifecycle foundation and dependency direction
 
@@ -182,6 +183,6 @@ for the next slices; Phase 1 does not claim Issue #37 is complete.
    larger transaction is required.
 3. Add characterization coverage for every moved terminal/recovery path before
    changing its lock acquisition or side-effect ordering.
-4. Do not add dynamic imports merely to hide a dependency cycle.  If a real
-   cycle remains, introduce an interface at the bounded-context boundary and
-   make the dependency direction visible in this document.
+4. Do not add dynamic imports merely to hide a dependency cycle. Internal
+   `await import("./...")` workarounds are prohibited; cross-context calls use
+   static imports and the application/ports adapters documented above.

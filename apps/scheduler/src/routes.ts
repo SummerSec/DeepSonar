@@ -85,6 +85,9 @@ import { sql } from "./db.js";
 import { readEvidenceManifest, readMainSession, readNormalizedStreamPage } from "./evidence.js";
 import { planePollOnce, planePollProject, planeWriteback } from "./plane-sync.js";
 import { registerGateway } from "./gateway.js";
+import { revokeJobTokens } from "./gateway.js";
+import { finalizeReportJob } from "./report.js";
+import { recoverVerifyJobTerminal } from "./core.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "./openapi.js";
 import { runner } from "./runtime.js";
 import { syncSkillSource, validateSourceUrl } from "./skill-sources.js";
@@ -134,6 +137,8 @@ import {
 import { loadReadiness, type ReadinessMaterialSource } from "./readiness.js";
 import { allocateRoleUiColor } from "./role-colors.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import { registerReportRoutes } from "./domains/report-convergence/routes.js";
+import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -164,11 +169,6 @@ const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject"]);
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code"]);
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 const STREAMABLE_JOB_STATUSES = new Set(["running", "waiting_human"]);
-
-function reportDownloadFilename(reportId: string, extension: "md" | "sarif"): string {
-  const safeId = reportId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "unknown";
-  return `report-${safeId}.${extension}`;
-}
 
 /**
  * Validate scheduler concurrency knobs at the API boundary. Other rule keys
@@ -351,12 +351,10 @@ async function recoverCancelledDerivedJob(
 ): Promise<void> {
   const jobId = String(job.id);
   if (job.type === "verify_finding") {
-    const { recoverVerifyJobTerminal } = await import("./core.js");
     await recoverVerifyJobTerminal(jobId, "cancelled", reason);
     return;
   }
   if (job.type === "report") {
-    const { finalizeReportJob } = await import("./report.js");
     await sql.begin((tx) => finalizeReportJob(
       tx as unknown as typeof sql,
       jobId,
@@ -374,7 +372,6 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
     false,
   );
   if (active.length === 0) return 0;
-  const { revokeJobTokens } = await import("./gateway.js");
   for (const job of active) {
     const id = job.id as string;
     if (job.sandbox_id) {
@@ -490,6 +487,11 @@ export function registerRoutes(app: FastifyInstance) {
       }
     }
   });
+
+  // Report convergence is a bounded route registrar. Shared auth and project
+  // scope hooks above are installed before it, preserving legacy behavior.
+  registerReportRoutes(app);
+  registerFindingVerificationRoutes(app);
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
   registerGateway(app);
@@ -3516,205 +3518,7 @@ export function registerRoutes(app: FastifyInstance) {
     });
   });
 
-  // ---------- Findings 清单（可按项目 / 画布 / severity / 验证状态筛选） ----------
-  // canvas_id：只看「本次任务」产出，不混入同项目其它任务
-  app.get("/findings", async (req, reply) => {
-    const q = req.query as {
-      project_id?: string;
-      severity?: string;
-      verify_status?: string;
-      disposition?: string;
-      canvas_id?: string;
-      cursor?: string;
-      after?: string;
-      limit?: string;
-    };
-    const projectId = q.project_id || req.actor?.projectId || null;
-    const severity = q.severity || null;
-    const verifyStatus = q.verify_status || null;
-    const canvasId = q.canvas_id || null;
-    const disposition = q.disposition || null;
-    const after = q.cursor ?? q.after ?? null;
-    const paginated = Boolean(canvasId || after || q.limit || q.cursor);
-    const cursor = after ? decodeCursor(after, "findings") : null;
-    if (after && (!cursor?.created_at || !cursor.id)) {
-      return reply.code(400).send({ error: "invalid findings cursor", error_code: "INVALID_CURSOR" });
-    }
-    const limit = paginated ? pageLimit(q.limit) : 500;
-    const rows = await sql`
-      SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
-             f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
-             f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
-             p.name AS project_name, j.canvas_id
-      FROM findings f
-      JOIN projects p ON p.id = f.project_id
-      JOIN jobs j ON j.id = f.job_id
-      WHERE (${projectId}::uuid IS NULL OR f.project_id = ${projectId}::uuid)
-        AND (${severity}::text IS NULL OR f.severity = ${severity})
-        AND (${verifyStatus}::text IS NULL OR f.verify_status = ${verifyStatus})
-        AND (${disposition}::text IS NULL OR f.disposition = ${disposition})
-        AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId})
-        AND (${cursor?.created_at ?? null}::timestamptz IS NULL
-          OR f.created_at < ${cursor?.created_at ?? null}::timestamptz
-          OR (f.created_at = ${cursor?.created_at ?? null}::timestamptz AND f.id < ${cursor?.id ?? null}::uuid))
-      ORDER BY f.created_at DESC, f.id DESC
-      LIMIT ${paginated ? limit + 1 : limit}`;
-    const items = rows.slice(0, limit);
-    if (!paginated) return items;
-    const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
-    const hasMore = rows.length > limit;
-    return page(items, {
-      after,
-      nextCursor: hasMore && last ? cursorForRow("findings", last) : null,
-      hasMore,
-      live: false,
-    });
-  });
-
   const DISPOSITIONS = ["open", "accepted", "confirmed_vuln", "rejected_fp", "resolved", "archived"] as const;
-
-  app.get("/findings/:id", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const [finding] = await sql`
-      SELECT f.*, p.name AS project_name, j.canvas_id, j.type AS source_job_type,
-             j.status AS source_job_status, c.title AS canvas_title
-      FROM findings f
-      JOIN projects p ON p.id = f.project_id
-      JOIN jobs j ON j.id = f.job_id
-      LEFT JOIN canvases c ON c.id = j.canvas_id
-      WHERE f.id = ${id}`;
-    if (!finding) return reply.code(404).send({ error: "finding not found" });
-    const [verification_jobs, source_events, comments, links, verification_rounds] = await Promise.all([
-      sql`SELECT id, type, status, error, started_at, finished_at, created_at, payload_json
-          FROM jobs WHERE finding_id = ${id} ORDER BY created_at`,
-      sql`SELECT id, job_seq, type, payload_json, created_at
-          FROM events WHERE job_id = ${finding.job_id as string} ORDER BY id LIMIT 1000`,
-      sql`SELECT id, finding_id, body, author_type, author_id, author_name, created_at
-          FROM finding_comments WHERE finding_id = ${id} ORDER BY created_at`,
-      sql`SELECT id, finding_id, url, title, link_type, created_by, created_at
-          FROM finding_links WHERE finding_id = ${id} ORDER BY created_at`,
-      sql`SELECT id, attempt, verify_job_id, status, proposed_verdict, final_outcome,
-                 requirements_json, evidence_snapshot_json, summary, error, created_at, finished_at
-          FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt LIMIT 1001`,
-    ]);
-    const { loadFindingTrace } = await import("./finding-trace.js");
-    const trace = await loadFindingTrace(sql, finding, verification_rounds);
-    return {
-      finding,
-      verification_jobs: verification_jobs.map((verificationJob) => ({
-        ...verificationJob,
-        error: projectCredentialProviderError(verificationJob.error),
-        payload_json: projectJobPayload(verificationJob.payload_json),
-      })),
-      source_events: source_events.map((event) => ({
-        ...event,
-        payload_json: projectJobEventPayload(event.payload_json),
-      })),
-      comments,
-      links,
-      verification_rounds: verification_rounds.slice(0, 1000),
-      trace,
-    };
-  });
-
-  // ---------- 任务报告（Hub complete → analysis_complete → Report） ----------
-  app.get("/canvases/:id/report", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const { getTaskReport } = await import("./report.js");
-    const report = await getTaskReport(id);
-    if (!report) return reply.code(404).send({ error: "report not found" });
-    return report;
-  });
-
-  app.get("/findings/:id/report", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const { getFindingReport } = await import("./report.js");
-    const report = await getFindingReport(id);
-    if (!report) return reply.code(404).send({ error: "finding report not found" });
-    return report;
-  });
-
-  app.post("/findings/:id/report", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const [finding] = await sql`SELECT id, project_id, verify_status FROM findings WHERE id = ${id}`;
-    if (!finding) return reply.code(404).send({ error: "finding not found" });
-    if (finding.verify_status !== "confirmed") {
-      return reply.code(409).send({ error: "finding_not_confirmed", verify_status: finding.verify_status });
-    }
-    const { createFindingReport } = await import("./report.js");
-    const result = await createFindingReport(id, true);
-    await audit(req, {
-      action: "finding.report.create",
-      resourceType: "finding",
-      resourceId: id,
-      projectId: finding.project_id as string,
-      after: result,
-    });
-    if (!result.dispatched && !["report_in_flight", "already_succeeded"].includes(result.reason ?? "")) {
-      return reply.code(409).send(result);
-    }
-    return result;
-  });
-
-  app.get("/reports/:id/markdown", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const { getTaskReportById, getFindingReportById, readReportBlob } = await import("./report.js");
-    const report = await getTaskReportById(id) ?? await getFindingReportById(id);
-    if (!report) return reply.code(404).send({ error: "report not found" });
-    if (report.status !== "succeeded" || !report.markdown_uri) {
-      return reply.code(409).send({ error: "report not ready", status: report.status });
-    }
-    try {
-      const buf = await readReportBlob(report.markdown_uri as string);
-      return reply
-        .type("text/markdown; charset=utf-8")
-        .header("content-disposition", `attachment; filename="${reportDownloadFilename(id, "md")}"`)
-        .send(buf);
-    } catch {
-      return reply.code(404).send({ error: "markdown blob missing" });
-    }
-  });
-
-  app.get("/reports/:id/sarif", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const { getTaskReportById, readReportBlob } = await import("./report.js");
-    const report = await getTaskReportById(id);
-    if (!report) return reply.code(404).send({ error: "report not found" });
-    if (report.status !== "succeeded" || !report.sarif_uri) {
-      return reply.code(409).send({ error: "report not ready", status: report.status });
-    }
-    try {
-      const buf = await readReportBlob(report.sarif_uri as string);
-      // Keep the previous validity gate while preserving the exact generated
-      // SARIF bytes for the attachment response.
-      JSON.parse(buf.toString("utf8"));
-      return reply
-        .type("application/sarif+json; charset=utf-8")
-        .header("content-disposition", `attachment; filename="${reportDownloadFilename(id, "sarif")}"`)
-        .send(buf);
-    } catch {
-      return reply.code(404).send({ error: "sarif blob missing" });
-    }
-  });
-
-  app.post("/canvases/:id/report/retry", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
-    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
-    const { retryReport } = await import("./report.js");
-    const result = await retryReport(id);
-    await audit(req, {
-      action: "report.retry",
-      resourceType: "canvas",
-      resourceId: id,
-      projectId: canvas.project_id as string,
-      after: result,
-    });
-    if (!result.ok) return reply.code(409).send(result);
-    // 唤醒 dispatcher
-    await sql`SELECT pg_notify('deepsonar_jobs', 'report_retry')`;
-    return result;
-  });
 
   app.patch("/findings/:id/disposition", async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -4057,7 +3861,6 @@ export function registerRoutes(app: FastifyInstance) {
       });
     }
     // §6.3：取消即吊销短期模型 Token
-    const { revokeJobTokens } = await import("./gateway.js");
     await revokeJobTokens(id, "cancelled").catch(() => {});
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
@@ -4087,7 +3890,6 @@ export function registerRoutes(app: FastifyInstance) {
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const reason = body.reason?.trim() || "强制退出全部活动 Job";
     const active = await createSqlJobLifecycleApplication().cancelJobsOnCanvas(canvasId, reason);
-    const { revokeJobTokens } = await import("./gateway.js");
     let cancelled = 0;
     for (const job of active) {
       const jobId = job.id as string;
