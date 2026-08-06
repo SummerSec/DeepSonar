@@ -1077,6 +1077,60 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .role-config-advanced-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; padding: 14px; }
 .role-config-provider { grid-column: 1 / -1; }
 .role-config-actions { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.role-config-instructions {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(10, 13, 15, .55);
+}
+.role-config-instructions-summary {
+  display: flex;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: #aeb6bb;
+}
+.role-config-instructions-summary::-webkit-details-marker { display: none; }
+.role-config-instructions-title {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  margin: 0;
+  font: 500 12px/1.2 var(--font-mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: inherit;
+}
+.role-config-instructions-summary small {
+  color: #646d73;
+  font: 500 10px var(--font-mono);
+  white-space: nowrap;
+}
+.role-config-instructions-summary svg {
+  flex: none;
+  color: #667277;
+  transition: transform .2s ease;
+}
+.role-config-instructions[open] > .role-config-instructions-summary {
+  border-bottom: 1px solid var(--line);
+  color: #d8dde0;
+}
+.role-config-instructions[open] > .role-config-instructions-summary svg {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+.role-config-instructions-body {
+  padding: 10px 12px 12px;
+}
+.markdown-view-editable {
+  min-height: 220px;
+}
+.markdown-view-editor {
+  min-height: 220px;
+  field-sizing: content;
+}
 .credential-toolbar { display: flex; align-items: stretch; gap: 8px; margin-bottom: 5px; }
 .credential-toolbar select, .credential-toolbar > button { min-height: 38px; border: 1px solid var(--line); border-radius: 8px; background: #0b0e10; padding: 0 11px; color: #9ba4aa; font: 500 11px var(--font-mono); }
 .credential-toolbar > button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); color: var(--accent); }

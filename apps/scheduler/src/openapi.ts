@@ -1421,7 +1421,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             platform_tools: {
               type: "object",
               additionalProperties: { type: "boolean" },
-              description: "角色合法平台工具的启用开关；未声明默认启用。mark_job_done 与 Hub 的 list_available_roles、submit_hub_decision 不可关闭。",
+              description: "平台工具启用开关（全量 list 对每个 Agent 可选）；未声明默认启用。仅 mark_job_done 不可关闭。",
             },
             instructions_markdown: { type: "string", nullable: true },
             runtime_image_key: { type: "string", nullable: true },

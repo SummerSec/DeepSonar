@@ -385,20 +385,37 @@ export function RoleConfigEditor({
               </HelpTip>
             </strong>
           </div>
-          <div>
-            <label className={labelCls}>
-              Worker 长期指令
-              <HelpTip>
-                平台会自动补充工作区、prompt 输入、runtime-manifest、动态 skill / command / MCP / sub-agent、环境变量名称、网络边界、不可用内部接口和增量结果工具；这里仅维护该角色长期稳定的职责与方法。
-              </HelpTip>
-            </label>
-            <textarea value={form.instructions_markdown} onChange={(e) => setForm({ ...form, instructions_markdown: e.target.value })} rows={10} className={`${inputCls} resize-y`} placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。" />
-            {form.instructions_markdown.trim() && <details className="mt-2 rounded-xl bg-black/20 ring-1 ring-white/[.06]"><summary className="cursor-pointer px-3 py-2 font-mono text-[10px] text-zinc-500">Markdown 预览 / 原文 / 复制</summary><div className="border-t border-white/[.05] p-3"><MarkdownView markdown={form.instructions_markdown} /></div></details>}
-          </div>
+          <details className="role-config-instructions">
+            <summary className="role-config-instructions-summary">
+              <span className="role-config-instructions-title">
+                Worker 长期指令
+                <HelpTip>
+                  平台会自动补充工作区、prompt 输入、runtime-manifest、动态 skill / command / MCP / sub-agent、环境变量名称、网络边界、不可用内部接口和增量结果工具；这里仅维护该角色长期稳定的职责与方法。
+                </HelpTip>
+              </span>
+              <small>
+                {form.instructions_markdown.trim()
+                  ? `${form.instructions_markdown.trim().length} 字`
+                  : "未填写"}
+              </small>
+              <CaretDown size={14} />
+            </summary>
+            <div className="role-config-instructions-body">
+              <MarkdownView
+                markdown={form.instructions_markdown}
+                editable
+                onChange={(value) => setForm({ ...form, instructions_markdown: value })}
+                rows={12}
+                placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。支持 Markdown。"
+                className="rounded-xl border border-ink-700 bg-ink-850/50 p-2.5"
+              />
+            </div>
+          </details>
           <div>
             <label className={labelCls}>
               平台工具
               <HelpTip>
+                平台工具 list 对每个 Agent 全量可选，默认全部启用；仅 mark_job_done（正常完成）为终态必需且不可关闭。
                 保存后从下一 Job 起生效并冻结到快照；关闭的工具不会注入 MCP，也不会出现在动态 AGENTS.md、CLAUDE.md 和运行清单的可用列表中。
               </HelpTip>
             </label>
@@ -410,7 +427,7 @@ export function RoleConfigEditor({
                 return (
                   <label
                     key={tool}
-                    className="flex cursor-pointer items-start gap-2.5 rounded-md border border-ink-700 bg-ink-850/70 px-3 py-2.5 transition-colors hover:border-ink-600"
+                    className="flex cursor-pointer items-center gap-2.5 rounded-md border border-ink-700 bg-ink-850/70 px-3 py-2.5 transition-colors hover:border-ink-600"
                   >
                     <input
                       type="checkbox"
@@ -420,15 +437,19 @@ export function RoleConfigEditor({
                         ...current,
                         platform_tools: { ...current.platform_tools, [tool]: event.target.checked },
                       }))}
-                      className="mt-1 accent-acc-500"
+                      className="accent-acc-500"
                     />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2 text-[13px] text-zinc-200">
-                        <code className="font-mono text-acc-300">{tool}</code>
-                        <span>{meta.title}</span>
-                        {required && <em className="rounded bg-acc-500/10 px-1.5 py-0.5 font-mono text-[9px] not-italic text-acc-300">终态必需</em>}
+                    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-zinc-200">
+                      <code className="font-mono text-acc-300">{tool}</code>
+                      <span className="inline-flex items-center">
+                        {meta.title}
+                        <HelpTip label={`${meta.title} 说明`}>{meta.description}</HelpTip>
                       </span>
-                      <small className="mt-0.5 block text-[11px] leading-5 text-zinc-600">{meta.description}</small>
+                      {required && (
+                        <em className="rounded bg-acc-500/10 px-1.5 py-0.5 font-mono text-[9px] not-italic text-acc-300">
+                          终态必需
+                        </em>
+                      )}
                     </span>
                   </label>
                 );
@@ -437,7 +458,7 @@ export function RoleConfigEditor({
           </div>
         </section>
 
-        <details className="role-config-section role-config-modules">
+        <details className="role-config-section role-config-modules" open>
           <summary className="role-config-modules-summary">
             <div className="role-config-section-title">
               <span>02</span>
@@ -450,7 +471,6 @@ export function RoleConfigEditor({
             </div>
             <small>
               {form.modules.length > 0 ? `已选 ${form.modules.length} 个` : "未选模块"}
-              {" · 默认收起"}
             </small>
             <CaretDown size={14} />
           </summary>

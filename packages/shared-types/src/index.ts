@@ -845,33 +845,37 @@ export function validateModuleSelectors(values: unknown, field = "modules"): str
   return selectors;
 }
 
-/** 一个角色有资格启用的工具；未列出的工具即使配置为 true 也必须拒绝。 */
+/**
+ * 平台工具全集（顺序固定，供 UI / 快照 / 校验共用）。
+ * 每个 Agent 默认都可勾选其中任意项；是否真正注入以 RoleConfig 开关 + Job 快照为准。
+ */
+export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
+  "list_available_roles",
+  "list_shared_assets",
+  "publish_shared_asset",
+  "emit_progress",
+  "emit_fact",
+  "emit_finding",
+  "submit_hub_decision",
+  "mark_job_done",
+  "request_human",
+];
+
+/**
+ * 一个角色有资格启用的工具。
+ * 现策略：平台工具 list 对所有 Agent 开放；未列出的名字仍拒绝。
+ * roleName/roleKind 保留入参以兼容调用方，不再按角色裁剪可选集合。
+ */
 export function allowedPlatformTools(
-  roleName: string,
-  roleKind: "role" | "hub" | "system",
+  _roleName: string,
+  _roleKind: "role" | "hub" | "system",
 ): PlatformToolName[] {
-  // verify/report 必须形成确定性终态：
-  // - verify 通过 verdict=needs_human 收口 Finding；request_human 只会让 Job 停在 waiting_human。
-  // - report 只消费冻结输入；输入损坏应让 Job 失败并重试，不能停在人工等待。
-  const canRequestHuman = roleName !== "verify" && roleName !== "report";
-  return [
-    ...(roleKind === "hub" ? (["list_available_roles"] as PlatformToolName[]) : []),
-    "list_shared_assets",
-    "emit_progress",
-    ...(roleKind === "role" && roleName !== "audit" ? (["emit_fact"] as PlatformToolName[]) : []),
-    ...(roleName === "audit" ? (["emit_finding"] as PlatformToolName[]) : []),
-    ...(roleKind === "hub" ? (["submit_hub_decision"] as PlatformToolName[]) : []),
-    "mark_job_done",
-    ...(canRequestHuman ? (["request_human"] as PlatformToolName[]) : []),
-    ...(roleKind === "role" ? (["publish_shared_asset"] as PlatformToolName[]) : []),
-  ];
+  return ALL_PLATFORM_TOOLS.slice();
 }
 
-/** 关闭后 Job 无法形成合法终态的工具，配置层不可禁用。 */
-export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): PlatformToolName[] {
-  return roleKind === "hub"
-    ? ["list_available_roles", "submit_hub_decision", "mark_job_done"]
-    : ["mark_job_done"];
+/** 关闭后 Job 无法形成合法终态的工具，配置层不可禁用。仅 mark_job_done。 */
+export function requiredPlatformTools(_roleKind: "role" | "hub" | "system"): PlatformToolName[] {
+  return ["mark_job_done"];
 }
 
 /** 空配置代表启用该角色全部合法工具；显式 false 才关闭可选工具。 */

@@ -174,6 +174,13 @@ export function HelpTip({
         className="help-tip-mark"
         aria-label={label}
         aria-describedby={open ? tipId : undefined}
+        onClick={(event) => {
+          // Avoid toggling parent <details>/<summary> when the tip sits in a collapsible header.
+          event.preventDefault();
+          event.stopPropagation();
+          if (open) scheduleClose();
+          else show();
+        }}
         onMouseEnter={show}
         onMouseLeave={scheduleClose}
         onFocus={show}

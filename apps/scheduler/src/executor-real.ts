@@ -81,8 +81,9 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
-export function canRolePublishSharedAsset(roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
-  return roleKind === "role";
+/** @deprecated 发布权限改由 Job 冻结的 platform_tools 决定；保留导出供旧测试兼容。 */
+export function canRolePublishSharedAsset(_roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
+  return true;
 }
 
 async function ingestSemanticEventObserved(
@@ -363,10 +364,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const isHub = snapshot.role_kind === "hub";
   const isAudit = snapshot.name === "audit";
   const isRole = snapshot.role_kind === "role" && !isAudit;
-  const canPublishSharedAsset = canRolePublishSharedAsset(snapshot.role_kind);
   const controlToolNames = snapshot.platform_tools;
   const allowedControlToolNames = allowedPlatformTools(snapshot.name, snapshot.role_kind);
   const disabledControlToolNames = allowedControlToolNames.filter((name) => !controlToolNames.includes(name));
+  const canSubmitHubDecision = controlToolNames.includes("submit_hub_decision");
   const contract = resultContract(controlToolNames, isHub, isRole, isVerify, isAudit);
   const toolGuide = platformToolGuide(controlToolNames);
   // Historical Jobs created before platform defaults were frozen may lack
@@ -376,9 +377,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const model = snapshot.model ?? undefined;
   const reasoning = snapshot.reasoning ?? undefined;
   const rules = await rulesForProject(sql, job.project_id as string);
-  const availableHubRoles = isHub ? await rolesForProject(sql, job.project_id as string) : [];
-  if (isHub && availableHubRoles.length === 0) {
-    throw new Error("项目未启用任何角色，hub 无可下发对象");
+  // Hub 决策工具对所有 Agent 可选；启用时才加载可派发角色目录。
+  const availableHubRoles = canSubmitHubDecision ? await rolesForProject(sql, job.project_id as string) : [];
+  if (canSubmitHubDecision && availableHubRoles.length === 0) {
+    throw new Error("项目未启用任何角色，无法使用 submit_hub_decision");
   }
   const availableHubRoleCatalog = availableHubRoles.map(({ name, title, description }) => ({
     name,
@@ -869,7 +871,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       throw toolBoundaryError("toolNotAllowed", `本 Job 未启用平台工具 ${requiredTool}`);
     }
     if (event.type === "shared_asset_publish") {
-      if (!canPublishSharedAsset) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权发布共享资产`);
+      // 授权只认冻结快照 platform_tools（上方已校验 publish_shared_asset）。
       const proposal = PublishSharedAssetPayload.parse(event.payload);
       const findingId = proposal.scope === "finding" ? (job.finding_id as string | null) : null;
       if (proposal.scope === "finding" && !findingId) {
@@ -900,7 +902,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return;
     }
     if (event.type === "fact") {
-      if (!isRole) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 emit_fact`);
       if (factCount >= 100) throw toolBoundaryError("toolLimit", "单 Job fact 超过 100 条上限");
       await ingestFactSemanticEvent(
         event,
@@ -913,14 +914,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return;
     }
     if (event.type === "finding") {
-      if (!isAudit) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 emit_finding`);
       if (findingCount >= 20) throw toolBoundaryError("toolLimit", "单 Job Finding 超过 20 条上限");
       await ingestSemanticEventObserved(jobId, { ...event, payload: FindingPayload.parse(event.payload) });
       findingCount++;
       return;
     }
     if (event.type === "hub_decision") {
-      if (!isHub) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 submit_hub_decision`);
       assertSemanticTerminalExclusivity(semanticState, "hub_decision");
       const decision = event.payload;
       const intents = "intents" in decision ? decision.intents : undefined;

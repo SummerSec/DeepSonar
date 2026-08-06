@@ -23,9 +23,20 @@ for (const expected of [
 const restrictedTools = resolvePlatformTools("explore", "role", {
   emit_progress: false,
   request_human: false,
-  mark_job_done: false,
+  mark_job_done: false, // required: still forced on
 });
-if (restrictedTools.join(",") !== "list_shared_assets,emit_fact,mark_job_done,publish_shared_asset") {
+// All platform tools are selectable for every Agent; only mark_job_done is required.
+// Explicit false disables optional tools; mark_job_done stays even if set false.
+const expectedRestricted = [
+  "list_available_roles",
+  "list_shared_assets",
+  "publish_shared_asset",
+  "emit_fact",
+  "emit_finding",
+  "submit_hub_decision",
+  "mark_job_done",
+].join(",");
+if (restrictedTools.join(",") !== expectedRestricted) {
   throw new Error(`unexpected restricted platform tools: ${restrictedTools.join(",")}`);
 }
 const restrictedGuide = platformToolGuide(restrictedTools);
@@ -41,16 +52,25 @@ for (const expected of [
 ]) {
   if (!restrictedGuide.includes(expected)) throw new Error(`shared-asset platform guide missing: ${expected}`);
 }
+// Only mark_job_done is forced; Hub-only tools may be turned off explicitly.
 const hubTools = resolvePlatformTools("hub_reason", "hub", { list_available_roles: false });
-for (const required of ["list_available_roles", "submit_hub_decision", "mark_job_done"]) {
-  if (!hubTools.some((name) => name === required)) throw new Error(`required Hub tool was disabled: ${required}`);
+if (hubTools.includes("list_available_roles")) {
+  throw new Error("optional Hub tool list_available_roles should honor explicit false");
+}
+for (const required of ["submit_hub_decision", "mark_job_done"]) {
+  if (!hubTools.some((name) => name === required)) throw new Error(`default-on tool missing: ${required}`);
 }
 for (const systemRole of ["verify", "report"]) {
   const tools = resolvePlatformTools(systemRole, "system", {});
-  if (tools.includes("request_human")) {
-    throw new Error(`${systemRole} must converge through mark_job_done instead of request_human`);
+  // Full tool list is available; request_human is optional (default on) for every Agent.
+  if (!tools.includes("request_human")) {
+    throw new Error(`${systemRole} should allow selecting request_human by default`);
   }
   if (!tools.includes("mark_job_done")) throw new Error(`${systemRole} missing required mark_job_done`);
+  const withoutHuman = resolvePlatformTools(systemRole, "system", { request_human: false });
+  if (withoutHuman.includes("request_human")) {
+    throw new Error(`${systemRole} must honor explicit request_human=false`);
+  }
 }
 
 const availableRoles = new Set(["review"]);
