@@ -49,12 +49,13 @@ export function StatusBadge({ status, compact = false }: { status: string; compa
   );
 }
 
-export function SeverityBadge({ severity }: { severity: string }) {
-  const c = SEVERITY_COLOR[severity] ?? "#7f8796";
+export function SeverityBadge({ severity }: { severity: string | null | undefined }) {
+  const label = severity || "未评分";
+  const c = severity ? (SEVERITY_COLOR[severity] ?? "#7f8796") : "#7f8796";
   return (
     <span className="severity-badge" style={{ color: c, background: `color-mix(in srgb, ${c} 10%, transparent)` }}>
       <span className="size-1.5 rounded-full" style={{ background: c }} />
-      {severity}
+      {label}
     </span>
   );
 }

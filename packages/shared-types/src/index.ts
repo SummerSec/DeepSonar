@@ -71,6 +71,62 @@ export type EventType = z.infer<typeof EventType>;
 export const Severity = z.enum(["low", "medium", "high", "critical"]);
 export type Severity = z.infer<typeof Severity>;
 
+const findingProfileName = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*$/);
+
+export const FindingProtocolMode = z.enum(["fixed", "agent_choice", "hybrid"]);
+export type FindingProtocolMode = z.infer<typeof FindingProtocolMode>;
+
+export const FindingScoringPolicy = z
+  .object({
+    default_standard: z.literal("CVSS").default("CVSS"),
+    default_version: z.string().min(1).max(20).default("4.0"),
+    accepted_versions: z.array(z.string().min(1).max(20)).min(1).max(10).default(["4.0", "3.1"]),
+    require_scoring_for_profiles: z.array(findingProfileName).max(50).default(["security.vulnerability"]),
+  })
+  .strict();
+export type FindingScoringPolicy = z.infer<typeof FindingScoringPolicy>;
+
+/** Partial policy stored at a configuration layer. Lists replace inherited
+ * lists so a task can narrow policy without a lower layer widening it. */
+export const FindingProtocolConfig = z
+  .object({
+    mode: FindingProtocolMode.optional(),
+    default_profile: findingProfileName.optional(),
+    allowed_profiles: z.array(findingProfileName).min(1).max(50).optional(),
+    scoring: FindingScoringPolicy.partial().strict().optional(),
+    display_name: nonEmptyText(100).optional(),
+  })
+  .strict();
+export type FindingProtocolConfig = z.infer<typeof FindingProtocolConfig>;
+
+export const EffectiveFindingProtocol = z
+  .object({
+    mode: FindingProtocolMode,
+    default_profile: findingProfileName,
+    allowed_profiles: z.array(findingProfileName).min(1).max(50),
+    scoring: FindingScoringPolicy,
+    display_name: nonEmptyText(100),
+    source: z.enum(["global", "project", "task"]),
+  })
+  .strict();
+export type EffectiveFindingProtocol = z.infer<typeof EffectiveFindingProtocol>;
+
+export const FindingScoringProposal = z
+  .object({
+    standard: z.literal("CVSS"),
+    version: z.string().min(1).max(20),
+    vector: z.string().min(1).max(1000),
+    metrics: z.record(z.string(), z.unknown()).optional(),
+    /** Accepted only for comparison/audit; Scheduler always recomputes. */
+    base_score: z.number().min(0).max(10).optional(),
+  })
+  .strict();
+export type FindingScoringProposal = z.infer<typeof FindingScoringProposal>;
+
 export const VerifyStatus = z.enum([
   "pending",
   "verifying",
@@ -146,7 +202,12 @@ export type EdgeType = z.infer<typeof EdgeType>;
 export const FindingPayload = z
   .object({
     title: nonEmptyText(500),
-    severity: Severity,
+    profile: findingProfileName.optional(),
+    category: findingProfileName.optional(),
+    tags: z.array(nonEmptyText(100)).max(50).optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+    severity: Severity.optional(),
+    scoring: FindingScoringProposal.optional(),
     location: z.string().max(1000).regex(/\S/).optional(), // "auth/login.php:42" ← SARIF artifactLocation + region
     summary: z.string().max(10000).regex(/\S/).optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
@@ -162,7 +223,12 @@ export type FindingPayload = z.infer<typeof FindingPayload>;
 export const EmitFindingPayload = z
   .object({
     title: nonEmptyText(500),
-    severity: Severity,
+    profile: findingProfileName.optional(),
+    category: findingProfileName.optional(),
+    tags: z.array(nonEmptyText(100)).max(50).optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+    severity: Severity.optional(),
+    scoring: FindingScoringProposal.optional(),
     location: z.string().max(1000).regex(/\S/).optional(),
     summary: z.string().max(10000).regex(/\S/).optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(),

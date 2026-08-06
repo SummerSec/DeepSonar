@@ -24,6 +24,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const { projectId } = useParams<{ projectId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const severity = searchParams.get("severity") ?? "";
+  const profile = searchParams.get("profile") ?? "";
   const verify = searchParams.get("verify") ?? "";
   const projectFilter = searchParams.get("project") ?? "";
   const q = searchParams.get("q") ?? "";
@@ -75,7 +76,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     };
   }, [scope, projectId]);
 
-  const setParam = (key: "severity" | "verify" | "q" | "project", value: string) => {
+  const setParam = (key: "severity" | "profile" | "verify" | "q" | "project", value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -109,22 +110,24 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     const needle = q.trim().toLowerCase();
     return rows.filter((f) => {
       if (severity && f.severity !== severity) return false;
+      if (profile && f.profile !== profile) return false;
       if (verify && f.verify_status !== verify) return false;
       if (scope === "global" && projectFilter && f.project_id !== projectFilter) return false;
       if (!needle) return true;
       const hay =
-        `${f.title} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.fingerprint ?? ""}`.toLowerCase();
+        `${f.title} ${f.profile} ${f.category ?? ""} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.fingerprint ?? ""}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [rows, severity, verify, projectFilter, q, scope]);
+  }, [rows, severity, profile, verify, projectFilter, q, scope]);
 
   const filterActive = Boolean(
-    severity || verify || q.trim() || (scope === "global" && projectFilter),
+    severity || profile || verify || q.trim() || (scope === "global" && projectFilter),
   );
   const totalCount = rows.length;
   const filteredCount = visible.length;
   const filterChips = [
     severity && `风险 ${severity}`,
+    profile && `协议 ${profile}`,
     verify && `验证 ${verify}`,
     scope === "global" &&
       projectFilter &&
@@ -135,6 +138,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const clearFilters = () => {
     const next = new URLSearchParams(searchParams);
     next.delete("severity");
+    next.delete("profile");
     next.delete("verify");
     next.delete("q");
     next.delete("project");
@@ -206,6 +210,17 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">标题</span>
+                    <select
+                      value={profile}
+                      onChange={(e) => setParam("profile", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按 Finding profile 筛选"
+                    >
+                      <option value="">全部 profile</option>
+                      {Array.from(new Set(rows.map((finding) => finding.profile))).sort().map((value) => (
+                        <option key={value} value={value}>{value}</option>
+                      ))}
+                    </select>
                     <div className="table-head-search">
                       <MagnifyingGlass size={12} />
                       <input
@@ -313,6 +328,15 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                           {f.summary}
                         </div>
                       )}
+                      <div className="mt-1 flex flex-wrap gap-2 font-mono text-[9px] text-zinc-500">
+                        <span>{f.profile}</span>
+                        {f.category && <span>{f.category}</span>}
+                        <span>
+                          {f.scoring_json?.base_score == null
+                            ? "未评分"
+                            : `${String(f.scoring_json.standard)} ${String(f.scoring_json.version)} · ${String(f.scoring_json.base_score)} · ${String(f.scoring_json.exploitability_label ?? "难度未知")}`}
+                        </span>
+                      </div>
                     </td>
                     {scope === "global" && (
                       <td className={`${tdCls} font-mono text-[13px] text-zinc-500`}>
@@ -443,6 +467,14 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                   <h2 className="mt-3 text-[14px] font-medium leading-6 text-zinc-100">
                     {finding.title}
                   </h2>
+                  <div className="mt-1 flex flex-wrap gap-2 font-mono text-[9px] text-zinc-500">
+                    <span>{finding.profile}</span>
+                    <span>
+                      {finding.scoring_json?.base_score == null
+                        ? "未评分"
+                        : `${String(finding.scoring_json.standard)} ${String(finding.scoring_json.version)} · ${String(finding.scoring_json.base_score)} · ${String(finding.scoring_json.exploitability_label ?? "难度未知")}`}
+                    </span>
+                  </div>
                   {finding.summary && (
                     <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">
                       {finding.summary}

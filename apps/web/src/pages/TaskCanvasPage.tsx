@@ -20,6 +20,7 @@ import {
   type CanvasNode,
   type FindingTrace,
   type FindingSummary,
+  type EffectiveFindingProtocol,
   type JobSummary,
 } from "../api";
 import { CanvasView } from "../CanvasView";
@@ -120,6 +121,7 @@ export function TaskCanvasPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as Tab) || "canvas";
   const severity = searchParams.get("severity") ?? "";
+  const profile = searchParams.get("profile") ?? "";
   const verify = searchParams.get("verify") ?? "";
   const selectedFinding = searchParams.get("finding");
   const selectedJob = searchParams.get("job");
@@ -437,7 +439,7 @@ export function TaskCanvasPage() {
     setSearchParams(sp, { replace: true });
   };
 
-  const setQuery = (key: "severity" | "verify" | "finding" | "job" | "traceFinding" | "focusNode", value: string | null) => {
+  const setQuery = (key: "severity" | "profile" | "verify" | "finding" | "job" | "traceFinding" | "focusNode", value: string | null) => {
     const sp = new URLSearchParams(searchParams);
     if (value) sp.set(key, value);
     else sp.delete(key);
@@ -460,8 +462,9 @@ export function TaskCanvasPage() {
     (n) => n.node_type === "fact" && n.verification_status === "needs_human",
   );
   const visibleFindings = findings.filter(
-    (finding) => (!severity || finding.severity === severity) && (!verify || finding.verify_status === verify),
+    (finding) => (!severity || finding.severity === severity) && (!profile || finding.profile === profile) && (!verify || finding.verify_status === verify),
   );
+  const findingProtocol = (meta?.target_json?.effective_finding_protocol ?? null) as EffectiveFindingProtocol | null;
   const findingIdByNodeId = useMemo(
     () => new Map(
       [...findingIndex, ...findings]
@@ -498,20 +501,30 @@ export function TaskCanvasPage() {
   return (
     <div className="task-workbench flex h-full min-h-0 flex-col bg-[var(--bg)]">
       {/* 工作台上下文：返回、任务标题与状态 */}
-      <div className="task-workbench-header mx-3 mt-3 flex min-h-14 shrink-0 flex-wrap items-center gap-3 rounded-[20px] bg-white/[.03] px-3 py-2 ring-1 ring-white/[.06]">
+      <div className="task-workbench-header mx-3 mt-3 flex min-h-14 shrink-0 flex-wrap items-start gap-3 rounded-[20px] bg-white/[.03] px-3 py-2 ring-1 ring-white/[.06] sm:items-center">
         <Link
           to={`/projects/${projectId}/tasks`}
-          className="flex items-center gap-1.5 rounded-full bg-black/20 px-3 py-2 text-[10px] text-zinc-500 transition-colors hover:bg-white/[.05] hover:text-zinc-200"
+          className="order-1 flex items-center gap-1.5 rounded-full bg-black/20 px-3 py-2 text-[10px] text-zinc-500 transition-colors hover:bg-white/[.05] hover:text-zinc-200 sm:order-none"
         >
           <ArrowLeft size={14} weight="light" /> 任务列表
         </Link>
-        <div className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium tracking-[-.015em] text-zinc-200">
+        <div className="order-3 min-w-0 w-full flex-none sm:order-none sm:w-auto sm:flex-1">
+          <span className="block break-words text-[13px] font-medium text-zinc-200 sm:truncate">
             {meta?.title ?? "加载任务…"}
           </span>
-          <span className="mt-1 inline-flex rounded-full px-2 py-0.5 font-mono text-[9px] ring-1" style={{ color: taskLifecycle.color, background: `${taskLifecycle.color}18`, borderColor: `${taskLifecycle.color}35` }}>
-            {taskLifecycle.label}
-          </span>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full px-2 py-0.5 font-mono text-[9px] ring-1" style={{ color: taskLifecycle.color, background: `${taskLifecycle.color}18`, borderColor: `${taskLifecycle.color}35` }}>
+              {taskLifecycle.label}
+            </span>
+            {findingProtocol && (
+              <span
+                className="inline-flex min-w-0 max-w-full items-center break-words rounded-full bg-acc-500/[.08] px-2 py-0.5 font-mono text-[9px] leading-relaxed text-acc-300 ring-1 ring-acc-400/20"
+                title={`允许 ${findingProtocol.allowed_profiles.join(", ")}`}
+              >
+                Finding 协议：{findingProtocol.display_name} · {findingProtocol.source === "task" ? "任务配置" : findingProtocol.source === "project" ? "继承项目" : "继承全局"}
+              </span>
+            )}
+          </div>
           <span className="mt-0.5 block font-mono text-[10px] text-zinc-600">
             {[
               decisionLabel,
@@ -533,7 +546,7 @@ export function TaskCanvasPage() {
           )}
         </div>
         {/* 唯一主操作：暂停 / 继续；次要能力收进 ⋯ */}
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="order-2 ml-auto flex shrink-0 items-center gap-1.5 sm:order-none sm:ml-0">
           <button
             type="button"
             disabled={convBusy || !convergence}
@@ -733,7 +746,7 @@ export function TaskCanvasPage() {
 
         {tab === "findings" && (
           <div className="h-full overflow-y-auto p-4 sm:p-6">
-            <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p><div className="flex flex-wrap gap-2"><FilterSelect label="SEVERITY" value={severity} onChange={(v) => setQuery("severity", v || null)} placeholder="全部 severity" options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))} /><FilterSelect label="VERIFY" value={verify} onChange={(v) => setQuery("verify", v || null)} placeholder="全部验证状态" options={["pending", "verifying", "confirmed", "false_positive", "needs_human"].map((value) => ({ value, label: value }))} /></div></div>
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p><div className="flex flex-wrap gap-2"><FilterSelect label="PROFILE" value={profile} onChange={(v) => setQuery("profile", v || null)} placeholder="全部 profile" options={Array.from(new Set(findings.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} /><FilterSelect label="SEVERITY" value={severity} onChange={(v) => setQuery("severity", v || null)} placeholder="全部 severity" options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))} /><FilterSelect label="VERIFY" value={verify} onChange={(v) => setQuery("verify", v || null)} placeholder="全部验证状态" options={["pending", "verifying", "confirmed", "false_positive", "needs_human"].map((value) => ({ value, label: value }))} /></div></div>
 
             {/* 待人工处理事实：hub 无法自动裁决的 fact，人工确认/排除后才会推进报告 */}
             {humanFacts.length > 0 && (
@@ -761,10 +774,11 @@ export function TaskCanvasPage() {
             ) : (
               <>
               <DataTable>
-                <table className="w-full min-w-[720px]">
+                <table className="w-full min-w-[860px]">
                   <thead>
                     <tr>
                       <th className={thCls}>Severity</th>
+                      <th className={thCls}>Profile / Score</th>
                       <th className={thCls}>标题</th>
                       <th className={thCls}>位置</th>
                       <th className={thCls}>验证</th>
@@ -776,6 +790,14 @@ export function TaskCanvasPage() {
                       <tr key={f.id} onClick={() => setQuery("finding", f.id)} className="cursor-pointer transition-colors hover:bg-ink-850/80">
                         <td className={tdCls}>
                           <SeverityBadge severity={f.severity} />
+                        </td>
+                        <td className={`${tdCls} font-mono text-[10px] text-zinc-500`}>
+                          <div className="text-zinc-300">{f.profile}</div>
+                          <div>
+                            {f.scoring_json?.base_score == null
+                              ? "未评分"
+                              : `${String(f.scoring_json.standard)} ${String(f.scoring_json.version)} · ${String(f.scoring_json.base_score)} · ${String(f.scoring_json.exploitability_label ?? "难度未知")}`}
+                          </div>
                         </td>
                         <td className={tdCls}>
                           <button type="button" className="text-left font-medium text-zinc-100 hover:text-acc-400">{f.title}</button>

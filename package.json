@@ -38,6 +38,8 @@
     "ci:unit:role-colors": "pnpm --filter @deepsonar/scheduler exec tsx --test src/role-colors.test.ts src/canvas-delta.test.ts && pnpm --filter @deepsonar/web exec tsx --test src/role-colors.test.ts",
     "ci:integration:role-colors": "pnpm --filter @deepsonar/scheduler exec tsx --test src/role-colors.integration.test.ts",
     "ci:unit:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.test.ts",
+    "ci:unit:finding-protocol": "pnpm --filter @deepsonar/scheduler exec tsx --test src/finding-protocol.test.ts",
+    "ci:integration:finding-protocol": "pnpm --filter @deepsonar/scheduler exec tsx --test src/finding-protocol.integration.test.ts",
     "ci:unit:executor-real": "pnpm --filter @deepsonar/scheduler exec tsx --test src/executor-real.test.ts",
     "ci:unit:credential-compatibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/credential-compatibility.test.ts",
     "ci:unit:migrations": "pnpm --filter @deepsonar/scheduler test:migrations",

@@ -1,7 +1,8 @@
 import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Pause, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type CanvasSummary, type Project } from "../api";
+import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type Project } from "../api";
+import { FindingProtocolEditor } from "../FindingProtocolEditor";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle } from "../task-lifecycle";
 import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, formatElapsed, formatTime, relativeTime } from "../ui";
@@ -25,7 +26,16 @@ function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | n
 
 function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
   const [form, setForm] = useState<{ title: string; content: string; network: "project" | "allow" | "deny" }>({ title: "", content: "", network: "project" });
+  const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
+  const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  useEffect(() => {
+    let active = true;
+    api.settings(projectId).then((settings) => {
+      if (active) setEffectiveFindingProtocol(settings.effective_finding_protocol);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [projectId]);
   return (
     <div className="surface-shell mb-5 deepsonar-reveal">
       <form
@@ -40,6 +50,7 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
               title: form.title.trim(),
               content: form.content.trim(),
               ...(form.network === "project" ? {} : { allow_egress: form.network === "allow" }),
+              ...(findingProtocol ? { finding_protocol: findingProtocol } : {}),
             });
             flash("任务已入队，Hub 正在决定执行路径");
             onDone(result.canvas_id);
@@ -114,6 +125,14 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
               })}
             </div>
           </fieldset>
+          {effectiveFindingProtocol && (
+            <FindingProtocolEditor
+              value={findingProtocol}
+              effective={effectiveFindingProtocol}
+              onChange={setFindingProtocol}
+              allowInherit
+            />
+          )}
         </div>
 
         <div className="mt-6 flex flex-col gap-3 border-t border-white/[.045] pt-4 sm:flex-row sm:items-center">

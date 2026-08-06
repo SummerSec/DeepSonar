@@ -4,12 +4,15 @@ import type {
   CanvasLifecycleRollup,
   CredentialBatchBindingImpact,
   CredentialBatchBindingRequest,
+  EffectiveFindingProtocol,
+  FindingProtocolConfig,
   ProviderAccountCatalogItem,
   PlatformToolConfig,
   ReadinessResponse,
 } from "@deepsonar/shared-types";
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
+export type { EffectiveFindingProtocol, FindingProtocolConfig } from "@deepsonar/shared-types";
 
 export interface Project {
   id: string;
@@ -217,7 +220,12 @@ export interface FindingSummary {
   node_id: string | null;
   fingerprint: string;
   title: string;
-  severity: string;
+  severity: string | null;
+  profile: string;
+  category: string | null;
+  tags_json: string[];
+  evidence_refs_json: string[];
+  scoring_json: Record<string, unknown>;
   location: string | null;
   summary: string | null;
   verify_status: string;
@@ -459,6 +467,8 @@ export interface ProjectSettings {
   rules: Record<string, unknown>;
   roles: { enabled: string[] | null };
   effective_rules: EffectiveRules;
+  finding_protocol: FindingProtocolConfig | null;
+  effective_finding_protocol: EffectiveFindingProtocol;
 }
 
 /** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='hub' = 唯一决策中枢；kind='system' = 系统角色（verify/report 等） */
@@ -488,6 +498,8 @@ export type RoleInput = {
 export interface GlobalSettings {
   rules: Record<string, unknown>;
   effective_rules: EffectiveRules;
+  finding_protocol: FindingProtocolConfig | null;
+  effective_finding_protocol: EffectiveFindingProtocol;
   active_by_agent_cli: Record<string, number>;
   active_by_provider: Record<string, number>;
 }
@@ -1257,6 +1269,7 @@ export const api = {
       content: string;
       /** 省略则继承项目设置；服务端在任务创建时冻结。 */
       allow_egress?: boolean;
+      finding_protocol?: FindingProtocolConfig;
     },
   ) => send<{ canvas_id: string; job: { id: string; status: string } }>("POST", `/projects/${projectId}/tasks`, t),
   /** 任务创建前的 Scheduler 权威就绪检查；网络覆盖只作用于本次任务。 */
@@ -1378,6 +1391,8 @@ export const api = {
   findingsPage: (opts?: {
     project_id?: string;
     severity?: string;
+    profile?: string;
+    category?: string;
     verify_status?: string;
     disposition?: string;
     /** 只拉某任务画布的发现，不混其它任务 */
@@ -1388,6 +1403,8 @@ export const api = {
       `/findings${qs({
         project_id: opts?.project_id,
         severity: opts?.severity,
+        profile: opts?.profile,
+        category: opts?.category,
         verify_status: opts?.verify_status,
         disposition: opts?.disposition,
         canvas_id: opts?.canvas_id,
@@ -1398,12 +1415,16 @@ export const api = {
   findings: async (opts?: {
     project_id?: string;
     severity?: string;
+    profile?: string;
+    category?: string;
     verify_status?: string;
     disposition?: string;
     canvas_id?: string;
   }) => unwrapPage(await get<FindingSummary[] | PageEnvelope<FindingSummary>>(`/findings${qs({
     project_id: opts?.project_id,
     severity: opts?.severity,
+    profile: opts?.profile,
+    category: opts?.category,
     verify_status: opts?.verify_status,
     disposition: opts?.disposition,
     canvas_id: opts?.canvas_id,
@@ -1453,6 +1474,7 @@ export const api = {
     body: {
       rules?: Record<string, unknown>;
       roles?: { enabled: string[] | null };
+      finding_protocol?: FindingProtocolConfig | null;
     },
   ) => send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),
@@ -1562,7 +1584,7 @@ export const api = {
   cancelImport: (id: string) => send<DataImportRow>("POST", `/imports/${id}/cancel`),
   deleteImport: (id: string) => send<{ ok: boolean }>("DELETE", `/imports/${id}`),
   globalSettings: () => get<GlobalSettings>("/global-settings"),
-  patchGlobalSettings: (body: { rules: Record<string, unknown> }) =>
+  patchGlobalSettings: (body: { rules?: Record<string, unknown>; finding_protocol?: FindingProtocolConfig | null }) =>
     send<GlobalSettings>("PATCH", "/global-settings", body),
   skillSources: () => get<SkillSource[]>("/skill-sources"),
   skillSource: (id: string) => get<SkillSourceDetail>(`/skill-sources/${id}`),

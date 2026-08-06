@@ -7,6 +7,7 @@ import {
   CredentialBatchBindingErrorCode,
   CredentialBatchBindingRepairAction,
   CredentialBatchBindingRequest,
+  FindingProtocolConfig,
   parseModuleSelector,
   requiredPlatformTools,
 } from "@deepsonar/shared-types";
@@ -139,6 +140,7 @@ import { allocateRoleUiColor } from "./role-colors.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { registerReportRoutes } from "./domains/report-convergence/routes.js";
 import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
+import { resolveFindingProtocol } from "./finding-protocol.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -222,8 +224,19 @@ export function parseConcurrencyRulesPatch(input: unknown): Record<string, unkno
 const SettingsPatchBody = z.object({
   rules: RulesPatch.optional(),
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
+  finding_protocol: FindingProtocolConfig.nullable().optional(),
 });
-const GlobalSettingsPatchBody = z.object({ rules: RulesPatch });
+const GlobalSettingsPatchBody = z.object({
+  rules: RulesPatch.optional(),
+  finding_protocol: FindingProtocolConfig.nullable().optional(),
+}).refine((body) => body.rules !== undefined || body.finding_protocol !== undefined, {
+  message: "at least one global setting is required",
+});
+
+function parseStoredFindingProtocolConfig(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  return FindingProtocolConfig.parse(value);
+}
 
 // 角色注册表：name 即 job.type，description 供 Hub 选角色时使用。
 const RoleBody = z.object({
@@ -249,6 +262,8 @@ const CreateTaskBody = z.object({
   content: z.string().trim().min(1).max(20_000),
   /** 省略则继承项目 allowEgress；创建画布时会冻结最终值。 */
   allow_egress: z.boolean().optional(),
+  /** 省略则继承项目/全局；声明字段只覆盖对应键。 */
+  finding_protocol: FindingProtocolConfig.optional(),
 });
 const TriggerTaskBody = z.object({
   event_id: z.string().trim().min(1).max(200),
@@ -1070,18 +1085,27 @@ export function registerRoutes(app: FastifyInstance) {
     if (!project) return reply.code(404).send({ error: "project not found" });
     if (project.status !== "active") return reply.code(409).send({ error: "项目已归档，不能新建任务" });
 
-    const canvasId = await ensureCanvasForTask({
-      projectId: id,
-      title: body.title,
-      target: {
+    let canvasId: string;
+    try {
+      canvasId = await ensureCanvasForTask({
+        projectId: id,
         title: body.title,
-        content: body.content,
-        goal: body.content,
-        ...(body.allow_egress !== undefined
-          ? { network_policy: { allow_egress: body.allow_egress } }
-          : {}),
-      },
-    });
+        target: {
+          title: body.title,
+          content: body.content,
+          goal: body.content,
+          ...(body.finding_protocol ? { finding_protocol: body.finding_protocol } : {}),
+          ...(body.allow_egress !== undefined
+            ? { network_policy: { allow_egress: body.allow_egress } }
+            : {}),
+        },
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("finding protocol")) {
+        return reply.code(400).send({ error: error.message });
+      }
+      throw error;
+    }
     const { job, duplicated } = await createJob({
       projectId: id,
       canvasId,
@@ -2850,14 +2874,18 @@ export function registerRoutes(app: FastifyInstance) {
 
   app.get("/global-settings", async () => {
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+    const storedRules = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+    const findingProtocol = parseStoredFindingProtocolConfig(storedRules.finding_protocol);
     const activeRows = await sql`
       SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
              agent_snapshot_json->>'credential_provider' AS provider,
              COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1, 2`;
     return {
-      rules: ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>,
+      rules: storedRules,
       effective_rules: await globalRules(sql),
+      finding_protocol: findingProtocol ?? null,
+      effective_finding_protocol: resolveFindingProtocol(findingProtocol),
       active_by_agent_cli: aggregateActive(activeRows, "agent_cli"),
       active_by_provider: aggregateActive(activeRows, "provider"),
     };
@@ -2871,7 +2899,20 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invalid global settings rules", details: error instanceof z.ZodError ? error.issues : undefined });
     }
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const merged = mergeGlobalRulesPatch(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>, body.rules);
+    const current = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+    const merged = body.rules ? mergeGlobalRulesPatch(current, body.rules) : { ...current };
+    if (body.finding_protocol !== undefined) {
+      if (body.finding_protocol === null) delete merged.finding_protocol;
+      else merged.finding_protocol = body.finding_protocol;
+    }
+    let effectiveFindingProtocol;
+    try {
+      effectiveFindingProtocol = resolveFindingProtocol(
+        parseStoredFindingProtocolConfig(merged.finding_protocol),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid finding protocol" });
+    }
     await sql`UPDATE global_settings SET rules_json = ${sql.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
     // Wake a LISTEN-driven dispatcher so a newly available slot/CLI cap is
     // observed without waiting for an optional polling interval or restart.
@@ -2881,7 +2922,12 @@ export function registerRoutes(app: FastifyInstance) {
       action: "settings.global_update",
       resourceType: "global_settings",
       resourceId: "global",
-      after: { changed_keys: Object.keys(body.rules) },
+      after: {
+        changed_keys: [
+          ...Object.keys(body.rules ?? {}),
+          ...(body.finding_protocol !== undefined ? ["finding_protocol"] : []),
+        ],
+      },
     });
     const activeRows = await sql`
       SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
@@ -2891,6 +2937,8 @@ export function registerRoutes(app: FastifyInstance) {
     return {
       rules: merged,
       effective_rules: await globalRules(sql),
+      finding_protocol: parseStoredFindingProtocolConfig(merged.finding_protocol) ?? null,
+      effective_finding_protocol: effectiveFindingProtocol,
       active_by_agent_cli: aggregateActive(activeRows, "agent_cli"),
       active_by_provider: aggregateActive(activeRows, "provider"),
     };
@@ -2944,11 +2992,18 @@ export function registerRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
+    const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    const globalProtocol = parseStoredFindingProtocolConfig(
+      ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
+    );
+    const projectProtocol = parseStoredFindingProtocolConfig(cfg.finding_protocol);
     return {
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
+      finding_protocol: projectProtocol ?? null,
+      effective_finding_protocol: resolveFindingProtocol(globalProtocol, projectProtocol),
     };
   });
 
@@ -2972,6 +3027,21 @@ export function registerRoutes(app: FastifyInstance) {
       else if (body.roles.enabled !== undefined) roles.enabled = body.roles.enabled;
       cfg.roles = roles;
     }
+    if (body.finding_protocol !== undefined) {
+      if (body.finding_protocol === null) delete cfg.finding_protocol;
+      else cfg.finding_protocol = body.finding_protocol;
+    }
+    const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+    const globalProtocol = parseStoredFindingProtocolConfig(
+      ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
+    );
+    const projectProtocol = parseStoredFindingProtocolConfig(cfg.finding_protocol);
+    let effectiveFindingProtocol;
+    try {
+      effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid finding protocol" });
+    }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
     // Project rule changes can alter effective task behavior; wake dispatch so
     // pending jobs do not wait for the next unrelated enqueue event.
@@ -2988,6 +3058,8 @@ export function registerRoutes(app: FastifyInstance) {
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
+      finding_protocol: projectProtocol ?? null,
+      effective_finding_protocol: effectiveFindingProtocol,
     };
   });
 

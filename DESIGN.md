@@ -40,7 +40,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 | **Job** | 一次沙箱运行：`hub_reason` / 角色名 / `verify_finding` / `report` 等 |
 | **Intent** | Hub 下发；与角色 Job 1:1；`prompt` 直接注入 Worker CLI |
 | **Fact** | 工作角色增量产出；可带 verification 证据块 |
-| **Finding** | 审计假设 → 全量进 verify 生命周期 → confirmed / needs_human / … |
+| **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`）；`severity` 可选，`scoring` 可选且由 Scheduler 规范化 → 全量进 verify 生命周期 → confirmed / needs_human / … |
 | **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
 | **Task report** | 画布收敛后生成的任务总报告；汇总全部 Finding，SARIF 仅含 `confirmed` |
 | **Root** | 画布根；阶段如 `analysis_complete` / `reporting` / `succeeded` |
@@ -69,6 +69,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
 - **双轨报告（#43）**：收敛门通过后，Scheduler 为每个画布幂等派发一个 Task Report；每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。Finding 报告输入写入 `report-input.json` 并记录 checksum，`pending/generating` 期间每个 Finding 只允许一个活跃版本；手动刷新/重试创建下一版本，失败只更新报告行，不改变 Finding 状态。
+- **通用 Finding 协议（#44）**：`profile`、`category`、`tags`、`evidence_refs` 是跨安全、质量、合规等领域的通用字段；严重度可不提供，CVSS 评分可选。有效协议由全局、项目、任务三层按任务 > 项目 > 全局合并，在建画布时写入 `target_json.effective_finding_protocol` 冻结；Job 和 Agent 只读取该快照。Scheduler 校验 profile/字段边界、去重并决定 Verify，受支持的 CVSS 4.0/3.1 向量由系统重算，协议显式接受的未知版本保留原始向量/指标。
 
 ## 5. Job 与并发
 
@@ -88,16 +89,20 @@ pending → claimed → provisioning → running
 |----|------|------|
 | 全局 | `global_settings`、全局 `role_configs`、平台 skill 源、镜像市场 | 缺省 |
 | 项目 | 规则、启用角色、项目 RoleConfig、出网默认 | **压过全局** |
-| 任务/画布 | `target_json`、出网覆盖、（拟）Finding 协议等 | **压过项目** |
+| 任务/画布 | `target_json`、出网覆盖、Finding 协议等 | **压过项目** |
 | Job | `agent_snapshot_json` 创建时冻结 | 执行只认快照 |
 
 **冲突规则：任务 > 项目 > 全局**（RoleConfig 已如此；Finding 协议等演进配置同此心智）。
+
+Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项目
+`projects.config_json.finding_protocol`，任务创建请求可用 `finding_protocol` 只覆盖声明的键；列表字段在高层整表替换。解析后的 `EffectiveFindingProtocol`（模式、默认/允许 profiles、评分策略、显示名和来源）随新画布冻结，后续配置修改只影响新任务。
 
 ## 7. 注入与读图（as-built）
 
 - `buildGraphSnapshot(canvasId, scope?, opts?)` → YAML：goal、facts/findings 摘要、open/concluded intents、hints。
 - **GraphScope**（`hub` | `agent` | `verify` | `report`）与**整图字符预算**已在 `graph.ts` 落地（#30）；Hub/Worker/Verify 注入投影不同，仍须关注超预算截断与索引完整性。
 - 单字段仍有截断（description/summary 等）；`job` 类型节点**不进** YAML。
+- Worker 运行包会注入画布冻结的 Finding 协议说明（模式、允许 profile、CVSS 接受版本和必评分 profile）；Agent 只能通过严格的 `emit_finding` MCP 提交提案，不能写 `raw` 或修改协议、验证派生和 severity/scoring 的系统归一化。
 - Skill：`skill_sources` sync catalog；RoleConfig `modules` 现为 `"source_id:module_id"` / `plugin:` / `source:*` 展开为 embedded skills/commands。手写同 kind/name 配置覆盖 catalog 模块时，最终 expanded 集合/hash 只保留实际嵌入内容，并记录 `manual-override`。Job 快照同时冻结模块元数据哈希与结构化 `missing_modules`；同一 materializer 命名空间的重名模块全部排除，禁止顺序覆盖；materializer 对组件名和 skill 文件路径执行严格子树安全校验。
 
 ## 8. 观测与证据
@@ -128,6 +133,7 @@ pending → claimed → provisioning → running
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
 - **任务是否在跑：以 `active_count` / 活跃 Job 为准**；勿把 `last_job_status=succeeded` 当成任务已完成（#46）
 - 画布只读；Finding 详情偏 GitHub Issue（disposition + 评论可唤醒 Hub）
+- Finding 列表/画布运行区显示冻结的 profile、可选 category 与 CVSS 版本/基础分；按 severity、profile、verify 状态筛选。详情保留向量、定性严重度、利用难度和原始 JSON；报告按 profile 分组、展示 category，并携带 tags、evidence_refs 与 scoring。
 - Finding 详情直接展示服务端统一的验证追踪（来源、review/test Fact、Intent/Fact 有向流、Verify 轮次与 exact Hub）；可用 `traceFinding` 深链在画布中淡化或隐藏非链路节点，并按 `focusNode` 定位单个证据节点。弱关联不从 prompt 推断，未连边 Intent 与证据缺口显式呈现。
 
 ## 11. 已共识演进（未完全落地）
@@ -145,7 +151,7 @@ pending → claimed → provisioning → running
 | 分层共享资产 | #41 | **Runtime foundation landed**：仅接受带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，并固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`；fresh/warm attach 后均校验实际 mount。资产元数据/API、Job 快照、人工与 Agent publish、分层策略及 UI 仍待实现。 |
 | 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
 | 双轨报告 | #43 | **已完成**：任务收敛后保留一份 Task Report；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report，支持手动刷新/重试并限制单 Finding 同时一个活跃报告，不修改 Finding 状态 |
-| 通用 Finding + CVSS | #44 | profile 可配置；任务>项目>全局；运行中显著标识；CVSS 主流版+可演进 |
+| 通用 Finding + CVSS | #44 | **已完成**：通用 `profile/category/tags/evidence_refs` 与可选 severity/scoring；协议按任务>项目>全局解析并随画布冻结；Agent 通过严格 MCP 提案，Scheduler 重算 CVSS 4.0/3.1、保留协议允许的未知版本原始数据；Web/报告支持标识、筛选与分组 |
 | 任务卡片状态 | #46 | 任务级相位与 `active_count` 同源 |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
 | 官方运行镜像多 channel catalog | #70 | **已完成**：v2 canonical digest/platform/size + `registry_refs`/`registry_evidence` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 按 ACR→GHCR→Docker Hub 发布并对每个可用目的地执行真实 `imagetools inspect`，配置通道失败时清单生成 fail-closed，v2 Release asset 与 bundled fallback 同步；平台全局通道由 Scheduler 落库并经 `GET /runtime-images/registry` 的 `selected_channel` 读取、`PATCH /runtime-images/registry/channel`（`images:manage`）切换，Job 创建时冻结所选 digest/ref，pull/resolution 对未发布通道 fail-closed；Web 市场提供固定三选项通道选择器，与 CPU 平台筛选分离，展示加载/403/切换状态并在切换后刷新清单与镜像行 |
@@ -159,7 +165,7 @@ pending → claimed → provisioning → running
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 最新 fresh 基线；现有库通过连续 `database/migrations/` 升级，改表须 bump `SCHEMA_VERSION` |
+| `database/schema.sql` | 最新 fresh 基线（schema v20）；现有库通过连续 `database/migrations/` 升级，改表须 bump `SCHEMA_VERSION` |
 | `docs/ARCHITECTURE.md` | 完整架构与威胁建模 |
 | `deploy/` | 生产与 real 模式编排 |
 
@@ -187,7 +193,7 @@ pending → claimed → provisioning → running
 | `list_available_roles` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
 | `emit_progress` | 空白/超长 message、percent 越界或非数字 | `invalid_progress` |
 | `emit_fact` | 缺 title/description、未知字段、非法 verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
-| `emit_finding` | 非法 severity、空白/超长字段、写入内部 `raw` | `invalid_payload` / `unknown_field` |
+| `emit_finding` | 非法 profile/category、空白/超长字段、未接受的评分版本、写入内部 `raw` | `invalid_payload` / `unknown_field` |
 | `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` |
 | `mark_job_done` | 空白 summary、verify 缺 verdict、rework 缺 missing_evidence、非 verify 乱传 verdict | `invalid_done` |
 | `request_human` | 空白/超长 reason、未授权角色 | `invalid_human` / `tool_not_allowed` |

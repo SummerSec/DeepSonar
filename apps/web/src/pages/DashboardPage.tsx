@@ -30,7 +30,7 @@ export function DashboardPage() {
 
   const activeJobs = jobs.filter((job) => ACTIVE.has(job.status));
   const failedJobs = jobs.filter((job) => FAILURE.has(job.status));
-  const criticalFindings = findings.filter((finding) => ["critical", "high"].includes(finding.severity));
+  const criticalFindings = findings.filter((finding) => finding.severity != null && ["critical", "high"].includes(finding.severity));
   const humanJobs = jobs.filter((job) => job.status === "waiting_human");
   const activeProjectCount = projects.filter((project) => project.status === "active").length;
   const attentionCount = humanJobs.length + failedJobs.length + criticalFindings.filter((f) => f.verify_status !== "confirmed").length;

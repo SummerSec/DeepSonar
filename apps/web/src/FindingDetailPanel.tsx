@@ -39,6 +39,15 @@ function shortId(id: string) {
   return id.slice(0, 8);
 }
 
+function ProtocolDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="font-mono text-[9px] uppercase text-zinc-600">{label}</div>
+      <div className="mt-1 break-words font-mono text-[11px] text-zinc-300">{value}</div>
+    </div>
+  );
+}
+
 function SidebarField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="theme-divider border-b py-3 last:border-0">
@@ -373,6 +382,36 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       </div>
                     )}
                   </div>
+                </section>
+
+                <section className="theme-surface mt-4 rounded-xl px-4 py-4 ring-1" aria-label="Finding 协议与评分">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-acc-500/[.08] px-2.5 py-1 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/20">{f.profile}</span>
+                    {f.category && <span className="rounded-full bg-white/[.035] px-2.5 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.07]">{f.category}</span>}
+                    <span className="font-mono text-[10px] text-zinc-500">本条 profile 已冻结</span>
+                  </div>
+                  {f.scoring_json && Object.keys(f.scoring_json).length > 0 ? (
+                    <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <ProtocolDatum label="标准" value={`${String(f.scoring_json.standard)} ${String(f.scoring_json.version)}`} />
+                      <ProtocolDatum label="基础分" value={f.scoring_json.base_score == null ? "不支持" : String(f.scoring_json.base_score)} />
+                      <ProtocolDatum label="定性" value={String(f.scoring_json.base_severity ?? "未评分")} />
+                      <ProtocolDatum label="利用难度" value={String(f.scoring_json.exploitability_label ?? "未知")} />
+                      <div className="col-span-2 sm:col-span-4">
+                        <div className="font-mono text-[9px] uppercase text-zinc-600">Vector</div>
+                        <code className="mt-1 block break-all rounded bg-black/20 px-2.5 py-2 font-mono text-[10px] leading-5 text-zinc-400">{String(f.scoring_json.vector ?? "未提供")}</code>
+                      </div>
+                      {Boolean(f.scoring_json.metrics) && Object.keys(f.scoring_json.metrics as Record<string, unknown>).length > 0 && (
+                        <div className="col-span-2 sm:col-span-4">
+                          <div className="font-mono text-[9px] uppercase text-zinc-600">Metrics</div>
+                          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 px-2.5 py-2 font-mono text-[10px] leading-5 text-zinc-400">
+                            {JSON.stringify(f.scoring_json.metrics, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-[12px] text-zinc-600">未评分。该 profile 不强制使用 CVSS。</p>
+                  )}
                 </section>
 
                 {reportEligible && (

@@ -10,6 +10,8 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     const q = req.query as {
       project_id?: string;
       severity?: string;
+      profile?: string;
+      category?: string;
       verify_status?: string;
       disposition?: string;
       canvas_id?: string;
@@ -19,6 +21,8 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     };
     const projectId = q.project_id || req.actor?.projectId || null;
     const severity = q.severity || null;
+    const profile = q.profile || null;
+    const category = q.category || null;
     const verifyStatus = q.verify_status || null;
     const canvasId = q.canvas_id || null;
     const disposition = q.disposition || null;
@@ -31,6 +35,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     const limit = paginated ? pageLimit(q.limit) : 500;
     const rows = await sql`
       SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
+             f.profile, f.category, f.tags_json, f.evidence_refs_json, f.scoring_json,
              f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
              f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
              p.name AS project_name, j.canvas_id
@@ -39,6 +44,8 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       JOIN jobs j ON j.id = f.job_id
       WHERE (${projectId}::uuid IS NULL OR f.project_id = ${projectId}::uuid)
         AND (${severity}::text IS NULL OR f.severity = ${severity})
+        AND (${profile}::text IS NULL OR f.profile = ${profile})
+        AND (${category}::text IS NULL OR f.category = ${category})
         AND (${verifyStatus}::text IS NULL OR f.verify_status = ${verifyStatus})
         AND (${disposition}::text IS NULL OR f.disposition = ${disposition})
         AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId})

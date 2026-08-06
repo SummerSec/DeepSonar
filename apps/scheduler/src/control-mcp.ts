@@ -59,7 +59,7 @@ const descriptions = {
   list_available_roles: "返回当前 Hub Job 可派发的数据库角色。只使用返回的 name，不得猜测或使用固定角色清单。",
   emit_progress: "增量上报当前动作或阶段进展。可在执行中多次调用。",
   emit_fact: "把一个新的、可验证的增量事实实时写入任务画布。Hub 回弹补证 Job 可附带 verification 结构化证据。可多次调用。",
-  emit_finding: "实时提交一个有证据的安全 Finding；调度器负责去重和决定是否验证。可多次调用。",
+  emit_finding: "实时提交一条有证据的通用 Finding；profile 与可选评分须符合任务冻结协议，调度器负责校验、重算、去重和验证。可多次调用。",
   submit_hub_decision: "提交本轮 Hub 的 complete 或 intents 决策，二者必须且只能提供一个。from 必须填写当前 YAML root_id/fact/finding 节点的 UUID 值，不能填写字段名 root_id、别名或占位符。",
   mark_job_done: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
   request_human: "只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",

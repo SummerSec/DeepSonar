@@ -5,7 +5,9 @@ import {
   ControlEventEnvelope,
   EmitFactPayload,
   EmitFindingPayload,
+  EffectiveFindingProtocol,
   EventEnvelope,
+  FindingProtocolConfig,
   type EventEnvelopeInput,
   FindingPayload,
   HumanPayload,
@@ -34,6 +36,7 @@ import { CONTROL_MCP_NAME, CONTROL_MCP_SERVER, CONTROL_SEMANTIC_EVENT_TYPES } fr
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
 import { inc } from "./metrics.js";
+import { resolveFindingProtocol } from "./finding-protocol.js";
 import {
   CONTROL_INPUT_ERROR_CODES,
   ControlInputError,
@@ -367,6 +370,29 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
     ? await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`
     : [undefined];
   const taskTarget = ((canvas?.target_json ?? {}) as Record<string, unknown>);
+  let effectiveFindingProtocol = EffectiveFindingProtocol.safeParse(
+    taskTarget.effective_finding_protocol,
+  ).data;
+  if (!effectiveFindingProtocol) {
+    // Compatibility for pre-v20 canvases only. New tasks are frozen by
+    // ensureCanvasForTask and must never follow later configuration changes.
+    const [globalSettings] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+    const [project] = await sql`SELECT config_json FROM projects WHERE id = ${job.project_id as string}`;
+    const globalValue = ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol;
+    const projectValue = ((project?.config_json ?? {}) as Record<string, unknown>).finding_protocol;
+    const globalProtocol = globalValue == null ? undefined : FindingProtocolConfig.parse(globalValue);
+    const projectProtocol = projectValue == null ? undefined : FindingProtocolConfig.parse(projectValue);
+    effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
+  }
+  const findingProtocolGuide = `## 当前生效 Finding 协议（Scheduler 冻结）
+名称：${effectiveFindingProtocol.display_name}
+来源：${effectiveFindingProtocol.source}
+模式：${effectiveFindingProtocol.mode}
+默认 profile：${effectiveFindingProtocol.default_profile}
+允许 profiles：${effectiveFindingProtocol.allowed_profiles.join(", ")}
+评分：${effectiveFindingProtocol.scoring.default_standard} ${effectiveFindingProtocol.scoring.default_version}；接受 ${effectiveFindingProtocol.scoring.accepted_versions.join(", ")}
+必须评分的 profiles：${effectiveFindingProtocol.scoring.require_scoring_for_profiles.join(", ") || "无"}
+emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受支持 CVSS 分数并拒绝冲突输入。`;
   const networkPolicy = ((taskTarget.network_policy ?? {}) as Record<string, unknown>);
   if (typeof networkPolicy.allow_egress !== "boolean") {
     throw new Error(`job ${jobId} 的画布缺少冻结的 network_policy.allow_egress`);
@@ -640,7 +666,7 @@ ${inputBlock}
 ${workerPrompt}
 ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目标：${taskGoal}` : ""}`;
   }
-  initialInput += `\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
+  initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
 
   const roleDescription = snapshot.role_description;
   const instructions = instructionDocument({
@@ -649,7 +675,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     customInstructions: snapshot.instructions_markdown,
     allowEgress,
     contract,
-    toolGuide,
+    toolGuide: `${findingProtocolGuide}\n\n${toolGuide}`,
     enabledTools: controlToolNames,
     disabledTools: disabledControlToolNames,
   });
@@ -671,6 +697,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     role_kind: snapshot.role_kind,
     provider,
     network: { allow_egress: allowEgress },
+    finding_protocol: effectiveFindingProtocol,
     env_names: Object.keys(env).sort(),
     ...moduleEvidence,
     skills: { names: componentNames(snapshot.skills), count: snapshot.skills.length, sha256: jsonHash(snapshot.skills) },
@@ -744,6 +771,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     component_manifest_sha256: jsonHash(componentManifest),
     provider_config_files: componentManifest.provider_files,
     allow_egress: allowEgress,
+    effective_finding_protocol: effectiveFindingProtocol,
     module_selectors: moduleEvidence.module_selectors,
     missing_modules: moduleEvidence.missing_modules,
     module_content_hash: moduleEvidence.module_content_hash,

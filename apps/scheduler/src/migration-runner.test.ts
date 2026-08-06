@@ -30,12 +30,13 @@ import {
   TRUSTED_V17_CATALOG_SHA256,
   TRUSTED_V18_CATALOG_SHA256,
   TRUSTED_V19_CATALOG_SHA256,
+  TRUSTED_V20_CATALOG_SHA256,
   TRUSTED_CATALOG_SHA256_BY_VERSION,
 } from "./schema-version.js";
 
 test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", async () => {
   const migrations = discoverMigrations();
-  assert.deepEqual(migrations.map((migration) => migration.version), [13, 14, 15, 16, 17, 18, 19]);
+  assert.deepEqual(migrations.map((migration) => migration.version), [13, 14, 15, 16, 17, 18, 19, 20]);
   assert.equal(migrations[0]?.filename, "0013_add_schema_migrations.sql");
   assert.equal(migrations[1]?.filename, "0014_add_canvas_change_log.sql");
   assert.equal(migrations[2]?.filename, "0015_credential_health_metadata.sql");
@@ -43,10 +44,11 @@ test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", asyn
   assert.equal(migrations[4]?.filename, "0017_add_event_rate_limits.sql");
   assert.equal(migrations[5]?.filename, "0018_runtime_registry_channels.sql");
   assert.equal(migrations[6]?.filename, "0019_finding_reports.sql");
+  assert.equal(migrations[7]?.filename, "0020_finding_protocol.sql");
   assert.match(migrations[0]?.checksum ?? "", /^[0-9a-f]{64}$/);
   assert.equal(parseTableManifest(readTrustedV12Baseline()).has("schema_migrations"), false);
   assert.equal(parseTableManifest(await readFile(SCHEMA_FILE, "utf8")).has("schema_migrations"), true);
-  assert.equal(SCHEMA_VERSION, 19);
+  assert.equal(SCHEMA_VERSION, 20);
   assert.equal(SUPPORTED_BASELINE_VERSION, 12);
   assert.equal(TRUSTED_V12_BASELINE_SHA256.length, 64);
   assert.match(TRUSTED_V12_CATALOG_SHA256, /^[0-9a-f]{64}$/);
@@ -57,11 +59,13 @@ test("migration chain is contiguous, UTF-8, and pinned to the v12 fixture", asyn
   assert.match(TRUSTED_V17_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.match(TRUSTED_V18_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.match(TRUSTED_V19_CATALOG_SHA256, /^[0-9a-f]{64}$/);
+  assert.match(TRUSTED_V20_CATALOG_SHA256, /^[0-9a-f]{64}$/);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SUPPORTED_BASELINE_VERSION], TRUSTED_V12_CATALOG_SHA256);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[13], TRUSTED_V13_CATALOG_SHA256);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[14], TRUSTED_V14_CATALOG_SHA256);
   assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[15], TRUSTED_V15_CATALOG_SHA256);
-  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SCHEMA_VERSION], TRUSTED_V19_CATALOG_SHA256);
+  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[19], TRUSTED_V19_CATALOG_SHA256);
+  assert.equal(TRUSTED_CATALOG_SHA256_BY_VERSION[SCHEMA_VERSION], TRUSTED_V20_CATALOG_SHA256);
   assert.equal(
     ledgerCatalogVersionForTarget(SUPPORTED_BASELINE_VERSION, 16, {
       supportedBaselineVersion: 12,
@@ -146,7 +150,7 @@ async function roleColors(db: ReturnType<typeof postgres>): Promise<{ name: stri
     SELECT name, ui_color FROM agent_roles WHERE kind = 'role' ORDER BY name`;
 }
 
-test("fresh v19 and v12 upgrade have equivalent table/column structure", {
+test("fresh v20 and v12 upgrade have equivalent table/column structure", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -194,11 +198,11 @@ test("fresh v19 and v12 upgrade have equivalent table/column structure", {
     assert.ok(freshRoleColors.every((role) => !reserved.has((role.ui_color ?? "").toLowerCase())));
     assert.equal(
       await catalogFingerprint(freshDb as unknown as MigrationConnection),
-      TRUSTED_V19_CATALOG_SHA256,
+      TRUSTED_V20_CATALOG_SHA256,
     );
     assert.equal(
       await catalogFingerprint(upgradedDb as unknown as MigrationConnection),
-      TRUSTED_V19_CATALOG_SHA256,
+      TRUSTED_V20_CATALOG_SHA256,
     );
     await upgradedDb`DROP INDEX canvases_project_idx`;
     assert.notEqual(
@@ -230,7 +234,7 @@ test("fresh v19 and v12 upgrade have equivalent table/column structure", {
   }
 });
 
-test("v19 schema keeps built-in colors before custom roles and stays unique beyond the palette", {
+test("v20 schema keeps built-in colors before custom roles and stays unique beyond the palette", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -319,7 +323,7 @@ test("a v12 database with legacy or future successful ledger rows fails before v
   }
 });
 
-test("versioned catalog pins continue v19 through a future v20 chain", {
+test("versioned catalog pins continue v20 through a future v21 chain", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -332,7 +336,7 @@ test("versioned catalog pins continue v19 through a future v20 chain", {
   const expectedDb = postgres(expected.url, { max: 2 });
   const bootstrapDb = postgres(bootstrap.url, { max: 2 });
   const directory = await mkdtemp(path.join(os.tmpdir(), "deepsonar-future-migrations-"));
-  const futureSchemaFile = path.join(os.tmpdir(), `deepsonar-schema-v20-${process.pid}-${Date.now()}.sql`);
+  const futureSchemaFile = path.join(os.tmpdir(), `deepsonar-schema-v21-${process.pid}-${Date.now()}.sql`);
   try {
     await applyBaseline(db);
     await withMigrationLock(db);
@@ -353,10 +357,12 @@ test("versioned catalog pins continue v19 through a future v20 chain", {
     const body18 = await readFile(source18, "utf8");
     const source19 = path.join(MIGRATIONS_DIR, "0019_finding_reports.sql");
     const body19 = await readFile(source19, "utf8");
-    const body20 = "ALTER TABLE schema_migrations ADD COLUMN migration20_marker text;\n";
-    const checksum20 = sha256Utf8(Buffer.from(body20, "utf8"));
-    await expectedDb`ALTER TABLE schema_migrations ADD COLUMN migration20_marker text`;
-    const expectedCatalogFingerprint20 = await catalogFingerprint(expectedDb as unknown as MigrationConnection);
+    const source20 = path.join(MIGRATIONS_DIR, "0020_finding_protocol.sql");
+    const body20 = await readFile(source20, "utf8");
+    const body21 = "ALTER TABLE schema_migrations ADD COLUMN migration21_marker text;\n";
+    const checksum21 = sha256Utf8(Buffer.from(body21, "utf8"));
+    await expectedDb`ALTER TABLE schema_migrations ADD COLUMN migration21_marker text`;
+    const expectedCatalogFingerprint21 = await catalogFingerprint(expectedDb as unknown as MigrationConnection);
     await writeFile(path.join(directory, "0013_add_schema_migrations.sql"), body13, "utf8");
     await writeFile(path.join(directory, "0014_add_canvas_change_log.sql"), body14, "utf8");
     await writeFile(path.join(directory, "0015_credential_health_metadata.sql"), body15, "utf8");
@@ -364,20 +370,21 @@ test("versioned catalog pins continue v19 through a future v20 chain", {
     await writeFile(path.join(directory, "0017_add_event_rate_limits.sql"), body17, "utf8");
     await writeFile(path.join(directory, "0018_runtime_registry_channels.sql"), body18, "utf8");
     await writeFile(path.join(directory, "0019_finding_reports.sql"), body19, "utf8");
-    await writeFile(path.join(directory, "0020_add_migration_marker.sql"), body20, "utf8");
+    await writeFile(path.join(directory, "0020_finding_protocol.sql"), body20, "utf8");
+    await writeFile(path.join(directory, "0021_add_migration_marker.sql"), body21, "utf8");
     const latest = await readFile(SCHEMA_FILE, "utf8");
     const futureLatest = latest
-      .replace("INSERT INTO schema_meta (id, version) VALUES ('global', 19);", "INSERT INTO schema_meta (id, version) VALUES ('global', 20);")
-      .replace("  error text,\n", "  error text,\n  migration20_marker text,\n")
-      .replace("        'succeeded');\n\nCREATE TABLE projects", `        'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (20, '0020_add_migration_marker.sql', '${checksum20}', 'succeeded');\n\nCREATE TABLE projects`);
+      .replace("INSERT INTO schema_meta (id, version) VALUES ('global', 20);", "INSERT INTO schema_meta (id, version) VALUES ('global', 21);")
+      .replace("  error text,\n", "  error text,\n  migration21_marker text,\n")
+      .replace("        'succeeded');\n\nCREATE TABLE projects", `        'succeeded');\nINSERT INTO schema_migrations (version, filename, checksum, result)\nVALUES (21, '0021_add_migration_marker.sql', '${checksum21}', 'succeeded');\n\nCREATE TABLE projects`);
     await writeFile(futureSchemaFile, futureLatest, "utf8");
     await db`UPDATE schema_migrations SET checksum = ${"0".repeat(64)} WHERE version = 15 AND result = 'succeeded'`;
     await assert.rejects(
       withMigrationLock(db, {
         schemaFile: futureSchemaFile,
         migrationsDirectory: directory,
-        targetVersion: 20,
-        expectedCatalogFingerprints: { 20: expectedCatalogFingerprint20 },
+        targetVersion: 21,
+        expectedCatalogFingerprints: { 21: expectedCatalogFingerprint21 },
       }),
       /checksum drift/i,
     );
@@ -385,24 +392,24 @@ test("versioned catalog pins continue v19 through a future v20 chain", {
     const applied = await withMigrationLock(db, {
       schemaFile: futureSchemaFile,
       migrationsDirectory: directory,
-      targetVersion: 20,
-      expectedCatalogFingerprints: { 20: expectedCatalogFingerprint20 },
+      targetVersion: 21,
+      expectedCatalogFingerprints: { 21: expectedCatalogFingerprint21 },
     });
-    assert.deepEqual(applied, ["database/migrations/0020_add_migration_marker.sql"]);
+    assert.deepEqual(applied, ["database/migrations/0021_add_migration_marker.sql"]);
     const [meta] = await db<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
-    assert.equal(meta?.version, 20);
+    assert.equal(meta?.version, 21);
     const [marker] = await db<{ column_name: string }[]>`
       SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'schema_migrations' AND column_name = 'migration20_marker'
+      WHERE table_schema = 'public' AND table_name = 'schema_migrations' AND column_name = 'migration21_marker'
     `;
-    assert.equal(marker?.column_name, "migration20_marker");
+    assert.equal(marker?.column_name, "migration21_marker");
 
     await applyBaseline(bootstrapDb);
     const appliedBootstrap = await withMigrationLock(bootstrapDb, {
       schemaFile: futureSchemaFile,
       migrationsDirectory: directory,
-      targetVersion: 20,
-      expectedCatalogFingerprints: { 20: expectedCatalogFingerprint20 },
+      targetVersion: 21,
+      expectedCatalogFingerprints: { 21: expectedCatalogFingerprint21 },
     });
     assert.deepEqual(appliedBootstrap, [
       "database/migrations/0013_add_schema_migrations.sql",
@@ -412,10 +419,11 @@ test("versioned catalog pins continue v19 through a future v20 chain", {
       "database/migrations/0017_add_event_rate_limits.sql",
       "database/migrations/0018_runtime_registry_channels.sql",
       "database/migrations/0019_finding_reports.sql",
-      "database/migrations/0020_add_migration_marker.sql",
+      "database/migrations/0020_finding_protocol.sql",
+      "database/migrations/0021_add_migration_marker.sql",
     ]);
     const [bootstrapMeta] = await bootstrapDb<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
-    assert.equal(bootstrapMeta?.version, 20);
+    assert.equal(bootstrapMeta?.version, 21);
   } finally {
     await db.end();
     await expectedDb.end();
@@ -447,6 +455,7 @@ test("failed migration rolls back, leaves an audit row, and retries", {
     const source17 = path.join(MIGRATIONS_DIR, "0017_add_event_rate_limits.sql");
     const source18 = path.join(MIGRATIONS_DIR, "0018_runtime_registry_channels.sql");
     const source19 = path.join(MIGRATIONS_DIR, "0019_finding_reports.sql");
+    const source20 = path.join(MIGRATIONS_DIR, "0020_finding_protocol.sql");
     const bad = await readFile(source, "utf8");
     await writeFile(path.join(directory, "0013_add_schema_migrations.sql"), `${bad}\nTHIS IS NOT SQL;\n`, "utf8");
     await cp(source14, path.join(directory, "0014_add_canvas_change_log.sql"));
@@ -455,6 +464,7 @@ test("failed migration rolls back, leaves an audit row, and retries", {
     await cp(source17, path.join(directory, "0017_add_event_rate_limits.sql"));
     await cp(source18, path.join(directory, "0018_runtime_registry_channels.sql"));
     await cp(source19, path.join(directory, "0019_finding_reports.sql"));
+    await cp(source20, path.join(directory, "0020_finding_protocol.sql"));
     const failedDb = await db.reserve();
     await failedDb`SELECT pg_advisory_lock(${MIGRATE_LOCK_ID})`;
     try {
@@ -491,7 +501,7 @@ test("failed migration rolls back, leaves an audit row, and retries", {
   }
 });
 
-test("concurrent migration startups apply v19 once", {
+test("concurrent migration startups apply v20 once", {
   skip: !testDatabaseUrl,
 }, async () => {
   const adminUrl = new URL(testDatabaseUrl as string);
@@ -503,7 +513,7 @@ test("concurrent migration startups apply v19 once", {
   try {
     await applyBaseline(first);
     await Promise.all([withMigrationLock(first), withMigrationLock(second)]);
-    const rows = await first<{ count: number }[]>`SELECT count(*)::int AS count FROM schema_migrations WHERE version = 19 AND result = 'succeeded'`;
+    const rows = await first<{ count: number }[]>`SELECT count(*)::int AS count FROM schema_migrations WHERE version = 20 AND result = 'succeeded'`;
     assert.equal(rows[0]?.count, 1);
   } finally {
     await first.end();
