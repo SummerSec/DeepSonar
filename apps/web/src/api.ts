@@ -27,6 +27,35 @@ export interface Project {
   archived_at?: string | null;
 }
 
+export interface SharedAsset {
+  id: string;
+  scope_type: "platform" | "project" | "finding";
+  project_id: string | null;
+  finding_id: string | null;
+  logical_key: string;
+  origin: "human" | "agent" | "system";
+  immutable: boolean;
+  labels_json: Record<string, string>;
+  status: "active" | "archived" | "quarantined";
+  current_version: number;
+  version_id: string;
+  version: number;
+  content_sha256: string;
+  bytes: number;
+  content_type: string;
+  created_by_job_id: string | null;
+  created_at: string;
+}
+
+export interface SharedAssetPolicy {
+  project_id: string;
+  platform_enabled: boolean;
+  revision: number;
+  updated_at?: string;
+}
+
+export interface SharedAssetPage { items: SharedAsset[]; limit: number; offset: number }
+
 export interface CanvasNode {
   id: string;
   node_type: "root" | "job" | "finding" | "note" | "human" | "intent" | "fact" | "report";
@@ -997,6 +1026,19 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function uploadSharedAsset(path: string, file: File, key: string, labels: Record<string, string> = {}): Promise<SharedAsset> {
+  const headers: Record<string, string> = {
+    ...authHeaders(),
+    "content-type": "application/octet-stream",
+    "x-asset-key": key,
+  };
+  if (file.type) headers["x-asset-content-type"] = file.type;
+  if (Object.keys(labels).length) headers["x-asset-labels"] = JSON.stringify(labels);
+  const res = await fetch(`/api${path}`, { method: "POST", headers, body: file });
+  if (!res.ok) throw new Error(await responseErrorDetail(res));
+  return res.json() as Promise<SharedAsset>;
+}
+
 /**
  * Keep browser downloads on the same authenticated fetch path as every other
  * API request.  Native links cannot attach the Bearer token kept in
@@ -1430,6 +1472,24 @@ export const api = {
     canvas_id: opts?.canvas_id,
   })}`)),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
+  projectSharedAssets: (projectId: string, page: { limit?: number; offset?: number } = {}) =>
+    get<SharedAssetPage>(`/projects/${projectId}/shared-assets${qs({ limit: page.limit?.toString(), offset: page.offset?.toString() })}`),
+  findingSharedAssets: (findingId: string, page: { limit?: number; offset?: number } = {}) =>
+    get<SharedAssetPage>(`/findings/${findingId}/shared-assets${qs({ limit: page.limit?.toString(), offset: page.offset?.toString() })}`),
+  platformSharedAssets: (page: { limit?: number; offset?: number } = {}) =>
+    get<SharedAssetPage>(`/platform/shared-assets${qs({ limit: page.limit?.toString(), offset: page.offset?.toString() })}`),
+  sharedAssetPolicy: (projectId: string) => get<SharedAssetPolicy>(`/projects/${projectId}/shared-assets/policy`),
+  updateSharedAssetPolicy: (projectId: string, platform_enabled: boolean) =>
+    send<SharedAssetPolicy>("PATCH", `/projects/${projectId}/shared-assets/policy`, { platform_enabled }),
+  uploadProjectSharedAsset: (projectId: string, file: File, key: string, labels?: Record<string, string>) =>
+    uploadSharedAsset(`/projects/${projectId}/shared-assets`, file, key, labels),
+  uploadFindingSharedAsset: (findingId: string, file: File, key: string, labels?: Record<string, string>) =>
+    uploadSharedAsset(`/findings/${findingId}/shared-assets`, file, key, labels),
+  uploadPlatformSharedAsset: (file: File, key: string, labels?: Record<string, string>) =>
+    uploadSharedAsset("/platform/shared-assets", file, key, labels),
+  archiveSharedAsset: (id: string) => send<SharedAsset>("POST", `/shared-assets/${id}/archive`),
+  downloadSharedAsset: (asset: SharedAsset) =>
+    downloadAuthenticatedFile(`/shared-assets/${asset.id}/content`, safeDownloadFilename(asset.logical_key.split("/").at(-1), "asset")),
   findingReport: (id: string) => get<FindingReport>(`/findings/${id}/report`),
   createFindingReport: (id: string) =>
     send<{ dispatched: boolean; reason?: string; report_id?: string; job_id?: string; version?: number }>(

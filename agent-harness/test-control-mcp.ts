@@ -25,7 +25,7 @@ const restrictedTools = resolvePlatformTools("explore", "role", {
   request_human: false,
   mark_job_done: false,
 });
-if (restrictedTools.join(",") !== "emit_fact,mark_job_done") {
+if (restrictedTools.join(",") !== "list_shared_assets,emit_fact,mark_job_done,publish_shared_asset") {
   throw new Error(`unexpected restricted platform tools: ${restrictedTools.join(",")}`);
 }
 const restrictedGuide = platformToolGuide(restrictedTools);
@@ -63,6 +63,8 @@ const child = spawn(process.execPath, ["--input-type=module", "-e", CONTROL_MCP_
     ...process.env,
     DEEPSONAR_CONTROL_TOOL_NAMES: JSON.stringify([
       "list_available_roles",
+      "list_shared_assets",
+      "publish_shared_asset",
       "emit_progress",
       "emit_fact",
       "emit_finding",
@@ -160,11 +162,27 @@ send(21, "tools/call", {
     intents: [{ from: [], role: "review", description: "复核", prompt: "执行复核" }],
   },
 });
+send(22, "tools/call", {
+  name: "list_shared_assets",
+  arguments: {},
+});
+send(23, "tools/call", {
+  name: "list_shared_assets",
+  arguments: { scope: "unknown" },
+});
+send(24, "tools/call", {
+  name: "publish_shared_asset",
+  arguments: { scope: "project", source_path: "/workspace/output/result.json", key: "output/result.json", content_type: "application/json" },
+});
+send(25, "tools/call", {
+  name: "publish_shared_asset",
+  arguments: { scope: "project", source_path: "/workspace/.deepsonar/shared/catalog.json", key: "catalog.json", content_type: "application/json" },
+});
 
 await new Promise<void>((resolve, reject) => {
   const deadline = setTimeout(() => reject(new Error("MCP response timeout")), 5_000);
   const timer = setInterval(() => {
-    if (replies.trim().split("\n").length >= 21) {
+    if (replies.trim().split("\n").length >= 25) {
       clearTimeout(deadline);
       clearInterval(timer);
       resolve();
@@ -191,7 +209,7 @@ const statusOf = (id: number) => {
   const text = reply?.result?.content?.[0]?.text;
   try { return JSON.parse(text ?? "null"); } catch { return null; }
 };
-for (const id of [5, 7, 9, 11, 13, 15]) {
+for (const id of [5, 7, 9, 11, 13, 15, 24]) {
   const status = statusOf(id);
   if (status?.status !== "schema_validated" || status.phase !== "pending_scheduler_validation") {
     throw new Error(`unexpected valid control tool response ${id}: ${JSON.stringify(rpcReplies.find((item) => item.id === id))}`);
@@ -225,6 +243,12 @@ for (const [id, name] of [[18, "__proto__"], [19, "constructor"], [20, "toString
   if (text.includes(name)) throw new Error(`MCP unknown_tool echoed prototype key ${name}`);
 }
 assertError(21, "invalid_payload");
+const catalogStatus = statusOf(22);
+if (catalogStatus?.version !== 1 || catalogStatus?.readonly !== true || !Array.isArray(catalogStatus.assets)) {
+  throw new Error(`unexpected shared asset catalog response: ${JSON.stringify(catalogStatus)}`);
+}
+assertError(23, "invalid_payload");
+assertError(25, "invalid_payload");
 let hostHubErrorCode = "";
 try {
   parseHubDecisionPayload({

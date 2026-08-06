@@ -23,9 +23,11 @@ export const CONTROL_SEMANTIC_EVENT_TYPES = {
   submit_hub_decision: "hub_decision",
   mark_job_done: "done",
   request_human: "human",
+  publish_shared_asset: "shared_asset_publish",
 } as const;
 
 export const CONTROL_MCP_SERVER = String.raw`import readline from "node:readline";
+import { readFileSync } from "node:fs";
 
 const allowed = new Set(JSON.parse(process.env.DEEPSONAR_CONTROL_TOOL_NAMES || "[]"));
 const availableRoles = JSON.parse(process.env.DEEPSONAR_AVAILABLE_ROLES_JSON || "[]");
@@ -47,6 +49,8 @@ const TOOL_ERROR_CODES = {
   mark_job_done: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidDone)},
   request_human: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidHuman)},
   list_available_roles: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidPayload)},
+  list_shared_assets: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidPayload)},
+  publish_shared_asset: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidPayload)},
 };
 const TOOL_INPUT_SCHEMAS = ${JSON.stringify(ControlToolInputSchemasJson)};
 const MAX_REFERENCES_PER_FROM = ${HUB_REFERENCE_LIMITS.perFrom};
@@ -63,6 +67,8 @@ const descriptions = {
   submit_hub_decision: "提交本轮 Hub 的 complete 或 intents 决策，二者必须且只能提供一个。from 必须填写当前 YAML root_id/fact/finding 节点的 UUID 值，不能填写字段名 root_id、别名或占位符。",
   mark_job_done: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
   request_human: "只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
+  list_shared_assets: "分页读取本 Job 冻结的只读共享资产目录，可按 scope 或逻辑路径前缀过滤。",
+  publish_shared_asset: "提议把当前 /workspace 内文件发布为项目或当前 Finding 的不可变共享资产版本。",
 };
 const definitions = Object.fromEntries(
   Object.keys(TOOL_INPUT_SCHEMAS).map((name) => [name, {
@@ -293,6 +299,17 @@ rl.on("line", (line) => {
         });
       } else if (name === "list_available_roles") {
         reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: JSON.stringify({ roles: availableRoles }) }] } });
+      } else if (name === "list_shared_assets") {
+        let catalog = { version: 1, revision: null, readonly: true, assets: [] };
+        try { catalog = JSON.parse(readFileSync("/workspace/.deepsonar/shared/catalog.json", "utf8")); } catch {}
+        const args = input || {};
+        const matched = Array.isArray(catalog.assets) ? catalog.assets.filter((asset) =>
+          (!args.scope || asset.scope === args.scope) && (!args.prefix || String(asset.key || "").startsWith(args.prefix))
+        ) : [];
+        const limit = Number.isInteger(args.limit) ? args.limit : 100;
+        const offset = Number.isInteger(args.offset) ? args.offset : 0;
+        const assets = matched.slice(offset, offset + limit);
+        reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: JSON.stringify({ ...catalog, assets, total: matched.length, limit, offset, next_offset: offset + assets.length < matched.length ? offset + assets.length : null }) }] } });
       } else {
         reply({
           jsonrpc: "2.0",

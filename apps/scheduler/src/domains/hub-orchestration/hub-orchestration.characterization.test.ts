@@ -42,6 +42,7 @@ test("Hub application keeps no-op guards before touching the transaction", async
     patchCanvasConvergence: async () => ({ hub_paused: false, auto_stopped: false }),
     careSeverities: () => ["critical", "high"],
     resolveAgentSnapshotForJob: async () => ({}),
+    recordJobSharedAssets: async () => {},
     fixedPriorityForJob: () => 500,
     insertEdgeIfAbsent: async () => undefined,
     settleCanvasFindingsAtGuardrail: async () => undefined,

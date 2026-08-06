@@ -1,6 +1,7 @@
 import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
 import type { PlatformToolName } from "@deepsonar/shared-types";
+import type { SharedAssetSelection } from "../shared-assets/application.js";
 
 /** Minimal transaction-shaped client accepted by the snapshot application. */
 export type RoleRuntimeSnapshotTransaction = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
@@ -45,6 +46,9 @@ export interface RoleRuntimeSnapshotResult {
   role_config_version: number | null;
   runtime_image_key: string | null;
   runtime_image: RuntimeImageSnapshot;
+  /** Exact immutable shared-asset versions selected when this Job is created. */
+  shared_assets?: SharedAssetSelection[];
+  shared_assets_revision?: string;
 }
 
 export interface RoleRuntimeSnapshotApplication {

@@ -15,6 +15,7 @@ projects:read / projects:write
 tasks:read / tasks:write
 jobs:control
 findings:read
+assets:read / assets:write / assets:manage
 skills:read / skills:write
 agents:read / agents:write        # 角色、RoleConfig、设置、凭据
 images:read / images:manage / images:approve
@@ -50,6 +51,9 @@ findings:read
 | 导入镜像、重扫、项目启停/固定版本 | `images:manage` |
 | 批准、拒绝、禁用或撤销镜像版本 | `images:approve`（只给平台管理员） |
 | 绑定/同步 Plane | `integrations:read`、`integrations:write` |
+| 查看/下载项目与 Finding 共享资产 | `assets:read` |
+| 上传/归档项目与 Finding 共享资产、修改项目 opt-in | `assets:write` |
+| 管理平台共享资产 | `assets:manage`（只给平台管理员；隐含 assets read/write） |
 
 ## 豁免鉴权（无需 Token）
 
@@ -70,6 +74,7 @@ findings:read
 - `admin` —— 隐式全部 scope，含 `/audit-logs`；
 - Credential **明文任何路径都读不到**；`agents:write` 仅在确需自动化登记/轮换凭据时再给。
 - `images:approve` 可把第三方代码变成可执行环境，与 `admin` 同样只给人类平台管理员。
+- `assets:manage` 可向所有 opt-in 项目注入平台文件，只给人类平台管理员。
 
 ## 其它约束
 

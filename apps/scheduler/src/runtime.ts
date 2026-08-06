@@ -1,4 +1,11 @@
-import { AgentboxRunner, NoopRunner, type SandboxRunner } from "@deepsonar/runtime-sandbox";
+import {
+  AgentboxRunner,
+  DockerSharedAssetsVolumeManager,
+  NoopRunner,
+  NoopSharedAssetsVolumeManager,
+  type SandboxRunner,
+  type SharedAssetsVolumeManager,
+} from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 
 /**
@@ -7,3 +14,6 @@ import { config } from "./config.js";
  */
 export const runner: SandboxRunner =
   config.runtime.agentMode === "real" ? new AgentboxRunner() : new NoopRunner();
+
+export const sharedAssetsVolumeManager: SharedAssetsVolumeManager =
+  config.runtime.agentMode === "real" ? new DockerSharedAssetsVolumeManager() : new NoopSharedAssetsVolumeManager();

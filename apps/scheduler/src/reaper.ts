@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
-import { runner } from "./runtime.js";
+import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
@@ -32,6 +32,10 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
         console.error(`[reaper] 沙箱回收失败 ${sandboxId}:`, e);
       });
     }
+    await sharedAssetsVolumeManager.removeForJob(jobId).catch((e) => {
+      inc("deepsonar_shared_assets_cleanup_failed_total");
+      console.error(`[reaper] 共享资产卷回收失败 ${jobId}:`, e);
+    });
     // §13.1 指标：终局原因计数
     const isTimeout = timedOut.some((x) => x.id === jobId);
     const isProvision = provisionStuck.some((x) => x.id === jobId);

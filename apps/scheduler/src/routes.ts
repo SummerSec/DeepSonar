@@ -140,6 +140,8 @@ import { allocateRoleUiColor } from "./role-colors.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { registerReportRoutes } from "./domains/report-convergence/routes.js";
 import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
+import { registerSharedAssetRoutes } from "./domains/shared-assets/routes.js";
+import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
 
 const SyncProjectBody = z.object({
@@ -507,6 +509,7 @@ export function registerRoutes(app: FastifyInstance) {
   // scope hooks above are installed before it, preserving legacy behavior.
   registerReportRoutes(app);
   registerFindingVerificationRoutes(app);
+  registerSharedAssetRoutes(app);
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
   registerGateway(app);
@@ -1370,6 +1373,7 @@ export function registerRoutes(app: FastifyInstance) {
           followup_depth: 0,
         })}
         RETURNING *`;
+      await recordJobSharedAssets(tx as unknown as typeof sql, hubJob.id as string, snapshot.shared_assets ?? []);
 
       const [{ next_x }] = await tx<[{ next_x: number }]>`
         SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes

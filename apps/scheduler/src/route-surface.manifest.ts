@@ -37,6 +37,7 @@ GET /exports/:id/download
 GET /findings
 GET /findings/:id
 GET /findings/:id/report
+GET /findings/:id/shared-assets
 GET /gateway/*
 GET /global-settings
 GET /health
@@ -52,6 +53,7 @@ GET /metrics
 GET /openapi.json
 GET /plane-info
 GET /platform/exports
+GET /platform/shared-assets
 GET /projects
 GET /projects/:id
 GET /projects/:id/canvas
@@ -61,6 +63,8 @@ GET /projects/:id/readiness
 GET /projects/:id/role-configs
 GET /projects/:id/roles
 GET /projects/:id/settings
+GET /projects/:id/shared-assets
+GET /projects/:id/shared-assets/policy
 GET /readiness
 GET /reports/:id/markdown
 GET /reports/:id/sarif
@@ -73,6 +77,7 @@ GET /runtime-images/registry/pull-status
 GET /runtime-image-versions/:id/usage
 GET /schema
 GET /schema.md
+GET /shared-assets/:id/content
 GET /skill-sources
 GET /skill-sources/:id
 GET /tokens
@@ -86,6 +91,7 @@ PATCH /global-settings
 PATCH /jobs/:id/priority
 PATCH /projects/:id
 PATCH /projects/:id/settings
+PATCH /projects/:id/shared-assets/policy
 PATCH /runtime-images/registry/channel
 PATCH /users/:id
 POST /agent-roles
@@ -112,6 +118,7 @@ POST /exports/:id/cancel
 POST /findings/:id/comments
 POST /findings/:id/links
 POST /findings/:id/report
+POST /findings/:id/shared-assets
 POST /gateway/*
 POST /imports
 POST /imports/:id/apply
@@ -121,11 +128,13 @@ POST /jobs
 POST /jobs/:id/cancel
 POST /jobs/:id/resume
 POST /platform/exports
+POST /platform/shared-assets
 POST /projects
 POST /projects/:id/archive
 POST /projects/:id/events
 POST /projects/:id/exports
 POST /projects/:id/integrations/plane/sync
+POST /projects/:id/shared-assets
 POST /projects/:id/tasks
 POST /projects/sync
 POST /runtime-images/:id([0-9a-fA-F-]{36})/adopt-local
@@ -138,6 +147,7 @@ POST /runtime-images/registry/pull
 POST /runtime-images/registry/sync
 POST /runtime-image-versions/:id/rescan
 POST /runtime-image-versions/:id/status
+POST /shared-assets/:id/archive
 POST /skill-sources
 POST /skill-sources/:id/sync
 POST /skill-sources/:id/trust
@@ -181,6 +191,7 @@ GET /credentials/providers
 GET /findings
 GET /findings/{id}
 GET /findings/{id}/report
+GET /findings/{id}/shared-assets
 GET /global-settings
 GET /health
 GET /jobs
@@ -192,6 +203,7 @@ GET /jobs/{id}/evidence/stream
 GET /metrics
 GET /openapi.json
 GET /plane-info
+GET /platform/shared-assets
 GET /projects
 GET /projects/{id}
 GET /projects/{id}/canvas
@@ -200,6 +212,8 @@ GET /projects/{id}/readiness
 GET /projects/{id}/role-configs
 GET /projects/{id}/roles
 GET /projects/{id}/settings
+GET /projects/{id}/shared-assets
+GET /projects/{id}/shared-assets/policy
 GET /readiness
 GET /reports/{id}/markdown
 GET /reports/{id}/sarif
@@ -212,6 +226,7 @@ GET /runtime-images/registry/pull-status
 GET /runtime-image-versions/{id}/usage
 GET /schema
 GET /schema.md
+GET /shared-assets/{id}/content
 GET /skill-sources
 GET /skill-sources/{id}
 GET /tokens
@@ -222,6 +237,7 @@ PATCH /global-settings
 PATCH /jobs/{id}/priority
 PATCH /projects/{id}
 PATCH /projects/{id}/settings
+PATCH /projects/{id}/shared-assets/policy
 POST /agent-roles
 POST /auth/bootstrap
 POST /auth/change-password
@@ -236,11 +252,14 @@ POST /credentials/{id}/status
 POST /credentials/{id}/test
 POST /credentials/batch-bind
 POST /findings/{id}/report
+POST /findings/{id}/shared-assets
 POST /jobs
 POST /jobs/{id}/cancel
+POST /platform/shared-assets
 POST /jobs/{id}/resume
 POST /projects
 POST /projects/{id}/archive
+POST /projects/{id}/shared-assets
 POST /projects/{id}/events
 POST /projects/{id}/integrations/plane/sync
 POST /projects/{id}/tasks
@@ -254,6 +273,7 @@ POST /runtime-images/registry/pull
 POST /runtime-images/registry/sync
 POST /runtime-image-versions/{id}/rescan
 POST /runtime-image-versions/{id}/status
+POST /shared-assets/{id}/archive
 POST /skill-sources
 POST /skill-sources/{id}/sync
 POST /skill-sources/{id}/trust

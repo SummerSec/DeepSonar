@@ -108,6 +108,19 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:finding-protocol
 
+      - name: Shared assets contract unit
+        run: pnpm ci:unit:shared-assets
+
+      - name: Shared assets PostgreSQL and API integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:shared-assets
+
+      - name: Shared assets real Docker read-only volume
+        env:
+          RUN_DOCKER_SHARED_ASSETS_TEST: "1"
+        run: pnpm ci:integration:shared-assets-volume
+
       - name: Incremental migration chain (fresh, v12 upgrade, rollback/retry, concurrency)
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}

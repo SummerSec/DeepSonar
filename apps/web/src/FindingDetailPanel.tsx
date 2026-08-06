@@ -22,6 +22,7 @@ import {
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
 import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
+import { FindingSharedAssets } from "./SharedAssetsPanel";
 
 const LINK_TYPES: { value: FindingLink["link_type"]; label: string }[] = [
   { value: "related", label: "相关" },
@@ -612,6 +613,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                     </div>
                   )}
                 </section>
+
+                <FindingSharedAssets findingId={findingId} />
 
                 {/* Activity / comments timeline */}
                 <section className="mt-6">

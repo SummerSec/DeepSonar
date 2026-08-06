@@ -466,7 +466,10 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 - 复扫失败的 trusted 版本自动 revoked，调度器/准入 Worker 会取消尚未完成的相关 Job 并精确回收它们的 sandbox ID。历史 Job 快照、Finding 和扫描记录不删除；新 digest 只进入 quarantined，不自动替换生产版本。
 - 私有 registry 使用 `oci_registry` Credential，准入 Worker 仅在 `docker login --password-stdin` 时解密，不进入 Job Snapshot、Docker 参数、日志或 Agent 工作区。
 - `runtime_data_layers` / `runtime_data_layer_versions` 为 Trivy/OSV 等离线库预留可版本化、只读、digest 准入模型；尚未准入的数据层不得挂载进运行沙箱。
-- Shared asset injection only accepts pre-existing local `deepsonar-assets-*` Docker named volumes whose daemon labels bind them to the exact Job, and mounts them at the fixed `/workspace/.deepsonar/shared` target with `:ro`; arbitrary host paths, arbitrary container targets, unlabeled volumes, and Docker auto-created volumes are rejected. After fresh provision or warm attach, the runtime inspects the actual container mount and requires the frozen volume name with `RW=false` before executing any Agent command. Asset storage, snapshot selection, APIs, and publish flows remain tracked by #41.
+- Shared Assets 使用 `shared_assets`（逻辑对象）+ append-only `shared_asset_versions` + SHA-256 `shared_asset_blobs`（CAS 元数据）分离内容与引用；字节只存 `BLOB_DIR/shared-assets/sha256/`，不进入 PostgreSQL JSONB、画布或 Graph YAML。scope 为 `platform | project | finding`：项目资产自动选择，platform 仅在项目显式 opt-in 后选择，finding 仅对同项目且 Job 绑定该 `finding_id` 的 review/test/verify/report/Hub 链选择。
+- Job 创建事务计算排序后的精确 version/hash/path 清单和 `shared_assets_revision`，写入 `agent_snapshot_json` 与 `job_shared_asset_versions`；后续资产更新不会改变已建 Job。prompt 只说明只读目录和 bounded catalog，不注入文件正文。Agent publish 只能从普通 `/workspace` 的单一已打开正则文件描述符做有界读取，拒绝 symlink、路径逃逸和 `.deepsonar/shared` 自复制；宿主执行前后校验 Job/lease/sandbox，数据库触发器再锁 Job 做原子终态门禁。Agent 不能 publish platform，也不能覆盖 human/platform key，自有 key 仅追加版本。
+- Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，受限 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。任意 host bind、任意 target、无标签卷和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 均只按可信标签删除终态/孤儿 Job 卷。
+- 上传由 Scheduler 服务端计算 SHA-256，并在 scope 级 advisory transaction lock 内执行配额检查；内容类型与扩展名必须同时命中白名单，单文件与 scope 总额均受配置约束。归档只改变逻辑状态，历史版本与 Job 引用不删；CAS 垃圾回收只能在无 version/Job 引用并过保留期后执行。HTTP 目录和本地 `list_shared_assets` 均按 `limit/offset` 分页；真正的按需 fetch 需要独立可信 IPC，当前不开放写 socket 或控制文件。
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
 
@@ -760,7 +763,7 @@ CANVAS_LAYOUT=auto
 - 启动时自动 `migrate up`；每个 PR 必须带迁移文件
 - 破坏性变更走 **expand → migrate → contract** 三步：先加新列（可空/默认值）→ 部署 + 回填 → 稳定后删旧列；服务不停机
 - MVP 单用户阶段允许"改表 + 清库重来"，但迁移文件照写，保证重来是一条命令的事
-- 当前 fresh 基线为 schema v20；`0020_finding_protocol.sql` 是受支持的连续升级，增加通用 Finding 协议字段并将 `severity` 改为可空，不能用清库替代升级。
+- 当前 fresh 基线为 schema v21；`0020_finding_protocol.sql` 增加通用 Finding 协议字段，`0021_shared_assets.sql` 增加分层资产/CAS/策略/Job 引用表；两者均是受支持的连续升级，不能用清库替代升级。
 
 ### 17.3 事件格式版本化
 

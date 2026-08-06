@@ -61,7 +61,13 @@ export interface HubOrchestrationPorts {
     tx: HubOrchestrationTransaction,
     projectId: string,
     type: string,
+    findingIds?: string[],
   ) => Promise<unknown>;
+  recordJobSharedAssets: (
+    tx: HubOrchestrationTransaction,
+    jobId: string,
+    snapshot: unknown,
+  ) => Promise<void>;
   fixedPriorityForJob: (input: { type: string; purpose?: string }) => number;
   insertEdgeIfAbsent: (
     tx: HubOrchestrationTransaction,
