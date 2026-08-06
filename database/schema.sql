@@ -14,61 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 21);
-
--- Scheduler migration ledger.  Failed attempts are retained for audit; only
--- successful rows are unique per version and participate in the applied
--- migration chain.
-CREATE TABLE schema_migrations (
-  id bigserial PRIMARY KEY,
-  version int NOT NULL,
-  filename text NOT NULL,
-  checksum text NOT NULL,
-  applied_at timestamptz NOT NULL DEFAULT now(),
-  result text NOT NULL,
-  error text,
-  CONSTRAINT schema_migrations_checksum_check CHECK (checksum ~ '^[0-9a-f]{64}$'),
-  CONSTRAINT schema_migrations_result_check CHECK (result IN ('succeeded', 'failed'))
-);
-CREATE UNIQUE INDEX schema_migrations_applied_version_uniq
-  ON schema_migrations (version) WHERE result = 'succeeded';
-CREATE INDEX schema_migrations_version_idx ON schema_migrations (version, applied_at DESC);
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (13, '0013_add_schema_migrations.sql',
-        'b975ebaa56faafa7a8b43848a64f821ac04da0f02c2b7022fa1dddd18be216fc',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (14, '0014_add_canvas_change_log.sql',
-        'c9776b4ca0225927b47207a3278c07053c56d6e83f8a2d374e40484d7b34c42d',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (15, '0015_credential_health_metadata.sql',
-        '9de5ad157cfcfa0add0beabf17fe9ebf6d7c858b8518b444eeea2d7a7fcd11d6',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (16, '0016_role_ui_colors.sql',
-        '8d7982c44d7c292f87835a1478cd46763b27644fe488741f6ebaf61cbe233844',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (17, '0017_add_event_rate_limits.sql',
-        'd3c3bc4ab679e3524878f4408699d5c968522066e2a99d21952db4f6b03803a6',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (18, '0018_runtime_registry_channels.sql',
-        '4e3d2b318a23c0f11275d605e9c8988e9d2f6cd3f05b83acb784714d9b7bf02b',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (19, '0019_finding_reports.sql',
-        '416094907ae8c04b7a36f4b0e381ceb23a4fd8408f322012793b8ffbc6568500',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (20, '0020_finding_protocol.sql',
-        '6da3a66b0fcb87c3a31ceb062e0fe1f3952a1e1d931b98b8e75597bf44fa42d0',
-        'succeeded');
-INSERT INTO schema_migrations (version, filename, checksum, result)
-VALUES (21, '0021_shared_assets.sql',
-        'b80b7ef68fff1101b0b29aec7a90d2c13925c7920fbe5d76b84639c6999cd3ad',
-        'succeeded');
+INSERT INTO schema_meta (id, version) VALUES ('global', 22);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -635,6 +581,10 @@ CREATE TABLE credentials (
   health_detail text,
   model_catalog_json jsonb NOT NULL DEFAULT '[]',
   model_catalog_fetched_at timestamptz,
+  -- CC Switch-style provider profile: full CLI config file + manager meta.
+  agent_cli text,
+  settings_config_json jsonb NOT NULL DEFAULT '{}',
+  meta_json jsonb NOT NULL DEFAULT '{}',
   CONSTRAINT credentials_kind_check CHECK (kind IN ('llm_provider', 'plane', 'git', 'oci_registry')),
   CONSTRAINT credentials_status_check
     CHECK (status IN ('active', 'disabled', 'rotation_required')),
@@ -648,8 +598,16 @@ CREATE TABLE credentials (
   CONSTRAINT credentials_health_detail_check
     CHECK (health_detail IS NULL OR (length(health_detail) <= 300 AND health_detail !~ '[[:cntrl:]]')),
   CONSTRAINT credentials_model_catalog_check
-    CHECK (jsonb_typeof(model_catalog_json) = 'array' AND jsonb_array_length(model_catalog_json) <= 200)
+    CHECK (jsonb_typeof(model_catalog_json) = 'array' AND jsonb_array_length(model_catalog_json) <= 200),
+  CONSTRAINT credentials_agent_cli_check CHECK (
+    agent_cli IS NULL OR agent_cli IN ('claude-code', 'codex', 'open-code')
+  ),
+  CONSTRAINT credentials_settings_config_object_check CHECK (jsonb_typeof(settings_config_json) = 'object'),
+  CONSTRAINT credentials_meta_object_check CHECK (jsonb_typeof(meta_json) = 'object')
 );
+CREATE INDEX credentials_agent_cli_idx
+  ON credentials (agent_cli, status, created_at DESC)
+  WHERE kind = 'llm_provider';
 
 -- 短期 Job Token（§6.3 Model Gateway：沙箱不持有长期 Provider Key，明文只注入本 Job 沙箱 env）
 CREATE TABLE job_tokens (

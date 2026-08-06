@@ -52,24 +52,21 @@ test("batch route documents one transaction and never rewrites active snapshots"
   assert.equal(snapshotUpdates.length, 1);
 });
 
-test("batch route has server-owned health and model-catalog gates before mutation", () => {
+test("batch route has server-owned health gate; model catalog is not a bind requirement", () => {
   const start = routes.indexOf('app.post("/credentials/batch-bind"');
   const route = routes.slice(start, routes.indexOf('/** Persist only', start));
   for (const marker of [
     "CREDENTIAL_HEALTH_REQUIRED",
-    "CREDENTIAL_MODEL_CATALOG_REQUIRED",
-    "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED",
-    "CREDENTIAL_MODEL_NOT_CURRENT",
     "health_status",
-    "model_catalog_fetched_at",
-    "normalizeModelCatalog(target.model_catalog_json)",
     "last_tested_at",
+    "CREDENTIAL_MODEL_NOT_CURRENT",
   ]) {
     assert.ok(route.includes(marker), `batch route must enforce ${marker}`);
   }
   assert.match(route, /return gateFailure\(409, "CREDENTIAL_HEALTH_REQUIRED"/);
-  assert.match(route, /return gateFailure\(409, "CREDENTIAL_MODEL_CATALOG_REQUIRED"/);
-  assert.match(route, /return gateFailure\(409, "CREDENTIAL_MODEL_NOT_CURRENT"/);
+  // Catalog is optional reference (CC Switch model mapping); no hard catalog gate.
+  assert.doesNotMatch(route, /return gateFailure\(409, "CREDENTIAL_MODEL_CATALOG_REQUIRED"/);
+  assert.doesNotMatch(route, /return gateFailure\(409, "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED"/);
   assert.match(route, /idempotency_key/);
   assert.match(route, /IDEMPOTENCY_KEY_REUSED/);
   assert.match(route, /BATCH_TRANSACTION_FAILED/);

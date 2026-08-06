@@ -23,6 +23,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
+    "smol-toml": "^1.7.1",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {

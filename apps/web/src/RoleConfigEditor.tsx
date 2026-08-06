@@ -1,54 +1,49 @@
-import { CaretDown, Check, FloppyDisk, Key, MagnifyingGlass, Plus, Trash, X } from "@phosphor-icons/react";
+import { CaretDown, Check, FloppyDisk, MagnifyingGlass, X } from "@phosphor-icons/react";
 import {
   allowedPlatformTools,
   requiredPlatformTools,
   type PlatformToolConfig,
   type PlatformToolName,
 } from "@deepsonar/shared-types";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  api,
   type ProviderCredential,
   type RoleConfigInput,
   type RoleConfigView,
   type SkillSource,
   type SkillSourceDetail,
-  type RuntimeImageSummary,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
+import { HelpTip } from "./ui";
 import {
+  countIncludedModules,
   groupModuleOptions,
+  isPluginGroupExpanded,
   moduleIsIncluded,
   moduleSelectorFor,
   pluginSelectorFor,
   selectorIsActive,
   sourceSelectorFor,
   toggleExplicitModule,
+  togglePluginGroupExpanded,
   toggleSelector,
   type ModulePickerOption,
 } from "./module-selector-state";
 
 /**
- * 角色配置编辑器（§4.2 角色即配置）：全局缺省与项目覆盖共用同一表单。
- * 全量声明式保存 —— 每次保存整体替换 Credential 绑定与 Provider 配置文件。
- * 生效语义：下一 job 生效（job 创建时冻结快照）。
+ * 角色配置编辑器：指令 / 平台工具 / 模块。
+ * Agent CLI、模型、LLM 凭据、settings/env 由 Provider 账号页承接；运行镜像由镜像页承接。
+ * 保存时保留已有 agent_cli / credential / model / reasoning / env / runtime_image 绑定。
  */
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
 const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500";
 
-/** 各 CLI 的 Provider 配置文件固定路径（首期白名单，与后端 core.ts CONFIG_FILE_PATHS 一致） */
-const CONFIG_FILE_PATHS: Record<string, string> = {
-  "claude-code": ".claude/settings.json",
-  codex: ".codex/config.toml",
-  "open-code": ".opencode/config.json",
-};
-
 const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
   list_available_roles: { title: "查询可用角色", description: "让 Hub 按需获取当前项目可派发的数据库角色。" },
-  list_shared_assets: { title: "查询共享资产", description: "读取本 Job 创建时冻结的只读共享资产目录。" },
-  publish_shared_asset: { title: "发布共享资产", description: "允许工作角色把工作区文件发布为后续 Job 可复用的不可变版本。" },
+  list_shared_assets: { title: "查询共享资产", description: "列出本 Job 冻结的只读资产目录；用 mount_path 直接读取，无单独下载工具（Scheduler 预挂载，含 S3）。" },
+  publish_shared_asset: { title: "发布共享资产", description: "把 /workspace 普通文件发布为不可变版本；Scheduler 经 BlobStore（本地/S3）落库，禁止从只读挂载树发布。" },
   emit_progress: { title: "过程进度", description: "允许 Worker 增量上报当前动作和完成百分比。" },
   emit_fact: { title: "事实提交", description: "允许工作角色把新证据写成画布 Fact。" },
   emit_finding: { title: "漏洞提交", description: "允许审计角色提交带严重级别的 Finding。" },
@@ -59,29 +54,25 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
 
 // ---------- 表单状态 ----------
 
-interface EnvPair {
-  key: string;
-  value: string;
-}
-
 type ReasoningForm = "" | "low" | "medium" | "high" | "xhigh";
 
 interface ConfigForm {
+  /** Provider 闭环字段：UI 不编辑，保存时原样回传。 */
   agent_cli: string;
   model: string;
   reasoning: ReasoningForm;
-  credential_id: string; // "" = 不绑定（退回 env_keys 过渡路径）
-  env_keys: string; // 逗号分隔
-  env_pairs: EnvPair[]; // 非敏感环境变量键值对
+  credential_id: string;
+  env_keys: string[];
+  env_vars: Record<string, string>;
+  config_files: Array<{ path: string; content: string }>;
   instructions_markdown: string;
   runtime_image_key: string;
-  modules: string[]; // 原始模块 selector：module / plugin / source
-  skills: string; // JSON 文本
+  modules: string[];
+  skills: string;
   commands: string;
   mcps: string;
   subagents: string;
   platform_tools: PlatformToolConfig;
-  config_content: string; // Provider 配置文件内容（路径按 agent_cli 固定）
 }
 
 const EMPTY: ConfigForm = {
@@ -89,8 +80,9 @@ const EMPTY: ConfigForm = {
   model: "",
   reasoning: "",
   credential_id: "",
-  env_keys: "",
-  env_pairs: [],
+  env_keys: [],
+  env_vars: {},
+  config_files: [],
   instructions_markdown: "",
   runtime_image_key: "",
   modules: [],
@@ -99,7 +91,6 @@ const EMPTY: ConfigForm = {
   mcps: "[]",
   subagents: "[]",
   platform_tools: {},
-  config_content: "",
 };
 
 /** 从已有 RoleConfig 视图预填表单（无配置时给缺省值） */
@@ -109,10 +100,10 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     agent_cli: cfg.agent_cli,
     model: cfg.model ?? "",
     reasoning: (cfg.reasoning as ReasoningForm | null) ?? "",
-    // 首期 UI 只暴露单条 purpose=llm 绑定（多用途绑定后端已支持）
     credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
-    env_keys: (cfg.env_keys ?? []).join(", "),
-    env_pairs: Object.entries(cfg.env_vars_json ?? {}).map(([key, value]) => ({ key, value })),
+    env_keys: cfg.env_keys ?? [],
+    env_vars: cfg.env_vars_json ?? {},
+    config_files: (cfg.config_files ?? []).map((file) => ({ path: file.path, content: file.content })),
     instructions_markdown: cfg.instructions_markdown ?? "",
     runtime_image_key: cfg.runtime_image_key ?? "",
     modules: cfg.modules_json ?? [],
@@ -121,7 +112,6 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     mcps: JSON.stringify(cfg.mcps_json ?? [], null, 2),
     subagents: JSON.stringify(cfg.subagents_json ?? [], null, 2),
     platform_tools: cfg.platform_tools_json ?? {},
-    config_content: cfg.config_files[0]?.content ?? "",
   };
 }
 
@@ -131,24 +121,11 @@ function parseJsonArray(text: string): Record<string, unknown>[] {
   return v as Record<string, unknown>[];
 }
 
-function CredentialPicker({ credentials, value, onChange }: { credentials: ProviderCredential[]; value: string; onChange: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const rootRef = useRef<HTMLDivElement>(null);
-  const available = credentials.filter((credential) => credential.status === "active");
-  const selected = available.find((credential) => credential.id === value) ?? null;
-  const filtered = available.filter((credential) => `${credential.name} ${credential.provider} ${credential.kind} ${credential.last4}`.toLowerCase().includes(query.trim().toLowerCase()));
-  useEffect(() => {
-    const close = (event: PointerEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, []);
-  return <div ref={rootRef} className="relative"><button type="button" onClick={() => setOpen((current) => !current)} className={`selector-trigger ${open ? "is-open" : ""}`} aria-haspopup="listbox" aria-expanded={open}><span className="selector-icon"><Key size={15} weight="light" /></span><span className="min-w-0 flex-1 text-left">{selected ? <><strong>{selected.name}</strong><small>{selected.provider} · 尾号 {selected.last4}{selected.project_id ? " · 项目凭据" : " · 全局凭据"}</small></> : <><strong>不绑定凭据</strong><small>使用调度器环境变量过渡路径</small></>}</span><CaretDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} /></button>{open && <div className="selector-popover"><div className="selector-search"><MagnifyingGlass size={14} weight="light" /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="按名称、Provider 或尾号搜索" /></div><div className="selector-options" role="listbox"><button type="button" className={!value ? "is-selected" : ""} onClick={() => { onChange(""); setOpen(false); }}><span><strong>不绑定凭据</strong><small>退回 env 引用</small></span>{!value && <Check size={14} />}</button>{filtered.map((credential) => <button type="button" key={credential.id} className={value === credential.id ? "is-selected" : ""} onClick={() => { onChange(credential.id); setOpen(false); }}><span><strong>{credential.name}</strong><small>{credential.provider} · {credential.kind} · …{credential.last4}</small></span><em>{credential.project_id ? "项目" : "全局"}</em>{value === credential.id && <Check size={14} />}</button>)}{filtered.length === 0 && <div className="selector-empty">没有匹配的可用凭据</div>}</div></div>}</div>;
-}
-
 function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources: SkillSource[]; sourceDetails: Record<string, SkillSourceDetail>; selected: string[]; onChange: (values: string[]) => void }) {
   const [query, setQuery] = useState("");
   const [sourceId, setSourceId] = useState("all");
+  /** Per-plugin open/closed overrides; default is collapsed (search expands matches). */
+  const [expandOverrides, setExpandOverrides] = useState<Map<string, boolean>>(() => new Map());
   const options = useMemo<ModulePickerOption[]>(
     () => sources.flatMap((source) => (sourceDetails[source.id]?.catalog_json ?? []).map((module) => ({
       ...module,
@@ -180,25 +157,109 @@ function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources:
     options: filtered.filter((option) => option.sourceId === source.id),
     total: options.filter((option) => option.sourceId === source.id).length,
   })).filter(({ source }) => sourceId === "all" || source.id === sourceId);
+
+  const visiblePluginKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (const { source, options: sourceVisible } of sourceOptions) {
+      for (const group of groups.filter((item) => item.sourceId === source.id)) {
+        const visible = group.options.filter((option) => sourceVisible.some((item) => item.key === option.key));
+        if (visible.length > 0 || !query.trim()) keys.push(group.selector);
+      }
+    }
+    return keys;
+  }, [groups, query, sourceOptions]);
+
+  const expandAllVisible = () => {
+    setExpandOverrides((current) => {
+      const next = new Map(current);
+      for (const key of visiblePluginKeys) next.set(key, true);
+      return next;
+    });
+  };
+  const collapseAll = () => setExpandOverrides(new Map(visiblePluginKeys.map((key) => [key, false])));
+
   return <div className="module-picker">
     <div className="module-toolbar">
       <div className="selector-search flex-1"><MagnifyingGlass size={14} weight="light" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、Command、插件或说明" /></div>
       <select value={sourceId} onChange={(event) => setSourceId(event.target.value)} aria-label="模块来源"><option value="all">全部模块源</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
     </div>
-    <div className="module-summary"><span><strong>{selected.length}</strong> 个选择器已选 · 当前显示 {filtered.length} 个模块</span><div><button type="button" onClick={toggleVisible} disabled={visibleKeys.length === 0}>{allVisibleDirectSelected ? "取消当前结果" : "全选当前结果"}</button>{selected.length > 0 && <button type="button" onClick={() => onChange([])}>全部清空</button>}</div></div>
+    <div className="module-summary">
+      <span><strong>{selected.length}</strong> 个选择器已选 · 当前显示 {filtered.length} 个模块 · 插件默认折叠</span>
+      <div>
+        <button type="button" onClick={expandAllVisible} disabled={visiblePluginKeys.length === 0}>展开插件</button>
+        <button type="button" onClick={collapseAll} disabled={visiblePluginKeys.length === 0}>全部折叠</button>
+        <button type="button" onClick={toggleVisible} disabled={visibleKeys.length === 0}>{allVisibleDirectSelected ? "取消当前结果" : "全选当前结果"}</button>
+        {selected.length > 0 && <button type="button" onClick={() => onChange([])}>全部清空</button>}
+      </div>
+    </div>
     {selectedGroupSelectors.length > 0 && <div className="selected-modules">{selectedGroupSelectors.map((selector) => <button type="button" key={selector} onClick={() => onChange(toggleSelector(selected, selector))} title="取消整组选择"><span>{selector.endsWith(":source:*") ? "整源" : `插件 · ${selector.split(":plugin:")[1] ?? selector}`}</span><X size={11} /></button>)}</div>}
     {selectedDirectOptions.length > 0 && <div className="selected-modules">{selectedDirectOptions.map((option) => <button type="button" key={option.key} onClick={() => toggleOne(option)} title="移除单个模块"><span>{option.name}</span><X size={11} /></button>)}</div>}
     <div className="module-results">
       {sourceOptions.map(({ source, options: sourceVisible, total }) => {
         const sourceSelector = sourceSelectorFor(source.id);
         const sourceActive = selectorIsActive(selected, sourceSelector);
-        const sourceGroups = groups.filter((group) => group.sourceId === source.id).map((group) => ({ ...group, options: group.options.filter((option) => sourceVisible.some((item) => item.key === option.key)) })).filter((group) => group.options.length > 0 || !query.trim());
+        const sourceGroups = groups
+          .filter((group) => group.sourceId === source.id)
+          .map((group) => ({
+            ...group,
+            options: group.options.filter((option) => sourceVisible.some((item) => item.key === option.key)),
+          }))
+          .filter((group) => group.options.length > 0 || !query.trim());
         return <div key={source.id} className="module-source-group">
-          <div className="module-group-heading"><span><strong>{source.name}</strong><small>{total > 0 ? `${total} 个目录项` : "目录为空，请先同步"}{source.trust_status !== "trusted" ? ` · ${source.trust_status === "quarantined" ? "待审批" : "未启用"}` : ""}</small></span><button type="button" disabled={total === 0} className={sourceActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, sourceSelector))}>{sourceActive ? "取消整源" : "挂载整源"}</button></div>
+          <div className="module-group-heading">
+            <span>
+              <strong>{source.name}</strong>
+              <small>
+                {total > 0 ? `${total} 个目录项 · ${sourceGroups.length} 个插件` : "目录为空，请先同步"}
+                {source.trust_status !== "trusted" ? ` · ${source.trust_status === "quarantined" ? "待审批" : "未启用"}` : ""}
+              </small>
+            </span>
+            <button type="button" disabled={total === 0} className={sourceActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, sourceSelector))}>{sourceActive ? "取消整源" : "挂载整源"}</button>
+          </div>
           {sourceGroups.map((group) => {
             const pluginExplicit = selectorIsActive(selected, pluginSelectorFor(group.sourceId, group.plugin));
             const pluginActive = pluginExplicit || sourceActive;
-            return <div key={group.selector} className="module-plugin-group"><div className="module-group-heading module-plugin-heading"><span><strong>{group.plugin}</strong><small>{group.options.length} 个模块 · {sourceActive ? "随整源包含" : "选择后跟随 sync 新增"}</small></span><button type="button" disabled={sourceActive} className={pluginActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, group.selector))}>{sourceActive ? "随整源" : pluginExplicit ? "取消插件" : "挂载插件"}</button></div>{group.options.map((option) => { const checked = moduleIsIncluded(option, selected); const inherited = checked && !selected.includes(option.key); return <label key={option.key} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={inherited} onChange={() => toggleOne(option)} /><span className="module-check">{checked && <Check size={12} weight="bold" />}</span><span className="min-w-0 flex-1"><strong>{option.name}</strong><small>{option.description || `${option.plugin} 中的 ${option.kind}`}{inherited ? " · 随组包含" : ""}</small></span><span className="module-meta"><em>{option.kind}</em><small>{option.sourceName} / {option.plugin}</small></span></label>; })}</div>;
+            const included = countIncludedModules(group.options, selected);
+            const expanded = isPluginGroupExpanded({
+              groupKey: group.selector,
+              query,
+              overrides: expandOverrides,
+              hasVisibleModules: group.options.length > 0,
+            });
+            return <div key={group.selector} className={`module-plugin-group${expanded ? " is-expanded" : " is-collapsed"}`}>
+              <div className="module-group-heading module-plugin-heading">
+                <button
+                  type="button"
+                  className="module-plugin-toggle"
+                  aria-expanded={expanded}
+                  onClick={() => setExpandOverrides((current) => togglePluginGroupExpanded(current, group.selector, expanded))}
+                >
+                  <CaretDown size={12} className={`module-plugin-caret ${expanded ? "is-open" : ""}`} />
+                  <span>
+                    <strong>{group.plugin}</strong>
+                    <small>
+                      {group.options.length} 个模块
+                      {included > 0 ? ` · ${included} 已选` : ""}
+                      {sourceActive ? " · 随整源包含" : pluginExplicit ? " · 整插件挂载" : " · 点开可单选"}
+                    </small>
+                  </span>
+                </button>
+                <button type="button" disabled={sourceActive} className={pluginActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, group.selector))}>{sourceActive ? "随整源" : pluginExplicit ? "取消插件" : "挂载插件"}</button>
+              </div>
+              {expanded && group.options.map((option) => {
+                const checked = moduleIsIncluded(option, selected);
+                const inherited = checked && !selected.includes(option.key);
+                return <label key={option.key} className={checked ? "is-selected" : ""}>
+                  <input type="checkbox" checked={checked} disabled={inherited} onChange={() => toggleOne(option)} />
+                  <span className="module-check">{checked && <Check size={12} weight="bold" />}</span>
+                  <span className="min-w-0 flex-1">
+                    <strong>{option.name}</strong>
+                    <small>{option.description || `${option.plugin} 中的 ${option.kind}`}{inherited ? " · 随组包含" : ""}</small>
+                  </span>
+                  <span className="module-meta"><em>{option.kind}</em><small>{option.sourceName} / {option.plugin}</small></span>
+                </label>;
+              })}
+            </div>;
           })}
         </div>;
       })}
@@ -239,86 +300,20 @@ export function RoleConfigEditor({
 }) {
   const [form, setForm] = useState<ConfigForm>(() => formOf(initial));
   const [error, setError] = useState<string | null>(null);
-  const selectedCredential = credentials.find((credential) => credential.id === form.credential_id) ?? null;
-  const enabledModels = Array.isArray(selectedCredential?.public_metadata_json?.allowed_model_ids)
-    ? selectedCredential.public_metadata_json.allowed_model_ids.filter((model): model is string => typeof model === "string")
-    : [];
-  const selectedModel = form.model.trim();
-  const modelRequired = Boolean(form.credential_id && enabledModels.length > 0 && !selectedModel);
-  const modelInvalid = Boolean(form.credential_id && enabledModels.length > 0 && selectedModel && !enabledModels.includes(selectedModel));
-  const initialModelAutofilled = useRef(false);
-  const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
-  const [runtimeImagesError, setRuntimeImagesError] = useState<string | null>(null);
-  useEffect(() => {
-    if (initialModelAutofilled.current) return;
-    const initialCredentialId = initial?.credentials.find((credential) => credential.purpose === "llm")?.credential_id ?? "";
-    if (
-      !initialCredentialId ||
-      initial?.model?.trim() ||
-      form.credential_id !== initialCredentialId ||
-      form.model.trim() ||
-      enabledModels.length !== 1
-    ) return;
-    initialModelAutofilled.current = true;
-    setForm((current) => ({ ...current, model: enabledModels[0] }));
-  }, [enabledModels, form.credential_id, form.model, initial]);
-  const loadRuntimeImages = useCallback(async () => {
-    try {
-      setRuntimeImages(await api.runtimeImages(projectId));
-      setRuntimeImagesError(null);
-    } catch {
-      setRuntimeImagesError("运行镜像列表加载失败，请稍后重试");
-    }
-  }, [projectId]);
-  useEffect(() => {
-    void loadRuntimeImages();
-  }, [loadRuntimeImages]);
+  void credentials; // 仍由父组件传入以兼容签名；CLI/凭据/模型改由 Provider 页绑定
+  void projectId;
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
-  const runtimeImageGuidance = roleName === "test"
-    ? "Test 默认使用 Kali Test；需要 runtime_test 时不要选择 Base 或在沙箱内冷装 JDK/Maven。"
-    : roleName === "verify"
-      ? "Verify 全局默认是 Base；仅当目标确实需要动态复现时，在项目级配置显式选择已准入的动态镜像。"
-      : "系统沙箱使用平台治理的最小 Base；选择专项镜像后，下一 Job 会冻结其 digest。";
-
-  const setPair = (i: number, patch: Partial<EnvPair>) =>
-    setForm((f) => ({
-      ...f,
-      env_pairs: f.env_pairs.map((p, idx) => (idx === i ? { ...p, ...patch } : p)),
-    }));
-
-  const handleCredentialChange = (credential_id: string) => {
-    const credential = credentials.find((item) => item.id === credential_id);
-    const allowedModels = Array.isArray(credential?.public_metadata_json?.allowed_model_ids)
-      ? credential.public_metadata_json.allowed_model_ids.filter((model): model is string => typeof model === "string")
-      : [];
-    setForm((current) => ({
-      ...current,
-      credential_id,
-      model: allowedModels.length === 1 ? allowedModels[0] : "",
-    }));
-    setError(null);
-  };
 
   const submit = () => {
     try {
-      if (modelRequired) throw new Error("当前 Credential 启用了模型白名单，必须选择一个模型后才能保存");
-      if (modelInvalid) throw new Error(`当前模型不在 Credential 的允许列表中，请选择：${enabledModels.join("、")}`);
-      const env_vars: Record<string, string> = {};
-      for (const p of form.env_pairs) {
-        const k = p.key.trim();
-        if (!k && !p.value) continue; // 跳过完全空的行
-        if (!k) throw new Error("环境变量名不能为空");
-        if (env_vars[k] !== undefined) throw new Error(`环境变量名重复：${k}`);
-        env_vars[k] = p.value;
-      }
-      const configPath = CONFIG_FILE_PATHS[form.agent_cli] ?? CONFIG_FILE_PATHS["claude-code"];
+      // agent_cli / 模型 / 凭据 / env / settings 由 Provider 页管理，原样回传。
       const body: RoleConfigInput = {
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         model: form.model.trim() || null,
         reasoning: form.reasoning || null,
-        env_keys: form.env_keys.split(",").map((s) => s.trim()).filter(Boolean),
-        env_vars,
+        env_keys: form.env_keys,
+        env_vars: form.env_vars,
         modules: form.modules,
         skills: parseJsonArray(form.skills),
         commands: parseJsonArray(form.commands),
@@ -330,9 +325,7 @@ export function RoleConfigEditor({
         credentials: form.credential_id
           ? [{ credential_id: form.credential_id, purpose: "llm" }]
           : [],
-        config_files: form.config_content.trim()
-          ? [{ path: configPath, content: form.config_content }]
-          : [],
+        config_files: form.config_files,
       };
       setError(null);
       onSave(body);
@@ -347,7 +340,10 @@ export function RoleConfigEditor({
     hint?: string,
   ) => (
     <div key={key}>
-      <label className={labelCls}>{label}</label>
+      <label className={labelCls}>
+        {label}
+        {hint ? <HelpTip>{hint}</HelpTip> : null}
+      </label>
       <textarea
         value={form[key]}
         onChange={(e) => setForm({ ...form, [key]: e.target.value })}
@@ -356,7 +352,6 @@ export function RoleConfigEditor({
         placeholder="[]"
         className={`${inputCls} resize-y`}
       />
-      {hint && <div className="mt-0.5 text-[12px] text-zinc-600">{hint}</div>}
     </div>
   );
 
@@ -379,76 +374,34 @@ export function RoleConfigEditor({
 
       <div className="role-config-grid">
         <section className="role-config-section role-config-runtime">
-          <div className="role-config-section-title"><span>01</span><strong>执行与凭据</strong></div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <div>
-              <label className={labelCls}>Agent CLI</label>
-              <select value={form.agent_cli} onChange={(e) => setForm({ ...form, agent_cli: e.target.value })} className={inputCls}>
-                <option value="claude-code">claude-code</option><option value="open-code">open-code</option><option value="codex">codex</option>
-              </select>
-            </div>
+          <div className="role-config-section-title">
+            <span>01</span>
+            <strong>
+              指令与平台工具
+              <HelpTip>
+                Agent CLI、LLM 凭据、模型与 settings/env 请在「凭据 / Provider 账号」页配置与绑定；此处仅维护角色职责与平台工具。
+                {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}（由 Provider 绑定流程维护）。` : ""}
+                {form.credential_id ? " 已绑定 LLM 凭据。" : " 尚未绑定 LLM 凭据。"}
+              </HelpTip>
+            </strong>
           </div>
           <div>
-            <label className={labelCls}>思考强度（reasoning effort）</label>
-            <select
-              value={form.reasoning}
-              onChange={(e) => setForm({ ...form, reasoning: e.target.value as ReasoningForm })}
-              className={inputCls}
-            >
-              <option value="">默认（由模型/CLI 决定）</option>
-              <option value="low">low — 轻量，省 token</option>
-              <option value="medium">medium — 均衡</option>
-              <option value="high">high — 深入推理</option>
-              <option value="xhigh">xhigh — 最强（慢/贵）</option>
-            </select>
-            <p className="mt-1 text-[10px] leading-5 text-zinc-600">
-              写入 job 快照后下一任务生效；部分模型/中转可能忽略该参数。
-            </p>
-          </div>
-          <div>
-            <label className={labelCls}>LLM Credential</label>
-            <CredentialPicker credentials={credentials} value={form.credential_id} onChange={handleCredentialChange} />
-            <p className="mt-1.5 text-[10px] leading-5 text-zinc-600">单次运行绑定一个 LLM 凭据；可按名称、Provider 或尾号搜索。</p>
-          </div>
-          <div>
-            <label className={labelCls}>模型 ID{enabledModels.length > 0 ? "（必选，由 Credential 启用列表约束）" : "（由 Credential 启用列表约束）"}</label>
-            {enabledModels.length > 0 ? (
-              <select
-                value={form.model}
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
-                className={inputCls}
-                aria-invalid={modelRequired || modelInvalid}
-                aria-describedby="role-config-model-hint"
-              >
-                <option value="">选择模型</option>
-                {enabledModels.map((model) => <option key={model} value={model}>{model}</option>)}
-              </select>
-            ) : (
-              <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls} placeholder={selectedCredential ? "该凭据尚未配置模型白名单" : "如 claude-sonnet-4-5 / gpt-5 / k3"} spellCheck={false} aria-invalid={false} aria-describedby="role-config-model-hint" />
-            )}
-            {selectedCredential && <p id="role-config-model-hint" className="mt-1 text-[10px] leading-5 text-zinc-600">{enabledModels.length ? `必选：仅可选择凭据已启用的 ${enabledModels.length} 个模型。` : "请先在凭据页从 Provider 获取模型并启用；当前仍兼容手工 ID。"}</p>}
-            {modelRequired && <p className="mt-1 rounded border border-red-900/60 bg-red-950/40 px-2 py-1 text-[11px] text-red-300">请先选择一个模型后再保存。</p>}
-            {modelInvalid && <p className="mt-1 rounded border border-red-900/60 bg-red-950/40 px-2 py-1 text-[11px] text-red-300">当前模型不在该 Credential 的允许列表中，请重新选择。</p>}
-          </div>
-          {form.credential_id === "" && <div><label className={labelCls}>调度器环境变量引用</label><input value={form.env_keys} onChange={(e) => setForm({ ...form, env_keys: e.target.value })} className={inputCls} placeholder="逗号分隔变量名，值取调度器环境" /></div>}
-          <div>
-            <label className={labelCls}>非敏感环境变量</label>
-            <div className="flex flex-col gap-1.5">
-              {form.env_pairs.map((p, i) => <div key={i} className="flex items-center gap-1.5"><input value={p.key} onChange={(e) => setPair(i, { key: e.target.value })} className={`${inputCls} flex-1`} placeholder="变量名（如 LOG_LEVEL）" spellCheck={false} /><input value={p.value} onChange={(e) => setPair(i, { value: e.target.value })} className={`${inputCls} flex-[1.4]`} placeholder="值" spellCheck={false} /><button onClick={() => setForm((f) => ({ ...f, env_pairs: f.env_pairs.filter((_, idx) => idx !== i) }))} aria-label="删除该行" className="shrink-0 rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-red-950/40 hover:text-red-300"><Trash size={13} /></button></div>)}
-              <button onClick={() => setForm((f) => ({ ...f, env_pairs: [...f.env_pairs, { key: "", value: "" }] }))} className="inline-flex w-fit items-center gap-1.5 rounded-md border border-ink-700 px-2 py-1 font-mono text-[12px] leading-none text-zinc-400 hover:border-ink-600 hover:text-zinc-200"><Plus size={12} weight="bold" className="block" />添加变量</button>
-            </div>
-            <div className="mt-1 text-[11px] leading-5 text-zinc-600">敏感值必须使用 Credential，疑似密钥名会被后端拒绝。</div>
-          </div>
-          <div>
-            <label className={labelCls}>Worker 长期指令</label>
+            <label className={labelCls}>
+              Worker 长期指令
+              <HelpTip>
+                平台会自动补充工作区、prompt 输入、runtime-manifest、动态 skill / command / MCP / sub-agent、环境变量名称、网络边界、不可用内部接口和增量结果工具；这里仅维护该角色长期稳定的职责与方法。
+              </HelpTip>
+            </label>
             <textarea value={form.instructions_markdown} onChange={(e) => setForm({ ...form, instructions_markdown: e.target.value })} rows={10} className={`${inputCls} resize-y`} placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。" />
             {form.instructions_markdown.trim() && <details className="mt-2 rounded-xl bg-black/20 ring-1 ring-white/[.06]"><summary className="cursor-pointer px-3 py-2 font-mono text-[10px] text-zinc-500">Markdown 预览 / 原文 / 复制</summary><div className="border-t border-white/[.05] p-3"><MarkdownView markdown={form.instructions_markdown} /></div></details>}
-            <p className="mt-1 text-[10px] leading-5 text-zinc-600">
-              平台会自动补充工作区、prompt 输入、runtime-manifest、动态 skill / command / MCP / sub-agent、环境变量名称、网络边界、不可用内部接口和增量结果工具；这里仅维护该角色长期稳定的职责与方法。
-            </p>
           </div>
           <div>
-            <label className={labelCls}>平台工具</label>
+            <label className={labelCls}>
+              平台工具
+              <HelpTip>
+                保存后从下一 Job 起生效并冻结到快照；关闭的工具不会注入 MCP，也不会出现在动态 AGENTS.md、CLAUDE.md 和运行清单的可用列表中。
+              </HelpTip>
+            </label>
             <div className="flex flex-col gap-1.5">
               {availablePlatformTools.map((tool) => {
                 const required = requiredPlatformToolSet.has(tool);
@@ -481,42 +434,39 @@ export function RoleConfigEditor({
                 );
               })}
             </div>
-            <p className="mt-1.5 text-[10px] leading-5 text-zinc-600">
-              保存后从下一 Job 起生效并冻结到快照；关闭的工具不会注入 MCP，也不会出现在动态 AGENTS.md、CLAUDE.md 和运行清单的可用列表中。
-            </p>
           </div>
         </section>
 
-        <section className="role-config-section role-config-modules">
-          <div className="role-config-section-title"><span>02</span><strong>Agent 模块目录</strong></div>
-          <ModulePicker sources={sources} sourceDetails={sourceDetails} selected={form.modules} onChange={(modules) => setForm({ ...form, modules })} />
-          <p className="text-[11px] leading-5 text-zinc-600">目录由「模块源」同步生成。可挂载整个插件或模块源；selector 会跟随后续 sync 在下一 Job 自动纳入新增模块，单个模块仍可独立勾选。</p>
-        </section>
+        <details className="role-config-section role-config-modules">
+          <summary className="role-config-modules-summary">
+            <div className="role-config-section-title">
+              <span>02</span>
+              <strong>
+                Agent 模块目录
+                <HelpTip>
+                  目录由「模块源」同步生成。展开后列表内上下滚动；可挂载整插件/整源，selector 会跟随后续 sync 在下一 Job 纳入新增模块。
+                </HelpTip>
+              </strong>
+            </div>
+            <small>
+              {form.modules.length > 0 ? `已选 ${form.modules.length} 个` : "未选模块"}
+              {" · 默认收起"}
+            </small>
+            <CaretDown size={14} />
+          </summary>
+          <div className="role-config-modules-body">
+            <ModulePicker sources={sources} sourceDetails={sourceDetails} selected={form.modules} onChange={(modules) => setForm({ ...form, modules })} />
+          </div>
+        </details>
       </div>
 
       <details className="role-config-advanced">
-        <summary><span><strong>高级运行声明</strong><small>JSON 模块、MCP、子 Agent、运行镜像与 Provider 配置</small></span><CaretDown size={14} /></summary>
+        <summary><span><strong>高级运行声明</strong><small>JSON 模块、MCP、子 Agent</small></span><CaretDown size={14} /></summary>
         <div className="role-config-advanced-grid">
           {jsonField("skills（模块勾选优先）", "skills", '[{"name":"x","repo":"https://…"}] 或 embedded source')}
           {jsonField("commands（slash 命令）", "commands")}
           {jsonField("mcps（MCP server）", "mcps", '[{"name":"fs","type":"local","command":"npx","args":[…]}]')}
           {jsonField("subagents（子 Agent）", "subagents")}
-          <div>
-            <label className={labelCls}>运行环境</label>
-            <select value={form.runtime_image_key} onFocus={() => void loadRuntimeImages()} onChange={(e) => setForm({ ...form, runtime_image_key: e.target.value })} className={inputCls}>
-              <option value="">{roleName === "verify" ? "系统沙箱（默认 Base）" : "系统沙箱（不绑定专项镜像）"}</option>
-              {runtimeImages
-                .filter((image) => image.trust_status === "trusted" && ((image.official && !image.project_opt_in) || Boolean(projectId && image.project_enabled)))
-                .map((image) => (
-                  <option key={image.id} value={image.image_key}>
-                    {image.name} · {image.latest_version ?? "trusted"}{image.image_key === "deepsonar-kali-minimal" ? " · 动态 Java/Python/Go/Rust" : ""}
-                  </option>
-                ))}
-            </select>
-            {runtimeImagesError && <p className="mt-1 text-[10px] leading-5 text-red-400">{runtimeImagesError}</p>}
-            <p className="mt-1 text-[10px] leading-5 text-zinc-600">{runtimeImageGuidance}</p>
-          </div>
-          <div className="role-config-provider"><label className={labelCls}>Provider 配置文件（<span className="text-zinc-300">{CONFIG_FILE_PATHS[form.agent_cli]}</span>）</label><textarea value={form.config_content} onChange={(e) => setForm({ ...form, config_content: e.target.value })} rows={4} spellCheck={false} className={`${inputCls} resize-y leading-relaxed`} placeholder={form.agent_cli === "codex" ? "# TOML 配置内容" : "{ …JSON 配置内容… }"} /><div className="mt-1 text-[11px] leading-5 text-zinc-600">配置命中密钥特征会被拒绝，请改用 Credential。</div></div>
         </div>
       </details>
 
@@ -529,7 +479,7 @@ export function RoleConfigEditor({
       <div className="role-config-actions">
         <button
           onClick={submit}
-          disabled={busy || modelRequired || modelInvalid}
+          disabled={busy}
           className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:opacity-50"
         >
           <FloppyDisk size={13} /> {busy ? "保存中…" : "保存配置"}

@@ -95,3 +95,42 @@ export function groupModuleOptions(options: ModulePickerOption[]): ModulePickerP
 export function sourceHasSelector(selected: string[], sourceId: string): boolean {
   return selectorIsActive(selected, sourceSelectorFor(sourceId));
 }
+
+/** Count how many modules in a plugin group are currently included by selection. */
+export function countIncludedModules(options: ModulePickerOption[], selected: string[]): number {
+  return options.reduce((count, option) => count + (moduleIsIncluded(option, selected) ? 1 : 0), 0);
+}
+
+/**
+ * Plugin groups stay collapsed by default so large skill catalogs stay scannable.
+ * Searching expands matching groups; the user can pin open/closed overrides.
+ */
+export function isPluginGroupExpanded(input: {
+  groupKey: string;
+  query: string;
+  /** Explicit open/closed overrides; missing key means default. */
+  overrides: ReadonlyMap<string, boolean> | Readonly<Record<string, boolean>>;
+  /** True when this group has at least one module matching the current filter. */
+  hasVisibleModules: boolean;
+}): boolean {
+  let override: boolean | undefined;
+  if (input.overrides instanceof Map) {
+    override = input.overrides.get(input.groupKey);
+  } else if (Object.prototype.hasOwnProperty.call(input.overrides, input.groupKey)) {
+    override = (input.overrides as Readonly<Record<string, boolean>>)[input.groupKey];
+  }
+  if (typeof override === "boolean") return override;
+  // Search mode: only groups with hits are expanded so results are immediately actionable.
+  if (input.query.trim()) return input.hasVisibleModules;
+  return false;
+}
+
+export function togglePluginGroupExpanded(
+  overrides: ReadonlyMap<string, boolean> | Readonly<Record<string, boolean>>,
+  groupKey: string,
+  currentlyExpanded: boolean,
+): Map<string, boolean> {
+  const next = overrides instanceof Map ? new Map(overrides) : new Map(Object.entries(overrides));
+  next.set(groupKey, !currentlyExpanded);
+  return next;
+}

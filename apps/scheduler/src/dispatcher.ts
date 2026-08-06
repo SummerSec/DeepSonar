@@ -13,7 +13,7 @@ import {
 } from "./core.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
-import { materializeSharedAssetBlob } from "./domains/shared-assets/index.js";
+import { buildJobSharedAssetCatalog, materializeSharedAssetBlob } from "./domains/shared-assets/index.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
@@ -574,12 +574,10 @@ async function runJob(jobId: string) {
         jobId,
         image: runtimeImage,
         files,
-        catalog: {
-          version: 1,
+        catalog: buildJobSharedAssetCatalog({
           revision: snapshot.shared_assets_revision,
-          readonly: true,
-          assets: frozenAssets.map(({ blob_uri: _blobUri, ...asset }) => asset),
-        },
+          assets: frozenAssets as unknown as Array<Record<string, unknown>>,
+        }),
       });
     }
     handle = await withTimeout(

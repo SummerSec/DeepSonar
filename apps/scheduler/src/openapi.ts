@@ -621,6 +621,22 @@ const OPS: Op[] = [
     },
   },
   {
+    method: "patch",
+    path: "/role-configs/{id}/agent-cli",
+    summary: "仅更新 RoleConfig 的 agent_cli（Provider 绑定列表用）",
+    description: "不改写凭据绑定与配置文件。若已绑定 LLM Credential，会校验 CLI 与 Provider 兼容性。",
+    scope: "agents:write",
+    tags: ["RoleConfig"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["agent_cli"],
+      properties: {
+        agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex"] },
+      },
+    },
+  },
+  {
     method: "put",
     path: "/role-configs/global/{roleId}",
     summary: "全局 RoleConfig upsert（声明式全量替换）",
@@ -1273,13 +1289,16 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           required: [
             "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "model", "version",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "scope", "can_bind",
-            "credential_provider_valid",
+            "credential_provider_valid", "role_kind", "role_builtin",
           ],
           properties: {
             id: { type: "string", format: "uuid" },
             role_id: { type: "string", format: "uuid" },
             role_name: { type: "string" },
             role_title: { type: "string", nullable: true },
+            role_kind: { type: "string", enum: ["hub", "system", "role"] },
+            role_builtin: { type: "boolean" },
+            role_ui_color: { type: "string", nullable: true },
             project_id: { type: "string", format: "uuid", nullable: true },
             project_name: { type: "string", nullable: true },
             agent_cli: { type: "string" },

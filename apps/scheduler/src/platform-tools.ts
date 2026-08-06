@@ -50,6 +50,21 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 只在缺少必要授权/凭据、必须操作生产环境或动作风险超出任务授权时调用。调用后停止执行，不再调用 `mark_job_done`。",
     '- 示例：`{"reason":"验证需要生产租户的只读测试账号；已完成静态路径确认，请人工提供隔离账号或批准在测试环境复现。"}`',
   ].join("\n"),
+  list_shared_assets: [
+    "### `list_shared_assets` — 查询本 Job 冻结的只读共享资产目录",
+    "- 参数（均可选）：`scope`（platform|project|finding）、`prefix`（逻辑 key 前缀）、`limit`、`offset`。",
+    "- **没有单独的下载工具。** 返回的每条资产含 `mount_path` / `read_path`：用普通 Read/cat 直接打开该路径读取内容；需要改写时先 `cp` 到 `/workspace` 普通工作区。",
+    "- 字节由 Scheduler 在 Job 启动时从 BlobStore（本地盘或任意 S3 兼容存储）预挂载到 `/workspace/.deepsonar/shared`；Agent 不得用 HTTP/S3/curl 拉取，也没有对象存储凭据。",
+    "- 时机：需要复用平台/项目/Finding 资产、PoC 脚本或基线材料时先 list 再按路径读取。",
+    '- 示例：`{}` 或 `{"scope":"project","prefix":"scripts/","limit":50}`',
+  ].join("\n"),
+  publish_shared_asset: [
+    "### `publish_shared_asset` — 发布工作区文件为不可变共享资产",
+    "- 参数：`scope`（project|finding）、`source_path`（必填，必须以 `/workspace/` 开头且**不能**位于 `.deepsonar/shared`）、`key`（逻辑路径）、`content_type`、可选 `labels`。",
+    "- 时机：产出可被后续 Job 复用的脚本、PoC、基线或工件后调用；Scheduler 读取工作区文件并经 BlobStore 写入（本地或 S3 兼容存储），Agent 不接触存储后端。",
+    "- 边界：仅 running Job 可发布；不能覆盖 human/platform key；Finding scope 仅当本 Job 绑定 finding_id。",
+    '- 示例：`{"scope":"project","source_path":"/workspace/dist/repro.sh","key":"scripts/repro.sh","content_type":"text/x-shellscript"}`',
+  ].join("\n"),
 };
 
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */

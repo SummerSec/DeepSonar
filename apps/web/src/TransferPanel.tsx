@@ -6,6 +6,7 @@
 import { DownloadSimple, UploadSimple, ArrowsClockwise } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type DataExportRow, type ImportPreview } from "./api";
+import { HelpTip } from "./ui";
 
 const PROJECT_PRESETS = [
   { id: "configuration" as const, label: "配置模板", hint: "规则 / 角色 / Skill / 环境（无任务历史）" },
@@ -189,20 +190,19 @@ export function TransferPanel({
       <section>
         <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
           {isPlatform ? "导出平台配置" : "导出项目"}
+          <HelpTip>
+            {isPlatform ? (
+              <>
+                导出全局规则、角色注册表、全局 RoleConfig、Skill 源与凭据<strong>元数据</strong>
+                。不含项目任务、API Token、主密钥与 Secret 明文。
+              </>
+            ) : (
+              <>
+                生成 <code>.deepsonarpack</code>。默认不含 Secret 明文、API Token 与 Job Token。
+              </>
+            )}
+          </HelpTip>
         </div>
-        <p className="mb-3 text-[12px] leading-5 text-zinc-600">
-          {isPlatform ? (
-            <>
-              导出全局规则、角色注册表、全局 RoleConfig、Skill 源与凭据<strong className="text-zinc-400">元数据</strong>
-              。不含项目任务、API Token、主密钥与 Secret 明文。
-            </>
-          ) : (
-            <>
-              生成 <code className="text-zinc-400">.deepsonarpack</code>。默认不含 Secret 明文、API Token 与 Job
-              Token。
-            </>
-          )}
-        </p>
 
         {!isPlatform && (
           <div className="flex flex-col gap-2">
@@ -272,12 +272,14 @@ export function TransferPanel({
       </section>
 
       <section className="border-t border-ink-800 pt-4">
-        <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">导入</div>
-        <p className="mb-3 text-[12px] leading-5 text-zinc-600">
-          {isPlatform
-            ? "仅接受平台配置包（deepsonar-platform-export）。项目包请到项目 → 数据。"
-            : "仅接受本项目数据包（deepsonar-project-export）。平台包请到平台数据与调度。"}
-        </p>
+        <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
+          导入
+          <HelpTip>
+            {isPlatform
+              ? "仅接受平台配置包（deepsonar-platform-export）。项目包请到项目 → 数据。"
+              : "仅接受本项目数据包（deepsonar-project-export）。平台包请到平台数据与调度。"}
+          </HelpTip>
+        </div>
         <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-white/[.04] px-3 py-1.5 text-[13px] text-zinc-300 ring-1 ring-white/[.08] hover:bg-white/[.07]">
           <UploadSimple size={14} />
           选择 .deepsonarpack

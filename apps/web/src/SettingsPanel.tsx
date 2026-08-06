@@ -30,6 +30,7 @@ import { AccountPanel } from "./AccountPanel";
 import { MarkdownView } from "./MarkdownView";
 import { FindingProtocolEditor } from "./FindingProtocolEditor";
 import { SharedAssetsPanel } from "./SharedAssetsPanel";
+import { HelpTip } from "./ui";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -331,7 +332,10 @@ export function SettingsPanel({
 
   const numField = (key: keyof EffectiveRules, label: string, help?: string) => (
     <div key={key}>
-      <label className={labelCls}>{label}</label>
+      <label className={labelCls}>
+        {label}
+        {help ? <HelpTip>{help}</HelpTip> : null}
+      </label>
       <input
         type="number"
         value={String(rules?.[key] ?? "")}
@@ -340,7 +344,6 @@ export function SettingsPanel({
         }
         className={inputCls}
       />
-      {help && <p className="mt-1.5 text-[11px] leading-5 text-zinc-600">{help}</p>}
     </div>
   );
 
@@ -360,12 +363,16 @@ export function SettingsPanel({
     globalConfigs.find((c) => c.role_id === roleId) ?? null;
   const projConfigOf = (roleId: string) => projConfigs.find((c) => c.role_id === roleId) ?? null;
 
-  /** kind 只读徽标（hub=中枢 / system=系统；普通角色不展示） */
+  /** kind 只读徽标：Hub 品红 / 系统角色琥珀；普通角色不展示 */
   const kindBadge = (kind: string) =>
     kind === "hub" ? (
-      <span className="rounded-full bg-violet-400/[.07] px-2 py-1 font-mono text-[9px] text-violet-300 ring-1 ring-violet-300/15">中枢</span>
+      <span className="rounded-full bg-violet-400/[.14] px-2 py-1 font-mono text-[9px] font-semibold text-violet-200 ring-1 ring-violet-300/35">
+        Hub 中枢
+      </span>
     ) : kind === "system" ? (
-      <span className="rounded-full bg-white/[.035] px-2 py-1 font-mono text-[9px] text-zinc-500 ring-1 ring-white/[.06]">系统</span>
+      <span className="rounded-full bg-amber-400/[.14] px-2 py-1 font-mono text-[9px] font-semibold text-amber-200 ring-1 ring-amber-300/40">
+        系统角色（调度内核）
+      </span>
     ) : null;
 
   /** 项目模式：配置来源徽标（项目覆盖 / 全局缺省 / 未配置） */
@@ -389,12 +396,24 @@ export function SettingsPanel({
     const globalCfg = globalConfigOf(r.id);
     const projEntry = projConfigOf(r.id);
     const editing = configRoleId === r.id;
+    const kindTone =
+      r.kind === "system"
+        ? "bg-amber-400/[.06] ring-amber-400/30 hover:bg-amber-400/[.09] hover:ring-amber-400/45"
+        : r.kind === "hub"
+          ? "bg-violet-400/[.06] ring-violet-400/30 hover:bg-violet-400/[.09] hover:ring-violet-400/45"
+          : "bg-white/[.022] ring-white/[.055] hover:bg-white/[.038] hover:ring-white/[.09]";
+    const editingTone =
+      r.kind === "system"
+        ? "bg-amber-400/[.1] ring-amber-400/45"
+        : r.kind === "hub"
+          ? "bg-violet-400/[.1] ring-violet-400/45"
+          : "bg-acc-500/[.045] ring-acc-400/25";
     return (
       <div
         key={r.id}
         className={`role-card rounded-[22px] p-4 ring-1 transition-all ${editing ? "sm:col-span-2 xl:col-span-3" : ""} ${
-          roleForm.id === r.id || editing ? "bg-acc-500/[.045] ring-acc-400/25" : "bg-white/[.022] ring-white/[.055] hover:bg-white/[.038] hover:ring-white/[.09]"
-        }`}
+          roleForm.id === r.id || editing ? editingTone : kindTone
+        } ${r.kind === "system" ? "shadow-[inset_3px_0_0_#f0a35e]" : r.kind === "hub" ? "shadow-[inset_3px_0_0_#c084fc]" : ""}`}
       >
         <div className="flex flex-wrap items-center gap-2">
           {/* 启用勾选只对普通角色有意义（hub/system 角色不受启用清单限制） */}
@@ -464,10 +483,10 @@ export function SettingsPanel({
           <button
             onClick={() => setConfigRoleId(editing ? null : r.id)}
             className="ml-auto flex items-center gap-1 rounded-full bg-white/[.035] px-3 py-1.5 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.06] transition-colors hover:bg-acc-500/[.07] hover:text-acc-300 hover:ring-acc-400/20"
-            title={projectId ? "项目覆盖：CLI / 模型 / Credential / 模块 / 环境变量" : "全局缺省：CLI / 模型 / Credential / 模块 / 环境变量"}
+            title={projectId ? "项目覆盖：指令 / 平台工具 / 模块" : "全局缺省：指令 / 平台工具 / 模块"}
           >
             <GearSix size={12} />
-            {projectId ? (projEntry?.project_config_id ? "编辑覆盖" : "添加覆盖") : "运行配置"}
+            {projectId ? (projEntry?.project_config_id ? "编辑覆盖" : "添加覆盖") : "角色配置"}
           </button>
           {projectId && projEntry?.project_config_id && (
             <button
@@ -600,10 +619,12 @@ export function SettingsPanel({
           <div className="flex flex-col gap-4">
             {projectId && (
               <section>
-                <div className="rounded-[10px] border border-ink-700 bg-ink-900/60 px-4 py-3 text-[13px] leading-relaxed text-zinc-400">
-                  各角色的运行配置（CLI / 模型 / Credential / 模块）已迁移到
-                  <strong className="text-zinc-200">「角色配置」tab 的项目覆盖</strong>；
-                  未覆盖的角色使用全局缺省（在「Agent 管理 → 角色注册表」维护）。
+                <div className="flex items-center gap-1 rounded-[10px] border border-ink-700 bg-ink-900/60 px-4 py-3 text-[13px] text-zinc-300">
+                  项目规则与覆盖说明
+                  <HelpTip>
+                    各角色的指令 / 平台工具 / 模块在<strong>「角色配置」tab 的项目覆盖</strong>中维护；
+                    CLI / 模型 / 凭据在「凭据」页的 Provider 绑定中配置。未覆盖的角色使用全局缺省。
+                  </HelpTip>
                 </div>
               </section>
             )}
@@ -611,13 +632,13 @@ export function SettingsPanel({
             {!projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
-                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
-                    调度器总并发硬上限
+                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                    <span>调度器总并发硬上限</span>
+                    <HelpTip>
+                      claim 使用本页规则的 effective 值；<code>.env</code> 只在数据库未配置时提供启动默认。
+                      全局上限是安全顶，每项目上限不能被项目配置放宽。修改只影响后续 claim，不终止已运行 Job。
+                    </HelpTip>
                   </div>
-                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">
-                    claim 使用本页规则的 effective 值；<code>.env</code> 只在数据库未配置时提供启动默认。
-                    全局上限是安全顶，每项目上限不能被项目配置放宽。修改只影响后续 claim，不终止已运行 Job。
-                  </p>
                 </div>
                 <div className="px-4 py-4">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -634,12 +655,12 @@ export function SettingsPanel({
             {projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
-                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
-                    调度器并发（全局托管）
+                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                    <span>调度器并发（全局托管）</span>
+                    <HelpTip>
+                      并发 claim 只读全局设置的 effective 值；项目规则不能放宽全局安全 cap。请在全局设置页调整。
+                    </HelpTip>
                   </div>
-                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">
-                    并发 claim 只读全局设置的 effective 值；项目规则不能放宽全局安全 cap。请在全局设置页调整。
-                  </p>
                 </div>
                 <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
                   <div>
@@ -657,13 +678,13 @@ export function SettingsPanel({
             {!projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
-                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
-                    Agent CLI 全局并发
+                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                    <span>Agent CLI 全局并发</span>
+                    <HelpTip>
+                      Agent CLI 配额是调度 claim 的操作面；同时受上方全局/项目安全 cap 与「凭据」页的 Provider / Credential / Model 限制。
+                      留空表示该 CLI 不单独限额；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
+                    </HelpTip>
                   </div>
-                  <p className="mt-1 text-[11px] leading-5 text-zinc-600">
-                    Agent CLI 配额是调度 claim 的操作面；同时受上方全局/项目安全 cap 与「凭据」页的 Provider / Credential / Model 限制。
-                    留空表示该 CLI 不单独限额；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
-                  </p>
                 </div>
                 <div className="px-4 py-4">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -689,7 +710,12 @@ export function SettingsPanel({
             )}
 
             <section className={projectId ? "border-t border-ink-800 pt-3" : ""}>
-              <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">网络边界</div>
+              <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
+                网络边界
+                <HelpTip>
+                  这是{projectId ? "项目" : "全局"}默认值；任务创建时可覆盖，最终值会冻结到画布。Hub 始终不代 Worker 访问目标。
+                </HelpTip>
+              </div>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="checkbox"
@@ -699,9 +725,6 @@ export function SettingsPanel({
                 />
                 <span className="text-[14px] text-zinc-200">允许 Worker 访问外部网络</span>
               </label>
-              <div className="mt-1 text-[12px] text-zinc-600">
-                这是{projectId ? "项目" : "全局"}默认值；任务创建时可覆盖，最终值会冻结到画布。Hub 始终不代 Worker 访问目标。
-              </div>
             </section>
 
             <section className="border-t border-ink-800 pt-3">
@@ -709,7 +732,12 @@ export function SettingsPanel({
                 关注策略（只配这一项）
               </div>
               <div>
-                <label className={labelCls}>最低关注级别</label>
+                <label className={labelCls}>
+                  最低关注级别
+                  <HelpTip>
+                    达到该级别的 Finding 会自动验证；Hub 等它们验完再决策；验完且无活跃任务后停自驱；队列永远高危优先。更低级别不自动验，可在画布人工处理。
+                  </HelpTip>
+                </label>
                 <select
                   value={rules.minVerifySeverity ?? "high"}
                   onChange={(e) =>
@@ -726,15 +754,17 @@ export function SettingsPanel({
                   <option value="low">low — 含 low 及以上</option>
                   <option value="info">info — 全部自动验证</option>
                 </select>
-                <p className="mt-1.5 text-[11px] leading-5 text-zinc-600">
-                  达到该级别的 Finding 会自动验证；Hub 等它们验完再决策；验完且无活跃任务后停自驱；队列永远高危优先。更低级别不自动验，可在画布人工处理。
-                </p>
               </div>
             </section>
 
             <section className="border-t border-ink-800 pt-3">
               <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                 hub 与护栏
+                <HelpTip>
+                  {projectId
+                    ? "未覆盖项继承全局。任务页可随时暂停/恢复决策。"
+                    : "全局默认；项目可覆盖。"}
+                </HelpTip>
               </div>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
@@ -763,11 +793,6 @@ export function SettingsPanel({
                 {numField("auditTimeoutSec", "审计超时（秒）")}
                 {numField("verifyTimeoutSec", "验证超时（秒）")}
               </div>
-              <p className="mt-2 text-[11px] leading-5 text-zinc-600">
-                {projectId
-                  ? "未覆盖项继承全局。任务页可随时暂停/恢复决策。"
-                  : "全局默认；项目可覆盖。"}
-              </p>
             </section>
 
             {effectiveFindingProtocol && (
@@ -791,35 +816,54 @@ export function SettingsPanel({
 
         {activeTab === "roles" && (
           <div className="flex flex-col gap-3">
-            <div className="settings-role-intro text-[13px] leading-relaxed text-zinc-500">
-              {projectId ? (
-                <>
-                  本项目只声明与全局缺省的差异：<strong className="text-zinc-300">启用 Hub 可派发的角色，并在确有需要时覆盖运行配置</strong>。
-                  未覆盖项继续继承全局值，避免项目配置漂移。
-                </>
-              ) : (
-                <>
-                  系统角色由调度器调用，工作角色由 Hub 按意图派发。先为需要使用的角色设置<strong className="text-zinc-300">可信的全局运行配置</strong>，
-                  再由各项目决定启用范围或少量覆盖。点击角色名称编辑 Hub 可见的职责描述。
-                </>
-              )}
+            <div className="settings-role-intro flex items-center gap-1 text-[13px] text-zinc-400">
+              {projectId ? "项目角色启用与覆盖" : "角色注册与全局运行缺省"}
+              <HelpTip>
+                {projectId ? (
+                  <>
+                    本项目只声明与全局缺省的差异：<strong>启用 Hub 可派发的角色，并在确有需要时覆盖运行配置</strong>。
+                    未覆盖项继续继承全局值，避免项目配置漂移。
+                  </>
+                ) : (
+                  <>
+                    系统角色由调度器调用，工作角色由 Hub 按意图派发。先为需要使用的角色设置<strong>可信的全局运行配置</strong>，
+                    再由各项目决定启用范围或少量覆盖。点击角色名称编辑 Hub 可见的职责描述。
+                  </>
+                )}
+              </HelpTip>
             </div>
 
-            {/* 系统角色分组（hub/system）：不可删除、不受启用清单限制 */}
-            {roles.some((r) => r.kind !== "role") && (
+            {/* Hub 与 系统角色分开展示，颜色显著不同 */}
+            {roles.some((r) => r.kind === "hub") && (
               <>
-                <div className="mt-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-                  系统角色（调度内核）
+                <div className="mt-1 flex flex-wrap items-baseline gap-2">
+                  <span className="font-mono text-[12px] font-semibold uppercase tracking-[0.14em] text-violet-300">
+                    Hub 中枢
+                    <HelpTip>决策与派发；与调度内核系统角色不同色</HelpTip>
+                  </span>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {roles.filter((r) => r.kind !== "role").map(renderRoleRow)}
+                  {roles.filter((r) => r.kind === "hub").map(renderRoleRow)}
+                </div>
+              </>
+            )}
+            {roles.some((r) => r.kind === "system") && (
+              <>
+                <div className="mt-1 flex flex-wrap items-baseline gap-2">
+                  <span className="font-mono text-[12px] font-semibold uppercase tracking-[0.14em] text-amber-300">
+                    系统角色（调度内核）
+                    <HelpTip>verify / report 等由调度器调用，非 Hub 派发</HelpTip>
+                  </span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {roles.filter((r) => r.kind === "system").map(renderRoleRow)}
                 </div>
               </>
             )}
 
             {/* 普通角色分组：全局=注册表；项目=启用勾选 + 项目覆盖 */}
             <div className="mt-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-              {projectId ? "项目角色（hub 可下发）" : "角色注册表（hub 可下发）"}
+              {projectId ? "工作角色（Hub 可下发）" : "工作角色注册表（Hub 可下发）"}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {roles.filter((r) => r.kind === "role").map(renderRoleRow)}
@@ -835,8 +879,13 @@ export function SettingsPanel({
                 <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
                   {roleForm.id ? `编辑 ${roleForm.name}` : "新建自定义角色"}
                   {roleForm.id && roleForm.kind !== "role" && (
-                    <span className="ml-2 rounded border border-ink-700 px-1 text-[11px] normal-case text-zinc-500">
-                      {roleForm.kind === "hub" ? "中枢" : "系统"}角色：可改展示名、职责与运行配置，不可删除或修改 kind
+                    <span className={`ml-2 rounded px-1.5 text-[11px] normal-case ${
+                      roleForm.kind === "hub"
+                        ? "border border-violet-400/35 bg-violet-400/10 text-violet-200"
+                        : "border border-amber-400/35 bg-amber-400/10 text-amber-200"
+                    }`}>
+                      {roleForm.kind === "hub" ? "Hub 中枢" : "系统角色（调度内核）"}
+                      ：可改展示名、职责与角色配置，不可删除或修改 kind
                     </span>
                   )}
                 </span>
@@ -910,9 +959,12 @@ export function SettingsPanel({
 
         {activeTab === "plane" && projectId && (
           <div className="flex flex-col gap-3">
-            <div className="text-[13px] leading-relaxed text-zinc-500">
-              Plane 是可选的协作镜像：绑定后 Ready 状态的 issue（描述含 type= 标记）会被自动认领为任务；
-              本地库才是唯一状态真相，Plane 故障不影响本地任务。解绑只停止后续同步，不删除已导入的任务。
+            <div className="flex items-center gap-1 text-[13px] text-zinc-400">
+              Plane 协作镜像
+              <HelpTip>
+                Plane 是可选的协作镜像：绑定后 Ready 状态的 issue（描述含 type= 标记）会被自动认领为任务；
+                本地库才是唯一状态真相，Plane 故障不影响本地任务。解绑只停止后续同步，不删除已导入的任务。
+              </HelpTip>
             </div>
 
             <div className="rounded-lg border border-ink-700 bg-ink-850/60 px-3 py-2.5">
@@ -992,10 +1044,12 @@ export function SettingsPanel({
 
         {activeTab === "sources" && (
           <div className="flex flex-col gap-3">
-            <div className="text-[13px] leading-relaxed text-zinc-500">
-              Agent 的插件 / skill 集中托管在 Git 仓库（默认内置{" "}
-              <span className="font-mono text-zinc-400">DeepSonar-Skills</span>
-              ）。同步后扫描出全部模块，在「角色配置」里按角色勾选下发；内容随同步缓存，跑任务不再访问 Git。
+            <div className="flex items-center gap-1 text-[13px] text-zinc-400">
+              模块源
+              <HelpTip>
+                Agent 的插件 / skill 集中托管在 Git 仓库（默认内置 <code>DeepSonar-Skills</code>
+                ）。同步后扫描出全部模块，在「角色配置」里按角色勾选下发；内容随同步缓存，跑任务不再访问 Git。
+              </HelpTip>
             </div>
 
             {sources.map((s) => (

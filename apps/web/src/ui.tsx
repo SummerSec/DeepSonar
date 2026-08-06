@@ -1,5 +1,15 @@
 import { ArrowUpRight, CircleNotch } from "@phosphor-icons/react";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { STATUS_COLOR, SEVERITY_COLOR } from "./semantics";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -80,6 +90,113 @@ export function PageHeader({
       </div>
       {actions && <div className="page-actions">{actions}</div>}
     </header>
+  );
+}
+
+/**
+ * 上标说明：默认只显示小标记，悬停 / 聚焦时再展开帮助文案。
+ * 气泡经 portal 挂到 body + fixed 定位，避免被父级 overflow:hidden 裁切
+ * （例如设置页 rounded + overflow-hidden 卡片标题）。
+ */
+export function HelpTip({
+  children,
+  label = "说明",
+}: {
+  children: ReactNode;
+  label?: string;
+}) {
+  const tipId = useId();
+  const markRef = useRef<HTMLButtonElement>(null);
+  const bubbleRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number; place: "above" | "below" }>({
+    top: 0,
+    left: 0,
+    place: "above",
+  });
+
+  const updatePosition = useCallback(() => {
+    const mark = markRef.current;
+    if (!mark) return;
+    const rect = mark.getBoundingClientRect();
+    const gap = 8;
+    const preferAbove = rect.top > 120;
+    const top = preferAbove ? rect.top - gap : rect.bottom + gap;
+    const left = Math.min(Math.max(rect.left + rect.width / 2, 12), window.innerWidth - 12);
+    setCoords({
+      top,
+      left,
+      place: preferAbove ? "above" : "below",
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePosition();
+  }, [open, updatePosition, children]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onReposition = () => updatePosition();
+    window.addEventListener("scroll", onReposition, true);
+    window.addEventListener("resize", onReposition);
+    return () => {
+      window.removeEventListener("scroll", onReposition, true);
+      window.removeEventListener("resize", onReposition);
+    };
+  }, [open, updatePosition]);
+
+  // Keep open while pointer moves from mark into portal bubble.
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 80);
+  };
+  const cancelClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
+  useEffect(() => () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+
+  const show = () => {
+    cancelClose();
+    updatePosition();
+    setOpen(true);
+  };
+
+  return (
+    <span className="help-tip">
+      <button
+        ref={markRef}
+        type="button"
+        className="help-tip-mark"
+        aria-label={label}
+        aria-describedby={open ? tipId : undefined}
+        onMouseEnter={show}
+        onMouseLeave={scheduleClose}
+        onFocus={show}
+        onBlur={scheduleClose}
+      >
+        ?
+      </button>
+      {open
+        && createPortal(
+          <span
+            ref={bubbleRef}
+            id={tipId}
+            role="tooltip"
+            className={`help-tip-bubble is-portal is-${coords.place}`}
+            style={{ top: coords.top, left: coords.left }}
+            onMouseEnter={cancelClose}
+            onMouseLeave={scheduleClose}
+          >
+            {children}
+          </span>,
+          document.body,
+        )}
+    </span>
   );
 }
 

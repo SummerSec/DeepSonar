@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  countIncludedModules,
   groupModuleOptions,
+  isPluginGroupExpanded,
   moduleIsIncluded,
   moduleSelectorFor,
   pluginSelectorFor,
   sourceSelectorFor,
+  togglePluginGroupExpanded,
   toggleSelector,
   type ModulePickerOption,
 } from "./module-selector-state.js";
@@ -43,4 +46,40 @@ test("source selector includes current and future catalog entries without rewrit
   const selected = [sourceSelectorFor(sourceId)];
   assert.equal(moduleIsIncluded(option("whitebox/new-after-sync", "whitebox"), selected), true);
   assert.deepEqual(toggleSelector(selected, sourceSelectorFor(sourceId)), []);
+});
+
+test("plugin groups collapse by default and expand on search or user override", () => {
+  assert.equal(isPluginGroupExpanded({
+    groupKey: "whitebox",
+    query: "",
+    overrides: {},
+    hasVisibleModules: true,
+  }), false);
+  assert.equal(isPluginGroupExpanded({
+    groupKey: "whitebox",
+    query: "auth",
+    overrides: {},
+    hasVisibleModules: true,
+  }), true);
+  assert.equal(isPluginGroupExpanded({
+    groupKey: "whitebox",
+    query: "auth",
+    overrides: {},
+    hasVisibleModules: false,
+  }), false);
+  assert.equal(isPluginGroupExpanded({
+    groupKey: "whitebox",
+    query: "",
+    overrides: { whitebox: true },
+    hasVisibleModules: true,
+  }), true);
+  assert.equal(isPluginGroupExpanded({
+    groupKey: "whitebox",
+    query: "auth",
+    overrides: { whitebox: false },
+    hasVisibleModules: true,
+  }), false);
+  const toggled = togglePluginGroupExpanded({}, "whitebox", false);
+  assert.equal(toggled.get("whitebox"), true);
+  assert.equal(countIncludedModules([option("a", "p"), option("b", "p")], [moduleSelectorFor(sourceId, "a")]), 1);
 });

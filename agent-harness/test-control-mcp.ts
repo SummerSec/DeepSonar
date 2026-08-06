@@ -32,6 +32,15 @@ const restrictedGuide = platformToolGuide(restrictedTools);
 for (const disabled of ["emit_progress", "request_human"]) {
   if (restrictedGuide.includes(disabled)) throw new Error(`disabled tool leaked into guide: ${disabled}`);
 }
+for (const expected of [
+  "list_shared_assets",
+  "没有单独的下载工具",
+  "mount_path",
+  "publish_shared_asset",
+  "BlobStore",
+]) {
+  if (!restrictedGuide.includes(expected)) throw new Error(`shared-asset platform guide missing: ${expected}`);
+}
 const hubTools = resolvePlatformTools("hub_reason", "hub", { list_available_roles: false });
 for (const required of ["list_available_roles", "submit_hub_decision", "mark_job_done"]) {
   if (!hubTools.some((name) => name === required)) throw new Error(`required Hub tool was disabled: ${required}`);

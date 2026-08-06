@@ -1,55 +1,27 @@
 # Database schema
 
-`schema.sql` 是全新数据库使用的最新完整基线（当前 v19）。Scheduler 启动时在一个
-reserved PostgreSQL session 上持有 session advisory lock：
+`schema.sql` 是唯一 schema 真相源（当前 v22）。Scheduler 启动时在 reserved
+PostgreSQL session 上持有 session advisory lock：
 
-- 空数据库：原子执行 `database/schema.sql`，直接得到 v19；
-- v12 数据库：按 `database/migrations/0013_*.sql` 至 `0019_*.sql` 的连续编号顺序升级；
-- 已是 v19：校验迁移账本与 checksum 后 no-op；
-- v12 之前、未知结构、缺少账本或 checksum 漂移：fail closed，不能靠启动过程猜测或
-  重放 DDL。
+- **空数据库**：原子执行 `database/schema.sql`，直接得到当前版本；
+- **已是当前版本**：校验表/列结构后 no-op；
+- **版本不符、未知结构或结构漂移**：fail closed。
 
-## 迁移账本
+**没有增量 migration。** 结构变更 = 改 `schema.sql` + bump
+`apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` + **重建数据库**。
 
-`schema_migrations` 记录版本、文件名、原始 UTF-8 字节 SHA-256、时间、结果和错误信息。
-成功的迁移和 `schema_meta.version` 在同一个事务中提交；失败的事务完全回滚，Scheduler
-随后在回滚后的连接上追加 `result = 'failed'` 审计行，因此重启可以安全重试。已成功应用的
-文件内容不可修改；必须新增下一个连续编号的 migration，不能编辑历史文件。
+## 升级与恢复
 
-当前支持窗口是 **v12 → v19**。v12 的受信冻结 fixture 位于
-`database/fixtures/schema-v12.sql`，启动时会校验其固定 SHA-256；删除、修改或伪造旧结构
-都将拒绝升级。项目导入导出包（`.deepsonarpack`）是业务数据格式，不是数据库 schema
-升级工具。
-
-`database/migrations/0019_finding_reports.sql` 新增 `finding_reports`：每条 `confirmed` Finding
-拥有独立的版本化报告记录，保存冻结输入 URI/checksum，并以部分唯一索引保证同一 Finding
-同时只有一个 `pending`/`generating` 报告。
-既有 `task_reports` 不被替代，仍保存每个画布收敛后的任务总报告；手动刷新/重试会创建
-Finding 报告的新版本，报告失败不会修改 `findings.verify_status`。
-
-## 升级、备份与恢复
-
-升级前先完成 PostgreSQL 物理备份，并确认备份可以在隔离数据库恢复：
-
-```bash
-pg_dump "$DATABASE_URL" -Fc > deepsonar-$(date +%Y%m%d-%H%M%S).dump
-createdb deepsonar_restore_check
-pg_restore --clean --if-exists --no-owner -d deepsonar_restore_check deepsonar-*.dump
-```
-
-部署升级时直接发布新 Scheduler 并重启；它会在 lock 内完成 v12→v19，其他实例会等待并
-在 v19 上 no-op。不要在迁移运行期间删除 volume、手工执行同一 SQL 或修改 migration
-文件。若迁移失败，检查 Scheduler 日志与 `schema_migrations` 的失败审计行，修复部署包后
-重新启动；版本不会前进。若需要恢复，停止 Scheduler，先将备份恢复到新的 PostgreSQL
-实例，校验 `schema_meta.version` 和账本，再切换 `DATABASE_URL`。本项目不提供自动
-down migration；从 v19 回退应用代码时仍需保留已新增的结构。
-
-手工建立全新外部 PostgreSQL：
+1. 备份：`pg_dump "$DATABASE_URL" -Fc > deepsonar-$(date +%Y%m%d-%H%M%S).dump`
+2. 停 Scheduler
+3. 新建空库并执行：
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
 ```
 
-`schema.sql` 不包含 `psql` 专用的 `\i` / `\ir` 指令，也可以粘贴到 Supabase、Neon、RDS
-Query Editor 等 PostgreSQL SQL 控制台执行。它适配 PostgreSQL，不适配 MySQL、SQLite 或
-SQL Server。
+或让 Scheduler 对空库自动套基线。业务数据通过 `.deepsonarpack` 导入导出，
+不是 schema 升级工具。
+
+`schema.sql` 不包含 `psql` 专用的 `\i` / `\ir` 指令，也可以粘贴到 Supabase、
+Neon、RDS Query Editor 等 PostgreSQL SQL 控制台执行。仅适配 PostgreSQL。

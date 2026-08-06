@@ -768,13 +768,12 @@ CANVAS_LAYOUT=auto
 
 判断标准：状态机/去重/限流逻辑依赖的字段进列；"内容是什么"的字段进 JSONB。类型字段（`jobs.type`、`node_type`、`status`）一律用**字符串**，不用 Postgres enum——新增类型零迁移。
 
-### 17.2 迁移纪律（Phase 0 第一天就建立）
+### 17.2 Schema 纪律（schema-only，无增量 migration）
 
-- **版本化迁移工具（**Drizzle Kit** 或 node-pg-migrate）**，`migrations/000N_*.sql` 顺序编号，禁止手改库
-- 启动时自动 `migrate up`；每个 PR 必须带迁移文件
-- 破坏性变更走 **expand → migrate → contract** 三步：先加新列（可空/默认值）→ 部署 + 回填 → 稳定后删旧列；服务不停机
-- MVP 单用户阶段允许"改表 + 清库重来"，但迁移文件照写，保证重来是一条命令的事
-- 当前 fresh 基线为 schema v21；`0020_finding_protocol.sql` 增加通用 Finding 协议字段，`0021_shared_assets.sql` 增加分层资产/CAS/策略/Job 引用表；两者均是受支持的连续升级，不能用清库替代升级。
+- **唯一真相**：`database/schema.sql` + `SCHEMA_VERSION`；无 `database/migrations/`
+- **启动行为**：空库原子套用基线；非空库校验 `schema_meta.version == SCHEMA_VERSION` 与表/列结构，不符 fail closed
+- **改表**：直接改基线、bump 版本、**重建数据库**；不写 migration、不留旧结构 fallback
+- 业务数据用 `.deepsonarpack` 导入导出，不是 schema 升级工具
 
 ### 17.3 事件格式版本化
 
@@ -782,14 +781,14 @@ CANVAS_LAYOUT=auto
 
 ### 17.4 扩展场景验证（设计时已推演）
 
-| 未来场景 | 改动面 | 需要迁移 |
-|----------|--------|----------|
+| 未来场景 | 改动面 | 需要重建库 |
+|----------|--------|------------|
 | 新增任务类型 / 节点类型 / 事件类型 | 字符串新值 + JSONB 新形状 + 应用层代码 | ❌ |
-| 自由区字段高频查询（如 CWE 编号） | expand 加列，只加不删 | ✅ 安全 |
+| 自由区字段高频查询（如 CWE 编号） | 改 `schema.sql` 加列 + bump 版本 | ✅ |
 | 换沙箱 provider / 多 Scheduler 实例 | 适配层/领取逻辑，表不动 | ❌ |
 | 状态机加状态 | status 新字符串值 | ❌ |
 
-总原则：**表结构管"关系和不变量"，JSONB 管"内容"，版本号管"格式演进"，migration 工具管"物理变更"。** 真正危险的是把易变内容固化成列，§6 已规避。
+总原则：**表结构管"关系和不变量"，JSONB 管"内容"，版本号管"格式"，重建库管"物理变更"。** 真正危险的是把易变内容固化成列，§6 已规避。
 
 ### Issue #12 调度语义补充：资格与排序分离
 

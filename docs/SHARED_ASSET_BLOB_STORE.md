@@ -88,11 +88,21 @@ export BLOB_S3_FORCE_PATH_STYLE=true
 
 ## Runtime behaviour
 
-1. Upload / Agent publish → BlobStore `put` by CAS key → insert/update Postgres metadata  
-2. Download API → BlobStore `get`  
-3. Job provision → BlobStore `materializeLocal` (S3 downloads into `BLOB_S3_CACHE_DIR`) → read-only named volume as today  
+1. Upload / Agent `publish_shared_asset` → Scheduler reads `/workspace/...` → BlobStore `put` by CAS key → Postgres metadata  
+2. Human download API → BlobStore `get`  
+3. Job provision → BlobStore `materializeLocal` (S3 downloads into `BLOB_S3_CACHE_DIR`) → read-only named volume `:ro` at `/workspace/.deepsonar/shared`  
 
 `blob_uri` in the database stays the logical CAS path. Object keys in the bucket are `BLOB_S3_PREFIX` + that path when a prefix is set.
+
+### Agent tools vs storage backend
+
+| Tool | Agent sees | Backend (fs / S3) |
+|------|------------|-------------------|
+| `list_shared_assets` | Frozen catalog + `mount_path` / `read_path` | Transparent: catalog from mount or workspace copy |
+| *(no download tool)* | Read file at `mount_path` with normal Read/cat | Scheduler already materialised bytes into the volume |
+| `publish_shared_asset` | Propose workspace file path | Scheduler `createSharedAsset` → BlobStore put |
+
+Agents never receive S3 credentials and must not curl object storage. There is intentionally **no** `download_shared_asset` control tool: pre-mount keeps the threat boundary (Agent only proposes; Scheduler owns bytes).
 
 ## Security notes
 

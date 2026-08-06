@@ -296,7 +296,7 @@ pending → claimed → provisioning → running → waiting_human → succeeded
 
 - `POST /jobs/:id/resume`：`failed` / `timeout` / `orphan` / `waiting_human` → `pending`（终态 409）；Scheduler 按 Job `type`/`purpose` 重算固定 priority class，不信任历史或调用方 priority。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。
-- schema 版本：当前支持 v12 → v15；Scheduler 持 session advisory lock 执行连续 migration，并校验 `schema_migrations` 的原始字节 checksum。v15 会重建 Credential public metadata allowlist 并添加持久化 health/model catalog。v12 之前、未知结构或已应用文件漂移会 fail closed；先备份并按数据库恢复文档处理，不要直接 `DROP SCHEMA public CASCADE`。
+- schema 版本：当前 v22；空库套 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。
 
 ## 发现契约（推荐流程）

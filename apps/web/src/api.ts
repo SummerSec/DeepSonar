@@ -614,6 +614,10 @@ export interface BindableRoleConfig {
   role_id: string;
   role_name: string;
   role_title: string;
+  /** hub | system | role — system = 调度内核系统角色 */
+  role_kind?: "hub" | "system" | "role";
+  role_builtin?: boolean;
+  role_ui_color?: string | null;
   project_id: string | null;
   project_name: string | null;
   scope: "global" | "project";
@@ -646,6 +650,12 @@ export interface ProviderCredential {
   key_version: number;
   public_metadata_json: Record<string, unknown>;
   model_catalog_json?: string[];
+  /** CC Switch-style profile: which CLI this settingsConfig targets. */
+  agent_cli?: "claude-code" | "codex" | "open-code" | null;
+  /** Full CLI settingsConfig (may include plaintext keys). */
+  settings_config_json?: Record<string, unknown>;
+  /** Manager-only meta (apiFormat, fullUrl, …). */
+  meta_json?: Record<string, unknown>;
   fingerprint: string;
   last4: string;
   status: "active" | "disabled" | "rotation_required";
@@ -1751,6 +1761,13 @@ export const api = {
   credentialImpact: (id: string) => get<CredentialImpact>(`/credentials/${id}/impact`),
   credentialProviders: () => get<ProviderAccountCatalogItemView[]>("/credentials/providers"),
   bindableRoleConfigs: () => get<BindableRoleConfig[]>("/role-configs/bindable"),
+  /** Provider 绑定列表：仅改 RoleConfig.agent_cli，不整表替换 */
+  updateRoleConfigAgentCli: (roleConfigId: string, agent_cli: "claude-code" | "open-code" | "codex") =>
+    send<{ id: string; agent_cli: string; version: number; role_id: string; project_id: string | null }>(
+      "PATCH",
+      `/role-configs/${roleConfigId}/agent-cli`,
+      { agent_cli },
+    ),
   createCredential: (c: {
     name: string;
     kind?: string;
@@ -1758,8 +1775,11 @@ export const api = {
     secret: string;
     project_id?: string | null;
     metadata?: Record<string, unknown>;
+    agent_cli?: "claude-code" | "codex" | "open-code" | null;
+    settings_config?: Record<string, unknown>;
+    meta?: Record<string, unknown>;
   }) => send<ProviderCredential>("POST", "/credentials", c),
-  /** 更新非敏感字段（名称 / provider / 项目 / base_url 等 metadata）；密钥仍走 rotate */
+  /** 更新非敏感字段（名称 / provider / 项目 / base_url / settingsConfig 等）；密钥仍走 rotate */
   updateCredential: (
     id: string,
     patch: {
@@ -1767,6 +1787,9 @@ export const api = {
       provider?: string;
       project_id?: string | null;
       metadata?: Record<string, unknown>;
+      agent_cli?: "claude-code" | "codex" | "open-code" | null;
+      settings_config?: Record<string, unknown>;
+      meta?: Record<string, unknown>;
     },
   ) => send<CredentialUpdateResponse>("PATCH", `/credentials/${id}`, patch),
   rotateCredential: (id: string, secret: string) =>
