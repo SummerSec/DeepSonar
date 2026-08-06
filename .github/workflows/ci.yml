@@ -4,10 +4,26 @@ name: ci
 # - control MCP 协议（无服务）
 # - roles / hub-loop / local-project API
 # - auth（独立 3101 进程，AUTH_REQUIRED=true）
+#
+# 触发策略（避免每个 push 都跑全量）：
+# - pull_request：开/更新 PR 时跑（功能分支日常推送不单独跑）
+# - push@main：合并进主干后再跑一遍；纯文档改动跳过
+# - workflow_dispatch：手动补跑
 on:
-  push:
-    branches: [main, "feat/**"]
   pull_request:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "skills/**"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/deepsonar
