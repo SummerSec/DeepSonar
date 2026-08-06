@@ -45,7 +45,7 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   const reaperSource = readFileSync(new URL("../../reaper.ts", import.meta.url), "utf8");
   const reconcileSource = readFileSync(new URL("../../reconcile.ts", import.meta.url), "utf8");
   const dispatcherSource = readFileSync(new URL("../../dispatcher.ts", import.meta.url), "utf8");
-  const routesSource = readFileSync(new URL("../../routes.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("../job-control/routes.ts", import.meta.url), "utf8");
 
   // These multi-source CAS operations intentionally remain outside the pure
   // matrix: Reaper handles three active sources for execution timeout, while

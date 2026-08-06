@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { CredentialBatchBindingRequest } from "@deepsonar/shared-types";
 
-const routes = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+const routes = readFileSync(new URL("./domains/credential/routes.ts", import.meta.url), "utf8");
 
 test("batch binding schema rejects duplicate targets and incomplete migrations", () => {
   const credentialId = "11111111-1111-4111-8111-111111111111";

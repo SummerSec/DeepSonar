@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const routes = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+const routes = readFileSync(new URL("./domains/credential/routes.ts", import.meta.url), "utf8");
 const probe = readFileSync(new URL("./credential-test.ts", import.meta.url), "utf8");
 const projectExport = readFileSync(new URL("./transfer/export.ts", import.meta.url), "utf8");
 const platformTransfer = readFileSync(new URL("./transfer/platform.ts", import.meta.url), "utf8");
