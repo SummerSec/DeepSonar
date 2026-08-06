@@ -45,7 +45,7 @@ services:
 
   scheduler:
     # 默认拉阿里云已发布镜像；仅在 deploy.sh 传 build 时本地构建
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-0.1.12}
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.scheduler
@@ -78,7 +78,7 @@ services:
 
   # 第三方镜像只在独立准入 Worker 中执行自检；Scheduler 只管理状态与审批。
   image-admission:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-image-admission:${DEEPSONAR_IMAGE_TAG:-0.1.12}
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-image-admission:${DEEPSONAR_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.image-admission
@@ -99,7 +99,7 @@ services:
     networks: [deepsonar]
 
   web:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:-0.1.12}
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web

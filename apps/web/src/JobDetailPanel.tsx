@@ -483,8 +483,12 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           {!error && !detail && (
             <div className="p-8 font-mono text-sm text-zinc-600">正在读取运行账本…</div>
           )}
-          {detail?.job.error && (
+          {/* 非「结果」页：顶栏展示一次 Job 终态错误；结果页内已有带标题的错误卡片，避免双份 */}
+          {detail?.job.error && tab !== "result" && (
             <div className="m-4 rounded-xl bg-red-950/20 px-4 py-3 text-red-300 ring-1 ring-red-400/15">
+              <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">
+                错误
+              </div>
               <MarkdownView markdown={detail.job.error} />
             </div>
           )}

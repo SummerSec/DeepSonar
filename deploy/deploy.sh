@@ -14,7 +14,7 @@ REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
 
 # 默认阿里云 ACR；可用 deploy/.env 覆盖
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
-DEFAULT_IMAGE_TAG="0.1.12"
+DEFAULT_IMAGE_TAG="latest"
 
 case "$ACTION" in up|down|status|logs|check|pull) ;; *)
   echo "用法: $0 [up|down|status|logs|check|pull] [real|fake] [pull|build]" >&2
