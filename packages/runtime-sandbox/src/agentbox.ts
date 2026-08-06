@@ -44,8 +44,97 @@ if (process.platform === "win32") {
 const sandboxes = new Map<string, Sandbox>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
 const GATEWAY_PROXY = "deepsonar-gateway-proxy";
+export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
+export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
+export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
+const SHARED_ASSETS_VOLUME_RE = /^deepsonar-assets-[a-z0-9][a-z0-9_.-]{0,62}$/;
 let restrictedNetworkReady: Promise<void> | null = null;
 let gatewayProxyReady: Promise<void> | null = null;
+
+/** Build the only Docker bind accepted for shared assets; host paths are never allowed. */
+export function sharedAssetsVolumeBinds(mount: ProvisionInput["sharedAssetsMount"]): string[] {
+  if (!mount) return [];
+  if (!SHARED_ASSETS_VOLUME_RE.test(mount.volumeName)) {
+    throw new Error("shared assets volume must be a Scheduler-owned deepsonar-assets-* named volume");
+  }
+  return [`${mount.volumeName}:${SHARED_ASSETS_MOUNT_PATH}:ro`];
+}
+
+interface SharedAssetsVolumeInspection {
+  Name?: unknown;
+  Driver?: unknown;
+  Scope?: unknown;
+  Labels?: unknown;
+}
+
+interface SharedAssetsContainerInspection {
+  Mounts?: unknown;
+}
+
+/** Validate daemon-owned metadata before Docker can auto-create a typoed volume. */
+export function assertSharedAssetsVolumeOwnership(
+  inspected: SharedAssetsVolumeInspection,
+  volumeName: string,
+  jobId: string,
+): void {
+  const labels = inspected.Labels && typeof inspected.Labels === "object"
+    ? inspected.Labels as Record<string, unknown>
+    : {};
+  if (
+    inspected.Name !== volumeName ||
+    inspected.Driver !== "local" ||
+    inspected.Scope !== "local" ||
+    labels[SHARED_ASSETS_VOLUME_LABEL] !== "true" ||
+    labels[SHARED_ASSETS_JOB_LABEL] !== jobId
+  ) {
+    throw new Error("shared assets volume is not a local Scheduler-managed volume for this Job");
+  }
+}
+
+/** Validate the actual container after attach as well as after fresh provision. */
+export function assertSharedAssetsContainerMount(
+  inspected: SharedAssetsContainerInspection,
+  volumeName: string,
+): void {
+  const mounts = Array.isArray(inspected.Mounts) ? inspected.Mounts : [];
+  const targetMounts = mounts.filter((entry) => (
+    entry && typeof entry === "object" &&
+    (entry as Record<string, unknown>).Destination === SHARED_ASSETS_MOUNT_PATH
+  ));
+  const mount = targetMounts[0] as Record<string, unknown> | undefined;
+  if (
+    targetMounts.length !== 1 ||
+    mount?.Type !== "volume" ||
+    mount?.Name !== volumeName ||
+    mount?.RW !== false
+  ) {
+    throw new Error("sandbox shared assets mount does not match the frozen read-only volume");
+  }
+}
+
+async function validateSharedAssetsVolume(volumeName: string, jobId: string): Promise<void> {
+  let output: string;
+  try {
+    output = await docker("volume", "inspect", volumeName, "--format", "{{json .}}");
+  } catch {
+    throw new Error("shared assets volume must exist before sandbox provisioning");
+  }
+  let inspected: SharedAssetsVolumeInspection;
+  try {
+    inspected = JSON.parse(output) as SharedAssetsVolumeInspection;
+  } catch {
+    throw new Error("shared assets volume inspection returned invalid JSON");
+  }
+  assertSharedAssetsVolumeOwnership(inspected, volumeName, jobId);
+}
+
+async function validateSharedAssetsContainer(sandbox: Sandbox, volumeName: string): Promise<void> {
+  const raw = sandbox.raw as { container?: { inspect?: () => Promise<SharedAssetsContainerInspection> } } | undefined;
+  if (!raw?.container || typeof raw.container.inspect !== "function") {
+    throw new Error("sandbox provider cannot verify the shared assets mount");
+  }
+  assertSharedAssetsContainerMount(await raw.container.inspect(), volumeName);
+}
 
 const GATEWAY_PROXY_SCRIPT = String.raw`
 const http = require("node:http");
@@ -260,6 +349,7 @@ function hardenCreateContainer(
   sandbox: Sandbox,
   limits: ProvisionInput["limits"],
   extraHosts: string[] = [],
+  readonlyBinds: string[] = [],
 ): void {
   const adapter = (sandbox as unknown as { adapter?: { client?: {
     createContainer: (opts: CreateContainerOptions) => Promise<unknown>;
@@ -276,6 +366,9 @@ function hardenCreateContainer(
       const prevHosts = Array.isArray(opts.HostConfig?.ExtraHosts)
         ? (opts.HostConfig!.ExtraHosts as string[])
         : [];
+      const prevBinds = Array.isArray(opts.HostConfig?.Binds)
+        ? (opts.HostConfig!.Binds as string[])
+        : [];
       opts.HostConfig = {
         ...opts.HostConfig,
         PidsLimit: pidsLimit,
@@ -283,6 +376,9 @@ function hardenCreateContainer(
         ...(noNewPrivileges ? { SecurityOpt: ["no-new-privileges:true"] } : {}),
         ...(extraHosts.length > 0
           ? { ExtraHosts: [...new Set([...prevHosts, ...extraHosts])] }
+          : {}),
+        ...(readonlyBinds.length > 0
+          ? { Binds: [...new Set([...prevBinds, ...readonlyBinds])] }
           : {}),
       };
     }
@@ -293,6 +389,10 @@ function hardenCreateContainer(
 export class AgentboxRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
     const extraHosts: string[] = [];
+    const readonlyBinds = sharedAssetsVolumeBinds(input.sharedAssetsMount);
+    if (input.sharedAssetsMount) {
+      await validateSharedAssetsVolume(input.sharedAssetsMount.volumeName, input.jobId);
+    }
     if (input.network === "restricted") {
       await ensureRestrictedNetwork();
       if (!input.gatewayUpstreamUrl) throw new Error("restricted Worker 缺少 Gateway 上游 URL");
@@ -312,6 +412,7 @@ export class AgentboxRunner implements SandboxRunner {
       },
       provider: {
         name: `deepsonar-${input.jobId.slice(0, 8)}`,
+        binds: readonlyBinds,
         // restricted=无外网 NAT 的内部 bridge（仅保留 host-gateway 模型通道）；
         // egress=普通 bridge，Worker 可按 prompt 自主取材。
         networkMode:
@@ -319,13 +420,16 @@ export class AgentboxRunner implements SandboxRunner {
         autoRemove: true,
       },
     });
-    hardenCreateContainer(sandbox, input.limits, extraHosts);
+    hardenCreateContainer(sandbox, input.limits, extraHosts, readonlyBinds);
     await sandbox.findOrProvision();
     const id = sandbox.id ?? `unknown-${input.jobId}`;
     sandboxes.set(id, sandbox);
     try {
+      if (input.sharedAssetsMount) {
+        await validateSharedAssetsContainer(sandbox, input.sharedAssetsMount.volumeName);
+      }
       const contractResult = await sandbox.run(
-        "test -d /workspace && test -x /bin/sh && cat /opt/deepsonar/tool-manifest.json",
+        `test -d /workspace && test -x /bin/sh${input.sharedAssetsMount ? ` && test -d ${SHARED_ASSETS_MOUNT_PATH}` : ""} && cat /opt/deepsonar/tool-manifest.json`,
         { timeoutMs: 15_000 },
       );
       if (contractResult.exitCode !== 0) {

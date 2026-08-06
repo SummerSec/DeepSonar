@@ -7,6 +7,8 @@ export interface ProvisionInput {
   jobId: string;
   image: string;
   env?: Record<string, string>;
+  /** Scheduler-owned per-Job volume mounted read-only at /workspace/.deepsonar/shared. */
+  sharedAssetsMount?: SharedAssetsMount;
   /** none=完全断网；restricted=仅平台必要通道；egress=允许 Worker 自主访问外网。 */
   network: "none" | "restricted" | "egress";
   /** restricted 模式由固定目标 sidecar 代理的调度器模型 Gateway。 */
@@ -16,6 +18,11 @@ export interface ProvisionInput {
   expectedToolsManifestSha256?: string | null;
   /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
   limits?: SandboxLimits;
+}
+
+export interface SharedAssetsMount {
+  /** Must be an opaque Docker named volume created by the trusted host. */
+  volumeName: string;
 }
 
 export interface SandboxLimits {
@@ -63,6 +70,12 @@ export {
   normalizeRuntimeErrorDetails,
   parseRuntimeLine,
   runRealAgent,
+  assertSharedAssetsContainerMount,
+  assertSharedAssetsVolumeOwnership,
+  SHARED_ASSETS_MOUNT_PATH,
+  SHARED_ASSETS_JOB_LABEL,
+  SHARED_ASSETS_VOLUME_LABEL,
+  sharedAssetsVolumeBinds,
 } from "./agentbox.js";
 export { RuntimeImageContractError } from "./agentbox.js";
 export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails } from "./agentbox.js";

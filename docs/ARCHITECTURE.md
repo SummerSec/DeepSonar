@@ -443,6 +443,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 复扫失败的 trusted 版本自动 revoked，调度器/准入 Worker 会取消尚未完成的相关 Job 并精确回收它们的 sandbox ID。历史 Job 快照、Finding 和扫描记录不删除；新 digest 只进入 quarantined，不自动替换生产版本。
 - 私有 registry 使用 `oci_registry` Credential，准入 Worker 仅在 `docker login --password-stdin` 时解密，不进入 Job Snapshot、Docker 参数、日志或 Agent 工作区。
 - `runtime_data_layers` / `runtime_data_layer_versions` 为 Trivy/OSV 等离线库预留可版本化、只读、digest 准入模型；尚未准入的数据层不得挂载进运行沙箱。
+- Shared asset injection only accepts pre-existing local `deepsonar-assets-*` Docker named volumes whose daemon labels bind them to the exact Job, and mounts them at the fixed `/workspace/.deepsonar/shared` target with `:ro`; arbitrary host paths, arbitrary container targets, unlabeled volumes, and Docker auto-created volumes are rejected. After fresh provision or warm attach, the runtime inspects the actual container mount and requires the frozen volume name with `RW=false` before executing any Agent command. Asset storage, snapshot selection, APIs, and publish flows remain tracked by #41.
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
 
