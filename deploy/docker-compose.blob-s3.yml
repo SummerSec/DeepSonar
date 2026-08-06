@@ -1,0 +1,74 @@
+# Optional S3-compatible blob backend for shared assets.
+#
+# DeepSonar talks pure S3 API — MinIO is only an example, not a hard dependency.
+# Replace the minio service with Garage, SeaweedFS, cloud OSS, AWS S3, etc. by
+# pointing BLOB_S3_* at your endpoint and credentials.
+#
+# Usage (with prod stack):
+#   docker compose -f docker-compose.prod.yml -f docker-compose.blob-s3.yml up -d
+#
+# Then create the bucket once (console :9001 or mc) if the init job is skipped.
+#
+# License: MinIO is third-party software under its own terms (historically AGPLv3
+# / commercial AIStor). Review before production; swap to any other S3 API freely.
+
+services:
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:-deepsonar}
+      MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:-deepsonar-secret}
+    ports:
+      - "${DEEPSONAR_MINIO_API_PORT:-9000}:9000"
+      - "${DEEPSONAR_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    # minio/minio images vary; if healthcheck fails on your tag, switch depends_on to service_started.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [deepsonar]
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$BLOB_S3_BUCKET"
+    environment:
+      MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:-deepsonar}
+      MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:-deepsonar-secret}
+      BLOB_S3_BUCKET: ${BLOB_S3_BUCKET:-deepsonar}
+    networks: [deepsonar]
+    restart: "no"
+
+  scheduler:
+    depends_on:
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      BLOB_STORE: s3
+      BLOB_S3_ENDPOINT: http://minio:9000
+      BLOB_S3_REGION: ${BLOB_S3_REGION:-us-east-1}
+      BLOB_S3_BUCKET: ${BLOB_S3_BUCKET:-deepsonar}
+      BLOB_S3_PREFIX: ${BLOB_S3_PREFIX:-}
+      BLOB_S3_ACCESS_KEY_ID: ${BLOB_S3_ACCESS_KEY_ID:-deepsonar}
+      BLOB_S3_SECRET_ACCESS_KEY: ${BLOB_S3_SECRET_ACCESS_KEY:-deepsonar-secret}
+      BLOB_S3_FORCE_PATH_STYLE: "true"
+      # Still used for evidence/report local cold storage + S3 materialize cache.
+      BLOB_DIR: /app/data/blobs
+      BLOB_S3_CACHE_DIR: /app/data/blobs
+
+volumes:
+  minio_data:

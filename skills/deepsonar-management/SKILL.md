@@ -208,7 +208,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 | 本地镜像存在 | Docker 已有对应 digest（可 `docker tag` 别名） |
 | schema 版本 | 当前支持 v12 → v15；Scheduler 持 session advisory lock 执行连续 migration，校验 `schema_migrations` checksum；v12 之前、未知结构或漂移会 fail closed |
 | 鉴权 | `DEEPSONAR_AUTH_REQUIRED=true` 时需 Bearer；应急用 `DEEPSONAR_ADMIN_TOKEN`（不落库） |
-| 证据目录 | `BLOB_DIR`（默认 `./data/blobs`）可写；改 `apps/scheduler/src` 会触发 tsx watch 重载 |
+| 证据目录 | `BLOB_DIR`（默认 `./data/blobs`）可写；共享资产 CAS 见 `BLOB_STORE=fs` 或 `s3`（`docs/SHARED_ASSET_BLOB_STORE.md`）；改 `apps/scheduler/src` 会触发 tsx watch 重载 |
 
 ## 运维踩坑（本 skill 经验沉淀）
 

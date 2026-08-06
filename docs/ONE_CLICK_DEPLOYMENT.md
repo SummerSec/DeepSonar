@@ -403,6 +403,7 @@ rewrite an existing Job snapshot.
 ## 11. 上线检查表
 
 - [ ] `deploy/.env` 不含占位符且未提交 Git；
+- [ ] 多 Scheduler / 分布式时共享资产使用 `BLOB_STORE=s3` 与任意 S3 兼容存储（见 `docs/SHARED_ASSET_BLOB_STORE.md`）；单机可保持 `BLOB_STORE=fs`；
 - [ ] `DEEPSONAR_AUTH_REQUIRED=true`；
 - [ ] 已创建长期数据库 API Token；
 - [ ] 外部事件 Token 绑定单项目且只有 `tasks:write`；
