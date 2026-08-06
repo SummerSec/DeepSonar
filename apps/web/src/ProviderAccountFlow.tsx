@@ -108,6 +108,14 @@ export function ProviderAccountFlow({
 
   const selectedCredential = credentials.find((credential) => credential.id === selectedCredentialId) ?? null;
   const models = useMemo(() => modelIds(selectedCredential), [selectedCredential]);
+  /** Roles currently bound to the selected credential (from bindable list). */
+  const boundRoleIds = useMemo(() => {
+    if (!selectedCredentialId) return [] as string[];
+    return roleConfigs
+      .filter((roleConfig) => roleConfig.can_bind && roleConfig.credential_id === selectedCredentialId)
+      .map((roleConfig) => roleConfig.id);
+  }, [roleConfigs, selectedCredentialId]);
+  const boundRoleCount = selectedCredential?.bound_role_config_count ?? boundRoleIds.length;
   const selectedRoles = useMemo(
     () => roleConfigs.filter((roleConfig) => selectedRoleIds.has(roleConfig.id)),
     [roleConfigs, selectedRoleIds],
@@ -168,14 +176,6 @@ export function ProviderAccountFlow({
   }, [actorProjectId]);
 
   useEffect(() => {
-    setSelectedRoleIds((current) => {
-      const allowed = new Set(roleConfigs.filter((roleConfig) => roleConfig.can_bind).map((roleConfig) => roleConfig.id));
-      const next = new Set([...current].filter((id) => allowed.has(id)));
-      return next.size === current.size ? current : next;
-    });
-  }, [roleConfigs]);
-
-  useEffect(() => {
     if (!selectedCredentialId && credentials.length > 0) {
       setSelectedCredentialId(credentials.find((credential) => credential.kind === "llm_provider")?.id ?? credentials[0].id);
     }
@@ -184,6 +184,16 @@ export function ProviderAccountFlow({
   useEffect(() => {
     if (credentials.length === 0) setShowCreate(true);
   }, [credentials.length]);
+
+  // Prefill checkboxes from roles already bound to this credential (not "0 selected" after a successful bind).
+  const boundRoleKey = boundRoleIds.slice().sort().join(",");
+  useEffect(() => {
+    if (!selectedCredentialId) {
+      setSelectedRoleIds(new Set());
+      return;
+    }
+    setSelectedRoleIds(new Set(boundRoleKey ? boundRoleKey.split(",") : []));
+  }, [selectedCredentialId, boundRoleKey]);
 
   useEffect(() => {
     if (!selectedCredential) return;
@@ -194,13 +204,15 @@ export function ProviderAccountFlow({
       .map((roleConfig) => roleConfig.credential_id)
       .filter((id): id is string => Boolean(id));
     setSourceCredentialId(candidates.length && new Set(candidates).size === 1 ? candidates[0] : "");
+    // Only re-derive source when the selected account changes; do not fight user checkbox edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: selectedCredentialId gate
   }, [selectedCredentialId]);
 
   useEffect(() => {
     setCatalogError("");
     setPreviewImpact(null);
     if (selectedCredentialId) {
-      api.credentialImpact(selectedCredentialId).then(setPreviewImpact).catch(() => {});
+      api.credentialImpact(selectedCredentialId).then(setPreviewImpact).catch(() => setPreviewImpact(null));
     }
   }, [selectedCredentialId]);
 
@@ -331,11 +343,16 @@ export function ProviderAccountFlow({
       });
       setImpact(result);
       setNotice(effect === "refresh_pending"
-        ? `已原子生效。刷新了 ${result.refreshed_pending_job_count} 个 pending 快照；运行中快照保持冻结。`
-        : "已原子生效（仅新 Job）。已有 pending 与运行中快照保持冻结。");
+        ? `已原子生效。已绑定 ${result.role_config_count} 个角色配置；刷新了 ${result.refreshed_pending_job_count} 个 pending 快照；运行中快照保持冻结。`
+        : `已原子生效（仅新 Job）。已绑定 ${result.role_config_count} 个角色配置；已有 pending 与运行中快照保持冻结。`);
       setStep("effect");
       setBatchIdempotencyKey(newBatchIdempotencyKey());
-      api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
+      const [nextRoles, nextImpact] = await Promise.all([
+        api.bindableRoleConfigs().catch(() => null),
+        api.credentialImpact(selectedCredential.id).catch(() => null),
+      ]);
+      if (nextRoles) setRoleConfigs(nextRoles);
+      if (nextImpact) setPreviewImpact(nextImpact);
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -347,7 +364,13 @@ export function ProviderAccountFlow({
   const steps: Array<{ key: FlowStep; label: string; detail: string }> = [
     { key: "account", label: "Provider 账号", detail: selectedCredential ? providerLabel(selectedCredential.provider, catalog) : "选择账号" },
     { key: "model", label: "模型门槛", detail: models.length ? `${models.length} 个可用` : "兼容性检查" },
-    { key: "roles", label: "角色绑定", detail: `已选 ${selectedRoleIds.size} 个角色配置` },
+    {
+      key: "roles",
+      label: "角色绑定",
+      detail: selectedCredential
+        ? `已绑定 ${boundRoleCount} · 本次勾选 ${selectedRoleIds.size}`
+        : "选择角色配置",
+    },
     { key: "effect", label: "生效策略", detail: effect === "refresh_pending" ? "刷新 pending" : "仅新 Job" },
   ];
 
@@ -422,7 +445,7 @@ export function ProviderAccountFlow({
               <span className={`provider-health-dot ${selectedCredential.health?.status ?? "unknown"}`} />
               <strong>{selectedCredential.provider_valid === false ? "Provider 映射待修复" : healthStatusLabel(selectedCredential.health?.status)}</strong>
               <span>{selectedCredential.scope === "project" ? "项目账号" : "全局账号"}</span>
-              <span>{selectedCredential.bound_role_config_count ?? 0} 处绑定</span>
+              <span>{boundRoleCount} 处绑定</span>
               <span>{selectedCredential.health?.last_tested_at ? `最近测试 ${new Date(selectedCredential.health.last_tested_at).toLocaleString()}` : "尚未测试"}</span>
             </div>
           )}
@@ -478,9 +501,14 @@ export function ProviderAccountFlow({
         <div className="provider-flow-bind-head">
           <div>
             <label className="provider-flow-label">选择全局与项目节点</label>
-            <p className="provider-flow-help">仅兼容组合可进入下一 Job 快照。</p>
+            <p className="provider-flow-help">
+              已绑定到本账号的角色会自动勾选。「已绑定」为持久状态，「本次勾选」为即将提交的集合。
+            </p>
           </div>
-          <div className="provider-flow-count">{selectedRoleIds.size}<span>已选</span></div>
+          <div className="provider-flow-count-stack" aria-label="绑定与勾选数量">
+            <div className="provider-flow-count">{boundRoleCount}<span>已绑定</span></div>
+            <div className="provider-flow-count is-muted">{selectedRoleIds.size}<span>本次勾选</span></div>
+          </div>
         </div>
         <div className="provider-flow-role-list">
           {roleConfigs.length === 0 && <div className="provider-flow-empty">暂无角色配置。请先在「Agent 角色」中创建，再回到这里绑定。</div>}
@@ -570,7 +598,8 @@ export function ProviderAccountFlow({
         <div className="provider-flow-impact" role="status">
           <div className="provider-flow-impact-title"><CheckCircle size={16} /> 已在同一事务中生效</div>
           <div className="provider-flow-impact-grid">
-            <span><strong>{impact.role_config_count}</strong> 角色配置</span>
+            <span><strong>{impact.role_config_count}</strong> 本次绑定角色配置</span>
+            <span><strong>{previewImpact?.role_configs.count ?? boundRoleCount}</strong> 当前已绑定</span>
             <span><strong>{impact.pending_job_count}</strong> pending</span>
             <span><strong>{impact.refreshed_pending_job_count}</strong> 已刷新</span>
             <span><strong>{impact.active_frozen_job_count}</strong> 活跃冻结</span>
@@ -578,7 +607,7 @@ export function ProviderAccountFlow({
           </div>
         </div>
       )}
-      {previewImpact && !impact && (
+      {previewImpact && (
         <div className="provider-flow-preview" role="status">
           <div className="provider-flow-impact-title"><GitBranch size={15} /> 当前账号影响预览</div>
           <div className="provider-flow-impact-grid">

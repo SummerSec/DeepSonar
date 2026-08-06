@@ -1081,7 +1081,9 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .provider-flow-help { margin: 8px 0 0; color: #667277; font-size: 10px; line-height: 1.6; }
 .provider-flow-bind-card, .provider-flow-effect-card { margin-top: 9px; }
 .provider-flow-bind-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.provider-flow-count-stack { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 .provider-flow-count { color: var(--accent); font: 600 20px var(--font-mono); text-align: right; }
+.provider-flow-count.is-muted { color: #9aa6ac; font-size: 16px; }
 .provider-flow-count span { display: block; color: #6f7b80; font-size: 9px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
 .provider-flow-role-list { display: grid; gap: 5px; max-height: 265px; margin-top: 10px; overflow: auto; }
 .provider-flow-role { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; border: 1px solid rgb(255 255 255 / .07); border-radius: 8px; background: rgb(255 255 255 / .018); padding: 8px 9px; cursor: pointer; }
