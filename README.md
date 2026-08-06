@@ -33,7 +33,7 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 - Finding 全量进入验证生命周期；confirmed / needs_human 后可生成任务级与 Finding 级报告；
 - Agent 只提案（`emit_*` / `submit_hub_decision` / `mark_job_done`），调度器是唯一副作用执行者；
 - RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场可在控制台管理；
-- PostgreSQL 为业务真相；Scheduler 启动时应用 schema / 增量 migration；
+- PostgreSQL 为业务真相；Scheduler 启动时对空库套 schema 基线，已有库只校验版本；
 - **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 Agentbox 起真实沙箱。
 
 ## 一键部署（推荐：拉取已发布镜像）
@@ -201,7 +201,7 @@ pnpm ci:images
 
 - 完整建库入口：[database/schema.sql](database/schema.sql)
 - 说明：[database/README.md](database/README.md)
-- Scheduler 启动时对空库套基线，并应用 `database/migrations/` 增量迁移；版本/checksum 不符会 fail closed
+- Scheduler 启动时对空库套基线；已有库只校验版本与结构，不符则 fail closed（无增量 migration，需重建）
 - 升级前请 `pg_dump -Fc` 并在隔离实例演练恢复
 
 ```bash
@@ -237,7 +237,7 @@ packages/
   shared-types/     前后端共享 Zod schema
   plane-client/     Plane 可选集成
   runtime-sandbox/  Noop / Agentbox 沙箱
-database/           schema 基线与 migrations
+database/           schema 基线（无 migration）
 deploy/             Compose、一键脚本、发布镜像清单
 agent-harness/      冒烟与镜像校验
 docs/               架构与专题文档

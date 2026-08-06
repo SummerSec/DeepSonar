@@ -45,7 +45,11 @@ import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
 import { inc } from "./metrics.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
-import { createSharedAsset } from "./domains/shared-assets/index.js";
+import {
+  buildJobSharedAssetCatalog,
+  createSharedAsset,
+  SHARED_ASSETS_WORKSPACE_CATALOG,
+} from "./domains/shared-assets/index.js";
 import {
   CONTROL_INPUT_ERROR_CODES,
   ControlInputError,
@@ -77,8 +81,9 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
-export function canRolePublishSharedAsset(roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
-  return roleKind === "role";
+/** @deprecated 发布权限改由 Job 冻结的 platform_tools 决定；保留导出供旧测试兼容。 */
+export function canRolePublishSharedAsset(_roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
+  return true;
 }
 
 async function ingestSemanticEventObserved(
@@ -359,10 +364,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const isHub = snapshot.role_kind === "hub";
   const isAudit = snapshot.name === "audit";
   const isRole = snapshot.role_kind === "role" && !isAudit;
-  const canPublishSharedAsset = canRolePublishSharedAsset(snapshot.role_kind);
   const controlToolNames = snapshot.platform_tools;
   const allowedControlToolNames = allowedPlatformTools(snapshot.name, snapshot.role_kind);
   const disabledControlToolNames = allowedControlToolNames.filter((name) => !controlToolNames.includes(name));
+  const canSubmitHubDecision = controlToolNames.includes("submit_hub_decision");
   const contract = resultContract(controlToolNames, isHub, isRole, isVerify, isAudit);
   const toolGuide = platformToolGuide(controlToolNames);
   // Historical Jobs created before platform defaults were frozen may lack
@@ -372,9 +377,10 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const model = snapshot.model ?? undefined;
   const reasoning = snapshot.reasoning ?? undefined;
   const rules = await rulesForProject(sql, job.project_id as string);
-  const availableHubRoles = isHub ? await rolesForProject(sql, job.project_id as string) : [];
-  if (isHub && availableHubRoles.length === 0) {
-    throw new Error("项目未启用任何角色，hub 无可下发对象");
+  // Hub 决策工具对所有 Agent 可选；启用时才加载可派发角色目录。
+  const availableHubRoles = canSubmitHubDecision ? await rolesForProject(sql, job.project_id as string) : [];
+  if (canSubmitHubDecision && availableHubRoles.length === 0) {
+    throw new Error("项目未启用任何角色，无法使用 submit_hub_decision");
   }
   const availableHubRoleCatalog = availableHubRoles.map(({ name, title, description }) => ({
     name,
@@ -684,7 +690,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   }
   initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
   if ((snapshot.shared_assets?.length ?? 0) > 0) {
-    initialInput += `\n\n本 Job 的不可变共享资产已只读挂载到 /workspace/.deepsonar/shared；索引见 catalog.json。可复制到普通工作区使用，但不得修改共享目录。`;
+    initialInput += `\n\n本 Job 已冻结 ${snapshot.shared_assets!.length} 个只读共享资产，预挂载到 /workspace/.deepsonar/shared（Scheduler 从本地或 S3 兼容 BlobStore 注入，Agent 无下载工具/无对象存储凭据）。先 list_shared_assets，再按返回的 mount_path/read_path 用普通文件工具读取；可 cp 到 /workspace 普通目录使用，禁止修改共享目录，禁止从共享目录 publish。`;
   }
 
   const roleDescription = snapshot.role_description;
@@ -738,6 +744,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       revision: snapshot.shared_assets_revision ?? null,
       count: snapshot.shared_assets?.length ?? 0,
       readonly_mount: "/workspace/.deepsonar/shared",
+      access: "read_mount_path",
+      workspace_catalog: SHARED_ASSETS_WORKSPACE_CATALOG,
+      note: "No download tool; open mount_path. Bytes materialised by Scheduler BlobStore (fs|s3).",
     },
     semantic_event_transport: "local_mcp_over_agentbox_control_channel",
     canvas_update_delivery: "agent_attach_sendMessage",
@@ -757,6 +766,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     "/workspace/.deepsonar/runtime-manifest.json": JSON.stringify(componentManifest, null, 2),
     "/workspace/.deepsonar/control-mcp.mjs": CONTROL_MCP_SERVER,
   };
+  if ((snapshot.shared_assets?.length ?? 0) > 0) {
+    // Catalog metadata always available even if the named volume is empty in fake mode;
+    // real mode also mounts bytes under /workspace/.deepsonar/shared.
+    workspaceFiles[SHARED_ASSETS_WORKSPACE_CATALOG] = `${JSON.stringify(buildJobSharedAssetCatalog({
+      revision: snapshot.shared_assets_revision,
+      assets: (snapshot.shared_assets ?? []) as unknown as Array<Record<string, unknown>>,
+    }), null, 2)}\n`;
+  }
   for (const file of snapshot.config_files) {
     workspaceFiles[`/workspace/${file.path}`] = file.content;
   }
@@ -854,7 +871,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       throw toolBoundaryError("toolNotAllowed", `本 Job 未启用平台工具 ${requiredTool}`);
     }
     if (event.type === "shared_asset_publish") {
-      if (!canPublishSharedAsset) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权发布共享资产`);
+      // 授权只认冻结快照 platform_tools（上方已校验 publish_shared_asset）。
       const proposal = PublishSharedAssetPayload.parse(event.payload);
       const findingId = proposal.scope === "finding" ? (job.finding_id as string | null) : null;
       if (proposal.scope === "finding" && !findingId) {
@@ -885,7 +902,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return;
     }
     if (event.type === "fact") {
-      if (!isRole) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 emit_fact`);
       if (factCount >= 100) throw toolBoundaryError("toolLimit", "单 Job fact 超过 100 条上限");
       await ingestFactSemanticEvent(
         event,
@@ -898,14 +914,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return;
     }
     if (event.type === "finding") {
-      if (!isAudit) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 emit_finding`);
       if (findingCount >= 20) throw toolBoundaryError("toolLimit", "单 Job Finding 超过 20 条上限");
       await ingestSemanticEventObserved(jobId, { ...event, payload: FindingPayload.parse(event.payload) });
       findingCount++;
       return;
     }
     if (event.type === "hub_decision") {
-      if (!isHub) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权调用 submit_hub_decision`);
       assertSemanticTerminalExclusivity(semanticState, "hub_decision");
       const decision = event.payload;
       const intents = "intents" in decision ? decision.intents : undefined;

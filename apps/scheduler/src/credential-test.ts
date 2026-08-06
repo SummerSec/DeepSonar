@@ -8,6 +8,7 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
+import { extractBaseUrlFromSettings } from "./provider-settings.js";
 
 /** Provider response bytes accepted by model discovery (before JSON parsing). */
 export const CREDENTIAL_PROVIDER_RESPONSE_MAX_BYTES = 256 * 1024;
@@ -19,6 +20,8 @@ type CredentialProbe = {
   nonce: string;
   auth_tag: string;
   public_metadata_json: unknown;
+  /** CC Switch settingsConfig; used when public_metadata lacks base_url. */
+  settings_config_json?: unknown;
 };
 
 export type CredentialProbeResult = {
@@ -65,14 +68,15 @@ function modelRequest(cred: CredentialProbe, secret: string): { url: string; hea
   const mapping = PROVIDER_ENV_MAP[cred.provider];
   if (!isProviderKnown(cred.provider) || !mapping) throw new CredentialProbeError("Provider 未在服务器允许列表", "configuration");
   const metadata = projectCredentialMetadata(cred.kind ?? "llm_provider", cred.provider, cred.public_metadata_json);
-  const baseUrl = typeof metadata.base_url === "string"
-    ? metadata.base_url
-    : mapping.defaultBaseUrl ?? "";
+  const fromSettings = extractBaseUrlFromSettings(cred.settings_config_json);
+  const baseUrl = typeof metadata.base_url === "string" && metadata.base_url.trim()
+    ? metadata.base_url.trim()
+    : (fromSettings || mapping.defaultBaseUrl || "");
   if (cred.provider === "openrouter") {
     return { url: "https://openrouter.ai/api/v1/models", headers: { Authorization: `Bearer ${secret}` } };
   }
   if (!baseUrl && cred.provider !== "openai") {
-    throw new CredentialProbeError("Credential 缺少 Provider URL 配置", "configuration");
+    throw new CredentialProbeError("Credential 缺少 Provider URL 配置（请在 metadata.base_url 或 settingsConfig 中填写）", "configuration");
   }
   const url = modelsUrl(baseUrl || "https://api.openai.com");
   return {

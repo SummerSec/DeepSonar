@@ -6,7 +6,7 @@ import { SCHEMA_VERSION } from "./schema-version.js";
 export { SCHEMA_VERSION } from "./schema-version.js";
 
 export const sql = postgres(config.databaseUrl, {
-  // §12.3 连接治理：池上限 + 语句/空闲/连接超时。迁移在同一 reserved session 上执行。
+  // §12.3 连接治理：池上限 + 语句/空闲/连接超时。Schema 引导在同一 reserved session 上执行。
   max: config.db.poolMax,
   idle_timeout: config.db.idleTimeoutSec,
   connect_timeout: config.db.connectTimeoutSec,
@@ -17,11 +17,12 @@ export const sql = postgres(config.databaseUrl, {
 });
 
 /**
- * Apply the latest baseline or the supported incremental migration chain.
+ * Bootstrap an empty database from schema.sql, or verify the live database
+ * already matches SCHEMA_VERSION.  There is no incremental upgrade path.
  *
  * A reserved connection is important here: pg_advisory_lock is a session
  * lock, so releasing the pool connection before unlocking would let another
- * Scheduler race the migration.
+ * Scheduler race the bootstrap.
  */
 export async function migrate(): Promise<string[]> {
   return migrateOnReservedSession(() => sql.reserve() as unknown as Promise<ReservedMigrationConnection>);
@@ -32,9 +33,9 @@ export type ReservedMigrationConnection = MigrationConnection & {
 };
 
 /**
- * Run migrations while keeping the session advisory lock and reserved pool
- * connection paired.  Exported separately so lock-acquisition failures can be
- * tested without opening a real database connection.
+ * Run schema bootstrap while keeping the session advisory lock and reserved
+ * pool connection paired.  Exported separately so lock-acquisition failures
+ * can be tested without opening a real database connection.
  */
 export async function migrateOnReservedSession(
   reserve: () => Promise<ReservedMigrationConnection>,

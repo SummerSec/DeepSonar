@@ -15,7 +15,6 @@ import { audit, credentialAuditState } from "../../audit.js";
 import { config } from "../../config.js";
 import {
   allowedModelIds,
-  credentialModelCatalogCapability,
   normalizeModelCatalog,
   encryptSecret,
   fingerprintOf,
@@ -37,6 +36,7 @@ import {
   type Encrypted,
 } from "../../credentials.js";
 import { CredentialProbeError, listCredentialModels, testCredential } from "../../credential-test.js";
+import { extractBaseUrlFromSettings, extractModelsFromSettings } from "../../provider-settings.js";
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   PLATFORM_DEFAULT_AGENT_CLI,
@@ -51,8 +51,10 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
                         fingerprint, last4, status, last_used_at, rotated_at,
                         last_tested_at, health_status, health_error_category,
                         health_detail, model_catalog_json, model_catalog_fetched_at,
+                        agent_cli, settings_config_json, meta_json,
                         created_at, created_by`;
 
+  const AgentCliSchema = z.enum(["claude-code", "codex", "open-code"]);
   const CredentialBody = z.object({
     name: z.string().trim().min(1).max(100),
     kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]).default("llm_provider"),
@@ -60,6 +62,12 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     secret: z.string().min(1).max(4096),
     project_id: z.string().uuid().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
+    /** CC Switch agent_cli column for this profile (llm_provider only). */
+    agent_cli: AgentCliSchema.nullable().optional(),
+    /** Full CLI settingsConfig (may include plaintext keys); empty = legacy env path. */
+    settings_config: z.record(z.string(), z.unknown()).optional(),
+    /** Manager-only meta (apiFormat, fullUrl, reasoning maps, …). */
+    meta: z.record(z.string(), z.unknown()).optional(),
   });
 
   function safeHealthDetail(value: unknown): string | null {
@@ -76,11 +84,20 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const healthStatus = row.health_status === "ok" || row.health_status === "error" ? row.health_status : "unknown";
     const healthErrorCategory = typeof row.health_error_category === "string" ? row.health_error_category : null;
     const healthDetail = safeHealthDetail(row.health_detail);
+    const settingsConfig = row.settings_config_json && typeof row.settings_config_json === "object" && !Array.isArray(row.settings_config_json)
+      ? row.settings_config_json as Record<string, unknown>
+      : {};
+    const metaJson = row.meta_json && typeof row.meta_json === "object" && !Array.isArray(row.meta_json)
+      ? row.meta_json as Record<string, unknown>
+      : {};
     return {
       ...row,
       ...providerProjection,
       public_metadata_json: metadata,
       model_catalog_json: modelCatalog,
+      agent_cli: row.agent_cli ?? null,
+      settings_config_json: settingsConfig,
+      meta_json: metaJson,
       scope: row.project_id ? "project" : "global",
       health: {
         status: healthStatus,
@@ -201,37 +218,50 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     };
   }
 
-  app.get("/credentials", async (req) => {
+  app.get("/credentials", async (req, reply) => {
     const actorProjectId = req.actor?.projectId ?? null;
-    const [rows, usage] = await Promise.all([
-      sql`
-        SELECT ${CRED_SAFE} FROM credentials
-        WHERE (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})
-        ORDER BY created_at DESC`,
-      sql`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
-                 agent_snapshot_json->>'model' AS model,
-                 COUNT(*)::int AS count
-          FROM jobs
-          WHERE status IN ('claimed','provisioning','running')
-            AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
-            AND agent_snapshot_json->>'credential_id' IS NOT NULL
-          GROUP BY 1, 2`,
-    ]);
-    const bindingCounts = await sql<{ credential_id: string; count: number }[]>`
-      SELECT rc2.credential_id, COUNT(DISTINCT rc2.role_config_id)::int AS count
-      FROM role_credentials rc2
-      JOIN role_configs rc ON rc.id = rc2.role_config_id
-      WHERE (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})
-      GROUP BY rc2.credential_id`;
-    const bindingCountByCredential = new Map(bindingCounts.map((row) => [String(row.credential_id), Number(row.count)]));
-    return rows.map((row) => {
-      const own = usage.filter((item) => item.credential_id === row.id);
-      return credentialView(row as Record<string, unknown>, {
-        bound_role_config_count: bindingCountByCredential.get(String(row.id)) ?? 0,
-        active_count: own.reduce((total, item) => total + Number(item.count), 0),
-        active_by_model: Object.fromEntries(own.filter((item) => item.model).map((item) => [String(item.model), Number(item.count)])),
+    try {
+      const [rows, usage] = await Promise.all([
+        sql`
+          SELECT ${CRED_SAFE} FROM credentials
+          WHERE (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})
+          ORDER BY created_at DESC`,
+        sql`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
+                   agent_snapshot_json->>'model' AS model,
+                   COUNT(*)::int AS count
+            FROM jobs
+            WHERE status IN ('claimed','provisioning','running')
+              AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
+              AND agent_snapshot_json->>'credential_id' IS NOT NULL
+            GROUP BY 1, 2`,
+      ]);
+      const bindingCounts = await sql<{ credential_id: string; count: number }[]>`
+        SELECT rc2.credential_id, COUNT(DISTINCT rc2.role_config_id)::int AS count
+        FROM role_credentials rc2
+        JOIN role_configs rc ON rc.id = rc2.role_config_id
+        WHERE (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})
+        GROUP BY rc2.credential_id`;
+      const bindingCountByCredential = new Map(bindingCounts.map((row) => [String(row.credential_id), Number(row.count)]));
+      return rows.map((row) => {
+        const own = usage.filter((item) => item.credential_id === row.id);
+        return credentialView(row as Record<string, unknown>, {
+          bound_role_config_count: bindingCountByCredential.get(String(row.id)) ?? 0,
+          active_count: own.reduce((total, item) => total + Number(item.count), 0),
+          active_by_model: Object.fromEntries(own.filter((item) => item.model).map((item) => [String(item.model), Number(item.count)])),
+        });
       });
-    });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[credentials] list failed:", message);
+      // Common local/dev failure: Scheduler code expects schema v22 columns before migrate.
+      if (/settings_config_json|agent_cli|meta_json|column .* does not exist/i.test(message)) {
+        return reply.code(500).send({
+          error: "数据库 schema 缺少 credentials.settings_config_json。请用 database/schema.sql 重建数据库后重启 Scheduler",
+          error_code: "SCHEMA_DRIFT",
+        });
+      }
+      return reply.code(500).send({ error: message, error_code: "CREDENTIALS_LIST_FAILED" });
+    }
   });
 
   app.get("/credentials/:id", async (req, reply) => {
@@ -403,14 +433,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       if (String(target.health_status) !== "ok" || !target.last_tested_at) {
         return gateFailure(409, "CREDENTIAL_HEALTH_REQUIRED", "A successful latest connection test is required before binding. Test the connection and retry.", body.credential_id, "test_connection");
       }
-      const modelCatalogCapability = credentialModelCatalogCapability(String(target.kind), String(target.provider));
-      const modelCatalog = normalizeModelCatalog(target.model_catalog_json);
-      if (modelCatalogCapability === "unsupported") {
-        return gateFailure(409, "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED", "This Provider has no server-owned model catalog capability; binding is not permitted until the Scheduler adds an explicit capability.", body.credential_id, "discover_models");
-      }
-      if (!target.model_catalog_fetched_at || modelCatalog.length === 0) {
-        return gateFailure(409, "CREDENTIAL_MODEL_CATALOG_REQUIRED", "A successful non-empty model catalog is required before binding. Refresh the model catalog and retry.", body.credential_id, "discover_models");
-      }
+      // Model catalog is optional reference (CC Switch style). Binding keeps each
+      // RoleConfig's own model; only health + CLI compatibility are hard gates.
+      // Explicit allowlist (if set) still constrains models.
       const source = body.source_credential_id
         ? credentials.find((credential) => String(credential.id) === body.source_credential_id)
         : undefined;
@@ -470,11 +495,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         }
         const allowed = allowedModelIds(target.public_metadata_json);
         const modelForGate = model ?? PLATFORM_DEFAULT_AGENT_MODEL;
-        if (!modelForGate) {
-          return gateFailure(409, "CREDENTIAL_MODEL_REQUIRED", `RoleConfig ${configId} must choose a model before binding`, body.credential_id, "choose_model", configId);
-        }
-        if (!modelCatalog.includes(modelForGate) || (allowed.length > 0 && !allowed.includes(modelForGate))) {
-          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId} model ${modelForGate} is not in the current Provider catalog and allowlist`, body.credential_id, "choose_model", configId);
+        // Only enforce explicit allowlist. Catalog is not a bind gate.
+        if (allowed.length > 0 && modelForGate && !allowed.includes(modelForGate)) {
+          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId} model ${modelForGate} is not in the credential allowlist`, body.credential_id, "choose_model", configId);
         }
       }
 
@@ -622,6 +645,24 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     } catch (e) {
       return reply.code(503).send({ error: e instanceof Error ? e.message : String(e) });
     }
+    if (body.kind !== "llm_provider" && (body.agent_cli || body.settings_config || body.meta)) {
+      return reply.code(400).send({ error: "agent_cli/settings_config/meta 仅适用于 llm_provider" });
+    }
+    const settingsConfig = body.settings_config ?? {};
+    const metaJson = body.meta ?? {};
+    // Keep public_metadata.base_url / models in sync with settingsConfig so health
+    // probes and binding gates share one closed loop with the CC Switch profile.
+    if (body.kind === "llm_provider") {
+      const fromSettings = extractBaseUrlFromSettings(settingsConfig);
+      if (fromSettings && typeof metadata.base_url !== "string") metadata.base_url = fromSettings;
+      const modelsFromSettings = extractModelsFromSettings(settingsConfig);
+      if (modelsFromSettings.length > 0) {
+        const existing = Array.isArray(metadata.allowed_model_ids)
+          ? metadata.allowed_model_ids.filter((item): item is string => typeof item === "string")
+          : [];
+        if (existing.length === 0) metadata.allowed_model_ids = modelsFromSettings;
+      }
+    }
     const [row] = await sql`
       INSERT INTO credentials ${sql({
         name: body.name,
@@ -635,6 +676,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         fingerprint: fingerprintOf(body.secret),
         last4: last4Of(body.secret),
         created_by: req.actor?.name ?? null,
+        agent_cli: body.kind === "llm_provider" ? (body.agent_cli ?? null) : null,
+        settings_config_json: (body.kind === "llm_provider" ? settingsConfig : {}) as never,
+        meta_json: (body.kind === "llm_provider" ? metaJson : {}) as never,
       })}
       RETURNING ${CRED_SAFE}`;
     // §7.2 红线：只记指纹/last4/元数据，密文与明文都不进审计
@@ -666,23 +710,30 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         project_id: z.string().uuid().nullable().optional(),
         /** 整体替换 public_metadata_json（非密钥：base_url 等）；传 {} 可清空 */
         metadata: z.record(z.string(), z.unknown()).optional(),
+        agent_cli: AgentCliSchema.nullable().optional(),
+        settings_config: z.record(z.string(), z.unknown()).optional(),
+        meta: z.record(z.string(), z.unknown()).optional(),
       })
-      .refine((b) => b.name !== undefined || b.provider !== undefined || b.project_id !== undefined || b.metadata !== undefined, {
-        message: "至少提供 name / provider / project_id / metadata 之一",
+      .refine((b) => b.name !== undefined || b.provider !== undefined || b.project_id !== undefined || b.metadata !== undefined || b.agent_cli !== undefined || b.settings_config !== undefined || b.meta !== undefined, {
+        message: "至少提供 name / provider / project_id / metadata / agent_cli / settings_config / meta 之一",
       })
       .parse(req.body);
 
     const result = await sql.begin(async (tx) => {
-      const runtimeFieldsChanged = body.provider !== undefined || body.project_id !== undefined || body.metadata !== undefined;
+      const runtimeFieldsChanged = body.provider !== undefined || body.project_id !== undefined || body.metadata !== undefined
+        || body.agent_cli !== undefined || body.settings_config !== undefined || body.meta !== undefined;
       if (runtimeFieldsChanged) {
         await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       }
       const [existing] = await tx`
-        SELECT id, name, kind, provider, project_id, public_metadata_json
+        SELECT id, name, kind, provider, project_id, public_metadata_json, agent_cli, settings_config_json, meta_json
         FROM credentials WHERE id = ${id} FOR UPDATE`;
       if (!existing) return null;
       if (!credentialMutableToActor(existing.project_id, actorProjectId)) {
         return { scope: true, error: "project-scoped actors may modify only their own project credentials" };
+      }
+      if (existing.kind !== "llm_provider" && (body.agent_cli !== undefined || body.settings_config !== undefined || body.meta !== undefined)) {
+        return { error: "agent_cli/settings_config/meta 仅适用于 llm_provider" };
       }
       const providerChanged = body.provider !== undefined && body.provider !== existing.provider;
       const targetProvider = body.provider ?? String(existing.provider);
@@ -758,7 +809,23 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       if (body.metadata !== undefined) {
         sets.public_metadata_json = targetMetadata;
       }
-      if (body.provider !== undefined || body.metadata !== undefined) {
+      if (body.agent_cli !== undefined) sets.agent_cli = body.agent_cli;
+      if (body.settings_config !== undefined) {
+        sets.settings_config_json = body.settings_config;
+        // Keep probe metadata aligned when settingsConfig is updated.
+        const fromSettings = extractBaseUrlFromSettings(body.settings_config);
+        if (fromSettings) {
+          const nextMeta = body.metadata !== undefined
+            ? targetMetadata
+            : projectCredentialMetadata(String(existing.kind), targetProvider, existing.public_metadata_json);
+          if (typeof nextMeta.base_url !== "string" || !nextMeta.base_url) {
+            nextMeta.base_url = fromSettings;
+            sets.public_metadata_json = nextMeta;
+          }
+        }
+      }
+      if (body.meta !== undefined) sets.meta_json = body.meta;
+      if (body.provider !== undefined || body.metadata !== undefined || body.settings_config !== undefined) {
         sets.health_status = "unknown";
         sets.health_error_category = null;
         sets.health_detail = null;

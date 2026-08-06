@@ -76,10 +76,12 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
         WHERE ri.image_key = ${body.runtime_image_key} AND ri.enabled = true`;
       if (!image) return `runtime_image_key 不存在或已禁用: ${body.runtime_image_key}`;
-      const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official && !image.project_opt_in;
+      // Official catalog (含 project_opt_in 专项如 OpenHarmony) 可先写到 RoleConfig；
+      // Job 解析时仍按项目启用强制。仅第三方必须在项目 RoleConfig 上且已项目启用。
+      const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official;
       if (!image.has_trusted && !fakeOfficialCatalogImage) return `runtime_image_key 没有可信版本: ${body.runtime_image_key}`;
-      if ((!image.official || image.project_opt_in) && (!projectId || image.project_enabled !== true)) {
-        return `镜像必须先在目标项目显式启用: ${body.runtime_image_key}`;
+      if (!image.official && (!projectId || image.project_enabled !== true)) {
+        return `第三方镜像必须先在目标项目显式启用: ${body.runtime_image_key}`;
       }
     }
     const allowedTools = new Set<string>(allowedPlatformTools(role.name, role.kind));
@@ -266,11 +268,137 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   /** Unified binding picker for the Provider account flow. It intentionally
    * returns only RoleConfig identity/health metadata, never secret material. */
+  /** Lightweight CLI update for Provider bind UI (does not rewrite credentials/files). */
+  app.patch("/role-configs/:id/agent-cli", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      agent_cli: z.enum(["claude-code", "open-code", "codex"]),
+    }).parse(req.body);
+    const actorProjectId = req.actor?.projectId ?? null;
+    const [row] = await sql`
+      SELECT rc.id, rc.project_id, rc.agent_cli, rc.role_id,
+             r.name AS role_name, r.kind AS role_kind
+      FROM role_configs rc
+      JOIN agent_roles r ON r.id = rc.role_id
+      WHERE rc.id = ${id}`;
+    if (!row) return reply.code(404).send({ error: "RoleConfig not found" });
+    if (actorProjectId) {
+      if (!row.project_id || String(row.project_id) !== actorProjectId) {
+        return reply.code(403).send({
+          error: "project-scoped actors may only change RoleConfigs in their own project",
+          error_code: "PROJECT_SCOPE_FORBIDDEN",
+        });
+      }
+    }
+    const [binding] = await sql`
+      SELECT c.provider, c.kind
+      FROM role_credentials rcb
+      JOIN credentials c ON c.id = rcb.credential_id
+      WHERE rcb.role_config_id = ${id} AND rcb.purpose = 'llm'
+      LIMIT 1`;
+    if (binding) {
+      const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(binding.provider ?? ""));
+      if (compatibilityError) {
+        return reply.code(409).send({ error: compatibilityError, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
+      }
+    }
+    const [updated] = await sql`
+      UPDATE role_configs
+      SET agent_cli = ${body.agent_cli}, version = version + 1, updated_at = now()
+      WHERE id = ${id}
+      RETURNING id, agent_cli, version, project_id, role_id`;
+    await audit(req, {
+      action: "role_config.agent_cli",
+      resourceType: "role_config",
+      resourceId: id,
+      after: { agent_cli: body.agent_cli, role: row.role_name, project_id: row.project_id },
+    });
+    return {
+      id: updated.id,
+      agent_cli: updated.agent_cli,
+      version: updated.version,
+      role_id: updated.role_id,
+      project_id: updated.project_id,
+    };
+  });
+
+  /** Lightweight runtime image update for Provider bind UI (null = system base). */
+  app.patch("/role-configs/:id/runtime-image", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      runtime_image_key: z.string().min(1).max(200).nullable(),
+    }).parse(req.body);
+    const actorProjectId = req.actor?.projectId ?? null;
+    const [row] = await sql`
+      SELECT rc.id, rc.project_id, rc.runtime_image_key, rc.role_id,
+             r.name AS role_name, r.kind AS role_kind
+      FROM role_configs rc
+      JOIN agent_roles r ON r.id = rc.role_id
+      WHERE rc.id = ${id}`;
+    if (!row) return reply.code(404).send({ error: "RoleConfig not found" });
+    if (actorProjectId) {
+      if (!row.project_id || String(row.project_id) !== actorProjectId) {
+        return reply.code(403).send({
+          error: "project-scoped actors may only change RoleConfigs in their own project",
+          error_code: "PROJECT_SCOPE_FORBIDDEN",
+        });
+      }
+    }
+    const projectId = row.project_id ? String(row.project_id) : null;
+    if (body.runtime_image_key) {
+      const [image] = await sql`
+        SELECT ri.id, ri.official, ri.project_opt_in,
+               EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted') AS has_trusted,
+               pri.enabled AS project_enabled
+        FROM runtime_images ri
+        LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+        WHERE ri.image_key = ${body.runtime_image_key} AND ri.enabled = true`;
+      if (!image) {
+        return reply.code(400).send({ error: `runtime_image_key 不存在或已禁用: ${body.runtime_image_key}` });
+      }
+      // Official catalog (含 OpenHarmony 等 project_opt_in 专项) 与市场一致可选；
+      // Job 解析时仍要求项目启用。第三方仍须项目启用。
+      const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official;
+      if (!image.has_trusted && !fakeOfficialCatalogImage) {
+        return reply.code(400).send({ error: `runtime_image_key 没有可信版本: ${body.runtime_image_key}` });
+      }
+      if (!image.official && (!projectId || image.project_enabled !== true)) {
+        return reply.code(400).send({
+          error: `第三方镜像必须先在目标项目显式启用: ${body.runtime_image_key}`,
+        });
+      }
+    }
+    const [updated] = await sql`
+      UPDATE role_configs
+      SET runtime_image_key = ${body.runtime_image_key}, version = version + 1, updated_at = now()
+      WHERE id = ${id}
+      RETURNING id, runtime_image_key, version, project_id, role_id`;
+    await audit(req, {
+      action: "role_config.runtime_image",
+      resourceType: "role_config",
+      resourceId: id,
+      after: {
+        runtime_image_key: body.runtime_image_key,
+        role: row.role_name,
+        project_id: row.project_id,
+      },
+    });
+    return {
+      id: updated.id,
+      runtime_image_key: updated.runtime_image_key ?? null,
+      version: updated.version,
+      role_id: updated.role_id,
+      project_id: updated.project_id,
+    };
+  });
+
   app.get("/role-configs/bindable", async (req) => {
     const projectScope = req.actor?.projectId ?? null;
     const rows = await sql`
       SELECT rc.id, rc.role_id, r.name AS role_name, r.title AS role_title,
+             r.kind AS role_kind, r.builtin AS role_builtin, r.ui_color AS role_ui_color,
              rc.project_id, p.name AS project_name, rc.agent_cli, rc.model, rc.version,
+             rc.runtime_image_key,
              c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
              c.provider AS credential_provider, c.status AS credential_status
       FROM role_configs rc
@@ -286,9 +414,17 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         LIMIT 1
       ) c ON true
       WHERE (${projectScope}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${projectScope})
-      ORDER BY rc.project_id NULLS FIRST, r.name`;
+      ORDER BY
+        CASE r.kind WHEN 'system' THEN 0 WHEN 'hub' THEN 1 ELSE 2 END,
+        rc.project_id NULLS FIRST,
+        p.name NULLS FIRST,
+        r.name`;
     return rows.map((row) => ({
       ...row,
+      runtime_image_key: row.runtime_image_key ?? null,
+      role_kind: row.role_kind ?? "role",
+      role_builtin: Boolean(row.role_builtin),
+      role_ui_color: typeof row.role_ui_color === "string" ? row.role_ui_color : null,
       scope: row.project_id ? "project" : "global",
       can_bind: !projectScope || String(row.project_id ?? "") === projectScope,
       credential_provider: row.credential_provider

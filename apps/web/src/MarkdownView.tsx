@@ -66,12 +66,21 @@ export function MarkdownView({
   markdown,
   controls = true,
   className = "",
+  editable = false,
+  onChange,
+  placeholder,
+  rows = 12,
 }: {
   markdown: string;
   controls?: boolean;
   className?: string;
+  /** 可编辑时：工具栏为「渲染 / 编辑 / 复制」，编辑态为 textarea，与预览合并同一块 */
+  editable?: boolean;
+  onChange?: (value: string) => void;
+  placeholder?: string;
+  rows?: number;
 }) {
-  const [mode, setMode] = useState<"rendered" | "source">("rendered");
+  const [mode, setMode] = useState<"rendered" | "source">(editable ? "source" : "rendered");
   const [copied, setCopied] = useState(false);
   const lines = markdown.split(/\r?\n/);
   const blocks: ReactNode[] = [];
@@ -214,16 +223,59 @@ export function MarkdownView({
     window.setTimeout(() => setCopied(false), 1600);
   };
 
+  const empty = !markdown.trim();
+  const showControls = controls || editable;
+
   return (
-    <div className={`markdown-view min-w-0 ${className}`}>
-      {controls && (
-        <div className="mb-3 flex items-center gap-1 border-b border-white/[.055] pb-2">
-          <button type="button" onClick={() => setMode("rendered")} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] ${mode === "rendered" ? "bg-white/[.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-300"}`}><Eye size={12} /> 渲染</button>
-          <button type="button" onClick={() => setMode("source")} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] ${mode === "source" ? "bg-white/[.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-300"}`}><FileCode size={12} /> 原文</button>
-          <button type="button" onClick={() => void copySource().catch(() => setCopied(false))} className="ml-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.07] hover:text-zinc-200">{copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}{copied ? "已复制" : "复制"}</button>
+    <div className={`markdown-view min-w-0 ${editable ? "markdown-view-editable" : ""} ${className}`}>
+      {showControls && (
+        <div className="mb-2 flex items-center gap-1 border-b border-white/[.055] pb-2">
+          <button
+            type="button"
+            onClick={() => setMode("rendered")}
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] ${mode === "rendered" ? "bg-white/[.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-300"}`}
+          >
+            <Eye size={12} /> 渲染
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("source")}
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] ${mode === "source" ? "bg-white/[.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-300"}`}
+          >
+            <FileCode size={12} /> {editable ? "编辑" : "原文"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void copySource().catch(() => setCopied(false))}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.07] hover:text-zinc-200"
+          >
+            {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            {copied ? "已复制" : "复制"}
+          </button>
         </div>
       )}
-      {mode === "rendered" ? <div>{blocks}</div> : <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]">{markdown}</pre>}
+      {mode === "rendered" ? (
+        empty ? (
+          <p className="py-6 text-center font-mono text-[11px] text-zinc-600">
+            {editable ? "暂无内容，切换到「编辑」开始编写 Markdown。" : "（空）"}
+          </p>
+        ) : (
+          <div className="markdown-view-body max-h-[65vh] overflow-auto">{blocks}</div>
+        )
+      ) : editable ? (
+        <textarea
+          value={markdown}
+          onChange={(event) => onChange?.(event.target.value)}
+          rows={rows}
+          spellCheck={false}
+          placeholder={placeholder}
+          className="markdown-view-editor w-full resize-y rounded-xl border border-white/[.08] bg-black/30 px-3 py-2.5 font-mono text-[12px] leading-5 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-acc-500/50"
+        />
+      ) : (
+        <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]">
+          {markdown}
+        </pre>
+      )}
     </div>
   );
 }

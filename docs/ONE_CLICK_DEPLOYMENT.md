@@ -248,10 +248,10 @@ Scheduler 启动时及其后每隔 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC`（默�
 ## 6. 数据库 schema 基线
 
 正常 Compose 部署无需手工导入数据库：Scheduler 启动时在 reserved session 上持有 PostgreSQL
-session advisory lock。空库会一次性套用 `database/schema.sql` 得到最新 v13；已有 v12
-数据库会按连续 migration 升级，其他实例等待后在 v13 no-op。
+session advisory lock。空库一次性套用 `database/schema.sql` 得到当前版本；已是当前版本则
+校验表结构后 no-op；版本不符或结构漂移 fail closed。**无增量 migration**，改表须重建库。
 
-仓库同时提供统一 schema 入口：
+仓库 schema 入口：
 
 ```text
 database/schema.sql
@@ -264,12 +264,7 @@ PostgreSQL、托管 PostgreSQL SQL 控制台、审阅和 CI。手工初始化：
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
 ```
 
-当前支持的增量链是 v12 → v15，迁移文件位于 `database/migrations/`，由
-`schema_migrations` 账本记录原始 UTF-8 字节 SHA-256、执行结果和错误。成功的 migration
-与 `schema_meta.version` 在同一事务提交；失败会回滚并追加失败审计行，重启可安全重试；
-历史文件 checksum 漂移、编号不连续、v12 之前或未知结构都会 fail closed。每次结构变更
-必须新增下一个连续编号的 SQL，同时更新 `schema.sql` 最新基线和 `SCHEMA_VERSION`，并在
-全新库与 v12 fixture 上运行 CI 迁移测试。
+结构变更：直接改 `schema.sql`、bump `SCHEMA_VERSION`，然后对空库重新应用基线。
 
 ## 7. 日常操作
 
@@ -318,7 +313,7 @@ docker compose -p deepsonar --env-file deploy/.env \
   pg_dump -U deepsonar -d deepsonar -Fc > deepsonar.dump
 ```
 
-建议把 dump 恢复到独立 PostgreSQL 实例并读取关键业务表及 `schema_migrations`，确认恢复
+建议把 dump 恢复到独立 PostgreSQL 实例并读取关键业务表及 `schema_meta`，确认恢复
 有效后再切换部署。不要删除 `postgres_data` volume 或手工重放 migration；若需要恢复，
 停止 Scheduler，将备份恢复到新实例并切换 `DATABASE_URL`。项目不提供 down migration，
 v13 应用回退仍需保留已新增结构。

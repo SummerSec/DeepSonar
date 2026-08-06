@@ -11,6 +11,7 @@ import {
   type Project,
 } from "./api";
 import { useAuth } from "./auth";
+import { HelpTip } from "./ui";
 
 /**
  * 平台 API Token 管理（§6.4）：与 Provider Credential（LLM/Plane/Git 密钥）严格分离。
@@ -152,13 +153,13 @@ export function TokensPanel() {
     <div className="flex flex-col gap-4 p-4 text-[13px]">
       {/* 本机鉴权材料：会话与 API Token 分存，默认遮罩 */}
       <div className="rounded-[10px] border border-ink-700 bg-ink-850/60 p-3">
-        <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[12px] uppercase tracking-[0.12em] text-zinc-500">
+        <div className="mb-3 flex items-center gap-1.5 font-mono text-[12px] uppercase tracking-[0.12em] text-zinc-500">
           <Key size={13} /> 本机鉴权
+          <HelpTip>
+            用户会话与平台 API Token 分开存放。请求时<strong>优先使用会话</strong>
+            ；secret 默认遮罩，不会在设置页整段明文摊开。
+          </HelpTip>
         </div>
-        <p className="mb-3 text-[12px] leading-5 text-zinc-600">
-          用户会话与平台 API Token 分开存放。请求时<strong className="font-medium text-zinc-500">优先使用会话</strong>
-          ；secret 默认遮罩，不会在设置页整段明文摊开。
-        </p>
 
         <div className="mb-3 rounded-lg border border-white/[.06] bg-black/20 px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-2">
@@ -210,10 +211,8 @@ export function TokensPanel() {
         <div>
           <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">
             本机 API Token（可选）
+            <HelpTip>服务账号或自动化用。有会话时不会覆盖会话；仅在无会话时作为 Bearer。</HelpTip>
           </div>
-          <p className="mb-2 text-[11px] leading-5 text-zinc-600">
-            服务账号或自动化用。有会话时不会覆盖会话；仅在无会话时作为 Bearer。
-          </p>
           <div className="flex flex-wrap gap-2">
             <input
               type={revealApi ? "text" : "password"}

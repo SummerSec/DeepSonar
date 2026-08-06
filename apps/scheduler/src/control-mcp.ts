@@ -67,8 +67,8 @@ const descriptions = {
   submit_hub_decision: "提交本轮 Hub 的 complete 或 intents 决策，二者必须且只能提供一个。from 必须填写当前 YAML root_id/fact/finding 节点的 UUID 值，不能填写字段名 root_id、别名或占位符。",
   mark_job_done: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
   request_human: "只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
-  list_shared_assets: "分页读取本 Job 冻结的只读共享资产目录，可按 scope 或逻辑路径前缀过滤。",
-  publish_shared_asset: "提议把当前 /workspace 内文件发布为项目或当前 Finding 的不可变共享资产版本。",
+  list_shared_assets: "分页列出本 Job 创建时冻结的只读共享资产目录。没有单独的下载工具：用返回的 mount_path/read_path 以普通文件工具直接读取（Scheduler 已从本地或 S3 兼容存储预挂载）。可按 scope 或逻辑 key 前缀过滤。",
+  publish_shared_asset: "提议把 /workspace 下普通工作区文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止从 .deepsonar/shared 只读挂载树发布。",
 };
 const definitions = Object.fromEntries(
   Object.keys(TOOL_INPUT_SCHEMAS).map((name) => [name, {
@@ -300,16 +300,72 @@ rl.on("line", (line) => {
       } else if (name === "list_available_roles") {
         reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: JSON.stringify({ roles: availableRoles }) }] } });
       } else if (name === "list_shared_assets") {
-        let catalog = { version: 1, revision: null, readonly: true, assets: [] };
-        try { catalog = JSON.parse(readFileSync("/workspace/.deepsonar/shared/catalog.json", "utf8")); } catch {}
+        const defaultAccess = {
+          mode: "readonly_mount",
+          how: "read_mount_path",
+          note: "There is no separate download tool. Open each asset mount_path/read_path with normal file tools; Scheduler pre-materialized bytes into the read-only mount (local or S3-compatible BlobStore).",
+          copy_hint: "cp <mount_path> /workspace/<name>",
+          forbid: [
+            "Do not modify /workspace/.deepsonar/shared",
+            "Do not publish from .deepsonar/shared",
+            "Do not fetch assets via HTTP/S3/curl",
+          ],
+        };
+        let catalog = {
+          version: 1,
+          revision: null,
+          readonly: true,
+          readonly_root: "/workspace/.deepsonar/shared",
+          access: defaultAccess,
+          assets: [],
+        };
+        // Prefer mounted catalog; fall back to workspace snapshot copy written at provision.
+        for (const path of [
+          "/workspace/.deepsonar/shared/catalog.json",
+          "/workspace/.deepsonar/shared-assets-catalog.json",
+        ]) {
+          try {
+            const parsed = JSON.parse(readFileSync(path, "utf8"));
+            if (parsed && typeof parsed === "object") {
+              catalog = { ...catalog, ...parsed, access: parsed.access || defaultAccess };
+              break;
+            }
+          } catch {}
+        }
         const args = input || {};
         const matched = Array.isArray(catalog.assets) ? catalog.assets.filter((asset) =>
           (!args.scope || asset.scope === args.scope) && (!args.prefix || String(asset.key || "").startsWith(args.prefix))
-        ) : [];
+        ).map((asset) => {
+          const mount = asset.mount_path || asset.read_path || null;
+          return {
+            ...asset,
+            mount_path: mount,
+            read_path: asset.read_path || mount,
+          };
+        }) : [];
         const limit = Number.isInteger(args.limit) ? args.limit : 100;
         const offset = Number.isInteger(args.offset) ? args.offset : 0;
         const assets = matched.slice(offset, offset + limit);
-        reply({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: JSON.stringify({ ...catalog, assets, total: matched.length, limit, offset, next_offset: offset + assets.length < matched.length ? offset + assets.length : null }) }] } });
+        reply({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                ...catalog,
+                readonly: true,
+                readonly_root: catalog.readonly_root || "/workspace/.deepsonar/shared",
+                access: catalog.access || defaultAccess,
+                assets,
+                total: matched.length,
+                limit,
+                offset,
+                next_offset: offset + assets.length < matched.length ? offset + assets.length : null,
+              }),
+            }],
+          },
+        });
       } else {
         reply({
           jsonrpc: "2.0",

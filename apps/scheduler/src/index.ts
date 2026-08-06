@@ -30,10 +30,10 @@ async function main() {
       : `[boot] shared-asset BlobStore=fs root=${config.storage.blobDir}`,
   );
 
-  console.log("[boot] 应用数据库 schema / 迁移…");
+  console.log("[boot] 校验 / 引导数据库 schema…");
   const applied = await migrate();
   if (applied.length > 0) console.log(`[boot] 已应用: ${applied.join(", ")}`);
-  else console.log("[boot] schema 已就绪（无需变更）");
+  else console.log("[boot] schema 已就绪");
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();

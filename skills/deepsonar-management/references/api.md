@@ -160,7 +160,7 @@ PUT body：
 - `runtime_image_key 没有可信版本: <key>` — 市场 catalog 有 key 不等于有 `trust_status=trusted` 的版本；先配置 `DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:...` 重启，或 import+approve。
 - 凭据 `purpose` 必须是 **`llm`** 才会进入模型通道；其它 purpose 不会被 Executor 当作 LLM key。
 
-`platform_tools` 只接受该角色合法的工具名；未声明的合法工具默认启用。所有角色的 `mark_job_done`，以及 Hub 的 `list_available_roles`、`submit_hub_decision` 是形成合法决策/终态所必需的工具，不可关闭。`verify` / `report` 不支持 `request_human`：Verify 用 verdict=`needs_human` 收口 Finding，Report 输入损坏则失败并重试。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
+`platform_tools` 接受平台工具全集中的任意工具名（每个 Agent 均可勾选）；未声明的工具默认启用。仅 `mark_job_done` 为形成合法终态所必需，不可关闭。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
 
 Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。快照含 `model` / `reasoning` / `credential_id` / `runtime_image`（digest）；**改 RoleConfig 不影响已创建 Job**。
 
@@ -296,7 +296,7 @@ pending → claimed → provisioning → running → waiting_human → succeeded
 
 - `POST /jobs/:id/resume`：`failed` / `timeout` / `orphan` / `waiting_human` → `pending`（终态 409）；Scheduler 按 Job `type`/`purpose` 重算固定 priority class，不信任历史或调用方 priority。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。
-- schema 版本：当前支持 v12 → v15；Scheduler 持 session advisory lock 执行连续 migration，并校验 `schema_migrations` 的原始字节 checksum。v15 会重建 Credential public metadata allowlist 并添加持久化 health/model catalog。v12 之前、未知结构或已应用文件漂移会 fail closed；先备份并按数据库恢复文档处理，不要直接 `DROP SCHEMA public CASCADE`。
+- schema 版本：当前 v22；空库套 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。
 
 ## 发现契约（推荐流程）

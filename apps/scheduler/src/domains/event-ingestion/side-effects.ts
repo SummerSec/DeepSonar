@@ -250,13 +250,11 @@ export function createEventIngestionSideEffectApplication(
     const requiredTool = SEMANTIC_TOOL_BY_EVENT[type];
     if (!requiredTool) return;
     const contract = semanticJobContract(job);
-    const staticAllowed = allowedPlatformTools(contract.name, contract.kind);
-    let roleAllowed = staticAllowed.includes(requiredTool);
-    if (type === "finding") roleAllowed = roleAllowed && contract.kind === "role" && contract.name === "audit";
-    if (type === "fact") roleAllowed = roleAllowed && contract.kind === "role" && contract.name !== "audit";
-    if (type === "hub_decision") roleAllowed = roleAllowed && contract.kind === "hub";
+    // 授权只认：平台工具全集是否包含该工具 + Job 冻结快照是否启用。
+    // 不再按 role name/kind 硬编码裁剪（配置层已对所有 Agent 开放可选 list）。
+    const staticAllowed = allowedPlatformTools(contract.name, contract.kind).includes(requiredTool);
     const snapshotAllowed = contract.platformTools === null || contract.platformTools.includes(requiredTool);
-    if (!roleAllowed || !snapshotAllowed) {
+    if (!staticAllowed || !snapshotAllowed) {
       throw new ControlInputError("tool_not_allowed", `${requiredTool} is not authorized for this Job`, requiredTool);
     }
   }

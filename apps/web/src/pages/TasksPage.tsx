@@ -217,7 +217,7 @@ export function TasksPage() {
       {project?.plane_project_id && <PlaneGuide project={project} plane={plane} />}
 
       {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && filter !== "archived" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((canvas, index) => {
             const lifecycle = deriveTaskLifecycle({
               status: canvas.status,
@@ -235,20 +235,61 @@ export function TasksPage() {
                 ? "等待启动"
                 : "—";
             const lifecycleElapsed = formatElapsed(canvas.created_at, lifecycle.isActive ? null : lifecycle.endedAt, clock);
-            return <article key={canvas.id} className="surface-shell deepsonar-reveal" style={{ animationDelay: `${index * 55}ms` }}><div className="surface-core flex min-h-[200px] flex-col p-4 sm:p-5"><div className="flex items-start gap-3"><div className={`relative mt-0.5 grid size-9 shrink-0 place-items-center rounded-[12px] ring-1 ${isArchived ? "bg-zinc-500/[.08] text-zinc-500 ring-white/[.06]" : isActive ? "bg-run-400/[.08] text-run-400 ring-run-400/15" : "bg-white/[.03] text-zinc-500 ring-white/[.055]"}`}>{isActive && !isArchived ? <span className="deepsonar-live-dot size-2 rounded-full bg-current" /> : <span className="size-2 rounded-full bg-current" />}</div><div className="min-w-0 flex-1"><Link to={`/projects/${projectId}/tasks/${canvas.id}`} className="line-clamp-2 text-[15px] font-medium leading-5 tracking-[-.02em] text-zinc-100 hover:text-acc-300">{canvas.title}</Link><p className="mt-1.5 line-clamp-2 text-[11px] leading-4.5 text-zinc-600">{targetLine(canvas.target_json) || "任务正在等待范围解析"}</p></div><div className="flex flex-col items-end gap-1"><span className="rounded-full px-2 py-0.5 font-mono text-[9px] ring-1" style={{ color: lifecycle.color, background: `${lifecycle.color}18`, borderColor: `${lifecycle.color}35` }}>{lifecycle.label}</span>{canvas.last_job_status && <span className="font-mono text-[9px] text-zinc-600">最近 Job · {canvas.last_job_status}</span>}</div></div>
-              <div className="mt-4 grid grid-cols-3 gap-2"><Metric label="运行" value={canvas.job_count} /><Metric label="发现" value={canvas.finding_count} tone={canvas.finding_count ? "#ec8c5d" : undefined} /><Metric label="已确认" value={canvas.confirmed_count} tone={canvas.confirmed_count ? "#65e6b4" : undefined} /></div>
-              <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-white/[.045] pt-3 sm:grid-cols-3">
-                <LifecycleValue label="创建" value={relativeTime(canvas.created_at)} title={formatTime(canvas.created_at)} />
-                <LifecycleValue label="首个开始" value={canvas.started_at ? relativeTime(canvas.started_at) : "等待启动"} title={canvas.started_at ? formatTime(canvas.started_at) : "尚未有 Job 实际开始"} />
-                <LifecycleValue label="运行耗时" value={runningElapsed} title={canvas.started_at ? (lifecycle.isActive ? "从首个实际开始到现在" : lifecycle.endedAt ? "从首个实际开始到终态结束" : undefined) : undefined} tone={isActive ? "#65e6b4" : undefined} />
-                <LifecycleValue label="生命周期" value={lifecycleElapsed} title="从画布创建到结束（或现在）" />
-                <LifecycleValue label="结束" value={lifecycle.isActive ? "进行中" : lifecycle.endedAt ? formatTime(lifecycle.endedAt) : "—"} title={lifecycle.endedAt && !lifecycle.isActive ? formatTime(lifecycle.endedAt) : undefined} />
-              </div>
-              <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-white/[.045] pt-3">
-                <span className="font-mono text-[9px] text-zinc-700">
-                  PRIORITY {canvas.last_job_priority ?? "—"}
+            return (
+              <article key={canvas.id} className="surface-shell deepsonar-reveal" style={{ animationDelay: `${index * 40}ms` }}>
+                <div className="surface-core flex flex-col gap-2.5 p-3">
+                  <div className="flex items-start gap-2">
+                    <div
+                      className={`relative mt-0.5 grid size-6 shrink-0 place-items-center rounded-md ring-1 ${
+                        isArchived
+                          ? "bg-zinc-500/[.08] text-zinc-500 ring-white/[.06]"
+                          : isActive
+                            ? "bg-run-400/[.08] text-run-400 ring-run-400/15"
+                            : "bg-white/[.03] text-zinc-500 ring-white/[.055]"
+                      }`}
+                    >
+                      {isActive && !isArchived
+                        ? <span className="deepsonar-live-dot size-1.5 rounded-full bg-current" />
+                        : <span className="size-1.5 rounded-full bg-current" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        to={`/projects/${projectId}/tasks/${canvas.id}`}
+                        className="line-clamp-1 text-[13px] font-medium leading-4 tracking-[-.01em] text-zinc-100 hover:text-acc-300"
+                      >
+                        {canvas.title}
+                      </Link>
+                      <p className="mt-0.5 line-clamp-1 text-[10px] leading-4 text-zinc-600">
+                        {targetLine(canvas.target_json) || "任务正在等待范围解析"}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-0.5">
+                      <span
+                        className="rounded-full px-1.5 py-0.5 font-mono text-[8px] ring-1"
+                        style={{ color: lifecycle.color, background: `${lifecycle.color}18`, borderColor: `${lifecycle.color}35` }}
+                      >
+                        {lifecycle.label}
+                      </span>
+                      {canvas.last_job_status && (
+                        <span className="font-mono text-[8px] text-zinc-600">Job · {canvas.last_job_status}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <Metric label="运行" value={canvas.job_count} />
+                    <Metric label="发现" value={canvas.finding_count} tone={canvas.finding_count ? "#ec8c5d" : undefined} />
+                    <Metric label="已确认" value={canvas.confirmed_count} tone={canvas.confirmed_count ? "#65e6b4" : undefined} />
+                  </div>
+                  <div className="grid grid-cols-3 gap-x-2 gap-y-1 border-t border-white/[.045] pt-2">
+                    <LifecycleValue label="创建" value={relativeTime(canvas.created_at)} title={formatTime(canvas.created_at)} />
+                    <LifecycleValue label="运行" value={runningElapsed} title={canvas.started_at ? (lifecycle.isActive ? "从首个实际开始到现在" : lifecycle.endedAt ? "从首个实际开始到终态结束" : undefined) : "尚未有 Job 实际开始"} tone={isActive ? "#65e6b4" : undefined} />
+                    <LifecycleValue label="生命周期" value={lifecycleElapsed} title="从画布创建到结束（或现在）" />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1 border-t border-white/[.045] pt-2">
+                <span className="font-mono text-[8px] text-zinc-700">
+                  P{canvas.last_job_priority ?? "—"}
                 </span>
-                <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-0.5">
                   {!isArchived && canvas.last_job_id && canvas.last_job_status && ACTIVE_TASK_JOB_STATUSES.has(canvas.last_job_status) && (
                     <button
                       onClick={async () => {
@@ -259,9 +300,9 @@ export function TasksPage() {
                           flash(`取消失败：${e instanceof Error ? e.message : e}`);
                         }
                       }}
-                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
+                      className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
                     >
-                      <Pause size={12} />
+                      <Pause size={11} />
                       取消
                     </button>
                   )}
@@ -278,10 +319,10 @@ export function TasksPage() {
                           flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);
                         }
                       }}
-                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                      className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
                     >
-                      <ArrowClockwise size={12} />
-                      恢复会话
+                      <ArrowClockwise size={11} />
+                      恢复
                     </button>
                   )}
                   {!isArchived && !isActive && canvas.job_count > 0 && (
@@ -302,9 +343,9 @@ export function TasksPage() {
                           flash(`重试失败：${e instanceof Error ? e.message : e}`);
                         }
                       }}
-                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
+                      className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
                     >
-                      <ArrowClockwise size={12} />
+                      <ArrowClockwise size={11} />
                       重试
                     </button>
                   )}
@@ -325,9 +366,9 @@ export function TasksPage() {
                           flash(`归档失败：${e instanceof Error ? e.message : e}`);
                         }
                       }}
-                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                      className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
                     >
-                      <Archive size={12} />
+                      <Archive size={11} />
                       归档
                     </button>
                   )}
@@ -347,9 +388,9 @@ export function TasksPage() {
                           flash(`取消归档失败：${e instanceof Error ? e.message : e}`);
                         }
                       }}
-                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                      className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
                     >
-                      <Archive size={12} />
+                      <Archive size={11} />
                       取消归档
                     </button>
                   )}
@@ -371,24 +412,26 @@ export function TasksPage() {
                         flash(`删除失败：${e instanceof Error ? e.message : e}`);
                       }
                     }}
-                    className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
+                    className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
                   >
-                    <Trash size={12} />
+                    <Trash size={11} />
                     删除
                   </button>
                   <Link
                     to={`/projects/${projectId}/tasks/${canvas.id}`}
-                    className="group ml-1 inline-flex items-center gap-2 rounded-full bg-white/[.045] px-3 py-2 text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-all hover:bg-white/[.075] hover:text-white"
+                    className="group ml-0.5 inline-flex items-center gap-1 rounded-full bg-white/[.045] px-2 py-1 text-[9px] text-zinc-300 ring-1 ring-white/[.06] transition-all hover:bg-white/[.075] hover:text-white"
                   >
-                    打开工作台
+                    打开
                     <ArrowUpRight
-                      size={13}
+                      size={11}
                       className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
                     />
                   </Link>
                 </div>
               </div>
-            </div></article>;
+            </div>
+              </article>
+            );
           })}
         </div>
       )}
@@ -396,8 +439,20 @@ export function TasksPage() {
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: number; tone?: string }) { return <div className="rounded-2xl bg-white/[.018] px-3 py-2.5 ring-1 ring-white/[.04]"><span className="block font-mono text-[8px] tracking-[.14em] text-zinc-700">{label}</span><strong className="mt-1 block text-[16px] font-medium tabular-nums text-zinc-300" style={{ color: tone }}>{value}</strong></div>; }
+function Metric({ label, value, tone }: { label: string; value: number; tone?: string }) {
+  return (
+    <div className="rounded-lg bg-white/[.018] px-2 py-1.5 ring-1 ring-white/[.04]">
+      <span className="block font-mono text-[7px] tracking-[.12em] text-zinc-700">{label}</span>
+      <strong className="mt-0.5 block text-[13px] font-medium tabular-nums leading-none text-zinc-300" style={{ color: tone }}>{value}</strong>
+    </div>
+  );
+}
 
 function LifecycleValue({ label, value, title, tone }: { label: string; value: string; title?: string; tone?: string }) {
-  return <div className="min-w-0"><span className="block font-mono text-[8px] uppercase tracking-[.12em] text-zinc-700">{label}</span><strong className="mt-0.5 block truncate text-[11px] font-medium tabular-nums text-zinc-400" style={{ color: tone }} title={title}>{value}</strong></div>;
+  return (
+    <div className="min-w-0">
+      <span className="block font-mono text-[7px] uppercase tracking-[.1em] text-zinc-700">{label}</span>
+      <strong className="mt-0.5 block truncate text-[10px] font-medium tabular-nums text-zinc-400" style={{ color: tone }} title={title}>{value}</strong>
+    </div>
+  );
 }

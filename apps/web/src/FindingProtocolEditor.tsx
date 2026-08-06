@@ -1,20 +1,23 @@
 import type { EffectiveFindingProtocol, FindingProtocolConfig } from "./api";
+import { HelpTip } from "./ui";
 
-const inputCls =
-  "theme-input-surface w-full border px-3 py-2 text-[12px] text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
-
-function csv(value: string[] | undefined): string {
-  return (value ?? []).join(", ");
-}
-
-function list(value: string): string[] {
-  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
-}
-
-function optionalList(value: string): string[] | undefined {
-  const values = list(value);
-  return values.length ? values : undefined;
-}
+const MODE_META: Record<
+  EffectiveFindingProtocol["mode"],
+  { label: string; help: string }
+> = {
+  fixed: {
+    label: "固定",
+    help: "所有 Finding 必须使用默认 profile；Agent 不能自选其它 profile。",
+  },
+  hybrid: {
+    label: "混合",
+    help: "默认使用默认 profile；Agent 可在允许列表内改选其它 profile（推荐）。",
+  },
+  agent_choice: {
+    label: "Agent 自选",
+    help: "Agent 在允许列表内自由选择 profile；未指定时回落默认 profile。",
+  },
+};
 
 export function FindingProtocolEditor({
   value,
@@ -28,17 +31,24 @@ export function FindingProtocolEditor({
   allowInherit?: boolean;
 }) {
   const current: FindingProtocolConfig = value ?? {};
-  const set = (patch: Partial<FindingProtocolConfig>) => onChange({ ...current, ...patch });
   const inherited = allowInherit && value === null;
+  const mode = current.mode ?? effective.mode;
 
   return (
     <section className="border-t border-white/[.06] pt-4" aria-label="Finding 协议">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="font-mono text-[10px] uppercase text-zinc-500">Finding 协议</div>
+          <div className="inline-flex items-center font-mono text-[10px] uppercase text-zinc-500">
+            Finding 协议
+            <HelpTip label="Finding 协议说明">
+              控制 Finding 的 profile 选择方式与默认 CVSS 版本。平台默认 CVSS 3.1；高级 profiles / 强制评分等由系统默认维护，界面不再展开。
+            </HelpTip>
+          </div>
           <div className="mt-1 text-[12px] text-zinc-300">{effective.display_name}</div>
           <div className="mt-1 font-mono text-[9px] text-zinc-600">
-            {effective.source} · {effective.mode} · {effective.scoring.default_standard} {effective.scoring.default_version}
+            {effective.source} · {MODE_META[effective.mode]?.label ?? effective.mode}
+            {" · "}
+            {effective.scoring.default_standard} {effective.scoring.default_version}
           </div>
         </div>
         {allowInherit && (
@@ -55,48 +65,44 @@ export function FindingProtocolEditor({
       </div>
 
       {!inherited && (
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label>
-            <span className="mb-1 block font-mono text-[9px] text-zinc-500">显示名称</span>
-            <input value={current.display_name ?? ""} onChange={(event) => set({ display_name: event.target.value || undefined })} className={inputCls} placeholder={effective.display_name} />
-          </label>
-          <label>
-            <span className="mb-1 block font-mono text-[9px] text-zinc-500">默认 profile</span>
-            <input value={current.default_profile ?? ""} onChange={(event) => set({ default_profile: event.target.value || undefined })} className={inputCls} placeholder={effective.default_profile} />
-          </label>
-          <fieldset className="sm:col-span-2">
-            <legend className="mb-1 font-mono text-[9px] text-zinc-500">模式</legend>
-            <div className="grid grid-cols-3 gap-1 rounded-md bg-black/20 p-1 ring-1 ring-white/[.06]">
-              {(["fixed", "hybrid", "agent_choice"] as const).map((mode) => (
+        <div className="mt-3">
+          <div className="mb-1.5 inline-flex items-center font-mono text-[9px] text-zinc-500">
+            模式
+            <HelpTip label="Finding 协议模式">
+              <strong>固定</strong>：只用默认 profile。
+              {" "}
+              <strong>混合</strong>：默认 profile，Agent 可在允许列表内改选（推荐）。
+              {" "}
+              <strong>Agent 自选</strong>：Agent 在允许列表内自由选择。
+            </HelpTip>
+          </div>
+          <div className="grid grid-cols-3 gap-1 rounded-md bg-black/20 p-1 ring-1 ring-white/[.06]">
+            {(["hybrid", "fixed", "agent_choice"] as const).map((next) => {
+              const meta = MODE_META[next];
+              const active = mode === next;
+              return (
                 <button
-                  key={mode}
+                  key={next}
                   type="button"
-                  onClick={() => set({ mode })}
-                  className={`min-w-0 rounded px-2 py-1.5 font-mono text-[10px] ${
-                    (current.mode ?? effective.mode) === mode ? "bg-white/[.08] text-zinc-100" : "text-zinc-500 hover:text-zinc-300"
+                  title={meta.help}
+                  onClick={() => onChange({ ...current, mode: next })}
+                  className={`inline-flex min-w-0 items-center justify-center gap-1 rounded px-2 py-1.5 font-mono text-[10px] ${
+                    active ? "bg-white/[.08] text-zinc-100" : "text-zinc-500 hover:text-zinc-300"
                   }`}
                 >
-                  {mode}
+                  <span className="truncate">{meta.label}</span>
+                  <HelpTip label={`${meta.label} 模式说明`}>{meta.help}</HelpTip>
                 </button>
-              ))}
-            </div>
-          </fieldset>
-          <label className="sm:col-span-2">
-            <span className="mb-1 block font-mono text-[9px] text-zinc-500">允许 profiles（逗号分隔，高层整表覆盖）</span>
-            <input value={csv(current.allowed_profiles)} onChange={(event) => set({ allowed_profiles: optionalList(event.target.value) })} className={inputCls} placeholder={csv(effective.allowed_profiles)} />
-          </label>
-          <label>
-            <span className="mb-1 block font-mono text-[9px] text-zinc-500">默认 CVSS 版本</span>
-            <input value={current.scoring?.default_version ?? ""} onChange={(event) => set({ scoring: { ...current.scoring, default_version: event.target.value || undefined } })} className={inputCls} placeholder={effective.scoring.default_version} />
-          </label>
-          <label>
-            <span className="mb-1 block font-mono text-[9px] text-zinc-500">接受版本</span>
-            <input value={csv(current.scoring?.accepted_versions)} onChange={(event) => set({ scoring: { ...current.scoring, accepted_versions: optionalList(event.target.value) } })} className={inputCls} placeholder={csv(effective.scoring.accepted_versions)} />
-          </label>
-          <label className="sm:col-span-2">
-            <span className="mb-1 block font-mono text-[9px] text-zinc-500">强制评分 profiles</span>
-            <input value={csv(current.scoring?.require_scoring_for_profiles)} onChange={(event) => set({ scoring: { ...current.scoring, require_scoring_for_profiles: list(event.target.value) } })} className={inputCls} placeholder="留空表示不强制" />
-          </label>
+              );
+            })}
+          </div>
+          <p className="mt-2 font-mono text-[9px] text-zinc-600">
+            默认 CVSS {effective.scoring.default_version}
+            {" · 接受 "}
+            {effective.scoring.accepted_versions.join(" / ")}
+            {" · profile "}
+            {effective.default_profile}
+          </p>
         </div>
       )}
     </section>

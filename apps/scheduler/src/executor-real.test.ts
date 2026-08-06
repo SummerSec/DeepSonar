@@ -246,9 +246,10 @@ test("semantic tool capture only enables this Job's authorized tools", () => {
 });
 
 test("all role Jobs, including audit, may publish shared assets", () => {
+  // Publish is gated by frozen platform_tools, not role kind.
   assert.equal(canRolePublishSharedAsset("role"), true);
-  assert.equal(canRolePublishSharedAsset("hub"), false);
-  assert.equal(canRolePublishSharedAsset("system"), false);
+  assert.equal(canRolePublishSharedAsset("hub"), true);
+  assert.equal(canRolePublishSharedAsset("system"), true);
 });
 
 test("semantic tool map rejects prototype keys", () => {

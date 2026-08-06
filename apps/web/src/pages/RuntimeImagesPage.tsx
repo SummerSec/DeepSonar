@@ -16,7 +16,7 @@ import {
   type RuntimeImageRegistryChannel,
   type RuntimeImagePullTask,
 } from "../api";
-import { EmptyState, PageHeader, PageSkeleton, formatTime } from "../ui";
+import { EmptyState, HelpTip, PageHeader, PageSkeleton, formatTime } from "../ui";
 
 const TRUST_STYLE: Record<RuntimeImageTrustStatus, string> = {
   trusted: "border-emerald-400/20 bg-emerald-400/[.08] text-emerald-300",
@@ -42,6 +42,19 @@ function shortDigest(value: string | null) {
 
 function sizeLabel(bytes: number | null) {
   return bytes ? `${Math.round(bytes / 1024 / 1024)} MiB` : "—";
+}
+
+/** 系统默认运行环境（RoleConfig.runtime_image_key=null 时调度器使用的最小 Base） */
+function isSystemBaseRuntime(image: RuntimeImageSummary): boolean {
+  return image.image_key === "deepsonar-base";
+}
+
+function isOfficialSpecialty(image: RuntimeImageSummary): boolean {
+  return image.official && !isSystemBaseRuntime(image);
+}
+
+function isThirdPartyImage(image: RuntimeImageSummary): boolean {
+  return !image.official;
 }
 
 function canApproveVersion(version: RuntimeImageVersion): { ok: boolean; reason: string } {
@@ -594,9 +607,14 @@ export function RuntimeImagesPage() {
         title={projectId ? "项目运行镜像" : "镜像市场"}
         eyebrow="TRUSTED RUNTIME CATALOG"
         subtitle={
-          projectId
-            ? "为项目启用已准入镜像，并固定角色可选择的可信版本。任务表单仍不暴露镜像参数。"
-            : "官方与第三方运行时共用不可变 digest、准入扫描、审批、撤销和证据链。「同步市场」刷新受治理目录；不可达时用「手动更新市场」选择本机 runtime-image-registry.json 上传入库。一平台一版本，项目可固定平台 digest。"
+          <span className="inline-flex items-center gap-0.5">
+            {projectId ? "项目启用与固定官方专项 / 第三方镜像" : "系统底座 · 官方专项 · 第三方隔离准入"}
+            <HelpTip label={projectId ? "项目运行镜像说明" : "镜像市场说明"}>
+              {projectId
+                ? "系统底座自动用于未绑定专项镜像的角色；此处仅为项目启用/固定官方专项与第三方镜像。任务表单不暴露镜像参数。"
+                : "系统运行环境（deepsonar-base）是调度默认底座，与专项镜像（Kali / Audit 等）不同层。「专项」需角色显式绑定；第三方须隔离区准入。共用 digest / 扫描 / 审批证据链，但卡片按类别分区。"}
+            </HelpTip>
+          </span>
         }
         actions={
           <div className="flex w-full flex-wrap gap-2 sm:w-auto">
@@ -642,7 +660,12 @@ export function RuntimeImagesPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[10px] tracking-[.14em] text-zinc-600">CPU PLATFORM</span>
+        <span className="inline-flex items-center font-mono text-[10px] tracking-[.14em] text-zinc-600">
+          CPU PLATFORM
+          <HelpTip label="CPU 平台筛选说明">
+            一平台一版本；项目可固定某个平台 digest。
+          </HelpTip>
+        </span>
         {PLATFORM_FILTERS.map((item) => (
           <button
             key={item.label}
@@ -653,9 +676,6 @@ export function RuntimeImagesPage() {
             {item.label}
           </button>
         ))}
-        <span className="ml-1 w-full text-[11px] text-zinc-600 sm:w-auto">
-          一平台一版本；项目可固定某个平台 digest
-        </span>
       </div>
 
       {error && (
@@ -682,8 +702,11 @@ export function RuntimeImagesPage() {
               )}
             </div>
             <div className="min-w-0">
-              <label htmlFor="runtime-registry-channel" className="font-mono text-[10px] tracking-[.16em] text-zinc-600">
+              <label htmlFor="runtime-registry-channel" className="inline-flex items-center font-mono text-[10px] tracking-[.16em] text-zinc-600">
                 OFFICIAL REGISTRY CHANNEL
+                <HelpTip label="官方镜像仓库通道说明">
+                  选择服务器治理的官方镜像仓库；不会接受自定义 URL，也不会改变下方 CPU / 平台筛选。
+                </HelpTip>
               </label>
               <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
                 <select
@@ -691,7 +714,7 @@ export function RuntimeImagesPage() {
                   className="field-input min-w-0 flex-1 font-mono text-[12px]"
                   value={registry?.selected_channel ?? ""}
                   disabled={!registry || registryLoading || busy !== null || !canManageRegistryChannel}
-                  aria-describedby="runtime-registry-channel-status"
+                  aria-describedby={channelMessage || !canManageRegistryChannel ? "runtime-registry-channel-status" : undefined}
                   onChange={(event) => void updateRegistryChannel(event.target.value as RuntimeImageRegistryChannel)}
                 >
                   {!registry && <option value="">{registryLoading ? "加载通道…" : "无法读取通道"}</option>}
@@ -704,11 +727,17 @@ export function RuntimeImagesPage() {
                 {channelStatus === "pending" && <span className="shrink-0 font-mono text-[10px] text-sky-300">切换中…</span>}
                 {channelStatus === "success" && <span className="shrink-0 font-mono text-[10px] text-emerald-300">已更新</span>}
               </div>
-              <p id="runtime-registry-channel-status" className={`mt-2 text-[11px] leading-5 ${channelStatus === "error" ? "text-red-300" : channelStatus === "success" ? "text-emerald-300" : "text-zinc-500"}`}>
-                {channelMessage ?? "选择服务器治理的官方镜像仓库；不会接受自定义 URL，也不会改变下方 CPU / 平台筛选。"}
-              </p>
-              {!canManageRegistryChannel && (
-                <p className="mt-1 text-[11px] leading-5 text-amber-300/80">当前账号只能查看通道；切换需要管理员或 images:manage 权限。</p>
+              {(channelMessage || !canManageRegistryChannel) && (
+                <div id="runtime-registry-channel-status" className="mt-2 space-y-1">
+                  {channelMessage && (
+                    <p className={`text-[11px] leading-5 ${channelStatus === "error" ? "text-red-300" : channelStatus === "success" ? "text-emerald-300" : "text-zinc-500"}`}>
+                      {channelMessage}
+                    </p>
+                  )}
+                  {!canManageRegistryChannel && (
+                    <p className="text-[11px] leading-5 text-amber-300/80">当前账号只能查看通道；切换需要管理员或 images:manage 权限。</p>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -828,23 +857,72 @@ export function RuntimeImagesPage() {
         </section>
       )}
 
-      {rows.filter((image) => imageMatchesPlatform(image, platformFilter)).length === 0 ? (
-        <EmptyState title="没有匹配的运行镜像" hint={platformFilter ? `当前平台筛选：${platformFilter}` : "第三方镜像必须先导入隔离区并完成准入"} />
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-2">
-          {rows.filter((image) => imageMatchesPlatform(image, platformFilter)).map((image) => (
-            <article key={image.id} className="surface-shell">
+      {(() => {
+        const filtered = rows.filter((image) => imageMatchesPlatform(image, platformFilter));
+        const systemBase = filtered.filter(isSystemBaseRuntime);
+        const officialSpecialty = filtered.filter(isOfficialSpecialty);
+        const thirdParty = filtered.filter(isThirdPartyImage);
+        if (filtered.length === 0) {
+          return (
+            <EmptyState title="没有匹配的运行镜像" hint={platformFilter ? `当前平台筛选：${platformFilter}` : "第三方镜像必须先导入隔离区并完成准入"} />
+          );
+        }
+        const sections = ([
+          {
+            key: "base",
+            title: "系统运行环境（默认底座）",
+            hint: "RoleConfig 未绑定专项镜像时，Job 使用此最小 Base。不是「与 Kali 同级可选专项」。",
+            items: systemBase,
+            tone: "base" as const,
+          },
+          {
+            key: "specialty",
+            title: "官方专项镜像",
+            hint: "Test / Audit 等角色按需绑定；体积与工具链更重，须显式选用。",
+            items: officialSpecialty,
+            tone: "specialty" as const,
+          },
+          {
+            key: "third",
+            title: "第三方镜像",
+            hint: "须导入隔离区 → 扫描 → 管理员批准 → 项目启用，与官方底座治理路径不同。",
+            items: thirdParty,
+            tone: "third" as const,
+          },
+        ] as const).filter((section) => section.items.length > 0);
+
+        const renderCard = (image: RuntimeImageSummary) => (
+            <article
+              key={image.id}
+              className={`surface-shell ${isSystemBaseRuntime(image) ? "ring-1 ring-sky-400/25" : ""} ${!image.official ? "ring-1 ring-amber-400/15" : ""}`}
+            >
               <div className="surface-core flex h-full flex-col p-4">
                 <div className="flex items-start gap-3">
-                  <span className="rounded-xl bg-white/[.035] p-2.5 text-acc-300 ring-1 ring-white/[.06]">
+                  <span className={`rounded-xl p-2.5 ring-1 ${
+                    isSystemBaseRuntime(image)
+                      ? "bg-sky-400/[.1] text-sky-300 ring-sky-400/25"
+                      : image.official
+                        ? "bg-white/[.035] text-acc-300 ring-white/[.06]"
+                        : "bg-amber-400/[.08] text-amber-300 ring-amber-400/20"
+                  }`}>
                     <Cube size={20} weight="light" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-[15px] font-medium text-zinc-100">{image.name}</h2>
-                      {image.official && (
+                      {isSystemBaseRuntime(image) && (
+                        <span className="rounded-full bg-sky-400/[.12] px-2 py-1 font-mono text-[8px] tracking-[.12em] text-sky-300">
+                          系统底座
+                        </span>
+                      )}
+                      {image.official && !isSystemBaseRuntime(image) && (
                         <span className="rounded-full bg-acc-400/[.1] px-2 py-1 font-mono text-[8px] tracking-[.12em] text-acc-300">
-                          OFFICIAL
+                          官方专项
+                        </span>
+                      )}
+                      {!image.official && (
+                        <span className="rounded-full bg-amber-400/[.1] px-2 py-1 font-mono text-[8px] tracking-[.12em] text-amber-300">
+                          第三方
                         </span>
                       )}
                       {image.project_opt_in && (
@@ -855,6 +933,11 @@ export function RuntimeImagesPage() {
                       <TrustBadge status={image.trust_status} />
                     </div>
                     <p className="mt-1 font-mono text-[9px] text-zinc-600">{image.image_key}</p>
+                    {isSystemBaseRuntime(image) && (
+                      <p className="mt-1 text-[10px] leading-4 text-sky-300/80">
+                        默认运行环境：角色不绑专项镜像时自动使用（runtime_image_key=null）。
+                      </p>
+                    )}
                   </div>
                 </div>
                 <p className="mt-3 min-h-8 line-clamp-2 text-[11px] leading-4 text-zinc-500">{image.description || "暂无描述"}</p>
@@ -970,9 +1053,31 @@ export function RuntimeImagesPage() {
                 )}
               </div>
             </article>
-          ))}
-        </div>
-      )}
+        );
+
+        return (
+          <div className="flex flex-col gap-6">
+            {sections.map((section) => (
+              <section key={section.key} className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-end justify-between gap-2 border-b border-white/[.06] pb-2">
+                  <div>
+                    <h3 className={`font-mono text-[11px] font-semibold tracking-[.08em] ${
+                      section.tone === "base" ? "text-sky-300" : section.tone === "specialty" ? "text-acc-300" : "text-amber-300"
+                    }`}>
+                      {section.title}
+                      {section.hint ? <HelpTip>{section.hint}</HelpTip> : null}
+                    </h3>
+                  </div>
+                  <span className="font-mono text-[10px] text-zinc-600">{section.items.length} 个</span>
+                </div>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {section.items.map(renderCard)}
+                </div>
+              </section>
+            ))}
+          </div>
+        );
+      })()}
 
       {selected && (
         <div

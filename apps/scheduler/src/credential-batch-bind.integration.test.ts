@@ -203,15 +203,15 @@ if (!testDatabaseUrl) {
       const [bindingAfterHealthFailure] = await sql`SELECT credential_id FROM role_credentials WHERE role_config_id = ${configId} AND purpose = 'llm'`;
       assert.equal(bindingAfterHealthFailure.credential_id, targetId, "failed health is an atomic no-op");
 
+      // Empty model catalog is no longer a bind gate (CC Switch: roles keep own models).
       const missingCatalogResponse = await app.inject({
         method: "POST",
         url: "/credentials/batch-bind",
           payload: { credential_id: missingCatalogId, role_config_ids: [configId], mode: "bind", idempotency_key: "batch-missing-catalog-1" },
       });
-      assert.equal(missingCatalogResponse.statusCode, 409, missingCatalogResponse.payload);
-      assert.equal(JSON.parse(missingCatalogResponse.payload).error_code, "CREDENTIAL_MODEL_CATALOG_REQUIRED");
-      const [bindingAfterCatalogFailure] = await sql`SELECT credential_id FROM role_credentials WHERE role_config_id = ${configId} AND purpose = 'llm'`;
-      assert.equal(bindingAfterCatalogFailure.credential_id, targetId, "missing model catalog is an atomic no-op");
+      assert.equal(missingCatalogResponse.statusCode, 200, missingCatalogResponse.payload);
+      const [bindingAfterEmptyCatalog] = await sql`SELECT credential_id FROM role_credentials WHERE role_config_id = ${configId} AND purpose = 'llm'`;
+      assert.equal(bindingAfterEmptyCatalog.credential_id, missingCatalogId, "healthy credential may bind without model catalog");
 
       const atomicFailure = await app.inject({
         method: "POST",
