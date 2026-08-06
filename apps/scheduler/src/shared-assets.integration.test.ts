@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import postgres from "postgres";
@@ -23,12 +23,14 @@ if (!testDatabaseUrl) {
       await admin.unsafe(`CREATE DATABASE "${databaseName}"`); databaseCreated = true;
       process.env.DATABASE_URL = targetUrl.toString();
       process.env.BLOB_DIR = blobDir;
+      process.env.BLOB_STORE = "fs";
       process.env.DEEPSONAR_AUTH_REQUIRED = "true";
       process.env.DEEPSONAR_ADMIN_TOKEN = "issue41-admin";
       process.env.AGENT_MODE = "fake";
-      const [{ default: Fastify }, websocketModule, dbModule, routesModule, authModule, sharedModule, coreModule] = await Promise.all([
-        import("fastify"), import("@fastify/websocket"), import("./db.js"), import("./routes.js"), import("./auth.js"), import("./domains/shared-assets/index.js"), import("./core.js"),
+      const [{ default: Fastify }, websocketModule, dbModule, routesModule, authModule, sharedModule, coreModule, blobStoreModule] = await Promise.all([
+        import("fastify"), import("@fastify/websocket"), import("./db.js"), import("./routes.js"), import("./auth.js"), import("./domains/shared-assets/index.js"), import("./core.js"), import("./blob-store/index.js"),
       ]);
+      blobStoreModule.resetSharedAssetBlobStoreForTests();
       const { sql, migrate } = dbModule; endSql = () => sql.end({ timeout: 5 });
       await migrate();
       const app = Fastify({ logger: false });
@@ -99,7 +101,7 @@ if (!testDatabaseUrl) {
       assert.ok(frozenRefs.some((row) => row.version_id === agentFirst.version_id));
       assert.ok(!frozenRefs.some((row) => row.version_id === second.version_id));
       const [blob] = await sql`SELECT blob_uri FROM shared_asset_blobs WHERE content_sha256=${first.content_sha256}`;
-      assert.deepEqual(await readFile(path.join(blobDir, ...(blob.blob_uri as string).split("/"))), firstBytes);
+      assert.deepEqual(await sharedModule.readSharedAssetBlob(String(blob.blob_uri)), firstBytes);
       const audits = await sql`SELECT action FROM audit_logs WHERE action IN ('shared_asset.upload','shared_asset.publish') ORDER BY action`;
       assert.deepEqual(new Set(audits.map((row) => row.action)), new Set(["shared_asset.publish", "shared_asset.upload"]));
 

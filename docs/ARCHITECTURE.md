@@ -471,7 +471,7 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 - 复扫失败的 trusted 版本自动 revoked，调度器/准入 Worker 会取消尚未完成的相关 Job 并精确回收它们的 sandbox ID。历史 Job 快照、Finding 和扫描记录不删除；新 digest 只进入 quarantined，不自动替换生产版本。
 - 私有 registry 使用 `oci_registry` Credential，准入 Worker 仅在 `docker login --password-stdin` 时解密，不进入 Job Snapshot、Docker 参数、日志或 Agent 工作区。
 - `runtime_data_layers` / `runtime_data_layer_versions` 为 Trivy/OSV 等离线库预留可版本化、只读、digest 准入模型；尚未准入的数据层不得挂载进运行沙箱。
-- Shared Assets 使用 `shared_assets`（逻辑对象）+ append-only `shared_asset_versions` + SHA-256 `shared_asset_blobs`（CAS 元数据）分离内容与引用；字节只存 `BLOB_DIR/shared-assets/sha256/`，不进入 PostgreSQL JSONB、画布或 Graph YAML。scope 为 `platform | project | finding`：项目资产自动选择，platform 仅在项目显式 opt-in 后选择，finding 仅对同项目且 Job 绑定该 `finding_id` 的 review/test/verify/report/Hub 链选择。
+- Shared Assets 使用 `shared_assets`（逻辑对象）+ append-only `shared_asset_versions` + SHA-256 `shared_asset_blobs`（CAS 元数据）分离内容与引用；字节经可插拔 **BlobStore**（`BLOB_STORE=fs|s3`）存放，逻辑键为 `shared-assets/sha256/<aa>/<sha256>`，**不**进入 PostgreSQL JSONB、画布或 Graph YAML。`fs` 落在 `BLOB_DIR`；`s3` 为任意 S3 兼容 API（AWS / MinIO / Garage / SeaweedFS / 云 OSS 等，**不锁定厂商**），Job 注入前 `materializeLocal` 到本地缓存。详见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)。scope 为 `platform | project | finding`：项目资产自动选择，platform 仅在项目显式 opt-in 后选择，finding 仅对同项目且 Job 绑定该 `finding_id` 的 review/test/verify/report/Hub 链选择。
 - Job 创建事务计算排序后的精确 version/hash/path 清单和 `shared_assets_revision`，写入 `agent_snapshot_json` 与 `job_shared_asset_versions`；后续资产更新不会改变已建 Job。prompt 只说明只读目录和 bounded catalog，不注入文件正文。Agent publish 只能从普通 `/workspace` 的单一已打开正则文件描述符做有界读取，拒绝 symlink、路径逃逸和 `.deepsonar/shared` 自复制；宿主执行前后校验 Job/lease/sandbox，数据库触发器再锁 Job 做原子终态门禁。Agent 不能 publish platform，也不能覆盖 human/platform key，自有 key 仅追加版本。
 - Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，受限 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。任意 host bind、任意 target、无标签卷和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 均只按可信标签删除终态/孤儿 Job 卷。
 - 上传由 Scheduler 服务端计算 SHA-256，并在 scope 级 advisory transaction lock 内执行配额检查；内容类型与扩展名必须同时命中白名单，单文件与 scope 总额均受配置约束。归档只改变逻辑状态，历史版本与 Job 引用不删；CAS 垃圾回收只能在无 version/Job 引用并过保留期后执行。HTTP 目录和本地 `list_shared_assets` 均按 `limit/offset` 分页；真正的按需 fetch 需要独立可信 IPC，当前不开放写 socket 或控制文件。
@@ -667,6 +667,12 @@ EVENT_RATE_LIMIT_TERMINAL_PER_WINDOW=8
 
 BLOB_STORE=fs
 BLOB_DIR=./data/blobs
+# Shared-asset multi-node: BLOB_STORE=s3 + BLOB_S3_* (any S3-compatible API)
+# BLOB_S3_ENDPOINT=http://127.0.0.1:9000
+# BLOB_S3_BUCKET=deepsonar
+# BLOB_S3_ACCESS_KEY_ID=
+# BLOB_S3_SECRET_ACCESS_KEY=
+# BLOB_S3_FORCE_PATH_STYLE=true
 TRANSCRIPT_RETENTION_DAYS=90
 EVENT_FLUSH_INTERVAL_MS=2000
 EVENT_FLUSH_MAX_KB=32

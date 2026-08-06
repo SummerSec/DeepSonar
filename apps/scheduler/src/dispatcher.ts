@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { config } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
@@ -14,6 +13,7 @@ import {
 } from "./core.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
+import { materializeSharedAssetBlob } from "./domains/shared-assets/index.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
@@ -563,10 +563,13 @@ async function runJob(jobId: string) {
     if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {
-      const files = frozenAssets.map((asset) => ({
-        sourcePath: path.join(config.storage.blobDir, ...asset.blob_uri.split("/")),
-        relativePath: asset.mount_path.replace("/workspace/.deepsonar/shared/", ""),
-      }));
+      const files = [];
+      for (const asset of frozenAssets) {
+        files.push({
+          sourcePath: await materializeSharedAssetBlob(asset.blob_uri),
+          relativePath: asset.mount_path.replace("/workspace/.deepsonar/shared/", ""),
+        });
+      }
       sharedAssetsVolumeName = await sharedAssetsVolumeManager.prepare({
         jobId,
         image: runtimeImage,

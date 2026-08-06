@@ -184,10 +184,43 @@ export const config = {
     rateLimitTerminalPerWindow: boundedInt("EVENT_RATE_LIMIT_TERMINAL_PER_WINDOW", 8, 1000),
   },
 
-  /** Job 原始 Session、normalized stream 与 OTLP 冷存储。 */
+  /**
+   * Cold storage roots.
+   * - Evidence / reports always use local `blobDir`.
+   * - Shared-asset CAS bytes use pluggable `blobStore` (`fs` | `s3`).
+   *   `s3` is any S3-compatible API (AWS S3, MinIO, Garage, SeaweedFS S3 gateway, cloud OSS, …).
+   */
   storage: {
     blobDir: path.resolve(process.cwd(), str("BLOB_DIR", "./data/blobs")),
+    /**
+     * Shared-asset backend: `fs` (default, local disk under BLOB_DIR) or `s3`
+     * (S3-compatible object store). Aliases: local→fs, minio/object→s3.
+     */
+    blobStore: str("BLOB_STORE", "fs").toLowerCase() || "fs",
     transcriptRetentionDays: int("TRANSCRIPT_RETENTION_DAYS", 90),
+    s3: {
+      endpoint: str("BLOB_S3_ENDPOINT"),
+      region: str("BLOB_S3_REGION", "us-east-1"),
+      bucket: str("BLOB_S3_BUCKET"),
+      /** Optional key prefix inside the bucket (e.g. deepsonar/blobs). */
+      prefix: str("BLOB_S3_PREFIX"),
+      accessKeyId: str("BLOB_S3_ACCESS_KEY_ID", str("AWS_ACCESS_KEY_ID")),
+      secretAccessKey: str("BLOB_S3_SECRET_ACCESS_KEY", str("AWS_SECRET_ACCESS_KEY")),
+      sessionToken: str("BLOB_S3_SESSION_TOKEN", str("AWS_SESSION_TOKEN")),
+      /**
+       * Path-style addressing. Default true when an endpoint is set (MinIO and
+       * most self-hosted S3 APIs); false for virtual-hosted AWS-style endpoints.
+       */
+      forcePathStyle: (() => {
+        const raw = process.env.BLOB_S3_FORCE_PATH_STYLE;
+        if (raw !== undefined && raw !== "") {
+          return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
+        }
+        return Boolean(str("BLOB_S3_ENDPOINT"));
+      })(),
+      /** Local materialize cache for Job volume injection when backend is s3. */
+      cacheDir: path.resolve(process.cwd(), str("BLOB_S3_CACHE_DIR", str("BLOB_DIR", "./data/blobs"))),
+    },
   },
 
   sharedAssets: {

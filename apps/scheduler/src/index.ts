@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
+import { getSharedAssetBlobStore } from "./blob-store/index.js";
 import { config } from "./config.js";
 import { migrate, sql } from "./db.js";
 import { drainInFlight, startDispatcher } from "./dispatcher.js";
@@ -20,6 +21,14 @@ async function main() {
   process.on("unhandledRejection", (reason) => {
     console.error("[fatal-guard] unhandledRejection:", reason instanceof Error ? reason.message : reason);
   });
+
+  // Fail fast on invalid BLOB_STORE / missing S3 bucket (shared-asset CAS only).
+  const sharedAssetBlobs = getSharedAssetBlobStore();
+  console.log(
+    sharedAssetBlobs.kind === "s3"
+      ? `[boot] shared-asset BlobStore=s3 bucket=${config.storage.s3.bucket} endpoint=${config.storage.s3.endpoint || "(default AWS)"}`
+      : `[boot] shared-asset BlobStore=fs root=${config.storage.blobDir}`,
+  );
 
   console.log("[boot] 应用数据库 schema / 迁移…");
   const applied = await migrate();

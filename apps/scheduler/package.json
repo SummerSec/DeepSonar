@@ -12,6 +12,7 @@
     "test:migrations": "tsx --test src/migration-runner.test.ts src/db.test.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1104.0",
     "@deepsonar/plane-client": "workspace:*",
     "@deepsonar/runtime-sandbox": "workspace:*",
     "@deepsonar/shared-types": "workspace:*",

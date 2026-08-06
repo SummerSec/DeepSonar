@@ -1,6 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import {
+  assertSharedAssetBlobUri,
+  getSharedAssetBlobStore,
+  sharedAssetBlobUri,
+} from "../../blob-store/index.js";
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
 
@@ -63,11 +67,6 @@ export function validateAssetContentType(contentType: string, key: string): stri
   throw new Error("asset_content_type_not_allowed");
 }
 
-function blobPath(sha256: string): { uri: string; absolute: string } {
-  const uri = path.posix.join("shared-assets", "sha256", sha256.slice(0, 2), sha256);
-  return { uri, absolute: path.join(config.storage.blobDir, ...uri.split("/")) };
-}
-
 export function mountPathFor(scope: SharedAssetScope, findingId: string | null, key: string): string {
   const prefix = scope === "finding" ? `finding/${findingId}` : scope;
   return `/workspace/.deepsonar/shared/${prefix}/${normalizeAssetKey(key)}`;
@@ -89,10 +88,13 @@ export async function createSharedAsset(input: {
   const contentType = validateAssetContentType(input.contentType, key);
   if (input.bytes.byteLength > config.sharedAssets.maxFileBytes) throw new Error("asset_file_too_large");
   const sha256 = createHash("sha256").update(input.bytes).digest("hex");
-  const blob = blobPath(sha256);
-  const temp = `${blob.absolute}.${randomUUID()}.tmp`;
-  await mkdir(path.dirname(blob.absolute), { recursive: true });
-  await writeFile(temp, input.bytes, { flag: "wx" });
+  const blobUri = sharedAssetBlobUri(sha256);
+  const store = getSharedAssetBlobStore();
+  // Ensure CAS bytes exist before metadata commit. Put is idempotent for the same
+  // key; orphans after a failed transaction are safe and can be GC'd later.
+  if (!(await store.exists(blobUri))) {
+    await store.put(blobUri, input.bytes, { contentType });
+  }
   try {
     const result = await sql.begin(async (tx) => {
       if (input.scope === "platform") {
@@ -124,19 +126,10 @@ export async function createSharedAsset(input: {
           : await tx`SELECT * FROM shared_assets WHERE scope_type='project' AND project_id=${input.projectId!} AND logical_key=${key} AND status='active' FOR UPDATE`;
       if (existing && (input.origin !== "agent" || existing.origin !== "agent")) throw new Error("immutable_asset_key_exists");
 
-      const insertedBlob = await tx`INSERT INTO shared_asset_blobs (content_sha256,bytes,content_type,blob_uri) VALUES (${sha256},${input.bytes.byteLength},${contentType},${blob.uri}) ON CONFLICT (content_sha256) DO NOTHING RETURNING content_sha256`;
-      // Always ensure the content-addressed object exists on disk. When the same
-      // sha256 is re-uploaded after a volume loss, the blob row already exists
-      // (ON CONFLICT DO NOTHING) but the file may be missing — keep the temp
-      // payload and materialize it instead of discarding.
-      const onDisk = await stat(blob.absolute).catch(() => null);
-      if (insertedBlob.length > 0 || !onDisk) {
-        try { await rename(temp, blob.absolute); } catch (error) {
-          if (!(await stat(blob.absolute).catch(() => null))) throw error;
-          await rm(temp, { force: true });
-        }
-      } else {
-        await rm(temp, { force: true });
+      await tx`INSERT INTO shared_asset_blobs (content_sha256,bytes,content_type,blob_uri) VALUES (${sha256},${input.bytes.byteLength},${contentType},${blobUri}) ON CONFLICT (content_sha256) DO NOTHING RETURNING content_sha256`;
+      // Re-upload after store loss: blob row may already exist while object is gone.
+      if (!(await store.exists(blobUri))) {
+        await store.put(blobUri, input.bytes, { contentType });
       }
       let asset = existing;
       if (!asset) {
@@ -161,7 +154,6 @@ export async function createSharedAsset(input: {
     }
     return output;
   } catch (error) {
-    await rm(temp, { force: true }).catch(() => undefined);
     if (input.origin === "agent" && input.jobId) {
       await sql`INSERT INTO audit_logs (actor_type,actor_id,action,project_id,resource_type,after_json,result,error_code) VALUES ('internal',${`job:${input.jobId}`},'shared_asset.publish',${input.projectId ?? null},'shared_asset',${sql.json({ scope: input.scope, key } as never)},'denied',${error instanceof Error ? error.message.slice(0, 120) : "shared_asset_error"})`.catch(() => undefined);
     }
@@ -214,8 +206,12 @@ export async function recordJobSharedAssets(db: typeof sql, jobId: string, asset
 }
 
 export async function readSharedAssetBlob(blobUri: string): Promise<Buffer> {
-  const absolute = path.resolve(config.storage.blobDir, ...blobUri.split("/"));
-  const root = path.resolve(config.storage.blobDir, "shared-assets") + path.sep;
-  if (!absolute.startsWith(root)) throw new Error("invalid_asset_blob_uri");
-  return readFile(absolute);
+  const key = assertSharedAssetBlobUri(blobUri);
+  return getSharedAssetBlobStore().get(key);
+}
+
+/** Resolve a local filesystem path for Job volume injection (may download into cache for S3). */
+export async function materializeSharedAssetBlob(blobUri: string): Promise<string> {
+  const key = assertSharedAssetBlobUri(blobUri);
+  return getSharedAssetBlobStore().materializeLocal(key);
 }
