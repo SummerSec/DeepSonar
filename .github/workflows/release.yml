@@ -199,8 +199,13 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
-          cache-from: type=gha,scope=base
-          cache-to: type=gha,mode=max,scope=base
+          # Registry cache 扛大层；GHA 作补充命中。buildcache 标签仅 CI 用，不进市场清单。
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:buildcache
+            type=gha,scope=base
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:buildcache,mode=max
+            type=gha,mode=max,scope=base
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
@@ -397,8 +402,12 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache
+            type=gha,scope=${{ matrix.name }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache,mode=max
+            type=gha,mode=max,scope=${{ matrix.name }}
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
@@ -594,8 +603,12 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=kali-minimal-amd64
-          cache-to: type=gha,mode=max,scope=kali-minimal-amd64
+          cache-from: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-amd64
+            type=gha,scope=kali-minimal-amd64
+          cache-to: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-amd64,mode=max
+            type=gha,mode=max,scope=kali-minimal-amd64
       - name: Reclaim disk before arm64
         run: |
           set -euo pipefail
@@ -615,8 +628,12 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=kali-minimal-arm64
-          cache-to: type=gha,mode=max,scope=kali-minimal-arm64
+          cache-from: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-arm64
+            type=gha,scope=kali-minimal-arm64
+          cache-to: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-arm64,mode=max
+            type=gha,mode=max,scope=kali-minimal-arm64
       - name: Create multi-arch tags
         id: merge
         env:
@@ -835,8 +852,12 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
-          cache-from: type=gha,scope=openharmony-test
-          cache-to: type=gha,mode=max,scope=openharmony-test
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test:buildcache
+            type=gha,scope=openharmony-test
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test:buildcache,mode=max
+            type=gha,mode=max,scope=openharmony-test
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
@@ -1016,8 +1037,12 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
-          cache-from: type=gha,scope=openharmony-audit
-          cache-to: type=gha,mode=max,scope=openharmony-audit
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit:buildcache
+            type=gha,scope=openharmony-audit
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit:buildcache,mode=max
+            type=gha,mode=max,scope=openharmony-audit
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
@@ -1197,8 +1222,12 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
           provenance: mode=max
-          cache-from: type=gha,scope=openharmony-fuzz
-          cache-to: type=gha,mode=max,scope=openharmony-fuzz
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache
+            type=gha,scope=openharmony-fuzz
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache,mode=max
+            type=gha,mode=max,scope=openharmony-fuzz
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz

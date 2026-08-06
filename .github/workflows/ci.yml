@@ -277,6 +277,9 @@ jobs:
   runtime-images:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -295,6 +298,13 @@ jobs:
             config: agent-harness/kali-minimal-runtime.json
     steps:
       - uses: actions/checkout@v4
+      - id: ns
+        name: GHCR namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - name: Free disk for Kali toolchain image
         if: matrix.toolset == 'kali-minimal'
         run: |
@@ -314,6 +324,11 @@ jobs:
           docker system df || true
           df -h /
       - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build official runtime
         uses: docker/build-push-action@v6
         with:
@@ -322,8 +337,13 @@ jobs:
           load: true
           tags: deepsonar-${{ matrix.toolset }}:ci
           build-args: ${{ matrix.build_args }}
-          cache-from: type=gha,scope=runtime-${{ matrix.toolset }}
-          cache-to: type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
+          # Registry cache 扛大层；ignore-error 避免 fork PR 无 packages:write 时失败
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci
+            type=gha,scope=runtime-${{ matrix.toolset }}
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
+            type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
       - name: Offline hardened smoke
         run: node agent-harness/test-runtime-image.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
       - name: Maven online package smoke
@@ -333,6 +353,9 @@ jobs:
   openharmony-runtime-images:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -363,6 +386,13 @@ jobs:
             arch: arm64
     steps:
       - uses: actions/checkout@v4
+      - id: ns
+        name: GHCR namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -379,7 +409,11 @@ jobs:
           tags: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
           platforms: ${{ matrix.platform }}
           build-args: BASE_IMAGE=ghcr.io/summersec/deepsonar-base:latest
-          cache-from: type=gha,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }}
+            type=gha,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }},mode=max,ignore-error=true
+            type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
       - name: Offline environment smoke
         run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} ${{ matrix.check_args }}
