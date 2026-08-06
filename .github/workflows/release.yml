@@ -1,9 +1,21 @@
 name: release
 
-# v* tag 发布调度器、前端、准入服务和官方运行时镜像。
+# v* tag 发布调度器、前端、准入服务和官方运行时镜像；也支持手动触发。
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "发布版本号（如 0.1.16 或 v0.1.16；留空则用当前 ref 名去掉 v 前缀）"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "可选：检出的 git ref（分支/tag/sha）；留空则用 Actions 选中的分支/tag"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -38,17 +50,38 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 手动触发时可指定 ref；tag push 时仍用默认 GITHUB_REF。
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析发布版本
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
           [[ -n "$owner" ]]
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            raw="${{ inputs.version }}"
+            if [[ -z "$raw" ]]; then
+              raw="${GITHUB_REF_NAME}"
+            fi
+            version="${raw#v}"
+            if [[ -z "$version" || ! "$version" =~ ^[0-9] ]]; then
+              echo "手动触发须提供合法 version（如 0.1.16 / v0.1.16），当前解析为: ${version:-empty}" >&2
+              exit 1
+            fi
+          else
+            version="${GITHUB_REF_NAME#v}"
+            if [[ "$version" == "$GITHUB_REF_NAME" || -z "$version" ]]; then
+              echo "tag 推送须为 v* 格式，当前 GITHUB_REF_NAME=${GITHUB_REF_NAME}" >&2
+              exit 1
+            fi
+          fi
+
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+          echo "release version=${version} (event=${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -225,14 +258,16 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ needs.base-image.outputs.version }}"
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$version" ]]
           [[ -n "$owner" ]]
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
@@ -391,7 +426,7 @@ jobs:
           DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.base-image.outputs.version }}
         run: |
           set -euo pipefail
           VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs "release-digests/${{ matrix.name }}.json"
@@ -416,14 +451,16 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ needs.base-image.outputs.version }}"
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$version" ]]
           [[ -n "$owner" ]]
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
@@ -646,7 +683,7 @@ jobs:
           DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.base-image.outputs.version }}
         run: |
           set -euo pipefail
           VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs release-digests/kali-minimal.json
@@ -668,14 +705,16 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ needs.base-image.outputs.version }}"
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$version" ]]
           [[ -n "$owner" ]]
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
@@ -847,14 +886,16 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ needs.base-image.outputs.version }}"
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$version" ]]
           [[ -n "$owner" ]]
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
@@ -1026,14 +1067,16 @@ jobs:
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ needs.base-image.outputs.version }}"
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$version" ]]
           [[ -n "$owner" ]]
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
@@ -1206,14 +1249,15 @@ jobs:
         with:
           # 需要 fetch 默认分支以便把发布清单回写进仓库（bundled 回退用）
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ needs.base-image.outputs.version }}"
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ "$version" != "$GITHUB_REF_NAME" && -n "$version" ]]
+          [[ -n "$version" ]]
           [[ -n "$owner" ]]
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
@@ -1277,13 +1321,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.base-image.outputs.version }}"
           tar -czf "deepsonar-management-skill-${VERSION}.tar.gz" -C skills deepsonar-management
       - name: 发布 Release 与附件
         uses: softprops/action-gh-release@v2
         with:
           body: |
-            > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/${{ github.ref_name }}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/${{ github.ref_name }}/THIRD_PARTY_NOTICES.md).
+            > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/v${{ needs.base-image.outputs.version }}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/v${{ needs.base-image.outputs.version }}/THIRD_PARTY_NOTICES.md).
           files: |
             deepsonar-management-skill-*.tar.gz
             deploy/runtime-image-registry.json
