@@ -221,8 +221,8 @@ GET /reports/{id}/markdown
 GET /reports/{id}/sarif
 GET /role-configs/bindable
 GET /role-configs/global
-PATCH /role-configs/:id/agent-cli
-PATCH /role-configs/:id/runtime-image
+PATCH /role-configs/{id}/agent-cli
+PATCH /role-configs/{id}/runtime-image
 GET /runtime-images
 GET /runtime-images/{id}
 GET /runtime-images/registry
