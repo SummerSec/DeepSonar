@@ -168,17 +168,22 @@ loop:
 7. 全部 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 幂等派发该画布唯一任务总 Report。任务报告汇总全部 Finding，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
 8. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
 
-### 4.4 Scheduler bounded contexts（Issue #37，渐进迁移）
+### 4.4 Scheduler bounded contexts（Issue #37）
 
-Scheduler 的领域代码按 application/ports seam 渐进拆分，PostgreSQL 仍是唯一执行状态权威；终态/恢复调用方把已开启的事务 client 传入 application，application 不自行开启嵌套事务，也不改变外层锁顺序。人工评论入口由该 bounded context 自己拥有一个明确的外层事务。当前已落地的边界为：
+Scheduler 的领域代码通过 application/ports seam 拆分，PostgreSQL 仍是唯一执行状态权威；终态/恢复调用方把已开启的事务 client 传入 application，application 不自行开启嵌套事务，也不改变外层锁顺序。人工评论入口由该 bounded context 自己拥有一个明确的外层事务。六个执行领域为：
 
 - `domains/job-lifecycle`：Job 状态迁移、claim、恢复、取消与重试的 CAS 写入；
-- `domains/event-ingestion`：event envelope 校验、幂等、`job_seq` 与固定窗口限流；
-- `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger、idle/terminal 推进、人工评论唤醒、`maxHubRounds` 收口。
+- `domains/event-ingestion`：event envelope 校验、幂等、`job_seq`、固定窗口限流，以及由显式 ports 组合的 progress/fact/finding/Hub decision/done/human 语义副作用；
+- `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger、idle/terminal 推进、人工评论唤醒、`maxHubRounds` 收口；
+- `domains/finding-verification`：Finding 派生、证据附着、verification round、完成门与 rework/needs_human/confirmed 收口；
+- `domains/report-convergence`：analysis complete 后的任务报告、Finding 报告、输入冻结与失败恢复；
+- `domains/role-runtime-snapshot`：RoleConfig、Credential/CLI、skill/shared asset 与 runtime image 的建 Job 时冻结。
 
 Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verification round；同一事务内才会写入 Hub Job、节点和 `next` 边。失败 Hub 会清除等待证据的 edge marker 并停在人工恢复边界，不递归生成相同快照的 Hub。`maxHubRounds` 只统计 `hub_reason.status = succeeded`，耗尽时复用 Verify 完成门；未通过完成门则设置 `auto_stopped`，不派发空图 Report。
 
-`core.ts` 暂时保留兼容 facade，供既有 dispatcher/reaper/reconcile/routes 调用；Hub 业务实现不再由 facade 承载。Finding verification、Report convergence 与 role/runtime snapshot 现在通过各自的 application/ports seam 暴露，保留 legacy adapter 以确保外部行为与事务边界不变。Report 与只读 Finding/verification API 由 `domains/*/routes.ts` registrar 注册；共享鉴权和项目作用域 hook 仍由顶层 `routes.ts` 组装。内部 cycle-dodging dynamic imports 已移除，跨域依赖通过静态 import 和显式 adapter 可审查。
+`event-ingestion` 先解析目标 Canvas，按 Canvas → Job → 事件历史/领域记录的顺序加锁，并在同一事务中完成 dedup、`events` append 和语义副作用；任何校验或下游 service 失败都会连同配额与副作用整体回滚。Finding/Hub/Report/runtime snapshot 变化只通过注入的显式 service ports 发起，不由 event-ingestion 直接取得其他领域的可变全局状态。
+
+`core.ts` 只保留既有调用方所需的兼容 facade、共享规则与 composition root；Hub 与事件副作用实现不再由 facade 承载。Finding verification、Report convergence 与 role/runtime snapshot 通过各自的 application/ports seam 暴露，legacy SQL adapter 仅用于保持既有数据库行为和外层事务边界。HTTP 业务 handler 已全部迁入 `domains/*/routes.ts`，顶层 `routes.ts` 仅安装共享鉴权/项目作用域 hook、Gateway，并组装各领域 registrar。route manifest 同时锁定 Fastify/OpenAPI surface，源码护栏禁止业务 handler 回流顶层。内部 cycle-dodging dynamic imports 已移除，跨域依赖通过静态 import 和显式 adapter 可审查。
 
 **护栏**（同时是防注入措施，见 §9）：
 
@@ -346,7 +351,7 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 `progress_count`、`standard_count` 或独立的 `terminal_count`。超过额度时抛出稳定
 `event_rate_limited`（含 `retry_after_sec`、bucket、limit），并由外层事务回滚 dedup、
 事件、节点、边和状态副作用；重复 `event_id` 直接返回 deduped，不占额度。计数行随
-数据库保留，跨 Scheduler 进程/重启仍有效，窗口回拨不会倒退。`core.applySideEffects` 还会
+数据库保留，跨 Scheduler 进程/重启仍有效，窗口回拨不会倒退。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）还会
 按 Scheduler-owned Job 类型/冻结快照重算工具授权，并要求 Job 为 `status=running`；终态、
 角色种类或快照工具不一致时回滚当前 dedup、额度、事件和图副作用。项目数据导入/恢复是
 历史审计写入，可按 manifest 批量恢复既有 `events` 而不消耗运行时额度；恢复完成后的新
@@ -420,7 +425,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - SDK normalized event stream → 文本/进度 → `progress` 事件
 - 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、执行同源严格 schema 校验并返回 `schema_validated / pending_scheduler_validation`，不声称业务已落库，不写文件、不连接调度器
 - 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块只登记 bounded pending；收到同一 `tool_use_id` 的合法非错误 `user.tool_result`（`is_error` 省略或为 `false`）后才转换为 `{v:1,event_id(UUID),type,payload}`，串行 `await onSemanticEvent`。显式错误或畸形 `is_error` 结果丢弃 pending，Agent 可用新的 call id 重试；重复结果/重放不重复释放。
-- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`core.applySideEffects` 仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
+- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、未知控制命名空间工具和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；控制工具的 normalized telemetry 仅保留 toolName/callId 与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列
 - 同一 `tool_use.id` 只有合法非错误 `tool_result` 才生成一次语义事件；pending 有上限，Job 终态会丢弃残留并记低基数告警。`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
@@ -450,7 +455,7 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
-平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权；`core.applySideEffects` 是 fake/direct/recovery 路径的最终授权边界。`mark_job_done` 对所有角色，以及 `list_available_roles`、`submit_hub_decision` 对 Hub 是不可关闭的决策/终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。
+平台控制工具也属于 RoleConfig：每个角色只能配置自身合法工具，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。`mark_job_done` 对所有角色，以及 `list_available_roles`、`submit_hub_decision` 对 Hub 是不可关闭的决策/终态工具；其余进度、事实、Finding、人工请求工具可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。
 
 ### 8.2 可信运行镜像与独立市场
 
