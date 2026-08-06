@@ -1,6 +1,10 @@
+# 默认从阿里云 ACR 拉取已发布镜像（DEEPSONAR_IMAGE_REGISTRY / DEEPSONAR_IMAGE_TAG）。
+# 本地源码构建：./deploy/deploy.sh up fake build
+
 services:
   postgres:
-    image: postgres:16-alpine
+    # 基础库镜像可用 POSTGRES_IMAGE 覆盖（国内可改 DaoCloud 等镜像加速）
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_USER: deepsonar
@@ -20,7 +24,7 @@ services:
 
   # 每日 pg_dump + 7 天保留（§12.3；恢复演练见 docs/ONE_CLICK_DEPLOYMENT.md）
   backup:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:?}
@@ -40,6 +44,8 @@ services:
     networks: [deepsonar]
 
   scheduler:
+    # 默认拉阿里云已发布镜像；仅在 deploy.sh 传 build 时本地构建
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-0.1.12}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.scheduler
@@ -70,6 +76,7 @@ services:
 
   # 第三方镜像只在独立准入 Worker 中执行自检；Scheduler 只管理状态与审批。
   image-admission:
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-image-admission:${DEEPSONAR_IMAGE_TAG:-0.1.12}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.image-admission
@@ -79,7 +86,8 @@ services:
       DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
       DEEPSONAR_IMAGE_SCAN_VOLUME: deepsonar_admission_scan
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Rootless Podman: set DEEPSONAR_DOCKER_SOCK to the user podman.sock path.
+      - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./master.key:/run/secrets/deepsonar_master_key:ro
       - admission_scan:/scan
     depends_on:
@@ -89,6 +97,7 @@ services:
     networks: [deepsonar]
 
   web:
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:-0.1.12}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
