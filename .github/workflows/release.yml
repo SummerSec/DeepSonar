@@ -7,12 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号（如 0.1.16 或 v0.1.16；留空则用当前 ref 名去掉 v 前缀）"
+        description: "发布版本号（如 0.1.16 或 v0.1.16；留空=自动用仓库最新 v* tag）"
         required: false
         type: string
         default: ""
       ref:
-        description: "可选：检出的 git ref（分支/tag/sha）；留空则用 Actions 选中的分支/tag"
+        description: "检出的 git ref（分支/tag/sha）；留空=与 version 对应的 v* tag（或最新 tag）"
         required: false
         type: string
         default: ""
@@ -41,6 +41,8 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       owner: ${{ steps.release.outputs.owner }}
+      # 下游 job 统一 checkout 此 ref；手动触发且未填 ref 时为最新/指定的 v* tag
+      checkout_ref: ${{ steps.release.outputs.checkout_ref }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -51,7 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 手动触发时可指定 ref；tag push 时仍用默认 GITHUB_REF。
+          # 先拉全量 tags，便于手动触发时解析「最新 v*」；随后可再切到目标 tag。
+          fetch-depth: 0
+          fetch-tags: true
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
       - id: release
         name: 解析发布版本
@@ -60,16 +64,36 @@ jobs:
           set -euo pipefail
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           [[ -n "$owner" ]]
+          git fetch --tags --force origin 2>/dev/null || true
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             raw="${{ inputs.version }}"
             if [[ -z "$raw" ]]; then
-              raw="${GITHUB_REF_NAME}"
+              # 默认：仓库最新 v* tag（版本排序，如 v0.1.16）
+              raw="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
+              if [[ -z "$raw" ]]; then
+                echo "未找到任何 v* tag，请填写 version 输入项" >&2
+                exit 1
+              fi
+              echo "手动触发未填 version，自动使用最新 tag: ${raw}" >> "$GITHUB_STEP_SUMMARY"
             fi
             version="${raw#v}"
             if [[ -z "$version" || ! "$version" =~ ^[0-9] ]]; then
-              echo "手动触发须提供合法 version（如 0.1.16 / v0.1.16），当前解析为: ${version:-empty}" >&2
+              echo "version 不合法（期望如 0.1.16 / v0.1.16），当前: ${version:-empty}" >&2
               exit 1
+            fi
+            # 未指定 ref 时，检出与 version 对应的 tag，保证镜像构建自该 tag 源码
+            if [[ -z "${{ inputs.ref }}" ]]; then
+              checkout_ref="v${version}"
+              if git rev-parse -q --verify "refs/tags/${checkout_ref}" >/dev/null; then
+                git checkout --force "refs/tags/${checkout_ref}"
+                echo "checkout ${checkout_ref} for release build" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "警告: 不存在 tag ${checkout_ref}，继续使用当前 checkout" >> "$GITHUB_STEP_SUMMARY"
+                checkout_ref="${GITHUB_REF}"
+              fi
+            else
+              checkout_ref="${{ inputs.ref }}"
             fi
           else
             version="${GITHUB_REF_NAME#v}"
@@ -77,11 +101,13 @@ jobs:
               echo "tag 推送须为 v* 格式，当前 GITHUB_REF_NAME=${GITHUB_REF_NAME}" >&2
               exit 1
             fi
+            checkout_ref="${GITHUB_REF}"
           fi
 
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
-          echo "release version=${version} (event=${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
+          printf 'checkout_ref=%s\n' "$checkout_ref" >> "$GITHUB_OUTPUT"
+          echo "release version=${version} checkout_ref=${checkout_ref} (event=${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -259,7 +285,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
@@ -452,7 +478,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
@@ -706,7 +732,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
@@ -887,7 +913,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
@@ -1068,7 +1094,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
@@ -1249,7 +1275,7 @@ jobs:
         with:
           # 需要 fetch 默认分支以便把发布清单回写进仓库（bundled 回退用）
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
       - id: release
         name: 解析 registry 命名空间
         shell: bash
@@ -1326,6 +1352,8 @@ jobs:
       - name: 发布 Release 与附件
         uses: softprops/action-gh-release@v2
         with:
+          # 手动触发时 GITHUB_REF 是分支，必须显式指定已有 v* tag
+          tag_name: v${{ needs.base-image.outputs.version }}
           body: |
             > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/v${{ needs.base-image.outputs.version }}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/v${{ needs.base-image.outputs.version }}/THIRD_PARTY_NOTICES.md).
           files: |
