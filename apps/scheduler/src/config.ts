@@ -150,7 +150,7 @@ export const config = {
     provider: str("SANDBOX_PROVIDER", "local-docker"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepsonar-agent:latest"),
     /** fake=内置假 agent（联调用）；real=agentbox-sdk 真实 agent */
-    agentMode: str("AGENT_MODE", "fake"),
+    agentMode: str("AGENT_MODE", "real"),
     /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
     sandboxLimits: {
       cpu: int("DEEPSONAR_SANDBOX_CPU", 2),

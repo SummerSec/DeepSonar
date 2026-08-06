@@ -25,6 +25,10 @@ COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
 RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/plane-client --filter @deepsonar/runtime-sandbox --filter @deepsonar/scheduler build
 
 ENV NODE_ENV=production
+# Content-addressed blobs (shared assets, evidence) must live on the mounted volume.
+# Compose mounts blob_data at /app/data; without this, cwd-relative ./data/blobs
+# lands on the container writable layer and is lost on recreate.
+ENV BLOB_DIR=/app/data/blobs
 EXPOSE 3100
 
 CMD ["pnpm", "--filter", "@deepsonar/scheduler", "start"]

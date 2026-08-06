@@ -1,0 +1,7 @@
+# 兼容层：prod 已默认使用阿里云 image: 标签。
+# 保留本文件以便旧文档/脚本仍可 -f docker-compose.online.yml。
+# 推荐直接：
+#   ./deploy/deploy.sh up          # 默认 real + 从阿里云 ACR pull
+#   ./deploy/deploy.sh up real build  # 本地 Dockerfile 构建
+#   ./deploy/deploy.sh up fake pull   # 仅状态机
+services: {}

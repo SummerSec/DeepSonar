@@ -1,5 +1,5 @@
 # 默认从阿里云 ACR 拉取已发布镜像（DEEPSONAR_IMAGE_REGISTRY / DEEPSONAR_IMAGE_TAG）。
-# 本地源码构建：./deploy/deploy.sh up fake build
+# 本地源码构建：./deploy/deploy.sh up real build
 
 services:
   postgres:
@@ -56,6 +56,8 @@ services:
       SCHEDULER_HOST: 0.0.0.0
       SCHEDULER_PORT: 3100
       DEEPSONAR_AUTH_REQUIRED: "true"
+      # 必须落在 blob_data volume 内。默认相对 cwd 会写成 /app/apps/scheduler/data（容器可写层，重建即丢）。
+      BLOB_DIR: /app/data/blobs
       # real 模式：沙箱容器经宿主机回连网关（同 compose 网络则改为 http://scheduler:3100/gateway）
       DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://host.docker.internal:3100/gateway}
       # stop_grace_period 配合优雅退出（dispatcher drain + fastify close）

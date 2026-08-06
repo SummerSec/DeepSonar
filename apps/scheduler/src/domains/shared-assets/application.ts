@@ -125,7 +125,12 @@ export async function createSharedAsset(input: {
       if (existing && (input.origin !== "agent" || existing.origin !== "agent")) throw new Error("immutable_asset_key_exists");
 
       const insertedBlob = await tx`INSERT INTO shared_asset_blobs (content_sha256,bytes,content_type,blob_uri) VALUES (${sha256},${input.bytes.byteLength},${contentType},${blob.uri}) ON CONFLICT (content_sha256) DO NOTHING RETURNING content_sha256`;
-      if (insertedBlob.length > 0) {
+      // Always ensure the content-addressed object exists on disk. When the same
+      // sha256 is re-uploaded after a volume loss, the blob row already exists
+      // (ON CONFLICT DO NOTHING) but the file may be missing — keep the temp
+      // payload and materialize it instead of discarding.
+      const onDisk = await stat(blob.absolute).catch(() => null);
+      if (insertedBlob.length > 0 || !onDisk) {
         try { await rename(temp, blob.absolute); } catch (error) {
           if (!(await stat(blob.absolute).catch(() => null))) throw error;
           await rm(temp, { force: true });

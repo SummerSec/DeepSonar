@@ -2,7 +2,7 @@
 set -eu
 
 ACTION="${1:-up}"
-MODE="${2:-fake}"
+MODE="${2:-real}"
 SOURCE="${3:-pull}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
@@ -17,9 +17,10 @@ DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.c
 DEFAULT_IMAGE_TAG="0.1.12"
 
 case "$ACTION" in up|down|status|logs|check|pull) ;; *)
-  echo "用法: $0 [up|down|status|logs|check|pull] [fake|real] [pull|build]" >&2
-  echo "  默认: up fake pull  — 从阿里云 ACR 拉取 deepsonar-* 镜像后启动" >&2
-  echo "  本地构建: $0 up fake build" >&2
+  echo "用法: $0 [up|down|status|logs|check|pull] [real|fake] [pull|build]" >&2
+  echo "  默认: up real pull  — 从阿里云 ACR 拉取 deepsonar-* 镜像后以真实沙箱启动" >&2
+  echo "  仅状态机: $0 up fake pull" >&2
+  echo "  本地构建: $0 up real build" >&2
   exit 2
   ;;
 esac
@@ -169,7 +170,9 @@ case "$ACTION" in
     echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DEEPSONAR_ADMIN_TOKEN，请勿提交该文件。"
     echo "[deploy] 人类默认管理员：admin / Deep@Sonar66；生产首次登录后必须立即修改密码并建议修改登录名。"
     if [ "$MODE" = "fake" ]; then
-      echo "[deploy] 当前为 fake 模式；真实 Agent 请使用：./deploy/deploy.sh up real"
+      echo "[deploy] 当前为 fake 模式（仅状态机）；真实沙箱请使用：./deploy/deploy.sh up real"
+    else
+      echo "[deploy] 当前为 real 模式（真实沙箱）；需挂载容器 runtime socket（见 docker-compose.real.yml）"
     fi
     mkdir -p "$REPO_ROOT/data/logs"
     nohup env DEEPSONAR_URL="http://127.0.0.1:$port/api" \

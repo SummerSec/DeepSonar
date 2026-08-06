@@ -22,7 +22,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 - **测试**：无 test runner。`agent-harness/test-*` 是手工 API 冒烟脚本（需调度器运行中），快捷方式 `pnpm ci:smoke:projects`（项目/任务）、`ci:smoke:roles`（角色）、`ci:smoke:hub`（hub 循环）、`ci:smoke:auth`（API Token）、`ci:smoke:images`（镜像市场）、`ci:smoke:mcp`（控制 MCP）；另有 `test-credentials-api.py`、`test-gateway.py`（Model Gateway）、`test-sandbox-hardening.mts`（沙箱硬限制）。
 - **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI、仅项目显式启用。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
-- **联调不开沙箱**：`.env` 设 `AGENT_MODE=fake`（默认），dispatcher 走 NoopRunner 只跑状态机；`AGENT_MODE=real` 才经 agentbox-sdk 起真实容器。
+- **运行模式**：默认 `AGENT_MODE=real`（agentbox-sdk 真实沙箱）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
 - **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission 四个 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。CI 在 `.github/workflows/ci.yml`，GHCR 制品发布在 `release.yml`。
 - **镜像发布**：Release 必须显式向多架构 OCI index 写入各镜像专属 annotations；Docker Hub 仅在 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN` 同时存在时发布，Actions 中被跳过的“凭据未配置”步骤不代表登录失败。

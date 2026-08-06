@@ -1,10 +1,21 @@
+# Real Agent 覆盖层：AGENT_MODE=real + 调度器挂载容器运行时 socket。
+# Rootless Podman：在 deploy/.env 设置 DEEPSONAR_DOCKER_SOCK（如 /tmp/podman-run-1000/podman/podman.sock）。
+# 用法：./deploy/deploy.sh up real pull
 services:
   scheduler:
     environment:
       AGENT_MODE: real
+      BLOB_DIR: /app/data/blobs
+      # 沙箱经宿主机回连网关；同 compose 网络可改为 http://scheduler:3100/gateway
+      DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://host.docker.internal:3100/gateway}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - blob_data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./master.key:/run/secrets/deepsonar_master_key:ro
+      - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
   image-admission:
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./master.key:/run/secrets/deepsonar_master_key:ro
+      - admission_scan:/scan
