@@ -283,7 +283,7 @@ export function CredentialsPanel() {
         </div>
         {selectedIds.size > 0 && <div className="credential-selection-bar"><span><strong>{selectedIds.size}</strong> 个凭据已选</span><div><button type="button" onClick={() => bulkSetStatus("active")} disabled={busy}><Key size={13} />批量启用</button><button type="button" onClick={() => bulkSetStatus("disabled")} disabled={busy}><Prohibit size={13} />批量禁用</button><button type="button" onClick={() => setSelectedIds(new Set())}>清空选择</button></div></div>}
         {creds.length === 0 && (
-          <div className="py-6 text-center font-mono text-[12px] text-zinc-600">暂无 Credential</div>
+          <div className="py-6 text-center font-mono text-[12px] text-zinc-600">暂无凭据</div>
         )}
         {creds.length > 0 && filteredCreds.length === 0 && <div className="py-6 text-center font-mono text-[12px] text-zinc-600">没有匹配的凭据</div>}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

@@ -20,14 +20,33 @@ test("Provider account flow keeps the happy path on one surface", () => {
     "new_jobs_only",
     "refresh_pending",
     "refreshed_pending_job_count",
-    "raw legacy value was not displayed",
+    "原始遗留值不会展示或回传",
   ]) {
     assert.ok(flow.includes(marker), `flow should expose ${marker}`);
   }
   assert.match(flow, /setCreateSecret\(\"\"\)/);
-  assert.match(flow, /(?:active|running) snapshots remain frozen/);
+  assert.match(flow, /(?:活跃|运行中)快照保持冻结/);
   assert.match(flow, /disabled=\{!roleConfig\.can_bind\}/);
-  assert.match(flow, /Project-scoped actors can create accounts only in their own project/);
+  assert.match(flow, /项目作用域账号只能在本项目内创建 Provider 账号/);
+});
+
+test("Provider account flow user-facing copy is Chinese", () => {
+  for (const chinese of [
+    "接入账号，再完成绑定闭环",
+    "测试连接",
+    "刷新模型目录",
+    "加密并添加账号",
+    "应用到所选角色配置",
+    "仅新 Job",
+    "刷新 pending",
+  ]) {
+    assert.ok(flow.includes(chinese), `flow should show Chinese copy: ${chinese}`);
+  }
+  // Regression: English marketing copy from the initial #63 surface must not return.
+  assert.doesNotMatch(flow, /Connect an account, then close the loop/);
+  assert.doesNotMatch(flow, /Encrypt and add account/);
+  assert.doesNotMatch(flow, /Test connection/);
+  assert.doesNotMatch(flow, /Apply to selected RoleConfigs/);
 });
 
 test("CredentialsPanel does not render the legacy duplicate create surface", () => {

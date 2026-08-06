@@ -58,6 +58,18 @@ function rawModelCatalog(credential: ProviderCredential | null): string[] {
     : [];
 }
 
+const HEALTH_STATUS_LABEL: Record<string, string> = {
+  ok: "正常",
+  error: "异常",
+  unknown: "未知",
+  degraded: "降级",
+};
+
+function healthStatusLabel(status: string | null | undefined): string {
+  if (!status) return "未知";
+  return HEALTH_STATUS_LABEL[status] ?? status;
+}
+
 export function ProviderAccountFlow({
   credentials,
   projects,
@@ -122,19 +134,19 @@ export function ProviderAccountFlow({
       && models.length > 0,
   );
   const bindingGateReason = !selectedCredential
-    ? "Choose a Provider account."
+    ? "请先选择 Provider 账号。"
     : selectedCredential.provider_valid === false
-      ? "Repair the Provider mapping before binding."
+      ? "请先修复 Provider 映射，再绑定。"
       : selectedCredential.status !== "active"
-        ? "Activate this account before binding."
+        ? "请先启用该账号，再绑定。"
         : !connectionHealthy
-          ? "A successful latest connection test is required before binding. Test the connection and retry."
+          ? "绑定前需最近一次连通性测试成功。请先测试连接后重试。"
           : selectedCredential.kind !== "llm_provider"
-            ? "Only LLM Provider accounts can bind to RoleConfigs."
+            ? "仅 LLM Provider 账号可绑定到角色配置。"
             : !modelCatalogReady
               ? currentCatalog.length > 0 && models.length === 0
-                ? "The current model catalog does not intersect the account allowlist. Repair the allowlist or refresh the catalog."
-                : "A successful non-empty model catalog is required before binding. Refresh the model catalog and retry."
+                ? "当前模型目录与账号白名单无交集。请修复白名单或刷新模型目录。"
+                : "绑定前需要非空的模型目录。请先刷新模型目录后重试。"
               : "";
   const incompatibleRoles = selectedRoles.filter((roleConfig) => {
     if (bindingGateReason) return true;
@@ -195,7 +207,7 @@ export function ProviderAccountFlow({
   const createAccount = async () => {
     if (!createName.trim() || !createSecret.trim()) return;
     if (actorProjectId && createProjectId !== actorProjectId) {
-      setError("Project-scoped actors can create accounts only in their own project.");
+      setError("项目作用域账号只能在本项目内创建 Provider 账号。");
       return;
     }
     setBusy(true);
@@ -216,7 +228,7 @@ export function ProviderAccountFlow({
       setCreateName("");
       setCreateBaseUrl("");
       setSelectedCredentialId(created.id);
-      setNotice("Account encrypted and registered. Test the connection before choosing a model.");
+      setNotice("账号已加密登记。选择模型前请先测试连接。");
       onChanged();
     } catch (e) {
       const detail = String(e);
@@ -233,9 +245,9 @@ export function ProviderAccountFlow({
     try {
       const result = await api.testCredential(selectedCredential.id);
       if (result.ok) {
-        setNotice(`Connection healthy: ${result.detail}`);
+        setNotice(`连接正常：${result.detail}`);
       } else {
-        setError(`Connection failed: ${result.detail}${result.category ? ` (${result.category})` : ""}. Test again before binding.`);
+        setError(`连接失败：${result.detail}${result.category ? `（${result.category}）` : ""}。请修复后再次测试，再绑定。`);
       }
       onChanged();
     } catch (e) {
@@ -251,9 +263,9 @@ export function ProviderAccountFlow({
     setError("");
     try {
       const result = await api.credentialModels(selectedCredential.id);
-      if (result.models.length === 0) throw new Error("Model catalog was empty. Refresh it after repairing the Provider.");
+      if (result.models.length === 0) throw new Error("模型目录为空。请修复 Provider 后重新刷新。");
       setCatalogError("");
-      setNotice(`Model catalog refreshed: ${result.models.length} models available.`);
+      setNotice(`模型目录已刷新：可用 ${result.models.length} 个模型。`);
       onChanged();
     } catch (e) {
       const detail = String(e);
@@ -283,7 +295,7 @@ export function ProviderAccountFlow({
     setError("");
     try {
       await api.updateCredential(selectedCredential.id, { provider: repairProvider });
-      setNotice("Provider mapping repaired. The raw legacy value was not displayed or returned.");
+      setNotice("Provider 映射已修复。原始遗留值不会展示或回传。");
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -300,14 +312,14 @@ export function ProviderAccountFlow({
     setImpact(null);
     try {
       if (bindingGateReason) throw new Error(bindingGateReason);
-      if (unbindableSelectedRoles.length > 0) throw new Error("Project-scoped actors may bind only their own project RoleConfigs.");
-      if (mode === "migrate" && !sourceCredentialId) throw new Error("Choose the source account to migrate");
-      if (incompatibleRoles.length > 0) throw new Error("One or more selected RoleConfigs are incompatible; choose a compatible model or account");
+      if (unbindableSelectedRoles.length > 0) throw new Error("项目作用域操作者只能绑定本项目的角色配置。");
+      if (mode === "migrate" && !sourceCredentialId) throw new Error("请选择要迁移的源账号");
+      if (incompatibleRoles.length > 0) throw new Error("部分所选角色配置不兼容；请更换兼容的模型或账号");
       const checks = await Promise.all(selectedRoles.map((roleConfig) =>
         api.credentialCompatibility(selectedCredential.id, roleConfig.agent_cli, model === "__keep__" ? roleConfig.model : model),
       ));
       const failed = checks.find((check) => !check.compatible);
-      if (failed) throw new Error(failed.error ?? "Provider and Agent CLI/model are incompatible");
+      if (failed) throw new Error(failed.error ?? "Provider 与 Agent CLI/模型不兼容");
       const result = await api.bindCredentialsBatch({
         credential_id: selectedCredential.id,
         role_config_ids: [...selectedRoleIds],
@@ -319,8 +331,8 @@ export function ProviderAccountFlow({
       });
       setImpact(result);
       setNotice(effect === "refresh_pending"
-        ? `Applied atomically. ${result.refreshed_pending_job_count} pending snapshot(s) refreshed; running snapshots remain frozen.`
-        : "Applied atomically for new jobs. Existing pending and running snapshots remain frozen.");
+        ? `已原子生效。刷新了 ${result.refreshed_pending_job_count} 个 pending 快照；运行中快照保持冻结。`
+        : "已原子生效（仅新 Job）。已有 pending 与运行中快照保持冻结。");
       setStep("effect");
       setBatchIdempotencyKey(newBatchIdempotencyKey());
       api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
@@ -333,21 +345,21 @@ export function ProviderAccountFlow({
   };
 
   const steps: Array<{ key: FlowStep; label: string; detail: string }> = [
-    { key: "account", label: "Provider account", detail: selectedCredential ? providerLabel(selectedCredential.provider, catalog) : "Choose an account" },
-    { key: "model", label: "Model gate", detail: models.length ? `${models.length} allowed` : "Compatibility check" },
-    { key: "roles", label: "Loop Graph bindings", detail: `${selectedRoleIds.size} RoleConfig${selectedRoleIds.size === 1 ? "" : "s"}` },
-    { key: "effect", label: "Job effect", detail: effect === "refresh_pending" ? "Pending refresh" : "New jobs only" },
+    { key: "account", label: "Provider 账号", detail: selectedCredential ? providerLabel(selectedCredential.provider, catalog) : "选择账号" },
+    { key: "model", label: "模型门槛", detail: models.length ? `${models.length} 个可用` : "兼容性检查" },
+    { key: "roles", label: "角色绑定", detail: `已选 ${selectedRoleIds.size} 个角色配置` },
+    { key: "effect", label: "生效策略", detail: effect === "refresh_pending" ? "刷新 pending" : "仅新 Job" },
   ];
 
   return (
-    <section className="provider-flow-shell" aria-label="Provider account flow">
+    <section className="provider-flow-shell" aria-label="Provider 账号流程">
       <div className="provider-flow-head">
         <div>
-          <div className="provider-flow-eyebrow"><GitBranch size={13} weight="bold" /> LOOP GRAPH / ACCOUNT CONTROL</div>
-          <h2>Connect an account, then close the loop.</h2>
-          <p>One surface for provider health, model gates, RoleConfig bindings and the exact Job snapshot effect.</p>
+          <div className="provider-flow-eyebrow"><GitBranch size={13} weight="bold" /> 闭环 / 账号管控</div>
+          <h2>接入账号，再完成绑定闭环。</h2>
+          <p>在同一界面完成 Provider 健康检查、模型门槛、角色配置绑定，以及 Job 快照生效范围。</p>
         </div>
-        <div className="provider-flow-lock"><LockKey size={14} /> Secrets only appear on create or rotate</div>
+        <div className="provider-flow-lock"><LockKey size={14} /> 密钥仅在创建或轮换时出现</div>
       </div>
 
       <div className="provider-flow-steps" role="list">
@@ -371,100 +383,143 @@ export function ProviderAccountFlow({
 
       <div className="provider-flow-grid">
         <div className="provider-flow-card provider-flow-account-card">
-          <div className="provider-flow-card-kicker">01 / ACCOUNT HEALTH</div>
-          <div className="provider-flow-account-label-row"><label className="provider-flow-label" htmlFor="provider-flow-account">Use a server-owned Provider account</label><button type="button" className="provider-flow-inline-action" onClick={() => setShowCreate((value) => !value)}>{showCreate ? "Hide add form" : "Add another account"}</button></div>
+          <div className="provider-flow-card-kicker">01 / 账号健康</div>
+          <div className="provider-flow-account-label-row">
+            <label className="provider-flow-label" htmlFor="provider-flow-account">使用服务端托管的 Provider 账号</label>
+            <button type="button" className="provider-flow-inline-action" onClick={() => setShowCreate((value) => !value)}>
+              {showCreate ? "收起添加表单" : "添加账号"}
+            </button>
+          </div>
           {showCreate && (
             <div className="provider-flow-create">
               <div className="provider-flow-create-grid">
-                <input value={createName} onChange={(event) => setCreateName(event.target.value)} className="theme-input-surface" placeholder="Account label, e.g. team-anthropic" aria-label="Account label" />
+                <input value={createName} onChange={(event) => setCreateName(event.target.value)} className="theme-input-surface" placeholder="账号名称，如 team-anthropic" aria-label="账号名称" />
                 <select value={createProvider} onChange={(event) => { const provider = event.target.value; setCreateProvider(provider); if (!catalog.find((item) => item.provider === provider)?.supports_base_url) setCreateBaseUrl(""); }} className="theme-input-surface" aria-label="Provider">
                   {(catalog.length ? catalog.filter((item) => item.kind === "llm_provider") : [{ provider: "anthropic", label: "Anthropic" }]).map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}
                 </select>
               </div>
-              <input value={createSecret} onChange={(event) => setCreateSecret(event.target.value)} type="password" className="theme-input-surface" placeholder="API key (shown only for create/rotate)" aria-label="API key" />
+              <input value={createSecret} onChange={(event) => setCreateSecret(event.target.value)} type="password" className="theme-input-surface" placeholder="API Key（仅创建/轮换时可见）" aria-label="API Key" />
               <div className="provider-flow-create-grid">
-                <input value={createBaseUrl} onChange={(event) => setCreateBaseUrl(event.target.value)} disabled={!createCatalog?.supports_base_url} className="theme-input-surface" placeholder={createCatalog?.supports_base_url ? "Optional compatible base URL" : "Base URL is not supported for this provider"} aria-label="Base URL" />
-                <select value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)} disabled={Boolean(actorProjectId)} className="theme-input-surface" aria-label="Account scope">
-                  {!actorProjectId && <option value="">Global account</option>}
+                <input value={createBaseUrl} onChange={(event) => setCreateBaseUrl(event.target.value)} disabled={!createCatalog?.supports_base_url} className="theme-input-surface" placeholder={createCatalog?.supports_base_url ? "可选兼容 Base URL" : "该 Provider 不支持自定义 Base URL"} aria-label="Base URL" />
+                <select value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)} disabled={Boolean(actorProjectId)} className="theme-input-surface" aria-label="账号作用域">
+                  {!actorProjectId && <option value="">全局账号</option>}
                   {actorProjectId
-                    ? <option value={actorProjectId}>Project account</option>
+                    ? <option value={actorProjectId}>项目账号</option>
                     : projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                 </select>
               </div>
-              <button type="button" onClick={createAccount} disabled={busy || !createName.trim() || !createSecret.trim()} className="provider-flow-apply"><LockKey size={14} /> Encrypt and add account</button>
+              <button type="button" onClick={createAccount} disabled={busy || !createName.trim() || !createSecret.trim()} className="provider-flow-apply"><LockKey size={14} /> 加密并添加账号</button>
             </div>
           )}
           <select id="provider-flow-account" value={selectedCredentialId} onChange={(event) => setSelectedCredentialId(event.target.value)} className="theme-input-surface provider-flow-select">
-            <option value="">Choose an account</option>
+            <option value="">选择账号</option>
             {credentials.map((credential) => (
-              <option key={credential.id} value={credential.id}>{credential.name} · {credential.provider_valid === false ? "legacy mapping" : credential.provider}</option>
+              <option key={credential.id} value={credential.id}>{credential.name} · {credential.provider_valid === false ? "遗留映射待修复" : credential.provider}</option>
             ))}
           </select>
           {selectedCredential && (
             <div className="provider-flow-health">
               <span className={`provider-health-dot ${selectedCredential.health?.status ?? "unknown"}`} />
-              <strong>{selectedCredential.provider_valid === false ? "Provider mapping needs repair" : (selectedCredential.health?.status ?? "unknown")}</strong>
-              <span>{selectedCredential.scope === "project" ? "Project account" : "Global account"}</span>
-              <span>{selectedCredential.bound_role_config_count ?? 0} bindings</span>
-              <span>{selectedCredential.health?.last_tested_at ? `tested ${new Date(selectedCredential.health.last_tested_at).toLocaleString()}` : "not tested"}</span>
+              <strong>{selectedCredential.provider_valid === false ? "Provider 映射待修复" : healthStatusLabel(selectedCredential.health?.status)}</strong>
+              <span>{selectedCredential.scope === "project" ? "项目账号" : "全局账号"}</span>
+              <span>{selectedCredential.bound_role_config_count ?? 0} 处绑定</span>
+              <span>{selectedCredential.health?.last_tested_at ? `最近测试 ${new Date(selectedCredential.health.last_tested_at).toLocaleString()}` : "尚未测试"}</span>
             </div>
           )}
-          {selectedCredential && <div className="provider-flow-account-actions"><button type="button" onClick={testConnection} disabled={testing || discovering} className="secondary-button"><Plugs size={13} /> {testing ? "Testing…" : "Test connection"}</button><button type="button" onClick={discoverModels} disabled={discovering || testing} className="secondary-button"><Lightning size={13} /> {discovering ? "Refreshing…" : "Refresh model catalog"}</button></div>}
+          {selectedCredential && (
+            <div className="provider-flow-account-actions">
+              <button type="button" onClick={testConnection} disabled={testing || discovering} className="secondary-button">
+                <Plugs size={13} /> {testing ? "测试中…" : "测试连接"}
+              </button>
+              <button type="button" onClick={discoverModels} disabled={discovering || testing} className="secondary-button">
+                <Lightning size={13} /> {discovering ? "刷新中…" : "刷新模型目录"}
+              </button>
+            </div>
+          )}
           {selectedCredential?.provider_valid === false && (
             <div className="provider-flow-repair">
-              <div className="text-[11px] text-amber-300">Legacy provider values are hidden. Choose the intended mapping to repair it.</div>
+              <div className="text-[11px] text-amber-300">遗留 Provider 值已隐藏。请选择正确映射以修复。</div>
               <div className="flex gap-2">
                 <select value={repairProvider} onChange={(event) => setRepairProvider(event.target.value)} className="theme-input-surface min-w-0 flex-1">
-                  <option value="">Choose provider</option>
+                  <option value="">选择 Provider</option>
                   {catalog.filter((item) => item.kind === "llm_provider").map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}
                 </select>
-                <button type="button" onClick={repair} disabled={busy || !repairProvider} className="secondary-button px-3">Repair mapping</button>
+                <button type="button" onClick={repair} disabled={busy || !repairProvider} className="secondary-button px-3">修复映射</button>
               </div>
             </div>
           )}
           <div className="provider-flow-account-meta">
-            <span><Plugs size={13} /> {selectedCredential?.health?.error_category ?? "No error category"}</span>
-            <span>last4 ····{selectedCredential?.last4 ?? "----"}</span>
-            <span>fingerprint {selectedCredential?.fingerprint?.slice(0, 8) ?? "--------"}</span>
+            <span><Plugs size={13} /> {selectedCredential?.health?.error_category ?? "无错误类别"}</span>
+            <span>末四位 ····{selectedCredential?.last4 ?? "----"}</span>
+            <span>指纹 {selectedCredential?.fingerprint?.slice(0, 8) ?? "--------"}</span>
           </div>
           {selectedCredential && bindingGateReason && <div className="provider-flow-warning"><Warning size={13} /> {bindingGateReason}</div>}
         </div>
 
         <div className="provider-flow-card">
-          <div className="provider-flow-card-kicker">02 / MODEL GATE</div>
-          <label className="provider-flow-label" htmlFor="provider-flow-model">Choose one model or keep each RoleConfig model</label>
+          <div className="provider-flow-card-kicker">02 / 模型门槛</div>
+          <label className="provider-flow-label" htmlFor="provider-flow-model">选择统一模型，或保留各角色原有模型</label>
           <select id="provider-flow-model" value={model} onChange={(event) => setModel(event.target.value)} className="theme-input-surface provider-flow-select" disabled={!selectedCredential || !modelCatalogReady}>
-            <option value="__keep__">Keep each RoleConfig model</option>
+            <option value="__keep__">保留各角色配置的模型</option>
             {models.map((modelId) => <option key={modelId} value={modelId}>{modelId}</option>)}
           </select>
           <div className="provider-flow-model-meta">
             <Lightning size={14} />
-            {modelCatalogReady ? `${models.length} current catalog/allowlist model${models.length === 1 ? "" : "s"}` : "Binding requires a successful non-empty current model catalog"}
-            {selectedCredential?.health?.model_catalog_fetched_at && <span>· refreshed {new Date(selectedCredential.health.model_catalog_fetched_at).toLocaleString()}</span>}
+            {modelCatalogReady ? `当前目录/白名单共 ${models.length} 个模型` : "绑定需要非空的当前模型目录"}
+            {selectedCredential?.health?.model_catalog_fetched_at && <span>· 刷新于 {new Date(selectedCredential.health.model_catalog_fetched_at).toLocaleString()}</span>}
           </div>
           {catalogError && <div className="provider-flow-catalog-error"><Warning size={13} /> {catalogError}</div>}
-          <p className="provider-flow-help">Catalog refresh happens on the account card below. The Scheduler re-checks the model under the same lock when applying.</p>
+          <p className="provider-flow-help">模型目录在左侧账号卡片刷新。应用绑定时，调度器会在同一事务锁下再次校验模型。</p>
         </div>
       </div>
 
       <div className="provider-flow-card provider-flow-bind-card">
-        <div className="provider-flow-card-kicker">03 / ROLE CONFIGS</div>
+        <div className="provider-flow-card-kicker">03 / 角色配置</div>
         <div className="provider-flow-bind-head">
-          <div><label className="provider-flow-label">Select global and project nodes</label><p className="provider-flow-help">Only compatible combinations can enter the next Job snapshot.</p></div>
-          <div className="provider-flow-count">{selectedRoleIds.size}<span>selected</span></div>
+          <div>
+            <label className="provider-flow-label">选择全局与项目节点</label>
+            <p className="provider-flow-help">仅兼容组合可进入下一 Job 快照。</p>
+          </div>
+          <div className="provider-flow-count">{selectedRoleIds.size}<span>已选</span></div>
         </div>
         <div className="provider-flow-role-list">
-          {roleConfigs.length === 0 && <div className="provider-flow-empty">No RoleConfigs are available yet. Create one in Agent roles, then return here.</div>}
+          {roleConfigs.length === 0 && <div className="provider-flow-empty">暂无角色配置。请先在「Agent 角色」中创建，再回到这里绑定。</div>}
           {roleConfigs.map((roleConfig) => {
             const selected = selectedRoleIds.has(roleConfig.id);
             const incompatible = Boolean(selectedCredential && targetCatalog && !targetCatalog.compatible_agent_cli.includes(roleConfig.agent_cli));
             return (
               <label key={roleConfig.id} className={`provider-flow-role ${selected ? "is-selected" : ""}`}>
-                <input type="checkbox" checked={selected} disabled={!roleConfig.can_bind} onChange={() => toggleRole(roleConfig.id)} title={!roleConfig.can_bind ? "Global RoleConfig is visible but project actors may bind only own project RoleConfigs" : undefined} />
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  disabled={!roleConfig.can_bind}
+                  onChange={() => toggleRole(roleConfig.id)}
+                  title={!roleConfig.can_bind ? "全局角色配置可见，但项目操作者只能绑定本项目角色配置" : undefined}
+                />
                 <span className="provider-flow-role-check" aria-hidden><Check size={11} weight="bold" /></span>
-                <span className="provider-flow-role-main"><strong>{roleConfig.role_title || roleConfig.role_name}</strong><small>{roleConfig.scope === "project" ? roleConfig.project_name ?? "Project" : "Global default"} · {cliLabel[roleConfig.agent_cli] ?? roleConfig.agent_cli}</small></span>
-                <span className="provider-flow-role-model">{roleConfig.model ?? "default model"}</span>
-                <span className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind ? "is-warning" : ""}`} title={!roleConfig.can_bind ? "Global RoleConfig is visible but project actors may bind only own project RoleConfigs" : incompatible ? `Choose a Provider compatible with ${cliLabel[roleConfig.agent_cli] ?? roleConfig.agent_cli}` : undefined}>{!roleConfig.can_bind ? "read-only · project scope" : incompatible ? "CLI mismatch · repair" : roleConfig.credential_name ? `bound · ${roleConfig.credential_name}` : "unbound"}</span>
+                <span className="provider-flow-role-main">
+                  <strong>{roleConfig.role_title || roleConfig.role_name}</strong>
+                  <small>{roleConfig.scope === "project" ? roleConfig.project_name ?? "项目" : "全局默认"} · {cliLabel[roleConfig.agent_cli] ?? roleConfig.agent_cli}</small>
+                </span>
+                <span className="provider-flow-role-model">{roleConfig.model ?? "默认模型"}</span>
+                <span
+                  className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind ? "is-warning" : ""}`}
+                  title={
+                    !roleConfig.can_bind
+                      ? "全局角色配置可见，但项目操作者只能绑定本项目角色配置"
+                      : incompatible
+                        ? `请选择与 ${cliLabel[roleConfig.agent_cli] ?? roleConfig.agent_cli} 兼容的 Provider`
+                        : undefined
+                  }
+                >
+                  {!roleConfig.can_bind
+                    ? "只读 · 项目作用域"
+                    : incompatible
+                      ? "CLI 不匹配 · 需修复"
+                      : roleConfig.credential_name
+                        ? `已绑定 · ${roleConfig.credential_name}`
+                        : "未绑定"}
+                </span>
               </label>
             );
           })}
@@ -472,51 +527,65 @@ export function ProviderAccountFlow({
       </div>
 
       <div className="provider-flow-card provider-flow-effect-card">
-        <div className="provider-flow-card-kicker">04 / EFFECT POLICY</div>
+        <div className="provider-flow-card-kicker">04 / 生效策略</div>
         <div className="provider-flow-effect-grid">
           <div>
-            <label className="provider-flow-label">Binding operation</label>
+            <label className="provider-flow-label">绑定操作</label>
             <div className="provider-flow-toggle-group">
-              <button type="button" className={mode === "bind" ? "is-active" : ""} onClick={() => setMode("bind")}>Bind account</button>
-              <button type="button" className={mode === "migrate" ? "is-active" : ""} onClick={() => setMode("migrate")}>Migrate from account</button>
+              <button type="button" className={mode === "bind" ? "is-active" : ""} onClick={() => setMode("bind")}>绑定账号</button>
+              <button type="button" className={mode === "migrate" ? "is-active" : ""} onClick={() => setMode("migrate")}>从账号迁移</button>
             </div>
-            {mode === "migrate" && <select value={sourceCredentialId} onChange={(event) => setSourceCredentialId(event.target.value)} className="theme-input-surface provider-flow-select mt-2"><option value="">Choose source account</option>{sourceOptions.map((credential) => <option key={credential.id} value={credential.id}>{credential.name} · {credential.provider}</option>)}</select>}
+            {mode === "migrate" && (
+              <select value={sourceCredentialId} onChange={(event) => setSourceCredentialId(event.target.value)} className="theme-input-surface provider-flow-select mt-2">
+                <option value="">选择源账号</option>
+                {sourceOptions.map((credential) => <option key={credential.id} value={credential.id}>{credential.name} · {credential.provider}</option>)}
+              </select>
+            )}
           </div>
           <div>
-            <label className="provider-flow-label">When does it take effect?</label>
+            <label className="provider-flow-label">何时生效？</label>
             <div className="provider-flow-toggle-group">
-              <button type="button" className={effect === "new_jobs_only" ? "is-active" : ""} onClick={() => setEffect("new_jobs_only")}>New Jobs only</button>
-              <button type="button" className={effect === "refresh_pending" ? "is-active" : ""} onClick={() => setEffect("refresh_pending")}>Refresh pending</button>
+              <button type="button" className={effect === "new_jobs_only" ? "is-active" : ""} onClick={() => setEffect("new_jobs_only")}>仅新 Job</button>
+              <button type="button" className={effect === "refresh_pending" ? "is-active" : ""} onClick={() => setEffect("refresh_pending")}>刷新 pending</button>
             </div>
-            <p className="provider-flow-help">Running and terminal Jobs always retain frozen snapshots. Refresh pending is explicit and bounded.</p>
+            <p className="provider-flow-help">运行中与终态 Job 始终保留冻结快照。「刷新 pending」需显式选择且有边界。</p>
           </div>
         </div>
-        {incompatibleRoles.length > 0 && selectedRoleIds.size > 0 && <div className="provider-flow-warning"><Warning size={14} /> {incompatibleRoles.length} selected RoleConfig{incompatibleRoles.length === 1 ? " is" : "s are"} incompatible. Choose a compatible account/model before applying.</div>}
-        <button type="button" onClick={apply} disabled={busy || !selectedCredential || selectedRoleIds.size === 0 || Boolean(bindingGateReason) || incompatibleRoles.length > 0 || unbindableSelectedRoles.length > 0} className="provider-flow-apply">
-          {busy ? "Checking compatibility…" : <><GitBranch size={15} /> Apply to selected RoleConfigs</>}
+        {incompatibleRoles.length > 0 && selectedRoleIds.size > 0 && (
+          <div className="provider-flow-warning">
+            <Warning size={14} /> 已选 {incompatibleRoles.length} 个角色配置不兼容。请先更换兼容账号/模型再应用。
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={apply}
+          disabled={busy || !selectedCredential || selectedRoleIds.size === 0 || Boolean(bindingGateReason) || incompatibleRoles.length > 0 || unbindableSelectedRoles.length > 0}
+          className="provider-flow-apply"
+        >
+          {busy ? "正在检查兼容性…" : <><GitBranch size={15} /> 应用到所选角色配置</>}
         </button>
       </div>
 
       {impact && (
         <div className="provider-flow-impact" role="status">
-          <div className="provider-flow-impact-title"><CheckCircle size={16} /> Applied under one transaction</div>
+          <div className="provider-flow-impact-title"><CheckCircle size={16} /> 已在同一事务中生效</div>
           <div className="provider-flow-impact-grid">
-            <span><strong>{impact.role_config_count}</strong> RoleConfigs</span>
+            <span><strong>{impact.role_config_count}</strong> 角色配置</span>
             <span><strong>{impact.pending_job_count}</strong> pending</span>
-            <span><strong>{impact.refreshed_pending_job_count}</strong> refreshed</span>
-            <span><strong>{impact.active_frozen_job_count}</strong> active frozen</span>
-            <span><strong>{impact.terminal_historical_job_count}</strong> terminal / retry</span>
+            <span><strong>{impact.refreshed_pending_job_count}</strong> 已刷新</span>
+            <span><strong>{impact.active_frozen_job_count}</strong> 活跃冻结</span>
+            <span><strong>{impact.terminal_historical_job_count}</strong> 终态 / 重试</span>
           </div>
         </div>
       )}
       {previewImpact && !impact && (
         <div className="provider-flow-preview" role="status">
-          <div className="provider-flow-impact-title"><GitBranch size={15} /> Current impact preview for this account</div>
+          <div className="provider-flow-impact-title"><GitBranch size={15} /> 当前账号影响预览</div>
           <div className="provider-flow-impact-grid">
-            <span><strong>{previewImpact.role_configs.count}</strong> bound RoleConfigs</span>
-            <span><strong>{previewImpact.jobs.pending_unclaimed.count}</strong> pending frozen</span>
-            <span><strong>{previewImpact.jobs.active_frozen.count}</strong> active frozen</span>
-            <span><strong>{previewImpact.jobs.terminal_historical.count}</strong> terminal / retry</span>
+            <span><strong>{previewImpact.role_configs.count}</strong> 已绑定角色配置</span>
+            <span><strong>{previewImpact.jobs.pending_unclaimed.count}</strong> pending 冻结</span>
+            <span><strong>{previewImpact.jobs.active_frozen.count}</strong> 活跃冻结</span>
+            <span><strong>{previewImpact.jobs.terminal_historical.count}</strong> 终态 / 重试</span>
           </div>
         </div>
       )}
