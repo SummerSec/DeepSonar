@@ -77,6 +77,10 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
+export function canRolePublishSharedAsset(roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
+  return roleKind === "role";
+}
+
 async function ingestSemanticEventObserved(
   jobId: string,
   event: EventEnvelopeInput,
@@ -355,6 +359,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const isHub = snapshot.role_kind === "hub";
   const isAudit = snapshot.name === "audit";
   const isRole = snapshot.role_kind === "role" && !isAudit;
+  const canPublishSharedAsset = canRolePublishSharedAsset(snapshot.role_kind);
   const controlToolNames = snapshot.platform_tools;
   const allowedControlToolNames = allowedPlatformTools(snapshot.name, snapshot.role_kind);
   const disabledControlToolNames = allowedControlToolNames.filter((name) => !controlToolNames.includes(name));
@@ -849,7 +854,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       throw toolBoundaryError("toolNotAllowed", `本 Job 未启用平台工具 ${requiredTool}`);
     }
     if (event.type === "shared_asset_publish") {
-      if (!isRole) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权发布共享资产`);
+      if (!canPublishSharedAsset) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权发布共享资产`);
       const proposal = PublishSharedAssetPayload.parse(event.payload);
       const findingId = proposal.scope === "finding" ? (job.finding_id as string | null) : null;
       if (proposal.scope === "finding" && !findingId) {

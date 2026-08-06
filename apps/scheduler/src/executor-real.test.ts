@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ControlEventEnvelope, EventEnvelope } from "@deepsonar/shared-types";
 import {
+  canRolePublishSharedAsset,
   ingestFactSemanticEvent,
   assertSemanticTerminalExclusivity,
   moduleEvidenceFromSnapshot,
@@ -242,6 +243,12 @@ test("semantic tool capture only enables this Job's authorized tools", () => {
     "mcp__deepsonar-control__mark_job_done": "done",
   });
   assert.equal(Object.getPrototypeOf(semanticTools), null);
+});
+
+test("all role Jobs, including audit, may publish shared assets", () => {
+  assert.equal(canRolePublishSharedAsset("role"), true);
+  assert.equal(canRolePublishSharedAsset("hub"), false);
+  assert.equal(canRolePublishSharedAsset("system"), false);
 });
 
 test("semantic tool map rejects prototype keys", () => {
