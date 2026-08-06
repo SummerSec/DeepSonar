@@ -109,13 +109,15 @@ def main() -> None:
     assert "唯一权威" in by_role["report"], "report 缺少冻结输入唯一权威语义"
     assert "audit/explore" in by_role["hub_reason"] and "不得" in by_role["hub_reason"]
     hub_cfg = next(c for c in global_configs if c["role_name"] == "hub_reason")
+    # 平台工具 list 对每个 Agent 全量可选；仅 mark_job_done 为终态必需、不可关闭。
+    # 用不完整 body 探测校验即可，避免声明式 PUT 误清凭据/指令。
     code, _ = req(
         "PUT",
         f"/role-configs/global/{hub_cfg['role_id']}",
-        {"platform_tools": {"list_available_roles": False}},
+        {"platform_tools": {"mark_job_done": False}},
         expect=None,
     )
-    assert code == 400, f"关闭 Hub 角色查询工具应被拒，得到 {code}"
+    assert code == 400, f"关闭 mark_job_done 应被拒，得到 {code}"
 
     # 数据库基线内置官方模块源；catalog 是否已有内容取决于部署后是否执行过同步。
     sources = req("GET", "/skill-sources")
