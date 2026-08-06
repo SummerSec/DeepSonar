@@ -12,8 +12,49 @@ import {
   assertSharedAssetsContainerMount,
   assertSharedAssetsVolumeOwnership,
   sharedAssetsVolumeBinds,
+  isDeepsonarRestrictedNetwork,
+  dockerSocketPath,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+
+test("restricted network ownership accepts Docker and Podman inspect shapes", () => {
+  assert.equal(isDeepsonarRestrictedNetwork({
+    Internal: true,
+    Driver: "bridge",
+    Labels: { "deepsonar.managed": "true" },
+    IPAM: { Config: [{ Gateway: "<nil>" }] },
+  }), true);
+  // Podman lower-case keys from some CLI paths
+  assert.equal(isDeepsonarRestrictedNetwork({
+    internal: true,
+    driver: "bridge",
+    labels: { "deepsonar.managed": "true" },
+  }), true);
+  assert.equal(isDeepsonarRestrictedNetwork({
+    Internal: false,
+    Driver: "bridge",
+    Labels: { "deepsonar.managed": "true" },
+  }), false);
+  assert.equal(isDeepsonarRestrictedNetwork({
+    Internal: true,
+    Driver: "bridge",
+    Labels: {},
+  }), false);
+  assert.equal(isDeepsonarRestrictedNetwork(null), false);
+});
+
+test("docker socket path prefers DOCKER_HOST unix:// sockets", () => {
+  const prev = process.env.DOCKER_HOST;
+  try {
+    delete process.env.DOCKER_HOST;
+    assert.equal(dockerSocketPath(), "/var/run/docker.sock");
+    process.env.DOCKER_HOST = "unix:///tmp/podman-run-1000/podman/podman.sock";
+    assert.equal(dockerSocketPath(), "/tmp/podman-run-1000/podman/podman.sock");
+  } finally {
+    if (prev === undefined) delete process.env.DOCKER_HOST;
+    else process.env.DOCKER_HOST = prev;
+  }
+});
 
 test("shared assets accept only Scheduler-owned named volumes and always mount read-only", () => {
   assert.deepEqual(sharedAssetsVolumeBinds(undefined), []);

@@ -16,6 +16,7 @@ import type {
 } from "agentbox-sdk";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
@@ -25,8 +26,98 @@ const execFileP = promisify(execFile);
 
 /** docker CLI 兜底（进程重启后内存注册表丢失，按持久化 sandboxId 直查引擎） */
 async function docker(...args: string[]): Promise<string> {
-  const { stdout } = await execFileP("docker", args, { timeout: 15000 });
-  return stdout.trim();
+  try {
+    const { stdout } = await execFileP("docker", args, { timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+    return stdout.trim();
+  } catch (error) {
+    const err = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
+    const detail = [err.stderr, err.stdout, err.message]
+      .map((part) => (typeof part === "string" ? part : part?.toString?.() ?? ""))
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("\n");
+    throw new Error(detail || `docker ${args.join(" ")} failed`);
+  }
+}
+
+/** Resolve the engine unix socket path used by the scheduler container / host. */
+export function dockerSocketPath(): string {
+  const host = process.env.DOCKER_HOST?.trim();
+  if (!host || host === "unix:///var/run/docker.sock") return "/var/run/docker.sock";
+  if (host.startsWith("unix://")) return host.slice("unix://".length) || "/var/run/docker.sock";
+  // tcp://… is unsupported for the unix-socket API helper; callers fall back to CLI.
+  return "/var/run/docker.sock";
+}
+
+/**
+ * Docker Engine / Podman compatibility API over the unix socket.
+ *
+ * Prefer this for network inspect/create: recent docker CLI fails on Podman
+ * networks whose IPAM Gateway is the literal string "<nil>" with
+ * `ParseAddr("<nil>"): unable to parse IP`. The HTTP API returns usable JSON.
+ */
+export async function dockerApiJson(
+  pathname: string,
+  init?: { method?: string; body?: unknown; timeoutMs?: number },
+): Promise<unknown> {
+  const method = init?.method ?? "GET";
+  const body = init?.body === undefined ? undefined : JSON.stringify(init.body);
+  const timeoutMs = init?.timeoutMs ?? 15_000;
+  const socketPath = dockerSocketPath();
+  return await new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        socketPath,
+        path: pathname,
+        method,
+        headers: body
+          ? {
+              "Content-Type": "application/json",
+              "Content-Length": Buffer.byteLength(body),
+            }
+          : undefined,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          const status = res.statusCode ?? 500;
+          if (status >= 400) {
+            reject(new Error(`docker API ${method} ${pathname} -> ${status}: ${text.slice(0, 400)}`));
+            return;
+          }
+          if (!text) {
+            resolve(null);
+            return;
+          }
+          try {
+            resolve(JSON.parse(text));
+          } catch {
+            resolve(text);
+          }
+        });
+      },
+    );
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`docker API ${method} ${pathname} timed out after ${timeoutMs}ms`));
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+/** True when a network inspect payload is our managed internal bridge. */
+export function isDeepsonarRestrictedNetwork(net: Record<string, unknown> | null | undefined): boolean {
+  if (!net || typeof net !== "object") return false;
+  const internal = net.Internal ?? net.internal;
+  const driver = String(net.Driver ?? net.driver ?? "");
+  const labelsRaw = net.Labels ?? net.labels;
+  const labels = labelsRaw && typeof labelsRaw === "object" && !Array.isArray(labelsRaw)
+    ? labelsRaw as Record<string, unknown>
+    : {};
+  return internal === true && driver === "bridge" && String(labels["deepsonar.managed"] ?? "") === "true";
 }
 
 // --- agentbox-sdk 0.1.501 Windows 宿主兼容性补丁 ---
@@ -176,16 +267,15 @@ server.listen(3100, "0.0.0.0");
 /**
  * Docker internal bridge 不做外网 NAT；模型请求由另一个固定目标 sidecar 转发。
  * 网络是宿主级共享资源，创建操作幂等，并发首次 provision 共用同一 Promise。
+ *
+ * Inspect/create go through the Engine HTTP API so Podman rootless works:
+ * `docker network inspect --format …` dies on IPAM Gateway="<nil>" (ParseAddr).
  */
 async function ensureRestrictedNetwork(): Promise<void> {
   restrictedNetworkReady ??= (async () => {
     const validate = async () => {
-      const state = await docker(
-        "network", "inspect", "--format",
-        "{{.Internal}}|{{.Driver}}|{{index .Labels \"deepsonar.managed\"}}",
-        RESTRICTED_NETWORK,
-      );
-      if (state !== "true|bridge|true") {
+      const net = await dockerApiJson(`/networks/${encodeURIComponent(RESTRICTED_NETWORK)}`) as Record<string, unknown>;
+      if (!isDeepsonarRestrictedNetwork(net)) {
         throw new Error(`Docker 网络 ${RESTRICTED_NETWORK} 存在但不是 DEEPSONAR 管理的 internal bridge`);
       }
     };
@@ -193,12 +283,30 @@ async function ensureRestrictedNetwork(): Promise<void> {
       await validate();
       return;
     } catch {
-      await docker(
-        "network", "create", "--driver", "bridge", "--internal",
-        "--label", "deepsonar.managed=true", RESTRICTED_NETWORK,
-      ).catch(async (e) => {
-        await validate().catch(() => { throw e; });
-      });
+      try {
+        await dockerApiJson("/networks/create", {
+          method: "POST",
+          body: {
+            Name: RESTRICTED_NETWORK,
+            Driver: "bridge",
+            Internal: true,
+            Labels: { "deepsonar.managed": "true" },
+          },
+        });
+      } catch (createError) {
+        const msg = createError instanceof Error ? createError.message : String(createError);
+        // Already exists (409) — re-validate below. Other errors: try CLI create once.
+        if (!/\b409\b|already exists|Conflict/i.test(msg)) {
+          await docker(
+            "network", "create", "--driver", "bridge", "--internal",
+            "--label", "deepsonar.managed=true", RESTRICTED_NETWORK,
+          ).catch(async (cliError) => {
+            await validate().catch(() => {
+              throw cliError instanceof Error ? cliError : createError;
+            });
+          });
+        }
+      }
       await validate();
     }
   })();
