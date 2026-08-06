@@ -30,7 +30,10 @@ const recordContractScript = readFileSync(new URL("./runtime-image-record.mjs", 
 const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
 const schedulerRegistryContract = readFileSync(new URL("../apps/scheduler/src/runtime-image-registry-contract.ts", import.meta.url), "utf8");
 const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
-const schedulerRoutes = readFileSync(new URL("../apps/scheduler/src/routes.ts", import.meta.url), "utf8");
+const schedulerRuntimeImageRoutes = readFileSync(
+  new URL("../apps/scheduler/src/domains/runtime-image/routes.ts", import.meta.url),
+  "utf8",
+);
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -246,9 +249,9 @@ expect(registryScript.includes("platforms.length !== 1") || registryScript.inclu
 expect(schedulerRuntimeImages.includes("releases/latest/download/runtime-image-registry.json"), "Scheduler 必须从固定官方 latest Release 同步清单");
 expect(schedulerRuntimeImages.includes("image.versions.length > 0"), "正式清单已有版本时不能被环境变量旧版本覆盖");
 expect(schedulerRuntimeImages.includes("SET promoted_at = NULL"), "同步最新版本后必须取消旧版本默认 promoted 状态");
-const runtimeImageListRoute = schedulerRoutes.slice(
-  schedulerRoutes.indexOf('app.get("/runtime-images"'),
-  schedulerRoutes.indexOf('app.get("/runtime-images/registry"'),
+const runtimeImageListRoute = schedulerRuntimeImageRoutes.slice(
+  schedulerRuntimeImageRoutes.indexOf('app.get("/runtime-images"'),
+  schedulerRuntimeImageRoutes.indexOf('app.get("/runtime-images/registry"'),
 );
 const trustPriorityIndex = runtimeImageListRoute.indexOf("ORDER BY CASE v.trust_status");
 const platformPriorityIndex = runtimeImageListRoute.indexOf("WHEN v.platforms_json @>");
