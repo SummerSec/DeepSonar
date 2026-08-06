@@ -105,9 +105,9 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /global-settings | agents:read | `{rules, effective_rules, active_by_agent_cli, active_by_provider}`；`effective_rules` 含 `maxGlobalJobs` / `maxJobsPerProject` / `maxConcurrentByAgentCli` |
-| PATCH | /global-settings | agents:write | `{rules: {...}}` 合并；调度 claim 读取更新后的 effective 规则并由 `pg_notify` 唤醒，无需重启 |
-| GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 |
-| PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}}`；`enabled: null` 恢复默认 |
+| PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；claim 读 effective 并由 `pg_notify` 唤醒。并发默认 **20 / 5**（env/代码）；库 `rules_json` 优先。Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0），模式 hybrid/fixed/agent_choice |
+| GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 + effective_finding_protocol |
+| PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}, finding_protocol?}`；`enabled: null` 恢复默认 |
 
 ### 角色注册表（agent_roles）
 
@@ -160,13 +160,22 @@ PUT body：
 - `runtime_image_key 没有可信版本: <key>` — 市场 catalog 有 key 不等于有 `trust_status=trusted` 的版本；先配置 `DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:...` 重启，或 import+approve。
 - 凭据 `purpose` 必须是 **`llm`** 才会进入模型通道；其它 purpose 不会被 Executor 当作 LLM key。
 
-`platform_tools` 接受平台工具全集中的任意工具名（每个 Agent 均可勾选）；未声明的工具默认启用。仅 `mark_job_done` 为形成合法终态所必需，不可关闭。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
+`platform_tools` 接受平台工具**全集**中的任意工具名（每个 Agent 均可勾选，不再按 role/kind 裁剪 list）；未声明的工具默认启用。仅 **`mark_job_done`** 为形成合法终态所必需，不可关闭。授权以 Job 冻结的 `platform_tools` 快照为准。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
+
+`runtime_image_key`：
+- `null` = 系统底座（调度默认 deepsonar-base）
+- 官方 catalog（含 `project_opt_in` 专项如 OpenHarmony）可先写入 RoleConfig
+- Job 解析时：官方非 opt-in 默认可跑；opt-in / 第三方仍要求**项目启用**
+- 与镜像市场列表对齐（enabled 官方全量可选）
 
 Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。快照含 `model` / `reasoning` / `credential_id` / `runtime_image`（digest）；**改 RoleConfig 不影响已创建 Job**。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /role-configs/global | agents:read | 全局缺省清单（含 credentials / config_files） |
+| GET | /role-configs/bindable | agents:read | Provider 绑定选择器元数据（含 `agent_cli` / `runtime_image_key` / `can_bind`） |
+| PATCH | /role-configs/:id/agent-cli | agents:write | 仅改 `agent_cli`；已绑 LLM 时校验 CLI↔Provider |
+| PATCH | /role-configs/:id/runtime-image | agents:write | 仅改 `runtime_image_key`（`null`=系统底座）；不改写凭据/文件 |
 | PUT | /role-configs/global/:roleId | agents:write | 全局 upsert（version +1） |
 | GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none；`project_config` 返回实时完整项目覆盖 |
 | PUT | /projects/:id/role-configs/:roleId | agents:write | 项目覆盖；普通角色须已启用（409） |
@@ -246,6 +255,15 @@ Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 L
 | POST | /projects/:id/integrations/plane/sync | integrations:write | 手动同步 |
 | GET | /plane-info | integrations:read | 连接信息 |
 | POST | /webhooks/plane | 豁免 | Webhook 入口（签名校验） |
+
+### 平台导入导出（.deepsonarpack）
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| POST | /platform/exports | exports:write | `{preset: platform_full\|custom, modules?: string[], credentials?: {mode}}`；`custom` 时 `modules` 可自由勾选：`global_rules` / `agent_roles` / `global_role_configs` / `skill_sources` / `credentials` |
+| GET | /platform/exports | exports:read | 平台导出任务列表 |
+| GET | /exports/:id/download | exports:read | 下载 pack |
+| POST | /imports | exports:write | 上传 `.deepsonarpack`（raw body） |
 
 ### 管理面
 

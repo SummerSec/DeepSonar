@@ -1,6 +1,6 @@
 ---
 name: deepsonar-management
-description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目/任务/Job 生命周期，画布/Finding/报告，RoleConfig（模型 ID/思考强度/运行镜像）、Skill 模块源、凭据、运行时镜像市场、Plane。当需要以程序化方式操作 DeepSonar 时使用。
+description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目/任务/Job 生命周期，画布/Finding/报告，RoleConfig（CLI/镜像轻量 PATCH、平台工具全量可选、CVSS 3.1 协议）、Provider 绑定、Skill 模块源、凭据、运行时镜像市场、平台导出模块选择、Plane。当需要以程序化方式操作 DeepSonar 时使用。
 ---
 
 # DeepSonar Management
@@ -76,16 +76,17 @@ python scripts/deepsonar-api.py events push <projectId> --source ci --event-id b
 # 设置
 python scripts/deepsonar-api.py settings get
 python scripts/deepsonar-api.py settings update --rules '{"maxHubRounds": 8}'
-# 调度并发的权威配置（返回 effective_rules；0 仅暂停对应 CLI）
-python scripts/deepsonar-api.py settings update --rules '{"maxGlobalJobs": 4, "maxJobsPerProject": 4, "maxConcurrentByAgentCli": {"claude-code": 4}}'
-# 也可使用运维快捷参数（--cli-limits 接受 JSON 或 @file）
-python scripts/deepsonar-api.py settings update --max-global-jobs 4 --max-jobs-per-project 4 --cli-limits '{"claude-code": 4}'
+# 调度并发：库内 global_settings.rules_json 优先；.env 仅在库未配置时提供启动默认
+# 代码/env 默认 maxGlobalJobs=20、maxJobsPerProject=5（0 仅暂停对应 CLI）
+python scripts/deepsonar-api.py settings update --rules '{"maxGlobalJobs": 20, "maxJobsPerProject": 5, "maxConcurrentByAgentCli": {"claude-code": 4}}'
+python scripts/deepsonar-api.py settings update --max-global-jobs 20 --max-jobs-per-project 5 --cli-limits '{"claude-code": 4}'
 python scripts/deepsonar-api.py project-settings get <projectId>
 python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"hubEnabled": true, "allowEgress": true}'
 python scripts/deepsonar-api.py project-settings update <projectId> --roles "explore,analyze,review"
 python scripts/deepsonar-api.py project-settings update <projectId> --roles null
 
-# 角色 + RoleConfig（含 model / reasoning / runtime_image_key；需 agents:read|write）
+# 角色 + RoleConfig（agents:read|write）
+# Web：CLI / 凭据 / 模型 / 镜像在「凭据 · Provider 绑定」；指令 / 平台工具 / 模块在「Agent 角色」
 python scripts/deepsonar-api.py roles list
 python scripts/deepsonar-api.py roles project <projectId>
 python scripts/deepsonar-api.py roles create --name security_review --description "适合处理的任务与能力边界" [--title ...]
@@ -93,6 +94,11 @@ python scripts/deepsonar-api.py roles update <roleId> --data '{"description":"..
 python scripts/deepsonar-api.py roles delete <roleId>
 python scripts/deepsonar-api.py role-configs global
 python scripts/deepsonar-api.py role-configs global-put <roleId> --data @role-config.json
+python scripts/deepsonar-api.py role-configs bindable
+# Provider 绑定列表等价轻量 PATCH（不改写凭据/config_files）
+python scripts/deepsonar-api.py role-configs agent-cli <roleConfigId> --agent-cli claude-code
+python scripts/deepsonar-api.py role-configs runtime-image <roleConfigId> --image-key deepsonar-audit
+python scripts/deepsonar-api.py role-configs runtime-image <roleConfigId> --image-key null   # 系统底座
 python scripts/deepsonar-api.py role-configs sync-builtin-prompts [--dry-run] [--schema database/schema.sql]
 python scripts/deepsonar-api.py role-configs list <projectId>
 python scripts/deepsonar-api.py role-configs put <projectId> <roleId> --data @role-config.json
@@ -133,7 +139,7 @@ python scripts/deepsonar-api.py plane sync <projectId>
 python scripts/deepsonar-api.py plane info
 ```
 
-### RoleConfig 示例（model + 思考强度 + 镜像 + 凭据）
+### RoleConfig 示例（model + 思考强度 + 镜像 + 凭据 + 平台工具）
 
 ```json
 {
@@ -147,14 +153,20 @@ python scripts/deepsonar-api.py plane info
   "commands": [],
   "mcps": [],
   "subagents": [],
-  "runtime_image_key": "deepsonar-base",
+  "platform_tools": {},
+  "instructions_markdown": null,
+  "runtime_image_key": null,
   "credentials": [{ "credential_id": "<uuid>", "purpose": "llm" }],
   "config_files": []
 }
 ```
 
-**审计角色**常用 `runtime_image_key: "deepsonar-audit"`；Hub / explore / analyze / code 用 `deepsonar-base`。  
-`purpose` 必须是 **`llm`**（调度器只认这个 purpose 注入模型通道）。
+- `runtime_image_key: null` = **系统底座**（调度默认 deepsonar-base，不必写 key）。
+- 官方专项：`deepsonar-audit`、`deepsonar-kali-minimal`、OpenHarmony 系列（`deepsonar-openharmony-*`，`project_opt_in`）。
+- **OpenHarmony 等 opt-in 专项**：RoleConfig 可先 pin；**真正跑 Job** 仍要求项目在镜像市场启用。
+- `platform_tools`：每个 Agent **全量可选**；未声明 = 全开；仅 **`mark_job_done` 不可关**。
+- `purpose` 必须是 **`llm`**（调度器只认这个 purpose 注入模型通道）。
+- Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0）；UI 只暴露模式 hybrid/fixed/agent_choice。
 
 ## 推荐工作流：清库 → 配多模型 → 下发全量审计
 
@@ -202,20 +214,21 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 | --- | --- |
 | `AGENT_MODE=real` | `.env`；fake 只跑状态机 |
 | 主密钥 | `DEEPSONAR_MASTER_KEY_FILE` / `DEEPSONAR_MASTER_KEY`（32 字节） |
-| 活跃 Credential | 绑定到 RoleConfig，`purpose=llm` |
+| 活跃 Credential | 绑定到 RoleConfig，`purpose=llm`；Provider 绑定流可批量绑定 |
 | 可信镜像版本 | `runtime_image_versions.trust_status=trusted` 且 `image_ref` 含 `@sha256:` |
 | 官方 digest 引导 | `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`（tag 不会被静默信任） |
 | 本地镜像存在 | Docker 已有对应 digest（可 `docker tag` 别名） |
-| schema 版本 | 当前 v22；空库套 `database/schema.sql`，非空只校验版本与结构；不符 fail closed（无增量 migration，需重建） |
+| 并发默认 | `MAX_GLOBAL_JOBS=20`、`MAX_JOBS_PER_PROJECT=5`（库 `rules_json` 优先） |
+| schema 版本 | 当前 v22；空库套 `database/schema.sql`，非空只校验版本与结构；不符 fail closed（无增量 migration，需重建）；遗留 `schema_migrations` 表不拦启动 |
 | 鉴权 | `DEEPSONAR_AUTH_REQUIRED=true` 时需 Bearer；应急用 `DEEPSONAR_ADMIN_TOKEN`（不落库） |
 | 证据目录 | `BLOB_DIR`（默认 `./data/blobs`）可写；共享资产 CAS 见 `BLOB_STORE=fs` 或 `s3`（`docs/SHARED_ASSET_BLOB_STORE.md`）；改 `apps/scheduler/src` 会触发 tsx watch 重载 |
 
 ## 运维踩坑（本 skill 经验沉淀）
 
-1. **清业务数据不要 `TRUNCATE projects CASCADE`**：会连带清空 `credentials` / `role_configs`（FK）。应显式列出业务表，**保留** `credentials`、`agent_roles`、`role_configs`、`skill_sources`、`runtime_images*`、`users`、`schema_meta`、`global_settings`。平台导出包（`.deepsonarpack`）**不含凭据明文**，清掉后只能从 `.env`/密钥管理重新 `credentials create`。
+1. **清业务数据不要 `TRUNCATE projects CASCADE`**：会连带清空 `credentials` / `role_configs`（FK）。应显式列出业务表，**保留** `credentials`、`agent_roles`、`role_configs`、`skill_sources`、`runtime_images*`、`users`、`schema_meta`、`global_settings`。平台导出包（`.deepsonarpack`）**不含凭据明文**，清掉后只能从 `.env`/密钥管理重新 `credentials create`。平台导出模块可自由勾选（`POST /platform/exports`：`preset=custom` + `modules[]`）。
 2. **git pull 后 schema bump**：先 `pg_dump -Fc`；版本不符时 Scheduler 会 fail closed。无自动升级——备份业务数据后对空库套 `database/schema.sql`（或让 Scheduler 对空库引导），再按需导入 `.deepsonarpack`。
-3. **RoleConfig PUT 400 `runtime_image_key 没有可信版本`**：市场 catalog 有 key 不等于有 trusted version。先 bootstrap 官方 digest 或 import+approve。
-4. **多模型分配**：`credentials models` 看各 Provider 真实目录；hub 与 worker 可不同凭证。Job 快照在创建时冻结，改 RoleConfig **不影响**已创建 job。
+3. **RoleConfig 镜像**：`runtime_image_key 没有可信版本` = catalog 有 key 但无 trusted version。官方 digest 引导或 import+approve。`PATCH .../runtime-image` 返回 **404** = 调度器未加载新路由，重启后再试。OpenHarmony 等 `project_opt_in` 可 pin 到 RoleConfig，Job 解析仍要求项目启用。
+4. **多模型分配**：`credentials models` 看各 Provider 真实目录；hub 与 worker 可不同凭证。Job 快照在创建时冻结，改 RoleConfig **不影响**已创建 job。CLI/镜像轻量 PATCH 与 Provider 绑定 UI 等价。
 5. **tsx watch 改 src 会重载**：running job → `orphan`（「调度器重启」）；`jobs resume`（也支持 waiting_human）回 pending 并重算固定 priority class。排障时先确认无 running job 再改代码，或接受重跑。
 6. **`jobs resume` 后若轮询关闭**：依赖 `pg_notify`；schema 触发器须覆盖 pending 恢复路径（基线已含）。
 7. **dispatcher `FOR UPDATE` + `LEFT JOIN credentials`**：必须 `FOR UPDATE OF j`，否则 Postgres `0A000` 导致领取失败。
@@ -223,6 +236,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 9. **无 body 的 POST**（sync / test / cancel / resume / models）**不要**带 `Content-Type: application/json`（CLI 已处理）。
 10. **端口**：`SCHEDULER_PORT`（默认 3100），不是 `PORT`；EADDRINUSE = 已有实例，先按 PID 清干净再起唯一实例。
 11. **Windows 启动 pnpm**：`Start-Process` 用 `pnpm.cmd` 全路径，不要直接 `pnpm`（.ps1 不是 Win32 应用）。
+12. **并发显示 6/2 而非 20/5**：库 `global_settings.rules_json` 已写死旧值；改 `.env` 不够，需 PATCH rules 或更新库内字段。
 
 ## 边界
 

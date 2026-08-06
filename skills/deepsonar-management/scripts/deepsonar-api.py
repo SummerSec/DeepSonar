@@ -521,12 +521,22 @@ COMMANDS = {
         parse_json_arg(need(f.get("data"), '--data \'{"title":"..."}\''), "--data")),
     "roles.delete": lambda pos, f: call("DELETE", f"/agent-roles/{_p0(pos, 'roleId')}"),
 
-    # ---------- RoleConfig（角色 → agent 配置；全局缺省 + 项目级覆盖，声明式全量替换） ----------
-    # PUT body 须含 runtime_image_key（须已有 trusted 版本），credentials[].purpose 用 llm
+    # ---------- RoleConfig（全局缺省 + 项目覆盖；轻量 PATCH 供 Provider 绑定流） ----------
+    # PUT body 可含 runtime_image_key（官方 catalog 可写；null=系统底座）、credentials[].purpose 用 llm
     "role-configs.global": lambda pos, f: call("GET", "/role-configs/global"),
     "role-configs.global-put": lambda pos, f: call(
         "PUT", f"/role-configs/global/{_p0(pos, 'roleId')}",
         parse_json_arg(need(f.get("data"), "--data '{...}' 或 @file.json"), "--data")),
+    "role-configs.bindable": lambda pos, f: call("GET", "/role-configs/bindable"),
+    "role-configs.agent-cli": lambda pos, f: call(
+        "PATCH", f"/role-configs/{_p0(pos, 'roleConfigId')}/agent-cli",
+        {"agent_cli": need(f.get("agent-cli") or f.get("cli"), "--agent-cli claude-code|codex|open-code")}),
+    "role-configs.runtime-image": lambda pos, f: call(
+        "PATCH", f"/role-configs/{_p0(pos, 'roleConfigId')}/runtime-image",
+        {"runtime_image_key": (
+            None if (f.get("image-key") in (None, "", "null", "base", "system"))
+            else f.get("image-key")
+        )}),
     "role-configs.sync-builtin-prompts": _role_configs_sync_builtin_prompts,
     "role-configs.list": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}/role-configs"),
     "role-configs.put": lambda pos, f: call(
