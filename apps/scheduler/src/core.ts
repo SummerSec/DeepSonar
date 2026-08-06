@@ -486,8 +486,8 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
-    maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, 12),
-    maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, 4),
+    maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, 20),
+    maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
     maxConcurrentByProvider: {},
     maxConcurrentByAgentCli: {},
   };

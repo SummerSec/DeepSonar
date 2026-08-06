@@ -149,6 +149,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /role-configs/global": "agents:read",
   "GET /role-configs/bindable": "agents:read",
   "PATCH /role-configs/:id/agent-cli": "agents:write",
+  "PATCH /role-configs/:id/runtime-image": "agents:write",
   "PUT /role-configs/global/:roleId": "agents:write",
   "GET /projects/:id/role-configs": "agents:read",
   "PUT /projects/:id/role-configs/:roleId": "agents:write",

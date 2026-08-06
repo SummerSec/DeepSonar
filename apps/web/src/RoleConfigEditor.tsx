@@ -334,27 +334,6 @@ export function RoleConfigEditor({
     }
   };
 
-  const jsonField = (
-    label: string,
-    key: "skills" | "commands" | "mcps" | "subagents",
-    hint?: string,
-  ) => (
-    <div key={key}>
-      <label className={labelCls}>
-        {label}
-        {hint ? <HelpTip>{hint}</HelpTip> : null}
-      </label>
-      <textarea
-        value={form[key]}
-        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-        rows={2}
-        spellCheck={false}
-        placeholder="[]"
-        className={`${inputCls} resize-y`}
-      />
-    </div>
-  );
-
   return (
     <div className="role-config-editor min-w-0">
       <div className="role-config-header flex-wrap">
@@ -479,16 +458,6 @@ export function RoleConfigEditor({
           </div>
         </details>
       </div>
-
-      <details className="role-config-advanced">
-        <summary><span><strong>高级运行声明</strong><small>JSON 模块、MCP、子 Agent</small></span><CaretDown size={14} /></summary>
-        <div className="role-config-advanced-grid">
-          {jsonField("skills（模块勾选优先）", "skills", '[{"name":"x","repo":"https://…"}] 或 embedded source')}
-          {jsonField("commands（slash 命令）", "commands")}
-          {jsonField("mcps（MCP server）", "mcps", '[{"name":"fs","type":"local","command":"npx","args":[…]}]')}
-          {jsonField("subagents（子 Agent）", "subagents")}
-        </div>
-      </details>
 
       {error && (
         <div className="rounded-md border border-red-900/60 bg-red-950/40 px-3 py-2 font-mono text-[13px] text-red-300">

@@ -83,8 +83,8 @@ export type FindingProtocolMode = z.infer<typeof FindingProtocolMode>;
 export const FindingScoringPolicy = z
   .object({
     default_standard: z.literal("CVSS").default("CVSS"),
-    default_version: z.string().min(1).max(20).default("4.0"),
-    accepted_versions: z.array(z.string().min(1).max(20)).min(1).max(10).default(["4.0", "3.1"]),
+    default_version: z.string().min(1).max(20).default("3.1"),
+    accepted_versions: z.array(z.string().min(1).max(20)).min(1).max(10).default(["3.1", "4.0"]),
     require_scoring_for_profiles: z.array(findingProfileName).max(50).default(["security.vulnerability"]),
   })
   .strict();

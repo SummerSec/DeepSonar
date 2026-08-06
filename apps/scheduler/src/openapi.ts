@@ -637,6 +637,22 @@ const OPS: Op[] = [
     },
   },
   {
+    method: "patch",
+    path: "/role-configs/{id}/runtime-image",
+    summary: "仅更新 RoleConfig 的 runtime_image_key（Provider 绑定列表用）",
+    description: "null 表示系统默认底座（deepsonar-base）。专项/第三方须满足可信版本与项目启用规则。",
+    scope: "agents:write",
+    tags: ["RoleConfig", "RuntimeImages"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["runtime_image_key"],
+      properties: {
+        runtime_image_key: { type: "string", nullable: true },
+      },
+    },
+  },
+  {
     method: "put",
     path: "/role-configs/global/{roleId}",
     summary: "全局 RoleConfig upsert（声明式全量替换）",
@@ -1288,6 +1304,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           additionalProperties: false,
           required: [
             "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "model", "version",
+            "runtime_image_key",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "scope", "can_bind",
             "credential_provider_valid", "role_kind", "role_builtin",
           ],
@@ -1303,6 +1320,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             project_name: { type: "string", nullable: true },
             agent_cli: { type: "string" },
             model: { type: "string", nullable: true },
+            runtime_image_key: { type: "string", nullable: true },
             version: { type: "integer" },
             credential_id: { type: "string", format: "uuid", nullable: true },
             credential_name: { type: "string", nullable: true },

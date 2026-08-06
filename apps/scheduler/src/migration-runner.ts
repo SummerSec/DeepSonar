@@ -230,7 +230,11 @@ async function assertStructure(
       );
     }
   }
+  // Legacy bookkeeping tables may remain after the schema.sql-only baseline
+  // cutover; they are not part of the product model and must not block boot.
+  const ignoredTables = new Set(["schema_migrations"]);
   for (const table of actualNames) {
+    if (ignoredTables.has(table)) continue;
     if (!expectedNames.has(table)) {
       throw new Error(`database ${label} contains unknown table ${table}`);
     }

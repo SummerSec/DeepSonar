@@ -77,7 +77,8 @@ export function PageHeader({
   eyebrow = "OPERATIONS",
 }: {
   title: string;
-  subtitle?: string;
+  /** 支持字符串或 React 节点（如标题旁 HelpTip） */
+  subtitle?: ReactNode;
   actions?: ReactNode;
   eyebrow?: string;
 }) {
@@ -86,7 +87,7 @@ export function PageHeader({
       <div className="min-w-0 max-w-3xl">
         <div className="eyebrow"><span />{eyebrow}</div>
         <h1>{title}</h1>
-        {subtitle && <p>{subtitle}</p>}
+        {subtitle != null && subtitle !== "" && <p>{subtitle}</p>}
       </div>
       {actions && <div className="page-actions">{actions}</div>}
     </header>

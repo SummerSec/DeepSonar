@@ -623,6 +623,8 @@ export interface BindableRoleConfig {
   scope: "global" | "project";
   agent_cli: "claude-code" | "open-code" | "codex";
   model: string | null;
+  /** null = 系统默认底座（deepsonar-base） */
+  runtime_image_key: string | null;
   version: number;
   credential_id: string | null;
   credential_name: string | null;
@@ -1767,6 +1769,13 @@ export const api = {
       "PATCH",
       `/role-configs/${roleConfigId}/agent-cli`,
       { agent_cli },
+    ),
+  /** Provider 绑定列表：仅改 RoleConfig.runtime_image_key；null = 系统底座 */
+  updateRoleConfigRuntimeImage: (roleConfigId: string, runtime_image_key: string | null) =>
+    send<{ id: string; runtime_image_key: string | null; version: number; role_id: string; project_id: string | null }>(
+      "PATCH",
+      `/role-configs/${roleConfigId}/runtime-image`,
+      { runtime_image_key },
     ),
   createCredential: (c: {
     name: string;

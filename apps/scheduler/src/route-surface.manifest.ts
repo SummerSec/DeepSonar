@@ -71,6 +71,7 @@ GET /reports/:id/sarif
 GET /role-configs/bindable
 GET /role-configs/global
 PATCH /role-configs/:id/agent-cli
+PATCH /role-configs/:id/runtime-image
 GET /runtime-images
 GET /runtime-images/:id([0-9a-fA-F-]{36})
 GET /runtime-images/registry
@@ -221,6 +222,7 @@ GET /reports/{id}/sarif
 GET /role-configs/bindable
 GET /role-configs/global
 PATCH /role-configs/:id/agent-cli
+PATCH /role-configs/:id/runtime-image
 GET /runtime-images
 GET /runtime-images/{id}
 GET /runtime-images/registry

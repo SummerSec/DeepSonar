@@ -35,13 +35,13 @@ export const DEFAULT_FINDING_PROTOCOL: EffectiveFindingProtocol = {
   ],
   scoring: {
     default_standard: "CVSS",
-    default_version: "4.0",
-    accepted_versions: ["4.0", "3.1"],
+    default_version: "3.1",
+    accepted_versions: ["3.1", "4.0"],
     // Preserve compatibility with existing audit Agents; projects can opt in
     // to mandatory scoring after their prompts emit versioned vectors.
     require_scoring_for_profiles: [],
   },
-  display_name: "安全漏洞 · CVSS 4.0（Agent 可选）",
+  display_name: "安全漏洞 · CVSS 3.1（Agent 可选）",
   source: "global",
 };
 

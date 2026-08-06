@@ -1461,7 +1461,7 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .provider-flow-role {
   --role-accent: var(--accent);
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) minmax(128px, 148px) auto auto;
+  grid-template-columns: 16px minmax(0, 1fr) minmax(110px, 128px) minmax(140px, 168px) auto auto;
   align-items: center;
   gap: 8px;
   border: 1px solid rgb(255 255 255 / .07);
@@ -1495,13 +1495,33 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
   font: 600 10px var(--font-mono) !important;
   cursor: pointer;
 }
+.provider-flow-role-image {
+  border-color: color-mix(in srgb, #6ec8ff 42%, var(--line)) !important;
+  background: color-mix(in srgb, #6ec8ff 10%, #0b1012) !important;
+  color: #b7dff0 !important;
+}
 .provider-flow-role-cli:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 70%, var(--line)) !important;
   background: color-mix(in srgb, var(--accent) 16%, #0b1012) !important;
 }
+.provider-flow-role-image:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #6ec8ff 70%, var(--line)) !important;
+  background: color-mix(in srgb, #6ec8ff 16%, #0b1012) !important;
+}
 .provider-flow-role-cli:disabled {
   opacity: .55;
   cursor: not-allowed;
+}
+@media (max-width: 960px) {
+  .provider-flow-role {
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: 6px 8px;
+  }
+  .provider-flow-role-cli-wrap,
+  .provider-flow-role-model,
+  .provider-flow-role-status {
+    grid-column: 2;
+  }
 }
 .provider-flow-role:hover { border-color: color-mix(in srgb, var(--role-accent) 28%, var(--line)); }
 .provider-flow-role.is-selected {

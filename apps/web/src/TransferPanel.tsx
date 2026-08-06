@@ -14,6 +14,16 @@ const PROJECT_PRESETS = [
   { id: "evidence_archive" as const, label: "证据归档", hint: "任务结果与审计归档" },
 ];
 
+const PLATFORM_MODULES = [
+  { id: "global_rules", label: "全局规则", hint: "调度并发、网络边界、关注策略、Finding 协议等" },
+  { id: "agent_roles", label: "角色注册表", hint: "agent_roles：名称、标题、kind、内置标记" },
+  { id: "global_role_configs", label: "全局 RoleConfig", hint: "全局缺省运行配置（指令 / 工具 / 模块）" },
+  { id: "skill_sources", label: "模块源", hint: "Skill / 插件 Git 源登记与同步元数据" },
+  { id: "credentials", label: "凭据元数据", hint: "仅名称 / provider / 指纹等，不含 Secret 明文" },
+] as const;
+
+type PlatformModuleId = (typeof PLATFORM_MODULES)[number]["id"];
+
 type Scope = "project" | "platform";
 
 export function TransferPanel({
@@ -26,6 +36,9 @@ export function TransferPanel({
 }) {
   const isPlatform = scope === "platform" || !projectId;
   const [preset, setPreset] = useState<(typeof PROJECT_PRESETS)[number]["id"]>("configuration");
+  const [platformModules, setPlatformModules] = useState<Set<PlatformModuleId>>(
+    () => new Set(PLATFORM_MODULES.map((m) => m.id)),
+  );
   const [exports, setExports] = useState<DataExportRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -49,13 +62,37 @@ export function TransferPanel({
     return () => clearInterval(t);
   }, [reload]);
 
+  const togglePlatformModule = (id: PlatformModuleId) => {
+    setPlatformModules((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllPlatformModules = () => {
+    setPlatformModules(new Set(PLATFORM_MODULES.map((m) => m.id)));
+  };
+
+  const clearPlatformModules = () => {
+    setPlatformModules(new Set());
+  };
+
   const createExport = async () => {
     setBusy(true);
     try {
       if (isPlatform) {
+        const modules = PLATFORM_MODULES.map((m) => m.id).filter((id) => platformModules.has(id));
+        if (modules.length === 0) {
+          flash("请至少选择一个导出模块");
+          return;
+        }
+        const allSelected = modules.length === PLATFORM_MODULES.length;
         await api.createPlatformExport({
-          preset: "platform_full",
-          credentials: { mode: "metadata" },
+          preset: allSelected ? "platform_full" : "custom",
+          modules,
+          credentials: { mode: modules.includes("credentials") ? "metadata" : "excluded" },
         });
       } else {
         await api.createExport(projectId!, {
@@ -230,14 +267,58 @@ export function TransferPanel({
         )}
 
         {isPlatform && (
-          <div className="rounded-xl bg-white/[.02] px-3 py-2.5 text-[12px] leading-5 text-zinc-500 ring-1 ring-white/[.06]">
-            固定导出：global_rules · agent_roles · global_role_configs · skill_sources · credentials（元数据）
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-zinc-500">导出模块</span>
+              <button
+                type="button"
+                onClick={selectAllPlatformModules}
+                className="font-mono text-[10px] text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
+              >
+                全选
+              </button>
+              <button
+                type="button"
+                onClick={clearPlatformModules}
+                className="font-mono text-[10px] text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
+              >
+                清空
+              </button>
+              <span className="font-mono text-[10px] text-zinc-600">
+                已选 {platformModules.size}/{PLATFORM_MODULES.length}
+              </span>
+            </div>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {PLATFORM_MODULES.map((mod) => {
+                const checked = platformModules.has(mod.id);
+                return (
+                  <label
+                    key={mod.id}
+                    className={`flex cursor-pointer items-start gap-2.5 rounded-xl px-3 py-2.5 ring-1 transition-colors ${
+                      checked ? "bg-white/[.04] ring-white/[.12]" : "ring-white/[.05] hover:bg-white/[.02]"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => togglePlatformModule(mod.id)}
+                      className="mt-1 accent-zinc-300"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-[13px] text-zinc-200">{mod.label}</span>
+                      <span className="block font-mono text-[10px] text-zinc-600">{mod.id}</span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-zinc-600">{mod.hint}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
         )}
 
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || (isPlatform && platformModules.size === 0)}
           onClick={createExport}
           className="mt-3 flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[13px] font-medium text-ink-950 hover:bg-acc-400 disabled:opacity-50"
         >

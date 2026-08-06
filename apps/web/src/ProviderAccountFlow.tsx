@@ -18,6 +18,7 @@ import {
   type Project,
   type ProviderAccountCatalogItemView,
   type ProviderCredential,
+  type RuntimeImageSummary,
 } from "./api";
 import {
   type AgentCli,
@@ -146,6 +147,7 @@ export function ProviderAccountFlow({
 }) {
   const [catalog, setCatalog] = useState<ProviderAccountCatalogItemView[]>([]);
   const [roleConfigs, setRoleConfigs] = useState<BindableRoleConfig[]>([]);
+  const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
   const [selectedRoleIds, setSelectedRoleIds] = useState<Set<string>>(() => new Set());
   const [actorProjectId, setActorProjectId] = useState<string | null>(null);
@@ -340,6 +342,54 @@ export function ProviderAccountFlow({
     api.credentialProviders().then(setCatalog).catch(() => {});
     api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
   }, []);
+
+  // Same catalog as 镜像市场：enabled 镜像全量可选（官方含 OpenHarmony project_opt_in）。
+  // project_id 仅用于选项上标注「需项目启用」；第三方未启用时仍过滤（与后端一致）。
+  useEffect(() => {
+    const projectId =
+      roleScopeFilter !== "all" && roleScopeFilter !== "global"
+        ? roleScopeFilter
+        : selectedCredential?.project_id ?? actorProjectId ?? undefined;
+    api.runtimeImages(projectId || undefined).then(setRuntimeImages).catch(() => setRuntimeImages([]));
+  }, [roleScopeFilter, selectedCredential?.project_id, actorProjectId]);
+
+  /** Marketplace-aligned options for a RoleConfig row (null key = system base). */
+  const runtimeImageOptionsFor = (projectId: string | null): RuntimeImageSummary[] => {
+    return runtimeImages
+      .filter((image) => {
+        if (!image.enabled) return false;
+        // Official (base + specialty + OpenHarmony opt-in): always list, match market.
+        if (image.official) return true;
+        // Third-party: only when project has enabled it (or show if no project context with warning via option label).
+        if (projectId) return image.project_enabled === true;
+        return false;
+      })
+      .slice()
+      .sort((a, b) => {
+        const aBase = a.image_key === "deepsonar-base" ? 0 : a.official ? 1 : 2;
+        const bBase = b.image_key === "deepsonar-base" ? 0 : b.official ? 1 : 2;
+        if (aBase !== bBase) return aBase - bBase;
+        return a.name.localeCompare(b.name, "zh");
+      });
+  };
+
+  const runtimeImageOptionLabel = (image: RuntimeImageSummary, projectId: string | null): string => {
+    const kind =
+      image.image_key === "deepsonar-base"
+        ? "底座"
+        : image.official
+          ? image.project_opt_in
+            ? "专项·项目启用"
+            : "专项"
+          : "第三方";
+    const needsProject =
+      image.official && image.project_opt_in && projectId && image.project_enabled !== true
+        ? " · 未在项目启用"
+        : image.official && image.project_opt_in && !projectId
+          ? " · 运行前需项目启用"
+          : "";
+    return `${image.name} · ${kind}${needsProject}`;
+  };
 
   useEffect(() => {
     setCreateProjectId(actorProjectId ?? "");
@@ -1176,6 +1226,65 @@ export function ProviderAccountFlow({
                           <option value="claude-code">claude-code</option>
                           <option value="codex">codex</option>
                           <option value="open-code">open-code</option>
+                        </select>
+                      </label>
+                      <label
+                        className="provider-flow-role-cli-wrap provider-flow-role-image-wrap"
+                        onClick={(event) => event.stopPropagation()}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <span className="provider-flow-role-cli-caption">镜像</span>
+                        <select
+                          className="theme-input-surface provider-flow-role-cli provider-flow-role-image"
+                          value={roleConfig.runtime_image_key ?? ""}
+                          disabled={busy || !roleConfig.can_bind}
+                          title="修改此角色配置的运行镜像（立即保存；空 = 系统底座）"
+                          aria-label={`${roleConfig.role_title || roleConfig.role_name} 的运行镜像`}
+                          onClick={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                          onChange={(event) => {
+                            event.stopPropagation();
+                            const next = event.target.value.trim() || null;
+                            const current = roleConfig.runtime_image_key ?? null;
+                            if (next === current) return;
+                            void (async () => {
+                              setBusy(true);
+                              setError("");
+                              try {
+                                await api.updateRoleConfigRuntimeImage(roleConfig.id, next);
+                                setRoleConfigs((currentRows) =>
+                                  currentRows.map((item) =>
+                                    item.id === roleConfig.id ? { ...item, runtime_image_key: next } : item,
+                                  ),
+                                );
+                                const label = next
+                                  ? (runtimeImages.find((image) => image.image_key === next)?.name ?? next)
+                                  : "系统底座";
+                                setNotice(`已将「${roleConfig.role_title || roleConfig.role_name}」镜像改为 ${label}`);
+                                api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
+                              } catch (e) {
+                                setError(String(e));
+                              } finally {
+                                setBusy(false);
+                              }
+                            })();
+                          }}
+                        >
+                          <option value="">系统底座（默认）</option>
+                          {runtimeImageOptionsFor(roleConfig.project_id).map((image) => (
+                            <option key={image.id} value={image.image_key}>
+                              {runtimeImageOptionLabel(image, roleConfig.project_id)}
+                            </option>
+                          ))}
+                          {/* Keep current key visible even if not in filtered catalog (stale pin). */}
+                          {roleConfig.runtime_image_key
+                            && !runtimeImageOptionsFor(roleConfig.project_id).some(
+                              (image) => image.image_key === roleConfig.runtime_image_key,
+                            ) && (
+                            <option value={roleConfig.runtime_image_key}>
+                              {roleConfig.runtime_image_key}（当前 · 需检查启用）
+                            </option>
+                          )}
                         </select>
                       </label>
                       <span className="provider-flow-role-model">{roleConfig.model ?? "默认模型"}</span>

@@ -607,9 +607,14 @@ export function RuntimeImagesPage() {
         title={projectId ? "项目运行镜像" : "镜像市场"}
         eyebrow="TRUSTED RUNTIME CATALOG"
         subtitle={
-          projectId
-            ? "系统底座自动用于未绑定专项镜像的角色；此处仅为项目启用/固定官方专项与第三方镜像。任务表单不暴露镜像参数。"
-            : "系统运行环境（deepsonar-base）是调度默认底座，与专项镜像（Kali / Audit 等）不同层。「专项」需角色显式绑定；第三方须隔离区准入。共用 digest / 扫描 / 审批证据链，但卡片按类别分区。"
+          <span className="inline-flex items-center gap-0.5">
+            {projectId ? "项目启用与固定官方专项 / 第三方镜像" : "系统底座 · 官方专项 · 第三方隔离准入"}
+            <HelpTip label={projectId ? "项目运行镜像说明" : "镜像市场说明"}>
+              {projectId
+                ? "系统底座自动用于未绑定专项镜像的角色；此处仅为项目启用/固定官方专项与第三方镜像。任务表单不暴露镜像参数。"
+                : "系统运行环境（deepsonar-base）是调度默认底座，与专项镜像（Kali / Audit 等）不同层。「专项」需角色显式绑定；第三方须隔离区准入。共用 digest / 扫描 / 审批证据链，但卡片按类别分区。"}
+            </HelpTip>
+          </span>
         }
         actions={
           <div className="flex w-full flex-wrap gap-2 sm:w-auto">
@@ -655,7 +660,12 @@ export function RuntimeImagesPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[10px] tracking-[.14em] text-zinc-600">CPU PLATFORM</span>
+        <span className="inline-flex items-center font-mono text-[10px] tracking-[.14em] text-zinc-600">
+          CPU PLATFORM
+          <HelpTip label="CPU 平台筛选说明">
+            一平台一版本；项目可固定某个平台 digest。
+          </HelpTip>
+        </span>
         {PLATFORM_FILTERS.map((item) => (
           <button
             key={item.label}
@@ -666,9 +676,6 @@ export function RuntimeImagesPage() {
             {item.label}
           </button>
         ))}
-        <span className="ml-1 w-full text-[11px] text-zinc-600 sm:w-auto">
-          一平台一版本；项目可固定某个平台 digest
-        </span>
       </div>
 
       {error && (
@@ -695,8 +702,11 @@ export function RuntimeImagesPage() {
               )}
             </div>
             <div className="min-w-0">
-              <label htmlFor="runtime-registry-channel" className="font-mono text-[10px] tracking-[.16em] text-zinc-600">
+              <label htmlFor="runtime-registry-channel" className="inline-flex items-center font-mono text-[10px] tracking-[.16em] text-zinc-600">
                 OFFICIAL REGISTRY CHANNEL
+                <HelpTip label="官方镜像仓库通道说明">
+                  选择服务器治理的官方镜像仓库；不会接受自定义 URL，也不会改变下方 CPU / 平台筛选。
+                </HelpTip>
               </label>
               <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
                 <select
@@ -704,7 +714,7 @@ export function RuntimeImagesPage() {
                   className="field-input min-w-0 flex-1 font-mono text-[12px]"
                   value={registry?.selected_channel ?? ""}
                   disabled={!registry || registryLoading || busy !== null || !canManageRegistryChannel}
-                  aria-describedby="runtime-registry-channel-status"
+                  aria-describedby={channelMessage || !canManageRegistryChannel ? "runtime-registry-channel-status" : undefined}
                   onChange={(event) => void updateRegistryChannel(event.target.value as RuntimeImageRegistryChannel)}
                 >
                   {!registry && <option value="">{registryLoading ? "加载通道…" : "无法读取通道"}</option>}
@@ -717,11 +727,17 @@ export function RuntimeImagesPage() {
                 {channelStatus === "pending" && <span className="shrink-0 font-mono text-[10px] text-sky-300">切换中…</span>}
                 {channelStatus === "success" && <span className="shrink-0 font-mono text-[10px] text-emerald-300">已更新</span>}
               </div>
-              <p id="runtime-registry-channel-status" className={`mt-2 text-[11px] leading-5 ${channelStatus === "error" ? "text-red-300" : channelStatus === "success" ? "text-emerald-300" : "text-zinc-500"}`}>
-                {channelMessage ?? "选择服务器治理的官方镜像仓库；不会接受自定义 URL，也不会改变下方 CPU / 平台筛选。"}
-              </p>
-              {!canManageRegistryChannel && (
-                <p className="mt-1 text-[11px] leading-5 text-amber-300/80">当前账号只能查看通道；切换需要管理员或 images:manage 权限。</p>
+              {(channelMessage || !canManageRegistryChannel) && (
+                <div id="runtime-registry-channel-status" className="mt-2 space-y-1">
+                  {channelMessage && (
+                    <p className={`text-[11px] leading-5 ${channelStatus === "error" ? "text-red-300" : channelStatus === "success" ? "text-emerald-300" : "text-zinc-500"}`}>
+                      {channelMessage}
+                    </p>
+                  )}
+                  {!canManageRegistryChannel && (
+                    <p className="text-[11px] leading-5 text-amber-300/80">当前账号只能查看通道；切换需要管理员或 images:manage 权限。</p>
+                  )}
+                </div>
               )}
             </div>
           </div>
