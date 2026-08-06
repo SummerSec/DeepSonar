@@ -16,7 +16,7 @@ const AVAILABLE_PROVENANCE = {
 const UNAVAILABLE_REASON_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REF_POLICIES = {
   github: { host: "ghcr.io", namespace: "summersec" },
-  dockerhub: { host: "docker.io", namespace: "summersec" },
+  dockerhub: { host: "docker.io", namespace: "sumsec" },
   "aliyun-acr": { host: "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com", namespace: "summersec" },
 };
 const EXPECTED_KEYS = [
