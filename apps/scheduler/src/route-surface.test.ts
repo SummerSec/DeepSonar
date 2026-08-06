@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import test from "node:test";
@@ -114,6 +115,25 @@ function openApiSurface(): string[] {
 test("registered Fastify route surface matches the Issue #37 characterization manifest", async () => {
   assert.deepEqual(sortedUnique(REGISTERED_ROUTE_SURFACE), [...REGISTERED_ROUTE_SURFACE].sort());
   assert.deepEqual(await registeredRouteSurface(), [...REGISTERED_ROUTE_SURFACE].sort());
+});
+
+test("top-level routes module remains a hook and registrar composition root", () => {
+  const source = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  assert.ok(source.split(/\r?\n/).length <= 220, "top-level routes.ts must stay narrow");
+  assert.doesNotMatch(source, /\bapp\.(?:delete|get|head|options|patch|post|put|route)\s*\(/);
+  for (const registrar of [
+    "registerProjectTaskRoutes",
+    "registerJobControlRoutes",
+    "registerFindingVerificationRoutes",
+    "registerRoleConfigRoutes",
+    "registerCredentialRoutes",
+    "registerRuntimeImageRoutes",
+    "registerTransferRoutes",
+    "registerAuthRoutes",
+    "registerAuditRoutes",
+  ]) {
+    assert.match(source, new RegExp(`${registrar}\\(app\\)`), `${registrar} must be composed at the top level`);
+  }
 });
 
 test("route surface collector does not blanket-drop explicit HEAD registrations", async () => {

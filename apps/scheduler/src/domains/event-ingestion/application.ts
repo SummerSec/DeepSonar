@@ -20,10 +20,10 @@ export interface EventIngestionResult {
 }
 
 /**
- * Semantic convergence stays in core until the Hub/Verify/Report contexts are
- * extracted.  This callback is deliberately the only escape hatch from the
- * ingestion boundary; it receives the already-ordered transaction owned by
- * this application service.
+ * Semantic convergence is an explicit application callback so the append
+ * boundary can remain transaction-owned. Production composition uses the
+ * typed side-effect ports in `side-effects.ts`; this callback stays available
+ * for focused adapters and characterization tests.
  */
 export type EventSideEffects = (
   tx: EventIngestionTransaction,

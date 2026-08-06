@@ -7,7 +7,7 @@ execution-state and side-effect authority.
 
 ## Context map
 
-The Scheduler is being split by responsibility.  Each context exposes a small
+The Scheduler is split by responsibility.  Each context exposes a small
 application interface; a caller must not update another context's rows by
 reaching through its implementation module.
 
@@ -20,10 +20,12 @@ reaching through its implementation module.
 | `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, report failure recovery, and report/download route registration. | Agent runtime snapshots or generic Job transition rules. |
 | `role-runtime-snapshot` | RoleConfig, credential/CLI compatibility, skills, and immutable runtime-image snapshots. | Canvas/Finding convergence and Job terminal decisions. |
 
-The route layer is an adapter over these application interfaces. `core.ts`
-remains the compatibility composition root while callers migrate. Legacy
-implementations are injected through explicit ports so the application seams
-can be tested without a database and transaction ownership remains visible.
+The route layer is an adapter over these application interfaces. Business
+handlers live in domain registrars; top-level `routes.ts` installs shared hooks
+and composes those registrars. `core.ts` remains the compatibility composition
+root for established internal imports. Legacy SQL implementations are injected
+through explicit ports so application seams can be tested without a database
+and transaction ownership remains visible.
 
 ## Lifecycle foundation and dependency direction
 
@@ -88,18 +90,19 @@ update after a locked node-set recheck; Verify, Hub, and Report work continue
 underneath that outer Canvas lock.  The
 event-ingestion callback is invoked only after the ordered locks are held, so
 duplicate replay and a callback failure cannot produce an append/side-effect
-split-brain.  Moving the remaining semantic callback implementations behind
-their own context interfaces is a later Issue #37 slice, not a lock-order
-exception.
+split-brain.  The semantic callback implementation now lives in the
+event-ingestion side-effect application and receives Hub, Finding, runtime
+snapshot, shared-asset, and terminal/report adapters through explicit ports;
+this extraction does not change the lock-order contract.
 
 ## Event-ingestion second slice
 
 `apps/scheduler/src/domains/event-ingestion/application.ts` owns envelope
 validation, payload limits, event-id deduplication, and per-Job sequencing.
-`core.ts` remains the compatibility facade and supplies the semantic callback
-until Hub/Verify/Report move behind their own application interfaces.  The
-application performs a read-only Canvas hint preflight, then re-checks the Job
-row and the target/Job/Intent/Report node snapshots with row locks after acquiring
+`side-effects.ts` owns the semantic callback behind typed ports; `core.ts`
+remains the compatibility facade and composition root.  The application
+performs a read-only Canvas hint preflight, then re-checks the Job row and the
+target/Job/Intent/Report node snapshots with row locks after acquiring
 locks (`Canvas → Job → nodes`) and retries once if legacy data was reassigned
 concurrently.  Both the append and callback run before the
 transaction commits; an exception rolls back `event_dedup`, `events`, and all
@@ -169,10 +172,28 @@ runtime-image revocation use bulk `UPDATE ... RETURNING` operations so side
 effects run only for rows that won the CAS.
 
 The Phase 0 inventory intentionally still lists these direct writers in
-`core.ts`: `request_human` (`running → waiting_human`), `finalizeJob`
-(`running → succeeded/failed`), and Verify priority drain (`pending →
-cancelled`).  They are coupled to Canvas/Finding/Report convergence and remain
-for the next slices; Phase 1 does not claim Issue #37 is complete.
+`core.ts`: `finalizeJob` (`running → succeeded/failed`) and Verify priority
+drain (`pending → cancelled`). `request_human` is now owned by the
+event-ingestion side-effect application. Finalization and priority drain remain
+coupled to Canvas/Finding/Report convergence. Phase 1 remains a historical
+milestone and does not by itself describe the later completed slices.
+
+## Issue #37 completion
+
+All six execution contexts now expose explicit application/ports seams. The
+event-ingestion context owns semantic side effects, while `core.ts` composes
+Finding, Hub, runtime snapshot, shared-asset, edge, and terminal services and
+keeps narrow compatibility exports. HTTP business handlers are registered by
+domain; top-level `routes.ts` contains only shared auth/project-scope hooks,
+Gateway registration, and registrar composition.
+
+Characterization tests enforce the direct Job-status writer inventory, event
+side-effect ownership, transaction-preserving facades, top-level route shape,
+Fastify route surface, and OpenAPI operation surface. PostgreSQL integration
+tests cover lifecycle recovery, event ordering/rollback/authorization/rate
+limits, Hub reference validation, Verify rework, and convergence recovery.
+Production Scheduler sources contain no dynamic `import()` used to evade a
+dependency cycle.
 
 ## Migration rules
 

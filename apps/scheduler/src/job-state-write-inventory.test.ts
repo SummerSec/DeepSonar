@@ -13,30 +13,33 @@ type JobStateWriteEntry = {
 /**
  * Phase-1 inventory of the intentionally retained direct Job status writers.
  * Lifecycle-owned callers now route through domains/job-lifecycle/application;
- * only semantic-human, finalize, and priority-drain writes remain in core.ts
- * until their convergence/event-ingestion slices are moved.
+ * semantic-human is owned by event-ingestion; finalize and priority-drain
+ * remain in core.ts until their convergence slices are moved.
  */
 const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
   {
-    id: "core.semantic-human",
-    file: "core.ts",
+    id: "event-ingestion.semantic-human",
+    file: "domains/event-ingestion/side-effects.ts",
     targets: ["waiting_human"],
     purpose: "request_human moves a running Job into the human gate",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*'waiting_human'[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s*'running'/,
+    pattern:
+      /UPDATE\s+jobs\s+SET\s+status\s*=\s*'waiting_human'[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s*'running'/,
   },
   {
     id: "core.finalize-running-terminal",
     file: "core.ts",
     targets: ["succeeded", "failed"],
     purpose: "finalizeJob performs the guarded running-to-terminal CAS",
-    pattern: /UPDATE\s+jobs\s+SET\s+status\s*=\s*\$\{status\}[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s*'running'/,
+    pattern:
+      /UPDATE\s+jobs\s+SET\s+status\s*=\s*\$\{status\}[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s*'running'/,
   },
   {
     id: "core.drain-non-gate-verify",
     file: "core.ts",
     targets: ["cancelled"],
     purpose: "priority drain cancels pending non-gate Verify Jobs",
-    pattern: /UPDATE\s+jobs\s+j\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?FROM\s+findings\s+f[\s\S]*?j\.status\s*=\s*'pending'/,
+    pattern:
+      /UPDATE\s+jobs\s+j\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?FROM\s+findings\s+f[\s\S]*?j\.status\s*=\s*'pending'/,
   },
 ] as const;
 
@@ -144,7 +147,10 @@ function directStatusUpdateSegments(source: string): { index: number; text: stri
   return starts.flatMap((index) => {
     const statementEnd = findTemplateLiteralEnd(source, index);
     const text = source.slice(index, statementEnd);
-    const setClause = /UPDATE\s+(?:(?:[a-z_][a-z0-9_$]*)\.)?jobs(?:\s+(?:AS\s+)?[a-z_][a-z0-9_$]*)?\s+SET(?<set>[\s\S]*?)(?:\bWHERE\b|$)/i.exec(text);
+    const setClause =
+      /UPDATE\s+(?:(?:[a-z_][a-z0-9_$]*)\.)?jobs(?:\s+(?:AS\s+)?[a-z_][a-z0-9_$]*)?\s+SET(?<set>[\s\S]*?)(?:\bWHERE\b|$)/i.exec(
+        text,
+      );
     const setText = setClause?.groups?.set ?? "";
     return /\bstatus\s*=/.test(setText) || /\bSET\s+\$\{/.test(text) ? [{ index, text }] : [];
   });
@@ -160,7 +166,9 @@ test("direct status scanner handles qualified, aliased, nested, and unguarded SQ
   const segments = directStatusUpdateSegments(source);
   assert.deepEqual(
     segments.map((segment) => segment.index),
-    ["UPDATE public.jobs", "UPDATE jobs AS j", "UPDATE jobs SET status = 'timeout'"].map((marker) => source.indexOf(marker)),
+    ["UPDATE public.jobs", "UPDATE jobs AS j", "UPDATE jobs SET status = 'timeout'"].map((marker) =>
+      source.indexOf(marker),
+    ),
   );
   assert.equal(directStatusUpdateSegments("await sql`UPDATE jobs SET ${db(sets)}`").length, 1);
 });
