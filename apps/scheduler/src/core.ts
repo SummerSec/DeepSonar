@@ -9,6 +9,7 @@ import {
   HumanPayload,
   ProgressPayload,
   allowedPlatformTools,
+  CANONICAL_UUID_PATTERN,
   type EventEnvelopeInput,
   type PlatformToolName,
   type VerificationEvidence,
@@ -65,6 +66,7 @@ import {
   type FindingVerificationLegacyPort,
 } from "./domains/finding-verification/index.js";
 import { createReportConvergenceApplication } from "./domains/report-convergence/index.js";
+import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 
 export {
   PLATFORM_DEFAULT_AGENT_CLI,
@@ -98,6 +100,29 @@ export const canTransition = canJobTransition;
  */
 export async function transitionJob(jobId: string, to: string, patch: Record<string, unknown> = {}) {
   return applyJobTransition(jobId, to, patch);
+}
+
+/**
+ * The publish callback is host-authorized, but the sandbox can still deliver
+ * a late event after cancellation or lease expiry. Keep the check on the
+ * scheduler connection and bind it to the execution's current sandbox.
+ */
+export async function assertJobCanPublishSharedAsset(
+  jobId: string,
+  sandboxId: string | null,
+): Promise<void> {
+  const [row] = await sql`
+    SELECT id
+      FROM jobs
+     WHERE id = ${jobId}
+       AND status = 'running'
+       AND lease_expires_at IS NOT NULL
+       AND lease_expires_at > now()
+       AND sandbox_id IS NOT NULL
+       AND sandbox_id = ${sandboxId}
+     FOR UPDATE
+  `;
+  if (!row) throw new Error("shared_asset_publish_job_not_running");
 }
 
 export function sha16(s: string): string {
@@ -657,6 +682,26 @@ export interface CreateJobInput {
   ingressKey?: string;
 }
 
+export const MAX_RELATED_FINDING_IDS = 8;
+const canonicalUuid = new RegExp(CANONICAL_UUID_PATTERN, "i");
+
+/** Parse the untrusted payload declaration used to widen a Job's Finding scope. */
+export function parseRelatedFindingIds(payload: Record<string, unknown>): string[] {
+  if (!Object.prototype.hasOwnProperty.call(payload, "related_finding_ids")) return [];
+  const raw = payload.related_finding_ids;
+  if (!Array.isArray(raw) || raw.length > MAX_RELATED_FINDING_IDS) {
+    throw new Error(`related_finding_ids_invalid: expected at most ${MAX_RELATED_FINDING_IDS} canonical UUIDs`);
+  }
+  const ids = raw.map((value, index) => {
+    if (typeof value !== "string" || !canonicalUuid.test(value)) {
+      throw new Error(`related_finding_ids_invalid: index ${index}`);
+    }
+    return value.toLowerCase();
+  });
+  if (new Set(ids).size !== ids.length) throw new Error("related_finding_ids_duplicate");
+  return ids;
+}
+
 export async function createJob(input: CreateJobInput) {
   const requestedPayload = { ...(input.payload ?? {}) };
   const systemType = SCHEDULER_SYSTEM_JOB_TYPES.has(String(input.type ?? "").toLowerCase());
@@ -676,6 +721,11 @@ export async function createJob(input: CreateJobInput) {
       schedulingPayload.verification_followup = followup;
     }
   }
+  const relatedFindingIds = parseRelatedFindingIds(schedulingPayload);
+  const snapshotFindingIds = [...new Set([
+    ...(input.findingId ? [input.findingId.toLowerCase()] : []),
+    ...relatedFindingIds,
+  ])];
   const purpose = schedulingPurposeForJob({
     type: input.type,
     // Custom/public Job creation never accepts a caller-selected convergence
@@ -698,7 +748,12 @@ export async function createJob(input: CreateJobInput) {
     // 快照读取与 Job 插入必须处于同一事务；Credential provider 迁移会等待本事务结束，
     // 避免生成“快照是旧 provider、执行期已是新 provider”的竞态 Job。
     const job = await sql.begin(async (tx) => {
-      const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, input.projectId, input.type);
+      const snapshot = await resolveAgentSnapshotForJob(
+        tx as unknown as typeof sql,
+        input.projectId,
+        input.type,
+        snapshotFindingIds,
+      );
       const [created] = await tx`
         INSERT INTO jobs ${tx({
           project_id: input.projectId,
@@ -715,6 +770,7 @@ export async function createJob(input: CreateJobInput) {
           ingress_key: input.ingressKey ?? null,
         })}
         RETURNING *`;
+      await recordJobSharedAssets(tx as unknown as typeof sql, created.id as string, snapshot.shared_assets ?? []);
       return created;
     });
     inc("deepsonar_jobs_created_total", { type: input.type });
@@ -932,8 +988,14 @@ const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
   patchCanvasConvergence: async (tx, canvasId, patch) =>
     patchCanvasConvergence(tx as unknown as typeof sql, canvasId, patch),
   careSeverities,
-  resolveAgentSnapshotForJob: async (tx, projectId, type) =>
-    resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, type),
+  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) =>
+    resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, type, findingIds),
+  recordJobSharedAssets: async (tx, jobId, snapshot) =>
+    recordJobSharedAssets(
+      tx as unknown as typeof sql,
+      jobId,
+      (snapshot as { shared_assets?: Parameters<typeof recordJobSharedAssets>[2] }).shared_assets ?? [],
+    ),
   fixedPriorityForJob: (input) => fixedPriorityForJob(input),
   insertEdgeIfAbsent,
   settleCanvasFindingsAtGuardrail: async (tx, canvasId, reason) => {
@@ -1535,7 +1597,6 @@ export async function applySideEffects(
 
       // 服务端硬边界：只接受数据库实时查询出的项目可用工作角色，不做默认或回退。
       const role = it.role!;
-      const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, job.project_id as string, role);
       const trigger = decisionTrigger;
       // verify_rework/verify_failed 补证不得 hub_followup：否则每个补证成功都会 force Hub，
       // 与「全部补证终态后 maybeReverifyAfterFollowup」冲突。
@@ -1543,6 +1604,13 @@ export async function applySideEffects(
         trigger.kind ?? "",
       );
       const verificationFollowup = findingVerificationApplication.buildVerificationFollowupPayload(trigger, it.from, role);
+      const followupFindingId = typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
+      const snapshot = await resolveAgentSnapshotForJob(
+        tx as unknown as typeof sql,
+        job.project_id as string,
+        role,
+        followupFindingId ? [followupFindingId] : [],
+      );
       // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
       const applyHubFollowup = hubFollowup && !verificationFollowup;
       const schedulingPurpose: SchedulingPurpose = verificationFollowup
@@ -1553,6 +1621,7 @@ export async function applySideEffects(
           project_id: job.project_id as string,
           canvas_id: canvasId,
           parent_job_id: job.id as string,
+          finding_id: followupFindingId,
           agent_snapshot_json: snapshot as never,
           type: role,
           priority: fixedPriorityForJob({ type: role, purpose: schedulingPurpose }),
@@ -1572,6 +1641,7 @@ export async function applySideEffects(
           followup_depth: 0,
         })}
         RETURNING id`;
+      await recordJobSharedAssets(tx as unknown as typeof sql, roleJob.id as string, snapshot.shared_assets ?? []);
       // intent 节点与角色 job 1:1（节点即任务卡：pending=未认领 running=进行中 succeeded=已结论）
       const [{ next_y }] = await tx<[{ next_y: number }]>`
         SELECT COALESCE(MAX(y), 60) + 140 AS next_y FROM canvas_nodes
@@ -1988,6 +2058,9 @@ export async function resolveAgentSnapshotForJob(
   db: typeof sql,
   projectId: string,
   jobType: string,
+  findingIds: string[] = [],
 ): Promise<AgentRuntimeSnapshot> {
-  return roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(db as never, projectId, jobType) as Promise<AgentRuntimeSnapshot>;
+  const snapshot = await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(db as never, projectId, jobType) as AgentRuntimeSnapshot;
+  const selection = await resolveSharedAssetSelection(db, projectId, findingIds);
+  return { ...snapshot, shared_assets_revision: selection.revision, shared_assets: selection.assets };
 }

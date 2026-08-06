@@ -38,6 +38,7 @@ interface Op {
   scope?: string | null; // null = 豁免鉴权
   tags: string[];
   body?: Record<string, unknown>;
+  bodyContentType?: string;
   query?: Record<string, unknown>;
   requiredQuery?: readonly string[];
   responses?: Record<string, unknown>;
@@ -238,6 +239,18 @@ const OPS: Op[] = [
     },
   },
   { method: "post", path: "/projects/{id}/archive", summary: "归档项目", scope: "projects:write", tags: ["Projects"] },
+
+  // shared assets
+  { method: "get", path: "/projects/{id}/shared-assets", summary: "项目共享资产目录", scope: "assets:read", tags: ["Shared Assets"] },
+  { method: "post", path: "/projects/{id}/shared-assets", summary: "上传项目共享资产（x-asset-key 指定逻辑路径）", scope: "assets:write", tags: ["Shared Assets"], bodyContentType: "application/octet-stream", body: { type: "string", format: "binary" } },
+  { method: "get", path: "/projects/{id}/shared-assets/policy", summary: "项目共享资产策略", scope: "assets:read", tags: ["Shared Assets"] },
+  { method: "patch", path: "/projects/{id}/shared-assets/policy", summary: "更新平台资产 opt-in", scope: "assets:write", tags: ["Shared Assets"], body: { type: "object", required: ["platform_enabled"], additionalProperties: false, properties: { platform_enabled: { type: "boolean" } } } },
+  { method: "get", path: "/findings/{id}/shared-assets", summary: "Finding 只读工作包目录", scope: "assets:read", tags: ["Shared Assets"] },
+  { method: "post", path: "/findings/{id}/shared-assets", summary: "上传 Finding 共享资产", scope: "assets:write", tags: ["Shared Assets"], bodyContentType: "application/octet-stream", body: { type: "string", format: "binary" } },
+  { method: "get", path: "/platform/shared-assets", summary: "平台共享资产目录（管理员）", scope: "assets:manage", tags: ["Shared Assets"] },
+  { method: "post", path: "/platform/shared-assets", summary: "上传平台共享资产（管理员）", scope: "assets:manage", tags: ["Shared Assets"], bodyContentType: "application/octet-stream", body: { type: "string", format: "binary" } },
+  { method: "post", path: "/shared-assets/{id}/archive", summary: "归档共享资产（保留历史版本）", scope: "assets:write", tags: ["Shared Assets"] },
+  { method: "get", path: "/shared-assets/{id}/content", summary: "下载共享资产内容", scope: "assets:read", tags: ["Shared Assets"] },
 
   // tasks / canvases
   {
@@ -1155,7 +1168,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     if (op.body) {
       operation.requestBody = {
         required: true,
-        content: { "application/json": { schema: op.body } },
+        content: { [op.bodyContentType ?? "application/json"]: { schema: op.body } },
       };
     }
     item[op.method] = operation;

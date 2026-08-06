@@ -330,7 +330,8 @@ export function createHubOrchestrationApplication(
         WHERE id = ${waitingWake.id}`;
     }
 
-    const snapshot = await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason");
+    const triggerFindingId = typeof trigger.finding_id === "string" ? trigger.finding_id : null;
+    const snapshot = await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []);
     const [hubJob] = await tx`
       INSERT INTO jobs ${tx({
         project_id: projectId,
@@ -343,6 +344,7 @@ export function createHubOrchestrationApplication(
         followup_depth: 0,
       })}
       RETURNING id`;
+    await ports.recordJobSharedAssets(tx, hubJob.id as string, snapshot);
 
     const [{ next_x }] = await tx<[{ next_x: number }]>`
       SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes

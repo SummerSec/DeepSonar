@@ -567,7 +567,10 @@ export interface RealAgentSpec {
   /** 控制 MCP 工具名到宿主语义事件类型的映射。 */
   semanticToolEvents?: Record<string, string>;
   /** 每条完整语义事件到达时串行调用。 */
-  onSemanticEvent?: (event: Record<string, unknown>) => void | Promise<void>;
+  onSemanticEvent?: (
+    event: Record<string, unknown>,
+    control: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
+  ) => void | Promise<void>;
   /** Run 建立后注册外部增量消息源；消息经 stdin stream-json 注入同一会话。 */
   onRunReady?: (control: { sendMessage(content: string): Promise<void> }) =>
     void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
@@ -656,6 +659,47 @@ async function readSandboxFileText(sandbox: Sandbox, filePath: string): Promise<
     throw new Error(`读取沙箱文件失败(exit=${res.exitCode}): ${res.stderr.slice(0, 200)}`);
   }
   return res.stdout;
+}
+
+export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: string, maxBytes: number): Promise<Buffer> {
+  if (!filePath.startsWith("/workspace/") || filePath.startsWith(`${SHARED_ASSETS_MOUNT_PATH}/`)) {
+    throw new Error("shared_asset_source_path_forbidden");
+  }
+  const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
+  const containerId = inspected?.Id;
+  if (!containerId) throw new Error("shared_asset_container_unavailable");
+  const quoted = shellQuote(filePath);
+  const command = [
+    "set -eu",
+    `test ! -L ${quoted} || exit 44`,
+    `exec 3<${quoted}`,
+    "resolved=$(readlink -f /proc/self/fd/3)",
+    'case "$resolved" in /workspace/*) ;; *) exit 45 ;; esac',
+    `case "$resolved" in ${SHARED_ASSETS_MOUNT_PATH}/*) exit 46 ;; esac`,
+    "test -f /proc/self/fd/3 || exit 47",
+    "size=$(stat -Lc %s /proc/self/fd/3)",
+    `test "$size" -le ${maxBytes} || exit 48`,
+    "cat <&3",
+  ].join("; ");
+  return await new Promise<Buffer>((resolve, reject) => {
+    execFile(
+      "docker",
+      ["exec", containerId, "/bin/sh", "-c", command],
+      { timeout: 15_000, encoding: "buffer", maxBuffer: maxBytes + 1 },
+      (error, stdout) => {
+        if (error) {
+          const code = (error as unknown as { code?: string | number }).code;
+          if (code === 48 || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return reject(new Error("asset_file_too_large"));
+          if (code === 45 || code === 46) return reject(new Error("shared_asset_source_path_forbidden"));
+          if (code === 44 || code === 47) return reject(new Error("shared_asset_source_not_regular_file"));
+          return reject(new Error("shared_asset_source_changed"));
+        }
+        const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
+        if (bytes.byteLength > maxBytes) return reject(new Error("asset_file_too_large"));
+        resolve(bytes);
+      },
+    );
+  });
 }
 
 function shellQuote(value: string): string {
@@ -1335,7 +1379,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         }
         for (const event of outcome.semanticEvents) {
           try {
-            await spec.onSemanticEvent?.(event);
+            await spec.onSemanticEvent?.(event, {
+              readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+            });
           } catch (error) {
             semanticError = error instanceof Error ? error.message : String(error);
             semanticErrorDetails = normalizeRuntimeErrorDetails(error);

@@ -289,6 +289,23 @@ export type DonePayload = z.infer<typeof DonePayload>;
 export const ListAvailableRolesPayload = z.object({}).strict();
 export type ListAvailableRolesPayload = z.infer<typeof ListAvailableRolesPayload>;
 
+export const ListSharedAssetsPayload = z.object({
+  scope: z.enum(["platform", "project", "finding"]).optional(),
+  prefix: z.string().trim().min(1).max(120).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  offset: z.number().int().min(0).max(1_000_000).optional(),
+}).strict();
+export type ListSharedAssetsPayload = z.infer<typeof ListSharedAssetsPayload>;
+
+export const PublishSharedAssetPayload = z.object({
+  scope: z.enum(["project", "finding"]),
+  source_path: z.string().min(1).max(320).regex(/^\/workspace\/(?!\.deepsonar\/shared(?:\/|$)).+/),
+  key: z.string().trim().min(1).max(240),
+  content_type: z.string().trim().min(1).max(160).default("application/octet-stream"),
+  labels: z.record(z.string().min(1).max(60), z.string().max(200)).optional(),
+}).strict();
+export type PublishSharedAssetPayload = z.infer<typeof PublishSharedAssetPayload>;
+
 export const VerifyFindingPayload = z.object({
   finding: z.object({
     fingerprint: z.string(),
@@ -639,6 +656,8 @@ export type HubDecisionPayload = z.infer<typeof HubDecisionPayload>;
 
 export const ControlToolPayloadSchemas = {
   list_available_roles: ListAvailableRolesPayload,
+  list_shared_assets: ListSharedAssetsPayload,
+  publish_shared_asset: PublishSharedAssetPayload,
   emit_progress: ProgressPayload,
   emit_fact: EmitFactPayload,
   emit_finding: EmitFindingPayload,
@@ -679,6 +698,7 @@ export const ControlEventEnvelope = z.discriminatedUnion("type", [
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("shared_asset_publish"), payload: PublishSharedAssetPayload }).strict(),
 ]);
 export type ControlEventEnvelope = z.infer<typeof ControlEventEnvelope>;
 
@@ -712,6 +732,8 @@ export const PlatformToolName = z.enum([
   "submit_hub_decision",
   "mark_job_done",
   "request_human",
+  "list_shared_assets",
+  "publish_shared_asset",
 ]);
 export type PlatformToolName = z.infer<typeof PlatformToolName>;
 export type PlatformToolConfig = Partial<Record<PlatformToolName, boolean>>;
@@ -834,12 +856,14 @@ export function allowedPlatformTools(
   const canRequestHuman = roleName !== "verify" && roleName !== "report";
   return [
     ...(roleKind === "hub" ? (["list_available_roles"] as PlatformToolName[]) : []),
+    "list_shared_assets",
     "emit_progress",
     ...(roleKind === "role" && roleName !== "audit" ? (["emit_fact"] as PlatformToolName[]) : []),
     ...(roleName === "audit" ? (["emit_finding"] as PlatformToolName[]) : []),
     ...(roleKind === "hub" ? (["submit_hub_decision"] as PlatformToolName[]) : []),
     "mark_job_done",
     ...(canRequestHuman ? (["request_human"] as PlatformToolName[]) : []),
+    ...(roleKind === "role" ? (["publish_shared_asset"] as PlatformToolName[]) : []),
   ];
 }
 

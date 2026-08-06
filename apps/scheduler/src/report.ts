@@ -14,6 +14,7 @@ import {
   resolveAgentSnapshotForJob,
   rulesForProject,
 } from "./core.js";
+import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 
@@ -620,7 +621,7 @@ export async function maybeDispatchFindingReport(
   const projectId = String(finding.project_id);
   const canvasId = String(finding.canvas_id);
   const version = Number(latest?.version ?? 0) + 1;
-  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
+  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report", [findingId]);
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
   const inputJson = JSON.stringify(input);
@@ -653,6 +654,7 @@ export async function maybeDispatchFindingReport(
       followup_depth: 0,
     })}
     RETURNING id`;
+  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, snapshot.shared_assets ?? []);
   if (!job?.id) return { dispatched: false, reason: "insert_failed" };
   await tx`
     INSERT INTO finding_reports ${tx({
@@ -878,6 +880,7 @@ export async function maybeDispatchReport(
       followup_depth: 0,
     })}
     RETURNING id`;
+  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, (snapshot as { shared_assets?: Parameters<typeof recordJobSharedAssets>[2] }).shared_assets ?? []);
   const reportJobId = job?.id as string | undefined;
   if (!reportJobId) return { dispatched: false, reason: "insert_failed" };
 

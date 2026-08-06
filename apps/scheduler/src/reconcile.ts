@@ -5,6 +5,7 @@ import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.
 import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
 import { finalizeReportJob } from "./report.js";
+import { sharedAssetsVolumeManager } from "./runtime.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
@@ -21,6 +22,13 @@ export async function reconcileOnBoot(): Promise<void> {
     SELECT id, status, sandbox_id FROM jobs WHERE status IN ('claimed','provisioning','running')`;
   const activeJobIds = new Set(activeJobs.map((j) => j.id as string));
 
+  for (const volume of await sharedAssetsVolumeManager.listManaged()) {
+    if (activeJobIds.has(volume.jobId)) continue;
+    await sharedAssetsVolumeManager.removeForJob(volume.jobId)
+      .then(() => console.warn(`[reconcile] 回收孤儿共享资产卷 ${volume.volumeName}`))
+      .catch((e) => console.error(`[reconcile] 共享资产卷回收失败 ${volume.volumeName}:`, e instanceof Error ? e.message : e));
+  }
+
   // 1. 孤儿容器（标签指向的 job 已非活动）
   for (const c of containers) {
     if (activeJobIds.has(c.jobId)) continue;
@@ -34,6 +42,7 @@ export async function reconcileOnBoot(): Promise<void> {
   if (reset.length > 0) {
     console.warn(`[reconcile] ${reset.length} 个 provision 途中 job 已重置回 pending`);
   }
+  for (const job of reset) await sharedAssetsVolumeManager.removeForJob(job.id as string).catch(() => undefined);
 
   // 3. running 中断 → orphan + 销毁残留容器 + 画布节点同步 + Plane 回写
   const orphaned = await lifecycle.reconcileRunning();
@@ -45,6 +54,7 @@ export async function reconcileOnBoot(): Promise<void> {
       await forceRemoveContainer(cid)
         .catch((e) => console.error(`[reconcile] 容器回收失败 ${cid}:`, e instanceof Error ? e.message : e));
     }
+    await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => undefined);
     await sql`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;

@@ -22,6 +22,9 @@ export const ALL_SCOPES = [
   "jobs:control",
   "findings:read",
   "findings:write",
+  "assets:read",
+  "assets:write",
+  "assets:manage",
   "skills:read",
   "skills:write",
   "agents:read",
@@ -123,6 +126,16 @@ const ROUTE_SCOPES: Record<string, string> = {
   "DELETE /findings/:id/comments/:commentId": "findings:write",
   "POST /findings/:id/links": "findings:write",
   "DELETE /findings/:id/links/:linkId": "findings:write",
+  "GET /projects/:id/shared-assets": "assets:read",
+  "POST /projects/:id/shared-assets": "assets:write",
+  "GET /projects/:id/shared-assets/policy": "assets:read",
+  "PATCH /projects/:id/shared-assets/policy": "assets:write",
+  "GET /findings/:id/shared-assets": "assets:read",
+  "POST /findings/:id/shared-assets": "assets:write",
+  "GET /platform/shared-assets": "assets:manage",
+  "POST /platform/shared-assets": "assets:manage",
+  "POST /shared-assets/:id/archive": "assets:write",
+  "GET /shared-assets/:id/content": "assets:read",
   "GET /skill-sources": "skills:read",
   "GET /skill-sources/:id": "skills:read",
   "POST /skill-sources": "skills:write",
@@ -245,6 +258,7 @@ function hasScope(actor: Actor, scope: string | null): boolean {
   // Management implies read access for the read-only local image detector;
   // callers may hold either images:read or images:manage as documented.
   if (scope === "images:read" && actor.scopes.includes("images:manage")) return true;
+  if ((scope === "assets:read" || scope === "assets:write") && actor.scopes.includes("assets:manage")) return true;
   return actor.scopes.includes("admin") || actor.scopes.includes(scope);
 }
 

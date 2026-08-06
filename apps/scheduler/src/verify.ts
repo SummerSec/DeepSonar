@@ -17,6 +17,7 @@ import {
   resolveAgentSnapshotForJob,
   rulesForProject,
 } from "./core.js";
+import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { maybeDispatchFindingReport } from "./report.js";
 
 type Tx = typeof sql;
@@ -265,7 +266,7 @@ export async function createVerifyRound(
 
   if (openRound && !existingRoundIsWaiting) return null;
 
-  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding");
+  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding", [findingId]);
   const priority = fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity });
 
   let verifyJob: { id: string };
@@ -298,6 +299,7 @@ export async function createVerifyRound(
       })}
       RETURNING id`;
     verifyJob = row as { id: string };
+    await recordJobSharedAssets(tx as unknown as typeof sql, verifyJob.id, snapshot.shared_assets ?? []);
   } catch (e) {
     // 局部唯一索引：并发下另一活跃 verify 已存在
     const msg = e instanceof Error ? e.message : String(e);

@@ -190,6 +190,14 @@ export const config = {
     transcriptRetentionDays: int("TRANSCRIPT_RETENTION_DAYS", 90),
   },
 
+  sharedAssets: {
+    maxFileBytes: boundedInt("DEEPSONAR_SHARED_ASSET_MAX_FILE_BYTES", 64 * 1024 * 1024, 1024 * 1024 * 1024),
+    projectQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_PROJECT_QUOTA_BYTES", 2 * 1024 * 1024 * 1024, 20 * 1024 * 1024 * 1024),
+    findingQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_FINDING_QUOTA_BYTES", 256 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
+    platformQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_PLATFORM_QUOTA_BYTES", 5 * 1024 * 1024 * 1024, 50 * 1024 * 1024 * 1024),
+    maxCatalogEntries: boundedInt("DEEPSONAR_SHARED_ASSET_MAX_CATALOG_ENTRIES", 500, 5000),
+  },
+
   skillSources: {
     /** 逗号分隔的 Git host 允许列表；空 = 任意 HTTPS host。 */
     allowedGitHosts: str("DEEPSONAR_GIT_ALLOWED_HOSTS", ""),

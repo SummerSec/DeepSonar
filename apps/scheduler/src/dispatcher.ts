@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { config } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
@@ -16,7 +17,7 @@ import { sql } from "./db.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
-import { runner } from "./runtime.js";
+import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
@@ -534,6 +535,7 @@ export async function dispatchOnce(): Promise<number> {
 
 async function runJob(jobId: string) {
   let handle: { sandboxId: string } | null = null;
+  let sharedAssetsVolumeName: string | null = null;
   const lifecycle = createSqlJobLifecycleApplication();
   try {
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
@@ -559,6 +561,24 @@ async function runJob(jobId: string) {
     const runtimeImage = snapshot.runtime_image?.image_ref;
     if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
     if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
+    const frozenAssets = snapshot.shared_assets ?? [];
+    if (useReal && frozenAssets.length > 0) {
+      const files = frozenAssets.map((asset) => ({
+        sourcePath: path.join(config.storage.blobDir, ...asset.blob_uri.split("/")),
+        relativePath: asset.mount_path.replace("/workspace/.deepsonar/shared/", ""),
+      }));
+      sharedAssetsVolumeName = await sharedAssetsVolumeManager.prepare({
+        jobId,
+        image: runtimeImage,
+        files,
+        catalog: {
+          version: 1,
+          revision: snapshot.shared_assets_revision,
+          readonly: true,
+          assets: frozenAssets.map(({ blob_uri: _blobUri, ...asset }) => asset),
+        },
+      });
+    }
     handle = await withTimeout(
       runner.provision({
         jobId,
@@ -568,6 +588,7 @@ async function runJob(jobId: string) {
         gatewayUpstreamUrl: useReal && !allowEgress ? config.gateway.sandboxUrl : undefined,
         expectedContract: snapshot.runtime_image.contract_version,
         expectedToolsManifestSha256: snapshot.runtime_image.tools_manifest_sha256,
+        sharedAssetsMount: sharedAssetsVolumeName ? { volumeName: sharedAssetsVolumeName } : undefined,
         limits: config.runtime.sandboxLimits,
       }),
       config.timeouts.provisionSec * 1000,
@@ -642,6 +663,12 @@ async function runJob(jobId: string) {
       await runner.destroy(h).catch((e) => {
         inc("deepsonar_sandbox_cleanup_failed_total");
         console.error(`[dispatcher] 沙箱回收失败 ${h.sandboxId}:`, e);
+      });
+    }
+    if (sharedAssetsVolumeName) {
+      await sharedAssetsVolumeManager.removeForJob(jobId).catch((e) => {
+        inc("deepsonar_shared_assets_cleanup_failed_total");
+        console.error(`[dispatcher] 共享资产卷回收失败 ${jobId}:`, e);
       });
     }
     await planeWriteback(jobId).catch((e) => console.error("[plane] 回写异常:", e));

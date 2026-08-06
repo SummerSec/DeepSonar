@@ -12,12 +12,20 @@ import {
   FindingPayload,
   HumanPayload,
   ProgressPayload,
+  PublishSharedAssetPayload,
   allowedPlatformTools,
   type PlatformToolName,
   type VerifyVerdict,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
-import { ingestEvent, PLATFORM_DEFAULT_AGENT_CLI, rolesForProject, rulesForProject, type AgentRuntimeSnapshot } from "./core.js";
+import {
+  assertJobCanPublishSharedAsset,
+  ingestEvent,
+  PLATFORM_DEFAULT_AGENT_CLI,
+  rolesForProject,
+  rulesForProject,
+  type AgentRuntimeSnapshot,
+} from "./core.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope } from "./graph.js";
 import {
@@ -37,6 +45,7 @@ import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
 import { inc } from "./metrics.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
+import { createSharedAsset } from "./domains/shared-assets/index.js";
 import {
   CONTROL_INPUT_ERROR_CODES,
   ControlInputError,
@@ -58,12 +67,18 @@ function invalidToolPayload(
     mark_job_done: CONTROL_INPUT_ERROR_CODES.invalidDone,
     request_human: CONTROL_INPUT_ERROR_CODES.invalidHuman,
     list_available_roles: CONTROL_INPUT_ERROR_CODES.invalidPayload,
+    list_shared_assets: CONTROL_INPUT_ERROR_CODES.invalidPayload,
+    publish_shared_asset: CONTROL_INPUT_ERROR_CODES.invalidPayload,
   }[tool];
   return new ControlInputError(code, message, path);
 }
 
 function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolLimit", message: string): ControlInputError {
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
+}
+
+export function canRolePublishSharedAsset(roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
+  return roleKind === "role";
 }
 
 async function ingestSemanticEventObserved(
@@ -344,6 +359,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const isHub = snapshot.role_kind === "hub";
   const isAudit = snapshot.name === "audit";
   const isRole = snapshot.role_kind === "role" && !isAudit;
+  const canPublishSharedAsset = canRolePublishSharedAsset(snapshot.role_kind);
   const controlToolNames = snapshot.platform_tools;
   const allowedControlToolNames = allowedPlatformTools(snapshot.name, snapshot.role_kind);
   const disabledControlToolNames = allowedControlToolNames.filter((name) => !controlToolNames.includes(name));
@@ -667,6 +683,9 @@ ${workerPrompt}
 ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目标：${taskGoal}` : ""}`;
   }
   initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
+  if ((snapshot.shared_assets?.length ?? 0) > 0) {
+    initialInput += `\n\n本 Job 的不可变共享资产已只读挂载到 /workspace/.deepsonar/shared；索引见 catalog.json。可复制到普通工作区使用，但不得修改共享目录。`;
+  }
 
   const roleDescription = snapshot.role_description;
   const instructions = instructionDocument({
@@ -714,6 +733,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       image: snapshot.runtime_image.image_ref,
       digest: snapshot.runtime_image.image_digest,
       registry_channel: snapshot.runtime_image.registry_channel ?? null,
+    },
+    shared_assets: {
+      revision: snapshot.shared_assets_revision ?? null,
+      count: snapshot.shared_assets?.length ?? 0,
+      readonly_mount: "/workspace/.deepsonar/shared",
     },
     semantic_event_transport: "local_mcp_over_agentbox_control_channel",
     canvas_update_delivery: "agent_attach_sendMessage",
@@ -776,6 +800,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     missing_modules: moduleEvidence.missing_modules,
     module_content_hash: moduleEvidence.module_content_hash,
     skill_revisions: moduleEvidence.skill_revisions,
+    shared_assets_revision: snapshot.shared_assets_revision ?? null,
+    shared_asset_count: snapshot.shared_assets?.length ?? 0,
     recorded_at: new Date().toISOString(),
   };
   await sql`
@@ -794,7 +820,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     human: { eventId: string; reason: string } | null;
   } = { done: null, hub: null, human: null };
 
-  const onSemanticEvent = async (raw: Record<string, unknown>) => {
+  const onSemanticEvent = async (
+    raw: Record<string, unknown>,
+    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
+  ) => {
     let event: ControlEventEnvelope;
     try {
       // Hub references need the graph-aware parser first so malformed values
@@ -818,10 +847,37 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       hub_decision: "submit_hub_decision",
       done: "mark_job_done",
       human: "request_human",
+      shared_asset_publish: "publish_shared_asset",
     };
     const requiredTool = toolForEvent[event.type];
     if (!controlToolNames.includes(requiredTool)) {
       throw toolBoundaryError("toolNotAllowed", `本 Job 未启用平台工具 ${requiredTool}`);
+    }
+    if (event.type === "shared_asset_publish") {
+      if (!canPublishSharedAsset) throw toolBoundaryError("toolNotAllowed", `${snapshot.name} 无权发布共享资产`);
+      const proposal = PublishSharedAssetPayload.parse(event.payload);
+      const findingId = proposal.scope === "finding" ? (job.finding_id as string | null) : null;
+      if (proposal.scope === "finding" && !findingId) {
+        throw invalidToolPayload("publish_shared_asset", "本 Job 未绑定 Finding，不能发布 Finding 资产", "scope");
+      }
+      // The host owns this authorization. A database trigger repeats the
+      // check while inserting the version to linearize terminal transitions.
+      await assertJobCanPublishSharedAsset(jobId, (job.sandbox_id as string | null) ?? null);
+      const bytes = await runtimeControl.readWorkspaceFile(proposal.source_path, config.sharedAssets.maxFileBytes);
+      await assertJobCanPublishSharedAsset(jobId, (job.sandbox_id as string | null) ?? null);
+      await createSharedAsset({
+        scope: proposal.scope,
+        projectId: job.project_id as string,
+        findingId,
+        key: proposal.key,
+        contentType: proposal.content_type,
+        bytes,
+        origin: "agent",
+        actor: `job:${jobId}`,
+        jobId,
+        labels: proposal.labels,
+      });
+      return;
     }
     if (event.type === "progress") {
       const p = ProgressPayload.parse(event.payload);

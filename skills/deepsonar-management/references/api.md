@@ -14,6 +14,8 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 **注意**：「角色 / RoleConfig / 设置 / 凭据」统一使用 `agents:read` / `agents:write`；运行时镜像市场使用独立的 `images:*` scopes。
 
+共享资产使用 `assets:read` / `assets:write` / `assets:manage`。上传请求体是原始二进制（`application/octet-stream`），逻辑路径由 `x-asset-key` 指定，真实 MIME 可放 `x-asset-content-type`；不要用 JSON/base64。
+
 ### 人类用户认证
 
 人类登录使用数据库中的 scrypt 用户会话，与 API Token 服务账号分离。空库启动时 Scheduler 只创建一次公开的默认管理员 `admin` / `Deep@Sonar66`；已有任意用户时不会重置密码或再次创建。生产或公网部署必须在首次登录后立即修改登录名和密码。密码或登录名修改会吊销该用户全部旧会话，并返回一个新的会话 Token。
@@ -63,6 +65,19 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /projects/:id/canvas | tasks:read | 项目当前画布（兼容） |
 | GET | /canvases/:id | tasks:read | 画布节点/边 |
 | PATCH | /canvas-nodes/:id/verification | jobs:control | Fact 人工验证 `{status: verified\|rejected\|needs_human, note?}` |
+
+### 共享资产
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET / POST | /projects/:id/shared-assets | assets:read / assets:write | 项目目录；GET 支持 `limit/offset`，POST 为原始字节并要求 `x-asset-key` |
+| GET / PATCH | /projects/:id/shared-assets/policy | assets:read / assets:write | 读取或设置 `{platform_enabled}` |
+| GET / POST | /findings/:id/shared-assets | assets:read / assets:write | Finding 工作包；GET 支持 `limit/offset`，服务端校验 Finding 归属项目 |
+| GET / POST | /platform/shared-assets | assets:manage | 平台管理员目录与上传；GET 支持 `limit/offset` |
+| GET | /shared-assets/:id/content | assets:read | 鉴权下载；项目 token 读取 platform 资产还要求项目 opt-in |
+| POST | /shared-assets/:id/archive | assets:write | 归档逻辑对象，保留不可变版本和 Job 引用 |
+
+Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻结的 `list_shared_assets` / `publish_shared_asset`。前者支持 `scope/prefix/limit/offset`，后者只能发布普通 `/workspace` 正则文件到 project 或当前绑定 Finding，不能写 platform。
 
 ### Job
 

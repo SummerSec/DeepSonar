@@ -29,6 +29,7 @@ import { UsersPanel } from "./UsersPanel";
 import { AccountPanel } from "./AccountPanel";
 import { MarkdownView } from "./MarkdownView";
 import { FindingProtocolEditor } from "./FindingProtocolEditor";
+import { SharedAssetsPanel } from "./SharedAssetsPanel";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -36,17 +37,17 @@ import { FindingProtocolEditor } from "./FindingProtocolEditor";
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users" | "account";
+type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users" | "account" | "assets";
 export type GlobalSettingsSection = "agents" | "modules" | "access" | "credentials" | "platform";
 
-const PROJECT_TAB_KEYS: readonly Tab[] = ["rules", "roles", "plane"];
-const GLOBAL_TAB_KEYS: readonly Tab[] = ["roles", "sources", "rules", "account", "users", "transfer", "credentials", "tokens"];
+const PROJECT_TAB_KEYS: readonly Tab[] = ["rules", "roles", "assets", "plane"];
+const GLOBAL_TAB_KEYS: readonly Tab[] = ["roles", "sources", "rules", "assets", "account", "users", "transfer", "credentials", "tokens"];
 const GLOBAL_SECTION_TABS: Record<GlobalSettingsSection, readonly Tab[]> = {
   agents: ["roles"],
   modules: ["sources"],
   access: ["account", "users", "tokens"],
   credentials: ["credentials"],
-  platform: ["rules", "transfer"],
+  platform: ["rules", "assets", "transfer"],
 };
 const GLOBAL_TAB_SCOPES: Partial<Record<Tab, readonly string[]>> = {
   roles: ["agents:read"],
@@ -57,6 +58,7 @@ const GLOBAL_TAB_SCOPES: Partial<Record<Tab, readonly string[]>> = {
   transfer: ["exports:read", "imports:read"],
   credentials: ["agents:read"],
   tokens: ["tokens:manage"],
+  assets: ["assets:manage"],
 };
 
 export function settingsTabsForActor(section: GlobalSettingsSection, me: AuthMe | null): readonly Tab[] {
@@ -529,11 +531,13 @@ export function SettingsPanel({
     { key: "transfer", label: "平台数据" },
     { key: "credentials", label: "Provider 凭据" },
     { key: "tokens", label: "API Token" },
+    { key: "assets", label: "共享资产" },
   ];
   const tabList: { key: Tab; label: string }[] = projectId
     ? [
         { key: "rules", label: "规则配置" },
         { key: "roles", label: "角色配置" },
+        { key: "assets", label: "共享资产" },
         { key: "plane", label: "Plane 集成" },
       ]
     : globalTabList.filter((item) => visibleGlobalTabs.includes(item.key));
@@ -783,6 +787,7 @@ export function SettingsPanel({
             </button>
           </div>
         )}
+        {activeTab === "assets" && <SharedAssetsPanel projectId={projectId} />}
 
         {activeTab === "roles" && (
           <div className="flex flex-col gap-3">
