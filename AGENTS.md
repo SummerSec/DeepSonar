@@ -50,11 +50,12 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 |------|------|
 | `index.ts` | 启动：migrate（空库套基线）→ `reconcileOnBoot` → 路由 → dispatcher/reaper/plane-sync 三个后台循环 |
 | `dispatcher.ts` | 领取 pending job（全局/每项目并发上限，原子 claim）→ provision → run |
-| `core.ts` | 状态机 `transitionJob`、事件入库 `ingestEvent`、规则引擎派生、hub 触发（`finalizeJob`） |
+| `core.ts` | Scheduler composition root 与既有内部 import 的窄 facade；保留共享规则、Job 创建/终态编排，各领域实现通过 application/ports 注入 |
+| `domains/*` | Job lifecycle、event ingestion、Hub、Finding verification、Report convergence、runtime snapshot 及各 HTTP API 的领域入口；语义事件副作用归 `event-ingestion/side-effects.ts` |
 | `executor-real.ts` | 真实 agent 执行：按 `agent_snapshot_json` 冻结快照决定 provider/model/env/prompt |
 | `reconcile.ts` | 重启对账 DB↔docker：孤儿容器强删、死在 provision 途中的 job 重置回 pending、running → orphan |
 | `graph.ts` | fact-intent 二分图 → hub prompt 用 YAML；agent 输出结构化解析 |
-| `routes.ts` | 全部 HTTP API（项目/任务/job/画布/角色/RoleConfig/skill-source/镜像市场/配置/webhook） |
+| `routes.ts` | 只安装共享 auth/project-scope hook、Gateway，并组装 `domains/*/routes.ts` registrar；不承载业务 handler |
 | `auth.ts` / `users.ts` | 双轨鉴权：服务/自动化用 API Token（库中只存 sha256），人用用户名密码 + 会话 Token（scrypt，角色 admin/operator/viewer，无用户时 `/auth/bootstrap` 引导）；跨回环部署须 `DEEPSONAR_AUTH_REQUIRED=true` |
 | `credentials.ts` / `audit.ts` / `credential-test.ts` | Provider 凭据库 / append-only 审计（凭据明文永不入审计）/ 凭据连通性测试 |
 | `gateway.ts` | Model Gateway（§6.3）：沙箱持短期单 Job token 经 `/gateway` 访问上游 LLM，不持长期 Provider Key |
