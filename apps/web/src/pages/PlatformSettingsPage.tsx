@@ -47,7 +47,7 @@ export function PlatformSettingsPage() {
   const Icon = config.icon;
 
   return (
-    <div className="flex min-h-full flex-col overflow-x-hidden overflow-y-auto">
+    <div className="flex h-full min-h-0 flex-col overflow-x-hidden overflow-y-auto">
       <div className="w-full max-w-[1320px] shrink-0 px-5 pt-7 sm:px-9 sm:pt-9">
         <PageHeader
           title={config.title}
