@@ -22,7 +22,7 @@ assert.deepEqual(available, {
 assert.throws(() => buildRegistryRecord({
   channel: "dockerhub",
   configured: true,
-  reference: "docker.io/summersec/deepsonar-base:0.1.0",
+  reference: "docker.io/sumsec/deepsonar-base:0.1.0",
   canonicalDigest: digest,
   inspectedDigest: otherDigest,
 }), /does not equal canonical|digest/i);
@@ -30,7 +30,7 @@ assert.throws(() => buildRegistryRecord({
 assert.throws(() => buildRegistryRecord({
   channel: "dockerhub",
   configured: true,
-  reference: "docker.io/summersec/deepsonar-base:0.1.0",
+  reference: "docker.io/sumsec/deepsonar-base:0.1.0",
   canonicalDigest: digest,
   inspectError: new Error("registry fetch failed"),
 }), /inspect failed/i);
@@ -51,14 +51,14 @@ assert.deepEqual(unavailable, {
 assert.throws(() => buildRegistryRecord({
   channel: "dockerhub",
   configured: false,
-  reference: "docker.io/summersec/deepsonar-base@" + digest,
+  reference: "docker.io/sumsec/deepsonar-base@" + digest,
   canonicalDigest: digest,
   unavailableReason: "credentials_missing",
 }), /unavailable.*reference/i);
 assert.throws(() => buildRegistryRecord({
   channel: "dockerhub",
   configured: true,
-  reference: "docker.io/summersec/deepsonar-base:0.1.0",
+  reference: "docker.io/sumsec/deepsonar-base:0.1.0",
   canonicalDigest: digest,
 }), /inspect did not return a digest/i);
 assert.throws(() => buildRegistryRecord({

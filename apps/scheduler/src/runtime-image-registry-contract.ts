@@ -54,7 +54,8 @@ export type RuntimeImageRegistryPolicy = Readonly<Record<RuntimeImageRegistryCha
  */
 export const SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY: RuntimeImageRegistryPolicy = Object.freeze({
   github: Object.freeze({ hosts: Object.freeze(["ghcr.io"]), namespaces: Object.freeze(["summersec"]) }),
-  dockerhub: Object.freeze({ hosts: Object.freeze(["docker.io"]), namespaces: Object.freeze(["summersec"]) }),
+  // Docker Hub org/user is sumsec (see release.yml DOCKERHUB_IMAGE); GHCR/ACR use summersec.
+  dockerhub: Object.freeze({ hosts: Object.freeze(["docker.io"]), namespaces: Object.freeze(["sumsec"]) }),
   "aliyun-acr": Object.freeze({
     hosts: Object.freeze(["crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"]),
     namespaces: Object.freeze(["summersec"]),

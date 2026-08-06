@@ -19,7 +19,7 @@ The payload uses `schema: "deepsonar.registry/v2"` (or
   "size_bytes": 215224931,
   "registry_refs": {
     "github": "ghcr.io/summersec/deepsonar-base@sha256:<same digest>",
-    "dockerhub": "docker.io/summersec/deepsonar-base@sha256:<same digest>"
+    "dockerhub": "docker.io/sumsec/deepsonar@sha256:<same digest>"
   },
   "registry_evidence": {
     "github": {
@@ -88,7 +88,7 @@ The pure validator lives in
 URLs, userinfo, ports, tag-only references, query/fragment/escape syntax,
 traversal or empty path segments, uppercase/ambiguous hosts, and malformed
 sha256 digests. GitHub and Docker Hub use the server-owned canonical
-`ghcr.io/summersec` and `docker.io/summersec` policy. The built-in ACR policy
+`ghcr.io/summersec` and `docker.io/sumsec` policy. The built-in ACR policy
 pins the exact currently published official endpoint
 `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec`; other
 ACR endpoints require a server-owned policy and are never self-authorized by

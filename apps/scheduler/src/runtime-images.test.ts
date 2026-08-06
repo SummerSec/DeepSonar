@@ -111,7 +111,7 @@ test("GitHub and Docker Hub policy authority cannot be overridden or smuggled th
   } as never), /server-owned|overridden|fixed/i);
   assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v1", images: [] }, {
     ...builtin,
-    dockerhub: { hosts: ["docker.io", "docker.example.com"], namespaces: ["summersec"] },
+    dockerhub: { hosts: ["docker.io", "docker.example.com"], namespaces: ["sumsec"] },
   } as never), /server-owned|overridden|fixed/i);
   assert.throws(() => validateRuntimeImageRegistryPolicy({
     ...builtin,
@@ -122,7 +122,7 @@ test("GitHub and Docker Hub policy authority cannot be overridden or smuggled th
 test("v2 keeps one canonical digest/platform/size and only emits available channel refs", () => {
   const refs = {
     github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
-    dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}`,
+    dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}`,
     "aliyun-acr": `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${DIGEST}`,
   };
   const normalized = parseRuntimeImageRegistry({
@@ -159,7 +159,7 @@ test("v2 requires inspected GitHub evidence before a channel can be consumed", (
         digest: DIGEST,
         platforms: ["linux/amd64"],
         size_bytes: 42,
-        registry_refs: { dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}` },
+        registry_refs: { dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}` },
       }],
     }],
   }), /registry_evidence|github/i);
@@ -189,7 +189,7 @@ test("v2 unavailable channel evidence is explicit and cannot smuggle a ref", () 
     schema: "deepsonar.registry/v2",
     images: [{ ...baseImage, versions: [{ ...baseVersion, registry_evidence: {
       ...baseVersion.registry_evidence,
-      dockerhub: { available: false, provenance: "unavailable", reason: "credentials_missing", ref: "docker.io/summersec/invalid" },
+      dockerhub: { available: false, provenance: "unavailable", reason: "credentials_missing", ref: "docker.io/sumsec/invalid" },
     } }] }],
   }), /unavailable evidence|ref|inspect/i);
 });
@@ -299,7 +299,7 @@ test("promotion digest projection excludes Docker Hub-only versions", () => {
   const dockerOnly = {
     version: "0.1.0",
     digest: DIGEST,
-    registry_refs: { dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}` },
+    registry_refs: { dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}` },
     platforms: ["linux/amd64"],
     size_bytes: 42,
   };
@@ -308,7 +308,7 @@ test("promotion digest projection excludes Docker Hub-only versions", () => {
     image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
     registry_refs: {
       github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
-      dockerhub: `docker.io/summersec/deepsonar-base@${DIGEST}`,
+      dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}`,
     },
   };
   assert.deepEqual(legacyProjectedRegistryDigests([dockerOnly]), []);

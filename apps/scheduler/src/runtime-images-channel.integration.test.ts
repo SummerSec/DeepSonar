@@ -44,7 +44,7 @@ if (!testDatabaseUrl) {
       const imageKey = "channel-fixture-" + randomUUID().slice(0, 8);
       const digest = "sha256:" + "c".repeat(64);
       const githubRef = "ghcr.io/summersec/" + imageKey + "@" + digest;
-      const dockerHubRef = "docker.io/summersec/" + imageKey + "@" + digest;
+      const dockerHubRef = "docker.io/sumsec/" + imageKey + "@" + digest;
       await sql.unsafe(
         "INSERT INTO projects (id, canvas_id, name) VALUES (" +
         [projectId, "canvas-" + projectId, "runtime channel fixture"].map(quote).join(", ") + ")",

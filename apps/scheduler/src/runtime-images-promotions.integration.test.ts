@@ -47,7 +47,7 @@ if (!testDatabaseUrl) {
             platforms: ["linux/amd64"],
             size_bytes: 42,
             registry_refs: {
-              dockerhub: `docker.io/summersec/${imageKey}@${newDigest}`,
+              dockerhub: `docker.io/sumsec/${imageKey}@${newDigest}`,
               "aliyun-acr": `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${newDigest}`,
             },
             // This fixture exercises the Scheduler's defensive demotion path
@@ -57,7 +57,7 @@ if (!testDatabaseUrl) {
               github: { available: false, provenance: "unavailable", reason: "channel_not_published" },
               dockerhub: {
                 available: true,
-                ref: `docker.io/summersec/${imageKey}@${newDigest}`,
+                ref: `docker.io/sumsec/${imageKey}@${newDigest}`,
                 inspect_digest: newDigest,
                 provenance: "cross-registry-copy+inspect",
               },
