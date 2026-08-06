@@ -1254,12 +1254,14 @@ jobs:
           registry_file="deploy/runtime-image-registry.json"
           [[ -f "$registry_file" ]]
           node agent-harness/generate-runtime-image-registry.mjs --check "$registry_file"
+          # 生成步骤已改动工作区中的 registry；必须先拷到临时文件，再用 -f 切到默认分支，
+          # 否则 git checkout 会因本地改动被覆盖而失败（Your local changes would be overwritten）。
           tmp_registry="$(mktemp)"
           cp "$registry_file" "$tmp_registry"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin "$DEFAULT_BRANCH"
-          git checkout -B "bot/sync-runtime-registry-v${VERSION}" "origin/${DEFAULT_BRANCH}"
+          git checkout -f -B "bot/sync-runtime-registry-v${VERSION}" "origin/${DEFAULT_BRANCH}"
           cp "$tmp_registry" "$registry_file"
           rm -f "$tmp_registry"
           git add -- "$registry_file"
