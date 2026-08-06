@@ -12,7 +12,7 @@ on:
         type: string
         default: ""
       ref:
-        description: "检出的 git ref（分支/tag/sha）；留空=与 version 对应的 v* tag（或最新 tag）"
+        description: "检出的 git ref（分支/tag/sha）；留空=触发时所选分支的最新 commit（GITHUB_SHA）"
         required: false
         type: string
         default: ""
@@ -41,7 +41,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       owner: ${{ steps.release.outputs.owner }}
-      # 下游 job 统一 checkout 此 ref；手动触发且未填 ref 时为最新/指定的 v* tag
+      # 下游 job 统一 checkout 此 ref；手动触发且未填 ref 时为触发分支 HEAD 的 commit sha
       checkout_ref: ${{ steps.release.outputs.checkout_ref }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 先拉全量 tags，便于手动触发时解析「最新 v*」；随后可再切到目标 tag。
+          # 先拉全量 tags，便于解析「最新 v*」版本号；源码默认用触发 commit。
           fetch-depth: 0
           fetch-tags: true
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
@@ -69,31 +69,37 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             raw="${{ inputs.version }}"
             if [[ -z "$raw" ]]; then
-              # 默认：仓库最新 v* tag（版本排序，如 v0.1.16）
+              # 默认：仓库最新 v* tag（版本排序，如 v0.1.16）——只作镜像/Release 版本号
               raw="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
               if [[ -z "$raw" ]]; then
                 echo "未找到任何 v* tag，请填写 version 输入项" >&2
                 exit 1
               fi
-              echo "手动触发未填 version，自动使用最新 tag: ${raw}" >> "$GITHUB_STEP_SUMMARY"
+              echo "手动触发未填 version，自动使用最新 tag 作为版本号: ${raw}" >> "$GITHUB_STEP_SUMMARY"
             fi
             version="${raw#v}"
             if [[ -z "$version" || ! "$version" =~ ^[0-9] ]]; then
               echo "version 不合法（期望如 0.1.16 / v0.1.16），当前: ${version:-empty}" >&2
               exit 1
             fi
-            # 未指定 ref 时，检出与 version 对应的 tag，保证镜像构建自该 tag 源码
+            # 未指定 ref：用触发时所选分支的最新 commit（GITHUB_SHA），不回退到 v* tag
             if [[ -z "${{ inputs.ref }}" ]]; then
-              checkout_ref="v${version}"
-              if git rev-parse -q --verify "refs/tags/${checkout_ref}" >/dev/null; then
-                git checkout --force "refs/tags/${checkout_ref}"
-                echo "checkout ${checkout_ref} for release build" >> "$GITHUB_STEP_SUMMARY"
-              else
-                echo "警告: 不存在 tag ${checkout_ref}，继续使用当前 checkout" >> "$GITHUB_STEP_SUMMARY"
-                checkout_ref="${GITHUB_REF}"
-              fi
+              checkout_ref="${GITHUB_SHA}"
+              echo "手动触发未填 ref，使用触发分支最新 commit: ${checkout_ref} (${GITHUB_REF_NAME})" >> "$GITHUB_STEP_SUMMARY"
             else
               checkout_ref="${{ inputs.ref }}"
+              git fetch --force origin "${checkout_ref}" 2>/dev/null || true
+              if git rev-parse -q --verify "${checkout_ref}^{commit}" >/dev/null 2>&1 \
+                || git rev-parse -q --verify "refs/tags/${checkout_ref}" >/dev/null 2>&1 \
+                || git rev-parse -q --verify "refs/remotes/origin/${checkout_ref}" >/dev/null 2>&1; then
+                git checkout --force "${checkout_ref}" 2>/dev/null \
+                  || git checkout --force "refs/tags/${checkout_ref}" 2>/dev/null \
+                  || git checkout --force "origin/${checkout_ref}"
+                echo "checkout ${checkout_ref} for release build" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "无法解析 ref: ${checkout_ref}" >&2
+                exit 1
+              fi
             fi
           else
             version="${GITHUB_REF_NAME#v}"
@@ -101,7 +107,7 @@ jobs:
               echo "tag 推送须为 v* 格式，当前 GITHUB_REF_NAME=${GITHUB_REF_NAME}" >&2
               exit 1
             fi
-            checkout_ref="${GITHUB_REF}"
+            checkout_ref="${GITHUB_SHA}"
           fi
 
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
