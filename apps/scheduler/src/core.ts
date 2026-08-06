@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   DonePayload,
+  EffectiveFindingProtocol as EffectiveFindingProtocolSchema,
   FactPayload,
+  FindingProtocolConfig as FindingProtocolConfigSchema,
   FindingPayload,
   HumanPayload,
   ProgressPayload,
@@ -10,6 +12,7 @@ import {
   type EventEnvelopeInput,
   type PlatformToolName,
   type VerificationEvidence,
+  type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { isProviderKnown } from "./credentials.js";
@@ -50,6 +53,10 @@ import {
   type HubReferenceLookup,
 } from "./graph.js";
 import { ControlInputError, invalidControlPayload, invalidRole, invalidVerification } from "./control-input.js";
+import {
+  normalizeFindingProposal,
+  resolveFindingProtocol,
+} from "./finding-protocol.js";
 import * as findingVerificationLegacy from "./verify.js";
 import * as reportConvergenceLegacy from "./report.js";
 import { revokeJobTokens } from "./gateway.js";
@@ -733,6 +740,16 @@ export interface EnsureCanvasInput {
   triggerPayload?: Record<string, unknown>;
 }
 
+function parseStoredFindingProtocolConfig(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  return FindingProtocolConfigSchema.parse(value);
+}
+
+function parseFrozenFindingProtocol(value: unknown): EffectiveFindingProtocol | undefined {
+  if (value === undefined || value === null) return undefined;
+  return EffectiveFindingProtocolSchema.parse(value);
+}
+
 /**
  * 为任务确保一个画布：同一 plane_issue_id 复用（重试算同一任务的历史），
  * 否则新建；新建时同事物写 root 节点（body_json 带目标）。
@@ -742,8 +759,20 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
   return sql.begin(async (tx) => {
     const requestedPolicy = (input.target.network_policy ?? {}) as Record<string, unknown>;
     const effectiveRules = await rulesForProject(tx as unknown as typeof sql, input.projectId);
+    const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+    const [project] = await tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`;
+    if (!project) throw new Error(`project ${input.projectId} 不存在`);
+    const globalConfig = parseStoredFindingProtocolConfig(
+      ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
+    );
+    const projectConfig = parseStoredFindingProtocolConfig(
+      ((project.config_json ?? {}) as Record<string, unknown>).finding_protocol,
+    );
+    const taskConfig = parseStoredFindingProtocolConfig(input.target.finding_protocol);
+    const effectiveFindingProtocol = resolveFindingProtocol(globalConfig, projectConfig, taskConfig);
     const target = {
       ...input.target,
+      effective_finding_protocol: effectiveFindingProtocol,
       network_policy: {
         allow_egress:
           typeof requestedPolicy.allow_egress === "boolean"
@@ -829,6 +858,26 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
     }
     return canvasId;
   });
+}
+
+async function findingProtocolForJob(tx: Tx, job: Record<string, unknown>): Promise<EffectiveFindingProtocol> {
+  if (job.canvas_id) {
+    const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${job.canvas_id as string}`;
+    const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
+    const frozen = parseFrozenFindingProtocol(target.effective_finding_protocol);
+    if (frozen) return frozen;
+  }
+
+  // Compatibility for canvases created before schema v20. New canvases always
+  // freeze this value at creation, so later config edits cannot rewrite history.
+  const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const [project] = await tx`SELECT config_json FROM projects WHERE id = ${job.project_id as string}`;
+  return resolveFindingProtocol(
+    parseStoredFindingProtocolConfig(
+      ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
+    ),
+    parseStoredFindingProtocolConfig(((project?.config_json ?? {}) as Record<string, unknown>).finding_protocol),
+  );
 }
 
 // ---------- 事件摄入（幂等 + job_seq + 按类型落地副作用） ----------
@@ -1249,20 +1298,46 @@ export async function applySideEffects(
 
   if (type === "finding") {
     const f = validatedPayload as FindingPayload;
+    const protocol = await findingProtocolForJob(tx, job as Record<string, unknown>);
+    let normalized: ReturnType<typeof normalizeFindingProposal>;
+    try {
+      normalized = normalizeFindingProposal(f, protocol);
+    } catch (error) {
+      throw new ControlInputError(
+        "invalid_payload",
+        `Finding 不符合任务冻结协议：${error instanceof Error ? error.message : "invalid finding protocol"}`,
+        f.scoring ? "scoring" : "profile",
+      );
+    }
+    const severity = normalized.scoring?.status === "supported"
+      ? normalized.scoring.base_severity === "none"
+        ? null
+        : normalized.scoring.base_severity
+      : normalized.severity ?? null;
     const fingerprint = sha16(
-      [f.title.trim().toLowerCase(), (f.location ?? "").trim(), (f.rule_id ?? "").trim()].join("|"),
+      [
+        normalized.profile,
+        normalized.title.trim().toLowerCase(),
+        (normalized.location ?? "").trim(),
+        (normalized.rule_id ?? "").trim(),
+      ].join("|"),
     );
     const [finding] = await tx`
       INSERT INTO findings ${tx({
         project_id: job.project_id,
         job_id: jobId,
         fingerprint,
-        title: f.title,
-        severity: f.severity,
-        location: f.location ?? null,
-        summary: f.summary ?? null,
-        suggest_verify: f.suggest_verify ?? false,
-        raw_json: (f.raw ?? {}) as never,
+        title: normalized.title,
+        severity,
+        profile: normalized.profile,
+        category: normalized.category ?? null,
+        tags_json: (normalized.tags ?? []) as never,
+        evidence_refs_json: (normalized.evidence_refs ?? []) as never,
+        scoring_json: (normalized.scoring ?? {}) as never,
+        location: normalized.location ?? null,
+        summary: normalized.summary ?? null,
+        suggest_verify: normalized.suggest_verify ?? false,
+        raw_json: (normalized.raw ?? {}) as never,
       })}
       ON CONFLICT (project_id, fingerprint) DO NOTHING
       RETURNING *`;
@@ -1280,8 +1355,16 @@ export async function applySideEffects(
           canvas_id: jobNode.canvas_id,
           job_id: jobId,
           node_type: "finding",
-          title: f.title,
-          body_json: { severity: f.severity, location: f.location, summary: f.summary } as never,
+          title: normalized.title,
+          body_json: {
+            profile: normalized.profile,
+            category: normalized.category,
+            severity,
+            score: normalized.scoring?.base_score ?? null,
+            score_version: normalized.scoring?.version ?? null,
+            location: normalized.location,
+            summary: normalized.summary,
+          } as never,
           x: jobNode.x + 300,
           y: jobNode.y + count * 140,
           status: "open",

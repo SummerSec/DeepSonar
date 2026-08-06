@@ -38,7 +38,12 @@ const ACTIVE_REPORT_STATUSES = ["pending", "generating"];
 export interface ReportInputFinding {
   id: string;
   title: string;
-  severity: string;
+  severity: string | null;
+  profile: string;
+  category: string | null;
+  tags: string[];
+  evidence_refs: string[];
+  scoring: Record<string, unknown> | null;
   location: string | null;
   summary: string | null;
   verify_status: string;
@@ -49,7 +54,13 @@ export interface ReportInputFinding {
 }
 
 export interface ReportInput {
-  task: { canvas_id: string; title: string; goal: string; project_id: string };
+  task: {
+    canvas_id: string;
+    title: string;
+    goal: string;
+    project_id: string;
+    effective_finding_protocol: Record<string, unknown> | null;
+  };
   statistics: {
     findings_total: number;
     confirmed_count: number;
@@ -70,12 +81,17 @@ export interface FindingReportInput {
   input_budget_chars: number;
   input_truncated: boolean;
   project: { id: string; name: string };
-  task: { canvas_id: string; title: string };
+  task: { canvas_id: string; title: string; effective_finding_protocol: Record<string, unknown> | null };
   finding: {
     id: string;
     fingerprint: string;
     title: string;
-    severity: string;
+    severity: string | null;
+    profile: string;
+    category: string | null;
+    tags: string[];
+    evidence_refs: string[];
+    scoring: Record<string, unknown> | null;
     location: string | null;
     summary: string | null;
     verify_status: "confirmed";
@@ -215,7 +231,9 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
 
   const target = (canvas.target_json ?? {}) as Record<string, unknown>;
   const findings = await db`
-    SELECT f.id, f.title, f.severity, f.location, f.summary, f.verify_status, f.raw_json, f.job_id, f.node_id
+    SELECT f.id, f.title, f.severity, f.profile, f.category, f.tags_json,
+           f.evidence_refs_json, f.scoring_json, f.location, f.summary,
+           f.verify_status, f.raw_json, f.job_id, f.node_id
     FROM findings f
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId}
@@ -237,7 +255,14 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     items.push({
       id: f.id as string,
       title: f.title as string,
-      severity: f.severity as string,
+      severity: (f.severity as string | null) ?? null,
+      profile: String(f.profile),
+      category: (f.category as string | null) ?? null,
+      tags: (f.tags_json as string[]) ?? [],
+      evidence_refs: (f.evidence_refs_json as string[]) ?? [],
+      scoring: Object.keys((f.scoring_json ?? {}) as Record<string, unknown>).length
+        ? (f.scoring_json as Record<string, unknown>)
+        : null,
       location: (f.location as string) ?? null,
       summary: (f.summary as string) ?? null,
       verify_status: f.verify_status as string,
@@ -261,7 +286,8 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
   const needsHuman = items.filter((i) => i.verify_status === "needs_human");
   const bySev: Record<string, number> = {};
   for (const c of confirmed) {
-    bySev[c.severity] = (bySev[c.severity] ?? 0) + 1;
+    const severity = c.severity ?? "unscored";
+    bySev[severity] = (bySev[severity] ?? 0) + 1;
   }
 
   return {
@@ -270,6 +296,8 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
       title: canvas.title as string,
       goal: String(target.goal ?? canvas.title ?? ""),
       project_id: canvas.project_id as string,
+      effective_finding_protocol:
+        (target.effective_finding_protocol as Record<string, unknown> | undefined) ?? null,
     },
     statistics: {
       findings_total: items.length,
@@ -283,6 +311,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     scope_and_coverage: {
       goal: String(target.goal ?? ""),
       network_policy: target.network_policy ?? null,
+      effective_finding_protocol: target.effective_finding_protocol ?? null,
     },
     evidence: [],
   };
@@ -295,9 +324,10 @@ export async function buildFindingReportInput(
   db: typeof sql = sql,
 ): Promise<FindingReportInput> {
   const [finding] = await db`
-    SELECT f.id, f.project_id, f.fingerprint, f.title, f.severity, f.location,
-           f.summary, f.verify_status, f.raw_json, f.job_id,
-           j.canvas_id, c.title AS canvas_title, p.name AS project_name
+    SELECT f.id, f.project_id, f.fingerprint, f.title, f.severity, f.profile,
+           f.category, f.tags_json, f.evidence_refs_json, f.scoring_json,
+           f.location, f.summary, f.verify_status, f.raw_json, f.job_id,
+           j.canvas_id, c.title AS canvas_title, c.target_json, p.name AS project_name
     FROM findings f
     JOIN jobs j ON j.id = f.job_id
     JOIN canvases c ON c.id = j.canvas_id
@@ -328,12 +358,24 @@ export async function buildFindingReportInput(
     input_budget_chars: Math.max(4_000, config.graph.maxFindingReportInputChars),
     input_truncated: false,
     project: { id: String(finding.project_id), name: String(finding.project_name) },
-    task: { canvas_id: String(finding.canvas_id), title: String(finding.canvas_title) },
+    task: {
+      canvas_id: String(finding.canvas_id),
+      title: String(finding.canvas_title),
+      effective_finding_protocol:
+        ((((finding.target_json ?? {}) as Record<string, unknown>).effective_finding_protocol as Record<string, unknown> | undefined) ?? null),
+    },
     finding: {
       id: String(finding.id),
       fingerprint: String(finding.fingerprint),
       title: String(finding.title),
-      severity: String(finding.severity),
+      severity: (finding.severity as string | null) ?? null,
+      profile: String(finding.profile),
+      category: (finding.category as string | null) ?? null,
+      tags: (finding.tags_json as string[]) ?? [],
+      evidence_refs: (finding.evidence_refs_json as string[]) ?? [],
+      scoring: Object.keys((finding.scoring_json ?? {}) as Record<string, unknown>).length
+        ? (finding.scoring_json as Record<string, unknown>)
+        : null,
       location: (finding.location as string | null) ?? null,
       summary: (finding.summary as string | null) ?? null,
       verify_status: "confirmed",
@@ -381,6 +423,9 @@ export function buildSarifFromConfirmed(input: ReportInput): object {
       : [],
     properties: {
       severity: f.severity,
+      profile: f.profile,
+      category: f.category,
+      scoring: f.scoring,
       verify_status: "confirmed",
       title: f.title,
     },
@@ -401,9 +446,14 @@ export function buildSarifFromConfirmed(input: ReportInput): object {
               shortDescription: { text: f.title },
               fullDescription: { text: f.summary || f.title },
               defaultConfiguration: {
-                level: f.severity === "critical" || f.severity === "high" ? "error" : "warning",
+                level:
+                  f.severity === "critical" || f.severity === "high"
+                    ? "error"
+                    : f.severity === "medium"
+                      ? "warning"
+                      : "note",
               },
-              properties: { severity: f.severity },
+              properties: { severity: f.severity, profile: f.profile, category: f.category, scoring: f.scoring },
             })),
           },
         },
@@ -418,6 +468,10 @@ function defaultMarkdown(input: ReportInput): string {
   lines.push(`# 任务报告：${input.task.title}`);
   lines.push("");
   lines.push(`> 目标：${input.task.goal || "（未声明）"}`);
+  const protocol = input.task.effective_finding_protocol;
+  if (protocol) {
+    lines.push(`> Finding 协议：${String(protocol.display_name ?? protocol.default_profile ?? "未命名")}（${String(protocol.source ?? "unknown")}）`);
+  }
   lines.push("");
   lines.push("## 执行摘要");
   lines.push("");
@@ -434,13 +488,19 @@ function defaultMarkdown(input: ReportInput): string {
   if (input.confirmed_findings.length === 0) {
     lines.push("_无_");
   } else {
-    for (const f of input.confirmed_findings) {
-      lines.push(`### [${f.severity}] ${f.title}`);
+    for (const profile of [...new Set(input.confirmed_findings.map((finding) => finding.profile))]) {
+      lines.push(`### ${profile}`);
       lines.push("");
-      if (f.location) lines.push(`- 位置：\`${f.location}\``);
-      if (f.summary) lines.push(`- 摘要：${f.summary}`);
-      lines.push(`- 验证轮次：${f.final_verification_round?.attempt ?? "?"}`);
-      lines.push("");
+      for (const f of input.confirmed_findings.filter((finding) => finding.profile === profile)) {
+        lines.push(`#### [${f.severity ?? "未评分"}] ${f.title}`);
+        lines.push("");
+        if (f.category) lines.push(`- 分类：${f.category}`);
+        if (f.scoring) lines.push(`- 评分：${String(f.scoring.standard)} ${String(f.scoring.version)} · ${String(f.scoring.base_score ?? "未计算")} · ${String(f.scoring.exploitability_label ?? "未知难度")}`);
+        if (f.location) lines.push(`- 位置：\`${f.location}\``);
+        if (f.summary) lines.push(`- 摘要：${f.summary}`);
+        lines.push(`- 验证轮次：${f.final_verification_round?.attempt ?? "?"}`);
+        lines.push("");
+      }
     }
   }
   lines.push("## 待人工确认 / 验证限制");
@@ -449,8 +509,10 @@ function defaultMarkdown(input: ReportInput): string {
     lines.push("_无_");
   } else {
     for (const f of input.needs_human_findings) {
-      lines.push(`### [${f.severity}] ${f.title}`);
+      lines.push(`### [${f.severity ?? "未评分"}] ${f.title}`);
       lines.push("");
+      lines.push(`- Profile：${f.profile}`);
+      if (f.scoring) lines.push(`- 评分：${String(f.scoring.standard)} ${String(f.scoring.version)} · ${String(f.scoring.base_score ?? "未计算")}`);
       if (f.location) lines.push(`- 位置：\`${f.location}\``);
       if (f.summary) lines.push(`- 摘要：${f.summary}`);
       const err = f.final_verification_round?.error ?? f.final_verification_round?.summary;
@@ -472,15 +534,21 @@ function defaultMarkdown(input: ReportInput): string {
 function defaultFindingMarkdown(input: FindingReportInput): string {
   const f = input.finding;
   const lines = [
-    `# [${f.severity}] ${f.title}`,
+    `# [${f.severity ?? "未评分"}] ${f.title}`,
     "",
     `- Finding ID: \`${f.id}\``,
     `- Fingerprint: \`${f.fingerprint}\``,
     `- Project: ${input.project.name}`,
     `- Task: ${input.task.title}`,
     `- Verification: confirmed`,
+    `- Profile: ${f.profile}`,
+    `- Category: ${f.category ?? "uncategorized"}`,
     `- Report version: ${input.report_version}`,
   ];
+  if (f.scoring) {
+    lines.push(`- Scoring: ${String(f.scoring.standard)} ${String(f.scoring.version)} · ${String(f.scoring.base_score ?? "unsupported")}`);
+    lines.push(`- Vector: \`${String(f.scoring.vector ?? "unknown")}\``);
+  }
   if (f.location) lines.push(`- Location: \`${f.location}\``);
   lines.push("", "## Summary", "", f.summary || "No summary was recorded.");
   lines.push("", "## Verification", "");
@@ -909,6 +977,9 @@ async function finalizeFindingReportJob(
       finding_id: input.finding.id,
       fingerprint: input.finding.fingerprint,
       severity: input.finding.severity,
+      profile: input.finding.profile,
+      category: input.finding.category,
+      scoring: input.finding.scoring,
       verification_attempts: input.verification_rounds.length,
       report_version: input.report_version,
       frozen_at: input.frozen_at,

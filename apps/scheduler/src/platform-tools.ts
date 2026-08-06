@@ -21,7 +21,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     '- 补证示例：`{"title":"实测复现未授权读取","description":"步骤与响应见 verification","verification":{"finding_id":"<uuid>","evidence_kind":"test","outcome":"supports","subject_revision":"app@abc123","steps":["构造请求","观察响应"],"expected":"拒绝","actual":"返回其他租户数据"}}`',
   ].join("\n"),
   emit_finding: [
-    "### `emit_finding` — 增量提交安全 Finding",
+    "### `emit_finding` — 增量提交通用 Finding",
     "- 参数：`title`、`severity` 必填；severity 只能是 `low|medium|high|critical`。`location`、`summary`、`rule_id`、`suggest_verify` 可选。",
     "- 时机：有具体位置、触发路径和证据的安全问题一经确认就调用；单 Job 最多 20 条。一般建议验证时设 `suggest_verify: true`，是否派生由调度器决定。",
     '- 示例：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置后令牌未失效，可再次修改密码。","rule_id":"AUTH-RESET-REPLAY","suggest_verify":true}`',

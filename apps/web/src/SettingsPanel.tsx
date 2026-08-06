@@ -11,6 +11,8 @@ import {
   type ProjectRoleConfigEntry,
   type ProviderCredential,
   type ProjectSettings,
+  type FindingProtocolConfig,
+  type EffectiveFindingProtocol,
   type RoleConfigInput,
   type RoleConfigView,
   type SkillSource,
@@ -26,6 +28,7 @@ import { TransferPanel } from "./TransferPanel";
 import { UsersPanel } from "./UsersPanel";
 import { AccountPanel } from "./AccountPanel";
 import { MarkdownView } from "./MarkdownView";
+import { FindingProtocolEditor } from "./FindingProtocolEditor";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -123,6 +126,8 @@ export function SettingsPanel({
   const [searchParams, setSearchParams] = useSearchParams();
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
   const [rules, setRules] = useState<EffectiveRules | null>(null);
+  const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
+  const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
@@ -167,6 +172,8 @@ export function SettingsPanel({
         .then((s) => {
           setSettings(s);
           setRules(s.effective_rules);
+          setFindingProtocol(s.finding_protocol);
+          setEffectiveFindingProtocol(s.effective_finding_protocol);
         })
         .catch(() => {});
     } else if (globalSection === "agents" && canLoadTab("roles")) {
@@ -182,6 +189,8 @@ export function SettingsPanel({
     } else if (globalSection === "platform" && canLoadTab("rules")) {
       api.globalSettings().then((g) => {
         setRules(g.effective_rules);
+        setFindingProtocol(g.finding_protocol);
+        setEffectiveFindingProtocol(g.effective_finding_protocol);
         setCliActive(g.active_by_agent_cli ?? {});
       }).catch(() => {});
     }
@@ -243,10 +252,10 @@ export function SettingsPanel({
     }
     try {
       if (projectId) {
-        await api.patchSettings(projectId, { rules: ruleBody });
+        await api.patchSettings(projectId, { rules: ruleBody, finding_protocol: findingProtocol });
       } else {
         // 全局模式：写入 global_settings（项目未覆盖时的默认值）
-        await api.patchGlobalSettings({ rules: ruleBody });
+        await api.patchGlobalSettings({ rules: ruleBody, finding_protocol: findingProtocol });
       }
       flash("规则已保存（下一 job 生效）");
       reload();
@@ -756,6 +765,15 @@ export function SettingsPanel({
                   : "全局默认；项目可覆盖。"}
               </p>
             </section>
+
+            {effectiveFindingProtocol && (
+              <FindingProtocolEditor
+                value={findingProtocol}
+                effective={effectiveFindingProtocol}
+                onChange={setFindingProtocol}
+                allowInherit={Boolean(projectId)}
+              />
+            )}
 
             <button
               onClick={saveRules}

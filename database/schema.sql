@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 19);
+INSERT INTO schema_meta (id, version) VALUES ('global', 20);
 
 -- Scheduler migration ledger.  Failed attempts are retained for audit; only
 -- successful rows are unique per version and participate in the applied
@@ -60,6 +60,10 @@ VALUES (18, '0018_runtime_registry_channels.sql',
 INSERT INTO schema_migrations (version, filename, checksum, result)
 VALUES (19, '0019_finding_reports.sql',
         '416094907ae8c04b7a36f4b0e381ceb23a4fd8408f322012793b8ffbc6568500',
+        'succeeded');
+INSERT INTO schema_migrations (version, filename, checksum, result)
+VALUES (20, '0020_finding_protocol.sql',
+        '6da3a66b0fcb87c3a31ceb062e0fe1f3952a1e1d931b98b8e75597bf44fa42d0',
         'succeeded');
 
 CREATE TABLE projects (
@@ -197,7 +201,7 @@ CREATE TABLE findings (
   node_id uuid,
   fingerprint text NOT NULL,
   title text NOT NULL,
-  severity text NOT NULL,
+  severity text,
   location text,
   summary text,
   suggest_verify boolean NOT NULL DEFAULT false,
@@ -211,8 +215,13 @@ CREATE TABLE findings (
   raw_json jsonb NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
+  profile text NOT NULL DEFAULT 'security.vulnerability',
+  category text,
+  tags_json jsonb NOT NULL DEFAULT '[]',
+  evidence_refs_json jsonb NOT NULL DEFAULT '[]',
+  scoring_json jsonb NOT NULL DEFAULT '{}',
   CONSTRAINT findings_project_id_fingerprint_key UNIQUE (project_id, fingerprint),
-  CONSTRAINT findings_severity_check CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+  CONSTRAINT findings_severity_check CHECK (severity IS NULL OR severity IN ('low', 'medium', 'high', 'critical')),
   CONSTRAINT findings_verify_status_check CHECK (
     verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human')
   ),
@@ -221,6 +230,7 @@ CREATE TABLE findings (
   )
 );
 CREATE INDEX findings_filter_idx ON findings (project_id, severity, verify_status);
+CREATE INDEX findings_profile_category_idx ON findings (project_id, profile, category, verify_status);
 CREATE INDEX findings_disposition_idx ON findings (project_id, disposition, updated_at DESC);
 CREATE INDEX findings_title_trgm ON findings USING gin (title gin_trgm_ops);
 CREATE INDEX findings_location_trgm ON findings USING gin (location gin_trgm_ops);

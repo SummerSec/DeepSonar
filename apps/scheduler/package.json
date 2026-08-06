@@ -16,6 +16,7 @@
     "@deepsonar/runtime-sandbox": "workspace:*",
     "@deepsonar/shared-types": "workspace:*",
     "@fastify/websocket": "^11.3.0",
+    "ae-cvss-calculator": "1.0.13",
     "fastify": "^5.11.0",
     "jszip": "^3.10.1",
     "postgres": "^3.4.9",

@@ -247,9 +247,11 @@ events
   -- 按月原生分区，到期 DROP PARTITION（不 DELETE，避免死元组）
 
 findings
-  id, project_id, job_id, node_id, fingerprint, title, severity,
+  id, project_id, job_id, node_id, fingerprint, title, profile, category,
+  severity, tags_json, evidence_refs_json, scoring_json,
   location, summary, suggest_verify, verify_status, raw_json, created_at
-  -- 唯一约束: (project_id, fingerprint)  -- fingerprint = hash(title + location + rule)
+  -- 唯一约束: (project_id, fingerprint)  -- fingerprint = hash(profile + title + location + rule)
+  -- schema v20：通用 Finding 协议字段；severity 可空，评分由 Scheduler 规范化
 
 canvas_nodes
   id, canvas_id, job_id, node_type, title, body_json,
@@ -285,14 +287,24 @@ canvas_changes
 | findings 字段 | SARIF 字段（runs[].results[]） |
 |---------------|-------------------------------|
 | `title` | `message.text` |
+| `profile` | `properties.deepsonar.profile`（通用领域/协议标识） |
+| `category` | `properties.deepsonar.category` |
+| `tags_json` | `properties.tags` |
+| `evidence_refs_json` | `properties.deepsonar.evidence_refs` |
 | `severity` (low/medium/high/critical) | `level`（note/warning/error）+ `properties.severity` 细分 critical |
+| `scoring_json` | `properties.deepsonar.scoring`（CVSS 版本、向量、重算分数与状态） |
 | `location` | `locations[0].physicalLocation.artifactLocation.uri` + `region.startLine` |
 | `summary` | `markdown` 版 `message` / `fullDescription` |
 | `fingerprint` | `partialFingerprints`（SARIF 原生概念，语义一致） |
-| `raw_json` | 整条 SARIF result 原样保留 |
+| `raw_json` | 受治理的 SARIF/Finding 原文；Agent-facing MCP 不允许写入该内部字段 |
 | 派生规则来源 | `ruleId` → 对应 job type / audit 规则名 |
 
-`emit_finding` 的 payload 即 SARIF result 的子集；`raw_json` 保证不丢信息。
+`emit_finding` 的 payload 是 SARIF result 的受限子集，并扩展通用 `profile`、`category`、`tags`、`evidence_refs` 和可选 `scoring`。`profile` 缺省为
+`security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略，且不再决定是否进入 Verify；`suggest_verify` 仅保留兼容语义，所有 Finding 仍由规则引擎派生验证。
+
+评分标准目前固定为 CVSS。Scheduler 对协议接受的 4.0 和 3.1 向量调用固定版本计算器（当前 `ae-cvss-calculator@1.0.13`）重算基础分、定性严重度和利用难度，忽略 Agent 报告分数对系统结果的覆盖（可保留作对比）。协议显式接受的未知未来版本不计算，保留版本、向量、metrics 和可选 reported score，标记 `unsupported_version`；未列入 `accepted_versions` 的版本直接拒绝。`scoring_json` 因而既是报告/筛选输入，也是未来版本兼容的原始承载。
+
+schema v20 的 `0020_finding_protocol.sql` 为 `findings` 增加上述五个 JSON/文本字段、允许 `severity` 为 NULL，并建立 `(project_id, profile, category, verify_status)` 索引；fresh 基线和连续迁移保持同一结构。
 
 ### 6.2 存储分层（热/冷分离）
 
@@ -324,6 +336,7 @@ events   (job_id, event_id)                                                     
 jobs     (project_id, status, created_at DESC)                                   -- 列表
 events   (job_id, id)                                                            -- 顺序读
 findings (project_id, severity, verify_status)                                   -- 过滤
+findings (project_id, profile, category, verify_status)                          -- 协议/分类过滤
 canvas_nodes / canvas_edges (canvas_id)
 findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin_trgm_ops)  -- 子串搜索
 ```
@@ -374,6 +387,8 @@ Job 事件仍必须经过本摄入硬门。
 - `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup 计数 + 最近一次 job 状态/优先级）
 - `GET  /canvases/{id}`  单任务画布节点/边
 - `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
+- `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤
+- `GET /findings/{id}`  Finding 详情；返回协议字段、评分原文/规范化结果、验证轮次、来源事件和结构化 trace
 - `POST /jobs/{id}/cancel`
 - `POST /jobs/{id}/resume`  人工处理后恢复
 - `POST /reconcile/run`（或定时）以 jobs 表为准修正 Plane 状态
@@ -394,6 +409,7 @@ Job 事件仍必须经过本摄入硬门。
 - `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令
 - Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
 - 非敏感环境变量、白名单 `env_keys` 和按 Job 签发的短期模型凭据
+- 画布创建时冻结的 Finding 协议说明：模式、默认/允许 profile、CVSS 默认/接受版本和必评分 profile；运行中以协议名和来源显著标识
 - Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
 - 已准入的不可变运行镜像快照：产品/版本 ID、`name@sha256:digest`、工具清单哈希和准入扫描 ID
 
@@ -405,6 +421,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、执行同源严格 schema 校验并返回 `schema_validated / pending_scheduler_validation`，不声称业务已落库，不写文件、不连接调度器
 - 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块只登记 bounded pending；收到同一 `tool_use_id` 的合法非错误 `user.tool_result`（`is_error` 省略或为 `false`）后才转换为 `{v:1,event_id(UUID),type,payload}`，串行 `await onSemanticEvent`。显式错误或畸形 `is_error` 结果丢弃 pending，Agent 可用新的 call id 重试；重复结果/重放不重复释放。
 - 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`core.applySideEffects` 仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
+- `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、未知控制命名空间工具和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；控制工具的 normalized telemetry 仅保留 toolName/callId 与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列
 - 同一 `tool_use.id` 只有合法非错误 `tool_result` 才生成一次语义事件；pending 有上限，Job 终态会丢弃残留并记低基数告警。`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
 - Claude CLI 的 `HOME` 与 `CLAUDE_CONFIG_DIR` 固定到 `/workspace/.deepsonar/` 下的 Job 专属可写目录，不信任镜像继承的 `/root`；原始 Session 归档复用同一环境，读回内存后立即清理，随后再销毁一次性沙箱
@@ -422,6 +439,12 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 | 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关、可信镜像、Provider 配置文件与 Credential 引用 |
 | 决策 | 全局 RoleConfig + 项目 RoleConfig + `projects.config_json.rules` | 项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照；Executor 不读取旧配置或为缺失快照降级 |
+
+Finding 协议是同一配置层级中的独立规则：全局存于
+`global_settings.rules_json.finding_protocol`，项目存于
+`projects.config_json.finding_protocol`，任务请求的 `finding_protocol` 写入画布
+`target_json`。`resolveFindingProtocol` 按任务 > 项目 > 全局覆盖（数组按层替换并去重），生成
+`EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
 
 长期密钥不进入数据库明文字段、Job 快照或工作区文件。RoleConfig 的 `env_vars` 只能保存非敏感值；`env_keys` 经过服务端白名单；Credential 运行时换成短期 Job Token。
 
@@ -507,6 +530,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 | 威胁 | 对策 |
 |------|------|
 | 被审计代码中埋 **prompt injection**（注释诱导 Agent 乱提案、外泄源码） | 审计沙箱默认**断外网**；工具白名单收口；followup 频次/深度护栏（§4.3）；system prompt 中声明仓库内容均为不可信数据 |
+| 目标内容或 Agent 伪造 Finding profile/评分、借未来 CVSS 版本绕过策略 | Finding 协议在画布冻结；Agent 只能调用严格 MCP 提案；Scheduler 重算 CVSS、按 accepted_versions 拒绝或原样留存未知版本，不能由 prompt 改写规则 |
 | **PoC 由 Agent 生成**，验证 = 在沙箱执行半不可信代码 | verify 沙箱独立隔离、一次性、跑完即毁；出网白名单 |
 | finding 内容含恶意 HTML/JS | finding 一律当纯数据存储；画布前端渲染防 XSS（不渲染 raw HTML） |
 | 事件通道被滥用（伪造 finding、刷事件） | 事件不经沙箱网络，只走 SDK 控制通道；沙箱内无调度器凭据；payload schema 校验 + 大小上限 + 每 Job 持久化固定窗口速率限制 |
@@ -736,6 +760,7 @@ CANVAS_LAYOUT=auto
 - 启动时自动 `migrate up`；每个 PR 必须带迁移文件
 - 破坏性变更走 **expand → migrate → contract** 三步：先加新列（可空/默认值）→ 部署 + 回填 → 稳定后删旧列；服务不停机
 - MVP 单用户阶段允许"改表 + 清库重来"，但迁移文件照写，保证重来是一条命令的事
+- 当前 fresh 基线为 schema v20；`0020_finding_protocol.sql` 是受支持的连续升级，增加通用 Finding 协议字段并将 `severity` 改为可空，不能用清库替代升级。
 
 ### 17.3 事件格式版本化
 
