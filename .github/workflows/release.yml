@@ -43,6 +43,8 @@ jobs:
       owner: ${{ steps.release.outputs.owner }}
       # 下游 job 统一 checkout 此 ref；手动触发且未填 ref 时为触发分支 HEAD 的 commit sha
       checkout_ref: ${{ steps.release.outputs.checkout_ref }}
+      # base 镜像 digest（openharmony 指纹与 BASE_IMAGE 钉死用）
+      digest: ${{ steps.image.outputs.digest }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -187,7 +189,20 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: node agent-harness/image-build-fingerprint.mjs --preset deepsonar-base
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -206,10 +221,30 @@ jobs:
           cache-to: |
             type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:buildcache,mode=max
             type=gha,mode=max,scope=base
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
-          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -256,7 +291,7 @@ jobs:
       - name: 保存 base manifest digest
         env:
           IMAGE_KEY: deepsonar-base
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -390,7 +425,20 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: node agent-harness/image-build-fingerprint.mjs --preset deepsonar-${{ matrix.name }}
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -408,10 +456,30 @@ jobs:
           cache-to: |
             type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache,mode=max
             type=gha,mode=max,scope=${{ matrix.name }}
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
-          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -458,7 +526,7 @@ jobs:
       - name: 保存运行时 manifest digest
         env:
           IMAGE_KEY: deepsonar-${{ matrix.name }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -591,7 +659,20 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: node agent-harness/image-build-fingerprint.mjs --preset deepsonar-kali-minimal
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build-amd64
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         name: Build linux/amd64 (push by digest)
         uses: docker/build-push-action@v6
         with:
@@ -610,6 +691,7 @@ jobs:
             type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-amd64,mode=max
             type=gha,mode=max,scope=kali-minimal-amd64
       - name: Reclaim disk before arm64
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
           docker builder prune -af || true
@@ -617,6 +699,7 @@ jobs:
           sudo rm -rf /tmp/* || true
           df -h /
       - id: build-arm64
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         name: Build linux/arm64 (push by digest)
         uses: docker/build-push-action@v6
         with:
@@ -638,6 +721,10 @@ jobs:
         id: merge
         env:
           IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
           AMD64_DIGEST: ${{ steps.build-amd64.outputs.digest }}
           ARM64_DIGEST: ${{ steps.build-arm64.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
@@ -665,61 +752,118 @@ jobs:
               delay_seconds=$((delay_seconds * 2))
             done
           }
-          source_refs=(
-            "${IMAGE_NAME}@${AMD64_DIGEST}"
-            "${IMAGE_NAME}@${ARM64_DIGEST}"
-          )
-          annotation_args=(
-            --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test"
-            --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。"
-            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
-            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
-            --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
-          )
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then
-            acr_tag_args=()
-            while IFS= read -r tag; do
-              [[ -n "$tag" ]] || continue
-              acr_tag_args+=(-t "$tag")
-            done <<< "${ACR_TAGS:-}"
-            [[ ${#acr_tag_args[@]} -gt 0 ]]
-            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"
-          fi
-          ghcr_tag_args=()
-          while IFS= read -r tag; do
-            [[ -n "$tag" ]] || continue
-            ghcr_tag_args+=(-t "$tag")
-          done <<< "$GHCR_TAGS"
-          [[ ${#ghcr_tag_args[@]} -gt 0 ]]
-          docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
-          # 取 GHCR 首个标签的 multi-arch index digest
-          primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
-          # Inspect the GHCR destination before copying to another registry.
-          # The Docker Hub source must be immutable; a mutable tag could move
-          # between the GHCR publish and the cross-registry copy.
-          digest="$(docker buildx imagetools inspect "$primary" \
-            | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
-            | head -n1)"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          immutable_primary="${primary}@${digest}"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
-            dockerhub_tag_args=()
-            while IFS= read -r tag; do
-              [[ -n "$tag" ]] || continue
-              dockerhub_tag_args+=(-t "$tag")
-            done <<< "$DOCKERHUB_TAGS"
-            [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
-            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
-              echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
-              echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
-              exit 1
+          publish_from_source() {
+            local source="$1"
+            annotation_args=(
+              --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test"
+              --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。"
+              --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+              --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+              --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
+            )
+            if [[ "$ACR_CONFIGURED" == "true" ]]; then
+              acr_tag_args=()
+              while IFS= read -r tag; do
+                [[ -n "$tag" ]] || continue
+                acr_tag_args+=(-t "$tag")
+              done <<< "${ACR_TAGS:-}"
+              [[ ${#acr_tag_args[@]} -gt 0 ]]
+              retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$source"
             fi
+            ghcr_tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              ghcr_tag_args+=(-t "$tag")
+            done <<< "$GHCR_TAGS"
+            [[ ${#ghcr_tag_args[@]} -gt 0 ]]
+            docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "$source"
+            primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+            digest="$(docker buildx imagetools inspect "$primary" \
+              | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+              | head -n1)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            immutable_primary="${primary}@${digest}"
+            if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+              dockerhub_tag_args=()
+              while IFS= read -r tag; do
+                [[ -n "$tag" ]] || continue
+                dockerhub_tag_args+=(-t "$tag")
+              done <<< "$DOCKERHUB_TAGS"
+              [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
+              if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
+                echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+                echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi
+            fi
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+            {
+              printf 'primary=%s\n' "$primary"
+              printf 'digest=%s\n' "$digest"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          if [[ "$SKIP" == "true" ]]; then
+            echo "Kali build unchanged; retag ${REUSE_DIGEST} across registries" >> "$GITHUB_STEP_SUMMARY"
+            publish_from_source "${IMAGE_NAME}@${REUSE_DIGEST}"
+          else
+            source_refs=(
+              "${IMAGE_NAME}@${AMD64_DIGEST}"
+              "${IMAGE_NAME}@${ARM64_DIGEST}"
+            )
+            annotation_args=(
+              --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test"
+              --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。"
+              --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+              --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+              --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
+            )
+            if [[ "$ACR_CONFIGURED" == "true" ]]; then
+              acr_tag_args=()
+              while IFS= read -r tag; do
+                [[ -n "$tag" ]] || continue
+                acr_tag_args+=(-t "$tag")
+              done <<< "${ACR_TAGS:-}"
+              [[ ${#acr_tag_args[@]} -gt 0 ]]
+              retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"
+            fi
+            ghcr_tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              ghcr_tag_args+=(-t "$tag")
+            done <<< "$GHCR_TAGS"
+            [[ ${#ghcr_tag_args[@]} -gt 0 ]]
+            docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
+            # 取 GHCR 首个标签的 multi-arch index digest
+            primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+            # Inspect the GHCR destination before copying to another registry.
+            # The Docker Hub source must be immutable; a mutable tag could move
+            # between the GHCR publish and the cross-registry copy.
+            digest="$(docker buildx imagetools inspect "$primary" \
+              | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+              | head -n1)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            immutable_primary="${primary}@${digest}"
+            if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+              dockerhub_tag_args=()
+              while IFS= read -r tag; do
+                [[ -n "$tag" ]] || continue
+                dockerhub_tag_args+=(-t "$tag")
+              done <<< "$DOCKERHUB_TAGS"
+              [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
+              if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
+                echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+                echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi
+            fi
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+            {
+              printf 'primary=%s\n' "$primary"
+              printf 'digest=%s\n' "$digest"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-          {
-            printf 'primary=%s\n' "$primary"
-            printf 'digest=%s\n' "$digest"
-          } >> "$GITHUB_STEP_SUMMARY"
       - name: 保存运行时 manifest digest
         env:
           IMAGE_KEY: deepsonar-kali-minimal
@@ -840,14 +984,30 @@ jobs:
           tags: |
             type=semver,pattern=openharmony-test-{{version}}
             type=sha,prefix=openharmony-test-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-test \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile.agent-openharmony
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test,push-by-digest=true,name-canonical=true,push=true
           platforms: linux/amd64,linux/arm64
-          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
@@ -858,10 +1018,30 @@ jobs:
           cache-to: |
             type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test:buildcache,mode=max
             type=gha,mode=max,scope=openharmony-test
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
-          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -908,7 +1088,7 @@ jobs:
       - name: 保存 OpenHarmony manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-test
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -1025,14 +1205,30 @@ jobs:
           tags: |
             type=semver,pattern=openharmony-audit-{{version}}
             type=sha,prefix=openharmony-audit-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-audit \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile.agent-openharmony-audit
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit,push-by-digest=true,name-canonical=true,push=true
           platforms: linux/amd64,linux/arm64
-          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
@@ -1043,10 +1239,30 @@ jobs:
           cache-to: |
             type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit:buildcache,mode=max
             type=gha,mode=max,scope=openharmony-audit
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
-          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -1093,7 +1309,7 @@ jobs:
       - name: 保存 OpenHarmony Audit manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-audit
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -1210,14 +1426,30 @@ jobs:
           tags: |
             type=semver,pattern=openharmony-fuzz-{{version}}
             type=sha,prefix=openharmony-fuzz-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-fuzz \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile.agent-openharmony-fuzz
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz,push-by-digest=true,name-canonical=true,push=true
           platforms: linux/amd64,linux/arm64
-          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:${{ steps.release.outputs.version }}
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           sbom: true
@@ -1228,10 +1460,30 @@ jobs:
           cache-to: |
             type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache,mode=max
             type=gha,mode=max,scope=openharmony-fuzz
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
-          SOURCE_DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -1278,7 +1530,7 @@ jobs:
       - name: 保存 OpenHarmony Fuzz manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-fuzz
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}

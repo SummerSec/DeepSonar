@@ -329,7 +329,35 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 与 release 相同 preset/platforms，便于复用 GHCR src-* 多架构产物；CI 只 pull amd64 做冒烟
+          node agent-harness/image-build-fingerprint.mjs --preset "deepsonar-${{ matrix.toolset }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Reuse unchanged image (amd64)
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+          LOCAL_TAG: deepsonar-${{ matrix.toolset }}:ci
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "${IMAGE_NAME}@${DIGEST}"
+          docker tag "${IMAGE_NAME}@${DIGEST}" "$LOCAL_TAG"
+          echo "reused ${IMAGE_NAME}@${DIGEST} as ${LOCAL_TAG}" >> "$GITHUB_STEP_SUMMARY"
       - name: Build official runtime
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -338,8 +366,10 @@ jobs:
           tags: deepsonar-${{ matrix.toolset }}:ci
           build-args: ${{ matrix.build_args }}
           # Registry cache 扛大层；ignore-error 避免 fork PR 无 packages:write 时失败
+          # 不 pin 多架构 src-*（CI 仅 amd64，避免覆盖 release 的 multi-arch index）
           cache-from: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:${{ steps.fingerprint.outputs.src_tag }}
             type=gha,scope=runtime-${{ matrix.toolset }}
           cache-to: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
@@ -400,7 +430,39 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 单架构指纹，避免与 release multi-arch src-* 冲突；CI 之间可复用
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms "${{ matrix.platform }}" \
+            --build-arg "BASE_IMAGE=ghcr.io/summersec/deepsonar-base:latest"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Reuse unchanged OpenHarmony image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+          LOCAL_TAG: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          docker pull --platform "$PLATFORM" "${IMAGE_NAME}@${DIGEST}"
+          docker tag "${IMAGE_NAME}@${DIGEST}" "$LOCAL_TAG"
+          echo "reused ${IMAGE_NAME}@${DIGEST} as ${LOCAL_TAG}" >> "$GITHUB_STEP_SUMMARY"
       - name: Build OpenHarmony specialist runtime
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -415,5 +477,22 @@ jobs:
           cache-to: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }},mode=max,ignore-error=true
             type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
+      - name: Pin single-arch src cache
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          LOCAL_TAG: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
+        run: |
+          set -euo pipefail
+          # 推单架构 src 标签供后续 CI 复用；ignore 失败（fork / 权限）
+          docker tag "$LOCAL_TAG" "${IMAGE_NAME}:${SRC_TAG}"
+          if docker push "${IMAGE_NAME}:${SRC_TAG}"; then
+            echo "pinned ${IMAGE_NAME}:${SRC_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "pin skipped/failed for ${IMAGE_NAME}:${SRC_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Offline environment smoke
         run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} ${{ matrix.check_args }}

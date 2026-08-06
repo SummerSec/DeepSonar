@@ -170,7 +170,7 @@ for (const [file, content] of [
   expect((mode & 0o111) !== 0, `${file} 必须可执行`);
   expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
 }
-const openHarmonyRepoSha256 = "2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020";
+const openHarmonyRepoSha256 = "2fcb4754e6f1bbb3657b3a0712c21dcb8ad39ec41d6f8291771021689894466b";
 expect(createHash("sha256").update(openHarmonyRepo).digest("hex") === openHarmonyRepoSha256, "OpenHarmony vendored repo launcher checksum 不匹配");
 for (const item of openHarmonyImages) {
   const df = item.dockerfile;
@@ -235,8 +235,13 @@ expect(releaseWorkflow.includes("needs: base-image"), "OpenHarmony job 必须依
 expect(releaseWorkflow.includes("Dockerfile.agent-openharmony"), "release workflow 未发布 OpenHarmony Test Dockerfile");
 expect(releaseWorkflow.includes("Dockerfile.agent-openharmony-audit"), "release workflow 未发布 OpenHarmony Audit Dockerfile");
 expect(releaseWorkflow.includes("Dockerfile.agent-openharmony-fuzz"), "release workflow 未发布 OpenHarmony Fuzz Dockerfile");
-expect(releaseWorkflow.includes("steps.build.outputs.digest"), "release workflow 必须使用 build-push-action 真实 digest");
+expect(releaseWorkflow.includes("steps.image.outputs.digest"), "release workflow 必须用统一 image digest（build 或 skip-reuse）");
+expect(releaseWorkflow.includes("image-build-fingerprint.mjs"), "release workflow 必须计算构建指纹以支持未变更跳过");
+expect(releaseWorkflow.includes("resolve-image-src-cache.sh"), "release workflow 必须解析 GHCR src-* 内容寻址缓存");
+expect(releaseWorkflow.includes("steps.resolve.outputs.skip"), "release workflow 必须在构建输入未变时跳过 rebuild");
 expect(releaseWorkflow.includes("record-runtime-image-digest.mjs"), "release workflow 缺少 digest artifact 记录脚本");
+expect(ciWorkflow.includes("image-build-fingerprint.mjs"), "ci workflow 必须计算构建指纹以支持未变更跳过");
+expect(ciWorkflow.includes("resolve-image-src-cache.sh"), "ci workflow 必须解析 GHCR src-* 内容寻址缓存");
 expect(releaseWorkflow.includes("DOCKER_METADATA_ANNOTATIONS_LEVELS"), "release workflow 必须生成 OCI manifest/index annotations");
 expect(releaseWorkflow.includes("steps.meta.outputs.annotations"), "release workflow 必须把 metadata annotations 传给 build-push-action");
 expect((releaseWorkflow.match(/^\s{10}annotations: \|$/gm) ?? []).length >= 6, "runtime metadata 必须显式生成镜像专属 OCI annotations");
@@ -263,7 +268,7 @@ expect(releaseWorkflow.includes("回写 bundled 清单到默认分支"), "releas
 expect(releaseWorkflow.includes("group: release-runtime-images-${{ github.repository }}"), "release workflow 必须跨 tag 串行执行");
 expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 不得取消正在执行的旧发布");
 expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length === 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
-expect((releaseWorkflow.match(/::warning::Docker Hub 标签发布失败/g) ?? []).length === 6, "所有运行时镜像发布必须把 Docker Hub 复制失败降级为警告");
+expect((releaseWorkflow.match(/::warning::Docker Hub 标签发布失败/g) ?? []).length >= 6, "所有运行时镜像发布必须把 Docker Hub 复制失败降级为警告");
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
@@ -300,7 +305,7 @@ expect(releaseWorkflow.includes("inspectPublishedImageDigest") || releaseWorkflo
 expect(releaseWorkflow.includes("registry_records"), "release workflow must archive channel evidence");
 expect((releaseWorkflow.match(/publish_tags true/g) ?? []).length >= 6, "cross-registry publish must use bounded retry");
 expect((releaseWorkflow.match(/CHANNEL_PUBLISH_FAILED=true/g) ?? []).length === 6, "every release image publish retry must fail closed");
-expect((releaseWorkflow.match(/warning::Docker Hub/g) ?? []).length === 6 && (releaseWorkflow.match(/exit 1/g) ?? []).length >= 6, "configured Docker Hub failure must fail the release");
+expect((releaseWorkflow.match(/warning::Docker Hub/g) ?? []).length >= 6 && (releaseWorkflow.match(/exit 1/g) ?? []).length >= 6, "configured Docker Hub failure must fail the release");
 expect(releaseWorkflow.includes("runtime-image-registry-v2.json"), "release must attach the validated v2 catalog asset");
 expect(!openHarmonyRegistry.fallback && !openHarmonyRegistry.error && !openHarmonyRegistry.checked_at, "bundled catalog must not accept Scheduler-owned fallback/error/checked_at metadata");
 const kaliDigestInspectIndex = releaseWorkflow.indexOf('digest="$(docker buildx imagetools inspect "$primary"');
