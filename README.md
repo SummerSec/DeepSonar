@@ -4,7 +4,9 @@
 >
 > Every loop converges.
 
-DeepSonar 是一套完整的 Loop Graph 工程平台。人只需要提供任务标题和自然语言内容，`hub_reason` 读取任务画布后决定调用 Audit、Explore、Analyze、Review、Test 或 Code Agent；调度器负责状态机、幂等、沙箱、验证和过程记账，让多项目 Agent 的编排、执行、反馈与收敛形成可信闭环。
+DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语言目标，`hub_reason` 读画布后派发 Audit / Explore / Analyze / Review / Test / Code 等角色；调度器负责状态机、幂等、沙箱、验证与过程记账，让多项目 Agent 编排可收敛、可审计。
+
+设计摘要见根目录 [DESIGN.md](DESIGN.md)；完整架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 核心流程
 
@@ -21,115 +23,150 @@ DeepSonar 是一套完整的 Loop Graph 工程平台。人只需要提供任务�
                 ↓
        环境 / PoC / 动态验证
                 ↓
-          Hub 最终收敛
+          Hub 最终收敛 → Report
 ```
 
 主要能力：
 
-- 一任务一画布，完整展示 Agent 决策和执行过程；
-- 新建任务只填写标题和内容；
-- 人工、Plane 和幂等事件统一进入 Hub；
-- Finding 必须经过验证，前后端共用统一状态；
-- confirmed 风险强制进入 Hub 验收；
-- 每种画布边拥有独立颜色、箭头和流动效果；
-- Agent Profile、Skill 源、角色和 API Token 可在控制台管理；
-- PostgreSQL 是唯一业务真相，Scheduler 启动时自动迁移；
-- fake 模式无需模型凭据即可验证完整流程，real 模式通过 Agentbox 沙箱运行真实 Agent。
+- **一任务一画布**（`canvases`，无独立 tasks 表），完整展示决策与执行过程；
+- 新建任务只填标题和内容；Hub / 事件 / 人工评论统一进入调度闭环；
+- Finding 全量进入验证生命周期；confirmed / needs_human 后可生成任务级与 Finding 级报告；
+- Agent 只提案（`emit_*` / `submit_hub_decision` / `mark_job_done`），调度器是唯一副作用执行者；
+- RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场可在控制台管理；
+- PostgreSQL 为业务真相；Scheduler 启动时应用 schema / 增量 migration；
+- **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 Agentbox 起真实沙箱。
 
-## 一键部署
+## 一键部署（推荐：拉取已发布镜像）
 
-要求：Docker 24+、Docker Compose v2。Windows 推荐 PowerShell 7，Linux/macOS 需要 POSIX shell 和 curl。
+要求：Docker 24+、Docker Compose v2。
 
-### Windows
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\deploy\deploy.ps1 up
-```
+**默认从阿里云 ACR 拉取平台镜像并启动**（real 模式），无需本地 `docker build` 源码。
 
 ### Linux / macOS
 
 ```bash
 chmod +x deploy/deploy.sh
-./deploy/deploy.sh up
+./deploy/deploy.sh up              # 等价：up real pull
+# 仅状态机：
+./deploy/deploy.sh up fake pull
+# 必须本地构建时：
+./deploy/deploy.sh up real build
 ```
 
-脚本会自动：
-
-1. 生成 `deploy/.env`；
-2. 生成随机 PostgreSQL 密码、管理员引导 Token 和 Credential 主密钥；
-3. 构建 Web、Scheduler 镜像；
-4. 启动 PostgreSQL、Scheduler、Web Gateway；
-5. 等待数据库迁移和健康检查完成。
-
-启动后访问：<http://127.0.0.1:8080>。
-
-启用 `DEEPSONAR_AUTH_REQUIRED=true` 的新库会在首次启动时创建默认管理员：`admin` / `Deep@Sonar66`。该口令仅用于本地/演示开箱，已公开且不会在重启时重置；生产或公网部署首次登录后必须立即修改密码，并建议修改登录名。人类账号会话与 API Token 服务账号相互独立。
-
-默认使用 `AGENT_MODE=fake`，可以直接验证完整编排。真实 Agent 部署、首次 Token 配置、升级、备份和故障排查见：[一键部署教程](docs/ONE_CLICK_DEPLOYMENT.md)。
-
-常用命令：
+### Windows
 
 ```powershell
-.\deploy\deploy.ps1 status
-.\deploy\deploy.ps1 logs
-.\deploy\deploy.ps1 down       # 保留数据库和 blob volume
-.\deploy\deploy.ps1 up -Mode real
+Set-ExecutionPolicy -Scope Process Bypass
+# 拉取镜像后启动（不要默认 --build）：
+.\deploy\deploy.ps1 -Action up -Mode real -NoBuild
+# 仅状态机：
+.\deploy\deploy.ps1 -Action up -Mode fake -NoBuild
 ```
+
+脚本会：
+
+1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token）；
+2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交 Git）；
+3. **pull** `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
+4. 启动 PostgreSQL、Scheduler、Image Admission、Web Gateway；
+5. 健康检查通过后输出访问地址。
+
+启动后访问：**http://127.0.0.1:8080**（不是开发态的 5173）。
+
+### 登录（鉴权开启时）
+
+新库首次启动会创建默认人类管理员：
+
+| 字段 | 值 |
+|------|-----|
+| 用户名 | `admin` |
+| 密码 | `Deep@Sonar66` |
+
+该口令仅用于本地/演示开箱，**不会在重启时重置**；生产或公网部署后请立即改密（并建议改登录名）。人类会话与 API Token 服务账号相互独立。
+
+### 镜像标签注意
+
+- 平台镜像请使用 **Release 版本号**（如 `0.1.14`），**不要依赖不存在的 `latest` 标签**。
+- 在 `deploy/.env` 中设置：
+
+```dotenv
+DEEPSONAR_IMAGE_REGISTRY=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
+DEEPSONAR_IMAGE_TAG=0.1.14
+```
+
+- 将 `0.1.14` 换成你要的 [Release](https://github.com/SummerSec/DeepSonar/releases) 版本（与 `v0.1.14` 标签对应，**pull 时一般不带 `v` 前缀**）。
+
+手工拉取示例：
+
+```bash
+REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
+VER=0.1.14
+
+for img in deepsonar-scheduler deepsonar-web deepsonar-image-admission; do
+  docker pull "$REG/$img:$VER"
+done
+```
+
+### 常用运维命令
 
 ```bash
 ./deploy/deploy.sh status
 ./deploy/deploy.sh logs
-./deploy/deploy.sh down         # 保留数据库和 blob volume
-./deploy/deploy.sh up real
+./deploy/deploy.sh down          # 保留 postgres / blob volume
+./deploy/deploy.sh pull          # 仅拉取应用镜像
 ```
+
+```powershell
+.\deploy\deploy.ps1 status
+.\deploy\deploy.ps1 logs
+.\deploy\deploy.ps1 down
+```
+
+真实沙箱、凭据、备份与故障排查见 [一键部署教程](docs/ONE_CLICK_DEPLOYMENT.md)。
 
 ## 本地开发
 
-要求：Node.js 20+、pnpm、Docker。
+要求：Node.js 20+、pnpm、Docker（Postgres）。
 
 ```bash
 corepack enable
 pnpm install
 cp .env.example .env            # PowerShell: Copy-Item .env.example .env
 pnpm db:up
+# Windows 若 predev 报找不到 tsc，先把 node_modules/.bin 加入 PATH
 pnpm dev                        # Scheduler: http://127.0.0.1:3100
-pnpm dev:web                    # Web: http://127.0.0.1:5173
+pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100
 ```
 
-默认 `AGENT_MODE=fake`，不需要构建 Agent 镜像。Web 的 `/images` 是独立镜像市场页；项目内的 `/projects/:projectId/images` 用于启用第三方已准入镜像和固定版本。
+默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
 
 ### 官方运行时镜像与语言能力
 
-官方运行时按职责拆包，**镜像选择以 RoleConfig 为准**（Job 创建时冻结 digest），不要用全局 env 指定 CLI 或临时 `apt` 充当工具链：
+官方运行时按职责拆包，**镜像选择以 RoleConfig 为准**（Job 创建时冻结 digest），不要用全局 env 指定 CLI 或在沙箱内临时 `apt` 装工具链：
 
 | 镜像 | 默认角色 | 主要能力 | 刻意不含 |
 |------|----------|----------|----------|
-| `deepsonar-base` | explore / analyze / review / code / hub / **verify** | Node 22 slim、git、系统 python3、curl、rg、jq | 多版本语言、JDK、Go、Rust、Maven、审计重器 |
+| `deepsonar-base` | explore / analyze / review / code / hub / **verify** | Node 22 slim、git、系统 python3、curl、rg、jq | 多版本语言、JDK、Go、Rust、Maven |
 | `deepsonar-audit` | **audit** | base + Semgrep、Gitleaks、ShellCheck、binutils | 完整应用构建链（如 Maven 起 Spring） |
-| `deepsonar-kali-minimal`（Kali Test） | **test** | Python 3.10–3.14 + `uv`、Temurin JDK 8/11/17、固定 Apache Maven 3.9.16（`/opt/deepsonar/maven`，无预置 `.m2`）、Go、Rust、以及 audit 系 CLI | Kali metapackage/GUI、Gradle、Docker-in-Docker |
+| `deepsonar-kali-minimal`（Kali Test） | **test** | 多版本 Python + `uv`、Temurin JDK、Maven、Go、Rust 等 | Kali metapackage/GUI、DinD |
 
-#### 官方镜像仓库（中国区 ACR）
+#### 镜像仓库（中国区 ACR）
 
-`v*` Release 会同步推送到阿里云个人版 ACR（与 GHCR 同一批 digest）。中国区部署优先从这里拉取：
+`v*` Release 会同步推送到阿里云个人版 ACR（与 GHCR 同一批 digest）：
 
 ```text
 crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/<image>:<version>
 ```
 
-运行时与平台镜像（含 `deepsonar-kali-minimal`，**无需单独流程**，Release 多架构构建稍慢，完成后同一路径可用）：
-
 | 镜像 | 用途 |
 |------|------|
-| `deepsonar-base` | 官方最小运行时 |
-| `deepsonar-audit` | 官方审计运行时 |
-| `deepsonar-kali-minimal` | Test 默认（Kali Test） |
+| `deepsonar-base` / `deepsonar-audit` / `deepsonar-kali-minimal` | 官方运行时 |
 | `deepsonar-openharmony-test` / `-audit` / `-fuzz` | OpenHarmony 专项（项目 opt-in） |
 | `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` | 平台服务 |
 
 ```bash
 REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-VER=0.1.10   # 换成目标 Release 版本号
+VER=0.1.14   # 与 GitHub Release 对齐，通常不带 v 前缀
 
 for img in \
   deepsonar-base deepsonar-audit deepsonar-kali-minimal \
@@ -140,7 +177,7 @@ do
 done
 ```
 
-也可用发布附件清单批量拉取：`deploy/pull-runtime-images.sh --file runtime-image-registry.json`（ACR 配齐时清单优先写 ACR 的 `name@sha256:…`）。real 模式请把不可变 digest 写入 `DEEPSONAR_OFFICIAL_*_IMAGE`，不要只写可变 tag。白名单需包含 ACR host：
+也可用发布附件清单：`deploy/pull-runtime-images.sh --file deploy/runtime-image-registry.json`（优先 `name@sha256:…`）。real 模式请把不可变 digest 写入 `DEEPSONAR_OFFICIAL_*_IMAGE`。白名单需包含 ACR host：
 
 ```dotenv
 DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=ghcr.io,docker.io,registry-1.docker.io,crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com
@@ -148,11 +185,9 @@ DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=ghcr.io,docker.io,registry-1.docker.io,crpi-6
 
 **静态审计 vs 动态验证**
 
-- **只读代码出 Finding**（audit）：多数语言在 `deepsonar-audit` 上即可起步（Semgrep + 读仓）。
-- **要 runtime_test / 编译运行 / 打 PoC**（test，必要时项目级覆盖 verify）：必须使用 **Kali Test**（或项目启用的专项镜像），**不要**把 test 绑到 base。
-- base 上没有 `go` / `cargo` / `java` / `mvn`；系统仅有单版本 `python3`。test 误绑 base 时，Python 也偏弱，Go/Rust/Java 会直接 `command not found`，Agent 会浪费时间在沙箱内下载工具链（不可复现，见 [issue #11](https://github.com/SummerSec/DeepSonar/issues/11)）。
-- 需要 `runtime_test` 时，Test/项目级动态 Verify 必须使用可信预构建工具链；**不要在沙箱内冷装** JDK/Maven。完整 Web+DB、Compose 全家桶任何语言都不在默认镜像范围内。
-- Java、Python、Go、Rust 的静态/动态能力矩阵与证据边界见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](docs/RUNTIME_TEST_TOOLCHAINS.md)；OpenHarmony 等专项镜像为 `project_opt_in`，见 [agent-harness/README.md](agent-harness/README.md) 与 [一键部署](docs/ONE_CLICK_DEPLOYMENT.md)。
+- **只读代码出 Finding**（audit）：多数语言可用 `deepsonar-audit`。
+- **runtime_test / 编译 / PoC**（test）：使用 **Kali Test** 或项目专项镜像，不要绑 base。
+- 不要在沙箱内冷装 JDK/Maven；能力矩阵见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](docs/RUNTIME_TEST_TOOLCHAINS.md)。
 
 基本验证：
 
@@ -160,19 +195,14 @@ DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=ghcr.io,docker.io,registry-1.docker.io,crpi-6
 pnpm typecheck
 pnpm build
 pnpm ci:images
-python agent-harness/test-local-project-api.py
 ```
 
 ## 数据库
 
-- 当前完整建库入口：[database/schema.sql](database/schema.sql)
-- Schema 使用说明：[database/README.md](database/README.md)
-- 当前支持 v12 → v15 增量 migration；Scheduler 在 reserved session 上持有 session advisory lock，空库套用最新完整基线
-- `schema_migrations` 记录原始字节 checksum、成功/失败结果；旧版本、未知结构或 checksum 漂移会 fail closed
-- 升级前必须执行 `pg_dump -Fc` 并在隔离实例完成恢复演练；失败 migration 回滚且可在重启后安全重试
-- `database/schema.sql` 是全新外部数据库初始化、审阅和 CI 校验的唯一结构基线
-
-手工初始化全新数据库：
+- 完整建库入口：[database/schema.sql](database/schema.sql)
+- 说明：[database/README.md](database/README.md)
+- Scheduler 启动时对空库套基线，并应用 `database/migrations/` 增量迁移；版本/checksum 不符会 fail closed
+- 升级前请 `pg_dump -Fc` 并在隔离实例演练恢复
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
@@ -180,7 +210,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
 
 ## 外部事件触发
 
-事件和人工任务共用 Hub 入口；`project + source + event_id` 保证重复投递不会重复执行。
+事件与人工任务共用 Hub 入口；`project + source + event_id` 幂等，重复投递不重复执行。
 
 ```bash
 curl -X POST "http://127.0.0.1:8080/api/projects/<project-id>/events" \
@@ -194,46 +224,47 @@ curl -X POST "http://127.0.0.1:8080/api/projects/<project-id>/events" \
   }'
 ```
 
-事件 Token 至少需要 `tasks:write` scope，并应绑定到目标项目。
+Token 至少需要 `tasks:write`，并建议绑定到目标项目。
 
 ## 项目结构
 
 ```text
 apps/
-  scheduler/        Fastify 调度器、状态机、Hub、建库基线
-  image-admission/  第三方 OCI 镜像独立准入/持续复扫 Worker
-  web/              React 控制台和任务画布
+  scheduler/        Fastify 调度器、Hub、验证、报告、API
+  image-admission/  第三方 OCI 镜像准入 Worker
+  web/              React 控制台与任务画布
 packages/
   shared-types/     前后端共享 Zod schema
   plane-client/     Plane 可选集成
-  runtime-sandbox/  Noop/Agentbox 沙箱适配层
-database/           完整 schema 入口
-deploy/             Docker 镜像、Compose 和一键部署脚本
-agent-harness/      API、Hub、鉴权和真实 Agent 验收脚本
-docs/               架构与实施文档
+  runtime-sandbox/  Noop / Agentbox 沙箱
+database/           schema 基线与 migrations
+deploy/             Compose、一键脚本、发布镜像清单
+agent-harness/      冒烟与镜像校验
+docs/               架构与专题文档
+DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
 ```
 
 ## 设计约束
 
-- 本地数据库是唯一业务真相；Plane 只是可选入口；
-- Agent 只提交 Finding、Fact 或决策提案，调度器是唯一副作用执行者；
-- 被审计代码和外部事件都属于不可信输入；
-- API Token 与模型/Plane 凭据严格分离；
-- Credential 生命周期：同一 `credential_id` 的 secret、`base_url` 和 metadata 在执行期读取即可生效，RoleConfig 无需重新保存。provider、项目归属或模型白名单变更会在事务内校验全部绑定及活动/待运行 Job，并记录 `credential.update` 审计；provider 迁移还会拒绝活动 Job 并同步刷新所有 pending Job 快照。失败或终态 Job 保持历史快照，retry 会生成新快照。
-- Agent 只能运行 Job 创建时冻结的已准入 digest，不能从任务内容指定 OCI 引用；
-- real 模式挂载 Docker Socket，等价于较高宿主权限，只能部署在受控主机。
+- 本地库 = 唯一业务真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者；
+- Agent 只提案；图引用 id 必须是画布 UUID，禁止字段名泄漏（如字面量 `root_id`）；
+- 被审计代码与外部事件均为不可信输入；
+- API Token 与模型凭据分离；Job 使用创建时冻结的 snapshot / 镜像 digest；
+- real 模式挂载 Docker Socket，仅限受控主机。
 
 ## 文档
 
+- [DESIGN.md](DESIGN.md) — 设计摘要与演进索引
 - [系统架构](docs/ARCHITECTURE.md)
-- [Hub 与事件触发实施方案](docs/HUB_ORCHESTRATION_AND_EVENT_TRIGGER_IMPLEMENTATION_PLAN.md)
 - [一键部署教程](docs/ONE_CLICK_DEPLOYMENT.md)
+- [Hub 与事件触发](docs/HUB_ORCHESTRATION_AND_EVENT_TRIGGER_IMPLEMENTATION_PLAN.md)
 - [本地项目管理迁移](docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md)
 - [Plane 集成笔记](docs/PLANE_NOTES.md)
-- [生产改进与优化方案](docs/PRODUCTION_HARDENING_AND_OPTIMIZATION_PLAN.md)
+- [运行时测试工具链](docs/RUNTIME_TEST_TOOLCHAINS.md)
+- [生产改进方案](docs/PRODUCTION_HARDENING_AND_OPTIMIZATION_PLAN.md)
 
 ## License
 
-DeepSonar 当前版本为专有源码。使用、复制、修改、分发、再许可或销售前，均须取得 SummerSec 的事先书面授权；可通过 [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) 申请。
+DeepSonar 当前版本为 **专有源码**。使用、复制、修改、分发、再许可或销售前，须取得 SummerSec 事先书面授权；可通过 [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) 申请。
 
-本变更仅适用于包含当前授权声明的仓库版本，不追溯改变此前已按 MIT License 发布的历史版本。第三方依赖与随附工具仍适用各自的许可证。详见 [LICENSE](LICENSE) 与 [第三方声明](THIRD_PARTY_NOTICES.md)。
+本声明适用于包含当前 `LICENSE` 的仓库版本，**不追溯**改变此前已按 MIT 发布的历史版本。第三方组件适用各自许可证。详见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
