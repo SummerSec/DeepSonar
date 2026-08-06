@@ -63,12 +63,11 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
       }
       await writeFile(path.join(staging, "catalog.json"), `${JSON.stringify(input.catalog, null, 2)}\n`, { flag: "wx" });
       await docker(
-        "run", "-d", "--name", helper, "--network", "none", "--user", "0:0", "--cap-drop", "ALL",
+        "run", "-d", "--name", helper, "--network", "none", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--read-only", "-v", `${name}:/assets`,
         "--entrypoint", "/bin/sh", input.image, "-c", "while :; do sleep 60; done",
       );
       await docker("cp", `${staging}${path.sep}.`, `${helper}:/assets`);
-      await docker("exec", helper, "/bin/sh", "-c", "find /assets -type d -exec chmod 0555 {} + && find /assets -type f -exec chmod 0444 {} +");
     } catch (error) {
       await docker("rm", "-f", helper).catch(() => "");
       await docker("volume", "rm", "-f", name).catch(() => "");
