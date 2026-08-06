@@ -14,7 +14,7 @@ const outputPath = path.join(tempRoot, "runtime-image-registry.json");
 const digest = `sha256:${"a".repeat(64)}`;
 const channels = {
   github: `ghcr.io/summersec/deepsonar-base@${digest}`,
-  dockerhub: `docker.io/summersec/deepsonar-base@${digest}`,
+  dockerhub: `docker.io/sumsec/deepsonar-base@${digest}`,
   "aliyun-acr": `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-base@${digest}`,
 };
 
@@ -71,7 +71,7 @@ try {
     assert.deepEqual(version.platforms, ["linux/amd64", "linux/arm64"]);
     assert.equal(version.digest, digest);
     assert.equal(version.registry_refs.github, `ghcr.io/summersec/${image.image_key}@${digest}`);
-    assert.equal(version.registry_refs.dockerhub, `docker.io/summersec/${image.image_key}@${digest}`);
+    assert.equal(version.registry_refs.dockerhub, `docker.io/sumsec/${image.image_key}@${digest}`);
     assert.match(version.registry_refs["aliyun-acr"], /^crpi-6s5wwv0nhl6dq1l0\.cn-hangzhou\.personal\.cr\.aliyuncs\.com\/summersec\//);
     assert.equal(version.image_ref, version.registry_refs.github);
     assert.equal(version.registry_evidence.github.inspect_digest, digest);
@@ -98,7 +98,7 @@ try {
   assertGenerationFails(/inspect_digest.*canonical|digest/i, (descriptor, imageKey) => {
     if (imageKey === "deepsonar-base") descriptor.registry_records.dockerhub = {
       available: true,
-      ref: `docker.io/summersec/${imageKey}@${"b".repeat(64)}`,
+      ref: `docker.io/sumsec/${imageKey}@${"b".repeat(64)}`,
       inspect_digest: `sha256:${"b".repeat(64)}`,
       provenance: "cross-registry-copy+inspect",
     };
@@ -106,7 +106,7 @@ try {
   assertGenerationFails(/inspect|evidence|registry_records/i, (descriptor, imageKey) => {
     if (imageKey === "deepsonar-base") descriptor.registry_records.dockerhub = {
       available: true,
-      ref: `docker.io/summersec/${imageKey}@${digest}`,
+      ref: `docker.io/sumsec/${imageKey}@${digest}`,
       provenance: "cross-registry-copy",
     };
   });
@@ -117,6 +117,11 @@ try {
       inspect_digest: digest,
       provenance: "cross-registry-copy+inspect",
     };
+  });
+  assertGenerationFails(/server-owned dockerhub host\/namespace/i, (descriptor, imageKey) => {
+    if (imageKey === "deepsonar-base") {
+      descriptor.registry_records.dockerhub.ref = `docker.io/summersec/${imageKey}@${digest}`;
+    }
   });
 
   assertGenerationFails(/provenance/i, (descriptor, imageKey) => {
