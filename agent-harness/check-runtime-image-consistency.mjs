@@ -170,7 +170,7 @@ for (const [file, content] of [
   expect((mode & 0o111) !== 0, `${file} 必须可执行`);
   expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
 }
-const openHarmonyRepoSha256 = "2fcb4754e6f1bbb3657b3a0712c21dcb8ad39ec41d6f8291771021689894466b";
+const openHarmonyRepoSha256 = "2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020";
 expect(createHash("sha256").update(openHarmonyRepo).digest("hex") === openHarmonyRepoSha256, "OpenHarmony vendored repo launcher checksum 不匹配");
 for (const item of openHarmonyImages) {
   const df = item.dockerfile;
