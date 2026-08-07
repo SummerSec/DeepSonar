@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 当前产品与系统设计摘要（as-built + 已共识演进方向）。  
-> 细节与历史决策以 `docs/ARCHITECTURE.md` 为准；本文件给 Agent / 新人**先读**用。  
+> 本文件给 Agent / 新人**先读**；细节冲突时以代码、`database/schema.sql`、OpenAPI 与测试为准。
 > 日期：2026-08 · 与代码主路径对齐（Plane 可选、本地任务为主）。
 
 ## 1. 一句话
@@ -14,11 +14,11 @@
 |----|------|------|------|
 | **本地库 / Web** | 管理真相 | 项目、任务（画布）、角色、凭据、规则、镜像准入 | 不在 Agent 里改基建 |
 | **Canvas** | 过程真相 | fact / intent / finding / job 节点与边；布局由服务端算 | Agent 不提案坐标 |
-| **Sandbox** | 执行真相 | 每 Job 全新 `/workspace`；CLI + 控制 MCP | 不持长期 Provider Key |
+| **Sandbox** | 执行真相 | 每 Job 全新 `/workspace`；CLI + 控制 MCP | 仅持当前 Job 冻结的 CLI 配置，终态即销毁 |
 | **Scheduler** | 副作用唯一执行者 | claim、状态机、派生 verify/report、Reaper、注入快照 | 不做业务推理 |
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。**  
-> Plane 为可选集成（`docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md`）。
+> Plane 为可选集成，默认主路径是 Web 直接创建项目与任务。
 
 ## 3. 核心实体（实现）
 
@@ -119,7 +119,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 ## 9. 安全边界
 
 - 被审计目标 = 不可信输入（prompt injection）。
-- 长期密钥不进快照/工作区；沙箱经 **Model Gateway** 短 token 访问模型。
+- `settings_config_json` 是 CLI 连接真相：随 Job 完整冻结并原样物化到一次性沙箱；管理 API/Web 只返回脱敏投影。无配置文件的历史 Credential 才走 Model Gateway 兼容路径。
 - 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。
 - 出网：`allow_egress` 任务级冻结；禁出网时仅 gateway sidecar。
 
@@ -138,7 +138,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 ## 11. 已共识演进（未完全落地）
 
-下列方向已在 GitHub Issues 中立项，**实现前以 issue 为准**；改架构需同步 `ARCHITECTURE.md`。
+下列方向已在 GitHub Issues 中立项，**实现前以 issue 和当前代码为准**。
 
 | 主题 | Issue | 设计要点 |
 |------|-------|----------|
@@ -148,14 +148,14 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | Scheduler bounded contexts / characterization | #37 | **已完成**：六个领域均通过 application/ports 暴露窄接口；`event-ingestion` 拥有 envelope、幂等、顺序、限流与语义副作用，Hub/Finding/Report/runtime snapshot 通过显式 ports 协作。顶层 `routes.ts` 只保留 auth/project-scope hook、Gateway 与领域 registrar 组装，业务 handler 全部按域归属。`core.ts` 保留既有 import 的兼容 facade 与 composition root，不再承载事件副作用实现；Canvas-first 事务锁序、终态组合、路由/OpenAPI surface 和无生产动态 import 均有回归护栏。 |
 | 实时流 + 运行中过程流 | #38 | WS 鉴权；inflight 读 `stream.ndjson` |
 | 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`canvas_changes` durable revision/tombstone；`delta?since=<revision>`，游标过旧显式回退 L0 |
-| 分层共享资产 | #41 | **已实现**：platform/project/finding 三级不可变版本库，CAS blob、配额/MIME/path 校验、人工上传/归档/下载、Agent `list_shared_assets`/`publish_shared_asset`、项目 platform opt-in、Finding 隔离、Job 精确版本快照，以及带 Job 标签的 `:ro` named volume 自动注入/回收；项目/平台/Finding UI 已接入。字节经可插拔 BlobStore（`BLOB_STORE=fs|s3`，任意 S3 兼容存储，不锁定 MinIO）；Agent **无单独下载工具**，list 返回 `mount_path`/`read_path` 用普通文件工具读取，publish 由 Scheduler 写 BlobStore；见 `docs/SHARED_ASSET_BLOB_STORE.md`。 |
-| Provider 配置（CC Switch 模型） | — | **P0 落地中**：`credentials` 存 `agent_cli` + 完整 `settings_config_json`（CLI 方言配置文件，可含 model/thinking/features）+ `meta_json`；Job 快照 materialize 注入沙箱 `.claude/settings.json` / `.codex/*` / `.opencode/config.json`。不做统一供应商。 |
+| 分层共享资产 | #41 | **已实现**：platform/project/finding 三级不可变版本库，CAS blob、配额/MIME/path 校验、人工上传/归档/下载、Agent `list_shared_assets`/`publish_shared_asset`、项目 platform opt-in、Finding 隔离、Job 精确版本快照，以及带 Job 标签的 `:ro` named volume 自动注入/回收；项目/平台/Finding UI 已接入。字节经可插拔 BlobStore（`BLOB_STORE=fs|s3`，官方生产 Compose 默认使用 PGSTY Silo，仍兼容任意 S3 服务）；Agent **无单独下载工具**，list 返回 `mount_path`/`read_path` 用普通文件工具读取，publish 由 Scheduler 写 BlobStore。 |
+| Provider 配置（CC Switch 模型） | #99 | **已落地（三类配置方言）**：LLM `provider` 是协议（Anthropic Messages / OpenAI Responses），不是厂商预设。`credentials` 存 `agent_cli` + 完整 `settings_config_json` + `meta_json`；管理 API 仅返回 `[已保存密钥]` 脱敏投影。角色绑定 Credential 配置文件，`RoleConfig.model` 仅作可选高级覆盖；所有门禁与 Job 冻结统一解析 `effectiveModel = RoleConfig.model ?? Credential settings model ?? null`。显式 `allowed_model_ids` 只约束 effective model，settings 模型不会静默开启白名单。Job 快照把完整配置原样物化为 `.claude/settings.json` / `.codex/*` / `.opencode/config.json`，不再用 Gateway Token 改写文件；沙箱终态销毁。**当前 real runtime 只完整驱动 Claude Code**；通用多 CLI Runtime Adapter 见 #100。 |
 | 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
 | 双轨报告 | #43 | **已完成**：任务收敛后保留一份 Task Report；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report，支持手动刷新/重试并限制单 Finding 同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | **已完成**：通用 `profile/category/tags/evidence_refs` 与可选 severity/scoring；协议按任务>项目>全局解析并随画布冻结；Agent 通过严格 MCP 提案，Scheduler 重算 CVSS 4.0/3.1、保留协议允许的未知版本原始数据；Web/报告支持标识、筛选与分组 |
 | 任务卡片状态 | #46 | 任务级相位与 `active_count` 同源 |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
-| 官方运行镜像多 channel catalog | #70 | **已完成**：v2 canonical digest/platform/size + `registry_refs`/`registry_evidence` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 按 ACR→GHCR→Docker Hub 发布并对每个可用目的地执行真实 `imagetools inspect`，配置通道失败时清单生成 fail-closed，v2 Release asset 与 bundled fallback 同步；平台全局通道由 Scheduler 落库并经 `GET /runtime-images/registry` 的 `selected_channel` 读取、`PATCH /runtime-images/registry/channel`（`images:manage`）切换，Job 创建时冻结所选 digest/ref，pull/resolution 对未发布通道 fail-closed；Web 市场提供固定三选项通道选择器，与 CPU 平台筛选分离，展示加载/403/切换状态并在切换后刷新清单与镜像行 |
+| 官方运行镜像多 channel catalog | #70 | **已完成**：v2 canonical digest/platform/size + `registry_refs`/`registry_evidence` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 按 ACR→GHCR→Docker Hub 发布并对每个可用目的地执行真实 `imagetools inspect`，配置通道失败时清单生成 fail-closed，v2 Release asset 与 bundled fallback 同步；schema v23 新库默认选择 `aliyun-acr`，平台全局通道由 Scheduler 落库并经 `GET /runtime-images/registry` 的 `selected_channel` 读取、`PATCH /runtime-images/registry/channel`（`images:manage`）切换，Job 创建时冻结所选 digest/ref，pull/resolution 对未发布通道 fail-closed；Web 市场提供固定三选项通道选择器，与 CPU 平台筛选分离，展示加载/403/切换状态并在切换后刷新清单与镜像行 |
 
 ## 12. 仓库地图
 
@@ -166,8 +166,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v22）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
-| `docs/ARCHITECTURE.md` | 完整架构与威胁建模 |
+| `database/schema.sql` | 唯一 schema 基线（当前 v23）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
@@ -206,12 +205,12 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 3. **列表 API 不塞大 body**；大字段详情/按需（#39）。  
 4. **进 prompt 的内容当不可信**；共享资产只读挂载（#41）。  
 5. **配置覆盖：任务 > 项目 > 全局**；Job 只认冻结快照。  
-6. 细节冲突时：`ARCHITECTURE.md` + 代码 > 本摘要；演进以 open issue 为准。
+6. 细节冲突时：代码 + schema + OpenAPI + 测试 > 本摘要；演进以 open issue 为准。
 
-## 14. 相关文档
+## 14. 当前事实入口
 
-- `docs/ARCHITECTURE.md` — 架构全文  
-- `docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md` — Plane 可选化  
-- `docs/ROLE_CONFIG_AND_REPORT_PLAN.md` — 角色/报告/读图分级（含未落地 GraphScope）  
-- `docs/TODO_VERIFY_*.md` — 验证与收敛  
-- `AGENTS.md` / `CLAUDE.md` — 给编码 Agent 的操作手册  
+- `database/schema.sql` — 数据结构与默认值唯一基线
+- `/api/openapi.json` — HTTP API 契约
+- `.github/workflows/ci.yml` / `release.yml` — 构建、验证与发布门禁
+- GitHub Issues — 未完成能力和后续方案
+- `AGENTS.md` / `CLAUDE.md` — 给编码 Agent 的操作手册

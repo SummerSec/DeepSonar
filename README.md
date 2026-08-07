@@ -6,7 +6,7 @@
 
 DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语言目标，`hub_reason` 读画布后派发 Audit / Explore / Analyze / Review / Test / Code 等角色；调度器负责状态机、幂等、沙箱、验证与过程记账，让多项目 Agent 编排可收敛、可审计。
 
-设计摘要见根目录 [DESIGN.md](DESIGN.md)；完整架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+当前设计摘要见根目录 [DESIGN.md](DESIGN.md)；行为以代码、`database/schema.sql`、OpenAPI 与测试为准。
 
 ## 核心流程
 
@@ -35,6 +35,14 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 - RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场可在控制台管理；
 - PostgreSQL 为业务真相；Scheduler 启动时对空库套 schema 基线，已有库只校验版本；
 - **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 Agentbox 起真实沙箱。
+
+## Provider 与 Agent CLI
+
+- `provider` 表示上游协议，仅支持 **Anthropic Messages** 与 **OpenAI Responses**；不内置 Anthropic、Kimi 等厂商预设。
+- `agent_cli` 表示配置方言，当前支持 **Claude Code、Codex、OpenCode**。Credential 保存完整 `settings_config_json`，Job 创建时冻结并原样写入一次性 Agent 沙箱。
+- 设置页可在保存前一键读取模型列表；显式 `allowed_model_ids` 只限制实际生效模型，不会由配置文件中的 model 自动生成白名单。
+- 用户密码、Provider API Key 和完整 CLI 配置不会由管理 API 或 Web 明文回显；已保存密钥仅显示占位状态。
+- 当前 real runtime 仅完整驱动 Claude Code。Codex、OpenCode 及后续更多 CLI 的通用执行适配跟踪见 [Issue #100](https://github.com/SummerSec/DeepSonar/issues/100)。
 
 ## 一键部署（推荐：拉取已发布镜像）
 
@@ -65,10 +73,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 脚本会：
 
-1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token）；
+1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token、Silo S3 凭据）；
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交 Git）；
-3. **pull** `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
-4. 启动 PostgreSQL、Scheduler、Image Admission、Web Gateway；
+3. 使用当前 Release 的无 `v` 版本号拉取 `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
+4. 启动 PostgreSQL、PGSTY Silo、Scheduler、Image Admission、Web Gateway；
 5. 健康检查通过后输出访问地址。
 
 启动后访问：**http://127.0.0.1:8080**（不是开发态的 5173）。
@@ -86,33 +94,37 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 镜像标签注意
 
-- 平台镜像请使用 **Release 版本号**（如 `0.1.14`），**不要依赖不存在的 `latest` 标签**。
-- 在 `deploy/.env` 中设置：
+- 平台镜像使用 **Release 版本号**，阿里云 ACR 标签不带 Git tag 的 `v` 前缀，也不发布 `latest`。
+- Release workflow 会把发布版本自动同步到 `deploy/.env.example`；部署脚本也会把旧的 `latest` 配置改为当前清单版本。需要固定旧版本时再在 `deploy/.env` 显式设置：
 
 ```dotenv
 DEEPSONAR_IMAGE_REGISTRY=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-DEEPSONAR_IMAGE_TAG=0.1.14
+DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 ```
 
-- 将 `0.1.14` 换成你要的 [Release](https://github.com/SummerSec/DeepSonar/releases) 版本（与 `v0.1.14` 标签对应，**pull 时一般不带 `v` 前缀**）。
+- 版本值与 [GitHub Release](https://github.com/SummerSec/DeepSonar/releases) 的 `vX.Y.Z` 对应，但 ACR 拉取使用 `X.Y.Z`。
 
 手工拉取示例：
 
 ```bash
 REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-VER=0.1.14
+VER=<release-version-without-v>
 
 for img in deepsonar-scheduler deepsonar-web deepsonar-image-admission; do
   docker pull "$REG/$img:$VER"
 done
 ```
 
+### 对象存储
+
+生产 Compose 默认启动固定版本的 [PGSTY Silo](https://github.com/pgsty/silo)，共享资产 CAS 通过内部 `http://silo:9000` 使用 S3 API。API 与 Console 默认只绑定宿主机 `127.0.0.1:9000/9001`，数据保存在独立 `silo_data` volume；报告与运行证据仍写入本地 `blob_data`。切换既有对象存储时必须先迁移并校验对象，部署脚本不会删除旧卷。
+
 ### 常用运维命令
 
 ```bash
 ./deploy/deploy.sh status
 ./deploy/deploy.sh logs
-./deploy/deploy.sh down          # 保留 postgres / blob volume
+./deploy/deploy.sh down          # 保留 postgres / blob / silo volume
 ./deploy/deploy.sh pull          # 仅拉取应用镜像
 ```
 
@@ -122,7 +134,7 @@ done
 .\deploy\deploy.ps1 down
 ```
 
-真实沙箱、凭据、备份与故障排查见 [一键部署教程](docs/ONE_CLICK_DEPLOYMENT.md)。
+部署行为以 `deploy/deploy.sh`、`deploy/deploy.ps1` 与 `deploy/docker-compose.prod.yml` 为准。
 
 ## 本地开发
 
@@ -138,7 +150,7 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100
 ```
 
-默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
+默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema v23 新库默认选择阿里云 ACR 通道，管理员仍可在市场切换 GHCR / Docker Hub / ACR。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
 
 ### 官方运行时镜像与语言能力
 
@@ -166,7 +178,7 @@ crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/<image>:<ve
 
 ```bash
 REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-VER=0.1.14   # 与 GitHub Release 对齐，通常不带 v 前缀
+VER=<release-version-without-v>   # 与 GitHub Release 的 vX.Y.Z 对齐
 
 for img in \
   deepsonar-base deepsonar-audit deepsonar-kali-minimal \
@@ -187,7 +199,7 @@ DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=ghcr.io,docker.io,registry-1.docker.io,crpi-6
 
 - **只读代码出 Finding**（audit）：多数语言可用 `deepsonar-audit`。
 - **runtime_test / 编译 / PoC**（test）：使用 **Kali Test** 或项目专项镜像，不要绑 base。
-- 不要在沙箱内冷装 JDK/Maven；能力矩阵见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](docs/RUNTIME_TEST_TOOLCHAINS.md)。
+- 不要在沙箱内冷装 JDK/Maven；以 `agent-harness/*runtime.json` 的版本、能力和体积契约为准。
 
 基本验证：
 
@@ -240,7 +252,6 @@ packages/
 database/           schema 基线（无 migration）
 deploy/             Compose、一键脚本、发布镜像清单
 agent-harness/      冒烟与镜像校验
-docs/               架构与专题文档
 DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
 ```
 
@@ -252,16 +263,13 @@ DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
 - API Token 与模型凭据分离；Job 使用创建时冻结的 snapshot / 镜像 digest；
 - real 模式挂载 Docker Socket，仅限受控主机。
 
-## 文档
+## 当前事实入口
 
-- [DESIGN.md](DESIGN.md) — 设计摘要与演进索引
-- [系统架构](docs/ARCHITECTURE.md)
-- [一键部署教程](docs/ONE_CLICK_DEPLOYMENT.md)
-- [Hub 与事件触发](docs/HUB_ORCHESTRATION_AND_EVENT_TRIGGER_IMPLEMENTATION_PLAN.md)
-- [本地项目管理迁移](docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md)
-- [Plane 集成笔记](docs/PLANE_NOTES.md)
-- [运行时测试工具链](docs/RUNTIME_TEST_TOOLCHAINS.md)
-- [生产改进方案](docs/PRODUCTION_HARDENING_AND_OPTIMIZATION_PLAN.md)
+- [DESIGN.md](DESIGN.md) — as-built 设计摘要与开放 Issue 索引
+- [database/schema.sql](database/schema.sql) — 数据结构唯一基线
+- [database/README.md](database/README.md) — schema 启动与重建规则
+- `/api/openapi.json` — 当前 HTTP API 契约
+- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 未完成能力与演进方案
 
 ## License
 
