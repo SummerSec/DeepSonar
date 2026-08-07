@@ -19,6 +19,7 @@ import {
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
+import { resolveEffectiveModel } from "../../provider-settings.js";
 
 const ReasoningEffort = z.enum(["low", "medium", "high", "xhigh"]);
 const RoleBody = z.object({
@@ -96,7 +97,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       // provider/project/metadata mutations.  Lock each row while reading so
       // a concurrent Credential PATCH cannot invalidate this validation.
       const [cred] = await db`
-        SELECT id, project_id, status, provider, public_metadata_json
+        SELECT id, project_id, status, provider, public_metadata_json,
+               agent_cli, settings_config_json
         FROM credentials WHERE id = ${c.credential_id} FOR UPDATE`;
       if (!cred) return `Credential 不存在: ${c.credential_id}`;
       if (projectId && cred.project_id && cred.project_id !== projectId) {
@@ -106,15 +108,23 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       if (c.purpose === "llm") {
         const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(cred.provider ?? ""));
         if (compatibilityError) return compatibilityError;
-      }
-      if (c.purpose === "llm" && body.model) {
-        const allowed = allowedModelIds(cred.public_metadata_json);
-        if (allowed.length > 0 && !allowed.includes(body.model)) {
-          return `模型 ${body.model} 不在 Credential ${c.credential_id} 的 allowed_model_ids 白名单`;
+        if (cred.agent_cli && cred.agent_cli !== body.agent_cli) {
+          return `Credential ${c.credential_id} 的配置文件属于 ${cred.agent_cli}，不能绑定到 ${body.agent_cli} 角色`;
         }
       }
-      if (c.purpose === "llm" && !body.model && allowedModelIds(cred.public_metadata_json).length > 0) {
-        return `Credential ${c.credential_id} 已启用模型白名单，请显式选择模型`;
+      if (c.purpose === "llm") {
+        const effectiveModel = resolveEffectiveModel({
+          roleModel: body.model,
+          agentCli: body.agent_cli,
+          settingsConfig: cred.settings_config_json,
+        });
+        const allowed = allowedModelIds(cred.public_metadata_json);
+        if (allowed.length > 0 && !effectiveModel) {
+          return `Credential ${c.credential_id} 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖`;
+        }
+        if (effectiveModel && allowed.length > 0 && !allowed.includes(effectiveModel)) {
+          return `模型 ${effectiveModel} 不在 Credential ${c.credential_id} 的 allowed_model_ids 白名单`;
+        }
       }
     }
     if (body.config_files.length > CONFIG_FILE_MAX_COUNT) return `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`;

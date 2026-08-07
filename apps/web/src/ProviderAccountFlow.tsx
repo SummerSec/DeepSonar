@@ -26,6 +26,11 @@ import {
   CredentialConfigEditor,
   extractBaseUrlFromSettingsClient,
   extractSecretFromSettings,
+  providerProtocolLabel,
+  redactSecretText,
+  redactSecretValues,
+  restoreRedactedSecretText,
+  restoreRedactedSecrets,
 } from "./CredentialConfigEditor";
 import { formatJsonObject } from "./json-text";
 import { HelpTip } from "./ui";
@@ -70,10 +75,6 @@ function isBuiltinBindableRole(roleConfig: BindableRoleConfig): boolean {
     .includes((roleConfig.role_name ?? "").toLowerCase());
 }
 
-function providerLabel(provider: string, catalog: ProviderAccountCatalogItemView[]): string {
-  return catalog.find((item) => item.provider === provider)?.label ?? provider;
-}
-
 /** Models declared inside CC Switch settingsConfig (env / toml / open-code). */
 function modelsFromSettingsConfig(credential: ProviderCredential | null): string[] {
   if (!credential?.settings_config_json) return [];
@@ -90,6 +91,10 @@ function modelsFromSettingsConfig(credential: ProviderCredential | null): string
   push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
   push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
   push(settings.model);
+  const openCodeModels = settings.models && typeof settings.models === "object" && !Array.isArray(settings.models)
+    ? settings.models as Record<string, unknown>
+    : {};
+  for (const model of Object.keys(openCodeModels)) push(model);
   if (typeof settings.config === "string") {
     const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     push(match?.[1] || match?.[2]);
@@ -163,8 +168,10 @@ export function ProviderAccountFlow({
   const [previewImpact, setPreviewImpact] = useState<CredentialImpact | null>(null);
   const [testing, setTesting] = useState(false);
   const [discovering, setDiscovering] = useState(false);
+  const [createDiscovering, setCreateDiscovering] = useState(false);
+  const [createModels, setCreateModels] = useState<string[]>([]);
   const [createName, setCreateName] = useState("");
-  const [createProvider, setCreateProvider] = useState("anthropic");
+  const [createProvider, setCreateProvider] = useState("");
   const [createSecret, setCreateSecret] = useState("");
   const [createBaseUrl, setCreateBaseUrl] = useState("");
   const [createAgentCli, setCreateAgentCli] = useState<AgentCli>("claude-code");
@@ -175,7 +182,7 @@ export function ProviderAccountFlow({
   const [showCreate, setShowCreate] = useState(false);
   const [editingCredentialId, setEditingCredentialId] = useState("");
   const [editName, setEditName] = useState("");
-  const [editProvider, setEditProvider] = useState("anthropic");
+  const [editProvider, setEditProvider] = useState("");
   const [editAgentCli, setEditAgentCli] = useState<AgentCli>("claude-code");
   const [editProjectId, setEditProjectId] = useState("");
   const [editSettingsJson, setEditSettingsJson] = useState("");
@@ -183,6 +190,8 @@ export function ProviderAccountFlow({
   const [editAuthJson, setEditAuthJson] = useState("");
   const [editApiKey, setEditApiKey] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editOriginalSettings, setEditOriginalSettings] = useState<Record<string, unknown> | null>(null);
+  const [editOriginalAgentCli, setEditOriginalAgentCli] = useState<AgentCli | null>(null);
   const [catalogError, setCatalogError] = useState("");
   const [batchIdempotencyKey, setBatchIdempotencyKey] = useState(newBatchIdempotencyKey);
   /** Bind list scope: all | global-only | one project id */
@@ -218,8 +227,8 @@ export function ProviderAccountFlow({
       && selectedCredential.health?.status === "ok"
       && selectedCredential.health.last_tested_at,
   );
-  // Binding keeps each RoleConfig's own model (CC Switch style). No unified model gate;
-  // catalog refresh is optional reference only.
+  // Binding keeps an optional RoleConfig model override. Credential settings remain
+  // the default model source; catalog refresh is optional reference only.
   const bindingGateReason = !selectedCredential
     ? "请先选择 Provider 账号。"
     : selectedCredential.provider_valid === false
@@ -343,6 +352,13 @@ export function ProviderAccountFlow({
     api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!createProvider) {
+      const firstProvider = catalog.find((item) => item.kind === "llm_provider");
+      if (firstProvider) setCreateProvider(firstProvider.provider);
+    }
+  }, [catalog, createProvider]);
+
   // Same catalog as 镜像市场：enabled 镜像全量可选（官方含 OpenHarmony project_opt_in）。
   // project_id 仅用于选项上标注「需项目启用」；第三方未启用时仍过滤（与后端一致）。
   useEffect(() => {
@@ -428,6 +444,8 @@ export function ProviderAccountFlow({
   const loadEditorFromCredential = (credential: ProviderCredential) => {
     const settings = credential.settings_config_json ?? {};
     const cli = (credential.agent_cli as AgentCli | null) ?? "claude-code";
+    setEditOriginalSettings(settings);
+    setEditOriginalAgentCli(cli);
     setEditName(credential.name);
     setEditProvider(credential.provider);
     setEditAgentCli(cli);
@@ -436,16 +454,17 @@ export function ProviderAccountFlow({
       const auth = settings.auth && typeof settings.auth === "object" && !Array.isArray(settings.auth)
         ? settings.auth as Record<string, unknown>
         : {};
-      setEditAuthJson(Object.keys(auth).length > 0 ? formatJsonObject(auth) : "");
-      setEditTomlText(typeof settings.config === "string" ? settings.config : "");
+      setEditAuthJson(Object.keys(auth).length > 0 ? formatJsonObject(redactSecretValues(auth) as Record<string, unknown>) : "");
+      setEditTomlText(typeof settings.config === "string" ? redactSecretText(settings.config) : "");
       setEditSettingsJson("");
       setEditApiKey("");
       setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
     } else {
-      setEditSettingsJson(Object.keys(settings).length > 0 ? formatJsonObject(settings) : "");
+      setEditSettingsJson(Object.keys(settings).length > 0 ? formatJsonObject(redactSecretValues(settings) as Record<string, unknown>) : "");
       setEditTomlText("");
       setEditAuthJson("");
-      setEditApiKey(extractSecretFromSettings(settings));
+      // Existing Credential secrets are never copied into the editable API Key field.
+      setEditApiKey("");
       setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
     }
   };
@@ -559,6 +578,45 @@ export function ProviderAccountFlow({
     }
   };
 
+  const discoverCreateModels = async () => {
+    if (!createProvider || !createSecret.trim()) {
+      setError("请先填写 Provider 和 API Key");
+      return;
+    }
+    const built = buildSettingsConfigFromEditor({
+      agentCli: createAgentCli,
+      settingsJson: createSettingsJson,
+      tomlText: createTomlText,
+      authJson: createAuthJson,
+      secret: createSecret,
+      baseUrl: createBaseUrl,
+      provider: createProvider,
+      allowEmptyDefault: true,
+    });
+    if (!built.ok) {
+      setError(built.error);
+      return;
+    }
+    const baseUrl = (createBaseUrl.trim() || extractBaseUrlFromSettingsClient(built.settings)).replace(/\/+$/u, "");
+    setCreateDiscovering(true);
+    setError("");
+    try {
+      const result = await api.credentialModelsPreview({
+        agent_cli: createAgentCli,
+        provider: createProvider,
+        secret: createSecret,
+        metadata: createCatalog?.supports_base_url && baseUrl ? { base_url: baseUrl } : {},
+        settings_config: built.settings,
+      });
+      setCreateModels(result.models);
+      setNotice(`模型目录已获取：${result.models.length} 个，可在配置中选择。`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCreateDiscovering(false);
+    }
+  };
+
   /** Edit save uses the same settingsConfig builder as create (paste-as-is). */
   const saveEditedConfig = async () => {
     if (!editingCredential) return;
@@ -576,8 +634,13 @@ export function ProviderAccountFlow({
       setError(built.error);
       return;
     }
-    const baseUrl = (editBaseUrl.trim() || extractBaseUrlFromSettingsClient(built.settings)).replace(/\/+$/u, "");
-    const nextSecret = editApiKey.trim() || extractSecretFromSettings(built.settings);
+    const settingsToSave = editOriginalSettings && editOriginalAgentCli === editAgentCli
+      ? restoreRedactedSecrets(editOriginalSettings, built.settings) as Record<string, unknown>
+      : built.settings;
+    if (typeof settingsToSave.config === "string" && typeof editOriginalSettings?.config === "string") {
+      settingsToSave.config = restoreRedactedSecretText(editOriginalSettings.config, settingsToSave.config);
+    }
+    const baseUrl = (editBaseUrl.trim() || extractBaseUrlFromSettingsClient(settingsToSave)).replace(/\/+$/u, "");
     setBusy(true);
     setError("");
     try {
@@ -588,19 +651,19 @@ export function ProviderAccountFlow({
       await api.updateCredential(editingCredential.id, {
         name: editName.trim() || editingCredential.name,
         agent_cli: editAgentCli,
-        settings_config: built.settings,
+        settings_config: settingsToSave,
         metadata,
       });
       // Keep credential.secret column in sync when config carries a new key (same as create path).
-      const previousSecret = extractSecretFromSettings(editingCredential.settings_config_json);
-      const resolvedSecret = editApiKey.trim() || nextSecret;
-      if (resolvedSecret && resolvedSecret !== previousSecret) {
-        await api.rotateCredential(editingCredential.id, resolvedSecret);
+      if (editApiKey.trim()) {
+        await api.rotateCredential(editingCredential.id, editApiKey.trim());
       }
       setNotice(built.pastedAsIs
         ? "配置已原样保存（与创建逻辑一致）。请重新测试连接后再绑定。"
         : "配置已保存（与创建逻辑一致）。请重新测试连接后再绑定。");
       setEditingCredentialId("");
+      setEditOriginalSettings(null);
+      setEditOriginalAgentCli(null);
       setSelectedCredentialId(editingCredential.id);
       onChanged();
     } catch (e) {
@@ -691,7 +754,8 @@ export function ProviderAccountFlow({
       if (unbindableSelectedRoles.length > 0) throw new Error("项目作用域操作者只能绑定本项目的角色配置。");
       if (mode === "migrate" && !sourceCredentialId) throw new Error("请选择要迁移的源账号");
       if (incompatibleRoles.length > 0) throw new Error("部分所选角色配置与当前账号 CLI 不兼容");
-      // Always keep each RoleConfig's own model — no unified override.
+      // Compatibility resolves the optional RoleConfig override first, then the
+      // selected Credential's CLI-specific settings.
       const checks = await Promise.all(selectedRoles.map((roleConfig) =>
         api.credentialCompatibility(selectedCredential.id, roleConfig.agent_cli, roleConfig.model),
       ));
@@ -726,7 +790,9 @@ export function ProviderAccountFlow({
   };
 
   const steps: Array<{ key: FlowStep; label: string; detail: string }> = [
-    { key: "account", label: "Provider 账号", detail: selectedCredential ? providerLabel(selectedCredential.provider, catalog) : "选择账号" },
+    { key: "account", label: "Provider 账号", detail: selectedCredential
+      ? providerProtocolLabel(selectedCredential.provider, (selectedCredential.agent_cli as AgentCli | null) ?? "claude-code", catalog)
+      : "选择账号" },
     {
       key: "roles",
       label: "角色绑定",
@@ -839,7 +905,10 @@ export function ProviderAccountFlow({
               onTomlTextChange={setCreateTomlText}
               authJson={createAuthJson}
               onAuthJsonChange={setCreateAuthJson}
-              modelOptions={[]}
+              modelOptions={createModels}
+              onFetchModels={discoverCreateModels}
+              fetchingModels={createDiscovering}
+              canFetchModels={Boolean(createProvider && createSecret.trim())}
               onNotice={(message) => { setNotice(message); setError(""); }}
               onError={(message) => { if (message) setError(message); else setError(""); }}
               onSubmit={createAccount}
@@ -874,7 +943,9 @@ export function ProviderAccountFlow({
                     <span className="provider-flow-credential-title">
                       <strong>{credential.name}</strong>
                       <small>
-                        {credential.provider_valid === false ? "映射待修复" : credential.provider}
+                        {credential.provider_valid === false
+                          ? "映射待修复"
+                          : providerProtocolLabel(credential.provider, (credential.agent_cli as AgentCli | null) ?? "claude-code", catalog)}
                         {credential.agent_cli
                           ? ` · ${cliLabel[credential.agent_cli] ?? credential.agent_cli}`
                           : " · CLI 未设置"}
@@ -953,7 +1024,11 @@ export function ProviderAccountFlow({
                         onNotice={(message) => { setNotice(message); setError(""); }}
                         onError={(message) => { if (message) setError(message); else setError(""); }}
                         onSubmit={saveEditedConfig}
-                        onCancel={() => setEditingCredentialId("")}
+                        onCancel={() => {
+                          setEditingCredentialId("");
+                          setEditOriginalSettings(null);
+                          setEditOriginalAgentCli(null);
+                        }}
                         busy={busy}
                         submitLabel="保存配置修改"
                       />
@@ -988,7 +1063,9 @@ export function ProviderAccountFlow({
               <div className="flex gap-2">
                 <select value={repairProvider} onChange={(event) => setRepairProvider(event.target.value)} className="theme-input-surface min-w-0 flex-1">
                   <option value="">选择 Provider</option>
-                  {catalog.filter((item) => item.kind === "llm_provider").map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}
+                  {catalog.filter((item) => item.kind === "llm_provider").map((item) => <option key={item.provider} value={item.provider}>
+                    {providerProtocolLabel(item.provider, (selectedCredential.agent_cli as AgentCli | null) ?? "claude-code", catalog)}
+                  </option>)}
                 </select>
                 <button type="button" onClick={repair} disabled={busy || !repairProvider} className="secondary-button px-3">修复映射</button>
               </div>
@@ -1287,7 +1364,13 @@ export function ProviderAccountFlow({
                           )}
                         </select>
                       </label>
-                      <span className="provider-flow-role-model">{roleConfig.model ?? "默认模型"}</span>
+                      <span className="provider-flow-role-model">
+                        {roleConfig.model
+                          ? `Role 覆盖 · ${roleConfig.model}`
+                          : modelsFromSettingsConfig(selectedCredential)[0]
+                            ? `配置文件 · ${modelsFromSettingsConfig(selectedCredential)[0]}`
+                            : "配置文件 · 未声明模型"}
+                      </span>
                       <span
                         className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind ? "is-warning" : ""}`}
                         title={
@@ -1331,7 +1414,9 @@ export function ProviderAccountFlow({
             {mode === "migrate" && (
               <select value={sourceCredentialId} onChange={(event) => setSourceCredentialId(event.target.value)} className="theme-input-surface provider-flow-select mt-2">
                 <option value="">选择源账号</option>
-                {sourceOptions.map((credential) => <option key={credential.id} value={credential.id}>{credential.name} · {credential.provider}</option>)}
+                {sourceOptions.map((credential) => <option key={credential.id} value={credential.id}>
+                  {credential.name} · {providerProtocolLabel(credential.provider, (credential.agent_cli as AgentCli | null) ?? "claude-code", catalog)}
+                </option>)}
               </select>
             )}
           </div>

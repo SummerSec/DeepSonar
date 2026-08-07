@@ -411,7 +411,7 @@ async function importRoleConfigs(
       const targetCred = id_map.credentials[c.source_credential_id];
       if (!targetCred) continue;
       const [credential] = await tx`
-        SELECT id, project_id, provider, public_metadata_json
+        SELECT id, project_id, provider, public_metadata_json, settings_config_json, agent_cli
         FROM credentials WHERE id = ${targetCred} FOR UPDATE`;
       if (!credential) throw new Error(`Credential 不存在: ${targetCred}`);
       const purpose = c.purpose ?? "llm";
@@ -424,6 +424,8 @@ async function importRoleConfigs(
         roleConfigProjectId: projectId,
         provider: String(credential.provider ?? ""),
         metadata: credential.public_metadata_json,
+        settingsConfig: credential.settings_config_json,
+        credentialAgentCli: (credential.agent_cli as string | null) ?? null,
       });
       if (bindingError) throw new Error(bindingError);
       await tx`

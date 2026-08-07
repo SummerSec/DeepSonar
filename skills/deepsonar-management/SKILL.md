@@ -112,9 +112,11 @@ python scripts/deepsonar-api.py skills sync <sourceId>
 python scripts/deepsonar-api.py skills trust <sourceId> --status trusted
 python scripts/deepsonar-api.py skills delete <sourceId>
 
-# 凭据（明文不可回读；可改 base_url 等 metadata）
+# 凭据（LLM provider 是协议 ID，不是厂商品牌；明文不可回读）
 python scripts/deepsonar-api.py credentials list
-python scripts/deepsonar-api.py credentials create --name kimi --provider kimi --secret '...' [--base-url 'https://...']
+python scripts/deepsonar-api.py credentials create --name claude-proxy --provider anthropic --agent-cli claude-code --secret '...' --settings-config @claude-settings.json [--base-url 'https://...']
+python scripts/deepsonar-api.py credentials create --name codex-proxy --provider openai --agent-cli codex --secret '...' --settings-config @codex-settings.json [--base-url 'https://...']
+python scripts/deepsonar-api.py credentials models-preview --provider anthropic --agent-cli claude-code --secret '...' --base-url 'https://...' --settings-config @claude-settings.json
 python scripts/deepsonar-api.py credentials update <id> --data '{"metadata":{"base_url":"https://ai.example/v1"}}'
 python scripts/deepsonar-api.py credentials rotate <id> --secret '...'
 python scripts/deepsonar-api.py credentials status <id> --status active|disabled
@@ -139,12 +141,12 @@ python scripts/deepsonar-api.py plane sync <projectId>
 python scripts/deepsonar-api.py plane info
 ```
 
-### RoleConfig 示例（model + 思考强度 + 镜像 + 凭据 + 平台工具）
+### RoleConfig 示例（Credential 配置文件 + 可选 model 覆盖 + 思考强度 + 镜像）
 
 ```json
 {
   "agent_cli": "claude-code",
-  "model": "k3",
+  "model": null,
   "reasoning": "high",
   "env_keys": [],
   "env_vars": {},
@@ -166,6 +168,7 @@ python scripts/deepsonar-api.py plane info
 - **OpenHarmony 等 opt-in 专项**：RoleConfig 可先 pin；**真正跑 Job** 仍要求项目在镜像市场启用。
 - `platform_tools`：每个 Agent **全量可选**；未声明 = 全开；仅 **`mark_job_done` 不可关**。
 - `purpose` 必须是 **`llm`**（调度器只认这个 purpose 注入模型通道）。
+- `model: null` 表示使用 Credential 的 CLI 配置文件；仅高级场景才在 RoleConfig 填覆盖模型。
 - Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0）；UI 只暴露模式 hybrid/fixed/agent_choice。
 
 ## 推荐工作流：清库 → 配多模型 → 下发全量审计
@@ -175,10 +178,10 @@ python scripts/deepsonar-api.py plane info
 python scripts/deepsonar-api.py health
 python scripts/deepsonar-api.py schema summary
 
-# 2) 确认凭据与可用模型（按凭据分流，不要所有角色绑同一 model）
+# 2) 确认凭据配置文件与可用模型目录
 python scripts/deepsonar-api.py credentials list
-python scripts/deepsonar-api.py credentials models <kimiCredId>
-python scripts/deepsonar-api.py credentials models <otherCredId>
+python scripts/deepsonar-api.py credentials models <anthropicCredentialId>
+python scripts/deepsonar-api.py credentials models <openaiCredentialId>
 
 # 3) 确认镜像市场已有 trusted 版本（real 模式硬门槛）
 python scripts/deepsonar-api.py runtime-images list
@@ -188,9 +191,9 @@ python scripts/deepsonar-api.py runtime-images list
 # 本地镜像采用是两步操作：先 detect-local，再由管理员核对 image_id 后 adopt-local（images:approve）。
 # adopt-local 只接受服务端检测得到的 adoptable 候选；不会因为输入 mutable tag 就自动信任。
 
-# 4) 拉全局 RoleConfig，按角色 PUT 不同 model/credential/reasoning
+# 4) 拉全局 RoleConfig，按角色绑定不同 Credential 配置文件；model 默认 null
 python scripts/deepsonar-api.py role-configs global
-# hub_reason → 用户指定模型 + high 思考；audit/verify 可同系；explore/analyze/review 用另一凭据
+# hub_reason → Credential 配置文件 + high 思考；需要时才用 RoleConfig.model 覆盖
 
 # 5) 建项目 + 打开 hub/出网 + 下发单任务
 python scripts/deepsonar-api.py projects create --name "java-sec-code 全量审计" \

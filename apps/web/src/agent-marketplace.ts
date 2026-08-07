@@ -44,7 +44,7 @@ const CONFIG_KEYS = new Set([
 ]);
 const SECRET_FIELD = /^(?:api_?key|access_token|api_token|auth_token|refresh_token|client_secret|private_key|secret|password|authorization|cookie|credential(?:s|_id)?)$/i;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESERVED_ENV_KEYS = new Set(["DEEPSONAR_JOB_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENROUTER_API_KEY", "PATH", "HOME", "NODE_OPTIONS"]);
+const RESERVED_ENV_KEYS = new Set(["DEEPSONAR_JOB_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "PATH", "HOME", "NODE_OPTIONS"]);
 const SENSITIVE_ENV_NAME = /TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|COOKIE|CREDENTIAL/i;
 
 function record(value: unknown, label: string): Record<string, unknown> {

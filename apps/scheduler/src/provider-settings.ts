@@ -6,6 +6,8 @@
  */
 import { createHash } from "node:crypto";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
+import { extractModelFromSettings } from "./provider-effective-model.js";
+export { extractModelFromSettings, resolveEffectiveModel } from "./provider-effective-model.js";
 
 /** Keep in sync with core.CONFIG_FILE_PATHS (avoid circular import via core). */
 const CONFIG_FILE_PATHS: Record<string, string> = {
@@ -44,6 +46,30 @@ function file(path: string, content: string): MaterializedConfigFile {
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+/** Match CC Switch save semantics for CLI-specific provider fragments. */
+export function normalizeProviderSettings(agentCli: string | null | undefined, settingsConfig: unknown): Record<string, unknown> {
+  const clone = structuredClone(asObject(settingsConfig));
+  if (agentCli !== "claude-code") return clone;
+  const env = asObject(clone.env);
+  const main = typeof env.ANTHROPIC_MODEL === "string" && env.ANTHROPIC_MODEL.trim()
+    ? env.ANTHROPIC_MODEL.trim()
+    : null;
+  const smallFast = typeof env.ANTHROPIC_SMALL_FAST_MODEL === "string" && env.ANTHROPIC_SMALL_FAST_MODEL.trim()
+    ? env.ANTHROPIC_SMALL_FAST_MODEL.trim()
+    : null;
+  const setFallback = (key: string, fallback: string | null) => {
+    if (typeof env[key] !== "string" || !String(env[key]).trim()) {
+      if (fallback) env[key] = fallback;
+    }
+  };
+  setFallback("ANTHROPIC_DEFAULT_HAIKU_MODEL", smallFast ?? main);
+  setFallback("ANTHROPIC_DEFAULT_SONNET_MODEL", main ?? smallFast);
+  setFallback("ANTHROPIC_DEFAULT_OPUS_MODEL", main ?? smallFast);
+  delete env.ANTHROPIC_SMALL_FAST_MODEL;
+  clone.env = env;
+  return clone;
 }
 
 function isEmptySettings(settings: unknown): boolean {
@@ -121,19 +147,20 @@ requires_openai_auth = true
     };
   }
 
-  // open-code: OpenAI-compatible provider block
+  // OpenCode stores one provider fragment. Runtime materialization wraps it in
+  // the CLI's provider map and selects the first declared model.
   const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
   return {
-    provider: {
-      npm: input.provider === "anthropic" || input.provider === "kimi"
-        ? "@ai-sdk/anthropic"
-        : "@ai-sdk/openai-compatible",
-      options: {
-        apiKey: input.secret,
-        baseURL: endpoint,
-      },
+    npm: input.provider === "anthropic"
+      ? "@ai-sdk/anthropic"
+      : "@ai-sdk/openai-compatible",
+    options: {
+      apiKey: input.secret,
+      baseURL: endpoint,
     },
-    ...(input.model?.trim() ? { model: input.model.trim() } : {}),
+    models: input.model?.trim()
+      ? { [input.model.trim()]: { name: input.model.trim() } }
+      : {},
   };
 }
 
@@ -190,32 +217,24 @@ requires_openai_auth = true
     ];
   }
 
-  // open-code
+  // OpenCode's settingsConfig is the selected provider fragment, matching CC
+  // Switch. The live CLI file needs the outer provider map.
+  const providerId = "deepsonar";
   const clone = structuredClone(settings) as Record<string, unknown>;
-  if (input.overrides?.model?.trim()) clone.model = input.overrides.model.trim();
-  const content = `${JSON.stringify(clone, null, 2)}\n`;
+  const modelIds = Object.keys(asObject(clone.models));
+  const selectedModel = input.overrides?.model?.trim() || modelIds[0] || null;
+  const fullConfig: Record<string, unknown> = {
+    $schema: "https://opencode.ai/config.json",
+    provider: { [providerId]: clone },
+  };
+  if (selectedModel) fullConfig.model = `${providerId}/${selectedModel}`;
+  const content = `${JSON.stringify(fullConfig, null, 2)}\n`;
   return [file(expectedPath, content)];
 }
 
 /** True when credential row carries a non-empty settingsConfig profile. */
 export function hasProviderSettingsConfig(settingsConfig: unknown): boolean {
   return !isEmptySettings(settingsConfig);
-}
-
-export function extractModelFromSettings(agentCli: string, settingsConfig: unknown): string | null {
-  const settings = asObject(settingsConfig);
-  if (agentCli === "claude-code") {
-    const env = asObject(settings.env);
-    const model = env.ANTHROPIC_MODEL ?? env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-    return typeof model === "string" && model.trim() ? model.trim() : null;
-  }
-  if (agentCli === "codex") {
-    const config = typeof settings.config === "string" ? settings.config : "";
-    const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(config);
-    return match?.[1] || match?.[2] || null;
-  }
-  const model = settings.model;
-  return typeof model === "string" && model.trim() ? model.trim() : null;
 }
 
 export function extractReasoningFromSettings(agentCli: string, settingsConfig: unknown): string | null {
@@ -235,7 +254,7 @@ export function extractReasoningFromSettings(agentCli: string, settingsConfig: u
 export function extractBaseUrlFromSettings(settingsConfig: unknown): string | null {
   const settings = asObject(settingsConfig);
   const env = asObject(settings.env);
-  for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL"]) {
+  for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]) {
     const value = env[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
   }
@@ -246,8 +265,7 @@ export function extractBaseUrlFromSettings(settingsConfig: unknown): string | nu
     const any = /base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     if (any?.[1] || any?.[2]) return (any[1] || any[2])!.replace(/\/+$/u, "");
   }
-  const providerBlock = asObject(settings.provider);
-  const options = asObject(providerBlock.options);
+  const options = asObject(settings.options);
   for (const key of ["baseURL", "baseUrl", "base_url"]) {
     const value = options[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
@@ -267,7 +285,8 @@ export function extractModelsFromSettings(settingsConfig: unknown): string[] {
   push(env.ANTHROPIC_DEFAULT_SONNET_MODEL);
   push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
   push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
-  push(settings.model);
+  push(env.ANTHROPIC_SMALL_FAST_MODEL);
+  for (const model of Object.keys(asObject(settings.models))) push(model);
   if (typeof settings.config === "string") {
     const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     push(match?.[1] || match?.[2]);

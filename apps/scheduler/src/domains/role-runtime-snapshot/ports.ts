@@ -41,6 +41,8 @@ export interface RoleRuntimeSnapshotResult {
   role_description: string;
   instructions_markdown: string | null;
   platform_tools: PlatformToolName[];
+  /** Full provider settings profile frozen with the Job and materialized verbatim for the CLI. */
+  settings_config_json: unknown;
   config_files: { path: string; content: string; content_sha256: string }[];
   role_config_id: string | null;
   role_config_version: number | null;

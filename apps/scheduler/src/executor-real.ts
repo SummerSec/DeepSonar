@@ -45,6 +45,7 @@ import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
 import { inc } from "./metrics.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
+import { hasProviderSettingsConfig } from "./provider-settings.js";
 import {
   buildJobSharedAssetCatalog,
   createSharedAsset,
@@ -155,6 +156,10 @@ export function runtimeCredentialProviderError(
     return `Credential provider 已从 ${snapshotProvider} 变更为 ${currentProvider}，Job 快照已过期，请刷新 pending Job 或 retry`;
   }
   return validateCredentialCompatibility(agentCli, currentProvider);
+}
+
+export function usesDirectProviderConfig(settingsConfig: unknown): boolean {
+  return hasProviderSettingsConfig(settingsConfig);
 }
 
 export function semanticToolEventsFor(toolNames: string[]): Record<string, string> {
@@ -321,7 +326,7 @@ function instructionDocument(input: {
 
 - DEEPSONAR_ALLOW_EGRESS 固定为 '${input.allowEgress ? "1" : "0"}'，与本文件的网络边界一致。
 - 运行清单只公开本轮可用的环境变量名称；值只应在完成任务所需的进程中使用，禁止打印、写入结果文件或复制到任务材料。
-- Provider token/base URL 属于系统保留的短期模型通道，不是目标系统凭据，也不代表获得外部网络权限。
+- Provider 配置文件属于本 Job 冻结的模型连接配置，不是目标系统凭据，也不代表获得任务范围外的访问授权。
 - RoleConfig 可注入非敏感变量或经白名单引用的调度器变量；变量不存在时不得臆造。
 
 ## 网络边界
@@ -422,9 +427,10 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   // Hub 只读图和下发 prompt，不替 Worker 访问目标；只有 Worker 才继承任务冻结的出网开关。
   const allowEgress = !isHub && networkPolicy.allow_egress;
 
-  // 环境变量按快照组装：非敏感 env_vars → 白名单 env_keys → 短期 Credential → 系统保留值。
-  // 长期 Credential 永不进入快照或工作区文件。
+  // 有 settings_config_json 时，冻结的 CLI 配置文件是 Provider 连接真相；
+  // 没有配置文件的旧 Credential 才通过 Job Gateway 环境变量兼容运行。
   const env: Record<string, string> = { ...snapshot.env_vars };
+  const directProviderConfig = usesDirectProviderConfig(snapshot.settings_config_json);
   for (const key of snapshot.env_keys) {
     if (!config.runtime.isEnvKeyAllowed(key)) {
       console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
@@ -454,11 +460,13 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       allowedModels: model ? [model] : credentialModels,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
     });
-    for (const k of mapping.secretKeys) env[k] = jt.plaintext;
-    if (mapping.baseUrlKey) {
-      env[mapping.baseUrlKey] = allowEgress
-        ? config.gateway.sandboxUrl
-        : config.gateway.restrictedSandboxUrl;
+    if (!directProviderConfig) {
+      for (const k of mapping.secretKeys) env[k] = jt.plaintext;
+      if (mapping.baseUrlKey) {
+        env[mapping.baseUrlKey] = allowEgress
+          ? config.gateway.sandboxUrl
+          : config.gateway.restrictedSandboxUrl;
+      }
     }
     if (provider === "claude-code") {
       const gatewayBase = allowEgress ? config.gateway.sandboxUrl : config.gateway.restrictedSandboxUrl;

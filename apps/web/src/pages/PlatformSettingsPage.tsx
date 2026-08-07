@@ -24,7 +24,7 @@ const SECTIONS: Record<string, {
   credentials: {
     title: "Provider 凭据",
     eyebrow: "PLATFORM / SECRETS",
-    subtitle: "绑定模型与镜像 Provider 凭据。长期密钥不进入 Agent 配置、任务快照或工作区。",
+    subtitle: "绑定模型与协议凭据。管理界面不回显密钥，完整 CLI 配置仅随 Job 下发执行沙箱。",
     section: "credentials",
     icon: Key,
     scopes: ["agents:read"],

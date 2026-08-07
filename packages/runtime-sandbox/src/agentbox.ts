@@ -654,7 +654,7 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export interface RealAgentSpec {
   provider: "claude-code" | "open-code" | "codex";
-  /** 模型 ID（如 claude-sonnet-4-5、gpt-5、kimi-k2） */
+  /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
   model?: string;
   /** 思考/推理强度；缺省由 provider 默认 */
   reasoning?: ReasoningEffort;

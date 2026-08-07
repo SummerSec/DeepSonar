@@ -101,13 +101,11 @@ export async function revokeJobTokens(jobId: string, reason: string): Promise<vo
 function upstreamAuthHeaders(provider: string, secret: string): Record<string, string> {
   switch (provider) {
     case "anthropic":
-      return { "x-api-key": secret, authorization: `Bearer ${secret}` };
-    case "kimi":
+      return { "x-api-key": secret, "anthropic-version": "2023-06-01" };
     case "openai":
-    case "openrouter":
       return { authorization: `Bearer ${secret}` };
     default:
-      return { authorization: `Bearer ${secret}` };
+      return {};
   }
 }
 

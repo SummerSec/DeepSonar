@@ -86,9 +86,9 @@ if (!testDatabaseUrl) {
           )`;
         return id;
       };
-      const sourceId = await credential("source", "kimi", projectId);
+      const sourceId = await credential("source", "anthropic", projectId);
       const targetId = await credential("target", "anthropic", projectId);
-      const refreshSourceId = await credential("refresh-source", "kimi");
+      const refreshSourceId = await credential("refresh-source", "anthropic");
       const refreshTargetId = await credential("refresh-target", "anthropic");
       const incompatibleTargetId = await credential("incompatible-target", "openai", projectId);
       const failedHealthId = await credential("failed-health", "anthropic", projectId, "error", []);
@@ -106,7 +106,7 @@ if (!testDatabaseUrl) {
       const snapshot = (roleConfigId: string, credentialId: string) => ({
         role_config_id: roleConfigId,
         credential_id: credentialId,
-        credential_provider: "kimi",
+        credential_provider: "anthropic",
         model: "claude-sonnet-4-5",
       });
       await sql`

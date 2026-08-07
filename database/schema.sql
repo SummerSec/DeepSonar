@@ -581,7 +581,9 @@ CREATE TABLE credentials (
   health_detail text,
   model_catalog_json jsonb NOT NULL DEFAULT '[]',
   model_catalog_fetched_at timestamptz,
-  -- CC Switch-style provider profile: full CLI config file + manager meta.
+  -- Server-owned CC Switch profile. settings_config_json keeps the complete
+  -- CLI configuration used to materialize sandbox files; management APIs
+  -- redact secret values and restore unchanged masks on PATCH.
   agent_cli text,
   settings_config_json jsonb NOT NULL DEFAULT '{}',
   meta_json jsonb NOT NULL DEFAULT '{}',
@@ -609,7 +611,7 @@ CREATE INDEX credentials_agent_cli_idx
   ON credentials (agent_cli, status, created_at DESC)
   WHERE kind = 'llm_provider';
 
--- 短期 Job Token（§6.3 Model Gateway：沙箱不持有长期 Provider Key，明文只注入本 Job 沙箱 env）
+-- 短期 Job Token：仅供无 settings_config_json 的历史 Credential 兼容及受控 OTLP 回传。
 CREATE TABLE job_tokens (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

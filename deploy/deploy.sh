@@ -14,7 +14,19 @@ REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
 
 # 默认阿里云 ACR；可用 deploy/.env 覆盖
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
-DEFAULT_IMAGE_TAG="latest"
+REGISTRY_FILE="$SCRIPT_DIR/runtime-image-registry.json"
+DEFAULT_IMAGE_TAG=""
+if [ -f "$REGISTRY_FILE" ]; then
+  DEFAULT_IMAGE_TAG=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' "$REGISTRY_FILE")
+fi
+if [ -z "$DEFAULT_IMAGE_TAG" ] && [ -f "$ENV_EXAMPLE" ]; then
+  DEFAULT_IMAGE_TAG=$(awk -F= '$1=="DEEPSONAR_IMAGE_TAG" {print $2; exit}' "$ENV_EXAMPLE")
+fi
+DEFAULT_IMAGE_TAG=${DEFAULT_IMAGE_TAG#v}
+if [ -z "$DEFAULT_IMAGE_TAG" ]; then
+  echo "无法从 deploy/runtime-image-registry.json 或 deploy/.env.example 解析当前 Release 版本" >&2
+  exit 1
+fi
 
 case "$ACTION" in up|down|status|logs|check|pull) ;; *)
   echo "用法: $0 [up|down|status|logs|check|pull] [real|fake] [pull|build]" >&2
@@ -48,6 +60,24 @@ ensure_env_kv() {
   fi
 }
 
+ensure_env_secret() {
+  key="$1"
+  value="$2"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    current=$(sed -n "s/^${key}=//p" "$ENV_FILE" | head -1)
+    case "$current" in
+      ""|change-me-*)
+        tmp=$(mktemp)
+        sed "s|^${key}=.*|${key}=${value}|" "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
+        echo "[deploy] 已生成 $key"
+        ;;
+    esac
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+    echo "[deploy] 已生成 $key"
+  fi
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   cp "$ENV_EXAMPLE" "$ENV_FILE"
   db_secret=$(random_hex 16)
@@ -57,6 +87,10 @@ if [ ! -f "$ENV_FILE" ]; then
   chmod 600 "$ENV_FILE"
   echo "[deploy] 已生成 deploy/.env（包含随机数据库密码和管理员引导 Token）"
 fi
+
+# Silo credentials are generated for both new and existing deployments. Values are never printed.
+ensure_env_secret "BLOB_S3_ACCESS_KEY_ID" "$(random_hex 12)"
+ensure_env_secret "BLOB_S3_SECRET_ACCESS_KEY" "$(random_hex 32)"
 
 if grep -q 'change-me-' "$ENV_FILE"; then
   echo "deploy/.env 仍包含 change-me 占位符，请先设置安全值" >&2
@@ -70,6 +104,12 @@ fi
 # 默认镜像源：阿里云 ACR + 当前发布标签
 ensure_env_kv "DEEPSONAR_IMAGE_REGISTRY" "$DEFAULT_IMAGE_REGISTRY"
 ensure_env_kv "DEEPSONAR_IMAGE_TAG" "$DEFAULT_IMAGE_TAG"
+# A previous generated env used latest; normalize only that legacy default.
+if grep -q '^DEEPSONAR_IMAGE_TAG=latest$' "$ENV_FILE"; then
+  tmp=$(mktemp)
+  sed "s|^DEEPSONAR_IMAGE_TAG=latest$|DEEPSONAR_IMAGE_TAG=${DEFAULT_IMAGE_TAG}|" "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
+  echo "[deploy] 已将旧的 latest 镜像标签规范为 ${DEFAULT_IMAGE_TAG}"
+fi
 # 允许运行时从 ACR 拉官方 Agent 镜像（只检查 ALLOWED 行，避免被 IMAGE_REGISTRY 误匹配）
 ACR_HOST="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"
 if grep -q '^DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=' "$ENV_FILE"; then

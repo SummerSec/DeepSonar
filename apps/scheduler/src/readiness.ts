@@ -12,6 +12,7 @@ import { config } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
 import { allowedModelIds, isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
+import { resolveEffectiveModel } from "./provider-effective-model.js";
 import {
   defaultRuntimeImageKey,
   hostRuntimePlatform,
@@ -60,6 +61,8 @@ export interface ReadinessCredentialRow {
   project_id: string | null;
   status: "active" | "disabled" | "rotation_required" | null;
   public_metadata_json: unknown;
+  agent_cli?: string | null;
+  settings_config_json?: unknown;
 }
 
 export interface ReadinessRuntimeImageRow {
@@ -509,8 +512,11 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
         ));
       } else {
         const compatibility = validateCredentialCompatibility(role.agentCli ?? "", String(binding.provider));
-        if (compatibility) {
-          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
+        const profileCompatibility = binding.agent_cli && binding.agent_cli !== role.agentCli
+          ? `Credential 配置文件属于 ${binding.agent_cli}，不能绑定到 ${role.agentCli}`
+          : null;
+        if (compatibility || profileCompatibility) {
+          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility ?? profileCompatibility!, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
         }
       }
       if (binding.status !== "active") {
@@ -530,9 +536,13 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
         ));
       }
       const allowed = allowedModelIds(binding.public_metadata_json);
-      const model = role.model?.trim() || null;
+      const model = resolveEffectiveModel({
+        roleModel: role.model,
+        agentCli: role.agentCli ?? "claude-code",
+        settingsConfig: binding.settings_config_json,
+      });
       if (allowed.length > 0 && !model) {
-        checks.push(fail("MODEL_REQUIRED_BY_ALLOWLIST", `${role.name} 的 Credential 有模型白名单，RoleConfig 必须显式选择模型。`, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
+        checks.push(fail("MODEL_REQUIRED_BY_ALLOWLIST", `${role.name} 的 Credential 有模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖。`, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
       } else if (model && allowed.length > 0 && !allowed.includes(model)) {
         checks.push(fail("MODEL_NOT_ALLOWED", `模型 ${model} 不在 ${role.name} Credential 的允许列表中。`, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
       }
@@ -705,7 +715,7 @@ export async function loadReadiness(
     : await db`
       SELECT rc.role_config_id, rc.purpose,
              c.id AS credential_id, c.name, c.kind, c.provider, c.project_id,
-             c.status, c.public_metadata_json
+             c.status, c.public_metadata_json, c.agent_cli, c.settings_config_json
       FROM role_credentials rc
       LEFT JOIN credentials c ON c.id = rc.credential_id
       WHERE rc.role_config_id = ANY(${configIds})`;

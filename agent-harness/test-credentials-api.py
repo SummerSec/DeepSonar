@@ -36,8 +36,8 @@ def main():
 
     # 1. 登记：返回安全字段（无明文/密文）；库中无明文
     c = req("POST", "/credentials", {
-        "name": f"kimi-{tag}", "provider": "kimi", "secret": secret,
-        "metadata": {"base_url": "https://api.kimi.example/coding"},
+        "name": f"anthropic-{tag}", "provider": "anthropic", "secret": secret,
+        "metadata": {"base_url": "https://api.anthropic.com"},
     }, 201)
     cid = c["id"]
     assert "ciphertext" not in c and "secret" not in c and "nonce" not in c
@@ -76,13 +76,13 @@ def main():
 
     # 5.1 运行语义更新：不能用模型白名单破坏未选模型的绑定；普通 metadata 更新需审计
     req("PATCH", f"/credentials/{cid}", {
-        "metadata": {"allowed_model_ids": ["kimi-k2"]},
+        "metadata": {"allowed_model_ids": ["claude-sonnet-4-5"]},
     }, expect=400)
     updated = req("PATCH", f"/credentials/{cid}", {
-        "name": f"kimi-updated-{tag}",
-        "metadata": {"base_url": "https://api.kimi.example/v2/"},
+        "name": f"anthropic-updated-{tag}",
+        "metadata": {"base_url": "https://api.anthropic.com/v1/"},
     })
-    assert updated["public_metadata_json"]["base_url"] == "https://api.kimi.example/v2"
+    assert updated["public_metadata_json"]["base_url"] == "https://api.anthropic.com/v1"
     assert updated["impact"]["role_config_count"] == 1
     logs = req("GET", "/audit-logs?action=credential.update&limit=20")
     assert any(log.get("resource_id") == cid for log in logs), "Credential 更新必须写审计日志"

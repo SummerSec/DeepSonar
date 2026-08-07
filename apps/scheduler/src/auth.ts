@@ -204,6 +204,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /credentials/:id/status": "agents:write",
   "POST /credentials/:id/test": "agents:write",
   "POST /credentials/:id/models": "agents:write",
+  "POST /credentials/models/preview": "agents:write",
   "GET /ws": "tasks:read",
   "POST /projects/:id/exports": "exports:write",
   "GET /projects/:id/exports": "exports:read",

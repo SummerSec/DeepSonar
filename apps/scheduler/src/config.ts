@@ -163,7 +163,7 @@ export const config = {
      * profile env_keys 白名单（P0：暂停任意环境变量下发，SEC 方案 §6.2 过渡措施）。
      * 逗号分隔，支持前缀通配（如 ANTHROPIC_*）；profile 里不在白名单的变量名会被拒绝注入。
      */
-    allowedEnvKeys: str("DEEPSONAR_ALLOWED_ENV_KEYS", "ANTHROPIC_*,OPENAI_*,OPENROUTER_*"),
+    allowedEnvKeys: str("DEEPSONAR_ALLOWED_ENV_KEYS", "ANTHROPIC_*,OPENAI_*"),
     isEnvKeyAllowed(key: string): boolean {
       return this.allowedEnvKeys
         .split(",")

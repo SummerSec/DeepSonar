@@ -29,6 +29,51 @@ function New-HexSecret([int]$GuidCount = 2) {
   return ($parts -join "")
 }
 
+function Get-DefaultImageTag {
+  $registryFile = Join-Path $DeployDir "runtime-image-registry.json"
+  if (Test-Path -LiteralPath $registryFile) {
+    try {
+      $registry = Get-Content -LiteralPath $registryFile -Raw -Encoding UTF8 | ConvertFrom-Json
+      $version = [string]$registry.images[0].versions[0].version
+      if ($version -match "^[0-9]") { return $version }
+    } catch {}
+  }
+  $exampleTag = Get-Content -LiteralPath $EnvExample -Encoding UTF8 |
+    Where-Object { $_ -match "^DEEPSONAR_IMAGE_TAG=(.+)$" } |
+    Select-Object -First 1
+  if ($exampleTag -match "^DEEPSONAR_IMAGE_TAG=(.+)$") {
+    $value = $Matches[1].Trim().TrimStart("v")
+    if ($value) { return $value }
+  }
+  throw "Cannot resolve the current release version from deploy/runtime-image-registry.json or deploy/.env.example"
+}
+
+function Ensure-EnvSecret([string]$Name, [string]$Value) {
+  $raw = Get-Content -LiteralPath $EnvFile -Raw -Encoding UTF8
+  $pattern = "(?m)^$([regex]::Escape($Name))=(.*)$"
+  $match = [regex]::Match($raw, $pattern)
+  if ($match.Success) {
+    $current = $match.Groups[1].Value.Trim()
+    if ($current -and $current -notmatch "^change-me-") { return }
+    $raw = [regex]::Replace($raw, $pattern, { param($m) "$Name=$Value" }, 1)
+  } else {
+    $raw = "$($raw.TrimEnd())`n$Name=$Value`n"
+  }
+  [IO.File]::WriteAllText($EnvFile, $raw, [Text.UTF8Encoding]::new($false))
+  Write-Host "[deploy] Generated $Name." -ForegroundColor Green
+}
+
+function Ensure-EnvValue([string]$Name, [string]$Value) {
+  $raw = Get-Content -LiteralPath $EnvFile -Raw -Encoding UTF8
+  $pattern = "(?m)^$([regex]::Escape($Name))=.*$"
+  if ([regex]::IsMatch($raw, $pattern)) {
+    $raw = [regex]::Replace($raw, $pattern, { param($m) "$Name=$Value" }, 1)
+  } else {
+    $raw = "$($raw.TrimEnd())`n$Name=$Value`n"
+  }
+  [IO.File]::WriteAllText($EnvFile, $raw, [Text.UTF8Encoding]::new($false))
+}
+
 function Initialize-Env {
   if (-not (Test-Path -LiteralPath $EnvFile)) {
     $content = Get-Content -LiteralPath $EnvExample -Raw -Encoding UTF8
@@ -39,12 +84,22 @@ function Initialize-Env {
   }
 
   $raw = Get-Content -LiteralPath $EnvFile -Raw -Encoding UTF8
-  if ($raw -match "change-me-") {
-    throw "deploy/.env still contains change-me placeholders"
-  }
   if ($raw -notmatch "(?m)^DEEPSONAR_MASTER_KEY_FILE=") {
     $raw = "$($raw.TrimEnd())`nDEEPSONAR_MASTER_KEY_FILE=/run/secrets/deepsonar_master_key`n"
     [IO.File]::WriteAllText($EnvFile, $raw, [Text.UTF8Encoding]::new($false))
+  }
+
+  Ensure-EnvSecret "BLOB_S3_ACCESS_KEY_ID" (New-HexSecret 1)
+  Ensure-EnvSecret "BLOB_S3_SECRET_ACCESS_KEY" (New-HexSecret 2)
+  $raw = Get-Content -LiteralPath $EnvFile -Raw -Encoding UTF8
+  if ($raw -match "change-me-") {
+    throw "deploy/.env still contains change-me placeholders"
+  }
+  $defaultImageTag = Get-DefaultImageTag
+  if ($raw -match "(?m)^DEEPSONAR_IMAGE_TAG=latest$") {
+    Ensure-EnvValue "DEEPSONAR_IMAGE_TAG" $defaultImageTag
+  } elseif ($raw -notmatch "(?m)^DEEPSONAR_IMAGE_TAG=") {
+    Ensure-EnvValue "DEEPSONAR_IMAGE_TAG" $defaultImageTag
   }
 
   if (-not (Test-Path -LiteralPath $MasterKeyFile)) {

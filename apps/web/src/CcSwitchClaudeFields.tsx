@@ -7,7 +7,7 @@
  * Layout only — no shadcn/i18n/presets stack. DeepSonar owns save/bind.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, Eye, EyeSlash, MagicWand } from "@phosphor-icons/react";
+import { Download, MagicWand } from "@phosphor-icons/react";
 import { formatJsonObjectText, validateJsonObjectText } from "./json-text";
 
 export type ClaudeModelField =
@@ -22,6 +22,7 @@ const MODEL_FIELDS: Array<{ key: ClaudeModelField; label: string }> = [
   { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", label: "Sonnet 默认模型" },
   { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", label: "Opus 默认模型" },
 ];
+const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
 
 function parseConfig(text: string): Record<string, unknown> {
   const result = validateJsonObjectText(text);
@@ -48,7 +49,7 @@ function extractApiKey(config: Record<string, unknown>): string {
   const env = readEnv(config);
   for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]) {
     const value = envString(env, key);
-    if (value.trim()) return value;
+    if (value.trim() && value !== MASKED_SECRET_PLACEHOLDER) return value;
   }
   return "";
 }
@@ -99,7 +100,6 @@ export function CcSwitchClaudeFields({
   onNotice?: (message: string) => void;
   onError?: (message: string) => void;
 }) {
-  const [showKey, setShowKey] = useState(false);
   const [models, setModels] = useState<Record<ClaudeModelField, string>>({
     ANTHROPIC_MODEL: "",
     ANTHROPIC_DEFAULT_HAIKU_MODEL: "",
@@ -147,8 +147,8 @@ export function CcSwitchClaudeFields({
     onApiKeyChange(value);
     // CC Switch third-party path: fill AUTH_TOKEN into config; keep API_KEY in sync if present or empty.
     writeEnvPatch({
-      ANTHROPIC_AUTH_TOKEN: value,
-      ANTHROPIC_API_KEY: value || null,
+      ANTHROPIC_AUTH_TOKEN: value ? MASKED_SECRET_PLACEHOLDER : null,
+      ANTHROPIC_API_KEY: value ? MASKED_SECRET_PLACEHOLDER : null,
     });
   };
 
@@ -182,29 +182,20 @@ export function CcSwitchClaudeFields({
 
   return (
     <div className="cc-switch-form">
-      {/* API Key — full width equals API 地址; eye button toggles plaintext */}
+      {/* API Key is deliberately always masked; provider secrets are never revealed in the UI. */}
       <div className="cc-switch-field">
         <label className="cc-switch-label" htmlFor="cc-switch-api-key">API Key</label>
         <div className="cc-switch-secret-wrap">
           <input
             id="cc-switch-api-key"
-            type={showKey ? "text" : "password"}
+            type="password"
             value={apiKey}
             onChange={(event) => handleApiKeyChange(event.target.value)}
-            className="theme-input-surface cc-switch-input cc-switch-input-with-eye"
+            className="theme-input-surface cc-switch-input"
             placeholder="输入 API Key，将自动填充到配置"
             autoComplete="off"
             spellCheck={false}
           />
-          <button
-            type="button"
-            className="cc-switch-eye-btn"
-            onClick={() => setShowKey((value) => !value)}
-            aria-label={showKey ? "隐藏密钥" : "显示明文"}
-            title={showKey ? "隐藏密钥" : "显示明文"}
-          >
-            {showKey ? <EyeSlash size={16} weight="bold" /> : <Eye size={16} weight="bold" />}
-          </button>
         </div>
         <p className="cc-switch-hint">也可直接在下方 JSON 粘贴完整 settings（含 ANTHROPIC_AUTH_TOKEN），将原样保存。</p>
       </div>

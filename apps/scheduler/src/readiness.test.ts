@@ -126,6 +126,24 @@ test("real preflight accepts governed role, credential, evidence and image proje
   assert.equal(JSON.stringify(result).includes("ANTHROPIC_API_KEY"), false);
 });
 
+test("real preflight resolves an allowlisted model from Credential settings when RoleConfig model is null", () => {
+  const input = baseInput({
+    roles: baseInput().roles.map((role) => ({
+      ...role,
+      project_model: null,
+      global_model: null,
+    })),
+    credentials: baseInput().credentials?.map((credential) => ({
+      ...credential,
+      agent_cli: "claude-code",
+      settings_config_json: { env: { ANTHROPIC_MODEL: "claude-sonnet-4-5" } },
+    })),
+  });
+  const result = evaluateReadiness(input);
+  assert.equal(result.ready, true);
+  assert.equal(result.checks.some((check) => check.code === "MODEL_REQUIRED_BY_ALLOWLIST"), false);
+});
+
 test("real preflight accepts a bare immutable digest from the runtime resolver", () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const result = evaluateReadiness(baseInput({

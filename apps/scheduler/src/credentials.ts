@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { resolveEffectiveModel } from "./provider-effective-model.js";
 
 /**
  * Provider Credential 加密（§6.2 存储要求）：
@@ -109,10 +110,8 @@ export const UNKNOWN_PROVIDER_ERROR = "未知 provider（固定映射表外的 p
 /** Scheduler-owned Provider catalog. Keep capability flags beside the runtime
  * mapping so API/UI choices cannot drift from credential-test behavior. */
 export const PROVIDER_CATALOG = [
-  { provider: "anthropic", label: "Anthropic", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
-  { provider: "kimi", label: "Kimi for Coding", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "codex"], supports_base_url: true },
-  { provider: "openai", label: "OpenAI compatible", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: true },
-  { provider: "openrouter", label: "OpenRouter", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["open-code", "codex"], supports_base_url: false },
+  { provider: "anthropic", label: "Anthropic Messages", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code"], supports_base_url: true },
+  { provider: "openai", label: "OpenAI Responses", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["codex", "open-code"], supports_base_url: true },
   { provider: "plane", label: "Plane", kind: "plane", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
   { provider: "git", label: "Git repository", kind: "git", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
   { provider: "docker", label: "OCI Registry", kind: "oci_registry", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
@@ -364,9 +363,7 @@ export type CredentialModelCatalogCapability = "required" | "unsupported";
 
 const MODEL_CATALOG_CAPABILITY: Record<string, CredentialModelCatalogCapability> = {
   anthropic: "required",
-  kimi: "required",
   openai: "required",
-  openrouter: "required",
 };
 
 export function credentialModelCatalogCapability(kind: string, provider: string): CredentialModelCatalogCapability {
@@ -418,13 +415,7 @@ export const PROVIDER_ENV_MAP: Record<string, { secretKeys: string[]; baseUrlKey
     baseUrlKey: "ANTHROPIC_BASE_URL",
     defaultBaseUrl: "https://api.anthropic.com",
   },
-  kimi: {
-    secretKeys: ["ANTHROPIC_AUTH_TOKEN"],
-    baseUrlKey: "ANTHROPIC_BASE_URL",
-    defaultBaseUrl: "https://api.kimi.com/coding",
-  },
   openai: { secretKeys: ["OPENAI_API_KEY"], baseUrlKey: "OPENAI_BASE_URL", defaultBaseUrl: "https://api.openai.com" },
-  openrouter: { secretKeys: ["OPENROUTER_API_KEY"] },
   plane: { secretKeys: ["PLANE_API_TOKEN"] },
   git: { secretKeys: ["GIT_TOKEN"] },
 };
@@ -463,7 +454,7 @@ export function projectCredentialProviderError(value: unknown): unknown {
     return UNKNOWN_PROVIDER_ERROR;
   }
 
-  const incompatibleCliMessage = /^agent_cli claude-code 仅兼容 anthropic\/kimi，不能使用 provider ([^\r\n]+)$/u.exec(value);
+  const incompatibleCliMessage = /^agent_cli claude-code 仅兼容 anthropic，不能使用 provider ([^\r\n]+)$/u.exec(value);
   if (incompatibleCliMessage && unknownProvider(incompatibleCliMessage[1])) return UNKNOWN_PROVIDER_ERROR;
 
   return value;
@@ -530,9 +521,10 @@ export function projectCredentialProvider(kind: unknown, provider: unknown): Cre
 /** 校验 Agent CLI 与 Credential Provider 的已知兼容关系。返回 null 表示兼容。 */
 export function validateCredentialCompatibility(agentCli: string, provider: string): string | null {
   if (!isProviderKnown(provider)) return UNKNOWN_PROVIDER_ERROR;
-  if (agentCli === "claude-code" && provider !== "anthropic" && provider !== "kimi") {
-    return `agent_cli claude-code 仅兼容 anthropic/kimi，不能使用 provider ${provider}`;
-  }
+  if (!["claude-code", "codex", "open-code"].includes(agentCli)) return "未知 agent_cli 不允许绑定 Credential";
+  if (agentCli === "claude-code" && provider !== "anthropic") return `agent_cli claude-code 仅兼容 anthropic，不能使用 provider ${provider}`;
+  if (agentCli === "codex" && provider !== "openai") return `agent_cli codex 仅兼容 openai，不能使用 provider ${provider}`;
+  if (agentCli === "open-code" && provider !== "anthropic" && provider !== "openai") return `agent_cli open-code 仅兼容 anthropic/openai，不能使用 provider ${provider}`;
   return null;
 }
 
@@ -552,6 +544,8 @@ export interface CredentialRoleConfigBinding {
   roleConfigProjectId: string | null;
   provider: string;
   metadata: unknown;
+  settingsConfig?: unknown;
+  credentialAgentCli?: string | null;
 }
 
 /** 校验 Credential 运行语义变更不会破坏既有 RoleConfig 或活动/待运行 Job。 */
@@ -559,21 +553,31 @@ export function validateCredentialRuntimeMutation(input: {
   provider: string;
   projectId: string | null;
   metadata: unknown;
+  settingsConfig?: unknown;
+  credentialAgentCli?: string | null;
   consumers: CredentialRuntimeConsumer[];
 }): string | null {
   if (!isProviderKnown(input.provider)) return UNKNOWN_PROVIDER_ERROR;
   const allowed = allowedModelIds(input.metadata);
   for (const consumer of input.consumers) {
+    if (input.credentialAgentCli && input.credentialAgentCli !== consumer.agentCli) {
+      return `${consumer.source} 使用 ${consumer.agentCli}，不能绑定 ${input.credentialAgentCli} 配置文件`;
+    }
     const compatibilityError = validateCredentialCompatibility(consumer.agentCli, input.provider);
     if (compatibilityError) return `${consumer.source} 不兼容：${compatibilityError}`;
     if (input.projectId && consumer.projectId !== input.projectId) {
       return `${consumer.source} 属于${consumer.projectId ? `项目 ${consumer.projectId}` : "全局配置"}，不能使用项目 ${input.projectId} 的 Credential`;
     }
-    if (allowed.length > 0 && !consumer.model) {
-      return `${consumer.source} 未显式选择模型，不能绑定已启用模型白名单的 Credential`;
+    const effectiveModel = resolveEffectiveModel({
+      roleModel: consumer.model,
+      agentCli: consumer.agentCli,
+      settingsConfig: input.settingsConfig,
+    });
+    if (allowed.length > 0 && !effectiveModel) {
+      return `${consumer.source} 的 Credential 配置文件未声明模型且 RoleConfig 未提供覆盖，不能使用已启用模型白名单的 Credential`;
     }
-    if (consumer.model && allowed.length > 0 && !allowed.includes(consumer.model)) {
-      return `${consumer.source} 的模型 ${consumer.model} 不在 Credential allowed_model_ids 白名单`;
+    if (effectiveModel && allowed.length > 0 && !allowed.includes(effectiveModel)) {
+      return `${consumer.source} 的模型 ${effectiveModel} 不在 Credential allowed_model_ids 白名单`;
     }
   }
   return null;
@@ -590,6 +594,8 @@ export function validateCredentialRoleConfigBinding(input: CredentialRoleConfigB
     provider: input.provider,
     projectId: input.credentialProjectId,
     metadata: input.metadata,
+    settingsConfig: input.settingsConfig,
+    credentialAgentCli: input.credentialAgentCli,
     consumers: [{
       source: input.source,
       agentCli: input.agentCli,

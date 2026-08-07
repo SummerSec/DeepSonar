@@ -13,7 +13,8 @@ RUN apt-get update \
   && install -d -m 0755 /opt/deepsonar/bin /workspace
 
 COPY deploy/vendor/gitcode-repo-py3 /tmp/repo
-RUN echo "$REPO_SHA256  /tmp/repo" | sha256sum -c - \
+RUN sed -i 's/\r$//' /tmp/repo \
+  && echo "$REPO_SHA256  /tmp/repo" | sha256sum -c - \
   && install -m 0755 /tmp/repo /usr/local/bin/repo \
   && rm -f /tmp/repo
 

@@ -609,7 +609,7 @@ export async function applyPlatformImport(
           const target = credMap[b.source_credential_id];
           if (!target) continue;
           const [credential] = await tx`
-            SELECT id, project_id, provider, public_metadata_json
+            SELECT id, project_id, provider, public_metadata_json, settings_config_json, agent_cli
             FROM credentials WHERE id = ${target} FOR UPDATE`;
           if (!credential) throw new Error(`Credential 不存在: ${target}`);
           const purpose = b.purpose ?? "llm";
@@ -622,6 +622,8 @@ export async function applyPlatformImport(
             roleConfigProjectId: null,
             provider: String(credential.provider ?? ""),
             metadata: credential.public_metadata_json,
+            settingsConfig: credential.settings_config_json,
+            credentialAgentCli: (credential.agent_cli as string | null) ?? null,
           });
           if (bindingError) throw new Error(bindingError);
           await tx`

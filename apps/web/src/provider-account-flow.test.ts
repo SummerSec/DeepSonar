@@ -34,12 +34,17 @@ test("Provider account flow keeps the happy path on one surface", () => {
     assert.ok(flow.includes(marker), `flow should expose ${marker}`);
   }
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
-  for (const marker of ["auth.json", "CcSwitchClaudeFields", "ANTHROPIC_AUTH_TOKEN"]) {
+  for (const marker of ["auth.json", "CcSwitchClaudeFields", "CcSwitchCodexFields", "CcSwitchOpenCodeFields", "ANTHROPIC_AUTH_TOKEN"]) {
     assert.ok(editor.includes(marker), `editor should expose ${marker}`);
   }
+  assert.ok(
+    editor.indexOf('aria-label="Agent CLI 类型"') < editor.indexOf('aria-label="Provider"'),
+    "Agent CLI must be selected before Provider",
+  );
+  assert.ok(editor.includes("item.compatible_agent_cli.includes(agentCli)"));
   assert.match(flow, /setCreateSecret\(\"\"\)/);
   assert.match(flow, /(?:活跃|运行中)快照保持冻结/);
-  assert.match(flow, /disabled=\{!roleConfig\.can_bind \|\| incompatible\}/);
+  assert.match(flow, /const canToggle = roleConfig\.can_bind && !incompatible/);
   assert.match(flow, /项目作用域账号只能在本项目内创建 Provider 账号/);
   assert.match(flow, /testCredential\(created\.id\)/);
   // No model-threshold / model-mapping bind UI.
@@ -57,6 +62,7 @@ test("Provider account flow keeps the happy path on one surface", () => {
   const claudeFields = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
   assert.match(claudeFields, /获取模型列表/);
   assert.match(claudeFields, /模型配置/);
+  assert.match(flow, /配置文件 ·/);
 });
 
 test("Provider account flow user-facing copy is Chinese", () => {
@@ -76,6 +82,37 @@ test("Provider account flow user-facing copy is Chinese", () => {
   assert.doesNotMatch(flow, /Encrypt and add account/);
   assert.doesNotMatch(flow, /Test connection/);
   assert.doesNotMatch(flow, /Apply to selected RoleConfigs/);
+});
+
+test("credential and login secrets cannot be revealed in the browser", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  const claude = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
+  const codex = readFileSync(new URL("./CcSwitchCodexFields.tsx", import.meta.url), "utf8");
+  const openCode = readFileSync(new URL("./CcSwitchOpenCodeFields.tsx", import.meta.url), "utf8");
+  const login = readFileSync(new URL("./pages/LoginPage.tsx", import.meta.url), "utf8");
+  for (const source of [claude, codex, openCode, login]) {
+    assert.doesNotMatch(source, /显示明文|显示 API Token|showKey|setShowKey/iu);
+  }
+  assert.match(claude, /id="cc-switch-api-key"\s+type="password"/u);
+  assert.match(codex, /id="cc-switch-codex-key" type="password"/u);
+  assert.match(openCode, /id="cc-switch-opencode-key" type="password"/u);
+  assert.match(login, /type="password"/u);
+  assert.match(flow, /setEditApiKey\(""\)/u);
+  assert.match(editor, /redactSecretValues|restoreRedactedSecrets/u);
+  assert.doesNotMatch(editor, /return entries\.length > 0 \? entries : .*anthropic/u);
+});
+
+test("provider UI exposes only protocol labels and the two supported OpenCode protocols", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const openCode = readFileSync(new URL("./CcSwitchOpenCodeFields.tsx", import.meta.url), "utf8");
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(editor, /providerProtocolLabel/);
+  assert.doesNotMatch(editor, /<option key=\{item\.provider\} value=\{item\.provider\}>\{item\.label\}/u);
+  assert.match(openCode, /Anthropic Messages/);
+  assert.match(openCode, /OpenAI Responses/);
+  assert.doesNotMatch(openCode, /OpenAI Compatible|OpenRouter|Google/);
+  assert.match(flow, /providerProtocolLabel/);
 });
 
 test("CredentialsPanel only hosts ProviderAccountFlow (no duplicate card grid)", () => {

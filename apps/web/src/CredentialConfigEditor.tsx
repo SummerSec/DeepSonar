@@ -5,10 +5,77 @@
 import { useMemo } from "react";
 import type { Project, ProviderAccountCatalogItemView } from "./api";
 import { CcSwitchClaudeFields } from "./CcSwitchClaudeFields";
-import { formatJsonObject, formatJsonObjectText, validateJsonObjectText } from "./json-text";
-import { defaultCodexToml, formatTomlText, validateTomlText } from "./toml-text";
+import { CcSwitchCodexFields } from "./CcSwitchCodexFields";
+import { CcSwitchOpenCodeFields, defaultOpenCodeSettings } from "./CcSwitchOpenCodeFields";
+import { formatJsonObject, validateJsonObjectText } from "./json-text";
+import { defaultCodexToml, validateTomlText } from "./toml-text";
 
 export type AgentCli = "claude-code" | "codex" | "open-code";
+
+export const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
+const SECRET_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)/iu;
+
+/** Redact server-returned settings before placing them in an editable control. */
+export function redactSecretValues(value: unknown, key?: string): unknown {
+  if (typeof value === "string") return key && SECRET_KEY_PATTERN.test(key) && value ? MASKED_SECRET_PLACEHOLDER : value;
+  if (Array.isArray(value)) return value.map((item) => redactSecretValues(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [
+    entryKey,
+    redactSecretValues(entryValue, entryKey),
+  ]));
+}
+
+/** Restore masked values only when the user left the redacted field unchanged. */
+export function restoreRedactedSecrets(original: unknown, edited: unknown, key?: string): unknown {
+  if (typeof edited === "string") {
+    if (key && SECRET_KEY_PATTERN.test(key) && (!edited || edited === MASKED_SECRET_PLACEHOLDER)) return original;
+    return edited;
+  }
+  if (Array.isArray(edited)) {
+    return edited.map((item, index) => restoreRedactedSecrets(Array.isArray(original) ? original[index] : undefined, item));
+  }
+  if (!edited || typeof edited !== "object") return edited;
+  const originalObject = original && typeof original === "object" && !Array.isArray(original)
+    ? original as Record<string, unknown>
+    : {};
+  return Object.fromEntries(Object.entries(edited as Record<string, unknown>).map(([entryKey, entryValue]) => [
+    entryKey,
+    restoreRedactedSecrets(originalObject[entryKey], entryValue, entryKey),
+  ]));
+}
+
+export function redactSecretText(value: string): string {
+  return value.replace(
+    /((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)\s*=\s*["'])([^"']*)(["'])/giu,
+    `$1${MASKED_SECRET_PLACEHOLDER}$3`,
+  );
+}
+
+export function restoreRedactedSecretText(original: string, edited: string): string {
+  const originals = new Map<string, string>();
+  const pattern = /((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)\s*=\s*["'])([^"']*)(["'])/giu;
+  for (const match of original.matchAll(pattern)) originals.set(match[1].toLowerCase(), match[2]);
+  return edited.replace(pattern, (full, prefix: string, value: string, suffix: string) => {
+    const restored = originals.get(prefix.toLowerCase());
+    return restored && (!value || value === MASKED_SECRET_PLACEHOLDER) ? `${prefix}${restored}${suffix}` : full;
+  });
+}
+
+/** Keep the provider surface protocol-oriented; catalog provider ids stay server-owned. */
+export function providerProtocolLabel(
+  provider: string,
+  agentCli: AgentCli,
+  providerCatalog: ProviderAccountCatalogItemView[],
+): string {
+  if (!providerCatalog.some((item) => item.provider === provider)) return "未识别协议";
+  if (agentCli === "claude-code") return "Anthropic Messages";
+  if (agentCli === "codex") return "OpenAI Responses";
+  const entry = providerCatalog.find((item) => item.provider === provider);
+  return entry?.provider === "anthropic"
+    ? "Anthropic Messages"
+    : "OpenAI Responses";
+}
 
 export function extractSecretFromSettings(settings: Record<string, unknown> | null | undefined): string {
   if (!settings) return "";
@@ -19,8 +86,6 @@ export function extractSecretFromSettings(settings: Record<string, unknown> | nu
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY",
-    "DASHSCOPE_API_KEY",
   ]) {
     const value = env[key];
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -32,11 +97,8 @@ export function extractSecretFromSettings(settings: Record<string, unknown> | nu
     const value = auth[key];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
-  const provider = settings.provider && typeof settings.provider === "object" && !Array.isArray(settings.provider)
-    ? settings.provider as Record<string, unknown>
-    : {};
-  const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options)
-    ? provider.options as Record<string, unknown>
+  const options = settings.options && typeof settings.options === "object" && !Array.isArray(settings.options)
+    ? settings.options as Record<string, unknown>
     : {};
   for (const key of ["apiKey", "api_key", "token"]) {
     const value = options[key];
@@ -50,7 +112,7 @@ export function extractBaseUrlFromSettingsClient(settings: Record<string, unknow
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
     ? settings.env as Record<string, unknown>
     : {};
-  for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL"]) {
+  for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]) {
     const value = env[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
   }
@@ -60,11 +122,8 @@ export function extractBaseUrlFromSettingsClient(settings: Record<string, unknow
     const any = /base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     if (any?.[1] || any?.[2]) return (any[1] || any[2])!.replace(/\/+$/u, "");
   }
-  const provider = settings.provider && typeof settings.provider === "object" && !Array.isArray(settings.provider)
-    ? settings.provider as Record<string, unknown>
-    : {};
-  const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options)
-    ? provider.options as Record<string, unknown>
+  const options = settings.options && typeof settings.options === "object" && !Array.isArray(settings.options)
+    ? settings.options as Record<string, unknown>
     : {};
   for (const key of ["baseURL", "baseUrl", "base_url"]) {
     const value = options[key];
@@ -94,11 +153,13 @@ export function buildSettingsConfigFromEditor(input: {
     const configText = toml.empty
       ? defaultCodexToml(baseUrl.trim() || "https://api.openai.com/v1")
       : tomlText.replace(/\r\n/g, "\n");
+    const authSettings = auth.empty ? {} : structuredClone(auth.value);
+    if (secret.trim()) authSettings.OPENAI_API_KEY = secret.trim();
     return {
       ok: true,
       pastedAsIs: !auth.empty || !toml.empty,
       settings: {
-        auth: auth.empty ? { OPENAI_API_KEY: secret } : auth.value,
+        auth: Object.keys(authSettings).length > 0 ? authSettings : { OPENAI_API_KEY: secret },
         config: configText,
       },
     };
@@ -108,7 +169,24 @@ export function buildSettingsConfigFromEditor(input: {
     return { ok: false, error: `settingsConfig JSON 无效：${validation.error}${validation.line ? `（约第 ${validation.line} 行）` : ""}` };
   }
   if (!validation.empty) {
-    return { ok: true, pastedAsIs: true, settings: validation.value };
+    const settings = structuredClone(validation.value);
+    if (secret.trim()) {
+      if (agentCli === "claude-code") {
+        const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
+          ? settings.env as Record<string, unknown>
+          : {};
+        env.ANTHROPIC_AUTH_TOKEN = secret.trim();
+        env.ANTHROPIC_API_KEY = secret.trim();
+        settings.env = env;
+      } else {
+        const options = settings.options && typeof settings.options === "object" && !Array.isArray(settings.options)
+          ? settings.options as Record<string, unknown>
+          : {};
+        options.apiKey = secret.trim();
+        settings.options = options;
+      }
+    }
+    return { ok: true, pastedAsIs: true, settings };
   }
   if (input.allowEmptyDefault === false) {
     return { ok: false, error: "settingsConfig 不能为空" };
@@ -122,7 +200,6 @@ export function buildSettingsConfigFromEditor(input: {
     }
     const url = baseUrl.trim().replace(/\/+$/u, "");
     if (url) env.ANTHROPIC_BASE_URL = url;
-    else if (provider === "kimi") env.ANTHROPIC_BASE_URL = "https://api.kimi.com/coding";
     else if (provider === "anthropic") env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
     return { ok: true, pastedAsIs: false, settings: { env } };
   }
@@ -130,15 +207,7 @@ export function buildSettingsConfigFromEditor(input: {
   return {
     ok: true,
     pastedAsIs: false,
-    settings: {
-      provider: {
-        npm: provider === "anthropic" || provider === "kimi" ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible",
-        options: {
-          apiKey: secret,
-          baseURL: baseUrl.trim() || "https://api.openai.com/v1",
-        },
-      },
-    },
+    settings: defaultOpenCodeSettings(secret, baseUrl, provider),
   };
 }
 
@@ -212,6 +281,12 @@ export function CredentialConfigEditor({
   const settingsValidation = useMemo(() => validateJsonObjectText(settingsJson), [settingsJson]);
   const tomlValidation = useMemo(() => validateTomlText(tomlText), [tomlText]);
   const authValidation = useMemo(() => validateJsonObjectText(authJson), [authJson]);
+  const compatibleProviders = useMemo(() => {
+    const entries = providerCatalog.filter((item) =>
+      item.kind === "llm_provider" && item.compatible_agent_cli.includes(agentCli),
+    );
+    return entries;
+  }, [agentCli, providerCatalog]);
   const configValid = agentCli === "codex" ? tomlValidation.ok && authValidation.ok : settingsValidation.ok;
   const secretFromConfig = useMemo(() => {
     if (agentCli === "codex") {
@@ -221,13 +296,21 @@ export function CredentialConfigEditor({
     if (settingsValidation.ok && !settingsValidation.empty) return extractSecretFromSettings(settingsValidation.value);
     return "";
   }, [agentCli, authValidation, settingsValidation]);
-  const canSubmit = Boolean(name.trim() && configValid && (mode === "edit" || secret.trim() || secretFromConfig));
+  const hasUsableConfigSecret = Boolean(secretFromConfig && secretFromConfig !== MASKED_SECRET_PLACEHOLDER);
+  const canSubmit = Boolean(provider && name.trim() && configValid && (mode === "edit" || secret.trim() || hasUsableConfigSecret));
 
   const switchCli = (cli: AgentCli) => {
+    const nextProviders = providerCatalog.filter((item) =>
+      item.kind === "llm_provider" && item.compatible_agent_cli.includes(cli),
+    );
+    const nextProvider = nextProviders.some((item) => item.provider === provider)
+      ? provider
+      : (nextProviders[0]?.provider ?? "");
     onAgentCliChange(cli);
+    if (nextProvider !== provider) onProviderChange(nextProvider);
     if (cli === "codex") {
       onTomlTextChange(defaultCodexToml(baseUrl.trim() || "https://api.openai.com/v1"));
-      onAuthJsonChange(formatJsonObject({ OPENAI_API_KEY: secret || "sk-..." }));
+      onAuthJsonChange(formatJsonObject({ OPENAI_API_KEY: secret ? MASKED_SECRET_PLACEHOLDER : "" }));
       onSettingsJsonChange("");
       return;
     }
@@ -236,32 +319,34 @@ export function CredentialConfigEditor({
     if (cli === "claude-code") {
       const env: Record<string, string> = {};
       if (secret.trim()) {
-        env.ANTHROPIC_AUTH_TOKEN = secret.trim();
-        env.ANTHROPIC_API_KEY = secret.trim();
+        env.ANTHROPIC_AUTH_TOKEN = MASKED_SECRET_PLACEHOLDER;
+        env.ANTHROPIC_API_KEY = MASKED_SECRET_PLACEHOLDER;
       }
       const url = baseUrl.trim().replace(/\/+$/u, "");
       if (url) env.ANTHROPIC_BASE_URL = url;
       onSettingsJsonChange(formatJsonObject({ env }));
       return;
     }
-    onSettingsJsonChange(formatJsonObject({
-      provider: {
-        npm: provider === "anthropic" || provider === "kimi" ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible",
-        options: { apiKey: secret, baseURL: baseUrl.trim() || "https://api.openai.com/v1" },
-      },
-    }));
+    onSettingsJsonChange(formatJsonObject(defaultOpenCodeSettings(
+      secret ? MASKED_SECRET_PLACEHOLDER : "",
+      baseUrl,
+      nextProvider,
+    )));
   };
 
   return (
     <div className="provider-flow-create credential-config-editor">
       <div className="provider-flow-create-grid">
-        <input
-          value={name}
-          onChange={(event) => onNameChange(event.target.value)}
+        <select
+          value={agentCli}
+          onChange={(event) => switchCli(event.target.value as AgentCli)}
           className="theme-input-surface"
-          placeholder="账号名称，如 team-anthropic"
-          aria-label="账号名称"
-        />
+          aria-label="Agent CLI 类型"
+        >
+          <option value="claude-code">Claude Code（settings.json）</option>
+          <option value="codex">Codex（config.toml + auth.json）</option>
+          <option value="open-code">OpenCode（config.json）</option>
+        </select>
         <select
           value={provider}
           onChange={(event) => {
@@ -273,25 +358,19 @@ export function CredentialConfigEditor({
           aria-label="Provider"
           disabled={mode === "edit"}
         >
-          {(providerCatalog.length
-            ? providerCatalog.filter((item) => item.kind === "llm_provider")
-            : [{ provider: "anthropic", label: "Anthropic" }]
-          ).map((item) => (
-            <option key={item.provider} value={item.provider}>{item.label}</option>
+          {compatibleProviders.map((item) => (
+            <option key={item.provider} value={item.provider}>{providerProtocolLabel(item.provider, agentCli, providerCatalog)}</option>
           ))}
         </select>
       </div>
       <div className="provider-flow-create-grid">
-        <select
-          value={agentCli}
-          onChange={(event) => switchCli(event.target.value as AgentCli)}
+        <input
+          value={name}
+          onChange={(event) => onNameChange(event.target.value)}
           className="theme-input-surface"
-          aria-label="目标 CLI（限制可绑定的角色配置）"
-        >
-          <option value="claude-code">claude-code（settings.json）</option>
-          <option value="codex">codex（config.toml + auth.json）</option>
-          <option value="open-code">open-code（config.json）</option>
-        </select>
+          placeholder="账号名称，如 team-provider"
+          aria-label="账号名称"
+        />
         <select
           value={projectId}
           onChange={(event) => onProjectIdChange(event.target.value)}
@@ -323,112 +402,38 @@ export function CredentialConfigEditor({
           onError={onError}
         />
       ) : agentCli === "codex" ? (
-        <>
-          <input
-            value={secret}
-            onChange={(event) => onSecretChange(event.target.value)}
-            type="password"
-            className="theme-input-surface"
-            placeholder={mode === "edit" ? "API Key（可空：不改密钥；或填新密钥轮换）" : "API Key"}
-            aria-label="API Key"
-          />
-          <input
-            value={baseUrl}
-            onChange={(event) => onBaseUrlChange(event.target.value)}
-            className="theme-input-surface"
-            placeholder="Base URL"
-            aria-label="Base URL"
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-medium text-zinc-400">auth.json</span>
-            <button
-              type="button"
-              className="secondary-button !min-h-7 !px-2 !text-[10px]"
-              onClick={() => onAuthJsonChange(formatJsonObject({ OPENAI_API_KEY: secret || "sk-..." }))}
-            >
-              填入默认
-            </button>
-          </div>
-          <textarea
-            value={authJson}
-            onChange={(event) => onAuthJsonChange(event.target.value)}
-            rows={4}
-            className={`theme-input-surface font-mono text-[12px] ${!authValidation.ok ? "border-red-700/80" : ""}`}
-            aria-label="auth.json"
-            spellCheck={false}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-medium text-zinc-400">config.toml</span>
-            <button
-              type="button"
-              className="secondary-button !min-h-7 !px-2 !text-[10px]"
-              onClick={() => {
-                try {
-                  if (!tomlText.trim()) {
-                    onTomlTextChange(defaultCodexToml(baseUrl.trim() || "https://api.openai.com/v1"));
-                    return;
-                  }
-                  onTomlTextChange(formatTomlText(tomlText));
-                } catch (e) {
-                  onError?.(e instanceof Error ? e.message : String(e));
-                }
-              }}
-            >
-              格式化
-            </button>
-          </div>
-          <textarea
-            value={tomlText}
-            onChange={(event) => onTomlTextChange(event.target.value)}
-            rows={10}
-            className={`theme-input-surface font-mono text-[12px] ${!tomlValidation.ok ? "border-red-700/80" : ""}`}
-            aria-label="config.toml"
-            spellCheck={false}
-          />
-        </>
+        <CcSwitchCodexFields
+          authJson={authJson}
+          onAuthJsonChange={onAuthJsonChange}
+          tomlText={tomlText}
+          onTomlTextChange={onTomlTextChange}
+          apiKey={secret}
+          onApiKeyChange={onSecretChange}
+          baseUrl={baseUrl}
+          onBaseUrlChange={onBaseUrlChange}
+          modelOptions={modelOptions}
+          onFetchModels={onFetchModels}
+          fetchingModels={fetchingModels}
+          canFetchModels={canFetchModels}
+          onNotice={onNotice}
+          onError={onError}
+        />
       ) : (
-        <>
-          <input
-            value={secret}
-            onChange={(event) => onSecretChange(event.target.value)}
-            type="password"
-            className="theme-input-surface"
-            placeholder={mode === "edit" ? "API Key（可空：不改密钥）" : "API Key"}
-            aria-label="API Key"
-          />
-          <input
-            value={baseUrl}
-            onChange={(event) => onBaseUrlChange(event.target.value)}
-            className="theme-input-surface"
-            placeholder="Base URL"
-            aria-label="Base URL"
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-medium text-zinc-400">settingsConfig JSON</span>
-            <button
-              type="button"
-              className="secondary-button !min-h-7 !px-2 !text-[10px]"
-              onClick={() => {
-                try {
-                  if (!settingsJson.trim()) return;
-                  onSettingsJsonChange(formatJsonObjectText(settingsJson));
-                } catch (e) {
-                  onError?.(e instanceof Error ? e.message : String(e));
-                }
-              }}
-            >
-              格式化
-            </button>
-          </div>
-          <textarea
-            value={settingsJson}
-            onChange={(event) => onSettingsJsonChange(event.target.value)}
-            rows={10}
-            className={`theme-input-surface font-mono text-[12px] ${!settingsValidation.ok ? "border-red-700/80" : ""}`}
-            aria-label="settingsConfig JSON"
-            spellCheck={false}
-          />
-        </>
+        <CcSwitchOpenCodeFields
+          settingsJson={settingsJson}
+          onSettingsJsonChange={onSettingsJsonChange}
+          apiKey={secret}
+          onApiKeyChange={onSecretChange}
+          baseUrl={baseUrl}
+          onBaseUrlChange={onBaseUrlChange}
+          provider={provider}
+          modelOptions={modelOptions}
+          onFetchModels={onFetchModels}
+          fetchingModels={fetchingModels}
+          canFetchModels={canFetchModels}
+          onNotice={onNotice}
+          onError={onError}
+        />
       )}
 
       <div className="flex flex-wrap gap-2">

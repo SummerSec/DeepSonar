@@ -168,7 +168,7 @@ PUT body：
 - Job 解析时：官方非 opt-in 默认可跑；opt-in / 第三方仍要求**项目启用**
 - 与镜像市场列表对齐（enabled 官方全量可选）
 
-Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。快照含 `model` / `reasoning` / `credential_id` / `runtime_image`（digest）；**改 RoleConfig 不影响已创建 Job**。
+Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。模型按 `RoleConfig.model（可选覆盖）→ Credential settingsConfig → null` 解析；快照含 effective `model`、物化后的 CLI 配置文件、`reasoning`、`credential_id` 与 `runtime_image`（digest）。**改 RoleConfig 或 Credential 不影响已创建 Job**。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
@@ -235,16 +235,17 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | GET | /credentials | agents:read | 列表（指纹 / last4 / 安全 metadata / scope / health / bound RoleConfig count；无密文） |
 | GET | /credentials/:id | agents:read | 详情（安全 health/model catalog + 有界 impact 投影；无密文） |
 | GET | /credentials/:id/impact | agents:read | 只读影响：global/project RoleConfig、pending 未 claim、active frozen、terminal historical Job（counts + 有界条目） |
-| POST | /credentials | agents:write | `{name, provider, secret, kind?, project_id?, metadata?}`；OCI 使用 `kind=oci_registry`、`provider=<registry-host>`、`metadata={registry,username}` |
-| PATCH | /credentials/:id | agents:write | 非敏感：`{name?, provider?, project_id?, metadata?}`（可改 base_url） |
+| POST | /credentials | agents:write | LLM：`{name, provider: anthropic\|openai, agent_cli, secret, settings_config, metadata?}`；OCI 使用 `kind=oci_registry`、`provider=<registry-host>`、`metadata={registry,username}` |
+| PATCH | /credentials/:id | agents:write | `{name?, provider?, project_id?, metadata?, agent_cli?, settings_config?, meta?}`；`settings_config` 中 `[已保存密钥]` 由服务端恢复原值 |
 | POST | /credentials/:id/rotate | agents:write | `{secret}` 轮换密钥 |
 | POST | /credentials/:id/status | agents:write | `{status: active\|disabled\|rotation_required}` |
 | POST | /credentials/:id/test | agents:read | 连接测试（无 body） |
-| POST | /credentials/:id/models | agents:read | 实时拉取 Provider 模型目录（无 body；选 RoleConfig.model 前调用） |
+| POST | /credentials/:id/models | agents:write | 实时拉取 Provider 模型目录（无 body；用于配置文件模型字段的参考） |
+| POST | /credentials/models/preview | agents:write | `{agent_cli, provider, secret, base_url?, settings_config?}`；未保存账号一键获取模型目录，不落库/审计/回显密钥 |
 | GET | /credentials/:id/models | agents:read | 读取已持久化的有界模型 ID 目录与 allowed_model_ids |
-| GET | /credentials/:id/compatibility | agents:read | `?agent_cli=claude-code|open-code|codex&model=<id>`；复用服务端 CLI/provider/model 白名单规则 |
+| GET | /credentials/:id/compatibility | agents:read | `?agent_cli=claude-code|open-code|codex&model=<可选覆盖>`；省略 model 时服务端从 Credential settingsConfig 解析 effective model |
 
-Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`allowed_model_ids`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。旧数据库与导入包在服务端按同一 allowlist 丢弃不安全字段，不把未知值迁移到其它明文字段。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。
+LLM `provider` 表示协议：`anthropic` = Anthropic Messages，`openai` = OpenAI Responses。`settings_config_json` 在服务端保留完整 CLI 配置，Job 创建时物化为 Agent 沙箱内的 CLI 文件；管理 API 只返回带 `[已保存密钥]` 的脱敏投影。Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`allowed_model_ids`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。
 
 ### Plane 集成（可选）
 

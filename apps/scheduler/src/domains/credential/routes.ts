@@ -35,14 +35,20 @@ import {
   validateCredentialRuntimeMutation,
   type Encrypted,
 } from "../../credentials.js";
-import { CredentialProbeError, listCredentialModels, testCredential } from "../../credential-test.js";
-import { extractBaseUrlFromSettings, extractModelsFromSettings } from "../../provider-settings.js";
+import { CredentialProbeError, listCredentialModels, listCredentialModelsPreview, testCredential } from "../../credential-test.js";
+import { extractBaseUrlFromSettings, normalizeProviderSettings, resolveEffectiveModel } from "../../provider-settings.js";
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   PLATFORM_DEFAULT_AGENT_CLI,
   PLATFORM_DEFAULT_AGENT_MODEL,
 } from "../../core.js";
 import { sql } from "../../db.js";
+import {
+  containsSecretMask,
+  MASKED_SECRET_PLACEHOLDER,
+  redactSecretProjection,
+  restoreMaskedSecretValues,
+} from "../../credential-secret-projection.js";
 
 export function registerCredentialRoutes(app: FastifyInstance): void {
   // ---------- Provider Credential（§6.2/§6.4：加密存储，与 API Token 严格分离） ----------
@@ -68,6 +74,17 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     settings_config: z.record(z.string(), z.unknown()).optional(),
     /** Manager-only meta (apiFormat, fullUrl, reasoning maps, …). */
     meta: z.record(z.string(), z.unknown()).optional(),
+  });
+  const CredentialModelsPreviewBody = z.object({
+    agent_cli: AgentCliSchema.default("claude-code"),
+    provider: z.string().trim().min(1).max(50),
+    secret: z.string().min(1).max(4096),
+    base_url: z.string().trim().min(1).max(500).optional(),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+    settings_config: z.record(z.string(), z.unknown()).optional(),
+  }).superRefine((body, ctx) => {
+    const error = validateCredentialCompatibility(body.agent_cli, body.provider);
+    if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "provider 与 agent_cli 不兼容", path: ["provider"] });
   });
 
   function safeHealthDetail(value: unknown): string | null {
@@ -96,7 +113,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       public_metadata_json: metadata,
       model_catalog_json: modelCatalog,
       agent_cli: row.agent_cli ?? null,
-      settings_config_json: settingsConfig,
+      settings_config_json: redactSecretProjection(settingsConfig),
       meta_json: metaJson,
       scope: row.project_id ? "project" : "global",
       health: {
@@ -410,7 +427,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
 
       const credentials = await tx`
         SELECT id, name, kind, provider, project_id, status, public_metadata_json,
-               health_status, last_tested_at, model_catalog_json, model_catalog_fetched_at
+               health_status, last_tested_at, model_catalog_json, model_catalog_fetched_at,
+               agent_cli, settings_config_json
         FROM credentials
         WHERE id = ANY(${credentialIds}::uuid[])
         ORDER BY id
@@ -480,6 +498,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       }
 
       const normalizedModel = body.model === undefined ? undefined : body.model?.trim() || null;
+      const effectiveModelByConfig = new Map<string, string | null>();
       for (const configRow of configs) {
         const configId = String(configRow.id);
         const currentCredentialId = llmByConfig.get(configId) ?? null;
@@ -493,9 +512,20 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         if (compatibilityError) {
           return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${compatibilityError}`, body.credential_id, "choose_model", configId);
         }
+        if (target.agent_cli && target.agent_cli !== configRow.agent_cli) {
+          return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: Credential 配置文件属于 ${target.agent_cli}，不能绑定到 ${configRow.agent_cli}`, body.credential_id, "choose_model", configId);
+        }
         const allowed = allowedModelIds(target.public_metadata_json);
-        const modelForGate = model ?? PLATFORM_DEFAULT_AGENT_MODEL;
+        const modelForGate = resolveEffectiveModel({
+          roleModel: model,
+          agentCli: String(configRow.agent_cli),
+          settingsConfig: target.settings_config_json,
+        }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
+        effectiveModelByConfig.set(configId, modelForGate);
         // Only enforce explicit allowlist. Catalog is not a bind gate.
+        if (allowed.length > 0 && !modelForGate) {
+          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId}: Credential 配置文件未声明模型且 RoleConfig 未提供覆盖`, body.credential_id, "choose_model", configId);
+        }
         if (allowed.length > 0 && modelForGate && !allowed.includes(modelForGate)) {
           return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId} model ${modelForGate} is not in the credential allowlist`, body.credential_id, "choose_model", configId);
         }
@@ -534,7 +564,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
                         jsonb_set(agent_snapshot_json, '{credential_id}', to_jsonb(${body.credential_id}::text), true),
                         '{credential_name}', to_jsonb(${String(target.name)}::text), true),
                       '{credential_provider}', to_jsonb(${String(target.provider)}::text), true),
-                    '{model}', to_jsonb(${model ?? PLATFORM_DEFAULT_AGENT_MODEL}::text), true),
+                    '{model}', COALESCE(to_jsonb(${effectiveModelByConfig.get(configId) ?? null}::text), 'null'::jsonb), true),
                   '{role_config_version}', to_jsonb(${nextVersion}::int), true)
               WHERE id = ANY(${pending.map((job) => job.id)}::uuid[])
                 AND status = 'pending'`;
@@ -618,6 +648,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
 
   app.post("/credentials", async (req, reply) => {
     const body = CredentialBody.parse(req.body);
+    if (containsSecretMask(body.secret) || (body.settings_config && containsSecretMask(body.settings_config))) {
+      return reply.code(400).send({ error: `创建 Credential 不接受 ${MASKED_SECRET_PLACEHOLDER} 作为密钥` });
+    }
     const actorProjectId = req.actor?.projectId ?? null;
     if (actorProjectId && body.project_id && body.project_id !== actorProjectId) {
       return reply.code(403).send({ error: "project-scoped actors must create credentials in their own project", error_code: "PROJECT_MISMATCH" });
@@ -625,6 +658,10 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const effectiveProjectId = actorProjectId ?? body.project_id ?? null;
     if (!isProviderAllowedForKind(body.kind, body.provider) || (body.kind !== "oci_registry" && !isProviderKnown(body.provider))) {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
+    if (body.kind === "llm_provider" && body.agent_cli) {
+      const compatibilityError = validateCredentialCompatibility(body.agent_cli, body.provider);
+      if (compatibilityError) return reply.code(400).send({ error: "provider 与 agent_cli 不兼容", error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
     }
     let metadata: Record<string, unknown>;
     try {
@@ -648,20 +685,13 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     if (body.kind !== "llm_provider" && (body.agent_cli || body.settings_config || body.meta)) {
       return reply.code(400).send({ error: "agent_cli/settings_config/meta 仅适用于 llm_provider" });
     }
-    const settingsConfig = body.settings_config ?? {};
+    const settingsConfig = normalizeProviderSettings(body.agent_cli, body.settings_config ?? {});
     const metaJson = body.meta ?? {};
     // Keep public_metadata.base_url / models in sync with settingsConfig so health
     // probes and binding gates share one closed loop with the CC Switch profile.
     if (body.kind === "llm_provider") {
       const fromSettings = extractBaseUrlFromSettings(settingsConfig);
       if (fromSettings && typeof metadata.base_url !== "string") metadata.base_url = fromSettings;
-      const modelsFromSettings = extractModelsFromSettings(settingsConfig);
-      if (modelsFromSettings.length > 0) {
-        const existing = Array.isArray(metadata.allowed_model_ids)
-          ? metadata.allowed_model_ids.filter((item): item is string => typeof item === "string")
-          : [];
-        if (existing.length === 0) metadata.allowed_model_ids = modelsFromSettings;
-      }
     }
     const [row] = await sql`
       INSERT INTO credentials ${sql({
@@ -740,6 +770,23 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const targetProjectId = body.project_id !== undefined
         ? body.project_id
         : (existing.project_id as string | null) ?? null;
+      const submittedSettingsConfig = body.settings_config !== undefined
+        ? restoreMaskedSecretValues(existing.settings_config_json, body.settings_config)
+        : existing.settings_config_json;
+      if (body.settings_config !== undefined && containsSecretMask(submittedSettingsConfig)) {
+        return { error: `settings_config 不接受无法恢复的 ${MASKED_SECRET_PLACEHOLDER} 密钥标记` };
+      }
+      const targetSettingsConfig = normalizeProviderSettings(
+        body.agent_cli !== undefined ? body.agent_cli : existing.agent_cli,
+        submittedSettingsConfig,
+      );
+      const targetAgentCli = body.agent_cli !== undefined
+        ? body.agent_cli
+        : (existing.agent_cli as string | null) ?? null;
+      if (existing.kind === "llm_provider" && targetAgentCli) {
+        const compatibilityError = validateCredentialCompatibility(targetAgentCli, targetProvider);
+        if (compatibilityError) return { error: compatibilityError, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" };
+      }
       if (actorProjectId && targetProjectId !== actorProjectId) {
         return { scope: true, error: "project-scoped actors may keep credentials only in their own project" };
       }
@@ -784,6 +831,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           provider: targetProvider,
           projectId: targetProjectId,
           metadata: targetMetadata,
+          settingsConfig: targetSettingsConfig,
+          credentialAgentCli: targetAgentCli,
           consumers: [
             ...bindings.map((binding) => ({
               source: `RoleConfig ${String(binding.role_config_id)}`,
@@ -811,9 +860,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       }
       if (body.agent_cli !== undefined) sets.agent_cli = body.agent_cli;
       if (body.settings_config !== undefined) {
-        sets.settings_config_json = body.settings_config;
+        sets.settings_config_json = targetSettingsConfig;
         // Keep probe metadata aligned when settingsConfig is updated.
-        const fromSettings = extractBaseUrlFromSettings(body.settings_config);
+        const fromSettings = extractBaseUrlFromSettings(targetSettingsConfig);
         if (fromSettings) {
           const nextMeta = body.metadata !== undefined
             ? targetMetadata
@@ -889,6 +938,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const actorProjectId = req.actor?.projectId ?? null;
     const body = z.object({ secret: z.string().min(1).max(4096) }).parse(req.body);
+    if (containsSecretMask(body.secret)) {
+      return reply.code(400).send({ error: `轮换 Credential 不接受 ${MASKED_SECRET_PLACEHOLDER} 作为密钥` });
+    }
     const [existing] = await sql`SELECT id, project_id FROM credentials WHERE id = ${id}`;
     if (!existing) return reply.code(404).send({ error: "credential not found" });
     if (!credentialMutableToActor(existing.project_id, actorProjectId)) {
@@ -1002,6 +1054,43 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     return result;
   });
 
+  // Probe an unsaved account without persisting its secret or model catalog.
+  app.post("/credentials/models/preview", async (req, reply) => {
+    const parsed = CredentialModelsPreviewBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "模型目录预览参数非法" });
+    const body = parsed.data;
+    if (containsSecretMask(body.secret) || (body.settings_config && containsSecretMask(body.settings_config))) {
+      return reply.code(400).send({ error: `模型预览不接受 ${MASKED_SECRET_PLACEHOLDER} 作为密钥` });
+    }
+    if (!projectCredentialProvider("llm_provider", body.provider).provider_valid) {
+      return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
+    const previewMetadata = { ...body.metadata, ...(body.base_url ? { base_url: body.base_url } : {}) };
+    let normalizedMetadata: Record<string, unknown>;
+    try {
+      normalizedMetadata = sanitizeCredentialMetadata(previewMetadata, { kind: "llm_provider", provider: body.provider, mode: "reject" });
+    } catch {
+      return reply.code(400).send({ error: "Credential metadata 非法" });
+    }
+    try {
+      return await listCredentialModelsPreview({
+        provider: body.provider,
+        kind: "llm_provider",
+        public_metadata_json: normalizedMetadata,
+        settings_config_json: body.settings_config ?? {},
+      }, body.secret);
+    } catch (error) {
+      const validCategories = new Set<CredentialHealthErrorCategory>([
+        "configuration", "authentication", "authorization", "rate_limited", "timeout",
+        "network", "upstream", "invalid_response", "unknown",
+      ]);
+      const categoryCandidate = error instanceof CredentialProbeError ? error.category : "unknown";
+      const category = validCategories.has(categoryCandidate) ? categoryCandidate : "unknown";
+      const message = error instanceof CredentialProbeError ? error.message.slice(0, 300) : "模型目录获取失败";
+      return reply.code(502).send({ error: message, error_category: category });
+    }
+  });
+
   // Persisted model catalog read (no Provider call, no secret material).
   app.get("/credentials/:id/models", async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -1038,7 +1127,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     if (!queryResult.success) return reply.code(400).send({ error: "兼容性查询参数非法" });
     const query = queryResult.data;
     const [cred] = await sql`
-      SELECT id, project_id, kind, provider, public_metadata_json
+      SELECT id, project_id, kind, provider, public_metadata_json,
+             agent_cli, settings_config_json
       FROM credentials
       WHERE id = ${id}
         AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
@@ -1049,23 +1139,31 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
     const agentCli = query.agent_cli;
-    const model = query.model ?? null;
+    const model = resolveEffectiveModel({
+      roleModel: query.model ?? null,
+      agentCli,
+      settingsConfig: cred.settings_config_json,
+    });
     const metadata = projectCredentialMetadata(String(cred.kind), String(cred.provider), cred.public_metadata_json);
     const compatibilityError = validateCredentialCompatibility(agentCli, String(cred.provider));
     const allowed = allowedModelIds(metadata);
     const modelError = model && allowed.length > 0 && !allowed.includes(model)
       ? `模型 ${model} 不在 Credential allowed_model_ids 白名单`
       : !model && allowed.length > 0
-        ? "Credential 已启用模型白名单，请显式选择模型"
+        ? "Credential 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖"
         : null;
+    const profileCliError = cred.agent_cli && cred.agent_cli !== agentCli
+      ? `Credential 配置文件属于 ${cred.agent_cli}，不能绑定到 ${agentCli}`
+      : null;
     return {
       credential_id: id,
       ...providerProjection,
       agent_cli: agentCli,
       model,
       allowed_model_ids: allowed,
-      compatible: !compatibilityError && !modelError,
-      error: compatibilityError ?? modelError,
+      model_source: query.model ? "role_override" : model ? "credential_settings" : "none",
+      compatible: !compatibilityError && !profileCliError && !modelError,
+      error: compatibilityError ?? profileCliError ?? modelError,
     };
   });
 

@@ -52,8 +52,6 @@ export function TokensPanel() {
   const [error, setError] = useState("");
   const [sessionToken, setSessionTokenState] = useState(getSessionToken());
   const [apiTokenDraft, setApiTokenDraft] = useState(getApiAccessToken());
-  const [revealSession, setRevealSession] = useState(false);
-  const [revealApi, setRevealApi] = useState(false);
   const [apiSavedHint, setApiSavedHint] = useState<string | null>(null);
 
   // 创建表单
@@ -115,7 +113,6 @@ export function TokensPanel() {
     setError("");
     setApiSavedHint(null);
     setApiAccessToken(apiTokenDraft.trim());
-    setRevealApi(false);
     setApiTokenDraft(getApiAccessToken());
     try {
       await refresh();
@@ -130,7 +127,6 @@ export function TokensPanel() {
   const clearApiToken = async () => {
     setApiTokenDraft("");
     setApiAccessToken("");
-    setRevealApi(false);
     setError("");
     try {
       await refresh();
@@ -184,17 +180,8 @@ export function TokensPanel() {
           {sessionToken ? (
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
               <code className="min-w-0 flex-1 break-all rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-300">
-                {revealSession ? sessionToken : maskTokenForDisplay(sessionToken)}
+                {maskTokenForDisplay(sessionToken)}
               </code>
-              <button
-                type="button"
-                onClick={() => setRevealSession((v) => !v)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-600 px-2.5 py-1.5 text-[12px] text-zinc-400 hover:border-acc-500/40 hover:text-zinc-200"
-                aria-label={revealSession ? "隐藏会话令牌" : "显示会话令牌"}
-              >
-                {revealSession ? <EyeSlash size={14} /> : <Eye size={14} />}
-                {revealSession ? "隐藏" : "显示"}
-              </button>
               <button
                 type="button"
                 onClick={() => void logout()}
@@ -215,7 +202,7 @@ export function TokensPanel() {
           </div>
           <div className="flex flex-wrap gap-2">
             <input
-              type={revealApi ? "text" : "password"}
+              type="password"
               value={apiTokenDraft}
               onChange={(e) => setApiTokenDraft(e.target.value)}
               placeholder="deepsonar_dev_xxxxxxxx_…（粘贴平台 API Token）"
@@ -223,15 +210,6 @@ export function TokensPanel() {
               spellCheck={false}
               className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 font-mono text-[12px] text-zinc-200 outline-none focus:border-acc-500"
             />
-            <button
-              type="button"
-              onClick={() => setRevealApi((v) => !v)}
-              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-600 px-2.5 py-1.5 text-[12px] text-zinc-400 hover:border-acc-500/40 hover:text-zinc-200"
-              aria-label={revealApi ? "隐藏 API Token" : "显示 API Token"}
-            >
-              {revealApi ? <EyeSlash size={14} /> : <Eye size={14} />}
-              {revealApi ? "隐藏" : "显示"}
-            </button>
             <button
               type="button"
               onClick={() => void saveApiToken()}

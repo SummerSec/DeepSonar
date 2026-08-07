@@ -72,17 +72,14 @@ function modelRequest(cred: CredentialProbe, secret: string): { url: string; hea
   const baseUrl = typeof metadata.base_url === "string" && metadata.base_url.trim()
     ? metadata.base_url.trim()
     : (fromSettings || mapping.defaultBaseUrl || "");
-  if (cred.provider === "openrouter") {
-    return { url: "https://openrouter.ai/api/v1/models", headers: { Authorization: `Bearer ${secret}` } };
-  }
-  if (!baseUrl && cred.provider !== "openai") {
+  if (!baseUrl) {
     throw new CredentialProbeError("Credential 缺少 Provider URL 配置（请在 metadata.base_url 或 settingsConfig 中填写）", "configuration");
   }
   const url = modelsUrl(baseUrl || "https://api.openai.com");
   return {
     url,
-    headers: cred.provider === "anthropic" || cred.provider === "kimi"
-      ? { "x-api-key": secret, Authorization: `Bearer ${secret}`, "anthropic-version": "2023-06-01" }
+    headers: cred.provider === "anthropic"
+      ? { "x-api-key": secret, "anthropic-version": "2023-06-01" }
       : { Authorization: `Bearer ${secret}` },
   };
 }
@@ -205,7 +202,7 @@ export async function listCredentialModels(cred: CredentialProbe): Promise<{
   source_url: string;
   fetched_at: string;
 }> {
-  if (!['anthropic', 'kimi', 'openai', 'openrouter'].includes(cred.provider)) {
+  if (!['anthropic', 'openai'].includes(cred.provider)) {
     throw new CredentialProbeError("该 Provider 暂不支持模型目录", "configuration");
   }
   let secret: string;
@@ -250,6 +247,35 @@ export async function listCredentialModels(cred: CredentialProbe): Promise<{
   };
 }
 
+/** Probe an unsaved credential without writing its secret or model catalog. */
+export async function listCredentialModelsPreview(
+  cred: Omit<CredentialProbe, "ciphertext" | "nonce" | "auth_tag">,
+  secret: string,
+): Promise<{ models: string[]; source_url: string; fetched_at: string }> {
+  if (!secret.trim()) throw new CredentialProbeError("Credential 缺少 API Key", "configuration");
+  if (!['anthropic', 'openai'].includes(cred.provider)) {
+    throw new CredentialProbeError("该 Provider 暂不支持模型目录", "configuration");
+  }
+  const request = modelRequest(cred as CredentialProbe, secret);
+  const sourceUrl = safeSourceUrl(request.url);
+  let response: Response;
+  try {
+    response = await fetch(sourceUrl, { headers: request.headers, signal: AbortSignal.timeout(15_000) });
+  } catch (error) {
+    throw new CredentialProbeError(detailForCategory(isAbortError(error) ? "timeout" : "network"), isAbortError(error) ? "timeout" : "network");
+  }
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    const category = categoryForStatus(response.status);
+    throw new CredentialProbeError(detailForCategory(category, response.status), category);
+  }
+  const payload = await readJsonBounded(response) as { data?: unknown; models?: unknown };
+  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
+  const models = normalizeModelCatalog(rows.map((row) => typeof row === "string" ? row : row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string" ? String((row as { id: string }).id) : ""));
+  if (models.length === 0) throw new CredentialProbeError(detailForCategory("invalid_response"), "invalid_response");
+  return { models: models.slice(0, CREDENTIAL_MODEL_CATALOG_MAX).map((model) => model.slice(0, CREDENTIAL_MODEL_ID_MAX_LENGTH)), source_url: sourceUrl, fetched_at: now() };
+}
+
 /**
  * Credential connection test.  The returned detail is platform-generated;
  * upstream body text, URL query strings and credentials never leave process.
@@ -268,7 +294,7 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
   }
 
   try {
-    if (!['anthropic', 'kimi', 'openai', 'openrouter'].includes(cred.provider)) {
+    if (!['anthropic', 'openai'].includes(cred.provider)) {
       return {
         ok: false,
         detail: "该 Provider 暂不支持连接测试",

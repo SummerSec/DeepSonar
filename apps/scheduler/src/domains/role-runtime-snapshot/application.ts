@@ -10,11 +10,11 @@ import {
   validateCredentialCompatibility,
 } from "../../credentials.js";
 import {
-  extractModelFromSettings,
   extractReasoningFromSettings,
   hasProviderSettingsConfig,
   isProviderAgentCli,
   materializeProviderSettings,
+  resolveEffectiveModel,
 } from "../../provider-settings.js";
 import { resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
@@ -111,7 +111,7 @@ export async function resolveAgentSnapshotForJob(
         LIMIT 1
         FOR SHARE OF c`
     : [undefined]) as Array<Record<string, unknown> | undefined>;
-  const settingsConfig = llm?.settings_config_json;
+  const settingsConfig = llm?.settings_config_json ?? {};
   const hasSettings = hasProviderSettingsConfig(settingsConfig);
   if (llm) {
     const provider = String(llm.provider ?? "");
@@ -123,19 +123,19 @@ export async function resolveAgentSnapshotForJob(
     if (hasSettings && isProviderAgentCli(profileCli) && profileCli !== agentCli) {
       throw new Error(`Credential ${llm.id} 绑定 agent_cli=${profileCli}，与角色 ${agentCli} 不匹配`);
     }
-    if (!hasSettings) {
-      const compatibilityError = validateCredentialCompatibility(agentCli, provider);
-      if (compatibilityError) throw new Error(compatibilityError);
-    }
+    const compatibilityError = validateCredentialCompatibility(agentCli, provider);
+    if (compatibilityError) throw new Error(compatibilityError);
     const credProject = (llm.cred_project_id as string | null) ?? null;
     if (cfg?.project_id != null && credProject && credProject !== projectId) throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
     if (cfg?.project_id == null && credProject) throw new Error("全局 RoleConfig 只能绑定全局 Credential");
     if ((llm.status as string) !== "active") throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
-    const configuredModel = typeof cfg?.model === "string" && cfg.model.trim()
-      ? cfg.model.trim()
-      : (hasSettings ? extractModelFromSettings(agentCli, settingsConfig) : null) ?? PLATFORM_DEFAULT_AGENT_MODEL;
+    const configuredModel = resolveEffectiveModel({
+      roleModel: typeof cfg?.model === "string" ? cfg.model : null,
+      agentCli,
+      settingsConfig,
+    }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
     const allowed = allowedModelIds(llm.public_metadata_json);
-    if (allowed.length > 0 && !configuredModel) throw new Error(`Credential ${llm.id} 已启用模型白名单，RoleConfig 必须显式选择模型`);
+    if (allowed.length > 0 && !configuredModel) throw new Error(`Credential ${llm.id} 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖`);
     if (configuredModel && allowed.length > 0 && !allowed.includes(configuredModel)) throw new Error(`模型 ${configuredModel} 不在 Credential ${llm.id} 的 allowed_model_ids 白名单`);
   }
   const manualConfigFiles = cfg
@@ -160,7 +160,7 @@ export async function resolveAgentSnapshotForJob(
       },
     });
     if (materialized.length > 0) configFiles = materialized;
-    if (!roleModel) model = extractModelFromSettings(agentCli, settingsConfig) ?? PLATFORM_DEFAULT_AGENT_MODEL;
+    if (!roleModel) model = resolveEffectiveModel({ roleModel: null, agentCli, settingsConfig }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
     if (!roleReasoning) {
       const fromSettings = extractReasoningFromSettings(agentCli, settingsConfig);
       if (fromSettings === "low" || fromSettings === "medium" || fromSettings === "high" || fromSettings === "xhigh") {
@@ -198,6 +198,7 @@ export async function resolveAgentSnapshotForJob(
     role_description: (role.description as string) ?? roleName,
     instructions_markdown: withRuntimeTestToolchainPolicy(roleName, (cfg?.instructions_markdown as string) ?? null, runtimeImage.image_key),
     platform_tools: platformTools as PlatformToolName[],
+    settings_config_json: settingsConfig,
     config_files: configFiles,
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,

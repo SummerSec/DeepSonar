@@ -654,7 +654,7 @@ export interface ProviderCredential {
   model_catalog_json?: string[];
   /** CC Switch-style profile: which CLI this settingsConfig targets. */
   agent_cli?: "claude-code" | "codex" | "open-code" | null;
-  /** Full CLI settingsConfig (may include plaintext keys). */
+  /** CLI settingsConfig projection. Secret values are returned as [已保存密钥]. */
   settings_config_json?: Record<string, unknown>;
   /** Manager-only meta (apiFormat, fullUrl, …). */
   meta_json?: Record<string, unknown>;
@@ -1809,6 +1809,14 @@ export const api = {
     send<{ ok: boolean; detail: string; category?: string; fetched_at?: string }>("POST", `/credentials/${id}/test`),
   credentialModels: (id: string) =>
     send<CredentialModels>("POST", `/credentials/${id}/models`),
+  credentialModelsPreview: (input: {
+    agent_cli?: "claude-code" | "codex" | "open-code";
+    provider: string;
+    secret: string;
+    base_url?: string;
+    metadata?: Record<string, unknown>;
+    settings_config?: Record<string, unknown>;
+  }) => send<CredentialModels>("POST", "/credentials/models/preview", input),
   credentialCompatibility: (id: string, agent_cli: string, model?: string | null) => {
     const query = new URLSearchParams({ agent_cli });
     if (model) query.set("model", model);
@@ -1818,6 +1826,7 @@ export const api = {
       provider_valid: boolean;
       agent_cli: string;
       model: string | null;
+      model_source: "role_override" | "credential_settings" | "none";
       allowed_model_ids: string[];
       compatible: boolean;
       error: string | null;

@@ -269,7 +269,7 @@ def _credentials_create(_pos, f):
         "name": need(f.get("name"), "--name"),
         "provider": need(
             f.get("provider"),
-            "--provider anthropic|kimi|openai|openrouter|plane|git|<oci-registry-host>",
+            "--provider anthropic|openai|plane|git|<oci-registry-host>",
         ),
         "secret": need(f.get("secret"), "--secret"),
     }
@@ -277,6 +277,10 @@ def _credentials_create(_pos, f):
         body["kind"] = f["kind"]
     if f.get("project-id"):
         body["project_id"] = f["project-id"]
+    if f.get("agent-cli"):
+        body["agent_cli"] = f["agent-cli"]
+    if f.get("settings-config"):
+        body["settings_config"] = parse_json_arg(str(f["settings-config"]), "--settings-config")
     meta = {}
     if f.get("base-url"):
         meta["base_url"] = str(f["base-url"]).rstrip("/")
@@ -285,6 +289,19 @@ def _credentials_create(_pos, f):
     if meta:
         body["metadata"] = meta
     return call("POST", "/credentials", body)
+
+
+def _credentials_models_preview(_pos, f):
+    body = {
+        "agent_cli": need(f.get("agent-cli"), "--agent-cli claude-code|codex|open-code"),
+        "provider": need(f.get("provider"), "--provider anthropic|openai"),
+        "secret": need(f.get("secret"), "--secret"),
+    }
+    if f.get("base-url"):
+        body["base_url"] = str(f["base-url"]).rstrip("/")
+    if f.get("settings-config"):
+        body["settings_config"] = parse_json_arg(str(f["settings-config"]), "--settings-config")
+    return call("POST", "/credentials/models/preview", body)
 
 
 def _runtime_images_list(_pos, f):
@@ -594,6 +611,7 @@ COMMANDS = {
     "credentials.test": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/test"),
     # 无 body；用于 RoleConfig 选 model 前发现 Provider 真实目录
     "credentials.models": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/models"),
+    "credentials.models-preview": _credentials_models_preview,
 }
 
 

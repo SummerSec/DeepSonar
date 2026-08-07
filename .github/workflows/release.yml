@@ -1609,27 +1609,46 @@ jobs:
         run: |
           set -euo pipefail
           registry_file="deploy/runtime-image-registry.json"
+          env_file="deploy/.env.example"
           [[ -f "$registry_file" ]]
+          [[ -f "$env_file" ]]
+          [[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]
           node agent-harness/generate-runtime-image-registry.mjs --check "$registry_file"
+          validate_image_tag_line() {
+            local file="$1" line_count
+            line_count="$(grep -Ec '^DEEPSONAR_IMAGE_TAG=[^[:space:]]+$' "$file" || true)"
+            [[ "$line_count" == "1" ]] || {
+              echo "$file must contain exactly one valid DEEPSONAR_IMAGE_TAG= line" >&2
+              exit 1
+            }
+          }
+          validate_image_tag_line "$env_file"
           # 生成步骤已改动工作区中的 registry；必须先拷到临时文件，再用 -f 切到默认分支，
           # 否则 git checkout 会因本地改动被覆盖而失败（Your local changes would be overwritten）。
           tmp_registry="$(mktemp)"
+          tmp_env="$(mktemp)"
           cp "$registry_file" "$tmp_registry"
+          VERSION="$VERSION" awk '
+            /^DEEPSONAR_IMAGE_TAG=/ { print "DEEPSONAR_IMAGE_TAG=" ENVIRON["VERSION"]; next }
+            { print }
+          ' "$env_file" > "$tmp_env"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin "$DEFAULT_BRANCH"
           git checkout -f -B "bot/sync-runtime-registry-v${VERSION}" "origin/${DEFAULT_BRANCH}"
+          validate_image_tag_line "$env_file"
           cp "$tmp_registry" "$registry_file"
-          rm -f "$tmp_registry"
-          git add -- "$registry_file"
-          if git diff --cached --quiet -- "$registry_file"; then
-            echo "默认分支上的 $registry_file 已是本次发布内容，跳过回写"
+          cp "$tmp_env" "$env_file"
+          rm -f "$tmp_registry" "$tmp_env"
+          git add -- "$registry_file" "$env_file"
+          if git diff --cached --quiet -- "$registry_file" "$env_file"; then
+            echo "默认分支上的 $registry_file 和 $env_file 已是本次发布内容，跳过回写"
             exit 0
           fi
-          git commit -m "chore(release): sync runtime-image-registry.json for v${VERSION}"
+          git commit -m "chore(release): sync runtime-image-registry.json and image tag for v${VERSION}"
           # 只更新清单文件；推到默认分支不会再次触发本 workflow（仅 tag 触发）
           git push origin "HEAD:${DEFAULT_BRANCH}"
-          echo "已将 $registry_file 回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "已将 $registry_file 和 $env_file 回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
       - name: 打包 Management Skill
         shell: bash
         run: |

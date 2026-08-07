@@ -8,6 +8,8 @@ import {
   hasProviderSettingsConfig,
   legacySettingsConfig,
   materializeProviderSettings,
+  normalizeProviderSettings,
+  resolveEffectiveModel,
 } from "./provider-settings.js";
 
 test("legacySettingsConfig builds Claude env dialect", () => {
@@ -89,6 +91,58 @@ test("extract model and reasoning from settings", () => {
   });
   assert.equal(extractModelFromSettings("codex", codex), "gpt-5");
   assert.equal(extractReasoningFromSettings("codex", codex), "low");
+  assert.equal(
+    resolveEffectiveModel({
+      roleModel: null,
+      agentCli: "claude-code",
+      settingsConfig: { env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-1" } },
+    }),
+    "claude-opus-4-1",
+  );
+  assert.equal(
+    resolveEffectiveModel({
+      roleModel: "role-override",
+      agentCli: "claude-code",
+      settingsConfig: { env: { ANTHROPIC_MODEL: "settings-default" } },
+    }),
+    "role-override",
+  );
+});
+
+test("Claude settings persist CC Switch fallback models", () => {
+  assert.deepEqual(
+    normalizeProviderSettings("claude-code", {
+      env: { ANTHROPIC_MODEL: "claude-sonnet-4-5" },
+    }),
+    {
+      env: {
+        ANTHROPIC_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-sonnet-4-5",
+      },
+    },
+  );
+});
+
+test("OpenCode settings use a CC Switch provider fragment and materialize a full CLI config", () => {
+  const settings = legacySettingsConfig({
+    provider: "openai",
+    secret: "sk-openai",
+    metadata: { base_url: "https://api.openai.com/v1" },
+    agentCli: "open-code",
+    model: "gpt-5",
+  });
+  assert.equal(settings.npm, "@ai-sdk/openai-compatible");
+  assert.deepEqual(Object.keys(settings.models as Record<string, unknown>), ["gpt-5"]);
+  assert.equal(extractModelFromSettings("open-code", settings), "gpt-5");
+  assert.equal(extractBaseUrlFromSettings(settings), "https://api.openai.com/v1");
+
+  const [file] = materializeProviderSettings({ agentCli: "open-code", settingsConfig: settings });
+  assert.equal(file?.path, ".opencode/config.json");
+  const materialized = JSON.parse(file!.content) as Record<string, unknown>;
+  assert.equal(materialized.model, "deepsonar/gpt-5");
+  assert.deepEqual(Object.keys(materialized.provider as Record<string, unknown>), ["deepsonar"]);
 });
 
 test("extractBaseUrlFromSettings reads env and codex toml", () => {

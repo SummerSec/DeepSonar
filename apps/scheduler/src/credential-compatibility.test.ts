@@ -8,19 +8,21 @@ import {
   validateCredentialRuntimeMutation,
 } from "./credentials.js";
 
-test("claude-code 只允许 anthropic 和 kimi Credential", () => {
+test("CLI 与协议 provider 严格兼容", () => {
   assert.equal(validateCredentialCompatibility("claude-code", "anthropic"), null);
-  assert.equal(validateCredentialCompatibility("claude-code", "kimi"), null);
+  assert.equal(validateCredentialCompatibility("open-code", "anthropic"), null);
+  assert.equal(validateCredentialCompatibility("open-code", "openai"), null);
+  assert.equal(validateCredentialCompatibility("codex", "openai"), null);
   assert.match(
     validateCredentialCompatibility("claude-code", "openai") ?? "",
-    /claude-code.*anthropic\/kimi.*openai/,
+    /claude-code.*anthropic.*openai/,
   );
 });
 
-test("其他 CLI 不施加未经证实的 provider 限制", () => {
+test("未知 CLI/provider fail closed", () => {
   assert.equal(validateCredentialCompatibility("open-code", "openai"), null);
-  assert.equal(validateCredentialCompatibility("codex", "openrouter"), null);
-  assert.equal(validateCredentialCompatibility("custom-cli", "openai"), null);
+  assert.match(validateCredentialCompatibility("codex", "anthropic") ?? "", /codex.*openai/);
+  assert.match(validateCredentialCompatibility("custom-cli", "openai") ?? "", /未知 agent_cli/);
 });
 
 test("legacy server provider errors are projected without rewriting arbitrary target errors", () => {
@@ -64,16 +66,32 @@ test("Credential 运行语义变更拒绝破坏既有消费者", () => {
 
 test("Credential 运行语义变更允许兼容的全局凭据与模型", () => {
   assert.equal(validateCredentialRuntimeMutation({
-    provider: "kimi",
+    provider: "anthropic",
     projectId: null,
-    metadata: { allowed_model_ids: ["kimi-k2"] },
+    metadata: { allowed_model_ids: ["claude-sonnet-4-5"] },
     consumers: [{
       source: "pending Job job-1",
       agentCli: "claude-code",
-      model: "kimi-k2",
+      model: "claude-sonnet-4-5",
       projectId: "project-1",
     }],
   }), null);
+});
+
+test("Credential 配置文件 CLI 变更不能破坏已有角色绑定", () => {
+  assert.match(validateCredentialRuntimeMutation({
+    provider: "openai",
+    projectId: null,
+    metadata: {},
+    settingsConfig: { config: 'model = "gpt-5"' },
+    credentialAgentCli: "codex",
+    consumers: [{
+      source: "RoleConfig role-1",
+      agentCli: "claude-code",
+      model: null,
+      projectId: null,
+    }],
+  }) ?? "", /RoleConfig role-1.*claude-code.*codex/);
 });
 
 test("RoleConfig 导入绑定复用项目作用域、provider 与模型白名单校验", () => {

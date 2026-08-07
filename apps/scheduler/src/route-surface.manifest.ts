@@ -112,6 +112,7 @@ POST /canvases/:id/jobs/cancel-active
 POST /canvases/:id/report/retry
 POST /credentials
 POST /credentials/:id/models
+POST /credentials/models/preview
 POST /credentials/:id/rotate
 POST /credentials/:id/status
 POST /credentials/:id/test
@@ -251,6 +252,7 @@ POST /auth/logout
 POST /canvases/{id}/report/retry
 POST /credentials
 POST /credentials/{id}/models
+POST /credentials/models/preview
 POST /credentials/{id}/rotate
 POST /credentials/{id}/status
 POST /credentials/{id}/test

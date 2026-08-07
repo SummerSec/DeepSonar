@@ -10,6 +10,7 @@ import {
   reconstructAgentRunError,
   runtimeCredentialProviderError,
   semanticToolEventsFor,
+  usesDirectProviderConfig,
 } from "./executor-real.js";
 import { expandModules } from "./skill-sources.js";
 
@@ -232,8 +233,14 @@ test("runtime rejects stale or incompatible credential providers", () => {
   );
   assert.match(
     runtimeCredentialProviderError("claude-code", "openai", "openai") ?? "",
-    /claude-code.*anthropic\/kimi/,
+    /claude-code.*anthropic/,
   );
+});
+
+test("runtime keeps full provider settings in direct-config mode", () => {
+  assert.equal(usesDirectProviderConfig({ env: { ANTHROPIC_API_KEY: "provider-key" } }), true);
+  assert.equal(usesDirectProviderConfig({}), false);
+  assert.equal(usesDirectProviderConfig(null), false);
 });
 
 test("semantic tool capture only enables this Job's authorized tools", () => {

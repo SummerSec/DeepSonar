@@ -983,9 +983,12 @@ const OPS: Op[] = [
       properties: {
         name: { type: "string" },
         kind: { type: "string", enum: ["llm_provider", "plane", "git", "oci_registry"] },
-        provider: { type: "string", description: "OCI registry 凭据时使用 registry host，其余类型使用平台固定 provider" },
+        provider: { type: "string", description: "LLM 仅允许协议 ID anthropic（Anthropic Messages）或 openai（OpenAI Responses）；OCI 使用 registry host" },
         secret: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code"], nullable: true },
+        settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置；运行时物化为 Agent 沙箱配置文件" },
+        meta: { type: "object", additionalProperties: true },
         metadata: {
           type: "object",
           additionalProperties: false,
@@ -1005,7 +1008,7 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/credentials/{id}",
-    summary: "更新非敏感字段（name / project_id / metadata）",
+    summary: "更新 Credential 配置（settings_config 中已保存密钥由服务端恢复）",
     scope: "agents:write",
     tags: ["Credentials"],
     body: {
@@ -1015,6 +1018,9 @@ const OPS: Op[] = [
         provider: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
         metadata: { $ref: "#/components/schemas/CredentialMetadata" },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code"], nullable: true },
+        settings_config: { type: "object", additionalProperties: true, description: "API 返回的 [已保存密钥] 可原样回传，服务端保留原值" },
+        meta: { type: "object", additionalProperties: true },
       },
     },
   },
@@ -1040,6 +1046,25 @@ const OPS: Op[] = [
   },
   { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:write", tags: ["Credentials"] },
   { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:write", tags: ["Credentials"] },
+  {
+    method: "post",
+    path: "/credentials/models/preview",
+    summary: "预览未保存 Credential 的模型目录（不落库）",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    body: {
+      type: "object",
+      required: ["agent_cli", "provider", "secret"],
+      properties: {
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code"] },
+        provider: { type: "string", enum: ["anthropic", "openai"] },
+        secret: { type: "string", minLength: 1, maxLength: 4096 },
+        base_url: { type: "string", format: "uri" },
+        metadata: { $ref: "#/components/schemas/CredentialMetadata" },
+        settings_config: { type: "object", additionalProperties: true },
+      },
+    },
+  },
   { method: "get", path: "/credentials/{id}/models", summary: "读取已持久化的安全模型目录", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "get",
