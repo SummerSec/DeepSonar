@@ -21,7 +21,8 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 22);
+  assert.equal(SCHEMA_VERSION, 23);
+  assert.match(body, /runtime_registry_channel\s+text\s+NOT\s+NULL\s+DEFAULT\s+'aliyun-acr'/i);
   const manifest = parseTableManifest(body);
   assert.equal(manifest.has("schema_meta"), true);
   assert.equal(manifest.has("projects"), true);
@@ -67,6 +68,10 @@ test("empty database applies schema.sql; second start is a no-op", {
     assert.deepEqual(await withSchemaLock(db), []);
     const [meta] = await db<{ version: number }[]>`SELECT version FROM schema_meta WHERE id = 'global'`;
     assert.equal(meta?.version, SCHEMA_VERSION);
+    const [settings] = await db<{ runtime_registry_channel: string }[]>`
+      SELECT runtime_registry_channel FROM global_settings WHERE id = 'global'
+    `;
+    assert.equal(settings?.runtime_registry_channel, "aliyun-acr");
     const [projects] = await db<{ count: number }[]>`
       SELECT count(*)::int AS count FROM information_schema.tables
       WHERE table_schema = 'public' AND table_name = 'projects'

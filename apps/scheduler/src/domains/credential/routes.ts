@@ -270,7 +270,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[credentials] list failed:", message);
-      // Common local/dev failure: Scheduler code expects schema v22 columns before migrate.
+      // Common local/dev failure: Scheduler code expects current schema columns before migrate.
       if (/settings_config_json|agent_cli|meta_json|column .* does not exist/i.test(message)) {
         return reply.code(500).send({
           error: "数据库 schema 缺少 credentials.settings_config_json。请用 database/schema.sql 重建数据库后重启 Scheduler",

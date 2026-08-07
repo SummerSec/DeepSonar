@@ -222,7 +222,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 | 官方 digest 引导 | `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`（tag 不会被静默信任） |
 | 本地镜像存在 | Docker 已有对应 digest（可 `docker tag` 别名） |
 | 并发默认 | `MAX_GLOBAL_JOBS=20`、`MAX_JOBS_PER_PROJECT=5`（库 `rules_json` 优先） |
-| schema 版本 | 当前 v22；空库套 `database/schema.sql`，非空只校验版本与结构；不符 fail closed（无增量 migration，需重建）；遗留 `schema_migrations` 表不拦启动 |
+| schema 版本 | 当前 v23；空库套 `database/schema.sql`，非空只校验版本与结构；不符 fail closed（无增量 migration，需重建）；遗留 `schema_migrations` 表不拦启动 |
 | 鉴权 | `DEEPSONAR_AUTH_REQUIRED=true` 时需 Bearer；应急用 `DEEPSONAR_ADMIN_TOKEN`（不落库） |
 | 证据目录 | `BLOB_DIR`（默认 `./data/blobs`）可写；共享资产 CAS 见 `BLOB_STORE=fs` 或 `s3`（`docs/SHARED_ASSET_BLOB_STORE.md`）；改 `apps/scheduler/src` 会触发 tsx watch 重载 |
 

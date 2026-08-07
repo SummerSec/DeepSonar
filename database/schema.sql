@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 22);
+INSERT INTO schema_meta (id, version) VALUES ('global', 23);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -534,7 +534,7 @@ CREATE TABLE global_settings (
   id text PRIMARY KEY DEFAULT 'global',
   rules_json jsonb NOT NULL DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now(),
-  runtime_registry_channel text NOT NULL DEFAULT 'github',
+  runtime_registry_channel text NOT NULL DEFAULT 'aliyun-acr',
   CONSTRAINT global_settings_id_check CHECK (id = 'global'),
   CONSTRAINT global_settings_runtime_registry_channel_check
     CHECK (runtime_registry_channel IN ('github', 'dockerhub', 'aliyun-acr'))
