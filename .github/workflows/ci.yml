@@ -321,25 +321,6 @@ jobs:
           set -euo pipefail
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
-      - name: Free disk for Kali toolchain image
-        if: matrix.toolset == 'kali-minimal'
-        run: |
-          set -euo pipefail
-          sudo rm -rf \
-            /usr/local/lib/android \
-            /usr/share/dotnet \
-            /opt/ghc \
-            /usr/local/share/boost \
-            /usr/share/swift \
-            /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL \
-            /opt/hostedtoolcache/go \
-            /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk \
-            "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
-          sudo docker system prune -af || true
-          docker system df || true
-          df -h /
-      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -360,18 +341,32 @@ jobs:
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
           SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
-      - name: Reuse unchanged image (amd64)
+      - name: Record reused image
         if: ${{ steps.resolve.outputs.skip == 'true' }}
-        shell: bash
-        env:
-          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
-          DIGEST: ${{ steps.resolve.outputs.digest }}
-          LOCAL_TAG: deepsonar-${{ matrix.toolset }}:ci
         run: |
           set -euo pipefail
-          docker pull --platform linux/amd64 "${IMAGE_NAME}@${DIGEST}"
-          docker tag "${IMAGE_NAME}@${DIGEST}" "$LOCAL_TAG"
-          echo "reused ${IMAGE_NAME}@${DIGEST} as ${LOCAL_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.toolset }} build unchanged: reused previously validated immutable src cache; pull, local tag, and duplicate smoke skipped" >> "$GITHUB_STEP_SUMMARY"
+      - name: Free disk for Kali toolchain image
+        if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
+        run: |
+          set -euo pipefail
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/go \
+            /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk \
+            "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker system prune -af || true
+          docker system df || true
+          df -h /
+      - name: Set up Buildx for image build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/setup-buildx-action@v3
       - name: Build official runtime
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
@@ -391,9 +386,10 @@ jobs:
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
             type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
       - name: Offline hardened smoke
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
         run: node agent-harness/test-runtime-image.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
       - name: Maven online package smoke
-        if: matrix.toolset == 'kali-minimal'
+        if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
         run: node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:ci
 
   openharmony-runtime-images:
@@ -439,13 +435,25 @@ jobs:
           set -euo pipefail
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: base-image
+        name: Resolve immutable base image digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref=ghcr.io/summersec/deepsonar-base:latest
+          digest="$(docker buildx imagetools inspect "$base_ref" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            digest="$(docker buildx imagetools inspect "$base_ref" 2>/dev/null \
+              | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+              | head -n1)"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'ref=%s@%s\n' "${base_ref%:*}" "$digest" >> "$GITHUB_OUTPUT"
       - id: fingerprint
         name: Build fingerprint
         shell: bash
@@ -455,7 +463,7 @@ jobs:
           node agent-harness/image-build-fingerprint.mjs \
             --preset "deepsonar-${{ matrix.toolset }}" \
             --platforms "${{ matrix.platform }}" \
-            --build-arg "BASE_IMAGE=ghcr.io/summersec/deepsonar-base:latest"
+            --build-arg "BASE_IMAGE=${{ steps.base-image.outputs.ref }}"
       - id: resolve
         name: Resolve src cache
         shell: bash
@@ -464,19 +472,17 @@ jobs:
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
           SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
-      - name: Reuse unchanged OpenHarmony image
+      - name: Record reused OpenHarmony image
         if: ${{ steps.resolve.outputs.skip == 'true' }}
-        shell: bash
-        env:
-          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
-          DIGEST: ${{ steps.resolve.outputs.digest }}
-          LOCAL_TAG: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
-          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
-          docker pull --platform "$PLATFORM" "${IMAGE_NAME}@${DIGEST}"
-          docker tag "${IMAGE_NAME}@${DIGEST}" "$LOCAL_TAG"
-          echo "reused ${IMAGE_NAME}@${DIGEST} as ${LOCAL_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.toolset }} (${{ matrix.arch }}) build unchanged: reused previously validated immutable src cache; pull, local tag, and duplicate smoke skipped" >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up QEMU for image build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx for image build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/setup-buildx-action@v3
       - name: Build OpenHarmony specialist runtime
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
@@ -486,13 +492,16 @@ jobs:
           load: true
           tags: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
           platforms: ${{ matrix.platform }}
-          build-args: BASE_IMAGE=ghcr.io/summersec/deepsonar-base:latest
+          build-args: BASE_IMAGE=${{ steps.base-image.outputs.ref }}
           cache-from: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }}
             type=gha,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
           cache-to: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }},mode=max,ignore-error=true
             type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
+      - name: Offline environment smoke
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} ${{ matrix.check_args }}
       - name: Pin single-arch src cache
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         shell: bash
@@ -510,5 +519,3 @@ jobs:
           else
             echo "pin skipped/failed for ${IMAGE_NAME}:${SRC_TAG}" >> "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Offline environment smoke
-        run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} ${{ matrix.check_args }}
