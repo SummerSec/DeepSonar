@@ -711,7 +711,7 @@ async function executeFake(jobId: string, type: string) {
       title: fake?.title ?? "SQL 注入：未参数化的查询拼接",
       severity: fake?.severity ?? "high",
       location: fake?.location ?? "auth/login.php:42",
-      summary: fake?.summary ?? "用户输入直接拼入 SQL 语句，可注入。",
+      summary: fake?.summary ?? "用户输入未经参数化处理直接拼入 SQL 查询语句，攻击者可构造恶意参数改变查询语义并读取未授权数据。",
       rule_id: "fake-sqli-001",
       suggest_verify: true,
       raw: { source: "fake-agent", v: 1 },
@@ -924,7 +924,7 @@ async function executeFake(jobId: string, type: string) {
               from: refs.map((r) => r.id as string),
               role: selected.name,
               description: `假 Hub：由 ${selected.title} 角色${roleDone.length === 0 ? "首次取证" : "补充事实"}`,
-              prompt: `围绕画布目标，按 ${selected.name} 角色职责补充尚缺的可验证${selected.name === "audit" ? "发现" : "事实"}。`,
+              prompt: `围绕画布目标和现有证据，按 ${selected.name} 角色职责补充尚缺的可验证${selected.name === "audit" ? "发现" : "事实"}；完成后通过平台工具提交结构化结果。`,
             },
           ],
         });
