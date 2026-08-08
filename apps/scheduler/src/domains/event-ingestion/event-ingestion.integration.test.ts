@@ -266,7 +266,7 @@ if (!testDatabaseUrl) {
           type: "fact",
           payload: {
             title: "foreign project evidence",
-            description: "must roll back",
+            description: "foreign-project evidence must roll back",
             verification: {
               finding_id: foreignFindingId,
               evidence_kind: "test",
@@ -294,7 +294,7 @@ if (!testDatabaseUrl) {
           type: "fact",
           payload: {
             title: "wrong evidence kind",
-            description: "must roll back",
+            description: "wrong evidence kind must roll back",
             verification: {
               finding_id: verificationFindingId,
               evidence_kind: "review",
@@ -610,7 +610,7 @@ if (!testDatabaseUrl) {
         v: 1,
         event_id: terminalEventId,
         type: "done",
-        payload: { summary: "event" },
+        payload: { summary: "event completed" },
       });
       const results = await Promise.race([
         Promise.allSettled([finalizeDirect, finalizeEvent]),
