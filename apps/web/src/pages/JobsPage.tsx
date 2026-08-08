@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type JobSummary, type Project } from "../api";
 import { JobDetailPanel } from "../JobDetailPanel";
+import { useConfirmDialog } from "../components/ConfirmDialog";
 import {
   DataTable,
   EmptyState,
@@ -37,6 +38,7 @@ const CANCELLABLE = new Set([
 const RESUMABLE = new Set(["waiting_human", "orphan", "failed", "timeout"]);
 
 export function JobsPage() {
+  const confirm = useConfirmDialog();
   const [searchParams, setSearchParams] = useSearchParams();
   const status = searchParams.get("status") ?? "";
   const typeFilter = searchParams.get("type") ?? "";
@@ -190,7 +192,12 @@ export function JobsPage() {
   };
 
   const act = async (id: string, kind: "cancel" | "resume") => {
-    if (kind === "cancel" && !window.confirm("强制退出该 Job？将立即取消调度并回收沙箱。")) return;
+    if (kind === "cancel" && !await confirm({
+      title: "强制退出该 Job？",
+      description: "将立即取消调度并回收沙箱，当前执行不可恢复。",
+      confirmLabel: "强制退出",
+      tone: "danger",
+    })) return;
     setBusy(id);
     try {
       if (kind === "cancel") await api.cancelJob(id, { force: true, reason: "强制退出" });

@@ -88,12 +88,27 @@ const descriptions = {
   list_shared_assets: "分页列出本 Job 创建时冻结的只读共享资产目录。没有单独的下载工具：用返回的 mount_path/read_path 以普通文件工具直接读取（Scheduler 已从本地或 S3 兼容存储预挂载）。可按 scope 或逻辑 key 前缀过滤。",
   publish_shared_asset: "提议把 /workspace 下普通工作区文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止从 .deepsonar/shared 只读挂载树发布。",
 };
+const descriptionCautions = {
+  list_available_roles: "Hub 派发前调用；必须原样复制返回的 name，不得猜测、缩写或使用已禁用及 system 角色。",
+  emit_progress: "只用于增量进度，可按需多次调用；不得代替最终结论或 Finding，仅在返回 isError 后重试。",
+  emit_fact: "每个新增可验证事实提交一次，不得重复提交或故意缩短内容；遇到 isError 或截断时，写入完整 JSON 后用 payload_file 重试。",
+  emit_finding: "只提交有证据支撑的 Finding；suggest_verify 只是建议，不能当作派发决定；遇到 isError 或截断时用 payload_file 提交完整内容。",
+  submit_hub_decision: "仅 Hub 使用：读完画布和可用角色后、mark_job_done 前调用，complete、intents、payload_file 必须三选一；仅在 isError 或校验失败后重试，成功后不得再次调用。",
+  mark_job_done: "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；结束时只调用一次，首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，成功后不得重试。",
+  request_human: "仅在必要授权、凭据或高风险审批阻塞时调用一次；调用后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
+  list_shared_assets: "用于发现本 Job 冻结的只读资产，再按返回路径读取；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取，可安全重复查询。",
+  publish_shared_asset: "只发布普通 /workspace 中可复用的文件；不得从 .deepsonar/shared 发布或覆盖不可变资产，仅在返回 isError 后重试。",
+};
 const definitions = Object.fromEntries(
   Object.keys(TOOL_INPUT_SCHEMAS).map((name) => [name, {
     description: hasOwn(descriptions, name) ? descriptions[name] : "DeepSonar 控制工具。",
     inputSchema: TOOL_INPUT_SCHEMAS[name],
   }]),
 );
+
+for (const [name, caution] of Object.entries(descriptionCautions)) {
+  if (definitions[name]) definitions[name].description += " " + caution;
+}
 
 function reply(message) {
   process.stdout.write(JSON.stringify(message) + "\n");

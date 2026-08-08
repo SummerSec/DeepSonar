@@ -8,6 +8,7 @@ import {
   moduleEvidenceFromSnapshot,
   normalizeLegacyControlInstructions,
   reconstructAgentRunError,
+  recordFirstSemanticDone,
   runtimeCredentialProviderError,
   semanticToolEventsFor,
   hasMaterializedProviderConfig,
@@ -250,6 +251,16 @@ test("semantic tool capture only enables this Job's authorized tools", () => {
     "mcp__deepsonar-control__mark_job_done": "done",
   });
   assert.equal(Object.getPrototypeOf(semanticTools), null);
+});
+
+test("late sub-agent completion keeps the first accepted mark_job_done proposal", () => {
+  const first = { eventId: "first", summary: "parent completion" };
+  const late = { eventId: "late", summary: "sub-agent completion" };
+  const state: { done: typeof first | null } = { done: null };
+
+  assert.equal(recordFirstSemanticDone(state, first), true);
+  assert.equal(recordFirstSemanticDone(state, late), false);
+  assert.equal(state.done, first);
 });
 
 test("all role Jobs, including audit, may publish shared assets", () => {

@@ -73,12 +73,24 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 };
 
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
+const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
+  list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
+  emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在返回 isError 后重试。",
+  emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 isError 或截断时，写入完整 JSON 后使用 payload_file。",
+  emit_finding: "注意：只提交有证据支撑的 Finding；suggest_verify 只是建议，验证是否派生由 Scheduler 决定；遇到 isError 或截断时用 payload_file 提交完整内容。",
+  submit_hub_decision: "注意：Hub 在 mark_job_done 前调用，complete、intents、payload_file 必须三选一；成功后只允许一次，仅在 isError 或校验失败后重试。",
+  mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，因此只调用一次，成功后不得重试。",
+  request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
+  list_shared_assets: "注意：只读取返回的冻结挂载路径；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取。",
+  publish_shared_asset: "注意：只发布普通 /workspace 文件；不得从 .deepsonar/shared 发布或覆盖不可变资产，仅在返回 isError 后重试。",
+};
+
 export function platformToolGuide(toolNames: string[]): string {
   const enabled = new Set(toolNames);
   const incremental = ["emit_progress", "emit_fact", "emit_finding"].filter((name) => enabled.has(name));
   return [
     "调用规则：直接调用当前 Agent CLI 工具列表中的同名 MCP 工具，并传入 JSON 对象；不要用 shell、curl 或自行写文件代替工具调用；只用普通文本描述决策、发现或摘要同样不算提交。合法响应只表示 `schema_validated / pending_scheduler_validation`，Scheduler 仍会重验并记账；收到 `isError` 时修正参数后重试，不得把失败调用当作已上报。",
     `生命周期：${incremental.length > 0 ? `${incremental.map((name) => `\`${name}\``).join("、")} 可增量调用；` : ""}正常完成以一次 \`mark_job_done\` 结束${enabled.has("request_human") ? "，人工阻塞以一次 `request_human` 结束，二者不要同时调用" : ""}。平台收到事件后负责实时入库、画布更新、派生与终态处理。`,
-    ...toolNames.map((name) => PLATFORM_TOOL_USAGE[name]).filter((entry): entry is string => Boolean(entry)),
+    ...toolNames.flatMap((name) => [PLATFORM_TOOL_USAGE[name], PLATFORM_TOOL_CAUTIONS[name]]).filter((entry): entry is string => Boolean(entry)),
   ].join("\n\n");
 }

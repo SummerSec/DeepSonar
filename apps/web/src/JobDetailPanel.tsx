@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
+import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
@@ -66,6 +67,7 @@ function ConfigField({ label, value, title }: { label: string; value: string; ti
 }
 
 export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
+  const confirm = useConfirmDialog();
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [evidence, setEvidence] = useState<JobEvidence | null>(null);
   const [stream, setStream] = useState<Array<Record<string, unknown>>>([]);
@@ -244,13 +246,12 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     : detail?.missing_modules ?? [];
   const forceExit = async () => {
     if (!detail || !ACTIVE.has(detail.job.status)) return;
-    if (
-      !window.confirm(
-        `强制退出 Job「${detail.job.type}」？\n将立即取消调度、回收沙箱并标记为 cancelled，不可恢复。`,
-      )
-    ) {
-      return;
-    }
+    if (!await confirm({
+      title: `强制退出 Job「${detail.job.type}」？`,
+      description: "将立即取消调度、回收沙箱并标记为 cancelled，当前执行不可恢复。",
+      confirmLabel: "强制退出",
+      tone: "danger",
+    })) return;
     setForceBusy(true);
     setForceMsg(null);
     try {

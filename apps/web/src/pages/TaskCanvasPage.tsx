@@ -25,6 +25,7 @@ import {
 } from "../api";
 import { CanvasView } from "../CanvasView";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type PageProgress } from "../canvas-page-sync";
+import { useConfirmDialog } from "../components/ConfirmDialog";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
@@ -117,6 +118,7 @@ function HumanFactCard({ node, onDone }: { node: CanvasNode; onDone: (msg: strin
 
 /** 任务详情：只展示本任务范围 / 本任务发现 / 本任务过程画布（不混其它任务） */
 export function TaskCanvasPage() {
+  const confirm = useConfirmDialog();
   const { projectId, canvasId } = useParams<{ projectId: string; canvasId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as Tab) || "canvas";
@@ -340,13 +342,12 @@ export function TaskCanvasPage() {
   /** 强制退出画布上全部活动 Job（含 running） */
   const forceExitActive = async () => {
     if (!canvasId || activeJobs.length === 0) return;
-    if (
-      !window.confirm(
-        `强制退出本任务 ${activeJobs.length} 个活动 Job？\n将立即取消调度并回收沙箱，节点标记为 cancelled。`,
-      )
-    ) {
-      return;
-    }
+    if (!await confirm({
+      title: `强制退出 ${activeJobs.length} 个活动 Job？`,
+      description: "将立即取消调度并回收沙箱，相关节点会标记为 cancelled，当前执行不可恢复。",
+      confirmLabel: "全部强制退出",
+      tone: "danger",
+    })) return;
     setConvBusy(true);
     setMoreOpen(false);
     try {
@@ -384,9 +385,12 @@ export function TaskCanvasPage() {
   /** 重试任务 = 清空本画布历史后从意图重新执行 */
   const retryTaskHard = async () => {
     if (!canvasId) return;
-    const ok = window.confirm(
-      "将删除本任务的全部运行历史（Job、画布节点、Finding、报告），并按原意图从零重新执行。此操作不可撤销，确定？",
-    );
+    const ok = await confirm({
+      title: "清空历史并重新执行？",
+      description: "将删除本任务的全部运行历史（Job、画布节点、Finding、报告），并按原意图从零重新执行。此操作不可撤销。",
+      confirmLabel: "清空并重试",
+      tone: "danger",
+    });
     if (!ok) return;
     setConvBusy(true);
     setMoreOpen(false);
@@ -725,7 +729,7 @@ export function TaskCanvasPage() {
       )}
 
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 min-h-0 flex-1 overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
-        <div className={`h-full min-h-0 ${tab === "canvas" ? "" : "invisible pointer-events-none absolute inset-0"}`}>
+        <div className={`h-full min-h-0 ${tab === "canvas" ? "" : "hidden"}`}>
           <CanvasView
             canvasId={canvasId}
             onData={onCanvasData}
@@ -915,7 +919,12 @@ export function TaskCanvasPage() {
                               type="button"
                               disabled={convBusy}
                               onClick={async () => {
-                                if (!window.confirm(`强制退出 Job「${j.type}」？`)) return;
+                                if (!await confirm({
+                                  title: `强制退出 Job「${j.type}」？`,
+                                  description: "将立即取消调度并回收沙箱，当前执行不可恢复。",
+                                  confirmLabel: "强制退出",
+                                  tone: "danger",
+                                })) return;
                                 setConvBusy(true);
                                 try {
                                   await api.cancelJob(j.id, { force: true, reason: "强制退出" });

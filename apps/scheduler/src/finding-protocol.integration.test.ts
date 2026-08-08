@@ -103,7 +103,11 @@ if (!testDatabaseUrl) {
           v: 1,
           event_id: rejectedEventId,
           type: "finding",
-          payload: { title: "wrong profile", profile: "quality.bug" },
+          payload: {
+            title: "wrong profile",
+            profile: "quality.bug",
+            summary: "This finding intentionally uses a profile outside the frozen task protocol.",
+          },
         }),
         (error: unknown) => {
           assert.ok(error instanceof ControlInputError);
@@ -126,6 +130,7 @@ if (!testDatabaseUrl) {
           title: "recomputed score",
           profile: "security.vulnerability",
           category: "security.vuln",
+          summary: "The finding carries a supported CVSS vector whose score is recomputed by the Scheduler.",
           severity: "low",
           scoring: {
             standard: "CVSS",
@@ -151,6 +156,7 @@ if (!testDatabaseUrl) {
         type: "finding",
         payload: {
           title: "future score",
+          summary: "The finding carries an unsupported future CVSS version and preserves the reported score.",
           severity: "medium",
           scoring: {
             standard: "CVSS",

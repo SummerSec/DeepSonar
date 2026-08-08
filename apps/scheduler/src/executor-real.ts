@@ -129,6 +129,17 @@ export function assertSemanticTerminalExclusivity(
 }
 
 /**
+ * A Claude parent session and its sub-agents share the same control MCP. Keep
+ * the first valid completion proposal authoritative so a late sub-agent
+ * completion cannot overwrite it or fail an otherwise completed Job.
+ */
+export function recordFirstSemanticDone<T>(state: { done: T | null }, proposal: T): boolean {
+  if (state.done) return false;
+  state.done = proposal;
+  return true;
+}
+
+/**
  * 真实 Agent 执行器（ARCHITECTURE §8）
  * 契约：每个 Job 使用全新 /workspace；系统动态生成 AGENTS.md / CLAUDE.md，
  *   Hub 通过 input 注入本轮任务，Worker 自行决定是否及如何获取外部材料，
@@ -1011,6 +1022,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return;
     }
     if (event.type === "done") {
+      // The first accepted completion is authoritative. A parent session and
+      // its sub-agents share this MCP, so do not let any later completion
+      // proposal revalidate, overwrite, or fail the Job.
+      if (semanticState.done) return;
       const parsed = DonePayload.safeParse(event.payload);
       if (!parsed.success) throw invalidToolPayload("mark_job_done", "mark_job_done 参数非法");
       const p = parsed.data;
@@ -1024,13 +1039,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         throw invalidToolPayload("mark_job_done", "verdict=rework 必须列出 missing_evidence", "missing_evidence");
       }
       assertSemanticTerminalExclusivity(semanticState, "done");
-      if (semanticState.done) throw toolBoundaryError("duplicateToolCall", "mark_job_done 每个 Job 只能调用一次");
-      semanticState.done = {
+      recordFirstSemanticDone(semanticState, {
         eventId,
         summary: p.summary.trim(),
         ...(verdict ? { verdict } : {}),
         ...(missingEvidence ? { missingEvidence } : {}),
-      };
+      });
       return;
     }
     if (event.type === "human") {

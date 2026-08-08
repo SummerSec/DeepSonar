@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type Project } from "../api";
 import { FindingProtocolEditor } from "../FindingProtocolEditor";
+import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle } from "../task-lifecycle";
 import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, formatElapsed, formatTime, relativeTime } from "../ui";
@@ -151,6 +152,7 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
 }
 
 export function TasksPage() {
+  const confirm = useConfirmDialog();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
@@ -329,13 +331,12 @@ export function TasksPage() {
                     <button
                       title="清空历史后从意图重新执行"
                       onClick={async () => {
-                        if (
-                          !window.confirm(
-                            "将删除本任务的全部运行历史并按原意图从零重跑。此操作不可撤销，确定？",
-                          )
-                        ) {
-                          return;
-                        }
+                        if (!await confirm({
+                          title: "清空历史并重新执行？",
+                          description: "将删除本任务的全部运行历史，并按原意图从零重跑。此操作不可撤销。",
+                          confirmLabel: "清空并重试",
+                          tone: "danger",
+                        })) return;
                         try {
                           await api.retryTask(canvas.id);
                           flash("已清空历史并重新开始执行");
@@ -353,7 +354,12 @@ export function TasksPage() {
                     <button
                       title="归档任务：停止调度，历史保留，列表默认隐藏"
                       onClick={async () => {
-                        if (!window.confirm("归档后任务将停止调度并从默认列表隐藏，历史数据保留。确定？")) return;
+                        if (!await confirm({
+                          title: "归档该任务？",
+                          description: "任务将停止调度并从默认列表隐藏，历史数据会保留。",
+                          confirmLabel: "归档任务",
+                          tone: "danger",
+                        })) return;
                         try {
                           const r = await api.archiveTask(canvas.id);
                           flash(r.cancelled_jobs > 0 ? `已归档（取消 ${r.cancelled_jobs} 个活动 Job）` : "已归档");
@@ -397,13 +403,12 @@ export function TasksPage() {
                   <button
                     title="永久删除任务及全部运行数据（不可恢复）"
                     onClick={async () => {
-                      if (
-                        !window.confirm(
-                          `将永久删除任务「${canvas.title}」及其全部 Job、Finding、画布与报告，不可恢复。确定？`,
-                        )
-                      ) {
-                        return;
-                      }
+                      if (!await confirm({
+                        title: `永久删除任务「${canvas.title}」？`,
+                        description: "该任务及其全部 Job、Finding、画布与报告都会被永久删除，无法恢复。",
+                        confirmLabel: "永久删除",
+                        tone: "danger",
+                      })) return;
                       try {
                         await api.deleteTask(canvas.id);
                         flash("任务已永久删除");

@@ -2,6 +2,7 @@ import { Prohibit, SealCheck, Stop, TreeStructure, X } from "@phosphor-icons/rea
 import { useEffect, useState } from "react";
 import { api, type CanvasNode, type JobDetail } from "./api";
 import { LiveStream } from "./LiveStream";
+import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
@@ -53,6 +54,7 @@ export function Sidebar({
   onClose: () => void;
   onTraceFinding?: () => void;
 }) {
+  const confirm = useConfirmDialog();
   const [job, setJob] = useState<JobDetail | null>(null);
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [forceBusy, setForceBusy] = useState(false);
@@ -108,13 +110,12 @@ export function Sidebar({
 
   const forceExit = async () => {
     if (!node.job_id || !canForceExit) return;
-    if (
-      !window.confirm(
-        `强制退出节点「${node.title}」对应的 Job？\n将立即取消调度、回收沙箱并标记为 cancelled。`,
-      )
-    ) {
-      return;
-    }
+    if (!await confirm({
+      title: `强制退出「${node.title}」对应的 Job？`,
+      description: "将立即取消调度、回收沙箱并标记为 cancelled，当前执行不可恢复。",
+      confirmLabel: "强制退出",
+      tone: "danger",
+    })) return;
     setForceBusy(true);
     setForceMsg(null);
     try {

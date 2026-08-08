@@ -2,6 +2,7 @@ import { ArrowsClockwise, Cube, DownloadSimple, MagnifyingGlass, Plus, SealCheck
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useAuth } from "../auth";
+import { useConfirmDialog } from "../components/ConfirmDialog";
 import {
   api,
   isSupportedRuntimeImageRegistryEnvelope,
@@ -212,6 +213,7 @@ function LocalCandidatePanel({
 }
 
 export function RuntimeImagesPage() {
+  const confirm = useConfirmDialog();
   const { projectId } = useParams<{ projectId: string }>();
   const { me } = useAuth();
   const [rows, setRows] = useState<RuntimeImageSummary[]>([]);
@@ -577,9 +579,12 @@ export function RuntimeImagesPage() {
       return;
     }
     const expectedImageId = candidate.image_id;
-    const confirmed = window.confirm(
-      `确认授权采用 ${image.name} 的本地镜像？\n\nimage_ref: ${candidate.image_ref}\nimage_id: ${expectedImageId}\n\n这会把当前 image_id 绑定为本机 local-docker trusted 版本；确认前请核对不可变引用。`,
-    );
+    const confirmed = await confirm({
+      title: `授权采用 ${image.name}？`,
+      description: `image_ref: ${candidate.image_ref}\nimage_id: ${expectedImageId}\n\n这会把当前 image_id 绑定为本机 local-docker trusted 版本；确认前请核对不可变引用。`,
+      confirmLabel: "授权采用",
+      tone: "danger",
+    });
     if (!confirmed) return;
     setBusy(`adopt-local:${image.id}`);
     setError(null);

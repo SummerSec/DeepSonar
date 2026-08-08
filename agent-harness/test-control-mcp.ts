@@ -249,6 +249,23 @@ rmSync(tempDir, { recursive: true, force: true });
 
 const rpcReplies = replies.trim().split("\n").map((line) => JSON.parse(line));
 const toolsReply = rpcReplies.find((reply) => reply.id === 2);
+const descriptionCautions: Record<string, string> = {
+  list_available_roles: "不得猜测、缩写或使用已禁用及 system 角色",
+  emit_progress: "不得代替最终结论或 Finding",
+  emit_fact: "遇到 isError 或截断时，写入完整 JSON 后用 payload_file 重试",
+  emit_finding: "suggest_verify 只是建议，不能当作派发决定",
+  submit_hub_decision: "仅在 isError 或校验失败后重试，成功后不得再次调用",
+  mark_job_done: "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用",
+  request_human: "不得再调用 mark_job_done",
+  list_shared_assets: "不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取",
+  publish_shared_asset: "不得从 .deepsonar/shared 发布或覆盖不可变资产",
+};
+for (const [name, caution] of Object.entries(descriptionCautions)) {
+  const advertised = toolsReply?.result?.tools?.find((tool: { name?: string }) => tool.name === name);
+  if (!advertised || typeof advertised.description !== "string" || !advertised.description.includes(caution)) {
+    throw new Error(`MCP tools/list description missing caution for ${name}: ${caution}`);
+  }
+}
 for (const [name, schema] of Object.entries(ControlToolInputSchemasJson)) {
   // Claude Code / Anthropic skip tools whose inputSchema lacks type:object
   // or uses top-level anyOf/oneOf (MCP log: "top-level anyOf, which the Anthropic API does not accept").
