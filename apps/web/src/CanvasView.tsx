@@ -7,7 +7,6 @@ import {
   MarkerType,
   MiniMap,
   ReactFlow,
-  useNodesInitialized,
   useReactFlow,
   type Edge,
   type Node,
@@ -46,6 +45,8 @@ export { EDGE_STYLE } from "./edge-style";
 
 /** Avoid a main-thread ELK layout spike on large topology snapshots. */
 export const ELK_NODE_THRESHOLD = 200;
+const FULL_GRAPH_MIN_ZOOM = 0.05;
+const FOCUSED_GRAPH_MIN_ZOOM = 0.2;
 export const CANVAS_DELTA_POLL_MS = 3_000;
 
 type ExpandHandlers = {
@@ -67,7 +68,6 @@ function CanvasViewportController({
   focusNodeId?: string | null;
 }) {
   const reactFlow = useReactFlow();
-  const nodesInitialized = useNodesInitialized();
   const latestGenerationRef = useRef(generation);
   const fittedGenerationRef = useRef("");
   const fitNodeIds = useMemo(
@@ -85,29 +85,48 @@ function CanvasViewportController({
   }, [generation]);
 
   useEffect(() => {
-    const decision = consumeViewportFit(
-      fittedGenerationRef.current,
-      generation,
-      nodesInitialized,
-    );
-    if (!decision.shouldFit) return;
+    if (!generation || fittedGenerationRef.current === generation || nodes.length === 0) return;
     const requestGeneration = generation;
     const requestNodeIds = fitNodeIds;
-    const frame = window.requestAnimationFrame(() => {
+    const expected = new Map(nodes.map((node) => [node.id, node.position]));
+    let frame = 0;
+    let previousSignature = "";
+    let stableFrames = 0;
+    let attempts = 0;
+    const fitWhenMeasured = () => {
       if (latestGenerationRef.current !== requestGeneration) return;
+      const currentNodes = reactFlow.getNodes().filter((node) => expected.has(node.id));
+      const completeGeneration = currentNodes.length === nodes.length;
+      const signature = completeGeneration
+        ? currentNodes
+          .map((node) => `${node.id}:${node.position.x},${node.position.y}:${node.width ?? 0}x${node.height ?? 0}`)
+          .sort()
+          .join("|")
+        : "";
+      stableFrames = signature && signature === previousSignature ? stableFrames + 1 : 0;
+      previousSignature = signature;
+      attempts += 1;
+      if (!completeGeneration || stableFrames < 1) {
+        if (attempts < 120) frame = window.requestAnimationFrame(fitWhenMeasured);
+        return;
+      }
+      const decision = consumeViewportFit(fittedGenerationRef.current, generation, true);
+      if (!decision.shouldFit) return;
       fittedGenerationRef.current = decision.fittedGeneration;
       const requestNodes = requestNodeIds
-        ? nodes.filter((node) => requestNodeIds.includes(node.id))
-        : undefined;
+        ? currentNodes.filter((node) => requestNodeIds.includes(node.id))
+        : currentNodes;
       void reactFlow.fitView({
         nodes: requestNodes,
         padding: requestNodeIds ? 0.7 : 0.18,
+        minZoom: requestNodeIds ? FOCUSED_GRAPH_MIN_ZOOM : FULL_GRAPH_MIN_ZOOM,
         maxZoom: requestNodeIds ? 1.2 : 1.05,
         duration: 320,
       });
-    });
+    };
+    frame = window.requestAnimationFrame(fitWhenMeasured);
     return () => window.cancelAnimationFrame(frame);
-  }, [fitNodeIds, generation, nodes, nodesInitialized, reactFlow]);
+  }, [fitNodeIds, generation, nodes, reactFlow]);
 
   return null;
 }
@@ -845,9 +864,7 @@ export function CanvasView({
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
-        fitView
-        fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-        minZoom={0.2}
+        minZoom={FULL_GRAPH_MIN_ZOOM}
         proOptions={{ hideAttribution: false }}
       >
         <CanvasViewportController
