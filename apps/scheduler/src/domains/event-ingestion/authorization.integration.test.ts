@@ -68,7 +68,12 @@ if (!testDatabaseUrl) {
       switch (type) {
         case "progress": return { message: "late event" };
         case "fact": return { title: "late fact", description: "late description" };
-        case "finding": return { title: "late finding", severity: "low", suggest_verify: false };
+        case "finding": return {
+          title: "late finding",
+          summary: "late finding remains valid before authorization",
+          severity: "low",
+          suggest_verify: false,
+        };
         case "hub_decision": return { complete: { from: [], description: "late decision" } };
         case "human": return { reason: "late operator decision" };
         case "done": return { summary: "late completion" };

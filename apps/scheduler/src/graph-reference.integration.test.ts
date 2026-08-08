@@ -53,8 +53,15 @@ if (!testDatabaseUrl) {
 
     const decision = (from: unknown, complete = false) =>
       complete
-        ? { complete: { from, description: "完成" } }
-        : { intents: [{ from, role: "review", description: "复核", prompt: "执行复核" }] };
+        ? { complete: { from, description: "complete after validating graph references" } }
+        : {
+            intents: [{
+              from,
+              role: "review",
+              description: "review graph references",
+              prompt: "Review the referenced graph nodes and report durable evidence.",
+            }],
+          };
 
     const attempt = async (payload: unknown, label: string, expectedCode = "invalid_node_ref") => {
       const eventId = randomUUID();
@@ -96,8 +103,8 @@ if (!testDatabaseUrl) {
         totalBudgetIntents.push({
           from: totalBudgetRefs.slice(offset, offset + HUB_REFERENCE_LIMITS.perFrom),
           role: "review",
-          description: `intent-${offset}`,
-          prompt: "run",
+          description: `review reference batch ${offset}`,
+          prompt: "Review this reference batch and report durable evidence.",
         });
       }
       await attempt(
@@ -109,7 +116,7 @@ if (!testDatabaseUrl) {
         from: [rootId],
         role: index === 6 ? "role-that-is-not-enabled" : "review",
         description: `cap intent ${index}`,
-        prompt: "run enough detail",
+        prompt: "Review the graph references with enough detail to validate the role.",
       }));
       await attempt(
         { intents: beyondCapIntents },
@@ -144,7 +151,7 @@ if (!testDatabaseUrl) {
       const completePayload = {
         complete: {
           from: [factOne.id, factOne.id, factTwo.id],
-          description: "完成批量引用",
+          description: "complete the batched graph reference review",
         },
       };
       await sql`UPDATE jobs SET status = 'succeeded' WHERE parent_job_id = ${jobId}`;
@@ -205,8 +212,18 @@ if (!testDatabaseUrl) {
 
       const intentsPayload = {
         intents: [
-          { from: [factOne.id, factOne.id], role: "review", description: "意图一", prompt: "执行一" },
-          { from: [factTwo.id], role: "review", description: "意图二", prompt: "执行二" },
+          {
+            from: [factOne.id, factOne.id],
+            role: "review",
+            description: "review the first graph reference group",
+            prompt: "Review the first graph reference group and report durable evidence.",
+          },
+          {
+            from: [factTwo.id],
+            role: "review",
+            description: "review the second graph reference group",
+            prompt: "Review the second graph reference group and report durable evidence.",
+          },
         ],
       };
       await sql.begin(async (rawTx) => {
@@ -237,7 +254,7 @@ if (!testDatabaseUrl) {
           rawTx as unknown as typeof sql,
           jobId,
           "hub_decision",
-          { complete: { from: [], description: "空引用完成" } },
+          { complete: { from: [], description: "complete with an empty reference list" } },
           services,
         );
       });
