@@ -386,6 +386,7 @@ export interface WsTicket {
   ticket: string;
   expires_at: string;
   job_id: string;
+  purpose?: "stream" | "terminal";
 }
 
 export interface FindingDetail {
@@ -1670,7 +1671,8 @@ export const api = {
   /** 用户认证 */
   authStatus: () => get<AuthStatus>("/auth/status"),
   authMe: () => get<AuthMe>("/auth/me"),
-  createWsTicket: (jobId: string) => send<WsTicket>("POST", "/auth/ws-ticket", { job_id: jobId }),
+  createWsTicket: (jobId: string, purpose: "stream" | "terminal" = "stream") =>
+    send<WsTicket>("POST", "/auth/ws-ticket", { job_id: jobId, purpose }),
   login: (body: { username: string; password: string }) =>
     send<LoginResult>("POST", "/auth/login", body),
   bootstrap: (body: { username: string; password: string; display_name?: string }) =>

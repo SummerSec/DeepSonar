@@ -42,11 +42,26 @@ export interface RunHandle {
   sandboxId: string;
 }
 
+export interface TerminalOpenInput {
+  cols: number;
+  rows: number;
+}
+
+export interface SandboxTerminalSession {
+  id: string;
+  output: AsyncIterable<string>;
+  write(data: string): Promise<void>;
+  resize(cols: number, rows: number): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface SandboxRunner {
   provision(input: ProvisionInput): Promise<RunHandle>;
   destroy(handle: RunHandle): Promise<void>;
   /** Reaper 探测：控制通道是否存活（§3.3 lease 依据） */
   isAlive(handle: RunHandle): Promise<boolean>;
+  /** Optional, provider-backed PTY in the existing Job sandbox. */
+  openTerminal?(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession>;
 }
 
 /** Phase 0 骨架：不起真实沙箱，只走状态机 */
@@ -57,6 +72,9 @@ export class NoopRunner implements SandboxRunner {
   async destroy(_handle: RunHandle): Promise<void> {}
   async isAlive(_handle: RunHandle): Promise<boolean> {
     return true;
+  }
+  async openTerminal(): Promise<SandboxTerminalSession> {
+    throw new Error("TERMINAL_PROVIDER_UNSUPPORTED");
   }
 }
 

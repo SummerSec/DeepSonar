@@ -9,6 +9,7 @@ export interface AgentCliCapabilities {
   completionGate: boolean;
   sessionCapture: boolean;
   reasoningEffort: boolean;
+  interactiveTerminal: boolean;
 }
 
 export interface AdapterStartContext {
@@ -238,6 +239,7 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
     completionGate: false,
     sessionCapture: false,
     reasoningEffort: false,
+    interactiveTerminal: false,
     ...input,
   });
 }
@@ -245,7 +247,7 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.220",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, incrementalMessages: true, completionGate: true, sessionCapture: true, reasoningEffort: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, incrementalMessages: true, completionGate: true, sessionCapture: true, reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, mcpConfigPath, systemPromptPath }) => {
     let command = `claude -p --input-format stream-json --output-format stream-json --verbose --mcp-config ${shellQuote(mcpConfigPath)} --permission-mode bypassPermissions`;
@@ -278,7 +280,7 @@ function sandboxCodex(sandbox: Sandbox, context: AdapterStartContext, sessionId?
 const codex = Object.freeze<RuntimeAdapter>({
   id: "codex",
   version: "0.147.0",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, reasoningEffort: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxCodex(context.sandbox, context),
   resume: (context) => sandboxCodex(context.sandbox, context, context.sessionId),
@@ -289,7 +291,7 @@ const codex = Object.freeze<RuntimeAdapter>({
 const openCode = Object.freeze<RuntimeAdapter>({
   id: "open-code",
   version: "1.18.15",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, reasoningEffort: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
     let command = `opencode run --format json --dangerously-skip-permissions --pure`;

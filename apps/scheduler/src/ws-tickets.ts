@@ -16,11 +16,13 @@ export interface WsTicketActor {
 
 interface TicketRecord {
   jobId: string;
+  purpose: WsTicketPurpose;
   expiresAt: number;
   actor: WsTicketActor;
 }
 
 const tickets = new Map<string, TicketRecord>();
+export type WsTicketPurpose = "stream" | "terminal";
 
 function prune(now = Date.now()): void {
   for (const [ticket, record] of tickets) {
@@ -33,12 +35,13 @@ function prune(now = Date.now()): void {
   }
 }
 
-export function issueWsTicket(jobId: string, actor: Actor): { ticket: string; expires_at: string } {
+export function issueWsTicket(jobId: string, actor: Actor, purpose: WsTicketPurpose = "stream"): { ticket: string; expires_at: string } {
   const now = Date.now();
   prune(now);
   const ticket = `dws_${randomBytes(24).toString("base64url")}`;
   tickets.set(ticket, {
     jobId,
+    purpose,
     expiresAt: now + WS_TICKET_TTL_MS,
     actor: {
       type: actor.type,
@@ -53,12 +56,12 @@ export function issueWsTicket(jobId: string, actor: Actor): { ticket: string; ex
 }
 
 /** Consume means delete before returning: retrying the same browser URL fails. */
-export function consumeWsTicket(ticket: string, jobId: string): WsTicketActor | null {
+export function consumeWsTicket(ticket: string, jobId: string, purpose: WsTicketPurpose = "stream"): WsTicketActor | null {
   prune();
   if (!ticket || ticket.length > 256) return null;
   const record = tickets.get(ticket);
   tickets.delete(ticket);
-  if (!record || record.jobId !== jobId || record.expiresAt <= Date.now()) return null;
+  if (!record || record.jobId !== jobId || record.purpose !== purpose || record.expiresAt <= Date.now()) return null;
   return record.actor;
 }
 

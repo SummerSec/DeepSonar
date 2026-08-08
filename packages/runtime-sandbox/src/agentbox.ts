@@ -21,7 +21,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
 import { requireAgentCliRuntimeAdapter, type AgentCliRuntimeSnapshot } from "./runtime-adapters.js";
-import type { ProvisionInput, RunHandle, SandboxRunner } from "./index.js";
+import type { ProvisionInput, RunHandle, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 
 const execFileP = promisify(execFile);
 
@@ -146,6 +146,7 @@ if (process.platform === "win32") {
 
 /** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
+const terminalSessions = new Map<string, Set<SandboxTerminalSession>>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
 const GATEWAY_NETWORK = "deepsonar-sandbox-gateway";
 const GATEWAY_PROXY = "deepsonar-gateway-proxy";
@@ -620,6 +621,9 @@ export class AgentboxRunner implements SandboxRunner {
   }
 
   async destroy(handle: RunHandle): Promise<void> {
+    const sessions = terminalSessions.get(handle.sandboxId);
+    terminalSessions.delete(handle.sandboxId);
+    if (sessions) await Promise.allSettled([...sessions].map((session) => session.close()));
     const s = sandboxes.get(handle.sandboxId);
     sandboxes.delete(handle.sandboxId);
     await s?.delete().catch(() => {});
@@ -644,6 +648,62 @@ export class AgentboxRunner implements SandboxRunner {
     } catch {
       return false;
     }
+  }
+
+  async openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession> {
+    const sandbox = sandboxes.get(handle.sandboxId);
+    if (!sandbox) throw new Error("TERMINAL_SANDBOX_NOT_OWNED");
+    if (sandbox.provider !== "local-docker") throw new Error("TERMINAL_PROVIDER_UNSUPPORTED");
+    const cols = Math.max(20, Math.min(240, Math.trunc(input.cols)));
+    const rows = Math.max(5, Math.min(100, Math.trunc(input.rows)));
+    const process = await sandbox.runAsync("exec /bin/sh -l", {
+      cwd: "/workspace",
+      env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
+      pty: true,
+      timeoutMs: 0,
+    });
+    let closed = false;
+    const output = (async function* () {
+      for await (const event of process) {
+        if (event.type === "stdout" || event.type === "stderr") yield event.chunk ?? "";
+      }
+    })();
+    const session: SandboxTerminalSession = {
+      id: process.id,
+      output,
+      write: async (data) => {
+        if (closed || !process.write) throw new Error("TERMINAL_SESSION_CLOSED");
+        await process.write(data);
+      },
+      resize: async (nextCols, nextRows) => {
+        if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
+        const exec = (process.raw as { exec?: { resize?: (size: { w: number; h: number }) => Promise<void> } } | undefined)?.exec;
+        if (!exec?.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
+        await exec.resize({
+          w: Math.max(20, Math.min(240, Math.trunc(nextCols))),
+          h: Math.max(5, Math.min(100, Math.trunc(nextRows))),
+        });
+      },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        terminalSessions.get(handle.sandboxId)?.delete(session);
+        await process.kill().catch(() => undefined);
+      },
+    };
+    const sessions = terminalSessions.get(handle.sandboxId) ?? new Set<SandboxTerminalSession>();
+    if (sessions.size >= 4) {
+      await session.close();
+      throw new Error("TERMINAL_SESSION_LIMIT");
+    }
+    sessions.add(session);
+    terminalSessions.set(handle.sandboxId, sessions);
+    await session.resize(cols, rows);
+    void process.wait().catch(() => undefined).finally(() => {
+      closed = true;
+      terminalSessions.get(handle.sandboxId)?.delete(session);
+    });
+    return session;
   }
 
   /** 供 executor 取沙箱实例（上传种子文件 / 跑 agent / 读结果） */

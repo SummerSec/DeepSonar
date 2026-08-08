@@ -82,6 +82,7 @@ GET /schema.md
 GET /shared-assets/:id/content
 GET /skill-sources
 GET /skill-sources/:id
+GET /terminal-ws
 GET /tokens
 GET /users
 GET /ws

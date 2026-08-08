@@ -22,5 +22,10 @@ test("browser WS tickets are scoped and single use", () => {
   const consumed = consumeWsTicket(second.ticket, "job-1");
   assert.equal(consumed?.id, "user-1");
   assert.equal(consumeWsTicket(second.ticket, "job-1"), null);
+
+  const terminal = issueWsTicket("job-1", actor, "terminal");
+  assert.equal(consumeWsTicket(terminal.ticket, "job-1", "stream"), null);
+  const terminal2 = issueWsTicket("job-1", actor, "terminal");
+  assert.equal(consumeWsTicket(terminal2.ticket, "job-1", "terminal")?.id, "user-1");
   clearWsTicketsForTests();
 });

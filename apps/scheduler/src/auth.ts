@@ -206,6 +206,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /credentials/:id/models": "agents:write",
   "POST /credentials/models/preview": "agents:write",
   "GET /ws": "tasks:read",
+  "GET /terminal-ws": "jobs:control",
   "POST /projects/:id/exports": "exports:write",
   "GET /projects/:id/exports": "exports:read",
   "POST /platform/exports": "exports:write",
@@ -235,6 +236,7 @@ const EXEMPT = new Set([
   // Browser WebSocket upgrades cannot reliably carry an Authorization header;
   // the route consumes a short-lived one-use ticket in its handler instead.
   "/ws",
+  "/terminal-ws",
 ]);
 
 /** 前缀豁免：Model Gateway 用 Job Token 自鉴权，不走平台 Bearer */

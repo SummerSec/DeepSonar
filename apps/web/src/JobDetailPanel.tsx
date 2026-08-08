@@ -2,6 +2,7 @@ import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
+import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
@@ -88,6 +89,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [forceBusy, setForceBusy] = useState(false);
   const [forceMsg, setForceMsg] = useState<string | null>(null);
+  const [terminalAllowed, setTerminalAllowed] = useState(false);
 
   // 初次加载 + 运行中轮询：与调度器账本保持同步
   useEffect(() => {
@@ -109,6 +111,11 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     setEventTypeFilter("");
     setEventQuery("");
     api.credentials().then((list) => alive && setCredentials(list)).catch(() => {});
+    api.authMe().then((me) => {
+      if (!alive) return;
+      const scopes = me.actor?.scopes ?? [];
+      setTerminalAllowed(scopes.includes("admin") || scopes.includes("jobs:control"));
+    }).catch(() => alive && setTerminalAllowed(false));
 
     const loadCore = () =>
       api
@@ -357,7 +364,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
       aria-label="运行详情"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <aside className="theme-drawer flex h-full min-h-0 w-full max-w-[900px] flex-col border-l">
+      <aside className="theme-drawer flex h-full min-h-0 w-full max-w-[1320px] flex-col border-l">
         <header className="theme-drawer-header theme-divider flex shrink-0 flex-wrap items-start gap-3 border-b px-5 py-4">
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] uppercase tracking-[.18em] text-zinc-600">
@@ -639,7 +646,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           {/* 实时流常驻挂载：切换结果/事件 tab 只隐藏，不销毁 WS。 */}
           {detail && active && (
             <div className={`relative flex h-full min-h-0 flex-col overflow-hidden ${tab === "live" ? "" : "hidden"}`}>
-              <LiveStream jobId={jobId} active={tab === "live"} />
+              <LiveTerminalWorkspace jobId={jobId} terminalAllowed={terminalAllowed} />
             </div>
           )}
           {detail && !active && tab === "live" && (

@@ -40,13 +40,27 @@ export function registerAuthRoutes(app: FastifyInstance): void {
    * in seconds; long-lived API tokens never enter the WebSocket URL.
    */
   app.post("/auth/ws-ticket", async (req, reply) => {
-    const body = z.object({ job_id: z.string().uuid() }).parse(req.body ?? {});
+    const body = z.object({
+      job_id: z.string().uuid(),
+      purpose: z.enum(["stream", "terminal"]).default("stream"),
+    }).parse(req.body ?? {});
     const actor = req.actor;
     if (!actor) return reply.code(401).send({ error: "缺少认证主体", error_code: "AUTH_REQUIRED" });
     const [job] = await sql`SELECT id, project_id, status FROM jobs WHERE id = ${body.job_id}`;
     if (!job) return reply.code(404).send({ error: "job not found", error_code: "JOB_NOT_FOUND" });
     if (actor.projectId && actor.projectId !== job.project_id) {
       return reply.code(403).send({ error: "token 仅限项目 " + actor.projectId, error_code: "PROJECT_MISMATCH" });
+    }
+    if (body.purpose === "terminal" && !actor.scopes.includes("admin") && !actor.scopes.includes("jobs:control")) {
+      await audit(req, {
+        action: "terminal.ticket.denied",
+        projectId: String(job.project_id),
+        resourceType: "job",
+        resourceId: body.job_id,
+        result: "denied",
+        errorCode: "TERMINAL_PERMISSION_DENIED",
+      });
+      return reply.code(403).send({ error: "terminal permission denied", error_code: "TERMINAL_PERMISSION_DENIED" });
     }
     if (!STREAMABLE_JOB_STATUSES.has(String(job.status))) {
       return reply.code(409).send({
@@ -55,8 +69,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         status: job.status,
       });
     }
-    const ticket = issueWsTicket(body.job_id, actor);
-    return { ...ticket, job_id: body.job_id };
+    const ticket = issueWsTicket(body.job_id, actor, body.purpose);
+    return { ...ticket, job_id: body.job_id, purpose: body.purpose };
   });
 
   app.post("/auth/bootstrap", async (req, reply) => {
