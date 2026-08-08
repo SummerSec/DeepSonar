@@ -22,6 +22,7 @@ import { recoverCancelledDerivedJob } from "../job-control/recovery.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
+import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -562,7 +563,10 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       after: { canvas_id: canvasId, job_id: job.id, mode: "wipe_and_rerun" },
     });
     await sql`SELECT pg_notify('deepsonar_jobs', 'task_retry')`;
-    return reply.code(201).send(job);
+    return reply.code(201).send(projectJobProviderFields({
+      ...job,
+      agent_snapshot_json: projectJobSnapshot(job.agent_snapshot_json),
+    }));
   });
 
   /**

@@ -226,7 +226,9 @@ export function normalizeFindingProposal(
   proposal: EmitFindingPayload | FindingPayload,
   protocol: EffectiveFindingProtocol,
 ): NormalizedFindingProposal {
-  const { profile: _requestedProfile, scoring: _proposedScoring, ...rest } = proposal;
+  if (typeof proposal.title !== "string") throw new Error("finding title is required");
+  const { profile: _requestedProfile, scoring: _proposedScoring, ...restWithPayloadFile } = proposal;
+  const { payload_file: _payloadFile, ...rest } = restWithPayloadFile as typeof restWithPayloadFile & { payload_file?: unknown };
   const profile = selectFindingProfile(protocol, proposal.profile);
   if (proposal.scoring && !protocol.scoring.accepted_versions.includes(proposal.scoring.version)) {
     throw new Error(`CVSS version ${proposal.scoring.version} is not accepted by the effective protocol`);
@@ -236,6 +238,7 @@ export function normalizeFindingProposal(
   }
   return {
     ...rest,
+    title: proposal.title,
     suggest_verify: rest.suggest_verify ?? false,
     profile,
     ...(proposal.scoring ? { scoring: normalizeFindingScoring(profile, proposal.scoring) } : {}),

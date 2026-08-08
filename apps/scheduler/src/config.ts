@@ -126,10 +126,10 @@ export const config = {
 
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */
   gateway: {
-    /** 沙箱内可达的网关地址（容器→宿主；compose 内为服务名） */
-    sandboxUrl: str("DEEPSONAR_GATEWAY_SANDBOX_URL", "http://host.docker.internal:3100/gateway"),
-    /** 禁止出网 Worker 在 internal bridge 内访问的固定目标 sidecar URL。 */
-    restrictedSandboxUrl: str("DEEPSONAR_GATEWAY_RESTRICTED_URL", "http://deepsonar-gateway-proxy:3100/gateway"),
+    /** Endpoint injected into every real sandbox CLI configuration. */
+    sandboxUrl: str("DEEPSONAR_GATEWAY_SANDBOX_URL", "http://deepsonar-gateway-proxy:3100/gateway"),
+    /** URL used only by the managed proxy to reach Scheduler /gateway. */
+    proxyUpstreamUrl: str("DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL", "http://host.docker.internal:3100/gateway"),
     /** Job Token 默认请求上限 */
     maxRequests: int("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 500),
     /** Job Token 生命周期（秒），应 ≥ job timeout */

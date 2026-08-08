@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parse as parseToml } from "smol-toml";
 import {
   extractBaseUrlFromSettings,
   extractModelFromSettings,
@@ -9,7 +10,9 @@ import {
   legacySettingsConfig,
   materializeProviderSettings,
   normalizeProviderSettings,
+  providerSettingsForJobSnapshot,
   resolveEffectiveModel,
+  routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
 
 test("legacySettingsConfig builds Claude env dialect", () => {
@@ -161,4 +164,86 @@ test("extractBaseUrlFromSettings reads env and codex toml", () => {
     extractModelsFromSettings({ env: { ANTHROPIC_MODEL: "claude-sonnet-4-5" } }),
     ["claude-sonnet-4-5"],
   );
+});
+
+test("restricted Claude config replaces direct credentials with the Job Gateway", () => {
+  const files = materializeProviderSettings({
+    agentCli: "claude-code",
+    settingsConfig: { env: { ANTHROPIC_API_KEY: "long-lived", ANTHROPIC_BASE_URL: "https://provider.example" } },
+  });
+  const [routed] = routeMaterializedProviderFilesThroughGateway({
+    agentCli: "claude-code",
+    files,
+    gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway/",
+    jobToken: "deepsonarjob_12345678_test-token-value",
+  });
+  const settings = JSON.parse(routed!.content) as { env: Record<string, string> };
+  assert.equal(settings.env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, "deepsonarjob_12345678_test-token-value");
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, "http://deepsonar-gateway-proxy:3100/gateway");
+  assert.doesNotMatch(routed!.content, /long-lived|provider\.example/);
+});
+
+test("restricted Codex and OpenCode configs route through the same Job Gateway", () => {
+  const gatewayBaseUrl = "http://deepsonar-gateway-proxy:3100/gateway";
+  const jobToken = "deepsonarjob_12345678_test-token-value";
+  const codex = routeMaterializedProviderFilesThroughGateway({
+    agentCli: "codex",
+    files: materializeProviderSettings({
+      agentCli: "codex",
+      settingsConfig: legacySettingsConfig({ provider: "openai", secret: "long-lived", agentCli: "codex" }),
+    }),
+    gatewayBaseUrl,
+    jobToken,
+  });
+  const auth = JSON.parse(codex.find((item) => item.path.endsWith("auth.json"))!.content) as Record<string, string>;
+  const config = parseToml(codex.find((item) => item.path.endsWith("config.toml"))!.content) as Record<string, unknown>;
+  const providers = config.model_providers as Record<string, Record<string, unknown>>;
+  assert.equal(auth.OPENAI_API_KEY, jobToken);
+  assert.equal(providers.custom?.base_url, gatewayBaseUrl);
+
+  const openCode = routeMaterializedProviderFilesThroughGateway({
+    agentCli: "open-code",
+    files: materializeProviderSettings({
+      agentCli: "open-code",
+      settingsConfig: legacySettingsConfig({ provider: "openai", secret: "long-lived", agentCli: "open-code" }),
+    }),
+    gatewayBaseUrl,
+    jobToken,
+  });
+  const openCodeConfig = JSON.parse(openCode[0]!.content) as {
+    provider: { deepsonar: { options: Record<string, string> } };
+  };
+  assert.deepEqual(openCodeConfig.provider.deepsonar.options, { apiKey: jobToken, baseURL: gatewayBaseUrl });
+  assert.doesNotMatch(JSON.stringify({ codex, openCode }), /long-lived|api\.openai\.com/);
+});
+
+test("restricted routing fails closed when the frozen CLI file is missing", () => {
+  assert.throws(() => routeMaterializedProviderFilesThroughGateway({
+    agentCli: "claude-code",
+    files: [],
+    gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway",
+    jobToken: "deepsonarjob_12345678_test-token-value",
+  }), /缺少冻结/);
+});
+
+test("Job snapshot Provider settings retain routing/model data but no long-lived secrets", () => {
+  const snapshot = providerSettingsForJobSnapshot({
+    env: {
+      ANTHROPIC_MODEL: "claude-sonnet-4-5",
+      ANTHROPIC_BASE_URL: "https://provider.example",
+      ANTHROPIC_AUTH_TOKEN: "long-lived",
+    },
+    nested: { apiKey: "nested-secret", token: "plain-token", key: "plain-key", timeout: 30 },
+    config: 'api_key = "toml-secret"\nmodel = "gpt-5"\n',
+  });
+  assert.deepEqual(snapshot, {
+    env: {
+      ANTHROPIC_MODEL: "claude-sonnet-4-5",
+      ANTHROPIC_BASE_URL: "https://provider.example",
+    },
+    nested: { timeout: 30 },
+    config: 'model = "gpt-5"\n\n',
+  });
+  assert.doesNotMatch(JSON.stringify(snapshot), /long-lived|nested-secret|plain-token|plain-key|toml-secret/);
 });

@@ -77,7 +77,10 @@ export function graphProjectionMarkers(
 }
 
 export interface FindingIndexInput {
+  /** Canonical canvas node UUID used by Hub `from` references. */
   id: string;
+  /** Database Finding UUID, retained as a lookup identity when it differs. */
+  finding_id?: string | null;
   title?: string | null;
   severity?: string | null;
   verify_status?: string | null;
@@ -98,6 +101,7 @@ export function serializeFindingStatusIndex(
     ...findings.map((finding) =>
       row({
         id: finding.id,
+        ...(finding.finding_id && finding.finding_id !== finding.id ? { finding_id: finding.finding_id } : {}),
         title: short(finding.title, 56),
         severity: finding.severity,
         verify_status: finding.verify_status,
@@ -226,7 +230,10 @@ export async function buildGraphSnapshot(
       findingRows.map((finding) => {
         const summary = verificationSummaries.get(String(finding.id)) ?? {};
         return {
-          id: String(finding.id),
+          // Hub references are canvas-node identities. A finding row can have
+          // a distinct database UUID, so never expose that UUID as `id` here.
+          id: String(finding.node_id ?? finding.id),
+          finding_id: String(finding.id),
           title: (finding.title ?? findingByNode.get(String(finding.node_id))?.title) as string | null,
           severity: finding.severity as string | null,
           verify_status: finding.verify_status as string | null,
@@ -575,15 +582,18 @@ export function parseHubDecisionPayload(
       throw unknownControlField(issue.path.length > 0 ? issue.path.join(".") : `hub_decision.${keys}`);
     }
     throw invalidControlPayload(
-      "Hub 决策必须且只能提供 complete 或 intents 之一，且每个字段都必须完整。",
+      "Hub 决策必须且只能提供 complete、intents 或 payload_file 之一，且每个字段都必须完整（payload_file 须在宿主展开后变为 complete/intents）。",
       issue?.path.join(".") || "hub_decision",
     );
   }
 
-  const decision: HubDecision = "complete" in parsed.data
-    ? { complete: parsed.data.complete }
+  // HubDecisionPayload is a single object with optional complete|intents (xor via superRefine).
+  // Do not use `"complete" in data` — optional keys may be present as undefined.
+  const data = parsed.data;
+  const decision: HubDecision = data.complete
+    ? { complete: data.complete }
     : {
-        intents: parsed.data.intents.map((intent) => ({
+        intents: (data.intents ?? []).map((intent) => ({
           ...intent,
           role: intent.role.trim(),
           description: intent.description.trim(),

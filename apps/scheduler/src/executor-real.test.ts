@@ -10,7 +10,7 @@ import {
   reconstructAgentRunError,
   runtimeCredentialProviderError,
   semanticToolEventsFor,
-  usesDirectProviderConfig,
+  hasMaterializedProviderConfig,
 } from "./executor-real.js";
 import { expandModules } from "./skill-sources.js";
 
@@ -54,12 +54,12 @@ test("ControlEventEnvelope rejects Scheduler-owned fact and Finding fields", () 
   assert.equal(ControlEventEnvelope.safeParse({
     ...base,
     type: "fact",
-    payload: { title: "事实", description: "证据" },
+    payload: { title: "事实", description: "证据描述已达到平台要求的最小长度" },
   }).success, true);
   assert.equal(ControlEventEnvelope.safeParse({
     ...base,
     type: "finding",
-    payload: { title: "Finding", severity: "high" },
+    payload: { title: "Finding title", severity: "high", summary: "evidence summary with enough durable context" },
   }).success, true);
 });
 
@@ -181,7 +181,7 @@ test("real fact ingress forwards normalized verification to Scheduler convergenc
 test("real fact ingress preserves ordinary fact behavior and outer intent association", async () => {
   const accepted: EventEnvelope[] = [];
   await ingestFactSemanticEvent(
-    factEvent({ title: "  Discovery  ", description: "  A new fact.  " }),
+    factEvent({ title: "  Discovery  ", description: "  A new fact with enough evidence context.  " }),
     intentNodeId,
     async (event) => {
       accepted.push(event);
@@ -191,7 +191,7 @@ test("real fact ingress preserves ordinary fact behavior and outer intent associ
   assert.deepEqual(accepted[0]?.payload, {
     intent_node_id: intentNodeId,
     title: "Discovery",
-    description: "A new fact.",
+    description: "A new fact with enough evidence context.",
   });
 });
 
@@ -237,10 +237,10 @@ test("runtime rejects stale or incompatible credential providers", () => {
   );
 });
 
-test("runtime keeps full provider settings in direct-config mode", () => {
-  assert.equal(usesDirectProviderConfig({ env: { ANTHROPIC_API_KEY: "provider-key" } }), true);
-  assert.equal(usesDirectProviderConfig({}), false);
-  assert.equal(usesDirectProviderConfig(null), false);
+test("runtime recognizes materialized Provider settings for Gateway routing", () => {
+  assert.equal(hasMaterializedProviderConfig({ env: { ANTHROPIC_MODEL: "model-id" } }), true);
+  assert.equal(hasMaterializedProviderConfig({}), false);
+  assert.equal(hasMaterializedProviderConfig(null), false);
 });
 
 test("semantic tool capture only enables this Job's authorized tools", () => {

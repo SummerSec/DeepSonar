@@ -18,6 +18,7 @@ import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
+import { ensureRuntimeImageAvailable } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
@@ -552,15 +553,14 @@ async function runJob(jobId: string) {
     if (typeof networkPolicy.allow_egress !== "boolean") {
       throw new Error(`job ${jobId} 的任务画布缺少冻结的 network_policy.allow_egress`);
     }
-    const allowEgress =
-      useReal &&
-      job.type !== "hub_reason" &&
-      networkPolicy.allow_egress;
+    // Hub 与 Worker 共用画布冻结的 allow_egress（不再对 hub_reason 强制禁出网）。
+    const allowEgress = useReal && networkPolicy.allow_egress;
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
     const runtimeImage = snapshot.runtime_image?.image_ref;
     if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
     if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
+    if (useReal) await ensureRuntimeImageAvailable(runtimeImage);
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {
       const files = [];
@@ -586,7 +586,7 @@ async function runJob(jobId: string) {
         image: runtimeImage,
         env: useReal ? { DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0" } : undefined,
         network: useReal ? (allowEgress ? "egress" : "restricted") : "none",
-        gatewayUpstreamUrl: useReal && !allowEgress ? config.gateway.sandboxUrl : undefined,
+        gatewayUpstreamUrl: useReal ? config.gateway.proxyUpstreamUrl : undefined,
         expectedContract: snapshot.runtime_image.contract_version,
         expectedToolsManifestSha256: snapshot.runtime_image.tools_manifest_sha256,
         sharedAssetsMount: sharedAssetsVolumeName ? { volumeName: sharedAssetsVolumeName } : undefined,

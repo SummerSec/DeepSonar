@@ -88,10 +88,15 @@ export function unknownControlField(path: string): ControlInputError {
   );
 }
 
-export function invalidRole(role: unknown, path = "role"): ControlInputError {
+export function invalidRole(role: unknown, path = "role", allowed?: readonly string[]): ControlInputError {
+  // Shape only — never echo the untrusted role token (may be secret-like or prompt injection).
+  const allowHint =
+    allowed && allowed.length > 0
+      ? ` 允许的 name：${allowed.join(", ")}。`
+      : " 请使用 list_available_roles 返回的 name。";
   return new ControlInputError(
     CONTROL_INPUT_ERROR_CODES.invalidRole,
-    `Hub 角色必须来自本轮 list_available_roles，字段 ${path} 收到类型 ${inputShape(role)}，请使用返回的名称。`,
+    `Hub 角色必须来自本轮 list_available_roles，字段 ${path} 收到类型 ${inputShape(role)}。${allowHint}`,
     path,
   );
 }

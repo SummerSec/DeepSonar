@@ -72,6 +72,8 @@ export {
   runRealAgent,
   assertSharedAssetsContainerMount,
   assertSharedAssetsVolumeOwnership,
+  isDeepsonarGatewayNetwork,
+  isDeepsonarRestrictedNetwork,
   SHARED_ASSETS_MOUNT_PATH,
   SHARED_ASSETS_JOB_LABEL,
   SHARED_ASSETS_VOLUME_LABEL,

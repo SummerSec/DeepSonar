@@ -418,7 +418,7 @@ Job 事件仍必须经过本摄入硬门。
 - Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
 - 已准入的不可变运行镜像快照：产品/版本 ID、`name@sha256:digest`、工具清单哈希和准入扫描 ID
 
-Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结。Hub 不访问目标网络。
+Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结，Hub 与 Worker 共用。该开关只控制目标网络能力；模型通道始终经 Scheduler Model Gateway 和 Scheduler-owned gateway proxy。允许出网时沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，proxy 同时加入两网但只转发 `/gateway`。
 
 **事件通道**：事件不经过沙箱网络，经 agentbox-sdk 控制通道回传调度器侧：
 
@@ -432,7 +432,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - Claude CLI 的 `HOME` 与 `CLAUDE_CONFIG_DIR` 固定到 `/workspace/.deepsonar/` 下的 Job 专属可写目录，不信任镜像继承的 `/root`；原始 Session 归档复用同一环境，读回内存后立即清理，随后再销毁一次性沙箱
 - 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
 - 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
-- 沙箱内不注入调度器数据库或 API 凭据；Provider Credential 只换成短期 Job Token
+- 沙箱内不注入调度器数据库、平台 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期 Job token，终态随沙箱销毁
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
 
 ### 8.1 Agent 配置体系（RoleConfig）
@@ -451,7 +451,7 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 `target_json`。`resolveFindingProtocol` 按任务 > 项目 > 全局覆盖（数组按层替换并去重），生成
 `EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
 
-长期密钥不进入数据库明文字段、Job 快照或工作区文件。RoleConfig 的 `env_vars` 只能保存非敏感值；`env_keys` 经过服务端白名单；Credential 运行时换成短期 Job Token。
+Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
 
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
@@ -553,7 +553,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 | 单项目并发 | 1～2（`global_settings` 可调；项目不能放宽） |
 | 默认超时 | audit 30–60min；verify 15–30min |
 | Lease TTL | 120s，心跳 30s |
-| 网络 | 项目默认 + 任务覆盖只得到一个 `allow_egress` 布尔值；Hub 不出网，禁止出网 Worker 使用 internal bridge，模型请求只能经固定目标 Gateway sidecar 到 `/gateway` |
+| 网络 | 项目默认 + 任务覆盖只得到一个 `allow_egress` 布尔值（Hub 与 Worker 共用）；模型请求始终经 `/gateway` 和固定 proxy，允许出网使用 `deepsonar-sandbox-gateway` NAT bridge，禁止出网使用 internal bridge + proxy |
 | 工作区 | 每个 Job 使用全新可写 `/workspace`；Worker 自行决定是否获取代码或其他材料 |
 | 密钥 | 仅调度器注入，不进画布正文 |
 | 审计日志 | 所有语义 event 落库；原始流进冷存储；均可导出 |

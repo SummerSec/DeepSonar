@@ -6,10 +6,9 @@ services:
     environment:
       AGENT_MODE: real
       BLOB_DIR: /app/data/blobs
-      # 沙箱经宿主机回连网关；同 compose 网络可改为 http://scheduler:3100/gateway
-      DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://host.docker.internal:3100/gateway}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # Sandboxes call the managed proxy; the proxy reaches Scheduler on the shared bridge.
+      DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://deepsonar-gateway-proxy:3100/gateway}
+      DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: ${DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http://scheduler:3100/gateway}
     volumes:
       - blob_data:/app/data
       - ./master.key:/run/secrets/deepsonar_master_key:ro

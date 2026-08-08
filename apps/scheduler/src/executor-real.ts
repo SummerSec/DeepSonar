@@ -3,8 +3,8 @@ import { normalizeRuntimeErrorDetails, runRealAgent } from "@deepsonar/runtime-s
 import {
   DonePayload,
   ControlEventEnvelope,
-  EmitFactPayload,
-  EmitFindingPayload,
+  EmitFactDirectPayload,
+  EmitFindingDirectPayload,
   EffectiveFindingProtocol,
   EventEnvelope,
   FindingProtocolConfig,
@@ -16,6 +16,8 @@ import {
   allowedPlatformTools,
   type PlatformToolName,
   type VerifyVerdict,
+  isSafeWorkspacePayloadFile,
+  WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import {
@@ -45,7 +47,10 @@ import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
 import { inc } from "./metrics.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
-import { hasProviderSettingsConfig } from "./provider-settings.js";
+import {
+  hasProviderSettingsConfig,
+  routeMaterializedProviderFilesThroughGateway,
+} from "./provider-settings.js";
 import {
   buildJobSharedAssetCatalog,
   createSharedAsset,
@@ -158,7 +163,7 @@ export function runtimeCredentialProviderError(
   return validateCredentialCompatibility(agentCli, currentProvider);
 }
 
-export function usesDirectProviderConfig(settingsConfig: unknown): boolean {
+export function hasMaterializedProviderConfig(settingsConfig: unknown): boolean {
   return hasProviderSettingsConfig(settingsConfig);
 }
 
@@ -210,16 +215,15 @@ export async function ingestFactSemanticEvent(
   intentNodeId: string | null,
   ingest: (event: EventEnvelope) => Promise<void>,
 ): Promise<void> {
-  let fact: ReturnType<typeof EmitFactPayload.parse>;
+  let fact: ReturnType<typeof EmitFactDirectPayload.parse>;
   try {
-    fact = EmitFactPayload.parse(event.payload);
+    fact = EmitFactDirectPayload.parse(event.payload);
   } catch {
     throw invalidToolPayload("emit_fact", "emit_fact 参数非法");
   }
 
   const title = fact.title.trim();
   const description = fact.description.trim();
-  if (!title || !description) throw invalidToolPayload("emit_fact", "emit_fact 参数不能为空");
 
   await ingest(EventEnvelope.parse({
     ...event,
@@ -243,19 +247,19 @@ function resultContract(
 ): string {
   const enabled = new Set(toolNames);
   if (isHub) {
-    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete 或 intents 二选一，from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果；随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
+    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次返回 isError / 校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
   }
   if (isVerify) {
     return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human（兼容 false_positive→rework）。confirmed 仍须有独立 review + 完整 test 证据，否则调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
   }
   if (isRole) {
     return enabled.has("emit_fact")
-      ? `每得到一个新的、可验证事实就调用 emit_fact，可调用多次；执行结束后调用 mark_job_done。不要等到最后才批量上报事实；只在文本里列出事实或摘要不等于提交，平台只认工具调用。`
+      ? `每得到一个新的、可验证事实就调用 emit_fact，可调用多次；直接提交时 title≥2、description≥16，长内容或收到 isError/截断后先 Write 完整 JSON 到 /workspace，再只传 payload_file，禁止用故意缩短的事实重试。执行结束后调用 mark_job_done。不要等到最后才批量上报事实；只在文本里列出事实或摘要不等于提交，平台只认工具调用。`
       : `本 Job 已关闭 emit_fact；不要尝试提交事实。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。只在文本里写摘要不等于提交，平台只认工具调用。`;
   }
   if (isAudit) {
     return enabled.has("emit_finding")
-      ? `每确认一个有证据的安全问题就调用 emit_finding，可调用多次；执行结束后调用 mark_job_done。不要等到最后才批量上报 Finding；只在文本里列出 Finding 或摘要不等于提交，平台只认工具调用。`
+      ? `每确认一个有证据的安全问题就调用 emit_finding，可调用多次；直接提交时 title≥8、summary≥32，长内容或收到 isError/截断后先 Write 完整 JSON 到 /workspace，再只传 payload_file，禁止用故意缩短的 Finding 重试。执行结束后调用 mark_job_done。不要等到最后才批量上报 Finding；只在文本里列出 Finding 或摘要不等于提交，平台只认工具调用。`
       : `本 Job 已关闭 emit_finding；不要尝试提交 Finding。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。只在文本里写摘要不等于提交，平台只认工具调用。`;
   }
   return `执行结束后调用 mark_job_done 提交最终摘要。只在文本里写摘要不等于提交，平台只认工具调用。`;
@@ -424,13 +428,16 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   if (typeof networkPolicy.allow_egress !== "boolean") {
     throw new Error(`job ${jobId} 的画布缺少冻结的 network_policy.allow_egress`);
   }
-  // Hub 只读图和下发 prompt，不替 Worker 访问目标；只有 Worker 才继承任务冻结的出网开关。
-  const allowEgress = !isHub && networkPolicy.allow_egress;
+  // Hub 与 Worker 一样继承画布冻结的 allow_egress；该开关只控制目标网络。
+  // 模型通道始终经 Gateway，沙箱不会直连 Credential 中的 Provider endpoint。
+  const allowEgress = networkPolicy.allow_egress;
 
-  // 有 settings_config_json 时，冻结的 CLI 配置文件是 Provider 连接真相；
-  // 没有配置文件的旧 Credential 才通过 Job Gateway 环境变量兼容运行。
+  // settings_config_json 只保存无密钥的 CLI 结构；所有 Credential 模型请求
+  // 都经 Scheduler Gateway，沙箱只持当前 Job token。
   const env: Record<string, string> = { ...snapshot.env_vars };
-  const directProviderConfig = usesDirectProviderConfig(snapshot.settings_config_json);
+  const materializedProviderConfig = hasMaterializedProviderConfig(snapshot.settings_config_json);
+  let runtimeConfigFiles = snapshot.config_files.map((item) => ({ ...item }));
+  let runtimeGatewayRouted = false;
   for (const key of snapshot.env_keys) {
     if (!config.runtime.isEnvKeyAllowed(key)) {
       console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
@@ -460,16 +467,25 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       allowedModels: model ? [model] : credentialModels,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
     });
-    if (!directProviderConfig) {
+    if (materializedProviderConfig) {
+      runtimeConfigFiles = routeMaterializedProviderFilesThroughGateway({
+        agentCli: provider,
+        files: runtimeConfigFiles,
+        gatewayBaseUrl: config.gateway.sandboxUrl,
+        jobToken: jt.plaintext,
+      });
+      for (const key of mapping.secretKeys) delete env[key];
+      if (mapping.baseUrlKey) delete env[mapping.baseUrlKey];
+      runtimeGatewayRouted = true;
+    }
+    if (!materializedProviderConfig) {
       for (const k of mapping.secretKeys) env[k] = jt.plaintext;
       if (mapping.baseUrlKey) {
-        env[mapping.baseUrlKey] = allowEgress
-          ? config.gateway.sandboxUrl
-          : config.gateway.restrictedSandboxUrl;
+        env[mapping.baseUrlKey] = config.gateway.sandboxUrl;
       }
     }
     if (provider === "claude-code") {
-      const gatewayBase = allowEgress ? config.gateway.sandboxUrl : config.gateway.restrictedSandboxUrl;
+      const gatewayBase = config.gateway.sandboxUrl;
       env.CLAUDE_CODE_ENABLE_TELEMETRY = "1";
       env.OTEL_METRICS_EXPORTER = "otlp";
       env.OTEL_LOGS_EXPORTER = "otlp";
@@ -486,6 +502,9 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       ].join(",");
     }
     void sql`UPDATE credentials SET last_used_at = now() WHERE id = ${cred.id as string}`.catch(() => {});
+  }
+  if (materializedProviderConfig && !runtimeGatewayRouted) {
+    throw new Error("冻结的 Provider 配置无法绑定 Job Gateway");
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
@@ -529,8 +548,8 @@ ${graph.yaml}
 
   约束：最多 ${rules.maxIntentsPerDecision} 个意图；不要重复开放或已完成意图；from 只能引用当前 YAML 中 root_id/fact/finding 对应的 UUID 值（不要填写字段名 root_id、别名或占位符）。
 role 只能原样使用 list_available_roles 本轮返回的 name；不得使用记忆、固定清单或猜测的角色，不得派发 system/hub 角色。
-任务出网策略：${networkPolicy.allow_egress ? "Worker 允许访问外部网络" : "Worker 禁止访问模型网关之外的网络"}。
-Hub 不下载材料。Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
+任务出网策略：${networkPolicy.allow_egress ? "本任务允许访问外部网络（Hub 与 Worker 相同）" : "本任务禁止访问模型网关之外的网络（Hub 与 Worker 相同）"}。
+Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
     const trigger = payload.trigger as {
       kind?: string;
       finding_id?: string;
@@ -737,7 +756,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     commands: { names: componentNames(snapshot.commands), count: snapshot.commands.length, sha256: jsonHash(snapshot.commands) },
     mcps: { names: componentNames(mcps), count: mcps.length, sha256: jsonHash(mcps) },
     subagents: { names: componentNames(snapshot.subagents), count: snapshot.subagents.length, sha256: jsonHash(snapshot.subagents) },
-    provider_files: snapshot.config_files.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
+    provider_files: runtimeConfigFiles.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
+    provider_gateway_routed: runtimeGatewayRouted,
     system_tools: controlToolNames,
     disabled_system_tools: disabledControlToolNames,
     system_tool_guide: toolGuide,
@@ -782,7 +802,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       assets: (snapshot.shared_assets ?? []) as unknown as Array<Record<string, unknown>>,
     }), null, 2)}\n`;
   }
-  for (const file of snapshot.config_files) {
+  for (const file of runtimeConfigFiles) {
     workspaceFiles[`/workspace/${file.path}`] = file.content;
   }
 
@@ -845,6 +865,38 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     human: { eventId: string; reason: string } | null;
   } = { done: null, hub: null, human: null };
 
+  async function expandWorkspacePayloadFile(
+    tool: "emit_fact" | "emit_finding" | "submit_hub_decision",
+    value: unknown,
+    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
+  ): Promise<unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const payload = value as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(payload, "payload_file")) return value;
+    if (Object.keys(payload).length !== 1 || !isSafeWorkspacePayloadFile(payload.payload_file)) {
+      throw invalidToolPayload(tool, "payload_file 必须是唯一字段，并且是 /workspace 下的安全相对路径", "payload_file");
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await runtimeControl.readWorkspaceFile(`/workspace/${payload.payload_file}`, WORKSPACE_PAYLOAD_FILE_MAX_BYTES);
+    } catch {
+      throw invalidToolPayload(tool, "无法读取 payload_file，文件必须存在于 /workspace 且不超过 512KiB", "payload_file");
+    }
+    let expanded: unknown;
+    try {
+      expanded = JSON.parse(bytes.toString("utf8"));
+    } catch {
+      throw invalidToolPayload(tool, "payload_file 不是合法 JSON", "payload_file");
+    }
+    if (!expanded || typeof expanded !== "object" || Array.isArray(expanded)) {
+      throw invalidToolPayload(tool, "payload_file 根必须是对象", "payload_file");
+    }
+    if (Object.prototype.hasOwnProperty.call(expanded, "payload_file")) {
+      throw invalidToolPayload(tool, "payload_file 内容不得再嵌套 payload_file", "payload_file");
+    }
+    return expanded;
+  }
+
   const onSemanticEvent = async (
     raw: Record<string, unknown>,
     runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
@@ -855,9 +907,15 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       // retain the stable invalid_node_ref contract instead of becoming a
       // generic Zod error.  ControlEventEnvelope then enforces the external
       // no-Scheduler-owned-fields boundary for every tool.
-      const payload = raw.type === "hub_decision"
-        ? parseHubDecisionPayload(raw.payload, graph?.referableIds)
-        : raw.payload;
+      let payload = raw.payload;
+      if (raw.type === "fact" || raw.type === "finding" || raw.type === "hub_decision") {
+        payload = await expandWorkspacePayloadFile(
+          raw.type === "fact" ? "emit_fact" : raw.type === "finding" ? "emit_finding" : "submit_hub_decision",
+          payload,
+          runtimeControl,
+        );
+      }
+      if (raw.type === "hub_decision") payload = parseHubDecisionPayload(payload, graph?.referableIds);
       event = ControlEventEnvelope.parse({ ...raw, payload });
     } catch (error) {
       if (error instanceof ControlInputError) throw error;
@@ -932,10 +990,23 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       const decision = event.payload;
       const intents = "intents" in decision ? decision.intents : undefined;
       if (intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
-        const invalid = intents.find((intent) => !availableHubRoleNames.has(intent.role));
-        throw invalidRole(invalid?.role);
+        const invalidIndex = intents.findIndex((intent) => !availableHubRoleNames.has(intent.role));
+        const invalid = invalidIndex >= 0 ? intents[invalidIndex] : undefined;
+        throw invalidRole(
+          invalid?.role,
+          invalidIndex >= 0 ? `intents.${invalidIndex}.role` : "role",
+          [...availableHubRoleNames],
+        );
       }
-      if (semanticState.hub) throw toolBoundaryError("duplicateToolCall", "submit_hub_decision 每个 Job 只能调用一次");
+      // Only a successful acceptance locks the slot. Failed validation throws
+      // before this assignment, so the Agent may call submit_hub_decision again.
+      // A second call after success is rejected (no last-write-wins overwrite).
+      if (semanticState.hub) {
+        throw toolBoundaryError(
+          "duplicateToolCall",
+          "submit_hub_decision 已成功接受一次；每个 Job 成功提交后只能一次。仅当上一次返回 isError / 校验失败时才可重试，不要在成功后为“补全参数”再次调用。",
+        );
+      }
       semanticState.hub = { eventId, payload: event.payload };
       return;
     }
@@ -1011,7 +1082,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       // 协议完成门禁：mark_job_done 未到时由驱动层催促同一会话补齐（最多 3 次）
       completionGate: () => Boolean(semanticState.done),
       nudgeMessage: isHub
-        ? "你还没有通过平台工具提交本轮决策，只输出文本不算完成。请立即调用 submit_hub_decision（complete 或 intents 二选一），然后调用 mark_job_done 提交本轮摘要。"
+        ? "你还没有通过平台工具提交本轮决策，只输出文本不算完成。请立即调用 submit_hub_decision（complete、intents 或 payload_file 三选一），然后调用 mark_job_done 提交本轮摘要。"
         : isVerify
           ? "你还没有通过平台工具提交最终结论，只输出文本不算完成。请立即调用 mark_job_done，带上 summary 和 verdict（confirmed/rework/needs_human）。"
           : "你还没有通过平台工具提交最终结果，只输出文本不算完成。请通过 emit_fact/emit_finding 提交发现（如有），然后调用 mark_job_done 提交最终摘要。",
@@ -1032,7 +1103,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         if (type === "tool.call.started") {
           const toolName = String(e.toolName ?? "tool");
           const action = actionOf(toolName, e.input);
-          publishStream(jobId, { type, toolName, action }, evidenceAttemptId, evidenceSeq);
+          publishStream(jobId, {
+            type,
+            toolName,
+            action,
+            callId: typeof e.callId === "string" ? e.callId : undefined,
+            input: e.input,
+          }, evidenceAttemptId, evidenceSeq);
           const now = Date.now();
           if (now - lastActionPush > 1500) {
             lastActionPush = now;
@@ -1041,7 +1118,15 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
               WHERE job_id = ${jobId} AND node_type = 'job'`.catch(() => {});
           }
         } else if (type === "tool.call.completed") {
-          publishStream(jobId, { type, toolName: e.toolName, callId: e.callId }, evidenceAttemptId, evidenceSeq);
+          publishStream(jobId, {
+            type,
+            toolName: e.toolName,
+            callId: e.callId,
+            isError: e.isError === true,
+            result: e.result,
+            error: e.error,
+            exit: e.exit,
+          }, evidenceAttemptId, evidenceSeq);
         } else if (type === "text.delta" || type === "reasoning.delta") {
           publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) }, evidenceAttemptId, evidenceSeq);
         } else if (type.startsWith("run.") || type.startsWith("message.")) {
@@ -1086,8 +1171,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     if (!decision) {
       throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
     } else if (decision.intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
-      const invalid = decision.intents.find((intent) => !availableHubRoleNames.has(intent.role));
-      throw invalidRole(invalid?.role);
+      const invalidIndex = decision.intents.findIndex((intent) => !availableHubRoleNames.has(intent.role));
+      const invalid = invalidIndex >= 0 ? decision.intents[invalidIndex] : undefined;
+      throw invalidRole(
+        invalid?.role,
+        invalidIndex >= 0 ? `intents.${invalidIndex}.role` : "role",
+        [...availableHubRoleNames],
+      );
     } else if (decision.complete) {
       await ingestSemanticEventObserved(jobId, { v: 1, event_id: semanticState.hub!.eventId, type: "hub_decision", payload: { complete: decision.complete } });
       hubNote = `（结论：${decision.complete.description.slice(0, 80)}）`;

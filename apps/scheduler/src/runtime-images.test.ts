@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createServerOwnedRuntimeImageRegistryPolicy,
+  ensureRuntimeImageAvailable,
   hostRuntimePlatform,
   legacyProjectedRegistryDigests,
   parseOciDigestRef,
@@ -343,4 +344,58 @@ test("unknown schema and metadata/channel confusion fail closed", () => {
   assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v3", images: [] }), /schema/i);
   assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v2", schema_version: 1, images: [] }), /disagree/i);
   assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v1", source: "github", images: [] }), /source|channel/i);
+});
+
+test("本地已有准确 digest 时不拉取镜像", async () => {
+  const imageRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  let pulls = 0;
+  await ensureRuntimeImageAvailable(imageRef, {
+    inspect: async () => ({ exists: true, image_id: DIGEST }),
+    pull: async () => { pulls += 1; },
+  });
+  assert.equal(pulls, 0);
+});
+
+test("本地缺失时只拉取冻结的 digest 引用并复检", async () => {
+  const imageRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  let inspectCount = 0;
+  const pulled: string[] = [];
+  await ensureRuntimeImageAvailable(imageRef, {
+    inspect: async () => (++inspectCount === 1 ? { exists: false } : { exists: true, repo_digests: [imageRef] }),
+    pull: async (ref) => { pulled.push(ref); },
+  });
+  assert.deepEqual(pulled, [imageRef]);
+  assert.equal(inspectCount, 2);
+});
+
+test("同一 digest 的并发确保请求共用一次拉取", async () => {
+  const imageRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  let pulls = 0;
+  let releasePull!: () => void;
+  const pullBlocked = new Promise<void>((resolve) => { releasePull = resolve; });
+  const options = {
+    inspect: async () => ({ exists: false }),
+    pull: async () => { pulls += 1; await pullBlocked; },
+  };
+  const first = ensureRuntimeImageAvailable(imageRef, options);
+  const second = ensureRuntimeImageAvailable(imageRef, options);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(pulls, 1);
+  releasePull();
+  await assert.rejects(Promise.all([first, second]), /不可用/);
+});
+
+test("拉取失败返回脱敏错误", async () => {
+  const imageRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  await assert.rejects(
+    ensureRuntimeImageAvailable(imageRef, {
+      inspect: async () => ({ exists: false }),
+      pull: async () => { throw new Error("authorization=super-secret-token"); },
+    }),
+    (error: unknown) => {
+      assert.match(String(error), /冻结 runtime image 拉取失败/);
+      assert.doesNotMatch(String(error), /super-secret-token/);
+      return true;
+    },
+  );
 });

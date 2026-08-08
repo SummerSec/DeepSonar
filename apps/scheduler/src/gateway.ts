@@ -22,6 +22,7 @@ import {
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { appendOtlpEnvelope } from "./evidence.js";
+import { extractBaseUrlFromSettings } from "./provider-settings.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 
@@ -239,8 +240,9 @@ export function registerGateway(app: FastifyInstance): void {
       const safeProvider = providerProjection.provider;
       const secret = decryptSecret(cred as never);
       const meta = (cred.public_metadata_json ?? {}) as { base_url?: string };
+      const settingsBaseUrl = extractBaseUrlFromSettings(cred.settings_config_json);
       const baseUrl =
-        meta.base_url ?? PROVIDER_ENV_MAP[safeProvider]?.defaultBaseUrl ?? "https://api.anthropic.com";
+        meta.base_url ?? settingsBaseUrl ?? PROVIDER_ENV_MAP[safeProvider]?.defaultBaseUrl ?? "https://api.anthropic.com";
       const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
       const url = `${baseUrl.replace(/\/$/, "")}/${upstreamPath}${qs}`;
 

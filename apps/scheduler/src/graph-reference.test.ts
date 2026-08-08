@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { CONTROL_MCP_SERVER } from "./control-mcp.js";
@@ -10,6 +14,8 @@ import { HUB_REFERENCE_LIMITS, HubDecisionPayload } from "@deepsonar/shared-type
 const rootId = "00000000-0000-4000-8000-000000000001";
 const otherCanvasId = "00000000-0000-4000-8000-000000000002";
 const roles = new Set(["review"]);
+const intentDescription = "复核已有证据并确认剩余验证边界";
+const intentPrompt = "复核当前画布引用的全部证据，独立确认结论、缺口与下一步验证动作，并只提交新增事实。";
 
 function referenceId(index: number): string {
   return `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
@@ -21,7 +27,7 @@ function boundedIntents(total: number) {
   let offset = 0;
   while (offset < refs.length) {
     const from = refs.slice(offset, offset + HUB_REFERENCE_LIMITS.perFrom);
-    intents.push({ from, role: "review", description: "澶嶆牳", prompt: "鎵ц澶嶆牳" });
+    intents.push({ from, role: "review", description: intentDescription, prompt: intentPrompt });
     offset += from.length;
   }
   return intents;
@@ -29,7 +35,7 @@ function boundedIntents(total: number) {
 
 function parseIntent(from: unknown) {
   return parseHubDecision(
-    JSON.stringify({ intents: [{ from, role: "review", description: "复核", prompt: "执行复核" }] }),
+    JSON.stringify({ intents: [{ from, role: "review", description: intentDescription, prompt: intentPrompt }] }),
     roles,
     [rootId],
   );
@@ -65,7 +71,7 @@ test("Hub parser accepts canonical UUIDs and rejects cross-canvas IDs", () => {
 
 test("complete.from and missing references use the same stable rejection", () => {
   const complete = parseHubDecision(
-    JSON.stringify({ complete: { from: [rootId], description: "完成" } }),
+    JSON.stringify({ complete: { from: [rootId], description: "当前目标已经由引用证据完整覆盖" } }),
     roles,
     [rootId],
   );
@@ -79,7 +85,7 @@ test("Hub parser rejects a single oversized from list with a stable budget error
   const oversizedFrom = Array.from({ length: HUB_REFERENCE_LIMITS.perFrom + 1 }, (_, index) => referenceId(index + 1));
   assert.throws(
     () => parseHubDecision(
-      JSON.stringify({ intents: [{ from: oversizedFrom, role: "review", description: "x", prompt: "y" }] }),
+      JSON.stringify({ intents: [{ from: oversizedFrom, role: "review", description: intentDescription, prompt: intentPrompt }] }),
       roles,
     ),
     (error: unknown) => {
@@ -109,7 +115,7 @@ test("Hub parser rejects total unique references across intents but accepts the 
 
 test("shared Hub schema enforces per-from and total reference budgets", () => {
   const perFrom = HubDecisionPayload.safeParse({
-    intents: [{ from: Array.from({ length: HUB_REFERENCE_LIMITS.perFrom + 1 }, (_, index) => referenceId(index + 1)), role: "review", description: "x", prompt: "y" }],
+    intents: [{ from: Array.from({ length: HUB_REFERENCE_LIMITS.perFrom + 1 }, (_, index) => referenceId(index + 1)), role: "review", description: intentDescription, prompt: intentPrompt }],
   });
   assert.equal(perFrom.success, false);
 
@@ -119,7 +125,7 @@ test("shared Hub schema enforces per-from and total reference budgets", () => {
 
 test("duplicate references count once toward the total budget and are queried once", async () => {
   const decision = parseHubDecision(
-    JSON.stringify({ intents: [{ from: Array(HUB_REFERENCE_LIMITS.perFrom).fill(rootId), role: "review", description: "x", prompt: "y" }] }),
+    JSON.stringify({ intents: [{ from: Array(HUB_REFERENCE_LIMITS.perFrom).fill(rootId), role: "review", description: intentDescription, prompt: intentPrompt }] }),
     roles,
     [rootId],
   );
@@ -157,10 +163,14 @@ interface McpResponse {
 }
 
 async function callControlMcp(requests: unknown[]): Promise<McpResponse[]> {
-  const child = spawn(process.execPath, ["--input-type=module", "-e", CONTROL_MCP_SERVER], {
+  const tempDir = mkdtempSync(join(tmpdir(), "deepsonar-control-mcp-"));
+  const scriptPath = join(tempDir, "control-mcp.mjs");
+  writeFileSync(scriptPath, CONTROL_MCP_SERVER, "utf8");
+  const child = spawn(process.execPath, [scriptPath], {
     env: {
       ...process.env,
       DEEPSONAR_CONTROL_TOOL_NAMES: JSON.stringify(["submit_hub_decision"]),
+      DEEPSONAR_AVAILABLE_ROLES_JSON: JSON.stringify([{ name: "review", title: "Review", description: intentDescription }]),
     },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -191,6 +201,8 @@ async function callControlMcp(requests: unknown[]): Promise<McpResponse[]> {
   } finally {
     rl.close();
     child.kill();
+    if (child.exitCode === null) await once(child, "exit").catch(() => {});
+    rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -205,13 +217,13 @@ test("control MCP advertises and rejects invalid Hub references before scheduler
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "submit_hub_decision", arguments: { intents: [{ from: ["root_id"], role: "review", description: "x", prompt: "y" }] } },
+      params: { name: "submit_hub_decision", arguments: { intents: [{ from: ["root_id"], role: "review", description: intentDescription, prompt: intentPrompt }] } },
     },
     {
       jsonrpc: "2.0",
       id: 3,
       method: "tools/call",
-      params: { name: "submit_hub_decision", arguments: { intents: [{ from: [rootId], role: "review", description: "x", prompt: "y" }] } },
+      params: { name: "submit_hub_decision", arguments: { intents: [{ from: [rootId], role: "review", description: intentDescription, prompt: intentPrompt }] } },
     },
     {
       jsonrpc: "2.0",
@@ -223,7 +235,7 @@ test("control MCP advertises and rejects invalid Hub references before scheduler
       jsonrpc: "2.0",
       id: 5,
       method: "tools/call",
-      params: { name: "submit_hub_decision", arguments: { intents: [...maxBoundary.intents, { from: [referenceId(10_000)], role: "review", description: "x", prompt: "y" }] } },
+      params: { name: "submit_hub_decision", arguments: { intents: [...maxBoundary.intents, { from: [referenceId(10_000)], role: "review", description: intentDescription, prompt: intentPrompt }] } },
     },
     {
       jsonrpc: "2.0",

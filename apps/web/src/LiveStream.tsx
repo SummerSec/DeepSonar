@@ -1,4 +1,4 @@
-import { CircleNotch, Check, Funnel, Wrench, TextAlignLeft, X } from "@phosphor-icons/react";
+import { CaretDown, Check, CircleNotch, Copy, Funnel, TextAlignLeft, Wrench, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type StreamPage } from "./api";
 import { MarkdownView } from "./MarkdownView";
@@ -20,12 +20,32 @@ export interface StreamItem {
   toolName?: string;
   action?: string;
   text?: string;
+  input?: unknown;
+  result?: unknown;
+  output?: unknown;
+  error?: unknown;
+  exit?: unknown;
+  exitCode?: unknown;
+  isError?: boolean;
+  callId?: string;
 }
 
 /** 渲染单元：text 段落会随 delta 追加增长；tool 卡片 started→completed 置完成态 */
 export type StreamBlock =
   | { kind: "text"; key: string; text: string; reasoning: boolean }
-  | { kind: "tool"; key: string; name: string; action: string; done: boolean }
+  | {
+      kind: "tool";
+      key: string;
+      callId?: string;
+      name: string;
+      action: string;
+      input?: string;
+      result?: string;
+      error?: string;
+      exit?: number;
+      done: boolean;
+      failed?: boolean;
+    }
   | { kind: "meta"; key: string; text: string };
 
 export type StreamKindFilter = "all" | "text" | "tool" | "meta";
@@ -48,17 +68,52 @@ export function reduceStreamItem(blocks: StreamBlock[], item: StreamItem): Strea
   if (item.type === "tool.call.started") {
     return [
       ...blocks,
-      { kind: "tool", key, name: item.toolName ?? "tool", action: item.action ?? "", done: false },
+      {
+        kind: "tool",
+        key,
+        callId: item.callId,
+        name: item.toolName ?? "tool",
+        action: item.action ?? "",
+        input: formatToolValue(item.input),
+        done: false,
+      },
     ];
   }
   if (item.type === "tool.call.completed") {
     for (let i = blocks.length - 1; i >= 0; i--) {
       const b = blocks[i];
-      if (b.kind === "tool" && !b.done) {
-        return [...blocks.slice(0, i), { ...b, done: true }, ...blocks.slice(i + 1)];
+      if (b.kind === "tool" && !b.done && (!item.callId || !b.callId || b.callId === item.callId)) {
+        return [
+          ...blocks.slice(0, i),
+          {
+            ...b,
+            done: true,
+            result: formatToolValue(item.result ?? item.output),
+            error: formatToolValue(item.error),
+            exit: boundedExit(item.exit ?? item.exitCode),
+            failed: item.isError === true || item.error !== undefined,
+          },
+          ...blocks.slice(i + 1),
+        ];
       }
     }
-    return blocks;
+    // A paginated archive may begin at a completion frame. Keep that frame
+    // visible instead of silently dropping the result.
+    return [
+      ...blocks,
+      {
+        kind: "tool",
+        key,
+        callId: item.callId,
+        name: item.toolName ?? "tool",
+        action: item.action ?? "",
+        result: formatToolValue(item.result ?? item.output),
+        error: formatToolValue(item.error),
+        exit: boundedExit(item.exit ?? item.exitCode),
+        done: true,
+        failed: item.isError === true || item.error !== undefined,
+      },
+    ];
   }
   if (item.type === "run.started") return [...blocks, { kind: "meta", key, text: "agent 开始运行" }];
   if (item.type === "run.completed") return [...blocks, { kind: "meta", key, text: "运行结束" }];
@@ -87,6 +142,14 @@ export function recordsToStreamBlocks(records: Array<Record<string, unknown>>): 
       delta: typeof payload.delta === "string" ? payload.delta : undefined,
       toolName: typeof payload.toolName === "string" ? payload.toolName : typeof payload.tool_name === "string" ? payload.tool_name : undefined,
       action: typeof payload.action === "string" ? payload.action : typeof payload.message === "string" ? payload.message : undefined,
+      input: payload.input,
+      result: payload.result,
+      output: payload.output,
+      error: payload.error,
+      exit: payload.exit,
+      exitCode: payload.exitCode,
+      isError: payload.isError === true || payload.is_error === true,
+      callId: typeof payload.callId === "string" ? payload.callId : typeof payload.call_id === "string" ? payload.call_id : undefined,
       text:
         typeof payload.text === "string"
           ? payload.text
@@ -124,7 +187,9 @@ export function filterStreamBlocks(
     if (kind !== "all" && b.kind !== kind) return false;
     if (!needle) return true;
     if (b.kind === "text") return b.text.toLowerCase().includes(needle);
-    if (b.kind === "tool") return `${b.name} ${b.action}`.toLowerCase().includes(needle);
+    if (b.kind === "tool") {
+      return `${b.name} ${b.action} ${b.input ?? ""} ${b.result ?? ""} ${b.error ?? ""} ${b.exit ?? ""}`.toLowerCase().includes(needle);
+    }
     return b.text.toLowerCase().includes(needle);
   });
 }
@@ -137,7 +202,7 @@ const KIND_OPTIONS: { value: StreamKindFilter; label: string }[] = [
 ];
 
 /** 过程流筛选条 + 列表（实时 / 归档共用） */
-export function ProcessStreamView({
+export function StreamView({
   blocks,
   live,
   connected,
@@ -152,6 +217,7 @@ export function ProcessStreamView({
   const [query, setQuery] = useState("");
   const [follow, setFollow] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   const visible = useMemo(() => filterStreamBlocks(blocks, kind, query), [blocks, kind, query]);
 
@@ -192,7 +258,7 @@ export function ProcessStreamView({
           ))}
         </div>
         <input
-          aria-label="搜索执行过程"
+          aria-label="搜索实时流"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索文本 / 工具…"
@@ -253,18 +319,51 @@ export function ProcessStreamView({
             );
           }
           if (b.kind === "tool") {
+            const isExpanded = expanded.has(b.key);
+            const details = [b.input ? `input: ${b.input}` : "", b.result ? `result: ${b.result}` : "", b.error ? `error: ${b.error}` : "", b.exit !== undefined ? `exit: ${b.exit}` : ""].filter(Boolean).join("\n");
             return (
               <div
                 key={b.key}
-                className="mb-1.5 flex items-center gap-2 rounded-md border border-ink-800 bg-ink-850 px-2.5 py-1.5"
+                className="mb-1.5 rounded-md border border-ink-800 bg-ink-850 px-2.5 py-1.5"
               >
-                {b.done ? (
-                  <Check size={12} className="shrink-0 text-acc-400" />
-                ) : (
-                  <CircleNotch size={12} className="shrink-0 animate-spin text-run-400" />
+                <div className="flex min-w-0 items-center gap-2">
+                  {b.done ? (
+                    b.failed ? <X size={12} className="shrink-0 text-red-300" /> : <Check size={12} className="shrink-0 text-acc-400" />
+                  ) : (
+                    <CircleNotch size={12} className="shrink-0 animate-spin text-run-400" />
+                  )}
+                  <Wrench size={11} className="shrink-0 text-zinc-600" />
+                  <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-zinc-300">{b.action || b.name}</span>
+                  {details && (
+                    <>
+                      <button
+                        type="button"
+                        title={isExpanded ? "Collapse tool details" : "Expand tool details"}
+                        aria-label={isExpanded ? "Collapse tool details" : "Expand tool details"}
+                        onClick={() => setExpanded((before) => {
+                          const next = new Set(before);
+                          if (next.has(b.key)) next.delete(b.key); else next.add(b.key);
+                          return next;
+                        })}
+                        className="shrink-0 text-zinc-600 hover:text-zinc-200"
+                      >
+                        <CaretDown size={13} className={isExpanded ? "rotate-180" : ""} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Copy tool details"
+                        aria-label="Copy tool details"
+                        onClick={() => { void navigator.clipboard?.writeText(details); }}
+                        className="shrink-0 text-zinc-600 hover:text-zinc-200"
+                      >
+                        <Copy size={12} />
+                      </button>
+                    </>
+                  )}
+                </div>
+                {isExpanded && details && (
+                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words border-t border-white/[.06] pt-2 font-mono text-[11px] leading-relaxed text-zinc-500">{details}</pre>
                 )}
-                <Wrench size={11} className="shrink-0 text-zinc-600" />
-                <span className="truncate font-mono text-[13px] text-zinc-300">{b.action || b.name}</span>
               </div>
             );
           }
@@ -281,6 +380,33 @@ export function ProcessStreamView({
       </div>
     </div>
   );
+}
+
+function boundedExit(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= -255 && value <= 255 ? value : undefined;
+}
+
+function formatToolValue(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const redacted = redactToolValue(value);
+  const text = typeof redacted === "string" ? redacted : JSON.stringify(redacted);
+  return text && text.length > 4000 ? `${text.slice(0, 4000)}...` : text;
+}
+
+/** Display-side defense for archives created before runtime redaction. */
+export function redactToolValue(value: unknown, key?: string): unknown {
+  if (key && /pass(word)?|secret|token|api[-_]?key|authorization|cookie|credential|private[-_]?key|client[-_]?secret/i.test(key)) return "[REDACTED]";
+  if (typeof value === "string") {
+    return value
+      .replace(/\b(?:deepsonar_(?:prod|dev|user|job)_[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,})\b/gi, "[REDACTED]")
+      .replace(/(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [REDACTED]")
+      .replace(/((?:api[-_]?key|token|secret|password|authorization|cookie)\s*[:=]\s*)(?!Bearer\b|Basic\b)([^\s,;]+)/gi, "$1[REDACTED]");
+  }
+  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => redactToolValue(entry));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entryValue]) => [entryKey, redactToolValue(entryValue, entryKey)]));
+  }
+  return value;
 }
 
 export function LiveStream({ jobId, active }: { jobId: string; active: boolean }) {
@@ -406,7 +532,7 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
   return <div className="flex h-full min-h-0 flex-col">
     <div className="border-b border-white/[.06] px-3 py-1.5 font-mono text-[10px] text-zinc-600">{status}</div>
     <div className="min-h-0 flex-1">
-      <ProcessStreamView
+      <StreamView
         blocks={blocks}
         live
         connected={connected}

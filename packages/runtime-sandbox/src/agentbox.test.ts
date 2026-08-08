@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   mapCliEvent,
+  redactToolTelemetry,
   DEFAULT_SEMANTIC_TOOL_EVENTS,
   createSemanticToolState,
   discardPendingSemanticTools,
@@ -13,6 +14,7 @@ import {
   assertSharedAssetsVolumeOwnership,
   sharedAssetsVolumeBinds,
   isDeepsonarRestrictedNetwork,
+  isDeepsonarGatewayNetwork,
   dockerSocketPath,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
@@ -41,6 +43,24 @@ test("restricted network ownership accepts Docker and Podman inspect shapes", ()
     Labels: {},
   }), false);
   assert.equal(isDeepsonarRestrictedNetwork(null), false);
+});
+
+test("gateway network ownership accepts only a managed non-internal bridge", () => {
+  assert.equal(isDeepsonarGatewayNetwork({
+    Internal: false,
+    Driver: "bridge",
+    Labels: { "deepsonar.managed": "true" },
+  }), true);
+  assert.equal(isDeepsonarGatewayNetwork({
+    internal: true,
+    driver: "bridge",
+    labels: { "deepsonar.managed": "true" },
+  }), false);
+  assert.equal(isDeepsonarGatewayNetwork({
+    Internal: false,
+    Driver: "bridge",
+    Labels: {},
+  }), false);
 });
 
 test("docker socket path prefers DOCKER_HOST unix:// sockets", () => {
@@ -330,11 +350,65 @@ test("300 字符 Bash tool id 保持原始 telemetry 且以 hash 关联完成事
 
   assert.deepEqual(events, [
     { type: "tool.call.started", toolName: "Bash", callId: rawCallId, input: { command: "pwd" } },
-    { type: "tool.call.completed", callId: rawCallId, isError: false },
+    { type: "tool.call.completed", callId: rawCallId, toolName: "Bash", result: "ok", isError: false },
   ]);
   assert.equal(state.observedNonControlToolUseHashes.size, 0);
   assert.equal(state.settledNonControlToolUseHashes.size, 1);
   assert.equal([...state.settledNonControlToolUseHashes][0]?.length, 64);
+});
+
+test("ordinary tool telemetry redacts input and normalizes bounded result fields", () => {
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "ordinary-1", name: "Bash", input: { command: "curl", api_key: "top-secret" } }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "ordinary-1", is_error: true, content: "Bearer result-secret", exit_code: 7 }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(events[0], {
+    type: "tool.call.started",
+    toolName: "Bash",
+    callId: "ordinary-1",
+    input: { command: "curl", api_key: "[REDACTED]" },
+  });
+  assert.deepEqual(events[1], {
+    type: "tool.call.completed",
+    callId: "ordinary-1",
+    toolName: "Bash",
+    result: "Bearer [REDACTED]",
+    exit: 7,
+    error: "Bearer [REDACTED]",
+    isError: true,
+  });
+  assert.doesNotMatch(JSON.stringify(events), /top-secret|result-secret/);
+});
+
+test("control telemetry remains shape-only after ordinary redaction helpers", () => {
+  assert.deepEqual(redactToolTelemetry({ secret: "value", path: "/workspace/app.ts" }), { secret: "[REDACTED]", path: "/workspace/app.ts" });
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "control-shape", name: "mcp__deepsonar-control__emit_progress", input: { secret: "value", path: "/workspace/app.ts" } }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(events[0], {
+    type: "tool.call.started",
+    toolName: "mcp__deepsonar-control__emit_progress",
+    callId: events[0]?.callId,
+    inputShape: { kind: "object", field_count: 2 },
+  });
+  assert.equal("input" in (events[0] ?? {}), false);
+});
+
+test("ordinary tool telemetry redacts standalone platform and provider tokens", () => {
+  assert.equal(
+    redactToolTelemetry("curl -H x-token:deepsonar_prod_12345678_abcdefghijklmnop"),
+    "curl -H x-token:[REDACTED]",
+  );
+  assert.equal(redactToolTelemetry("use sk-abcdefghijklmnop1234"), "use [REDACTED]");
 });
 
 test("已知 control tool 重放只产生一对 hashed telemetry 和一个语义事件", () => {

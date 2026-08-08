@@ -2,6 +2,13 @@ import { z } from "zod";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
 
+/** Bounds and path syntax for large Agent control payloads stored in /workspace. */
+export const WORKSPACE_PAYLOAD_FILE_MAX_BYTES = 512 * 1024;
+export const WORKSPACE_PAYLOAD_FILE_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/;
+export function isSafeWorkspacePayloadFile(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= 200 && WORKSPACE_PAYLOAD_FILE_PATTERN.test(value);
+}
+
 /** Scheduler-governed role colors.  Keep this palette in the shared package
  * so the API, canvas renderer, and transfer surfaces agree on the same
  * syntax and reserved semantic colors. */
@@ -199,9 +206,16 @@ export type EdgeType = z.infer<typeof EdgeType>;
 
 // ---------- Finding payload（SARIF 2.1.0 子集，见 ARCHITECTURE §6.1） ----------
 
+const meaningfulText = (min: number, max: number) =>
+  z.string().min(min).max(max).regex(/\S/).refine((value) => value.trim().length >= min, `must contain at least ${min} nonblank characters`);
+const meaningfulFindingTitle = meaningfulText(8, 500);
+const meaningfulFindingSummary = meaningfulText(32, 10000);
+const meaningfulFactTitle = meaningfulText(2, 200);
+const meaningfulFactDescription = meaningfulText(16, 10000);
+
 export const FindingPayload = z
   .object({
-    title: nonEmptyText(500),
+    title: meaningfulFindingTitle,
     profile: findingProfileName.optional(),
     category: findingProfileName.optional(),
     tags: z.array(nonEmptyText(100)).max(50).optional(),
@@ -209,20 +223,25 @@ export const FindingPayload = z
     severity: Severity.optional(),
     scoring: FindingScoringProposal.optional(),
     location: z.string().max(1000).regex(/\S/).optional(), // "auth/login.php:42" ← SARIF artifactLocation + region
-    summary: z.string().max(10000).regex(/\S/).optional(),
+    summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
     /** 兼容字段：是否验证由调度器决定，不再影响派生。 */
     suggest_verify: z.boolean().default(false),
     raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.summary === undefined) {
+      ctx.addIssue({ code: "custom", path: ["summary"], message: "Finding summary is required and must contain at least 32 nonblank characters" });
+    }
+  });
 export type FindingPayload = z.infer<typeof FindingPayload>;
 
 /** Agent-facing Finding contract.  SARIF/raw is Scheduler-owned internal data
  * and is intentionally not writable through the control MCP. */
-export const EmitFindingPayload = z
+export const EmitFindingDirectPayload = z
   .object({
-    title: nonEmptyText(500),
+    title: meaningfulFindingTitle,
     profile: findingProfileName.optional(),
     category: findingProfileName.optional(),
     tags: z.array(nonEmptyText(100)).max(50).optional(),
@@ -230,18 +249,50 @@ export const EmitFindingPayload = z
     severity: Severity.optional(),
     scoring: FindingScoringProposal.optional(),
     location: z.string().max(1000).regex(/\S/).optional(),
-    summary: z.string().max(10000).regex(/\S/).optional(),
+    summary: meaningfulFindingSummary,
     rule_id: z.string().max(200).regex(/\S/).optional(),
     suggest_verify: z.boolean().optional(),
   })
   .strict();
+export type EmitFindingDirectPayload = z.infer<typeof EmitFindingDirectPayload>;
+
+export const EmitFindingPayload = z
+  .object({
+    title: meaningfulFindingTitle.optional(),
+    profile: findingProfileName.optional(),
+    category: findingProfileName.optional(),
+    tags: z.array(nonEmptyText(100)).max(50).optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+    severity: Severity.optional(),
+    scoring: FindingScoringProposal.optional(),
+    location: z.string().max(1000).regex(/\S/).optional(),
+    summary: meaningfulFindingSummary.optional(),
+    rule_id: z.string().max(200).regex(/\S/).optional(),
+    suggest_verify: z.boolean().optional(),
+    payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasFile = value.payload_file !== undefined;
+    const hasDirect = Object.keys(value).some((key) => key !== "payload_file");
+    if (hasFile === hasDirect) {
+      ctx.addIssue({ code: "custom", path: hasFile ? ["payload_file"] : [], message: "emit_finding must provide exactly one of direct fields or payload_file" });
+      return;
+    }
+    if (!hasFile && value.title === undefined) {
+      ctx.addIssue({ code: "custom", path: ["title"], message: "Finding title is required" });
+    }
+    if (!hasFile && value.summary === undefined) {
+      ctx.addIssue({ code: "custom", path: ["summary"], message: "Finding summary is required" });
+    }
+  });
 export type EmitFindingPayload = z.infer<typeof EmitFindingPayload>;
 
 /** 角色 agent 的 fact 提案；verification 仅在 Hub 回弹补证 Job 上被接受。 */
 export const FactPayload = z
   .object({
-    title: nonEmptyText(200),
-    description: nonEmptyText(10000),
+    title: meaningfulFactTitle,
+    description: meaningfulFactDescription,
     /** Scheduler-owned association; Agent input is ignored and overwritten. */
     intent_node_id: z.string().uuid().nullable().optional(),
     verification: VerificationEvidence.optional(),
@@ -251,13 +302,37 @@ export type FactPayload = z.infer<typeof FactPayload>;
 
 /** Control-tool input contracts.  These schemas are the single source used by
  * the Scheduler boundary and the generated in-sandbox MCP JSON Schema. */
-export const EmitFactPayload = z
+export const EmitFactDirectPayload = z
   .object({
-    title: nonEmptyText(200),
-    description: nonEmptyText(10000),
+    title: meaningfulFactTitle,
+    description: meaningfulFactDescription,
     verification: VerificationEvidence.optional(),
   })
   .strict();
+export type EmitFactDirectPayload = z.infer<typeof EmitFactDirectPayload>;
+
+export const EmitFactPayload = z
+  .object({
+    title: meaningfulFactTitle.optional(),
+    description: meaningfulFactDescription.optional(),
+    verification: VerificationEvidence.optional(),
+    payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasFile = value.payload_file !== undefined;
+    const hasDirect = Object.keys(value).some((key) => key !== "payload_file");
+    if (hasFile === hasDirect) {
+      ctx.addIssue({ code: "custom", path: hasFile ? ["payload_file"] : [], message: "emit_fact must provide exactly one of direct fields or payload_file" });
+      return;
+    }
+    if (!hasFile && value.title === undefined) {
+      ctx.addIssue({ code: "custom", path: ["title"], message: "Fact title is required" });
+    }
+    if (!hasFile && value.description === undefined) {
+      ctx.addIssue({ code: "custom", path: ["description"], message: "Fact description is required" });
+    }
+  });
 export type EmitFactPayload = z.infer<typeof EmitFactPayload>;
 
 export const ProgressPayload = z
@@ -270,14 +345,14 @@ export type ProgressPayload = z.infer<typeof ProgressPayload>;
 
 export const HumanPayload = z
   .object({
-    reason: nonEmptyText(2000),
+    reason: meaningfulText(8, 2000),
   })
   .strict();
 export type HumanPayload = z.infer<typeof HumanPayload>;
 
 export const DonePayload = z
   .object({
-    summary: nonEmptyText(10000),
+    summary: meaningfulText(8, 10000),
     verdict: VerifyVerdict.optional(),
     // Keep evidence labels canonical at the shared boundary: surrounding
     // whitespace is removed, while blank/whitespace-only entries are rejected.
@@ -619,13 +694,18 @@ export function hubReferenceBudgetViolation(value: unknown): HubReferenceBudgetV
 
 const HubReferenceList = z.array(GraphNodeReference).max(HUB_REFERENCE_LIMITS.perFrom);
 
-/** Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。 */
+/**
+ * Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。
+ *
+ * description/prompt 设有最小长度：拦截模型流式 tool_use 被截断后仍通过
+ * schema_validated 的半截意图（实战中曾出现 description="拉"、prompt="你"）。
+ */
 export const HubIntentPayload = z
   .object({
     from: HubReferenceList,
     role: nonEmptyText(64),
-    description: nonEmptyText(2_000),
-    prompt: nonEmptyText(20_000),
+    description: z.string().min(8).max(2_000).regex(/\S/),
+    prompt: z.string().min(32).max(20_000).regex(/\S/),
   })
   .strict();
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
@@ -633,25 +713,62 @@ export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
 export const HubCompletePayload = z
   .object({
     from: HubReferenceList,
-    description: nonEmptyText(10_000),
+    description: z.string().min(8).max(10_000).regex(/\S/),
   })
   .strict();
 export type HubCompletePayload = z.infer<typeof HubCompletePayload>;
 
-/** Complete and intents are mutually exclusive at the decision boundary. */
-export const HubDecisionPayload = z.union([
-  z.object({ complete: HubCompletePayload }).strict(),
-  z.object({ intents: z.array(HubIntentPayload).min(1).max(100) }).strict(),
-]).superRefine((value, ctx) => {
-  const violation = hubReferenceBudgetViolation(value);
-  if (!violation || violation.kind !== "total_unique") return;
-  ctx.addIssue({
-    code: "custom",
-    path: violation.path,
-    message: `Hub reference count exceeds the total unique limit of ${violation.limit}`,
-    params: { kind: violation.kind, limit: violation.limit, count: violation.count },
+/**
+ * Relative workspace path for large hub decisions that do not fit tool_use args.
+ * Must stay under /workspace; no absolute paths, drive letters, or `..` segments.
+ */
+export const HubDecisionPayloadFile = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(WORKSPACE_PAYLOAD_FILE_PATTERN, "payload_file must be a safe relative path under /workspace");
+export type HubDecisionPayloadFile = z.infer<typeof HubDecisionPayloadFile>;
+
+/**
+ * Hub decision payload.
+ *
+ * Must stay a **single object** schema (not z.union): Claude Code / Anthropic MCP
+ * skips tools whose inputSchema uses top-level anyOf/oneOf
+ * ("its input schema uses top-level anyOf, which the Anthropic API does not accept").
+ * Mutual exclusivity of complete vs intents vs payload_file is enforced in superRefine
+ * (and again in control-mcp). `payload_file` is a temporary bypass for tool_use
+ * truncation of large multi-intent JSON: write the full decision under /workspace
+ * then pass only the relative path.
+ */
+export const HubDecisionPayload = z
+  .object({
+    complete: HubCompletePayload.optional(),
+    intents: z.array(HubIntentPayload).min(1).max(100).optional(),
+    payload_file: HubDecisionPayloadFile.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasComplete = value.complete !== undefined;
+    const hasIntents = value.intents !== undefined;
+    const hasFile = value.payload_file !== undefined;
+    if ((hasComplete ? 1 : 0) + (hasIntents ? 1 : 0) + (hasFile ? 1 : 0) !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: hasComplete && hasIntents ? ["complete"] : hasFile ? ["payload_file"] : [],
+        message: "submit_hub_decision must provide exactly one of complete, intents, or payload_file",
+      });
+      return;
+    }
+    if (hasFile) return;
+    const violation = hubReferenceBudgetViolation(value);
+    if (!violation || violation.kind !== "total_unique") return;
+    ctx.addIssue({
+      code: "custom",
+      path: violation.path,
+      message: `Hub reference count exceeds the total unique limit of ${violation.limit}`,
+      params: { kind: violation.kind, limit: violation.limit, count: violation.count },
+    });
   });
-});
 export type HubDecisionPayload = z.infer<typeof HubDecisionPayload>;
 
 export const ControlToolPayloadSchemas = {
@@ -669,11 +786,32 @@ export type ControlToolPayload = {
   [K in keyof typeof ControlToolPayloadSchemas]: z.infer<(typeof ControlToolPayloadSchemas)[K]>;
 };
 
+/**
+ * Normalize Zod → JSON Schema for MCP tools/list.
+ * Anthropic / Claude Code reject tools when inputSchema:
+ * - lacks top-level type: "object", or
+ * - uses top-level anyOf / oneOf (even with type: object).
+ */
+export function toMcpToolInputSchema(schema: z.ZodType): Record<string, unknown> {
+  const json = z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
+  if (json.type !== "object") {
+    throw new Error(
+      `MCP inputSchema must serialize to type:object (got type=${String(json.type)}; keys=${Object.keys(json).join(",")})`,
+    );
+  }
+  if (Array.isArray(json.anyOf) || Array.isArray(json.oneOf)) {
+    throw new Error(
+      "MCP inputSchema must not use top-level anyOf/oneOf (Anthropic API rejects them; restructure the Zod contract to a single object)",
+    );
+  }
+  return json;
+}
+
 /** JSON Schema emitted for MCP tools/list from the same Zod contracts. */
 export const ControlToolInputSchemasJson = Object.fromEntries(
   Object.entries(ControlToolPayloadSchemas).map(([name, schema]) => [
     name,
-    z.toJSONSchema(schema, { target: "draft-7" }),
+    toMcpToolInputSchema(schema),
   ]),
 ) as unknown as Record<keyof typeof ControlToolPayloadSchemas, Record<string, unknown>>;
 
@@ -693,10 +831,10 @@ const HubDecisionEnvelopeInput = z
  * SARIF data are deliberately unavailable at this boundary. */
 export const ControlEventEnvelope = z.discriminatedUnion("type", [
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
-  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: EmitFindingPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: EmitFindingDirectPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
-  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactDirectPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("shared_asset_publish"), payload: PublishSharedAssetPayload }).strict(),
 ]);

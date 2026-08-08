@@ -1019,6 +1019,91 @@ function pullRuntimeImage(imageRef: string): Promise<void> {
   });
 }
 
+export interface RuntimeImageEnsureInspection {
+  exists: boolean;
+  image_id?: string | null;
+  repo_digests?: readonly string[];
+  immutable_ref?: string | null;
+  error?: string | null;
+}
+
+export interface RuntimeImageEnsureDependencies {
+  inspect: (imageRef: string) => Promise<RuntimeImageEnsureInspection>;
+  pull: (imageRef: string) => Promise<void>;
+}
+
+const runtimeImageEnsureInFlight = new Map<string, Promise<void>>();
+
+function defaultRuntimeImageEnsureDependencies(): RuntimeImageEnsureDependencies {
+  return {
+    inspect: async (imageRef) => inspectLocalRuntimeImage(imageRef, "", [imageRef]),
+    pull: pullRuntimeImage,
+  };
+}
+
+function localRuntimeImageMatchesRef(
+  inspection: RuntimeImageEnsureInspection,
+  imageRef: string,
+  expectedDigest: string,
+): boolean {
+  if (!inspection.exists) return false;
+  if (inspection.image_id && localImageDigest(inspection.image_id) === expectedDigest) return true;
+  if (inspection.immutable_ref === imageRef) return true;
+  return (inspection.repo_digests ?? []).some((ref) => ref === imageRef);
+}
+
+async function ensureRuntimeImageAvailableOnce(
+  imageRef: string,
+  expectedDigest: string,
+  dependencies: RuntimeImageEnsureDependencies,
+): Promise<void> {
+  let inspection: RuntimeImageEnsureInspection;
+  try {
+    inspection = await dependencies.inspect(imageRef);
+  } catch (error) {
+    inspection = { exists: false, error: sanitizeRuntimeImageError(error) };
+  }
+  if (localRuntimeImageMatchesRef(inspection, imageRef, expectedDigest)) return;
+
+  try {
+    await dependencies.pull(imageRef);
+  } catch (error) {
+    const detail = sanitizeRuntimeImageError(error) || "docker pull 失败，请检查 Docker、网络和 registry 凭据";
+    throw new Error(`冻结 runtime image 拉取失败（${expectedDigest}）：${detail}`);
+  }
+
+  try {
+    inspection = await dependencies.inspect(imageRef);
+  } catch (error) {
+    const detail = sanitizeRuntimeImageError(error) || "docker image inspect 失败";
+    throw new Error(`冻结 runtime image 拉取后校验失败（${expectedDigest}）：${detail}`);
+  }
+  if (!localRuntimeImageMatchesRef(inspection, imageRef, expectedDigest)) {
+    const detail = sanitizeRuntimeImageError(inspection.error) || "本地镜像未包含请求的不可变 digest";
+    throw new Error(`冻结 runtime image 不可用（${expectedDigest}）：${detail}`);
+  }
+}
+
+/** Ensure the exact immutable snapshot image is available to local Docker. */
+export async function ensureRuntimeImageAvailable(
+  imageRef: string,
+  dependencies: RuntimeImageEnsureDependencies = defaultRuntimeImageEnsureDependencies(),
+): Promise<void> {
+  const normalizedRef = imageRef.trim();
+  const expectedDigest = immutableDigest(normalizedRef);
+  if (!expectedDigest) throw new Error("冻结 runtime image 必须使用不可变 digest 引用");
+
+  const existing = runtimeImageEnsureInFlight.get(normalizedRef);
+  if (existing) return existing;
+  const operation = ensureRuntimeImageAvailableOnce(normalizedRef, expectedDigest, dependencies);
+  runtimeImageEnsureInFlight.set(normalizedRef, operation);
+  try {
+    await operation;
+  } finally {
+    if (runtimeImageEnsureInFlight.get(normalizedRef) === operation) runtimeImageEnsureInFlight.delete(normalizedRef);
+  }
+}
+
 export async function startRuntimeImagePull(): Promise<RuntimeImagePullTask> {
   if (runtimeImagePullTask && (runtimeImagePullTask.status === "queued" || runtimeImagePullTask.status === "running")) {
     throw new Error("已有运行中的镜像拉取任务");

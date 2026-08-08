@@ -2,6 +2,8 @@ import {
   CANONICAL_UUID_PATTERN,
   ControlToolInputSchemasJson,
   HUB_REFERENCE_LIMITS,
+  WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
+  WORKSPACE_PAYLOAD_FILE_PATTERN,
 } from "@deepsonar/shared-types";
 import {
   CONTROL_INPUT_ERROR_CODES,
@@ -27,7 +29,7 @@ export const CONTROL_SEMANTIC_EVENT_TYPES = {
 } as const;
 
 export const CONTROL_MCP_SERVER = String.raw`import readline from "node:readline";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 
 const allowed = new Set(JSON.parse(process.env.DEEPSONAR_CONTROL_TOOL_NAMES || "[]"));
 const availableRoles = JSON.parse(process.env.DEEPSONAR_AVAILABLE_ROLES_JSON || "[]");
@@ -55,18 +57,34 @@ const TOOL_ERROR_CODES = {
 const TOOL_INPUT_SCHEMAS = ${JSON.stringify(ControlToolInputSchemasJson)};
 const MAX_REFERENCES_PER_FROM = ${HUB_REFERENCE_LIMITS.perFrom};
 const MAX_UNIQUE_REFERENCES = ${HUB_REFERENCE_LIMITS.totalUnique};
+const MAX_PAYLOAD_FILE_BYTES = ${WORKSPACE_PAYLOAD_FILE_MAX_BYTES};
+const PAYLOAD_FILE_PATTERN = new RegExp(${JSON.stringify(WORKSPACE_PAYLOAD_FILE_PATTERN.source)});
 const NODE_REF_RE = new RegExp(CANONICAL_UUID_PATTERN, "i");
 const hasOwn = (object, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(object, key);
-
+const availableRoleNames = availableRoles
+  .map((role) => (role && typeof role === "object" ? role.name : null))
+  .filter((name) => typeof name === "string" && name.length > 0);
+// Constrain intents[].role to this Job's role catalog so Claude cannot invent
+// abbreviations (e.g. "a") that later fail Scheduler invalid_role.
+(() => {
+  const hubSchema = TOOL_INPUT_SCHEMAS.submit_hub_decision;
+  if (!hubSchema || typeof hubSchema !== "object" || availableRoleNames.length === 0) return;
+  const properties = hubSchema.properties && typeof hubSchema.properties === "object" ? hubSchema.properties : null;
+  const intents = properties && properties.intents && typeof properties.intents === "object" ? properties.intents : null;
+  const items = intents && intents.items && typeof intents.items === "object" ? intents.items : null;
+  const itemProps = items && items.properties && typeof items.properties === "object" ? items.properties : null;
+  if (!itemProps || !itemProps.role || typeof itemProps.role !== "object") return;
+  itemProps.role = { ...itemProps.role, type: "string", enum: availableRoleNames };
+})();
 
 const descriptions = {
   list_available_roles: "返回当前 Hub Job 可派发的数据库角色。只使用返回的 name，不得猜测或使用固定角色清单。",
   emit_progress: "增量上报当前动作或阶段进展。可在执行中多次调用。",
-  emit_fact: "把一个新的、可验证的增量事实实时写入任务画布。Hub 回弹补证 Job 可附带 verification 结构化证据。可多次调用。",
-  emit_finding: "实时提交一条有证据的通用 Finding；profile 与可选评分须符合任务冻结协议，调度器负责校验、重算、去重和验证。可多次调用。",
-  submit_hub_decision: "提交本轮 Hub 的 complete 或 intents 决策，二者必须且只能提供一个。from 必须填写当前 YAML root_id/fact/finding 节点的 UUID 值，不能填写字段名 root_id、别名或占位符。",
-  mark_job_done: "提交本 Job 的最终摘要；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
-  request_human: "只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
+  emit_fact: "把一个新的、可验证的增量事实实时写入任务画布。直接提交时 title 至少 2 个非空白字符、description 至少 16 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。Hub 回弹补证 Job 可附带 verification 结构化证据。可多次调用。",
+  emit_finding: "实时提交一条有证据的通用 Finding。直接提交时 title 至少 8 个非空白字符、summary 至少 32 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。profile 与可选评分须符合任务冻结协议，调度器负责校验、重算、去重和验证。可多次调用。",
+  submit_hub_decision: "提交本轮 Hub 的 complete、intents 或 payload_file 决策，三者必须且只能提供一个。大体积多意图时优先 Write 到 /workspace 下 JSON 文件再传 payload_file（相对路径，如 hub_decision_payload.json），避免 tool 参数截断。from 必须填写当前 YAML root_id/fact/finding 节点的 UUID 值。role 必须原样使用 list_available_roles 返回的 name。每个 Job 成功提交后只能一次；仅上一次 isError 时可重试。不要与 request_human 混用。",
+  mark_job_done: "提交本 Job 的最终摘要，至少 8 个非空白字符；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
+  request_human: "提交至少 8 个非空白字符的人工介入理由；只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
   list_shared_assets: "分页列出本 Job 创建时冻结的只读共享资产目录。没有单独的下载工具：用返回的 mount_path/read_path 以普通文件工具直接读取（Scheduler 已从本地或 S3 兼容存储预挂载）。可按 scope 或逻辑 key 前缀过滤。",
   publish_shared_asset: "提议把 /workspace 下普通工作区文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止从 .deepsonar/shared 只读挂载树发布。",
 };
@@ -173,9 +191,33 @@ function validateSchema(value, schema, path) {
 function validateToolInput(name, input) {
   if (!hasOwn(TOOL_INPUT_SCHEMAS, name)) return schemaError("tool", "未知工具");
   const schema = TOOL_INPUT_SCHEMAS[name];
+  if (name === "emit_fact" || name === "emit_finding") {
+    const failure = validateSemanticPayloadFileTool(name, input, schema);
+    if (failure) {
+      if (failure.code === INVALID_PAYLOAD_CODE && hasOwn(TOOL_ERROR_CODES, name)) {
+        return { ...failure, code: TOOL_ERROR_CODES[name], text: failure.text.replace("[" + INVALID_PAYLOAD_CODE + "]", "[" + TOOL_ERROR_CODES[name] + "]") };
+      }
+      return failure;
+    }
+    return null;
+  }
   if (name === "submit_hub_decision") {
     const hubFailure = validateHubDecision(input);
     if (hubFailure) return hubFailure;
+    // Large decisions may pass only payload_file; re-validate the expanded file body
+    // so description/prompt minLength and role enum still apply.
+    if (input && typeof input === "object" && typeof input.payload_file === "string") {
+      const loaded = loadHubDecisionFromPayloadFile(input.payload_file);
+      if (loaded.error) return loaded.error;
+      const bodyFailure = validateSchema(loaded.decision, schema, "arguments");
+      if (bodyFailure) {
+        if (bodyFailure.code === INVALID_PAYLOAD_CODE && hasOwn(TOOL_ERROR_CODES, name)) {
+          return { ...bodyFailure, code: TOOL_ERROR_CODES[name], text: bodyFailure.text.replace("[" + INVALID_PAYLOAD_CODE + "]", "[" + TOOL_ERROR_CODES[name] + "]") };
+        }
+        return bodyFailure;
+      }
+      return null;
+    }
   }
   const failure = validateSchema(input, schema, "arguments");
   if (failure) {
@@ -202,16 +244,115 @@ function invalidReferenceBudget(path, count, limit) {
   return { code: INVALID_REFERENCE_BUDGET_CODE, text: "[" + INVALID_REFERENCE_BUDGET_CODE + "] " + INVALID_REFERENCE_BUDGET_MESSAGE + " 字段 " + path + " 收到 " + count + " 项，最多 " + limit + " 项。" };
 }
 
+function invalidRole(role, path) {
+  // Shape only — never echo untrusted role text into the tool_result.
+  const allow = availableRoleNames.length > 0 ? availableRoleNames.join(", ") : "(empty catalog)";
+  return {
+    code: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidRole)},
+    text: "[" + ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidRole)} + "] Hub 角色必须来自本轮 list_available_roles，字段 " + path + " 收到类型 " + inputShape(role) + "。允许的 name：" + allow + "。",
+  };
+}
+
+function safeWorkspacePayloadPath(rel) {
+  if (typeof rel !== "string" || !PAYLOAD_FILE_PATTERN.test(rel)) return null;
+  return "/workspace/" + rel;
+}
+
+function loadPayloadFile(rel) {
+  const path = safeWorkspacePayloadPath(rel);
+  if (!path) {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 必须是 /workspace 下的安全相对路径" } };
+  }
+  let raw;
+  let fileSize = 0;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) throw new Error("not_regular_file");
+    fileSize = stat.size;
+  } catch {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " 无法读取 payload_file=" + rel } };
+  }
+  if (fileSize > MAX_PAYLOAD_FILE_BYTES) {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 超过 512KiB" } };
+  }
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " 无法读取 payload_file=" + rel } };
+  }
+  if (raw.length > MAX_PAYLOAD_FILE_BYTES) {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 超过 512KiB" } };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 不是合法 JSON" } };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 根必须是对象" } };
+  }
+  if (Object.prototype.hasOwnProperty.call(parsed, "payload_file")) {
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 内容不得再嵌套 payload_file" } };
+  }
+  return { payload: parsed };
+}
+
+function loadHubDecisionFromPayloadFile(rel) {
+  const loaded = loadPayloadFile(rel);
+  return loaded.error ? loaded : { decision: loaded.payload };
+}
+
+function semanticPayloadFailure(name, value) {
+  if (name === "emit_fact") {
+    if (typeof value?.title !== "string" || value.title.trim().length < 2) return schemaError("arguments.title", "至少需要 2 个非空白字符");
+    if (typeof value?.description !== "string" || value.description.trim().length < 16) return schemaError("arguments.description", "至少需要 16 个非空白字符");
+  }
+  if (name === "emit_finding") {
+    if (typeof value?.title !== "string" || value.title.trim().length < 8) return schemaError("arguments.title", "至少需要 8 个非空白字符");
+    if (typeof value?.summary !== "string" || value.summary.trim().length < 32) return schemaError("arguments.summary", "至少需要 32 个非空白字符");
+  }
+  return null;
+}
+
+function validateSemanticPayloadFileTool(name, input, schema) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return schemaError("arguments", "必须是对象");
+  const hasFile = hasOwn(input, "payload_file");
+  const directKeys = Object.keys(input).filter((key) => key !== "payload_file");
+  if (hasFile && directKeys.length > 0) return schemaError("arguments", "必须且只能提供直接字段或 payload_file 之一");
+  if (!hasFile) {
+    const failure = validateSchema(input, schema, "arguments");
+    return failure || semanticPayloadFailure(name, input);
+  }
+  const loaded = loadPayloadFile(input.payload_file);
+  if (loaded.error) return loaded.error;
+  const failure = validateSchema(loaded.payload, schema, "arguments");
+  return failure || semanticPayloadFailure(name, loaded.payload);
+}
+
 function validateHubDecision(input) {
   const args = input && typeof input === "object" ? input : {};
-  const hasComplete = Object.prototype.hasOwnProperty.call(args, "complete");
-  const hasIntents = Object.prototype.hasOwnProperty.call(args, "intents");
-  if ((hasComplete ? 1 : 0) + (hasIntents ? 1 : 0) !== 1) {
-    return { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " submit_hub_decision 必须且只能提供 complete 或 intents 之一" };
+  const hasComplete = Object.prototype.hasOwnProperty.call(args, "complete") && args.complete !== undefined;
+  const hasIntents = Object.prototype.hasOwnProperty.call(args, "intents") && args.intents !== undefined;
+  const hasFile = Object.prototype.hasOwnProperty.call(args, "payload_file") && args.payload_file !== undefined;
+  if ((hasComplete ? 1 : 0) + (hasIntents ? 1 : 0) + (hasFile ? 1 : 0) !== 1) {
+    return { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " submit_hub_decision 必须且只能提供 complete、intents 或 payload_file 之一" };
   }
+  let decisionArgs = args;
+  if (hasFile) {
+    const loaded = loadHubDecisionFromPayloadFile(args.payload_file);
+    if (loaded.error) return loaded.error;
+    decisionArgs = loaded.decision;
+    const nestedComplete = Object.prototype.hasOwnProperty.call(decisionArgs, "complete") && decisionArgs.complete !== undefined;
+    const nestedIntents = Object.prototype.hasOwnProperty.call(decisionArgs, "intents") && decisionArgs.intents !== undefined;
+    if ((nestedComplete ? 1 : 0) + (nestedIntents ? 1 : 0) !== 1) {
+      return { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 内容必须且只能提供 complete 或 intents 之一" };
+    }
+  }
+  const hasCompleteBody = Object.prototype.hasOwnProperty.call(decisionArgs, "complete") && decisionArgs.complete !== undefined;
   const references = [];
-  if (hasComplete) {
-    const complete = args.complete;
+  if (hasCompleteBody) {
+    const complete = decisionArgs.complete;
     if (!complete || typeof complete !== "object" || !Array.isArray(complete.from)) {
       return invalidNodeRef("complete.from", complete && complete.from);
     }
@@ -220,11 +361,15 @@ function validateHubDecision(input) {
     }
     references.push(["complete.from", complete.from]);
   } else {
-    if (!Array.isArray(args.intents)) return invalidNodeRef("intents", args.intents);
-    for (let index = 0; index < args.intents.length; index += 1) {
-      const intent = args.intents[index];
+    if (!Array.isArray(decisionArgs.intents)) return invalidNodeRef("intents", decisionArgs.intents);
+    const allowed = new Set(availableRoleNames);
+    for (let index = 0; index < decisionArgs.intents.length; index += 1) {
+      const intent = decisionArgs.intents[index];
       if (!intent || typeof intent !== "object" || !Array.isArray(intent.from)) {
         return invalidNodeRef("intents." + index + ".from", intent && intent.from);
+      }
+      if (typeof intent.role !== "string" || !allowed.has(intent.role)) {
+        return invalidRole(intent.role, "intents." + index + ".role");
       }
       if (intent.from.length > MAX_REFERENCES_PER_FROM) {
         return invalidReferenceBudget("intents." + index + ".from", intent.from.length, MAX_REFERENCES_PER_FROM);

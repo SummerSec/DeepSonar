@@ -70,9 +70,11 @@ services:
     image: ${SILO_IMAGE:-docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z}
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
-    command: >-
-      mcli alias set local http://silo:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
-      mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}"
+    # Must be a one-element list so `sh -c` receives the whole script (string form gets word-split by Compose).
+    command:
+      - >-
+        mcli alias set local http://silo:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+        mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}"
     environment:
       MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:?请在 deploy/.env 中设置 BLOB_S3_ACCESS_KEY_ID}
       MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:?请在 deploy/.env 中设置 BLOB_S3_SECRET_ACCESS_KEY}
@@ -107,8 +109,9 @@ services:
       BLOB_S3_CACHE_DIR: /app/data/blobs
       # 必须落在 blob_data volume 内。默认相对 cwd 会写成 /app/apps/scheduler/data（容器可写层，重建即丢）。
       BLOB_DIR: /app/data/blobs
-      # real 模式：沙箱容器经宿主机回连网关（同 compose 网络则改为 http://scheduler:3100/gateway）
-      DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://host.docker.internal:3100/gateway}
+      # real mode: sandboxes call the managed proxy; the proxy reaches Scheduler on the shared bridge.
+      DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://deepsonar-gateway-proxy:3100/gateway}
+      DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: ${DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http://scheduler:3100/gateway}
       # stop_grace_period 配合优雅退出（dispatcher drain + fastify close）
     stop_grace_period: 30s
     volumes:
@@ -127,7 +130,7 @@ services:
       timeout: 5s
       retries: 20
     logging: *default-logging
-    networks: [deepsonar]
+    networks: [deepsonar, sandbox_gateway]
 
   # 第三方镜像只在独立准入 Worker 中执行自检；Scheduler 只管理状态与审批。
   image-admission:
@@ -176,3 +179,8 @@ volumes:
 networks:
   deepsonar:
     driver: bridge
+  sandbox_gateway:
+    name: deepsonar-sandbox-gateway
+    driver: bridge
+    labels:
+      deepsonar.managed: "true"

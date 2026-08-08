@@ -1,7 +1,7 @@
 import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
-import { LiveStream, ProcessStreamView, recordsToStreamBlocks } from "./LiveStream";
+import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { MarkdownView } from "./MarkdownView";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
@@ -10,9 +10,9 @@ import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 /**
  * 运行详情（画布节点 / 运行列表共用）：
  * - 结果：下发 prompt + 运行摘要 + 产出（已结束默认）
- * - 执行过程 / 实时流 / 事件 / 原始 Session / 产出发现 / 运行配置
+ * - 实时流 / 事件 / 原始 Session / 产出发现 / 运行配置
  */
-type DetailTab = "result" | "process" | "live" | "events" | "session" | "findings" | "config";
+type DetailTab = "result" | "live" | "events" | "session" | "findings" | "config";
 const ACTIVE = new Set(["claimed", "provisioning", "running", "waiting_human"]);
 
 const EVENT_COLOR: Record<string, string> = {
@@ -78,7 +78,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [eventsCursor, setEventsCursor] = useState<string | null>(null);
   const [eventsHasMore, setEventsHasMore] = useState(false);
   const [session, setSession] = useState<{ text: string; truncated: boolean } | null>(null);
-  const [tab, setTab] = useState<DetailTab>("process");
+  const [tab, setTab] = useState<DetailTab>("live");
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [eventTypeFilter, setEventTypeFilter] = useState("");
@@ -336,7 +336,6 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
 
   const tabs: Array<[DetailTab, string, number | null, boolean]> = [
     ["result", "结果", runSummary || detail?.findings.length ? 1 : 0, true],
-    ["process", "执行过程", stream.length, true],
     ["live", "实时流", null, true],
     ["events", "事件", jobEvents.length || detail?.events.length || null, true],
     [
@@ -550,16 +549,16 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                   </p>
                 ) : (
                   <p className="font-mono text-[12px] text-zinc-600">
-                    没有 mark_job_done 摘要。可查看「执行过程」归档流或「事件」时间线。
+                    没有 mark_job_done 摘要。可查看「实时流」归档内容或「事件」时间线。
                   </p>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => setTab("process")}
+                    onClick={() => setTab("live")}
                     className="rounded-full px-3 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] hover:text-zinc-200"
                   >
-                    查看完整执行过程{stream.length ? ` · ${stream.length}` : ""}
+                    查看完整实时流{stream.length ? ` · ${stream.length}` : ""}
                   </button>
                   {(jobEvents.length > 0 || detail.events.length > 0) && (
                     <button
@@ -619,53 +618,19 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                     </div>
                     <button
                       type="button"
-                      onClick={() => setTab("process")}
+                      onClick={() => setTab("live")}
                       className="font-mono text-[10px] text-acc-400 hover:text-acc-300"
                     >
                       展开完整过程 →
                     </button>
                   </div>
                   <div className="max-h-[280px] overflow-hidden">
-                    <ProcessStreamView
+                    <StreamView
                       blocks={archivedBlocks.slice(-40)}
                       emptyHint="无过程流"
                     />
                   </div>
                 </section>
-              )}
-            </div>
-          )}
-
-          {/* 执行过程：调度器持久化 stream（NDJSON），可筛选；与是否运行中无关 */}
-          {detail && tab === "process" && (
-            <div className="flex h-full min-h-0 flex-col overflow-hidden">
-              {stream.length ? (
-                <>
-                  <ProcessStreamView
-                    blocks={archivedBlocks}
-                    emptyHint="此运行没有可解析的过程流。"
-                  />
-                  <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-white/[.06] px-3 py-2">
-                    {streamHasMore && (
-                      <button
-                        type="button"
-                        onClick={() => void loadMoreStream()}
-                        className="rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]"
-                      >
-                        加载更多过程
-                      </button>
-                    )}
-                    <span className="font-mono text-[10px] text-zinc-600">已加载 {stream.length} 条</span>
-                    {streamTruncated && <span className="font-mono text-[10px] text-amber-300">归档已截断，可能存在 CURSOR_GAP</span>}
-                    {streamError && <span className="font-mono text-[10px] text-red-300">{streamError}</span>}
-                  </div>
-                </>
-              ) : (
-                <div className="p-8 text-center text-[13px] text-zinc-600">
-                  {active
-                    ? "过程流尚未落盘，可先看「实时流」；终态后会归档到此。"
-                    : "此运行没有持久化过程流。旧运行在本功能上线前只保存在内存中，无法追溯。"}
-                </div>
               )}
             </div>
           )}
@@ -678,20 +643,25 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           )}
           {detail && !active && tab === "live" && (
             <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-                <p className="text-[13px] text-zinc-500">运行已结束，实时流已关闭。</p>
-                <button
-                  type="button"
-                  onClick={() => setTab("process")}
-                  className="rounded-full px-3 py-1.5 font-mono text-[11px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]"
-                >
-                  查看执行过程
-                </button>
-                {stream.length > 0 && (
-                  <p className="font-mono text-[10px] text-zinc-600">
-                    已归档 {stream.length} 条过程记录
-                  </p>
+              <div className="border-b border-white/[.06] px-3 py-1.5 font-mono text-[10px] text-zinc-600">
+                运行已结束 · 显示归档过程
+              </div>
+              <div className="min-h-0 flex-1">
+                <StreamView blocks={archivedBlocks} emptyHint="此运行没有归档过程记录" />
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-white/[.06] px-3 py-2">
+                {streamHasMore && (
+                  <button
+                    type="button"
+                    onClick={() => void loadMoreStream()}
+                    className="rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]"
+                  >
+                    加载更多
+                  </button>
                 )}
+                <span className="font-mono text-[10px] text-zinc-600">已加载 {stream.length} 条</span>
+                {streamTruncated && <span className="font-mono text-[10px] text-amber-300">归档已截断，可能存在游标缺口</span>}
+                {streamError && <span className="font-mono text-[10px] text-red-300">{streamError}</span>}
               </div>
             </div>
           )}

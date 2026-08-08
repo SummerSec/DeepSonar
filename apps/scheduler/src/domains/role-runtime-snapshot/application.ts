@@ -14,6 +14,7 @@ import {
   hasProviderSettingsConfig,
   isProviderAgentCli,
   materializeProviderSettings,
+  providerSettingsForJobSnapshot,
   resolveEffectiveModel,
 } from "../../provider-settings.js";
 import { resolveRuntimeImageForJob } from "../../runtime-images.js";
@@ -113,6 +114,7 @@ export async function resolveAgentSnapshotForJob(
     : [undefined]) as Array<Record<string, unknown> | undefined>;
   const settingsConfig = llm?.settings_config_json ?? {};
   const hasSettings = hasProviderSettingsConfig(settingsConfig);
+  const snapshotSettingsConfig = providerSettingsForJobSnapshot(settingsConfig);
   if (llm) {
     const provider = String(llm.provider ?? "");
     if (!isProviderKnown(provider)) throw new Error(UNKNOWN_PROVIDER_ERROR);
@@ -132,7 +134,7 @@ export async function resolveAgentSnapshotForJob(
     const configuredModel = resolveEffectiveModel({
       roleModel: typeof cfg?.model === "string" ? cfg.model : null,
       agentCli,
-      settingsConfig,
+      settingsConfig: snapshotSettingsConfig,
     }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
     const allowed = allowedModelIds(llm.public_metadata_json);
     if (allowed.length > 0 && !configuredModel) throw new Error(`Credential ${llm.id} 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖`);
@@ -153,16 +155,16 @@ export async function resolveAgentSnapshotForJob(
   if (hasSettings) {
     const materialized = materializeProviderSettings({
       agentCli,
-      settingsConfig,
+      settingsConfig: snapshotSettingsConfig,
       overrides: {
         model: roleModel,
         reasoning: roleReasoning,
       },
     });
     if (materialized.length > 0) configFiles = materialized;
-    if (!roleModel) model = resolveEffectiveModel({ roleModel: null, agentCli, settingsConfig }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
+    if (!roleModel) model = resolveEffectiveModel({ roleModel: null, agentCli, settingsConfig: snapshotSettingsConfig }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
     if (!roleReasoning) {
-      const fromSettings = extractReasoningFromSettings(agentCli, settingsConfig);
+      const fromSettings = extractReasoningFromSettings(agentCli, snapshotSettingsConfig);
       if (fromSettings === "low" || fromSettings === "medium" || fromSettings === "high" || fromSettings === "xhigh") {
         reasoning = fromSettings;
       }
@@ -198,7 +200,7 @@ export async function resolveAgentSnapshotForJob(
     role_description: (role.description as string) ?? roleName,
     instructions_markdown: withRuntimeTestToolchainPolicy(roleName, (cfg?.instructions_markdown as string) ?? null, runtimeImage.image_key),
     platform_tools: platformTools as PlatformToolName[],
-    settings_config_json: settingsConfig,
+    settings_config_json: snapshotSettingsConfig,
     config_files: configFiles,
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,

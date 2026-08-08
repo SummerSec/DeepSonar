@@ -119,9 +119,9 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 ## 9. 安全边界
 
 - 被审计目标 = 不可信输入（prompt injection）。
-- `settings_config_json` 是 CLI 连接真相：随 Job 完整冻结并原样物化到一次性沙箱；管理 API/Web 只返回脱敏投影。无配置文件的历史 Credential 才走 Model Gateway 兼容路径。
+- `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
 - 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。
-- 出网：`allow_egress` 任务级冻结；禁出网时仅 gateway sidecar。
+- 出网：`allow_egress` 任务级冻结；所有 real Job 的模型请求都经 Scheduler-owned gateway proxy。允许出网的沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，并通过同时接入两网的固定 proxy 到达 Scheduler。
 
 ## 10. 前端信息架构
 
@@ -149,7 +149,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 实时流 + 运行中过程流 | #38 | WS 鉴权；inflight 读 `stream.ndjson` |
 | 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`canvas_changes` durable revision/tombstone；`delta?since=<revision>`，游标过旧显式回退 L0 |
 | 分层共享资产 | #41 | **已实现**：platform/project/finding 三级不可变版本库，CAS blob、配额/MIME/path 校验、人工上传/归档/下载、Agent `list_shared_assets`/`publish_shared_asset`、项目 platform opt-in、Finding 隔离、Job 精确版本快照，以及带 Job 标签的 `:ro` named volume 自动注入/回收；项目/平台/Finding UI 已接入。字节经可插拔 BlobStore（`BLOB_STORE=fs|s3`，官方生产 Compose 默认使用 PGSTY Silo，仍兼容任意 S3 服务）；Agent **无单独下载工具**，list 返回 `mount_path`/`read_path` 用普通文件工具读取，publish 由 Scheduler 写 BlobStore。 |
-| Provider 配置（CC Switch 模型） | #99 | **已落地（三类配置方言）**：LLM `provider` 是协议（Anthropic Messages / OpenAI Responses），不是厂商预设。`credentials` 存 `agent_cli` + 完整 `settings_config_json` + `meta_json`；管理 API 仅返回 `[已保存密钥]` 脱敏投影。角色绑定 Credential 配置文件，`RoleConfig.model` 仅作可选高级覆盖；所有门禁与 Job 冻结统一解析 `effectiveModel = RoleConfig.model ?? Credential settings model ?? null`。显式 `allowed_model_ids` 只约束 effective model，settings 模型不会静默开启白名单。Job 快照把完整配置原样物化为 `.claude/settings.json` / `.codex/*` / `.opencode/config.json`，不再用 Gateway Token 改写文件；沙箱终态销毁。**当前 real runtime 只完整驱动 Claude Code**；通用多 CLI Runtime Adapter 见 #100。 |
+| Provider 配置（CC Switch 模型） | #99 | **已落地（三类配置方言）**：LLM `provider` 是协议（Anthropic Messages / OpenAI Responses），不是厂商预设。`credentials` 存 `agent_cli` + 完整 `settings_config_json` + `meta_json`；管理 API 仅返回 `[已保存密钥]` 脱敏投影。角色绑定 Credential 配置文件，`RoleConfig.model` 仅作可选高级覆盖；所有门禁与 Job 冻结统一解析 `effectiveModel = RoleConfig.model ?? Credential settings model ?? null`。显式 `allowed_model_ids` 只约束 effective model，settings 模型不会静默开启白名单。Job 快照仅保存无密钥配置结构；运行时物化 `.claude/settings.json` / `.codex/*` / `.opencode/config.json` 时统一改写到 Model Gateway，并注入短期 Job token。**当前 real runtime 只完整驱动 Claude Code**；通用多 CLI Runtime Adapter 见 #100。 |
 | 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
 | 双轨报告 | #43 | **已完成**：任务收敛后保留一份 Task Report；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report，支持手动刷新/重试并限制单 Finding 同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | **已完成**：通用 `profile/category/tags/evidence_refs` 与可选 severity/scoring；协议按任务>项目>全局解析并随画布冻结；Agent 通过严格 MCP 提案，Scheduler 重算 CVSS 4.0/3.1、保留协议允许的未知版本原始数据；Web/报告支持标识、筛选与分组 |

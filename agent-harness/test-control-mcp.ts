@@ -1,5 +1,9 @@
 /** 本地控制 MCP 协议冒烟：验证动态工具列表与控制工具成功响应。 */
 import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CONTROL_MCP_SERVER } from "../apps/scheduler/src/control-mcp.js";
 import { parseHubDecision, parseHubDecisionPayload } from "../apps/scheduler/src/graph.js";
 import { ControlInputError } from "../apps/scheduler/src/control-input.js";
@@ -41,7 +45,7 @@ if (restrictedTools.join(",") !== expectedRestricted) {
 }
 const restrictedGuide = platformToolGuide(restrictedTools);
 for (const disabled of ["emit_progress", "request_human"]) {
-  if (restrictedGuide.includes(disabled)) throw new Error(`disabled tool leaked into guide: ${disabled}`);
+  if (restrictedGuide.includes(`### \`${disabled}\``)) throw new Error(`disabled tool leaked into guide: ${disabled}`);
 }
 for (const expected of [
   "list_shared_assets",
@@ -74,20 +78,25 @@ for (const systemRole of ["verify", "report"]) {
 }
 
 const availableRoles = new Set(["review"]);
-if (!parseHubDecision(JSON.stringify({ intents: [{ from: [], role: "review", description: "复核", prompt: "执行复核" }] }), availableRoles)) {
+const validDescription = "复核已有证据并确认剩余验证边界";
+const validPrompt = "复核当前画布引用的全部证据，独立确认结论、缺口与下一步验证动作，并只提交新增事实。";
+if (!parseHubDecision(JSON.stringify({ intents: [{ from: [], role: "review", description: validDescription, prompt: validPrompt }] }), availableRoles)) {
   throw new Error("valid dynamic Hub role was rejected");
 }
 for (const invalid of [
-  { intents: [{ from: [], description: "缺角色", prompt: "执行" }] },
-  { intents: [{ from: [], role: "explore", description: "固定默认", prompt: "执行" }] },
-  { intents: [{ from: [], role: "report", description: "系统角色", prompt: "执行" }] },
+  { intents: [{ from: [], description: validDescription, prompt: validPrompt }] },
+  { intents: [{ from: [], role: "explore", description: validDescription, prompt: validPrompt }] },
+  { intents: [{ from: [], role: "report", description: validDescription, prompt: validPrompt }] },
 ]) {
   if (parseHubDecision(JSON.stringify(invalid), availableRoles)) {
     throw new Error(`invalid Hub role accepted: ${JSON.stringify(invalid)}`);
   }
 }
 
-const child = spawn(process.execPath, ["--input-type=module", "-e", CONTROL_MCP_SERVER], {
+const tempDir = mkdtempSync(join(tmpdir(), "deepsonar-control-mcp-"));
+const scriptPath = join(tempDir, "control-mcp.mjs");
+writeFileSync(scriptPath, CONTROL_MCP_SERVER, "utf8");
+const child = spawn(process.execPath, [scriptPath], {
   env: {
     ...process.env,
     DEEPSONAR_CONTROL_TOOL_NAMES: JSON.stringify([
@@ -135,15 +144,15 @@ send(6, "tools/call", {
 });
 send(7, "tools/call", {
   name: "emit_fact",
-  arguments: { title: "实时事实", description: "增量证据" },
+  arguments: { title: "实时事实", description: "增量证据已由当前请求与源码交叉确认" },
 });
 send(8, "tools/call", {
   name: "emit_fact",
-  arguments: { title: "实时事实", description: "增量证据", unexpected: true },
+  arguments: { title: "实时事实", description: "增量证据已由当前请求与源码交叉确认", unexpected: true },
 });
 send(9, "tools/call", {
   name: "emit_finding",
-  arguments: { title: "问题", severity: "high", summary: "证据" },
+  arguments: { title: "认证路径存在重放风险", severity: "high", summary: "成功重置后令牌仍可再次使用；隔离请求已复现，且源码路径确认未执行一次性失效处理。" },
 });
 send(10, "tools/call", {
   name: "emit_finding",
@@ -151,23 +160,23 @@ send(10, "tools/call", {
 });
 send(11, "tools/call", {
   name: "submit_hub_decision",
-  arguments: { intents: [{ from: [], role: "review", description: "复核", prompt: "执行复核" }] },
+  arguments: { intents: [{ from: [], role: "review", description: validDescription, prompt: validPrompt }] },
 });
 send(12, "tools/call", {
   name: "submit_hub_decision",
-  arguments: { intents: [{ from: ["ghp_super_secret_should_not_echo"], role: "review", description: "复核", prompt: "执行复核" }] },
+  arguments: { intents: [{ from: ["ghp_super_secret_should_not_echo"], role: "review", description: validDescription, prompt: validPrompt }] },
 });
 send(13, "tools/call", {
   name: "mark_job_done",
-  arguments: { summary: "完成" },
+  arguments: { summary: "已完成当前范围内的源码核对与证据整理。" },
 });
 send(14, "tools/call", {
   name: "mark_job_done",
-  arguments: { summary: "完成", unexpected: true },
+  arguments: { summary: "已完成当前范围内的源码核对与证据整理。", unexpected: true },
 });
 send(15, "tools/call", {
   name: "request_human",
-  arguments: { reason: "需要人工确认" },
+  arguments: { reason: "需要人工确认隔离测试账号的授权范围。" },
 });
 send(16, "tools/call", {
   name: "request_human",
@@ -207,11 +216,27 @@ send(25, "tools/call", {
   name: "publish_shared_asset",
   arguments: { scope: "project", source_path: "/workspace/.deepsonar/shared/catalog.json", key: "catalog.json", content_type: "application/json" },
 });
+send(26, "tools/call", {
+  name: "emit_fact",
+  arguments: { payload_file: "../fact.json" },
+});
+send(27, "tools/call", {
+  name: "emit_finding",
+  arguments: { title: "认证路径存在重放风险", summary: "成功重置后令牌仍可再次使用；隔离请求已复现，且源码路径确认未执行一次性失效处理。", payload_file: "finding.json" },
+});
+send(28, "tools/call", {
+  name: "emit_finding",
+  arguments: { payload_file: "C:\\tmp\\finding.json" },
+});
+send(29, "tools/call", {
+  name: "emit_fact",
+  arguments: { payload_file: "/workspace/fact.json" },
+});
 
 await new Promise<void>((resolve, reject) => {
   const deadline = setTimeout(() => reject(new Error("MCP response timeout")), 5_000);
   const timer = setInterval(() => {
-    if (replies.trim().split("\n").length >= 25) {
+    if (replies.trim().split("\n").length >= 29) {
       clearTimeout(deadline);
       clearInterval(timer);
       resolve();
@@ -219,12 +244,27 @@ await new Promise<void>((resolve, reject) => {
   }, 25);
 });
 child.kill();
+if (child.exitCode === null) await once(child, "exit").catch(() => {});
+rmSync(tempDir, { recursive: true, force: true });
 
 const rpcReplies = replies.trim().split("\n").map((line) => JSON.parse(line));
 const toolsReply = rpcReplies.find((reply) => reply.id === 2);
 for (const [name, schema] of Object.entries(ControlToolInputSchemasJson)) {
+  // Claude Code / Anthropic skip tools whose inputSchema lacks type:object
+  // or uses top-level anyOf/oneOf (MCP log: "top-level anyOf, which the Anthropic API does not accept").
+  const s = schema as { type?: unknown; anyOf?: unknown; oneOf?: unknown };
+  if (s.type !== "object") {
+    throw new Error(`MCP inputSchema for ${name} must have type: object (got ${JSON.stringify(s.type)})`);
+  }
+  if (Array.isArray(s.anyOf) || Array.isArray(s.oneOf)) {
+    throw new Error(`MCP inputSchema for ${name} must not use top-level anyOf/oneOf`);
+  }
   const advertised = toolsReply?.result?.tools?.find((tool) => tool.name === name)?.inputSchema;
-  if (JSON.stringify(advertised) !== JSON.stringify(schema)) {
+  const expected = structuredClone(schema) as Record<string, any>;
+  if (name === "submit_hub_decision") {
+    expected.properties.intents.items.properties.role.enum = ["review"];
+  }
+  if (JSON.stringify(advertised) !== JSON.stringify(expected)) {
     throw new Error(`MCP schema drift for ${name}`);
   }
 }
@@ -278,6 +318,10 @@ if (catalogStatus?.version !== 1 || catalogStatus?.readonly !== true || !Array.i
 }
 assertError(23, "invalid_payload");
 assertError(25, "invalid_payload");
+assertError(26, "invalid_payload");
+assertError(27, "invalid_payload");
+assertError(28, "invalid_payload");
+assertError(29, "invalid_payload");
 let hostHubErrorCode = "";
 try {
   parseHubDecisionPayload({

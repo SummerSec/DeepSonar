@@ -47,6 +47,20 @@ test("finding index falls back to an explicit compact form instead of partial ro
   assert.equal(projection.lines[0], "findings_index:");
 });
 
+test("finding index keeps canvas node identity distinct from database finding identity", () => {
+  const projection = serializeFindingStatusIndex([
+    {
+      id: "canvas-finding-node",
+      finding_id: "database-finding",
+      title: "A finding with enough detail",
+      verify_status: "pending",
+    },
+  ], 2_000);
+  const row = JSON.parse(projection.lines[1].replace(/^\s*-\s*/, "")) as Record<string, unknown>;
+  assert.equal(row.id, "canvas-finding-node");
+  assert.equal(row.finding_id, "database-finding");
+});
+
 test("graph projections prioritize open intents and do not repeat the Worker prompt", () => {
   const graphSource = readFileSync(new URL("./graph.ts", import.meta.url), "utf8");
   const hubSource = graphSource.slice(
@@ -75,12 +89,24 @@ test("projection markers expose truncation and omission counts", () => {
 test("Hub decision parser remains role-gated after graph scope changes", () => {
   const rootId = "00000000-0000-4000-8000-000000000001";
   const decision = parseHubDecision(
-    JSON.stringify({ intents: [{ role: "review", description: "check", prompt: "check the target", from: [rootId] }] }),
+    JSON.stringify({
+      intents: [{
+        role: "review",
+        description: "Review existing evidence and remaining validation boundaries",
+        prompt: "Review every referenced item, confirm the conclusion independently, and submit only new facts or actionable evidence gaps.",
+        from: [rootId],
+      }],
+    }),
     new Set(["review"]),
     [rootId],
   );
   assert.equal(decision?.intents?.[0]?.role, "review");
-  assert.equal(parseHubDecision(JSON.stringify({ intents: [{ role: "verify", description: "bad", prompt: "bad", from: [] }] }), new Set(["review"])), null);
+  assert.equal(parseHubDecision(JSON.stringify({ intents: [{
+    role: "verify",
+    description: "Review the unsupported role rejection path",
+    prompt: "Attempt a complete decision with an unavailable role so the parser must reject it before dispatch.",
+    from: [],
+  }] }), new Set(["review"])), null);
 });
 
 test("single and batch evidence paths share the same hard-gate helper", () => {

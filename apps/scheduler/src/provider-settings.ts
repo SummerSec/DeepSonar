@@ -5,6 +5,7 @@
  * Job runtime expands it into sandbox files under CONFIG_FILE_PATHS.
  */
 import { createHash } from "node:crypto";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { extractModelFromSettings } from "./provider-effective-model.js";
 export { extractModelFromSettings, resolveEffectiveModel } from "./provider-effective-model.js";
@@ -41,6 +42,121 @@ function sha256Text(content: string): string {
 
 function file(path: string, content: string): MaterializedConfigFile {
   return { path, content, content_sha256: sha256Text(content) };
+}
+
+function parseJsonObject(content: string, path: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error(`受限网络无法解析冻结的 Provider 配置文件 ${path}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`受限网络要求 ${path} 的根为对象`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+const RUNTIME_SECRET_FIELD = /(?:^|_)(?:api_?key|access_?token|api_?token|auth_?token|oauth_?token|refresh_?token|client_?secret|private_?key|key|token|secret|password|authorization|cookie)$/iu;
+
+function scrubRuntimeSecretFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(scrubRuntimeSecretFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !RUNTIME_SECRET_FIELD.test(key))
+      .map(([key, entry]) => [key, scrubRuntimeSecretFields(entry)]),
+  );
+}
+
+/** Secret-free Provider profile persisted into immutable Job snapshots. */
+export function providerSettingsForJobSnapshot(settingsConfig: unknown): Record<string, unknown> {
+  const snapshot = scrubRuntimeSecretFields(structuredClone(asObject(settingsConfig))) as Record<string, unknown>;
+  if (typeof snapshot.config === "string" && snapshot.config.trim()) {
+    try {
+      const parsed = scrubRuntimeSecretFields(parseToml(snapshot.config)) as Record<string, unknown>;
+      snapshot.config = `${stringifyToml(parsed)}\n`;
+    } catch {
+      throw new Error("Job 快照无法解析 Provider config TOML，拒绝冻结可能含密钥的原始文本");
+    }
+  }
+  return snapshot;
+}
+
+/**
+ * Replace direct Provider endpoints and long-lived keys with the restricted
+ * Scheduler Gateway and the current Job token. The frozen snapshot remains
+ * immutable; only the per-sandbox materialized copies are rewritten.
+ */
+export function routeMaterializedProviderFilesThroughGateway(input: {
+  agentCli: ProviderAgentCli;
+  files: readonly MaterializedConfigFile[];
+  gatewayBaseUrl: string;
+  jobToken: string;
+}): MaterializedConfigFile[] {
+  const gatewayBaseUrl = input.gatewayBaseUrl.trim().replace(/\/+$/u, "");
+  const jobToken = input.jobToken.trim();
+  if (!gatewayBaseUrl || !jobToken) throw new Error("受限网络缺少 Gateway URL 或 Job token");
+  const byPath = new Map(input.files.map((item) => [item.path, item]));
+
+  if (input.agentCli === "claude-code") {
+    const source = byPath.get(".claude/settings.json");
+    if (!source) throw new Error("受限网络缺少冻结的 Claude settings.json");
+    const settings = scrubRuntimeSecretFields(parseJsonObject(source.content, source.path)) as Record<string, unknown>;
+    const env = asObject(settings.env);
+    delete env.ANTHROPIC_API_KEY;
+    env.ANTHROPIC_AUTH_TOKEN = jobToken;
+    env.ANTHROPIC_BASE_URL = gatewayBaseUrl;
+    settings.env = env;
+    return input.files.map((item) => item.path === source.path
+      ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
+      : { ...item });
+  }
+
+  if (input.agentCli === "codex") {
+    const authSource = byPath.get(".codex/auth.json");
+    const configSource = byPath.get(".codex/config.toml");
+    if (!authSource || !configSource) throw new Error("受限网络缺少冻结的 Codex auth/config 文件");
+    parseJsonObject(authSource.content, authSource.path);
+    const auth = { OPENAI_API_KEY: jobToken };
+    let config: Record<string, unknown>;
+    try {
+      config = scrubRuntimeSecretFields(parseToml(configSource.content)) as Record<string, unknown>;
+    } catch {
+      throw new Error("受限网络无法解析冻结的 Codex config.toml");
+    }
+    const providerName = typeof config.model_provider === "string" ? config.model_provider : "";
+    const providers = asObject(config.model_providers);
+    const provider = asObject(providers[providerName]);
+    if (!providerName || Object.keys(provider).length === 0) {
+      throw new Error("受限网络无法定位 Codex 当前 model_provider");
+    }
+    provider.base_url = gatewayBaseUrl;
+    provider.requires_openai_auth = true;
+    providers[providerName] = provider;
+    config.model_providers = providers;
+    return input.files.map((item) => {
+      if (item.path === authSource.path) return file(item.path, `${JSON.stringify(auth, null, 2)}\n`);
+      if (item.path === configSource.path) return file(item.path, `${stringifyToml(config)}\n`);
+      return { ...item };
+    });
+  }
+
+  const source = byPath.get(".opencode/config.json");
+  if (!source) throw new Error("受限网络缺少冻结的 OpenCode config.json");
+  const settings = scrubRuntimeSecretFields(parseJsonObject(source.content, source.path)) as Record<string, unknown>;
+  const providers = asObject(settings.provider);
+  const selected = asObject(providers.deepsonar);
+  if (Object.keys(selected).length === 0) throw new Error("受限网络无法定位 OpenCode deepsonar provider");
+  const options = asObject(selected.options);
+  options.apiKey = jobToken;
+  options.baseURL = gatewayBaseUrl;
+  selected.options = options;
+  providers.deepsonar = selected;
+  settings.provider = providers;
+  return input.files.map((item) => item.path === source.path
+    ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
+    : { ...item });
 }
 
 function asObject(value: unknown): Record<string, unknown> {

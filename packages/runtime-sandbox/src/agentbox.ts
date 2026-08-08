@@ -120,6 +120,18 @@ export function isDeepsonarRestrictedNetwork(net: Record<string, unknown> | null
   return internal === true && driver === "bridge" && String(labels["deepsonar.managed"] ?? "") === "true";
 }
 
+/** True when a network is the Scheduler-owned NAT bridge for real sandboxes. */
+export function isDeepsonarGatewayNetwork(net: Record<string, unknown> | null | undefined): boolean {
+  if (!net || typeof net !== "object") return false;
+  const internal = net.Internal ?? net.internal;
+  const driver = String(net.Driver ?? net.driver ?? "");
+  const labelsRaw = net.Labels ?? net.labels;
+  const labels = labelsRaw && typeof labelsRaw === "object" && !Array.isArray(labelsRaw)
+    ? labelsRaw as Record<string, unknown>
+    : {};
+  return internal !== true && driver === "bridge" && String(labels["deepsonar.managed"] ?? "") === "true";
+}
+
 // --- agentbox-sdk 0.1.501 Windows 宿主兼容性补丁 ---
 // SDK 用宿主 path.join 拼沙箱内的 POSIX 路径，Windows 上产出反斜杠，传进容器后路径全毁。
 // 运行时补丁：join 的首参数是 POSIX 绝对路径（"/" 开头）时改用 posix.join。
@@ -134,12 +146,14 @@ if (process.platform === "win32") {
 /** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
+const GATEWAY_NETWORK = "deepsonar-sandbox-gateway";
 const GATEWAY_PROXY = "deepsonar-gateway-proxy";
 export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
 export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
 export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
 const SHARED_ASSETS_VOLUME_RE = /^deepsonar-assets-[a-z0-9][a-z0-9_.-]{0,62}$/;
 let restrictedNetworkReady: Promise<void> | null = null;
+let gatewayNetworkReady: Promise<void> | null = null;
 let gatewayProxyReady: Promise<void> | null = null;
 
 /** Build the only Docker bind accepted for shared assets; host paths are never allowed. */
@@ -313,6 +327,37 @@ async function ensureRestrictedNetwork(): Promise<void> {
   return restrictedNetworkReady;
 }
 
+/** Create/validate the shared non-internal bridge used by egress sandboxes. */
+async function ensureGatewayNetwork(): Promise<void> {
+  gatewayNetworkReady ??= (async () => {
+    const validate = async () => {
+      const net = await dockerApiJson(`/networks/${encodeURIComponent(GATEWAY_NETWORK)}`) as Record<string, unknown>;
+      if (!isDeepsonarGatewayNetwork(net)) throw new Error(`Docker network ${GATEWAY_NETWORK} is not a managed NAT bridge`);
+    };
+    try {
+      await validate();
+      return;
+    } catch {
+      try {
+        await dockerApiJson("/networks/create", {
+          method: "POST",
+          body: { Name: GATEWAY_NETWORK, Driver: "bridge", Internal: false, Labels: { "deepsonar.managed": "true" } },
+        });
+      } catch (createError) {
+        const msg = createError instanceof Error ? createError.message : String(createError);
+        if (!/\b409\b|already exists|Conflict/i.test(msg)) {
+          await docker("network", "create", "--driver", "bridge", "--label", "deepsonar.managed=true", GATEWAY_NETWORK)
+            .catch(async (cliError) => {
+              await validate().catch(() => { throw cliError instanceof Error ? cliError : createError; });
+            });
+        }
+      }
+      await validate();
+    }
+  })();
+  return gatewayNetworkReady;
+}
+
 /**
  * internal bridge 不能直达 Docker Desktop 宿主。共享 sidecar 同时连普通 bridge 和
  * internal bridge，但代码只允许把 /gateway 路径转发到唯一上游，不提供 CONNECT 或任意目标代理。
@@ -321,8 +366,10 @@ async function ensureRestrictedNetwork(): Promise<void> {
  * internal bridge 常无嵌入式 DNS，容器名 `deepsonar-gateway-proxy` 解析失败会表现为
  * Claude Code `Unable to connect to API (ENOTIMP)` / curl Could not resolve host。
  */
-async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<string> {
+async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<{ gatewayIp: string; restrictedIp: string }> {
   gatewayProxyReady ??= (async () => {
+    await ensureGatewayNetwork();
+    await ensureRestrictedNetwork();
     const parsed = new URL(upstreamUrl);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new Error(`Gateway sidecar 不支持上游协议: ${parsed.protocol}`);
@@ -351,13 +398,20 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<s
     if (!exists) {
       await docker(
         "run", "-d", "--name", GATEWAY_PROXY, "--restart", "unless-stopped",
-        "--network", "bridge", "--add-host", "host.docker.internal:host-gateway",
+        "--network", GATEWAY_NETWORK, "--add-host", "host.docker.internal:host-gateway",
         "--label", "deepsonar.managed=true", "--label", `deepsonar.gateway-upstream=${upstreamHash}`,
         "-e", `DEEPSONAR_GATEWAY_UPSTREAM=${upstreamUrl}`,
         "--entrypoint", "node", image, "-e", GATEWAY_PROXY_SCRIPT,
       );
     }
     const inspect = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<string, unknown>;
+    if (!(GATEWAY_NETWORK in inspect)) {
+      await docker("network", "connect", "--alias", GATEWAY_PROXY, GATEWAY_NETWORK, GATEWAY_PROXY).catch(async () => {
+        await docker("network", "connect", GATEWAY_NETWORK, GATEWAY_PROXY).catch(() => {});
+        const refreshed = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<string, unknown>;
+        if (!(GATEWAY_NETWORK in refreshed)) throw new Error(`${GATEWAY_PROXY} could not join ${GATEWAY_NETWORK}`);
+      });
+    }
     if (!(RESTRICTED_NETWORK in inspect)) {
       // --alias 让 Docker 嵌入 DNS 能解析容器名；Podman rootless 仍可能无 DNS，见 ExtraHosts。
       try {
@@ -386,9 +440,11 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<s
     string,
     { IPAddress?: string }
   >;
+  const gatewayIp = nets[GATEWAY_NETWORK]?.IPAddress?.trim();
   const ip = nets[RESTRICTED_NETWORK]?.IPAddress?.trim();
+  if (!gatewayIp) throw new Error(`${GATEWAY_PROXY} is not attached to ${GATEWAY_NETWORK}`);
   if (!ip) throw new Error(`${GATEWAY_PROXY} 未接入 ${RESTRICTED_NETWORK} 或缺少 IPv4`);
-  return ip;
+  return { gatewayIp, restrictedIp: ip };
 }
 
 /**
@@ -501,12 +557,11 @@ export class AgentboxRunner implements SandboxRunner {
     if (input.sharedAssetsMount) {
       await validateSharedAssetsVolume(input.sharedAssetsMount.volumeName, input.jobId);
     }
-    if (input.network === "restricted") {
-      await ensureRestrictedNetwork();
-      if (!input.gatewayUpstreamUrl) throw new Error("restricted Worker 缺少 Gateway 上游 URL");
-      const proxyIp = await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
+    if (input.network !== "none") {
+      if (!input.gatewayUpstreamUrl) throw new Error("real sandbox missing Gateway upstream URL");
+      const proxyIps = await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
       // 固定主机名 → restricted 网 IP，避免 Podman internal 网无 DNS 时 ANTHROPIC_BASE_URL 不可达
-      extraHosts.push(`${GATEWAY_PROXY}:${proxyIp}`);
+      extraHosts.push(`${GATEWAY_PROXY}:${input.network === "restricted" ? proxyIps.restrictedIp : proxyIps.gatewayIp}`);
     }
     const sandbox = new Sandbox("local-docker", {
       image: input.image,
@@ -524,7 +579,7 @@ export class AgentboxRunner implements SandboxRunner {
         // restricted=无外网 NAT 的内部 bridge（仅保留 host-gateway 模型通道）；
         // egress=普通 bridge，Worker 可按 prompt 自主取材。
         networkMode:
-          input.network === "none" ? "none" : input.network === "restricted" ? RESTRICTED_NETWORK : "bridge",
+          input.network === "none" ? "none" : input.network === "restricted" ? RESTRICTED_NETWORK : GATEWAY_NETWORK,
         autoRemove: true,
       },
     });
@@ -1067,6 +1122,8 @@ export interface SemanticToolState {
   observedToolUses: Map<string, ObservedToolKind>;
   /** Hash-only tracking for ordinary tool calls; raw ids remain telemetry-compatible. */
   observedNonControlToolUseHashes: Set<string>;
+  /** Bounded tool names for ordinary tool completion normalization. */
+  observedNonControlToolUseNames: Map<string, string>;
   /** Hash-only settled ids for ordinary tool calls, preventing replay without raw-id retention. */
   settledNonControlToolUseHashes: Set<string>;
   maxPendingToolUses: number;
@@ -1081,6 +1138,7 @@ export function createSemanticToolState(
     pendingToolUses: new Map(),
     observedToolUses: new Map(),
     observedNonControlToolUseHashes: new Set(),
+    observedNonControlToolUseNames: new Map(),
     settledNonControlToolUseHashes: new Set(),
     maxPendingToolUses,
   };
@@ -1094,6 +1152,7 @@ export function discardPendingSemanticTools(
   if (state.pendingToolUses.size === 0) {
     state.observedToolUses.clear();
     state.observedNonControlToolUseHashes.clear();
+    state.observedNonControlToolUseNames.clear();
     state.settledNonControlToolUseHashes.clear();
     return;
   }
@@ -1104,6 +1163,7 @@ export function discardPendingSemanticTools(
   state.pendingToolUses.clear();
   state.observedToolUses.clear();
   state.observedNonControlToolUseHashes.clear();
+  state.observedNonControlToolUseNames.clear();
   state.settledNonControlToolUseHashes.clear();
 }
 
@@ -1165,6 +1225,49 @@ function safeControlInputShape(value: unknown): Record<string, unknown> {
     return { kind: "object", field_count: Math.min(Object.keys(value as Record<string, unknown>).length, 1000) };
   }
   return { kind: safeRuntimeValueKind(value) };
+}
+
+const TOOL_DETAIL_MAX = 4000;
+const SENSITIVE_TOOL_KEY = /pass(word)?|secret|token|api[-_]?key|authorization|cookie|credential|private[-_]?key|client[-_]?secret/i;
+
+/** Redact and bound ordinary tool telemetry before it crosses the runtime boundary. */
+export function redactToolTelemetry(value: unknown, key?: string, depth = 0): unknown {
+  if (key && SENSITIVE_TOOL_KEY.test(key)) return "[REDACTED]";
+  if (depth > 5) return "[TRUNCATED]";
+  if (typeof value === "string") {
+    return value
+      .replace(/\b(?:deepsonar_(?:prod|dev|user|job)_[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,})\b/gi, "[REDACTED]")
+      .replace(/(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [REDACTED]")
+      .replace(/((?:api[-_]?key|token|secret|password|authorization|cookie)\s*[:=]\s*)(?!Bearer\b|Basic\b)([^\s,;]+)/gi, "$1[REDACTED]");
+  }
+  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => redactToolTelemetry(entry, undefined, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entryValue]) => [entryKey, redactToolTelemetry(entryValue, entryKey, depth + 1)]));
+  }
+  return value;
+}
+
+function boundedToolText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const redacted = redactToolTelemetry(value);
+  const text = typeof redacted === "string" ? redacted : JSON.stringify(redacted);
+  return text && text.length > TOOL_DETAIL_MAX ? `${text.slice(0, TOOL_DETAIL_MAX)}...` : text;
+}
+
+function toolResultText(block: Record<string, unknown>): string | undefined {
+  const value = block.result ?? block.output ?? block.content ?? block.stdout ?? block.text;
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((entry) => entry && typeof entry === "object" && typeof (entry as Record<string, unknown>).text === "string" ? (entry as Record<string, unknown>).text : entry)
+      .filter((entry) => entry !== undefined && entry !== null);
+    return boundedToolText(normalized);
+  }
+  return boundedToolText(value);
+}
+
+function toolExitCode(block: Record<string, unknown>): number | undefined {
+  const value = block.exit ?? block.exit_code ?? block.exitCode ?? block.code;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= -255 && value <= 255 ? value : undefined;
 }
 
 function runtimeContentBlocks(
@@ -1270,8 +1373,15 @@ export function mapCliEvent(
           if (validControlCallId(callId)) rememberObservedToolUse(state, callId, "control");
           warnings.push({ code: "unknown_control_tool", detail: "control_namespace" });
         } else {
-          emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: block.input });
-          if (callId) rememberToolHash(state.observedNonControlToolUseHashes, callId);
+          emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: redactToolTelemetry(block.input) });
+          if (callId) {
+            rememberToolHash(state.observedNonControlToolUseHashes, callId);
+            state.observedNonControlToolUseNames.set(telemetryToolHash(callId), toolName || "tool");
+            if (state.observedNonControlToolUseNames.size > SETTLED_CONTROL_TOOL_LIMIT) {
+              const oldest = state.observedNonControlToolUseNames.keys().next().value;
+              if (typeof oldest === "string") state.observedNonControlToolUseNames.delete(oldest);
+            }
+          }
         }
         if (canTrackControl) {
           if (state.pendingToolUses.size >= state.maxPendingToolUses) {
@@ -1314,8 +1424,19 @@ export function mapCliEvent(
           if (!state.observedNonControlToolUseHashes.delete(nonControlHash)) continue;
           if (!state.settledNonControlToolUseHashes.has(nonControlHash)) {
             rememberToolHash(state.settledNonControlToolUseHashes, callId);
-            emit({ type: "tool.call.completed", callId, isError: block.is_error === true });
+            const result = toolResultText(block);
+            const error = block.is_error === true ? result : boundedToolText(block.error);
+            emit({
+              type: "tool.call.completed",
+              callId,
+              toolName: state.observedNonControlToolUseNames.get(nonControlHash),
+              ...(result ? { result } : {}),
+              ...(toolExitCode(block) !== undefined ? { exit: toolExitCode(block) } : {}),
+              ...(error ? { error } : {}),
+              isError: block.is_error === true,
+            });
           }
+          state.observedNonControlToolUseNames.delete(nonControlHash);
           continue;
         }
         state.pendingToolUses.delete(callId);
