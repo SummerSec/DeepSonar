@@ -16,7 +16,7 @@ const manifest = {
   platforms: config.platforms,
   tools: [
     ...Object.entries(config.apt).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "debian:bookworm", version: entry.version, license: entry.license, capabilities: entry.capabilities })),
-    ...Object.entries(config.npm).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "npm", version: entry.version, license: entry.license, capabilities: entry.capabilities })),
+    ...Object.entries(config.npm).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "npm", version: entry.version, license: entry.license, capabilities: entry.capabilities, ...(entry.agent_cli ? { agent_cli: entry.agent_cli, compatible_image_keys: entry.compatible_image_keys } : {}) })),
     ...Object.entries(config.downloads).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "download", version: entry.version, license: entry.license, capabilities: entry.capabilities, assets: entry.assets })),
   ],
 };

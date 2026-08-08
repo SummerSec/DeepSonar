@@ -91,3 +91,19 @@ export type {
   SessionBundle,
   SupportedAgentCli,
 } from "./cli-session-adapters.js";
+export {
+  AGENT_CLI_RUNTIME_ADAPTERS,
+  REQUIRED_RUNTIME_CAPABILITIES,
+  freezeAgentCliRuntime,
+  getAgentCliRuntimeAdapter,
+  requireAgentCliRuntimeAdapter,
+} from "./runtime-adapters.js";
+export type {
+  AgentCliCapabilities,
+  AgentCliId,
+  AgentCliRuntimeSnapshot,
+  AdapterRuntimeState,
+  AdapterResumeContext,
+  AdapterStartContext,
+  RuntimeAdapter,
+} from "./runtime-adapters.js";

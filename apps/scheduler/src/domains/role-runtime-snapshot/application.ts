@@ -21,6 +21,7 @@ import { resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
+import { freezeAgentCliRuntime, requireAgentCliRuntimeAdapter } from "@deepsonar/runtime-sandbox";
 import type {
   RoleRuntimeSnapshotApplication,
   RoleRuntimeSnapshotResult,
@@ -174,12 +175,14 @@ export async function resolveAgentSnapshotForJob(
   const platformTools = resolvePlatformTools(roleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});
   const runtimeImageKey = (cfg?.runtime_image_key as string) ?? null;
   const runtimeImage = await resolveRuntimeImageForJob(db as never, projectId, roleName, runtimeImageKey);
+  const runtimeAdapter = requireAgentCliRuntimeAdapter(agentCli, runtimeImage.image_key);
 
   return {
     name: roleName,
     role_kind: roleKind,
     ui_color: roleKind === "role" ? normalizeRoleUiColor(role.ui_color) : null,
     agent_cli: agentCli,
+    agent_runtime: freezeAgentCliRuntime(runtimeAdapter),
     model,
     reasoning,
     env_vars: cfg?.env_vars_json && typeof cfg.env_vars_json === "object" ? cfg.env_vars_json as Record<string, string> : {},

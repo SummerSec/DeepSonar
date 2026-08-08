@@ -14,6 +14,8 @@ ARG UNZIP_VERSION=6.0-28
 ARG XZ_VERSION=5.4.1-1
 ARG BINUTILS_VERSION=2.40-2
 ARG CLAUDE_CODE_VERSION=2.1.220
+ARG CODEX_VERSION=0.147.0
+ARG OPENCODE_VERSION=1.18.15
 ARG SEMGREP_VERSION=1.172.0
 ARG GITLEAKS_VERSION=8.30.1
 ARG SHELLCHECK_VERSION=0.11.0
@@ -38,6 +40,8 @@ RUN set -eu; \
 
 RUN npm install -g --omit=dev --no-audit --no-fund \
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+  @openai/codex@${CODEX_VERSION} \
+  opencode-ai@${OPENCODE_VERSION} \
   && npm cache clean --force
 
 RUN set -eu; if [ "$TOOLSET" = audit ]; then \

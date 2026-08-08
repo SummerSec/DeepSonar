@@ -52,6 +52,20 @@ expect(localDefinition.includes('runtime-images.json'), "agent-harness/image.mjs
 expect(dockerfile.includes(`ARG BASE_IMAGE=${config.baseImage}`), "Dockerfile.agent base image differs from runtime-images.json");
 expect(dockerfile.includes("FROM ${BASE_IMAGE}"), "Dockerfile.agent must consume the pinned BASE_IMAGE arg");
 expect(dockerfile.includes(`ARG CLAUDE_CODE_VERSION=${config.npm["@anthropic-ai/claude-code"].version}`), "Claude Code version drift");
+for (const [packageName, entry] of Object.entries(config.npm)) {
+  if (!entry.agent_cli) continue;
+  expect(Array.isArray(entry.compatible_image_keys) && entry.compatible_image_keys.includes("deepsonar-base"), `${packageName} base compatibility missing`);
+  expect(Array.isArray(kaliConfig.npm[packageName]?.compatible_image_keys) && kaliConfig.npm[packageName].compatible_image_keys.includes("deepsonar-kali-minimal"), `${packageName} Kali compatibility missing`);
+}
+for (const [packageName, argName] of [["@openai/codex", "CODEX"], ["opencode-ai", "OPENCODE"]]) {
+  expect(config.npm[packageName], `${packageName} runtime package missing from manifest`);
+  if (config.npm[packageName]) {
+    expect(dockerfile.includes(`ARG ${argName}_VERSION=${config.npm[packageName].version}`), `${packageName} version drift`);
+    expect(dockerfile.includes(`${packageName}@\${${argName}_VERSION}`), `${packageName} must be installed from the pinned Docker ARG`);
+    expect(kaliDockerfile.includes(`ARG ${argName}_VERSION=${kaliConfig.npm[packageName].version}`), `Kali ${packageName} version drift`);
+    expect(kaliDockerfile.includes(`${packageName}@\${${argName}_VERSION}`), `Kali ${packageName} must be installed from the pinned Docker ARG`);
+  }
+}
 const aptArgs = {
   git: "GIT", python3: "PYTHON", "python3-venv": "PYTHON", "ca-certificates": "CA_CERTIFICATES",
   curl: "CURL", ripgrep: "RIPGREP", jq: "JQ", file: "FILE", unzip: "UNZIP", "xz-utils": "XZ", binutils: "BINUTILS",

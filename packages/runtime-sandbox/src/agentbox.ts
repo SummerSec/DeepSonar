@@ -2,8 +2,8 @@
  * agentbox-sdk（TwillAI, MIT）真实实现 —— ARCHITECTURE §5/§8
  *
  * 要点：
- * - agentbox 只作沙箱（容器生命周期 + exec + 文件上下行）；Agent 由 claude CLI
- *   以 stream-json 模式直接在沙箱内驱动，不走 SDK daemon/relay。
+ * - agentbox 只作沙箱（容器生命周期 + exec + 文件上下行）；Agent 由受治理的
+ *   Runtime Adapter 通过官方结构化 CLI 协议直接在沙箱内驱动，不走 SDK daemon/relay。
  * - assistant tool_use 先只进入宿主 bounded pending 表；对应的合法非错误 tool_result
  *   （is_error 省略或为 false）后才释放语义事件，不经过沙箱目标网络，也不依赖 Agent 可写文件。
  */
@@ -20,6 +20,7 @@ import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
+import { requireAgentCliRuntimeAdapter, type AgentCliRuntimeSnapshot } from "./runtime-adapters.js";
 import type { ProvisionInput, RunHandle, SandboxRunner } from "./index.js";
 
 const execFileP = promisify(execFile);
@@ -709,6 +710,8 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export interface RealAgentSpec {
   provider: "claude-code" | "open-code" | "codex";
+  adapter?: AgentCliRuntimeSnapshot;
+  runtimeImageKey?: string;
   /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
   model?: string;
   /** 思考/推理强度；缺省由 provider 默认 */
@@ -718,7 +721,7 @@ export interface RealAgentSpec {
   input: string;
   /** 平台不可变安全边界；与 /workspace 下的角色说明文件分层。 */
   systemPrompt?: string;
-  /** Agent 配置下发（claude CLI 本地组件文件，内容来自冻结 RoleConfig） */
+  /** Agent 配置下发（CLI 本地组件文件，内容来自冻结 RoleConfig） */
   skills?: AgentSkillConfig[];
   commands?: AgentCommandConfig[];
   mcps?: AgentMcpConfig[];
@@ -1496,7 +1499,7 @@ export function mapCliEvent(
     const text = typeof line.result === "string" ? line.result : "";
     const isError = line.is_error === true || (line.subtype as string) !== "success";
     emit({ type: "run.completed", text: text || (line.subtype as string) });
-    return { finalText: text, isError, errorDetail: isError ? text || `claude result: ${String(line.subtype)}` : undefined, semanticEvents, warnings };
+    return { finalText: text, isError, errorDetail: isError ? text || `agent result: ${String(line.subtype)}` : undefined, semanticEvents, warnings };
   }
   return { semanticEvents, warnings };
 }
@@ -1504,10 +1507,14 @@ export function mapCliEvent(
 export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
   const sandbox = AgentboxRunner.sandboxOf(handle);
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
-  if (spec.provider !== "claude-code") {
-    throw new Error(`CLI 驱动模式暂只支持 claude-code，收到: ${spec.provider}`);
+  const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
+  if (spec.adapter && (
+    spec.adapter.adapter_id !== adapter.id ||
+    spec.adapter.adapter_version !== adapter.version ||
+    JSON.stringify(spec.adapter.capabilities) !== JSON.stringify(adapter.capabilities)
+  )) {
+    throw new Error(`AGENT_CLI_SNAPSHOT_MISMATCH: ${adapter.id}`);
   }
-
   // 1. 从冻结快照生成本 Job 的完整 /workspace。目标内容不由 Scheduler 预下载，
   // Worker 根据 Hub prompt 与网络策略自行决定如何取材。
   for (const [filePath, content] of Object.entries(spec.workspaceFiles ?? {})) {
@@ -1525,8 +1532,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     await sandbox.uploadFile(content, normalized);
   }
 
-  // 2. agentbox 只当沙箱用：直接驱动 claude CLI（stream-json），不走 SDK daemon/relay。
-  //    该路径已在容器内验证：--mcp-config 注册本地控制 MCP，权限模式完全开放（§16）。
+  // 2. agentbox 只当沙箱用：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
+  //    控制 MCP 仍由宿主注册并捕获结构化 tool_use/tool_result，不经沙箱目标网络。
   const cliEnv = runtimeCliEnv(spec.env);
   await ensureRuntimeHome(sandbox);
   await materializeAgentFiles(sandbox, spec, cliEnv);
@@ -1537,26 +1544,41 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     systemPromptPath = `${RUNTIME_DIR}/system-prompt.txt`;
     await sandbox.uploadFile(spec.systemPrompt, systemPromptPath);
   }
+  await adapter.materialize?.({
+    sandbox,
+    cwd: "/workspace",
+    env: cliEnv,
+    model: spec.model,
+    reasoning: spec.reasoning,
+    input: spec.input,
+    mcpConfigPath,
+    ...(systemPromptPath ? { systemPromptPath } : {}),
+  });
 
-  let command =
-    `claude -p --input-format stream-json --output-format stream-json --verbose` +
-    ` --mcp-config ${shellQuote(mcpConfigPath)} --permission-mode bypassPermissions`;
-  if (spec.model) command += ` --model ${shellQuote(spec.model)}`;
-  if (spec.reasoning) command += ` --effort ${shellQuote(spec.reasoning)}`;
-  if (systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(systemPromptPath)})"`;
-
-  const exec = await sandbox.runAsync(command, { cwd: "/workspace", env: cliEnv });
+  const adapterContext = {
+    sandbox,
+    cwd: "/workspace",
+    env: cliEnv,
+    model: spec.model,
+    reasoning: spec.reasoning,
+    input: spec.input,
+    mcpConfigPath,
+    ...(systemPromptPath ? { systemPromptPath } : {}),
+  };
+  let exec = await adapter.start(adapterContext);
   // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
   // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
   let stdinClosed = false;
-  const rawStream = (exec.raw as { stream?: { destroyed?: boolean; writableEnded?: boolean; writable?: boolean } } | undefined)?.stream;
   const writeUserMessage = async (content: string) => {
+    const encoded = adapter.encodeInput(content);
+    if (!encoded) return;
     if (!exec.write) throw new Error("沙箱 exec 不支持 stdin 写入");
+    const rawStream = (exec.raw as { stream?: { destroyed?: boolean; writableEnded?: boolean; writable?: boolean } } | undefined)?.stream;
     if (stdinClosed || rawStream?.destroyed || rawStream?.writableEnded || rawStream?.writable === false) {
       throw new Error("agent stdin 已关闭，无法追加消息");
     }
     try {
-      await exec.write(JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n");
+      await exec.write(encoded);
     } catch (error) {
       stdinClosed = true;
       const msg = error instanceof Error ? error.message : String(error);
@@ -1564,10 +1586,13 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     }
   };
   await writeUserMessage(spec.input);
-  const disposeMessageSource = await spec.onRunReady?.({ sendMessage: writeUserMessage });
+  const disposeMessageSource = adapter.capabilities.incrementalMessages
+    ? await spec.onRunReady?.({ sendMessage: writeUserMessage })
+    : undefined;
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
   const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
+  const adapterState = { sessionId: undefined as string | undefined, finalText: undefined as string | undefined };
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
@@ -1592,8 +1617,11 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       }
     } else void exec.kill().catch(() => {});
   };
+  if (!adapter.capabilities.incrementalMessages && adapter.encodeInput(spec.input)) closeStdin();
   try {
-    for await (const chunk of exec) {
+    while (true) {
+      let resumedExec: typeof exec | undefined;
+      for await (const chunk of exec) {
       if (chunk.type === "stderr") {
         stderrTail = (stderrTail + chunk.chunk).slice(-2000);
         continue;
@@ -1614,56 +1642,71 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
           if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
           continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
         }
-        const parsed = parsedLine.parsed;
-        const outcome = mapCliEvent(parsed, (e) => {
-          spec.onEvent?.(e);
-          if (e.type === "tool.call.started") {
-            const input = e.input && typeof e.input === "object" ? e.input as Record<string, unknown> : {};
-            const command = typeof input.command === "string" ? input.command : "";
-            if (/\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(command)) {
-              spec.onWarning?.({ code: "forbidden_control_file", detail: `command_length=${command.length}` });
+        const rawParsed = parsedLine.parsed;
+        const decodedEvents = adapter.decodeOutput(rawParsed, adapterState);
+        if (adapterState.sessionId && !sessionId) sessionId = adapterState.sessionId;
+        for (const parsed of decodedEvents) {
+          const outcome = mapCliEvent(parsed, (e) => {
+            spec.onEvent?.(e);
+            if (e.type === "tool.call.started") {
+              const input = e.input && typeof e.input === "object" ? e.input as Record<string, unknown> : {};
+              const command = typeof input.command === "string" ? input.command : "";
+              if (/\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(command)) {
+                spec.onWarning?.({ code: "forbidden_control_file", detail: `command_length=${command.length}` });
+              }
+            }
+            if (e.type === "text.delta" && typeof e.delta === "string") {
+              progressBuffer += e.delta as string;
+            }
+          }, semanticToolEvents, semanticToolState);
+          for (const warning of outcome.warnings) spec.onWarning?.(warning);
+          if (!["system", "assistant", "user", "result"].includes(String(parsed.type))) {
+            spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
+          }
+          for (const event of outcome.semanticEvents) {
+            try {
+              await spec.onSemanticEvent?.(event, {
+                readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+              });
+            } catch (error) {
+              semanticError = error instanceof Error ? error.message : String(error);
+              semanticErrorDetails = normalizeRuntimeErrorDetails(error);
+              throw error;
             }
           }
-          if (e.type === "text.delta" && typeof e.delta === "string") {
-            progressBuffer += e.delta as string;
+          if (outcome.sessionId) sessionId = outcome.sessionId;
+          if (outcome.finalText !== undefined) {
+            finalText = outcome.finalText;
+            if (spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
+              nudgesLeft--;
+              const nudge = spec.nudgeMessage ??
+                "协议要求的系统工具调用还没有完成。请立即通过平台 MCP 工具提交（不要只用文本描述），然后结束本轮。";
+              if (adapter.capabilities.incrementalMessages) {
+                await writeUserMessage(nudge);
+              } else {
+                if (!sessionId) throw new Error(`AGENT_CLI_COMPLETION_GATE_SESSION_MISSING: ${adapter.id}`);
+                if (!adapter.resume) throw new Error(`AGENT_CLI_RESUME_UNSUPPORTED: ${adapter.id}`);
+                resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
+              }
+            } else {
+              closeStdin();
+            }
           }
-        }, semanticToolEvents, semanticToolState);
-        for (const warning of outcome.warnings) spec.onWarning?.(warning);
-        if (!["system", "assistant", "user", "result"].includes(String(parsed.type))) {
-          spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
-        }
-        for (const event of outcome.semanticEvents) {
-          try {
-            await spec.onSemanticEvent?.(event, {
-              readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
-            });
-          } catch (error) {
-            semanticError = error instanceof Error ? error.message : String(error);
-            semanticErrorDetails = normalizeRuntimeErrorDetails(error);
-            throw error;
+          if (outcome.isError) runError = outcome.errorDetail ?? "agent 执行失败";
+          const now = Date.now();
+          if (progressBuffer.length > 0 && now - lastPush > 4000) {
+            lastPush = now;
+            spec.onProgress?.(progressBuffer.slice(-200));
+            progressBuffer = "";
           }
-        }
-        if (outcome.sessionId) sessionId = outcome.sessionId;
-        if (outcome.finalText !== undefined) {
-          finalText = outcome.finalText;
-          if (spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
-            nudgesLeft--;
-            await writeUserMessage(
-              spec.nudgeMessage ??
-                "协议要求的系统工具调用还没有完成。请立即通过平台 MCP 工具提交（不要只用文本描述），然后结束本轮。",
-            );
-          } else {
-            closeStdin();
-          }
-        }
-        if (outcome.isError) runError = outcome.errorDetail ?? "claude 执行失败";
-        const now = Date.now();
-        if (progressBuffer.length > 0 && now - lastPush > 4000) {
-          lastPush = now;
-          spec.onProgress?.(progressBuffer.slice(-200));
-          progressBuffer = "";
         }
       }
+      }
+      if (!resumedExec) break;
+      exec = resumedExec;
+      stdinClosed = true;
+      stdoutBuffer = "";
+      exitCode = 0;
     }
   } catch (e) {
     if (!runError) runError = e instanceof Error ? e.message : String(e);
@@ -1674,7 +1717,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
 
   // 结果事件已拿到后，exitCode 只反映我们主动关 stdin/杀进程，不再视为错误
   if (!runError && exitCode !== 0 && finalText === "") {
-    runError = `claude CLI 退出码 ${exitCode}${stderrTail.trim() ? `: ${stderrTail.trim().slice(-300)}` : ""}`;
+    runError = `agent CLI 退出码 ${exitCode}${stderrTail.trim() ? `: ${stderrTail.trim().slice(-300)}` : ""}`;
   }
 
   // 4. 读回结果文件

@@ -800,7 +800,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     interfaces: {
       workspace_read_write: true,
       semantic_events_realtime: true,
-      incremental_messages_realtime: Boolean(canvasId),
+      incremental_messages_realtime: Boolean(canvasId && snapshot.agent_runtime?.capabilities.incrementalMessages === true),
       scheduler_http_api: false,
       scheduler_database: false,
       host_filesystem: false,
@@ -837,6 +837,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     tools_manifest_sha256: snapshot.runtime_image.tools_manifest_sha256,
     admission_scan_id: snapshot.runtime_image.admission_scan_id,
     agent_provider: provider,
+    agent_runtime: snapshot.agent_runtime,
     model: model ?? null,
     credential_id: snapshot.credential_id,
     ...(snapshot.credential_provider === null || snapshot.credential_provider === undefined || snapshot.credential_provider === ""
@@ -1084,6 +1085,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     { sandboxId: job.sandbox_id as string },
     {
       provider,
+      adapter: snapshot.agent_runtime,
+      runtimeImageKey: snapshot.runtime_image.image_key,
       model,
       reasoning,
       env,
@@ -1097,7 +1100,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       workspaceFiles,
       semanticToolEvents: semanticToolEventsFor(controlToolNames),
       onSemanticEvent,
-      onRunReady: canvasId
+      onRunReady: canvasId && snapshot.agent_runtime?.capabilities.incrementalMessages === true
         ? ({ sendMessage }) => subscribeCanvasUpdates(canvasId, jobId, sendMessage)
         : undefined,
       // 协议完成门禁：mark_job_done 未到时由驱动层催促同一会话补齐（最多 3 次）

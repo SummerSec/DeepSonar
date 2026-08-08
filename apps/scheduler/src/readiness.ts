@@ -13,6 +13,7 @@ import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
 import { allowedModelIds, isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
 import { resolveEffectiveModel } from "./provider-effective-model.js";
+import { getAgentCliRuntimeAdapter, REQUIRED_RUNTIME_CAPABILITIES } from "@deepsonar/runtime-sandbox";
 import {
   defaultRuntimeImageKey,
   hostRuntimePlatform,
@@ -580,6 +581,23 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     const imageKey = role.runtimeImageKey || defaultRuntimeImageKey(role.name);
     const image = imageByKey.get(imageKey);
     const runtimeSummary = imageSummary(image, imageKey);
+    if (input.executionMode === "real") {
+      const adapter = getAgentCliRuntimeAdapter(role.agentCli);
+      if (!adapter) {
+        checks.push(fail("AGENT_CLI_UNREGISTERED", `${role.name} 的 agent_cli=${role.agentCli ?? "<missing>"} 未在 Scheduler 治理注册表中注册。`, roleConfigFix(input.scope), { role: summary }));
+      } else {
+        const missing = REQUIRED_RUNTIME_CAPABILITIES.filter((capability) => !adapter.capabilities[capability]);
+        if (missing.length > 0) {
+          checks.push(fail("AGENT_CLI_CAPABILITY_MISSING", `${role.name} 的 ${adapter.id} 缺少必需运行能力：${missing.join(", " )}。`, roleConfigFix(input.scope), { role: summary }));
+        } else if (!adapter.capabilities.incrementalMessages && !adapter.resume) {
+          checks.push(fail("AGENT_CLI_RESUME_UNSUPPORTED", `${role.name} 的 ${adapter.id} 不支持非增量会话的 completion-gate resume。`, roleConfigFix(input.scope), { role: summary }));
+        } else if (!adapter.compatibleImageKeys.includes(imageKey)) {
+          checks.push(fail("AGENT_CLI_IMAGE_INCOMPATIBLE", `${role.name} 的 ${adapter.id} 与 runtime image ${imageKey} 不兼容；请选择受治理的匹配镜像。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
+        } else {
+          checks.push(pass("AGENT_CLI_READY", `${role.name} 已解析到受治理的 ${adapter.id} runtime adapter。`, { role: summary }));
+        }
+      }
+    }
     if (input.executionMode === "fake") {
       checks.push(pass("RUNTIME_IMAGE_SKIPPED_FAKE", `${role.name} 在 fake 模式使用 NoopRunner；real 模式才会校验可信 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     } else if (!image) {

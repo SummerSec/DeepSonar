@@ -2,6 +2,7 @@ import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
 import type { PlatformToolName } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
+import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
 
 /** Minimal transaction-shaped client accepted by the snapshot application. */
 export type RoleRuntimeSnapshotTransaction = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
@@ -13,6 +14,8 @@ export interface RoleRuntimeSnapshotResult {
   role_kind: "role" | "hub" | "system";
   ui_color: string | null;
   agent_cli: string;
+  /** Immutable adapter implementation/capability contract captured at Job creation. */
+  agent_runtime: AgentCliRuntimeSnapshot;
   model: string | null;
   reasoning: "low" | "medium" | "high" | "xhigh" | null;
   env_vars: Record<string, string>;

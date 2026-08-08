@@ -16,7 +16,9 @@
     "binutils": { "version": "2.40-2", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"], "toolsets": ["audit"] }
   },
   "npm": {
-    "@anthropic-ai/claude-code": { "version": "2.1.220", "license": "Commercial", "capabilities": ["agent-runtime"] }
+    "@anthropic-ai/claude-code": { "version": "2.1.220", "license": "Commercial", "capabilities": ["agent-runtime"], "agent_cli": "claude-code", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
+    "@openai/codex": { "version": "0.147.0", "license": "Apache-2.0", "capabilities": ["agent-runtime"], "agent_cli": "codex", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
+    "opencode-ai": { "version": "1.18.15", "license": "MIT", "capabilities": ["agent-runtime"], "agent_cli": "open-code", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] }
   },
   "downloads": {
     "semgrep": {
