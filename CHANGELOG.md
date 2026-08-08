@@ -8,11 +8,17 @@ Changes intended for the next release go here before a release section is dated 
 
 ## [0.1.20] - 2026-08-08
 
+### Added
+
+- Governed runtime adapters now execute Claude Code, Codex, and OpenCode through a shared capability contract with frozen Job snapshots, normalized structured events, control MCP enforcement, and fail-closed readiness checks.
+- Running local-docker Jobs now expose an authenticated, permission-gated PTY terminal beside the live event stream, with bounded traffic, resize support, audit metadata, and automatic sandbox cleanup.
+
 ### Changed
 
 - Official runtime image selection now defaults to the Aliyun ACR channel, while jobs continue to freeze governed immutable image digests.
 - Production deployment guidance and runtime configuration now reflect the current provider, gateway, object-storage, and image-channel behavior.
 - GitHub Releases now publish the exact validated version section from this changelog and fail before image builds when tag or compare-link metadata is inconsistent.
+- Runtime image size budgets now account for the governed Codex and OpenCode native payloads while retaining explicit CI-enforced limits for base, audit, and Kali images.
 
 ### Fixed
 
