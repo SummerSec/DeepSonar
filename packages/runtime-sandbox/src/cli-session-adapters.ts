@@ -74,7 +74,7 @@ const claudeAdapter: AgentCliSessionAdapter = {
   cli: "claude-code",
   async exportSession(runtime, sessionId) {
     const command =
-      `base="\${CLAUDE_CONFIG_DIR:-\${HOME:-/root}/.claude}/projects"; ` +
+      `base="\${HOME:-/root}/.claude/projects"; ` +
       `if [ -d "$base" ]; then find "$base" -type f \\( -name ${sh(`${sessionId}.jsonl`)} ` +
       `-o -path ${sh(`*/${sessionId}/subagents/*.jsonl`)} \\) -print 2>/dev/null; fi`;
     const result = await runtime.run(command);
@@ -89,7 +89,7 @@ const codexAdapter: AgentCliSessionAdapter = {
   cli: "codex",
   async exportSession(runtime, sessionId) {
     const command =
-      `base=\"\${CODEX_HOME:-/root/.codex}/sessions\"; ` +
+      `base=\"\${CODEX_HOME:-\${HOME:-/root}/.codex}/sessions\"; ` +
       `if [ -d \"$base\" ]; then find \"$base\" -type f -name '*.jsonl' ` +
       `\\( -name ${sh(`*${sessionId}*.jsonl`)} -o -exec grep -l -m1 -- ${sh(sessionId)} {} \\; \\) 2>/dev/null; fi`;
     const result = await runtime.run(command);

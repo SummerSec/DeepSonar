@@ -825,7 +825,18 @@ async function readSandboxFileText(sandbox: Sandbox, filePath: string): Promise<
 }
 
 export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: string, maxBytes: number): Promise<Buffer> {
-  if (!filePath.startsWith("/workspace/") || filePath.startsWith(`${SHARED_ASSETS_MOUNT_PATH}/`)) {
+  const reservedRoots = [
+    "/workspace/.deepsonar",
+    "/workspace/.deepsonar-home",
+    SHARED_ASSETS_MOUNT_PATH,
+    "/workspace/.claude",
+    "/workspace/.codex",
+    "/workspace/.opencode",
+  ];
+  if (
+    !filePath.startsWith("/workspace/") ||
+    reservedRoots.some((root) => filePath === root || filePath.startsWith(`${root}/`))
+  ) {
     throw new Error("shared_asset_source_path_forbidden");
   }
   const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
@@ -838,7 +849,7 @@ export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: strin
     `exec 3<${quoted}`,
     "resolved=$(readlink -f /proc/self/fd/3)",
     'case "$resolved" in /workspace/*) ;; *) exit 45 ;; esac',
-    `case "$resolved" in ${SHARED_ASSETS_MOUNT_PATH}/*) exit 46 ;; esac`,
+    'case "$resolved" in /workspace/.deepsonar/*|/workspace/.deepsonar-home/*|/workspace/.claude/*|/workspace/.codex/*|/workspace/.opencode/*) exit 46 ;; esac',
     "test -f /proc/self/fd/3 || exit 47",
     "size=$(stat -Lc %s /proc/self/fd/3)",
     `test "$size" -le ${maxBytes} || exit 48`,
@@ -870,17 +881,32 @@ function shellQuote(value: string): string {
 }
 
 const RUNTIME_DIR = "/workspace/.deepsonar";
-const CLAUDE_DIR = "/workspace/.claude";
-const RUNTIME_HOME = `${RUNTIME_DIR}/home`;
-const CLAUDE_CONFIG_DIR = `${RUNTIME_DIR}/claude`;
+const RUNTIME_HOME = "/workspace/.deepsonar-home";
+const CLAUDE_DIR = `${RUNTIME_HOME}/.claude`;
 
 /** 系统拥有的可写 CLI 环境；不依赖镜像继承的 HOME（非 root 镜像常仍错误指向 /root）。 */
 export function runtimeCliEnv(env: Record<string, string>): Record<string, string> {
+  const { CLAUDE_CONFIG_DIR: _ignoredClaudeConfigDir, ...rest } = env;
   return {
-    ...env,
+    ...rest,
     HOME: RUNTIME_HOME,
-    CLAUDE_CONFIG_DIR,
   };
+}
+
+export async function ensureRuntimeHome(sandbox: Pick<Sandbox, "run">): Promise<void> {
+  let result: { exitCode: number };
+  try {
+    result = await sandbox.run(
+      `mkdir -p -- ${shellQuote(RUNTIME_HOME)} && test -d ${shellQuote(RUNTIME_HOME)} && test -w ${shellQuote(RUNTIME_HOME)}`,
+      { timeoutMs: 15_000 },
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new Error(`runtime_directory_not_writable: ${RUNTIME_HOME}${detail}`);
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(`runtime_directory_not_writable: ${RUNTIME_HOME}`);
+  }
 }
 
 /** claude CLI --mcp-config 格式（与 SDK buildClaudeMcpConfig 等价） */
@@ -1502,7 +1528,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   // 2. agentbox 只当沙箱用：直接驱动 claude CLI（stream-json），不走 SDK daemon/relay。
   //    该路径已在容器内验证：--mcp-config 注册本地控制 MCP，权限模式完全开放（§16）。
   const cliEnv = runtimeCliEnv(spec.env);
-  await sandbox.run(`mkdir -p -- ${shellQuote(RUNTIME_HOME)} ${shellQuote(CLAUDE_CONFIG_DIR)}`);
+  await ensureRuntimeHome(sandbox);
   await materializeAgentFiles(sandbox, spec, cliEnv);
   const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;
   await sandbox.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
@@ -1676,7 +1702,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         captureError: error instanceof Error ? error.message : String(error),
       }))
     : undefined;
-  await sandbox.run(`rm -rf -- ${shellQuote(CLAUDE_CONFIG_DIR)} ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
+  await sandbox.run(`rm -rf -- ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
   const cleanupPaths = [...(spec.resultFiles ?? [])]

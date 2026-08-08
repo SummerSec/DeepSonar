@@ -15,7 +15,7 @@ export const SHARED_ASSET_ACCESS_GUIDE = {
     "There is no separate download tool. Each asset is pre-materialized by the Scheduler into the read-only mount (from local disk or any S3-compatible BlobStore). Open mount_path / read_path with normal Read/cat tools, or copy into /workspace for edits.",
   copy_hint: "cp <mount_path> /workspace/<name>",
   forbid: [
-    "Do not modify files under /workspace/.deepsonar/shared",
+    `Do not modify files under ${SHARED_ASSETS_READONLY_ROOT}`,
     "Do not publish_shared_asset from paths under .deepsonar/shared",
     "Do not call HTTP/S3/curl to fetch assets — Agent has no blob credentials",
   ],

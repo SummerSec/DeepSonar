@@ -411,7 +411,7 @@ Job 事件仍必须经过本摄入硬门。
 
 系统按 Job 冻结快照动态组装：
 
-- `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令
+- `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令；两份文件由同一内容生成并保持逐字一致
 - Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
 - 非敏感环境变量、白名单 `env_keys` 和按 Job 签发的短期模型凭据
 - 画布创建时冻结的 Finding 协议说明：模式、默认/允许 profile、CVSS 默认/接受版本和必评分 profile；运行中以协议名和来源显著标识
@@ -429,7 +429,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、未知控制命名空间工具和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；控制工具的 normalized telemetry 仅保留 toolName/callId 与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列
 - 同一 `tool_use.id` 只有合法非错误 `tool_result` 才生成一次语义事件；pending 有上限，Job 终态会丢弃残留并记低基数告警。`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
-- Claude CLI 的 `HOME` 与 `CLAUDE_CONFIG_DIR` 固定到 `/workspace/.deepsonar/` 下的 Job 专属可写目录，不信任镜像继承的 `/root`；原始 Session 归档复用同一环境，读回内存后立即清理，随后再销毁一次性沙箱
+- 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
 - 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
 - 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
 - 沙箱内不注入调度器数据库、平台 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期 Job token，终态随沙箱销毁
@@ -472,8 +472,8 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 - 私有 registry 使用 `oci_registry` Credential，准入 Worker 仅在 `docker login --password-stdin` 时解密，不进入 Job Snapshot、Docker 参数、日志或 Agent 工作区。
 - `runtime_data_layers` / `runtime_data_layer_versions` 为 Trivy/OSV 等离线库预留可版本化、只读、digest 准入模型；尚未准入的数据层不得挂载进运行沙箱。
 - Shared Assets 使用 `shared_assets`（逻辑对象）+ append-only `shared_asset_versions` + SHA-256 `shared_asset_blobs`（CAS 元数据）分离内容与引用；字节经可插拔 **BlobStore**（`BLOB_STORE=fs|s3`）存放，逻辑键为 `shared-assets/sha256/<aa>/<sha256>`，**不**进入 PostgreSQL JSONB、画布或 Graph YAML。`fs` 落在 `BLOB_DIR`；`s3` 为任意 S3 兼容 API（AWS / MinIO / Garage / SeaweedFS / 云 OSS 等，**不锁定厂商**），Job 注入前 `materializeLocal` 到本地缓存。详见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)。scope 为 `platform | project | finding`：项目资产自动选择，platform 仅在项目显式 opt-in 后选择，finding 仅对同项目且 Job 绑定该 `finding_id` 的 review/test/verify/report/Hub 链选择。
-- Job 创建事务计算排序后的精确 version/hash/path 清单和 `shared_assets_revision`，写入 `agent_snapshot_json` 与 `job_shared_asset_versions`；后续资产更新不会改变已建 Job。prompt 只说明只读目录和 bounded catalog，不注入文件正文。Agent publish 只能从普通 `/workspace` 的单一已打开正则文件描述符做有界读取，拒绝 symlink、路径逃逸和 `.deepsonar/shared` 自复制；宿主执行前后校验 Job/lease/sandbox，数据库触发器再锁 Job 做原子终态门禁。Agent 不能 publish platform，也不能覆盖 human/platform key，自有 key 仅追加版本。
-- Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，受限 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。任意 host bind、任意 target、无标签卷和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 均只按可信标签删除终态/孤儿 Job 卷。
+- Job 创建事务计算排序后的精确 version/hash/path 清单和 `shared_assets_revision`，写入 `agent_snapshot_json` 与 `job_shared_asset_versions`；后续资产更新不会改变已建 Job。prompt 只说明只读目录和 bounded catalog，不注入文件正文。Agent publish 只能从普通 `/workspace` 的单一已打开正则文件描述符做有界读取，拒绝 symlink、路径逃逸和平台运行/CLI 用户配置目录自复制；宿主执行前后校验 Job/lease/sandbox，数据库触发器再锁 Job 做原子终态门禁。Agent 不能 publish platform，也不能覆盖 human/platform key，自有 key 仅追加版本。
+- Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，受限 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。CLI 的可写 `HOME=/workspace/.deepsonar-home` 位于该只读挂载父树之外，因此 Docker 创建 `.deepsonar` 挂载父目录时不会阻断 CLI 用户目录初始化。任意 host bind、任意 target、无标签卷和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 均只按可信标签删除终态/孤儿 Job 卷。
 - 上传由 Scheduler 服务端计算 SHA-256，并在 scope 级 advisory transaction lock 内执行配额检查；内容类型与扩展名必须同时命中白名单，单文件与 scope 总额均受配置约束。归档只改变逻辑状态，历史版本与 Job 引用不删；CAS 垃圾回收只能在无 version/Job 引用并过保留期后执行。HTTP 目录和本地 `list_shared_assets` 均按 `limit/offset` 分页；真正的按需 fetch 需要独立可信 IPC，当前不开放写 socket 或控制文件。
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。

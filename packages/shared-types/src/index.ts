@@ -374,7 +374,9 @@ export type ListSharedAssetsPayload = z.infer<typeof ListSharedAssetsPayload>;
 
 export const PublishSharedAssetPayload = z.object({
   scope: z.enum(["project", "finding"]),
-  source_path: z.string().min(1).max(320).regex(/^\/workspace\/(?!\.deepsonar\/shared(?:\/|$)).+/),
+  source_path: z.string().min(1).max(320).regex(
+    /^\/workspace\/(?!\.(?:deepsonar(?:-home)?|claude|codex|opencode)(?:\/|$)).+/,
+  ),
   key: z.string().trim().min(1).max(240),
   content_type: z.string().trim().min(1).max(160).default("application/octet-stream"),
   labels: z.record(z.string().min(1).max(60), z.string().max(200)).optional(),

@@ -14,7 +14,7 @@
 |----|------|------|------|
 | **本地库 / Web** | 管理真相 | 项目、任务（画布）、角色、凭据、规则、镜像准入 | 不在 Agent 里改基建 |
 | **Canvas** | 过程真相 | fact / intent / finding / job 节点与边；布局由服务端算 | Agent 不提案坐标 |
-| **Sandbox** | 执行真相 | 每 Job 全新 `/workspace`；CLI + 控制 MCP | 仅持当前 Job 冻结的 CLI 配置，终态即销毁 |
+| **Sandbox** | 执行真相 | 每 Job 全新 `/workspace`；独立可写 `HOME`；CLI + 控制 MCP | 仅持当前 Job 冻结的 CLI 配置，终态即销毁 |
 | **Scheduler** | 副作用唯一执行者 | claim、状态机、派生 verify/report、Reaper、注入快照 | 不做业务推理 |
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。**  

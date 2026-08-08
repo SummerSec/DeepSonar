@@ -1,3 +1,5 @@
+import { SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/catalog.js";
+
 const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_roles: [
     "### `list_available_roles` — 查询 Hub 当前可派发角色",
@@ -59,13 +61,13 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "### `list_shared_assets` — 查询本 Job 冻结的只读共享资产目录",
     "- 参数（均可选）：`scope`（platform|project|finding）、`prefix`（逻辑 key 前缀）、`limit`、`offset`。",
     "- **没有单独的下载工具。** 返回的每条资产含 `mount_path` / `read_path`：用普通 Read/cat 直接打开该路径读取内容；需要改写时先 `cp` 到 `/workspace` 普通工作区。",
-    "- 字节由 Scheduler 在 Job 启动时从 BlobStore（本地盘或任意 S3 兼容存储）预挂载到 `/workspace/.deepsonar/shared`；Agent 不得用 HTTP/S3/curl 拉取，也没有对象存储凭据。",
+    `- 字节由 Scheduler 在 Job 启动时从 BlobStore（本地盘或任意 S3 兼容存储）预挂载到 \`${SHARED_ASSETS_READONLY_ROOT}\`；Agent 不得用 HTTP/S3/curl 拉取，也没有对象存储凭据。`,
     "- 时机：需要复用平台/项目/Finding 资产、PoC 脚本或基线材料时先 list 再按路径读取。",
     '- 示例：`{}` 或 `{"scope":"project","prefix":"scripts/","limit":50}`',
   ].join("\n"),
   publish_shared_asset: [
     "### `publish_shared_asset` — 发布工作区文件为不可变共享资产",
-    "- 参数：`scope`（project|finding）、`source_path`（必填，必须以 `/workspace/` 开头且**不能**位于 `.deepsonar/shared`）、`key`（逻辑路径）、`content_type`、可选 `labels`。",
+    "- 参数：`scope`（project|finding）、`source_path`（必填，必须是 `/workspace/` 下的普通工作文件，不能位于平台运行目录或 CLI 用户/配置目录）、`key`（逻辑路径）、`content_type`、可选 `labels`。",
     "- 时机：产出可被后续 Job 复用的脚本、PoC、基线或工件后调用；Scheduler 读取工作区文件并经 BlobStore 写入（本地或 S3 兼容存储），Agent 不接触存储后端。",
     "- 边界：仅 running Job 可发布；不能覆盖 human/platform key；Finding scope 仅当本 Job 绑定 finding_id。",
     '- 示例：`{"scope":"project","source_path":"/workspace/dist/repro.sh","key":"scripts/repro.sh","content_type":"text/x-shellscript"}`',
@@ -82,7 +84,7 @@ const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，因此只调用一次，成功后不得重试。",
   request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
   list_shared_assets: "注意：只读取返回的冻结挂载路径；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取。",
-  publish_shared_asset: "注意：只发布普通 /workspace 文件；不得从 .deepsonar/shared 发布或覆盖不可变资产，仅在返回 isError 后重试。",
+  publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
 };
 
 export function platformToolGuide(toolNames: string[]): string {

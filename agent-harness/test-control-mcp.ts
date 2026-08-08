@@ -258,7 +258,7 @@ const descriptionCautions: Record<string, string> = {
   mark_job_done: "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用",
   request_human: "不得再调用 mark_job_done",
   list_shared_assets: "不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取",
-  publish_shared_asset: "不得从 .deepsonar/shared 发布或覆盖不可变资产",
+  publish_shared_asset: "不得发布平台运行目录或 CLI 用户/配置目录中的内容",
 };
 for (const [name, caution] of Object.entries(descriptionCautions)) {
   const advertised = toolsReply?.result?.tools?.find((tool: { name?: string }) => tool.name === name);

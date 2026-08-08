@@ -7,6 +7,7 @@ import {
 } from "../../blob-store/index.js";
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
+import { SHARED_ASSETS_READONLY_ROOT } from "./catalog.js";
 
 export type SharedAssetScope = "platform" | "project" | "finding";
 export type SharedAssetOrigin = "human" | "agent" | "system";
@@ -69,7 +70,7 @@ export function validateAssetContentType(contentType: string, key: string): stri
 
 export function mountPathFor(scope: SharedAssetScope, findingId: string | null, key: string): string {
   const prefix = scope === "finding" ? `finding/${findingId}` : scope;
-  return `/workspace/.deepsonar/shared/${prefix}/${normalizeAssetKey(key)}`;
+  return `${SHARED_ASSETS_READONLY_ROOT}/${prefix}/${normalizeAssetKey(key)}`;
 }
 
 export async function createSharedAsset(input: {

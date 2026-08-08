@@ -11,6 +11,11 @@ import {
   INVALID_NODE_REF_MESSAGE,
   INVALID_REFERENCE_BUDGET_MESSAGE,
 } from "./control-input.js";
+import {
+  SHARED_ASSETS_MOUNT_CATALOG,
+  SHARED_ASSETS_READONLY_ROOT,
+  SHARED_ASSETS_WORKSPACE_CATALOG,
+} from "./domains/shared-assets/catalog.js";
 
 /**
  * 每 Job 注入的本地 MCP。它不连接 Scheduler，也不使用网络：只读查询返回调度器在启动
@@ -86,7 +91,7 @@ const descriptions = {
   mark_job_done: "提交本 Job 的最终摘要，至少 8 个非空白字符；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
   request_human: "提交至少 8 个非空白字符的人工介入理由；只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
   list_shared_assets: "分页列出本 Job 创建时冻结的只读共享资产目录。没有单独的下载工具：用返回的 mount_path/read_path 以普通文件工具直接读取（Scheduler 已从本地或 S3 兼容存储预挂载）。可按 scope 或逻辑 key 前缀过滤。",
-  publish_shared_asset: "提议把 /workspace 下普通工作区文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止从 .deepsonar/shared 只读挂载树发布。",
+  publish_shared_asset: "提议把 /workspace 下普通工作文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止发布平台运行目录或 CLI 用户/配置目录中的内容。",
 };
 const descriptionCautions = {
   list_available_roles: "Hub 派发前调用；必须原样复制返回的 name，不得猜测、缩写或使用已禁用及 system 角色。",
@@ -97,7 +102,7 @@ const descriptionCautions = {
   mark_job_done: "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；结束时只调用一次，首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，成功后不得重试。",
   request_human: "仅在必要授权、凭据或高风险审批阻塞时调用一次；调用后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
   list_shared_assets: "用于发现本 Job 冻结的只读资产，再按返回路径读取；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取，可安全重复查询。",
-  publish_shared_asset: "只发布普通 /workspace 中可复用的文件；不得从 .deepsonar/shared 发布或覆盖不可变资产，仅在返回 isError 后重试。",
+  publish_shared_asset: "只发布普通 /workspace 中可复用的工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
 };
 const definitions = Object.fromEntries(
   Object.keys(TOOL_INPUT_SCHEMAS).map((name) => [name, {
@@ -466,7 +471,7 @@ rl.on("line", (line) => {
           note: "There is no separate download tool. Open each asset mount_path/read_path with normal file tools; Scheduler pre-materialized bytes into the read-only mount (local or S3-compatible BlobStore).",
           copy_hint: "cp <mount_path> /workspace/<name>",
           forbid: [
-            "Do not modify /workspace/.deepsonar/shared",
+            "Do not modify ${SHARED_ASSETS_READONLY_ROOT}",
             "Do not publish from .deepsonar/shared",
             "Do not fetch assets via HTTP/S3/curl",
           ],
@@ -475,14 +480,14 @@ rl.on("line", (line) => {
           version: 1,
           revision: null,
           readonly: true,
-          readonly_root: "/workspace/.deepsonar/shared",
+          readonly_root: ${JSON.stringify(SHARED_ASSETS_READONLY_ROOT)},
           access: defaultAccess,
           assets: [],
         };
         // Prefer mounted catalog; fall back to workspace snapshot copy written at provision.
         for (const path of [
-          "/workspace/.deepsonar/shared/catalog.json",
-          "/workspace/.deepsonar/shared-assets-catalog.json",
+          ${JSON.stringify(SHARED_ASSETS_MOUNT_CATALOG)},
+          ${JSON.stringify(SHARED_ASSETS_WORKSPACE_CATALOG)},
         ]) {
           try {
             const parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -515,7 +520,7 @@ rl.on("line", (line) => {
               text: JSON.stringify({
                 ...catalog,
                 readonly: true,
-                readonly_root: catalog.readonly_root || "/workspace/.deepsonar/shared",
+                readonly_root: catalog.readonly_root || ${JSON.stringify(SHARED_ASSETS_READONLY_ROOT)},
                 access: catalog.access || defaultAccess,
                 assets,
                 total: matched.length,

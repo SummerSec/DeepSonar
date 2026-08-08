@@ -53,6 +53,7 @@ import {
 } from "./provider-settings.js";
 import {
   buildJobSharedAssetCatalog,
+  SHARED_ASSETS_READONLY_ROOT,
   createSharedAsset,
   SHARED_ASSETS_WORKSPACE_CATALOG,
 } from "./domains/shared-assets/index.js";
@@ -81,6 +82,13 @@ function invalidToolPayload(
     publish_shared_asset: CONTROL_INPUT_ERROR_CODES.invalidPayload,
   }[tool];
   return new ControlInputError(code, message, path);
+}
+
+export function buildInstructionWorkspaceFiles(instructions: string): Record<string, string> {
+  return {
+    "/workspace/AGENTS.md": instructions,
+    "/workspace/CLAUDE.md": instructions,
+  };
 }
 
 function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolLimit", message: string): ControlInputError {
@@ -728,7 +736,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   }
   initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
   if ((snapshot.shared_assets?.length ?? 0) > 0) {
-    initialInput += `\n\n本 Job 已冻结 ${snapshot.shared_assets!.length} 个只读共享资产，预挂载到 /workspace/.deepsonar/shared（Scheduler 从本地或 S3 兼容 BlobStore 注入，Agent 无下载工具/无对象存储凭据）。先 list_shared_assets，再按返回的 mount_path/read_path 用普通文件工具读取；可 cp 到 /workspace 普通目录使用，禁止修改共享目录，禁止从共享目录 publish。`;
+    initialInput += `\n\n本 Job 已冻结 ${snapshot.shared_assets!.length} 个只读共享资产，预挂载到 ${SHARED_ASSETS_READONLY_ROOT}（Scheduler 从本地或 S3 兼容 BlobStore 注入，Agent 无下载工具/无对象存储凭据）。先 list_shared_assets，再按返回的 mount_path/read_path 用普通文件工具读取；可 cp 到 /workspace 普通目录使用，禁止修改共享目录，禁止从共享目录 publish。`;
   }
 
   const roleDescription = snapshot.role_description;
@@ -782,7 +790,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     shared_assets: {
       revision: snapshot.shared_assets_revision ?? null,
       count: snapshot.shared_assets?.length ?? 0,
-      readonly_mount: "/workspace/.deepsonar/shared",
+      readonly_mount: SHARED_ASSETS_READONLY_ROOT,
       access: "read_mount_path",
       workspace_catalog: SHARED_ASSETS_WORKSPACE_CATALOG,
       note: "No download tool; open mount_path. Bytes materialised by Scheduler BlobStore (fs|s3).",
@@ -800,14 +808,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     },
   };
   const workspaceFiles: Record<string, string> = {
-    "/workspace/AGENTS.md": instructions,
-    "/workspace/CLAUDE.md": instructions,
+    ...buildInstructionWorkspaceFiles(instructions),
     "/workspace/.deepsonar/runtime-manifest.json": JSON.stringify(componentManifest, null, 2),
     "/workspace/.deepsonar/control-mcp.mjs": CONTROL_MCP_SERVER,
   };
   if ((snapshot.shared_assets?.length ?? 0) > 0) {
     // Catalog metadata always available even if the named volume is empty in fake mode;
-    // real mode also mounts bytes under /workspace/.deepsonar/shared.
+    // real mode also mounts bytes under the read-only shared-assets root.
     workspaceFiles[SHARED_ASSETS_WORKSPACE_CATALOG] = `${JSON.stringify(buildJobSharedAssetCatalog({
       revision: snapshot.shared_assets_revision,
       assets: (snapshot.shared_assets ?? []) as unknown as Array<Record<string, unknown>>,

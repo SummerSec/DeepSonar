@@ -16,6 +16,7 @@ import {
   isDeepsonarRestrictedNetwork,
   isDeepsonarGatewayNetwork,
   dockerSocketPath,
+  ensureRuntimeHome,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 
@@ -560,9 +561,54 @@ test("脏运行时行只产生告警，后续合法 tool_use 仍可解析", () =
   assert.equal(events.semanticEvents.length, 0);
 });
 
-test("Claude session 使用动态 CLAUDE_CONFIG_DIR 或 HOME", async () => {
+test("Claude session resolves its default config directory under HOME", async () => {
   let command = "";
   const bundle = await CLI_SESSION_ADAPTERS["claude-code"].exportSession({
+    async run(value) {
+      command = Array.isArray(value) ? value.join(" ") : value;
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    async readText() {
+      return null;
+    },
+  }, "session-1");
+
+  assert.match(command, /base="\$\{HOME:-\/root\}\/\.claude\/projects"/);
+  assert.match(command, /find "\$base"/);
+  assert.equal(bundle.artifacts.length, 0);
+});
+
+test("Claude CLI uses the per-Job HOME without a Claude-specific override", () => {
+  assert.deepEqual(runtimeCliEnv({ ANTHROPIC_BASE_URL: "http://gateway", CLAUDE_CONFIG_DIR: "/tmp/claude" }), {
+    ANTHROPIC_BASE_URL: "http://gateway",
+    HOME: "/workspace/.deepsonar-home",
+  });
+});
+
+test("runtime HOME preparation fails closed when the directory is not writable", async () => {
+  let command = "";
+  await ensureRuntimeHome({
+    async run(value) {
+      command = Array.isArray(value) ? value.join(" ") : value;
+      return { exitCode: 0 } as Awaited<ReturnType<Parameters<typeof ensureRuntimeHome>[0]["run"]>>;
+    },
+  });
+  assert.match(command, /mkdir -p -- '\/workspace\/\.deepsonar-home'/);
+  assert.match(command, /test -w '\/workspace\/\.deepsonar-home'/);
+
+  await assert.rejects(
+    ensureRuntimeHome({
+      async run() {
+        return { exitCode: 1 } as Awaited<ReturnType<Parameters<typeof ensureRuntimeHome>[0]["run"]>>;
+      },
+    }),
+    /runtime_directory_not_writable: \/workspace\/\.deepsonar-home/,
+  );
+});
+
+test("Codex session discovery falls back to HOME when CODEX_HOME is unset", async () => {
+  let command = "";
+  await CLI_SESSION_ADAPTERS.codex.exportSession({
     async run(value) {
       command = value;
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -572,17 +618,7 @@ test("Claude session 使用动态 CLAUDE_CONFIG_DIR 或 HOME", async () => {
     },
   }, "session-1");
 
-  assert.match(command, /base="\$\{CLAUDE_CONFIG_DIR:-\$\{HOME:-\/root\}\/\.claude\}\/projects"/);
-  assert.match(command, /find "\$base"/);
-  assert.equal(bundle.artifacts.length, 0);
-});
-
-test("Claude CLI 使用工作区内可写 HOME 与配置目录", () => {
-  assert.deepEqual(runtimeCliEnv({ ANTHROPIC_BASE_URL: "http://gateway" }), {
-    ANTHROPIC_BASE_URL: "http://gateway",
-    HOME: "/workspace/.deepsonar/home",
-    CLAUDE_CONFIG_DIR: "/workspace/.deepsonar/claude",
-  });
+  assert.match(command, /base="\$\{CODEX_HOME:-\$\{HOME:-\/root\}\/\.codex\}\/sessions"/);
 });
 
 test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () => {
@@ -598,7 +634,7 @@ test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () 
       ],
       subAgents: [],
     }),
-    ["/workspace/.claude/commands/review.md", "/workspace/.claude/skills/audit/SKILL.md"],
+    ["/workspace/.deepsonar-home/.claude/commands/review.md", "/workspace/.deepsonar-home/.claude/skills/audit/SKILL.md"],
   );
   // Skill and command namespaces are separate and may intentionally share a name.
   assert.deepEqual(

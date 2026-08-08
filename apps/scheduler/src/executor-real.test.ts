@@ -12,6 +12,7 @@ import {
   runtimeCredentialProviderError,
   semanticToolEventsFor,
   hasMaterializedProviderConfig,
+  buildInstructionWorkspaceFiles,
 } from "./executor-real.js";
 import { expandModules } from "./skill-sources.js";
 
@@ -38,6 +39,12 @@ test("real executor round-trips only controlled rate-limit details after string 
   });
   assert.doesNotMatch(JSON.stringify(error), /secret|drop/i);
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
+});
+
+test("real executor generates identical AGENTS.md and CLAUDE.md instructions", () => {
+  const files = buildInstructionWorkspaceFiles("platform rules\n");
+  assert.equal(files["/workspace/AGENTS.md"], "platform rules\n");
+  assert.equal(files["/workspace/CLAUDE.md"], files["/workspace/AGENTS.md"]);
 });
 
 test("ControlEventEnvelope rejects Scheduler-owned fact and Finding fields", () => {

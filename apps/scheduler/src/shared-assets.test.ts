@@ -16,10 +16,19 @@ test("shared asset keys and mount paths reject traversal and host paths", () => 
   );
 });
 
-test("Agent publish schema is strict and cannot publish platform or shared-mount files", () => {
+test("Agent publish schema is strict and cannot publish platform-owned runtime files", () => {
   assert.equal(PublishSharedAssetPayload.parse({ scope: "project", source_path: "/workspace/dist/app.jar", key: "dist/app.jar" }).scope, "project");
   assert.throws(() => PublishSharedAssetPayload.parse({ scope: "platform", source_path: "/workspace/a", key: "a" }));
-  assert.throws(() => PublishSharedAssetPayload.parse({ scope: "project", source_path: "/workspace/.deepsonar/shared/project/a", key: "a" }));
+  for (const source_path of [
+    "/workspace/.deepsonar/runtime-manifest.json",
+    "/workspace/.deepsonar-home/.claude/session.jsonl",
+    "/workspace/.deepsonar/shared/project/a",
+    "/workspace/.claude/settings.json",
+    "/workspace/.codex/config.toml",
+    "/workspace/.opencode/config.json",
+  ]) {
+    assert.throws(() => PublishSharedAssetPayload.parse({ scope: "project", source_path, key: "a" }));
+  }
   assert.throws(() => PublishSharedAssetPayload.parse({ scope: "project", source_path: "/etc/passwd", key: "a" }));
   assert.throws(() => PublishSharedAssetPayload.parse({ scope: "project", source_path: "/workspace/a", key: "a", extra: true }));
 });

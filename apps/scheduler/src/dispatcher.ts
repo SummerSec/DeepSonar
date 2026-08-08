@@ -13,7 +13,7 @@ import {
 } from "./core.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
-import { buildJobSharedAssetCatalog, materializeSharedAssetBlob } from "./domains/shared-assets/index.js";
+import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/index.js";
 import { executeReal } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
@@ -567,7 +567,7 @@ async function runJob(jobId: string) {
       for (const asset of frozenAssets) {
         files.push({
           sourcePath: await materializeSharedAssetBlob(asset.blob_uri),
-          relativePath: asset.mount_path.replace("/workspace/.deepsonar/shared/", ""),
+          relativePath: asset.mount_path.replace(`${SHARED_ASSETS_READONLY_ROOT}/`, ""),
         });
       }
       sharedAssetsVolumeName = await sharedAssetsVolumeManager.prepare({
