@@ -105,6 +105,6 @@
     }
   },
   "toolsets": {
-    "kali-minimal": { "imageKey": "deepsonar-kali-minimal", "description": "Kali test runtime with common language toolchains, without Kali metapackages or GUI", "maxSizeMiB": 1350 }
+    "kali-minimal": { "imageKey": "deepsonar-kali-minimal", "description": "Kali test runtime with common language toolchains, without Kali metapackages or GUI", "maxSizeMiB": 1600 }
   }
 }
