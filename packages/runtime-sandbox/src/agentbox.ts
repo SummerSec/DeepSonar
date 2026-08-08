@@ -1568,10 +1568,28 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const sandbox = AgentboxRunner.sandboxOf(handle);
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
+  // Compare capability maps by key, not JSON.stringify: agent_snapshot_json is
+  // stored as Postgres JSONB, which does not preserve object key insertion order.
+  // A pure stringify equality would fail every Job whose freeze round-tripped DB.
+  const capabilityValues = (value: object | undefined): Map<string, unknown> => {
+    const out = new Map<string, unknown>();
+    if (!value) return out;
+    for (const [key, entry] of Object.entries(value)) out.set(key, entry);
+    return out;
+  };
+  const capabilityMismatch = (left: object | undefined, right: object) => {
+    const a = capabilityValues(left);
+    const b = capabilityValues(right);
+    if (a.size !== b.size) return true;
+    for (const [key, entry] of a) {
+      if (b.get(key) !== entry) return true;
+    }
+    return false;
+  };
   if (spec.adapter && (
     spec.adapter.adapter_id !== adapter.id ||
     spec.adapter.adapter_version !== adapter.version ||
-    JSON.stringify(spec.adapter.capabilities) !== JSON.stringify(adapter.capabilities)
+    capabilityMismatch(spec.adapter.capabilities, adapter.capabilities)
   )) {
     throw new Error(`AGENT_CLI_SNAPSHOT_MISMATCH: ${adapter.id}`);
   }
