@@ -20,6 +20,7 @@ import {
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
 import { resolveEffectiveModel } from "../../provider-settings.js";
+import { parseSandboxLimitsOverride } from "../role-runtime-snapshot/sandbox-limits.js";
 
 const ReasoningEffort = z.enum(["low", "medium", "high", "xhigh"]);
 const RoleBody = z.object({
@@ -46,6 +47,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     platform_tools: z.partialRecord(PlatformToolName, z.boolean()).default({}),
     instructions_markdown: z.string().max(100_000).nullish(),
     runtime_image_key: z.string().nullish(),
+    /** Project-only numeric sandbox resource overrides; capability flags stay server-owned. */
+    sandbox_limits: z.unknown().optional(),
     credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).default([]),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
   });
@@ -56,6 +59,15 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     role: { name: string; kind: "role" | "hub" | "system" },
     db: typeof sql = sql,
   ): Promise<string | null> {
+    let sandboxLimits: ReturnType<typeof parseSandboxLimitsOverride>;
+    try {
+      sandboxLimits = parseSandboxLimitsOverride(body.sandbox_limits);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    if (!projectId && Object.keys(sandboxLimits).length > 0) {
+      return "sandbox_limits numeric overrides are only allowed on project RoleConfigs";
+    }
     const envErr = validateEnvVars(body.env_vars);
     if (envErr) return envErr;
     for (const key of body.env_keys) {
@@ -165,6 +177,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       mcps_json: body.mcps as never,
       subagents_json: body.subagents as never,
       platform_tools_json: body.platform_tools as never,
+      sandbox_limits_json: parseSandboxLimitsOverride(body.sandbox_limits) as never,
       instructions_markdown: body.instructions_markdown ?? null,
       runtime_image_key: body.runtime_image_key ?? null,
     };
@@ -408,7 +421,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       SELECT rc.id, rc.role_id, r.name AS role_name, r.title AS role_title,
              r.kind AS role_kind, r.builtin AS role_builtin, r.ui_color AS role_ui_color,
              rc.project_id, p.name AS project_name, rc.agent_cli, rc.model, rc.version,
-             rc.runtime_image_key,
+             rc.runtime_image_key, rc.sandbox_limits_json,
              c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
              c.provider AS credential_provider, c.status AS credential_status
       FROM role_configs rc

@@ -1,0 +1,89 @@
+# DeepSonar V8 fuzz runtime. Project opt-in only.
+# d8 is built from the pinned V8 source revision. The build fails closed if a
+# real d8 cannot be produced; no substitute executable is renamed to d8.
+ARG BASE_IMAGE=deepsonar-base:local
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+ARG DEBIAN_SNAPSHOT=20260731T162426Z
+ARG DEBIAN_SECURITY_SNAPSHOT=20260731T162426Z
+ARG TARGETARCH
+ARG V8_REPOSITORY=https://chromium.googlesource.com/v8/v8.git
+ARG V8_COMMIT=792d9716fea48312ad7ce4413c538e00628b1d50
+ARG V8_VERSION=15.1.206.10
+ARG DEPOT_TOOLS_REPOSITORY=https://chromium.googlesource.com/chromium/tools/depot_tools.git
+ARG DEPOT_TOOLS_COMMIT=921e61b35fbc5e97b14250a118e363ec05078089
+
+USER root
+RUN set -eux; \
+  rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SECURITY_SNAPSHOT" >>/etc/apt/sources.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl file git clang-16 lld-16 llvm-16 libclang-rt-16-dev libfuzzer-16-dev afl++ binutils ninja-build python3; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
+  install -d -m 0755 /opt/deepsonar/bin /workspace
+
+# A shallow, commit-addressed depot_tools checkout makes the source-build
+# dependency explicit. gclient then resolves V8 dependencies from the exact
+# V8 commit, and the final image retains only the resulting d8 binary.
+RUN set -eux; \
+  git init /opt/depot_tools; \
+  git -C /opt/depot_tools remote add origin "$DEPOT_TOOLS_REPOSITORY"; \
+  git -C /opt/depot_tools fetch --depth 1 origin "$DEPOT_TOOLS_COMMIT"; \
+  git -C /opt/depot_tools checkout --detach "$DEPOT_TOOLS_COMMIT"; \
+  export PATH="/usr/lib/llvm-16/bin:/opt/depot_tools:$PATH"; \
+  mkdir -p /tmp/v8-checkout; \
+  cd /tmp/v8-checkout; \
+  gclient config --name src "$V8_REPOSITORY"; \
+  gclient sync --revision "src@$V8_COMMIT" --no-history --shallow; \
+  cd src; \
+  case "$TARGETARCH" in amd64) target_cpu=x64 ;; arm64) target_cpu=arm64 ;; *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; esac; \
+  export CC=clang-16 CXX=clang++-16; \
+  gn gen out/release --args="is_debug=false is_component_build=false is_clang=true is_asan=true use_libfuzzer=true target_cpu=\"$target_cpu\" v8_enable_i18n_support=false v8_use_external_startup_data=false v8_enable_pointer_compression=true"; \
+  autoninja -C out/release d8 v8_simple_json_fuzzer; \
+  test -x out/release/d8; \
+  test -x out/release/v8_simple_json_fuzzer; \
+  install -m 0755 out/release/d8 /opt/deepsonar/bin/d8; \
+  install -m 0755 out/release/v8_simple_json_fuzzer /opt/deepsonar/bin/v8_simple_json_fuzzer; \
+  /opt/deepsonar/bin/d8 --version | grep -E '^V8'; \
+  rm -rf /tmp/v8-checkout /opt/depot_tools
+
+COPY deploy/chrome-fuzz-env.sh /tmp/chrome-fuzz-env.sh
+COPY deploy/chrome-fuzz-smoke.sh /tmp/chrome-fuzz-smoke.sh
+RUN set -eux; \
+  install -m 0755 /tmp/chrome-fuzz-env.sh /opt/deepsonar/bin/chrome-fuzz-env.sh; \
+  install -m 0755 /tmp/chrome-fuzz-smoke.sh /opt/deepsonar/bin/chrome-fuzz-smoke.sh; \
+  rm -f /tmp/chrome-fuzz-env.sh /tmp/chrome-fuzz-smoke.sh; \
+  if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
+  if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_simple_json_fuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_simple_json_fuzzer",actual:true,source:"v8",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_simple_json_fuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  chown -R deepsonar:deepsonar /opt/deepsonar /workspace
+
+ENV IS_SANDBOX=1 \
+    CC=clang \
+    CXX=clang++ \
+    AFL_SKIP_CPUFREQ=1 \
+    PATH=/opt/deepsonar/bin:/usr/lib/llvm-16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+RUN /opt/deepsonar/bin/chrome-fuzz-env.sh --check
+
+FROM scratch
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="chrome-fuzz" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.title="DeepSonar Chrome Fuzz" \
+      org.opencontainers.image.description="Project-opt-in real V8 d8 built from a pinned source revision with Clang/LLVM, compiler-rt/libFuzzer and AFL++." \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
+ENV IS_SANDBOX=1 \
+    CC=clang \
+    CXX=clang++ \
+    AFL_SKIP_CPUFREQ=1 \
+    PATH=/opt/deepsonar/bin:/usr/lib/llvm-16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]

@@ -21,8 +21,12 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 23);
+  assert.equal(SCHEMA_VERSION, 24);
   assert.match(body, /runtime_registry_channel\s+text\s+NOT\s+NULL\s+DEFAULT\s+'aliyun-acr'/i);
+  assert.match(body, /sandbox_limits_json\s+jsonb\s+NOT\s+NULL\s+DEFAULT\s+'\{\}'/i);
+  assert.match(body, /'deepsonar-chrome-audit'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
+  assert.match(body, /'deepsonar-chrome-test'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
+  assert.match(body, /'deepsonar-chrome-fuzz'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   const manifest = parseTableManifest(body);
   assert.equal(manifest.has("schema_meta"), true);
   assert.equal(manifest.has("projects"), true);

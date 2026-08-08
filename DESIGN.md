@@ -120,7 +120,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
-- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。
+- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。Chrome audit/test/fuzz 是官方但 project-opt-in 的专项运行时，按受治理 runtime key 选择，Job 创建时连同兼容 CLI 与工具清单一起冻结。
 - 出网：`allow_egress` 任务级冻结；所有 real Job 的模型请求都经 Scheduler-owned gateway proxy。允许出网的沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，并通过同时接入两网的固定 proxy 到达 Scheduler。
 
 ## 10. 前端信息架构
@@ -157,6 +157,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 任务卡片状态 | #46 | 任务级相位与 `active_count` 同源 |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
 | 官方运行镜像多 channel catalog | #70 | **已完成**：v2 canonical digest/platform/size + `registry_refs`/`registry_evidence` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 按 ACR→GHCR→Docker Hub 发布并对每个可用目的地执行真实 `imagetools inspect`，配置通道失败时清单生成 fail-closed，v2 Release asset 与 bundled fallback 同步；schema v23 新库默认选择 `aliyun-acr`，平台全局通道由 Scheduler 落库并经 `GET /runtime-images/registry` 的 `selected_channel` 读取、`PATCH /runtime-images/registry/channel`（`images:manage`）切换，Job 创建时冻结所选 digest/ref，pull/resolution 对未发布通道 fail-closed；Web 市场提供固定三选项通道选择器，与 CPU 平台筛选分离，展示加载/403/切换状态并在切换后刷新清单与镜像行 |
+| Chrome audit/test/fuzz 专项运行时 | #118 | **已实现发布基础设施**：三个官方 project-opt-in 镜像分别提供 C++ 静态分析、固定 Chromium/CDP 与固定 V8 源码构建的真实 `d8` + `v8_simple_json_fuzzer`；每个镜像同时声明 amd64/arm64、来源 SHA256/完整包闭包、工具清单与大小预算。V8 与 Chromium 版本语义分开声明；Job 仍只消费准入后的 immutable digest，Release 必须在原生架构 runner 上完成构建、smoke 与多 registry inspect 后才生成 catalog |
 
 ## 12. 仓库地图
 

@@ -6,6 +6,34 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+## [0.1.21] - 2026-08-08
+
+### Added
+
+- Added visible live-stream thinking/reasoning output, project-level sandbox resource overrides, and three project-opt-in Chrome specialist runtimes for audit, headless/CDP testing, and real V8 fuzzing.
+- Added governed terminal copy and keyboard behavior, including selection-aware Ctrl/Cmd+C and Tab/Shift+Tab passthrough.
+
+### Changed
+
+- Job detail terminals now open on demand, live results keep a single vertical scroller, and runtime/report convergence paths retain their durable payload and completion state.
+- Runtime image catalogs expanded from six to nine official multi-architecture images, with native Chrome child builds, immutable digest assembly, and smoke-gated release publication.
+- Database schema is now v24. Existing databases must be rebuilt from `database/schema.sql`; there is no incremental migration path.
+
+### Fixed
+
+- Fixed Job-detail Escape handling and terminal lifecycle leakage when switching Jobs.
+- Fixed missing Finding report payloads that left root-active work pending, and fixed successful completion-gate continuation after a 429 being recorded as failure.
+- Fixed terminal copy feedback, prompt double-scrollbars, and real-time reasoning visibility in the Job detail UI.
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.21` tag. Runtime image tags use `0.1.21` without the `v` prefix and must not use `latest`.
+- Rebuild existing databases for schema v24 before starting the Scheduler; the repository intentionally has no in-place migration path.
+
+### Runtime Images
+
+- The release publishes nine official multi-architecture runtime image catalogs: the existing six plus Chrome Audit, Chrome Test, and Chrome Fuzz. Chrome images remain project-opt-in and are recorded only after immutable digest and native-architecture smoke validation.
+
 ## [0.1.20] - 2026-08-08
 
 ### Added
@@ -66,6 +94,7 @@ Changes intended for the next release go here before a release section is dated 
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.21]: https://github.com/SummerSec/DeepSonar/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/SummerSec/DeepSonar/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/SummerSec/DeepSonar/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/SummerSec/DeepSonar/compare/v0.1.17...v0.1.18

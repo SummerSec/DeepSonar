@@ -119,6 +119,38 @@ export const PRESETS = {
     ],
     platforms: "linux/amd64,linux/arm64",
   },
+  "deepsonar-chrome-audit": {
+    dockerfile: "deploy/Dockerfile.agent-chrome-audit",
+    paths: [
+      "agent-harness/chrome-audit-runtime.json",
+      "deploy/chrome-runtime-sources.json",
+      "deploy/chrome-audit-rules.yml",
+      "deploy/chrome-audit-env.sh",
+      "deploy/chrome-audit-scan.sh",
+    ],
+    platforms: "linux/amd64,linux/arm64",
+  },
+  "deepsonar-chrome-test": {
+    dockerfile: "deploy/Dockerfile.agent-chrome-test",
+    paths: [
+      "agent-harness/chrome-test-runtime.json",
+      "deploy/chrome-runtime-sources.json",
+      "deploy/chrome-headless.sh",
+      "deploy/chrome-test-env.sh",
+      "agent-harness/chrome-test-smoke.mjs",
+    ],
+    platforms: "linux/amd64,linux/arm64",
+  },
+  "deepsonar-chrome-fuzz": {
+    dockerfile: "deploy/Dockerfile.agent-chrome-fuzz",
+    paths: [
+      "agent-harness/chrome-fuzz-runtime.json",
+      "deploy/chrome-runtime-sources.json",
+      "deploy/chrome-fuzz-env.sh",
+      "deploy/chrome-fuzz-smoke.sh",
+    ],
+    platforms: "linux/amd64,linux/arm64",
+  },
 };
 
 function fail(msg) {

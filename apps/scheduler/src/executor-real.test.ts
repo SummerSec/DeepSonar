@@ -9,6 +9,9 @@ import {
   normalizeLegacyControlInstructions,
   reconstructAgentRunError,
   recordFirstSemanticDone,
+  buildDeferredSemanticTerminalEvents,
+  isFinalAgentRunnerError,
+  isSemanticAgentRunError,
   runtimeCredentialProviderError,
   semanticToolEventsFor,
   hasMaterializedProviderConfig,
@@ -39,6 +42,68 @@ test("real executor round-trips only controlled rate-limit details after string 
   });
   assert.doesNotMatch(JSON.stringify(error), /secret|drop/i);
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
+});
+
+test("deferred Hub terminal events preserve decision-before-done ordering", () => {
+  const intent = {
+    from: [intentNodeId],
+    role: "code",
+    description: "Implement the verified remediation change.",
+    prompt: "Implement the verified remediation change and report the exact test evidence.",
+  };
+  const events = buildDeferredSemanticTerminalEvents({
+    state: {
+      hub: { eventId: "00000000-0000-4000-8000-000000000021", payload: { intents: [intent] } },
+      done: { eventId: "00000000-0000-4000-8000-000000000022", summary: "Hub completed" },
+      human: null,
+    },
+    isHub: true,
+    isVerify: false,
+    hubDecision: { intents: [intent] },
+    maxIntentsPerDecision: 10,
+    factCount: 0,
+    findingCount: 0,
+  });
+
+  assert.deepEqual(events.map((event) => event.type), ["hub_decision", "done"]);
+  assert.deepEqual((events[0]?.payload as { intents?: unknown[] }).intents, [intent]);
+  assert.equal((events[1]?.payload as { summary?: string }).summary, "Hub completed（派发 1 个意图）");
+});
+
+test("deferred Verify terminal event preserves verdict and missing evidence", () => {
+  const events = buildDeferredSemanticTerminalEvents({
+    state: {
+      hub: null,
+      done: {
+        eventId: "00000000-0000-4000-8000-000000000023",
+        summary: "Verification needs a rework pass",
+        verdict: "rework",
+        missingEvidence: ["reproduction transcript"],
+      },
+      human: null,
+    },
+    isHub: false,
+    isVerify: true,
+    hubDecision: null,
+    maxIntentsPerDecision: 10,
+    factCount: 0,
+    findingCount: 0,
+  });
+
+  assert.deepEqual(events.map((event) => event.type), ["done"]);
+  assert.deepEqual(events[0]?.payload, {
+    summary: "Verification needs a rework pass",
+    verdict: "rework",
+    missing_evidence: ["reproduction transcript"],
+  });
+});
+
+test("host semantic failures remain fail-closed while ordinary runner errors are distinct", () => {
+  assert.equal(isSemanticAgentRunError({ errorKind: "semantic", error: "ordinary" }), true);
+  assert.equal(isSemanticAgentRunError({ error: "语义事件处理失败: invalid control" }), true);
+  assert.equal(isSemanticAgentRunError({ errorKind: "runner", error: "Provider 429" }), false);
+  assert.equal(isFinalAgentRunnerError({ errorKind: "runner", error: "last retry failed", terminalOutcome: "failure" }), true);
+  assert.equal(isFinalAgentRunnerError({ errorKind: "runner", error: "stale 429", terminalOutcome: "success" }), false);
 });
 
 test("real executor generates identical AGENTS.md and CLAUDE.md instructions", () => {

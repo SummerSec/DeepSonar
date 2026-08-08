@@ -48,7 +48,7 @@ export type StreamBlock =
     }
   | { kind: "meta"; key: string; text: string };
 
-export type StreamKindFilter = "all" | "text" | "tool" | "meta";
+export type StreamKindFilter = "all" | "text" | "reasoning" | "tool" | "meta";
 
 export function streamItemKey(item: Pick<StreamItem, "attempt_id" | "seq">): string {
   return `${item.attempt_id ?? "legacy"}:${item.seq}`;
@@ -59,6 +59,7 @@ export function reduceStreamItem(blocks: StreamBlock[], item: StreamItem): Strea
   const namespace = `${item.attempt_id ?? "legacy"}:`;
   if (item.type === "text.delta" || item.type === "reasoning.delta") {
     const reasoning = item.type === "reasoning.delta";
+    if (typeof item.delta !== "string" || item.delta.length === 0) return blocks;
     const last = blocks[blocks.length - 1];
     if (last?.kind === "text" && last.reasoning === reasoning && last.key.startsWith(namespace)) {
       return [...blocks.slice(0, -1), { ...last, text: last.text + (item.delta ?? "") }];
@@ -184,7 +185,8 @@ export function filterStreamBlocks(
 ): StreamBlock[] {
   const needle = query.trim().toLowerCase();
   return blocks.filter((b) => {
-    if (kind !== "all" && b.kind !== kind) return false;
+    const blockKind = b.kind === "text" && b.reasoning ? "reasoning" : b.kind;
+    if (kind !== "all" && blockKind !== kind) return false;
     if (!needle) return true;
     if (b.kind === "text") return b.text.toLowerCase().includes(needle);
     if (b.kind === "tool") {
@@ -197,6 +199,7 @@ export function filterStreamBlocks(
 const KIND_OPTIONS: { value: StreamKindFilter; label: string }[] = [
   { value: "all", label: "全部" },
   { value: "text", label: "文本" },
+  { value: "reasoning", label: "思考" },
   { value: "tool", label: "工具" },
   { value: "meta", label: "系统" },
 ];
@@ -218,6 +221,7 @@ export function StreamView({
   const [follow, setFollow] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [collapsedReasoning, setCollapsedReasoning] = useState<Set<string>>(() => new Set());
 
   const visible = useMemo(() => filterStreamBlocks(blocks, kind, query), [blocks, kind, query]);
 
@@ -261,7 +265,7 @@ export function StreamView({
           aria-label="搜索实时流"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索文本 / 工具…"
+          placeholder="搜索文本 / 思考 / 工具…"
           className="min-h-8 min-w-[8rem] flex-1 rounded-lg bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700"
         />
         {(kind !== "all" || query) && (
@@ -308,12 +312,30 @@ export function StreamView({
         {visible.map((b) => {
           if (b.kind === "text") {
             return b.reasoning ? (
-              <MarkdownView
-                key={b.key}
-                markdown={b.text}
-                controls={false}
-                className="mb-2 font-mono italic text-zinc-600"
-              />
+              <div key={b.key} className="mb-2 rounded-md border border-white/[.05] bg-black/10">
+                <button
+                  type="button"
+                  aria-expanded={!collapsedReasoning.has(b.key)}
+                  aria-label={collapsedReasoning.has(b.key) ? "展开思考过程" : "收起思考过程"}
+                  onClick={() => setCollapsedReasoning((before) => {
+                    const next = new Set(before);
+                    if (next.has(b.key)) next.delete(b.key); else next.add(b.key);
+                    return next;
+                  })}
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-mono text-[10px] uppercase tracking-[0.12em] text-zinc-600 hover:text-zinc-400"
+                >
+                  <CaretDown size={11} className={collapsedReasoning.has(b.key) ? "-rotate-90" : ""} />
+                  <span>思考</span>
+                  <span className="normal-case tracking-normal text-zinc-700">{collapsedReasoning.has(b.key) ? "已折叠" : "可折叠"}</span>
+                </button>
+                {!collapsedReasoning.has(b.key) && (
+                  <MarkdownView
+                    markdown={b.text}
+                    controls={false}
+                    className="border-t border-white/[.04] px-2.5 py-1.5 font-mono italic text-zinc-600"
+                  />
+                )}
+              </div>
             ) : (
               <MarkdownView key={b.key} markdown={b.text} controls={false} className="mb-2" />
             );

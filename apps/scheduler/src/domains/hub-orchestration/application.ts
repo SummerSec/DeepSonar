@@ -1,4 +1,5 @@
 import { sql } from "../../db.js";
+import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import {
   isHubRoundWithinBudget,
   shouldConsiderHubTrigger,
@@ -331,7 +332,11 @@ export function createHubOrchestrationApplication(
     }
 
     const triggerFindingId = typeof trigger.finding_id === "string" ? trigger.finding_id : null;
-    const snapshot = await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []);
+    const snapshot = await freezeAgentSnapshotNetworkPolicy(
+      tx,
+      canvasId,
+      await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []) as object,
+    );
     const [hubJob] = await tx`
       INSERT INTO jobs ${tx({
         project_id: projectId,

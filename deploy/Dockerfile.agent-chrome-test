@@ -1,0 +1,89 @@
+# DeepSonar pinned Chromium headless/CDP runtime. Project opt-in only.
+ARG BASE_IMAGE=deepsonar-base:local
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+ARG DEBIAN_SNAPSHOT=20260731T162426Z
+ARG DEBIAN_SECURITY_SNAPSHOT=20260731T162426Z
+ARG TARGETARCH
+ARG CHROMIUM_VERSION=151.0.7922.71-1~deb12u1
+ARG CHROMIUM_AMD64_URL=https://snapshot.debian.org/archive/debian-security/20260731T162426Z/pool/updates/main/c/chromium/chromium_151.0.7922.71-1~deb12u1_amd64.deb
+ARG CHROMIUM_ARM64_URL=https://snapshot.debian.org/archive/debian-security/20260731T150449Z/pool/updates/main/c/chromium/chromium_151.0.7922.71-1~deb12u1_arm64.deb
+ARG CHROMIUM_AMD64_SHA256=455423ff7608b4a2af8ef6e66596ce86d313ae9e055381feee9e39df9f6165ef
+ARG CHROMIUM_ARM64_SHA256=1abbdfc529cd7b8576ec41b2f2aa4660888f7fd3efd6579b3d79cfc30bc0389d
+ARG CHROMIUM_COMMON_AMD64_URL=https://snapshot.debian.org/archive/debian-security/20260731T162426Z/pool/updates/main/c/chromium/chromium-common_151.0.7922.71-1~deb12u1_amd64.deb
+ARG CHROMIUM_COMMON_ARM64_URL=https://snapshot.debian.org/archive/debian-security/20260731T150449Z/pool/updates/main/c/chromium/chromium-common_151.0.7922.71-1~deb12u1_arm64.deb
+ARG CHROMIUM_COMMON_AMD64_SHA256=a99c21a89cac35e18997df511d4173cfb7bc57ea0312e88b0c3b99e564050938
+ARG CHROMIUM_COMMON_ARM64_SHA256=d26cdb3cc2ed1080a499603f5f0483ee9f377c9a753a8469dcf5be2004e74e8d
+ARG PLAYWRIGHT_CORE_VERSION=1.62.1
+ARG PLAYWRIGHT_CORE_INTEGRITY=sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==
+
+USER root
+RUN set -eux; \
+  rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SECURITY_SNAPSHOT" >>/etc/apt/sources.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends ca-certificates curl file jq; \
+  case "$TARGETARCH" in \
+    amd64) chromium_url="$CHROMIUM_AMD64_URL"; chromium_sha256="$CHROMIUM_AMD64_SHA256"; common_url="$CHROMIUM_COMMON_AMD64_URL"; common_sha256="$CHROMIUM_COMMON_AMD64_SHA256" ;; \
+    arm64) chromium_url="$CHROMIUM_ARM64_URL"; chromium_sha256="$CHROMIUM_ARM64_SHA256"; common_url="$CHROMIUM_COMMON_ARM64_URL"; common_sha256="$CHROMIUM_COMMON_ARM64_SHA256" ;; \
+    *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$chromium_url" -o /tmp/chromium.deb; \
+  echo "$chromium_sha256  /tmp/chromium.deb" | sha256sum -c -; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$common_url" -o /tmp/chromium-common.deb; \
+  echo "$common_sha256  /tmp/chromium-common.deb" | sha256sum -c -; \
+  apt-get install -y --no-install-recommends /tmp/chromium-common.deb /tmp/chromium.deb; \
+  test "$(chromium --version | awk '{print $2}')" = "${CHROMIUM_VERSION%%-*}"; \
+  rm -f /tmp/chromium.deb /tmp/chromium-common.deb; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
+  install -d -m 0755 /opt/deepsonar/bin /workspace
+
+RUN set -eux; \
+  mkdir -p /tmp/playwright; \
+  cd /tmp/playwright; \
+  archive="$(npm pack --ignore-scripts --silent "playwright-core@${PLAYWRIGHT_CORE_VERSION}")"; \
+  PLAYWRIGHT_ARCHIVE="$PWD/$archive" PLAYWRIGHT_CORE_INTEGRITY="$PLAYWRIGHT_CORE_INTEGRITY" node -e 'const fs=require("node:fs"); const crypto=require("node:crypto"); const expected=process.env.PLAYWRIGHT_CORE_INTEGRITY; const actual=`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.env.PLAYWRIGHT_ARCHIVE)).digest("base64")}`; if(actual!==expected) throw new Error(`playwright-core integrity mismatch: ${actual}`);'; \
+  npm install -g --omit=dev --no-audit --no-fund "$PWD/$archive"; \
+  rm -rf /tmp/playwright; \
+  npm cache clean --force
+
+COPY deploy/chrome-headless.sh /tmp/chrome-headless.sh
+COPY deploy/chrome-test-env.sh /tmp/chrome-test-env.sh
+COPY agent-harness/chrome-test-smoke.mjs /opt/deepsonar/chrome-test-smoke.mjs
+RUN set -eux; \
+  install -m 0755 /tmp/chrome-headless.sh /opt/deepsonar/bin/chrome-headless.sh; \
+  install -m 0755 /tmp/chrome-test-env.sh /opt/deepsonar/bin/chrome-test-env.sh; \
+  rm -f /tmp/chrome-headless.sh /tmp/chrome-test-env.sh; \
+  if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
+  if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-test",imageKey:"deepsonar-chrome-test",project_opt_in:true,tools:["chromium@151.0.7922.71","chromium-common@151.0.7922.71","chromium-headless","remote-debugging-cdp","playwright-core@1.62.1","node","claude"],browser:{binary:"/usr/bin/chromium",protocol:"cdp",wrapper:"/opt/deepsonar/bin/chrome-headless.sh",requiredFlags:["--no-sandbox","--headless=new"]},entrypoints:{check:"/opt/deepsonar/bin/chrome-test-env.sh",launch:"/opt/deepsonar/bin/chrome-headless.sh",smoke:"/opt/deepsonar/chrome-test-smoke.mjs"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  chown -R deepsonar:deepsonar /opt/deepsonar /workspace
+
+ENV IS_SANDBOX=1 \
+    CHROME_BIN=/usr/bin/chromium \
+    CHROME_REMOTE_DEBUGGING_PORT=9222 \
+    NODE_PATH=/usr/local/lib/node_modules \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+RUN /opt/deepsonar/bin/chrome-test-env.sh --check
+
+FROM scratch
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="chrome-test" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.title="DeepSonar Chrome Test" \
+      org.opencontainers.image.description="Project-opt-in pinned Chromium headless/CDP runtime with a governed --no-sandbox wrapper and Playwright path." \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
+ENV IS_SANDBOX=1 \
+    CHROME_BIN=/usr/bin/chromium \
+    CHROME_REMOTE_DEBUGGING_PORT=9222 \
+    NODE_PATH=/usr/local/lib/node_modules \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]

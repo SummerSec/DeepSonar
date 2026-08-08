@@ -1,0 +1,80 @@
+# DeepSonar Chrome/C++ static-analysis runtime. Project opt-in only.
+# The image intentionally does not install a browser or V8 build helpers: audit is
+# source/static-analysis focused and uses partial clone + governed C++ rules.
+ARG BASE_IMAGE=deepsonar-base:local
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+ARG DEBIAN_SNAPSHOT=20260731T162426Z
+ARG TARGETARCH
+ARG SEMGREP_VERSION=1.172.0
+ARG SEMGREP_AMD64_SHA256=d8b94af4266a575287ad2cd844573743ab4fe58f6bfb6d9229327807937eade3
+ARG SEMGREP_ARM64_SHA256=c881a305b965e594b88b15c2c6419b398e76e438ec61e60916c8b2effe927240
+
+USER root
+RUN set -eux; \
+  rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl git python3-venv clang clang-tools llvm binutils; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
+  install -d -m 0755 /opt/deepsonar/bin /workspace
+
+RUN set -eux; \
+  case "$TARGETARCH" in \
+    amd64) semgrep_arch=x86_64; semgrep_sha="$SEMGREP_AMD64_SHA256" ;; \
+    arm64) semgrep_arch=aarch64; semgrep_sha="$SEMGREP_ARM64_SHA256" ;; \
+    *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  mkdir -p /tmp/deepsonar-tools /opt/deepsonar/semgrep; \
+  semgrep_file="/tmp/deepsonar-tools/semgrep-${SEMGREP_VERSION}-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_${semgrep_arch}.whl"; \
+  semgrep_path="https://files.pythonhosted.org/packages/$(test "$TARGETARCH" = amd64 && printf '84/a5/21624510b65271a673961a894af7511b5123d662e84c74c765560ea28b27' || printf '1b/45/35488f2f609db23eed350ada093722484a6f8cb3b1eaf8ecfd54e2338521')/$(basename "$semgrep_file")"; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$semgrep_path" -o "$semgrep_file"; \
+  echo "$semgrep_sha  $semgrep_file" | sha256sum -c -; \
+  python3 -m venv /opt/deepsonar/semgrep; \
+  /opt/deepsonar/semgrep/bin/pip install --no-cache-dir "$semgrep_file"; \
+  ln -s /opt/deepsonar/semgrep/bin/semgrep /usr/local/bin/semgrep; \
+  rm -rf /tmp/deepsonar-tools
+
+COPY deploy/chrome-audit-rules.yml /opt/deepsonar/chrome-audit-rules.yml
+COPY deploy/chrome-audit-env.sh /tmp/chrome-audit-env.sh
+COPY deploy/chrome-audit-scan.sh /tmp/chrome-audit-scan.sh
+RUN set -eux; \
+  install -m 0755 /tmp/chrome-audit-env.sh /opt/deepsonar/bin/chrome-audit-env.sh; \
+  install -m 0755 /tmp/chrome-audit-scan.sh /opt/deepsonar/bin/chrome-audit-scan.sh; \
+  rm -f /tmp/chrome-audit-env.sh /tmp/chrome-audit-scan.sh; \
+  if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
+  if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-audit",imageKey:"deepsonar-chrome-audit",project_opt_in:true,tools:["git","git-partial-clone","semgrep","chrome-audit-rules","clang","clang-tidy","clangd","llvm","objdump","readelf","llvm-nm","node","claude"],focus:["c++-static-analysis","source-audit"],entrypoints:{check:"/opt/deepsonar/bin/chrome-audit-env.sh",scan:"/opt/deepsonar/bin/chrome-audit-scan.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  chown -R deepsonar:deepsonar /opt/deepsonar /workspace
+
+RUN /opt/deepsonar/bin/chrome-audit-env.sh --check
+
+ENV IS_SANDBOX=1 \
+    SEMGREP_SEND_METRICS=off \
+    SEMGREP_ENABLE_VERSION_CHECK=0 \
+    CHROME_SOURCE_DIR=/workspace/chrome-source \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+
+FROM scratch
+ARG OCI_TITLE="DeepSonar Chrome Audit"
+ARG OCI_DESCRIPTION="Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep rules, Clang/LLVM and binutils."
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="chrome-audit" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.title="${OCI_TITLE}" \
+      org.opencontainers.image.description="${OCI_DESCRIPTION}" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
+ENV IS_SANDBOX=1 \
+    SEMGREP_SEND_METRICS=off \
+    SEMGREP_ENABLE_VERSION_CHECK=0 \
+    CHROME_SOURCE_DIR=/workspace/chrome-source \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]
