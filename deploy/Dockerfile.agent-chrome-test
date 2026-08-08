@@ -46,8 +46,9 @@ RUN set -eux; \
   archive="$(npm pack --ignore-scripts --silent "playwright-core@${PLAYWRIGHT_CORE_VERSION}")"; \
   PLAYWRIGHT_ARCHIVE="$PWD/$archive" PLAYWRIGHT_CORE_INTEGRITY="$PLAYWRIGHT_CORE_INTEGRITY" node -e 'const fs=require("node:fs"); const crypto=require("node:crypto"); const expected=process.env.PLAYWRIGHT_CORE_INTEGRITY; const actual=`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.env.PLAYWRIGHT_ARCHIVE)).digest("base64")}`; if(actual!==expected) throw new Error(`playwright-core integrity mismatch: ${actual}`);'; \
   npm install -g --omit=dev --no-audit --no-fund "$PWD/$archive"; \
-  rm -rf /tmp/playwright; \
-  npm cache clean --force
+  npm cache clean --force; \
+  cd /; \
+  rm -rf /tmp/playwright
 
 COPY deploy/chrome-headless.sh /tmp/chrome-headless.sh
 COPY deploy/chrome-test-env.sh /tmp/chrome-test-env.sh

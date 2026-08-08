@@ -113,7 +113,7 @@ consumed by the three Chrome Dockerfiles and the consistency gate:
   `921e61b35fbc5e97b14250a118e363ec05078089` and V8 commit
   `792d9716fea48312ad7ce4413c538e00628b1d50` (V8 `15.1.206.10`, the V8
   revision from Chromium `151.0.7922.71`), then runs `autoninja d8
-  v8_simple_json_fuzzer` for the target architecture. The Chromium package
+  v8_json_libfuzzer` for the target architecture. The Chromium package
   version and the V8 source version are recorded separately because they are
   independently pinned inputs. `chrome-fuzz-env.sh` and
   `chrome-fuzz-smoke.sh` reject a missing or non-V8 binary and execute the

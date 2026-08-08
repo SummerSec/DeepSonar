@@ -22,7 +22,7 @@
     "chromium_tag": "151.0.7922.71",
     "version": "15.1.206.10",
     "depot_tools_commit": "921e61b35fbc5e97b14250a118e363ec05078089",
-    "target": "d8+v8_simple_json_fuzzer",
+    "target": "d8+v8_json_libfuzzer",
     "required": true,
     "honesty": "The image fails its build smoke if the actual V8 d8 binary is unavailable; no toy harness fallback exists."
   },

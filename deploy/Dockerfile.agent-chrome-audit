@@ -16,7 +16,13 @@ RUN set -eux; \
   printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
-    ca-certificates curl git python3-venv clang clang-tools llvm binutils; \
+    ca-certificates curl git python3-venv clang clang-tools clang-tidy clangd llvm binutils; \
+  tidy_bin="$(find /usr/lib -path '*/llvm-*/bin/clang-tidy' -type f -print -quit)"; \
+  clangd_bin="$(find /usr/lib -path '*/llvm-*/bin/clangd' -type f -print -quit)"; \
+  test -n "$tidy_bin" -a -x "$tidy_bin"; \
+  test -n "$clangd_bin" -a -x "$clangd_bin"; \
+  ln -sf "$tidy_bin" /usr/local/bin/clang-tidy; \
+  ln -sf "$clangd_bin" /usr/local/bin/clangd; \
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
   install -d -m 0755 /opt/deepsonar/bin /workspace

@@ -8,7 +8,9 @@
   "apt": {
     "git": { "version": "snapshot", "capabilities": ["source-control", "partial-clone"] },
     "clang": { "version": "snapshot", "capabilities": ["cpp-static-analysis"] },
-    "clang-tools": { "version": "snapshot", "capabilities": ["clang-tidy", "clangd"] },
+    "clang-tools": { "version": "snapshot", "capabilities": ["clang-extra-tools"] },
+    "clang-tidy": { "version": "snapshot", "capabilities": ["clang-tidy"] },
+    "clangd": { "version": "snapshot", "capabilities": ["clangd"] },
     "llvm": { "version": "snapshot", "capabilities": ["llvm-analysis"] },
     "binutils": { "version": "snapshot", "capabilities": ["binary-analysis"] },
     "python3-venv": { "version": "snapshot", "capabilities": ["python-runtime"] }

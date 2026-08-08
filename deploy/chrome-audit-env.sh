@@ -21,7 +21,7 @@ check_manifest() {
 
 check_tools() {
   local command_name
-  for command_name in git clang clang++ clang-tidy semgrep objdump readelf llvm-nm jq node claude; do
+  for command_name in git clang clang++ clang-tidy clangd semgrep objdump readelf llvm-nm jq node claude; do
     command -v "$command_name" >/dev/null 2>&1 || {
       printf 'Chrome Audit 环境检查失败：缺少命令 %s\n' "$command_name" >&2
       return 1
@@ -30,6 +30,7 @@ check_tools() {
   git --version >/dev/null
   clang --version >/dev/null
   clang-tidy --version >/dev/null
+  clangd --version >/dev/null
   semgrep --version >/dev/null
   objdump --version >/dev/null
   check_manifest

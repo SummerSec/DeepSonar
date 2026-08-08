@@ -27,7 +27,9 @@ RUN set -eux; \
 
 # A shallow, commit-addressed depot_tools checkout makes the source-build
 # dependency explicit. gclient then resolves V8 dependencies from the exact
-# V8 commit, and the final image retains only the resulting d8 binary.
+# V8 commit. The pinned Chromium sanitizer config maps use_libfuzzer=true to
+# -fsanitize=fuzzer-no-link for compilation; the appended target supplies
+# compiler-rt's libFuzzer main only at its final link.
 RUN set -eux; \
   git init /opt/depot_tools; \
   git -C /opt/depot_tools remote add origin "$DEPOT_TOOLS_REPOSITORY"; \
@@ -39,14 +41,23 @@ RUN set -eux; \
   gclient config --name src "$V8_REPOSITORY"; \
   gclient sync --revision "src@$V8_COMMIT" --no-history --shallow; \
   cd src; \
+  printf '%s\n' \
+    'config("v8_json_libfuzzer_link") {' \
+    '  ldflags = [ "-fsanitize=fuzzer,address" ]' \
+    '}' \
+    'v8_executable("v8_json_libfuzzer") {' \
+    '  testonly = true' \
+    '  deps = [ ":json_fuzzer" ]' \
+    '  configs = [ ":external_config", ":v8_json_libfuzzer_link" ]' \
+    '}' >> BUILD.gn; \
   case "$TARGETARCH" in amd64) target_cpu=x64 ;; arm64) target_cpu=arm64 ;; *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; esac; \
   export CC=clang-16 CXX=clang++-16; \
-  gn gen out/release --args="is_debug=false is_component_build=false is_clang=true is_asan=true use_libfuzzer=true target_cpu=\"$target_cpu\" v8_enable_i18n_support=false v8_use_external_startup_data=false v8_enable_pointer_compression=true"; \
-  autoninja -C out/release d8 v8_simple_json_fuzzer; \
+  gn gen out/release --args="is_debug=false is_component_build=false is_clang=true is_asan=true use_libfuzzer=true v8_enable_fuzztest=false target_cpu=\"$target_cpu\" v8_enable_i18n_support=false v8_use_external_startup_data=false v8_enable_pointer_compression=true"; \
+  autoninja -C out/release d8 v8_json_libfuzzer; \
   test -x out/release/d8; \
-  test -x out/release/v8_simple_json_fuzzer; \
+  test -x out/release/v8_json_libfuzzer; \
   install -m 0755 out/release/d8 /opt/deepsonar/bin/d8; \
-  install -m 0755 out/release/v8_simple_json_fuzzer /opt/deepsonar/bin/v8_simple_json_fuzzer; \
+  install -m 0755 out/release/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer; \
   /opt/deepsonar/bin/d8 --version | grep -E '^V8'; \
   rm -rf /tmp/v8-checkout /opt/depot_tools
 
@@ -58,7 +69,7 @@ RUN set -eux; \
   rm -f /tmp/chrome-fuzz-env.sh /tmp/chrome-fuzz-smoke.sh; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_simple_json_fuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_simple_json_fuzzer",actual:true,source:"v8",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_simple_json_fuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_json_libfuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_json_libfuzzer",actual:true,source:"v8",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_json_libfuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
 ENV IS_SANDBOX=1 \
