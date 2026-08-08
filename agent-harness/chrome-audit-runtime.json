@@ -1,0 +1,40 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "chrome-audit",
+  "aptSource": "snapshot.debian.org/archive/debian/20260731T162426Z",
+  "apt": {
+    "git": { "version": "snapshot", "capabilities": ["source-control", "partial-clone"] },
+    "clang": { "version": "snapshot", "capabilities": ["cpp-static-analysis"] },
+    "clang-tools": { "version": "snapshot", "capabilities": ["clang-extra-tools"] },
+    "clang-tidy": { "version": "snapshot", "capabilities": ["clang-tidy"] },
+    "clangd": { "version": "snapshot", "capabilities": ["clangd"] },
+    "llvm": { "version": "snapshot", "capabilities": ["llvm-analysis"] },
+    "binutils": { "version": "snapshot", "capabilities": ["binary-analysis"] },
+    "python3-venv": { "version": "snapshot", "capabilities": ["python-runtime"] }
+  },
+  "downloads": {
+    "semgrep": {
+      "version": "1.172.0",
+      "assets": {
+        "amd64": {
+          "url": "https://files.pythonhosted.org/packages/84/a5/21624510b65271a673961a894af7511b5123d662e84c74c765560ea28b27/semgrep-1.172.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl",
+          "sha256": "d8b94af4266a575287ad2cd844573743ab4fe58f6bfb6d9229327807937eade3"
+        },
+        "arm64": {
+          "url": "https://files.pythonhosted.org/packages/1b/45/35488f2f609db23eed350ada093722484a6f8cb3b1eaf8ecfd54e2338521/semgrep-1.172.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_aarch64.whl",
+          "sha256": "c881a305b965e594b88b15c2c6419b398e76e438ec61e60916c8b2effe927240"
+        }
+      }
+    }
+  },
+  "toolsets": {
+    "chrome-audit": {
+      "imageKey": "deepsonar-chrome-audit",
+      "description": "Project-opt-in Chrome/C++ static-analysis runtime",
+      "maxSizeMiB": 1300
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony Test / Audit / Fuzz 镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。
+`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony 与 Chrome 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。
 
 同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` **提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json for vX.Y.Z`），用于更新内置 bundled 回退清单。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。若默认分支开启了「禁止 GITHUB_TOKEN 直推」类保护规则，需为 Actions 放行或改用可写 PAT。
 
@@ -39,7 +39,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 ## 清单与校验
 
-清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit 与 OpenHarmony Fuzz 六项。
+清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test 与 Chrome Fuzz 九项。Chrome 条目在源码内置 bundled 清单中可以保持 `versions: []`；只有 Release 对两个平台完成真实构建、发布和 inspect 后，生成器才会写入版本与 digest。
 
 **一版本多平台**：v2 多架构发布时，每个产品在 `versions[]` 只有一条 canonical 记录，`platforms` 同时列出 `linux/amd64` / `linux/arm64`，`digest` 是共享 manifest/index digest，`size_bytes` 为目标平台压缩层大小上限。旧 v1 清单仍按一平台一版本兼容解析；Scheduler 当前只消费 v2 的 GitHub `image_ref` 投影。
 
@@ -96,3 +96,38 @@ immutable reference for apply, pull, and Job snapshots. If an internal
 channel-only item has no reference for the selected channel, it is skipped or
 fails closed; the Scheduler never substitutes another channel or rewrites an
 existing Job snapshot.
+
+## Chrome specialist release contract
+
+The Chrome source pins are kept in `deploy/chrome-runtime-sources.json` and are
+consumed by the three Chrome Dockerfiles and the consistency gate:
+
+- Chromium `151.0.7922.71-1~deb12u1` is installed from Debian bookworm-security
+  snapshot packages. The amd64 and arm64 package URLs, sizes, and SHA-256
+  values are pinned separately, including the exact-version `chromium-common`
+  package closure; the package is never downloaded from a moving `stable` URL.
+- `playwright-core@1.62.1` is installed with its npm integrity value. The test
+  smoke launches the image's governed Chromium wrapper and connects through
+  the CDP endpoint with Playwright; it is not a host-browser smoke.
+- Chrome Fuzz checks out depot_tools commit
+  `921e61b35fbc5e97b14250a118e363ec05078089` and V8 commit
+  `792d9716fea48312ad7ce4413c538e00628b1d50` (V8 `15.1.206.10`, the V8
+  revision from Chromium `151.0.7922.71`), then runs `autoninja d8
+  v8_json_libfuzzer` for the target architecture. The Chromium package
+  version and the V8 source version are recorded separately because they are
+  independently pinned inputs. `chrome-fuzz-env.sh` and
+  `chrome-fuzz-smoke.sh` reject a missing or non-V8 binary and execute the
+  real V8 libFuzzer target with `-runs=1`. A release must
+  therefore prove both `linux/amd64` and `linux/arm64`; if the arm64 source
+  build cannot produce actual d8, the release is incomplete and no digest may
+  be added to the registry.
+
+The Chrome images are all project opt-in and have no global role defaults.
+`ci.yml` builds amd64 and runs the contract/smoke harness on every supported
+CI path. `release.yml` is the authoritative multi-architecture gate: it uses
+native `ubuntu-latest` and `ubuntu-24.04-arm` runners for child image builds
+(especially the V8 build, which is not run under QEMU), then assembles the
+two child digests into one index. It uses
+the immutable base digest, publishes GHCR plus configured ACR and Docker Hub
+tags, inspects every destination, and uploads only records accepted by
+`record-runtime-image-digest.mjs`.

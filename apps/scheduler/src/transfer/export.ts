@@ -317,6 +317,7 @@ async function collectRoles(
       mcps_json: rc.mcps_json,
       subagents_json: rc.subagents_json,
       platform_tools_json: rc.platform_tools_json,
+      sandbox_limits_json: rc.sandbox_limits_json,
       instructions_markdown: rc.instructions_markdown,
       runtime_image_key: rc.runtime_image_key,
       version: rc.version,

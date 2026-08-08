@@ -31,7 +31,7 @@ if (!testDatabaseUrl) {
         VALUES (${projectId}, ${canvasId}, ${`verify-eligibility-${projectId}`}, ${sql.json({})})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
-        VALUES (${canvasId}, ${projectId}, 'Verify eligibility integration', ${sql.json({})})`;
+        VALUES (${canvasId}, ${projectId}, 'Verify eligibility integration', ${sql.json({ network_policy: { allow_egress: false } })})`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;

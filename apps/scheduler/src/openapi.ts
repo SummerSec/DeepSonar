@@ -1329,7 +1329,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           additionalProperties: false,
           required: [
             "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "model", "version",
-            "runtime_image_key",
+            "runtime_image_key", "sandbox_limits_json",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "scope", "can_bind",
             "credential_provider_valid", "role_kind", "role_builtin",
           ],
@@ -1346,6 +1346,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             agent_cli: { type: "string" },
             model: { type: "string", nullable: true },
             runtime_image_key: { type: "string", nullable: true },
+            sandbox_limits_json: { $ref: "#/components/schemas/SandboxLimitsOverride" },
             version: { type: "integer" },
             credential_id: { type: "string", format: "uuid", nullable: true },
             credential_name: { type: "string", nullable: true },
@@ -1444,6 +1445,15 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           },
         },
         ReasoningEffort: { type: "string", enum: [...ReasoningEnum], nullable: true },
+        SandboxLimitsOverride: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            cpu: { type: "number", minimum: 0.25, maximum: 64 },
+            memoryMiB: { type: "integer", minimum: 256, maximum: 131072 },
+            pidsLimit: { type: "integer", minimum: 64, maximum: 32768 },
+          },
+        },
         RoleConfigInput: {
           type: "object",
           properties: {
@@ -1468,6 +1478,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             },
             instructions_markdown: { type: "string", nullable: true },
             runtime_image_key: { type: "string", nullable: true },
+            sandbox_limits: { $ref: "#/components/schemas/SandboxLimitsOverride" },
             credentials: {
               type: "array",
               items: {

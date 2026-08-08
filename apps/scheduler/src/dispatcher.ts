@@ -22,6 +22,10 @@ import { ensureRuntimeImageAvailable } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
+import {
+  assertChromeRuntimeEgressAllowed,
+  requireFrozenSnapshotAllowEgress,
+} from "./domains/role-runtime-snapshot/index.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -30,6 +34,9 @@ import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
  */
 
 const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
+
+/** Kept as a dispatcher export for existing diagnostics/tests. */
+export { CHROME_RUNTIME_IMAGE_KEYS } from "./domains/role-runtime-snapshot/index.js";
 
 /** 在执行的 job（优雅退出 drain 用，§12.2） */
 const inFlight = new Set<Promise<void>>();
@@ -133,7 +140,14 @@ export async function loadGraphEligibilityBatch(
       ? tx`
           SELECT canvas_id,
                  (array_agg(id ORDER BY created_at ASC, id ASC) FILTER (WHERE type = 'hub_reason'))[1] AS oldest_hub_id,
-                 (array_agg(id ORDER BY created_at ASC, id ASC) FILTER (WHERE type = 'report'))[1] AS oldest_report_id
+                 (array_agg(id ORDER BY created_at ASC, id ASC) FILTER (
+                   WHERE type = 'report'
+                     AND COALESCE(payload_json->>'kind', 'task_report') <> 'finding_report'
+                 ))[1] AS oldest_task_report_id,
+                 (array_agg(id ORDER BY created_at ASC, id ASC) FILTER (
+                   WHERE type = 'report'
+                     AND payload_json->>'kind' = 'finding_report'
+                 ))[1] AS oldest_finding_report_id
           FROM jobs
           WHERE canvas_id = ANY(${canvasIds}::text[])
             AND status = 'pending'
@@ -156,6 +170,12 @@ export async function loadGraphEligibilityBatch(
     const current = systemByCanvas.get(canvasId);
     const oldest = oldestByCanvas.get(canvasId);
     if (!current) continue;
+    const reportScope = type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report"
+      ? "finding_report"
+      : "task_report";
+    const oldestReportId = reportScope === "finding_report"
+      ? oldest?.oldest_finding_report_id
+      : oldest?.oldest_task_report_id;
     systemStates.set(String(job.id ?? ""), {
       activeHub: Boolean(current.active_hub),
       activeWaitingHuman: Boolean(current.active_waiting_human),
@@ -163,7 +183,7 @@ export async function loadGraphEligibilityBatch(
       activeCanvasJob: Boolean(current.active_canvas_job),
       rootStatus: (current.root_status as string | null) ?? null,
       pendingHubOlder: Boolean(oldest?.oldest_hub_id && oldest.oldest_hub_id !== job.id),
-      pendingReportOlder: Boolean(oldest?.oldest_report_id && oldest.oldest_report_id !== job.id),
+      pendingReportOlder: Boolean(oldestReportId && oldestReportId !== job.id),
     });
   }
   return {
@@ -190,15 +210,32 @@ export function graphEligibilityReason(
   if (type === "verify_finding" && state.waitingEvidence) return "waiting_evidence";
   if (type === "report") {
     if (state.pendingReportOlder) return "report_pending_older";
-    const payload = job.payload_json && typeof job.payload_json === "object"
-      ? job.payload_json as Record<string, unknown>
-      : {};
+    const payload = parseDispatchPayload(job.payload_json);
     const findingScoped = payload.kind === "finding_report";
     if (state.activeCanvasJob || (!findingScoped && !["analysis_complete", "reporting"].includes(String(state.rootStatus)))) {
       return "report_gate";
     }
   }
   return null;
+}
+
+/** JSONB is normally decoded by postgres.js, but characterize legacy/string
+ * snapshots too so the report scope is never silently lost at the gate. */
+function parseDispatchPayload(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Invalid/legacy payloads retain the task-report default gate.
+    }
+  }
+  return {};
 }
 
 export type DispatchCounts = {
@@ -293,7 +330,7 @@ async function isRealType(type: string): Promise<boolean> {
 
 async function graphEligibilityReasonFromDb(
   tx: typeof sql,
-  job: Pick<DispatchCandidate, "id" | "canvas_id" | "type" | "finding_id">,
+  job: Pick<DispatchCandidate, "id" | "canvas_id" | "type" | "finding_id" | "payload_json">,
   batch?: GraphEligibilityBatch,
 ): Promise<string | null> {
   const type = String(job.type ?? "");
@@ -307,7 +344,7 @@ async function graphEligibilityReasonFromDb(
   if (type === "verify_finding") {
     if (!job.finding_id) return null;
     if (batch) {
-      return graphEligibilityReason({ type }, { waitingEvidence: batch.verifyWaitingIds.has(id) });
+      return graphEligibilityReason({ type, payload_json: job.payload_json }, { waitingEvidence: batch.verifyWaitingIds.has(id) });
     }
     const rows = await tx`
       SELECT 1 FROM finding_verification_rounds
@@ -316,12 +353,17 @@ async function graphEligibilityReasonFromDb(
         AND status IN ('pending','running')
         AND requirements_json->>'eligibility' = 'waiting_evidence'
       LIMIT 1`;
-    return graphEligibilityReason({ type }, { waitingEvidence: rows.length > 0 });
+    return graphEligibilityReason({ type, payload_json: job.payload_json }, { waitingEvidence: rows.length > 0 });
   }
 
   if (type === "report") {
     const batchedState = batch?.systemStates.get(id);
-    if (batchedState) return graphEligibilityReason({ type }, batchedState);
+    if (batchedState) {
+      return graphEligibilityReason({ type, payload_json: job.payload_json }, batchedState);
+    }
+    const reportScope = parseDispatchPayload(job.payload_json).kind === "finding_report"
+      ? "finding_report"
+      : "task_report";
     const [root, activeCanvas, oldestPendingReport] = await Promise.all([
       tx`SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`,
       tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id}
@@ -330,10 +372,14 @@ async function graphEligibilityReasonFromDb(
            OR (status = 'pending' AND type <> 'report')
          ) LIMIT 1`,
       tx`SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'report' AND status = 'pending'
+         AND CASE WHEN ${reportScope} = 'finding_report'
+           THEN payload_json->>'kind' = 'finding_report'
+           ELSE COALESCE(payload_json->>'kind', 'task_report') <> 'finding_report'
+         END
          ORDER BY created_at ASC, id ASC LIMIT 1`,
     ]);
     return graphEligibilityReason(
-      { type },
+      { type, payload_json: job.payload_json },
       {
         rootStatus: (root[0]?.status as string | null) ?? null,
         activeCanvasJob: activeCanvas.length > 0,
@@ -343,7 +389,9 @@ async function graphEligibilityReasonFromDb(
   }
 
   const batchedState = batch?.systemStates.get(id);
-  if (batchedState) return graphEligibilityReason({ type }, batchedState);
+  if (batchedState) {
+    return graphEligibilityReason({ type, payload_json: job.payload_json }, batchedState);
+  }
 
   const [activeHub, activeWaitingHuman, activeRole, root, oldestPendingHub] = await Promise.all([
     tx`SELECT 1 FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND type = 'hub_reason'
@@ -358,7 +406,7 @@ async function graphEligibilityReasonFromDb(
        ORDER BY created_at ASC, id ASC LIMIT 1`,
   ]);
   return graphEligibilityReason(
-    { type },
+    { type, payload_json: job.payload_json },
     {
       activeHub: activeHub.length > 0,
       activeWaitingHuman: activeWaitingHuman.length > 0,
@@ -509,6 +557,16 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         if (skipReason) continue;
         const row = await lifecycle.claimPendingJob(job.id as string);
         if (!row) continue;
+        // A Finding Report is queued as `pending`; it becomes visible as
+        // `generating` only after the DB claim succeeds.  Keep this update in
+        // the same transaction as the jobs CAS so a report can never advertise
+        // generation for a still-queued job (or remain queued after a claim).
+        if (String(job.type ?? "") === "report") {
+          await tx`
+            UPDATE finding_reports
+            SET status = 'generating', updated_at = now()
+            WHERE report_job_id = ${row.id as string} AND status = 'pending'`;
+        }
         claimed.push({ id: row.id as string });
         projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
         if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
@@ -545,18 +603,16 @@ async function runJob(jobId: string) {
     // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
     // provision 纳入同一异常保护 + 独立超时（§8.3：provision 异常不得让 job 永久卡住）
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
-    const [canvas] = job.canvas_id
-      ? await sql`SELECT target_json FROM canvases WHERE id = ${job.canvas_id as string}`
-      : [undefined];
-    const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
-    const networkPolicy = (target.network_policy ?? {}) as Record<string, unknown>;
-    if (typeof networkPolicy.allow_egress !== "boolean") {
-      throw new Error(`job ${jobId} 的任务画布缺少冻结的 network_policy.allow_egress`);
-    }
-    // Hub 与 Worker 共用画布冻结的 allow_egress（不再对 hub_reason 强制禁出网）。
-    const allowEgress = useReal && networkPolicy.allow_egress;
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+    const snapshotAllowEgress = requireFrozenSnapshotAllowEgress(snapshot, jobId);
+    const runtimeImageKey = String(snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "");
+    // Hub 与 Worker 共用 Job 创建时冻结的 allow_egress。
+    const allowEgress = useReal && snapshotAllowEgress;
+    assertChromeRuntimeEgressAllowed(runtimeImageKey, snapshotAllowEgress);
+    if (!snapshot.sandbox_limits) {
+      throw new Error(`job ${jobId} 缺少冻结的沙箱资源限制`);
+    }
     const runtimeImage = snapshot.runtime_image?.image_ref;
     if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
     if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
@@ -590,7 +646,9 @@ async function runJob(jobId: string) {
         expectedContract: snapshot.runtime_image.contract_version,
         expectedToolsManifestSha256: snapshot.runtime_image.tools_manifest_sha256,
         sharedAssetsMount: sharedAssetsVolumeName ? { volumeName: sharedAssetsVolumeName } : undefined,
-        limits: config.runtime.sandboxLimits,
+        // The Job snapshot is the only runtime resource authority. Never read
+        // mutable server config here; pending/running Jobs stay reproducible.
+        limits: snapshot.sandbox_limits,
       }),
       config.timeouts.provisionSec * 1000,
       `provision 超时（${config.timeouts.provisionSec}s）`,

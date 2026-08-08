@@ -15,6 +15,7 @@ import {
   PLATFORM_DEFAULT_AGENT_MODEL,
   RUNTIME_TEST_TOOLCHAIN_POLICY,
   createRoleRuntimeSnapshotApplication,
+  freezeAgentSnapshotNetworkPolicy,
   roleNameForJobType as roleNameForRuntimeType,
   withRuntimeTestToolchainPolicy,
   type AgentRuntimeSnapshot,
@@ -743,11 +744,15 @@ export async function createJob(input: CreateJobInput) {
     // 快照读取与 Job 插入必须处于同一事务；Credential provider 迁移会等待本事务结束，
     // 避免生成“快照是旧 provider、执行期已是新 provider”的竞态 Job。
     const job = await sql.begin(async (tx) => {
-      const snapshot = await resolveAgentSnapshotForJob(
+      const snapshot = await freezeAgentSnapshotNetworkPolicy(
         tx as unknown as typeof sql,
-        input.projectId,
-        input.type,
-        snapshotFindingIds,
+        input.canvasId,
+        await resolveAgentSnapshotForJob(
+          tx as unknown as typeof sql,
+          input.projectId,
+          input.type,
+          snapshotFindingIds,
+        ),
       );
       const [created] = await tx`
         INSERT INTO jobs ${tx({
@@ -931,6 +936,18 @@ async function findingProtocolForJob(tx: Tx, job: Record<string, unknown>): Prom
 
 export async function ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<IngestResult> {
   return eventIngestionApplication.ingestEvent(jobId, envelope);
+}
+
+/**
+ * Append deferred terminal semantic events as one same-Job transaction.  Hub
+ * decision side effects and the corresponding Job done therefore cannot be
+ * observed as a partially committed bundle.
+ */
+export async function ingestEventBundle(
+  jobId: string,
+  envelopes: readonly EventEnvelopeInput[],
+): Promise<IngestResult[]> {
+  return eventIngestionApplication.ingestEventBundle(jobId, envelopes);
 }
 
 /** Compatibility facade for semantic event application; ownership lives in event-ingestion. */

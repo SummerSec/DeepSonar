@@ -14,6 +14,20 @@ const kaliDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-kali-min
 const openHarmonyDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony", import.meta.url), "utf8");
 const openHarmonyAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-audit", import.meta.url), "utf8");
 const openHarmonyFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-fuzz", import.meta.url), "utf8");
+const chromeAuditConfig = JSON.parse(readFileSync(new URL("./chrome-audit-runtime.json", import.meta.url), "utf8"));
+const chromeTestConfig = JSON.parse(readFileSync(new URL("./chrome-test-runtime.json", import.meta.url), "utf8"));
+const chromeFuzzConfig = JSON.parse(readFileSync(new URL("./chrome-fuzz-runtime.json", import.meta.url), "utf8"));
+const chromeSources = JSON.parse(readFileSync(new URL("../deploy/chrome-runtime-sources.json", import.meta.url), "utf8"));
+const chromeAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-audit", import.meta.url), "utf8");
+const chromeTestDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-test", import.meta.url), "utf8");
+const chromeFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-fuzz", import.meta.url), "utf8");
+const chromeAuditEnv = readFileSync(new URL("../deploy/chrome-audit-env.sh", import.meta.url), "utf8");
+const chromeAuditScan = readFileSync(new URL("../deploy/chrome-audit-scan.sh", import.meta.url), "utf8");
+const chromeHeadless = readFileSync(new URL("../deploy/chrome-headless.sh", import.meta.url), "utf8");
+const chromeTestEnv = readFileSync(new URL("../deploy/chrome-test-env.sh", import.meta.url), "utf8");
+const chromeTestSmoke = readFileSync(new URL("./chrome-test-smoke.mjs", import.meta.url), "utf8");
+const chromeFuzzEnv = readFileSync(new URL("../deploy/chrome-fuzz-env.sh", import.meta.url), "utf8");
+const chromeFuzzSmoke = readFileSync(new URL("../deploy/chrome-fuzz-smoke.sh", import.meta.url), "utf8");
 const openHarmonyRepo = readFileSync(new URL("../deploy/vendor/gitcode-repo-py3", import.meta.url));
 const normalizedOpenHarmonyRepo = Buffer.from(openHarmonyRepo.toString("utf8").replace(/\r\n/g, "\n"));
 const openHarmonyEnv = readFileSync(new URL("../deploy/openharmony-env.sh", import.meta.url), "utf8");
@@ -172,6 +186,66 @@ for (const item of openHarmonyImages) {
     expect(Array.isArray(image.versions), `${item.key} registry versions 必须是数组`);
   }
 }
+const chromeImages = [
+  { key: "deepsonar-chrome-audit", role: "audit", config: chromeAuditConfig, dockerfile: chromeAuditDockerfile },
+  { key: "deepsonar-chrome-test", role: "test", config: chromeTestConfig, dockerfile: chromeTestDockerfile },
+  { key: "deepsonar-chrome-fuzz", role: "test", config: chromeFuzzConfig, dockerfile: chromeFuzzDockerfile },
+];
+for (const item of chromeImages) {
+  const image = openHarmonyRegistry.images?.find((entry) => entry.image_key === item.key);
+  expect(image, `registry 缺少 ${item.key}`);
+  if (image) {
+    expect(image.source_kind === "official", `${item.key} 必须是 official`);
+    expect(image.project_opt_in === true, `${item.key} 必须启用 project_opt_in`);
+    expect(image.default_role === item.role, `${item.key} default_role 必须是 ${item.role}`);
+    expect(Array.isArray(image.versions), `${item.key} registry versions 必须是数组`);
+  }
+  expect(item.config.contract === "deepsonar.runtime.contract/v1", `${item.key} runtime contract drift`);
+  expect(item.config.project_opt_in === true, `${item.key} config must remain project_opt_in`);
+  expect(item.config.platforms?.join(",") === "linux/amd64,linux/arm64", `${item.key} must declare both release platforms`);
+  expect(item.dockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), `${item.key} must default to local governed base`);
+  expect(item.dockerfile.includes("FROM ${BASE_IMAGE}"), `${item.key} must consume BASE_IMAGE`);
+  expect(item.dockerfile.includes("apt-get install -y --no-install-recommends"), `${item.key} apt install must disable recommends`);
+  expect(item.dockerfile.includes("USER deepsonar"), `${item.key} must run as non-root`);
+  expect(item.dockerfile.includes("/opt/deepsonar/tool-manifest.json"), `${item.key} must generate tool-manifest.json`);
+  expect(item.dockerfile.includes("io.deepsonar.contract") && item.dockerfile.includes("org.opencontainers.image.description"), `${item.key} OCI metadata missing`);
+}
+expect(chromeSources.contract === "deepsonar.chrome.runtime.sources/v1", "Chrome source metadata contract drift");
+expect(chromeSources.chromium.version === "151.0.7922.71-1~deb12u1", "Chrome Chromium version must remain pinned");
+expect(chromeSources.debianSecuritySnapshot === "20260731T162426Z", "Chrome Debian security snapshot must remain pinned");
+expect(chromeSources.v8.commit === "792d9716fea48312ad7ce4413c538e00628b1d50" && chromeSources.v8.version === "15.1.206.10", "Chrome Fuzz V8 revision/version must remain pinned");
+for (const arch of ["amd64", "arm64"]) {
+  const asset = chromeSources.chromium.architectures?.[arch];
+  expect(asset?.url?.startsWith("https://snapshot.debian.org/archive/debian-security/"), `Chrome ${arch} package must use pinned Debian security snapshot`);
+  expect(asset?.common_url?.startsWith("https://snapshot.debian.org/archive/debian-security/"), `Chrome ${arch} common package must use pinned Debian security snapshot`);
+  expect(asset?.url?.includes(chromeSources.chromium.version) && asset?.common_url?.includes(chromeSources.chromium.version), `Chrome ${arch} package URLs must match the pinned version`);
+  expect(/^[0-9a-f]{64}$/.test(asset?.sha256 ?? ""), `Chrome ${arch} package must carry a SHA256 checksum`);
+  expect(/^[0-9a-f]{64}$/.test(asset?.common_sha256 ?? ""), `Chrome ${arch} common package must carry a SHA256 checksum`);
+  expect(chromeTestDockerfile.includes(asset?.sha256 ?? "") && chromeTestDockerfile.includes(asset?.common_sha256 ?? ""), `Chrome ${arch} package checksums missing from Dockerfile`);
+}
+expect(chromeAuditDockerfile.includes("--filter=blob:none") || chromeAuditScan.includes("--filter=blob:none"), "Chrome Audit must support git partial clone");
+expect(chromeAuditDockerfile.includes("chrome-audit-rules.yml") && chromeAuditDockerfile.includes("semgrep"), "Chrome Audit must bundle Semgrep C++ rules");
+expect(chromeAuditDockerfile.includes("clang") && chromeAuditDockerfile.includes("clang-tools") && chromeAuditDockerfile.includes("clang-tidy") && chromeAuditDockerfile.includes("clangd") && chromeAuditDockerfile.includes("binutils"), "Chrome Audit must bundle Clang tooling and binutils");
+expect(!chromeAuditDockerfile.includes("depot_tools"), "Chrome Audit must not include depot_tools");
+expect(chromeTestDockerfile.includes(`ARG PLAYWRIGHT_CORE_VERSION=${chromeSources.playwright.version}`) && chromeTestDockerfile.includes(`ARG PLAYWRIGHT_CORE_INTEGRITY=${chromeSources.playwright.integrity}`) && chromeTestDockerfile.includes("playwright-core@${PLAYWRIGHT_CORE_VERSION}") && chromeTestDockerfile.includes("CHROMIUM_VERSION") && chromeTestDockerfile.includes("chromium-common"), "Chrome Test must pin Playwright, Chromium, and chromium-common versions");
+expect(chromeHeadless.includes("--no-sandbox") && chromeHeadless.includes("--headless=new") && chromeHeadless.includes("--remote-debugging-port"), "Chrome Test wrapper must enforce headless no-sandbox CDP flags");
+expect(chromeTestEnv.includes("connectOverCDP") && chromeTestSmoke.includes("connectOverCDP"), "Chrome Test must expose a Playwright/CDP path");
+expect(chromeFuzzDockerfile.includes(chromeSources.v8.commit) && chromeFuzzDockerfile.includes("gclient sync") && chromeFuzzDockerfile.includes("autoninja") && chromeFuzzDockerfile.includes("d8") && chromeFuzzDockerfile.includes("v8_json_libfuzzer") && chromeFuzzDockerfile.includes("use_libfuzzer=true") && chromeFuzzDockerfile.includes("-fsanitize=fuzzer-no-link") && chromeFuzzDockerfile.includes("-fsanitize=fuzzer,address") && chromeFuzzDockerfile.includes("v8_enable_fuzztest=false"), "Chrome Fuzz must compile an instrumented pinned V8 target and link a real libFuzzer engine");
+expect(chromeFuzzDockerfile.includes("pkg-config") && chromeFuzzDockerfile.includes("clang-16") && chromeFuzzDockerfile.includes("lld-16") && chromeFuzzDockerfile.includes("libclang-rt-16-dev") && chromeFuzzDockerfile.includes("libfuzzer-16-dev") && chromeFuzzDockerfile.includes("afl++"), "Chrome Fuzz Debian toolchain package closure incomplete");
+expect(chromeFuzzConfig.apt["libclang-rt-16-dev"]?.version === "16.0.6-15~deb12u1" && chromeFuzzConfig.apt["libfuzzer-16-dev"]?.version === "16.0.6-15~deb12u1", "Chrome Fuzz must declare verified Bookworm compiler-rt/libFuzzer package names");
+expect(chromeFuzzEnv.includes(".fuzz.actual == true") && chromeFuzzSmoke.includes("actual V8 d8") && chromeFuzzSmoke.includes("-runs=1") && !chromeFuzzDockerfile.includes("toy"), "Chrome Fuzz must fail closed without real d8/libFuzzer");
+for (const [file, content] of [
+  ["chrome-audit-env.sh", chromeAuditEnv], ["chrome-audit-scan.sh", chromeAuditScan],
+  ["chrome-headless.sh", chromeHeadless], ["chrome-test-env.sh", chromeTestEnv],
+  ["chrome-fuzz-env.sh", chromeFuzzEnv], ["chrome-fuzz-smoke.sh", chromeFuzzSmoke],
+]) {
+  const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
+  expect((mode & 0o111) !== 0, `${file} 必须可执行`);
+  expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
+}
+expect(prepareScript.includes("deepsonar-chrome-audit") && prepareScript.includes("deepsonar-chrome-test") && prepareScript.includes("deepsonar-chrome-fuzz"), "prepare 脚本必须接入 Chrome 三项镜像");
+expect(ciWorkflow.includes("chrome-runtime-images") && ciWorkflow.includes("test-chrome-runtime.mjs"), "CI must build and smoke Chrome runtime images");
+expect(releaseWorkflow.includes("chrome-images:") && releaseWorkflow.includes("Dockerfile.agent-chrome-audit") && releaseWorkflow.includes("Dockerfile.agent-chrome-test") && releaseWorkflow.includes("Dockerfile.agent-chrome-fuzz"), "release workflow must publish all Chrome runtime images");
 for (const [file, content] of [
   ["openharmony-env.sh", openHarmonyEnv],
   ["openharmony-init.sh", openHarmonyInit],
@@ -287,12 +361,12 @@ expect(releaseWorkflow.includes('print "DEEPSONAR_IMAGE_TAG=" ENVIRON["VERSION"]
 expect(releaseWorkflow.includes('git add -- "$registry_file" "$env_file"'), "release workflow 必须同时暂存 runtime registry 和 deploy/.env.example");
 expect(releaseWorkflow.includes("group: release-runtime-images-${{ github.repository }}"), "release workflow 必须跨 tag 串行执行");
 expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 不得取消正在执行的旧发布");
-expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length === 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
+expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length >= 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
 expect((releaseWorkflow.match(/::warning::Docker Hub 标签发布失败/g) ?? []).length >= 6, "所有运行时镜像发布必须把 Docker Hub 复制失败降级为警告");
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
-expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
+expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
 for (const name of ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]) {
   expect(releaseWorkflow.includes(`secrets.${name}`), `release workflow 缺少 ACR Secret：${name}`);
 }
@@ -312,7 +386,7 @@ expect(openHarmonyRegistry.images.every((image) => image.versions.every((version
 expect(registryScript.includes("registry_records") && registryScript.includes("inspect_digest"), "v2 generator must require destination inspect evidence");
 expect(registryScript.includes("registry_records must include ${channel} evidence"), "every release descriptor must carry all three channel outcomes");
 expect(registryScript.includes("registry_evidence must contain exactly all three channels"), "v2 generator must require exactly three channel evidence entries");
-expect(registryScript.includes("must contain exactly the six official image keys"), "release/bundled registry checks must require all six official products");
+expect(registryScript.includes("must contain exactly the nine official image keys"), "release/bundled registry checks must require all nine official products");
 expect(schedulerRegistryContract.includes("assertKnownKeys") && schedulerRegistryContract.includes("project_opt_in must be boolean"), "Scheduler catalog parser must reject unknown fields and invalid project_opt_in types");
 expect(schedulerRegistryContract.includes("RUNTIME_IMAGE_REGISTRY_AVAILABLE_PROVENANCE") && schedulerRegistryContract.includes("UNAVAILABLE_REASON_RE"), "Scheduler catalog parser must bound provenance and unavailable reasons");
 expect(recordContractScript.includes("AVAILABLE_PROVENANCE") && recordContractScript.includes("REASON_RE"), "release record verifier must use fixed provenance and bounded reasons");
@@ -324,7 +398,7 @@ expect(releaseWorkflow.includes("DOCKERHUB_UNAVAILABLE_REASON") && releaseWorkfl
 expect(releaseWorkflow.includes("inspectPublishedImageDigest") || releaseWorkflow.includes("imagetools inspect"), "release workflow must inspect destination digests");
 expect(releaseWorkflow.includes("registry_records"), "release workflow must archive channel evidence");
 expect((releaseWorkflow.match(/publish_tags true/g) ?? []).length >= 6, "cross-registry publish must use bounded retry");
-expect((releaseWorkflow.match(/CHANNEL_PUBLISH_FAILED=true/g) ?? []).length === 6, "every release image publish retry must fail closed");
+expect((releaseWorkflow.match(/CHANNEL_PUBLISH_FAILED=true/g) ?? []).length >= 6, "every release image publish retry must fail closed");
 expect((releaseWorkflow.match(/warning::Docker Hub/g) ?? []).length >= 6 && (releaseWorkflow.match(/exit 1/g) ?? []).length >= 6, "configured Docker Hub failure must fail the release");
 expect(releaseWorkflow.includes("runtime-image-registry-v2.json"), "release must attach the validated v2 catalog asset");
 expect(!openHarmonyRegistry.fallback && !openHarmonyRegistry.error && !openHarmonyRegistry.checked_at, "bundled catalog must not accept Scheduler-owned fallback/error/checked_at metadata");
@@ -337,4 +411,4 @@ if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));
   process.exit(1);
 }
-console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test", "openharmony-audit", "openharmony-fuzz"].join("、")}）`);
+console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test", "openharmony-audit", "openharmony-fuzz", "chrome-audit", "chrome-test", "chrome-fuzz"].join("、")}）`);

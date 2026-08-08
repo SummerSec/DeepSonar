@@ -1,0 +1,46 @@
+{
+  "contract": "deepsonar.chrome.runtime.sources/v1",
+  "debianSnapshot": "20260731T162426Z",
+  "debianSecuritySnapshot": "20260731T162426Z",
+  "chromium": {
+    "version": "151.0.7922.71-1~deb12u1",
+    "package": "chromium",
+    "commonPackage": "chromium-common",
+    "binary": "/usr/bin/chromium",
+    "architectures": {
+      "amd64": {
+        "url": "https://snapshot.debian.org/archive/debian-security/20260731T162426Z/pool/updates/main/c/chromium/chromium_151.0.7922.71-1~deb12u1_amd64.deb",
+        "sha256": "455423ff7608b4a2af8ef6e66596ce86d313ae9e055381feee9e39df9f6165ef",
+        "size_bytes": 78750860,
+        "common_url": "https://snapshot.debian.org/archive/debian-security/20260731T162426Z/pool/updates/main/c/chromium/chromium-common_151.0.7922.71-1~deb12u1_amd64.deb",
+        "common_sha256": "a99c21a89cac35e18997df511d4173cfb7bc57ea0312e88b0c3b99e564050938",
+        "common_size_bytes": 29499424
+      },
+      "arm64": {
+        "url": "https://snapshot.debian.org/archive/debian-security/20260731T150449Z/pool/updates/main/c/chromium/chromium_151.0.7922.71-1~deb12u1_arm64.deb",
+        "sha256": "1abbdfc529cd7b8576ec41b2f2aa4660888f7fd3efd6579b3d79cfc30bc0389d",
+        "size_bytes": 68749708,
+        "common_url": "https://snapshot.debian.org/archive/debian-security/20260731T150449Z/pool/updates/main/c/chromium/chromium-common_151.0.7922.71-1~deb12u1_arm64.deb",
+        "common_sha256": "d26cdb3cc2ed1080a499603f5f0483ee9f377c9a753a8469dcf5be2004e74e8d",
+        "common_size_bytes": 34771156
+      }
+    }
+  },
+  "playwright": {
+    "package": "playwright-core",
+    "version": "1.62.1",
+    "integrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
+    "protocol": "cdp"
+  },
+  "v8": {
+    "repository": "https://chromium.googlesource.com/v8/v8.git",
+    "commit": "792d9716fea48312ad7ce4413c538e00628b1d50",
+    "chromium_tag": "151.0.7922.71",
+    "version": "15.1.206.10",
+    "depot_tools_repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+    "depot_tools_commit": "921e61b35fbc5e97b14250a118e363ec05078089",
+    "target": "d8",
+    "build": "source",
+    "note": "d8 is built from the pinned V8 source; no toy harness or renamed Node binary is accepted."
+  }
+}

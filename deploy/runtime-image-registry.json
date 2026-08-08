@@ -277,6 +277,36 @@
           }
         }
       ]
+    },
+    {
+      "image_key": "deepsonar-chrome-audit",
+      "name": "DeepSonar Chrome Audit",
+      "description": "Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep C++ rules, Clang/LLVM and binutils",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "audit",
+      "versions": []
+    },
+    {
+      "image_key": "deepsonar-chrome-test",
+      "name": "DeepSonar Chrome Test",
+      "description": "Project-opt-in pinned Chromium headless/CDP runtime with a governed no-sandbox wrapper",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "test",
+      "versions": []
+    },
+    {
+      "image_key": "deepsonar-chrome-fuzz",
+      "name": "DeepSonar Chrome Fuzz",
+      "description": "Project-opt-in real V8 d8 with Clang/LLVM, compiler-rt/libFuzzer and AFL++",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "test",
+      "versions": []
     }
   ],
   "source": "remote"

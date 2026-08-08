@@ -34,10 +34,11 @@ if (!testDatabaseUrl) {
       process.env.AGENT_MODE = "fake";
       process.env.DEEPSONAR_AUTH_REQUIRED = "false";
 
-      const [{ sql, migrate }, reportModule, verifyModule] = await Promise.all([
+      const [{ sql, migrate }, reportModule, verifyModule, dispatcherModule] = await Promise.all([
         import("./db.js"),
         import("./report.js"),
         import("./verify.js"),
+        import("./dispatcher.js"),
       ]);
       endSql = () => sql.end({ timeout: 5 });
       await migrate();
@@ -47,7 +48,20 @@ if (!testDatabaseUrl) {
       const sourceJobId = randomUUID();
       const findingId = randomUUID();
       await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'finding report project')`;
-      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${canvasId}, ${projectId}, 'finding report task', ${sql.json({})})`;
+      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${canvasId}, ${projectId}, 'finding report task', ${sql.json({ network_policy: { allow_egress: false } })})`;
+      await sql`
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, 'root', 'finding report root', 'running', ${sql.json({})})`;
+      // This older Task Report is gated by the active root. It must not block
+      // a newer Finding Report through a cross-scope FIFO check.
+      const taskReportJobId = randomUUID();
+      await sql`
+        INSERT INTO jobs (
+          id, project_id, canvas_id, type, status, priority, payload_json, agent_snapshot_json
+        ) VALUES (
+          ${taskReportJobId}, ${projectId}, ${canvasId}, 'report', 'pending', 450,
+          ${sql.json({ kind: "task_report", scheduling_purpose: "report" })}, ${sql.json({})}
+        )`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
         VALUES (${sourceJobId}, ${projectId}, ${canvasId}, 'audit', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
@@ -77,10 +91,18 @@ if (!testDatabaseUrl) {
       assert.equal(results.filter((result) => result.dispatched).length, 1);
       const [report] = await sql`SELECT * FROM finding_reports WHERE finding_id = ${findingId}`;
       assert.equal(report?.version, 1);
-      assert.equal(report?.status, "generating");
+      assert.equal(report?.status, "pending");
       const jobs = await sql`SELECT id, payload_json FROM jobs WHERE finding_id = ${findingId} AND type = 'report'`;
       assert.equal(jobs.length, 1);
       assert.equal((jobs[0].payload_json as Record<string, unknown>).kind, "finding_report");
+
+      // Enqueue and claim are separate lifecycle steps: a queued Finding
+      // Report stays pending, then the real dispatcher DB path advances it to
+      // generating in the same transaction as jobs.pending -> claimed.
+      const claimed = await dispatcherModule.claimPendingJobs();
+      assert.deepEqual(claimed.map((job) => job.id), [String(jobs[0].id)]);
+      const [claimedReport] = await sql`SELECT status FROM finding_reports WHERE id = ${report.id as string}`;
+      assert.equal(claimedReport.status, "generating");
 
       const inputPath = path.join(blobDir, String(report.input_uri));
       const inputBytes = await readFile(inputPath);
@@ -153,7 +175,26 @@ if (!testDatabaseUrl) {
       assert.equal(cancelledReport.error, "report_cancelled_by_test");
       const fourthResponse = await app.inject({ method: "POST", url: `/findings/${findingId}/report` });
       assert.equal(fourthResponse.statusCode, 200, fourthResponse.payload);
-      assert.equal(fourthResponse.json().version, 4);
+      const fourth = fourthResponse.json();
+      assert.equal(fourth.version, 4);
+
+      // A terminal Job can be persisted before the report lifecycle projector
+      // runs (for example after a pre-claim failure).  The next dispatch must
+      // reconcile that stale pending row and allocate the deterministic next
+      // version instead of returning report_in_flight forever.
+      await sql`
+        UPDATE jobs
+        SET status = 'failed', error = 'report_failed_before_claim', finished_at = now()
+        WHERE id = ${fourth.job_id as string} AND status = 'pending'`;
+      const fifthResponse = await app.inject({ method: "POST", url: `/findings/${findingId}/report` });
+      assert.equal(fifthResponse.statusCode, 200, fifthResponse.payload);
+      const fifth = fifthResponse.json();
+      assert.equal(fifth.dispatched, true);
+      assert.equal(fifth.version, 5);
+      const [reconciled] = await sql`
+        SELECT status, error FROM finding_reports WHERE id = ${fourth.report_id as string}`;
+      assert.equal(reconciled.status, "failed");
+      assert.equal(reconciled.error, "report_failed_before_claim");
 
       const isolatedFindingId = randomUUID();
       const isolatedVerifyJobId = randomUUID();

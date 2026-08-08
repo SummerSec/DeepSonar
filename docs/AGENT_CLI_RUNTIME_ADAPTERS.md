@@ -23,11 +23,25 @@ is consumed as structured JSON events; terminal text is never scraped.
 
 The current registry contains:
 
-| Adapter | CLI | Protocol | Incremental messages |
-| --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.220 | `stream-json` | yes |
-| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no |
-| `open-code` | OpenCode 1.18.15 | `opencode run --format json` | no |
+| Adapter | CLI | Protocol | Incremental messages | Structured reasoning |
+| --- | --- | --- | --- | --- |
+| `claude-code` | Claude Code 2.1.220 | `stream-json` + governed `--include-partial-messages` | yes | `stream_event` thinking/text deltas and complete assistant blocks |
+| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Official reasoning summary/item events when emitted |
+| `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Structured `reasoning`/`thinking` parts when emitted |
+
+`reasoningEffort` is an input/configuration capability; it does not guarantee
+that a provider exposes its internal reasoning in output. The runtime only
+normalizes an explicitly structured reasoning event (`reasoning.delta`) and
+never infers or fabricates reasoning from ordinary text, tool output, or
+terminal lines. If the selected CLI/model does not emit a supported reasoning
+event, the live and archived stream simply contains no reasoning block.
+
+Claude partial frames are enabled only for the pinned 2.1.220 governed minimum
+above. `content_block_delta` `thinking_delta`/`text_delta` frames are
+normalized to `reasoning.delta`/`text.delta`; the later complete assistant
+message remains accepted for compatibility but is de-duplicated against those
+frames. Codex and OpenCode complete item/part frames are likewise de-duplicated
+when they repeat an official reasoning delta.
 
 ## Snapshot and admission
 
