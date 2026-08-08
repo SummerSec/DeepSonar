@@ -8,6 +8,7 @@
   "aptSource": "snapshot.debian.org/archive/debian/20260731T162426Z",
   "aptSecuritySource": "snapshot.debian.org/archive/debian-security/20260731T162426Z",
   "apt": {
+    "pkg-config": { "version": "snapshot", "capabilities": ["v8-gn-probe"] },
     "clang": { "version": "snapshot", "capabilities": ["native-build", "instrumentation"] },
     "llvm": { "version": "snapshot", "capabilities": ["llvm-tools"] },
     "lld": { "version": "snapshot", "capabilities": ["linker"] },
