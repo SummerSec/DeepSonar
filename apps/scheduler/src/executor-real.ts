@@ -527,6 +527,9 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
+  // Verify Jobs must pass verdict on mark_job_done; surface it in MCP schema so
+  // the CLI rejects missing verdict before host soft-fail loops.
+  if (isVerify) env.DEEPSONAR_CONTROL_REQUIRE_DONE_VERDICT = "1";
   if (isHub) env.DEEPSONAR_AVAILABLE_ROLES_JSON = JSON.stringify(availableHubRoleCatalog);
 
   const intent = (payload.intent ?? {}) as { description?: string; prompt?: string };

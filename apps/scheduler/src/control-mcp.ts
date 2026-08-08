@@ -69,6 +69,9 @@ const hasOwn = (object, key) => typeof key === "string" && Object.prototype.hasO
 const availableRoleNames = availableRoles
   .map((role) => (role && typeof role === "object" ? role.name : null))
   .filter((name) => typeof name === "string" && name.length > 0);
+const requireDoneVerdict = process.env.DEEPSONAR_CONTROL_REQUIRE_DONE_VERDICT === "1";
+const VERIFY_VERDICTS = ["confirmed", "rework", "needs_human", "false_positive"];
+
 // Constrain intents[].role to this Job's role catalog so Claude cannot invent
 // abbreviations (e.g. "a") that later fail Scheduler invalid_role.
 (() => {
@@ -82,13 +85,34 @@ const availableRoleNames = availableRoles
   itemProps.role = { ...itemProps.role, type: "string", enum: availableRoleNames };
 })();
 
+// Verify Jobs: make mark_job_done.verdict required in the MCP schema so the
+// model sees it before host validation (optional in the shared DonePayload).
+(() => {
+  if (!requireDoneVerdict) return;
+  const doneSchema = TOOL_INPUT_SCHEMAS.mark_job_done;
+  if (!doneSchema || typeof doneSchema !== "object") return;
+  const properties = doneSchema.properties && typeof doneSchema.properties === "object" ? doneSchema.properties : null;
+  if (!properties) return;
+  properties.verdict = {
+    type: "string",
+    enum: VERIFY_VERDICTS,
+    description: "Verify required. confirmed | rework | needs_human (false_positive maps to rework).",
+  };
+  const required = Array.isArray(doneSchema.required) ? doneSchema.required.slice() : [];
+  if (!required.includes("summary")) required.push("summary");
+  if (!required.includes("verdict")) required.push("verdict");
+  doneSchema.required = required;
+})();
+
 const descriptions = {
   list_available_roles: "返回当前 Hub Job 可派发的数据库角色。只使用返回的 name，不得猜测或使用固定角色清单。",
   emit_progress: "增量上报当前动作或阶段进展。可在执行中多次调用。",
   emit_fact: "把一个新的、可验证的增量事实实时写入任务画布。直接提交时 title 至少 2 个非空白字符、description 至少 16 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。Hub 回弹补证 Job 可附带 verification 结构化证据。可多次调用。",
   emit_finding: "实时提交一条有证据的通用 Finding。直接提交时 title 至少 8 个非空白字符、summary 至少 32 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。profile 与可选评分须符合任务冻结协议，调度器负责校验、重算、去重和验证。可多次调用。",
   submit_hub_decision: "提交本轮 Hub 的 complete、intents 或 payload_file 决策，三者必须且只能提供一个。大体积多意图时优先 Write 到 /workspace 下 JSON 文件再传 payload_file（相对路径，如 hub_decision_payload.json），避免 tool 参数截断。from 必须填写当前 YAML root_id/fact/finding 节点的 UUID 值。role 必须原样使用 list_available_roles 返回的 name。每个 Job 成功提交后只能一次；仅上一次 isError 时可重试。不要与 request_human 混用。",
-  mark_job_done: "提交本 Job 的最终摘要，至少 8 个非空白字符；verify 系统角色还必须提交 verdict（confirmed|rework|needs_human；兼容 false_positive→rework）。每个 Job 最后调用一次。",
+  mark_job_done: requireDoneVerdict
+    ? "【Verify 专用】结束本 Job。必须同时传 summary（≥8 非空白）和 verdict（confirmed|rework|needs_human；兼容 false_positive）。仅传 summary 会被拒绝。rework 时建议附 missing_evidence。每个 Job 最后调用一次。"
+    : "提交本 Job 的最终摘要，至少 8 个非空白字符；非 verify 角色不得传 verdict。每个 Job 最后调用一次。",
   request_human: "提交至少 8 个非空白字符的人工介入理由；只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
   list_shared_assets: "分页列出本 Job 创建时冻结的只读共享资产目录。没有单独的下载工具：用返回的 mount_path/read_path 以普通文件工具直接读取（Scheduler 已从本地或 S3 兼容存储预挂载）。可按 scope 或逻辑 key 前缀过滤。",
   publish_shared_asset: "提议把 /workspace 下普通工作文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止发布平台运行目录或 CLI 用户/配置目录中的内容。",
@@ -99,7 +123,9 @@ const descriptionCautions = {
   emit_fact: "每个新增可验证事实提交一次，不得重复提交或故意缩短内容；遇到 isError 或截断时，写入完整 JSON 后用 payload_file 重试。",
   emit_finding: "只提交有证据支撑的 Finding；suggest_verify 只是建议，不能当作派发决定；遇到 isError 或截断时用 payload_file 提交完整内容。",
   submit_hub_decision: "仅 Hub 使用：读完画布和可用角色后、mark_job_done 前调用，complete、intents、payload_file 必须三选一；仅在 isError 或校验失败后重试，成功后不得再次调用。",
-  mark_job_done: "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；结束时只调用一次，首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，成功后不得重试。",
+  mark_job_done: requireDoneVerdict
+    ? "Verify 必须带 verdict；示例 {\"summary\":\"…\",\"verdict\":\"confirmed\"}。缺少 verdict 会 isError，请立即重试并补上。"
+    : "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；结束时只调用一次，首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，成功后不得重试。",
   request_human: "仅在必要授权、凭据或高风险审批阻塞时调用一次；调用后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
   list_shared_assets: "用于发现本 Job 冻结的只读资产，再按返回路径读取；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取，可安全重复查询。",
   publish_shared_asset: "只发布普通 /workspace 中可复用的工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
@@ -245,6 +271,18 @@ function validateToolInput(name, input) {
       return { ...failure, code: TOOL_ERROR_CODES[name], text: failure.text.replace("[" + INVALID_PAYLOAD_CODE + "]", "[" + TOOL_ERROR_CODES[name] + "]") };
     }
     return failure;
+  }
+  if (name === "mark_job_done" && requireDoneVerdict) {
+    const verdict = input && typeof input === "object" ? input.verdict : undefined;
+    if (typeof verdict !== "string" || !VERIFY_VERDICTS.includes(verdict)) {
+      return {
+        code: TOOL_ERROR_CODES.mark_job_done,
+        text:
+          "[" + TOOL_ERROR_CODES.mark_job_done + "] verify 必须提供 verdict。" +
+          "在 mark_job_done 中同时传 summary 与 verdict，例如 " +
+          "{\"summary\":\"…\",\"verdict\":\"confirmed\"}；允许值：" + VERIFY_VERDICTS.join("|") + "。",
+      };
+    }
   }
   return null;
 }
