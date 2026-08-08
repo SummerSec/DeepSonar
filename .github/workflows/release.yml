@@ -45,6 +45,7 @@ jobs:
       checkout_ref: ${{ steps.release.outputs.checkout_ref }}
       # base 镜像 digest（openharmony 指纹与 BASE_IMAGE 钉死用）
       digest: ${{ steps.image.outputs.digest }}
+      previous_version: ${{ steps.changelog.outputs.previous_version }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -116,6 +117,55 @@ jobs:
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
           printf 'checkout_ref=%s\n' "$checkout_ref" >> "$GITHUB_OUTPUT"
           echo "release version=${version} checkout_ref=${checkout_ref} (event=${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
+      - id: changelog
+        name: 校验 tag 与 CHANGELOG
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          CHECKOUT_REF: ${{ steps.release.outputs.checkout_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="v${VERSION}"
+          checkout_commit="$(git rev-parse "${CHECKOUT_REF}^{commit}")"
+          tag_commit="$(git rev-parse -q --verify "refs/tags/${release_tag}^{commit}" || true)"
+          if [[ -z "$tag_commit" ]]; then
+            echo "目标 release tag 不存在：${release_tag}" >&2
+            exit 1
+          fi
+          if [[ "$tag_commit" != "$checkout_commit" ]]; then
+            echo "release tag ${release_tag} 不指向 checkout ref ${CHECKOUT_REF}" >&2
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == "push" && "$TAG_NAME" != "$release_tag" ]]; then
+            echo "触发 tag ${TAG_NAME} 与版本 ${release_tag} 不匹配" >&2
+            exit 1
+          fi
+          previous_tag="$(git tag -l 'v[0-9]*' --sort=-v:refname | while IFS= read -r candidate; do
+            if [[ "$candidate" != "$release_tag" ]]; then
+              printf '%s' "$candidate"
+              break
+            fi
+          done)"
+          if [[ -z "$previous_tag" ]]; then
+            echo "未找到 ${release_tag} 的 previous v* tag" >&2
+            exit 1
+          fi
+          previous_version="${previous_tag#v}"
+          node agent-harness/validate-changelog.mjs \
+            --file CHANGELOG.md \
+            --version "$VERSION" \
+            --previous-version "$previous_version" \
+            --tag "$release_tag" \
+            --output release-notes.md
+          printf 'previous_version=%s\n' "$previous_version" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG validated for ${release_tag} against ${previous_tag}" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-changelog
+          path: release-notes.md
+          if-no-files-found: error
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -1580,6 +1630,10 @@ jobs:
           pattern: runtime-image-digest-*
           path: release-digests
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-changelog
+          path: release-changelog
       - name: 生成 runtime 镜像清单
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -1656,13 +1710,28 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.base-image.outputs.version }}"
           tar -czf "deepsonar-management-skill-${VERSION}.tar.gz" -C skills deepsonar-management
+      - name: 生成 Release 正文
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+          PREVIOUS_VERSION: ${{ needs.base-image.outputs.previous_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -s release-changelog/release-notes.md ]]
+          {
+            cat <<EOF
+          > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/THIRD_PARTY_NOTICES.md).
+
+          EOF
+            cat release-changelog/release-notes.md
+            printf '\n[Full Changelog](https://github.com/SummerSec/DeepSonar/compare/v%s...v%s)\n' "$PREVIOUS_VERSION" "$VERSION"
+          } > release-body.md
       - name: 发布 Release 与附件
         uses: softprops/action-gh-release@v2
         with:
           # 手动触发时 GITHUB_REF 是分支，必须显式指定已有 v* tag
           tag_name: v${{ needs.base-image.outputs.version }}
-          body: |
-            > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/v${{ needs.base-image.outputs.version }}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/v${{ needs.base-image.outputs.version }}/THIRD_PARTY_NOTICES.md).
+          body_path: release-body.md
           files: |
             deepsonar-management-skill-*.tar.gz
             deploy/runtime-image-registry.json

@@ -7,9 +7,10 @@ import {
   MarkerType,
   MiniMap,
   ReactFlow,
+  useNodesInitialized,
+  useReactFlow,
   type Edge,
   type Node,
-  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { api, type CanvasData, type CanvasNode, type FindingTrace } from "./api";
@@ -37,6 +38,7 @@ import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
 import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
 import { Sidebar } from "./Sidebar";
+import { consumeViewportFit, resolveViewportNodeIds } from "./canvas-viewport";
 import { findingTraceIds, traceDisplayIds, type TraceFocusMode } from "./finding-trace-focus";
 
 /** 边类型只控制线型/流速；颜色始终取源节点最终展示色。 */
@@ -50,6 +52,65 @@ type ExpandHandlers = {
   expandNode: (id: string) => void;
   collapseNode: (id: string) => void;
 };
+
+function CanvasViewportController({
+  generation,
+  nodes,
+  traceNodeIds,
+  traceActive,
+  focusNodeId,
+}: {
+  generation: string;
+  nodes: Node[];
+  traceNodeIds: ReadonlySet<string>;
+  traceActive: boolean;
+  focusNodeId?: string | null;
+}) {
+  const reactFlow = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
+  const latestGenerationRef = useRef(generation);
+  const fittedGenerationRef = useRef("");
+  const fitNodeIds = useMemo(
+    () => resolveViewportNodeIds(
+      nodes.map((node) => node.id),
+      traceNodeIds,
+      traceActive,
+      focusNodeId,
+    ),
+    [focusNodeId, nodes, traceActive, traceNodeIds],
+  );
+
+  useEffect(() => {
+    latestGenerationRef.current = generation;
+  }, [generation]);
+
+  useEffect(() => {
+    const decision = consumeViewportFit(
+      fittedGenerationRef.current,
+      generation,
+      nodesInitialized,
+    );
+    if (!decision.shouldFit) return;
+    const requestGeneration = generation;
+    const requestNodeIds = fitNodeIds;
+    const frame = window.requestAnimationFrame(() => {
+      if (latestGenerationRef.current !== requestGeneration) return;
+      fittedGenerationRef.current = decision.fittedGeneration;
+      const requestNodes = requestNodeIds
+        ? nodes.filter((node) => requestNodeIds.includes(node.id))
+        : undefined;
+      void reactFlow.fitView({
+        nodes: requestNodes,
+        padding: requestNodeIds ? 0.7 : 0.18,
+        maxZoom: requestNodeIds ? 1.2 : 1.05,
+        duration: 320,
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [fitNodeIds, generation, nodes, nodesInitialized, reactFlow]);
+
+  return null;
+}
 
 function toFlow(
   data: CanvasData,
@@ -211,7 +272,11 @@ export function CanvasView({
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [elkPos, setElkPos] = useState<Map<string, { x: number; y: number }> | null>(null);
+  const [elkResult, setElkResult] = useState<{
+    key: string;
+    positions: Map<string, { x: number; y: number }>;
+    mode: "elk" | "fallback";
+  } | null>(null);
   const [kindFilter, setKindFilter] = useState("");
   const [severityFilter, setSeverityFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
@@ -228,7 +293,6 @@ export function CanvasView({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   /** 用户强制收起（覆盖默认 depth 展开） */
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
-  const rf = useRef<ReactFlowInstance | null>(null);
   const hydratedNodesRef = useRef(new Map<string, CanvasNode>());
   const nodeRequestRef = useRef(0);
   const revisionRef = useRef("0");
@@ -236,7 +300,6 @@ export function CanvasView({
   const deltaInFlightRef = useRef<number | null>(null);
   const summaryInFlightRef = useRef<number | null>(null);
   const focusedNodeRef = useRef("");
-  const focusedViewportRef = useRef("");
   const clearSelected = useCallback(() => {
     nodeRequestRef.current += 1;
     setSelected(null);
@@ -271,7 +334,6 @@ export function CanvasView({
   useEffect(() => {
     if (!focusNodeId) {
       focusedNodeRef.current = "";
-      focusedViewportRef.current = "";
     }
   }, [focusNodeId]);
 
@@ -344,8 +406,7 @@ export function CanvasView({
     setData(null);
     clearSelected();
     focusedNodeRef.current = "";
-    focusedViewportRef.current = "";
-    setElkPos(null);
+    setElkResult(null);
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
@@ -547,18 +608,20 @@ export function CanvasView({
   // 坐标，避免一次性把数百节点/边交给 ELK 阻塞主线程。
   useEffect(() => {
     if (layoutSubgraph.nodes.length === 0 || layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD) {
-      setElkPos(null);
+      setElkResult(null);
       return;
     }
     // 立刻清空 → fallback 占位，避免旧坐标留下空洞
-    setElkPos(null);
+    setElkResult(null);
     let alive = true;
     const { nodes: layoutN, edges: layoutE } = layoutSubgraph;
     elkLayout(layoutN, layoutE)
       .then((m) => {
-        if (alive) setElkPos(m);
+        if (alive) setElkResult({ key: layoutKey, positions: m, mode: "elk" });
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) setElkResult({ key: layoutKey, positions: new Map(), mode: "fallback" });
+      });
     return () => {
       alive = false;
     };
@@ -572,6 +635,8 @@ export function CanvasView({
         : null,
     [layoutSubgraph],
   );
+  const elkPos = elkResult?.key === layoutKey ? elkResult.positions : null;
+  const layoutMode = elkResult?.key === layoutKey ? elkResult.mode : null;
 
   const handlers = useMemo(
     () => ({ expandNode, collapseNode }),
@@ -651,39 +716,12 @@ export function CanvasView({
   const isDefaultCollapsed =
     maxDepth === DEFAULT_MAX_DEPTH && expandedIds.size === 0 && collapsedIds.size === 0;
 
-  // 布局签名变化或 elk 算完后 fitView
-  const prevLayoutSig = useRef("");
-  useEffect(() => {
-    const sig = `${layoutKey}#${elkPos ? "elk" : "fb"}#${visibleNodes.length}`;
-    if (visibleNodes.length > 0 && sig !== prevLayoutSig.current) {
-      prevLayoutSig.current = sig;
-      const t = setTimeout(
-        () => rf.current?.fitView({
-          padding: 0.18,
-          maxZoom: 1.05,
-          duration: 320,
-          nodes: traceActive
-            ? visibleNodes.filter((node) => traceIds.nodeIds.has(node.id))
-            : undefined,
-        }),
-        80,
-      );
-      return () => clearTimeout(t);
-    }
-  }, [elkPos, layoutKey, traceActive, traceIds.nodeIds, visibleNodes]);
-
-  useEffect(() => {
-    if (!focusNodeId || !traceActive) return;
-    const node = visibleNodes.find((item) => item.id === focusNodeId);
-    if (!node) return;
-    const focusKey = `${canvasId}:${focusNodeId}:${layoutKey}:${elkPos ? "elk" : "fallback"}`;
-    if (focusedViewportRef.current === focusKey) return;
-    focusedViewportRef.current = focusKey;
-    const timer = window.setTimeout(() => {
-      void rf.current?.fitView({ nodes: [node], padding: 0.7, maxZoom: 1.2, duration: 320 });
-    }, 150);
-    return () => window.clearTimeout(timer);
-  }, [canvasId, elkPos, focusNodeId, layoutKey, traceActive, visibleNodes]);
+  const layoutReady = layoutSubgraph.nodes.length > 0 && (
+    layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD || elkPos !== null
+  );
+  const viewportGeneration = layoutReady
+    ? `${canvasId}:${layoutKey}#${layoutMode ?? "server"}#focus:${focusNodeId ?? ""}`
+    : "";
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
@@ -804,7 +842,6 @@ export function CanvasView({
         edges={visibleEdges}
         nodeTypes={nodeTypes}
         onNodeClick={onNodeClick}
-        onInit={(i) => (rf.current = i)}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
@@ -813,6 +850,13 @@ export function CanvasView({
         minZoom={0.2}
         proOptions={{ hideAttribution: false }}
       >
+        <CanvasViewportController
+          generation={viewportGeneration}
+          nodes={visibleNodes}
+          traceNodeIds={traceIds.nodeIds}
+          traceActive={traceActive}
+          focusNodeId={focusNodeId}
+        />
         <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} color="#263037" />
         <Controls showInteractive={false} position="bottom-right" />
         <MiniMap

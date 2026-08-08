@@ -8,6 +8,10 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 
 当前设计摘要见根目录 [DESIGN.md](DESIGN.md)；行为以代码、`database/schema.sql`、OpenAPI 与测试为准。
 
+## 发布记录与版本规则
+
+完整的生产变更记录见 [CHANGELOG.md](CHANGELOG.md)。产品版本以不可变的 `vX.Y.Z` Git tag 为准；根目录和第一方 workspace 的私有 package 版本（当前为 `0.1.11`）只是内部包元数据，不代表产品 Release 版本。运行时镜像标签对应同一版本但省略 `v` 前缀。
+
 ## 核心流程
 
 ```text
