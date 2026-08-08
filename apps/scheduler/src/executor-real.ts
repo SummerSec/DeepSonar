@@ -965,20 +965,44 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       // The host owns this authorization. A database trigger repeats the
       // check while inserting the version to linearize terminal transitions.
       await assertJobCanPublishSharedAsset(jobId, (job.sandbox_id as string | null) ?? null);
-      const bytes = await runtimeControl.readWorkspaceFile(proposal.source_path, config.sharedAssets.maxFileBytes);
+      let bytes: Buffer;
+      try {
+        bytes = await runtimeControl.readWorkspaceFile(proposal.source_path, config.sharedAssets.maxFileBytes);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw invalidToolPayload(
+          "publish_shared_asset",
+          `无法读取 source_path：${detail}。路径必须是 /workspace 下普通工作文件且不超过配额。`,
+          "source_path",
+        );
+      }
       await assertJobCanPublishSharedAsset(jobId, (job.sandbox_id as string | null) ?? null);
-      await createSharedAsset({
-        scope: proposal.scope,
-        projectId: job.project_id as string,
-        findingId,
-        key: proposal.key,
-        contentType: proposal.content_type,
-        bytes,
-        origin: "agent",
-        actor: `job:${jobId}`,
-        jobId,
-        labels: proposal.labels,
-      });
+      try {
+        await createSharedAsset({
+          scope: proposal.scope,
+          projectId: job.project_id as string,
+          findingId,
+          key: proposal.key,
+          contentType: proposal.content_type,
+          bytes,
+          origin: "agent",
+          actor: `job:${jobId}`,
+          jobId,
+          labels: proposal.labels,
+        });
+      } catch (error) {
+        if (error instanceof ControlInputError) throw error;
+        const detail = error instanceof Error ? error.message : String(error);
+        // Asset policy / quota / key validation is agent-correctable (ControlInputError.retryable).
+        if (/^asset_|^invalid_asset_/u.test(detail) || detail.includes("asset_content_type_not_allowed")) {
+          throw invalidToolPayload(
+            "publish_shared_asset",
+            detail,
+            detail.includes("content_type") ? "content_type" : detail.includes("key") ? "key" : undefined,
+          );
+        }
+        throw error;
+      }
       return;
     }
     if (event.type === "progress") {

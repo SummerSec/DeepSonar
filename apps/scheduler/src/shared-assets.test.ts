@@ -33,17 +33,22 @@ test("Agent publish schema is strict and cannot publish platform-owned runtime f
   assert.throws(() => PublishSharedAssetPayload.parse({ scope: "project", source_path: "/workspace/a", key: "a", extra: true }));
 });
 
-test("shared asset MIME and extension allowlists agree and reject disguised executables", () => {
+test("shared asset content_type is format-agnostic and only normalizes the MIME token", () => {
   assert.equal(validateAssetContentType("application/x-sh", "scripts/run.sh"), "application/x-sh");
+  assert.equal(validateAssetContentType("text/x-shellscript", "scripts/run.sh"), "text/x-shellscript");
   assert.equal(validateAssetContentType("text/x-python; charset=utf-8", "poc/reproduce.py"), "text/x-python");
-  assert.equal(validateAssetContentType("text/javascript", "tools/check.mjs"), "text/javascript");
-  assert.throws(() => validateAssetContentType("text/plain", "payload.exe"), /asset_content_type_not_allowed/);
-  assert.throws(() => validateAssetContentType("application/zip", "payload.txt"), /asset_content_type_not_allowed/);
+  assert.equal(validateAssetContentType("text/x-c++", "poc/harness.cpp"), "text/x-c++");
+  assert.equal(validateAssetContentType("application/octet-stream", "payload.exe"), "application/octet-stream");
+  assert.equal(validateAssetContentType("application/zip", "payload.txt"), "application/zip");
+  assert.equal(validateAssetContentType("application/vnd.android.package-archive", "app.apk"), "application/vnd.android.package-archive");
+  assert.equal(validateAssetContentType("", "no-type.bin"), "application/octet-stream");
+  assert.throws(() => validateAssetContentType("not a mime", "a.bin"), /invalid_asset_content_type/);
+  assert.throws(() => validateAssetContentType("text/plain\n", "a.txt"), /invalid_asset_content_type/);
 });
 
 test("shared asset catalog queries are explicitly paginated", () => {
   assert.deepEqual(ListSharedAssetsPayload.parse({ limit: 25, offset: 50 }), { limit: 25, offset: 50 });
-  assert.throws(() => ListSharedAssetsPayload.parse({ limit: 501 }));
+  assert.throws(() => ListSharedAssetsPayload.parse({ limit: 101 }));
   assert.throws(() => ListSharedAssetsPayload.parse({ offset: -1 }));
 });
 

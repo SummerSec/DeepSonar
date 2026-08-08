@@ -367,7 +367,8 @@ export type ListAvailableRolesPayload = z.infer<typeof ListAvailableRolesPayload
 export const ListSharedAssetsPayload = z.object({
   scope: z.enum(["platform", "project", "finding"]).optional(),
   prefix: z.string().trim().min(1).max(120).optional(),
-  limit: z.number().int().min(1).max(500).optional(),
+  // Host listSharedAssets and control-mcp both cap at 100.
+  limit: z.number().int().min(1).max(100).optional(),
   offset: z.number().int().min(0).max(1_000_000).optional(),
 }).strict();
 export type ListSharedAssetsPayload = z.infer<typeof ListSharedAssetsPayload>;

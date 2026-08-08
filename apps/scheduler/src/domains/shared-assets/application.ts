@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import {
   assertSharedAssetBlobUri,
   getSharedAssetBlobStore,
@@ -29,29 +28,8 @@ export interface SharedAssetSelection {
   mount_path: string;
 }
 
-const CONTENT_TYPE_EXTENSIONS: Readonly<Record<string, ReadonlySet<string>>> = {
-  "text/plain": new Set([".txt", ".md", ".csv", ".sh", ".py", ".js", ".ts", ".yaml", ".yml", ".xml"]),
-  "text/markdown": new Set([".md"]),
-  "text/csv": new Set([".csv"]),
-  "text/yaml": new Set([".yaml", ".yml"]),
-  "text/xml": new Set([".xml"]),
-  "text/javascript": new Set([".js", ".mjs", ".cjs"]),
-  "text/x-python": new Set([".py"]),
-  "application/json": new Set([".json"]),
-  "application/yaml": new Set([".yaml", ".yml"]),
-  "application/xml": new Set([".xml"]),
-  "application/javascript": new Set([".js", ".mjs", ".cjs"]),
-  "application/x-sh": new Set([".sh"]),
-  "application/zip": new Set([".zip"]),
-  "application/gzip": new Set([".gz", ".tgz"]),
-  "application/x-gzip": new Set([".gz", ".tgz"]),
-  "application/x-tar": new Set([".tar"]),
-  "application/java-archive": new Set([".jar", ".war"]),
-  "application/octet-stream": new Set([
-    ".jar", ".war", ".zip", ".gz", ".tgz", ".tar",
-    ".sh", ".py", ".js", ".mjs", ".cjs", ".ts", ".md", ".txt", ".yaml", ".yml", ".json", ".csv", ".xml",
-  ]),
-};
+/** Shared assets accept any file type/format. Only normalize the MIME token. */
+const CONTENT_TYPE_RE = /^[a-z0-9][a-z0-9!#$&\-^_.+]{0,126}\/[a-z0-9][a-z0-9!#$&\-^_.+]{0,126}$/i;
 
 export function normalizeAssetKey(input: string): string {
   const key = input.trim().replaceAll("\\", "/").replace(/^\/+/, "");
@@ -61,11 +39,26 @@ export function normalizeAssetKey(input: string): string {
   return segments.join("/");
 }
 
-export function validateAssetContentType(contentType: string, key: string): string {
-  const normalized = contentType.split(";", 1)[0]!.trim().toLowerCase() || "application/octet-stream";
-  const extension = path.extname(key).toLowerCase();
-  if (CONTENT_TYPE_EXTENSIONS[normalized]?.has(extension)) return normalized;
-  throw new Error("asset_content_type_not_allowed");
+/**
+ * Normalize content_type for storage. File extension is not constrained 鈥? * agents and humans may publish any PoC/binary/source format under path/size
+ * policy. `key` is accepted for call-site compatibility and ignored for type.
+ */
+export function validateAssetContentType(contentType: string, _key?: string): string {
+  if (/[\0\r\n]/.test(contentType)) {
+    throw new Error("invalid_asset_content_type: content_type must not contain control characters");
+  }
+  const raw = contentType.split(";", 1)[0]!.trim();
+  if (!raw) return "application/octet-stream";
+  if (raw.length > 160) {
+    throw new Error("invalid_asset_content_type: content_type must be a single MIME token 鈮?60 chars");
+  }
+  const normalized = raw.toLowerCase();
+  if (!CONTENT_TYPE_RE.test(normalized)) {
+    throw new Error(
+      `invalid_asset_content_type: ${normalized.slice(0, 80)} is not a type/subtype token; use e.g. application/octet-stream or text/plain`,
+    );
+  }
+  return normalized;
 }
 
 export function mountPathFor(scope: SharedAssetScope, findingId: string | null, key: string): string {

@@ -48,15 +48,40 @@ function inputShape(value: unknown): string {
   }
 }
 
+/** Host-side control validation the Worker can usually fix by retrying the tool. */
+const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new Set([
+  CONTROL_INPUT_ERROR_CODES.invalidPayload,
+  CONTROL_INPUT_ERROR_CODES.unknownField,
+  CONTROL_INPUT_ERROR_CODES.duplicateToolCall,
+  CONTROL_INPUT_ERROR_CODES.toolLimit,
+  CONTROL_INPUT_ERROR_CODES.invalidEvent,
+  CONTROL_INPUT_ERROR_CODES.invalidNodeRef,
+  CONTROL_INPUT_ERROR_CODES.invalidFindingRef,
+  CONTROL_INPUT_ERROR_CODES.invalidRole,
+  CONTROL_INPUT_ERROR_CODES.invalidVerification,
+  CONTROL_INPUT_ERROR_CODES.invalidProgress,
+  CONTROL_INPUT_ERROR_CODES.invalidDone,
+  CONTROL_INPUT_ERROR_CODES.invalidHuman,
+  CONTROL_INPUT_ERROR_CODES.invalidReferenceBudget,
+]);
+
 export class ControlInputError extends Error {
   readonly code: ControlInputErrorCode;
   readonly path?: string;
+  /**
+   * When true, the real-agent driver must surface the message to the Worker and
+   * continue the run (do not convert into fatal "语义事件处理失败").
+   * Fail-closed codes (tool_not_allowed, job_not_running, forbidden_control_file)
+   * stay non-retryable.
+   */
+  readonly retryable: boolean;
 
   constructor(code: ControlInputErrorCode, message: string, path?: string) {
     super(`[${code}] ${message}`);
     this.name = "ControlInputError";
     this.code = code;
     this.path = path;
+    this.retryable = AGENT_CORRECTABLE_CONTROL_CODES.has(code);
   }
 }
 

@@ -70,7 +70,9 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 参数：`scope`（project|finding）、`source_path`（必填，必须是 `/workspace/` 下的普通工作文件，不能位于平台运行目录或 CLI 用户/配置目录）、`key`（逻辑路径）、`content_type`、可选 `labels`。",
     "- 时机：产出可被后续 Job 复用的脚本、PoC、基线或工件后调用；Scheduler 读取工作区文件并经 BlobStore 写入（本地或 S3 兼容存储），Agent 不接触存储后端。",
     "- 边界：仅 running Job 可发布；不能覆盖 human/platform key；Finding scope 仅当本 Job 绑定 finding_id。",
+    "- 文件类型/格式不限制：任意扩展名与 MIME 均可（未知类型用 application/octet-stream）；仍受路径安全与大小配额约束。",
     '- 示例：`{"scope":"project","source_path":"/workspace/dist/repro.sh","key":"scripts/repro.sh","content_type":"text/x-shellscript"}`',
+    '- 二进制/PoC 示例：`{"scope":"finding","source_path":"/workspace/poc/harness","key":"openharmony/poc/harness.bin","content_type":"application/octet-stream"}`',
   ].join("\n"),
 };
 

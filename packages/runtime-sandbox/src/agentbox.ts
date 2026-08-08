@@ -1564,6 +1564,52 @@ export function mapCliEvent(
   return { semanticEvents, warnings };
 }
 
+/** Host errors that the Worker can usually fix by changing tool arguments. */
+const AGENT_CORRECTABLE_HOST_ERROR_RE =
+  /^(?:asset_|invalid_asset_|immutable_asset_key_exists$|shared_asset_source_(?:path_forbidden|not_regular_file|changed)$)/u;
+
+/** Host / infrastructure failures that must still fail the Job. */
+const FATAL_HOST_ERROR_RE =
+  /^(?:shared_asset_publish_job_not_running|shared_asset_container_unavailable)/u;
+
+/** Duck-type host control errors that the Worker can fix without ending the Job. */
+function isAgentCorrectableSemanticError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as { name?: unknown; retryable?: unknown; code?: unknown; message?: unknown };
+  if (record.retryable === true) return true;
+  if (record.retryable === false) return false;
+  if (record.name === "ControlInputError") {
+    // Prefer explicit retryable when present; otherwise treat ControlInputError as soft.
+    return record.retryable !== false;
+  }
+  const message = typeof record.message === "string" ? record.message : "";
+  if (FATAL_HOST_ERROR_RE.test(message)) return false;
+  // Cross-package / stringified host validation (assets, Zod wrappers, rate limits).
+  if (
+    /^\[(?:invalid_|unknown_field|duplicate_tool_call|tool_limit)/u.test(message) ||
+    message.includes("asset_content_type_not_allowed") ||
+    message.includes("event_rate_limited") ||
+    AGENT_CORRECTABLE_HOST_ERROR_RE.test(message)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function semanticToolNameForEvent(event: Record<string, unknown>): string {
+  const type = String(event.type ?? "");
+  const map: Record<string, string> = {
+    progress: "emit_progress",
+    fact: "emit_fact",
+    finding: "emit_finding",
+    hub_decision: "submit_hub_decision",
+    done: "mark_job_done",
+    human: "request_human",
+    shared_asset_publish: "publish_shared_asset",
+  };
+  return map[type] ?? (type ? `control:${type}` : "control_tool");
+}
+
 export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
   const sandbox = AgentboxRunner.sandboxOf(handle);
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
@@ -1747,6 +1793,47 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                 readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
               });
             } catch (error) {
+              // Host-side control validation runs after MCP returned
+              // schema_validated. Agent-correctable failures must return as
+              // tool/error feedback and keep the CLI session alive — never
+              // collapse into fatal "语义事件处理失败" Job exit.
+              if (isAgentCorrectableSemanticError(error)) {
+                const message = error instanceof Error ? error.message : String(error);
+                const toolHint = semanticToolNameForEvent(event);
+                spec.onWarning?.({
+                  code: "control_tool_host_rejected",
+                  detail: message.length > 280 ? `${message.slice(0, 280)}…` : message,
+                });
+                // Surface on the process stream as a failed control tool so the
+                // live UI shows the rejection (MCP already answered success).
+                spec.onEvent?.({
+                  type: "tool.call.completed",
+                  toolName: toolHint,
+                  isError: true,
+                  error: message,
+                  result: message,
+                });
+                const nudge =
+                  `【控制工具被平台拒绝 — 请修正后重试，本 Job 未退出】\n` +
+                  (toolHint ? `工具: ${toolHint}\n` : "") +
+                  `错误: ${message}\n` +
+                  "请根据错误修正参数并重新调用该工具（或改用 payload_file）；不要 mark_job_done，直到契约要求的提交成功。";
+                if (adapter.capabilities.incrementalMessages) {
+                  await writeUserMessage(nudge);
+                } else if (sessionId && adapter.resume) {
+                  // Non-incremental CLIs: resume same session with the error so
+                  // the model can still recover instead of dying mid-run.
+                  try {
+                    resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
+                  } catch (resumeError) {
+                    spec.onWarning?.({
+                      code: "control_tool_reject_resume_failed",
+                      detail: resumeError instanceof Error ? resumeError.message : String(resumeError),
+                    });
+                  }
+                }
+                continue;
+              }
               semanticError = error instanceof Error ? error.message : String(error);
               semanticErrorDetails = normalizeRuntimeErrorDetails(error);
               throw error;
