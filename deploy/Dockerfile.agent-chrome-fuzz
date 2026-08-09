@@ -25,13 +25,14 @@ RUN set -eux; \
     ca-certificates curl file git pkg-config clang-16 lld-16 llvm-16 libclang-rt-16-dev libfuzzer-16-dev afl++ binutils ninja-build python3; \
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
-  install -d -m 0755 /opt/deepsonar/bin /workspace
+  install -d -m 0755 /opt/deepsonar/bin /opt/deepsonar/lib /workspace
 
 # A shallow, commit-addressed depot_tools checkout makes the source-build
 # dependency explicit. gclient then resolves V8 dependencies from the exact
 # V8 commit. The pinned Chromium sanitizer config maps use_libfuzzer=true to
 # -fsanitize=fuzzer-no-link. Compile compiler-rt's matching libFuzzer revision
 # inside the same GN graph so the engine and V8 share Clang 23 and libc++.
+FROM runtime-rootfs AS v8-builder
 RUN set -eux; \
   git init /opt/depot_tools; \
   git -C /opt/depot_tools remote add origin "$DEPOT_TOOLS_REPOSITORY"; \
@@ -100,10 +101,14 @@ RUN set -eux; \
   autoninja -C out/release d8 v8_json_libfuzzer; \
   test -x out/release/d8; \
   test -x out/release/v8_json_libfuzzer; \
-  install -m 0755 out/release/d8 /opt/deepsonar/bin/d8; \
-  install -m 0755 out/release/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer; \
-  /opt/deepsonar/bin/d8 --version | grep -E '^V8'; \
-  rm -rf /tmp/v8-checkout /opt/depot_tools
+  test -f out/release/libsanitizer_shared_hooks.so
+
+FROM runtime-rootfs AS runtime-final
+COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/d8 /opt/deepsonar/bin/d8
+COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer
+COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/libsanitizer_shared_hooks.so /opt/deepsonar/lib/libsanitizer_shared_hooks.so
+ENV LD_LIBRARY_PATH=/opt/deepsonar/lib
+RUN /opt/deepsonar/bin/d8 --version | grep -E '^V8'
 
 COPY deploy/chrome-fuzz-env.sh /tmp/chrome-fuzz-env.sh
 COPY deploy/chrome-fuzz-smoke.sh /tmp/chrome-fuzz-smoke.sh
@@ -120,6 +125,7 @@ ENV IS_SANDBOX=1 \
     CC=clang \
     CXX=clang++ \
     AFL_SKIP_CPUFREQ=1 \
+    LD_LIBRARY_PATH=/opt/deepsonar/lib \
     PATH=/opt/deepsonar/bin:/usr/lib/llvm-16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 RUN /opt/deepsonar/bin/chrome-fuzz-env.sh --check
@@ -137,8 +143,9 @@ ENV IS_SANDBOX=1 \
     CC=clang \
     CXX=clang++ \
     AFL_SKIP_CPUFREQ=1 \
+    LD_LIBRARY_PATH=/opt/deepsonar/lib \
     PATH=/opt/deepsonar/bin:/usr/lib/llvm-16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-COPY --from=runtime-rootfs / /
+COPY --from=runtime-final / /
 WORKDIR /workspace
 USER deepsonar
 CMD ["sleep", "infinity"]
