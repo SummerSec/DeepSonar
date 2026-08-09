@@ -14,13 +14,15 @@ curl -s "$DEEPSONAR_BASE_URL/schema?format=summary" | jq .auth.scopes
 projects:read / projects:write
 tasks:read / tasks:write
 jobs:control
-findings:read
+findings:read / findings:write
 assets:read / assets:write / assets:manage
 skills:read / skills:write
 agents:read / agents:write        # 角色、RoleConfig、设置、凭据
 images:read / images:manage / images:approve
 integrations:read / integrations:write
 tokens:manage
+exports:read / exports:write
+imports:read / imports:write
 admin
 ```
 
@@ -37,6 +39,7 @@ tasks:read
 tasks:write
 jobs:control
 findings:read
+findings:write
 ```
 
 - `jobs:control` 覆盖 cancel / resume / priority / 任务重试 / 报告重试 / fact 人工验证。
@@ -46,6 +49,8 @@ findings:read
 | 场景 | 追加 scope |
 | --- | --- |
 | 查看/改角色注册表、RoleConfig、全局/项目设置、凭据 | `agents:read`、`agents:write` |
+| 查看 Provider 目录/详情/影响/兼容性/缓存模型 | `agents:read` |
+| 创建/改/轮换/测试 Credential、刷新模型目录、批量绑定 | `agents:write` |
 | 管理 Skill 模块源（同步/信任审批） | `skills:read`、`skills:write` |
 | 查看镜像市场 | `images:read` |
 | 导入镜像、重扫、项目启停/固定版本 | `images:manage` |
@@ -54,6 +59,8 @@ findings:read
 | 查看/下载项目与 Finding 共享资产 | `assets:read` |
 | 上传/归档项目与 Finding 共享资产、修改项目 opt-in | `assets:write` |
 | 管理平台共享资产 | `assets:manage`（只给平台管理员；隐含 assets read/write） |
+| 创建/查看/下载/取消项目或平台数据包 | `exports:read`、`exports:write` |
+| 上传/预览/应用/取消数据包 | `imports:read`、`imports:write` |
 
 ## 豁免鉴权（无需 Token）
 
@@ -64,9 +71,12 @@ findings:read
 /schema.md
 /webhooks/plane
 /gateway/*
+/auth/status、/auth/login、/auth/bootstrap
 ```
 
 外部 Agent **应先拉 schema** 再调业务 API，避免硬编码过期路径。
+
+`/ws` 与 `/terminal-ws` 绕过普通 Bearer hook，但并非匿名访问：浏览器先用已认证会话或 Token 调 `POST /auth/ws-ticket`，再携带一次性 ticket 建立连接。
 
 ## 红线（绝不授予外部 Agent）
 
@@ -74,7 +84,7 @@ findings:read
 - `admin` —— 隐式全部 scope，含 `/audit-logs`；
 - Credential **明文任何路径都读不到**；`agents:write` 仅在确需自动化登记/轮换凭据时再给。
 - `images:approve` 可把第三方代码变成可执行环境，与 `admin` 同样只给人类平台管理员。
-- `assets:manage` 可向所有 opt-in 项目注入平台文件，只给人类平台管理员。
+- 平台共享资产除 `assets:manage` 路由 scope 外还要求 admin actor，可向所有 opt-in 项目注入文件，只给人类平台管理员。
 
 ## 其它约束
 

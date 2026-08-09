@@ -8,7 +8,7 @@
 Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
 认证：`Authorization: Bearer <deepsonar_token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
 
-**豁免鉴权**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/webhooks/plane`、`/gateway/*`
+**普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/webhooks/plane`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
 
 Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出的写操作默认 `admin`，读操作只需已认证。
 
@@ -59,11 +59,18 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, allow_egress?}`；省略出网字段时继承项目默认值 |
+| POST | /tasks/:canvasId/resume-session | jobs:control | 恢复该任务的会话入口 |
+| POST | /tasks/:canvasId/archive | tasks:write | 归档任务 |
+| POST | /tasks/:canvasId/unarchive | tasks:write | 取消归档 |
+| DELETE | /tasks/:canvasId | tasks:write | 删除任务 |
 | POST | /tasks/:canvasId/retry | jobs:control | 同画布重试（复用同一 canvas） |
 | POST | /projects/:id/events | tasks:write | 外部事件 `{source, event_id, event_type, title?, content?, data?}`，`source+event_id` 幂等 |
 | GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布） |
 | GET | /projects/:id/canvas | tasks:read | 项目当前画布（兼容） |
 | GET | /canvases/:id | tasks:read | 画布节点/边 |
+| GET | /canvases/:id/summary | tasks:read | 画布摘要 |
+| GET | /canvases/:id/delta | tasks:read | `?since=` 增量图数据 |
+| GET | /canvases/:id/nodes/:nodeId | tasks:read | 节点详情 |
 | PATCH | /canvas-nodes/:id/verification | jobs:control | Fact 人工验证 `{status: verified\|rejected\|needs_human, note?}` |
 
 ### 共享资产
@@ -73,7 +80,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET / POST | /projects/:id/shared-assets | assets:read / assets:write | 项目目录；GET 支持 `limit/offset`，POST 为原始字节并要求 `x-asset-key` |
 | GET / PATCH | /projects/:id/shared-assets/policy | assets:read / assets:write | 读取或设置 `{platform_enabled}` |
 | GET / POST | /findings/:id/shared-assets | assets:read / assets:write | Finding 工作包；GET 支持 `limit/offset`，服务端校验 Finding 归属项目 |
-| GET / POST | /platform/shared-assets | assets:manage | 平台管理员目录与上传；GET 支持 `limit/offset` |
+| GET / POST | /platform/shared-assets | assets:manage + admin actor | 平台管理员目录与上传；GET 支持 `limit/offset` |
 | GET | /shared-assets/:id/content | assets:read | 鉴权下载；项目 token 读取 platform 资产还要求项目 opt-in |
 | POST | /shared-assets/:id/archive | assets:write | 归档逻辑对象，保留不可变版本和 Job 引用 |
 
@@ -86,8 +93,14 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；公共入口对 `hub_reason` / `hub` / `verify_finding` / `report` 返回 409；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
 | GET | /jobs/:id | tasks:read | 详情（含事件） |
+| GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`） |
+| GET | /jobs/:id/evidence | tasks:read | 运行证据 manifest 与 transcript URI |
+| GET | /jobs/:id/evidence/session | tasks:read | 会话证据元数据/摘要 |
+| GET | /jobs/:id/evidence/session/download | tasks:read | NDJSON 会话附件 |
+| GET | /jobs/:id/evidence/stream | tasks:read | 证据流分页（`cursor/limit/tail`） |
 | PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}`；值必须匹配 Scheduler 根据 Job 类型/Finding 严重度计算的固定 priority class，不能任意改分 |
-| POST | /jobs/:id/cancel | jobs:control | 取消（running 回收沙箱） |
+| POST | /jobs/:id/cancel | jobs:control | 取消（可选 `{force,reason}`；running 回收沙箱） |
+| POST | /canvases/:id/jobs/cancel-active | jobs:control | 取消画布当前活跃 Jobs |
 | POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan/waiting_human → pending（终态 409）；恢复时按 Scheduler 固定 priority class 重新归一化，忽略历史或调用方 payload 中的 scheduling priority |
 
 ### 结果与报告
@@ -95,6 +108,14 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /findings | findings:read | Finding 列表；`?project_id=` / `?canvas_id=` |
+| GET | /findings/:id | findings:read | Finding 详情、验证 Jobs、来源事件、评论、链接、验证轮次和 trace |
+| PATCH | /findings/:id/disposition | findings:write | `{disposition, note?}` |
+| POST | /findings/:id/comments | findings:write | `{body, request_hub?}`；评论可请求 Hub 继续分析 |
+| DELETE | /findings/:id/comments/:commentId | findings:write | 删除评论 |
+| POST | /findings/:id/links | findings:write | `{url, title?, link_type?}` |
+| DELETE | /findings/:id/links/:linkId | findings:write | 删除链接 |
+| GET | /findings/:id/report | findings:read | Finding 报告详情 |
+| POST | /findings/:id/report | jobs:control | 生成/重算 Finding 报告 |
 | GET | /canvases/:id/report | tasks:read | 任务报告元数据（status / markdown_uri / sarif_uri） |
 | GET | /reports/:id/markdown | tasks:read | **非 JSON attachment**，`text/markdown; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.md"` |
 | GET | /reports/:id/sarif | tasks:read | **非 JSON attachment**，`application/sarif+json; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.sarif"` |
@@ -147,6 +168,11 @@ PUT body：
   },
   "instructions_markdown": "string | null",
   "runtime_image_key": "string | null",
+  "sandbox_limits": {
+    "cpu": 2,
+    "memoryMiB": 4096,
+    "pidsLimit": 256
+  },
   "credentials": [{ "credential_id": "uuid", "purpose": "llm" }],
   "config_files": [{ "path": ".claude/settings.json", "content": "{...}" }]
 }
@@ -164,9 +190,12 @@ PUT body：
 
 `runtime_image_key`：
 - `null` = 系统底座（调度默认 deepsonar-base）
+- 官方 Chrome 产品 key 包括 `deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`；以运行时 registry 为准
 - 官方 catalog（含 `project_opt_in` 专项如 OpenHarmony）可先写入 RoleConfig
 - Job 解析时：官方非 opt-in 默认可跑；opt-in / 第三方仍要求**项目启用**
 - 与镜像市场列表对齐（enabled 官方全量可选）
+
+`sandbox_limits` 是项目 RoleConfig 的唯一覆盖入口（不是全局 RoleConfig）；项目 RoleConfig 读取投影字段名为 `sandbox_limits_json`。Schema v24 的字段仍服从服务端硬上限，Job 创建时冻结。
 
 Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。模型按 `RoleConfig.model（可选覆盖）→ Credential settingsConfig → null` 解析；快照含 effective `model`、物化后的 CLI 配置文件、`reasoning`、`credential_id` 与 `runtime_image`（digest）。**改 RoleConfig 或 Credential 不影响已创建 Job**。
 
@@ -193,6 +222,10 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | GET | /runtime-images/:id | images:read | 产品、不可变版本、工具清单、SBOM/签名和扫描历史 |
 | GET | /runtime-images/registry | images:read | 官方目录；保留 `schema/images`，并附 `selected_channel`（`github`\|`dockerhub`\|`aliyun-acr`）、`source`、`fallback`、`error`、`checked_at` 诊断 |
 | PATCH | /runtime-images/registry/channel | images:manage | 严格 body `{channel: github\|dockerhub\|aliyun-acr}`；只允许全局/admin actor，项目限定 token 返回 `403 PROJECT_SCOPE_FORBIDDEN`；审计 `runtime_image.registry_channel_update` |
+| POST | /runtime-images/registry/sync | images:manage | 刷新官方/内置 catalog；所选 channel 用于后续镜像引用解析与 pull，不决定 catalog 来源 |
+| POST | /runtime-images/registry/apply | admin | 直接提交 registry 对象或 `{registry: ...}`；该内部运维入口未分配 `images:manage` scope |
+| POST | /runtime-images/registry/pull | images:manage | 启动异步拉取任务，返回 202/task |
+| GET | /runtime-images/registry/pull-status | images:read | 拉取任务状态、进度与错误 |
 | POST | /runtime-images/:id/detect-local | images:read | `{image_ref}`；读取本机 Docker 元数据并返回候选（不会改变信任状态） |
 | POST | /runtime-images/:id/adopt-local | images:approve | `{image_ref, expected_image_id}`；仅官方产品的 adoptable 候选可由管理员二次确认采用；第三方仍走准入扫描 |
 | POST | /runtime-images/import | images:manage | `{image_key,name,publisher,image_ref,description?,source_url?,version?,registry_credential_id?}`；返回 202 |
@@ -200,6 +233,8 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | POST | /runtime-image-versions/:id/status | images:approve | `{status: trusted\|rejected\|disabled\|revoked, reason?}`；rejected/revoked 必填 reason |
 | GET | /runtime-image-versions/:id/usage | images:read | 反向查询历史 Job、项目和 Finding |
 | PUT | /projects/:id/runtime-images/:imageId | images:manage | `{enabled, version_id?}`；只能启用 trusted 版本，`version_id` 用于固定/回滚 |
+| POST | /runtime-images/:id/official-digest | images:approve | 管理员登记官方不可变 digest |
+| POST | /runtime-images/manual-digest | images:approve | 管理员登记手工 digest（需完整 `image_ref`） |
 
 Job 创建时冻结 `agent_snapshot_json.runtime_image`，至少包含产品/版本 ID、`image_ref=name@sha256:digest`、`image_digest`、工具清单哈希与准入扫描 ID。任务、Hub、Skill 和外部事件都不能提供任意镜像引用。
 
@@ -232,6 +267,7 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
+| GET | /credentials/providers | agents:read | Scheduler-owned Provider catalog and validation metadata |
 | GET | /credentials | agents:read | 列表（指纹 / last4 / 安全 metadata / scope / health / bound RoleConfig count；无密文） |
 | GET | /credentials/:id | agents:read | 详情（安全 health/model catalog + 有界 impact 投影；无密文） |
 | GET | /credentials/:id/impact | agents:read | 只读影响：global/project RoleConfig、pending 未 claim、active frozen、terminal historical Job（counts + 有界条目） |
@@ -239,11 +275,12 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | PATCH | /credentials/:id | agents:write | `{name?, provider?, project_id?, metadata?, agent_cli?, settings_config?, meta?}`；`settings_config` 中 `[已保存密钥]` 由服务端恢复原值 |
 | POST | /credentials/:id/rotate | agents:write | `{secret}` 轮换密钥 |
 | POST | /credentials/:id/status | agents:write | `{status: active\|disabled\|rotation_required}` |
-| POST | /credentials/:id/test | agents:read | 连接测试（无 body） |
+| POST | /credentials/:id/test | agents:write | 连接测试（无 body；会更新健康证据） |
 | POST | /credentials/:id/models | agents:write | 实时拉取 Provider 模型目录（无 body；用于配置文件模型字段的参考） |
 | POST | /credentials/models/preview | agents:write | `{agent_cli, provider, secret, base_url?, settings_config?}`；未保存账号一键获取模型目录，不落库/审计/回显密钥 |
 | GET | /credentials/:id/models | agents:read | 读取已持久化的有界模型 ID 目录与 allowed_model_ids |
 | GET | /credentials/:id/compatibility | agents:read | `?agent_cli=claude-code|open-code|codex&model=<可选覆盖>`；省略 model 时服务端从 Credential settingsConfig 解析 effective model |
+| POST | /credentials/batch-bind | agents:write | `{credential_id, role_config_ids[], mode: bind|migrate, source_credential_id?, model?, effect: new_jobs_only|refresh_pending, idempotency_key}`；运行中 Job 不会被改写 |
 
 LLM `provider` 表示协议：`anthropic` = Anthropic Messages，`openai` = OpenAI Responses。`settings_config_json` 在服务端保留完整 CLI 配置，Job 创建时物化为 Agent 沙箱内的 CLI 文件；管理 API 只返回带 `[已保存密钥]` 的脱敏投影。Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`allowed_model_ids`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。
 
@@ -261,10 +298,22 @@ LLM `provider` 表示协议：`anthropic` = Anthropic Messages，`openai` = Open
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
+| POST | /projects/:id/exports | exports:write | 项目包；`preset=configuration|project_full|evidence_archive|custom`，可选 `modules/include_blobs/allow_active_jobs/credentials.mode` |
+| GET | /projects/:id/exports | exports:read | 项目导出任务列表 |
 | POST | /platform/exports | exports:write | `{preset: platform_full\|custom, modules?: string[], credentials?: {mode}}`；`custom` 时 `modules` 可自由勾选：`global_rules` / `agent_roles` / `global_role_configs` / `skill_sources` / `credentials` |
 | GET | /platform/exports | exports:read | 平台导出任务列表 |
+| GET | /exports/:id | exports:read | 导出详情（pending/collecting/packaging/succeeded/failed/cancelled） |
 | GET | /exports/:id/download | exports:read | 下载 pack |
-| POST | /imports | exports:write | 上传 `.deepsonarpack`（raw body） |
+| POST | /exports/:id/cancel | exports:write | 取消未完成导出 |
+| DELETE | /exports/:id | exports:write | 删除导出记录及 artifact |
+| POST | /imports | imports:write | 上传 `.deepsonarpack`（raw body，`application/zip`/`application/x-deepsonarpack`） |
+| GET | /imports/:id | imports:read | 导入详情/状态 |
+| POST | /imports/:id/preview | imports:write | 预览可导入模块与冲突 |
+| POST | /imports/:id/apply | imports:write | `{mode: create_new|merge_configuration|merge_platform, project_name?, target_project_id?, modules?, conflict_policy?, credential_mappings?}` |
+| POST | /imports/:id/cancel | imports:write | 取消未应用导入 |
+| DELETE | /imports/:id | imports:write | 删除上传包及记录 |
+
+AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当前没有服务端 `/agent-packs` 端点。Web 安装时通过 Agent Role 与 RoleConfig API 完成登记，凭据与 secret-like 配置不会从 pack 直接写入。
 
 ### 管理面
 
@@ -305,7 +354,7 @@ Credential 连接测试和模型目录只读取 Scheduler append-only audit evid
 - 任务创建：`jobs.ingress_key` 唯一；重复提交返回既有 Job。
 - 事件注入：`(project_id, source, event_id)` 幂等。
 - RoleConfig PUT：声明式全量替换 credentials/config_files，重复提交安全。
-- 无 body 的 POST（sync / test / cancel / resume / models 等）**不要**带 `Content-Type: application/json`，否则 Fastify 可能 400。
+- 无 body 的 POST（sync / test / resume / model refresh 等）**不要**带 `Content-Type: application/json`，否则 Fastify 可能 400；cancel 只有传 force/reason 时才带 JSON body。
 
 ## Job 状态与运维
 
@@ -315,7 +364,7 @@ pending → claimed → provisioning → running → waiting_human → succeeded
 
 - `POST /jobs/:id/resume`：`failed` / `timeout` / `orphan` / `waiting_human` → `pending`（终态 409）；Scheduler 按 Job `type`/`purpose` 重算固定 priority class，不信任历史或调用方 priority。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。
-- schema 版本：当前 v23；空库套 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。
+- schema 版本：以运行中 `/schema` 为准；远端 `origin/main` 最新基线为 v24，当前未同步 checkout 仍可能是 v23。空库套对应 checkout 的 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。
 
 ## 发现契约（推荐流程）

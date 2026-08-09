@@ -25,6 +25,7 @@ import re
 import sys
 from typing import Dict
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # Windows 控制台默认 GBK，强制 UTF-8 输出，保证下游 Agent 消费一致
@@ -115,6 +116,78 @@ def call(method: str, path: str, body=None):
     return parsed
 
 
+def call_bytes(method: str, path: str, data: bytes | None = None, content_type: str | None = None,
+               extra_headers: dict[str, str] | None = None) -> tuple[bytes, dict[str, str]]:
+    """Call a binary endpoint without decoding or printing the response body."""
+    headers: dict[str, str] = {}
+    if TOKEN:
+        headers["authorization"] = f"Bearer {TOKEN}"
+    if content_type:
+        headers["content-type"] = content_type
+    if extra_headers:
+        headers.update(extra_headers)
+    req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req) as res:
+            return res.read(), {str(k).lower(): str(v) for k, v in res.headers.items()}
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        parsed = _decode_json_text(raw.decode("utf-8", errors="replace"))
+        msg = (parsed or {}).get("error") or (parsed or {}).get("message") or f"HTTP {e.code}"
+        raise ApiError(msg if isinstance(msg, str) else f"HTTP {e.code}", status=e.code, body=parsed)
+
+
+def query_path(path: str, values: dict[str, object | None]) -> str:
+    """Append non-empty query values using URL encoding."""
+    pairs = [(key, str(value)) for key, value in values.items() if value is not None and value != ""]
+    return path + (("?" + urllib.parse.urlencode(pairs)) if pairs else "")
+
+
+def parse_bool(value, name: str) -> bool:
+    normalized = str(need(value, name)).lower()
+    if normalized not in ("true", "false"):
+        raise ApiError(f"{name} 必须是 true 或 false")
+    return normalized == "true"
+
+
+def parse_list_arg(value, name: str) -> list[str]:
+    """Accept a JSON string array, @file, or a comma-separated list."""
+    raw = need(value, name)
+    if str(raw).startswith("[") or str(raw).startswith("@"):
+        parsed = parse_json_arg(str(raw), name)
+        if not isinstance(parsed, list) or any(not isinstance(item, str) or not item.strip() for item in parsed):
+            raise ApiError(f"{name} 必须是字符串数组")
+        return [item.strip() for item in parsed]
+    return [item.strip() for item in str(raw).split(",") if item.strip()]
+
+
+def read_file_bytes(value, name: str) -> bytes:
+    path = Path(need(value, name))
+    if not path.is_file():
+        raise ApiError(f"{name} 文件不存在: {path}")
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise ApiError(f"{name} 文件读取失败: {error}")
+
+
+def download_to(path: str, f: dict, default_name: str) -> dict:
+    """Download a non-JSON endpoint to an explicit local path."""
+    output = Path(str(f.get("out") or default_name)).expanduser()
+    body, headers = call_bytes("GET", path)
+    try:
+        output.write_bytes(body)
+    except OSError as error:
+        raise ApiError(f"--out 写入失败: {error}")
+    return {
+        "ok": True,
+        "path": str(output.resolve()),
+        "bytes": len(body),
+        "content_type": headers.get("content-type"),
+        "sha256": hashlib.sha256(body).hexdigest(),
+    }
+
+
 def call_text(method: str, path: str) -> str:
     """非 JSON 响应（报告下载）：成功返回原文文本，错误仍按 JSON error 抛出。"""
     headers = {}
@@ -163,10 +236,9 @@ def _tasks_create(pos, f):
     content = f.get("content") or title
     body = {"title": title, "content": content}
     if f.get("allow-egress") is not None:
-        value = str(f["allow-egress"]).lower()
-        if value not in ("true", "false"):
-            raise ApiError("--allow-egress 必须是 true 或 false")
-        body["allow_egress"] = value == "true"
+        body["allow_egress"] = parse_bool(f["allow-egress"], "--allow-egress")
+    if f.get("finding-protocol"):
+        body["finding_protocol"] = parse_json_arg(str(f["finding-protocol"]), "--finding-protocol")
     return call("POST", f"/projects/{need(pos[0] if pos else None, 'projectId')}/tasks", body)
 
 
@@ -210,6 +282,10 @@ def _project_settings_update(pos, f):
         roles_val = str(f["roles"])
         enabled = None if roles_val == "null" else [s.strip() for s in roles_val.split(",") if s.strip()]
         body["roles"] = {"enabled": enabled}
+    if f.get("finding-protocol"):
+        body["finding_protocol"] = parse_json_arg(str(f["finding-protocol"]), "--finding-protocol")
+    if not body:
+        raise ApiError("至少提供 --rules、--roles 或 --finding-protocol")
     return call("PATCH", f"/projects/{need(pos[0] if pos else None, 'projectId')}/settings", body)
 
 
@@ -230,9 +306,12 @@ def _settings_update(_pos, f):
         if not isinstance(cli_limits, dict):
             raise ApiError("--cli-limits 必须是 JSON 对象")
         rules["maxConcurrentByAgentCli"] = cli_limits
-    if not rules:
-        raise ApiError("至少提供 --rules、--max-global-jobs、--max-jobs-per-project 或 --cli-limits")
-    return call("PATCH", "/global-settings", {"rules": rules})
+    body = {"rules": rules} if rules else {}
+    if f.get("finding-protocol"):
+        body["finding_protocol"] = parse_json_arg(str(f["finding-protocol"]), "--finding-protocol")
+    if not body:
+        raise ApiError("至少提供 --rules、--finding-protocol、--max-global-jobs、--max-jobs-per-project 或 --cli-limits")
+    return call("PATCH", "/global-settings", body)
 
 
 def _roles_create(_pos, f):
@@ -259,7 +338,7 @@ def _skills_create(_pos, f):
 def _skills_trust(pos, f):
     body = {"trust_status": need(f.get("status"), "--status quarantined|trusted|disabled")}
     if f.get("enabled") is not None:
-        body["enabled"] = str(f["enabled"]).lower() == "true"
+        body["enabled"] = parse_bool(f["enabled"], "--enabled")
     sid = need(pos[0] if pos else None, "sourceId")
     return call("POST", f"/skill-sources/{sid}/trust", body)
 
@@ -288,6 +367,8 @@ def _credentials_create(_pos, f):
         meta.update(parse_json_arg(str(f["metadata"]), "--metadata"))
     if meta:
         body["metadata"] = meta
+    if f.get("meta"):
+        body["meta"] = parse_json_arg(str(f["meta"]), "--meta")
     return call("POST", "/credentials", body)
 
 
@@ -301,22 +382,94 @@ def _credentials_models_preview(_pos, f):
         body["base_url"] = str(f["base-url"]).rstrip("/")
     if f.get("settings-config"):
         body["settings_config"] = parse_json_arg(str(f["settings-config"]), "--settings-config")
+    if f.get("metadata"):
+        body["metadata"] = parse_json_arg(str(f["metadata"]), "--metadata")
     return call("POST", "/credentials/models/preview", body)
 
 
-def _runtime_images_list(_pos, f):
-    qs = []
-    if f.get("search"):
-        qs.append("search=" + urllib.request.quote(str(f["search"])))
-    if f.get("project"):
-        qs.append("project_id=" + urllib.request.quote(str(f["project"])))
-    path = "/runtime-images" + (("?" + "&".join(qs)) if qs else "")
+def _credentials_update(pos, f):
+    body = parse_json_arg(str(need(f.get("data"), "--data '{...}' 或 @file.json")), "--data")
+    if not isinstance(body, dict):
+        raise ApiError("--data 必须是 JSON 对象")
+    return call("PATCH", f"/credentials/{_p0(pos, 'credentialId')}", body)
+
+
+def _credentials_compatibility(pos, f):
+    path = query_path(f"/credentials/{_p0(pos, 'credentialId')}/compatibility", {
+        "agent_cli": f.get("agent-cli") or f.get("cli"),
+        "model": f.get("model"),
+    })
     return call("GET", path)
+
+
+def _credentials_batch_bind(_pos, f):
+    body = {
+        "credential_id": need(f.get("credential-id"), "--credential-id"),
+        "role_config_ids": parse_list_arg(f.get("role-config-ids"), "--role-config-ids"),
+        "mode": f.get("mode") or "bind",
+        "effect": f.get("effect") or "new_jobs_only",
+        "idempotency_key": need(f.get("idempotency-key"), "--idempotency-key（至少 8 个字符）"),
+    }
+    if f.get("source-credential-id"):
+        body["source_credential_id"] = f["source-credential-id"]
+    if f.get("model") is not None:
+        body["model"] = f["model"]
+    return call("POST", "/credentials/batch-bind", body)
+
+def _runtime_images_list(_pos, f):
+    return call("GET", query_path("/runtime-images", {
+        "search": f.get("search"),
+        "project_id": f.get("project"),
+    }))
+
+
+def _readiness(pos, f):
+    path = "/readiness" if not pos else f"/projects/{_p0(pos, 'projectId')}/readiness"
+    allow_egress = None
+    if f.get("allow-egress") is not None:
+        allow_egress = "true" if parse_bool(f["allow-egress"], "--allow-egress") else "false"
+    return call("GET", query_path(path, {
+        "allow_egress": allow_egress,
+        "material_source": f.get("material-source"),
+    }))
+
+
+def _runtime_registry_apply(_pos, f):
+    return call("POST", "/runtime-images/registry/apply",
+                parse_json_arg(str(need(f.get("data"), "--data @runtime-image-registry.json")), "--data"))
+
+
+def _runtime_registry_channel(_pos, f):
+    return call("PATCH", "/runtime-images/registry/channel", {
+        "channel": need(f.get("channel"), "--channel github|dockerhub|aliyun-acr"),
+    })
+
+
+def _runtime_images_official_digest(pos, f):
+    body = {"image_ref": need(f.get("image-ref"), "--image-ref")}
+    if f.get("version"):
+        body["version"] = f["version"]
+    if f.get("source"):
+        body["source"] = f["source"]
+    return call("POST", f"/runtime-images/{_p0(pos, 'imageId')}/official-digest", body)
+
+
+def _runtime_images_manual_digest(_pos, f):
+    body = {
+        "image_key": need(f.get("image-key"), "--image-key"),
+        "name": need(f.get("name"), "--name"),
+        "publisher": need(f.get("publisher"), "--publisher"),
+        "image_ref": need(f.get("image-ref"), "--image-ref name@sha256:..."),
+    }
+    for key in ("description", "source-url", "version"):
+        if f.get(key):
+            body[key.replace("-", "_")] = f[key]
+    return call("POST", "/runtime-images/manual-digest", body)
 
 
 def _runtime_images_project_enable(pos, f):
     body = {
-        "enabled": str(need(f.get("enabled"), "--enabled true|false")).lower() == "true",
+        "enabled": parse_bool(f.get("enabled"), "--enabled"),
     }
     if f.get("version-id"):
         body["version_id"] = f["version-id"]
@@ -347,13 +500,173 @@ def _runtime_images_adopt_local(pos, f):
 
 
 def _findings_list(_pos, f):
-    qs = []
-    if f.get("project"):
-        qs.append("project_id=" + urllib.request.quote(str(f["project"])))
-    if f.get("canvas"):
-        qs.append("canvas_id=" + urllib.request.quote(str(f["canvas"])))
-    path = "/findings" + (("?" + "&".join(qs)) if qs else "")
+    return call("GET", query_path("/findings", {
+        "project_id": f.get("project"),
+        "canvas_id": f.get("canvas"),
+        "severity": f.get("severity"),
+        "profile": f.get("profile"),
+        "category": f.get("category"),
+        "verify_status": f.get("verify-status"),
+        "disposition": f.get("disposition"),
+        "cursor": f.get("cursor") or f.get("after"),
+        "limit": f.get("limit"),
+    }))
+
+
+def _findings_disposition(pos, f):
+    body = {"disposition": need(f.get("disposition"), "--disposition")}
+    if f.get("note"):
+        body["note"] = f["note"]
+    return call("PATCH", f"/findings/{_p0(pos, 'findingId')}/disposition", body)
+
+
+def _findings_comment(pos, f):
+    body = {
+        "body": need(f.get("body"), "--body"),
+        "request_hub": parse_bool(f.get("request-hub"), "--request-hub") if f.get("request-hub") is not None else True,
+    }
+    return call("POST", f"/findings/{_p0(pos, 'findingId')}/comments", body)
+
+
+def _findings_link(pos, f):
+    body = {
+        "url": need(f.get("url"), "--url"),
+        "link_type": f.get("link-type") or "related",
+    }
+    if f.get("title"):
+        body["title"] = f["title"]
+    return call("POST", f"/findings/{_p0(pos, 'findingId')}/links", body)
+
+
+def _asset_list(path: str, f):
+    return call("GET", query_path(path, {
+        "limit": f.get("limit"),
+        "offset": f.get("offset"),
+    }))
+
+
+def _asset_upload(path: str, f):
+    content_type = str(f.get("content-type") or "application/octet-stream")
+    extra = {"x-asset-key": need(f.get("asset-key"), "--asset-key")}
+    if f.get("asset-content-type"):
+        extra["x-asset-content-type"] = str(f["asset-content-type"])
+    if f.get("labels"):
+        labels = parse_json_arg(str(f["labels"]), "--labels")
+        if not isinstance(labels, dict):
+            raise ApiError("--labels 必须是 JSON 对象")
+        extra["x-asset-labels"] = json.dumps(labels, ensure_ascii=False, separators=(",", ":"))
+    raw, _ = call_bytes("POST", path, read_file_bytes(f.get("file"), "--file"), content_type, extra)
+    return _decode_json_text(raw.decode("utf-8", errors="replace"))
+
+
+def _asset_archive(pos, _f):
+    return call("POST", f"/shared-assets/{_p0(pos, 'assetId')}/archive")
+
+
+def _asset_download(pos, f):
+    return download_to(f"/shared-assets/{_p0(pos, 'assetId')}/content", f, "asset.bin")
+
+
+def _assets_policy_update(pos, f):
+    return call("PATCH", f"/projects/{_p0(pos, 'projectId')}/shared-assets/policy", {
+        "platform_enabled": parse_bool(f.get("platform-enabled"), "--platform-enabled"),
+    })
+
+
+def _jobs_list(_pos, f):
+    return call("GET", query_path("/jobs", {
+        "project_id": f.get("project"),
+        "status": f.get("status"),
+        "canvas_id": f.get("canvas"),
+        "cursor": f.get("cursor") or f.get("after"),
+        "limit": f.get("limit"),
+    }))
+
+
+def _jobs_events(pos, f):
+    return call("GET", query_path(f"/jobs/{_p0(pos, 'jobId')}/events", {
+        "cursor": f.get("cursor") or f.get("after"),
+        "limit": f.get("limit"),
+    }))
+
+
+def _jobs_evidence_stream(pos, f):
+    tail = None
+    if f.get("tail") is not None:
+        tail = "true" if parse_bool(f["tail"], "--tail") else "false"
+    return call("GET", query_path(f"/jobs/{_p0(pos, 'jobId')}/evidence/stream", {
+        "cursor": f.get("cursor") or f.get("after"),
+        "limit": f.get("limit"),
+        "tail": tail,
+    }))
+
+
+def _jobs_cancel(pos, f):
+    body = {}
+    if f.get("force") is not None:
+        body["force"] = parse_bool(f["force"], "--force")
+    if f.get("reason"):
+        body["reason"] = f["reason"]
+    return call("POST", f"/jobs/{_p0(pos, 'jobId')}/cancel", body or None)
+
+
+def _jobs_cancel_active(pos, f):
+    body = {"reason": f["reason"]} if f.get("reason") else None
+    return call("POST", f"/canvases/{_p0(pos, 'canvasId')}/jobs/cancel-active", body)
+
+
+def _binary_upload(path: str, f, content_type: str) -> object:
+    raw, _ = call_bytes("POST", path, read_file_bytes(f.get("file"), "--file"), content_type)
+    return _decode_json_text(raw.decode("utf-8", errors="replace"))
+
+
+def _export_body(f, platform: bool) -> dict:
+    body = {"preset": f.get("preset") or ("platform_full" if platform else "configuration")}
+    if f.get("modules"):
+        body["modules"] = parse_list_arg(f["modules"], "--modules")
+    if f.get("include-blobs") is not None:
+        body["include_blobs"] = parse_bool(f["include-blobs"], "--include-blobs")
+    if f.get("allow-active-jobs") is not None:
+        body["allow_active_jobs"] = parse_bool(f["allow-active-jobs"], "--allow-active-jobs")
+    if f.get("credentials-mode"):
+        body["credentials"] = {"mode": f["credentials-mode"]}
+    return body
+
+
+def _exports_create(_pos, f):
+    project_id = f.get("project-id")
+    if project_id:
+        return call("POST", f"/projects/{project_id}/exports", _export_body(f, platform=False))
+    return call("POST", "/platform/exports", _export_body(f, platform=True))
+
+
+def _exports_list(_pos, f):
+    project_id = f.get("project-id")
+    path = f"/projects/{project_id}/exports" if project_id else "/platform/exports"
     return call("GET", path)
+
+
+def _exports_download(pos, f):
+    return download_to(f"/exports/{_p0(pos, 'exportId')}/download", f, "deepsonar.deepsonarpack")
+
+
+def _imports_upload(_pos, f):
+    return _binary_upload("/imports", f, "application/x-deepsonarpack")
+
+
+def _imports_apply(pos, f):
+    body = {}
+    for flag, key in (("mode", "mode"), ("project-name", "project_name"), ("target-project-id", "target_project_id"), ("conflict-policy", "conflict_policy")):
+        if f.get(flag):
+            body[key] = f[flag]
+    if f.get("modules"):
+        body["modules"] = parse_list_arg(f["modules"], "--modules")
+    if f.get("credential-mappings"):
+        mappings = parse_json_arg(str(f["credential-mappings"]), "--credential-mappings")
+        if not isinstance(mappings, dict):
+            raise ApiError("--credential-mappings 必须是 JSON 对象")
+        body["credential_mappings"] = mappings
+    return call("POST", f"/imports/{_p0(pos, 'importId')}/apply", body)
 
 
 def _schema_cmd(pos, f):
@@ -389,12 +702,8 @@ def _builtin_prompt_templates(schema_path: Path) -> Dict[str, str]:
     return templates
 
 
-def _role_config_put_body(cfg: dict, instructions: str, disable_human: bool) -> dict:
+def _role_config_put_body(cfg: dict, instructions: str) -> dict:
     """把 GET view 转成声明式 PUT body；保留所有用户运行配置，只替换 Prompt。"""
-    tools = dict(cfg.get("platform_tools_json") or {})
-    if disable_human:
-        # 兼容尚未部署新工具矩阵的实例；新版服务端会拒绝该键，调用方随后无键重试。
-        tools["request_human"] = False
     return {
         "agent_cli": cfg.get("agent_cli") or "claude-code",
         "model": cfg.get("model"),
@@ -406,7 +715,7 @@ def _role_config_put_body(cfg: dict, instructions: str, disable_human: bool) -> 
         "commands": cfg.get("commands_json") or [],
         "mcps": cfg.get("mcps_json") or [],
         "subagents": cfg.get("subagents_json") or [],
-        "platform_tools": tools,
+        "platform_tools": dict(cfg.get("platform_tools_json") or {}),
         "instructions_markdown": instructions,
         "runtime_image_key": cfg.get("runtime_image_key"),
         "credentials": [
@@ -437,25 +746,15 @@ def _role_configs_sync_builtin_prompts(_pos, f):
         cfg = by_name[role_name]
         before = str(cfg.get("instructions_markdown") or "")
         changed = before != instructions
-        disable_human = role_name in {"verify", "report"}
-        body = _role_config_put_body(cfg, instructions, disable_human=disable_human)
-        if not dry_run and (changed or disable_human):
+        body = _role_config_put_body(cfg, instructions)
+        if not dry_run and changed:
             role_id = need(cfg.get("role_id"), f"线上 {role_name}.role_id")
-            try:
-                call("PUT", f"/role-configs/global/{role_id}", body)
-            except ApiError as error:
-                # 新版服务端已从 verify/report 合法工具集中移除 request_human；去掉兼容键重试。
-                if disable_human and error.status == 400 and "request_human" in str(error):
-                    body["platform_tools"].pop("request_human", None)
-                    call("PUT", f"/role-configs/global/{role_id}", body)
-                else:
-                    raise
+            call("PUT", f"/role-configs/global/{role_id}", body)
         results.append({
             "role": role_name,
             "changed": changed,
             "current_prompt_sha256": hashlib.sha256(before.encode("utf-8")).hexdigest(),
             "prompt_sha256": hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
-            "request_human_disabled": disable_human,
         })
     return {"ok": True, "dry_run": dry_run, "schema": str(schema_path), "roles": results}
 
@@ -466,6 +765,21 @@ def _p0(pos, name):
 
 def _p1(pos, name):
     return need(pos[1] if len(pos) > 1 else None, name)
+
+
+def print_help(prefix: str | None = None) -> None:
+    keys = sorted(
+        key for key in COMMANDS
+        if prefix is None or key == prefix or key.startswith(prefix + ".")
+    )
+    if prefix and not keys:
+        keys = [prefix]
+    sys.stdout.write(
+        "用法: deepsonar-api.py <资源> <动作> [位置参数] [--flag value...]\n"
+        "先拉契约: schema openapi|summary|markdown\n"
+        + (f"命令前缀 {prefix}:\n" if prefix else "可用命令:\n")
+        + "".join(f"  {key}\n" for key in keys)
+    )
 
 
 COMMANDS = {
@@ -479,6 +793,11 @@ COMMANDS = {
 
     # ---------- 项目 ----------
     "projects.list": lambda pos, f: call("GET", "/projects"),
+    "projects.sync": lambda pos, f: call("POST", "/projects/sync", {
+        "plane_project_id": need(f.get("plane-project-id"), "--plane-project-id"),
+        "name": need(f.get("name"), "--name"),
+        "config": parse_json_arg(str(f.get("config") or "{}"), "--config"),
+    }),
     "projects.get": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}"),
     "projects.create": _projects_create,
     # 服务端仅允许 name / description / status（active|archived）
@@ -487,35 +806,96 @@ COMMANDS = {
         parse_json_arg(need(f.get("data"), "--data '{\"k\":\"v\"}'"), "--data")),
     "projects.archive": lambda pos, f: call("POST", f"/projects/{_p0(pos, 'projectId')}/archive"),
 
+    # ---------- Readiness / shared assets ----------
+    "readiness": _readiness,
+    "readiness.project": _readiness,
+    "assets.project-list": lambda pos, f: _asset_list(f"/projects/{_p0(pos, 'projectId')}/shared-assets", f),
+    "assets.project-upload": lambda pos, f: _asset_upload(f"/projects/{_p0(pos, 'projectId')}/shared-assets", f),
+    "assets.finding-list": lambda pos, f: _asset_list(f"/findings/{_p0(pos, 'findingId')}/shared-assets", f),
+    "assets.finding-upload": lambda pos, f: _asset_upload(f"/findings/{_p0(pos, 'findingId')}/shared-assets", f),
+    "assets.platform-list": lambda pos, f: _asset_list("/platform/shared-assets", f),
+    "assets.platform-upload": lambda pos, f: _asset_upload("/platform/shared-assets", f),
+    "assets.archive": _asset_archive,
+    "assets.download": _asset_download,
+    "assets.project-policy": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}/shared-assets/policy"),
+    "assets.project-policy-update": _assets_policy_update,
+
     # ---------- 任务（一次任务 = 一个画布） ----------
     "tasks.create": _tasks_create,
+    "tasks.resume-session": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/resume-session"),
     "tasks.retry": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/retry"),
+    "tasks.archive": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/archive"),
+    "tasks.unarchive": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/unarchive"),
+    "tasks.delete": lambda pos, f: call("DELETE", f"/tasks/{_p0(pos, 'canvasId')}"),
 
     # ---------- 事件注入（幂等：source + event_id） ----------
     "events.push": _events_push,
 
     # ---------- Job ----------
-    "jobs.list": lambda pos, f: call("GET", f"/jobs?project_id={f['project']}" if f.get("project") else "/jobs"),
+    "jobs.list": _jobs_list,
     "jobs.get": lambda pos, f: call("GET", f"/jobs/{_p0(pos, 'jobId')}"),
+    "jobs.events": _jobs_events,
+    "jobs.evidence": lambda pos, f: call("GET", f"/jobs/{_p0(pos, 'jobId')}/evidence"),
+    "jobs.evidence-session": lambda pos, f: call("GET", f"/jobs/{_p0(pos, 'jobId')}/evidence/session"),
+    "jobs.evidence-session-download": lambda pos, f: download_to(
+        f"/jobs/{_p0(pos, 'jobId')}/evidence/session/download", f, "session.ndjson"),
+    "jobs.evidence-stream": _jobs_evidence_stream,
     # 直接建 job（type 须为已注册 agent_roles.name 或系统类型；一般用 tasks.create 而非此命令）
     "jobs.create": _jobs_create,
     "jobs.priority": lambda pos, f: call(
         "PATCH", f"/jobs/{_p0(pos, 'jobId')}/priority",
         {"priority": int(need(f.get("priority"), "--priority"))}),
-    "jobs.cancel": lambda pos, f: call("POST", f"/jobs/{_p0(pos, 'jobId')}/cancel"),
+    "jobs.cancel": _jobs_cancel,
+    "jobs.cancel-active": _jobs_cancel_active,
     "jobs.resume": lambda pos, f: call("POST", f"/jobs/{_p0(pos, 'jobId')}/resume"),
 
     # ---------- 结果 ----------
     "findings.list": _findings_list,
     "findings.get": lambda pos, f: call("GET", f"/findings/{_p0(pos, 'findingId')}"),
+    "findings.disposition": _findings_disposition,
+    "findings.comment": _findings_comment,
+    "findings.comment-delete": lambda pos, f: call(
+        "DELETE", f"/findings/{_p0(pos, 'findingId')}/comments/{_p1(pos, 'commentId')}"),
+    "findings.link": _findings_link,
+    "findings.link-delete": lambda pos, f: call(
+        "DELETE", f"/findings/{_p0(pos, 'findingId')}/links/{_p1(pos, 'linkId')}"),
     "canvases.list": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}/canvases"),
     "canvases.get": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}"),
+    "canvases.summary": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}/summary"),
+    "canvases.delta": lambda pos, f: call("GET", query_path(
+        f"/canvases/{_p0(pos, 'canvasId')}/delta", {"since": f.get("since")})),
+    "canvases.node": lambda pos, f: call(
+        "GET", f"/canvases/{_p0(pos, 'canvasId')}/nodes/{_p1(pos, 'nodeId')}"),
+    "canvases.convergence": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}/convergence"),
+    "canvases.pause": lambda pos, f: call("POST", f"/canvases/{_p0(pos, 'canvasId')}/convergence/pause",
+                                             {"reason": f["reason"]} if f.get("reason") else None),
+    "canvases.resume": lambda pos, f: call("POST", f"/canvases/{_p0(pos, 'canvasId')}/convergence/resume",
+                                             {"force_hub": parse_bool(f["force-hub"], "--force-hub")} if f.get("force-hub") is not None else None),
+    "canvases.stop-after-gate": lambda pos, f: call("POST", f"/canvases/{_p0(pos, 'canvasId')}/convergence/stop-after-gate"),
+    "canvases.drain-priority": lambda pos, f: call("POST", f"/canvases/{_p0(pos, 'canvasId')}/convergence/drain-priority"),
+    "canvases.run-hub-now": lambda pos, f: call("POST", f"/canvases/{_p0(pos, 'canvasId')}/convergence/run-hub-now"),
 
     # ---------- 任务报告（job 完成后由调度器自动生成） ----------
     "reports.get": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}/report"),
+    "reports.finding": lambda pos, f: call("GET", f"/findings/{_p0(pos, 'findingId')}/report"),
+    "reports.finding-create": lambda pos, f: call("POST", f"/findings/{_p0(pos, 'findingId')}/report"),
     "reports.markdown": lambda pos, f: call_text("GET", f"/reports/{_p0(pos, 'reportId')}/markdown"),
     "reports.sarif": lambda pos, f: call_text("GET", f"/reports/{_p0(pos, 'reportId')}/sarif"),
     "reports.retry": lambda pos, f: call("POST", f"/canvases/{_p0(pos, 'canvasId')}/report/retry"),
+
+    # ---------- 项目/平台数据包 transfer ----------
+    "exports.create": _exports_create,
+    "exports.list": _exports_list,
+    "exports.get": lambda pos, f: call("GET", f"/exports/{_p0(pos, 'exportId')}"),
+    "exports.download": _exports_download,
+    "exports.cancel": lambda pos, f: call("POST", f"/exports/{_p0(pos, 'exportId')}/cancel"),
+    "exports.delete": lambda pos, f: call("DELETE", f"/exports/{_p0(pos, 'exportId')}"),
+    "imports.upload": _imports_upload,
+    "imports.get": lambda pos, f: call("GET", f"/imports/{_p0(pos, 'importId')}"),
+    "imports.preview": lambda pos, f: call("POST", f"/imports/{_p0(pos, 'importId')}/preview"),
+    "imports.apply": _imports_apply,
+    "imports.cancel": lambda pos, f: call("POST", f"/imports/{_p0(pos, 'importId')}/cancel"),
+    "imports.delete": lambda pos, f: call("DELETE", f"/imports/{_p0(pos, 'importId')}"),
 
     # ---------- Fact 人工验证（needs_human 的确认/排除；处理后可能推进报告） ----------
     "nodes.verify": lambda pos, f: call(
@@ -579,6 +959,14 @@ COMMANDS = {
     "runtime-images.project-enable": _runtime_images_project_enable,
     "runtime-images.detect-local": _runtime_images_detect_local,
     "runtime-images.adopt-local": _runtime_images_adopt_local,
+    "runtime-images.registry": lambda pos, f: call("GET", "/runtime-images/registry"),
+    "runtime-images.registry-channel": _runtime_registry_channel,
+    "runtime-images.registry-sync": lambda pos, f: call("POST", "/runtime-images/registry/sync"),
+    "runtime-images.registry-apply": _runtime_registry_apply,
+    "runtime-images.registry-pull": lambda pos, f: call("POST", "/runtime-images/registry/pull"),
+    "runtime-images.registry-pull-status": lambda pos, f: call("GET", "/runtime-images/registry/pull-status"),
+    "runtime-images.official-digest": _runtime_images_official_digest,
+    "runtime-images.manual-digest": _runtime_images_manual_digest,
 
     # ---------- Skill 模块源（Git 托管；新源默认 quarantined，需 trust 后才下发） ----------
     "skills.list": lambda pos, f: call("GET", "/skill-sources"),
@@ -598,10 +986,11 @@ COMMANDS = {
 
     # ---------- Provider / OCI Credential（明文不可回读） ----------
     "credentials.list": lambda pos, f: call("GET", "/credentials"),
+    "credentials.providers": lambda pos, f: call("GET", "/credentials/providers"),
+    "credentials.get": lambda pos, f: call("GET", f"/credentials/{_p0(pos, 'credentialId')}"),
+    "credentials.impact": lambda pos, f: call("GET", f"/credentials/{_p0(pos, 'credentialId')}/impact"),
     "credentials.create": _credentials_create,
-    "credentials.update": lambda pos, f: call(
-        "PATCH", f"/credentials/{_p0(pos, 'credentialId')}",
-        parse_json_arg(need(f.get("data"), '--data \'{"metadata":{"base_url":"..."}}\''), "--data")),
+    "credentials.update": _credentials_update,
     "credentials.rotate": lambda pos, f: call(
         "POST", f"/credentials/{_p0(pos, 'credentialId')}/rotate",
         {"secret": need(f.get("secret"), "--secret")}),
@@ -610,23 +999,31 @@ COMMANDS = {
         {"status": need(f.get("status"), "--status active|disabled|rotation_required")}),
     "credentials.test": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/test"),
     # 无 body；用于 RoleConfig 选 model 前发现 Provider 真实目录
-    "credentials.models": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/models"),
+    "credentials.models": lambda pos, f: call("GET", f"/credentials/{_p0(pos, 'credentialId')}/models"),
+    "credentials.models-refresh": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/models"),
+    "credentials.compatibility": _credentials_compatibility,
+    "credentials.batch-bind": _credentials_batch_bind,
     "credentials.models-preview": _credentials_models_preview,
 }
 
 
 def main() -> None:
     argv = sys.argv[1:]
+    if not argv or argv == ["--help"]:
+        print_help()
+        return
+    if "--help" in argv:
+        prefix = argv[0]
+        if len(argv) > 1 and argv[1] != "--help":
+            prefix = f"{argv[0]}.{argv[1]}"
+        print_help(prefix)
+        return
     resource = argv[0] if argv else None
     action = argv[1] if len(argv) > 1 else None
     rest = argv[2:] if len(argv) > 2 else []
     if not resource:
-        sys.stderr.write(
-            f"用法: deepsonar-api.py <资源> <动作> [args] [--flag value]\n"
-            f"先拉契约: schema openapi|summary|markdown\n"
-            f"可用: {', '.join(COMMANDS)}\n"
-        )
-        sys.exit(64)
+        print_help()
+        return
     # schema openapi|summary|markdown → schema 单资源 + 位置参数
     if resource == "schema" and action in (None, "openapi", "summary", "markdown", "md", "json"):
         key = "schema"
@@ -639,7 +1036,8 @@ def main() -> None:
         key = f"{resource}.{action}" if action else resource
     fn = COMMANDS.get(key)
     if fn is None:
-        sys.stderr.write(f"未知命令: {key}\n可用: {', '.join(COMMANDS)}\n")
+        sys.stderr.write(f"未知命令: {key}\n")
+        print_help(resource)
         sys.exit(64)
     pos, flags = parse_flags(rest)
     try:
