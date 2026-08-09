@@ -151,7 +151,7 @@ try {
   assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.github.untrusted_extra = true; });
   assertRegistryCheckFails(/registry_evidence|provenance/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.github.provenance = "cross-registry-copy+inspect"; });
   assertRegistryCheckFails(/registry_evidence|unavailable|reason/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.dockerhub.reason = "credentials missing"; });
-  assertRegistryCheckFails(/exactly the six official image keys/i, (candidate) => { candidate.images.pop(); });
+  assertRegistryCheckFails(/exactly the nine official image keys/i, (candidate) => { candidate.images.pop(); });
   assertRegistryCheckFails(/unavailable evidence cannot coexist|registry_evidence/i, (candidate) => {
     const version = candidate.images[0].versions[0];
     version.registry_evidence.dockerhub = { available: false, provenance: "unavailable", reason: "credentials_missing" };

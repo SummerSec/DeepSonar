@@ -8,6 +8,8 @@ import {
   discardPendingSemanticTools,
   materializationPathCollisions,
   normalizeRuntimeErrorDetails,
+  resolveTerminalRunError,
+  resolveTerminalProcessOutcome,
   parseRuntimeLine,
   runtimeCliEnv,
   assertSharedAssetsContainerMount,
@@ -17,8 +19,126 @@ import {
   isDeepsonarGatewayNetwork,
   dockerSocketPath,
   ensureRuntimeHome,
+  buildTerminalShellCommand,
+  terminalShellCommand,
+  writeTerminalInput,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+
+test("terminal shell command prefers interactive Bash and safely falls back to interactive /bin/sh", () => {
+  assert.equal(terminalShellCommand("bash"), "exec bash -il");
+  assert.equal(terminalShellCommand("sh"), "exec /bin/sh -i");
+  assert.equal(
+    buildTerminalShellCommand(),
+    "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec /bin/sh -i; fi",
+  );
+});
+
+test("terminal input writes raw tab, backspace, and Ctrl+C bytes without translation", async () => {
+  const writes: string[] = [];
+  const process = { write: async (input: string) => { writes.push(input); } };
+  const input = "\t\b\u007f\u0003";
+  await writeTerminalInput(process, input);
+  assert.deepEqual(writes, [input]);
+});
+
+test("terminal input rejects a process without an active stdin channel", async () => {
+  await assert.rejects(
+    () => writeTerminalInput({}, "\u0003"),
+    /TERMINAL_SESSION_CLOSED/,
+  );
+});
+
+test("completion-gate terminal outcomes replace stale Provider errors", () => {
+  let runError = resolveTerminalRunError({ isError: true, errorDetail: "Provider 429" });
+  assert.equal(runError, "Provider 429");
+  runError = resolveTerminalRunError({ isError: false });
+  assert.equal(runError, undefined);
+  runError = resolveTerminalRunError({ isError: true, errorDetail: "last attempt failed" });
+  assert.equal(runError, "last attempt failed");
+});
+
+test("completion-gate attempts keep the last process exit authoritative", () => {
+  const firstAttempt = resolveTerminalProcessOutcome({
+    exitCode: 0,
+    terminalResult: { isError: true, errorDetail: "Provider 429" },
+  });
+  assert.deepEqual(firstAttempt, {
+    observed: true,
+    error: "Provider 429",
+    terminalOutcome: "failure",
+  });
+
+  // The old attempt produced text, but the resumed CLI process did not
+  // produce a terminal result and exited non-zero.  That exit is the final
+  // authoritative failure; prior text must not make it look successful.
+  const finalAttempt = resolveTerminalProcessOutcome({
+    finalText: "old terminal text from the previous attempt",
+    exitCode: 17,
+    terminalResult: undefined,
+    closeReason: undefined,
+    stderrTail: "provider closed the session",
+  });
+  assert.deepEqual(finalAttempt, {
+    observed: true,
+    error: "agent CLI 退出码 17: provider closed the session",
+    terminalOutcome: "failure",
+  });
+});
+
+test("intentional stdin close after a valid terminal result is not a runner failure", () => {
+  assert.deepEqual(resolveTerminalProcessOutcome({
+    exitCode: 1,
+    terminalResult: { isError: false },
+    closeReason: "terminal_result",
+  }), {
+    observed: true,
+    terminalOutcome: "success",
+  });
+  assert.deepEqual(resolveTerminalProcessOutcome({
+    exitCode: 1,
+    terminalResult: { isError: false },
+    closeReason: undefined,
+  }), {
+    observed: true,
+    error: "agent CLI 退出码 1",
+    terminalOutcome: "failure",
+  });
+});
+
+test("a clean process exit without a structured terminal result is a runner failure", () => {
+  assert.deepEqual(resolveTerminalProcessOutcome({
+    finalText: "buffered agent output",
+    exitCode: 0,
+    terminalResult: undefined,
+    stderrTail: "",
+  }), {
+    observed: true,
+    error: "agent CLI exited without a structured terminal result",
+    terminalOutcome: "failure",
+  });
+});
+
+test("an incomplete control tool call never releases deferred semantic state", () => {
+  const state = createSemanticToolState();
+  const started = mapCliEvent({
+    type: "assistant",
+    message: {
+      content: [{
+        type: "tool_use",
+        id: "incomplete-done",
+        name: "mcp__deepsonar-control__mark_job_done",
+        input: { summary: "terminal proposal" },
+      }],
+    },
+  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(started.semanticEvents, []);
+  assert.equal(state.pendingToolUses.size, 1);
+
+  const terminal = mapCliEvent({ type: "result", subtype: "success", result: "ordinary text" }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(terminal.semanticEvents, []);
+  assert.equal(state.pendingToolUses.size, 1);
+});
 
 test("restricted network ownership accepts Docker and Podman inspect shapes", () => {
   assert.equal(isDeepsonarRestrictedNetwork({
@@ -156,6 +276,69 @@ test("rate-limit error details keep only server-owned bounded metadata", () => {
     code: "event_rate_limited",
     metadata: { bucket: "not-a-bucket", retry_after_sec: 0, limit: 10001, window_seconds: 3601 },
   }), { code: "event_rate_limited" });
+});
+
+test("Claude partial stream thinking and text deltas normalize without duplicating the final assistant block", () => {
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  const emit = (event: Record<string, unknown>) => events.push(event);
+  mapCliEvent({
+    type: "stream_event",
+    event: { type: "message_start", message: { id: "message-1" } },
+  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  mapCliEvent({
+    type: "stream_event",
+    event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "先看证据" } },
+  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  mapCliEvent({
+    type: "stream_event",
+    event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "结论" } },
+  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  const full = mapCliEvent({
+    type: "assistant",
+    message: {
+      id: "message-1",
+      content: [
+        { type: "thinking", thinking: "先看证据" },
+        { type: "text", text: "结论" },
+      ],
+    },
+  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(full.semanticEvents, []);
+  assert.deepEqual(events, [
+    { type: "reasoning.delta", delta: "先看证据" },
+    { type: "text.delta", delta: "结论" },
+  ]);
+});
+
+test("complete thinking blocks remain compatible and absent/malformed stream thinking fails soft", () => {
+  const events: Record<string, unknown>[] = [];
+  const emit = (event: Record<string, unknown>) => events.push(event);
+  const state = createSemanticToolState();
+  mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "thinking", thinking: "完整思考" }, { type: "text", text: "回答" }] },
+  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(events, [
+    { type: "reasoning.delta", delta: "完整思考" },
+    { type: "text.delta", delta: "回答" },
+  ]);
+
+  events.length = 0;
+  const noThinking = mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "只有回答" }] },
+  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, createSemanticToolState());
+  assert.deepEqual(noThinking.warnings, []);
+  assert.deepEqual(events, [{ type: "text.delta", delta: "只有回答" }]);
+
+  const malformed = mapCliEvent({ type: "stream_event", event: { type: "content_block_delta", delta: null } }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(malformed.semanticEvents, []);
+  assert.equal(malformed.warnings[0]?.code, "malformed_runtime_event");
+  const unknown = mapCliEvent({ type: "stream_event", event: { type: "future_delta", thinking: "do not fabricate" } }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  assert.deepEqual(unknown.semanticEvents, []);
+  assert.equal(unknown.warnings[0]?.code, "unknown_runtime_event");
+  assert.doesNotMatch(JSON.stringify(events), /do not fabricate/);
 });
 
 test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {

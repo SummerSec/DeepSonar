@@ -1,0 +1,156 @@
+name: openharmony-runtime
+
+on:
+  pull_request:
+    paths:
+      - "deploy/Dockerfile.agent-openharmony-*"
+      - "deploy/openharmony-*.sh"
+      - "deploy/vendor/gitcode-repo-py3"
+      - ".dockerignore"
+      - "agent-harness/image-build-fingerprint.mjs"
+      - "agent-harness/resolve-image-src-cache.sh"
+      - ".github/workflows/openharmony-runtime.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/Dockerfile.agent-openharmony-*"
+      - "deploy/openharmony-*.sh"
+      - "deploy/vendor/gitcode-repo-py3"
+      - ".dockerignore"
+      - "agent-harness/image-build-fingerprint.mjs"
+      - "agent-harness/resolve-image-src-cache.sh"
+      - ".github/workflows/openharmony-runtime.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: openharmony-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openharmony-runtime-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolset: openharmony-audit
+            dockerfile: deploy/Dockerfile.agent-openharmony-audit
+            check: openharmony-audit-env.sh
+            check_args: --check
+            platform: linux/amd64
+            arch: amd64
+          - toolset: openharmony-audit
+            dockerfile: deploy/Dockerfile.agent-openharmony-audit
+            check: openharmony-audit-env.sh
+            check_args: --check
+            platform: linux/arm64
+            arch: arm64
+          - toolset: openharmony-fuzz
+            dockerfile: deploy/Dockerfile.agent-openharmony-fuzz
+            check: openharmony-fuzz-env.sh
+            check_args: --check
+            platform: linux/amd64
+            arch: amd64
+          - toolset: openharmony-fuzz
+            dockerfile: deploy/Dockerfile.agent-openharmony-fuzz
+            check: openharmony-fuzz-env.sh
+            check_args: --check --static
+            platform: linux/arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - id: ns
+        name: GHCR namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: base-image
+        name: Resolve immutable base image digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref=ghcr.io/summersec/deepsonar-base:latest
+          digest="$(docker buildx imagetools inspect "$base_ref" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            digest="$(docker buildx imagetools inspect "$base_ref" 2>/dev/null \
+              | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+              | head -n1)"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'ref=%s@%s\n' "${base_ref%:*}" "$digest" >> "$GITHUB_OUTPUT"
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep CI fingerprints separate from release multi-arch src-* tags.
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms "${{ matrix.platform }}" \
+            --build-arg "BASE_IMAGE=${{ steps.base-image.outputs.ref }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused OpenHarmony image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.toolset }} (${{ matrix.arch }}) build unchanged: reused previously validated immutable src cache; pull, local tag, and duplicate smoke skipped" >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up QEMU for image build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx for image build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/setup-buildx-action@v3
+      - name: Build OpenHarmony specialist runtime
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
+          platforms: ${{ matrix.platform }}
+          build-args: BASE_IMAGE=${{ steps.base-image.outputs.ref }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }}
+            type=gha,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }},mode=max,ignore-error=true
+            type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
+      - name: Offline environment smoke
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} ${{ matrix.check_args }}
+      - name: Pin single-arch src cache
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          LOCAL_TAG: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
+        run: |
+          set -euo pipefail
+          # Push a single-architecture src tag for later CI reuse; ignore fork/permission failures.
+          docker tag "$LOCAL_TAG" "${IMAGE_NAME}:${SRC_TAG}"
+          if docker push "${IMAGE_NAME}:${SRC_TAG}"; then
+            echo "pinned ${IMAGE_NAME}:${SRC_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "pin skipped/failed for ${IMAGE_NAME}:${SRC_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          fi

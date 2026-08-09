@@ -10,6 +10,7 @@ import {
   type ProviderCredential,
   type RoleConfigInput,
   type RoleConfigView,
+  type SandboxLimitsOverride,
   type SkillSource,
   type SkillSourceDetail,
 } from "./api";
@@ -67,6 +68,11 @@ interface ConfigForm {
   config_files: Array<{ path: string; content: string }>;
   instructions_markdown: string;
   runtime_image_key: string;
+  sandbox_limits: {
+    cpu: string;
+    memoryMiB: string;
+    pidsLimit: string;
+  };
   modules: string[];
   skills: string;
   commands: string;
@@ -85,6 +91,7 @@ const EMPTY: ConfigForm = {
   config_files: [],
   instructions_markdown: "",
   runtime_image_key: "",
+  sandbox_limits: { cpu: "", memoryMiB: "", pidsLimit: "" },
   modules: [],
   skills: "[]",
   commands: "[]",
@@ -106,12 +113,43 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     config_files: (cfg.config_files ?? []).map((file) => ({ path: file.path, content: file.content })),
     instructions_markdown: cfg.instructions_markdown ?? "",
     runtime_image_key: cfg.runtime_image_key ?? "",
+    sandbox_limits: {
+      cpu: cfg.sandbox_limits_json?.cpu === undefined ? "" : String(cfg.sandbox_limits_json.cpu),
+      memoryMiB: cfg.sandbox_limits_json?.memoryMiB === undefined ? "" : String(cfg.sandbox_limits_json.memoryMiB),
+      pidsLimit: cfg.sandbox_limits_json?.pidsLimit === undefined ? "" : String(cfg.sandbox_limits_json.pidsLimit),
+    },
     modules: cfg.modules_json ?? [],
     skills: JSON.stringify(cfg.skills_json ?? [], null, 2),
     commands: JSON.stringify(cfg.commands_json ?? [], null, 2),
     mcps: JSON.stringify(cfg.mcps_json ?? [], null, 2),
     subagents: JSON.stringify(cfg.subagents_json ?? [], null, 2),
     platform_tools: cfg.platform_tools_json ?? {},
+  };
+}
+
+const SANDBOX_LIMIT_FIELDS = [
+  { key: "cpu", label: "CPU", unit: "cores", min: 0.25, max: 64, step: 0.25 },
+  { key: "memoryMiB", label: "Memory", unit: "MiB", min: 256, max: 131_072, step: 256 },
+  { key: "pidsLimit", label: "PIDs", unit: "processes", min: 64, max: 32_768, step: 1 },
+] as const;
+
+function numericSandboxOverride(raw: string, label: string, min: number, max: number, integer: boolean): number | undefined {
+  if (!raw.trim()) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || (integer && !Number.isSafeInteger(value)) || value < min || value > max) {
+    throw new Error(`${label} must be between ${min} and ${max}${integer ? " (integer)" : ""}`);
+  }
+  return value;
+}
+
+function sandboxLimitsFromForm(form: ConfigForm): SandboxLimitsOverride {
+  const cpu = numericSandboxOverride(form.sandbox_limits.cpu, "CPU", 0.25, 64, false);
+  const memoryMiB = numericSandboxOverride(form.sandbox_limits.memoryMiB, "Memory MiB", 256, 131_072, true);
+  const pidsLimit = numericSandboxOverride(form.sandbox_limits.pidsLimit, "PIDs", 64, 32_768, true);
+  return {
+    ...(cpu === undefined ? {} : { cpu }),
+    ...(memoryMiB === undefined ? {} : { memoryMiB }),
+    ...(pidsLimit === undefined ? {} : { pidsLimit }),
   };
 }
 
@@ -301,7 +339,6 @@ export function RoleConfigEditor({
   const [form, setForm] = useState<ConfigForm>(() => formOf(initial));
   const [error, setError] = useState<string | null>(null);
   void credentials; // 仍由父组件传入以兼容签名；CLI/凭据/模型改由 Provider 页绑定
-  void projectId;
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
 
@@ -322,6 +359,7 @@ export function RoleConfigEditor({
         platform_tools: form.platform_tools,
         instructions_markdown: form.instructions_markdown.trim() || null,
         runtime_image_key: form.runtime_image_key.trim() || null,
+        sandbox_limits: sandboxLimitsFromForm(form),
         credentials: form.credential_id
           ? [{ credential_id: form.credential_id, purpose: "llm" }]
           : [],
@@ -433,6 +471,45 @@ export function RoleConfigEditor({
                   </label>
                 );
               })}
+            </div>
+          </div>
+          <div className="mt-4 border-t border-ink-700/60 pt-4">
+            <label className={labelCls}>
+              Sandbox resources
+              <HelpTip>
+                Numeric overrides are available only for project RoleConfigs. Leave a field blank to inherit the server default.
+                CPU is measured in cores; memory in MiB; PIDs is the process limit. Capability drop and no-new-privileges remain server-governed.
+              </HelpTip>
+            </label>
+            <p className="mb-2 text-[11px] leading-5 text-zinc-500">
+              {projectId
+                ? "Project override · blank fields inherit server defaults"
+                : "Global RoleConfig · server defaults only (project overrides can be set per project)"}
+            </p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {SANDBOX_LIMIT_FIELDS.map((field) => (
+                <label key={field.key} className="rounded-md border border-ink-700 bg-ink-850/70 px-2.5 py-2">
+                  <span className="mb-1 block font-mono text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    {field.label} <span className="normal-case text-zinc-600">({field.unit})</span>
+                  </span>
+                  <input
+                    type="number"
+                    min={field.min}
+                    max={field.max}
+                    step={field.step}
+                    value={form.sandbox_limits[field.key]}
+                    disabled={!projectId}
+                    onChange={(event) => setForm((current) => ({
+                      ...current,
+                      sandbox_limits: { ...current.sandbox_limits, [field.key]: event.target.value },
+                    }))}
+                    placeholder={`${field.min}–${field.max}`}
+                    className={inputCls}
+                    aria-label={`${field.label} ${field.unit}`}
+                  />
+                  <span className="mt-1 block font-mono text-[10px] text-zinc-600">bounds {field.min}–{field.max}</span>
+                </label>
+              ))}
             </div>
           </div>
         </section>

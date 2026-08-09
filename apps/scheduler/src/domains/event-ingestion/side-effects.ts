@@ -11,7 +11,11 @@ import {
   type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/index.js";
-import { roleNameForJobType, type AgentRuntimeSnapshot } from "../role-runtime-snapshot/index.js";
+import {
+  freezeAgentSnapshotNetworkPolicy,
+  roleNameForJobType,
+  type AgentRuntimeSnapshot,
+} from "../role-runtime-snapshot/index.js";
 import type { FindingVerificationApplication } from "../finding-verification/index.js";
 import type { EventIngestionTransaction } from "./application.js";
 import {
@@ -651,11 +655,15 @@ export function createEventIngestionSideEffectApplication(
         const verificationFollowup = ports.findingVerification.buildVerificationFollowupPayload(trigger, it.from, role);
         const followupFindingId =
           typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
-        const snapshot = await ports.resolveAgentSnapshotForJob(
+        const snapshot = await freezeAgentSnapshotNetworkPolicy(
           tx,
-          job.project_id as string,
-          role,
-          followupFindingId ? [followupFindingId] : [],
+          canvasId,
+          await ports.resolveAgentSnapshotForJob(
+            tx,
+            job.project_id as string,
+            role,
+            followupFindingId ? [followupFindingId] : [],
+          ),
         );
         // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
         const applyHubFollowup = hubFollowup && !verificationFollowup;

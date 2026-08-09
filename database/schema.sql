@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 23);
+INSERT INTO schema_meta (id, version) VALUES ('global', 24);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -828,6 +828,7 @@ CREATE TABLE role_configs (
   mcps_json jsonb NOT NULL DEFAULT '[]',
   subagents_json jsonb NOT NULL DEFAULT '[]',
   platform_tools_json jsonb NOT NULL DEFAULT '{}',
+  sandbox_limits_json jsonb NOT NULL DEFAULT '{}',
   instructions_markdown text,
   runtime_image_key text REFERENCES runtime_images(image_key),
   version int NOT NULL DEFAULT 1,
@@ -1110,7 +1111,10 @@ ON CONFLICT (name) DO NOTHING;
 INSERT INTO runtime_images (image_key, name, description, publisher, source_url, source_kind, official, project_opt_in, enabled) VALUES
   ('deepsonar-base', 'DeepSonar Base', 'Explore、Analyze、Code、Hub 与 Verify 的官方最小运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
   ('deepsonar-audit', 'DeepSonar Audit', 'Audit 的官方审计运行时', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, false, true),
-  ('deepsonar-kali-minimal', 'DeepSonar Kali Test', 'Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI', 'SummerSec + Kali Linux', 'https://www.kali.org/docs/containers/using-kali-docker-images/', 'official', true, false, true)
+  ('deepsonar-kali-minimal', 'DeepSonar Kali Test', 'Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI', 'SummerSec + Kali Linux', 'https://www.kali.org/docs/containers/using-kali-docker-images/', 'official', true, false, true),
+  ('deepsonar-chrome-audit', 'DeepSonar Chrome Audit', 'Chrome-backed official audit runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
+  ('deepsonar-chrome-test', 'DeepSonar Chrome Test', 'Chrome-backed official test runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
+  ('deepsonar-chrome-fuzz', 'DeepSonar Chrome Fuzz', 'Chrome-backed official fuzz runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true)
 ON CONFLICT (image_key) DO NOTHING;
 
 INSERT INTO runtime_data_layers (layer_key, name, tool_name, description, enabled) VALUES

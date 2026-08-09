@@ -27,8 +27,15 @@ const oh2 = computeFingerprint({
 });
 assert(oh1.fingerprint !== oh2.fingerprint, "BASE_IMAGE digest must affect openharmony fingerprint");
 
+for (const preset of ["deepsonar-chrome-audit", "deepsonar-chrome-test", "deepsonar-chrome-fuzz"]) {
+  const first = computeFingerprint({ preset, buildArgs: ["BASE_IMAGE=ghcr.io/x/deepsonar-base@sha256:aaa"] });
+  const second = computeFingerprint({ preset, buildArgs: ["BASE_IMAGE=ghcr.io/x/deepsonar-base@sha256:bbb"] });
+  assert(first.fingerprint !== second.fingerprint, `${preset} must include the immutable BASE_IMAGE digest`);
+}
+
 const keys = Object.keys(PRESETS);
 assert(keys.includes("deepsonar-kali-minimal"), "kali preset required");
 assert(keys.includes("deepsonar-scheduler"), "scheduler preset required");
+assert(keys.includes("deepsonar-chrome-audit") && keys.includes("deepsonar-chrome-test") && keys.includes("deepsonar-chrome-fuzz"), "Chrome presets required");
 
 console.log(`image-build-fingerprint ok (${keys.length} presets)`);

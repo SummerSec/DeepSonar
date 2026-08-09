@@ -891,6 +891,13 @@ export interface RuntimeImagePullTask {
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
 
 /** RoleConfig 保存体（全量声明式：每次 PUT 整体替换 Credential 绑定与配置文件） */
+/** Project-only numeric sandbox resource overrides. Capability flags are server-owned. */
+export interface SandboxLimitsOverride {
+  cpu?: number;
+  memoryMiB?: number;
+  pidsLimit?: number;
+}
+
 export type RoleConfigInput = {
   agent_cli: "claude-code" | "open-code" | "codex";
   model?: string | null;
@@ -910,6 +917,8 @@ export type RoleConfigInput = {
   instructions_markdown?: string | null;
   /** 只能引用服务端可信镜像目录，不是任意 OCI 地址 */
   runtime_image_key?: string | null;
+  /** Project-only CPU/memory/PID overrides; blank fields inherit server defaults. */
+  sandbox_limits?: SandboxLimitsOverride | null;
   credentials: { credential_id: string; purpose: string }[];
   /** Provider 配置文件：路径按 CLI 固定白名单（首期每角色最多 1 个） */
   config_files: { path: string; content: string }[];
@@ -934,6 +943,7 @@ export interface RoleConfigView {
   platform_tools_json: PlatformToolConfig;
   instructions_markdown: string | null;
   runtime_image_key: string | null;
+  sandbox_limits_json: SandboxLimitsOverride;
   version: number;
   created_at: string;
   updated_at: string;

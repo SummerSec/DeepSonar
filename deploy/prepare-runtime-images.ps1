@@ -167,6 +167,9 @@ function Get-ImageMap {
       "deepsonar-openharmony-test" = "deepsonar-openharmony-test:local";
       "deepsonar-openharmony-audit" = "deepsonar-openharmony-audit:local";
       "deepsonar-openharmony-fuzz" = "deepsonar-openharmony-fuzz:local";
+      "deepsonar-chrome-audit" = "deepsonar-chrome-audit:local";
+      "deepsonar-chrome-test" = "deepsonar-chrome-test:local";
+      "deepsonar-chrome-fuzz" = "deepsonar-chrome-fuzz:local";
     }
   }
   foreach ($spec in $LocalImage) {
@@ -210,6 +213,9 @@ function Build-LocalImages {
     "deepsonar-openharmony-test" = "deploy/Dockerfile.agent-openharmony";
     "deepsonar-openharmony-audit" = "deploy/Dockerfile.agent-openharmony-audit";
     "deepsonar-openharmony-fuzz" = "deploy/Dockerfile.agent-openharmony-fuzz";
+    "deepsonar-chrome-audit" = "deploy/Dockerfile.agent-chrome-audit";
+    "deepsonar-chrome-test" = "deploy/Dockerfile.agent-chrome-test";
+    "deepsonar-chrome-fuzz" = "deploy/Dockerfile.agent-chrome-fuzz";
   }
   $buildOrder = @(
     "deepsonar-base",
@@ -217,7 +223,10 @@ function Build-LocalImages {
     "deepsonar-kali-minimal",
     "deepsonar-openharmony-test",
     "deepsonar-openharmony-audit",
-    "deepsonar-openharmony-fuzz"
+    "deepsonar-openharmony-fuzz",
+    "deepsonar-chrome-audit",
+    "deepsonar-chrome-test",
+    "deepsonar-chrome-fuzz"
   )
   foreach ($key in $buildOrder) {
     if (-not $ImageMap.ContainsKey($key)) { continue }
@@ -227,7 +236,7 @@ function Build-LocalImages {
     $args = @("build", "--file", $file, "--tag", [string]$ImageMap[$key])
     if ($key -eq "deepsonar-base") { $args += @("--build-arg", "TOOLSET=base") }
     if ($key -eq "deepsonar-audit") { $args += @("--build-arg", "TOOLSET=audit") }
-    if ($key -like "deepsonar-openharmony-*") {
+    if ($key -like "deepsonar-openharmony-*" -or $key -like "deepsonar-chrome-*") {
       $baseRef = if ($ImageMap.ContainsKey("deepsonar-base")) { [string]$ImageMap["deepsonar-base"] } else { "deepsonar-base:local" }
       $args += @("--build-arg", "BASE_IMAGE=$baseRef")
     }

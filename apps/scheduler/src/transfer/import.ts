@@ -10,6 +10,8 @@ import {
 } from "../credentials.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
+import { freezeAgentSnapshotNetworkPolicy } from "../domains/role-runtime-snapshot/index.js";
+import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
 import {
   loadPackFile,
   openDeepsonarPack,
@@ -361,6 +363,7 @@ async function importRoleConfigs(
     const moduleSelectors = rc.modules_json == null
       ? []
       : validateModuleSelectors(rc.modules_json, `RoleConfig ${roleName}.modules_json`);
+    const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
 
     // upsert 项目覆盖
     await tx`DELETE FROM role_configs WHERE project_id = ${projectId} AND role_id = ${role.id as string}`;
@@ -382,6 +385,7 @@ async function importRoleConfigs(
         mcps_json: ((rc.mcps_json as unknown) ?? []) as never,
         subagents_json: ((rc.subagents_json as unknown) ?? []) as never,
         platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
+        sandbox_limits_json: sandboxLimits as never,
         instructions_markdown: (rc.instructions_markdown as string) ?? null,
         runtime_image_key: (rc.runtime_image_key as string) ?? null,
         version: 1,
@@ -483,7 +487,11 @@ async function importTasks(
       },
     };
     // agent_snapshot_json 必填
-    const snap = (j.agent_snapshot_json as object) ?? { name: j.type, agent_cli: "claude-code" };
+    const snap = await freezeAgentSnapshotNetworkPolicy(
+      tx as unknown as typeof sql,
+      canvasId,
+      ((j.agent_snapshot_json as object) ?? { name: j.type, agent_cli: "claude-code" }),
+    );
     await tx`
       INSERT INTO jobs ${tx({
         id: newId,

@@ -76,13 +76,13 @@ if (!testDatabaseUrl) {
         VALUES (${projectId}, ${canvasId}, ${`convergence-recovery-${projectId}`}, ${sql.json({})})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
-        VALUES (${canvasId}, ${projectId}, 'Convergence recovery', ${sql.json({})})`;
+        VALUES (${canvasId}, ${projectId}, 'Convergence recovery', ${sql.json({ network_policy: { allow_egress: false } })})`;
       await sql`
         INSERT INTO projects (id, canvas_id, name, config_json)
         VALUES (${secondProjectId}, ${secondCanvasId}, ${`convergence-recovery-${secondProjectId}`}, ${sql.json({})})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
-        VALUES (${secondCanvasId}, ${secondProjectId}, 'Convergence recovery concurrent', ${sql.json({})})`;
+        VALUES (${secondCanvasId}, ${secondProjectId}, 'Convergence recovery concurrent', ${sql.json({ network_policy: { allow_egress: false } })})`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})}),

@@ -24,11 +24,11 @@ is consumed as structured JSON events; terminal text is never scraped.
 
 The current registry contains:
 
-| Adapter | CLI | Protocol | Incremental messages | Context policy |
-| --- | --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.220 | `stream-json` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence |
-| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default; no unsupported adapter flag is added |
-| `open-code` | OpenCode 1.18.15 | `opencode run --format json` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys |
+| Adapter | CLI | Protocol | Incremental messages | Context policy | Structured reasoning |
+| --- | --- | --- | --- | --- | --- |
+| `claude-code` | Claude Code 2.1.220 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | `stream_event` thinking/text deltas and complete assistant blocks |
+| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default; no unsupported adapter flag is added | Official reasoning summary/item events when emitted |
+| `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | Structured `reasoning`/`thinking` parts when emitted |
 
 All three adapters declare `contextCompaction: true` and are admitted only when
 the context policy is supported. Claude and OpenCode do not rely on the Codex
@@ -48,6 +48,20 @@ be registered or admitted:
    `bounded-session-summary` policy.
 4. Do not admit the adapter until the declaration, tests, and bounded-session
    behavior (when needed) are complete.
+
+`reasoningEffort` is an input/configuration capability; it does not guarantee
+that a provider exposes its internal reasoning in output. The runtime only
+normalizes an explicitly structured reasoning event (`reasoning.delta`) and
+never infers or fabricates reasoning from ordinary text, tool output, or
+terminal lines. If the selected CLI/model does not emit a supported reasoning
+event, the live and archived stream simply contains no reasoning block.
+
+Claude partial frames are enabled only for the pinned 2.1.220 governed minimum
+above. `content_block_delta` `thinking_delta`/`text_delta` frames are
+normalized to `reasoning.delta`/`text.delta`; the later complete assistant
+message remains accepted for compatibility but is de-duplicated against those
+frames. Codex and OpenCode complete item/part frames are likewise de-duplicated
+when they repeat an official reasoning delta.
 
 ## Snapshot and admission
 

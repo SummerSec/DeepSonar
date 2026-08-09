@@ -17,6 +17,7 @@ import {
   resolveImportedRoleUiColor,
 } from "../role-colors.js";
 import { sql } from "../db.js";
+import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
 import {
   buildManifestSource,
   ensureTransferDirs,
@@ -190,6 +191,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
           mcps_json: rc.mcps_json,
           subagents_json: rc.subagents_json,
           platform_tools_json: rc.platform_tools_json,
+          sandbox_limits_json: rc.sandbox_limits_json,
           instructions_markdown: rc.instructions_markdown,
           runtime_image_key: rc.runtime_image_key,
           version: rc.version,
@@ -564,6 +566,10 @@ export async function applyPlatformImport(
         const moduleSelectors = rc.modules_json == null
           ? []
           : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${roleName}.modules_json`);
+        const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
+        if (Object.keys(sandboxLimits).length > 0) {
+          throw new Error("global RoleConfig cannot set sandbox resource overrides");
+        }
 
         await tx`DELETE FROM role_configs WHERE project_id IS NULL AND role_id = ${role.id as string}`;
         const [created] = await tx`
@@ -583,6 +589,7 @@ export async function applyPlatformImport(
             mcps_json: ((rc.mcps_json as unknown) ?? []) as never,
             subagents_json: ((rc.subagents_json as unknown) ?? []) as never,
             platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
+            sandbox_limits_json: sandboxLimits as never,
             instructions_markdown: (rc.instructions_markdown as string) ?? null,
             runtime_image_key: (rc.runtime_image_key as string) ?? null,
             version: 1,

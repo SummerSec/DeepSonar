@@ -33,6 +33,25 @@ test("archived records retain tool input and bounded completion details", () => 
   assert.equal(blocks[0].done, true);
 });
 
+test("live and archived reasoning stays distinct from answer text and empty deltas are ignored", () => {
+  const live = reduceStreamItem([], { type: "reasoning.delta", seq: 1, at: 1, delta: "先判断" });
+  const withAnswer = reduceStreamItem(live, { type: "text.delta", seq: 2, at: 2, delta: "答案" });
+  assert.equal(withAnswer.length, 2);
+  assert.equal(withAnswer[0]?.kind, "text");
+  assert.equal(withAnswer[0]?.kind === "text" ? withAnswer[0].reasoning : false, true);
+  assert.equal(filterStreamBlocks(withAnswer, "reasoning", "").length, 1);
+  assert.equal(filterStreamBlocks(withAnswer, "text", "").length, 1);
+  assert.equal(filterStreamBlocks(withAnswer, "reasoning", "答案").length, 0);
+  assert.deepEqual(reduceStreamItem(withAnswer, { type: "reasoning.delta", seq: 3, at: 3 }), withAnswer);
+
+  const archived = recordsToStreamBlocks([
+    { type: "reasoning.delta", seq: 1, delta: "归档思考" },
+    { type: "text.delta", seq: 2, delta: "归档回答" },
+  ]);
+  assert.equal(filterStreamBlocks(archived, "reasoning", "").length, 1);
+  assert.equal(filterStreamBlocks(archived, "text", "").length, 1);
+});
+
 test("tool search includes input, result, error, and exit fields", () => {
   const blocks = recordsToStreamBlocks([
     { type: "tool.call.started", seq: 1, toolName: "Bash", action: "run", input: { path: "/workspace/needle.ts" } },

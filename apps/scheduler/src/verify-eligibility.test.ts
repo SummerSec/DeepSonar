@@ -57,7 +57,15 @@ test("Hub eligibility blocks active Hub, role, and waiting-human work", () => {
   assert.equal(graphEligibilityReason({ type: "report" }, { pendingReportOlder: true }), "report_pending_older");
   assert.equal(graphEligibilityReason({ type: "report" }, { rootStatus: "analysis_complete" }), null);
   assert.equal(
+    graphEligibilityReason({ type: "report", payload_json: { kind: "task_report" } }, { rootStatus: "running" }),
+    "report_gate",
+  );
+  assert.equal(
     graphEligibilityReason({ type: "report", payload_json: { kind: "finding_report" } }, { rootStatus: "running" }),
+    null,
+  );
+  assert.equal(
+    graphEligibilityReason({ type: "report", payload_json: '{"kind":"finding_report"}' }, { rootStatus: "running" }),
     null,
   );
   assert.equal(
@@ -127,7 +135,8 @@ test("Hub and Report graph facts are batched per canvas without join fanout", as
       return Promise.resolve([{
         canvas_id: canvasId,
         oldest_hub_id: hubIds[0],
-        oldest_report_id: reportIds[0],
+        oldest_task_report_id: reportIds[0],
+        oldest_finding_report_id: reportIds[0],
       }]);
     }
     return Promise.resolve([]);
@@ -140,4 +149,43 @@ test("Hub and Report graph facts are batched per canvas without join fanout", as
   assert.equal(batch.systemStates.get(hubIds[1])?.pendingHubOlder, true);
   assert.equal(batch.systemStates.get(reportIds[0])?.pendingReportOlder, false);
   assert.equal(batch.systemStates.get(reportIds[1])?.pendingReportOlder, true);
+});
+
+test("Report FIFO is scoped so a gated task report cannot starve a finding report", async () => {
+  const canvasId = "00000000-0000-0000-0000-000000000100";
+  const taskReportId = "00000000-0000-0000-0000-000000000101";
+  const findingReportId = "00000000-0000-0000-0000-000000000102";
+  const pending = [
+    { id: taskReportId, type: "report", canvas_id: canvasId, payload_json: { kind: "task_report" } },
+    { id: findingReportId, type: "report", canvas_id: canvasId, payload_json: { kind: "finding_report" } },
+  ] as never[];
+  const fakeTx = ((strings: TemplateStringsArray) => {
+    const text = strings.join("");
+    if (text.includes("node_state") && text.includes("job_state")) {
+      return Promise.resolve([{
+        canvas_id: canvasId,
+        root_status: "running",
+        active_hub: false,
+        active_waiting_human: false,
+        active_role: false,
+        active_canvas_job: false,
+      }]);
+    }
+    if (text.includes("oldest_task_report_id") && text.includes("oldest_finding_report_id")) {
+      return Promise.resolve([{
+        canvas_id: canvasId,
+        oldest_task_report_id: taskReportId,
+        oldest_finding_report_id: findingReportId,
+      }]);
+    }
+    return Promise.resolve([]);
+  }) as unknown as Parameters<typeof loadGraphEligibilityBatch>[0];
+
+  const batch = await loadGraphEligibilityBatch(fakeTx, pending);
+  const taskState = batch.systemStates.get(taskReportId);
+  const findingState = batch.systemStates.get(findingReportId);
+  assert.equal(taskState?.pendingReportOlder, false);
+  assert.equal(findingState?.pendingReportOlder, false);
+  assert.equal(graphEligibilityReason(pending[0], taskState ?? {}), "report_gate");
+  assert.equal(graphEligibilityReason(pending[1], findingState ?? {}), null);
 });

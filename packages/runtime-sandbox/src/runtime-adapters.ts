@@ -35,6 +35,9 @@ export interface AdapterResumeContext extends AdapterStartContext {
 export interface AdapterRuntimeState {
   sessionId?: string;
   finalText?: string;
+  /** Text/reasoning already observed from provider delta events. */
+  streamedText?: string;
+  streamedReasoning?: string;
 }
 
 export interface RuntimeAdapter {
@@ -64,6 +67,9 @@ const ALL_IMAGE_KEYS = Object.freeze([
   "deepsonar-openharmony-test",
   "deepsonar-openharmony-audit",
   "deepsonar-openharmony-fuzz",
+  "deepsonar-chrome-audit",
+  "deepsonar-chrome-test",
+  "deepsonar-chrome-fuzz",
 ] as const);
 
 function unknownRuntimeEvent(): Record<string, unknown>[] {
@@ -85,10 +91,67 @@ function textFrom(value: unknown): string | undefined {
   if (typeof value === "string" && value) return value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  for (const key of ["text", "delta", "content", "message", "output", "result"]) {
+  for (const key of ["text", "delta", "content", "message", "output", "result", "summary"]) {
     if (typeof record[key] === "string" && record[key]) return record[key] as string;
   }
   return undefined;
+}
+
+function reasoningTextFrom(value: unknown, depth = 0): string | undefined {
+  if (depth > 5) return undefined;
+  if (typeof value === "string" && value) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of ["thinking", "reasoning", "text", "delta", "content", "summary"]) {
+    if (typeof record[key] === "string" && record[key]) return record[key] as string;
+  }
+  for (const key of ["summary", "content"]) {
+    const entries = record[key];
+    if (!Array.isArray(entries)) continue;
+    const text = entries
+      .map((entry) => reasoningTextFrom(entry, depth + 1))
+      .filter((entry): entry is string => Boolean(entry))
+      .join("");
+    return text || undefined;
+  }
+  return undefined;
+}
+
+function rememberStreamDelta(
+  state: AdapterRuntimeState,
+  kind: "text" | "reasoning",
+  delta: string,
+): void {
+  const key = kind === "text" ? "streamedText" : "streamedReasoning";
+  // Provider output is untrusted. Keep the dedupe ledger bounded; if it is
+  // truncated, complete-frame handling below prefers emitting content over
+  // silently losing the final answer.
+  const next = `${state[key] ?? ""}${delta}`;
+  state[key] = next.length > 64_000 ? next.slice(-64_000) : next;
+}
+
+/**
+ * Provider item events may repeat the complete content already sent as deltas.
+ * Return only the part not seen in the preceding delta stream.
+ */
+function unseenCompleteText(
+  state: AdapterRuntimeState,
+  kind: "text" | "reasoning",
+  value: string,
+): string | undefined {
+  const key = kind === "text" ? "streamedText" : "streamedReasoning";
+  const streamed = state[key] ?? "";
+  if (!streamed) {
+    state[key] = value;
+    return value;
+  }
+  if (value === streamed) return undefined;
+  if (value.startsWith(streamed)) {
+    state[key] = value;
+    return value.slice(streamed.length) || undefined;
+  }
+  state[key] = value;
+  return value;
 }
 
 function itemOf(line: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -166,17 +229,45 @@ function decodeCodex(line: Record<string, unknown>, state: AdapterRuntimeState):
   }
   if (type === "response.output_text.delta" || type === "output_text.delta") {
     const delta = textFrom(line.delta ?? line.text);
-    return delta ? [{ type: "assistant", message: { content: [{ type: "text", text: delta }] } }] : [];
+    if (!delta) return [];
+    rememberStreamDelta(state, "text", delta);
+    state.finalText = `${state.finalText ?? ""}${delta}`;
+    return [{ type: "assistant", message: { content: [{ type: "text", text: delta }] } }];
+  }
+  if (
+    type === "response.reasoning_summary_text.delta" ||
+    type === "response.reasoning_text.delta" ||
+    type === "reasoning.delta"
+  ) {
+    const delta = reasoningTextFrom(line.delta ?? line.text ?? line.reasoning);
+    if (!delta) return [];
+    rememberStreamDelta(state, "reasoning", delta);
+    return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: delta }] } }];
+  }
+  if (
+    type === "response.reasoning_summary_text.done" ||
+    type === "response.reasoning_text.done" ||
+    type === "reasoning.done"
+  ) {
+    const text = reasoningTextFrom(line.text ?? line.reasoning ?? line.summary ?? line.result);
+    const unseen = text ? unseenCompleteText(state, "reasoning", text) : undefined;
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
   }
   if (type === "item.started" || type === "item.completed" || type === "item.updated") {
     const item = itemOf(line);
     if (!item) return [];
     const itemType = String(item.type ?? "");
+    if (itemType === "reasoning" || itemType === "reasoning_summary" || itemType === "thinking") {
+      const text = reasoningTextFrom(item);
+      const unseen = text ? unseenCompleteText(state, "reasoning", text) : undefined;
+      return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
+    }
     if (itemType === "agent_message" || itemType === "message" || itemType === "output_text") {
       const text = textFrom(item);
       if (text && type !== "item.started") {
-        state.finalText = `${state.finalText ?? ""}${text}`;
-        return [{ type: "assistant", message: { content: [{ type: "text", text }] } }];
+        const unseen = unseenCompleteText(state, "text", text);
+        if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+        return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
       }
       return [];
     }
@@ -201,11 +292,34 @@ function decodeOpenCode(line: Record<string, unknown>, state: AdapterRuntimeStat
     state.sessionId = String(line.sessionID ?? line.session_id ?? line.id ?? "");
     return [{ type: "system", subtype: "init", session_id: state.sessionId }];
   }
-  if (["text", "text.delta", "message.part"].includes(type)) {
+  const part = itemOf(line);
+  const partType = String(part?.type ?? "").toLowerCase();
+  if (
+    type === "reasoning" ||
+    type === "reasoning.delta" ||
+    type === "thinking" ||
+    partType === "reasoning" ||
+    partType === "thinking"
+  ) {
+    const text = reasoningTextFrom(line.delta ?? line.reasoning ?? line.text ?? part);
+    if (!text) return [];
+    const isDelta = type.endsWith(".delta");
+    if (isDelta) rememberStreamDelta(state, "reasoning", text);
+    const unseen = isDelta ? text : unseenCompleteText(state, "reasoning", text);
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
+  }
+  if (["text", "text.delta", "message.part", "part.updated"].includes(type)) {
     const text = textFrom(line.delta ?? line.text ?? line.part);
     if (text) {
-      state.finalText = `${state.finalText ?? ""}${text}`;
-      return [{ type: "assistant", message: { content: [{ type: "text", text }] } }];
+      const isDelta = type === "text" || type === "text.delta";
+      if (isDelta) {
+        rememberStreamDelta(state, "text", text);
+        state.finalText = `${state.finalText ?? ""}${text}`;
+        return [{ type: "assistant", message: { content: [{ type: "text", text }] } }];
+      }
+      const unseen = unseenCompleteText(state, "text", text);
+      if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+      return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
     }
     return [];
   }
@@ -258,7 +372,10 @@ const claude = Object.freeze<RuntimeAdapter>({
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, mcpConfigPath, systemPromptPath }) => {
-    let command = `claude -p --input-format stream-json --output-format stream-json --verbose --mcp-config ${shellQuote(mcpConfigPath)} --permission-mode bypassPermissions`;
+    // Claude Code 2.1.220 is the governed minimum image version.  That
+    // contract supports partial stream-json frames; do not pass this flag to
+    // an adapter whose pinned minimum does not support it.
+    let command = `claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --mcp-config ${shellQuote(mcpConfigPath)} --permission-mode bypassPermissions`;
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --effort ${shellQuote(reasoning)}`;
     if (systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(systemPromptPath)})"`;
@@ -305,14 +422,16 @@ const openCode = Object.freeze<RuntimeAdapter>({
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
-    let command = `opencode run --format json --dangerously-skip-permissions --pure`;
+    // OpenCode's governed minimum supports --thinking and emits a structured
+    // `reasoning` JSON event when the selected model exposes one.
+    let command = `opencode run --format json --thinking --dangerously-skip-permissions --pure`;
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
     command += ` -- ${promptArg(input)}`;
     return sandbox.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" } });
   },
   resume: ({ sandbox, env, cwd, model, reasoning, input, sessionId }) => {
-    let command = `opencode run --session ${shellQuote(sessionId)} --format json --dangerously-skip-permissions --pure`;
+    let command = `opencode run --session ${shellQuote(sessionId)} --format json --thinking --dangerously-skip-permissions --pure`;
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
     command += ` -- ${promptArg(input)}`;

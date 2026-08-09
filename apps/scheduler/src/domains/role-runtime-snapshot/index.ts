@@ -14,3 +14,14 @@ export type {
   RoleRuntimeSnapshotResult,
   RoleRuntimeSnapshotTransaction,
 } from "./application.js";
+export {
+  parseSandboxLimitsOverride,
+  resolveEffectiveSandboxLimits,
+  SANDBOX_LIMIT_BOUNDS,
+  CHROME_RUNTIME_IMAGE_KEYS,
+  assertChromeRuntimeEgressAllowed,
+  frozenCanvasAllowEgress,
+  freezeAgentSnapshotNetworkPolicy,
+  requireFrozenSnapshotAllowEgress,
+} from "./sandbox-limits.js";
+export type { EffectiveSandboxLimits, FrozenNetworkPolicy, SandboxLimitsOverride } from "./sandbox-limits.js";

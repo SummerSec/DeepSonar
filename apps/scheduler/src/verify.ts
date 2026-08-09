@@ -19,6 +19,7 @@ import {
 } from "./core.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { maybeDispatchFindingReport } from "./report.js";
+import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
 
 type Tx = typeof sql;
 type SavepointTx = Tx & {
@@ -266,7 +267,11 @@ export async function createVerifyRound(
 
   if (openRound && !existingRoundIsWaiting) return null;
 
-  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding", [findingId]);
+  const snapshot = await freezeAgentSnapshotNetworkPolicy(
+    tx as unknown as typeof sql,
+    opts.canvasId,
+    await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding", [findingId]),
+  );
   const priority = fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity });
 
   let verifyJob: { id: string };

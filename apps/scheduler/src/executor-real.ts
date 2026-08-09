@@ -23,13 +23,14 @@ import { config } from "./config.js";
 import {
   assertJobCanPublishSharedAsset,
   ingestEvent,
+  ingestEventBundle,
   PLATFORM_DEFAULT_AGENT_CLI,
   rolesForProject,
   rulesForProject,
   type AgentRuntimeSnapshot,
 } from "./core.js";
 import { sql } from "./db.js";
-import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope } from "./graph.js";
+import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
 import {
   PROVIDER_ENV_MAP,
   UNKNOWN_PROVIDER_ERROR,
@@ -57,6 +58,10 @@ import {
   createSharedAsset,
   SHARED_ASSETS_WORKSPACE_CATALOG,
 } from "./domains/shared-assets/index.js";
+import {
+  assertChromeRuntimeEgressAllowed,
+  requireFrozenSnapshotAllowEgress,
+} from "./domains/role-runtime-snapshot/index.js";
 import {
   CONTROL_INPUT_ERROR_CODES,
   ControlInputError,
@@ -110,6 +115,13 @@ async function ingestSemanticEventObserved(
   await ingestEvent(jobId, event);
 }
 
+async function ingestSemanticEventBundle(
+  jobId: string,
+  events: readonly EventEnvelopeInput[],
+): Promise<void> {
+  await ingestEventBundle(jobId, events);
+}
+
 /** Rebuild only the Scheduler-owned stable error shape after the sandbox's string result boundary. */
 export function reconstructAgentRunError(
   message: string,
@@ -119,6 +131,21 @@ export function reconstructAgentRunError(
   const normalized = normalizeRuntimeErrorDetails(details);
   if (normalized) Object.assign(error, normalized);
   return error;
+}
+
+export function isSemanticAgentRunError(result: {
+  error?: string;
+  errorKind?: "semantic" | "runner";
+}): boolean {
+  return result.errorKind === "semantic" || result.error?.startsWith("语义事件处理失败:") === true;
+}
+
+export function isFinalAgentRunnerError(result: {
+  error?: string;
+  errorKind?: "semantic" | "runner";
+  terminalOutcome?: "success" | "failure";
+}): boolean {
+  return Boolean(result.error) && !isSemanticAgentRunError(result) && result.terminalOutcome !== "success";
 }
 
 export function assertSemanticTerminalExclusivity(
@@ -145,6 +172,84 @@ export function recordFirstSemanticDone<T>(state: { done: T | null }, proposal: 
   if (state.done) return false;
   state.done = proposal;
   return true;
+}
+
+export interface DeferredSemanticState {
+  done: { eventId: string; summary: string; verdict?: VerifyVerdict; missingEvidence?: string[] } | null;
+  hub: { eventId: string; payload: unknown } | null;
+  human: { eventId: string; reason: string } | null;
+}
+
+/**
+ * Build terminal semantic events only after the runner has finished. Hub
+ * decisions must be emitted before done so event-ingestion can create the
+ * next intents before the current Job is finalized. Keeping this pure makes
+ * the ordering and retry behavior testable without a database or sandbox.
+ */
+export function buildDeferredSemanticTerminalEvents(input: {
+  state: DeferredSemanticState;
+  isHub: boolean;
+  isVerify: boolean;
+  hubDecision: HubDecision | null;
+  maxIntentsPerDecision: number;
+  factCount: number;
+  findingCount: number;
+}): EventEnvelopeInput[] {
+  const { state } = input;
+  if (state.human) {
+    return [{
+      v: 1,
+      event_id: state.human.eventId,
+      type: "human",
+      payload: { reason: state.human.reason },
+    }];
+  }
+  if (!state.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
+
+  const events: EventEnvelopeInput[] = [];
+  let hubNote = "";
+  if (input.isHub) {
+    const decision = input.hubDecision;
+    if (!decision || !state.hub) throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
+    if (decision.complete) {
+      events.push({
+        v: 1,
+        event_id: state.hub.eventId,
+        type: "hub_decision",
+        payload: { complete: decision.complete },
+      });
+      hubNote = `（结论：${decision.complete.description.slice(0, 80)}）`;
+    } else {
+      const intents = (decision.intents ?? []).slice(0, input.maxIntentsPerDecision);
+      if (intents.length > 0) {
+        events.push({
+          v: 1,
+          event_id: state.hub.eventId,
+          type: "hub_decision",
+          payload: { intents },
+        });
+        hubNote = `（派发 ${intents.length} 个意图）`;
+      } else {
+        hubNote = "（无新意图）";
+      }
+    }
+  }
+
+  const verdict = state.done.verdict;
+  if (input.isVerify && !["confirmed", "rework", "needs_human", "false_positive"].includes(verdict ?? "")) {
+    throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human）");
+  }
+  events.push({
+    v: 1,
+    event_id: state.done.eventId,
+    type: "done",
+    payload: {
+      summary: `${state.done.summary}${hubNote}${input.factCount > 0 ? `（增量 fact: ${input.factCount} 条）` : ""}${input.findingCount > 0 ? `（结构化 finding: ${input.findingCount} 条）` : ""}`,
+      ...(input.isVerify && verdict ? { verdict } : {}),
+      ...(input.isVerify && state.done.missingEvidence ? { missing_evidence: state.done.missingEvidence } : {}),
+    },
+  });
+  return events;
 }
 
 /**
@@ -388,6 +493,9 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
 
   const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
   if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+  const snapshotAllowEgress = requireFrozenSnapshotAllowEgress(snapshot, jobId);
+  const runtimeImageKey = String(snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "");
+  assertChromeRuntimeEgressAllowed(runtimeImageKey, snapshotAllowEgress);
   const isVerify = snapshot.name === "verify";
   const isHub = snapshot.role_kind === "hub";
   const isAudit = snapshot.name === "audit";
@@ -443,13 +551,9 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
 评分：${effectiveFindingProtocol.scoring.default_standard} ${effectiveFindingProtocol.scoring.default_version}；接受 ${effectiveFindingProtocol.scoring.accepted_versions.join(", ")}
 必须评分的 profiles：${effectiveFindingProtocol.scoring.require_scoring_for_profiles.join(", ") || "无"}
 emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受支持 CVSS 分数并拒绝冲突输入。`;
-  const networkPolicy = ((taskTarget.network_policy ?? {}) as Record<string, unknown>);
-  if (typeof networkPolicy.allow_egress !== "boolean") {
-    throw new Error(`job ${jobId} 的画布缺少冻结的 network_policy.allow_egress`);
-  }
-  // Hub 与 Worker 一样继承画布冻结的 allow_egress；该开关只控制目标网络。
+  // Hub 与 Worker 一样继承 Job 创建时冻结的 allow_egress；该开关只控制目标网络。
   // 模型通道始终经 Gateway，沙箱不会直连 Credential 中的 Provider endpoint。
-  const allowEgress = networkPolicy.allow_egress;
+  const allowEgress = snapshotAllowEgress;
 
   // settings_config_json 只保存无密钥的 CLI 结构；所有 Credential 模型请求
   // 都经 Scheduler Gateway，沙箱只持当前 Job token。
@@ -570,7 +674,7 @@ ${graph.yaml}
 
   约束：最多 ${rules.maxIntentsPerDecision} 个意图；不要重复开放或已完成意图；from 只能引用当前 YAML 中 root_id/fact/finding 对应的 UUID 值（不要填写字段名 root_id、别名或占位符）。
 role 只能原样使用 list_available_roles 本轮返回的 name；不得使用记忆、固定清单或猜测的角色，不得派发 system/hub 角色。
-任务出网策略：${networkPolicy.allow_egress ? "本任务允许访问外部网络（Hub 与 Worker 相同）" : "本任务禁止访问模型网关之外的网络（Hub 与 Worker 相同）"}。
+任务出网策略：${allowEgress ? "本任务允许访问外部网络（Hub 与 Worker 相同）" : "本任务禁止访问模型网关之外的网络（Hub 与 Worker 相同）"}。
 Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
     const trigger = payload.trigger as {
       kind?: string;
@@ -881,11 +985,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
 
   let findingCount = 0;
   let factCount = 0;
-  const semanticState: {
-    done: { eventId: string; summary: string; verdict?: VerifyVerdict; missingEvidence?: string[] } | null;
-    hub: { eventId: string; payload: unknown } | null;
-    human: { eventId: string; reason: string } | null;
-  } = { done: null, hub: null, human: null };
+  const semanticState: DeferredSemanticState = { done: null, hub: null, human: null };
 
   async function expandWorkspacePayloadFile(
     tool: "emit_fact" | "emit_finding" | "submit_hub_decision",
@@ -1197,10 +1297,17 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
 
   evidenceWriter.setSession(result.session);
   await streamPublishTail;
-  const evidence = await evidenceWriter.finalize(result.error);
+  const evidence = await evidenceWriter.finalize(
+    isSemanticAgentRunError(result) || isFinalAgentRunnerError(result) ? result.error : undefined,
+  );
   await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
 
-  if (result.error) throw reconstructAgentRunError(result.error, result.errorDetails);
+  // Host semantic validation is fail-closed. A transient Provider/CLI error
+  // may be superseded by an accepted terminal control event below.
+  if (isSemanticAgentRunError(result)) throw reconstructAgentRunError(result.error ?? "语义事件处理失败", result.errorDetails);
+  // A final runner failure remains authoritative. Only a result explicitly
+  // marked as a later terminal success may carry a stale earlier error.
+  if (isFinalAgentRunnerError(result)) throw reconstructAgentRunError(result.error!, result.errorDetails);
 
   if (semanticState.human) {
     await ingestSemanticEventObserved(jobId, {
@@ -1214,47 +1321,29 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if (!semanticState.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
 
   // Hub 决策在 Agent 结束后落地：避免工具调用后 Agent 尚未收尾时提前派生下一轮。
-  let hubNote = "";
-  if (isHub) {
-    const decision = semanticState.hub
-      ? parseHubDecisionPayload(semanticState.hub.payload, graph?.referableIds)
-      : null;
-    if (!decision) {
-      throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
-    } else if (decision.intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
-      const invalidIndex = decision.intents.findIndex((intent) => !availableHubRoleNames.has(intent.role));
-      const invalid = invalidIndex >= 0 ? decision.intents[invalidIndex] : undefined;
-      throw invalidRole(
-        invalid?.role,
-        invalidIndex >= 0 ? `intents.${invalidIndex}.role` : "role",
-        [...availableHubRoleNames],
-      );
-    } else if (decision.complete) {
-      await ingestSemanticEventObserved(jobId, { v: 1, event_id: semanticState.hub!.eventId, type: "hub_decision", payload: { complete: decision.complete } });
-      hubNote = `（结论：${decision.complete.description.slice(0, 80)}）`;
-    } else {
-      const intents = (decision.intents ?? []).slice(0, rules.maxIntentsPerDecision);
-      if (intents.length > 0) {
-        await ingestSemanticEventObserved(jobId, { v: 1, event_id: semanticState.hub!.eventId, type: "hub_decision", payload: { intents } });
-        hubNote = `（派发 ${intents.length} 个意图）`;
-      } else {
-        hubNote = "（无新意图）";
-      }
-    }
+  const decision = isHub && semanticState.hub
+    ? parseHubDecisionPayload(semanticState.hub.payload, graph?.referableIds)
+    : null;
+  if (isHub && decision?.intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
+    const invalidIndex = decision.intents!.findIndex((intent) => !availableHubRoleNames.has(intent.role));
+    const invalid = invalidIndex >= 0 ? decision.intents![invalidIndex] : undefined;
+    throw invalidRole(
+      invalid?.role,
+      invalidIndex >= 0 ? `intents.${invalidIndex}.role` : "role",
+      [...availableHubRoleNames],
+    );
   }
-
-  const verdict = semanticState.done.verdict;
-  if (isVerify && !["confirmed", "rework", "needs_human", "false_positive"].includes(verdict ?? "")) {
-    throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human）");
-  }
-  await ingestSemanticEventObserved(jobId, {
-    v: 1,
-    event_id: semanticState.done.eventId,
-    type: "done",
-    payload: {
-      summary: `${semanticState.done.summary}${hubNote}${factCount > 0 ? `（增量 fact: ${factCount} 条）` : ""}${findingCount > 0 ? `（结构化 finding: ${findingCount} 条）` : ""}`,
-      ...(isVerify && verdict ? { verdict } : {}),
-      ...(isVerify && semanticState.done.missingEvidence ? { missing_evidence: semanticState.done.missingEvidence } : {}),
-    },
+  const deferredEvents = buildDeferredSemanticTerminalEvents({
+    state: semanticState,
+    isHub,
+    isVerify,
+    hubDecision: decision,
+    maxIntentsPerDecision: rules.maxIntentsPerDecision,
+    factCount,
+    findingCount,
   });
+  // Hub decision + done are one terminal bundle.  The event-ingestion
+  // transaction appends both and runs their side effects before commit, so a
+  // crash/reject cannot leave derived intents without the Job terminal state.
+  await ingestSemanticEventBundle(jobId, deferredEvents);
 }

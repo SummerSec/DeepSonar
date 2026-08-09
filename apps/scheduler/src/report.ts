@@ -15,6 +15,7 @@ import {
   rulesForProject,
 } from "./core.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
+import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
 import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 
@@ -35,6 +36,39 @@ function findingReportDir(findingId: string, version: number): string {
 }
 
 const ACTIVE_REPORT_STATUSES = ["pending", "generating"];
+const ACTIVE_REPORT_JOB_STATUSES = ["pending", "claimed", "provisioning", "running", "waiting_human"];
+const TERMINAL_REPORT_JOB_STATUSES = ["succeeded", "failed", "timeout", "cancelled", "orphan"];
+
+/**
+ * Repair a report row left active after its linked Job reached a terminal
+ * state before the normal report finalizer ran.  The Job lifecycle remains
+ * authoritative; this only projects an already committed terminal state into
+ * the derived finding_reports row so the next version can be queued.
+ */
+async function reconcileTerminalFindingReportJob(
+  tx: Tx,
+  report: Record<string, unknown>,
+): Promise<boolean> {
+  const reportId = String(report.id);
+  const reportJobId = report.report_job_id ? String(report.report_job_id) : null;
+  const [job] = reportJobId
+    ? await tx`SELECT status, error FROM jobs WHERE id = ${reportJobId}`
+    : [];
+  const jobStatus = job?.status ? String(job.status) : "missing";
+  if (job && ACTIVE_REPORT_JOB_STATUSES.includes(jobStatus)) return false;
+  const knownTerminal = TERMINAL_REPORT_JOB_STATUSES.includes(jobStatus);
+
+  const error = job?.error
+    ? String(job.error)
+    : knownTerminal || !job
+      ? `finding report job ended before claim (${jobStatus})`
+      : `finding report job has an invalid lifecycle state (${jobStatus})`;
+  await tx`
+    UPDATE finding_reports
+    SET status = 'failed', error = ${error}, updated_at = now()
+    WHERE id = ${reportId} AND status = ANY(${ACTIVE_REPORT_STATUSES})`;
+  return true;
+}
 
 export interface ReportInputFinding {
   id: string;
@@ -606,13 +640,16 @@ export async function maybeDispatchFindingReport(
     LIMIT 1
     FOR UPDATE`;
   if (latest && ACTIVE_REPORT_STATUSES.includes(String(latest.status))) {
-    return {
-      dispatched: false,
-      reason: "report_in_flight",
-      report_id: String(latest.id),
-      job_id: latest.report_job_id ? String(latest.report_job_id) : undefined,
-      version: Number(latest.version),
-    };
+    const reconciled = await reconcileTerminalFindingReportJob(tx, latest as Record<string, unknown>);
+    if (!reconciled) {
+      return {
+        dispatched: false,
+        reason: "report_in_flight",
+        report_id: String(latest.id),
+        job_id: latest.report_job_id ? String(latest.report_job_id) : undefined,
+        version: Number(latest.version),
+      };
+    }
   }
   if (latest?.status === "succeeded" && !opts.force) {
     return { dispatched: false, reason: "already_succeeded", report_id: String(latest.id), version: Number(latest.version) };
@@ -621,7 +658,11 @@ export async function maybeDispatchFindingReport(
   const projectId = String(finding.project_id);
   const canvasId = String(finding.canvas_id);
   const version = Number(latest?.version ?? 0) + 1;
-  const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report", [findingId]);
+  const snapshot = await freezeAgentSnapshotNetworkPolicy(
+    tx as unknown as typeof sql,
+    canvasId,
+    await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report", [findingId]),
+  );
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
   const inputJson = JSON.stringify(input);
@@ -664,7 +705,10 @@ export async function maybeDispatchFindingReport(
       project_id: projectId,
       version,
       report_job_id: job.id,
-      status: "generating",
+      // The report job is queued until the dispatcher claims it.  The claim
+      // transaction advances this row to `generating` together with the Job
+      // CAS, so status reflects executable lifecycle rather than enqueue time.
+      status: "pending",
       input_uri: inputUri,
       input_sha256: inputSha,
     })}`;
@@ -828,13 +872,18 @@ export async function maybeDispatchReport(
   }
 
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
-  let snapshot: unknown;
+  let resolvedSnapshot: Awaited<ReturnType<typeof resolveAgentSnapshotForJob>>;
   try {
-    snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
+    resolvedSnapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
   } catch (e) {
     console.warn(`[report] resolve snapshot failed:`, e);
     return { dispatched: false, reason: "no_report_role" };
   }
+  const snapshot = await freezeAgentSnapshotNetworkPolicy(
+    tx as unknown as typeof sql,
+    canvasId,
+    resolvedSnapshot,
+  );
 
   // 显式创建可运行 Report Job：持有 ingress 的旧终态 Job 先 retire，再 INSERT（不用 ON CONFLICT DO NOTHING 绑回 failed Job）
   const ingressKey = `report:${canvasId}`;
