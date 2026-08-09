@@ -2,6 +2,10 @@
 set -euo pipefail
 
 registry_file="deploy/runtime-image-registry.json"
+# Chrome specialist keys are intentionally handled by this same immutable
+# digest-only path. Their bundled entries stay empty until Release records a
+# real amd64/arm64 artifact; no moving browser or d8 tag is pulled here:
+# deepsonar-chrome-audit, deepsonar-chrome-test, deepsonar-chrome-fuzz.
 temp_file=""
 success_count=0
 failure_count=0

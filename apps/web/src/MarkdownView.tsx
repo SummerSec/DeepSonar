@@ -70,6 +70,7 @@ export function MarkdownView({
   onChange,
   placeholder,
   rows = 12,
+  scrollable = true,
 }: {
   markdown: string;
   controls?: boolean;
@@ -79,6 +80,8 @@ export function MarkdownView({
   onChange?: (value: string) => void;
   placeholder?: string;
   rows?: number;
+  /** Keep vertical scrolling in the caller when this view is inside a larger result pane. */
+  scrollable?: boolean;
 }) {
   const [mode, setMode] = useState<"rendered" | "source">(editable ? "source" : "rendered");
   const [copied, setCopied] = useState(false);
@@ -260,7 +263,7 @@ export function MarkdownView({
             {editable ? "暂无内容，切换到「编辑」开始编写 Markdown。" : "（空）"}
           </p>
         ) : (
-          <div className="markdown-view-body max-h-[65vh] overflow-auto">{blocks}</div>
+          <div className={`markdown-view-body ${scrollable ? "max-h-[65vh] overflow-auto" : "overflow-visible"}`}>{blocks}</div>
         )
       ) : editable ? (
         <textarea
@@ -272,7 +275,7 @@ export function MarkdownView({
           className="markdown-view-editor w-full resize-y rounded-xl border border-white/[.08] bg-black/30 px-3 py-2.5 font-mono text-[12px] leading-5 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-acc-500/50"
         />
       ) : (
-        <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]">
+        <pre className={`${scrollable ? "max-h-[65vh] overflow-auto" : "overflow-visible"} whitespace-pre-wrap break-words rounded-xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]`}>
           {markdown}
         </pre>
       )}

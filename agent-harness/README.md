@@ -8,8 +8,15 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工�
 - `deepsonar-audit`：在 base 清单上增加 Semgrep、Gitleaks、ShellCheck、binutils，默认供 Audit 使用。
 - `deepsonar-kali-minimal`（市场名 Kali Test）：仅 Test 的默认环境。固定官方 Kali last-release digest，预装 Python 3.10–3.14、Temurin JDK 8/11/17（默认 17，不含 21）、固定 Apache Maven 3.9.16、Go、Rust 与原有审计 CLI；Maven 安装到 `/opt/deepsonar/maven`，镜像不预置 `.m2` 缓存。不安装 `kali-linux-*`、`kali-tools-*`、GUI 或桌面。Verify 默认使用最小的 `deepsonar-base`，需要专项工具时再由 RoleConfig 覆盖。
 - `deepsonar-openharmony-test` / `deepsonar-openharmony-audit` / `deepsonar-openharmony-fuzz`：OpenHarmony 专项（`project_opt_in`）。Test 负责源码同步与构建；Audit 面向高危静态分析（Clang/clang-tidy/cppcheck/sparse + ASan/UBSan）；Fuzz 面向动态验证（libFuzzer/AFL++）。均基于 `deepsonar-base`，Dockerfile 见 `deploy/Dockerfile.agent-openharmony*`。
+- `deepsonar-chrome-audit` / `deepsonar-chrome-test` / `deepsonar-chrome-fuzz`：Chrome 专项（`project_opt_in`）。Audit 提供 C++ 静态分析；Test 提供固定 Chromium/CDP；Fuzz 提供固定 V8 `d8` 与 libFuzzer。均基于 `deepsonar-base`，Dockerfile 见 `deploy/Dockerfile.agent-chrome*`。
 
 `runtime-images.json` 与 `kali-minimal-runtime.json` 记录工具、来源、校验和、平台与 `maxSizeMiB`。`maxSizeMiB` 约束 `docker save` 后 gzip 压缩的可分发镜像包；CI 同时报告解压层大小。压缩包超预算、定义漂移或断网硬化冒烟失败都会阻断 CI。
+
+### Fingerprint 与专项 CI
+
+`agent-harness/image-build-fingerprint.mjs` 使用显式的 `FINGERPRINT_SCHEMA_VERSION`；所有 preset 统一把根目录 `.dockerignore` 纳入输入，以便构建上下文规则变化不会错误复用 GHCR `src-*` 标签。算法语义变化时必须 bump schema version；新增无关 preset 不应使既有镜像全部重编。
+
+核心门禁与 base/audit/Kali 镜像入口是 `.github/workflows/ci.yml`。Chrome amd64 合同冒烟与缓存复用入口是 `.github/workflows/chrome-runtime.yml`；OpenHarmony audit/fuzz 保持 amd64/arm64 四项矩阵、QEMU 与离线环境冒烟，入口是 `.github/workflows/openharmony-runtime.yml`。两个专项 workflow 都支持 PR/main 路径过滤与 `workflow_dispatch`，仅在自身输入、`.dockerignore`、共享 fingerprint/cache 机制或 workflow 改动时触发。
 
 构建 base/audit：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`。Kali Test 使用 `deploy/Dockerfile.agent-kali-minimal`；Python 版本化命令为 `python3.10`…`python3.14`，Java 可用 `java8`/`javac8`、`java11`/`javac11` 与默认的 `java17`/`javac17`，Maven 可用 `mvn`（3.9.16）。断网硬化冒烟执行 `mvn -v`；联网最小 POM 构建可运行 `node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:local`。
 
@@ -55,6 +62,8 @@ MCP 只暴露本 Job 获准的控制工具；调度器直接从 Agent CLI 的结
 画布增量消息冒烟（需本地 PostgreSQL）：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-canvas-updates.ts`。
 
 ## CI P0 门禁（`.github/workflows/ci.yml`）
+
+Chrome/OpenHarmony 专项镜像检查不在核心 workflow 中：分别由 `.github/workflows/chrome-runtime.yml` 与 `.github/workflows/openharmony-runtime.yml` 按路径过滤触发。
 
 在 `AGENT_MODE=fake` 下串跑：
 

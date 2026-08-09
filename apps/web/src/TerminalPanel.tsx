@@ -1,4 +1,4 @@
-import { ArrowsClockwise, Broom, Copy, PlugsConnected, Plugs } from "@phosphor-icons/react";
+import { ArrowsClockwise, Broom, ClipboardText, Copy, PlugsConnected, Plugs } from "@phosphor-icons/react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -6,6 +6,42 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 
 type TerminalState = "idle" | "connecting" | "connected" | "closed" | "error";
+
+async function writeClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document.execCommand !== "function" || !document.body) {
+    throw new Error("CLIPBOARD_UNAVAILABLE");
+  }
+
+  const textarea = document.createElement("textarea");
+  const activeElement = document.activeElement as HTMLElement | null;
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) throw new Error("CLIPBOARD_DENIED");
+  } finally {
+    textarea.remove();
+    activeElement?.focus();
+  }
+}
+
+function getTerminalBufferText(terminal: Terminal): string {
+  const buffer = terminal.buffer.active;
+  const lines: string[] = [];
+  for (let index = 0; index < buffer.length; index += 1) {
+    lines.push(buffer.getLine(index)?.translateToString(true) ?? "");
+  }
+  return lines.join("\n").replace(/\n+$/, "");
+}
 
 export function TerminalPanel({ jobId, active, allowed }: { jobId: string; active: boolean; allowed: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -15,6 +51,27 @@ export function TerminalPanel({ jobId, active, allowed }: { jobId: string; activ
   const [generation, setGeneration] = useState(0);
   const [state, setState] = useState<TerminalState>("idle");
   const [status, setStatus] = useState("终端尚未连接");
+  const [copyFeedback, setCopyFeedback] = useState("");
+
+  const copyText = async (text: string, label: string) => {
+    if (text.length === 0) {
+      setCopyFeedback(`没有可复制的${label}`);
+      return;
+    }
+    try {
+      await writeClipboard(text);
+      setCopyFeedback(`已复制${label}`);
+    } catch (error) {
+      const denied = (error instanceof DOMException && error.name === "NotAllowedError") || (error instanceof Error && error.message === "CLIPBOARD_DENIED");
+      setCopyFeedback(denied ? "复制失败：浏览器未授予剪贴板权限" : "复制失败：当前浏览器不支持剪贴板");
+    }
+  };
+
+  useEffect(() => {
+    if (!copyFeedback) return;
+    const timeout = window.setTimeout(() => setCopyFeedback(""), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [copyFeedback]);
 
   useEffect(() => {
     if (!active || !allowed || !hostRef.current) return;
@@ -56,9 +113,25 @@ export function TerminalPanel({ jobId, active, allowed }: { jobId: string; activ
     };
     const observer = new ResizeObserver(fitAndResize);
     observer.observe(hostRef.current);
-    const input = terminal.onData((data) => {
+    const sendInput = (data: string) => {
       const ws = socketRef.current;
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
+    };
+    const input = terminal.onData(sendInput);
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        if (event.type === "keydown") terminal.input(event.shiftKey ? "\u001b[Z" : "\t");
+        return false;
+      }
+
+      const copyShortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "c";
+      if (copyShortcut && terminal.hasSelection()) {
+        event.preventDefault();
+        if (event.type === "keydown") void copyText(terminal.getSelection(), "选中内容");
+        return false;
+      }
+      return true;
     });
 
     const connect = async () => {
@@ -141,7 +214,9 @@ export function TerminalPanel({ jobId, active, allowed }: { jobId: string; activ
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/[.07] px-3">
         <span className={`size-1.5 rounded-full ${state === "connected" ? "bg-emerald-400" : state === "error" ? "bg-red-400" : "bg-zinc-600"}`} />
         <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">{status}</span>
-        <button type="button" title="复制选中内容" aria-label="复制选中内容" onClick={() => void navigator.clipboard.writeText(terminalRef.current?.getSelection() ?? "")} className="terminal-tool-button"><Copy size={14} /></button>
+        <span role="status" aria-live="polite" aria-atomic="true" className={copyFeedback ? "font-mono text-[10px] text-zinc-400" : "sr-only"}>{copyFeedback}</span>
+        <button type="button" title="复制选中内容" aria-label="复制选中内容" onClick={() => { const terminal = terminalRef.current; void copyText(terminal?.hasSelection() ? terminal.getSelection() : "", "选中内容"); }} className="terminal-tool-button"><Copy size={14} /></button>
+        <button type="button" title="复制终端缓冲" aria-label="复制全部终端内容" onClick={() => { const terminal = terminalRef.current; void copyText(terminal ? getTerminalBufferText(terminal) : "", "终端缓冲"); }} className="terminal-tool-button"><ClipboardText size={14} /></button>
         <button type="button" title="清屏" aria-label="清屏" onClick={() => terminalRef.current?.clear()} className="terminal-tool-button"><Broom size={14} /></button>
         <button type="button" title="重新连接" aria-label="重新连接" onClick={() => setGeneration((value) => value + 1)} className="terminal-tool-button"><ArrowsClockwise size={14} /></button>
         <button type="button" title={state === "connected" ? "断开" : "连接"} aria-label={state === "connected" ? "断开" : "连接"} onClick={() => state === "connected" ? socketRef.current?.close(1000, "manual") : setGeneration((value) => value + 1)} className="terminal-tool-button">{state === "connected" ? <Plugs size={14} /> : <PlugsConnected size={14} />}</button>

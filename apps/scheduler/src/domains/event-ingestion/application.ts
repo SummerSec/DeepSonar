@@ -33,6 +33,8 @@ export type EventSideEffects = (
 
 export interface EventIngestionApplication {
   ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<EventIngestionResult>;
+  /** Append and apply a same-Job semantic terminal bundle atomically. */
+  ingestEventBundle(jobId: string, envelopes: readonly EventEnvelopeInput[]): Promise<EventIngestionResult[]>;
 }
 
 export interface EventIngestionOptions {
@@ -182,14 +184,14 @@ async function revalidateCanvasHint(
   }
 }
 
-async function appendAndApply(
+async function appendAndApplyBundle(
   db: EventIngestionDatabase,
   jobId: string,
-  envelope: EventEnvelope,
+  envelopes: readonly EventEnvelope[],
   hint: CanvasHint,
   sideEffects: EventSideEffects,
   options: EventIngestionOptions,
-): Promise<EventIngestionResult> {
+): Promise<EventIngestionResult[]> {
   return db.begin(async (rawTx) => {
     const tx = rawTx as unknown as EventIngestionTransaction;
 
@@ -218,43 +220,51 @@ async function appendAndApply(
     }
     await revalidateCanvasHint(tx, jobId, hint);
 
-    const dedup = await tx`
-      INSERT INTO event_dedup (event_id, job_id) VALUES (${envelope.event_id}, ${jobId})
-      ON CONFLICT (event_id) DO NOTHING
-      RETURNING event_id`;
-    if (dedup.length === 0) return { deduped: true };
+    const results: EventIngestionResult[] = [];
+    for (const envelope of envelopes) {
+      const dedup = await tx`
+        INSERT INTO event_dedup (event_id, job_id) VALUES (${envelope.event_id}, ${jobId})
+        ON CONFLICT (event_id) DO NOTHING
+        RETURNING event_id`;
+      if (dedup.length === 0) {
+        results.push({ deduped: true });
+        continue;
+      }
 
-    // The durable bucket is consumed only after the idempotency gate. A replay
-    // therefore returns above without touching quota, while a rejected first
-    // delivery rolls back this dedup marker together with every later write.
-    const now = options.clock
-      ? options.clock()
-      : (await tx<{ now: Date }[]>`SELECT statement_timestamp() AS now`)[0]?.now;
-    if (!now) throw new Error("event rate-limit clock unavailable");
-    try {
-      await consumeEventRateLimit(tx, jobId, envelope.type, new Date(now), options.rateLimit);
-    } catch (error) {
-      if (error instanceof EventRateLimitError) options.onRateLimited?.(error, jobId);
-      throw error;
+      // The durable bucket is consumed only after the idempotency gate. A
+      // replay therefore returns above without touching quota, while a
+      // rejected event rolls back this marker together with every earlier
+      // event and side effect in the bundle.
+      const now = options.clock
+        ? options.clock()
+        : (await tx<{ now: Date }[]>`SELECT statement_timestamp() AS now`)[0]?.now;
+      if (!now) throw new Error("event rate-limit clock unavailable");
+      try {
+        await consumeEventRateLimit(tx, jobId, envelope.type, new Date(now), options.rateLimit);
+      } catch (error) {
+        if (error instanceof EventRateLimitError) options.onRateLimited?.(error, jobId);
+        throw error;
+      }
+
+      const [{ next }] = await tx<[{ next: number }]>`
+        SELECT COALESCE(MAX(job_seq), 0) + 1 AS next FROM events WHERE job_id = ${jobId}`;
+
+      await tx`
+        INSERT INTO events ${tx({
+          job_id: jobId,
+          event_id: envelope.event_id,
+          job_seq: next,
+          type: envelope.type,
+          payload_json: (envelope.payload ?? {}) as never,
+        })}`;
+
+      // The callback runs before this transaction commits.  A thrown side
+      // effect rolls back every event_dedup/events row and side effect in the
+      // bundle, making retry of the same bundle safe without a new marker.
+      await sideEffects(tx, jobId, envelope);
+      results.push({ deduped: false, seq: next });
     }
-
-    const [{ next }] = await tx<[{ next: number }]>`
-      SELECT COALESCE(MAX(job_seq), 0) + 1 AS next FROM events WHERE job_id = ${jobId}`;
-
-    await tx`
-      INSERT INTO events ${tx({
-        job_id: jobId,
-        event_id: envelope.event_id,
-        job_seq: next,
-        type: envelope.type,
-        payload_json: (envelope.payload ?? {}) as never,
-      })}`;
-
-    // The callback runs before this transaction commits.  A thrown side
-    // effect therefore rolls back event_dedup/events as well, making retry of
-    // the same event safe without a new schema-level processed marker.
-    await sideEffects(tx, jobId, envelope);
-    return { deduped: false, seq: next };
+    return results;
   });
 }
 
@@ -264,27 +274,38 @@ export function createEventIngestionApplication(
   options: EventIngestionOptions = {},
 ): EventIngestionApplication {
   const maxPayloadBytes = options.maxPayloadBytes ?? 256 * 1024;
-  return {
-    async ingestEvent(jobId, input) {
-      const envelope = EventEnvelopeSchema.parse(input);
+  const ingestEventBundle = async (
+    jobId: string,
+    inputs: readonly EventEnvelopeInput[],
+  ): Promise<EventIngestionResult[]> => {
+    if (inputs.length === 0) throw new Error("event bundle must not be empty");
+    const envelopes = inputs.map((input) => EventEnvelopeSchema.parse(input));
+    for (const envelope of envelopes) {
       const payloadSize = Buffer.byteLength(JSON.stringify(envelope.payload ?? {}), "utf8");
       if (payloadSize > maxPayloadBytes) {
         throw new Error(`event payload 超限：${payloadSize}B > ${maxPayloadBytes / 1024}KB`);
       }
+    }
 
-      // A Job's canvas_id is immutable in normal operation.  One retry keeps
-      // this boundary safe if a legacy repair path changes it between the
-      // lock-target read and the transaction.
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const hint = await resolveCanvasHint(db, jobId, envelope);
-        try {
-          return await appendAndApply(db, jobId, envelope, hint, sideEffects, options);
-        } catch (error) {
-          if (error instanceof RetryCanvasResolution && attempt === 0) continue;
-          throw error;
-        }
+    // A Job's canvas_id is immutable in normal operation.  One retry keeps
+    // this boundary safe if a legacy repair path changes it between the
+    // lock-target read and the transaction.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const hint = await resolveCanvasHint(db, jobId, envelopes[0]!);
+      try {
+        return await appendAndApplyBundle(db, jobId, envelopes, hint, sideEffects, options);
+      } catch (error) {
+        if (error instanceof RetryCanvasResolution && attempt === 0) continue;
+        throw error;
       }
-      throw new Error(`event ${envelope.event_id} could not stabilize its Canvas lock target`);
+    }
+    throw new Error(`event ${envelopes[0]!.event_id} could not stabilize its Canvas lock target`);
+  };
+  return {
+    async ingestEvent(jobId, input) {
+      const [result] = await ingestEventBundle(jobId, [input]);
+      return result!;
     },
+    ingestEventBundle,
   };
 }

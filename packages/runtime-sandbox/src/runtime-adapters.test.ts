@@ -44,6 +44,8 @@ test("the built-in registry is explicit, immutable, and capability complete", ()
   assert.throws(() => requireAgentCliRuntimeAdapter("__proto__"), /AGENT_CLI_UNREGISTERED/);
   assert.throws(() => requireAgentCliRuntimeAdapter("codex", "untrusted-image"), /AGENT_CLI_IMAGE_INCOMPATIBLE/);
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-openharmony-audit").id, "claude-code");
+  assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
+  assert.equal(requireAgentCliRuntimeAdapter("codex", "deepsonar-chrome-fuzz").id, "codex");
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
 });
 
@@ -53,6 +55,20 @@ test("Claude keeps the existing stream-json protocol", () => {
   assert.deepEqual(adapter.decodeOutput({ type: "system", subtype: "init", session_id: "s1" }, {}), [
     { type: "system", subtype: "init", session_id: "s1" },
   ]);
+});
+
+test("Claude enables governed partial stream-json frames", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
+  const fake = fakeSandbox();
+  await adapter.start({
+    sandbox: fake.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "initial",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+  });
+  assert.match(fake.commands[0] ?? "", /--output-format stream-json/);
+  assert.match(fake.commands[0] ?? "", /--include-partial-messages/);
 });
 
 test("Codex JSONL lifecycle normalizes MCP calls and completion", () => {
@@ -68,6 +84,21 @@ test("Codex JSONL lifecycle normalizes MCP calls and completion", () => {
   assert.equal(contentType(completed.at(-1)), "tool_result");
   assert.deepEqual(adapter.decodeOutput({ type: "item.completed", item: { type: "mcp_tool_call" } }, state), [{ type: "unknown_runtime" }]);
   assert.equal(adapter.decodeOutput({ type: "turn.completed" }, state)[0]?.type, "result");
+});
+
+test("Codex official reasoning summary events normalize and suppress the repeated complete item", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
+  const state = {};
+  const delta = adapter.decodeOutput({
+    type: "response.reasoning_summary_text.delta",
+    delta: "先检查上下文",
+  }, state);
+  assert.equal(contentType(delta[0]), "thinking");
+  assert.equal((delta[0]?.message as { content?: Array<{ thinking?: unknown }> })?.content?.[0]?.thinking, "先检查上下文");
+  assert.deepEqual(adapter.decodeOutput({
+    type: "item.completed",
+    item: { type: "reasoning", summary: "先检查上下文" },
+  }, state), []);
 });
 
 test("Codex commands use governed MCP, model, reasoning, and resume arguments", async () => {
@@ -101,6 +132,21 @@ test("OpenCode JSON events normalize text and tool completion without scraping t
   assert.deepEqual(adapter.decodeOutput({ type: "future.provider.event" }, state), [{ type: "unknown_runtime" }]);
 });
 
+test("OpenCode reasoning parts are mapped only when the official structured part is present", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
+  const state = {};
+  const reasoning = adapter.decodeOutput({
+    type: "message.part",
+    part: { type: "reasoning", text: "检查证据" },
+  }, state);
+  assert.equal(contentType(reasoning[0]), "thinking");
+  assert.equal((reasoning[0]?.message as { content?: Array<{ thinking?: unknown }> })?.content?.[0]?.thinking, "检查证据");
+  assert.deepEqual(adapter.decodeOutput({
+    type: "part.updated",
+    part: { type: "reasoning", text: "检查证据" },
+  }, state), []);
+});
+
 test("OpenCode commands pin config path and support same-session resume", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
   const fake = fakeSandbox();
@@ -108,6 +154,7 @@ test("OpenCode commands pin config path and support same-session resume", async 
   await adapter.start(context);
   await adapter.resume?.({ ...context, input: "nudge", sessionId: "oc-s1" });
   assert.match(fake.commands[0], /opencode run/);
+  assert.match(fake.commands[0], /--thinking/);
   assert.match(fake.commands[1], /--session 'oc-s1'/);
   assert.equal(fake.envs[0].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
   assert.equal(fake.envs[1].OPENCODE_CONFIG, "/workspace/.opencode/config.json");

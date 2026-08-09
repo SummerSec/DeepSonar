@@ -70,11 +70,14 @@ def main() -> None:
     market = req("GET", "/runtime-images")
     by_key = {image["image_key"]: image for image in market}
     official_keys = ("deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal")
+    chrome_keys = ("deepsonar-chrome-audit", "deepsonar-chrome-test", "deepsonar-chrome-fuzz")
     assert set(official_keys).issubset(by_key), by_key.keys()
+    assert set(chrome_keys).issubset(by_key), by_key.keys()
     assert by_key["deepsonar-base"]["description"] == "Explore、Analyze、Code、Hub 与 Verify 的官方最小运行时"
     assert by_key["deepsonar-audit"]["description"] == "Audit 的官方审计运行时"
     assert by_key["deepsonar-kali-minimal"]["description"] == "Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI"
     assert all(by_key[key]["official"] for key in official_keys)
+    assert all(by_key[key]["official"] and by_key[key]["project_opt_in"] for key in chrome_keys)
     assert not by_key["deepsonar-base"]["project_opt_in"]
     assert not by_key["deepsonar-audit"]["project_opt_in"]
     assert not by_key["deepsonar-kali-minimal"]["project_opt_in"]

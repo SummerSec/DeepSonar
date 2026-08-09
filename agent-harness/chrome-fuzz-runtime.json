@@ -1,0 +1,37 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "chrome-fuzz",
+  "sources": "deploy/chrome-runtime-sources.json",
+  "aptSource": "snapshot.debian.org/archive/debian/20260731T162426Z",
+  "aptSecuritySource": "snapshot.debian.org/archive/debian-security/20260731T162426Z",
+  "apt": {
+    "pkg-config": { "version": "snapshot", "capabilities": ["v8-gn-probe"] },
+    "clang": { "version": "snapshot", "capabilities": ["native-build", "instrumentation"] },
+    "llvm": { "version": "snapshot", "capabilities": ["llvm-tools"] },
+    "lld": { "version": "snapshot", "capabilities": ["linker"] },
+    "libclang-rt-16-dev": { "version": "16.0.6-15~deb12u1", "capabilities": ["compiler-rt", "sanitizer-runtime"] },
+    "libfuzzer-16-dev": { "version": "16.0.6-15~deb12u1", "capabilities": ["libfuzzer"] },
+    "afl++": { "version": "snapshot", "capabilities": ["afl-fuzz", "afl-compiler"] },
+    "binutils": { "version": "snapshot", "capabilities": ["binary-analysis"] },
+    "ninja-build": { "version": "snapshot", "capabilities": ["native-build"] }
+  },
+  "v8": {
+    "commit": "792d9716fea48312ad7ce4413c538e00628b1d50",
+    "chromium_tag": "151.0.7922.71",
+    "version": "15.1.206.10",
+    "depot_tools_commit": "921e61b35fbc5e97b14250a118e363ec05078089",
+    "target": "d8+v8_json_libfuzzer",
+    "required": true,
+    "honesty": "The image fails its build smoke if the actual V8 d8 binary is unavailable; no toy harness fallback exists."
+  },
+  "toolsets": {
+    "chrome-fuzz": {
+      "imageKey": "deepsonar-chrome-fuzz",
+      "description": "Project-opt-in V8 d8 plus Clang/LLVM sanitizer and fuzz toolchain",
+      "maxSizeMiB": 2400
+    }
+  }
+}

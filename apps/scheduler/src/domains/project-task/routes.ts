@@ -23,6 +23,9 @@ import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
+import {
+  freezeAgentSnapshotNetworkPolicy,
+} from "../role-runtime-snapshot/index.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -469,7 +472,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       // path.
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       const [lockedCanvas] = await tx`
-        SELECT id, status FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+        SELECT id, status, target_json FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
       if (!lockedCanvas) return { job: null, reason: "canvas_not_found" as const };
       if ((lockedCanvas.status as string) === "archived") {
         return { job: null, reason: "archived" as const };
@@ -479,6 +482,15 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           AND status IN ('pending','claimed','provisioning','running','waiting_human')
         LIMIT 1`;
       if (activeInside.length > 0) return { job: null, reason: "active" as const };
+
+      // Resolve and validate against the locked canvas target before deleting
+      // any retry state or inserting the new Hub Job. Agent/Hub payload policy
+      // is intentionally ignored here.
+      const snapshot = await freezeAgentSnapshotNetworkPolicy(
+        tx as unknown as typeof sql,
+        canvasId,
+        await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "hub_reason"),
+      );
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态，保留用户任务内容
@@ -499,7 +511,6 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         })}`;
 
       // 同事务内插入入口 Hub，避免 createJob 另开连接看不到未提交删除
-      const snapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "hub_reason");
       const [hubJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: projectId,

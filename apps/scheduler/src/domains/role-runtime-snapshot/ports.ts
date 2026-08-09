@@ -3,6 +3,7 @@ import type { MissingModule } from "../../skill-sources.js";
 import type { PlatformToolName } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
+import type { EffectiveSandboxLimits, FrozenNetworkPolicy } from "./sandbox-limits.js";
 
 /** Minimal transaction-shaped client accepted by the snapshot application. */
 export type RoleRuntimeSnapshotTransaction = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
@@ -51,6 +52,10 @@ export interface RoleRuntimeSnapshotResult {
   role_config_version: number | null;
   runtime_image_key: string | null;
   runtime_image: RuntimeImageSnapshot;
+  /** Complete, immutable resource contract consumed by Dispatcher. */
+  sandbox_limits: EffectiveSandboxLimits;
+  /** Added by the Job creation boundary from the canvas target. */
+  network_policy?: FrozenNetworkPolicy;
   /** Exact immutable shared-asset versions selected when this Job is created. */
   shared_assets?: SharedAssetSelection[];
   shared_assets_revision?: string;

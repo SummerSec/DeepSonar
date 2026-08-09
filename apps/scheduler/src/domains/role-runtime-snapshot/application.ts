@@ -21,7 +21,9 @@ import { resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
+import { config } from "../../config.js";
 import { freezeAgentCliRuntime, requireAgentCliRuntimeAdapter } from "@deepsonar/runtime-sandbox";
+import { parseSandboxLimitsOverride, resolveEffectiveSandboxLimits } from "./sandbox-limits.js";
 import type {
   RoleRuntimeSnapshotApplication,
   RoleRuntimeSnapshotResult,
@@ -176,6 +178,11 @@ export async function resolveAgentSnapshotForJob(
   const runtimeImageKey = (cfg?.runtime_image_key as string) ?? null;
   const runtimeImage = await resolveRuntimeImageForJob(db as never, projectId, roleName, runtimeImageKey);
   const runtimeAdapter = requireAgentCliRuntimeAdapter(agentCli, runtimeImage.image_key);
+  const sandboxOverride = parseSandboxLimitsOverride(cfg?.sandbox_limits_json);
+  if (!cfg?.project_id && Object.keys(sandboxOverride).length > 0) {
+    throw new Error("global RoleConfig cannot set sandbox resource overrides");
+  }
+  const sandboxLimits = resolveEffectiveSandboxLimits(sandboxOverride, config.runtime.sandboxLimits);
 
   return {
     name: roleName,
@@ -209,6 +216,7 @@ export async function resolveAgentSnapshotForJob(
     role_config_version: (cfg?.version as number) ?? null,
     runtime_image_key: runtimeImageKey,
     runtime_image: runtimeImage,
+    sandbox_limits: sandboxLimits,
   };
 }
 

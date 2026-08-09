@@ -158,6 +158,37 @@ let restrictedNetworkReady: Promise<void> | null = null;
 let gatewayNetworkReady: Promise<void> | null = null;
 let gatewayProxyReady: Promise<void> | null = null;
 
+type TerminalCommandProcess = {
+  write?: (input: string) => Promise<void>;
+};
+
+/** Build one explicit interactive shell command for the terminal PTY. */
+export function terminalShellCommand(shell: "bash" | "sh"): string {
+  return shell === "bash" ? "exec bash -il" : "exec /bin/sh -i";
+}
+
+/**
+ * Select Bash when the governed image provides it, otherwise use the required
+ * POSIX /bin/sh contract.  Both branches stay interactive so readline/tab
+ * completion and control characters are handled by the shell attached to the
+ * SDK PTY rather than by a non-interactive command wrapper.
+ */
+export function buildTerminalShellCommand(): string {
+  return [
+    "if command -v bash >/dev/null 2>&1; then",
+    `${terminalShellCommand("bash")};`,
+    "else",
+    `${terminalShellCommand("sh")};`,
+    "fi",
+  ].join(" ");
+}
+
+/** Write terminal input without interpreting or normalizing control bytes. */
+export async function writeTerminalInput(process: TerminalCommandProcess, data: string): Promise<void> {
+  if (!process.write) throw new Error("TERMINAL_SESSION_CLOSED");
+  await process.write(data);
+}
+
 /** Build the only Docker bind accepted for shared assets; host paths are never allowed. */
 export function sharedAssetsVolumeBinds(mount: ProvisionInput["sharedAssetsMount"]): string[] {
   if (!mount) return [];
@@ -656,7 +687,7 @@ export class AgentboxRunner implements SandboxRunner {
     if (sandbox.provider !== "local-docker") throw new Error("TERMINAL_PROVIDER_UNSUPPORTED");
     const cols = Math.max(20, Math.min(240, Math.trunc(input.cols)));
     const rows = Math.max(5, Math.min(100, Math.trunc(input.rows)));
-    const process = await sandbox.runAsync("exec /bin/sh -l", {
+    const process = await sandbox.runAsync(buildTerminalShellCommand(), {
       cwd: "/workspace",
       env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
       pty: true,
@@ -672,8 +703,8 @@ export class AgentboxRunner implements SandboxRunner {
       id: process.id,
       output,
       write: async (data) => {
-        if (closed || !process.write) throw new Error("TERMINAL_SESSION_CLOSED");
-        await process.write(data);
+        if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
+        await writeTerminalInput(process, data);
       },
       resize: async (nextCols, nextRows) => {
         if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
@@ -821,6 +852,10 @@ export interface RealAgentResult {
   /** CLI 原始 Session；由 provider 专属 Adapter 在沙箱销毁前读回。 */
   session?: SessionBundle;
   error?: string;
+  /** Distinguish fail-closed host semantic validation from a Provider/CLI run failure. */
+  errorKind?: "semantic" | "runner";
+  /** The last terminal CLI attempt, even when an older runner error leaked across retries. */
+  terminalOutcome?: "success" | "failure";
   /** Scheduler-owned semantic failure details; never carries arbitrary Error fields. */
   errorDetails?: RuntimeErrorDetails;
 }
@@ -870,6 +905,71 @@ export function normalizeRuntimeErrorDetails(error: unknown): RuntimeErrorDetail
   return Object.keys(normalized).length > 0
     ? { code: "event_rate_limited", metadata: normalized }
     : { code: "event_rate_limited" };
+}
+
+/**
+ * Resolve the error represented by one terminal CLI result. Completion-gate
+ * retries replace this value, so a later successful result clears an earlier
+ * transient Provider error and a final failed result remains authoritative.
+ */
+export function resolveTerminalRunError(
+  outcome: { isError?: boolean; errorDetail?: string },
+): string | undefined {
+  return outcome.isError ? outcome.errorDetail ?? "agent 执行失败" : undefined;
+}
+
+export type TerminalAttemptCloseReason = "initial_input" | "terminal_result";
+
+export interface TerminalProcessAttempt {
+  /** Diagnostic text from this process; never used to infer success. */
+  finalText?: string;
+  exitCode?: number;
+  terminalResult?: { isError?: boolean; errorDetail?: string };
+  closeReason?: TerminalAttemptCloseReason;
+  stderrTail?: string;
+}
+
+export interface TerminalProcessOutcome {
+  /** Whether this attempt produced an authoritative terminal observation. */
+  observed: boolean;
+  error?: string;
+  terminalOutcome?: "success" | "failure";
+}
+
+/**
+ * Resolve one CLI process attempt without consulting text from an earlier
+ * attempt.  A terminal success followed by the intentional stdin close is a
+ * valid completion even if the SDK reports a non-zero close code; a later
+ * process exit without a terminal result is always a runner failure.
+ */
+export function resolveTerminalProcessOutcome(
+  input: TerminalProcessAttempt,
+): TerminalProcessOutcome {
+  const exitCode = input.exitCode ?? 0;
+  const terminalResult = input.terminalResult;
+  const stderr = input.stderrTail?.trim();
+  const exitError = `agent CLI 退出码 ${exitCode}${stderr ? `: ${stderr.slice(-300)}` : ""}`;
+  if (terminalResult) {
+    if (terminalResult.isError) {
+      return {
+        observed: true,
+        error: resolveTerminalRunError(terminalResult),
+        terminalOutcome: "failure",
+      };
+    }
+    if (exitCode !== 0 && input.closeReason !== "terminal_result") {
+      return { observed: true, error: exitError, terminalOutcome: "failure" };
+    }
+    return { observed: true, terminalOutcome: "success" };
+  }
+  if (exitCode !== 0) {
+    return { observed: true, error: exitError, terminalOutcome: "failure" };
+  }
+  return {
+    observed: true,
+    error: "agent CLI exited without a structured terminal result",
+    terminalOutcome: "failure",
+  };
 }
 
 /**
@@ -1197,6 +1297,11 @@ type PendingSemanticTool = {
   event: Record<string, unknown>;
 };
 
+type PartialAssistantMessage = {
+  text: string;
+  reasoning: string;
+};
+
 type ObservedToolKind = "control" | "other";
 
 /** Stream-local state for two-phase control tool delivery. */
@@ -1215,6 +1320,10 @@ export interface SemanticToolState {
   observedNonControlToolUseNames: Map<string, string>;
   /** Hash-only settled ids for ordinary tool calls, preventing replay without raw-id retention. */
   settledNonControlToolUseHashes: Set<string>;
+  /** Claude stream-json partial content used to suppress its later full block. */
+  partialAssistantMessages: Map<string, PartialAssistantMessage>;
+  currentPartialAssistantMessage?: string;
+  nextPartialAssistantMessage: number;
   maxPendingToolUses: number;
 }
 
@@ -1229,6 +1338,8 @@ export function createSemanticToolState(
     observedNonControlToolUseHashes: new Set(),
     observedNonControlToolUseNames: new Map(),
     settledNonControlToolUseHashes: new Set(),
+    partialAssistantMessages: new Map(),
+    nextPartialAssistantMessage: 0,
     maxPendingToolUses,
   };
 }
@@ -1243,6 +1354,8 @@ export function discardPendingSemanticTools(
     state.observedNonControlToolUseHashes.clear();
     state.observedNonControlToolUseNames.clear();
     state.settledNonControlToolUseHashes.clear();
+    state.partialAssistantMessages.clear();
+    state.currentPartialAssistantMessage = undefined;
     return;
   }
   onWarning?.({
@@ -1254,6 +1367,8 @@ export function discardPendingSemanticTools(
   state.observedNonControlToolUseHashes.clear();
   state.observedNonControlToolUseNames.clear();
   state.settledNonControlToolUseHashes.clear();
+  state.partialAssistantMessages.clear();
+  state.currentPartialAssistantMessage = undefined;
 }
 
 function rememberToolId(set: Set<string>, callId: string): void {
@@ -1314,6 +1429,82 @@ function safeControlInputShape(value: unknown): Record<string, unknown> {
     return { kind: "object", field_count: Math.min(Object.keys(value as Record<string, unknown>).length, 1000) };
   }
   return { kind: safeRuntimeValueKind(value) };
+}
+
+const PARTIAL_ASSISTANT_MAX = 64_000;
+const PARTIAL_ASSISTANT_MESSAGE_LIMIT = 32;
+
+function partialAssistantKey(state: SemanticToolState): string {
+  if (state.currentPartialAssistantMessage) return state.currentPartialAssistantMessage;
+  state.nextPartialAssistantMessage += 1;
+  const key = `stream-${state.nextPartialAssistantMessage}`;
+  state.currentPartialAssistantMessage = key;
+  return key;
+}
+
+function rememberPartialAssistant(
+  state: SemanticToolState,
+  kind: "text" | "reasoning",
+  delta: string,
+  messageId?: string,
+): void {
+  const key = messageId || partialAssistantKey(state);
+  state.currentPartialAssistantMessage = key;
+  const current = state.partialAssistantMessages.get(key) ?? { text: "", reasoning: "" };
+  const previous = kind === "text" ? current.text : current.reasoning;
+  const next = `${previous}${delta}`;
+  if (kind === "text") current.text = next.length > PARTIAL_ASSISTANT_MAX ? next.slice(-PARTIAL_ASSISTANT_MAX) : next;
+  else current.reasoning = next.length > PARTIAL_ASSISTANT_MAX ? next.slice(-PARTIAL_ASSISTANT_MAX) : next;
+  state.partialAssistantMessages.set(key, current);
+  while (state.partialAssistantMessages.size > PARTIAL_ASSISTANT_MESSAGE_LIMIT) {
+    const oldest = state.partialAssistantMessages.keys().next().value;
+    if (typeof oldest !== "string") break;
+    state.partialAssistantMessages.delete(oldest);
+  }
+}
+
+function completeAssistantText(
+  state: SemanticToolState,
+  kind: "text" | "reasoning",
+  value: string,
+  messageId?: string,
+): string | undefined {
+  if (!value) return undefined;
+  const key = partialAssistantKeyForComplete(state, messageId);
+  const partial = key ? state.partialAssistantMessages.get(key) : undefined;
+  const streamed = partial ? (kind === "text" ? partial.text : partial.reasoning) : "";
+  let unseen = value;
+  if (streamed === value) unseen = "";
+  else if (streamed && value.startsWith(streamed)) unseen = value.slice(streamed.length);
+  return unseen || undefined;
+}
+
+function partialAssistantKeyForComplete(
+  state: SemanticToolState,
+  messageId?: string,
+): string | undefined {
+  if (messageId && state.partialAssistantMessages.has(messageId)) return messageId;
+  if (state.currentPartialAssistantMessage && state.partialAssistantMessages.has(state.currentPartialAssistantMessage)) {
+    return state.currentPartialAssistantMessage;
+  }
+  if (state.partialAssistantMessages.size === 1) return state.partialAssistantMessages.keys().next().value as string | undefined;
+  return messageId || state.currentPartialAssistantMessage;
+}
+
+function partialAssistantMessagesDelete(state: SemanticToolState, key: string): void {
+  state.partialAssistantMessages.delete(key);
+  if (state.currentPartialAssistantMessage === key) state.currentPartialAssistantMessage = undefined;
+}
+
+function streamMessageId(
+  state: SemanticToolState,
+  value: unknown,
+): string {
+  if (typeof value === "string" && value) {
+    state.currentPartialAssistantMessage = value;
+    return value;
+  }
+  return partialAssistantKey(state);
 }
 
 const TOOL_DETAIL_MAX = 4000;
@@ -1407,6 +1598,67 @@ export function parseRuntimeLine(line: string): {
   }
 }
 
+const CLAUDE_STREAM_EVENT_TYPES = new Set([
+  "message_start",
+  "content_block_start",
+  "content_block_delta",
+  "content_block_stop",
+  "message_delta",
+  "message_stop",
+]);
+
+function mapClaudeStreamEvent(
+  line: Record<string, unknown>,
+  emit: (e: Record<string, unknown>) => void,
+  state: SemanticToolState,
+  warnings: Array<{ code: string; detail?: string }>,
+): boolean {
+  const event = line.event;
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    warnings.push({ code: "malformed_runtime_event", detail: "stream_event_payload" });
+    return true;
+  }
+  const eventRecord = event as Record<string, unknown>;
+  const eventType = typeof eventRecord.type === "string" ? eventRecord.type : "";
+  if (!CLAUDE_STREAM_EVENT_TYPES.has(eventType)) {
+    warnings.push({ code: "unknown_runtime_event", detail: "stream_event_type" });
+    return true;
+  }
+  if (eventType === "message_start") {
+    const message = eventRecord.message;
+    const messageId = message && typeof message === "object" && !Array.isArray(message)
+      ? (message as Record<string, unknown>).id
+      : undefined;
+    streamMessageId(state, messageId);
+    return true;
+  }
+  if (eventType !== "content_block_delta") return true;
+  const delta = eventRecord.delta;
+  if (!delta || typeof delta !== "object" || Array.isArray(delta)) {
+    warnings.push({ code: "malformed_runtime_event", detail: "content_block_delta_payload" });
+    return true;
+  }
+  const deltaRecord = delta as Record<string, unknown>;
+  const deltaType = typeof deltaRecord.type === "string" ? deltaRecord.type : "";
+  if (deltaType === "thinking_delta") {
+    if (typeof deltaRecord.thinking !== "string" || !deltaRecord.thinking) return true;
+    const value = deltaRecord.thinking;
+    rememberPartialAssistant(state, "reasoning", value);
+    emit({ type: "reasoning.delta", delta: value });
+    return true;
+  }
+  if (deltaType === "text_delta") {
+    if (typeof deltaRecord.text !== "string" || !deltaRecord.text) return true;
+    const value = deltaRecord.text;
+    rememberPartialAssistant(state, "text", value);
+    emit({ type: "text.delta", delta: value });
+    return true;
+  }
+  // Future content block delta types are intentionally ignored. They must not
+  // become fabricated text or control-MCP events.
+  return true;
+}
+
 export function mapCliEvent(
   line: Record<string, unknown>,
   emit: (e: Record<string, unknown>) => void,
@@ -1423,16 +1675,39 @@ export function mapCliEvent(
   const semanticEvents: Array<Record<string, unknown>> = [];
   const warnings: Array<{ code: string; detail?: string }> = [];
   const type = line.type as string;
+  if (type === "stream_event") {
+    mapClaudeStreamEvent(line, emit, state, warnings);
+    return { semanticEvents, warnings };
+  }
+  if (type === "text.delta" || type === "reasoning.delta") {
+    const delta = line.delta;
+    if (typeof delta === "string" && delta) emit({ type, delta });
+    return { semanticEvents, warnings };
+  }
   if (type === "system" && line.subtype === "init") {
     emit({ type: "run.started", sessionId: line.session_id });
     return { sessionId: typeof line.session_id === "string" ? line.session_id : undefined, semanticEvents, warnings };
   }
   if (type === "assistant") {
+    const message = line.message;
+    const messageId = message && typeof message === "object" && !Array.isArray(message)
+      ? (message as Record<string, unknown>).id
+      : undefined;
+    let completeAssistantMessage = false;
     for (const block of runtimeContentBlocks(line, "assistant", warnings)) {
       if (block.type === "text" && typeof block.text === "string" && block.text) {
-        emit({ type: "text.delta", delta: block.text });
-      } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
-        emit({ type: "reasoning.delta", delta: block.thinking });
+        const value = completeAssistantText(state, "text", block.text, typeof messageId === "string" ? messageId : undefined);
+        if (value) emit({ type: "text.delta", delta: value });
+        completeAssistantMessage = true;
+      } else if (
+        (block.type === "thinking" || block.type === "reasoning") &&
+        typeof (block.thinking ?? block.reasoning ?? block.text) === "string" &&
+        (block.thinking ?? block.reasoning ?? block.text)
+      ) {
+        const raw = (block.thinking ?? block.reasoning ?? block.text) as string;
+        const value = completeAssistantText(state, "reasoning", raw, typeof messageId === "string" ? messageId : undefined);
+        if (value) emit({ type: "reasoning.delta", delta: value });
+        completeAssistantMessage = true;
       } else if (block.type === "tool_use") {
         const toolName = typeof block.name === "string" ? block.name : "";
         const callId = typeof block.id === "string" ? block.id : "";
@@ -1489,6 +1764,13 @@ export function mapCliEvent(
           });
         }
       }
+    }
+    if (completeAssistantMessage) {
+      const key = partialAssistantKeyForComplete(
+        state,
+        typeof messageId === "string" && messageId ? messageId : undefined,
+      );
+      if (key) partialAssistantMessagesDelete(state, key);
     }
     return { semanticEvents, warnings };
   }
@@ -1722,15 +2004,23 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let lastPush = 0;
   let progressBuffer = "";
   let stdoutBuffer = "";
-  let stderrTail = "";
-  let exitCode = 0;
   let finalText = "";
   let sessionId = "";
   let runError: string | undefined;
+  let terminalOutcome: RealAgentResult["terminalOutcome"];
   let semanticErrorDetails: RuntimeErrorDetails | undefined;
   let nudgesLeft = 3;
+  // These values describe only the process currently being consumed.  They
+  // must be reset before every completion-gate resume; otherwise a previous
+  // final text/result can mask a later process exit.
+  let attemptFinalText = "";
+  let attemptExitCode = 0;
+  let attemptTerminalResult: TerminalProcessAttempt["terminalResult"];
+  let attemptCloseReason: TerminalAttemptCloseReason | undefined;
+  let attemptStderrTail = "";
   // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
-  const closeStdin = () => {
+  const closeStdin = (reason?: TerminalAttemptCloseReason) => {
+    if (reason) attemptCloseReason = reason;
     stdinClosed = true;
     const raw = exec.raw as { stream?: { end?: () => void } } | undefined;
     if (raw?.stream?.end) {
@@ -1741,17 +2031,17 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       }
     } else void exec.kill().catch(() => {});
   };
-  if (!adapter.capabilities.incrementalMessages && adapter.encodeInput(spec.input)) closeStdin();
+  if (!adapter.capabilities.incrementalMessages && adapter.encodeInput(spec.input)) closeStdin("initial_input");
   try {
     while (true) {
       let resumedExec: typeof exec | undefined;
       for await (const chunk of exec) {
       if (chunk.type === "stderr") {
-        stderrTail = (stderrTail + chunk.chunk).slice(-2000);
+        attemptStderrTail = (attemptStderrTail + chunk.chunk).slice(-2000);
         continue;
       }
       if (chunk.type === "exit") {
-        exitCode = chunk.exitCode ?? 0;
+        attemptExitCode = chunk.exitCode ?? 0;
         continue;
       }
       stdoutBuffer += chunk.chunk;
@@ -1784,7 +2074,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             }
           }, semanticToolEvents, semanticToolState);
           for (const warning of outcome.warnings) spec.onWarning?.(warning);
-          if (!["system", "assistant", "user", "result"].includes(String(parsed.type))) {
+          if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta"].includes(String(parsed.type))) {
             spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
           }
           for (const event of outcome.semanticEvents) {
@@ -1840,7 +2130,21 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             }
           }
           if (outcome.sessionId) sessionId = outcome.sessionId;
+          if (outcome.isError !== undefined) {
+            attemptTerminalResult = {
+              isError: outcome.isError,
+              ...(outcome.errorDetail !== undefined ? { errorDetail: outcome.errorDetail } : {}),
+            };
+            terminalOutcome = outcome.isError ? "failure" : "success";
+            // Replace the previous attempt's outcome even when the provider
+            // omits final text but still emits a terminal success/failure.
+            runError = resolveTerminalRunError(outcome);
+          }
           if (outcome.finalText !== undefined) {
+            // Each completion-gate attempt has its own terminal outcome. A
+            // later success clears a transient Provider error; if retries
+            // exhaust, the last failed attempt remains authoritative.
+            attemptFinalText = outcome.finalText;
             finalText = outcome.finalText;
             if (spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
               nudgesLeft--;
@@ -1854,10 +2158,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                 resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
               }
             } else {
-              closeStdin();
+              closeStdin("terminal_result");
             }
           }
-          if (outcome.isError) runError = outcome.errorDetail ?? "agent 执行失败";
           const now = Date.now();
           if (progressBuffer.length > 0 && now - lastPush > 4000) {
             lastPush = now;
@@ -1865,24 +2168,43 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             progressBuffer = "";
           }
         }
+        }
       }
+      const attemptOutcome = resolveTerminalProcessOutcome({
+        finalText: attemptFinalText,
+        exitCode: attemptExitCode,
+        terminalResult: attemptTerminalResult,
+        closeReason: attemptCloseReason,
+        stderrTail: attemptStderrTail,
+      });
+      if (attemptOutcome.observed) {
+        runError = attemptOutcome.error;
+        terminalOutcome = attemptOutcome.terminalOutcome;
       }
       if (!resumedExec) break;
       exec = resumedExec;
       stdinClosed = true;
       stdoutBuffer = "";
-      exitCode = 0;
+      attemptFinalText = "";
+      attemptExitCode = 0;
+      attemptTerminalResult = undefined;
+      attemptCloseReason = undefined;
+      attemptStderrTail = "";
     }
   } catch (e) {
-    if (!runError) runError = e instanceof Error ? e.message : String(e);
+    // An exception while handling the current attempt is the latest runner
+    // failure. Keep semanticError separate so host validation remains
+    // fail-closed even if the session emitted ordinary text afterwards.
+    // A stream error caused by the deliberate stdin close after a valid
+    // terminal result is not a runner failure.  Preserve a terminal failure
+    // result if that was what the provider reported.
+    if (!semanticError && !(attemptTerminalResult && attemptCloseReason === "terminal_result")) {
+      runError = e instanceof Error ? e.message : String(e);
+      terminalOutcome = "failure";
+    }
   } finally {
     discardPendingSemanticTools(semanticToolState, (warning) => spec.onWarning?.(warning));
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
-  }
-
-  // 结果事件已拿到后，exitCode 只反映我们主动关 stdin/杀进程，不再视为错误
-  if (!runError && exitCode !== 0 && finalText === "") {
-    runError = `agent CLI 退出码 ${exitCode}${stderrTail.trim() ? `: ${stderrTail.trim().slice(-300)}` : ""}`;
   }
 
   // 4. 读回结果文件
@@ -1928,6 +2250,12 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       : runError
         ? { error: runError }
         : {}),
+    ...(semanticError
+      ? { errorKind: "semantic" as const }
+      : runError
+        ? { errorKind: "runner" as const }
+        : {}),
     ...(semanticErrorDetails ? { errorDetails: semanticErrorDetails } : {}),
+    ...(terminalOutcome ? { terminalOutcome } : {}),
   };
 }

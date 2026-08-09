@@ -91,6 +91,19 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const [forceMsg, setForceMsg] = useState<string | null>(null);
   const [terminalAllowed, setTerminalAllowed] = useState(false);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      // ConfirmDialog is portaled outside this drawer. Let its own Escape
+      // handler resolve the pending confirmation before closing the job view.
+      if (document.querySelector('[role="alertdialog"]')) return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   // 初次加载 + 运行中轮询：与调度器账本保持同步
   useEffect(() => {
     let alive = true;
@@ -508,7 +521,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                   <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">
                     错误
                   </div>
-                  <MarkdownView markdown={detail.job.error} />
+                  <MarkdownView markdown={detail.job.error} scrollable={false} />
                 </div>
               )}
 
@@ -533,8 +546,8 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                   <p className="mb-2 text-[12px] leading-relaxed text-zinc-500">{intentDescription}</p>
                 )}
                 {dispatchPrompt ? (
-                  <div className="max-h-[40vh] overflow-y-auto rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
-                    <MarkdownView markdown={dispatchPrompt} />
+                  <div className="rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
+                    <MarkdownView markdown={dispatchPrompt} scrollable={false} />
                   </div>
                 ) : (
                   <p className="font-mono text-[12px] text-zinc-600">
@@ -548,8 +561,8 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                   运行输出摘要
                 </div>
                 {runSummary ? (
-                  <div className="max-h-[40vh] overflow-y-auto rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
-                    <MarkdownView markdown={runSummary} />
+                  <div className="rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
+                    <MarkdownView markdown={runSummary} scrollable={false} />
                   </div>
                 ) : active ? (
                   <p className="font-mono text-[12px] text-zinc-600">

@@ -595,8 +595,443 @@ jobs:
           path: release-digests/${{ matrix.name }}.json
           if-no-files-found: error
 
-  # Kali 工具链镜像很大：同作业并行构建 amd64+arm64 并 COPY 根文件系统时极易 ENOSPC。
-  # 按平台顺序 push-by-digest，再 imagetools 合成多架构标签。
+  # Native per-architecture Chrome builds avoid compiling V8 d8 under QEMU.
+  # chrome-images assembles the immutable child digests into one inspected
+  # multi-architecture index per project-opt-in product.
+  chrome-image-builds:
+    needs: base-image
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: chrome-audit
+            toolset: chrome-audit
+            config: agent-harness/chrome-audit-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-audit
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar Chrome Audit
+            description: Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep, Clang/LLVM and binutils.
+          - name: chrome-audit
+            toolset: chrome-audit
+            config: agent-harness/chrome-audit-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-audit
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar Chrome Audit
+            description: Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep, Clang/LLVM and binutils.
+          - name: chrome-test
+            toolset: chrome-test
+            config: agent-harness/chrome-test-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-test
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar Chrome Test
+            description: Project-opt-in pinned Chromium headless/CDP runtime with a governed no-sandbox wrapper and Playwright path.
+          - name: chrome-test
+            toolset: chrome-test
+            config: agent-harness/chrome-test-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-test
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar Chrome Test
+            description: Project-opt-in pinned Chromium headless/CDP runtime with a governed no-sandbox wrapper and Playwright path.
+          - name: chrome-fuzz
+            toolset: chrome-fuzz
+            config: agent-harness/chrome-fuzz-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-fuzz
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar Chrome Fuzz
+            description: Project-opt-in V8 fuzz runtime built from pinned source with real d8, compiler-rt, libFuzzer and AFL++.
+          - name: chrome-fuzz
+            toolset: chrome-fuzz
+            config: agent-harness/chrome-fuzz-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-fuzz
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar Chrome Fuzz
+            description: Project-opt-in V8 fuzz runtime built from pinned source with real d8, compiler-rt, libFuzzer and AFL++.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms "${{ matrix.platform }}" \
+            --build-arg "BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused Chrome image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.name }} build unchanged: reused immutable src cache; release still republishes and inspects every configured channel" >> "$GITHUB_STEP_SUMMARY"
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          platforms: ${{ matrix.platform }}
+          build-args: BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }}
+            type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }},mode=max
+            type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+      - id: image
+        name: Final digest and pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Smoke native Chrome child from immutable digest
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_NAME}@${DIGEST}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$image_ref"
+          node agent-harness/test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}"
+      - name: Save native Chrome child digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p chrome-arch
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; fs.writeFileSync("chrome-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest})+"\n")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chrome-arch-${{ matrix.name }}-${{ matrix.arch }}
+          path: chrome-arch/${{ matrix.name }}-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+  # Assemble child digests built on native amd64/arm64 runners, publish the
+  # canonical index to each configured registry, and record inspect evidence.
+  chrome-images:
+    needs: [base-image, chrome-image-builds]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: chrome-audit
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Chrome Audit
+            description: Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep, Clang/LLVM and binutils.
+          - name: chrome-test
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Chrome Test
+            description: Project-opt-in pinned Chromium headless/CDP runtime with a governed no-sandbox wrapper and Playwright path.
+          - name: chrome-fuzz
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Chrome Fuzz
+            description: Project-opt-in V8 fuzz runtime built from pinned source with real d8, compiler-rt, libFuzzer and AFL++.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" && -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: chrome-arch-${{ matrix.name }}-*
+          path: chrome-arch
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: image
+        name: Assemble and publish Chrome multi-arch index
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          amd64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-amd64.json")"
+          arm64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-arm64.json")"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          source_refs=("${IMAGE_NAME}@${amd64_digest}" "${IMAGE_NAME}@${arm64_digest}")
+          annotation_args=(
+            --annotation "index:org.opencontainers.image.title=${{ matrix.title }}"
+            --annotation "index:org.opencontainers.image.description=${{ matrix.description }}"
+            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+            --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
+          )
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          tag_args() {
+            local tags="$1"; local -n output=$2; output=()
+            while IFS= read -r tag; do [[ -n "$tag" ]] && output+=(-t "$tag"); done <<< "$tags"
+            [[ ${#output[@]} -gt 0 ]]
+          }
+          tag_args "$GHCR_TAGS" ghcr_tag_args
+          docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
+          primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          digest="$(docker buildx imagetools inspect "$primary" | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' | head -n1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          immutable_primary="${primary}@${digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then
+            tag_args "$ACR_TAGS" acr_tag_args
+            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"
+          fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+            tag_args "$DOCKERHUB_TAGS" dockerhub_tag_args
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
+              echo '::warning::Docker Hub tag publication failed; refusing an unchecked Chrome release record'
+              exit 1
+            fi
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Save Chrome manifest digest
+        env:
+          IMAGE_KEY: deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs "release-digests/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-${{ matrix.name }}
+          path: release-digests/${{ matrix.name }}.json
+          if-no-files-found: error
+
   kali-minimal:
     needs: base-image
     runs-on: ubuntu-latest
@@ -1601,7 +2036,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz]
+    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images]
     runs-on: ubuntu-latest
     env:
       ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}

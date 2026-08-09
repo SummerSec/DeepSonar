@@ -288,6 +288,9 @@ const TOOLSET_TO_RUNTIME_IMAGE_KEY: Record<string, string> = {
   "openharmony-test": "deepsonar-openharmony-test",
   "openharmony-audit": "deepsonar-openharmony-audit",
   "openharmony-fuzz": "deepsonar-openharmony-fuzz",
+  "chrome-audit": "deepsonar-chrome-audit",
+  "chrome-test": "deepsonar-chrome-test",
+  "chrome-fuzz": "deepsonar-chrome-fuzz",
 };
 
 function imageRepository(imageRef: string): string | null {
