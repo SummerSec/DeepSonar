@@ -6,6 +6,17 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+## [0.1.23] - 2026-08-10
+
+### Fixed
+
+- Fixed Chrome Fuzz arm64 V8 builds by using the pinned target LLVM/compiler-runtime toolchain and arm64 sysroot paths.
+- Recovered Chrome Fuzz smoke validation on x64 runners by pulling and running the immutable image with an explicit `linux/arm64` platform.
+
+### Deployment / Upgrade Notes
+
+- This recovery release is identified by the immutable `v0.1.23` tag. Runtime image tags use `0.1.23` without the `v` prefix.
+
 ## [0.1.21] - 2026-08-08
 
 ### Added
@@ -94,6 +105,7 @@ Changes intended for the next release go here before a release section is dated 
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.23]: https://github.com/SummerSec/DeepSonar/compare/v0.1.22...v0.1.23
 [0.1.21]: https://github.com/SummerSec/DeepSonar/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/SummerSec/DeepSonar/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/SummerSec/DeepSonar/compare/v0.1.18...v0.1.19
