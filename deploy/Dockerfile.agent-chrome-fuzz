@@ -33,8 +33,12 @@ RUN set -eux; \
 # -fsanitize=fuzzer-no-link. Compile compiler-rt's matching libFuzzer revision
 # inside the same GN graph. On amd64 V8 keeps its downloaded pinned Clang; on
 # native arm64 GN is explicitly pointed at the installed LLVM 16 because the
-# downloaded Chromium toolchain is an x86_64 executable. The Debian libFuzzer
-# package remains toolchain closure only and is never linked as a replacement.
+# downloaded Chromium toolchain is an x86_64 executable. Debian's LLVM 16
+# compiler-rt's builtins layout is bridged to the target-triple layout expected
+# by this Chromium GN revision. Clang's Linux sanitizer driver keeps using the
+# Debian lib/linux runtime closure. The Debian libFuzzer package remains
+# closure metadata and is never linked as a replacement for the pinned
+# compiler-rt/libFuzzer source set.
 FROM runtime-rootfs AS v8-builder
 ARG TARGETARCH
 COPY deploy/chrome-fuzz-toolchain-preflight.sh /usr/local/bin/chrome-fuzz-toolchain-preflight.sh
@@ -102,10 +106,20 @@ RUN set -eux; \
     '}' >> BUILD.gn; \
   case "$TARGETARCH" in \
     amd64) target_cpu=x64; gn_toolchain_args='' ;; \
-    arm64) target_cpu=arm64; gn_toolchain_args='clang_base_path="/usr/lib/llvm-16" clang_use_chrome_plugins=false' ;; \
+    arm64) target_cpu=arm64; gn_toolchain_args='clang_base_path="/usr/lib/llvm-16" clang_version="16" clang_use_chrome_plugins=false' ;; \
     *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
   esac; \
   export CC=clang-16 CXX=clang++-16; \
+  if [ "$TARGETARCH" = arm64 ]; then \
+    resource_dir="$(/usr/lib/llvm-16/bin/clang -print-resource-dir)"; \
+    test "$resource_dir" = /usr/lib/llvm-16/lib/clang/16; \
+    debian_runtime_dir="$resource_dir/lib/linux"; \
+    target_runtime_dir="$resource_dir/lib/aarch64-unknown-linux-gnu"; \
+    test -f "$debian_runtime_dir/libclang_rt.builtins-aarch64.a"; \
+    install -d -m 0755 "$target_runtime_dir"; \
+    ln -sfn ../linux/libclang_rt.builtins-aarch64.a "$target_runtime_dir/libclang_rt.builtins.a"; \
+    test -e "$target_runtime_dir/libclang_rt.builtins.a"; \
+  fi; \
   gn_args="is_debug=false is_component_build=false is_clang=true is_asan=true use_libfuzzer=true v8_enable_fuzztest=false target_cpu=\"$target_cpu\" v8_enable_i18n_support=false v8_use_external_startup_data=false v8_enable_pointer_compression=true $gn_toolchain_args"; \
   gn gen out/release --args="$gn_args"; \
   /usr/local/bin/chrome-fuzz-toolchain-preflight.sh "$TARGETARCH" out/release; \
@@ -129,7 +143,7 @@ RUN set -eux; \
   rm -f /tmp/chrome-fuzz-env.sh /tmp/chrome-fuzz-smoke.sh; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_json_libfuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_json_libfuzzer",actual:true,source:"v8",libfuzzer_source:"pinned compiler-rt source compiled in the V8 GN graph; Debian libfuzzer-16-dev is not linked",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089",compiler_rt_commit:"53d18800eda3b7407e53366f27ca78e922c6e0db"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_json_libfuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_json_libfuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_json_libfuzzer",actual:true,source:"v8",compiler_runtime:"Debian LLVM 16 compiler-rt builtins with Clang's lib/linux sanitizer runtime closure",libfuzzer_source:"pinned compiler-rt source compiled in the V8 GN graph; Debian libfuzzer-16-dev is not linked",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089",compiler_rt_commit:"53d18800eda3b7407e53366f27ca78e922c6e0db"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_json_libfuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
 ENV IS_SANDBOX=1 \

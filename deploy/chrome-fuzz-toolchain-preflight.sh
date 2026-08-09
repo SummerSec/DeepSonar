@@ -22,7 +22,9 @@ host_arch="$(uname -m)"
 }
 
 commands_file="$(mktemp)"
-trap 'rm -f -- "$commands_file"' EXIT
+inputs_file="$(mktemp)"
+runtime_refs_file="$(mktemp)"
+trap 'rm -f -- "$commands_file" "$inputs_file" "$runtime_refs_file"' EXIT
 
 # GN has already generated this graph. Inspect Ninja's real command lines rather
 # than trusting CC/CXX, which V8's GN toolchain does not use to select clang.
@@ -69,5 +71,41 @@ if [[ "$target_arch" == arm64 ]]; then
 fi
 
 "$compiler_path" --version >/dev/null
+
+# Check the generated graph's concrete compiler-rt inputs before Ninja starts
+# scheduling compilation. This catches resource-directory mismatches (for
+# example Debian's lib/linux layout versus Chromium's target-triple layout)
+# without allowing a late linker failure to hide a bad GN contract.
+"$ninja_bin" -C "$out_dir" -t inputs d8 v8_json_libfuzzer >"$inputs_file"
+grep -E 'libclang_rt[.][^[:space:]]+' "$inputs_file" | sed 's/[[:space:]]*$//' | sort -u >"$runtime_refs_file" || true
+[[ -s "$runtime_refs_file" ]] || {
+  echo 'Chrome Fuzz toolchain preflight failed: GN/Ninja emitted no compiler-rt runtime inputs' >&2
+  exit 1
+}
+grep -q 'libclang_rt[.]builtins' "$runtime_refs_file" || {
+  echo 'Chrome Fuzz toolchain preflight failed: GN/Ninja emitted no compiler-rt builtins input' >&2
+  exit 1
+}
+if grep -q 'libclang_rt[.]fuzzer' "$runtime_refs_file"; then
+  echo 'Chrome Fuzz toolchain preflight failed: Debian libFuzzer archive entered the GN graph' >&2
+  exit 1
+fi
+grep -q 'third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerMain.cpp' "$inputs_file" || {
+  echo 'Chrome Fuzz toolchain preflight failed: pinned compiler-rt/libFuzzer source is absent from the GN graph' >&2
+  exit 1
+}
+while IFS= read -r runtime_ref; do
+  [[ -n "$runtime_ref" ]] || continue
+  if [[ "$runtime_ref" = /* ]]; then
+    runtime_path="$runtime_ref"
+  else
+    runtime_path="$(cd "$out_dir" && realpath -m "$runtime_ref")"
+  fi
+  [[ -e "$runtime_path" ]] || {
+    echo "Chrome Fuzz toolchain preflight failed: GN/Ninja compiler-rt input is missing: $runtime_ref ($runtime_path)" >&2
+    exit 1
+  }
+done <"$runtime_refs_file"
+
 printf 'Chrome Fuzz toolchain preflight passed: target=%s host=%s compiler=%s (%s)\n' \
   "$target_arch" "$host_arch" "$compiler_path" "$compiler_format"
