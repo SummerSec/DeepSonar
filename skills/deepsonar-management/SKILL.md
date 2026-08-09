@@ -53,6 +53,11 @@ python scripts/deepsonar-api.py tasks retry <canvasId>
 # Job
 python scripts/deepsonar-api.py jobs list [--project <projectId>]
 python scripts/deepsonar-api.py jobs get <jobId>
+python scripts/deepsonar-api.py jobs events <jobId> [--cursor ...] [--limit 100]
+python scripts/deepsonar-api.py jobs evidence <jobId>   # evidence manifest
+python scripts/deepsonar-api.py jobs evidence-session <jobId>
+python scripts/deepsonar-api.py jobs evidence-session-download <jobId> --out session.ndjson
+python scripts/deepsonar-api.py jobs evidence-stream <jobId> [--cursor ...] [--limit 100] [--tail true]
 python scripts/deepsonar-api.py jobs create --project-id <projectId> --type explore [--title ...] [--payload '{...}']
 python scripts/deepsonar-api.py jobs priority <jobId> --priority 10
 python scripts/deepsonar-api.py jobs cancel <jobId>
@@ -60,9 +65,15 @@ python scripts/deepsonar-api.py jobs resume <jobId>   # failed/timeout/orphan/wa
 
 # Finding / 画布 / 报告
 python scripts/deepsonar-api.py findings list [--project <projectId>] [--canvas <canvasId>]
+python scripts/deepsonar-api.py findings get <findingId>
+python scripts/deepsonar-api.py findings disposition <findingId> --disposition confirmed_vuln [--note ...]
+python scripts/deepsonar-api.py findings comment <findingId> --body "..." [--request-hub false]
+python scripts/deepsonar-api.py findings link <findingId> --url https://tracker/item [--link-type ticket]
 python scripts/deepsonar-api.py canvases list <projectId>
 python scripts/deepsonar-api.py canvases get <canvasId>
 python scripts/deepsonar-api.py reports get <canvasId>
+python scripts/deepsonar-api.py reports finding <findingId>
+python scripts/deepsonar-api.py reports finding-create <findingId>
 python scripts/deepsonar-api.py reports markdown <reportId>     # Markdown 原文
 python scripts/deepsonar-api.py reports sarif <reportId>        # SARIF 原文
 python scripts/deepsonar-api.py reports retry <canvasId>
@@ -84,6 +95,16 @@ python scripts/deepsonar-api.py project-settings get <projectId>
 python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"hubEnabled": true, "allowEgress": true}'
 python scripts/deepsonar-api.py project-settings update <projectId> --roles "explore,analyze,review"
 python scripts/deepsonar-api.py project-settings update <projectId> --roles null
+python scripts/deepsonar-api.py readiness
+python scripts/deepsonar-api.py readiness project <projectId> [--allow-egress true] [--material-source declared]
+
+# 共享资产（上传用原始字节；--file 不会把内容打印到 stdout）
+python scripts/deepsonar-api.py assets project-list <projectId>
+python scripts/deepsonar-api.py assets project-upload <projectId> --asset-key report.json --file report.json --content-type application/json
+python scripts/deepsonar-api.py assets finding-list <findingId>
+python scripts/deepsonar-api.py assets platform-list
+python scripts/deepsonar-api.py assets download <assetId> --out evidence.bin
+python scripts/deepsonar-api.py assets archive <assetId>
 
 # 角色 + RoleConfig（agents:read|write）
 # Web：CLI / 凭据 / 模型 / 镜像在「凭据 · Provider 绑定」；指令 / 平台工具 / 模块在「Agent 角色」
@@ -114,6 +135,9 @@ python scripts/deepsonar-api.py skills delete <sourceId>
 
 # 凭据（LLM provider 是协议 ID，不是厂商品牌；明文不可回读）
 python scripts/deepsonar-api.py credentials list
+python scripts/deepsonar-api.py credentials providers
+python scripts/deepsonar-api.py credentials get <id>
+python scripts/deepsonar-api.py credentials impact <id>
 python scripts/deepsonar-api.py credentials create --name claude-proxy --provider anthropic --agent-cli claude-code --secret '...' --settings-config @claude-settings.json [--base-url 'https://...']
 python scripts/deepsonar-api.py credentials create --name codex-proxy --provider openai --agent-cli codex --secret '...' --settings-config @codex-settings.json [--base-url 'https://...']
 python scripts/deepsonar-api.py credentials models-preview --provider anthropic --agent-cli claude-code --secret '...' --base-url 'https://...' --settings-config @claude-settings.json
@@ -121,7 +145,10 @@ python scripts/deepsonar-api.py credentials update <id> --data '{"metadata":{"ba
 python scripts/deepsonar-api.py credentials rotate <id> --secret '...'
 python scripts/deepsonar-api.py credentials status <id> --status active|disabled
 python scripts/deepsonar-api.py credentials test <id>
-python scripts/deepsonar-api.py credentials models <id>   # 实时拉 Provider 模型目录
+python scripts/deepsonar-api.py credentials models <id>   # 已缓存模型目录
+python scripts/deepsonar-api.py credentials models-refresh <id>   # 连接 Provider 刷新目录
+python scripts/deepsonar-api.py credentials compatibility <id> [--agent-cli claude-code] [--model ...]
+python scripts/deepsonar-api.py credentials batch-bind --credential-id <id> --role-config-ids '["<id>"]' --idempotency-key change-20260809
 
 # 运行时镜像市场（images:*）
 python scripts/deepsonar-api.py runtime-images list [--search <kw>] [--project <projectId>]
@@ -133,6 +160,27 @@ python scripts/deepsonar-api.py runtime-images usage <versionId>
 python scripts/deepsonar-api.py runtime-images project-enable <projectId> <imageId> --enabled true [--version-id <vid>]
 python scripts/deepsonar-api.py runtime-images detect-local <imageId> --image-ref deepsonar-base:local
 python scripts/deepsonar-api.py runtime-images adopt-local <imageId> --image-ref deepsonar-base:local --expected-image-id sha256:<64hex>
+python scripts/deepsonar-api.py runtime-images registry
+python scripts/deepsonar-api.py runtime-images registry-channel --channel github
+python scripts/deepsonar-api.py runtime-images registry-sync
+python scripts/deepsonar-api.py runtime-images registry-apply --data @runtime-image-registry.json   # 当前为 admin-only
+python scripts/deepsonar-api.py runtime-images registry-pull
+python scripts/deepsonar-api.py runtime-images registry-pull-status
+python scripts/deepsonar-api.py runtime-images official-digest <imageId> --image-ref repo/image@sha256:... [--version 1.0.0]
+python scripts/deepsonar-api.py runtime-images manual-digest --image-key custom --name "Custom" --publisher team --image-ref repo/image@sha256:...
+
+# 项目/平台 transfer（.deepsonarpack；--file 上传、--out 下载）
+python scripts/deepsonar-api.py exports create --project-id <projectId> --preset project_full --include-blobs true
+python scripts/deepsonar-api.py exports create --preset platform_full
+python scripts/deepsonar-api.py exports list [--project-id <projectId>]
+python scripts/deepsonar-api.py exports get <exportId>
+python scripts/deepsonar-api.py exports download <exportId> --out project.deepsonarpack
+python scripts/deepsonar-api.py exports cancel <exportId>
+python scripts/deepsonar-api.py imports upload --file project.deepsonarpack
+python scripts/deepsonar-api.py imports get <importId>
+python scripts/deepsonar-api.py imports preview <importId>
+python scripts/deepsonar-api.py imports apply <importId> --mode create_new [--project-name restored]
+python scripts/deepsonar-api.py imports cancel <importId>
 
 # Plane（可选）
 python scripts/deepsonar-api.py plane bind <projectId> --project-id <planeProjectUuid>
@@ -158,13 +206,15 @@ python scripts/deepsonar-api.py plane info
   "platform_tools": {},
   "instructions_markdown": null,
   "runtime_image_key": null,
+  "sandbox_limits": null,
   "credentials": [{ "credential_id": "<uuid>", "purpose": "llm" }],
   "config_files": []
 }
 ```
 
 - `runtime_image_key: null` = **系统底座**（调度默认 deepsonar-base，不必写 key）。
-- 官方专项：`deepsonar-audit`、`deepsonar-kali-minimal`、OpenHarmony 系列（`deepsonar-openharmony-*`，`project_opt_in`）。
+- 官方专项：`deepsonar-audit`、`deepsonar-kali-minimal`、Chrome 系列（`deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`）及 OpenHarmony 系列（`deepsonar-openharmony-*`，`project_opt_in`）。
+- `sandbox_limits` 仅是项目 RoleConfig 的覆盖（读取项目投影时为 `sandbox_limits_json`，CPU/内存/PIDs 等）；仍受服务端硬上限约束，Job 创建时冻结。
 - **OpenHarmony 等 opt-in 专项**：RoleConfig 可先 pin；**真正跑 Job** 仍要求项目在镜像市场启用。
 - `platform_tools`：每个 Agent **全量可选**；未声明 = 全开；仅 **`mark_job_done` 不可关**。
 - `purpose` 必须是 **`llm`**（调度器只认这个 purpose 注入模型通道）。
@@ -222,7 +272,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 | 官方 digest 引导 | `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`（tag 不会被静默信任） |
 | 本地镜像存在 | Docker 已有对应 digest（可 `docker tag` 别名） |
 | 并发默认 | `MAX_GLOBAL_JOBS=20`、`MAX_JOBS_PER_PROJECT=5`（库 `rules_json` 优先） |
-| schema 版本 | 当前 v23；空库套 `database/schema.sql`，非空只校验版本与结构；不符 fail closed（无增量 migration，需重建）；遗留 `schema_migrations` 表不拦启动 |
+| schema 版本 | 以运行中 `/schema` 为准；远端 `origin/main` 最新基线为 v24，当前未同步工作树仍可能是 v23。空库套对应 checkout 的 `database/schema.sql`，非空只校验版本与结构；不符 fail closed（无增量 migration，需重建） |
 | 鉴权 | `DEEPSONAR_AUTH_REQUIRED=true` 时需 Bearer；应急用 `DEEPSONAR_ADMIN_TOKEN`（不落库） |
 | 证据目录 | `BLOB_DIR`（默认 `./data/blobs`）可写；共享资产 CAS 见 `BLOB_STORE=fs` 或 `s3`（`docs/SHARED_ASSET_BLOB_STORE.md`）；改 `apps/scheduler/src` 会触发 tsx watch 重载 |
 
@@ -236,7 +286,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 6. **`jobs resume` 后若轮询关闭**：依赖 `pg_notify`；schema 触发器须覆盖 pending 恢复路径（基线已含）。
 7. **dispatcher `FOR UPDATE` + `LEFT JOIN credentials`**：必须 `FOR UPDATE OF j`，否则 Postgres `0A000` 导致领取失败。
 8. **证据 stream 写盘**：`stream.ndjson` 在 `attempts/<sandboxId>/` 下，mkdir 必须建 attempt 目录，否则 unhandledRejection ENOENT。
-9. **无 body 的 POST**（sync / test / cancel / resume / models）**不要**带 `Content-Type: application/json`（CLI 已处理）。
+9. **无 body 的 POST**（sync / test / resume / model refresh）**不要**带 `Content-Type: application/json`（CLI 已处理）；cancel 仅在传 `--force/--reason` 时带 JSON body。
 10. **端口**：`SCHEDULER_PORT`（默认 3100），不是 `PORT`；EADDRINUSE = 已有实例，先按 PID 清干净再起唯一实例。
 11. **Windows 启动 pnpm**：`Start-Process` 用 `pnpm.cmd` 全路径，不要直接 `pnpm`（.ps1 不是 Win32 应用）。
 12. **并发显示 6/2 而非 20/5**：库 `global_settings.rules_json` 已写死旧值；改 `.env` 不够，需 PATCH rules 或更新库内字段。
@@ -247,6 +297,8 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 - 不绕过 Scheduler 直改 Job 状态（只用 cancel/resume/priority/retry）；
 - 不直接操作 Docker / 数据库（除非用户明确要求清库/重建，且须保留凭据策略）；
 - 不创建/吊销 API Token、不查审计日志（管理面，除非用户给了 admin token 且明确要求）；
+- `tasks delete`、`exports delete`、`imports delete` 会删除持久化对象或制品，只在用户明确指定目标并确认删除意图时使用；
+- Agent Marketplace 的 AgentPack（`deepsonar.agentpack/v1`）目前由 Web 本地导入/安装（通常创建 Agent Role + RoleConfig），没有服务端 `/agent-packs` 管理端点；不要把它写成 API 能力。
 - RoleConfig 越界配置服务端 400，不要绕过；
 - 不把任意镜像 ref 塞进任务 content / Hub prompt——镜像只能来自市场 + RoleConfig `runtime_image_key`。
 
