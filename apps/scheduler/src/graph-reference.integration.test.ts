@@ -33,10 +33,16 @@ if (!testDatabaseUrl) {
       VALUES (${projectId}, ${canvasId}, 'graph-reference', ${sql.json({})})`;
     await sql`
       INSERT INTO canvases (id, project_id, title, target_json)
-      VALUES (${canvasId}, ${projectId}, 'graph-reference', ${sql.json({})})`;
+      VALUES (
+        ${canvasId}, ${projectId}, 'graph-reference',
+        ${sql.json({ network_policy: { allow_egress: false } })}
+      )`;
     await sql`
       INSERT INTO canvases (id, project_id, title, target_json)
-      VALUES (${otherCanvasId}, ${projectId}, 'graph-reference-other', ${sql.json({})})`;
+      VALUES (
+        ${otherCanvasId}, ${projectId}, 'graph-reference-other',
+        ${sql.json({ network_policy: { allow_egress: false } })}
+      )`;
     const [root] = await sql<{ id: string }[]>`
       INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
       VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})
