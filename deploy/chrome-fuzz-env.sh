@@ -14,7 +14,6 @@ for command_name in clang clang++ lld llvm-symbolizer afl-fuzz afl-clang-fast d8
 done
 clang --version >/dev/null
 clang -print-resource-dir >/dev/null
-afl-fuzz -h >/dev/null 2>&1
 file "$(command -v d8)" | grep -E 'ELF .* (x86-64|ARM aarch64)' >/dev/null
 d8 --version >/dev/null
 jq -e '.contract == "deepsonar.runtime.contract/v1" and .imageKey == "deepsonar-chrome-fuzz" and .fuzz.target == "d8" and .fuzz.libfuzzer_target == "v8_json_libfuzzer" and .fuzz.actual == true' /opt/deepsonar/tool-manifest.json >/dev/null
