@@ -52,6 +52,7 @@ const schedulerRuntimeImageRoutes = readFileSync(
   "utf8",
 );
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
+const chromeRuntimeSmoke = readFileSync(new URL("./test-chrome-runtime.mjs", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const schedulerRuntimeSnapshot = readFileSync(
@@ -287,8 +288,10 @@ for (const [file, content] of [
 }
 expect(prepareScript.includes("deepsonar-chrome-audit") && prepareScript.includes("deepsonar-chrome-test") && prepareScript.includes("deepsonar-chrome-fuzz"), "prepare 脚本必须接入 Chrome 三项镜像");
 expect(chromeWorkflow.includes("chrome-runtime-images") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome CI must build and smoke Chrome runtime images");
-expect(ciWorkflow.includes("chrome-fuzz-arm64") && ciWorkflow.includes("docker/setup-qemu-action@v3") && ciWorkflow.includes("platforms: linux/arm64") && ciWorkflow.includes("test-chrome-runtime.mjs"), "core CI must cross-build and immutably smoke Chrome Fuzz arm64");
+expect(chromeRuntimeSmoke.includes('const targetPlatform = process.argv[5] ?? "linux/amd64"') && chromeRuntimeSmoke.includes('"--platform", targetPlatform') && chromeRuntimeSmoke.includes("linux/amd64") && chromeRuntimeSmoke.includes("linux/arm64"), "Chrome runtime smoke must validate a target platform and pass it to every Docker run");
+expect(ciWorkflow.includes("chrome-fuzz-arm64") && ciWorkflow.includes("docker/setup-qemu-action@v3") && ciWorkflow.includes("platforms: linux/arm64") && ciWorkflow.includes('docker pull --platform linux/arm64 "$image_ref"') && ciWorkflow.includes("test-chrome-runtime.mjs") && ciWorkflow.includes("agent-harness/chrome-fuzz-runtime.json linux/arm64"), "core CI must cross-build and immutably smoke Chrome Fuzz arm64");
 expect(releaseWorkflow.includes("chrome-images:") && releaseWorkflow.includes("Dockerfile.agent-chrome-audit") && releaseWorkflow.includes("Dockerfile.agent-chrome-test") && releaseWorkflow.includes("Dockerfile.agent-chrome-fuzz") && releaseWorkflow.includes("matrix.name == 'chrome-fuzz' && matrix.arch == 'arm64'"), "release workflow must publish all Chrome runtime images and enable QEMU only for the Chrome Fuzz arm64 cross-build");
+expect(releaseWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "$image_ref"') && releaseWorkflow.includes('test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"'), "release Chrome smoke must pull and run the matrix target platform");
 for (const [file, content] of [
   ["openharmony-env.sh", openHarmonyEnv],
   ["openharmony-init.sh", openHarmonyInit],

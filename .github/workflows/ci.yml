@@ -500,5 +500,5 @@ jobs:
           set -euo pipefail
           image_ref="${IMAGE_NAME}@${DIGEST}"
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker pull "$image_ref"
-          node agent-harness/test-chrome-runtime.mjs "$image_ref" chrome-fuzz agent-harness/chrome-fuzz-runtime.json
+          docker pull --platform linux/arm64 "$image_ref"
+          node agent-harness/test-chrome-runtime.mjs "$image_ref" chrome-fuzz agent-harness/chrome-fuzz-runtime.json linux/arm64

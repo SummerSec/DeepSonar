@@ -821,8 +821,8 @@ jobs:
           set -euo pipefail
           image_ref="${IMAGE_NAME}@${DIGEST}"
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker pull "$image_ref"
-          node agent-harness/test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}"
+          docker pull --platform "${{ matrix.platform }}" "$image_ref"
+          node agent-harness/test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"
       - name: Save native Chrome child digest
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
