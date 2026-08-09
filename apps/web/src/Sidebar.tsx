@@ -31,7 +31,7 @@ function Field({ k, v, markdown = true }: { k: string; v: string; markdown?: boo
     <div className="py-1.5">
       <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">{k}</div>
       <div className="mt-1 break-words text-[14px] leading-relaxed text-zinc-300">
-        {markdown ? <MarkdownView markdown={v} /> : <span className="font-mono">{v}</span>}
+        {markdown ? <MarkdownView markdown={v} scrollable={false} /> : <span className="font-mono">{v}</span>}
       </div>
     </div>
   );
@@ -131,9 +131,9 @@ export function Sidebar({
   };
 
   return (
-    <aside className="theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-20 flex w-[calc(100%-1rem)] max-w-[420px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]">
+    <aside className="theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-20 flex min-h-0 min-w-0 w-[calc(100%-1rem)] max-w-[420px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]">
       {/* 头部 */}
-      <div className="flex items-start gap-3 border-b border-white/[.05] px-5 py-4">
+      <div className="flex min-w-0 shrink-0 flex-wrap items-start gap-3 border-b border-white/[.05] px-5 py-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
@@ -153,7 +153,7 @@ export function Sidebar({
             {node.title}
           </h2>
           {forceMsg && (
-            <div className={`mt-1.5 font-mono text-[11px] ${forceMsg === "已强制退出" ? "text-acc-300" : "text-red-300"}`}>
+            <div className={`mt-1.5 break-words font-mono text-[11px] ${forceMsg === "已强制退出" ? "text-acc-300" : "text-red-300"}`}>
               {forceMsg}
             </div>
           )}
@@ -193,12 +193,12 @@ export function Sidebar({
       </div>
 
       {/* tab 栏（实时流只对 job 节点有意义） */}
-      <div className="flex gap-1 border-b border-white/[.05] px-4 py-2">
+      <div className="flex min-w-0 shrink-0 gap-1 overflow-x-auto overscroll-contain border-b border-white/[.05] px-4 py-2">
         {TABS.filter((t) => t.key !== "stream" || node.job_id).map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`rounded-full px-3 py-1.5 text-[11px] transition-colors ${
+            className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] transition-colors ${
               tab === t.key
                 ? "bg-white/[.08] text-zinc-100"
                 : "text-zinc-600 hover:bg-white/[.04] hover:text-zinc-300"
@@ -211,14 +211,14 @@ export function Sidebar({
 
       {/* 实时流：常驻挂载，切 tab 不断连，只隐藏 */}
       {node.job_id && (
-        <div className={`flex-1 overflow-hidden ${tab === "stream" ? "" : "hidden"}`}>
+        <div className={`min-h-0 min-w-0 flex-1 overflow-hidden ${tab === "stream" ? "" : "hidden"}`}>
           <LiveStream jobId={node.job_id} active={tab === "stream"} />
         </div>
       )}
 
       {/* 概览 / 事件 */}
       {tab !== "stream" && (
-        <div className="flex-1 overflow-y-auto px-4 py-3">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-3">
           {tab === "overview" && (
             <>
               {/* 待人工处理事实：人工确认 / 明确排除（§5.2-6；处理后调度器会尝试推进报告） */}
@@ -285,7 +285,7 @@ export function Sidebar({
                 </div>
               )}
               {job?.job.error && (
-                <div className="mt-3 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-red-300"><MarkdownView markdown={job.job.error} /></div>
+                <div className="mt-3 break-words rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-red-300"><MarkdownView markdown={job.job.error} scrollable={false} /></div>
               )}
             </>
           )}
@@ -308,7 +308,7 @@ export function Sidebar({
                         {e.type}
                       </span>
                     </div>
-                    <MarkdownView markdown={summarize(e.payload_json)} controls={false} className="mt-0.5 text-zinc-400" />
+                    <MarkdownView markdown={summarize(e.payload_json)} controls={false} scrollable={false} className="mt-0.5 text-zinc-400" />
                   </li>
                 ))}
               </ol>

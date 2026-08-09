@@ -98,8 +98,8 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
 
   if (error) {
     return (
-      <div className="p-5">
-        <div className="rounded-[10px] border border-red-900/60 bg-red-950/40 px-4 py-3 text-[14px] text-red-300">
+      <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
+        <div className="break-words rounded-[10px] border border-red-900/60 bg-red-950/40 px-4 py-3 text-[14px] text-red-300">
           报告加载失败：{error}
         </div>
       </div>
@@ -109,7 +109,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   // 无报告：Hub 还未宣布分析完成
   if (missing || !report) {
     return (
-      <div className="p-5">
+      <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
         <EmptyState
           title="暂无任务报告"
           hint="Hub 宣布分析完成后，调度器会自动生成任务级报告（已确认漏洞 / 排除项 / 验证统计 / 局限性声明）。"
@@ -121,7 +121,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   // 生成中
   if (report.status === "pending" || report.status === "generating") {
     return (
-      <div className="flex h-full items-center justify-center p-5">
+      <div className="flex h-full min-h-0 min-w-0 items-center justify-center overflow-x-hidden overflow-y-auto overscroll-contain p-5">
         <div className="flex items-center gap-3 rounded-[10px] border border-ink-700 bg-ink-900/60 px-6 py-4 text-[14px] text-zinc-400">
           <ArrowsClockwise size={16} className="animate-spin text-acc-400" />
           报告生成中…（分析已完成，正在汇总已确认漏洞与验证统计）
@@ -133,13 +133,13 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   // 失败：错误信息 + 显式重试
   if (report.status === "failed") {
     return (
-      <div className="p-5">
-        <div className="max-w-2xl rounded-[10px] border border-red-900/60 bg-red-950/40 px-5 py-4">
+      <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
+        <div className="max-w-2xl min-w-0 rounded-[10px] border border-red-900/60 bg-red-950/40 px-5 py-4">
           <div className="flex items-center gap-2 text-[15px] font-medium text-red-300">
             <FileText size={16} /> 报告生成失败
           </div>
           {report.error && (
-            <div className="mt-3 text-red-200/80"><MarkdownView markdown={report.error} /></div>
+            <div className="mt-3 break-words text-red-200/80"><MarkdownView markdown={report.error} scrollable={false} /></div>
           )}
           <div className="mt-3 flex items-center gap-3">
             <button
@@ -188,8 +188,8 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
     }
   };
   return (
-    <div className="h-full overflow-y-auto p-5">
-      <div className="mx-auto flex max-w-4xl flex-col gap-4">
+    <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
+      <div className="mx-auto flex min-w-0 max-w-4xl flex-col gap-4">
         {/* 摘要统计卡片 */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-[20px] bg-white/[.03] px-4 py-4 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
@@ -246,7 +246,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
             <DownloadSimple size={13} /> {downloading === "sarif" ? "下载中…" : "下载 SARIF"}
           </button>
           {downloadError && (
-            <div role="alert" className="basis-full text-[12px] text-red-300">
+            <div role="alert" className="basis-full break-words text-[12px] text-red-300">
               报告下载失败：{downloadError}
             </div>
           )}
@@ -267,7 +267,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
               <ArrowsClockwise size={14} className="animate-spin" /> 加载报告正文…
             </div>
           ) : (
-            <MarkdownView markdown={markdown} />
+            <MarkdownView markdown={markdown} scrollable={false} />
           )}
         </div>
       </div>

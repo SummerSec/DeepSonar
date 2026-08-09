@@ -495,6 +495,12 @@ export function TaskCanvasPage() {
   }, [jobKeyword, jobRoleTypeFilter, jobStatusFilter, jobs]);
   const hasJobFilters = Boolean(jobStatusFilter || jobRoleTypeFilter || jobKeyword);
 
+  const jobElapsed = (job: JobSummary) => {
+    if (!job.started_at) return "—";
+    if (!job.finished_at && !ACTIVE_JOB.has(job.status)) return "—";
+    return formatElapsed(job.started_at, job.finished_at, clock);
+  };
+
   const tabs: { key: Tab; label: string; count?: number; icon: typeof Graph }[] = [
     { key: "canvas", label: "过程画布", icon: Graph },
     { key: "findings", label: "本次发现", count: findings.length, icon: ListBullets },
@@ -728,8 +734,8 @@ export function TaskCanvasPage() {
         </div>
       )}
 
-      <div className="task-workbench-content theme-drawer relative mx-3 mb-3 min-h-0 flex-1 overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
-        <div className={`h-full min-h-0 ${tab === "canvas" ? "" : "hidden"}`}>
+      <div className="task-workbench-content theme-drawer relative mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
+        <div className={`min-h-0 flex-1 ${tab === "canvas" ? "" : "hidden"}`}>
           <CanvasView
             canvasId={canvasId}
             onData={onCanvasData}
@@ -749,7 +755,7 @@ export function TaskCanvasPage() {
         {tab === "report" && <ReportPanel canvasId={canvasId} />}
 
         {tab === "findings" && (
-          <div className="h-full overflow-y-auto p-4 sm:p-6">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p><div className="flex flex-wrap gap-2"><FilterSelect label="PROFILE" value={profile} onChange={(v) => setQuery("profile", v || null)} placeholder="全部 profile" options={Array.from(new Set(findings.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} /><FilterSelect label="SEVERITY" value={severity} onChange={(v) => setQuery("severity", v || null)} placeholder="全部 severity" options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))} /><FilterSelect label="VERIFY" value={verify} onChange={(v) => setQuery("verify", v || null)} placeholder="全部验证状态" options={["pending", "verifying", "confirmed", "false_positive", "needs_human"].map((value) => ({ value, label: value }))} /></div></div>
 
             {/* 待人工处理事实：hub 无法自动裁决的 fact，人工确认/排除后才会推进报告 */}
@@ -837,7 +843,7 @@ export function TaskCanvasPage() {
         )}
 
         {tab === "jobs" && (
-          <div className="h-full overflow-y-auto p-4 sm:p-6">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="mb-4 flex flex-col gap-3 rounded-2xl bg-white/[.018] p-3 ring-1 ring-white/[.045] sm:flex-row sm:flex-wrap sm:items-end">
               <FilterSelect value={jobStatusFilter} onChange={setJobStatusFilter} placeholder="全部状态" options={Array.from(new Set(jobs.map((job) => job.status))).sort().map((value) => ({ value, label: value }))} label="状态" />
               <FilterSelect value={jobRoleTypeFilter} onChange={setJobRoleTypeFilter} placeholder="全部角色 / 类型" options={jobRoleTypeOptions.map((value) => ({ value, label: value }))} label="角色 / Job 类型" />
@@ -868,7 +874,7 @@ export function TaskCanvasPage() {
                       <th className={thCls}>CLI 工具</th>
                       <th className={thCls}>模型</th>
                       <th className={thCls}>开始</th>
-                      <th className={thCls}>创建</th>
+                      <th className={thCls}>耗时</th>
                       <th className={thCls}>操作</th>
                     </tr>
                   </thead>
@@ -908,10 +914,10 @@ export function TaskCanvasPage() {
                           {formatTime(j.started_at)}
                         </td>
                         <td
-                          className={`${tdCls} font-mono text-[13px] text-zinc-500`}
-                          title={formatTime(j.created_at)}
+                          className={`${tdCls} whitespace-nowrap font-mono text-[13px] text-zinc-500`}
+                          title={j.started_at ? `开始 ${formatTime(j.started_at)}${j.finished_at ? ` · 结束 ${formatTime(j.finished_at)}` : " · 仍在运行"}` : "尚未开始运行"}
                         >
-                          {relativeTime(j.created_at)}
+                          {jobElapsed(j)}
                         </td>
                         <td className={tdCls} onClick={(e) => e.stopPropagation()}>
                           {ACTIVE_JOB.has(j.status) ? (

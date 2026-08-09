@@ -377,7 +377,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
       aria-label="运行详情"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <aside className="theme-drawer flex h-full min-h-0 w-full max-w-[1320px] flex-col border-l">
+      <aside className="theme-drawer flex h-full min-h-0 min-w-0 w-full max-w-[1320px] flex-col border-l">
         <header className="theme-drawer-header theme-divider flex shrink-0 flex-wrap items-start gap-3 border-b px-5 py-4">
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] uppercase tracking-[.18em] text-zinc-600">
@@ -465,7 +465,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
             ).map(([k, v]) => (
               <div key={k} className="theme-drawer min-w-0 px-4 py-3">
                 <div className="font-mono text-[8px] tracking-[.15em] text-zinc-700">{k}</div>
-                <div className="mt-1 truncate font-mono text-[10px] text-zinc-400" title={v}>
+                <div className="mt-1 break-all font-mono text-[10px] text-zinc-400" title={v}>
                   {v}
                 </div>
               </div>
@@ -494,7 +494,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
           ))}
         </nav>
 
-        <div className="min-h-0 flex-1 overflow-hidden">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
           {error && (
             <div className="m-5 rounded-xl bg-red-950/30 px-4 py-3 text-sm text-red-300 ring-1 ring-red-400/20">
               {error}
@@ -509,13 +509,13 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">
                 错误
               </div>
-              <MarkdownView markdown={detail.job.error} />
+              <MarkdownView markdown={detail.job.error} scrollable={false} />
             </div>
           )}
 
           {/* 结果：下发 prompt + 已运行输出摘要 + 产出发现 */}
           {detail && tab === "result" && (
-            <div className="h-full min-h-0 space-y-4 overflow-y-auto p-4">
+            <div className="min-h-full min-w-0 space-y-4 p-4">
               {detail.job.error && (
                 <div className="rounded-xl bg-red-950/25 px-4 py-3 text-red-300 ring-1 ring-red-400/20">
                   <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">

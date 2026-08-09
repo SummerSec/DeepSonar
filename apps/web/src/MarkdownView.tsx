@@ -105,7 +105,7 @@ export function MarkdownView({
       blocks.push(
         <pre
           key={key++}
-          className="my-2 overflow-x-auto rounded-lg border border-ink-800 bg-ink-950 px-3 py-2.5 font-mono text-[13px] leading-relaxed text-zinc-300"
+          className="my-2 overflow-x-auto break-normal rounded-lg border border-ink-800 bg-ink-950 px-3 py-2.5 font-mono text-[13px] leading-relaxed text-zinc-300"
         >
           {buf.join("\n")}
         </pre>,
@@ -263,7 +263,7 @@ export function MarkdownView({
             {editable ? "暂无内容，切换到「编辑」开始编写 Markdown。" : "（空）"}
           </p>
         ) : (
-          <div className={`markdown-view-body ${scrollable ? "max-h-[65vh] overflow-auto" : "overflow-visible"}`}>{blocks}</div>
+          <div className={`markdown-view-body break-words ${scrollable ? "max-h-[65vh] overflow-auto" : "overflow-visible"}`}>{blocks}</div>
         )
       ) : editable ? (
         <textarea
