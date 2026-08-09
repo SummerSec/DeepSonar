@@ -127,7 +127,11 @@ RUN set -eux; \
     '}' >> BUILD.gn; \
   case "$TARGETARCH" in \
     amd64) target_cpu=x64 ;; \
-    arm64) target_cpu=arm64 ;; \
+    arm64) \
+      target_cpu=arm64; \
+      python3 build/linux/sysroot_scripts/install-sysroot.py --arch=arm64; \
+      test -d build/linux/debian_bullseye_arm64-sysroot \
+      ;; \
     *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
   esac; \
   gn_args="is_debug=false is_component_build=false is_clang=true is_asan=true use_libfuzzer=true v8_enable_fuzztest=false target_cpu=\"$target_cpu\" v8_enable_i18n_support=false v8_use_external_startup_data=false v8_enable_pointer_compression=true"; \
