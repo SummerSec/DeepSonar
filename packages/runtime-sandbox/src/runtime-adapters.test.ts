@@ -13,21 +13,32 @@ function contentType(event: Record<string, unknown> | undefined): unknown {
   return message?.content?.[0]?.type;
 }
 
-function fakeSandbox(): { sandbox: never; commands: string[]; envs: Record<string, string>[] } {
+function fakeSandbox(): {
+  sandbox: never;
+  commands: string[];
+  envs: Record<string, string>[];
+  runCommands: string[];
+} {
   const commands: string[] = [];
   const envs: Record<string, string>[] = [];
+  const runCommands: string[] = [];
   const sandbox = {
     runAsync: async (command: string, options: { env?: Record<string, string> }) => {
       commands.push(command);
       envs.push(options.env ?? {});
       return {} as never;
     },
+    run: async (command: string) => {
+      runCommands.push(command);
+      return {} as never;
+    },
   } as never;
-  return { sandbox, commands, envs };
+  return { sandbox, commands, envs, runCommands };
 }
 
 test("the built-in registry is explicit, immutable, and capability complete", () => {
   assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "codex", "open-code"]);
+  assert.ok(REQUIRED_RUNTIME_CAPABILITIES.includes("contextCompaction"));
   for (const id of Object.keys(AGENT_CLI_RUNTIME_ADAPTERS)) {
     const adapter = getAgentCliRuntimeAdapter(id);
     assert.ok(adapter);
@@ -55,6 +66,24 @@ test("Claude keeps the existing stream-json protocol", () => {
   assert.deepEqual(adapter.decodeOutput({ type: "system", subtype: "init", session_id: "s1" }, {}), [
     { type: "system", subtype: "init", session_id: "s1" },
   ]);
+});
+
+test("Claude enables automatic compaction by default while honoring explicit env overrides", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
+  const defaultEnv = fakeSandbox();
+  const context = {
+    sandbox: defaultEnv.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "initial",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+  };
+  await adapter.start(context);
+  assert.equal(defaultEnv.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "70");
+
+  const explicitEnv = fakeSandbox();
+  await adapter.start({ ...context, sandbox: explicitEnv.sandbox, env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "35" } });
+  assert.equal(explicitEnv.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "35");
 });
 
 test("Claude enables governed partial stream-json frames", async () => {
@@ -112,6 +141,8 @@ test("Codex commands use governed MCP, model, reasoning, and resume arguments", 
   assert.match(fake.commands[0], /gpt-5/);
   assert.match(fake.commands[1], /exec resume/);
   assert.match(fake.commands[1], /codex-s1/);
+  assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
+  assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
 });
 
 test("OpenCode JSON events normalize text and tool completion without scraping terminal text", () => {
@@ -158,4 +189,23 @@ test("OpenCode commands pin config path and support same-session resume", async 
   assert.match(fake.commands[1], /--session 'oc-s1'/);
   assert.equal(fake.envs[0].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
   assert.equal(fake.envs[1].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
+  assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
+  assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
+});
+
+test("OpenCode materialization defaults compaction without discarding explicit config", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
+  const fake = fakeSandbox();
+  await adapter.materialize?.({
+    sandbox: fake.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+  });
+  assert.equal(fake.runCommands.length, 1);
+  assert.match(fake.runCommands[0], /const compaction=c\.compaction/);
+  assert.match(fake.runCommands[0], /hasOwnProperty\.call\(compaction,"auto"\)/);
+  assert.match(fake.runCommands[0], /compaction\.auto=true/);
+  assert.match(fake.runCommands[0], /c\.compaction=compaction/);
 });
