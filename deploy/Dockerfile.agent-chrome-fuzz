@@ -12,6 +12,8 @@ ARG V8_COMMIT=792d9716fea48312ad7ce4413c538e00628b1d50
 ARG V8_VERSION=15.1.206.10
 ARG DEPOT_TOOLS_REPOSITORY=https://chromium.googlesource.com/chromium/tools/depot_tools.git
 ARG DEPOT_TOOLS_COMMIT=921e61b35fbc5e97b14250a118e363ec05078089
+ARG COMPILER_RT_REPOSITORY=https://github.com/llvm/llvm-project.git
+ARG COMPILER_RT_COMMIT=53d18800eda3b7407e53366f27ca78e922c6e0db
 
 USER root
 RUN set -eux; \
@@ -28,8 +30,8 @@ RUN set -eux; \
 # A shallow, commit-addressed depot_tools checkout makes the source-build
 # dependency explicit. gclient then resolves V8 dependencies from the exact
 # V8 commit. The pinned Chromium sanitizer config maps use_libfuzzer=true to
-# -fsanitize=fuzzer-no-link for compilation; the appended target supplies
-# compiler-rt's libFuzzer main only at its final link.
+# -fsanitize=fuzzer-no-link. Compile compiler-rt's matching libFuzzer revision
+# inside the same GN graph so the engine and V8 share Clang 23 and libc++.
 RUN set -eux; \
   git init /opt/depot_tools; \
   git -C /opt/depot_tools remote add origin "$DEPOT_TOOLS_REPOSITORY"; \
@@ -41,14 +43,52 @@ RUN set -eux; \
   gclient config --name src "$V8_REPOSITORY"; \
   gclient sync --revision "src@$V8_COMMIT" --no-history --shallow; \
   cd src; \
+  git init third_party/deepsonar-compiler-rt; \
+  git -C third_party/deepsonar-compiler-rt remote add origin "$COMPILER_RT_REPOSITORY"; \
+  git -C third_party/deepsonar-compiler-rt sparse-checkout init --cone; \
+  git -C third_party/deepsonar-compiler-rt sparse-checkout set compiler-rt/lib/fuzzer; \
+  git -C third_party/deepsonar-compiler-rt fetch --depth 1 --filter=blob:none origin "$COMPILER_RT_COMMIT"; \
+  git -C third_party/deepsonar-compiler-rt checkout --detach FETCH_HEAD; \
   printf '%s\n' \
-    'config("v8_json_libfuzzer_link") {' \
-    '  ldflags = [ "-fsanitize=fuzzer,address" ]' \
+    'v8_source_set("deepsonar_libfuzzer") {' \
+    '  testonly = true' \
+    '  sources = [' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerCrossOver.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerDataFlowTrace.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerDriver.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerExtFunctionsDlsym.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerExtFunctionsWeak.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerExtFunctionsWindows.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerExtraCounters.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerExtraCountersDarwin.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerExtraCountersWindows.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerFork.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerIO.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerIOPosix.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerIOWindows.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerLoop.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerMain.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerMerge.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerMutate.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerSHA1.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerTracePC.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerUtil.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerUtilDarwin.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerUtilFuchsia.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerUtilLinux.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerUtilPosix.cpp",' \
+    '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerUtilWindows.cpp",' \
+    '  ]' \
+    '  include_dirs = [ "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer" ]' \
+    '  configs -= [ "//build/config/compiler:chromium_code" ]' \
+    '  configs -= [ "//build/config/sanitizers:default_sanitizer_flags" ]' \
+    '  configs += [ "//build/config/compiler:no_chromium_code" ]' \
+    '  configs += [ "//build/config/sanitizers:default_sanitizer_flags_but_coverage" ]' \
     '}' \
     'v8_executable("v8_json_libfuzzer") {' \
     '  testonly = true' \
-    '  deps = [ ":json_fuzzer" ]' \
-    '  configs = [ ":external_config", ":v8_json_libfuzzer_link" ]' \
+    '  deps = [ ":deepsonar_libfuzzer", ":json_fuzzer" ]' \
+    '  configs = [ ":external_config" ]' \
     '}' >> BUILD.gn; \
   case "$TARGETARCH" in amd64) target_cpu=x64 ;; arm64) target_cpu=arm64 ;; *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; esac; \
   export CC=clang-16 CXX=clang++-16; \
@@ -69,7 +109,7 @@ RUN set -eux; \
   rm -f /tmp/chrome-fuzz-env.sh /tmp/chrome-fuzz-smoke.sh; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_json_libfuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_json_libfuzzer",actual:true,source:"v8",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_json_libfuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_json_libfuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_json_libfuzzer",actual:true,source:"v8",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089",compiler_rt_commit:"53d18800eda3b7407e53366f27ca78e922c6e0db"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_json_libfuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
 ENV IS_SANDBOX=1 \
