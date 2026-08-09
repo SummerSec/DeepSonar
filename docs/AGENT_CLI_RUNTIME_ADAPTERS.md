@@ -9,8 +9,9 @@ provider-specific CLI protocols.
 real Agent CLIs. Each registered adapter declares:
 
 - a stable adapter id and installed CLI version;
-- required capabilities (`streamEvents`, `controlMcp`, `completionGate`, and
-  `sessionCapture`), plus optional incremental messaging and reasoning support;
+- required capabilities (`streamEvents`, `controlMcp`, `completionGate`,
+  `sessionCapture`, and `contextCompaction`), plus optional incremental
+  messaging and reasoning support;
 - the governed runtime image keys on which it may run;
 - a fixed command invocation and structured input/output codec.
 - an explicit same-session resume operation when incremental stdin is not
@@ -23,11 +24,30 @@ is consumed as structured JSON events; terminal text is never scraped.
 
 The current registry contains:
 
-| Adapter | CLI | Protocol | Incremental messages |
-| --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.220 | `stream-json` | yes |
-| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no |
-| `open-code` | OpenCode 1.18.15 | `opencode run --format json` | no |
+| Adapter | CLI | Protocol | Incremental messages | Context policy |
+| --- | --- | --- | --- | --- |
+| `claude-code` | Claude Code 2.1.220 | `stream-json` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence |
+| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default; no unsupported adapter flag is added |
+| `open-code` | OpenCode 1.18.15 | `opencode run --format json` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys |
+
+All three adapters declare `contextCompaction: true` and are admitted only when
+the context policy is supported. Claude and OpenCode do not rely on the Codex
+policy or receive the Claude-specific environment variable.
+
+## New adapter onboarding checklist
+
+Every new CLI must declare and test automatic context compaction before it can
+be registered or admitted:
+
+1. Add `contextCompaction: true` and document the exact upstream or adapter
+   policy, including defaults and explicit overrides.
+2. Add adapter tests that exercise the automatic-compaction behavior and verify
+   that unsupported provider flags or environment variables are not injected.
+3. If the upstream CLI has no automatic compaction, the adapter must implement
+   a bounded summary/new-session handoff and declare the
+   `bounded-session-summary` policy.
+4. Do not admit the adapter until the declaration, tests, and bounded-session
+   behavior (when needed) are complete.
 
 ## Snapshot and admission
 

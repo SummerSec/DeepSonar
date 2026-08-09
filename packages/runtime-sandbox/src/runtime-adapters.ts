@@ -2,12 +2,17 @@ import type { AsyncCommandHandle, Sandbox } from "agentbox-sdk";
 
 export type AgentCliId = "claude-code" | "codex" | "open-code";
 
+/** How an adapter keeps a long-running non-interactive session bounded. */
+export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-summary" | "unsupported";
+
 export interface AgentCliCapabilities {
   streamEvents: boolean;
   controlMcp: boolean;
   incrementalMessages: boolean;
   completionGate: boolean;
   sessionCapture: boolean;
+  contextCompaction: boolean;
+  contextCompactionPolicy: AgentCliContextCompactionPolicy;
   reasoningEffort: boolean;
   interactiveTerminal: boolean;
 }
@@ -49,6 +54,7 @@ export const REQUIRED_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities
   "controlMcp",
   "completionGate",
   "sessionCapture",
+  "contextCompaction",
 ];
 
 const ALL_IMAGE_KEYS = Object.freeze([
@@ -238,6 +244,8 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
     incrementalMessages: false,
     completionGate: false,
     sessionCapture: false,
+    contextCompaction: false,
+    contextCompactionPolicy: "unsupported",
     reasoningEffort: false,
     interactiveTerminal: false,
     ...input,
@@ -247,14 +255,17 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.220",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, incrementalMessages: true, completionGate: true, sessionCapture: true, reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, mcpConfigPath, systemPromptPath }) => {
     let command = `claude -p --input-format stream-json --output-format stream-json --verbose --mcp-config ${shellQuote(mcpConfigPath)} --permission-mode bypassPermissions`;
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --effort ${shellQuote(reasoning)}`;
     if (systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(systemPromptPath)})"`;
-    return sandbox.runAsync(command, { cwd, env });
+    return sandbox.runAsync(command, {
+      cwd,
+      env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70", ...env },
+    });
   },
   encodeInput: (content) => JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n",
   decodeOutput: (line) => [line],
@@ -280,7 +291,7 @@ function sandboxCodex(sandbox: Sandbox, context: AdapterStartContext, sessionId?
 const codex = Object.freeze<RuntimeAdapter>({
   id: "codex",
   version: "0.147.0",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxCodex(context.sandbox, context),
   resume: (context) => sandboxCodex(context.sandbox, context, context.sessionId),
@@ -291,7 +302,7 @@ const codex = Object.freeze<RuntimeAdapter>({
 const openCode = Object.freeze<RuntimeAdapter>({
   id: "open-code",
   version: "1.18.15",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
     let command = `opencode run --format json --dangerously-skip-permissions --pure`;
@@ -310,8 +321,10 @@ const openCode = Object.freeze<RuntimeAdapter>({
   materialize: async ({ sandbox }) => {
     // OpenCode's supported config is JSON. Merge the Scheduler-owned MCP
     // descriptor into the per-Job config after provider files are uploaded.
+    // Automatic compaction is the upstream bounded-session policy; preserve an
+    // explicit RoleConfig value instead of silently changing it.
     await sandbox.run(
-      "node -e 'const fs=require(\"node:fs\");const p=\"/workspace/.opencode/config.json\";let c={};try{c=JSON.parse(fs.readFileSync(p,\"utf8\"))}catch{};const m=JSON.parse(fs.readFileSync(\"/workspace/.deepsonar/mcp.json\",\"utf8\")).mcpServers||{};c.mcp=Object.fromEntries(Object.entries(m).map(([n,s])=>[n,s.type===\"stdio\"?{type:\"local\",command:[s.command,...(s.args||[])],environment:s.env||{}}:{type:\"remote\",url:s.url,headers:s.headers||{}}]));fs.mkdirSync(\"/workspace/.opencode\",{recursive:true});fs.writeFileSync(p,JSON.stringify(c)+\"\\n\")'",
+      "node -e 'const fs=require(\"node:fs\");const p=\"/workspace/.opencode/config.json\";let c={};try{c=JSON.parse(fs.readFileSync(p,\"utf8\"))}catch{};const compaction=c.compaction&&typeof c.compaction===\"object\"&&!Array.isArray(c.compaction)?c.compaction:{};if(!Object.prototype.hasOwnProperty.call(compaction,\"auto\"))compaction.auto=true;c.compaction=compaction;const m=JSON.parse(fs.readFileSync(\"/workspace/.deepsonar/mcp.json\",\"utf8\")).mcpServers||{};c.mcp=Object.fromEntries(Object.entries(m).map(([n,s])=>[n,s.type===\"stdio\"?{type:\"local\",command:[s.command,...(s.args||[])],environment:s.env||{}}:{type:\"remote\",url:s.url,headers:s.headers||{}}]));fs.mkdirSync(\"/workspace/.opencode\",{recursive:true});fs.writeFileSync(p,JSON.stringify(c)+\"\\n\")'",
       { cwd: "/workspace" },
     );
   },
@@ -339,6 +352,9 @@ export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): R
   }
   for (const capability of REQUIRED_RUNTIME_CAPABILITIES) {
     if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
+  }
+  if (adapter.capabilities.contextCompactionPolicy === "unsupported") {
+    throw new Error(`AGENT_CLI_CONTEXT_COMPACTION_UNSUPPORTED: ${adapter.id}`);
   }
   if (!adapter.capabilities.incrementalMessages && !adapter.resume) {
     throw new Error(`AGENT_CLI_RESUME_UNSUPPORTED: ${adapter.id}`);
