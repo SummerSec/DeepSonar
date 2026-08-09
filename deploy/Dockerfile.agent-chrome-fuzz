@@ -80,10 +80,14 @@ RUN set -eux; \
     '    "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer/FuzzerUtilWindows.cpp",' \
     '  ]' \
     '  include_dirs = [ "third_party/deepsonar-compiler-rt/compiler-rt/lib/fuzzer" ]' \
-    '  configs -= [ "//build/config/compiler:chromium_code" ]' \
-    '  configs -= [ "//build/config/sanitizers:default_sanitizer_flags" ]' \
-    '  configs += [ "//build/config/compiler:no_chromium_code" ]' \
-    '  configs += [ "//build/config/sanitizers:default_sanitizer_flags_but_coverage" ]' \
+    '  remove_configs = [' \
+    '    "//build/config/compiler:chromium_code",' \
+    '    "//build/config/sanitizers:default_sanitizer_flags",' \
+    '  ]' \
+    '  configs = [' \
+    '    "//build/config/compiler:no_chromium_code",' \
+    '    "//build/config/sanitizers:default_sanitizer_flags_but_coverage",' \
+    '  ]' \
     '}' \
     'v8_executable("v8_json_libfuzzer") {' \
     '  testonly = true' \
