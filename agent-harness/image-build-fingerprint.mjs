@@ -154,6 +154,7 @@ export const PRESETS = {
       "deploy/chrome-runtime-sources.json",
       "deploy/chrome-fuzz-env.sh",
       "deploy/chrome-fuzz-smoke.sh",
+      "deploy/chrome-fuzz-toolchain-preflight.sh",
     ],
     platforms: "linux/amd64,linux/arm64",
   },

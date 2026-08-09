@@ -391,3 +391,113 @@ jobs:
       - name: Maven online package smoke
         if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
         run: node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:ci
+
+  # Keep the V8 native-toolchain regression in the PR/main gate. This is a
+  # single arm64 build to control cost; release.yml remains authoritative for
+  # all six native Chrome children and the final multi-architecture indexes.
+  chrome-fuzz-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - id: ns
+        name: GHCR namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: base-image
+        name: Resolve immutable base image digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref=ghcr.io/summersec/deepsonar-base:latest
+          digest="$(docker buildx imagetools inspect "$base_ref" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            digest="$(docker buildx imagetools inspect "$base_ref" 2>/dev/null \
+              | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+              | head -n1)"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'ref=%s@%s\n' "${base_ref%:*}" "$digest" >> "$GITHUB_OUTPUT"
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset deepsonar-chrome-fuzz \
+            --platforms linux/arm64 \
+            --build-arg "BASE_IMAGE=${{ steps.base-image.outputs.ref }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused Chrome Fuzz image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "Chrome Fuzz arm64 build unchanged: reusing immutable src cache" >> "$GITHUB_STEP_SUMMARY"
+      - id: build
+        name: Build Chrome Fuzz arm64 by digest
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-chrome-fuzz
+          platforms: linux/arm64
+          outputs: type=image,name=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz,push-by-digest=true,name-canonical=true,push=true
+          build-args: BASE_IMAGE=${{ steps.base-image.outputs.ref }}
+          provenance: mode=max
+          sbom: true
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz:buildcache-arm64
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz:${{ steps.fingerprint.outputs.src_tag }}
+            type=gha,scope=chrome-fuzz-arm64
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz:buildcache-arm64,mode=max,ignore-error=true
+            type=gha,mode=max,scope=chrome-fuzz-arm64
+      - id: image
+        name: Resolve immutable Chrome Fuzz digest and pin src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Smoke Chrome Fuzz from immutable digest
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_NAME}@${DIGEST}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$image_ref"
+          node agent-harness/test-chrome-runtime.mjs "$image_ref" chrome-fuzz agent-harness/chrome-fuzz-runtime.json

@@ -29,6 +29,7 @@ const chromeTestEnv = readFileSync(new URL("../deploy/chrome-test-env.sh", impor
 const chromeTestSmoke = readFileSync(new URL("./chrome-test-smoke.mjs", import.meta.url), "utf8");
 const chromeFuzzEnv = readFileSync(new URL("../deploy/chrome-fuzz-env.sh", import.meta.url), "utf8");
 const chromeFuzzSmoke = readFileSync(new URL("../deploy/chrome-fuzz-smoke.sh", import.meta.url), "utf8");
+const chromeFuzzPreflight = readFileSync(new URL("../deploy/chrome-fuzz-toolchain-preflight.sh", import.meta.url), "utf8");
 const openHarmonyRepo = readFileSync(new URL("../deploy/vendor/gitcode-repo-py3", import.meta.url));
 const normalizedOpenHarmonyRepo = Buffer.from(openHarmonyRepo.toString("utf8").replace(/\r\n/g, "\n"));
 const openHarmonyEnv = readFileSync(new URL("../deploy/openharmony-env.sh", import.meta.url), "utf8");
@@ -271,12 +272,14 @@ expect(chromeHeadless.includes("--no-sandbox") && chromeHeadless.includes("--hea
 expect(chromeTestEnv.includes("connectOverCDP") && chromeTestSmoke.includes("connectOverCDP"), "Chrome Test must expose a Playwright/CDP path");
 expect(chromeFuzzDockerfile.includes(chromeSources.v8.commit) && chromeFuzzDockerfile.includes(chromeSources.v8.compiler_rt_commit) && chromeFuzzDockerfile.includes(chromeSources.v8.compiler_rt_repository) && chromeFuzzDockerfile.includes("gclient sync") && chromeFuzzDockerfile.includes("autoninja") && chromeFuzzDockerfile.includes("d8") && chromeFuzzDockerfile.includes("v8_json_libfuzzer") && chromeFuzzDockerfile.includes("use_libfuzzer=true") && chromeFuzzDockerfile.includes("-fsanitize=fuzzer-no-link") && chromeFuzzDockerfile.includes('v8_source_set("deepsonar_libfuzzer")') && chromeFuzzDockerfile.includes("FuzzerMain.cpp") && chromeFuzzDockerfile.includes("remove_configs = [") && chromeFuzzDockerfile.includes("configs = [") && chromeFuzzDockerfile.includes("default_sanitizer_flags_but_coverage") && chromeFuzzDockerfile.includes("v8_enable_fuzztest=false") && chromeFuzzDockerfile.includes("FROM runtime-rootfs AS v8-builder") && chromeFuzzDockerfile.includes("libsanitizer_shared_hooks.so") && chromeFuzzDockerfile.includes("LD_LIBRARY_PATH=/opt/deepsonar/lib"), "Chrome Fuzz must compile an instrumented pinned V8 target and ship its matching libFuzzer and sanitizer runtime closure through the V8 GN template contract");
 expect(chromeFuzzDockerfile.includes("pkg-config") && chromeFuzzDockerfile.includes("clang-16") && chromeFuzzDockerfile.includes("lld-16") && chromeFuzzDockerfile.includes("libclang-rt-16-dev") && chromeFuzzDockerfile.includes("libfuzzer-16-dev") && chromeFuzzDockerfile.includes("afl++"), "Chrome Fuzz Debian toolchain package closure incomplete");
+expect(chromeFuzzDockerfile.includes("clang_base_path=\"/usr/lib/llvm-16\"") && chromeFuzzDockerfile.includes("clang_use_chrome_plugins=false") && chromeFuzzDockerfile.includes("chrome-fuzz-toolchain-preflight.sh") && chromeFuzzPreflight.includes("/usr/bin/ninja") && chromeFuzzPreflight.includes("file -Lb"), "Chrome Fuzz arm64 must select native LLVM 16 through GN and run the generated-toolchain preflight");
 expect(chromeFuzzConfig.apt["libclang-rt-16-dev"]?.version === "16.0.6-15~deb12u1" && chromeFuzzConfig.apt["libfuzzer-16-dev"]?.version === "16.0.6-15~deb12u1", "Chrome Fuzz must declare verified Bookworm compiler-rt/libFuzzer package names");
 expect(chromeFuzzEnv.includes(".fuzz.actual == true") && chromeFuzzSmoke.includes("actual V8 d8") && chromeFuzzSmoke.includes("-runs=1") && !chromeFuzzDockerfile.includes("toy"), "Chrome Fuzz must fail closed without real d8/libFuzzer");
 for (const [file, content] of [
   ["chrome-audit-env.sh", chromeAuditEnv], ["chrome-audit-scan.sh", chromeAuditScan],
   ["chrome-headless.sh", chromeHeadless], ["chrome-test-env.sh", chromeTestEnv],
   ["chrome-fuzz-env.sh", chromeFuzzEnv], ["chrome-fuzz-smoke.sh", chromeFuzzSmoke],
+  ["chrome-fuzz-toolchain-preflight.sh", chromeFuzzPreflight],
 ]) {
   const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
   expect((mode & 0o111) !== 0, `${file} 必须可执行`);
@@ -284,6 +287,7 @@ for (const [file, content] of [
 }
 expect(prepareScript.includes("deepsonar-chrome-audit") && prepareScript.includes("deepsonar-chrome-test") && prepareScript.includes("deepsonar-chrome-fuzz"), "prepare 脚本必须接入 Chrome 三项镜像");
 expect(chromeWorkflow.includes("chrome-runtime-images") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome CI must build and smoke Chrome runtime images");
+expect(ciWorkflow.includes("chrome-fuzz-arm64") && ciWorkflow.includes("ubuntu-24.04-arm") && ciWorkflow.includes("platforms: linux/arm64") && ciWorkflow.includes("test-chrome-runtime.mjs"), "core CI must build and immutably smoke Chrome Fuzz on a native arm64 runner");
 expect(releaseWorkflow.includes("chrome-images:") && releaseWorkflow.includes("Dockerfile.agent-chrome-audit") && releaseWorkflow.includes("Dockerfile.agent-chrome-test") && releaseWorkflow.includes("Dockerfile.agent-chrome-fuzz"), "release workflow must publish all Chrome runtime images");
 for (const [file, content] of [
   ["openharmony-env.sh", openHarmonyEnv],
