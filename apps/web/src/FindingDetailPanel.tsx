@@ -304,7 +304,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
       aria-label="Finding 详情"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <aside className="theme-drawer flex h-full min-h-0 w-full max-w-[1040px] flex-col border-l">
+      <aside className="theme-drawer flex h-full min-h-0 min-w-0 w-full max-w-[1040px] flex-col border-l">
         {/* Issue header */}
         <header className="theme-drawer-header theme-divider shrink-0 border-b px-5 py-4 sm:px-6">
           <div className="flex items-start gap-3">
@@ -321,11 +321,11 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   </>
                 )}
               </div>
-              <h1 className="mt-2 text-[20px] font-semibold leading-7 tracking-tight text-zinc-50">
+              <h1 className="mt-2 break-words text-[20px] font-semibold leading-7 tracking-tight text-zinc-50">
                 {f?.title ?? "加载中…"}
               </h1>
               {f && (
-                <p className="mt-1.5 font-mono text-[11px] text-zinc-600">
+                <p className="mt-1.5 break-words font-mono text-[11px] text-zinc-600">
                   开于 {formatTime(f.created_at)}
                   {f.disposition_by
                     ? ` · 状态由 ${f.disposition_by}${f.disposition_at ? ` 于 ${formatTime(f.disposition_at)}` : ""} 更新`
@@ -342,9 +342,9 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
               <X size={16} />
             </button>
           </div>
-          {msg && <div className="mt-3 font-mono text-[12px] text-acc-400">{msg}</div>}
+          {msg && <div className="mt-3 break-words font-mono text-[12px] text-acc-400">{msg}</div>}
           {error && (
-            <div className="mt-3 rounded-xl bg-red-950/30 px-4 py-2.5 text-sm text-red-300 ring-1 ring-red-400/20">
+            <div className="mt-3 break-words rounded-xl bg-red-950/30 px-4 py-2.5 text-sm text-red-300 ring-1 ring-red-400/20">
               {error}
             </div>
           )}
@@ -355,7 +355,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
         )}
 
         {f && detail && (
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
             <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_280px]">
               {/* ── Main: body + activity ── */}
               <div className="theme-divider min-w-0 px-5 py-5 sm:px-6 lg:border-r">
@@ -372,12 +372,12 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   </div>
                   <div className="px-4 py-4">
                     {f.summary ? (
-                      <MarkdownView markdown={f.summary} />
+                      <MarkdownView markdown={f.summary} scrollable={false} />
                     ) : (
                       <p className="text-[13px] text-zinc-600">无描述内容。</p>
                     )}
                     {f.location && (
-                      <div className="theme-input-surface mt-4 rounded-lg border px-3 py-2 font-mono text-[11px] text-zinc-400">
+                      <div className="theme-input-surface mt-4 break-all rounded-lg border px-3 py-2 font-mono text-[11px] text-zinc-400">
                         <span className="text-zinc-600">location </span>
                         {f.location}
                       </div>
@@ -387,8 +387,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
 
                 <section className="theme-surface mt-4 rounded-xl px-4 py-4 ring-1" aria-label="Finding 协议与评分">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-acc-500/[.08] px-2.5 py-1 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/20">{f.profile}</span>
-                    {f.category && <span className="rounded-full bg-white/[.035] px-2.5 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.07]">{f.category}</span>}
+                    <span className="break-all rounded-full bg-acc-500/[.08] px-2.5 py-1 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/20">{f.profile}</span>
+                    {f.category && <span className="break-words rounded-full bg-white/[.035] px-2.5 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.07]">{f.category}</span>}
                     <span className="font-mono text-[10px] text-zinc-500">本条 profile 已冻结</span>
                   </div>
                   {f.scoring_json && Object.keys(f.scoring_json).length > 0 ? (
@@ -437,7 +437,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       </button>
                     </div>
                     <div className="px-4 py-4">
-                      {reportError && <p role="alert" className="mb-3 text-[12px] text-red-300">{reportError}</p>}
+                      {reportError && <p role="alert" className="mb-3 break-words text-[12px] text-red-300">{reportError}</p>}
                       {!findingReport && (
                         <p className="text-[12px] leading-5 text-zinc-500">确认完成后会自动生成；也可立即手动创建。</p>
                       )}
@@ -448,7 +448,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                         </div>
                       )}
                       {findingReport?.status === "failed" && (
-                        <div className="text-[12px] text-red-300">
+                        <div className="break-words text-[12px] text-red-300">
                           生成失败{findingReport.error ? `：${findingReport.error}` : ""}
                         </div>
                       )}
@@ -469,7 +469,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                               <DownloadSimple size={12} /> 下载 Markdown
                             </button>
                           </div>
-                          {reportMarkdown ? <MarkdownView markdown={reportMarkdown} /> : <p className="text-[12px] text-zinc-600">正在读取报告正文…</p>}
+                          {reportMarkdown ? <MarkdownView markdown={reportMarkdown} scrollable={false} /> : <p className="text-[12px] text-zinc-600">正在读取报告正文…</p>}
                         </>
                       )}
                     </div>
@@ -542,7 +542,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                           </Link>
                         )}
                         {round.missing.length > 0 && (
-                          <span className="text-amber-300">缺口：{round.missing.join("、")}</span>
+                          <span className="break-words text-amber-300">缺口：{round.missing.join("、")}</span>
                         )}
                       </TraceRow>
                     ))}
@@ -574,7 +574,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                             <div key={edge.edge_id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-lg bg-white/[.018] px-3 py-2 ring-1 ring-white/[.045]">
                               <Link to={traceUrl(edge.from_node_id)} className="min-w-0 hover:text-acc-300">
                                 <span className="block font-mono text-[9px] text-zinc-600">{FLOW_NODE_LABEL[from?.node_type ?? ""] ?? from?.node_type ?? "节点"}</span>
-                                <span className="block truncate text-[11px] text-zinc-300" title={from?.title}>{from?.title || shortId(edge.from_node_id)}</span>
+                                <span className="block break-words text-[11px] text-zinc-300" title={from?.title}>{from?.title || shortId(edge.from_node_id)}</span>
                               </Link>
                               <span className="flex flex-col items-center gap-0.5 text-zinc-600">
                                 <ArrowRight size={13} />
@@ -582,7 +582,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                               </span>
                               <Link to={traceUrl(edge.to_node_id)} className="min-w-0 text-right hover:text-acc-300">
                                 <span className="block font-mono text-[9px] text-zinc-600">{FLOW_NODE_LABEL[to?.node_type ?? ""] ?? to?.node_type ?? "节点"}</span>
-                                <span className="block truncate text-[11px] text-zinc-300" title={to?.title}>{to?.title || shortId(edge.to_node_id)}</span>
+                                <span className="block break-words text-[11px] text-zinc-300" title={to?.title}>{to?.title || shortId(edge.to_node_id)}</span>
                               </Link>
                             </div>
                           );
@@ -595,7 +595,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       <div className="mt-3 rounded-lg bg-amber-400/[.04] px-3 py-2 ring-1 ring-amber-300/10">
                         <div className="font-mono text-[9px] text-amber-300">未形成结构化边的 Intent</div>
                         {unlinkedIntents.map((intent) => (
-                          <Link key={intent.node_id} to={traceUrl(intent.node_id)} className="mt-1 block truncate text-[11px] text-zinc-400 hover:text-zinc-200">
+                          <Link key={intent.node_id} to={traceUrl(intent.node_id)} className="mt-1 block break-words text-[11px] text-zinc-400 hover:text-zinc-200">
                             {intent.role ? `${intent.role} · ` : ""}{intent.title}
                           </Link>
                         ))}
@@ -678,7 +678,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                             </button>
                           </div>
                           <div className="px-3 py-3">
-                            <MarkdownView markdown={c.body} />
+                            <MarkdownView markdown={c.body} scrollable={false} />
                           </div>
                         </div>
                       </div>
@@ -739,7 +739,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                                 {formatTime(job.started_at ?? job.created_at)}
                               </span>
                               {job.error && (
-                                <MarkdownView markdown={job.error} className="w-full text-red-300" />
+                                <MarkdownView markdown={job.error} scrollable={false} className="w-full text-red-300" />
                               )}
                             </div>
                           ))}

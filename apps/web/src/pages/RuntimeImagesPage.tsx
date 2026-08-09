@@ -1091,14 +1091,14 @@ export function RuntimeImagesPage() {
             if (event.target === event.currentTarget) setSelected(null);
           }}
         >
-          <aside className="h-full w-full max-w-[620px] overflow-y-auto border-l border-white/[.07] bg-[#0e1214] p-4 shadow-2xl sm:p-6">
-            <div className="flex items-start gap-3">
+          <aside className="flex h-full min-h-0 min-w-0 w-full max-w-[620px] flex-col overflow-x-hidden overflow-y-auto overscroll-contain border-l border-white/[.07] bg-[#0e1214] p-4 shadow-2xl sm:p-6">
+            <div className="flex min-w-0 items-start gap-3">
               <div className="min-w-0 flex-1">
                 <span className="font-mono text-[9px] tracking-[.16em] text-acc-300">RUNTIME EVIDENCE</span>
-                <h2 className="mt-2 text-xl text-zinc-100">{selected.image.name}</h2>
-                <p className="mt-1 font-mono text-[10px] text-zinc-600">{selected.image.image_key}</p>
+                <h2 className="mt-2 break-words text-xl text-zinc-100">{selected.image.name}</h2>
+                <p className="mt-1 break-all font-mono text-[10px] text-zinc-600">{selected.image.image_key}</p>
               </div>
-              <button className="secondary-button" onClick={() => setSelected(null)}>
+              <button className="secondary-button shrink-0" onClick={() => setSelected(null)}>
                 关闭
               </button>
             </div>
@@ -1110,7 +1110,7 @@ export function RuntimeImagesPage() {
                   <SealCheck size={16} className="text-acc-300" />
                   <strong className="text-[13px] font-medium text-zinc-100">登记官方 digest</strong>
                 </div>
-                <p className="mt-2 text-[12px] leading-5 text-zinc-500">
+                <p className="mt-2 break-words text-[12px] leading-5 text-zinc-500">
                   官方镜像<strong className="text-zinc-400">不会出现「导入 → 扫描 → 批准」按钮</strong>：catalog 只是占位。
                   需要配置 <code className="text-zinc-400">DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:…</code> 并重启，或在此粘贴不可变引用直接登记为
                   trusted。可移动 tag 会被拒绝。
@@ -1148,7 +1148,7 @@ export function RuntimeImagesPage() {
             </section>
             )}
 
-            <div className="mt-6 space-y-4">
+            <div className="mt-6 min-w-0 space-y-4">
               {selected.versions.some((version) => version.trust_status === "trusted") && selected.versions.some((version) => version.trust_status === "disabled") && (
                 <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/[.04] px-3 py-2 text-[11px] leading-5 text-zinc-400">
                   <span className="text-emerald-300">可信版本优先：</span>disabled 版本的扫描/停用诊断仍保留在下方，不会遮蔽当前可用的 trusted 版本。
@@ -1212,9 +1212,9 @@ export function RuntimeImagesPage() {
                   const approve = canApproveVersion(version);
                   const isPinned = projectId && selected.image.selected_version_id === version.id;
                   return (
-                    <section key={version.id} className={`rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : "border-white/[.065] bg-white/[.025]"}`}>
+                    <section key={version.id} className={`min-w-0 rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : "border-white/[.065] bg-white/[.025]"}`}>
                       <div className="flex flex-wrap items-center gap-2">
-                        <strong className="font-mono text-sm font-normal text-zinc-200">{version.version}</strong>
+                        <strong className="break-words font-mono text-sm font-normal text-zinc-200">{version.version}</strong>
                         <TrustBadge status={version.trust_status} />
                         {version.platforms_json?.map((platform) => (
                           <span key={platform} className="rounded-full bg-sky-400/[.1] px-2 py-0.5 font-mono text-[8px] tracking-[.08em] text-sky-300">
@@ -1235,7 +1235,7 @@ export function RuntimeImagesPage() {
                         {version.tools_json.map((tool) => (
                           <span
                             key={tool.name}
-                            className="rounded-full bg-white/[.04] px-2 py-1 font-mono text-[8px] text-zinc-500"
+                            className="break-words rounded-full bg-white/[.04] px-2 py-1 font-mono text-[8px] text-zinc-500"
                           >
                             {tool.name} {tool.version}
                           </span>
@@ -1249,7 +1249,7 @@ export function RuntimeImagesPage() {
                         <span>大小 {version.size_bytes ? `${Math.round(version.size_bytes / 1024 / 1024)} MiB` : "—"}</span>
                       </div>
                       {version.status_reason && (
-                        <p className="mt-3 rounded-lg bg-red-400/[.06] px-3 py-2 text-xs text-red-300">
+                        <p className="mt-3 break-words rounded-lg bg-red-400/[.06] px-3 py-2 text-xs text-red-300">
                           {version.status_reason}
                         </p>
                       )}
@@ -1307,7 +1307,7 @@ export function RuntimeImagesPage() {
                         )}
                       </div>
                       {!projectId && !approve.ok && version.trust_status !== "trusted" && (
-                        <p className="mt-2 text-[11px] leading-5 text-zinc-600">
+                        <p className="mt-2 break-words text-[11px] leading-5 text-zinc-600">
                           「批准 / 提升」不可用：{approve.reason}
                           {selected.image.official && "。官方镜像更推荐上方「登记官方 digest」。"}
                         </p>
@@ -1316,7 +1316,7 @@ export function RuntimeImagesPage() {
                       {version.scans.map((scan) => (
                         <div
                           key={scan.id}
-                          className="mt-3 border-t border-white/[.045] pt-3 font-mono text-[9px] text-zinc-600"
+                          className="mt-3 break-words border-t border-white/[.045] pt-3 font-mono text-[9px] text-zinc-600"
                         >
                           scan {scan.id.slice(0, 8)} · {scan.status}
                           {scan.error ? ` · ${scan.error}` : ""}

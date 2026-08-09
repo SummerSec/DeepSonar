@@ -85,15 +85,15 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
             aria-modal="true"
             aria-labelledby={titleId}
             aria-describedby={descriptionId}
-            className="theme-drawer w-full max-w-[440px] overflow-hidden rounded-lg border border-[var(--line-strong)] shadow-2xl"
+            className="theme-drawer flex max-h-[calc(100dvh-2rem)] min-w-0 w-full max-w-[440px] flex-col overflow-y-auto overscroll-contain rounded-lg border border-[var(--line-strong)] shadow-2xl"
           >
             <div className="theme-drawer-header flex items-start gap-3 border-b px-5 py-4">
               <span className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full ${pending.tone === "danger" ? "bg-red-500/10 text-red-300" : "bg-acc-500/10 text-acc-300"}`}>
                 <WarningCircle size={18} weight="fill" />
               </span>
               <div className="min-w-0 flex-1">
-                <h2 id={titleId} className="text-[15px] font-medium text-zinc-100">{pending.title}</h2>
-                <p id={descriptionId} className="mt-1 whitespace-pre-line text-[12px] leading-5 text-zinc-500">
+                <h2 id={titleId} className="break-words text-[15px] font-medium text-zinc-100">{pending.title}</h2>
+                <p id={descriptionId} className="mt-1 break-words whitespace-pre-line text-[12px] leading-5 text-zinc-500">
                   {pending.description}
                 </p>
               </div>
@@ -107,11 +107,11 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
                 <X size={16} />
               </button>
             </div>
-            <div className="flex justify-end gap-2 px-5 py-4">
+            <div className="flex shrink-0 flex-wrap justify-end gap-2 px-5 py-4">
               <button
                 type="button"
                 onClick={() => finish(false)}
-                className="min-h-9 rounded-md border border-[var(--line)] px-4 text-[12px] text-zinc-300 transition-colors hover:bg-white/[.04]"
+                className="min-h-9 break-words rounded-md border border-[var(--line)] px-4 text-[12px] text-zinc-300 transition-colors hover:bg-white/[.04]"
               >
                 {pending.cancelLabel ?? "取消"}
               </button>
@@ -119,7 +119,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
                 ref={confirmButtonRef}
                 type="button"
                 onClick={() => finish(true)}
-                className={`min-h-9 rounded-md px-4 text-[12px] font-medium text-white transition-colors ${pending.tone === "danger" ? "bg-red-600 hover:bg-red-500" : "bg-acc-500 hover:bg-acc-400"}`}
+                className={`min-h-9 break-words rounded-md px-4 text-[12px] font-medium text-white transition-colors ${pending.tone === "danger" ? "bg-red-600 hover:bg-red-500" : "bg-acc-500 hover:bg-acc-400"}`}
               >
                 {pending.confirmLabel ?? "确认"}
               </button>
