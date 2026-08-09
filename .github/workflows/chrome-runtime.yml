@@ -36,7 +36,9 @@ jobs:
   # the release workflow is the authoritative linux/amd64 + linux/arm64 gate.
   chrome-runtime-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Match the release builder allowance: a cold V8 + ASan build can exceed
+    # 90 minutes, while cache hits still finish in minutes.
+    timeout-minutes: 240
     permissions:
       contents: read
       packages: write
