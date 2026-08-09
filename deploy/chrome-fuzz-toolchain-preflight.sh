@@ -10,14 +10,14 @@ target_arch="$1"
 out_dir="$2"
 
 case "$target_arch" in
-  amd64) expected_host_arch='x86_64'; expected_file_arch='x86-64' ;;
-  arm64) expected_host_arch='aarch64'; expected_file_arch='ARM aarch64' ;;
+  amd64) expected_target_flag='' ;;
+  arm64) expected_target_flag='--target=aarch64-linux-gnu' ;;
   *) echo "unsupported target architecture: $target_arch" >&2; exit 1 ;;
 esac
 
 host_arch="$(uname -m)"
-[[ "$host_arch" == "$expected_host_arch" ]] || {
-  echo "Chrome Fuzz toolchain preflight failed: target $target_arch is running on host $host_arch" >&2
+[[ "$host_arch" == x86_64 ]] || {
+  echo "Chrome Fuzz toolchain preflight failed: pinned V8 Clang requires an x86_64 build host, got $host_arch" >&2
   exit 1
 }
 
@@ -34,8 +34,8 @@ ninja_bin=/usr/bin/ninja
   exit 1
 }
 ninja_format="$(file -Lb "$ninja_bin")"
-[[ "$ninja_format" == *"$expected_file_arch"* ]] || {
-  echo "Chrome Fuzz toolchain preflight failed: $ninja_bin is $ninja_format, expected $expected_file_arch" >&2
+[[ "$ninja_format" == *x86-64* ]] || {
+  echo "Chrome Fuzz toolchain preflight failed: $ninja_bin is $ninja_format, expected x86-64" >&2
   exit 1
 }
 "$ninja_bin" --version >/dev/null
@@ -58,14 +58,23 @@ fi
 }
 
 compiler_format="$(file -Lb "$compiler_path")"
-[[ "$compiler_format" == *"$expected_file_arch"* ]] || {
-  echo "Chrome Fuzz toolchain preflight failed: $compiler_path is $compiler_format, expected $expected_file_arch" >&2
+[[ "$compiler_format" == *x86-64* ]] || {
+  echo "Chrome Fuzz toolchain preflight failed: $compiler_path is $compiler_format, expected x86-64" >&2
   exit 1
 }
 
-if [[ "$target_arch" == arm64 ]]; then
-  [[ "$compiler_path" == /usr/lib/llvm-16/bin/clang++ ]] || {
-    echo "Chrome Fuzz toolchain preflight failed: arm64 GN selected $compiler_path instead of /usr/lib/llvm-16/bin/clang++" >&2
+[[ "$compiler_token" == *third_party/llvm-build/Release+Asserts/bin/clang++ ]] || {
+  echo "Chrome Fuzz toolchain preflight failed: GN emitted non-pinned compiler $compiler_token" >&2
+  exit 1
+}
+[[ "$compiler_path" == */third_party/llvm-build/Release+Asserts/bin/clang || "$compiler_path" == */third_party/llvm-build/Release+Asserts/bin/clang++ ]] || {
+  echo "Chrome Fuzz toolchain preflight failed: GN selected non-pinned compiler $compiler_path" >&2
+  exit 1
+}
+
+if [[ -n "$expected_target_flag" ]]; then
+  grep -q -- "$expected_target_flag" "$commands_file" || {
+    echo "Chrome Fuzz toolchain preflight failed: $target_arch commands omit $expected_target_flag" >&2
     exit 1
   }
 fi
