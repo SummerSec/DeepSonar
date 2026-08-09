@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync as fsStatSync } from "node:fs";
+import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION } from "./image-build-fingerprint.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
 // checkout's mode as 0644 regardless of that index bit. Keep the Linux gate
@@ -59,9 +60,47 @@ const schedulerRuntimeSnapshot = readFileSync(
 const schedulerDispatcher = readFileSync(new URL("../apps/scheduler/src/dispatcher.ts", import.meta.url), "utf8");
 const schema = readFileSync(new URL("../database/schema.sql", import.meta.url), "utf8");
 const roleSmoke = readFileSync(new URL("./test-runtime-images-api.py", import.meta.url), "utf8");
+const dockerIgnore = readFileSync(new URL("../.dockerignore", import.meta.url), "utf8");
+const chromeWorkflow = readFileSync(new URL("../.github/workflows/chrome-runtime.yml", import.meta.url), "utf8");
+const openHarmonyWorkflow = readFileSync(new URL("../.github/workflows/openharmony-runtime.yml", import.meta.url), "utf8");
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
+expect(FINGERPRINT_SCHEMA_VERSION === "v2", "fingerprint schema version must be bumped deliberately when semantics change");
+expect(COMMON_FINGERPRINT_PATHS.length === 1 && COMMON_FINGERPRINT_PATHS[0] === ".dockerignore", "all image fingerprints must include the shared .dockerignore input");
+expect(dockerIgnore.trim().length > 0, ".dockerignore must remain present for image-context fingerprinting");
+const assertSpecialistWorkflow = (workflow, label, paths) => {
+  expect(workflow.includes("pull_request:\n    paths:"), `${label} workflow must use a pull_request path filter`);
+  expect(workflow.includes("push:\n    branches: [main]\n    paths:"), `${label} workflow must use a main push path filter`);
+  expect(workflow.includes("workflow_dispatch:"), `${label} workflow must support workflow_dispatch`);
+  expect(workflow.includes("concurrency:\n  group:") && workflow.includes("cancel-in-progress: true"), `${label} workflow must have independent cancellable concurrency`);
+  for (const path of paths) expect(workflow.includes(`      - "${path}"`), `${label} workflow path filter missing ${path}`);
+  expect(workflow.includes("image-build-fingerprint.mjs"), `${label} workflow must calculate an image fingerprint`);
+  expect(workflow.includes("resolve-image-src-cache.sh resolve"), `${label} workflow must resolve immutable src-* cache tags`);
+  expect(workflow.includes("SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}"), `${label} workflow must pass the fingerprint src tag to cache resolution`);
+  expect(workflow.includes("steps.resolve.outputs.skip != 'true'") && workflow.includes("steps.resolve.outputs.skip == 'true'"), `${label} workflow must skip unchanged rebuilds`);
+  expect(workflow.includes('docker push "${IMAGE_NAME}:${SRC_TAG}"'), `${label} workflow must pin newly built src-* cache tags`);
+};
+assertSpecialistWorkflow(chromeWorkflow, "Chrome", [
+  "deploy/Dockerfile.agent-chrome-*", "deploy/chrome-*", "agent-harness/chrome-*-runtime.json",
+  "agent-harness/chrome-*.mjs", "agent-harness/test-chrome-runtime.mjs", ".dockerignore",
+  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/chrome-runtime.yml",
+]);
+assertSpecialistWorkflow(openHarmonyWorkflow, "OpenHarmony", [
+  "deploy/Dockerfile.agent-openharmony-*", "deploy/openharmony-*.sh", "deploy/vendor/gitcode-repo-py3", ".dockerignore",
+  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/openharmony-runtime.yml",
+]);
+expect(!ciWorkflow.includes("chrome-runtime-images"), "core ci workflow must not contain the Chrome specialist job");
+expect(!ciWorkflow.includes("openharmony-runtime-images"), "core ci workflow must not contain the OpenHarmony specialist job");
+expect(ciWorkflow.includes("toolset: base") && ciWorkflow.includes("toolset: audit") && ciWorkflow.includes("toolset: kali-minimal"), "core ci workflow must retain base/audit/kali runtime jobs");
+expect(chromeWorkflow.includes("chrome-runtime-images:") && chromeWorkflow.includes("platforms: linux/amd64") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome workflow must retain its amd64 matrix and smoke");
+expect(chromeWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "Chrome workflow must pull immutable src-* images before cache-hit smoke");
+expect(openHarmonyWorkflow.includes("openharmony-runtime-images:") && openHarmonyWorkflow.includes("setup-qemu-action@v3"), "OpenHarmony workflow must retain its QEMU-backed specialist job");
+expect((openHarmonyWorkflow.match(/toolset: openharmony-audit/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two audit matrix entries");
+expect((openHarmonyWorkflow.match(/toolset: openharmony-fuzz/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two fuzz matrix entries");
+expect((openHarmonyWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 2 && (openHarmonyWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 2, "OpenHarmony workflow must retain amd64/arm64 matrix coverage");
+expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
+expect(!openHarmonyWorkflow.includes("openharmony-test"), "OpenHarmony specialist CI must not add a test matrix");
 expect(localDefinition.includes('runtime-images.json'), "agent-harness/image.mjs must consume runtime-images.json");
 expect(dockerfile.includes(`ARG BASE_IMAGE=${config.baseImage}`), "Dockerfile.agent base image differs from runtime-images.json");
 expect(dockerfile.includes("FROM ${BASE_IMAGE}"), "Dockerfile.agent must consume the pinned BASE_IMAGE arg");
@@ -244,7 +283,7 @@ for (const [file, content] of [
   expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
 }
 expect(prepareScript.includes("deepsonar-chrome-audit") && prepareScript.includes("deepsonar-chrome-test") && prepareScript.includes("deepsonar-chrome-fuzz"), "prepare 脚本必须接入 Chrome 三项镜像");
-expect(ciWorkflow.includes("chrome-runtime-images") && ciWorkflow.includes("test-chrome-runtime.mjs"), "CI must build and smoke Chrome runtime images");
+expect(chromeWorkflow.includes("chrome-runtime-images") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome CI must build and smoke Chrome runtime images");
 expect(releaseWorkflow.includes("chrome-images:") && releaseWorkflow.includes("Dockerfile.agent-chrome-audit") && releaseWorkflow.includes("Dockerfile.agent-chrome-test") && releaseWorkflow.includes("Dockerfile.agent-chrome-fuzz"), "release workflow must publish all Chrome runtime images");
 for (const [file, content] of [
   ["openharmony-env.sh", openHarmonyEnv],
@@ -300,7 +339,7 @@ expect(openHarmonyFuzzEnv.includes("tool-manifest.json") && openHarmonyFuzzEnv.i
 expect(openHarmonyFuzzEnv.includes('if [[ "$check_mode" == "static" ]]'), "OpenHarmony Fuzz static mode must branch before sanitizer execution");
 expect(openHarmonyFuzzEnv.includes("ASAN_OPTIONS=detect_leaks=0") && openHarmonyFuzzEnv.includes('"$smoke_binary" -runs=1'), "OpenHarmony Fuzz amd64 mode must run the sanitizer/libFuzzer smoke binary");
 expect(openHarmonyFuzzDockerfile.includes("ARG TARGETARCH") && openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check --static"), "OpenHarmony Fuzz image build must use static mode for arm64 targets");
-expect(ciWorkflow.includes("check_args: --check --static") && ciWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
+expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
 expect(openHarmonyDockerfile.includes("openharmony-env.sh --check"), "OpenHarmony Test 必须在构建时执行环境 smoke check");
 expect(openHarmonyAuditDockerfile.includes("openharmony-audit-env.sh --check"), "OpenHarmony Audit 必须在构建时执行环境 smoke check");
 expect(openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check"), "OpenHarmony Fuzz 必须在构建时执行环境 smoke check");

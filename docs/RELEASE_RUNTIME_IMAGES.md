@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony 与 Chrome 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。
+`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony 与 Chrome 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，OpenHarmony audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`。
 
 同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` **提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json for vX.Y.Z`），用于更新内置 bundled 回退清单。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。若默认分支开启了「禁止 GITHUB_TOKEN 直推」类保护规则，需为 Actions 放行或改用可写 PAT。
 
@@ -123,11 +123,24 @@ consumed by the three Chrome Dockerfiles and the consistency gate:
   be added to the registry.
 
 The Chrome images are all project opt-in and have no global role defaults.
-`ci.yml` builds amd64 and runs the contract/smoke harness on every supported
-CI path. `release.yml` is the authoritative multi-architecture gate: it uses
+`chrome-runtime.yml` builds amd64 and runs the contract/smoke harness when its
+Dockerfiles, descriptors/scripts, `.dockerignore`, shared fingerprint/cache
+mechanism, or workflow changes. `release.yml` is the authoritative
+multi-architecture gate: it uses
 native `ubuntu-latest` and `ubuntu-24.04-arm` runners for child image builds
 (especially the V8 build, which is not run under QEMU), then assembles the
 two child digests into one index. It uses
 the immutable base digest, publishes GHCR plus configured ACR and Docker Hub
 tags, inspects every destination, and uploads only records accepted by
 `record-runtime-image-digest.mjs`.
+
+## OpenHarmony specialist CI contract
+
+`openharmony-runtime.yml` preserves the four CI matrix entries: audit and fuzz
+each run on `linux/amd64` and `linux/arm64`. It uses QEMU for builds, runs the
+offline environment checks, and pins one immutable GHCR `src-*` tag per
+architecture. It is path-filtered to the two OpenHarmony Dockerfiles, the
+`openharmony-*.sh` scripts, the exact vendored `deploy/vendor/gitcode-repo-py3`
+launcher, `.dockerignore`, the shared fingerprint/cache scripts, and its own
+workflow file. There is no OpenHarmony Test matrix in this CI workflow; the
+three OpenHarmony products remain covered by the release workflow.

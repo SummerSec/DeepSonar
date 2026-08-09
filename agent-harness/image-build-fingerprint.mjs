@@ -16,6 +16,12 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+// Bump this when the fingerprint algorithm or its input semantics change.
+// Keep the version explicit so adding an unrelated preset does not invalidate
+// every existing image's src-* cache tag.
+export const FINGERPRINT_SCHEMA_VERSION = "v2";
+export const COMMON_FINGERPRINT_PATHS = [".dockerignore"];
+
 /** @type {Record<string, { dockerfile: string, paths: string[], buildArgs?: string[], platforms: string }>} */
 export const PRESETS = {
   "deepsonar-base": {
@@ -208,13 +214,14 @@ export function computeFingerprint(opts) {
   if (!platforms) fail("missing --platforms or preset platforms");
 
   const h = createHash("sha256");
+  h.update(`schema:${FINGERPRINT_SCHEMA_VERSION}\n`);
   h.update(`dockerfile:${dockerfile.replaceAll("\\", "/")}\n`);
   h.update(`platforms:${platforms}\n`);
   for (const arg of [...buildArgs].sort()) h.update(`build-arg:${arg}\n`);
 
   const files = new Set();
   files.add(resolve(root, dockerfile));
-  for (const p of paths) {
+  for (const p of [...COMMON_FINGERPRINT_PATHS, ...paths]) {
     for (const f of walkFiles(resolve(root, p))) files.add(f);
   }
 
