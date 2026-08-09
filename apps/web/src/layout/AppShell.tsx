@@ -47,6 +47,32 @@ function initialAccentTheme(): AccentTheme {
   return ACCENT_THEMES.some((theme) => theme.id === stored) ? stored as AccentTheme : "mint";
 }
 
+type EscapeEventLike = {
+  key: string;
+  defaultPrevented: boolean;
+  preventDefault: () => void;
+};
+
+export function consumeAppShellEscape(
+  event: EscapeEventLike,
+  overlays: { commandOpen: boolean; menuOpen: boolean },
+  closeCommand: () => void,
+  closeMenu: () => void,
+): boolean {
+  if (event.key !== "Escape" || event.defaultPrevented) return false;
+  if (overlays.commandOpen) {
+    event.preventDefault();
+    closeCommand();
+    return true;
+  }
+  if (overlays.menuOpen) {
+    event.preventDefault();
+    closeMenu();
+    return true;
+  }
+  return false;
+}
+
 function MainNav({ projectId, onNavigate }: { projectId?: string; onNavigate?: () => void }) {
   const { me } = useAuth();
   const capabilityNav = CAPABILITY_NAV.filter((item) => canAccessAnyScope(me, item.scopes));
@@ -58,6 +84,10 @@ export function AppShell() {
   const projectId = projectMatch?.params.projectId;
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const menuOpenRef = useRef(menuOpen);
+  const commandOpenRef = useRef(commandOpen);
+  menuOpenRef.current = menuOpen;
+  commandOpenRef.current = commandOpen;
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("deepsonar:rail") === "collapsed");
   const [accentTheme, setAccentTheme] = useState<AccentTheme>(initialAccentTheme);
   const location = useLocation();
@@ -73,7 +103,12 @@ export function AppShell() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setCommandOpen((value) => !value); }
-      if (event.key === "Escape") { setCommandOpen(false); setMenuOpen(false); }
+      consumeAppShellEscape(
+        event,
+        { commandOpen: commandOpenRef.current, menuOpen: menuOpenRef.current },
+        () => setCommandOpen(false),
+        () => setMenuOpen(false),
+      );
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -216,5 +251,64 @@ function CommandMenu({ projectId, onClose, onNavigate }: { projectId?: string; o
   const filtered = commands.filter((item) => `${item.label}${item.caption}${item.group}`.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => setActive(0), [query]);
-  return <div className="command-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="command-panel" role="dialog" aria-modal="true" aria-label="搜索与跳转"><div className="command-input"><MagnifyingGlass size={18} weight="light" /><input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); setActive((value) => Math.min(value + 1, filtered.length - 1)); } if (event.key === "ArrowUp") { event.preventDefault(); setActive((value) => Math.max(value - 1, 0)); } if (event.key === "Enter" && filtered[active]) onNavigate(filtered[active].to); }} placeholder="搜索页面、任务入口或配置…" aria-label="搜索命令" /><kbd>ESC</kbd></div><div className="command-results">{filtered.length ? filtered.map((item, index) => <button key={item.to} className={index === active ? "is-active" : ""} onMouseEnter={() => setActive(index)} onClick={() => onNavigate(item.to)}><span className="command-icon"><item.icon size={16} weight="light" /></span><span><strong>{item.label}</strong><small>{item.caption}</small></span><em>{item.group}</em></button>) : <div className="command-empty">没有匹配的入口</div>}</div><footer><span>↑↓ 选择</span><span>↵ 打开</span><span>Esc 关闭</span></footer></section></div>;
+  return (
+    <div
+      className="command-layer overflow-y-auto overscroll-contain"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="command-panel flex max-h-[calc(100dvh-2rem)] min-h-0 min-w-0 flex-col"
+        role="dialog"
+        aria-modal="true"
+        aria-label="搜索与跳转"
+      >
+        <div className="command-input min-w-0 shrink-0">
+          <MagnifyingGlass size={18} weight="light" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setActive((value) => Math.min(value + 1, filtered.length - 1));
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setActive((value) => Math.max(value - 1, 0));
+              }
+              if (event.key === "Enter" && filtered[active]) onNavigate(filtered[active].to);
+            }}
+            placeholder="搜索页面、任务入口或配置…"
+            aria-label="搜索命令"
+          />
+          <kbd>ESC</kbd>
+        </div>
+        <div className="command-results min-h-0">
+          {filtered.length ? (
+            filtered.map((item, index) => (
+              <button
+                key={item.to}
+                className={index === active ? "is-active" : ""}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => onNavigate(item.to)}
+              >
+                <span className="command-icon"><item.icon size={16} weight="light" /></span>
+                <span><strong>{item.label}</strong><small>{item.caption}</small></span>
+                <em>{item.group}</em>
+              </button>
+            ))
+          ) : (
+            <div className="command-empty">没有匹配的入口</div>
+          )}
+        </div>
+        <footer className="shrink-0 flex-wrap">
+          <span>↑↓ 选择</span><span>↵ 打开</span><span>Esc 关闭</span>
+        </footer>
+      </section>
+    </div>
+  );
 }

@@ -325,6 +325,25 @@ export function CanvasView({
   }, []);
 
   useEffect(() => {
+    if (!selected) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.shiftKey
+      ) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable=\"true\"]")) return;
+      clearSelected();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearSelected, selected]);
+
+  useEffect(() => {
     if (!focusNodeId || !data) return;
     const found = data.nodes.find((node) => node.id === focusNodeId);
     if (!found) return;
