@@ -994,7 +994,7 @@ export interface TaskReport {
   project_id: string;
   report_job_id: string | null;
   status: "pending" | "generating" | "succeeded" | "failed";
-  /** 结构化摘要：confirmed / needs_human 分栏，SARIF 只含 confirmed */
+  /** 结构化摘要：confirmed / needs_human / 未自动验证分栏，SARIF 只含 confirmed */
   summary_json: {
     confirmed_count?: number;
     needs_human_count?: number;

@@ -904,7 +904,7 @@ async function executeFake(jobId: string, type: string) {
         return;
       }
       if (trigger.kind === "confirmed_finding") {
-        // 已确认后：全部 Finding 收敛（confirmed|needs_human）才 complete
+        // 已确认后：自动验证范围内 Finding 收敛（confirmed|needs_human）才 complete
         const care = await canvasFindingsConverged(sql, canvasId);
         if (care.ok) {
           const refs = await sql`
@@ -914,7 +914,7 @@ async function executeFake(jobId: string, type: string) {
           await emit("hub_decision", {
             complete: {
               from: refs.map((r) => r.id as string),
-              description: "假 hub：全部 Finding 已收敛（confirmed/needs_human），分析完成，可生成报告。",
+              description: "假 hub：自动验证范围内 Finding 已收敛（confirmed/needs_human），分析完成，可生成报告。",
             },
           });
           return;
@@ -940,7 +940,7 @@ async function executeFake(jobId: string, type: string) {
         });
         return;
       }
-      // 默认 / canvas_idle：全部 Finding 收敛则 complete，否则 explore/补证
+      // 默认 / canvas_idle：自动验证范围内 Finding 收敛则 complete，否则 explore/补证
       const careGate = await canvasFindingsConverged(sql, canvasId);
       const facts = await sql`
         SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact' ORDER BY created_at`;

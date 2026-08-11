@@ -11,11 +11,13 @@ import { invalidVerification } from "./control-input.js";
 import {
   careSeverities,
   fixedPriorityForJob,
+  isSeverityInVerifyScope,
   lockCanvasForConvergence,
   patchCanvasConvergence,
   recoverVerifyJobTerminal,
   resolveAgentSnapshotForJob,
   rulesForProject,
+  SEVERITY_RANK,
 } from "./core.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { maybeDispatchFindingReport } from "./report.js";
@@ -49,7 +51,7 @@ export interface EvidenceSnapshot {
   reason?: string;
 }
 
-export type VerificationEligibility = "eligible" | "waiting_evidence" | "blocked";
+export type VerificationEligibility = "eligible" | "waiting_evidence" | "blocked" | "below_min_verify_severity";
 
 function evidenceSignature(evidence: Pick<EvidenceSnapshot, "review" | "test" | "missing">): string {
   return JSON.stringify({
@@ -186,6 +188,12 @@ export async function createVerifyRound(
   if (!(await lockCanvasForConvergence(tx, opts.canvasId))) return null;
   const rules = await rulesForProject(tx as unknown as typeof sql, opts.projectId);
 
+  const severity = String(opts.finding.severity ?? "").trim().toLowerCase();
+  if (!isSeverityInVerifyScope(rules.minVerifySeverity, severity)) {
+    await markFindingBelowMinVerifySeverity(tx, findingId, rules.minVerifySeverity);
+    return null;
+  }
+
   if (opts.followupDepth >= rules.maxFollowupDepth) {
     await markFindingNeedsHuman(tx, findingId, "max_followup_depth", opts.canvasId);
     return null;
@@ -210,7 +218,6 @@ export async function createVerifyRound(
     LIMIT 1`;
   if (active.length > 0) return null;
 
-  const severity = String(opts.finding.severity ?? "").toLowerCase();
   const evidence = await collectEvidenceSnapshot(tx, findingId, (opts.finding.job_id as string) ?? null);
   const signature = evidenceSignature(evidence);
   const existingRequirements = (openRound?.requirements_json ?? {}) as Record<string, unknown>;
@@ -219,7 +226,7 @@ export async function createVerifyRound(
   // a stale/missing eligibility marker instead of leaving them invisible.
   const existingRoundIsWaiting = Boolean(openRound) && !openRound?.verify_job_id;
 
-  // A Finding always enters the Verify lifecycle, but a round with missing
+  // An in-scope Finding enters the Verify lifecycle, but a round with missing
   // independent evidence is represented explicitly and has no runnable Job.
   // This avoids a pending verify spinning through rework while Hub is waiting
   // for review/test evidence.
@@ -536,7 +543,7 @@ export async function normalizePendingVerificationRounds(
   };
 }
 
-/** Finding 创建后自动进入 Verify 生命周期；缺证据时先登记等待态。 */
+/** Finding 创建后按最低关注级别进入 Verify；缺证据时先登记等待态。 */
 export async function evaluateFollowup(
   tx: Tx,
   job: Record<string, unknown>,
@@ -546,6 +553,11 @@ export async function evaluateFollowup(
   const canvasId = (job.canvas_id as string) ?? null;
   const findingId = finding.id as string;
   if (!(await lockCanvasForConvergence(tx, canvasId))) return;
+
+  if (!isSeverityInVerifyScope(rules.minVerifySeverity, finding.severity)) {
+    await markFindingBelowMinVerifySeverity(tx, findingId, rules.minVerifySeverity);
+    return;
+  }
 
   if ((job.followup_depth as number) >= rules.maxFollowupDepth) {
     await markFindingNeedsHuman(tx, findingId, "max_followup_depth", canvasId);
@@ -581,13 +593,22 @@ export async function settleCanvasFindingsAtGuardrail(
   reason: string,
 ): Promise<{ settled: number }> {
   if (!(await lockCanvasForConvergence(tx, canvasId))) return { settled: 0 };
+  const [canvas] = await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`;
+  const rules = canvas?.project_id
+    ? await rulesForProject(tx as unknown as typeof sql, String(canvas.project_id))
+    : null;
   const rows = await tx`
-    SELECT f.id, f.node_id, f.verify_status
+    SELECT f.id, f.node_id, f.verify_status, f.severity
     FROM findings f
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId}
       AND f.verify_status IN ('pending', 'verifying', 'false_positive')`;
+  let settled = 0;
   for (const f of rows) {
+    if (rules && !isSeverityInVerifyScope(rules.minVerifySeverity, f.severity)) {
+      await markFindingBelowMinVerifySeverity(tx, f.id as string, rules.minVerifySeverity);
+      continue;
+    }
     // 关闭未结束的 round
     await tx`
       UPDATE finding_verification_rounds SET
@@ -597,8 +618,9 @@ export async function settleCanvasFindingsAtGuardrail(
         finished_at = COALESCE(finished_at, now())
       WHERE finding_id = ${f.id as string} AND status IN ('pending', 'running')`;
     await markFindingNeedsHuman(tx, f.id as string, reason, canvasId);
+    settled += 1;
   }
-  return { settled: rows.length };
+  return { settled };
 }
 
 export interface CloseVerifyResult {
@@ -1045,8 +1067,7 @@ export interface FindingStatusProblem {
 
 /**
  * 关注级别元数据（minVerifySeverity 及以上 severity 列表）。
- * **severity 只影响 Verify 优先级 / Hub 等待门，不改变收敛集合。**
- * 收敛门：全部 Finding ∈ {confirmed, needs_human}（见 canvasFindingsConverged）。
+ * 该范围同时用于自动 Verify 和收敛门；info 是现有配置中的全量严格模式。
  */
 export async function careSeverityMeta(
   tx: Tx,
@@ -1060,8 +1081,7 @@ export async function careSeverityMeta(
 }
 
 /**
- * @deprecated 名称易误解。历史上曾要求 care 必须 confirmed；现与全量收敛一致。
- * 请用 canvasFindingsConverged。保留别名以免外部误用旧语义。
+ * @deprecated 名称易误解。请用 canvasFindingsConverged；保留别名以免外部误用旧语义。
  */
 export async function checkCareFindingsConfirmed(
   tx: Tx,
@@ -1087,17 +1107,21 @@ export async function checkCareFindingsConfirmed(
 
 /**
  * Hub complete / Report 统一收敛门（TODO §0.3 / §4.2 / §5）：
- * 每条 Finding 的 verify_status ∈ {confirmed, needs_human}；
+ * 阈值范围内每条 Finding 的 verify_status ∈ {confirmed, needs_human}；
  * confirmed 须有可追溯 verification round；无未关闭 round。
- * severity / minVerifySeverity **不**收窄该集合。
+ * 低于 minVerifySeverity 的 Finding 保持 pending 并由策略标记，不阻塞门。
  */
 export async function canvasFindingsConverged(
   tx: Tx,
   canvasId: string,
-  _opts?: { projectId?: string; requireCareConfirmed?: boolean },
+  opts?: { projectId?: string; requireCareConfirmed?: boolean },
 ): Promise<{ ok: boolean; blockers: string[]; problems: FindingStatusProblem[] }> {
-  // requireCareConfirmed 已废弃：忽略，避免 care needs_human 堵死 Report 活性
-  void _opts;
+  // requireCareConfirmed 已废弃：阈值内 needs_human 仍是可报告终态。
+  const projectId = opts?.projectId ?? (await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`)[0]?.project_id;
+  const rules = projectId
+    ? await rulesForProject(tx as unknown as typeof sql, String(projectId))
+    : null;
+  const minVerifySeverity = rules?.minVerifySeverity ?? "high";
 
   const findings = await tx`
     SELECT f.id, f.verify_status, f.title, f.severity
@@ -1112,6 +1136,8 @@ export async function canvasFindingsConverged(
     const st = f.verify_status as string;
     const sev = String(f.severity ?? "").toLowerCase();
 
+    if (!isSeverityInVerifyScope(minVerifySeverity, sev)) continue;
+
     if (st !== "confirmed" && st !== "needs_human") {
       blockers.push(`finding:${f.id}:${st}`);
       problems.push({
@@ -1120,7 +1146,7 @@ export async function canvasFindingsConverged(
         severity: sev,
         verify_status: st,
         issue: `Finding 未收敛（须 confirmed 或 needs_human，当前 ${st}）`,
-        in_care_scope: false,
+        in_care_scope: true,
       });
       continue;
     }
@@ -1137,7 +1163,7 @@ export async function canvasFindingsConverged(
           severity: sev,
           verify_status: st,
           issue: "confirmed 缺少可追溯 verification round",
-          in_care_scope: false,
+          in_care_scope: true,
         });
       }
     }
@@ -1156,17 +1182,24 @@ export async function canvasFindingsConverged(
           severity: sev,
           verify_status: st,
           issue: "needs_human 缺少 human/blocker 节点（无可审计阻塞原因）",
-          in_care_scope: false,
+          in_care_scope: true,
         });
       }
     }
   }
 
+  const careSeveritiesForRounds = careSeverities(minVerifySeverity);
   const openRounds = await tx`
     SELECT r.id, r.finding_id FROM finding_verification_rounds r
     JOIN findings f ON f.id = r.finding_id
     JOIN jobs j ON j.id = f.job_id
-    WHERE j.canvas_id = ${canvasId} AND r.status IN ('pending','running')
+    WHERE j.canvas_id = ${canvasId}
+      AND r.status IN ('pending','running')
+      AND (
+        f.severity IS NULL
+        OR NOT (lower(f.severity) = ANY(${SEVERITY_RANK as readonly string[]}))
+        OR lower(f.severity) = ANY(${careSeveritiesForRounds})
+      )
     LIMIT 5`;
   for (const r of openRounds) blockers.push(`open_round:${r.id}`);
 
@@ -1210,7 +1243,7 @@ export async function hasSucceededRoleWork(tx: Tx, canvasId: string): Promise<bo
 
 /**
  * 统一分析完成门（Hub complete 与 maxHubRounds 护栏共用）。
- * - 全部 Finding ∈ {confirmed, needs_human}（含 human blocker 校验）
+ * - 阈值范围内 Finding ∈ {confirmed, needs_human}（含 human blocker 校验）
  * - 无未关闭 verification round
  * - 无活跃工作（可排除当前 job）
  * - 至少一次普通角色成功 Job（防空图成功报告）
@@ -1329,6 +1362,47 @@ async function markFindingNeedsHuman(
       reason,
       summary: reason,
     });
+  }
+}
+
+/**
+ * 标记低于自动 Verify 阈值的 Finding。schema/shared-types 没有
+ * skipped/ignored 状态，因此保留合法 pending；该策略标记供图和报告
+ * 解释，收敛门按同一阈值跳过它。
+ */
+async function markFindingBelowMinVerifySeverity(
+  tx: Tx,
+  findingId: string,
+  minVerifySeverity: string,
+) {
+  const [finding] = await tx`
+    SELECT id, node_id, verify_status
+    FROM findings
+    WHERE id = ${findingId}
+    FOR UPDATE`;
+  if (!finding || finding.verify_status === "confirmed" || finding.verify_status === "needs_human") return;
+
+  await tx`
+    UPDATE finding_verification_rounds
+    SET status = 'failed', final_outcome = NULL,
+        error = 'below_min_verify_severity', finished_at = COALESCE(finished_at, now())
+    WHERE finding_id = ${findingId} AND status IN ('pending', 'running')`;
+  await tx`
+    UPDATE findings SET
+      verify_status = 'pending',
+      raw_json = raw_json || ${tx.json({
+        verification_state: {
+          eligibility: "below_min_verify_severity",
+          min_verify_severity: minVerifySeverity,
+          updated_at: new Date().toISOString(),
+        },
+      } as never)},
+      updated_at = now()
+    WHERE id = ${findingId}`;
+  if (finding.node_id) {
+    await tx`
+      UPDATE canvas_nodes SET status = 'open', updated_at = now()
+      WHERE id = ${finding.node_id as string}`;
   }
 }
 

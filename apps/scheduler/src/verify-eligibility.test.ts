@@ -2,11 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   FIXED_PRIORITY,
+  isSeverityInVerifyScope,
   fixedPriorityForJob,
   priorityMatchesJob,
   shouldWakeEvidenceHub,
 } from "./core.js";
 import { graphEligibilityReason, loadGraphEligibilityBatch } from "./dispatcher.js";
+
+test("Verify scope uses only explicit known lower severities as exclusions", () => {
+  assert.equal(isSeverityInVerifyScope("high", "critical"), true);
+  assert.equal(isSeverityInVerifyScope("high", "high"), true);
+  assert.equal(isSeverityInVerifyScope("high", "medium"), false);
+  assert.equal(isSeverityInVerifyScope("info", "low"), true, "info keeps the existing full strict mode");
+  assert.equal(isSeverityInVerifyScope("high", null), true, "unscored Findings stay in scope");
+  assert.equal(isSeverityInVerifyScope("high", "future-severity"), true, "unknown values stay in scope");
+});
 
 test("five Hub rounds do not inflate child or Verify priority", () => {
   const hub = Array.from({ length: 5 }, () => fixedPriorityForJob({ type: "hub_reason" }));

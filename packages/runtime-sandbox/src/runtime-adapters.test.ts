@@ -44,7 +44,7 @@ test("the built-in registry is explicit, immutable, and capability complete", ()
     assert.ok(adapter);
     assert.equal(adapter.id, id);
     for (const capability of REQUIRED_RUNTIME_CAPABILITIES) assert.equal(adapter.capabilities[capability], true);
-    if (!adapter.capabilities.incrementalMessages) assert.ok(adapter.resume);
+    assert.equal(typeof adapter.resume, "function");
     assert.deepEqual(freezeAgentCliRuntime(adapter), {
       adapter_id: adapter.id,
       adapter_version: adapter.version,
@@ -100,6 +100,26 @@ test("Claude enables governed partial stream-json frames", async () => {
   assert.match(fake.commands[0] ?? "", /--include-partial-messages/);
 });
 
+test("Claude supports same-session resume through the stream-json protocol", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
+  const fake = fakeSandbox();
+  const context = {
+    sandbox: fake.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "继续",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    model: "claude-sonnet-4-5",
+    reasoning: "high",
+  } as const;
+  await adapter.resume({ ...context, sessionId: "claude-s1" });
+  assert.match(fake.commands[0] ?? "", /^claude -p --resume 'claude-s1'/);
+  assert.match(fake.commands[0] ?? "", /--input-format stream-json/);
+  assert.match(fake.commands[0] ?? "", /--output-format stream-json/);
+  assert.match(fake.commands[0] ?? "", /claude-sonnet-4-5/);
+  assert.equal(fake.envs[0]?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "70");
+});
+
 test("Codex JSONL lifecycle normalizes MCP calls and completion", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
   const state = {};
@@ -135,7 +155,7 @@ test("Codex commands use governed MCP, model, reasoning, and resume arguments", 
   const fake = fakeSandbox();
   const context = { sandbox: fake.sandbox, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
   await adapter.start(context);
-  await adapter.resume?.({ ...context, input: "nudge", sessionId: "codex-s1" });
+  await adapter.resume({ ...context, input: "nudge", sessionId: "codex-s1" });
   assert.match(fake.commands[0], /mcp_servers\.deepsonar-control\.required=true/);
   assert.match(fake.commands[0], /model_reasoning_effort/);
   assert.match(fake.commands[0], /gpt-5/);
@@ -183,7 +203,7 @@ test("OpenCode commands pin config path and support same-session resume", async 
   const fake = fakeSandbox();
   const context = { sandbox: fake.sandbox, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
   await adapter.start(context);
-  await adapter.resume?.({ ...context, input: "nudge", sessionId: "oc-s1" });
+  await adapter.resume({ ...context, input: "nudge", sessionId: "oc-s1" });
   assert.match(fake.commands[0], /opencode run/);
   assert.match(fake.commands[0], /--thinking/);
   assert.match(fake.commands[1], /--session 'oc-s1'/);

@@ -751,16 +751,16 @@ Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace �
       initialInput += `
 
 本轮由 **Report 门禁失败** 回弹触发。
-**全部 Finding 须为 confirmed 或 needs_human** 才能生成报告；以下 Finding 仍未收敛：
+**自动验证范围内 Finding 须为 confirmed 或 needs_human** 才能生成报告；以下范围内 Finding 仍未收敛：
 
 ${lines || (trigger as { summary?: string }).summary || "（见画布 root.report_gate_rejected）"}
 
 你必须：
 1. 针对上述 Finding 派发补证/推动 Verify，或在无法自动闭环时使其进入 needs_human（人工节点/阻塞说明）；
-2. 不得在仍有 pending/verifying Finding 时 complete；
+2. 不得在自动验证范围内仍有 pending/verifying Finding 时 complete；明确低于 minVerifySeverity 的策略排除项不阻塞；
 3. 不能下发 verify/report 系统角色，也不能直接写 confirmed。`;
     } else if (trigger?.kind === "confirmed_finding") {
-      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。全部 Finding 为 confirmed/needs_human 且无活跃工作时才可 complete。";
+      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。自动验证范围内 Finding 为 confirmed/needs_human 且无活跃工作时才可 complete；低于 minVerifySeverity 的策略排除项不阻塞。";
     } else if (trigger?.kind === "verify_rework" || trigger?.kind === "verify_failed") {
       initialInput += `
 
@@ -775,7 +775,7 @@ Finding：${trigger.finding_id ?? "未知"}
 2. 若已无安全可行路径，说明阻塞并 request_human / 在 complete 前确保 Finding 进入 needs_human。
 你不能直接把 Finding 写成 confirmed，也不能下发 verify 或 report 系统角色。`;
     } else if (trigger?.kind === "risk_acceptance_followup") {
-      initialInput += "\n\n这是风险回收验收轮次。证据足够且全部 Finding 收敛则 complete；否则只派发必要下一步。";
+      initialInput += "\n\n这是风险回收验收轮次。证据足够且自动验证范围内 Finding 收敛则 complete；否则只派发必要下一步。";
     } else if (trigger?.kind === "human_comment") {
       initialInput += `
 
@@ -792,8 +792,8 @@ Finding：${trigger.finding_id ?? "未知"}
 
 本轮由**画布空闲 / 图进度**触发：当前没有待跑的 Worker/Verify 节点。
 请读整图决策：
-1. 若目标已覆盖且**全部 Finding 为 confirmed 或 needs_human** → complete（随后自动 Report；SARIF 仅含 confirmed）；
-2. 若仍有 pending/verifying → 派发补证或推动验证，不得 complete；
+1. 若目标已覆盖且**自动验证范围内 Finding 为 confirmed 或 needs_human** → complete（随后自动 Report；SARIF 仅含 confirmed）；
+2. 若自动验证范围内仍有 pending/verifying → 派发补证或推动验证，不得 complete；低于 minVerifySeverity 的策略排除项不阻塞；
 3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并 request_human。`;
     } else if (["user_task", "plane_issue", "external_event"].includes(trigger?.kind ?? "")) {
       initialInput += "\n\n这是首次决策轮次；没有执行证据时不得直接 complete，初始 intent 可从 YAML root_id 的 UUID 值出发，不要填写 root_id 字段名。";
@@ -877,7 +877,7 @@ ${inputBlock}
       : `根据调度器提供的确定性任务数据撰写最终报告。不要创建新 Finding，不要改变验证结论。
 
 任务目标：${taskGoal || "未提供"}
-统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} total=${payload.findings_total ?? "?"}
+统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} not_auto_verified=${payload.excluded_count ?? "?"} total=${payload.findings_total ?? "?"}
 
 ## 确定性报告输入（report-input.json）
 以下 JSON 是 Finding 集合、状态和证据摘要的唯一权威来源；不得用任务文本、画布内容或模型常识覆盖它。
@@ -885,7 +885,7 @@ ${inputBlock}
 ${inputBlock}
 \`\`\`
 
-在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」与「待人工确认」，即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。`;
+在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」「待人工确认」与「未自动验证（严重度策略）」；策略排除项不等于误报或待人工。即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。`;
   } else {
     initialInput = `执行 Hub 下发的安全审计任务：
 ${workerPrompt}

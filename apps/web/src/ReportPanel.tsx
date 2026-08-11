@@ -214,7 +214,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
             </div>
           </div>
           <div className="rounded-[20px] bg-white/[.03] px-4 py-4 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
-            <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">已排除</div>
+            <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">未自动验证</div>
             <div className="mt-1.5 text-[24px] font-semibold tabular-nums text-zinc-100">
               {s.excluded_count ?? 0}
             </div>

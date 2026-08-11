@@ -154,18 +154,18 @@ loop:
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
-  7. Hub 派发 audit 等角色；每个 Finding 一律自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；全部 Finding 收敛为 confirmed/needs_human 后保留并生成任务总 Report
+  7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成任务总 Report
 ```
 
 ### 4.3 审计 → 验证链（单一决策点）
 
 1. `hub_reason` 根据目标派发 `audit` 等角色，审计角色输出结构化 Finding
-2. Finding 只是待证实假设，**所有严重级别都必须自动派生验证**，不由人或前端决定
+2. Finding 只是待证实假设；Scheduler 按 `minVerifySeverity` 决定自动验证范围，低于阈值的不派生 Verify，缺失或未知 severity 保守验证；设置为 `info` 即严格全量模式
 3. 派生前按 `fingerprint` 去重；同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
 4. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
 5. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
 6. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
-7. 全部 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 幂等派发该画布唯一任务总 Report。任务报告汇总全部 Finding，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
+7. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 幂等派发该画布唯一任务总 Report。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
 8. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
 
 ### 4.4 Scheduler bounded contexts（Issue #37）
@@ -305,7 +305,7 @@ canvas_changes
 | 派生规则来源 | `ruleId` → 对应 job type / audit 规则名 |
 
 `emit_finding` 的 payload 是 SARIF result 的受限子集，并扩展通用 `profile`、`category`、`tags`、`evidence_refs` 和可选 `scoring`。`profile` 缺省为
-`security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略，且不再决定是否进入 Verify；`suggest_verify` 仅保留兼容语义，所有 Finding 仍由规则引擎派生验证。
+`security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略；缺失或未知 severity 保守进入 Verify，已知 severity 是否自动验证由 `minVerifySeverity` 决定。`suggest_verify` 仅保留兼容语义，最终由规则引擎决策。
 
 评分标准目前固定为 CVSS。Scheduler 对协议接受的 4.0 和 3.1 向量调用固定版本计算器（当前 `ae-cvss-calculator@1.0.13`）重算基础分、定性严重度和利用难度，忽略 Agent 报告分数对系统结果的覆盖（可保留作对比）。协议显式接受的未知未来版本不计算，保留版本、向量、metrics 和可选 reported score，标记 `unsupported_version`；未列入 `accepted_versions` 的版本直接拒绝。`scoring_json` 因而既是报告/筛选输入，也是未来版本兼容的原始承载。
 
@@ -601,12 +601,12 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 ### Phase 3 — 派生验证（约 1 周）
 
-- [x] 规则引擎（全部 Finding 自动验证）+ fingerprint 去重 + 多轮/深度/频次护栏
+- [x] 规则引擎（按 `minVerifySeverity` 自动验证，未评分保守验证）+ fingerprint 去重 + 多轮/深度/频次护栏
 - [x] verify Worker（独立沙箱策略）+ 冻结证据快照 + `verifies` 边
 - [x] 普通 Worker `request_human` / `resume` 与 Verify `needs_human` 收口分流
 - [ ] Plane 可选自动建子 Issue
 
-**验收**：任意严重度 Finding 自动出现验证节点；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；每条 `confirmed` Finding 有独立版本化报告；全部 Finding 收敛后自动生成任务总报告。
+**验收**：验证范围内 Finding 自动出现验证节点，低于阈值项不创建 Verify 且不阻塞；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；每条 `confirmed` Finding 有独立版本化报告；验证范围内 Finding 收敛后自动生成任务总报告。
 
 ### Phase 4 — 多项目与打磨（持续）
 
@@ -805,8 +805,10 @@ CANVAS_LAYOUT=auto
 `jobs.priority` 只保存 `fixedPriorityForJob` 生成的固定语义档位；Hub
 轮次、父 Job 和 severity delta 均不得累加。调度器先判断图资格，再在
 固定档位内按 `created_at, id` FIFO（Verify 档位仍保持
-critical > high > medium > low/info）。`minVerifySeverity` 仅定义 care/wait
-门与 Verify 排序范围，所有 Finding 都进入 Verify 生命周期。
+critical > high > medium > low/info）。`minVerifySeverity` 同时定义自动 Verify、
+care/wait 门与收敛集合；明确低于阈值的 Finding 保持可审计但不创建 Verify
+round/Job，也不阻塞 complete/Report。缺失或未知 severity 保守进入 Verify，
+`minVerifySeverity=info` 保留严格全量模式。
 
 证据不足时，`finding_verification_rounds.requirements_json` 写入
 `eligibility = "waiting_evidence"`，Finding 的 `raw_json.verification_state`

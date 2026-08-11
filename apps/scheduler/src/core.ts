@@ -148,8 +148,8 @@ const eventIngestionApplication = createEventIngestionApplication(
 //
 // 第一性原理：用户只配「最低关注级别」一件事。
 // 派生（写死，不暴露配置）：
-//   · 所有 Finding 都进入 Verify 生命周期；缺证据时显式等待
-//   · minVerifySeverity 只定义 care/wait 门及 Verify 队列内的排序范围
+//   · 达到 minVerifySeverity 的 Finding 才进入自动 Verify 生命周期
+//   · 低于阈值的 Finding 保持 pending 并记录策略标记，且不阻塞收敛
 //   · Hub 等 care verify 跑完再决策（含 confirmed）
 //   · verify 调度永远 critical > high > …
 
@@ -159,8 +159,8 @@ export type SeverityRank = (typeof SEVERITY_RANK)[number];
 
 export interface ProjectRules {
   /**
-   * 关注级别旋钮：控制 verify 调度优先级与 Hub 等待门（≥ 该级别优先）。
-   * 注意：所有 Finding 都会自动进入 Verify；severity 不再决定「是否验证」。
+   * 关注级别旋钮：控制自动 Verify 范围、队列优先级与 Hub 等待门（≥ 该级别）。
+   * info 表示对所有带 severity 的 Finding 启用严格全量 Verify。
    */
   minVerifySeverity: SeverityRank;
   maxFollowupsPerJob: number;
@@ -249,6 +249,18 @@ export function careSeverities(min: string): string[] {
   return SEVERITY_RANK.slice(0, idx + 1) as string[];
 }
 
+/**
+ * 判断 Finding 是否在自动 Verify / 收敛门范围内。
+ * severity 是可选协议字段；未评分 Finding 不属于“低于阈值”，保留在
+ * 自动验证范围内，避免因缺失严重度而被静默丢弃。
+ */
+export function isSeverityInVerifyScope(min: string, severity: unknown): boolean {
+  const normalized = String(severity ?? "").trim().toLowerCase();
+  if (normalized.length === 0) return true;
+  if (!(SEVERITY_RANK as readonly string[]).includes(normalized)) return true;
+  return careSeverities(min).includes(normalized);
+}
+
 /** @deprecated 兼容旧调用名；语义 = careSeverities(rules.minVerifySeverity) */
 export function resolveHubWaitSeverities(rules: ProjectRules): string[] {
   return careSeverities(rules.minVerifySeverity);
@@ -315,9 +327,9 @@ export function schedulingPurposeForJob(input: SchedulingPriorityInput): Schedul
 }
 
 /**
- * Pure fixed-priority resolver used by every Job creation path.  Severity is
- * consulted only for Verify ordering; minVerifySeverity is intentionally not
- * an input, so it cannot remove a Finding from the Verify lifecycle.
+ * Pure fixed-priority resolver used by every Job creation path. Severity is
+ * consulted only for Verify ordering; the Verify scope gate is applied before
+ * this helper when a Finding is automatically derived.
  */
 export function fixedPriorityForJob(input: SchedulingPriorityInput): number {
   const purpose = schedulingPurposeForJob(input);
