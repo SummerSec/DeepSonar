@@ -26,6 +26,9 @@ import { extractBaseUrlFromSettings } from "./provider-settings.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 
+/** 模型网关允许进入业务层的最大请求体；超出后才由 Fastify 返回 413。 */
+export const MODEL_GATEWAY_BODY_LIMIT = 16 * 1024 * 1024;
+
 export function hashJobToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -137,6 +140,7 @@ export function registerGateway(app: FastifyInstance): void {
   app.route({
     method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     url: "/gateway/*",
+    bodyLimit: MODEL_GATEWAY_BODY_LIMIT,
     handler: async (req: FastifyRequest, reply: FastifyReply) => {
       const header = req.headers.authorization ?? "";
       const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";

@@ -274,7 +274,7 @@ async function validateSharedAssetsContainer(sandbox: Sandbox, volumeName: strin
   assertSharedAssetsContainerMount(await raw.container.inspect(), volumeName);
 }
 
-const GATEWAY_PROXY_SCRIPT = String.raw`
+export const GATEWAY_PROXY_SCRIPT = String.raw`
 const http = require("node:http");
 const https = require("node:https");
 const upstream = new URL(process.env.DEEPSONAR_GATEWAY_UPSTREAM);
@@ -293,6 +293,13 @@ const server = http.createServer((req, res) => {
   const headers = { ...req.headers, host: upstream.host };
   delete headers.connection;
   delete headers["proxy-authorization"];
+  const fail = () => {
+    if (res.headersSent || res.destroyed) {
+      res.destroy();
+      return;
+    }
+    res.writeHead(502).end("gateway unavailable");
+  };
   const target = client.request({
     protocol: upstream.protocol,
     hostname: upstream.hostname,
@@ -302,9 +309,16 @@ const server = http.createServer((req, res) => {
     headers,
   }, (reply) => {
     res.writeHead(reply.statusCode || 502, reply.headers);
+    reply.on("error", fail);
     reply.pipe(res);
   });
-  target.on("error", () => res.writeHead(502).end("gateway unavailable"));
+  target.on("error", fail);
+  const abort = () => {
+    target.destroy();
+    res.destroy();
+  };
+  req.on("error", abort);
+  req.on("aborted", abort);
   req.pipe(target);
 });
 server.on("connect", (_req, socket) => socket.destroy());

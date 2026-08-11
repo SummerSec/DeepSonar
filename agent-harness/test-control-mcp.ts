@@ -232,11 +232,19 @@ send(29, "tools/call", {
   name: "emit_fact",
   arguments: { payload_file: "/workspace/fact.json" },
 });
+send(30, "tools/call", {
+  name: "emit_fact",
+  arguments: { title: "超长事实", description: "x".repeat(10_001) },
+});
+send(31, "tools/call", {
+  name: "emit_finding",
+  arguments: { title: "超长 Finding", summary: "x".repeat(10_001) },
+});
 
 await new Promise<void>((resolve, reject) => {
   const deadline = setTimeout(() => reject(new Error("MCP response timeout")), 5_000);
   const timer = setInterval(() => {
-    if (replies.trim().split("\n").length >= 29) {
+    if (replies.trim().split("\n").length >= 31) {
       clearTimeout(deadline);
       clearInterval(timer);
       resolve();
@@ -339,6 +347,13 @@ assertError(26, "invalid_payload");
 assertError(27, "invalid_payload");
 assertError(28, "invalid_payload");
 assertError(29, "invalid_payload");
+for (const [id, field] of [[30, "arguments.description"], [31, "arguments.summary"]] as const) {
+  assertError(id, "invalid_payload");
+  const text = rpcReplies.find((reply) => reply.id === id)?.result?.content?.[0]?.text ?? "";
+  if (!text.includes(field) || !text.includes("payload_file") || !text.includes("拆分")) {
+    throw new Error(`超长字段 ${field} 的错误响应缺少可操作的 payload_file 引导：${text}`);
+  }
+}
 let hostHubErrorCode = "";
 try {
   parseHubDecisionPayload({

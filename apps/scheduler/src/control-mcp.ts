@@ -33,6 +33,9 @@ export const CONTROL_SEMANTIC_EVENT_TYPES = {
   publish_shared_asset: "shared_asset_publish",
 } as const;
 
+const SEMANTIC_PAYLOAD_SIZE_HINT =
+  "如果工具参数因传输截断，请改用 payload_file，将完整 JSON 写入 /workspace 下的文件后只传相对路径；字段本身超过 schema 上限时不能靠 payload_file 绕过，必须拆分为多条 emit_fact/emit_finding，或发布共享资产。";
+
 export const CONTROL_MCP_SERVER = String.raw`import readline from "node:readline";
 import { lstatSync, readFileSync } from "node:fs";
 
@@ -64,6 +67,7 @@ const MAX_REFERENCES_PER_FROM = ${HUB_REFERENCE_LIMITS.perFrom};
 const MAX_UNIQUE_REFERENCES = ${HUB_REFERENCE_LIMITS.totalUnique};
 const MAX_PAYLOAD_FILE_BYTES = ${WORKSPACE_PAYLOAD_FILE_MAX_BYTES};
 const PAYLOAD_FILE_PATTERN = new RegExp(${JSON.stringify(WORKSPACE_PAYLOAD_FILE_PATTERN.source)});
+const SEMANTIC_PAYLOAD_SIZE_HINT = ${JSON.stringify(SEMANTIC_PAYLOAD_SIZE_HINT)};
 const NODE_REF_RE = new RegExp(CANONICAL_UUID_PATTERN, "i");
 const hasOwn = (object, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(object, key);
 const availableRoleNames = availableRoles
@@ -373,14 +377,20 @@ function semanticPayloadFailure(name, value) {
   return null;
 }
 
+function addSemanticPayloadSizeHint(name, failure) {
+  if (!failure || (name !== "emit_fact" && name !== "emit_finding") || failure.code !== INVALID_PAYLOAD_CODE) return failure;
+  if (!/长度不能超过/.test(failure.text)) return failure;
+  return { ...failure, text: failure.text + " " + SEMANTIC_PAYLOAD_SIZE_HINT };
+}
+
 function validateSemanticPayloadFileTool(name, input, schema) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return schemaError("arguments", "必须是对象");
   const hasFile = hasOwn(input, "payload_file");
   const directKeys = Object.keys(input).filter((key) => key !== "payload_file");
   if (hasFile && directKeys.length > 0) return schemaError("arguments", "必须且只能提供直接字段或 payload_file 之一");
   if (!hasFile) {
-    const failure = validateSchema(input, schema, "arguments");
-    return failure || semanticPayloadFailure(name, input);
+    const failure = validateSchema(input, schema, "arguments") || semanticPayloadFailure(name, input);
+    return addSemanticPayloadSizeHint(name, failure);
   }
   const loaded = loadPayloadFile(input.payload_file);
   if (loaded.error) return loaded.error;
