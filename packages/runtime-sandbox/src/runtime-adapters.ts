@@ -46,7 +46,7 @@ export interface RuntimeAdapter {
   readonly capabilities: Readonly<AgentCliCapabilities>;
   readonly compatibleImageKeys: readonly string[];
   start(context: AdapterStartContext): Promise<AsyncCommandHandle>;
-  resume?(context: AdapterResumeContext): Promise<AsyncCommandHandle>;
+  resume(context: AdapterResumeContext): Promise<AsyncCommandHandle>;
   materialize?(context: AdapterStartContext): Promise<void>;
   encodeInput(content: string): string;
   decodeOutput(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[];
@@ -366,24 +366,35 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
   });
 }
 
+function sandboxClaude(
+  sandbox: Sandbox,
+  context: AdapterStartContext,
+  sessionId?: string,
+): Promise<AsyncCommandHandle> {
+  // Claude Code 恢复会话时仍接受相同的 stream-json 输入协议。恢复进程
+  // 建立后由 runner 向 stdin 写入恢复消息，因此固定命令只需携带 session ID。
+  let command = `claude -p`;
+  if (sessionId) command += ` --resume ${shellQuote(sessionId)}`;
+  command += ` --input-format stream-json --output-format stream-json --include-partial-messages --verbose --mcp-config ${shellQuote(context.mcpConfigPath)} --permission-mode bypassPermissions`;
+  if (context.model) command += ` --model ${shellQuote(context.model)}`;
+  if (context.reasoning) command += ` --effort ${shellQuote(context.reasoning)}`;
+  if (context.systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(context.systemPromptPath)})"`;
+  return sandbox.runAsync(command, {
+    cwd: context.cwd,
+    env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70", ...context.env },
+  });
+}
+
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.220",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  start: ({ sandbox, env, cwd, model, reasoning, mcpConfigPath, systemPromptPath }) => {
-    // Claude Code 2.1.220 is the governed minimum image version.  That
-    // contract supports partial stream-json frames; do not pass this flag to
-    // an adapter whose pinned minimum does not support it.
-    let command = `claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --mcp-config ${shellQuote(mcpConfigPath)} --permission-mode bypassPermissions`;
-    if (model) command += ` --model ${shellQuote(model)}`;
-    if (reasoning) command += ` --effort ${shellQuote(reasoning)}`;
-    if (systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(systemPromptPath)})"`;
-    return sandbox.runAsync(command, {
-      cwd,
-      env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70", ...env },
-    });
-  },
+  // Claude Code 2.1.220 is the governed minimum image version.  That
+  // contract supports partial stream-json frames; do not pass this flag to
+  // an adapter whose pinned minimum does not support it.
+  start: (context) => sandboxClaude(context.sandbox, context),
+  resume: (context) => sandboxClaude(context.sandbox, context, context.sessionId),
   encodeInput: (content) => JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n",
   decodeOutput: (line) => [line],
 });
@@ -475,7 +486,7 @@ export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): R
   if (adapter.capabilities.contextCompactionPolicy === "unsupported") {
     throw new Error(`AGENT_CLI_CONTEXT_COMPACTION_UNSUPPORTED: ${adapter.id}`);
   }
-  if (!adapter.capabilities.incrementalMessages && !adapter.resume) {
+  if (typeof adapter.resume !== "function") {
     throw new Error(`AGENT_CLI_RESUME_UNSUPPORTED: ${adapter.id}`);
   }
   return adapter;

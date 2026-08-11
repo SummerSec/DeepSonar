@@ -932,6 +932,96 @@ export function resolveTerminalRunError(
   return outcome.isError ? outcome.errorDetail ?? "agent 执行失败" : undefined;
 }
 
+/** CLI 同会话恢复只允许有限、明确的上游瞬态错误。 */
+export const CLI_SESSION_RESUME_MAX_ATTEMPTS = 3;
+export const CLI_SESSION_RESUME_BASE_DELAY_MS = 1_000;
+export const CLI_SESSION_RESUME_MAX_DELAY_MS = 4_000;
+
+export type CliSessionResumeReason = "http" | "timeout" | "network";
+
+const HTTP_PERMANENT_STATUS_RE = /\b(?:400\s+bad\s+request|401\s+unauthorized|403\s+forbidden)\b/iu;
+const HTTP_TRANSIENT_STATUS_RE = /\b(?:408\s+request\s+timeout|429\s+too\s+many\s+requests|500\s+internal\s+server\s+error|502\s+bad\s+gateway|503\s+service\s+unavailable|504\s+gateway\s+timeout)\b/iu;
+const HTTP_CONTEXT_STATUS_RE = (statuses: string): RegExp => new RegExp(
+  `\\b(?:http(?:\\/\\d(?:\\.\\d)?)?|status(?:[_ -]?code)?|upstream|gateway|provider|api|response|error)\\b[^\\d]{0,32}\\b(?:${statuses})\\b`,
+  "iu",
+);
+
+function runtimeErrorText(error: unknown, depth = 0): string {
+  if (depth > 2 || error === null || error === undefined) return "";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) {
+    const record = error as Error & { code?: unknown; status?: unknown; statusCode?: unknown; cause?: unknown };
+    return [
+      record.name,
+      record.message,
+      record.code,
+      record.status,
+      record.statusCode,
+      runtimeErrorText(record.cause, depth + 1),
+    ].filter((value) => value !== undefined && value !== null).join(" ");
+  }
+  if (typeof error !== "object") return String(error);
+  const record = error as Record<string, unknown>;
+  return [
+    record.name,
+    record.message,
+    record.code,
+    record.status,
+    record.statusCode,
+    record.error,
+    record.cause && runtimeErrorText(record.cause, depth + 1),
+  ].filter((value) => value !== undefined && value !== null).join(" ");
+}
+
+/**
+ * 判断一次 CLI 退出是否可以在原 Session 上继续。永久 HTTP 状态优先，
+ * 防止一条错误文本同时包含网络/超时字样时误进入恢复路径。
+ */
+export function classifyCliSessionResumeError(error: unknown): CliSessionResumeReason | undefined {
+  const text = runtimeErrorText(error);
+  if (!text) return undefined;
+  const status = error && typeof error === "object"
+    ? (error as { status?: unknown; statusCode?: unknown }).status ??
+      (error as { status?: unknown; statusCode?: unknown }).statusCode
+    : undefined;
+  const numericStatus = typeof status === "number"
+    ? status
+    : typeof status === "string" && /^\d{3}$/u.test(status)
+      ? Number(status)
+      : undefined;
+  if (numericStatus === 400 || numericStatus === 401 || numericStatus === 403 || HTTP_PERMANENT_STATUS_RE.test(text) ||
+    HTTP_CONTEXT_STATUS_RE("400|401|403").test(text)) {
+    return undefined;
+  }
+  if ([408, 429, 500, 502, 503, 504].includes(numericStatus ?? -1) ||
+    HTTP_TRANSIENT_STATUS_RE.test(text) || HTTP_CONTEXT_STATUS_RE("408|429|500|502|503|504").test(text)) {
+    return "http";
+  }
+  if (
+    /\b(?:timeout|timed[ -]?out|ETIMEDOUT|TimeoutError)\b|超时/iu.test(text) ||
+    (/\bAbortError\b/iu.test(text) && /\b(?:timeout|timed[ -]?out|deadline|aborted\s+by\s+(?:a\s+)?timeout)\b/iu.test(text))
+  ) {
+    return "timeout";
+  }
+  if (
+    /\b(?:network(?:\s+(?:error|failure|unavailable|unreachable|connection|request))?|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|socket\s+hang\s*up|connection\s+(?:reset|refused|closed|aborted|lost)|fetch\s+failed|unable\s+to\s+connect|could\s+not\s+resolve\s+host|upstream\s+(?:unreachable|unavailable)|gateway\s+unavailable)\b|上游(?:不可达|不可用)|网络(?:错误|异常|不可达|连接)/iu.test(text)
+  ) {
+    return "network";
+  }
+  return undefined;
+}
+
+/** 计算第 N 次同会话恢复前的固定指数退避（1s、2s、4s）。 */
+export function cliSessionResumeDelayMs(attempt: number): number {
+  const normalizedAttempt = Number.isFinite(attempt) ? Math.floor(attempt) : 1;
+  const exponent = Math.max(0, Math.min(2, normalizedAttempt - 1));
+  return Math.min(CLI_SESSION_RESUME_MAX_DELAY_MS, CLI_SESSION_RESUME_BASE_DELAY_MS * 2 ** exponent);
+}
+
+async function waitForCliSessionResume(attempt: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, cliSessionResumeDelayMs(attempt)));
+}
+
 export type TerminalAttemptCloseReason = "initial_input" | "terminal_result";
 
 export interface TerminalProcessAttempt {
@@ -981,7 +1071,7 @@ export function resolveTerminalProcessOutcome(
   }
   return {
     observed: true,
-    error: "agent CLI exited without a structured terminal result",
+    error: `agent CLI exited without a structured terminal result${stderr ? `: ${stderr.slice(-300)}` : ""}`,
     terminalOutcome: "failure",
   };
 }
@@ -2024,6 +2114,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let terminalOutcome: RealAgentResult["terminalOutcome"];
   let semanticErrorDetails: RuntimeErrorDetails | undefined;
   let nudgesLeft = 3;
+  let sessionResumeAttempts = 0;
+  let resumeSkipNotice: string | undefined;
+  const sessionResumeMessage = "上游请求暂时失败，请在当前会话中继续完成原任务，不要开启新会话；不要重复已成功的工具调用或副作用，只继续未完成的步骤。";
   // These values describe only the process currently being consumed.  They
   // must be reset before every completion-gate resume; otherwise a previous
   // final text/result can mask a later process exit.
@@ -2049,161 +2142,216 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   try {
     while (true) {
       let resumedExec: typeof exec | undefined;
-      for await (const chunk of exec) {
-      if (chunk.type === "stderr") {
-        attemptStderrTail = (attemptStderrTail + chunk.chunk).slice(-2000);
-        continue;
-      }
-      if (chunk.type === "exit") {
-        attemptExitCode = chunk.exitCode ?? 0;
-        continue;
-      }
-      stdoutBuffer += chunk.chunk;
-      // stream-json 按行解析，未完成的行留给下一个 chunk
-      let idx: number;
-      while ((idx = stdoutBuffer.indexOf("\n")) >= 0) {
-        const line = stdoutBuffer.slice(0, idx).trim();
-        stdoutBuffer = stdoutBuffer.slice(idx + 1);
-        if (!line) continue;
-        const parsedLine = parseRuntimeLine(line);
-        if (!parsedLine.parsed) {
-          if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
-          continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
-        }
-        const rawParsed = parsedLine.parsed;
-        const decodedEvents = adapter.decodeOutput(rawParsed, adapterState);
-        if (adapterState.sessionId && !sessionId) sessionId = adapterState.sessionId;
-        for (const parsed of decodedEvents) {
-          const outcome = mapCliEvent(parsed, (e) => {
-            spec.onEvent?.(e);
-            if (e.type === "tool.call.started") {
-              const input = e.input && typeof e.input === "object" ? e.input as Record<string, unknown> : {};
-              const command = typeof input.command === "string" ? input.command : "";
-              if (/\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(command)) {
-                spec.onWarning?.({ code: "forbidden_control_file", detail: `command_length=${command.length}` });
-              }
-            }
-            if (e.type === "text.delta" && typeof e.delta === "string") {
-              progressBuffer += e.delta as string;
-            }
-          }, semanticToolEvents, semanticToolState);
-          for (const warning of outcome.warnings) spec.onWarning?.(warning);
-          if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta"].includes(String(parsed.type))) {
-            spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
+      let resumedInput: string | undefined;
+      let processError: unknown;
+      try {
+        for await (const chunk of exec) {
+          if (chunk.type === "stderr") {
+            attemptStderrTail = (attemptStderrTail + chunk.chunk).slice(-2000);
+            continue;
           }
-          for (const event of outcome.semanticEvents) {
-            try {
-              await spec.onSemanticEvent?.(event, {
-                readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
-              });
-            } catch (error) {
-              // Host-side control validation runs after MCP returned
-              // schema_validated. Agent-correctable failures must return as
-              // tool/error feedback and keep the CLI session alive — never
-              // collapse into fatal "语义事件处理失败" Job exit.
-              if (isAgentCorrectableSemanticError(error)) {
-                const message = error instanceof Error ? error.message : String(error);
-                const toolHint = semanticToolNameForEvent(event);
-                spec.onWarning?.({
-                  code: "control_tool_host_rejected",
-                  detail: message.length > 280 ? `${message.slice(0, 280)}…` : message,
-                });
-                // Surface on the process stream as a failed control tool so the
-                // live UI shows the rejection (MCP already answered success).
-                spec.onEvent?.({
-                  type: "tool.call.completed",
-                  toolName: toolHint,
-                  isError: true,
-                  error: message,
-                  result: message,
-                });
-                const nudge =
-                  `【控制工具被平台拒绝 — 请修正后重试，本 Job 未退出】\n` +
-                  (toolHint ? `工具: ${toolHint}\n` : "") +
-                  `错误: ${message}\n` +
-                  "请根据错误修正参数并重新调用该工具（或改用 payload_file）；不要 mark_job_done，直到契约要求的提交成功。";
-                if (adapter.capabilities.incrementalMessages) {
-                  await writeUserMessage(nudge);
-                } else if (sessionId && adapter.resume) {
-                  // Non-incremental CLIs: resume same session with the error so
-                  // the model can still recover instead of dying mid-run.
-                  try {
-                    resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
-                  } catch (resumeError) {
-                    spec.onWarning?.({
-                      code: "control_tool_reject_resume_failed",
-                      detail: resumeError instanceof Error ? resumeError.message : String(resumeError),
-                    });
+          if (chunk.type === "exit") {
+            attemptExitCode = chunk.exitCode ?? 0;
+            continue;
+          }
+          stdoutBuffer += chunk.chunk;
+          // stream-json 按行解析，未完成的行留给下一个 chunk
+          let idx: number;
+          while ((idx = stdoutBuffer.indexOf("\n")) >= 0) {
+            const line = stdoutBuffer.slice(0, idx).trim();
+            stdoutBuffer = stdoutBuffer.slice(idx + 1);
+            if (!line) continue;
+            const parsedLine = parseRuntimeLine(line);
+            if (!parsedLine.parsed) {
+              if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
+              continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
+            }
+            const rawParsed = parsedLine.parsed;
+            const decodedEvents = adapter.decodeOutput(rawParsed, adapterState);
+            if (adapterState.sessionId && !sessionId) sessionId = adapterState.sessionId;
+            for (const parsed of decodedEvents) {
+              const outcome = mapCliEvent(parsed, (e) => {
+                spec.onEvent?.(e);
+                if (e.type === "tool.call.started") {
+                  const input = e.input && typeof e.input === "object" ? e.input as Record<string, unknown> : {};
+                  const command = typeof input.command === "string" ? input.command : "";
+                  if (/\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(command)) {
+                    spec.onWarning?.({ code: "forbidden_control_file", detail: `command_length=${command.length}` });
                   }
                 }
-                continue;
+                if (e.type === "text.delta" && typeof e.delta === "string") {
+                  progressBuffer += e.delta as string;
+                }
+              }, semanticToolEvents, semanticToolState);
+              for (const warning of outcome.warnings) spec.onWarning?.(warning);
+              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta"].includes(String(parsed.type))) {
+                spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
               }
-              semanticError = error instanceof Error ? error.message : String(error);
-              semanticErrorDetails = normalizeRuntimeErrorDetails(error);
-              throw error;
+              for (const event of outcome.semanticEvents) {
+                try {
+                  await spec.onSemanticEvent?.(event, {
+                    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+                  });
+                } catch (error) {
+                  // Host-side control validation runs after MCP returned
+                  // schema_validated. Agent-correctable failures must return as
+                  // tool/error feedback and keep the CLI session alive — never
+                  // collapse into fatal "语义事件处理失败" Job exit.
+                  if (isAgentCorrectableSemanticError(error)) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    const toolHint = semanticToolNameForEvent(event);
+                    spec.onWarning?.({
+                      code: "control_tool_host_rejected",
+                      detail: message.length > 280 ? `${message.slice(0, 280)}…` : message,
+                    });
+                    // Surface on the process stream as a failed control tool so the
+                    // live UI shows the rejection (MCP already answered success).
+                    spec.onEvent?.({
+                      type: "tool.call.completed",
+                      toolName: toolHint,
+                      isError: true,
+                      error: message,
+                      result: message,
+                    });
+                    const nudge =
+                      `【控制工具被平台拒绝 — 请修正后重试，本 Job 未退出】\n` +
+                      (toolHint ? `工具: ${toolHint}\n` : "") +
+                      `错误: ${message}\n` +
+                      "请根据错误修正参数并重新调用该工具（或改用 payload_file）；不要 mark_job_done，直到契约要求的提交成功。";
+                    if (adapter.capabilities.incrementalMessages) {
+                      await writeUserMessage(nudge);
+                    } else if (sessionId) {
+                      // Non-incremental CLIs: resume same session with the error so
+                      // the model can still recover instead of dying mid-run.
+                      try {
+                        resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
+                        resumedInput = nudge;
+                      } catch (resumeError) {
+                        spec.onWarning?.({
+                          code: "control_tool_reject_resume_failed",
+                          detail: resumeError instanceof Error ? resumeError.message : String(resumeError),
+                        });
+                      }
+                    }
+                    continue;
+                  }
+                  semanticError = error instanceof Error ? error.message : String(error);
+                  semanticErrorDetails = normalizeRuntimeErrorDetails(error);
+                  throw error;
+                }
+              }
+              // 首次捕获后保持 session ID 不变；恢复进程只能继续原会话，不能把
+              // 后续输出中的其他 ID 提升为新的恢复目标。
+              if (outcome.sessionId && !sessionId) sessionId = outcome.sessionId;
+              if (outcome.isError !== undefined) {
+                attemptTerminalResult = {
+                  isError: outcome.isError,
+                  ...(outcome.errorDetail !== undefined ? { errorDetail: outcome.errorDetail } : {}),
+                };
+                terminalOutcome = outcome.isError ? "failure" : "success";
+                // Replace the previous attempt's outcome even when the provider
+                // omits final text but still emits a terminal success/failure.
+                runError = resolveTerminalRunError(outcome);
+              }
+              if (outcome.finalText !== undefined) {
+                // Each completion-gate attempt has its own terminal outcome. A
+                // later success clears a transient Provider error; if retries
+                // exhaust, the last failed attempt remains authoritative.
+                attemptFinalText = outcome.finalText;
+                finalText = outcome.finalText;
+                if (outcome.isError !== true && spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
+                  nudgesLeft--;
+                  const nudge = spec.nudgeMessage ??
+                    "协议要求的系统工具调用还没有完成。请立即通过平台 MCP 工具提交（不要只用文本描述），然后结束本轮。";
+                  if (adapter.capabilities.incrementalMessages) {
+                    await writeUserMessage(nudge);
+                  } else {
+                    if (!sessionId) throw new Error(`AGENT_CLI_COMPLETION_GATE_SESSION_MISSING: ${adapter.id}`);
+                    resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
+                    resumedInput = nudge;
+                  }
+                } else {
+                  closeStdin("terminal_result");
+                }
+              }
+              const now = Date.now();
+              if (progressBuffer.length > 0 && now - lastPush > 4000) {
+                lastPush = now;
+                spec.onProgress?.(progressBuffer.slice(-200));
+                progressBuffer = "";
+              }
             }
           }
-          if (outcome.sessionId) sessionId = outcome.sessionId;
-          if (outcome.isError !== undefined) {
-            attemptTerminalResult = {
-              isError: outcome.isError,
-              ...(outcome.errorDetail !== undefined ? { errorDetail: outcome.errorDetail } : {}),
-            };
-            terminalOutcome = outcome.isError ? "failure" : "success";
-            // Replace the previous attempt's outcome even when the provider
-            // omits final text but still emits a terminal success/failure.
-            runError = resolveTerminalRunError(outcome);
-          }
-          if (outcome.finalText !== undefined) {
-            // Each completion-gate attempt has its own terminal outcome. A
-            // later success clears a transient Provider error; if retries
-            // exhaust, the last failed attempt remains authoritative.
-            attemptFinalText = outcome.finalText;
-            finalText = outcome.finalText;
-            if (spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
-              nudgesLeft--;
-              const nudge = spec.nudgeMessage ??
-                "协议要求的系统工具调用还没有完成。请立即通过平台 MCP 工具提交（不要只用文本描述），然后结束本轮。";
-              if (adapter.capabilities.incrementalMessages) {
-                await writeUserMessage(nudge);
-              } else {
-                if (!sessionId) throw new Error(`AGENT_CLI_COMPLETION_GATE_SESSION_MISSING: ${adapter.id}`);
-                if (!adapter.resume) throw new Error(`AGENT_CLI_RESUME_UNSUPPORTED: ${adapter.id}`);
-                resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
-              }
-            } else {
-              closeStdin("terminal_result");
-            }
-          }
-          const now = Date.now();
-          if (progressBuffer.length > 0 && now - lastPush > 4000) {
-            lastPush = now;
-            spec.onProgress?.(progressBuffer.slice(-200));
-            progressBuffer = "";
-          }
         }
-        }
+      } catch (error) {
+        processError = error;
       }
-      const attemptOutcome = resolveTerminalProcessOutcome({
-        finalText: attemptFinalText,
-        exitCode: attemptExitCode,
-        terminalResult: attemptTerminalResult,
-        closeReason: attemptCloseReason,
-        stderrTail: attemptStderrTail,
-      });
+      const processErrorText = processError
+        ? [runtimeErrorText(processError), attemptStderrTail].filter(Boolean).join(": ")
+        : undefined;
+      const attemptOutcome = semanticError
+        ? { observed: false }
+        : processError && !(attemptTerminalResult && attemptCloseReason === "terminal_result")
+          ? {
+              observed: true,
+              error: processErrorText || "agent CLI 运行失败",
+              terminalOutcome: "failure" as const,
+            }
+          : resolveTerminalProcessOutcome({
+              finalText: attemptFinalText,
+              exitCode: attemptExitCode,
+              terminalResult: attemptTerminalResult,
+              closeReason: attemptCloseReason,
+              stderrTail: attemptStderrTail,
+            });
       if (attemptOutcome.observed) {
         runError = attemptOutcome.error;
         terminalOutcome = attemptOutcome.terminalOutcome;
       }
+      if (!resumedExec && !semanticError && attemptOutcome.error) {
+        const reason = classifyCliSessionResumeError(attemptOutcome.error);
+        if (reason) {
+          const canResume = Boolean(sessionId && sessionResumeAttempts < CLI_SESSION_RESUME_MAX_ATTEMPTS);
+          if (canResume) {
+            sessionResumeAttempts++;
+            const attempt = sessionResumeAttempts;
+            const delayMs = cliSessionResumeDelayMs(attempt);
+            spec.onEvent?.({ type: "run.retrying", reason, attempt, delayMs });
+            await waitForCliSessionResume(attempt);
+            try {
+              resumedExec = await adapter.resume({ ...adapterContext, input: sessionResumeMessage, sessionId });
+              resumedInput = sessionResumeMessage;
+            } catch (resumeError) {
+              const detail = runtimeErrorText(resumeError).slice(0, 280) || "unknown_resume_error";
+              spec.onWarning?.({ code: "cli_session_resume_failed", detail });
+              runError = `AGENT_CLI_RESUME_FAILED: ${adapter.id}`;
+              terminalOutcome = "failure";
+            }
+          } else {
+            const cause = !sessionId
+              ? "session_missing"
+              : "attempts_exhausted";
+            const notice = `${reason}:${cause}`;
+            if (resumeSkipNotice !== notice) {
+              resumeSkipNotice = notice;
+              spec.onWarning?.({ code: "cli_session_resume_skipped", detail: notice });
+              spec.onEvent?.({ type: "run.retry_skipped", reason, cause });
+            }
+          }
+        }
+      }
       if (!resumedExec) break;
       exec = resumedExec;
-      stdinClosed = true;
+      // 只有增量 CLI 通过 stream-json stdin 注入恢复消息；Codex/OpenCode
+      // 已把恢复消息作为固定命令参数传入，不能再重复写入 stdin。
+      stdinClosed = !adapter.capabilities.incrementalMessages;
       stdoutBuffer = "";
       attemptFinalText = "";
       attemptExitCode = 0;
       attemptTerminalResult = undefined;
       attemptCloseReason = undefined;
       attemptStderrTail = "";
+      if (adapter.capabilities.incrementalMessages && resumedInput) await writeUserMessage(resumedInput);
     }
   } catch (e) {
     // An exception while handling the current attempt is the latest runner

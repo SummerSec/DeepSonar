@@ -7,6 +7,11 @@ import {
   mapCliEvent,
   redactToolTelemetry,
   DEFAULT_SEMANTIC_TOOL_EVENTS,
+  CLI_SESSION_RESUME_MAX_ATTEMPTS,
+  CLI_SESSION_RESUME_BASE_DELAY_MS,
+  CLI_SESSION_RESUME_MAX_DELAY_MS,
+  classifyCliSessionResumeError,
+  cliSessionResumeDelayMs,
   createSemanticToolState,
   discardPendingSemanticTools,
   materializationPathCollisions,
@@ -198,6 +203,42 @@ test("a clean process exit without a structured terminal result is a runner fail
     error: "agent CLI exited without a structured terminal result",
     terminalOutcome: "failure",
   });
+});
+
+test("CLI 同会话恢复只接受明确的临时上游错误", () => {
+  for (const message of [
+    "HTTP 408 Request Timeout",
+    "status_code=429",
+    "502 Bad Gateway",
+    "provider returned HTTP 500",
+    "upstream status: 503",
+    "response status 504 Gateway Timeout",
+  ]) {
+    assert.equal(classifyCliSessionResumeError(message), "http", message);
+  }
+  assert.equal(classifyCliSessionResumeError("TimeoutError: request timed out"), "timeout");
+  assert.equal(classifyCliSessionResumeError("network error: ECONNRESET"), "network");
+  assert.equal(classifyCliSessionResumeError({ status: 502, message: "provider failed" }), "http");
+
+  for (const message of [
+    "HTTP 400 Bad Request",
+    "status_code=401",
+    "provider returned 403 Forbidden",
+    "HTTP 400 network error",
+    "agent CLI 退出码 17",
+    "spawn claude ENOENT",
+    "AbortError: operation was aborted",
+  ]) {
+    assert.equal(classifyCliSessionResumeError(message), undefined, message);
+  }
+  assert.equal(classifyCliSessionResumeError({ status: 401, message: "network error" }), undefined);
+});
+
+test("CLI 同会话恢复退避有界且最多三次", () => {
+  assert.equal(CLI_SESSION_RESUME_MAX_ATTEMPTS, 3);
+  assert.equal(CLI_SESSION_RESUME_BASE_DELAY_MS, 1_000);
+  assert.equal(CLI_SESSION_RESUME_MAX_DELAY_MS, 4_000);
+  assert.deepEqual([1, 2, 3, 4, 99].map(cliSessionResumeDelayMs), [1_000, 2_000, 4_000, 4_000, 4_000]);
 });
 
 test("an incomplete control tool call never releases deferred semantic state", () => {

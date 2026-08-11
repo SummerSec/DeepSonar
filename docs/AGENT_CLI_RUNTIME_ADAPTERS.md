@@ -14,8 +14,9 @@ real Agent CLIs. Each registered adapter declares:
   messaging and reasoning support;
 - the governed runtime image keys on which it may run;
 - a fixed command invocation and structured input/output codec.
-- an explicit same-session resume operation when incremental stdin is not
-  supported.
+- 显式的同 session 恢复操作，用于进程级故障恢复。运行中 stdin 增量消息与
+  进程退出后的恢复是两个独立能力：即使 CLI 支持 stdin 更新，也必须能在
+  临时上游故障导致进程退出后恢复已捕获的 session。
 
 The adapter owns only protocol translation and provider configuration
 materialization. The host still owns sandbox lifecycle, semantic control MCP,
@@ -33,6 +34,11 @@ The current registry contains:
 All three adapters declare `contextCompaction: true` and are admitted only when
 the context policy is supported. Claude and OpenCode do not rely on the Codex
 policy or receive the Claude-specific environment variable.
+
+宿主只恢复明确的临时上游故障（HTTP 408/429/500/502/503/504、timeout 和
+network）。它在同一沙箱内按已捕获的精确 session ID 最多恢复三次，并使用
+有界退避。永久 HTTP 错误、缺少 session ID、适配器不支持以及次数耗尽均
+fail closed；宿主绝不选择 latest session，也不创建新的兜底会话。
 
 ## New adapter onboarding checklist
 
