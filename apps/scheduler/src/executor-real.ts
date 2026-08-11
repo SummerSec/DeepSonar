@@ -89,6 +89,56 @@ function invalidToolPayload(
   return new ControlInputError(code, message, path);
 }
 
+const SHARED_ASSET_RETRYABLE_ERROR_CODES = new Set([
+  "asset_file_too_large",
+  "asset_quota_exceeded",
+  "asset_scope_forbidden",
+  "asset_project_required",
+  "asset_finding_required",
+  "asset_finding_not_in_project",
+  "asset_content_type_not_allowed",
+  "invalid_asset_key",
+  "invalid_asset_content_type",
+  "immutable_asset_key_exists",
+  "asset_content_version_exists",
+]);
+
+const SHARED_ASSET_UNIQUE_CONSTRAINTS = new Set([
+  "shared_asset_versions_asset_id_content_sha256_key",
+  "shared_asset_versions_asset_id_version_key",
+  "shared_assets_active_platform_key_uniq",
+  "shared_assets_active_project_key_uniq",
+  "shared_assets_active_finding_key_uniq",
+]);
+
+/** source_path 读取失败统一返回固定文案，避免把沙箱路径或底层错误回显给 Agent。 */
+export function sharedAssetSourceReadControlError(_error: unknown): ControlInputError {
+  return invalidToolPayload(
+    "publish_shared_asset",
+    "无法读取 source_path。请确认文件位于 /workspace 下、是普通工作文件且未超过配额，修正后重试。",
+    "source_path",
+  );
+}
+
+/** 将已知共享资产输入冲突转换为可重试控制错误，未知故障保持 fail closed。 */
+export function sharedAssetPublishControlError(error: unknown): ControlInputError | null {
+  const record = error && typeof error === "object" ? (error as { code?: unknown; constraint?: unknown }) : undefined;
+  if (record?.code === "23505" && typeof record.constraint === "string" && SHARED_ASSET_UNIQUE_CONSTRAINTS.has(record.constraint)) {
+    return invalidToolPayload(
+      "publish_shared_asset",
+      "共享资产 key 或内容版本已存在，请修改 key 或提交不同内容后重试。",
+      "key",
+    );
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  const errorCode = detail.split(":", 1)[0];
+  if (!SHARED_ASSET_RETRYABLE_ERROR_CODES.has(errorCode)) return null;
+  const path = detail.includes("content_type") ? "content_type"
+    : detail.includes("key") || detail.includes("exists") ? "key"
+      : detail.includes("source") ? "source_path" : undefined;
+  return invalidToolPayload("publish_shared_asset", detail, path);
+}
+
 export function buildInstructionWorkspaceFiles(instructions: string): Record<string, string> {
   return {
     "/workspace/AGENTS.md": instructions,
@@ -1072,12 +1122,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       try {
         bytes = await runtimeControl.readWorkspaceFile(proposal.source_path, config.sharedAssets.maxFileBytes);
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw invalidToolPayload(
-          "publish_shared_asset",
-          `无法读取 source_path：${detail}。路径必须是 /workspace 下普通工作文件且不超过配额。`,
-          "source_path",
-        );
+        throw sharedAssetSourceReadControlError(error);
       }
       await assertJobCanPublishSharedAsset(jobId, (job.sandbox_id as string | null) ?? null);
       try {
@@ -1095,15 +1140,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         });
       } catch (error) {
         if (error instanceof ControlInputError) throw error;
-        const detail = error instanceof Error ? error.message : String(error);
-        // Asset policy / quota / key validation is agent-correctable (ControlInputError.retryable).
-        if (/^asset_|^invalid_asset_/u.test(detail) || detail.includes("asset_content_type_not_allowed")) {
-          throw invalidToolPayload(
-            "publish_shared_asset",
-            detail,
-            detail.includes("content_type") ? "content_type" : detail.includes("key") ? "key" : undefined,
-          );
-        }
+        const controlError = sharedAssetPublishControlError(error);
+        if (controlError) throw controlError;
         throw error;
       }
       return;

@@ -103,6 +103,49 @@ export async function createSharedAsset(input: {
       const quotaScopeKey = input.scope === "platform" ? "platform" : input.scope === "finding" ? `finding:${input.findingId}` : `project:${input.projectId}`;
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`shared-assets:${quotaScopeKey}`}, 0))`;
 
+      if (input.origin === "agent") {
+        const [job] = await tx`
+          SELECT id
+            FROM jobs
+           WHERE id=${input.jobId ?? null}
+             AND status='running'
+             AND lease_expires_at IS NOT NULL
+             AND lease_expires_at > now()
+             AND sandbox_id IS NOT NULL
+           FOR UPDATE
+        `;
+        if (!job) throw new Error("shared_asset_publish_job_not_running");
+      }
+
+      const [existing] = input.scope === "platform"
+        ? await tx`SELECT * FROM shared_assets WHERE scope_type='platform' AND logical_key=${key} AND status='active' FOR UPDATE`
+        : input.scope === "finding"
+          ? await tx`SELECT * FROM shared_assets WHERE scope_type='finding' AND finding_id=${input.findingId!} AND logical_key=${key} AND status='active' FOR UPDATE`
+          : await tx`SELECT * FROM shared_assets WHERE scope_type='project' AND project_id=${input.projectId!} AND logical_key=${key} AND status='active' FOR UPDATE`;
+      if (existing && (input.origin !== "agent" || existing.origin !== "agent")) throw new Error("immutable_asset_key_exists");
+
+      if (existing) {
+        const [sameContentVersion] = await tx`
+          SELECT *
+            FROM shared_asset_versions
+           WHERE asset_id=${existing.id}
+             AND content_sha256=${sha256}
+        `;
+        if (sameContentVersion) {
+          if (Number(sameContentVersion.version) !== Number(existing.current_version)) {
+            throw new Error("asset_content_version_exists");
+          }
+          return {
+            ...existing,
+            current_version: Number(existing.current_version),
+            version_id: sameContentVersion.id,
+            content_sha256: sameContentVersion.content_sha256,
+            bytes: Number(sameContentVersion.bytes),
+            content_type: sameContentVersion.content_type,
+          };
+        }
+      }
+
       const quota = input.scope === "finding" ? config.sharedAssets.findingQuotaBytes
         : input.scope === "platform" ? config.sharedAssets.platformQuotaBytes
           : config.sharedAssets.projectQuotaBytes;
@@ -112,13 +155,6 @@ export async function createSharedAsset(input: {
           ? await tx`SELECT COALESCE(sum(v.bytes),0)::bigint AS bytes FROM shared_assets a JOIN shared_asset_versions v ON v.asset_id=a.id WHERE a.finding_id=${input.findingId!}`
           : await tx`SELECT COALESCE(sum(v.bytes),0)::bigint AS bytes FROM shared_assets a JOIN shared_asset_versions v ON v.asset_id=a.id WHERE a.project_id=${input.projectId!} AND a.scope_type='project'`;
       if (Number(usage?.bytes ?? 0) + input.bytes.byteLength > quota) throw new Error("asset_quota_exceeded");
-
-      const [existing] = input.scope === "platform"
-        ? await tx`SELECT * FROM shared_assets WHERE scope_type='platform' AND logical_key=${key} AND status='active' FOR UPDATE`
-        : input.scope === "finding"
-          ? await tx`SELECT * FROM shared_assets WHERE scope_type='finding' AND finding_id=${input.findingId!} AND logical_key=${key} AND status='active' FOR UPDATE`
-          : await tx`SELECT * FROM shared_assets WHERE scope_type='project' AND project_id=${input.projectId!} AND logical_key=${key} AND status='active' FOR UPDATE`;
-      if (existing && (input.origin !== "agent" || existing.origin !== "agent")) throw new Error("immutable_asset_key_exists");
 
       await tx`INSERT INTO shared_asset_blobs (content_sha256,bytes,content_type,blob_uri) VALUES (${sha256},${input.bytes.byteLength},${contentType},${blobUri}) ON CONFLICT (content_sha256) DO NOTHING RETURNING content_sha256`;
       // Re-upload after store loss: blob row may already exist while object is gone.

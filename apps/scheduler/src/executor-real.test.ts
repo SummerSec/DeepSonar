@@ -16,11 +16,49 @@ import {
   semanticToolEventsFor,
   hasMaterializedProviderConfig,
   buildInstructionWorkspaceFiles,
+  sharedAssetPublishControlError,
+  sharedAssetSourceReadControlError,
 } from "./executor-real.js";
+import { ControlInputError } from "./control-input.js";
 import { expandModules } from "./skill-sources.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("共享资产已知业务与唯一冲突转换为可重试控制错误，基础设施故障保持失败关闭", () => {
+  for (const error of [
+    new Error("immutable_asset_key_exists"),
+    new Error("asset_content_version_exists"),
+    new Error("invalid_asset_key"),
+    new Error("asset_quota_exceeded"),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "shared_asset_versions_asset_id_content_sha256_key" }),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "shared_assets_active_project_key_uniq" }),
+  ]) {
+    const classified = sharedAssetPublishControlError(error);
+    assert.ok(classified instanceof ControlInputError);
+    assert.equal(classified.code, "invalid_payload");
+    assert.equal(classified.retryable, true);
+  }
+  for (const error of [
+    new Error("shared_asset_publish_job_not_running"),
+    new Error("shared_asset_container_unavailable"),
+    new Error("asset_store_unavailable"),
+    new Error("database connection closed"),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "other_table_unique_key" }),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" }),
+  ]) {
+    assert.equal(sharedAssetPublishControlError(error), null);
+  }
+});
+
+test("source_path 普通读取失败仍返回不回显底层详情的可重试错误", () => {
+  const error = sharedAssetSourceReadControlError(new Error("ENOENT: /workspace/private/secret.txt"));
+  assert.ok(error instanceof ControlInputError);
+  assert.equal(error.code, "invalid_payload");
+  assert.equal(error.retryable, true);
+  assert.equal(error.path, "source_path");
+  assert.doesNotMatch(error.message, /ENOENT|secret\.txt/);
+});
 
 test("real executor round-trips only controlled rate-limit details after string failure", () => {
   const error = reconstructAgentRunError("语义事件处理失败: [event_rate_limited]", {
