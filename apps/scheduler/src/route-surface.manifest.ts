@@ -22,6 +22,9 @@ GET /auth/me
 GET /auth/status
 GET /canvases/:id
 GET /canvases/:id/convergence
+GET /control/v1/jobs/:jobId/capabilities
+GET /control/v1/jobs/:jobId/openapi.json
+GET /control/v1/jobs/:jobId/operations/:operationId
 GET /canvases/:id/delta
 GET /canvases/:id/nodes/:nodeId
 GET /canvases/:id/report
@@ -109,6 +112,7 @@ POST /canvases/:id/convergence/pause
 POST /canvases/:id/convergence/resume
 POST /canvases/:id/convergence/run-hub-now
 POST /canvases/:id/convergence/stop-after-gate
+POST /control/v1/jobs/:jobId/operations/:operationId
 POST /canvases/:id/jobs/cancel-active
 POST /canvases/:id/report/retry
 POST /credentials

@@ -21,6 +21,7 @@ import { registerSkillSourceRoutes } from "./domains/skill-source/routes.js";
 import { registerStreamRoutes } from "./domains/stream/routes.js";
 import { registerSystemRoutes } from "./domains/system/routes.js";
 import { registerTransferRoutes } from "./domains/transfer/routes.js";
+import { registerPlatformControlRoutes } from "./domains/platform-api/routes.js";
 
 export { parseConcurrencyRulesPatch } from "./domains/settings/routes.js";
 export { RuntimeImageRegistryChannelBody } from "./domains/runtime-image/routes.js";
@@ -135,6 +136,11 @@ export function registerRoutes(app: FastifyInstance) {
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
   registerGateway(app);
+
+  // Job-scoped Platform Tool API. Its routes are exempt from the platform
+  // authHook because they perform their own independent capability-token
+  // authentication and never accept a management API token.
+  registerPlatformControlRoutes(app);
 
   registerAuthRoutes(app);
 

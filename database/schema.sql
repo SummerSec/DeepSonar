@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 24);
+INSERT INTO schema_meta (id, version) VALUES ('global', 25);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -634,6 +634,39 @@ CREATE TABLE job_tokens (
 );
 
 CREATE INDEX job_tokens_job_idx ON job_tokens (job_id);
+
+-- Short-lived Job-scoped capability tokens for the Platform Tool API. This is
+-- intentionally independent from job_tokens, which are Gateway credentials.
+-- Only the token hash and lookup prefix are persisted; the plaintext is
+-- returned once by the Scheduler's internal runtime minting path.
+CREATE TABLE job_capability_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  canvas_id text REFERENCES canvases(id) ON DELETE CASCADE,
+  role_name text NOT NULL,
+  role_config_id uuid,
+  role_config_version int,
+  snapshot_sha256 text NOT NULL,
+  token_prefix text NOT NULL UNIQUE,
+  token_hash text NOT NULL,
+  operation_ids text[] NOT NULL,
+  issued_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  revoke_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_capability_tokens_operation_ids_check CHECK (cardinality(operation_ids) > 0),
+  CONSTRAINT job_capability_tokens_expiry_check CHECK (expires_at > issued_at),
+  CONSTRAINT job_capability_tokens_revoke_reason_check CHECK (
+    revoke_reason IS NULL OR (length(revoke_reason) BETWEEN 1 AND 200 AND revoke_reason !~ '[[:cntrl:]]')
+  )
+);
+
+CREATE INDEX job_capability_tokens_job_idx
+  ON job_capability_tokens (job_id, revoked_at, expires_at);
+CREATE INDEX job_capability_tokens_project_idx
+  ON job_capability_tokens (project_id, created_at DESC);
 
 -- 审计日志（§7.2 append-only；红线：凭证明文/Authorization/Cookie/模型 Key 永不写入）
 CREATE TABLE audit_logs (

@@ -2,21 +2,47 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { gzip } from "node:zlib";
+import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
   JobEvidenceWriter,
   MAX_STREAM_RETAINED_BYTES,
+  appendOtlpEnvelope,
+  clearJobEvidenceSecrets,
   parseStreamFile,
   readGzipTail,
   readNormalizedStream,
   readNormalizedStreamPage,
+  registerJobEvidenceSecrets,
 } from "./evidence.js";
 import { config } from "./config.js";
 import { encodeCursor } from "./pagination.js";
 
 const gzipP = promisify(gzip);
+const gunzipP = promisify(gunzip);
+
+test("runtime capability secrets are redacted from normalized and OTLP evidence", async () => {
+  const jobId = "00000000-0000-0000-0000-000000000091";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const secret = "deepsonarcap_deadbeef_exact-runtime-secret-value";
+  const writer = new JobEvidenceWriter(jobId, "test", "attempt-secret");
+  registerJobEvidenceSecrets(jobId, [secret]);
+  try {
+    await writer.appendNormalized({ type: "text.delta", delta: `leak=${secret}` });
+    await appendOtlpEnvelope(jobId, "logs", "application/json", { body: `Bearer ${secret}` });
+    const { manifest } = await writer.finalize();
+    const contents = await Promise.all(manifest.files.map(async (file) => {
+      const raw = await readFile(path.join(root, file.path));
+      return file.path.endsWith(".gz") ? (await gunzipP(raw)).toString("utf8") : raw.toString("utf8");
+    }));
+    assert.equal(contents.some((content) => content.includes(secret)), false);
+    assert.equal(contents.some((content) => content.includes("[REDACTED]")), true);
+  } finally {
+    clearJobEvidenceSecrets(jobId);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("gzip evidence tail stops at decompression budget instead of inflating a bomb", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deepsonar-evidence-"));

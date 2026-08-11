@@ -131,6 +131,7 @@ test("top-level routes module remains a hook and registrar composition root", ()
     "registerTransferRoutes",
     "registerAuthRoutes",
     "registerAuditRoutes",
+    "registerPlatformControlRoutes",
   ]) {
     assert.match(source, new RegExp(`${registrar}\\(app\\)`), `${registrar} must be composed at the top level`);
   }

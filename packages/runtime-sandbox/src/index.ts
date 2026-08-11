@@ -86,6 +86,7 @@ export {
   listDeepSonarContainers,
   materializationPathCollisions,
   normalizeRuntimeErrorDetails,
+  redactRuntimeSecrets,
   parseRuntimeLine,
   runRealAgent,
   assertSharedAssetsContainerMount,
