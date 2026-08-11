@@ -212,7 +212,7 @@ export function graphEligibilityReason(
     if (state.pendingReportOlder) return "report_pending_older";
     const payload = parseDispatchPayload(job.payload_json);
     const findingScoped = payload.kind === "finding_report";
-    if (state.activeCanvasJob || (!findingScoped && !["analysis_complete", "reporting"].includes(String(state.rootStatus)))) {
+    if (!findingScoped && (state.activeCanvasJob || !["analysis_complete", "reporting"].includes(String(state.rootStatus)))) {
       return "report_gate";
     }
   }

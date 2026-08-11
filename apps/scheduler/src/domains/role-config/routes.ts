@@ -59,6 +59,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     role: { name: string; kind: "role" | "hub" | "system" },
     db: typeof sql = sql,
   ): Promise<string | null> {
+    if (projectId && body.runtime_image_key != null) {
+      return "项目 RoleConfig 不再直接设置 runtime_image_key，请使用项目镜像策略";
+    }
     let sandboxLimits: ReturnType<typeof parseSandboxLimitsOverride>;
     try {
       sandboxLimits = parseSandboxLimitsOverride(body.sandbox_limits);
@@ -368,6 +371,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       }
     }
     const projectId = row.project_id ? String(row.project_id) : null;
+    if (projectId) {
+      return reply.code(400).send({ error: "项目 RoleConfig 不再直接设置 runtime_image_key，请使用项目镜像策略" });
+    }
     if (body.runtime_image_key) {
       const [image] = await sql`
         SELECT ri.id, ri.official, ri.project_opt_in,

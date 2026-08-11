@@ -109,30 +109,29 @@ consumed by the three Chrome Dockerfiles and the consistency gate:
 - `playwright-core@1.62.1` is installed with its npm integrity value. The test
   smoke launches the image's governed Chromium wrapper and connects through
   the CDP endpoint with Playwright; it is not a host-browser smoke.
-- Chrome Fuzz checks out depot_tools commit
-  `921e61b35fbc5e97b14250a118e363ec05078089` and V8 commit
-  `792d9716fea48312ad7ce4413c538e00628b1d50` (V8 `15.1.206.10`, the V8
-  revision from Chromium `151.0.7922.71`), then runs `autoninja d8
-  v8_json_libfuzzer` for the target architecture. The Chromium package
-  version and the V8 source version are recorded separately because they are
-  independently pinned inputs. `chrome-fuzz-env.sh` and
-  `chrome-fuzz-smoke.sh` reject a missing or non-V8 binary and execute the
-  real V8 libFuzzer target with `-runs=1`. A release must
-  therefore prove both `linux/amd64` and `linux/arm64`; if the arm64 source
-  build cannot produce actual d8, the release is incomplete and no digest may
-  be added to the registry.
+- Chrome Fuzz 固定 checkout depot_tools 提交
+  `921e61b35fbc5e97b14250a118e363ec05078089` 与 V8 提交
+  `792d9716fea48312ad7ce4413c538e00628b1d50`（V8 `15.1.206.10`，来自 Chromium
+  `151.0.7922.71`），然后针对目标架构运行 `autoninja d8
+  v8_json_libfuzzer`。amd64 按正常目标架构构建；arm64 在 x86 runner 上使用固定
+  Chromium Clang 与 arm64 sysroot 交叉构建，QEMU 仅用于组装。Chromium 包版本与
+  V8 源码版本分别记录，因为它们是独立固定的输入。`chrome-fuzz-env.sh` 与
+  `chrome-fuzz-smoke.sh` 拒绝缺失或非 V8 二进制，并使用 `-runs=1` 执行真实 V8
+  libFuzzer 目标；arm64 的真实 smoke 在 `ubuntu-24.04-arm` 原生 runner 执行，
+  原生 smoke 通过前不得组装发布 index。Release 必须证明 `linux/amd64` 与
+  `linux/arm64` 均生成真实目标；若 arm64 源码构建不能生成实际 d8，发布不完整，
+  不得向 registry 写入 digest。
 
 The Chrome images are all project opt-in and have no global role defaults.
 `chrome-runtime.yml` builds amd64 and runs the contract/smoke harness when its
 Dockerfiles, descriptors/scripts, `.dockerignore`, shared fingerprint/cache
 mechanism, or workflow changes. `release.yml` is the authoritative
-multi-architecture gate: it uses
-native `ubuntu-latest` and `ubuntu-24.04-arm` runners for child image builds
-(especially the V8 build, which is not run under QEMU), then assembles the
-two child digests into one index. It uses
-the immutable base digest, publishes GHCR plus configured ACR and Docker Hub
-tags, inspects every destination, and uploads only records accepted by
-`record-runtime-image-digest.mjs`.
+multi-architecture gate：Chrome Fuzz amd64 按正常目标架构构建，arm64 在 x86 runner
+上使用固定 Chromium Clang 与 arm64 sysroot 交叉构建，QEMU 仅用于组装；arm64 的
+真实 d8/libFuzzer smoke 在 `ubuntu-24.04-arm` 原生 runner 执行，只有原生 smoke
+通过后才允许 `chrome-images` 组装两个子 digest 的发布 index。它使用不可变 base
+digest，发布 GHCR 以及配置的 ACR、Docker Hub 标签，检查每个目标，并且只上传
+`record-runtime-image-digest.mjs` 接受的记录。
 
 ## OpenHarmony specialist CI contract
 

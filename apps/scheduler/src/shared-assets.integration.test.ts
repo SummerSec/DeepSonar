@@ -96,6 +96,17 @@ if (!testDatabaseUrl) {
 
       const second = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v2"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId });
       assert.equal(second.current_version, 2);
+      const duplicate = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v2"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId });
+      assert.equal(duplicate.current_version, 2);
+      assert.equal(duplicate.version_id, second.version_id);
+      assert.equal(duplicate.content_sha256, second.content_sha256);
+      assert.equal((await sql`SELECT count(*)::int AS count FROM shared_asset_versions WHERE asset_id=${second.id as string}`)[0].count, 2);
+      await assert.rejects(
+        sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v1"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId }),
+        /asset_content_version_exists/,
+      );
+      assert.equal((await sql`SELECT count(*)::int AS count FROM shared_asset_versions WHERE asset_id=${second.id as string}`)[0].count, 2);
+      assert.equal(Number((await sql`SELECT current_version FROM shared_assets WHERE id=${second.id as string}`)[0].current_version), 2);
       const frozenRefs = await sql`SELECT version_id,content_sha256 FROM job_shared_asset_versions WHERE job_id=${frozenJob.id as string}`;
       assert.ok(frozenRefs.some((row) => row.version_id === first.version_id));
       assert.ok(frozenRefs.some((row) => row.version_id === agentFirst.version_id));

@@ -1305,65 +1305,76 @@ export function ProviderAccountFlow({
                           <option value="open-code">open-code</option>
                         </select>
                       </label>
-                      <label
-                        className="provider-flow-role-cli-wrap provider-flow-role-image-wrap"
-                        onClick={(event) => event.stopPropagation()}
-                        onMouseDown={(event) => event.stopPropagation()}
-                      >
-                        <span className="provider-flow-role-cli-caption">镜像</span>
-                        <select
-                          className="theme-input-surface provider-flow-role-cli provider-flow-role-image"
-                          value={roleConfig.runtime_image_key ?? ""}
-                          disabled={busy || !roleConfig.can_bind}
-                          title="修改此角色配置的运行镜像（立即保存；空 = 系统底座）"
-                          aria-label={`${roleConfig.role_title || roleConfig.role_name} 的运行镜像`}
+                      {roleConfig.project_id ? (
+                        <span
+                          className="provider-flow-role-cli-wrap provider-flow-role-image-wrap"
+                          title="项目 RoleConfig 的镜像由项目镜像策略集中决定"
                           onClick={(event) => event.stopPropagation()}
                           onMouseDown={(event) => event.stopPropagation()}
-                          onChange={(event) => {
-                            event.stopPropagation();
-                            const next = event.target.value.trim() || null;
-                            const current = roleConfig.runtime_image_key ?? null;
-                            if (next === current) return;
-                            void (async () => {
-                              setBusy(true);
-                              setError("");
-                              try {
-                                await api.updateRoleConfigRuntimeImage(roleConfig.id, next);
-                                setRoleConfigs((currentRows) =>
-                                  currentRows.map((item) =>
-                                    item.id === roleConfig.id ? { ...item, runtime_image_key: next } : item,
-                                  ),
-                                );
-                                const label = next
-                                  ? (runtimeImages.find((image) => image.image_key === next)?.name ?? next)
-                                  : "系统底座";
-                                setNotice(`已将「${roleConfig.role_title || roleConfig.role_name}」镜像改为 ${label}`);
-                                api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
-                              } catch (e) {
-                                setError(String(e));
-                              } finally {
-                                setBusy(false);
-                              }
-                            })();
-                          }}
                         >
-                          <option value="">系统底座（默认）</option>
-                          {runtimeImageOptionsFor(roleConfig.project_id).map((image) => (
-                            <option key={image.id} value={image.image_key}>
-                              {runtimeImageOptionLabel(image, roleConfig.project_id)}
-                            </option>
-                          ))}
-                          {/* Keep current key visible even if not in filtered catalog (stale pin). */}
-                          {roleConfig.runtime_image_key
-                            && !runtimeImageOptionsFor(roleConfig.project_id).some(
-                              (image) => image.image_key === roleConfig.runtime_image_key,
-                            ) && (
-                            <option value={roleConfig.runtime_image_key}>
-                              {roleConfig.runtime_image_key}（当前 · 需检查启用）
-                            </option>
-                          )}
-                        </select>
-                      </label>
+                          <span className="provider-flow-role-cli-caption">镜像</span>
+                          <span className="provider-flow-role-image-readonly">由项目镜像策略决定</span>
+                        </span>
+                      ) : (
+                        <label
+                          className="provider-flow-role-cli-wrap provider-flow-role-image-wrap"
+                          onClick={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                        >
+                          <span className="provider-flow-role-cli-caption">镜像</span>
+                          <select
+                            className="theme-input-surface provider-flow-role-cli provider-flow-role-image"
+                            value={roleConfig.runtime_image_key ?? ""}
+                            disabled={busy || !roleConfig.can_bind}
+                            title="修改全局角色配置的运行镜像（立即保存；空 = 系统底座）"
+                            aria-label={`${roleConfig.role_title || roleConfig.role_name} 的运行镜像`}
+                            onClick={(event) => event.stopPropagation()}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onChange={(event) => {
+                              event.stopPropagation();
+                              const next = event.target.value.trim() || null;
+                              const current = roleConfig.runtime_image_key ?? null;
+                              if (next === current) return;
+                              void (async () => {
+                                setBusy(true);
+                                setError("");
+                                try {
+                                  await api.updateRoleConfigRuntimeImage(roleConfig.id, next);
+                                  setRoleConfigs((currentRows) =>
+                                    currentRows.map((item) =>
+                                      item.id === roleConfig.id ? { ...item, runtime_image_key: next } : item,
+                                    ),
+                                  );
+                                  const label = next
+                                    ? (runtimeImages.find((image) => image.image_key === next)?.name ?? next)
+                                    : "系统底座";
+                                  setNotice(`已将「${roleConfig.role_title || roleConfig.role_name}」镜像改为 ${label}`);
+                                  api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
+                                } catch (e) {
+                                  setError(String(e));
+                                } finally {
+                                  setBusy(false);
+                                }
+                              })();
+                            }}
+                          >
+                            <option value="">系统底座（默认）</option>
+                            {runtimeImageOptionsFor(roleConfig.project_id).map((image) => (
+                              <option key={image.id} value={image.image_key}>
+                                {runtimeImageOptionLabel(image, roleConfig.project_id)}
+                              </option>
+                            ))}
+                            {roleConfig.runtime_image_key
+                              && !runtimeImageOptionsFor(roleConfig.project_id).some(
+                                (image) => image.image_key === roleConfig.runtime_image_key,
+                              ) && (
+                              <option value={roleConfig.runtime_image_key}>
+                                {roleConfig.runtime_image_key}（当前 · 需检查启用）
+                              </option>
+                            )}
+                          </select>
+                        </label>
+                      )}
                       <span className="provider-flow-role-model">
                         {roleConfig.model
                           ? `Role 覆盖 · ${roleConfig.model}`

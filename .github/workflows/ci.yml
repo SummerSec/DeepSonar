@@ -392,15 +392,17 @@ jobs:
         if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
         run: node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:ci
 
-  # Keep the V8 arm64 cross-toolchain regression in the PR/main gate. V8 is
-  # compiled by its pinned x86_64 Clang; QEMU only assembles and smokes the
-  # arm64 runtime. Release remains authoritative for the final indexes.
-  chrome-fuzz-arm64:
+  # 在 PR/main 门禁保留 V8 arm64 交叉工具链回归。V8 使用固定的 x86_64 Clang
+  # 编译，QEMU 只负责组装 arm64 运行时；真实 d8/libFuzzer 冒烟在依赖的 arm64 作业中原生执行。
+  chrome-fuzz-arm64-build:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     permissions:
       contents: read
       packages: write
+    outputs:
+      owner: ${{ steps.ns.outputs.owner }}
+      digest: ${{ steps.image.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - id: ns
@@ -492,10 +494,26 @@ jobs:
           fi
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-      - name: Smoke Chrome Fuzz from immutable digest
+  # QEMU 可以组装交叉构建的镜像，但不是 ASan 插桩 V8 冒烟的可靠执行环境。
+  # 该门禁固定使用原生 runner，成功结果才能证明真实 arm64 d8/libFuzzer 运行时可用。
+  chrome-fuzz-arm64:
+    needs: chrome-fuzz-arm64-build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 原生执行 Chrome Fuzz 不可变 digest 冒烟
         env:
-          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz
-          DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_NAME: ghcr.io/${{ needs.chrome-fuzz-arm64-build.outputs.owner }}/deepsonar-chrome-fuzz
+          DIGEST: ${{ needs.chrome-fuzz-arm64-build.outputs.digest }}
         run: |
           set -euo pipefail
           image_ref="${IMAGE_NAME}@${DIGEST}"

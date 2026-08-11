@@ -73,7 +73,7 @@ test("Hub eligibility blocks active Hub, role, and waiting-human work", () => {
       { type: "report", payload_json: { kind: "finding_report" } },
       { rootStatus: "running", activeCanvasJob: true },
     ),
-    "report_gate",
+    null,
   );
 });
 

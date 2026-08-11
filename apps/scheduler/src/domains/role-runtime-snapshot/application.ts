@@ -37,6 +37,54 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export const PLATFORM_DEFAULT_AGENT_CLI = "claude-code";
 export const PLATFORM_DEFAULT_AGENT_MODEL: string | null = null;
 
+export const PROJECT_IMAGE_STRATEGIES = ["inherit_global", "project_managed"] as const;
+export type ProjectImageStrategy = (typeof PROJECT_IMAGE_STRATEGIES)[number];
+export interface ProjectImagePolicy {
+  image_strategy: ProjectImageStrategy;
+  role_runtime_images: Record<string, string | null>;
+}
+
+const RUNTIME_IMAGE_KEY_PATTERN = /^[a-z][a-z0-9-]{1,62}$/;
+
+/** 读取项目 JSON 中的镜像策略；缺省或脏值均安全回到全局继承。 */
+export function parseProjectImagePolicy(value: unknown): ProjectImagePolicy {
+  const configValue = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const strategy = PROJECT_IMAGE_STRATEGIES.includes(configValue.image_strategy as ProjectImageStrategy)
+    ? configValue.image_strategy as ProjectImageStrategy
+    : "inherit_global";
+  const rawImages = configValue.role_runtime_images;
+  const images: Array<[string, string | null]> = [];
+  if (rawImages && typeof rawImages === "object" && !Array.isArray(rawImages)) {
+    for (const [roleName, rawKey] of Object.entries(rawImages as Record<string, unknown>)) {
+      if (rawKey === null) {
+        images.push([roleName, null]);
+        continue;
+      }
+      if (typeof rawKey === "string") {
+        const key = rawKey.trim();
+        if (RUNTIME_IMAGE_KEY_PATTERN.test(key)) images.push([roleName, key]);
+      }
+    }
+  }
+  return { image_strategy: strategy, role_runtime_images: Object.fromEntries(images) };
+}
+
+/** 选择 Job 实际使用的镜像 key；项目托管缺省固定为系统 Base。 */
+export function runtimeImageKeyForProjectPolicy(
+  policy: ProjectImagePolicy,
+  roleName: string,
+  globalRuntimeImageKey: string | null,
+): string | null {
+  if (policy.image_strategy === "project_managed") {
+    return Object.prototype.hasOwnProperty.call(policy.role_runtime_images, roleName)
+      ? policy.role_runtime_images[roleName] ?? "deepsonar-base"
+      : "deepsonar-base";
+  }
+  return globalRuntimeImageKey;
+}
+
 let legacyAgentDefaultsWarningEmitted = false;
 function warnIgnoredLegacyAgentDefaults(): void {
   if (legacyAgentDefaultsWarningEmitted) return;
@@ -85,10 +133,10 @@ export async function resolveAgentSnapshotForJob(
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
   if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);
 
+  const [project] = (await db`SELECT config_json FROM projects WHERE id = ${projectId}`) as Array<Record<string, unknown>>;
+  const projectImagePolicy = parseProjectImagePolicy(project?.config_json);
   const [projectCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`) as Array<Record<string, unknown>>;
-  const [globalCfg] = projectCfg
-    ? [undefined]
-    : (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`) as Array<Record<string, unknown>>;
+  const [globalCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`) as Array<Record<string, unknown>>;
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
   const agentCli = typeof cfg?.agent_cli === "string" && cfg.agent_cli.trim() ? cfg.agent_cli.trim() : PLATFORM_DEFAULT_AGENT_CLI;
 
@@ -175,7 +223,10 @@ export async function resolveAgentSnapshotForJob(
   }
   const roleKind = role.kind as "role" | "hub" | "system";
   const platformTools = resolvePlatformTools(roleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});
-  const runtimeImageKey = (cfg?.runtime_image_key as string) ?? null;
+  const globalRuntimeImageKey = typeof globalCfg?.runtime_image_key === "string" && globalCfg.runtime_image_key.trim()
+    ? globalCfg.runtime_image_key.trim()
+    : null;
+  const runtimeImageKey = runtimeImageKeyForProjectPolicy(projectImagePolicy, roleName, globalRuntimeImageKey);
   const runtimeImage = await resolveRuntimeImageForJob(db as never, projectId, roleName, runtimeImageKey);
   const runtimeAdapter = requireAgentCliRuntimeAdapter(agentCli, runtimeImage.image_key);
   const sandboxOverride = parseSandboxLimitsOverride(cfg?.sandbox_limits_json);

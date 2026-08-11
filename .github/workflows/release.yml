@@ -595,9 +595,8 @@ jobs:
           path: release-digests/${{ matrix.name }}.json
           if-no-files-found: error
 
-  # Chrome Audit/Test build natively per architecture. Chrome Fuzz arm64 uses
-  # V8's pinned x86_64 Clang as a cross-compiler; QEMU only assembles and smokes
-  # its target runtime. chrome-images then assembles immutable child digests.
+  # Chrome Audit/Test 按架构原生构建。Chrome Fuzz arm64 使用固定的 x86_64
+  # Clang 交叉编译，QEMU 只组装目标运行时；arm64 fuzz 冒烟在下方独立原生门禁执行。
   chrome-image-builds:
     needs: base-image
     runs-on: ${{ matrix.runner }}
@@ -814,6 +813,7 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: Smoke native Chrome child from immutable digest
+        if: ${{ matrix.name != 'chrome-fuzz' || matrix.arch != 'arm64' }}
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           DIGEST: ${{ steps.image.outputs.digest }}
@@ -837,10 +837,51 @@ jobs:
           path: chrome-arch/${{ matrix.name }}-${{ matrix.arch }}.json
           if-no-files-found: error
 
-  # Assemble child digests built on native amd64/arm64 runners, publish the
-  # canonical index to each configured registry, and record inspect evidence.
-  chrome-images:
+  # QEMU 可以组装交叉构建的 fuzz 镜像，但不是 ASan 插桩 V8 冒烟的可靠运行环境。
+  # 在原生环境校验不可变子镜像。
+  chrome-fuzz-arm64-smoke:
     needs: [base-image, chrome-image-builds]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$owner" ]]
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: chrome-arch-chrome-fuzz-arm64
+          path: chrome-arch
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 原生执行 Chrome Fuzz 不可变 digest 冒烟
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-chrome-fuzz
+        run: |
+          set -euo pipefail
+          digest="$(jq -r '.digest' chrome-arch/chrome-fuzz-arm64.json)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_ref="${IMAGE_NAME}@${digest}"
+          docker pull --platform linux/arm64 "$image_ref"
+          node agent-harness/test-chrome-runtime.mjs "$image_ref" chrome-fuzz agent-harness/chrome-fuzz-runtime.json linux/arm64
+
+  # 汇总 Audit/Test 的原生子镜像与 Fuzz 的交叉构建子镜像（其 arm64 已通过上方
+  # 原生冒烟门禁），发布各配置 registry 的 canonical index 并记录 inspect 证据。
+  chrome-images:
+    needs: [base-image, chrome-image-builds, chrome-fuzz-arm64-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:

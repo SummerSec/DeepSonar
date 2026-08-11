@@ -499,7 +499,11 @@ export interface ProjectSettings {
   effective_rules: EffectiveRules;
   finding_protocol: FindingProtocolConfig | null;
   effective_finding_protocol: EffectiveFindingProtocol;
+  image_strategy: ProjectImageStrategy;
+  role_runtime_images: Record<string, string | null>;
 }
+
+export type ProjectImageStrategy = "inherit_global" | "project_managed";
 
 /** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='hub' = 唯一决策中枢；kind='system' = 系统角色（verify/report 等） */
 export interface AgentRole {
@@ -1320,7 +1324,7 @@ function unwrapPage<T>(payload: T[] | PageEnvelope<T>): T[] {
 
 export const api = {
   projects: () => get<Project[]>("/projects"),
-  createProject: (p: { name: string; description?: string; plane_project_id?: string | null }) =>
+  createProject: (p: { name: string; description?: string; plane_project_id?: string | null; image_strategy?: ProjectImageStrategy }) =>
     send<Project>("POST", "/projects", p),
   updateProject: (id: string, p: { name?: string; description?: string; status?: "active" | "archived" }) =>
     send<Project>("PATCH", `/projects/${id}`, p),
@@ -1558,6 +1562,8 @@ export const api = {
       rules?: Record<string, unknown>;
       roles?: { enabled: string[] | null };
       finding_protocol?: FindingProtocolConfig | null;
+      image_strategy?: ProjectImageStrategy;
+      role_runtime_images?: Record<string, string | null>;
     },
   ) => send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),

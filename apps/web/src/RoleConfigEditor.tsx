@@ -358,7 +358,7 @@ export function RoleConfigEditor({
         subagents: parseJsonArray(form.subagents),
         platform_tools: form.platform_tools,
         instructions_markdown: form.instructions_markdown.trim() || null,
-        runtime_image_key: form.runtime_image_key.trim() || null,
+        runtime_image_key: projectId ? null : form.runtime_image_key.trim() || null,
         sandbox_limits: sandboxLimitsFromForm(form),
         credentials: form.credential_id
           ? [{ credential_id: form.credential_id, purpose: "llm" }]

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import http from "node:http";
 import {
   mapCliEvent,
   redactToolTelemetry,
@@ -22,8 +25,86 @@ import {
   buildTerminalShellCommand,
   terminalShellCommand,
   writeTerminalInput,
+  GATEWAY_PROXY_SCRIPT,
 } from "./agentbox.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+
+type GatewayResponse = { statusCode?: number; body: string };
+
+function requestGateway(port: number, requestPath: string, method = "GET", body?: string): Promise<GatewayResponse> {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ host: "127.0.0.1", port, path: requestPath, method }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      response.on("end", () => resolve({ statusCode: response.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
+      response.on("aborted", () => reject(new Error("网关响应已中止")));
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
+async function reserveHttpPort(): Promise<number> {
+  const server = http.createServer();
+  const port = await listenHttpServer(server);
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
+async function listenHttpServer(server: http.Server): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("无法取得测试端口");
+  return address.port;
+}
+
+async function closeHttpServer(server: http.Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+async function startGatewayProxy(upstreamUrl: string): Promise<{
+  child: ReturnType<typeof spawn>;
+  port: number;
+  stderr: () => string;
+}> {
+  const port = await reserveHttpPort();
+  const script = GATEWAY_PROXY_SCRIPT.replace(
+    'server.listen(3100, "0.0.0.0");',
+    `server.listen(${port}, "127.0.0.1");`,
+  );
+  if (script === GATEWAY_PROXY_SCRIPT) throw new Error("测试未能替换 Gateway proxy 监听端口");
+  const child = spawn(process.execPath, ["-e", script], {
+    env: { ...process.env, DEEPSONAR_GATEWAY_UPSTREAM: upstreamUrl },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const errors: string[] = [];
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk) => errors.push(String(chunk)));
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (child.exitCode !== null) throw new Error(`网关代理启动失败: ${errors.join("")}`);
+    try {
+      const health = await requestGateway(port, "/_deepsonar_health");
+      if (health.statusCode === 200 && health.body === "ok") {
+        return { child, port, stderr: () => errors.join("") };
+      }
+    } catch {
+      // 子进程刚启动时端口尚未监听，继续短暂重试。
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  child.kill();
+  throw new Error(`网关代理健康检查超时: ${errors.join("")}`);
+}
+
+async function stopGatewayProxy(proxy: Awaited<ReturnType<typeof startGatewayProxy>>): Promise<void> {
+  if (proxy.child.exitCode === null) proxy.child.kill();
+  if (proxy.child.exitCode === null) await once(proxy.child, "exit").catch(() => {});
+}
 
 test("terminal shell command prefers interactive Bash and safely falls back to interactive /bin/sh", () => {
   assert.equal(terminalShellCommand("bash"), "exec bash -il");
@@ -182,6 +263,77 @@ test("gateway network ownership accepts only a managed non-internal bridge", () 
     Driver: "bridge",
     Labels: {},
   }), false);
+});
+
+test("网关代理在上游连接失败且未发送响应头时返回 502", async () => {
+  const upstreamPort = await reserveHttpPort();
+  const proxy = await startGatewayProxy(`http://127.0.0.1:${upstreamPort}/gateway`);
+  try {
+    const response = await requestGateway(proxy.port, "/gateway/v1/messages");
+    assert.equal(response.statusCode, 502);
+    assert.equal(response.body, "gateway unavailable");
+    assert.equal(proxy.child.exitCode, null, proxy.stderr());
+  } finally {
+    await stopGatewayProxy(proxy);
+  }
+});
+
+test("网关代理在上游响应流中断且已发送响应头时销毁响应，不重复写头", async () => {
+  const upstream = http.createServer((_request, response) => {
+    const socket = response.socket;
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.write("partial");
+    setTimeout(() => socket?.destroy(), 20);
+  });
+  const upstreamPort = await listenHttpServer(upstream);
+  const proxy = await startGatewayProxy(`http://127.0.0.1:${upstreamPort}/gateway`);
+  try {
+    await assert.rejects(
+      requestGateway(proxy.port, "/gateway/v1/messages"),
+      /中止|aborted|socket hang up|ECONNRESET/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(proxy.child.exitCode, null, proxy.stderr());
+    assert.doesNotMatch(proxy.stderr(), /ERR_HTTP_HEADERS_SENT/);
+  } finally {
+    await stopGatewayProxy(proxy);
+    await closeHttpServer(upstream);
+  }
+});
+
+test("网关代理在客户端请求中止时销毁上游请求并保持进程运行", async () => {
+  let resolveUpstreamClose!: () => void;
+  const upstreamClosed = new Promise<void>((resolve) => { resolveUpstreamClose = resolve; });
+  const upstream = http.createServer((request) => {
+    request.once("close", resolveUpstreamClose);
+  });
+  const upstreamPort = await listenHttpServer(upstream);
+  const proxy = await startGatewayProxy(`http://127.0.0.1:${upstreamPort}/gateway`);
+  try {
+    await new Promise<void>((resolve) => {
+      const request = http.request({
+        host: "127.0.0.1",
+        port: proxy.port,
+        path: "/gateway/v1/messages",
+        method: "POST",
+        headers: { "content-length": 1024 * 1024 },
+      });
+      const done = () => resolve();
+      request.once("error", done);
+      request.once("close", done);
+      request.write("x".repeat(1024));
+      setTimeout(() => request.destroy(), 20);
+    });
+    const closed = await Promise.race([
+      upstreamClosed.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 1000)),
+    ]);
+    assert.equal(closed, true, "客户端中止后上游请求未关闭");
+    assert.equal(proxy.child.exitCode, null, proxy.stderr());
+  } finally {
+    await stopGatewayProxy(proxy);
+    await closeHttpServer(upstream);
+  }
 });
 
 test("docker socket path prefers DOCKER_HOST unix:// sockets", () => {
