@@ -86,6 +86,10 @@ export interface ReportInputFinding {
   review_evidence: unknown[];
   test_evidence: unknown[];
   limitations: string[];
+  verification_policy: {
+    eligibility: "below_min_verify_severity";
+    min_verify_severity: string | null;
+  } | null;
 }
 
 export interface ReportInput {
@@ -100,11 +104,13 @@ export interface ReportInput {
     findings_total: number;
     confirmed_count: number;
     needs_human_count: number;
+    excluded_count: number;
     confirmed_by_severity: Record<string, number>;
   };
   findings: ReportInputFinding[];
   confirmed_findings: ReportInputFinding[];
   needs_human_findings: ReportInputFinding[];
+  excluded_findings: ReportInputFinding[];
   scope_and_coverage: Record<string, unknown>;
   evidence: unknown[];
 }
@@ -287,6 +293,19 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
       review?: unknown[];
       test?: unknown[];
     };
+    const raw = (f.raw_json ?? {}) as Record<string, unknown>;
+    const verificationState = raw.verification_state && typeof raw.verification_state === "object" &&
+        !Array.isArray(raw.verification_state)
+      ? raw.verification_state as Record<string, unknown>
+      : {};
+    const verificationPolicy = f.verify_status === "pending" && verificationState.eligibility === "below_min_verify_severity"
+      ? {
+          eligibility: "below_min_verify_severity" as const,
+          min_verify_severity: typeof verificationState.min_verify_severity === "string"
+            ? verificationState.min_verify_severity
+            : null,
+        }
+      : null;
     items.push({
       id: f.id as string,
       title: f.title as string,
@@ -314,11 +333,13 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
       review_evidence: snap.review ?? [],
       test_evidence: snap.test ?? [],
       limitations: [],
+      verification_policy: verificationPolicy,
     });
   }
 
   const confirmed = items.filter((i) => i.verify_status === "confirmed");
   const needsHuman = items.filter((i) => i.verify_status === "needs_human");
+  const excluded = items.filter((i) => i.verification_policy?.eligibility === "below_min_verify_severity");
   const bySev: Record<string, number> = {};
   for (const c of confirmed) {
     const severity = c.severity ?? "unscored";
@@ -338,11 +359,13 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
       findings_total: items.length,
       confirmed_count: confirmed.length,
       needs_human_count: needsHuman.length,
+      excluded_count: excluded.length,
       confirmed_by_severity: bySev,
     },
     findings: items,
     confirmed_findings: confirmed,
     needs_human_findings: needsHuman,
+    excluded_findings: excluded,
     scope_and_coverage: {
       goal: String(target.goal ?? ""),
       network_policy: target.network_policy ?? null,
@@ -511,11 +534,11 @@ function defaultMarkdown(input: ReportInput): string {
   lines.push("## 执行摘要");
   lines.push("");
   lines.push(
-    `本次共发现 **${input.statistics.findings_total}** 条 Finding：已确认 **${input.statistics.confirmed_count}**，待人工 **${input.statistics.needs_human_count}**。`,
+    `本次共发现 **${input.statistics.findings_total}** 条 Finding：已确认 **${input.statistics.confirmed_count}**，待人工 **${input.statistics.needs_human_count}**，因严重度策略未自动验证 **${input.statistics.excluded_count}**。`,
   );
   if (input.statistics.confirmed_count === 0) {
     lines.push("");
-    lines.push("**本次未形成已确认漏洞**；这不代表系统绝对安全，仅表示自动验证未通过确认门槛。");
+    lines.push("**本次未形成已确认漏洞**；这不代表系统绝对安全，仅表示自动验证范围内未形成 confirmed 结论。");
   }
   lines.push("");
   lines.push("## 已确认问题");
@@ -552,6 +575,23 @@ function defaultMarkdown(input: ReportInput): string {
       if (f.summary) lines.push(`- 摘要：${f.summary}`);
       const err = f.final_verification_round?.error ?? f.final_verification_round?.summary;
       if (err) lines.push(`- 阻塞：${err}`);
+      lines.push("");
+    }
+  }
+  lines.push("## 未自动验证（严重度策略）");
+  lines.push("");
+  if (input.excluded_findings.length === 0) {
+    lines.push("_无_");
+  } else {
+    lines.push("以下 Finding 明确低于任务的自动验证阈值；它们未占用 Verify 资源，也不等于误报或待人工结论。");
+    lines.push("");
+    for (const f of input.excluded_findings) {
+      lines.push(`### [${f.severity ?? "未评分"}] ${f.title}`);
+      lines.push("");
+      lines.push(`- Profile：${f.profile}`);
+      lines.push(`- 自动验证阈值：${f.verification_policy?.min_verify_severity ?? "未知"}`);
+      if (f.location) lines.push(`- 位置：\`${f.location}\``);
+      if (f.summary) lines.push(`- 摘要：${f.summary}`);
       lines.push("");
     }
   }
@@ -786,7 +826,7 @@ async function bounceReportGateToHub(
         problem_count: problems.length,
         problems: problemsJson,
         summary:
-          `Report 被拒绝：全部 Finding 须为 confirmed 或 needs_human（severity 不影响收敛集合）。\n` +
+          `Report 被拒绝：自动验证范围内 Finding 须为 confirmed 或 needs_human。\n` +
           problemSummary,
       },
     },
@@ -804,8 +844,8 @@ async function bounceReportGateToHub(
 }
 
 /**
- * 在 Root 为 analysis_complete 且全部 Finding ∈ {confirmed, needs_human} 时，幂等创建唯一 Report Job。
- * severity 只影响优先级，不改变收敛集合；needs_human 进报告待人工章节，SARIF 仅 confirmed。
+ * 在 Root 为 analysis_complete 且验证范围内 Finding ∈ {confirmed, needs_human} 时，幂等创建唯一 Report Job。
+ * 低于阈值项单列为未自动验证；needs_human 进报告待人工章节，SARIF 仅 confirmed。
  *
  * 时序：Hub complete 同事务内当前 Hub 可能仍 running —— 此时只 **等待**，保持 analysis_complete，
  * **禁止** bounceReportGateToHub（否则 Root 被打回 running，空转烧 maxHubRounds）。
@@ -924,6 +964,7 @@ export async function maybeDispatchReport(
         findings_total: reportInput.statistics.findings_total,
         confirmed_count: reportInput.statistics.confirmed_count,
         needs_human_count: reportInput.statistics.needs_human_count,
+        excluded_count: reportInput.statistics.excluded_count,
       } as never,
       timeout_sec: rules.auditTimeoutSec,
       followup_depth: 0,
@@ -1103,7 +1144,8 @@ export async function finalizeReportJob(
         markdown.includes(f.id) ||
         markdown.includes(f.title) ||
         (f.verify_status === "confirmed" && markdown.includes("已确认")) ||
-        (f.verify_status === "needs_human" && (markdown.includes("人工") || markdown.includes("待"))),
+        (f.verify_status === "needs_human" && (markdown.includes("人工") || markdown.includes("待"))) ||
+        (f.verification_policy?.eligibility === "below_min_verify_severity" && markdown.includes("未自动验证")),
     );
   if (markdown.length < 20 || !coverageOk) {
     console.warn(
@@ -1132,6 +1174,7 @@ export async function finalizeReportJob(
   const summaryJson = {
     confirmed_count: input.statistics.confirmed_count,
     needs_human_count: input.statistics.needs_human_count,
+    excluded_count: input.statistics.excluded_count,
     findings_total: input.statistics.findings_total,
     confirmed_by_severity: input.statistics.confirmed_by_severity,
     generated_at: new Date().toISOString(),

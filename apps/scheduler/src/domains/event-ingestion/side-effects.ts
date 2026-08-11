@@ -479,7 +479,7 @@ export function createEventIngestionSideEffectApplication(
         await tx`UPDATE findings SET node_id = ${node.id} WHERE id = ${finding.id}`;
       }
 
-      // 规则引擎：所有 Finding 自动进入 Verify（§4.3；severity 只影响优先级）
+      // 规则引擎：达到最低关注级别或未评分的 Finding 自动进入 Verify。
       await ports.findingVerification.evaluateFollowup(tx, job, finding);
       return;
     }

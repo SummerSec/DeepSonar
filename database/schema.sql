@@ -1131,7 +1131,7 @@ INSERT INTO agent_roles (name, title, description, builtin, kind, ui_color) VALU
   ('audit', '审计', '根据任务目标自行确定材料获取方式和审计范围，产出结构化 Finding', true, 'role', '#facc15'),
   ('hub_reason', '决策中枢', '读取任务画布并判断完成度；未完成时选择角色并编写完整 Worker prompt；不可下发 verify/report', true, 'hub', NULL),
   ('verify', '验证', '系统角色：默认在最小基础环境中验证 Finding；只提交 confirmed/rework/needs_human 提案，Scheduler 证据硬门后才可写 confirmed；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发', true, 'system', NULL),
-  ('report', '报告', '系统角色：整合全部 Finding，分栏 confirmed 与 needs_human 撰写任务总报告；Hub 不可下发', true, 'system', NULL)
+  ('report', '报告', '系统角色：整合全部 Finding，分栏 confirmed、needs_human 与严重度策略未自动验证项撰写任务总报告；Hub 不可下发', true, 'system', NULL)
 ON CONFLICT (name) DO NOTHING;
 
 -- 首次建库内置一组可编辑的长期指令模板。平台会在每个 Job 中把模板与通用运行契约
@@ -1303,14 +1303,14 @@ $instructions$),
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
 6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认工具调用；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回响应。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 7. **complete / Report 硬门槛（Scheduler 会再校验）**：
-   - **全部 Finding** 的 `verify_status` 必须是 `confirmed` 或 `needs_human`（severity / minVerifySeverity **只影响优先级与等待，不改变收敛集合**）；
+   - **自动验证范围内 Finding** 的 `verify_status` 必须是 `confirmed` 或 `needs_human`；明确低于 `minVerifySeverity` 的 Finding 不派生 Verify、不阻塞收敛，但必须保留并在报告中单列；缺失或未知 severity 保守进入自动验证；
    - `needs_human` 可进报告「待人工」章节，SARIF 仅含 `confirmed`；即使没有 confirmed 也必须能出报告；
    - 画布无活跃普通角色 / Hub / Verify 工作；
    - 不得静默丢弃任何 Finding。
 8. **触发类型处理**：
    - `verify_rework` / `verify_failed`：只能派发 `review` / `test` 补独立复核与实测证据；每个 intent 的 prompt 必须写明 `finding_id`、唯一证据目标（review 或 test）以及上一轮缺口；不得用 audit/explore 代替结构化补证，也不要原样重复上一轮。
    - `report_gate_failed`：Report 因仍有 pending/verifying Finding 被打回；trigger.problems 列出问题，须补证或收口为 needs_human，不得空 complete。
-   - `confirmed_finding`：可做影响验收或相关跟进；全部 Finding 收敛后才可 complete。
+   - `confirmed_finding`：可做影响验收或相关跟进；自动验证范围内 Finding 收敛后才可 complete。
    - `canvas_idle` / `graph_progress`：画布当前无待跑节点，读整图决定 complete 或最小增量 intents；禁止空转。
 9. 补证 intent 应要求 Worker 用 `emit_fact.verification` 提交结构化证据；缺 review 派 review，缺 runtime_test 派 test，二者尽量不同角色、不同 Job。
 
@@ -1359,6 +1359,7 @@ $instructions$),
 1. **必须整合本次全部 Finding**，并明确分栏：
    - `confirmed`：已确认问题与风险结论（可进 SARIF 的技术确认集）；
    - `needs_human`：待人工确认 / 验证限制（已有证据、缺失证据、影响范围），**不得**写成已确认漏洞。
+   - `below_min_verify_severity`：低于自动验证阈值、未进入 Verify 的保留项，必须明确标为“未自动验证”，不得粉饰为误报或待人工。
 2. 即使没有 confirmed，也必须生成报告，并写明「本次未形成已确认漏洞」；不得宣称系统绝对安全。
 3. 旧语义中的「误报」不再作为自动验证的主终态；不要把 needs_human 或未验证项粉饰为误报。
 4. 不调用外部网络补充材料，不猜测缺失信息，不使用环境变量值，不访问 Scheduler API 或数据库；输入缺失或损坏时不得降级为按画布猜测报告。
@@ -1367,7 +1368,7 @@ $instructions$),
 ### 平台工具使用
 
 - 长报告生成时可调用 `emit_progress({"message":"已完成 Finding 分组，正在生成风险摘要","percent":70})`；report 没有 `emit_fact` 或 `emit_finding` 权限。
-- 报告完成后只调用一次 `mark_job_done`，`summary` 为**完整 Markdown 正文**，必须含「已确认问题」与「待人工确认」两节，并保留证据引用。
+- 报告完成后只调用一次 `mark_job_done`，`summary` 为**完整 Markdown 正文**，必须含「已确认问题」「待人工确认」与「未自动验证（严重度策略）」三节，并保留证据引用。
 - 输入中的业务背景或披露口径不足时，在报告中如实列为限制；report 不使用 `request_human`，也不因此改变 Finding 状态。
 - 工具必须通过 Agent CLI 同名 MCP 调用并传 JSON。MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，不代表业务落库成功；Scheduler 仍会二阶段重验与记账。
 $instructions$)
