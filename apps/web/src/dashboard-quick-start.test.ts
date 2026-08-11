@@ -113,6 +113,29 @@ test("ready preflight creates a task and keeps the selected network override", a
   ]);
 });
 
+test("快捷创建把项目镜像策略传给项目 API", async () => {
+  let createdInput: { name: string; description?: string; image_strategy?: string } | null = null;
+  const client: QuickStartApi = {
+    createProject: async (input) => {
+      createdInput = input;
+      return project;
+    },
+    readiness: async () => readiness(true),
+    createTask: async () => ({ canvas_id: "canvas", job: { id: "job", status: "pending" } }),
+  };
+
+  const result = await runQuickStart({
+    title: "检查镜像策略",
+    goal: "确认项目使用项目托管镜像",
+    project: null,
+    newProject: { name: "策略项目" },
+    imageStrategy: "project_managed",
+    networkOverride: "inherit",
+  }, client);
+  assert.equal(result.kind, "success");
+  assert.equal((createdInput as { image_strategy?: string } | null)?.image_strategy, "project_managed");
+});
+
 test("readiness failure exposes repair links and prevents task creation", async () => {
   const calls: string[] = [];
   const client: QuickStartApi = {

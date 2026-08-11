@@ -43,3 +43,17 @@ test("project and platform RoleConfig imports keep the same lock and binding val
     assert.ok(source.includes("validateCredentialRoleConfigBinding"), `${name} import must use shared binding validation`);
   }
 });
+
+test("项目 RoleConfig 镜像字段由项目策略统一管理", () => {
+  const validationStart = roleConfigRoutesSource.indexOf("async function validateRoleConfigBody(");
+  const validationEnd = roleConfigRoutesSource.indexOf("async function upsertRoleConfigInTx(", validationStart);
+  const validation = roleConfigRoutesSource.slice(validationStart, validationEnd);
+  assert.match(validation, /projectId && body\.runtime_image_key != null/);
+  assert.match(validation, /项目 RoleConfig 不再直接设置 runtime_image_key/);
+
+  const runtimePatchStart = roleConfigRoutesSource.indexOf('app.patch("/role-configs/:id/runtime-image"');
+  const runtimePatchEnd = roleConfigRoutesSource.indexOf('app.get("/role-configs/bindable"', runtimePatchStart);
+  const runtimePatch = roleConfigRoutesSource.slice(runtimePatchStart, runtimePatchEnd);
+  assert.match(runtimePatch, /if \(projectId\)/);
+  assert.match(runtimePatch, /项目 RoleConfig 不再直接设置 runtime_image_key/);
+});

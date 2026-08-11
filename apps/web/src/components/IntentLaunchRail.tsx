@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type Project } from "../api";
+import { api, type Project, type ProjectImageStrategy } from "../api";
 import { useAuth } from "../auth";
 import {
   errorMessage,
@@ -91,6 +91,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
   const [preset, setPreset] = useState<(typeof QUICK_START_PRESETS)[number]["id"]>("custom");
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [imageStrategy, setImageStrategy] = useState<ProjectImageStrategy>("inherit_global");
   const [networkOverride, setNetworkOverride] = useState<NetworkOverride>("inherit");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [stage, setStage] = useState<LaunchStage>("describe");
@@ -168,6 +169,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
           goal,
           project: creatingProject ? null : selectedProject,
           newProject: creatingProject ? { name: newProjectName, description: newProjectDescription } : null,
+          imageStrategy,
           networkOverride,
         },
         {
@@ -279,6 +281,18 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                 <input className="intent-launch-secondary-input" value={newProjectDescription} onChange={(event) => setNewProjectDescription(event.target.value)} maxLength={500} placeholder="一句话说明（可选）" autoComplete="off" aria-label="项目说明，可选" />
               </div>}
             </div>
+
+            {isCreatingProject && <fieldset className="intent-launch-project-policy">
+              <legend>项目镜像策略</legend>
+              <label className={imageStrategy === "inherit_global" ? "is-selected" : ""}>
+                <input type="radio" name={`quick-start-image-strategy-${instanceId}`} value="inherit_global" checked={imageStrategy === "inherit_global"} onChange={() => setImageStrategy("inherit_global")} />
+                <span><strong>继承全局</strong><small>各角色使用全局运行配置中的镜像。</small></span>
+              </label>
+              <label className={imageStrategy === "project_managed" ? "is-selected" : ""}>
+                <input type="radio" name={`quick-start-image-strategy-${instanceId}`} value="project_managed" checked={imageStrategy === "project_managed"} onChange={() => setImageStrategy("project_managed")} />
+                <span><strong>项目托管</strong><small>在项目设置集中选择可信镜像，未选角色使用系统基础环境。</small></span>
+              </label>
+            </fieldset>}
 
             <details className="intent-launch-advanced" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
               <summary><span><Target size={15} weight="light" />高级边界</span><strong>网络策略 · {networkOverrideLabel(networkOverride)}</strong></summary>

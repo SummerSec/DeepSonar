@@ -2,11 +2,17 @@ import type { FastifyInstance } from "fastify";
 import { FindingProtocolConfig } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
+import { config } from "../../config.js";
 import { isProviderKnown, projectCredentialProvider, UNKNOWN_PROVIDER_ERROR } from "../../credentials.js";
 import { globalRules, mergeGlobalRulesPatch, PLATFORM_DEFAULT_AGENT_CLI, rulesForProject } from "../../core.js";
 import { sql } from "../../db.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
+import { resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
+import {
+  parseProjectImagePolicy,
+  PROJECT_IMAGE_STRATEGIES,
+} from "../role-runtime-snapshot/application.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject"]);
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code"]);
@@ -56,6 +62,11 @@ const SettingsPatchBody = z.object({
   rules: RulesPatch.optional(),
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
   finding_protocol: FindingProtocolConfig.nullable().optional(),
+  image_strategy: z.enum(PROJECT_IMAGE_STRATEGIES).optional(),
+  role_runtime_images: z.record(
+    z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
+    z.string().trim().regex(/^[a-z][a-z0-9-]{1,62}$/).nullable(),
+  ).optional(),
 });
 const GlobalSettingsPatchBody = z.object({
   rules: RulesPatch.optional(),
@@ -71,6 +82,42 @@ const ReadinessQuery = z.object({
   allow_egress: z.enum(["true", "false"]).optional(),
   material_source: z.enum(["workspace_or_offline", "external_or_workspace", "declared", "unspecified"]).optional(),
 });
+
+async function validateProjectRuntimeImages(
+  projectId: string,
+  selections: Record<string, string | null>,
+): Promise<void> {
+  const roleNames = Object.keys(selections);
+  if (roleNames.length === 0) return;
+  const roles = await sql`SELECT name FROM agent_roles WHERE name = ANY(${roleNames})`;
+  const knownRoles = new Set(roles.map((role) => String(role.name)));
+  const unknownRole = roleNames.find((name) => !knownRoles.has(name));
+  if (unknownRole) throw new Error(`role_runtime_images 包含未注册角色: ${unknownRole}`);
+
+  for (const [roleName, imageKey] of Object.entries(selections)) {
+    if (imageKey === null) continue;
+    const [image] = await sql`
+      SELECT ri.id, ri.official, ri.project_opt_in, ri.enabled,
+             EXISTS (
+               SELECT 1 FROM runtime_image_versions v
+               WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
+             ) AS has_trusted,
+             pri.enabled AS project_enabled
+      FROM runtime_images ri
+      LEFT JOIN project_runtime_images pri
+        ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+      WHERE ri.image_key = ${imageKey}`;
+    if (!image || image.enabled !== true) throw new Error(`runtime_image_key 不存在或已禁用: ${imageKey}`);
+    const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official === true;
+    if (image.has_trusted !== true && !fakeOfficialCatalogImage) {
+      throw new Error(`runtime_image_key 没有可信版本: ${imageKey}`);
+    }
+    if (image.official !== true && image.project_enabled !== true) {
+      throw new Error(`第三方镜像必须先在目标项目显式启用: ${imageKey}`);
+    }
+    await resolveRuntimeImageForJob(sql, projectId, roleName, imageKey);
+  }
+}
 
 export function registerSettingsRoutes(app: FastifyInstance): void {
   // ---------- 全局设置（§8.1 所有配置落库：规则默认值 → global_settings 单例行） ----------
@@ -209,6 +256,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (!p) return reply.code(404).send({ error: "project not found" });
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    const imagePolicy = parseProjectImagePolicy(cfg);
     const globalProtocol = parseStoredFindingProtocolConfig(
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
     );
@@ -219,6 +267,8 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
       effective_finding_protocol: resolveFindingProtocol(globalProtocol, projectProtocol),
+      image_strategy: imagePolicy.image_strategy,
+      role_runtime_images: imagePolicy.role_runtime_images,
     };
   });
 
@@ -233,6 +283,18 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    const currentImagePolicy = parseProjectImagePolicy(cfg);
+    const nextImageStrategy = body.image_strategy ?? currentImagePolicy.image_strategy;
+    if (body.role_runtime_images !== undefined && nextImageStrategy !== "project_managed") {
+      return reply.code(400).send({ error: "仅 project_managed 策略可设置 role_runtime_images" });
+    }
+    if (body.role_runtime_images !== undefined) {
+      try {
+        await validateProjectRuntimeImages(id, body.role_runtime_images);
+      } catch (error) {
+        return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid project runtime images" });
+      }
+    }
     if (body.rules) {
       cfg.rules = { ...((cfg.rules as Record<string, unknown>) ?? {}), ...body.rules };
     }
@@ -246,11 +308,17 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       if (body.finding_protocol === null) delete cfg.finding_protocol;
       else cfg.finding_protocol = body.finding_protocol;
     }
+    if (body.image_strategy !== undefined) {
+      cfg.image_strategy = body.image_strategy;
+      if (body.image_strategy === "inherit_global") delete cfg.role_runtime_images;
+    }
+    if (body.role_runtime_images !== undefined) cfg.role_runtime_images = body.role_runtime_images;
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const globalProtocol = parseStoredFindingProtocolConfig(
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
     );
     const projectProtocol = parseStoredFindingProtocolConfig(cfg.finding_protocol);
+    const imagePolicy = parseProjectImagePolicy(cfg);
     let effectiveFindingProtocol;
     try {
       effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
@@ -275,6 +343,8 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
       effective_finding_protocol: effectiveFindingProtocol,
+      image_strategy: imagePolicy.image_strategy,
+      role_runtime_images: imagePolicy.role_runtime_images,
     };
   });
 }

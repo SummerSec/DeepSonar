@@ -88,7 +88,7 @@ pending → claimed → provisioning → running
 | 层 | 内容 | 覆盖 |
 |----|------|------|
 | 全局 | `global_settings`、全局 `role_configs`、平台 skill 源、镜像市场 | 缺省 |
-| 项目 | 规则、启用角色、项目 RoleConfig、出网默认 | **压过全局** |
+| 项目 | 规则、启用角色、项目 RoleConfig、出网默认、`config_json` 中的镜像策略 | **压过全局** |
 | 任务/画布 | `target_json`、出网覆盖、Finding 协议等 | **压过项目** |
 | Job | `agent_snapshot_json` 创建时冻结 | 执行只认快照 |
 
@@ -96,6 +96,11 @@ pending → claimed → provisioning → running
 
 Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项目
 `projects.config_json.finding_protocol`，任务创建请求可用 `finding_protocol` 只覆盖声明的键；列表字段在高层整表替换。解析后的 `EffectiveFindingProtocol`（模式、默认/允许 profiles、评分策略、显示名和来源）随新画布冻结，后续配置修改只影响新任务。
+
+项目镜像策略也存于 `projects.config_json`，不增加表或迁移：`image_strategy` 缺省为
+`inherit_global`，此时 Job 镜像始终取该角色的全局 `RoleConfig.runtime_image_key`；
+`project_managed` 时只取 `role_runtime_images`（角色名到可信 runtime key 或 `null`），缺项或
+`null` 使用系统 `deepsonar-base`。项目 RoleConfig 的 `runtime_image_key` 不再作为项目镜像来源。
 
 ## 7. 注入与读图（as-built）
 
@@ -120,7 +125,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
-- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。Chrome audit/test/fuzz 是官方但 project-opt-in 的专项运行时，按受治理 runtime key 选择，Job 创建时连同兼容 CLI 与工具清单一起冻结。
+- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。项目按全局继承或项目托管策略选择受治理 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome audit/test/fuzz 是官方但 project-opt-in 的专项运行时。
 - 出网：`allow_egress` 任务级冻结；所有 real Job 的模型请求都经 Scheduler-owned gateway proxy。允许出网的沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，并通过同时接入两网的固定 proxy 到达 Scheduler。
 
 ## 10. 前端信息架构
@@ -158,6 +163,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
 | 官方运行镜像多 channel catalog | #70 | **已完成**：v2 canonical digest/platform/size + `registry_refs`/`registry_evidence` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 按 ACR→GHCR→Docker Hub 发布并对每个可用目的地执行真实 `imagetools inspect`，配置通道失败时清单生成 fail-closed，v2 Release asset 与 bundled fallback 同步；schema v23 新库默认选择 `aliyun-acr`，平台全局通道由 Scheduler 落库并经 `GET /runtime-images/registry` 的 `selected_channel` 读取、`PATCH /runtime-images/registry/channel`（`images:manage`）切换，Job 创建时冻结所选 digest/ref，pull/resolution 对未发布通道 fail-closed；Web 市场提供固定三选项通道选择器，与 CPU 平台筛选分离，展示加载/403/切换状态并在切换后刷新清单与镜像行 |
 | Chrome audit/test/fuzz 专项运行时 | #118 | **已实现发布基础设施**：三个官方 project-opt-in 镜像分别提供 C++ 静态分析、固定 Chromium/CDP 与固定 V8 源码构建的真实 `d8` + `v8_json_libfuzzer`；每个镜像同时声明 amd64/arm64、来源 SHA256/完整包闭包、工具清单与大小预算。V8 与 Chromium 版本语义分开声明；Job 仍只消费准入后的 immutable digest；核心 CI 与 Chrome amd64 合同冒烟已拆为路径过滤的 `.github/workflows/ci.yml` / `.github/workflows/chrome-runtime.yml`，Release 必须在原生架构 runner 上完成构建、smoke 与多 registry inspect 后才生成 catalog |
+| 项目镜像策略 | #130 | **已完成**：项目创建与设置支持 `inherit_global` / `project_managed`；项目托管映射集中绑定全部角色到项目已启用的可信镜像，缺项使用 Base；项目 RoleConfig 不再接受独立镜像覆盖，Job 创建时只按项目策略解析并冻结 immutable digest |
 
 ## 12. 仓库地图
 

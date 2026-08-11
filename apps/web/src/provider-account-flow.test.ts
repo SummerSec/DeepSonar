@@ -65,6 +65,13 @@ test("Provider account flow keeps the happy path on one surface", () => {
   assert.match(flow, /配置文件 ·/);
 });
 
+test("项目角色镜像只能由项目镜像策略管理", () => {
+  const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(flow, /roleConfig\.project_id \?/);
+  assert.match(flow, /由项目镜像策略决定/);
+  assert.match(editor, /runtime_image_key: projectId \? null : form\.runtime_image_key\.trim\(\) \|\| null/);
+});
+
 test("Provider account flow user-facing copy is Chinese", () => {
   for (const chinese of [
     "接入账号，再完成绑定闭环",

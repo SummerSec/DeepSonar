@@ -219,6 +219,7 @@ const OPS: Op[] = [
         name: { type: "string" },
         description: { type: "string" },
         plane_project_id: { type: "string", nullable: true },
+        image_strategy: { type: "string", enum: ["inherit_global", "project_managed"], default: "inherit_global" },
       },
     },
   },
@@ -506,7 +507,7 @@ const OPS: Op[] = [
     tags: ["Settings"],
     body: { type: "object", required: ["rules"], properties: { rules: { type: "object", additionalProperties: true } } },
   },
-  { method: "get", path: "/projects/{id}/settings", summary: "项目规则与角色启用", scope: "agents:read", tags: ["Settings"] },
+  { method: "get", path: "/projects/{id}/settings", summary: "项目规则、角色启用与镜像策略", scope: "agents:read", tags: ["Settings"] },
   {
     method: "get",
     path: "/readiness",
@@ -536,7 +537,7 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/projects/{id}/settings",
-    summary: "更新项目规则 / 角色启用清单",
+    summary: "更新项目规则、角色启用清单与镜像策略",
     scope: "agents:write",
     tags: ["Settings"],
     body: {
@@ -548,6 +549,12 @@ const OPS: Op[] = [
           properties: {
             enabled: { oneOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
           },
+        },
+        image_strategy: { type: "string", enum: ["inherit_global", "project_managed"] },
+        role_runtime_images: {
+          type: "object",
+          additionalProperties: { oneOf: [{ type: "string" }, { type: "null" }] },
+          description: "project_managed 策略下的角色镜像选择；null 表示系统基础环境",
         },
       },
     },
@@ -639,8 +646,8 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/role-configs/{id}/runtime-image",
-    summary: "仅更新 RoleConfig 的 runtime_image_key（Provider 绑定列表用）",
-    description: "null 表示系统默认底座（deepsonar-base）。专项/第三方须满足可信版本与项目启用规则。",
+    summary: "仅更新全局 RoleConfig 的 runtime_image_key（Provider 绑定列表用）",
+    description: "项目 RoleConfig 返回 400，项目镜像必须通过项目设置策略管理；全局配置的 null 表示系统默认底座（deepsonar-base）。",
     scope: "agents:write",
     tags: ["RoleConfig", "RuntimeImages"],
     body: {
@@ -673,7 +680,7 @@ const OPS: Op[] = [
     method: "put",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "项目 RoleConfig 覆盖 upsert",
-    description: "项目限定 token 只能写所属项目 RoleConfig；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    description: "项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目镜像必须通过项目设置策略管理；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
@@ -1477,7 +1484,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
               description: "平台工具启用开关（全量 list 对每个 Agent 可选）；未声明默认启用。仅 mark_job_done 不可关闭。",
             },
             instructions_markdown: { type: "string", nullable: true },
-            runtime_image_key: { type: "string", nullable: true },
+            runtime_image_key: { type: "string", nullable: true, description: "仅全局 RoleConfig 使用；项目覆盖必须传 null，并通过项目镜像策略选择" },
             sandbox_limits: { $ref: "#/components/schemas/SandboxLimitsOverride" },
             credentials: {
               type: "array",

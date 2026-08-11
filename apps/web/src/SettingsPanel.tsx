@@ -15,6 +15,8 @@ import {
   type EffectiveFindingProtocol,
   type RoleConfigInput,
   type RoleConfigView,
+  type ProjectImageStrategy,
+  type RuntimeImageSummary,
   type SkillSource,
   type SkillSourceDetail,
 } from "./api";
@@ -131,6 +133,10 @@ export function SettingsPanel({
   const [rules, setRules] = useState<EffectiveRules | null>(null);
   const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
+  const [imageStrategy, setImageStrategy] = useState<ProjectImageStrategy>("inherit_global");
+  const [roleRuntimeImages, setRoleRuntimeImages] = useState<Record<string, string | null>>({});
+  const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
+  const [imagePolicyBusy, setImagePolicyBusy] = useState(false);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
@@ -166,6 +172,7 @@ export function SettingsPanel({
       // 项目模式：角色带启用态 + 角色配置来源（项目覆盖/全局缺省/未配置）
       api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error));
       api.projectRoleConfigs(projectId).then(setProjConfigs).catch((error) => showAgentLoadError("项目 Agent 配置", error));
+      api.runtimeImages(projectId).then(setRuntimeImages).catch((error) => showAgentLoadError("运行时镜像", error));
       api
         .projects()
         .then((list) => setPlaneBind(list.find((p) => p.id === projectId)?.plane_project_id ?? null))
@@ -177,6 +184,8 @@ export function SettingsPanel({
           setRules(s.effective_rules);
           setFindingProtocol(s.finding_protocol);
           setEffectiveFindingProtocol(s.effective_finding_protocol);
+          setImageStrategy(s.image_strategy ?? "inherit_global");
+          setRoleRuntimeImages(s.role_runtime_images ?? {});
         })
         .catch(() => {});
     } else if (globalSection === "agents" && canLoadTab("roles")) {
@@ -264,6 +273,28 @@ export function SettingsPanel({
       reload();
     } catch (e) {
       flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const projectRuntimeImageChoices = useMemo(() => runtimeImages.filter((image) => {
+    if (!image.enabled || image.trust_status !== "trusted" || !image.digest || !image.resolved_ref) return false;
+    return image.official && !image.project_opt_in ? image.project_enabled !== false : image.project_enabled === true;
+  }), [runtimeImages]);
+
+  const saveImagePolicy = async () => {
+    if (!projectId) return;
+    setImagePolicyBusy(true);
+    try {
+      await api.patchSettings(projectId, {
+        image_strategy: imageStrategy,
+        ...(imageStrategy === "project_managed" ? { role_runtime_images: roleRuntimeImages } : {}),
+      });
+      flash("项目镜像策略已保存（下一 job 生效）");
+      reload();
+    } catch (e) {
+      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setImagePolicyBusy(false);
     }
   };
 
@@ -362,6 +393,9 @@ export function SettingsPanel({
   const globalConfigOf = (roleId: string): RoleConfigView | null =>
     globalConfigs.find((c) => c.role_id === roleId) ?? null;
   const projConfigOf = (roleId: string) => projConfigs.find((c) => c.role_id === roleId) ?? null;
+  const imagePolicyRoles = projConfigs.length > 0
+    ? projConfigs.map((entry) => ({ id: entry.role_id, name: entry.name, title: entry.title }))
+    : roles.map((role) => ({ id: role.id, name: role.name, title: role.title }));
 
   /** kind 只读徽标：Hub 品红 / 系统角色琥珀；普通角色不展示 */
   const kindBadge = (kind: string) =>
@@ -671,6 +705,86 @@ export function SettingsPanel({
                     <div className={labelCls}>每项目活跃 Job 上限</div>
                     <div className="font-mono text-[15px] text-zinc-200">{rules.maxJobsPerProject}</div>
                   </div>
+                </div>
+              </section>
+            )}
+
+            {projectId && (
+              <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+                <div className="border-b border-white/[.055] px-4 py-3">
+                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                    <span>项目镜像策略</span>
+                    <HelpTip>
+                      全局继承只读取各角色的全局运行配置；项目托管在这里集中选择项目已启用的可信镜像。未选择的角色使用系统基础环境。
+                    </HelpTip>
+                  </div>
+                </div>
+                <div className="space-y-4 px-4 py-4">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 ${imageStrategy === "inherit_global" ? "border-acc-400/50 bg-acc-400/[.06]" : "border-ink-700"}`}>
+                      <input
+                        type="radio"
+                        name={`project-image-strategy-${projectId}`}
+                        checked={imageStrategy === "inherit_global"}
+                        onChange={() => setImageStrategy("inherit_global")}
+                        className="mt-1 accent-emerald-500"
+                      />
+                      <span>
+                        <strong className="block text-[13px] text-zinc-200">继承全局</strong>
+                        <small className="text-[11px] leading-5 text-zinc-500">每个角色使用全局 RoleConfig 的镜像。</small>
+                      </span>
+                    </label>
+                    <label className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 ${imageStrategy === "project_managed" ? "border-acc-400/50 bg-acc-400/[.06]" : "border-ink-700"}`}>
+                      <input
+                        type="radio"
+                        name={`project-image-strategy-${projectId}`}
+                        checked={imageStrategy === "project_managed"}
+                        onChange={() => setImageStrategy("project_managed")}
+                        className="mt-1 accent-emerald-500"
+                      />
+                      <span>
+                        <strong className="block text-[13px] text-zinc-200">项目托管</strong>
+                        <small className="text-[11px] leading-5 text-zinc-500">在项目内集中选择可信镜像，未选角色使用系统基础环境。</small>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="space-y-2">
+                    {imagePolicyRoles.map((role) => {
+                      const globalImage = globalConfigOf(role.id)?.runtime_image_key;
+                      const currentImage = roleRuntimeImages[role.name] ?? "";
+                      return (
+                        <div key={role.id} className="grid gap-2 border-t border-ink-800 pt-2 sm:grid-cols-[minmax(0,1fr)_minmax(190px,240px)] sm:items-center">
+                          <div>
+                            <div className="text-[13px] text-zinc-300">{role.title || role.name}</div>
+                            <div className="font-mono text-[10px] text-zinc-600">{role.name}</div>
+                          </div>
+                          {imageStrategy === "inherit_global" ? (
+                            <div className="font-mono text-[11px] text-zinc-500">全局镜像：{globalImage ?? "全局未绑定（系统默认）"}</div>
+                          ) : (
+                            <select
+                              value={currentImage}
+                              onChange={(event) => setRoleRuntimeImages((current) => ({ ...current, [role.name]: event.target.value || null }))}
+                              className={inputCls}
+                            >
+                              <option value="">系统基础环境</option>
+                              {projectRuntimeImageChoices.map((image) => <option key={image.image_key} value={image.image_key}>{image.name} · {image.image_key}</option>)}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {imagePolicyRoles.length === 0 && <div className="text-[12px] text-zinc-600">暂无可配置角色。</div>}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={saveImagePolicy}
+                    disabled={imagePolicyBusy}
+                    className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    <FloppyDisk size={13} /> {imagePolicyBusy ? "保存中…" : "保存镜像策略"}
+                  </button>
                 </div>
               </section>
             )}

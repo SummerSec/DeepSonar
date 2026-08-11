@@ -441,9 +441,16 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 | 层 | 位置 | 内容 |
 |----|------|------|
-| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关、可信镜像、Provider 配置文件与 Credential 引用 |
-| 决策 | 全局 RoleConfig + 项目 RoleConfig + `projects.config_json.rules` | 项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值 |
+| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关、Provider 配置文件与 Credential 引用；全局 RoleConfig 的可信镜像绑定 |
+| 决策 | 全局 RoleConfig + 项目 RoleConfig + `projects.config_json.rules` + `projects.config_json` 镜像策略 | 项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照；Executor 不读取旧配置或为缺失快照降级 |
+
+项目镜像策略不改表：`projects.config_json.image_strategy` 缺省为
+`inherit_global`，该策略下每个 Job 角色的镜像只读取全局 RoleConfig 的
+`runtime_image_key`，即使项目 RoleConfig 覆盖了 CLI、模型或其他字段；
+`project_managed` 则只读取 `role_runtime_images` 的角色映射，缺项或 `null`
+固定使用系统 `deepsonar-base`。非空 key 在项目设置写入时必须命中已启用、可信且符合
+现有准入规则的 runtime image；最终解析的 immutable digest/ref 与工具清单仍只冻结在新 Job。
 
 Finding 协议是同一配置层级中的独立规则：全局存于
 `global_settings.rules_json.finding_protocol`，项目存于
@@ -465,9 +472,9 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 - **镜像体积是准入硬门槛**：按角色拆包、`--no-install-recommends`、不安装重复 Agent SDK/CLI、构建后清理包缓存，并在断网冒烟中以 gzip 压缩分发包检查 `maxSizeMiB`、同时报告解压层大小。重型扫描器只进入专项镜像，不允许为了“可能用到”扩张默认 base。
 - `deepsonar-kali-minimal`（市场名 Kali Test）仅是 test 的官方默认镜像：固定官方 `kali-last-release` digest，预装 Python 3.10–3.14、固定 digest 的 Temurin JDK 8/11/17（默认 17，不含 21）、固定官方 Apache Maven 3.9.16、Kali 仓库的 Go/Rust 与清单化审计 CLI；Maven 位于 `/opt/deepsonar/maven` 且不预置 `.m2` 缓存。不安装 `kali-linux-*` / `kali-tools-*` metapackage、GUI、桌面或默认工具全集。Python 运行时构建后禁止联网补装，Java/Python/Maven 均提供明确的版本化命令。系统 verify 默认使用最小 Base，需要专项工具时通过 RoleConfig 显式覆盖。
 - Runtime-test Worker 只消费上述镜像内的预构建工具链，禁止在 Job 内冷装/下载 JDK、Maven、Gradle 或编译器；工具缺失时必须回传结构化 inconclusive/needs_human 证据。Java/Python/Go/Rust 的静态—动态能力和证据硬门见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
-- OpenHarmony 专项镜像均为 `project_opt_in`：`deepsonar-openharmony-test`（源码同步与构建）、`deepsonar-openharmony-audit`（Clang 静态分析 + ASan/UBSan 工具链，面向 OOB/UAF/提权类假设）、`deepsonar-openharmony-fuzz`（libFuzzer/AFL++ 动态验证）。三者均基于 `deepsonar-base`，不烘焙全量源码或板级固件；高危挖掘时由项目启用后覆盖 audit/test/verify 的 RoleConfig，不改变全局默认。
+- OpenHarmony 专项镜像均为 `project_opt_in`：`deepsonar-openharmony-test`（源码同步与构建）、`deepsonar-openharmony-audit`（Clang 静态分析 + ASan/UBSan 工具链，面向 OOB/UAF/提权类假设）、`deepsonar-openharmony-fuzz`（libFuzzer/AFL++ 动态验证）。三者均基于 `deepsonar-base`，不烘焙全量源码或板级固件；高危挖掘时由项目启用，并在 `project_managed` 的角色镜像映射中集中绑定 audit/test/verify，不改变全局默认。
 - Chrome 专项镜像也全部为 `project_opt_in`，不改变任何全局默认：`deepsonar-chrome-audit` 只提供 git partial clone、Semgrep C++ 规则、Clang/LLVM 与 binutils 静态分析工具；`deepsonar-chrome-test` 使用 Debian bookworm-security snapshot 固定版本的 Chromium `151.0.7922.71-1~deb12u1`、Playwright Core 与 CDP，通过受治理的 `--no-sandbox --headless=new` wrapper 启动；`deepsonar-chrome-fuzz` 以固定的 depot_tools/V8 源码提交构建真实 `d8` 与 `v8_json_libfuzzer`，后者从 V8 的 `json_fuzzer` 源集链接 compiler-rt 的 libFuzzer main；V8 `15.1.206.10` 是与浏览器包独立但由 Chromium 151 DEPS 锁定的输入，并提供 clang/lld/compiler-rt/libFuzzer/AFL++。Release 必须对 amd64/arm64 都执行实际 d8/libFuzzer smoke，若任一架构不能生成真实目标则 fail closed，不能用 Node 或 toy harness 冒充。
-- Job 创建于 `core.ts` 时按项目 RoleConfig → 全局 RoleConfig → 角色官方默认值解析可信版本（test → Kali Test，audit → Audit，verify 与其余角色 → Base），并立即冻结 digest；Dispatcher/Executor 只消费快照，不在执行期重新解析 tag。
+- Job 创建于 `core.ts` 时先按项目镜像策略选择来源：`inherit_global` 取全局 RoleConfig 镜像，若该全局 key 为空再按角色官方默认值解析；`project_managed` 对项目映射缺项或 null 固定取 Base，不再经过 test/audit 等角色默认镜像分流。最终立即冻结 digest；Dispatcher/Executor 只消费快照，不在执行期重新解析 tag。
 - `image-admission` 是与 Scheduler 进程隔离的 Worker。它对 allowlist registry 的导入执行 digest 解析、Cosign 验签、Syft SBOM、Trivy 漏洞/凭据扫描、ClamAV 恶意文件检查、setuid 枚举和断网硬化自检。扫描通过后仍保持 quarantined，只有 `images:approve` 管理员能提升 trusted。
 - 复扫失败的 trusted 版本自动 revoked，调度器/准入 Worker 会取消尚未完成的相关 Job 并精确回收它们的 sandbox ID。历史 Job 快照、Finding 和扫描记录不删除；新 digest 只进入 quarantined，不自动替换生产版本。
 - 私有 registry 使用 `oci_registry` Credential，准入 Worker 仅在 `docker login --password-stdin` 时解密，不进入 Job Snapshot、Docker 参数、日志或 Agent 工作区。

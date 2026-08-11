@@ -26,6 +26,7 @@ import { projectJobProviderFields, projectJobSnapshot } from "../credential/proj
 import {
   freezeAgentSnapshotNetworkPolicy,
 } from "../role-runtime-snapshot/index.js";
+import { PROJECT_IMAGE_STRATEGIES } from "../role-runtime-snapshot/application.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -36,6 +37,7 @@ const CreateProjectBody = z.object({
   name: z.string().min(1),
   description: z.string().default(""),
   plane_project_id: z.string().nullish(),
+  image_strategy: z.enum(PROJECT_IMAGE_STRATEGIES).default("inherit_global"),
 });
 const PatchProjectBody = z.object({
   name: z.string().min(1).optional(),
@@ -163,7 +165,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           canvas_id: crypto.randomUUID(),
           name: body.name,
           description: body.description,
-          config_json: {} as never,
+          config_json: { image_strategy: body.image_strategy } as never,
         })}
         RETURNING *`;
       await audit(req, {

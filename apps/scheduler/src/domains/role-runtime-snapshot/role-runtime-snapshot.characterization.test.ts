@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PLATFORM_DEFAULT_AGENT_CLI,
+  parseProjectImagePolicy,
   roleNameForJobType,
+  runtimeImageKeyForProjectPolicy,
   withRuntimeTestToolchainPolicy,
 } from "./application.js";
 
@@ -13,4 +15,24 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
   assert.equal(PLATFORM_DEFAULT_AGENT_CLI, "claude-code");
   assert.match(withRuntimeTestToolchainPolicy("test", null, "deepsonar-base") ?? "", /Runtime test toolchain/);
   assert.equal(withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-audit"), "custom");
+});
+
+test("项目镜像策略按全局继承与项目托管分别选择镜像", () => {
+  assert.deepEqual(parseProjectImagePolicy(undefined), {
+    image_strategy: "inherit_global",
+    role_runtime_images: {},
+  });
+  const inherited = parseProjectImagePolicy({
+    image_strategy: "inherit_global",
+    role_runtime_images: { audit: "deepsonar-audit" },
+  });
+  assert.equal(runtimeImageKeyForProjectPolicy(inherited, "audit", "custom-audit"), "custom-audit");
+
+  const managed = parseProjectImagePolicy({
+    image_strategy: "project_managed",
+    role_runtime_images: { audit: "deepsonar-audit", review: null },
+  });
+  assert.equal(runtimeImageKeyForProjectPolicy(managed, "audit", "custom-audit"), "deepsonar-audit");
+  assert.equal(runtimeImageKeyForProjectPolicy(managed, "review", "custom-review"), "deepsonar-base");
+  assert.equal(runtimeImageKeyForProjectPolicy(managed, "test", "custom-test"), "deepsonar-base");
 });
