@@ -45,6 +45,7 @@ import { resolveFindingProtocol } from "./finding-protocol.js";
 import * as findingVerificationLegacy from "./verify.js";
 import * as reportConvergenceLegacy from "./report.js";
 import { revokeJobTokens } from "./gateway.js";
+import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
   createFindingVerificationApplication,
   type FindingVerificationLegacyPort,
@@ -1183,6 +1184,7 @@ export async function finalizeJob(
 
   // §6.3：job 终态立即吊销短期模型 Token（容器残留也调不动模型；网关另按 job 状态逐请求兜底）
   await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
+  await revokeJobCapabilityTokens(jobId, `job_${status}`).catch(() => {});
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // §13.1 指标：终态计数 + 时长
@@ -1351,6 +1353,7 @@ export async function drainNonGateVerifies(
       AND NOT (lower(f.severity) = ANY(${gate}))
     RETURNING j.id, j.finding_id`;
   for (const row of rows) {
+    await revokeJobCapabilityTokens(row.id as string, "drain-priority").catch(() => {});
     await db`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${row.id as string} AND node_type = ANY(${["job", "intent"]})`;

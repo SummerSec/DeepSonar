@@ -412,18 +412,22 @@ Job 事件仍必须经过本摄入硬门。
 系统按 Job 冻结快照动态组装：
 
 - `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令；两份文件由同一内容生成并保持逐字一致
+- 平台内置且不可覆盖的静态 `deepsonar-control` Skill：只描述 capabilities/OpenAPI discovery、短期 Bearer Token、UUID `Idempotency-Key`、错误处理与 MCP/API 选择规则；Skill 内容对所有 Job 相同，不携带动态权限清单
 - Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
-- 非敏感环境变量、白名单 `env_keys` 和按 Job 签发的短期模型凭据
+- 非敏感环境变量、白名单 `env_keys`、按 Job 签发的短期模型凭据，以及只在执行期注入的短期平台 API capability token；两类 token 权限域与存储表完全分离
 - 画布创建时冻结的 Finding 协议说明：模式、默认/允许 profile、CVSS 默认/接受版本和必评分 profile；运行中以协议名和来源显著标识
 - Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
 - 已准入的不可变运行镜像快照：产品/版本 ID、`name@sha256:digest`、工具清单哈希和准入扫描 ID
 
-Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结，Hub 与 Worker 共用。该开关只控制目标网络能力；模型通道始终经 Scheduler Model Gateway 和 Scheduler-owned gateway proxy。允许出网时沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，proxy 同时加入两网但只转发 `/gateway`。
+Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结，Hub 与 Worker 共用。该开关只控制目标网络能力；模型通道始终经 Scheduler Model Gateway 和 Scheduler-owned gateway proxy。允许出网时沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge。proxy 同时加入两网，但只转发固定 Scheduler 上游的 `/gateway` 与 `/control/v1/`，拒绝 CONNECT、任意目标和其他路径。
 
-**事件通道**：事件不经过沙箱网络，经 agentbox-sdk 控制通道回传调度器侧：
+**平台控制双通道**：现有 MCP 控制通道保持不变；需要同步业务响应的 CLI 可使用平台 API。两条通道最终汇入同一个运行中 Job semantic handler：
 
 - SDK normalized event stream → 文本/进度 → `progress` 事件
 - 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、执行同源严格 schema 校验并返回 `schema_validated / pending_scheduler_validation`，不声称业务已落库，不写文件、不连接调度器
+- Scheduler 同时提供独立于管理 OpenAPI 的 Job 控制面：`GET /control/v1/jobs/:jobId/capabilities`、`GET /control/v1/jobs/:jobId/openapi.json` 与 `POST /control/v1/jobs/:jobId/operations/:operationId`。前两者和 OpenAPI paths 都按当前 capability token 的精确 operation allowlist 过滤；写调用要求 UUID `Idempotency-Key`，同 key 重放不得重复执行，跨 operation 重用返回冲突。
+- Job 进入真实执行时，Scheduler 从冻结的 `agent_snapshot_json.platform_tools` 签发独立短期 capability token，仅存 hash 并绑定 `job_id`、`project_id`、operation 列表和 TTL，通过 `DEEPSONAR_API_BASE_URL` / `DEEPSONAR_API_TOKEN` 注入 CLI 环境。它不复用 Credential/Model Gateway token，不写回 snapshot、workspace、运行清单、日志或 evidence，并在成功、失败、超时、取消或孤儿终态撤销；鉴权还要求 Job 仍在运行。
+- API operation 不直接复制 `event-ingestion`：路由调用进程内注册的当前 Job runtime handler；只读 operation 返回冻结角色/资产目录，语义写 operation 复用 MCP 的 `onSemanticEvent` 闭包、payload_file/共享资产宿主读取、计数和 Hub/done 延迟终态，再进入 Scheduler 权威事务。Agent 每次可选 MCP 或 API，但相同语义写入不得跨通道重复提交。
 - 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块只登记 bounded pending；收到同一 `tool_use_id` 的合法非错误 `user.tool_result`（`is_error` 省略或为 `false`）后才转换为 `{v:1,event_id(UUID),type,payload}`，串行 `await onSemanticEvent`。显式错误或畸形 `is_error` 结果丢弃 pending，Agent 可用新的 call id 重试；重复结果/重放不重复释放。
 - 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
@@ -432,7 +436,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
 - 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
 - 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
-- 沙箱内不注入调度器数据库、平台 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期 Job token，终态随沙箱销毁
+- 沙箱内不注入调度器数据库、管理 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期模型 Job token。平台控制 API 只注入另一枚按 operation 限权的短期 token；二者均随终态撤销并随一次性沙箱销毁
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
 
 ### 8.1 Agent 配置体系（RoleConfig）
@@ -464,7 +468,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
-平台控制工具也属于 RoleConfig：平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。关闭的工具不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md` 或运行清单的可用列表中，执行器接收语义事件时还会再次校验授权；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态工具；其余进度、事实、Finding、Hub 决策、人工请求与共享资产工具均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。
+平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 同时派生既有 MCP allowlist 与 API operation allowlist；关闭项不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。现有 capability 当前同时映射 MCP/API；后续新增平台能力只注册 API operation，不再新增 MCP 工具。Pi Agent CLI 的 Runtime Adapter 不属于本阶段。
 
 ### 8.2 可信运行镜像与独立市场
 
@@ -548,7 +552,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 | 威胁 | 对策 |
 |------|------|
 | 被审计代码中埋 **prompt injection**（注释诱导 Agent 乱提案、外泄源码） | 审计沙箱默认**断外网**；工具白名单收口；followup 频次/深度护栏（§4.3）；system prompt 中声明仓库内容均为不可信数据 |
-| 目标内容或 Agent 伪造 Finding profile/评分、借未来 CVSS 版本绕过策略 | Finding 协议在画布冻结；Agent 只能调用严格 MCP 提案；Scheduler 重算 CVSS、按 accepted_versions 拒绝或原样留存未知版本，不能由 prompt 改写规则 |
+| 目标内容或 Agent 伪造 Finding profile/评分、借未来 CVSS 版本绕过策略 | Finding 协议在画布冻结；Agent 只能调用严格 MCP 或同名 Job-scoped API operation 提案；Scheduler 重算 CVSS、按 accepted_versions 拒绝或原样留存未知版本，不能由 prompt 改写规则 |
 | **PoC 由 Agent 生成**，验证 = 在沙箱执行半不可信代码 | verify 沙箱独立隔离、一次性、跑完即毁；出网白名单 |
 | finding 内容含恶意 HTML/JS | finding 一律当纯数据存储；画布前端渲染防 XSS（不渲染 raw HTML） |
 | 事件通道被滥用（伪造 finding、刷事件） | 事件不经沙箱网络，只走 SDK 控制通道；沙箱内无调度器凭据；payload schema 校验 + 大小上限 + 每 Job 持久化固定窗口速率限制 |

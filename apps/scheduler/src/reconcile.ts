@@ -4,6 +4,7 @@ import { planeWriteback } from "./plane-sync.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
+import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { sharedAssetsVolumeManager } from "./runtime.js";
 
@@ -60,6 +61,7 @@ export async function reconcileOnBoot(): Promise<void> {
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
     // §6.3：orphan 即吊销短期模型 Token
     await revokeJobTokens(jobId, "orphan_reconcile").catch(() => {});
+    await revokeJobCapabilityTokens(jobId, "orphan_reconcile").catch(() => {});
 
     // 启动恢复也必须执行与实时终态入口相同的业务收口，不能只改 jobs 表。
     if (j.type === "verify_finding") {

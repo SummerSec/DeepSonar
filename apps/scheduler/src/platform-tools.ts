@@ -93,8 +93,8 @@ export function platformToolGuide(toolNames: string[]): string {
   const enabled = new Set(toolNames);
   const incremental = ["emit_progress", "emit_fact", "emit_finding"].filter((name) => enabled.has(name));
   return [
-    "调用规则：直接调用当前 Agent CLI 工具列表中的同名 MCP 工具，并传入 JSON 对象；不要用 shell、curl 或自行写文件代替工具调用；只用普通文本描述决策、发现或摘要同样不算提交。合法响应只表示 `schema_validated / pending_scheduler_validation`，Scheduler 仍会重验并记账；收到 `isError` 时修正参数后重试，不得把失败调用当作已上报。",
-    `生命周期：${incremental.length > 0 ? `${incremental.map((name) => `\`${name}\``).join("、")} 可增量调用；` : ""}正常完成以一次 \`mark_job_done\` 结束${enabled.has("request_human") ? "，人工阻塞以一次 `request_human` 结束，二者不要同时调用" : ""}。平台收到事件后负责实时入库、画布更新、派生与终态处理。`,
+    "调用规则：对当前授权 operation，可选择当前 Agent CLI 同名 MCP 或静态 `deepsonar-control` Skill 所述的 Job-scoped control API，单次调用二选一且不得跨通道重复提交；调用 API 时可按静态 Skill 使用受限 HTTP 客户端，但不得用 shell 写控制文件、伪造 MCP 或猜测管理路由。API 成功只表示 `accepted`，MCP 成功只表示 `schema_validated / pending_scheduler_validation`，Scheduler 仍会重验并记账；收到 `isError` 时修正参数后重试，不得把失败调用当作已上报。",
+    `生命周期：${incremental.length > 0 ? `${incremental.map((name) => `\`${name}\``).join("、")} 可增量调用；` : ""}正常完成以一次 \`mark_job_done\` 或 API 对应 operation 结束${enabled.has("request_human") ? "，人工阻塞以一次 `request_human` 结束，二者不要同时调用" : ""}。平台收到事件后负责实时入库、画布更新、派生与终态处理。`,
     ...toolNames.flatMap((name) => [PLATFORM_TOOL_USAGE[name], PLATFORM_TOOL_CAUTIONS[name]]).filter((entry): entry is string => Boolean(entry)),
   ].join("\n\n");
 }

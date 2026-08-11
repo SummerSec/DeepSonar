@@ -6,6 +6,7 @@ import http from "node:http";
 import {
   mapCliEvent,
   redactToolTelemetry,
+  redactRuntimeSecrets,
   DEFAULT_SEMANTIC_TOOL_EVENTS,
   CLI_SESSION_RESUME_MAX_ATTEMPTS,
   CLI_SESSION_RESUME_BASE_DELAY_MS,
@@ -14,6 +15,7 @@ import {
   cliSessionResumeDelayMs,
   createSemanticToolState,
   discardPendingSemanticTools,
+  skillMaterializationPath,
   materializationPathCollisions,
   normalizeRuntimeErrorDetails,
   resolveTerminalRunError,
@@ -36,9 +38,15 @@ import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 
 type GatewayResponse = { statusCode?: number; body: string };
 
-function requestGateway(port: number, requestPath: string, method = "GET", body?: string): Promise<GatewayResponse> {
+function requestGateway(
+  port: number,
+  requestPath: string,
+  method = "GET",
+  body?: string,
+  headers?: Record<string, string>,
+): Promise<GatewayResponse> {
   return new Promise((resolve, reject) => {
-    const request = http.request({ host: "127.0.0.1", port, path: requestPath, method }, (response) => {
+    const request = http.request({ host: "127.0.0.1", port, path: requestPath, method, headers }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       response.on("end", () => resolve({ statusCode: response.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
@@ -371,6 +379,57 @@ test("网关代理在客户端请求中止时销毁上游请求并保持进程�
     ]);
     assert.equal(closed, true, "客户端中止后上游请求未关闭");
     assert.equal(proxy.child.exitCode, null, proxy.stderr());
+  } finally {
+    await stopGatewayProxy(proxy);
+    await closeHttpServer(upstream);
+  }
+});
+
+test("restricted gateway proxy forwards only /gateway and /control/v1 and preserves Authorization", async () => {
+  const received: Array<{ path: string; authorization?: string }> = [];
+  const upstream = http.createServer((request, response) => {
+    received.push({ path: request.url ?? "", authorization: request.headers.authorization });
+    response.writeHead(200, { "content-type": "application/json" }).end('{"accepted":true}');
+  });
+  const upstreamPort = await listenHttpServer(upstream);
+  const proxy = await startGatewayProxy(`http://127.0.0.1:${upstreamPort}/gateway`);
+  try {
+    const control = await requestGateway(
+      proxy.port,
+      "/control/v1/jobs/job-1",
+      "GET",
+      undefined,
+      { authorization: "Bearer runtime-secret" },
+    );
+    assert.equal(control.statusCode, 200);
+    assert.deepEqual(received[0], { path: "/control/v1/jobs/job-1", authorization: "Bearer runtime-secret" });
+
+    const gateway = await requestGateway(proxy.port, "/gateway/v1/messages");
+    assert.equal(gateway.statusCode, 200);
+    assert.equal(received[1]?.path, "/gateway/v1/messages");
+
+    const management = await requestGateway(proxy.port, "/api/projects");
+    assert.equal(management.statusCode, 404);
+    assert.equal(received.length, 2);
+  } finally {
+    await stopGatewayProxy(proxy);
+    await closeHttpServer(upstream);
+  }
+});
+
+test("restricted gateway proxy rejects CONNECT even when the target is allowed", async () => {
+  const upstream = http.createServer((_request, response) => response.writeHead(200).end("ok"));
+  const upstreamPort = await listenHttpServer(upstream);
+  const proxy = await startGatewayProxy(`http://127.0.0.1:${upstreamPort}/gateway`);
+  try {
+    const result = await new Promise<{ connected: boolean; statusCode?: number }>((resolve) => {
+      const request = http.request({ host: "127.0.0.1", port: proxy.port, method: "CONNECT", path: "control/v1/jobs/job-1" });
+      request.once("connect", () => resolve({ connected: true }));
+      request.once("response", (response) => resolve({ connected: false, statusCode: response.statusCode }));
+      request.once("error", () => resolve({ connected: false }));
+      request.end();
+    });
+    assert.equal(result.connected, false);
   } finally {
     await stopGatewayProxy(proxy);
     await closeHttpServer(upstream);
@@ -788,6 +847,42 @@ test("ordinary tool telemetry redacts standalone platform and provider tokens", 
   assert.equal(redactToolTelemetry("use sk-abcdefghijklmnop1234"), "use [REDACTED]");
 });
 
+test("exact runtime secret redaction covers result files and archived session artifacts", () => {
+  const token = "deepsonarcap_runtime_exact_0123456789";
+  const value = redactRuntimeSecrets({
+    file: `Authorization: Bearer ${token}`,
+    session: {
+      captureError: `capture failed ${token}`,
+      artifacts: [{ content: `tool output included ${token}`, sourcePath: "/workspace/session.jsonl" }],
+    },
+  }, [token]);
+  assert.deepEqual(value, {
+    file: "Authorization: Bearer [REDACTED]",
+    session: {
+      captureError: "capture failed [REDACTED]",
+      artifacts: [{ content: "tool output included [REDACTED]", sourcePath: "/workspace/session.jsonl" }],
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(value), new RegExp(token));
+});
+
+test("mapCliEvent redacts an exact runtime token before non-control telemetry", () => {
+  const token = "deepsonarcap_runtime_stream_0123456789";
+  const events: Record<string, unknown>[] = [];
+  const state = createSemanticToolState();
+  mapCliEvent({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "secret-call", name: "Bash", input: { command: `echo ${token}` } }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state, [token]);
+  mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "secret-call", is_error: false, content: `output ${token}` }] },
+  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state, [token]);
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(token));
+  assert.equal((events[0]?.input as { command: string }).command, "echo [REDACTED]");
+  assert.equal(events[1]?.result, "output [REDACTED]");
+});
+
 test("已知 control tool 重放只产生一对 hashed telemetry 和一个语义事件", () => {
   const rawCallId = "control-replay-call";
   const events: Record<string, unknown>[] = [];
@@ -1018,6 +1113,30 @@ test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () 
       commands: [{ name: "shared", description: "", template: "" }],
       skills: [{ source: "embedded", name: "shared", files: { "SKILL.md": "" } }],
       subAgents: [],
+    }),
+    [],
+  );
+});
+
+test("embedded skill 使用当前 Agent CLI 的标准目录", () => {
+  assert.equal(
+    skillMaterializationPath("deepsonar-control", "SKILL.md", "claude-code"),
+    "/workspace/.deepsonar-home/.claude/skills/deepsonar-control/SKILL.md",
+  );
+  assert.equal(
+    skillMaterializationPath("deepsonar-control", "SKILL.md", "codex"),
+    "/workspace/.deepsonar-home/.codex/skills/deepsonar-control/SKILL.md",
+  );
+  assert.equal(
+    skillMaterializationPath("deepsonar-control", "SKILL.md", "open-code"),
+    "/workspace/.deepsonar-home/.config/opencode/skills/deepsonar-control/SKILL.md",
+  );
+  assert.deepEqual(
+    materializationPathCollisions({
+      provider: "codex",
+      commands: [],
+      subAgents: [],
+      skills: [{ source: "embedded", name: "deepsonar-control", files: { "SKILL.md": "" } }],
     }),
     [],
   );

@@ -5,6 +5,8 @@ import { config } from "../../config.js";
 import { projectCredentialMetadata } from "../../credentials.js";
 import { sql } from "../../db.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
+import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
+import { revokeJobTokens } from "../../gateway.js";
 import { runner } from "../../runtime.js";
 import {
   applyUploadedRuntimeCatalog,
@@ -702,6 +704,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
         `runtime image revoked: ${body.reason}`,
       );
       for (const job of affected) {
+        await revokeJobTokens(job.id as string, "runtime_image_revoked").catch(() => {});
+        await revokeJobCapabilityTokens(job.id as string, "runtime_image_revoked").catch(() => {});
         if (job.sandbox_id) await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
       }
     }

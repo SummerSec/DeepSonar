@@ -21,6 +21,7 @@ import { runner } from "../../runtime.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recoverCancelledDerivedJob } from "./recovery.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
+import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 
@@ -482,6 +483,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     }
     // §6.3：取消即吊销短期模型 Token
     await revokeJobTokens(id, "cancelled").catch(() => {});
+    await revokeJobCapabilityTokens(id, "cancelled").catch(() => {});
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
@@ -518,6 +520,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
       }
       await revokeJobTokens(jobId, "cancelled").catch(() => {});
+      await revokeJobCapabilityTokens(jobId, "cancelled").catch(() => {});
       await sql`
         UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;

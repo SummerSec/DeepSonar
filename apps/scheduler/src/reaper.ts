@@ -5,6 +5,7 @@ import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
+import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { planeWriteback } from "./plane-sync.js";
 
@@ -44,6 +45,7 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     else inc("deepsonar_jobs_orphan_total");
     // §6.3：终局判定即吊销短期模型 Token
     await revokeJobTokens(jobId, "reaper").catch(() => {});
+    await revokeJobCapabilityTokens(jobId, "reaper").catch(() => {});
     // 失败不能只改 jobs 表而留下 running 画布节点（§8.3：job/intent 节点同步终态）
     await sql`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()

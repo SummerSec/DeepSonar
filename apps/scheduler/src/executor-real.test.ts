@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { ControlEventEnvelope, EventEnvelope } from "@deepsonar/shared-types";
 import {
   canRolePublishSharedAsset,
@@ -80,6 +81,21 @@ test("real executor round-trips only controlled rate-limit details after string 
   });
   assert.doesNotMatch(JSON.stringify(error), /secret|drop/i);
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
+});
+
+test("real executor passes the reserved Skill to AgentBox without putting the API token in the manifest", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /skills:\s*runtimeSkills as never/);
+  assert.match(source, /mintJobCapabilityToken\(jobId,\s*\{[\s\S]*operationIds:\s*platformOperations/);
+  assert.match(source, /env\.DEEPSONAR_API_TOKEN\s*=\s*platformToken/);
+  const manifestStart = source.indexOf("const componentManifest = {");
+  const manifestEnd = source.indexOf("const sharedAssetCatalog", manifestStart);
+  assert.ok(manifestStart >= 0 && manifestEnd > manifestStart);
+  const manifestSource = source.slice(manifestStart, manifestEnd);
+  assert.match(manifestSource, /env_names:/);
+  assert.match(manifestSource, /DEEPSONAR_API_TOKEN/);
+  assert.doesNotMatch(manifestSource, /platformToken/);
+  assert.doesNotMatch(manifestSource, /DEEPSONAR_API_TOKEN\s*:/);
 });
 
 test("deferred Hub terminal events preserve decision-before-done ordering", () => {

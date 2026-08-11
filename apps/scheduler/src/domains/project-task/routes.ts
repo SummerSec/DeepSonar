@@ -21,6 +21,7 @@ import { runner } from "../../runtime.js";
 import { recoverCancelledDerivedJob } from "../job-control/recovery.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
+import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
 import {
@@ -108,6 +109,7 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
     }
     await revokeJobTokens(id, "cancelled").catch(() => {});
+    await revokeJobCapabilityTokens(id, "cancelled").catch(() => {});
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;

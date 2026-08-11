@@ -239,8 +239,8 @@ const EXEMPT = new Set([
   "/terminal-ws",
 ]);
 
-/** 前缀豁免：Model Gateway 用 Job Token 自鉴权，不走平台 Bearer */
-const EXEMPT_PREFIXES = ["/gateway"];
+/** 前缀豁免：Gateway 与 Job-scoped Control API 各自使用独立短期 token 自鉴权。 */
+const EXEMPT_PREFIXES = ["/gateway", "/control/v1/jobs"];
 
 function isExempt(routeUrl: string, rawPath: string): boolean {
   if (EXEMPT.has(routeUrl) || EXEMPT.has(rawPath)) return true;

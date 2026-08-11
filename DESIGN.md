@@ -61,9 +61,11 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 
 - **Agent 只提案**：`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human`；是否 verify、是否 report 由调度器决定。
 - **图引用硬约束**：Hub 的 `intents[].from` / `complete.from` 必须使用同画布 `root`/`fact`/`finding` 节点的 canonical UUID（YAML `root_id` 的值）；字段名、别名、占位符或跨画布 ID 会使整次决策被拒绝。
-- **控制面默认拒绝（#57）**：所有控制工具与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。Scheduler 的 `event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）以 Job 类型/冻结角色快照重算工具授权，并要求 Job 仍为 `status=running`；终态、角色种类或工具不一致均以稳定 `ControlInputError` 拒绝并回滚 dedup、额度、事件及图副作用。MCP 合法响应只代表 `schema_validated / pending_scheduler_validation`，不是落库成功；`isError` 始终带稳定 `error_code` 与人话。
+- **控制面默认拒绝（#57 / #135）**：所有控制工具与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。Scheduler 的 `event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）以 Job 类型/冻结角色快照重算工具授权，并要求 Job 仍为 `status=running`；终态、角色种类或工具不一致均以稳定 `ControlInputError` 拒绝并回滚 dedup、额度、事件及图副作用。现有本地 MCP 行为保持不变；同一冻结 capability 同时派生 MCP allowlist 与平台 API operation allowlist，Agent 可按单次调用选择任一通道，但不得跨通道重复提交同一语义写入。MCP 合法响应只代表 `schema_validated / pending_scheduler_validation`，平台 API 返回 Scheduler 接受或拒绝结果；`isError` / HTTP 错误始终带稳定错误码与人话。
 - **语义事件持久化限流（#57）**：Scheduler 在 `event-ingestion` 权威事务中以 `job_event_rate_limits` 单行 `SELECT ... FOR UPDATE` 执行有界固定窗口；进度、普通事件和终态/人工事件使用独立桶（默认每 60 秒 30/120/8），终态预算不会被 progress 消耗。幂等 `event_id` 先判重，重复投递不占额度；拒绝返回 `event_rate_limited`、`retry_after_sec` 等低基数元数据并回滚全部事件/画布副作用。计数行跨 Scheduler 进程/重启保留，禁止扫描 append-only `events`。
-- **二阶段 ack 边界**：本地 MCP 子进程不连 Scheduler/数据库，无法同步返回业务事务结果；禁止引入可写控制文件队列或未经治理的 socket。需要端到端同步业务 ack 时另立受治理宿主 IPC 架构变更。
+- **双通道 ack 边界**：本地 MCP 子进程仍不连 Scheduler/数据库，维持既有二阶段 ack，不引入可写控制文件队列或未经治理的 socket。需要同步业务 ack 的 CLI 使用按 Job 签发的短期 capability token 调用 `/control/v1/jobs/:jobId/operations/:operationId`；API 调用进入当前 Job 的同一个宿主 semantic handler，不形成第二套副作用逻辑。
+- **静态控制 Skill（#135）**：所有真实 Job 注入同一份平台内置、不可由 RoleConfig 同名条目覆盖的 `deepsonar-control` Skill。Skill 只说明 capabilities/OpenAPI discovery、Bearer 鉴权、UUID `Idempotency-Key`、有限重试和 MCP/API 选择方式，不动态生成 API 清单，也不授予权限；实际开放 operation 只认冻结 Job capability 与 token 绑定列表。
+- **短期 API Token（Schema v25 / #135）**：平台控制 API 使用独立 `job_capability_tokens`，不复用 Model Gateway `job_tokens`。Token 只存 hash，绑定 Job、项目、精确 operation 列表与到期时间，在执行期通过环境变量注入且不进入 Job snapshot、工作区、运行清单或 evidence；Job 终态撤销。受限网络只允许固定 Scheduler 上游的 `/control/v1/`，不开放任意代理。
 - **控制通道不污染**：结构化 MCP `tool_use` 先进入宿主 bounded pending；对应的合法非错误 `tool_result`（`is_error` 省略或为 `false`）才释放语义事件，显式错误或畸形标记均丢弃 pending。控制工具 telemetry 只保留 toolName/callId 与输入 shape/count，不记录原始 input/content；非 JSON 运行时行、未知行和写 `.deepsonar/control-*` 的尝试只记低基数告警/指标，跳过后继续处理后续合法事件。
 - **Hub 不可下发** `verify` / `report`；须先 `list_available_roles`。
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
@@ -108,7 +110,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 - `buildGraphSnapshot(canvasId, scope?, opts?)` → YAML：goal、facts/findings 摘要、open/concluded intents、hints。
 - **GraphScope**（`hub` | `agent` | `verify` | `report`）与**整图字符预算**已在 `graph.ts` 落地（#30）；Hub/Worker/Verify 注入投影不同，仍须关注超预算截断与索引完整性。
 - 单字段仍有截断（description/summary 等）；`job` 类型节点**不进** YAML。
-- Worker 运行包会注入画布冻结的 Finding 协议说明（模式、允许 profile、CVSS 接受版本和必评分 profile）；Agent 只能通过严格的 `emit_finding` MCP 提交提案，不能写 `raw` 或修改协议、验证派生和 severity/scoring 的系统归一化。
+- Worker 运行包会注入画布冻结的 Finding 协议说明（模式、允许 profile、CVSS 接受版本和必评分 profile）；Agent 只能通过严格的 `emit_finding` MCP 或同名 Job-scoped API operation 提交提案，不能写 `raw` 或修改协议、验证派生和 severity/scoring 的系统归一化。
 - Skill：`skill_sources` sync catalog；RoleConfig `modules` 现为 `"source_id:module_id"` / `plugin:` / `source:*` 展开为 embedded skills/commands。手写同 kind/name 配置覆盖 catalog 模块时，最终 expanded 集合/hash 只保留实际嵌入内容，并记录 `manual-override`。Job 快照同时冻结模块元数据哈希与结构化 `missing_modules`；同一 materializer 命名空间的重名模块全部排除，禁止顺序覆盖；materializer 对组件名和 skill 文件路径执行严格子树安全校验。
 
 ## 8. 观测与证据
@@ -169,6 +171,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 项目镜像策略 | #130 | **已完成**：项目创建与设置支持 `inherit_global` / `project_managed`；项目托管映射集中绑定全部角色到项目已启用的可信镜像，缺项使用 Base；项目 RoleConfig 不再接受独立镜像覆盖，Job 创建时只按项目策略解析并冻结 immutable digest |
 | 临时上游错误恢复 | #131 | **已完成**：Gateway 在响应交付前有界重试；CLI 仍因明确临时错误退出时，runner 在原沙箱按原 session ID 有界恢复，永久错误和缺 session 均 fail closed |
 | Verify 严重度收敛 | #133 | **已完成**：`minVerifySeverity` 同时限定自动 Verify 与收敛集合；低于阈值的 Finding 保留为策略排除项，不占 Verify 资源、不阻塞报告；`info` 保留严格全量模式 |
+| 平台 OpenAPI + 静态控制 Skill | #135 | **第一阶段已落地**：现有 MCP 保持不变；真实 Job 注入静态 `deepsonar-control` Skill，并以独立短期 capability token 访问按冻结 operation allowlist 过滤的 `/control/v1/jobs/:jobId` capabilities/OpenAPI/operation API。API 与 MCP 共用宿主 semantic handler 和 Scheduler 权威副作用；未来新平台工具只扩展 API。Pi Agent Runtime Adapter 留在后续阶段。 |
 
 ## 12. 仓库地图
 
@@ -188,10 +191,10 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 1. **D1 默认拒绝**：每个工具 `additionalProperties: false`；未知字段返回 `unknown_field`，不得 strip 后部分落库。
 2. **D2 标识符标准形态**：节点/边只认当前画布 `referableIds` 中的 canonical UUID；Finding 绑定只认数据库 Finding UUID；角色只认本轮 `list_available_roles`；未来路径工具只认白名单前缀。
-3. **D3 通道不可污染**：语义事件只能由控制 MCP 结构化提交；Agent 不能用 shell 或 `.deepsonar/control-*` 文件模拟队列；脏行告警后不得丢弃后续合法事件。
+3. **D3 通道不可污染**：语义事件只能由控制 MCP 或按 Job 授权的平台 API 结构化提交；Agent 不能用 shell 或 `.deepsonar/control-*` 文件模拟队列，也不能猜测管理 API；脏行告警后不得丢弃后续合法事件。
 4. **D4 错误形态**：拒绝返回稳定 `error_code` + 可读消息；禁止把 PostgreSQL/`JSON.parse` 堆栈作为唯一结果；禁止 MCP 先报成功、Scheduler 后静默失败。
 5. **D5 单源契约**：`shared-types` Zod schema 同时生成 MCP JSON Schema；每个工具必须有合法/非法夹具、宿主重验和业务前置条件测试。
-6. **D6 纵深校验**：MCP schema → runtime/host parse → ingest/apply transaction 三层均须拒绝；任何层缺失都不算完成。
+6. **D6 纵深校验**：MCP/API 同源 schema → runtime/host parse → ingest/apply transaction 三层均须拒绝；任何层缺失都不算完成。
 
 语义事件限流配置由 Scheduler 环境变量读取并在启动时做正整数/上界校验：
 `EVENT_RATE_LIMIT_WINDOW_SEC`（1–3600，默认 60）、

@@ -279,6 +279,7 @@ const http = require("node:http");
 const https = require("node:https");
 const upstream = new URL(process.env.DEEPSONAR_GATEWAY_UPSTREAM);
 const prefix = upstream.pathname.replace(/\/$/, "");
+const controlPrefix = "/control/v1";
 const client = upstream.protocol === "https:" ? https : http;
 const server = http.createServer((req, res) => {
   const incoming = new URL(req.url || "/", "http://proxy.local");
@@ -286,7 +287,12 @@ const server = http.createServer((req, res) => {
     res.writeHead(200).end("ok");
     return;
   }
-  if (incoming.pathname !== prefix && !incoming.pathname.startsWith(prefix + "/")) {
+  const isGatewayPath = incoming.pathname === prefix || incoming.pathname.startsWith(prefix + "/");
+  const isControlPath = incoming.pathname === controlPrefix || incoming.pathname.startsWith(controlPrefix + "/");
+  // The sidecar is intentionally a fixed-path forwarder. It exposes the
+  // existing model Gateway and the Job-scoped control API only; arbitrary
+  // proxying, CONNECT, and other Scheduler routes remain unavailable.
+  if (!isGatewayPath && !isControlPath) {
     res.writeHead(404).end("not found");
     return;
   }
@@ -842,8 +848,15 @@ export interface RealAgentSpec {
     event: Record<string, unknown>,
     control: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
   ) => void | Promise<void>;
-  /** Run 建立后注册外部增量消息源；消息经 stdin stream-json 注入同一会话。 */
-  onRunReady?: (control: { sendMessage(content: string): Promise<void> }) =>
+  /**
+   * Run 建立后注册外部增量消息源；消息经 stdin stream-json 注入同一会话。
+   * `readWorkspaceFile` 复用语义事件的安全读取边界，供 Job-scoped API
+   * handler 处理 payload_file；它不会暴露宿主文件系统。
+   */
+  onRunReady?: (control: {
+    sendMessage(content: string): Promise<void>;
+    readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer>;
+  }) =>
     void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
   /**
    * 完成门禁：result 事件到达时调用。返回 false 表示协议要求的语义事件（如
@@ -856,6 +869,8 @@ export interface RealAgentSpec {
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
   onEvent?: (event: Record<string, unknown>) => void;
+  /** Exact short-lived secrets to redact before telemetry/evidence/session output. */
+  secretValues?: readonly string[];
   /** 非语义运行流告警；告警不会进入控制事件或写库。 */
   onWarning?: (warning: { code: string; detail?: string }) => void;
 }
@@ -1279,11 +1294,20 @@ function subAgentMaterializationPath(name: unknown): string {
   );
 }
 
-function skillMaterializationPath(name: unknown, rel: unknown): string {
+export function skillMaterializationPath(
+  name: unknown,
+  rel: unknown,
+  provider: RealAgentSpec["provider"] = "claude-code",
+): string {
   const safeName = safeComponentName(name, "embedded skill.name");
+  const skillsRoot = provider === "codex"
+    ? `${RUNTIME_HOME}/.codex/skills`
+    : provider === "open-code"
+      ? `${RUNTIME_HOME}/.config/opencode/skills`
+      : `${CLAUDE_DIR}/skills`;
   const root = strictChildPath(
-    `${CLAUDE_DIR}/skills`,
-    path.posix.join(`${CLAUDE_DIR}/skills`, safeName),
+    skillsRoot,
+    path.posix.join(skillsRoot, safeName),
     "embedded skill.name",
   );
   const safeRel = safeRelativeSkillFile(rel, "embedded skill file");
@@ -1291,8 +1315,10 @@ function skillMaterializationPath(name: unknown, rel: unknown): string {
 }
 
 function materializationPaths(
-  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills">,
+  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills"> &
+    Partial<Pick<RealAgentSpec, "provider">>,
 ): string[] {
+  const provider = spec.provider ?? "claude-code";
   const paths: string[] = [];
   for (const command of spec.commands ?? []) {
     paths.push(commandMaterializationPath(command.name));
@@ -1307,7 +1333,7 @@ function materializationPaths(
       throw new Error(`拒绝 embedded skill ${safeName}：files 必须是对象`);
     }
     for (const rel of Object.keys(skill.files)) {
-      paths.push(skillMaterializationPath(safeName, rel));
+      paths.push(skillMaterializationPath(safeName, rel, provider));
     }
   }
   return paths;
@@ -1325,7 +1351,8 @@ function duplicatePaths(paths: string[]): string[] {
 
 /** Return duplicate normalized local component paths before any upload happens. */
 export function materializationPathCollisions(
-  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills">,
+  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills"> &
+    Partial<Pick<RealAgentSpec, "provider">>,
 ): string[] {
   return duplicatePaths(materializationPaths(spec));
 }
@@ -1333,7 +1360,8 @@ export function materializationPathCollisions(
 /**
  * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
- * embedded skills → .claude/skills/<name>/<files>；repo skills 需出网安装，尽力而为。
+ * embedded skills → 当前 CLI 的标准 skills 目录（Claude `.claude/skills`、
+ * Codex `.codex/skills`、OpenCode `.config/opencode/skills`）；repo skills 需出网安装，尽力而为。
  */
 async function materializeAgentFiles(
   sandbox: Sandbox,
@@ -1348,6 +1376,7 @@ async function materializeAgentFiles(
     throw new Error(`拒绝 materialize 组件路径冲突（不会执行覆盖写入）: ${collisions.join(", ")}`);
   }
   const writes: Array<[string, string]> = [];
+  const provider = spec.provider;
   for (const command of spec.commands ?? []) {
     const frontmatter = command.description ? `---\ndescription: ${yamlScalar(command.description)}\n---\n\n` : "";
     writes.push([commandMaterializationPath(command.name), frontmatter + command.template]);
@@ -1364,7 +1393,7 @@ async function materializeAgentFiles(
   for (const skill of spec.skills ?? []) {
     if (!("files" in skill)) continue; // repo skill 走下方安装命令
     for (const [rel, content] of Object.entries(skill.files)) {
-      writes.push([skillMaterializationPath(skill.name, rel), content]);
+      writes.push([skillMaterializationPath(skill.name, rel, provider), content]);
     }
   }
   for (const [filePath, content] of writes) {
@@ -1614,39 +1643,71 @@ function streamMessageId(
 const TOOL_DETAIL_MAX = 4000;
 const SENSITIVE_TOOL_KEY = /pass(word)?|secret|token|api[-_]?key|authorization|cookie|credential|private[-_]?key|client[-_]?secret/i;
 
+function redactSecretValues(value: string, secretValues: readonly string[]): string {
+  let redacted = value;
+  // Sort longest first so a token prefix cannot leave the secret suffix in
+  // telemetry when a caller supplied both a token and a derived prefix.
+  for (const secret of [...secretValues].filter((entry) => typeof entry === "string" && entry.length > 0).sort((a, b) => b.length - a.length)) {
+    redacted = redacted.split(secret).join("[REDACTED]");
+  }
+  return redacted;
+}
+
+/** Exact-value redaction that preserves result/session object shape and size. */
+function redactSecretsDeep(value: unknown, secretValues: readonly string[], seen = new WeakSet<object>()): unknown {
+  if (typeof value === "string") return redactSecretValues(value, secretValues);
+  if (!value || typeof value !== "object") return value;
+  if (seen.has(value)) return "[CIRCULAR]";
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => redactSecretsDeep(entry, secretValues, seen));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, redactSecretsDeep(entry, secretValues, seen)]),
+  );
+}
+
+/** Exact secret redaction for result files and archived CLI session bundles. */
+export function redactRuntimeSecrets(value: unknown, secretValues: readonly string[]): unknown {
+  return redactSecretsDeep(value, secretValues);
+}
+
 /** Redact and bound ordinary tool telemetry before it crosses the runtime boundary. */
-export function redactToolTelemetry(value: unknown, key?: string, depth = 0): unknown {
+export function redactToolTelemetry(
+  value: unknown,
+  key?: string,
+  depth = 0,
+  secretValues: readonly string[] = [],
+): unknown {
   if (key && SENSITIVE_TOOL_KEY.test(key)) return "[REDACTED]";
   if (depth > 5) return "[TRUNCATED]";
   if (typeof value === "string") {
-    return value
+    return redactSecretValues(value, secretValues)
       .replace(/\b(?:deepsonar_(?:prod|dev|user|job)_[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,})\b/gi, "[REDACTED]")
       .replace(/(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [REDACTED]")
       .replace(/((?:api[-_]?key|token|secret|password|authorization|cookie)\s*[:=]\s*)(?!Bearer\b|Basic\b)([^\s,;]+)/gi, "$1[REDACTED]");
   }
-  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => redactToolTelemetry(entry, undefined, depth + 1));
+  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => redactToolTelemetry(entry, undefined, depth + 1, secretValues));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entryValue]) => [entryKey, redactToolTelemetry(entryValue, entryKey, depth + 1)]));
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entryValue]) => [entryKey, redactToolTelemetry(entryValue, entryKey, depth + 1, secretValues)]));
   }
   return value;
 }
 
-function boundedToolText(value: unknown): string | undefined {
+function boundedToolText(value: unknown, secretValues: readonly string[] = []): string | undefined {
   if (value === undefined || value === null) return undefined;
-  const redacted = redactToolTelemetry(value);
+  const redacted = redactToolTelemetry(value, undefined, 0, secretValues);
   const text = typeof redacted === "string" ? redacted : JSON.stringify(redacted);
   return text && text.length > TOOL_DETAIL_MAX ? `${text.slice(0, TOOL_DETAIL_MAX)}...` : text;
 }
 
-function toolResultText(block: Record<string, unknown>): string | undefined {
+function toolResultText(block: Record<string, unknown>, secretValues: readonly string[] = []): string | undefined {
   const value = block.result ?? block.output ?? block.content ?? block.stdout ?? block.text;
   if (Array.isArray(value)) {
     const normalized = value
       .map((entry) => entry && typeof entry === "object" && typeof (entry as Record<string, unknown>).text === "string" ? (entry as Record<string, unknown>).text : entry)
       .filter((entry) => entry !== undefined && entry !== null);
-    return boundedToolText(normalized);
+    return boundedToolText(normalized, secretValues);
   }
-  return boundedToolText(value);
+  return boundedToolText(value, secretValues);
 }
 
 function toolExitCode(block: Record<string, unknown>): number | undefined {
@@ -1768,6 +1829,7 @@ export function mapCliEvent(
   emit: (e: Record<string, unknown>) => void,
   semanticToolEvents: Record<string, string> = DEFAULT_SEMANTIC_TOOL_EVENTS,
   state: SemanticToolState = createSemanticToolState(),
+  secretValues: readonly string[] = [],
 ): {
   finalText?: string;
   isError?: boolean;
@@ -1841,7 +1903,7 @@ export function mapCliEvent(
           if (validControlCallId(callId)) rememberObservedToolUse(state, callId, "control");
           warnings.push({ code: "unknown_control_tool", detail: "control_namespace" });
         } else {
-          emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: redactToolTelemetry(block.input) });
+          emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: redactToolTelemetry(block.input, undefined, 0, secretValues) });
           if (callId) {
             rememberToolHash(state.observedNonControlToolUseHashes, callId);
             state.observedNonControlToolUseNames.set(telemetryToolHash(callId), toolName || "tool");
@@ -1899,8 +1961,8 @@ export function mapCliEvent(
           if (!state.observedNonControlToolUseHashes.delete(nonControlHash)) continue;
           if (!state.settledNonControlToolUseHashes.has(nonControlHash)) {
             rememberToolHash(state.settledNonControlToolUseHashes, callId);
-            const result = toolResultText(block);
-            const error = block.is_error === true ? result : boundedToolText(block.error);
+            const result = toolResultText(block, secretValues);
+            const error = block.is_error === true ? result : boundedToolText(block.error, secretValues);
             emit({
               type: "tool.call.completed",
               callId,
@@ -1943,9 +2005,10 @@ export function mapCliEvent(
   }
   if (type === "result") {
     const text = typeof line.result === "string" ? line.result : "";
+    const safeText = redactSecretValues(text, secretValues);
     const isError = line.is_error === true || (line.subtype as string) !== "success";
-    emit({ type: "run.completed", text: text || (line.subtype as string) });
-    return { finalText: text, isError, errorDetail: isError ? text || `agent result: ${String(line.subtype)}` : undefined, semanticEvents, warnings };
+    emit({ type: "run.completed", text: safeText || (line.subtype as string) });
+    return { finalText: safeText, isError, errorDetail: isError ? safeText || `agent result: ${String(line.subtype)}` : undefined, semanticEvents, warnings };
   }
   return { semanticEvents, warnings };
 }
@@ -1999,6 +2062,7 @@ function semanticToolNameForEvent(event: Record<string, unknown>): string {
 export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
   const sandbox = AgentboxRunner.sandboxOf(handle);
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
+  const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
   // Compare capability maps by key, not JSON.stringify: agent_snapshot_json is
   // stored as Postgres JSONB, which does not preserve object key insertion order.
@@ -2095,10 +2159,18 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       throw new Error(`agent stdin 写入失败: ${msg}`);
     }
   };
-  await writeUserMessage(spec.input);
-  const disposeMessageSource = adapter.capabilities.incrementalMessages
-    ? await spec.onRunReady?.({ sendMessage: writeUserMessage })
-    : undefined;
+  const disposeMessageSource = await spec.onRunReady?.({
+    sendMessage: writeUserMessage,
+    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+  });
+  try {
+    // Register the Job-scoped runtime handler before the first prompt enters
+    // stdin, so a fast CLI cannot race its initial API discovery/call.
+    await writeUserMessage(spec.input);
+  } catch (error) {
+    if (typeof disposeMessageSource === "function") await disposeMessageSource();
+    throw error;
+  }
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
   const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
@@ -2171,25 +2243,27 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             if (adapterState.sessionId && !sessionId) sessionId = adapterState.sessionId;
             for (const parsed of decodedEvents) {
               const outcome = mapCliEvent(parsed, (e) => {
-                spec.onEvent?.(e);
-                if (e.type === "tool.call.started") {
-                  const input = e.input && typeof e.input === "object" ? e.input as Record<string, unknown> : {};
+                const safeEvent = redactToolTelemetry(e, undefined, 0, secretValues) as Record<string, unknown>;
+                spec.onEvent?.(safeEvent);
+                if (safeEvent.type === "tool.call.started") {
+                  const input = safeEvent.input && typeof safeEvent.input === "object" ? safeEvent.input as Record<string, unknown> : {};
                   const command = typeof input.command === "string" ? input.command : "";
                   if (/\.deepsonar[\\/]+control(?:-|\.)|control-events\.jsonl/i.test(command)) {
                     spec.onWarning?.({ code: "forbidden_control_file", detail: `command_length=${command.length}` });
                   }
                 }
-                if (e.type === "text.delta" && typeof e.delta === "string") {
-                  progressBuffer += e.delta as string;
+                if (safeEvent.type === "text.delta" && typeof safeEvent.delta === "string") {
+                  progressBuffer += safeEvent.delta as string;
                 }
-              }, semanticToolEvents, semanticToolState);
+              }, semanticToolEvents, semanticToolState, secretValues);
               for (const warning of outcome.warnings) spec.onWarning?.(warning);
               if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta"].includes(String(parsed.type))) {
                 spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
               }
               for (const event of outcome.semanticEvents) {
+                const safeSemanticEvent = redactToolTelemetry(event, undefined, 0, secretValues) as Record<string, unknown>;
                 try {
-                  await spec.onSemanticEvent?.(event, {
+                  await spec.onSemanticEvent?.(safeSemanticEvent, {
                     readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
                   });
                 } catch (error) {
@@ -2198,21 +2272,21 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                   // tool/error feedback and keep the CLI session alive — never
                   // collapse into fatal "语义事件处理失败" Job exit.
                   if (isAgentCorrectableSemanticError(error)) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    const toolHint = semanticToolNameForEvent(event);
+                    const message = redactSecretValues(error instanceof Error ? error.message : String(error), secretValues);
+                    const toolHint = semanticToolNameForEvent(safeSemanticEvent);
                     spec.onWarning?.({
                       code: "control_tool_host_rejected",
                       detail: message.length > 280 ? `${message.slice(0, 280)}…` : message,
                     });
                     // Surface on the process stream as a failed control tool so the
                     // live UI shows the rejection (MCP already answered success).
-                    spec.onEvent?.({
+                    spec.onEvent?.(redactToolTelemetry({
                       type: "tool.call.completed",
                       toolName: toolHint,
                       isError: true,
                       error: message,
                       result: message,
-                    });
+                    }, undefined, 0, secretValues) as Record<string, unknown>);
                     const nudge =
                       `【控制工具被平台拒绝 — 请修正后重试，本 Job 未退出】\n` +
                       (toolHint ? `工具: ${toolHint}\n` : "") +
@@ -2374,13 +2448,13 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   for (const path of spec.resultFiles ?? []) {
     try {
       const text = await readSandboxFileText(sandbox, path);
-      if (text !== null) files[path] = text;
+      if (text !== null) files[path] = redactSecretValues(text, secretValues);
     } catch {
       // 文件不存在 = agent 没写，容忍
     }
   }
   // 在沙箱销毁前按 CLI 专属规则归档原始 Session。捕获失败不覆盖 Agent 的主运行结果。
-  const session = sessionId
+  const rawSession = sessionId
     ? await CLI_SESSION_ADAPTERS[spec.provider].exportSession(
         {
           run: (command) => sandbox.run(command, { timeoutMs: 20_000, env: cliEnv }),
@@ -2394,6 +2468,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         captureError: error instanceof Error ? error.message : String(error),
       }))
     : undefined;
+  const session = rawSession
+    ? redactRuntimeSecrets(rawSession, secretValues) as SessionBundle
+    : undefined;
   await sandbox.run(`rm -rf -- ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
@@ -2404,13 +2481,13 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   }
 
   return {
-    text: finalText,
+    text: redactSecretValues(finalText, secretValues),
     files,
     session,
     ...(semanticError
-      ? { error: `语义事件处理失败: ${semanticError}` }
+      ? { error: `语义事件处理失败: ${redactSecretValues(semanticError, secretValues)}` }
       : runError
-        ? { error: runError }
+        ? { error: redactSecretValues(runError, secretValues) }
         : {}),
     ...(semanticError
       ? { errorKind: "semantic" as const }

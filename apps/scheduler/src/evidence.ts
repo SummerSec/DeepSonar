@@ -20,6 +20,65 @@ import {
 const gzipP = promisify(gzip);
 const otlpQueues = new Map<string, Promise<void>>();
 const otlpPaths = new Map<string, string>();
+const jobEvidenceSecrets = new Map<string, readonly string[]>();
+
+function exactSecrets(jobId: string): readonly string[] {
+  return jobEvidenceSecrets.get(jobId) ?? [];
+}
+
+function redactEvidenceText(value: string, secrets: readonly string[]): string {
+  let redacted = value;
+  for (const secret of secrets) {
+    if (secret) redacted = redacted.split(secret).join("[REDACTED]");
+  }
+  return redacted;
+}
+
+function redactEvidenceBuffer(value: Buffer, secrets: readonly string[]): Buffer {
+  let redacted = value;
+  const replacement = Buffer.from("[REDACTED]", "utf8");
+  for (const secret of secrets) {
+    const needle = Buffer.from(secret, "utf8");
+    if (needle.length === 0 || redacted.indexOf(needle) < 0) continue;
+    const chunks: Buffer[] = [];
+    let offset = 0;
+    let index = redacted.indexOf(needle, offset);
+    while (index >= 0) {
+      chunks.push(redacted.subarray(offset, index), replacement);
+      offset = index + needle.length;
+      index = redacted.indexOf(needle, offset);
+    }
+    chunks.push(redacted.subarray(offset));
+    redacted = Buffer.concat(chunks);
+  }
+  return redacted;
+}
+
+function redactEvidenceValue(value: unknown, secrets: readonly string[], depth = 0): unknown {
+  if (secrets.length === 0 || depth > 20) return value;
+  if (typeof value === "string") return redactEvidenceText(value, secrets);
+  if (Buffer.isBuffer(value)) return redactEvidenceBuffer(value, secrets);
+  if (Array.isArray(value)) return value.map((entry) => redactEvidenceValue(entry, secrets, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      redactEvidenceValue(entry, secrets, depth + 1),
+    ]));
+  }
+  return value;
+}
+
+/** Register exact, short-lived runtime secrets before any Job evidence can be written. */
+export function registerJobEvidenceSecrets(jobId: string, secrets: readonly string[]): void {
+  const normalized = [...new Set(secrets.filter((secret) => typeof secret === "string" && secret.length > 0))]
+    .sort((left, right) => right.length - left.length);
+  if (normalized.length > 0) jobEvidenceSecrets.set(jobId, normalized);
+  else jobEvidenceSecrets.delete(jobId);
+}
+
+export function clearJobEvidenceSecrets(jobId: string): void {
+  jobEvidenceSecrets.delete(jobId);
+}
 
 export interface EvidenceFileMeta {
   name: string;
@@ -95,7 +154,8 @@ export class JobEvidenceWriter {
    * uses the promise as its cursor visibility gate. */
   appendNormalized(event: Record<string, unknown>): Promise<number> {
     const seq = ++this.sequence;
-    const line = JSON.stringify({ ...event, at: Date.now(), attempt_id: this.safeAttemptId, seq }) + "\n";
+    const safeEvent = redactEvidenceValue(event, exactSecrets(this.jobId)) as Record<string, unknown>;
+    const line = JSON.stringify({ ...safeEvent, at: Date.now(), attempt_id: this.safeAttemptId, seq }) + "\n";
     this.queue = this.queue.then(async () => {
       // stream.ndjson 在 attempts/<id>/ 下，必须建 attempt 目录而不是仅 job 根目录
       await mkdir(this.attemptRoot, { recursive: true });
@@ -176,10 +236,11 @@ export function appendOtlpEnvelope(
 ): Promise<void> {
   const root = jobDir(jobId);
   const target = otlpPaths.get(jobId) ?? path.join(root, "unassigned-otlp.ndjson");
-  let payload: unknown = body;
+  const secrets = exactSecrets(jobId);
+  let payload: unknown = redactEvidenceValue(body, secrets);
   if (Buffer.isBuffer(body)) {
     if (body.byteLength > 2 * 1024 * 1024) return Promise.reject(new Error("OTLP payload 超过 2 MiB"));
-    payload = { encoding: "base64", data: body.toString("base64") };
+    payload = { encoding: "base64", data: (payload as Buffer).toString("base64") };
   }
   const line = JSON.stringify({ at: new Date().toISOString(), signal, content_type: contentType, payload }) + "\n";
   const next = (otlpQueues.get(jobId) ?? Promise.resolve()).then(async () => {

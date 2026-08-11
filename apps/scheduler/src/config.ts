@@ -138,6 +138,12 @@ export const config = {
     upstreamTimeoutMs: int("DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS", 3_000_000),
   },
 
+  /** Job-scoped runtime control API (never the management API). */
+  platformApi: {
+    /** Fixed sidecar URL reachable from restricted sandboxes; no localhost fallback. */
+    sandboxUrl: str("DEEPSONAR_API_SANDBOX_URL", "http://deepsonar-gateway-proxy:3100/control/v1"),
+  },
+
   /** 数据库连接治理（§12.3）：池上限、语句/空闲超时 */
   db: {
     poolMax: int("DEEPSONAR_DB_POOL_MAX", 10),
