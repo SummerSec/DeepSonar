@@ -120,7 +120,7 @@ pending → claimed → provisioning → running → succeeded
 
 每个可能产生外部副作用的动作都在 `job_attempt_effects` 记录 effect kind/id、intent、输入摘要与 `effect_pending`，观察到结果后写 settlement；所有 effect id/kind、JSON、错误文本均由应用层执行低基数和大小校验。默认 replay policy 为 `never`，进程崩溃或响应不确定时只能收口 `unknown`，不能凭 Promise 或重启自动重放。只有明确声明幂等的销毁动作可使用 `safe`。
 
-provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；资源身份、效果 settlement 与 `jobs.sandbox_id` 在同一个数据库事务落账。Job 终态和 Attempt 终态也在同一事务提交。启动 reconcile 只将“Attempt 为 preparing 且没有效果记录”的 Job 重排；其余 provision 未知窗口标记 orphan，清理容器、共享卷、短期 Token、画布/报告和 Plane，避免重复创建。
+provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；取消事务先提交 Job/Attempt 终态，随后通知当前进程的 provision 句柄。dispatcher 在调用 provider 前再次校验 Job 仍为 `provisioning`，runtime 在安装 abort listener 后立即重检 signal，避免取消落在句柄注册或监听安装窗口时丢失。资源身份、效果 settlement 与 `jobs.sandbox_id` 在同一个数据库事务落账。Job 终态和 Attempt 终态也在同一事务提交。启动 reconcile 只将“Attempt 为 preparing 且没有效果记录”的 Job 重排；其余 provision 未知窗口标记 orphan，清理容器、共享卷、短期 Token、画布/报告和 Plane，避免重复创建。
 
 ### 3.4 Agent 工具白名单（只提案）
 
@@ -454,7 +454,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 
 真实 Agent 的上下文不是调度器可以直接读取的 prompt 缓存，而是由 Scheduler、Runtime Adapter 和 Provider 共同形成的执行状态。Scheduler 在启动 Agent 前为当前 Attempt 生成稳定的 `context_id`，并以 `context_revision` 和摘要链记录输入变换：初始输入、GraphScope 投影、字符预算省略、摘要交接以及已明确观测到的 Provider 压缩。每个变换只持有输入/输出 digest、版本、预算、来源和有界省略说明，不保存 prompt、模型上下文或 Provider 原文。
 
-上下文状态同时写入活动 `job_attempts.state_json.runtime_context` 和 `jobs.payload_json.runtime_evidence.context`。前者与 `attempt_id` 绑定并在同一数据库事务中更新，后者保留其他运行证据字段。状态、变换链和压缩事件均有数量/字节上限；Job 详情 API 只投影最近的有界摘要。
+上下文状态同时写入活动 `job_attempts.state_json.runtime_context` 和 `jobs.payload_json.runtime_evidence.context`。前者与 `attempt_id` 绑定并在同一数据库事务中更新，后者保留其他运行证据字段。状态、变换链和压缩事件均有数量/字节上限；Job 详情 API 只投影最近的有界摘要，并单独投影最后一次已观测压缩的 event、boundary、budget、omission 和 source，避免诊断方反向扫描完整 manifest。
 
 Runtime Adapter 只有在收到包含完整上下文身份、revision、链 digest、边界及输入/输出 digest 的 `context.compacted` 事件时才上报已观测压缩。重复事件按 `event_id` 幂等，乱序、跨 Attempt、链不一致或身份不一致直接拒绝。Provider 仅暴露开始/结束标记，或适配器声明不支持时，状态分别标为 `unknown`/`unsupported`，不能伪造 revision 或输出 digest。
 

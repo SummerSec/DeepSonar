@@ -27,4 +27,4 @@ Scheduler 记录初始输入、GraphScope、预算省略和摘要交接；每个
 
 ## 可见性
 
-Job 详情只展示身份、revision、digest、预算、省略计数、压缩观测和有限阶段列表。UI 不展示上下文正文；`unknown`/`unsupported` 是诊断状态，不应被解释为已发生或已完成压缩。
+Job 详情只展示身份、revision、digest、预算、省略计数、压缩观测和有限阶段列表；`last_compaction` 额外给出最近一次已观测事件的 boundary、保留 tail 计数/digest、budget、omission 与 source。UI 不展示上下文正文；`unknown`/`unsupported` 是诊断状态，不应被解释为已发生或已完成压缩，也不会清除此前已经持久化的可观测边界。

@@ -105,8 +105,9 @@ Pi 的启动命令由适配器固定为 `pi --mode rpc --no-approve --no-extensi
 信号；Scheduler 仍要求已授权的 `mark_job_done` 通过完成门。临时网络错误在同一沙箱内最多
 按原会话恢复三次，恢复必须使用 `get_state` 返回并经过路径校验的精确 `sessionFile`。
 
-Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepsonar-control` Skill 引导
-调用 `GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list`，后续请求由短期 Job token 和
+Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepsonar-control` Skill 固定物化到
+`~/.pi/agent/skills/deepsonar-control/SKILL.md`，引导调用
+`GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list`；返回的每个获准 operation 直接携带输入 JSON Schema，后续请求由短期 Job token 和
 冻结 operation allowlist 再次鉴权。Provider 配置物化为 `.pi/agent/models.json`，模型请求
 统一改写到 Gateway，长期密钥不进入 snapshot、workspace、运行清单或 evidence。
 
