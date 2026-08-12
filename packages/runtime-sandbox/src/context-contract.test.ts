@@ -119,4 +119,7 @@ test("resume 身份必须完整匹配，任何 revision 或运行时差异都 fa
   assert.equal(mismatch.ok, false);
   if (!mismatch.ok) assert.equal(mismatch.code, "context_revision");
   assert.throws(() => assertContextResume(current, { ...current, runtime_identity: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" }), /CONTEXT_RESUME_IDENTITY_MISMATCH:runtime_identity/);
+  const bound = { ...current, session_id: "session-1", session_file: "/workspace/.pi/session.jsonl" };
+  assert.throws(() => assertContextResume(bound, { ...bound, session_id: "session-2" }), /CONTEXT_RESUME_IDENTITY_MISMATCH:session_id/);
+  assert.throws(() => assertContextResume(bound, { ...bound, session_file: "/workspace/.pi/other.jsonl" }), /CONTEXT_RESUME_IDENTITY_MISMATCH:session_file/);
 });

@@ -97,13 +97,15 @@ export interface ContextIdentity {
   adapter_version: string;
   runtime_identity: string;
   transform_chain_digest: string;
+  /** 首次结构化 init/get_state 观察到的稳定会话标识。 */
+  session_id?: string;
   /** Pi 恢复使用的精确 session 文件；不包含会话正文。 */
   session_file?: string;
 }
 
 export interface ContextResumeMismatch {
   ok: false;
-  code: "context_id" | "context_revision" | "adapter_id" | "adapter_version" | "runtime_identity" | "transform_chain_digest";
+  code: "context_id" | "context_revision" | "adapter_id" | "adapter_version" | "runtime_identity" | "transform_chain_digest" | "session_id" | "session_file";
   message: string;
 }
 
@@ -462,6 +464,8 @@ export function validateContextResume(
     "runtime_identity",
     "transform_chain_digest",
   ];
+  if (expected.session_id !== undefined) fields.push("session_id");
+  if (expected.session_file !== undefined) fields.push("session_file");
   for (const code of fields) {
     if (expected[code] !== actual[code]) {
       return { ok: false, code, message: `上下文恢复身份不一致：${code}` };

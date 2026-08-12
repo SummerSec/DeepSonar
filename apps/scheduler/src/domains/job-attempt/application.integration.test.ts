@@ -11,7 +11,13 @@ if (!testDatabaseUrl) {
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.AGENT_MODE = "fake";
     const { migrate, sql } = await import("../../db.js");
-    const { createAttempt, beginEffect, settleAttemptTerminal, requestAttemptCancel } = await import("./application.js");
+    const {
+      createAttempt,
+      beginEffect,
+      settleAttemptTerminal,
+      requestAttemptCancel,
+      updateAttemptSession,
+    } = await import("./application.js");
     await migrate();
     const projectId = randomUUID();
     const canvasId = `attempt-${randomUUID()}`;
@@ -28,6 +34,10 @@ if (!testDatabaseUrl) {
       ]);
       assert.equal(new Set(second.map((row) => String(row.id))).size, 1);
       await sql.begin(async (tx) => {
+        await updateAttemptSession(tx as unknown as typeof sql, firstAttemptId, {
+          sessionId: "integration-session-1",
+          sessionFile: "/workspace/.deepsonar-home/.pi/agent/integration-session-1.jsonl",
+        });
         await beginEffect(tx as unknown as typeof sql, firstAttemptId, {
           effectId: "provision:1",
           kind: "provision",
@@ -38,9 +48,11 @@ if (!testDatabaseUrl) {
         await requestAttemptCancel(tx as unknown as typeof sql, jobId, "测试取消");
         await settleAttemptTerminal(tx as unknown as typeof sql, jobId, "cancelled", { reason: "测试取消" }, "测试取消");
       });
-      const [attempt] = await sql`SELECT status, cancel_requested, phase FROM job_attempts WHERE id = ${firstAttemptId}`;
+      const [attempt] = await sql`SELECT status, cancel_requested, phase, state_json FROM job_attempts WHERE id = ${firstAttemptId}`;
       const [effect] = await sql`SELECT status FROM job_attempt_effects WHERE attempt_id = ${firstAttemptId} AND effect_id = 'provision:1'`;
       assert.deepEqual({ status: attempt.status, cancel_requested: attempt.cancel_requested, phase: attempt.phase, effect: effect.status }, { status: "cancelled", cancel_requested: true, phase: "terminal", effect: "unknown" });
+      assert.equal(attempt.state_json.session_id, "integration-session-1");
+      assert.equal(attempt.state_json.session_file, "/workspace/.deepsonar-home/.pi/agent/integration-session-1.jsonl");
     } finally {
       await sql`DELETE FROM jobs WHERE id = ${jobId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;

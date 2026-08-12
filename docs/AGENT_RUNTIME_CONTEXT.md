@@ -8,6 +8,7 @@
 
 - `context_revision`：变换链的单调版本；初始输入为 0。
 - `adapter_id`、`adapter_version`、`runtime_identity`：冻结运行时身份。
+- `session_id`、`session_file`：CLI 首次报告后绑定的实际会话身份；Pi 必须同时绑定两者。
 - `transform_chain_digest`：变换 manifest 的链摘要。
 - `transforms`：阶段、版本、输入/输出 digest、预算、来源和省略原因。
 - `compaction`：压缩观测为 `observed`、`unknown` 或 `unsupported`。
@@ -22,7 +23,7 @@ Scheduler 记录初始输入、GraphScope、预算省略和摘要交接；每个
 
 ## 恢复
 
-首次运行时捕获稳定 `sessionId` 后建立实际会话身份绑定；恢复前必须匹配 `context_id`、revision、adapter/runtime 身份和变换链摘要。适配器需要额外查询时可提供身份查询回调，但实际身份缺失或匹配失败都拒绝恢复。禁止选择 latest、创建新会话或以静态快照代替实际身份。Pi 的恢复还必须使用并匹配 `get_state` 返回的精确 `sessionFile`。
+首次运行时捕获稳定 `sessionId` 后，将实际会话身份绑定到活动 Attempt；Pi 同时持久化受治理工作区内的精确 `sessionFile`，后续报告不同会话或文件会立即拒绝。恢复前由 Scheduler 重新读取活动 Attempt 的 `state_json`，并匹配 `context_id`、revision、adapter/runtime 身份、变换链摘要和已绑定会话身份。实际身份来源缺失或匹配失败都拒绝恢复。禁止选择 latest、创建新会话、使用进程内缓存自证身份或以静态快照代替实际身份。
 
 ## 可见性
 

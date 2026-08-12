@@ -76,6 +76,7 @@ export type AttemptState = {
   current_effect_id: string | null;
   sandbox_id: string | null;
   session_id: string | null;
+  session_file: string | null;
   resource_labels: Record<string, string>;
   snapshot_identity: AttemptSnapshotIdentity;
   /** 仅保存上下文身份与变换摘要，不保存 prompt 或 provider 原文。 */
@@ -210,6 +211,7 @@ export function buildAttemptState(input: {
     current_effect_id: null,
     sandbox_id: null,
     session_id: null,
+    session_file: null,
     resource_labels: resourceLabels,
     snapshot_identity: snapshotIdentity,
     outcome: {},
@@ -224,6 +226,6 @@ export function canReplayEffect(
   persistedSnapshot: AttemptSnapshotIdentity,
 ): boolean {
   if (descriptor.replayPolicy !== "safe" || !SAFE_REPLAY_EFFECT_KINDS.has(descriptor.kind)) return false;
-  return ["snapshot_sha256", "agent_cli", "adapter_id", "adapter_version", "runtime_image_ref"]
+  return ["snapshot_sha256", "agent_cli", "adapter_id", "adapter_version", "runtime_image_ref", "runtime_image_key"]
     .every((key) => (currentSnapshot[key as keyof AttemptSnapshotIdentity] ?? null) === (persistedSnapshot[key as keyof AttemptSnapshotIdentity] ?? null));
 }

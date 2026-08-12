@@ -31,10 +31,35 @@ test("Attempt total state 身份和大小边界是确定的", () => {
 });
 
 test("默认 never 重放，只有显式 safe 效果且快照完全一致才可重放", () => {
-  const snapshot = { snapshot_sha256: "a".repeat(64), agent_cli: "claude-code", runtime_image_ref: "image@sha256:x" };
+  const snapshot = {
+    snapshot_sha256: "a".repeat(64),
+    agent_cli: "claude-code",
+    adapter_id: "claude-code",
+    adapter_version: "1.0.0",
+    runtime_image_ref: "image@sha256:x",
+    runtime_image_key: "deepsonar-base",
+  };
   assert.equal(canReplayEffect({ kind: "provision", replayPolicy: "never" }, snapshot, snapshot), false);
   assert.equal(canReplayEffect({ kind: "sandbox_destroy", replayPolicy: "safe" }, snapshot, snapshot), true);
-  assert.equal(canReplayEffect({ kind: "sandbox_destroy", replayPolicy: "safe" }, { ...snapshot, agent_cli: "codex" }, snapshot), false);
+  for (const key of [
+    "snapshot_sha256",
+    "agent_cli",
+    "adapter_id",
+    "adapter_version",
+    "runtime_image_ref",
+    "runtime_image_key",
+  ] as const) {
+    const changed = key === "snapshot_sha256"
+      ? "b".repeat(64)
+      : key === "runtime_image_ref"
+        ? "image@sha256:y"
+        : "changed";
+    assert.equal(
+      canReplayEffect({ kind: "sandbox_destroy", replayPolicy: "safe" }, { ...snapshot, [key]: changed }, snapshot),
+      false,
+      `${key} 不一致时必须拒绝 safe 重放`,
+    );
+  }
 });
 
 test("确定性故障点默认拒绝重放并保留 after-settlement 成功", () => {

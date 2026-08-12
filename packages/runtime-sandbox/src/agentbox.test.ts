@@ -34,11 +34,31 @@ import {
   writeTerminalInput,
   GATEWAY_PROXY_SCRIPT,
   AgentboxRunner,
+  mergeObservedSessionIdentity,
 } from "./agentbox.js";
 import { NoopRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 
 type GatewayResponse = { statusCode?: number; body: string };
+
+test("运行时会话身份首次绑定、延迟补充文件且禁止切换", () => {
+  const initial = mergeObservedSessionIdentity(undefined, { sessionId: "session-1" });
+  assert.deepEqual(initial, { sessionId: "session-1" });
+  const withFile = mergeObservedSessionIdentity(initial, {
+    sessionId: "session-1",
+    sessionFile: "/workspace/.deepsonar-home/.pi/agent/session.jsonl",
+  });
+  assert.deepEqual(withFile, {
+    sessionId: "session-1",
+    sessionFile: "/workspace/.deepsonar-home/.pi/agent/session.jsonl",
+  });
+  assert.equal(mergeObservedSessionIdentity(withFile, { sessionId: "session-1" }), withFile);
+  assert.throws(() => mergeObservedSessionIdentity(withFile, { sessionId: "session-2" }), /CONTEXT_SESSION_IDENTITY_CHANGED/);
+  assert.throws(
+    () => mergeObservedSessionIdentity(withFile, { sessionId: "session-1", sessionFile: "/workspace/other.jsonl" }),
+    /CONTEXT_SESSION_FILE_CHANGED/,
+  );
+});
 
 function requestGateway(
   port: number,

@@ -917,6 +917,8 @@ export interface RealAgentSpec {
     sessionId: string;
     sessionFile?: string;
   }) => ContextIdentity | Promise<ContextIdentity>;
+  /** 首次观察到稳定会话身份时持久化；同一运行内身份变化会失败关闭。 */
+  onSessionIdentity?: (input: { sessionId: string; sessionFile?: string }) => void | Promise<void>;
   /** telemetry/evidence/session 输出前必须精确脱敏的短期密钥。 */
   secretValues?: readonly string[];
   /** 非语义运行流告警；告警不会进入控制事件或写库。 */
@@ -946,6 +948,25 @@ export interface RuntimeErrorDetails {
     limit?: number;
     window_seconds?: number;
   };
+}
+
+export type ObservedSessionIdentity = { sessionId: string; sessionFile?: string };
+
+export function mergeObservedSessionIdentity(
+  current: ObservedSessionIdentity | undefined,
+  observed: { sessionId?: string; sessionFile?: string },
+): ObservedSessionIdentity | undefined {
+  const observedSessionId = observed.sessionId?.trim();
+  const observedSessionFile = observed.sessionFile?.trim();
+  if (!current) {
+    if (!observedSessionId) return undefined;
+    return { sessionId: observedSessionId, ...(observedSessionFile ? { sessionFile: observedSessionFile } : {}) };
+  }
+  if (observedSessionId && observedSessionId !== current.sessionId) throw new Error("CONTEXT_SESSION_IDENTITY_CHANGED");
+  if (current.sessionFile && observedSessionFile && observedSessionFile !== current.sessionFile) {
+    throw new Error("CONTEXT_SESSION_FILE_CHANGED");
+  }
+  return current.sessionFile || !observedSessionFile ? current : { ...current, sessionFile: observedSessionFile };
 }
 
 const RATE_LIMIT_BUCKETS = new Set(["progress", "standard", "terminal"]);
@@ -2201,13 +2222,12 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   });
 
   let expectedContextIdentity = spec.contextIdentity;
-  let observedResumeContextIdentity: ContextIdentity | undefined;
+  let observedSessionIdentity: ObservedSessionIdentity | undefined;
+  let persistedSessionIdentity: ObservedSessionIdentity | undefined;
   const assertResumeIdentity = async (): Promise<void> => {
     if (!expectedContextIdentity) return;
-    const actual = spec.getResumeContextIdentity
-      ? await spec.getResumeContextIdentity({ sessionId, ...(sessionFile ? { sessionFile } : {}) })
-      : observedResumeContextIdentity;
-    if (!actual) throw new Error("CONTEXT_RESUME_IDENTITY_UNKNOWN");
+    if (!spec.getResumeContextIdentity) throw new Error("CONTEXT_RESUME_IDENTITY_SOURCE_MISSING");
+    const actual = await spec.getResumeContextIdentity({ sessionId, ...(sessionFile ? { sessionFile } : {}) });
     assertContextResume(expectedContextIdentity, actual);
     if (spec.provider === "pi") {
       if (!sessionFile) throw new Error("CONTEXT_RESUME_SESSION_FILE_MISSING");
@@ -2293,10 +2313,25 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const bindObservedResumeIdentity = () => {
     if (!expectedContextIdentity || !sessionId) return;
     if (spec.provider === "pi" && !sessionFile) return;
-    observedResumeContextIdentity = {
-      ...expectedContextIdentity,
-      ...(spec.provider === "pi" ? { session_file: sessionFile } : {}),
-    };
+    if (!expectedContextIdentity.session_id) {
+      expectedContextIdentity = {
+        ...expectedContextIdentity,
+        session_id: sessionId,
+        ...(spec.provider === "pi" ? { session_file: sessionFile } : {}),
+      };
+    }
+  };
+  const observeSessionIdentity = async (observed: { sessionId?: string; sessionFile?: string }) => {
+    const next = mergeObservedSessionIdentity(observedSessionIdentity, observed);
+    if (!next) return;
+    observedSessionIdentity = next;
+    if (spec.provider === "pi" && !next.sessionFile) return;
+    if (persistedSessionIdentity?.sessionId === next.sessionId
+      && persistedSessionIdentity.sessionFile === next.sessionFile) return;
+    await spec.onSessionIdentity?.(next);
+    persistedSessionIdentity = next;
+    sessionId = next.sessionId;
+    sessionFile = next.sessionFile ?? "";
   };
   // 这些值只描述当前消费的进程；每次完成门恢复前必须重置，避免旧进程的
   // final text/result 掩盖后续进程退出。
@@ -2357,8 +2392,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             }
             const rawParsed = parsedLine.parsed;
             const decodedEvents = adapter.decodeOutput(rawParsed, adapterState);
-            if (adapterState.sessionId && !sessionId) sessionId = adapterState.sessionId;
-            if (adapterState.sessionFile && !sessionFile) sessionFile = adapterState.sessionFile;
+            await observeSessionIdentity({ sessionId: adapterState.sessionId, sessionFile: adapterState.sessionFile });
             bindObservedResumeIdentity();
             for (const parsed of decodedEvents) {
               if (parsed.type === "context.compacted" || parsed.type === "context.compaction_unknown") {
@@ -2456,8 +2490,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
               }
               // 首次捕获后保持 session ID 不变；恢复进程只能继续原会话，不能把
               // 后续输出中的其他 ID 提升为新的恢复目标。
-              if (outcome.sessionId && !sessionId) sessionId = outcome.sessionId;
-              if (outcome.sessionFile && !sessionFile) sessionFile = outcome.sessionFile;
+              await observeSessionIdentity({ sessionId: outcome.sessionId, sessionFile: outcome.sessionFile });
               bindObservedResumeIdentity();
               if (outcome.isError !== undefined) {
                 attemptTerminalResult = {
@@ -2498,9 +2531,16 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             }
           }
         }
-        if (piFramer) piFramer.finish();
       } catch (error) {
         processError = error;
+      } finally {
+        if (piFramer) {
+          try {
+            piFramer.finish();
+          } catch (error) {
+            processError ??= error;
+          }
+        }
       }
       const processErrorText = processError
         ? [runtimeErrorText(processError), attemptStderrTail].filter(Boolean).join(": ")

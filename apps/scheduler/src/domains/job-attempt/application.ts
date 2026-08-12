@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { validateContextState, type ContextState } from "@deepsonar/runtime-sandbox";
 import { sql } from "../../db.js";
 import {
@@ -107,6 +108,12 @@ async function updateState(
   const [row] = await db`SELECT * FROM job_attempts WHERE id = ${attemptId} FOR UPDATE`;
   if (!row) return null;
   const current = stateFromRow(row as AttemptRow);
+  if (patch.session_id !== undefined && current.session_id !== null && patch.session_id !== current.session_id) {
+    throw new Error("Attempt session_id 已绑定，禁止切换会话");
+  }
+  if (patch.session_file !== undefined && current.session_file !== null && patch.session_file !== current.session_file) {
+    throw new Error("Attempt session_file 已绑定，禁止切换会话文件");
+  }
   const next = { ...current, ...patch, ...statePatch } as AttemptState;
   assertBoundedJson(next, "attempt state", ATTEMPT_MAX_STATE_BYTES);
   const [updated] = await db`
@@ -224,6 +231,27 @@ export async function updateAttemptResource(
     patch.session_id = resource.sessionId === null ? null : String(resource.sessionId).slice(0, 255);
   }
   return updateState(db, attemptId, patch);
+}
+
+export async function updateAttemptSession(
+  db: AttemptDatabase,
+  attemptId: string,
+  session: { sessionId: string; sessionFile?: string },
+): Promise<AttemptRow | null> {
+  const sessionId = String(session.sessionId).trim();
+  if (!sessionId || sessionId.length > 255) throw new Error("Attempt session_id 格式非法或超出长度限制");
+  const sessionFile = session.sessionFile === undefined ? undefined : String(session.sessionFile).trim();
+  if (sessionFile !== undefined && (
+    !sessionFile.startsWith("/workspace/")
+    || path.posix.normalize(sessionFile) !== sessionFile
+    || sessionFile.length > 1024
+  )) {
+    throw new Error("Attempt session_file 必须是 workspace 内的有界绝对路径");
+  }
+  return updateState(db, attemptId, {
+    session_id: sessionId,
+    ...(sessionFile === undefined ? {} : { session_file: sessionFile }),
+  });
 }
 
 export async function updateAttemptContext(

@@ -101,6 +101,7 @@ import {
   createJobRuntimeContext,
   persistJobRuntimeContext,
 } from "./domains/context/index.js";
+import { updateAttemptSession } from "./domains/job-attempt/application.js";
 
 function invalidToolPayload(
   tool: PlatformToolName,
@@ -1463,6 +1464,26 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       env,
       input: initialInput,
       contextIdentity: runtimeContextIdentity,
+      onSessionIdentity: async (session) => {
+        await sql.begin((tx) => updateAttemptSession(tx as unknown as typeof sql, attemptId, session));
+      },
+      getResumeContextIdentity: async () => {
+        const [row] = await sql`SELECT state_json FROM job_attempts WHERE id = ${attemptId} AND status = 'active'`;
+        const state = row?.state_json && typeof row.state_json === "object"
+          ? row.state_json as Record<string, unknown>
+          : null;
+        const storedContext = state?.runtime_context;
+        const storedSessionId = state?.session_id;
+        if (!storedContext || typeof storedContext !== "object" || typeof storedSessionId !== "string") {
+          throw new Error("CONTEXT_RESUME_IDENTITY_UNKNOWN");
+        }
+        const identity = contextIdentity(storedContext as ContextState);
+        return {
+          ...identity,
+          session_id: storedSessionId,
+          ...(typeof state?.session_file === "string" ? { session_file: state.session_file } : {}),
+        };
+      },
       onContextEvent: async (event) => {
         runtimeContext = applyRuntimeContextEvent(runtimeContext, event);
         await persistJobRuntimeContext(sql, jobId, runtimeContext);
