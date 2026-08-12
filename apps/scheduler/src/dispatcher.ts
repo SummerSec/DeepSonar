@@ -25,7 +25,9 @@ import {
   beginEffect,
   createOrGetActiveAttempt,
   getActiveAttempt,
+  interruptProvision,
   markEffectUnknown,
+  registerProvisionCancellation,
   settleEffect,
   settleAttemptTerminal,
   updateAttemptResource,
@@ -717,16 +719,33 @@ async function runJob(jobId: string) {
       const cancellableRunner = runner as typeof runner & {
         cancelProvision?: (input: { jobId: string; attemptId: string }) => Promise<void>;
       };
-      handle = await withProvisionTimeout(
-        runner.provision(provisionInput),
-        config.timeouts.provisionSec * 1000,
-        `provision 超时（${config.timeouts.provisionSec}s）`,
-        () => {
-          provisionAbort.abort();
-          void cancellableRunner.cancelProvision?.({ jobId, attemptId: attemptId! }).catch(() => {});
-        },
-        (lateHandle) => runner.destroy(lateHandle).catch(() => {}),
-      );
+      const unregisterProvision = registerProvisionCancellation(jobId, {
+        attemptId: attemptId!,
+        abortController: provisionAbort,
+        cancelProvision: cancellableRunner.cancelProvision
+          ? () => cancellableRunner.cancelProvision!({ jobId, attemptId: attemptId! })
+          : undefined,
+      });
+      try {
+        const [stillProvisioning] = await sql`
+          SELECT id FROM jobs
+          WHERE id = ${jobId} AND status = 'provisioning'`;
+        if (!stillProvisioning) {
+          await interruptProvision(jobId, attemptId!);
+          throw new Error(`job ${jobId} 在 provision 启动前已离开 provisioning 状态`);
+        }
+        handle = await withProvisionTimeout(
+          runner.provision(provisionInput),
+          config.timeouts.provisionSec * 1000,
+          `provision 超时（${config.timeouts.provisionSec}s）`,
+          () => {
+            void interruptProvision(jobId, attemptId!);
+          },
+          (lateHandle) => runner.destroy(lateHandle).catch(() => {}),
+        );
+      } finally {
+        unregisterProvision();
+      }
     } catch (error) {
       await sql.begin(async (tx) => {
         await markEffectUnknown(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);

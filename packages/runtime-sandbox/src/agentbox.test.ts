@@ -30,6 +30,7 @@ import {
   dockerSocketPath,
   ensureRuntimeHome,
   buildTerminalShellCommand,
+  bindProvisionAbortSignal,
   terminalShellCommand,
   writeTerminalInput,
   GATEWAY_PROXY_SCRIPT,
@@ -159,6 +160,22 @@ test("Noop provision 遵守 Attempt 标识并响应取消信号", async () => {
     /provision 已取消/,
   );
   assert.equal(typeof (new AgentboxRunner() as { cancelProvision?: unknown }).cancelProvision, "function");
+});
+
+test("provision abort 绑定不丢失已发生的取消且只清理一次", () => {
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  let immediateCalls = 0;
+  bindProvisionAbortSignal(alreadyAborted.signal, () => { immediateCalls += 1; });
+  assert.equal(immediateCalls, 1);
+
+  const delayed = new AbortController();
+  let delayedCalls = 0;
+  const unbind = bindProvisionAbortSignal(delayed.signal, () => { delayedCalls += 1; });
+  delayed.abort();
+  delayed.abort();
+  assert.equal(delayedCalls, 1);
+  unbind();
 });
 
 test("terminal input writes raw tab, backspace, and Ctrl+C bytes without translation", async () => {

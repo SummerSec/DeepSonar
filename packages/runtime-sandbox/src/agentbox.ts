@@ -610,6 +610,22 @@ function hardenCreateContainer(
   };
 }
 
+export function bindProvisionAbortSignal(
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): () => void {
+  if (!signal) return () => {};
+  let handled = false;
+  const abort = () => {
+    if (handled) return;
+    handled = true;
+    onAbort();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  return () => signal.removeEventListener("abort", abort);
+}
+
 export class AgentboxRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
     if (input.signal?.aborted) throw new Error("provision 已取消");
@@ -651,18 +667,17 @@ export class AgentboxRunner implements SandboxRunner {
     });
     provisioningSandboxes.set(provisionKey, sandbox);
     let aborted = false;
-    const abort = () => {
+    const unbindAbort = bindProvisionAbortSignal(input.signal, () => {
       aborted = true;
       void sandbox.delete().catch(() => {});
-    };
-    input.signal?.addEventListener("abort", abort, { once: true });
+    });
     hardenCreateContainer(sandbox, input.limits, extraHosts, readonlyBinds);
     try {
       await sandbox.findOrProvision();
       if (aborted || input.signal?.aborted) throw new Error("provision 已取消");
     } finally {
       provisioningSandboxes.delete(provisionKey);
-      input.signal?.removeEventListener("abort", abort);
+      unbindAbort();
     }
     const id = sandbox.id ?? `unknown-${input.jobId}`;
     sandboxes.set(id, sandbox);

@@ -10,6 +10,7 @@ import type {
   ProvisionReconcileResult,
 } from "./ports.js";
 import {
+  interruptProvision,
   markAttemptInterrupted,
   requestAttemptCancel,
   settleAttemptTerminal,
@@ -265,7 +266,7 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
 
     /** 单 Job 取消：只处理活动状态，并清理 lease/heartbeat 元数据。 */
     async cancelJob(jobId, error) {
-      return atomically(async (tx) => {
+      const row = await atomically(async (tx) => {
         await requestAttemptCancel(tx, jobId, error);
         const [row] = await tx`
           UPDATE jobs SET status = 'cancelled', finished_at = now(),
@@ -275,6 +276,8 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
         if (row) await settleAttemptTerminal(tx, jobId, "cancelled", { reason: error }, error);
         return row ? (row as JobLifecycleRow) : null;
       });
+      if (row) await interruptProvision(jobId);
+      return row;
     },
 
     /**
@@ -282,7 +285,7 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
      * 只对返回行执行沙箱、Token 和画布副作用。
      */
     async cancelJobsOnCanvas(canvasId, error, preserveExistingError = false, clearRuntimeMetadata = true) {
-      return atomically(async (tx) => {
+      const cancelled = await atomically(async (tx) => {
         const result = preserveExistingError
         ? clearRuntimeMetadata
           ? await tx`
@@ -316,11 +319,13 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
         }
         return rows(result as unknown as JobLifecycleRow[]);
       });
+      await Promise.all(cancelled.map((row) => interruptProvision(String(row.id))));
+      return cancelled;
     },
 
     /** 按冻结快照 ID 执行运行镜像撤销取消。 */
     async cancelJobsForRuntimeImageVersion(versionId, error) {
-      return atomically(async (tx) => {
+      const cancelled = await atomically(async (tx) => {
         const result = await tx`
           UPDATE jobs SET status = 'cancelled', finished_at = now(), error = ${error}
           WHERE agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${versionId}
@@ -332,6 +337,8 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
         }
         return rows(result as unknown as JobLifecycleRow[]);
       });
+      await Promise.all(cancelled.map((row) => interruptProvision(String(row.id))));
+      return cancelled;
     },
   });
 }

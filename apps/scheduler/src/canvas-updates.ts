@@ -4,6 +4,21 @@ import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-atte
 
 type Sender = (message: string) => Promise<void>;
 
+export async function deliverCanvasMessage(input: {
+  send: () => Promise<void>;
+  settleInjected: () => Promise<void>;
+  settleUnknown: (error: unknown) => Promise<void>;
+}): Promise<"injected" | "unknown"> {
+  try {
+    await input.send();
+    await input.settleInjected();
+    return "injected";
+  } catch (error) {
+    await input.settleUnknown(error);
+    return "unknown";
+  }
+}
+
 function safeText(value: unknown, maxChars: number): string {
   return String(value ?? "")
     .replace(/[\u0000-\u001f\u007f]/gu, " ")
@@ -112,9 +127,9 @@ data: ${preview}`;
     }
     if (!planned) continue;
     const plannedId = String(planned.id);
-    try {
-      await send(message);
-      await sql.begin(async (tx) => {
+    await deliverCanvasMessage({
+      send: () => send(message),
+      settleInjected: () => sql.begin(async (tx) => {
         await tx`
           UPDATE canvas_broadcasts
              SET delivery_status = 'injected', delivered_at = now(), updated_at = now()
@@ -123,20 +138,21 @@ data: ${preview}`;
           status: "settled",
           outcome: { delivery_status: "injected" },
         });
-      });
-    } catch (error) {
-      const safeError = safeText(error instanceof Error ? error.message : error, 500);
-      await sql.begin(async (tx) => {
-        await tx`
-          UPDATE canvas_broadcasts
-             SET delivery_status = 'unknown', error = ${safeError}, updated_at = now()
-           WHERE id = ${plannedId} AND delivery_status = 'planned'`;
-        await markEffectUnknown(tx as unknown as typeof sql, String(target.attempt_id), effectId, safeError);
-      }).catch((settlementError) => {
-        console.error(`[canvas-update] 投递结果无法结算 effect=${effectId}:`, settlementError);
-      });
-      console.warn(`[canvas-update] 向运行中 job ${jobId} 的追加消息结果无法确认:`, safeError);
-    }
+      }).then(() => undefined),
+      settleUnknown: async (error) => {
+        const safeError = safeText(error instanceof Error ? error.message : error, 500);
+        await sql.begin(async (tx) => {
+          await tx`
+            UPDATE canvas_broadcasts
+               SET delivery_status = 'unknown', error = ${safeError}, updated_at = now()
+             WHERE id = ${plannedId} AND delivery_status = 'planned'`;
+          await markEffectUnknown(tx as unknown as typeof sql, String(target.attempt_id), effectId, safeError);
+        }).catch((settlementError) => {
+          console.error(`[canvas-update] 投递结果无法结算 effect=${effectId}:`, settlementError);
+        });
+        console.warn(`[canvas-update] 向运行中 job ${jobId} 的追加消息结果无法确认:`, safeError);
+      },
+    });
   }
 }
 

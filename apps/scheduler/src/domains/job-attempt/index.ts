@@ -44,3 +44,8 @@ export {
   type AttemptDatabase,
   type AttemptRow,
 } from "./application.js";
+export {
+  interruptProvision,
+  registerProvisionCancellation,
+  type ProvisionCancellation,
+} from "./provision-cancellation.js";
