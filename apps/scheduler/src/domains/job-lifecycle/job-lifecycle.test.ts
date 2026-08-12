@@ -151,7 +151,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
     },
     reconcileProvisioning: async () => {
       calls.push("reconcile-provision");
-      return [{ id: "reset" }];
+      return { requeued: [{ id: "reset" }], orphaned: [] };
     },
     reconcileRunning: async () => {
       calls.push("reconcile-running");
@@ -176,7 +176,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
   assert.deepEqual(await app.reapExecutionTimeout(), [{ id: "timeout" }]);
   assert.deepEqual(await app.reapProvisionTimeout(7), [{ id: "provision" }]);
   assert.deepEqual(await app.reapLeaseOrphans(), [{ id: "orphan" }]);
-  assert.deepEqual(await app.reconcileProvisioning(), [{ id: "reset" }]);
+  assert.deepEqual(await app.reconcileProvisioning(), { requeued: [{ id: "reset" }], orphaned: [] });
   assert.deepEqual(await app.reconcileRunning(), [{ id: "orphan" }]);
   assert.equal((await app.cancelJob("cancel", "reason"))?.status, "cancelled");
   assert.deepEqual(await app.cancelJobsOnCanvas("canvas", "reason", true), [{ id: "canvas-job" }]);

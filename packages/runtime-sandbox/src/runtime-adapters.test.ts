@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
+  PiJsonlFramer,
+  parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,
   getAgentCliRuntimeAdapter,
@@ -36,8 +38,8 @@ function fakeSandbox(): {
   return { sandbox, commands, envs, runCommands };
 }
 
-test("the built-in registry is explicit, immutable, and capability complete", () => {
-  assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "codex", "open-code"]);
+test("内置注册表明确、不可变且能力完整", () => {
+  assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "codex", "open-code", "pi"]);
   assert.ok(REQUIRED_RUNTIME_CAPABILITIES.includes("contextCompaction"));
   for (const id of Object.keys(AGENT_CLI_RUNTIME_ADAPTERS)) {
     const adapter = getAgentCliRuntimeAdapter(id);
@@ -57,7 +59,118 @@ test("the built-in registry is explicit, immutable, and capability complete", ()
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-openharmony-audit").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("codex", "deepsonar-chrome-fuzz").id, "codex");
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.controlMcp, false);
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.platformControlApi, true);
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.codex.capabilities.platformControlApi, false);
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
+});
+
+test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {
+  const record = { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "前\u2028中\u2029后" } };
+  const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\r\n`);
+  const framer = new PiJsonlFramer();
+  const lines: string[] = [];
+  for (let i = 0; i < bytes.length; i++) lines.push(...framer.push(bytes.slice(i, i + 1)));
+  assert.deepEqual(lines, [JSON.stringify(record)]);
+  assert.deepEqual(framer.finish(), []);
+  assert.deepEqual(parsePiJsonlRecord(lines[0]!), record);
+});
+
+test("Pi JSONL framing 对半帧、非法 UTF-8、空行和未知事件失败关闭", () => {
+  const truncated = new PiJsonlFramer();
+  truncated.push('{"type":"response"');
+  assert.throws(() => truncated.finish(), /PI_RPC_TRUNCATED_FRAME/);
+  const invalidUtf8 = new PiJsonlFramer();
+  invalidUtf8.push(new Uint8Array([0xe2, 0x82]));
+  assert.throws(() => invalidUtf8.finish(), /PI_RPC_INVALID_UTF8/);
+  assert.throws(() => parsePiJsonlRecord(""), /PI_RPC_EMPTY_FRAME/);
+  assert.throws(() => parsePiJsonlRecord(JSON.stringify({ type: "future_event" })), /PI_RPC_UNEXPECTED_EVENT/);
+  assert.throws(() => parsePiJsonlRecord("[]"), /PI_RPC_RECORD_NOT_OBJECT/);
+});
+
+test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const fake = fakeSandbox();
+  const context = {
+    sandbox: fake.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "initial",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    model: "claude-sonnet-4-5",
+  } as const;
+  await adapter.start(context);
+  await adapter.resume({ ...context, input: "follow", sessionId: "pi-s1", sessionFile: "/workspace/.deepsonar-home/.pi/agent/s.jsonl" });
+  assert.match(fake.commands[0] ?? "", /^pi --mode rpc --no-approve --no-extensions --session-dir \/workspace\/\.deepsonar-home\/\.pi\/agent/);
+  assert.doesNotMatch(fake.commands[0] ?? "", /mcp|control-mcp/);
+  assert.match(fake.commands[1] ?? "", /--session '\/workspace\/\.deepsonar-home\/\.pi\/agent\/s\.jsonl'/);
+  assert.equal(adapter.encodeGetState?.(), '{"type":"get_state"}\n');
+  assert.equal(adapter.encodeSteer?.("即时消息"), '{"type":"steer","message":"即时消息"}\n');
+  assert.equal(adapter.encodeFollowUp?.("后续消息"), '{"type":"follow_up","message":"后续消息"}\n');
+});
+
+test("Pi 默认关闭扩展，受治理扩展才通过显式路径加载", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const fake = fakeSandbox();
+  const context = {
+    sandbox: fake.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "initial",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    piExtensions: ["/workspace/.deepsonar-home/.pi/agent/extensions/deepsonar-control.mjs"],
+  } as const;
+  await adapter.start(context);
+  assert.match(fake.commands[0] ?? "", /--no-extensions/);
+  assert.match(fake.commands[0] ?? "", /-e '\/workspace\/\.deepsonar-home\/\.pi\/agent\/extensions\/deepsonar-control\.mjs'/);
+  assert.throws(
+    () => adapter.start({ ...context, piExtensions: ["/workspace/.pi/extensions/project.mjs"] }),
+    /PI_EXTENSION_PATH_INVALID/,
+  );
+});
+
+test("适配器只接受带完整身份的压缩事件，缺字段时记录未知", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
+  const state = {
+    contextIdentity: {
+      context_id: "ctx_1234567890abcdef1234567890abcdef",
+      context_revision: 0,
+      adapter_id: "codex",
+      adapter_version: adapter.version,
+      runtime_identity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      transform_chain_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    },
+  };
+  const unknown = adapter.decodeOutput({ type: "context.compacted", event_id: "compact-1" }, state);
+  assert.deepEqual(unknown, [{ type: "context.compaction_unknown", source: "adapter", reason: "压缩事件缺少完整上下文身份或摘要" }]);
+  const observed = adapter.decodeOutput({
+    type: "context.compacted",
+    event_id: "compact-1",
+    context_id: state.contextIdentity.context_id,
+    context_revision: 1,
+    adapter_id: state.contextIdentity.adapter_id,
+    adapter_version: state.contextIdentity.adapter_version,
+    runtime_identity: state.contextIdentity.runtime_identity,
+    transform_chain_digest: state.contextIdentity.transform_chain_digest,
+    policy: "automatic",
+    boundary: { kind: "tail", retained_tail_count: 2, retained_tail_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+    input_digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    output_digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  }, state);
+  assert.equal(observed[0]?.type, "context.compacted");
+  assert.equal(observed[0]?.context_id, state.contextIdentity.context_id);
+});
+
+test("Pi 只有 agent_settled 产生结算信号，agent_end 不产生成功结果", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  assert.deepEqual(adapter.decodeOutput({ type: "response", command: "get_state", success: true, data: { sessionId: "pi-s1", sessionFile: "/workspace/.deepsonar-home/.pi/agent/s.jsonl" } }, state), []);
+  const update = adapter.decodeOutput({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "完成" } }, state);
+  assert.equal(contentType(update[0]), "text");
+  assert.deepEqual(adapter.decodeOutput({ type: "agent_end" }, state), [{ type: "agent_end" }]);
+  const settled = adapter.decodeOutput({ type: "agent_settled" }, state);
+  assert.equal(settled[0]?.type, "agent_settled");
+  assert.equal(settled[0]?.session_file, "/workspace/.deepsonar-home/.pi/agent/s.jsonl");
 });
 
 test("Claude keeps the existing stream-json protocol", () => {
@@ -65,6 +178,13 @@ test("Claude keeps the existing stream-json protocol", () => {
   assert.match(adapter.encodeInput("hello"), /"type":"user"/);
   assert.deepEqual(adapter.decodeOutput({ type: "system", subtype: "init", session_id: "s1" }, {}), [
     { type: "system", subtype: "init", session_id: "s1" },
+  ]);
+});
+
+test("Claude provider 压缩标记无法验证时明确记录未知", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
+  assert.deepEqual(adapter.decodeOutput({ type: "compaction_start" }, {}), [
+    { type: "context.compaction_unknown", source: "provider", reason: "provider_event:compaction_start" },
   ]);
 });
 

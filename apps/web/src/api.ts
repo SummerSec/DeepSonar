@@ -188,6 +188,81 @@ export interface JobEvent {
   created_at: string;
 }
 
+export interface ContextDiagnostics {
+  context_id: string;
+  context_revision: number;
+  attempt_id: string | null;
+  adapter_id: string;
+  adapter_version: string;
+  runtime_identity: string;
+  transform_chain_digest: string;
+  transforms: Array<{
+    stage: string;
+    version: number;
+    revision: number;
+    input_digest: string;
+    output_digest: string;
+    budget: { unit: string; limit: number; observed: number | null } | null;
+    omission: { kind: string; count: number | null; reason: string; truncated: boolean } | null;
+    source: string;
+  }>;
+  compaction: {
+    observation: "observed" | "unknown" | "unsupported";
+    source: string;
+    policy: string;
+    reason: string | null;
+    last_event_id: string | null;
+  };
+}
+
+export interface JobAttemptSummary {
+  id: string;
+  attempt_no: number;
+  status: string;
+  phase: string;
+  replay_policy: string;
+  cancel_requested: boolean;
+  sandbox_id: string | null;
+  session_id: string | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JobEffectSummary {
+  id: string;
+  attempt_id: string;
+  effect_id: string;
+  effect_kind: string;
+  status: "planned" | "effect_pending" | "settled" | "unknown";
+  error: string | null;
+  effect_started_at: string | null;
+  settled_at: string | null;
+}
+
+export interface CanvasBroadcastSummary {
+  id: string;
+  effect_id: string;
+  delivery_status: "planned" | "injected" | "failed" | "unknown";
+  source_node_type: string;
+  title: string;
+  planned_at: string;
+  delivered_at: string | null;
+}
+
+export interface JobUsageSummary {
+  id: string;
+  effect_id: string;
+  provider: string;
+  model: string;
+  total_tokens: number;
+  adjustment_tokens: number;
+  settlement_status: "settled" | "unknown" | "not_reported";
+  observed_at: string;
+}
+
 export interface JobDetail {
   job: {
     id: string;
@@ -201,8 +276,14 @@ export interface JobDetail {
   };
   events: JobEvent[];
   findings: { id: string; severity: string; title: string; verify_status: string }[];
+  attempts: JobAttemptSummary[];
+  effects: JobEffectSummary[];
+  broadcasts: CanvasBroadcastSummary[];
+  usage: JobUsageSummary[];
   /** Structured module omissions copied from the frozen snapshot (old jobs: []). */
   missing_modules: unknown[];
+  /** 上下文生命周期的有界摘要；缺失表示旧 Job 尚未记录。 */
+  context_diagnostics: ContextDiagnostics | null;
 }
 
 /** 全局 / 项目 Job 列表 */
@@ -626,7 +707,7 @@ export interface BindableRoleConfig {
   project_id: string | null;
   project_name: string | null;
   scope: "global" | "project";
-  agent_cli: "claude-code" | "open-code" | "codex";
+  agent_cli: "claude-code" | "open-code" | "codex" | "pi";
   model: string | null;
   /** null = 系统默认底座（deepsonar-base） */
   runtime_image_key: string | null;
@@ -658,7 +739,7 @@ export interface ProviderCredential {
   public_metadata_json: Record<string, unknown>;
   model_catalog_json?: string[];
   /** CC Switch-style profile: which CLI this settingsConfig targets. */
-  agent_cli?: "claude-code" | "codex" | "open-code" | null;
+  agent_cli?: "claude-code" | "codex" | "open-code" | "pi" | null;
   /** CLI settingsConfig projection. Secret values are returned as [已保存密钥]. */
   settings_config_json?: Record<string, unknown>;
   /** Manager-only meta (apiFormat, fullUrl, …). */
@@ -903,7 +984,7 @@ export interface SandboxLimitsOverride {
 }
 
 export type RoleConfigInput = {
-  agent_cli: "claude-code" | "open-code" | "codex";
+  agent_cli: "claude-code" | "open-code" | "codex" | "pi";
   model?: string | null;
   /** 思考强度；null = provider 默认 */
   reasoning?: ReasoningEffort | null;
@@ -933,7 +1014,7 @@ export interface RoleConfigView {
   id: string;
   role_id: string;
   project_id: string | null;
-  agent_cli: "claude-code" | "open-code" | "codex";
+  agent_cli: "claude-code" | "open-code" | "codex" | "pi";
   model: string | null;
   reasoning: ReasoningEffort | null;
   env_keys: string[];
@@ -992,8 +1073,11 @@ export interface TaskReport {
   id: string;
   canvas_id: string;
   project_id: string;
+  version: number;
   report_job_id: string | null;
   status: "pending" | "generating" | "succeeded" | "failed";
+  input_uri: string;
+  input_sha256: string;
   /** 结构化摘要：confirmed / needs_human / 未自动验证分栏，SARIF 只含 confirmed */
   summary_json: {
     confirmed_count?: number;
@@ -1010,6 +1094,42 @@ export interface TaskReport {
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type TaskReportAvailabilityReason =
+  | "canvas_not_found"
+  | "root_not_found"
+  | "root_not_ready"
+  | "active_work"
+  | "no_role_work"
+  | "findings_not_converged"
+  | "report_not_dispatched";
+
+export interface TaskReportBlockingFinding {
+  finding_id: string;
+  title: string;
+  severity: string | null;
+  verify_status: string;
+  issue: string;
+}
+
+export interface TaskReportAvailability {
+  reason: TaskReportAvailabilityReason;
+  root_status: string | null;
+  min_verify_severity: string | null;
+  blockers: string[];
+  blocking_findings: TaskReportBlockingFinding[];
+}
+
+export class TaskReportUnavailableError extends Error {
+  readonly availability: TaskReportAvailability;
+
+  constructor(availability: TaskReportAvailability) {
+    super("任务报告尚未生成");
+    this.name = "TaskReportUnavailableError";
+    this.availability = availability;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
 }
 
 export interface FindingReport {
@@ -1051,6 +1171,39 @@ async function get<T>(path: string): Promise<T> {
     throw new Error(detail ? `${path} -> ${res.status}: ${detail}` : `${path} -> ${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+async function getTaskReport(path: string): Promise<TaskReport> {
+  const res = await fetch(`/api${path}`, { headers: authHeaders() });
+  if (!res.ok) {
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      /* 忽略非 JSON 错误响应 */
+    }
+    if (res.status === 404) {
+      try {
+        const availability = await get<TaskReportAvailability>(`${path}/availability`);
+        throw new TaskReportUnavailableError(availability);
+      } catch (availabilityError) {
+        if (availabilityError instanceof TaskReportUnavailableError) throw availabilityError;
+        if (
+          body &&
+          typeof body === "object" &&
+          "reason" in body &&
+          "blocking_findings" in body &&
+          Array.isArray((body as { blocking_findings?: unknown }).blocking_findings)
+        ) {
+          throw new TaskReportUnavailableError(body as TaskReportAvailability);
+        }
+      }
+    }
+    const err = body as { error?: string; message?: string; error_code?: string } | undefined;
+    const detail = [err?.error_code, err?.error ?? err?.message].filter(Boolean).join(": ");
+    throw new Error(detail ? `${path} -> ${res.status}: ${detail}` : `${path} -> ${res.status}`);
+  }
+  return res.json() as Promise<TaskReport>;
 }
 
 async function uploadSharedAsset(path: string, file: File, key: string, labels: Record<string, string> = {}): Promise<SharedAsset> {
@@ -1581,10 +1734,15 @@ export const api = {
     send<RoleConfigView>("PUT", `/projects/${projectId}/role-configs/${roleId}`, body),
   deleteProjectRoleConfig: (projectId: string, roleId: string) =>
     send<{ ok: boolean }>("DELETE", `/projects/${projectId}/role-configs/${roleId}`),
-  /** 任务报告（§8）：404 = 还没有报告（Hub 宣布分析完成后自动生成） */
-  canvasReport: (canvasId: string) => get<TaskReport>(`/canvases/${canvasId}/report`),
+  /** 任务报告（§8）：404 返回服务端完成门阻塞原因 */
+  canvasReport: (canvasId: string) => getTaskReport(`/canvases/${canvasId}/report`),
+  canvasReports: (canvasId: string) => get<TaskReport[]>(`/canvases/${canvasId}/reports`),
+  canvasReportAvailability: (canvasId: string) =>
+    get<TaskReportAvailability>(`/canvases/${canvasId}/report/availability`),
   retryReport: (canvasId: string) =>
     send<{ ok: boolean; report_id: string }>("POST", `/canvases/${canvasId}/report/retry`),
+  refreshReport: (canvasId: string) =>
+    send<{ ok: boolean; report_id?: string; reason?: string }>("POST", `/canvases/${canvasId}/report/refresh`),
   /** 报告 Markdown 正文（text/markdown；带认证头） */
   reportMarkdown: async (reportId: string): Promise<string> => {
     const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/markdown`, { headers: authHeaders() });
@@ -1782,7 +1940,7 @@ export const api = {
   credentialProviders: () => get<ProviderAccountCatalogItemView[]>("/credentials/providers"),
   bindableRoleConfigs: () => get<BindableRoleConfig[]>("/role-configs/bindable"),
   /** Provider 绑定列表：仅改 RoleConfig.agent_cli，不整表替换 */
-  updateRoleConfigAgentCli: (roleConfigId: string, agent_cli: "claude-code" | "open-code" | "codex") =>
+  updateRoleConfigAgentCli: (roleConfigId: string, agent_cli: "claude-code" | "open-code" | "codex" | "pi") =>
     send<{ id: string; agent_cli: string; version: number; role_id: string; project_id: string | null }>(
       "PATCH",
       `/role-configs/${roleConfigId}/agent-cli`,
@@ -1802,7 +1960,7 @@ export const api = {
     secret: string;
     project_id?: string | null;
     metadata?: Record<string, unknown>;
-    agent_cli?: "claude-code" | "codex" | "open-code" | null;
+    agent_cli?: "claude-code" | "codex" | "open-code" | "pi" | null;
     settings_config?: Record<string, unknown>;
     meta?: Record<string, unknown>;
   }) => send<ProviderCredential>("POST", "/credentials", c),
@@ -1814,7 +1972,7 @@ export const api = {
       provider?: string;
       project_id?: string | null;
       metadata?: Record<string, unknown>;
-      agent_cli?: "claude-code" | "codex" | "open-code" | null;
+      agent_cli?: "claude-code" | "codex" | "open-code" | "pi" | null;
       settings_config?: Record<string, unknown>;
       meta?: Record<string, unknown>;
     },
@@ -1828,7 +1986,7 @@ export const api = {
   credentialModels: (id: string) =>
     send<CredentialModels>("POST", `/credentials/${id}/models`),
   credentialModelsPreview: (input: {
-    agent_cli?: "claude-code" | "codex" | "open-code";
+      agent_cli?: "claude-code" | "codex" | "open-code" | "pi";
     provider: string;
     secret: string;
     base_url?: string;

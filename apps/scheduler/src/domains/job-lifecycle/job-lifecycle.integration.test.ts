@@ -17,6 +17,7 @@ if (!testDatabaseUrl) {
 
     const { migrate, sql } = await import("../../db.js");
     const { createSqlJobLifecycleApplication } = await import("./application.js");
+    const { createAttempt } = await import("../job-attempt/application.js");
     await migrate();
 
     const projectId = randomUUID();
@@ -85,12 +86,15 @@ if (!testDatabaseUrl) {
 
       const resetClaimed = await insertJob("claimed");
       const resetProvision = await insertJob("provisioning");
+      const safeRequeue = await insertJob("provisioning");
+      await createAttempt(sql, safeRequeue, { agent_cli: "claude-code" });
       const reset = await app.reconcileProvisioning();
-      assert.deepEqual(new Set(reset.map((row) => row.id)), new Set([resetClaimed, resetProvision]));
+      assert.deepEqual(new Set(reset.requeued.map((row) => row.id)), new Set([safeRequeue]));
+      assert.deepEqual(new Set(reset.orphaned.map((row) => row.id)), new Set([resetClaimed, resetProvision]));
       const [resetRow] = await sql`SELECT status, claimed_at, lease_expires_at FROM jobs WHERE id = ${resetClaimed}`;
       assert.deepEqual(
         { status: resetRow.status, claimed_at: resetRow.claimed_at, lease_expires_at: resetRow.lease_expires_at },
-        { status: "pending", claimed_at: null, lease_expires_at: null },
+        { status: "orphan", claimed_at: null, lease_expires_at: null },
       );
 
       const bootRunningId = await insertJob("running");

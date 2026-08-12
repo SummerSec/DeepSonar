@@ -45,6 +45,7 @@ const cliLabel: Record<string, string> = {
   "claude-code": "Claude Code",
   "open-code": "OpenCode",
   codex: "Codex",
+  pi: "Pi Coding Agent",
 };
 
 /** Resolve hub / system / role even if bindable API omits role_kind (legacy scheduler). */
@@ -95,6 +96,20 @@ function modelsFromSettingsConfig(credential: ProviderCredential | null): string
     ? settings.models as Record<string, unknown>
     : {};
   for (const model of Object.keys(openCodeModels)) push(model);
+  const piProviders = settings.providers && typeof settings.providers === "object" && !Array.isArray(settings.providers)
+    ? settings.providers as Record<string, unknown>
+    : {};
+  for (const rawProvider of Object.values(piProviders)) {
+    if (!rawProvider || typeof rawProvider !== "object" || Array.isArray(rawProvider)) continue;
+    const models = (rawProvider as Record<string, unknown>).models;
+    if (Array.isArray(models)) {
+      for (const rawModel of models) {
+        if (rawModel && typeof rawModel === "object" && !Array.isArray(rawModel)) push((rawModel as Record<string, unknown>).id);
+      }
+    } else if (models && typeof models === "object" && !Array.isArray(models)) {
+      for (const model of Object.keys(models as Record<string, unknown>)) push(model);
+    }
+  }
   if (typeof settings.config === "string") {
     const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     push(match?.[1] || match?.[2]);
@@ -1173,6 +1188,7 @@ export function ProviderAccountFlow({
                     <option value="claude-code">claude-code（Claude Code）</option>
                     <option value="codex">codex（Codex）</option>
                     <option value="open-code">open-code（OpenCode）</option>
+                    <option value="pi">pi（Pi Coding Agent）</option>
                   </select>
                 </label>
               </div>
@@ -1209,7 +1225,7 @@ export function ProviderAccountFlow({
                   const isSystem = kind === "system";
                   const isHub = kind === "hub";
                   const isBuiltin = isBuiltinBindableRole(roleConfig);
-                  const roleCli = (["claude-code", "codex", "open-code"].includes(roleConfig.agent_cli)
+                  const roleCli = (["claude-code", "codex", "open-code", "pi"].includes(roleConfig.agent_cli)
                     ? roleConfig.agent_cli
                     : "claude-code") as AgentCli;
                   const incompatible = Boolean(
@@ -1303,6 +1319,7 @@ export function ProviderAccountFlow({
                           <option value="claude-code">claude-code</option>
                           <option value="codex">codex</option>
                           <option value="open-code">open-code</option>
+                          <option value="pi">pi</option>
                         </select>
                       </label>
                       {roleConfig.project_id ? (

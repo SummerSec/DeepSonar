@@ -30,10 +30,10 @@ The current registry contains:
 | `claude-code` | Claude Code 2.1.220 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | `stream_event` thinking/text deltas and complete assistant blocks |
 | `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default; no unsupported adapter flag is added | Official reasoning summary/item events when emitted |
 | `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | Structured `reasoning`/`thinking` parts when emitted |
+| `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `message_update` 的结构化文本/思考事件 |
 
-All three adapters declare `contextCompaction: true` and are admitted only when
-the context policy is supported. Claude and OpenCode do not rely on the Codex
-policy or receive the Claude-specific environment variable.
+四个适配器均声明 `contextCompaction: true`，只有上下文策略受支持时才准入。Pi
+不依赖 MCP 控制通道；其平台控制能力通过 Job 级 HTTP Capability API 提供。
 
 宿主只恢复明确的临时上游故障（HTTP 408/429/500/502/503/504、timeout 和
 network）。它在同一沙箱内按已捕获的精确 session ID 最多恢复三次，并使用
@@ -92,6 +92,28 @@ arbitrary command template is accepted. The existing host MCP control flow is
 unchanged: only validated `tool_use`/`tool_result` pairs can release semantic
 events, with bounded pending state and redacted telemetry. Provider credentials
 remain outside the snapshot and are not emitted by adapter codecs.
+
+## Pi Coding Agent RPC（#140）
+
+Pi 的启动命令由适配器固定为 `pi --mode rpc --no-approve --no-extensions
+--session-dir /workspace/.deepsonar-home/.pi/agent`。初始提示通过 RPC 输入发送；运行中
+消息使用 `steer` 或 `follow_up`，启动后先发送 `get_state` 获取会话身份。每个输入块都交给
+同一个持久 `TextDecoder`，再按 LF 分帧；CRLF 会去掉回车，U+2028/U+2029 仍保留为数据。
+半帧、非法 UTF-8、空行、超大行和未知事件均 fail closed，`finish()` 会显式拒绝尾部残帧。
+
+`agent_end`、进程退出和普通响应都不能宣告成功，只有 `agent_settled` 提供 Agent 侧静止
+信号；Scheduler 仍要求已授权的 `mark_job_done` 通过完成门。临时网络错误在同一沙箱内最多
+按原会话恢复三次，恢复必须使用 `get_state` 返回并经过路径校验的精确 `sessionFile`。
+
+Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepsonar-control` Skill 引导
+调用 `GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list`，后续请求由短期 Job token 和
+冻结 operation allowlist 再次鉴权。Provider 配置物化为 `.pi/agent/models.json`，模型请求
+统一改写到 Gateway，长期密钥不进入 snapshot、workspace、运行清单或 evidence。
+
+项目 `.pi` 目录不会自动加载。RoleConfig 只能冻结受治理的 `.pi/agent/extensions/` 文件；
+默认保留 `--no-extensions`，批准的扩展才通过单独的 `--extension` 参数加载。运行镜像清单
+和 Dockerfile 固定 `@earendil-works/pi-coding-agent@0.84.1` 及其 integrity，构建阶段会
+实际查询 npm integrity 并在不匹配时失败。
 
 ## Verification
 

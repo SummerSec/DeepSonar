@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 const runner = new AgentboxRunner();
 const handle = await runner.provision({
   jobId: "test-hardening-0001",
+  attemptId: "attempt-hardening-0001",
   image: "alpine:latest",
   network: "none",
   limits: { cpu: 1.5, memoryMiB: 256, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },

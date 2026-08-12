@@ -212,7 +212,16 @@ export async function resolveAgentSnapshotForJob(
         reasoning: roleReasoning,
       },
     });
-    if (materialized.length > 0) configFiles = materialized;
+    if (materialized.length > 0) {
+      const materializedPaths = new Set(materialized.map((item) => item.path));
+      configFiles = agentCli === "pi"
+        ? [
+            ...materialized,
+            ...((manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>)
+              .filter((item) => !materializedPaths.has(item.path))),
+          ]
+        : materialized;
+    }
     if (!roleModel) model = resolveEffectiveModel({ roleModel: null, agentCli, settingsConfig: snapshotSettingsConfig }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
     if (!roleReasoning) {
       const fromSettings = extractReasoningFromSettings(agentCli, snapshotSettingsConfig);

@@ -9,7 +9,7 @@ import {
   platformApiBaseUrl,
 } from "./platform-control-skill.js";
 
-test("platform control skill is immutable by reserved name", () => {
+test("平台控制 Skill 按保留名称保持不可替换", () => {
   const injected = injectPlatformControlSkill([
     { name: "review", files: { "SKILL.md": "role" } },
     { name: DEEPSONAR_CONTROL_SKILL_NAME, files: { "SKILL.md": "role override" } },
@@ -19,17 +19,17 @@ test("platform control skill is immutable by reserved name", () => {
   assert.equal(injected[0]?.name, "review");
 });
 
-test("platform skill content documents the Job-scoped API route siblings", () => {
+test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   const content = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
-  assert.match(content, /GET \$DEEPSONAR_API_BASE_URL\/capabilities/);
+  assert.match(content, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
   assert.match(content, /GET \$DEEPSONAR_API_BASE_URL\/openapi\.json/);
   assert.match(content, /POST \$DEEPSONAR_API_BASE_URL\/operations\/:operationId/);
   assert.match(content, /Idempotency-Key/);
-  assert.match(content, /MCP.*API.*二选一|one transport/i);
-  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "145ecdc6a4f8edb52502fb11beae910666f7aa975e2411572888b44104bf3b0a");
+  assert.match(content, /MCP.*API.*二选一/);
+  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "a00dde56b685f7aaef335b33b389264a06046a736093d4897822f623324e02c8");
 });
 
-test("platform API base is sandbox reachable and points at the Job", () => {
+test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {
   assert.equal(
     platformApiBaseUrl({ baseUrl: "http://deepsonar-gateway-proxy:3100/control/v1/", jobId: "job-1" }),
     "http://deepsonar-gateway-proxy:3100/control/v1/jobs/job-1",
@@ -40,7 +40,7 @@ test("platform API base is sandbox reachable and points at the Job", () => {
   );
 });
 
-test("frozen platform operations preserve the exact snapshot order and values", () => {
+test("冻结的平台操作保持快照顺序和精确值", () => {
   const snapshot = ["emit_progress", "publish_shared_asset", "mark_job_done"];
   assert.deepEqual(frozenPlatformOperations(snapshot), snapshot);
 });

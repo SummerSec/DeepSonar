@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 25);
+INSERT INTO schema_meta (id, version) VALUES ('global', 27);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -109,6 +109,83 @@ CREATE UNIQUE INDEX jobs_one_active_verify_per_finding
   WHERE type = 'verify_finding'
     AND finding_id IS NOT NULL
     AND status IN ('pending','claimed','provisioning','running','waiting_human');
+
+-- 调度器拥有的单次 Job 执行程序计数器。
+-- Job 仍是宏观生命周期权威；此行只解释当前执行位置，Agent 不能写入。
+CREATE TABLE job_attempts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  attempt_no int NOT NULL,
+  status text NOT NULL DEFAULT 'active',
+  phase text NOT NULL DEFAULT 'preparing',
+  replay_policy text NOT NULL DEFAULT 'never',
+  cancel_requested boolean NOT NULL DEFAULT false,
+  cancel_requested_at timestamptz,
+  snapshot_identity_json jsonb NOT NULL DEFAULT '{}',
+  state_json jsonb NOT NULL DEFAULT '{}',
+  sandbox_id text,
+  session_id text,
+  resource_labels_json jsonb NOT NULL DEFAULT '{}',
+  outcome_json jsonb NOT NULL DEFAULT '{}',
+  error text,
+  started_at timestamptz,
+  finished_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_attempts_attempt_no_check CHECK (attempt_no >= 1),
+  CONSTRAINT job_attempts_status_check CHECK (
+    status IN ('active', 'succeeded', 'failed', 'cancelled', 'timeout', 'orphan', 'interrupted', 'unknown')
+  ),
+  CONSTRAINT job_attempts_phase_check CHECK (
+    phase IN (
+      'preparing', 'provision.effect_pending', 'provisioned',
+      'agent.ready', 'agent.effect_pending', 'agent.suspended',
+      'settling', 'terminal', 'interrupted', 'unknown'
+    )
+  ),
+  CONSTRAINT job_attempts_replay_policy_check CHECK (replay_policy IN ('never', 'safe')),
+  CONSTRAINT job_attempts_cancel_timestamp_check CHECK (
+    cancel_requested = false OR cancel_requested_at IS NOT NULL
+  ),
+  UNIQUE (job_id, attempt_no)
+);
+CREATE UNIQUE INDEX job_attempts_one_active_idx ON job_attempts (job_id)
+  WHERE status = 'active';
+CREATE INDEX job_attempts_job_idx ON job_attempts (job_id, attempt_no DESC);
+CREATE INDEX job_attempts_recovery_idx ON job_attempts (status, phase, updated_at)
+  WHERE status = 'active';
+
+-- 对重复敏感的外部效果使用 intent/effect/settlement 账本。
+-- effect_pending 是唯一预期的未知窗口；默认禁止重放，safe 仍需应用层声明。
+CREATE TABLE job_attempt_effects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  attempt_id uuid NOT NULL REFERENCES job_attempts(id) ON DELETE CASCADE,
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  effect_id text NOT NULL,
+  effect_kind text NOT NULL,
+  step int NOT NULL DEFAULT 1,
+  replay_policy text NOT NULL DEFAULT 'never',
+  status text NOT NULL DEFAULT 'planned',
+  input_digest text,
+  resource_identity_json jsonb NOT NULL DEFAULT '{}',
+  intent_json jsonb NOT NULL DEFAULT '{}',
+  settlement_json jsonb NOT NULL DEFAULT '{}',
+  evidence_ref text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  effect_started_at timestamptz,
+  settled_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_attempt_effects_step_check CHECK (step >= 1),
+  CONSTRAINT job_attempt_effects_replay_policy_check CHECK (replay_policy IN ('never', 'safe')),
+  CONSTRAINT job_attempt_effects_status_check CHECK (
+    status IN ('planned', 'effect_pending', 'settled', 'unknown')
+  ),
+  UNIQUE (attempt_id, effect_id)
+);
+CREATE INDEX job_attempt_effects_attempt_idx ON job_attempt_effects (attempt_id, step, created_at);
+CREATE INDEX job_attempt_effects_recovery_idx ON job_attempt_effects (status, replay_policy, updated_at)
+  WHERE status IN ('effect_pending', 'unknown');
 
 CREATE TABLE event_dedup (
   event_id text PRIMARY KEY,
@@ -249,13 +326,16 @@ CREATE TABLE finding_verification_rounds (
 CREATE INDEX finding_verification_rounds_finding_idx
   ON finding_verification_rounds (finding_id, attempt DESC);
 
--- 任务级最终报告（一画布至多一份有效报告）
+-- 任务级版本化报告；每次收敛输入变化生成新版本，默认读取最新版本。
 CREATE TABLE task_reports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  canvas_id text NOT NULL UNIQUE REFERENCES canvases(id),
+  canvas_id text NOT NULL REFERENCES canvases(id),
   project_id uuid NOT NULL REFERENCES projects(id),
+  version integer NOT NULL,
   report_job_id uuid REFERENCES jobs(id),
   status text NOT NULL DEFAULT 'pending',
+  input_uri text NOT NULL,
+  input_sha256 text NOT NULL,
   summary_json jsonb NOT NULL DEFAULT '{}',
   markdown_uri text,
   markdown_sha256 text,
@@ -264,10 +344,15 @@ CREATE TABLE task_reports (
   error text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT task_reports_version_check CHECK (version >= 1),
   CONSTRAINT task_reports_status_check
-    CHECK (status IN ('pending', 'generating', 'succeeded', 'failed'))
+    CHECK (status IN ('pending', 'generating', 'succeeded', 'failed')),
+  UNIQUE (canvas_id, version)
 );
 CREATE INDEX task_reports_project_idx ON task_reports (project_id, created_at DESC);
+CREATE INDEX task_reports_canvas_version_idx ON task_reports (canvas_id, version DESC);
+CREATE UNIQUE INDEX task_reports_active_canvas_uniq
+  ON task_reports (canvas_id) WHERE status IN ('pending', 'generating');
 
 -- 单 Finding 版本化报告；与 task_reports 双轨，默认读取最新版本。
 CREATE TABLE finding_reports (
@@ -484,6 +569,83 @@ CREATE TABLE canvas_changes (
   CONSTRAINT canvas_changes_projection_check CHECK (op = 'delete' OR projection_json IS NOT NULL)
 );
 CREATE INDEX canvas_changes_entity_idx ON canvas_changes (canvas_id, entity_type, entity_id, revision DESC);
+
+-- 画布增量投递账本。planned 在发送前落库，崩溃后的未决记录只能标记
+-- unknown，不得因为重启而把同一条事实再次注入 Worker。
+CREATE TABLE canvas_broadcasts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  canvas_id text NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+  source_job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  source_node_id uuid NOT NULL REFERENCES canvas_nodes(id) ON DELETE CASCADE,
+  target_job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  attempt_id uuid REFERENCES job_attempts(id) ON DELETE SET NULL,
+  effect_id text NOT NULL,
+  source_node_type text NOT NULL,
+  target_role text,
+  target_role_kind text,
+  attempt int NOT NULL DEFAULT 1,
+  delivery_status text NOT NULL DEFAULT 'planned',
+  title text NOT NULL DEFAULT '',
+  preview text NOT NULL DEFAULT '',
+  payload_sha256 text NOT NULL,
+  payload_chars int NOT NULL DEFAULT 0,
+  error text,
+  planned_at timestamptz NOT NULL DEFAULT now(),
+  delivered_at timestamptz,
+  deadline_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT canvas_broadcasts_node_type_check CHECK (source_node_type IN ('fact', 'finding')),
+  CONSTRAINT canvas_broadcasts_attempt_check CHECK (attempt >= 1 AND attempt <= 1000000),
+  CONSTRAINT canvas_broadcasts_status_check CHECK (
+    delivery_status IN ('planned', 'injected', 'failed', 'unknown')
+  ),
+  CONSTRAINT canvas_broadcasts_effect_id_check CHECK (effect_id ~ '^[a-z][a-z0-9_.:-]{1,127}$'),
+  CONSTRAINT canvas_broadcasts_title_check CHECK (length(title) <= 200 AND title !~ '[[:cntrl:]]'),
+  CONSTRAINT canvas_broadcasts_preview_check CHECK (length(preview) <= 6000 AND preview !~ '[[:cntrl:]]'),
+  CONSTRAINT canvas_broadcasts_payload_hash_check CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT canvas_broadcasts_payload_chars_check CHECK (payload_chars BETWEEN 0 AND 6000),
+  CONSTRAINT canvas_broadcasts_error_check CHECK (error IS NULL OR (length(error) <= 500 AND error !~ '[[:cntrl:]]')),
+  UNIQUE (source_node_id, target_job_id, attempt),
+  UNIQUE (target_job_id, effect_id)
+);
+CREATE INDEX canvas_broadcasts_canvas_idx ON canvas_broadcasts (canvas_id, created_at DESC);
+CREATE INDEX canvas_broadcasts_attempt_idx ON canvas_broadcasts (attempt_id, delivery_status, updated_at)
+  WHERE attempt_id IS NOT NULL;
+
+-- Model Gateway 用量的追加式账本。只记录计费维度和受控计数，不记录
+-- prompt、completion、请求头、凭据或沙箱内容；job_tokens 仍是额度熔断缓存。
+CREATE TABLE job_usage_ledger (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  attempt_id uuid NOT NULL REFERENCES job_attempts(id) ON DELETE CASCADE,
+  effect_id text NOT NULL,
+  request_no int NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL DEFAULT '',
+  input_tokens bigint NOT NULL DEFAULT 0,
+  output_tokens bigint NOT NULL DEFAULT 0,
+  total_tokens bigint NOT NULL DEFAULT 0,
+  adjustment_tokens bigint NOT NULL DEFAULT 0,
+  settlement_status text NOT NULL DEFAULT 'settled',
+  source text NOT NULL DEFAULT 'gateway_response',
+  observed_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_usage_ledger_effect_id_check CHECK (effect_id ~ '^[a-z][a-z0-9_.:-]{1,127}$'),
+  CONSTRAINT job_usage_ledger_request_no_check CHECK (request_no >= 1 AND request_no <= 1000000000),
+  CONSTRAINT job_usage_ledger_provider_check CHECK (length(provider) BETWEEN 1 AND 100 AND provider !~ '[[:cntrl:]]'),
+  CONSTRAINT job_usage_ledger_model_check CHECK (length(model) <= 200 AND model !~ '[[:cntrl:]]'),
+  CONSTRAINT job_usage_ledger_counts_check CHECK (
+    input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0
+    AND adjustment_tokens BETWEEN -1000000000000 AND 1000000000000
+  ),
+  CONSTRAINT job_usage_ledger_status_check CHECK (settlement_status IN ('settled', 'unknown', 'not_reported')),
+  CONSTRAINT job_usage_ledger_source_check CHECK (source IN ('gateway_response', 'gateway_stream', 'gateway_error')),
+  UNIQUE (attempt_id, effect_id)
+);
+CREATE INDEX job_usage_ledger_job_idx ON job_usage_ledger (job_id, observed_at DESC);
+CREATE INDEX job_usage_ledger_project_idx ON job_usage_ledger (project_id, observed_at DESC);
 
 CREATE TABLE skill_sources (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

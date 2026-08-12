@@ -1,6 +1,6 @@
 /** Agent CLI 原始 Session 发现适配器；不同 CLI 不共享目录假设。 */
 
-export type SupportedAgentCli = "claude-code" | "codex" | "open-code";
+export type SupportedAgentCli = "claude-code" | "codex" | "open-code" | "pi";
 
 export interface SessionDiscoveryRuntime {
   run(command: string): Promise<{ exitCode: number; stdout: string; stderr: string }>;
@@ -23,7 +23,7 @@ export interface SessionBundle {
 
 export interface AgentCliSessionAdapter {
   cli: SupportedAgentCli;
-  exportSession(runtime: SessionDiscoveryRuntime, sessionId: string): Promise<SessionBundle>;
+  exportSession(runtime: SessionDiscoveryRuntime, sessionId: string, sessionFile?: string): Promise<SessionBundle>;
 }
 
 const MAX_SESSION_BYTES = 32 * 1024 * 1024;
@@ -126,8 +126,39 @@ const openCodeAdapter: AgentCliSessionAdapter = {
   },
 };
 
+const piAdapter: AgentCliSessionAdapter = {
+  cli: "pi",
+  async exportSession(runtime, sessionId, sessionFile) {
+    if (!sessionFile || !sessionFile.startsWith("/workspace/.deepsonar-home/.pi/agent/")) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: "Pi 未返回受治理的 sessionFile，拒绝猜测会话路径" };
+    }
+    const normalized = sessionFile.replaceAll("\\", "/");
+    if (normalized.includes("/../") || normalized.endsWith("/..")) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: "Pi sessionFile 路径越界，拒绝归档" };
+    }
+    const content = await runtime.readText(normalized);
+    if (content === null) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: `未找到 Pi sessionFile ${sessionId}` };
+    }
+    if (Buffer.byteLength(content) > MAX_SESSION_BYTES) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: "Pi Session 文件超过 32 MiB，已停止归档" };
+    }
+    return {
+      cli: "pi",
+      sessionId,
+      artifacts: [{
+        name: safeName(normalized, sessionId, 0),
+        sourcePath: normalized,
+        content,
+        kind: "main",
+      }],
+    };
+  },
+};
+
 export const CLI_SESSION_ADAPTERS: Record<SupportedAgentCli, AgentCliSessionAdapter> = {
   "claude-code": claudeAdapter,
   codex: codexAdapter,
   "open-code": openCodeAdapter,
+  pi: piAdapter,
 };

@@ -20,6 +20,8 @@ ARG KALI_MIRROR=https://kali.download/kali
 ARG CLAUDE_CODE_VERSION=2.1.220
 ARG CODEX_VERSION=0.147.0
 ARG OPENCODE_VERSION=1.18.15
+ARG PI_CODING_AGENT_VERSION=0.84.1
+ARG PI_CODING_AGENT_INTEGRITY=sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==
 ARG NODE_VERSION=22.23.2
 ARG UV_VERSION=0.11.32
 ARG UV_AMD64_SHA256=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
@@ -68,10 +70,13 @@ RUN set -eu; arch="$(dpkg --print-architecture)"; \
     tar -xJf "$node_archive" -C /usr/local --strip-components=1; \
     rm "$node_archive"
 
-RUN npm install -g --omit=dev --no-audit --no-fund \
+RUN set -eu; \
+  test "$(npm view @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} dist.integrity)" = "$PI_CODING_AGENT_INTEGRITY"; \
+  npm install -g --omit=dev --no-audit --no-fund \
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
   @openai/codex@${CODEX_VERSION} \
   opencode-ai@${OPENCODE_VERSION} \
+  @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
   && npm cache clean --force
 
 RUN set -eu; arch="$(dpkg --print-architecture)"; \

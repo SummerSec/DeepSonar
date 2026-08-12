@@ -74,6 +74,7 @@ const HELP: Record<string, string> = {
   deepsonar_graph_yaml_chars_total: "Total characters injected through bounded graph projections by scope",
   deepsonar_control_input_warnings_total: "Malformed runtime lines and forbidden control-file attempts",
   deepsonar_event_rate_limited_total: "Semantic events rejected by the persistent per-Job rate limiter, by bucket",
+  deepsonar_usage_ledger_write_failures_total: "Model Gateway usage ledger write failures, by source",
 };
 
 /** Prometheus text exposition */

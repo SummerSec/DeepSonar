@@ -1,6 +1,6 @@
 # TODO：画布过程真相增强（广播可见性 + 连线/布局第一性）
 
-> 状态：待实现（本文是实现规格，不代表代码已落地）
+> 状态：A 部分已落地（四态投递账本、Attempt 关联、启动未知对账）；B 连线/布局仍按本文后续分期推进。
 > 本文含两块独立但同属「画布可读性」的方案，可分期落地：
 > **A. Fact/Finding 广播可见性** — 投递账本 + 日志/实时流 + 前端
 > **B. 连线规则与布局第一性收敛** — 边模型统一 + 语义布局
@@ -13,7 +13,7 @@
 - **A 值得先做，但不是简单加日志**：采用独立投递账本、`planned→injected|failed|unknown` 状态机和自然幂等键；承认 send 前后崩溃无法 exactly-once，Phase 1 偏向不重复注入。当前进程内订阅不能证明全局 `no_subscriber`。
 - **B 不应重写调度语义**：权威边类型是八类，不是原草案的六类。先修契约漂移、数据库唯一性和 Report 可视连接，再做按因果 round 的服务端权威布局；保留现有 Verify/Hub/Report 门禁。
 - **当前任务不是失败样本**：31 个 pending Verify、2 个 running Test 和暂时没有 Report 都符合任务仍在收敛中的状态；本方案不得以此触发取消、重试或热重建。
-- **发布必须等任务收敛**：A/B 的 schema 项合并为一次 v13，先备份和恢复演练，再重建/恢复；不在运行中任务上直接实施。
+- **发布必须等任务收敛**：schema 基线已按仓库当前版本纪律重建；后续 B 的结构变更仍须先备份和恢复演练，不在运行中任务上直接实施。
 
 ---
 
@@ -108,6 +108,10 @@ emit_fact/finding → canvas_nodes INSERT
 
 ## 数据模型
 
+> 当前实现已落地四态投递账本：`planned`、`injected`、`failed`、`unknown`。
+> 目标在发送前不满足活动 Attempt、同画布或权限策略时直接从候选集合排除，不生成
+> 不生成其他跳过状态行，也不把“没有账本”解释为“确认未投递”。
+
 ### 方案 A（推荐）：新表 `canvas_broadcasts`
 
 不塞进 `events`（events 语义是「Agent 提案/语义事件」），避免与 `emit_*` 混源。
@@ -123,8 +127,7 @@ CREATE TABLE canvas_broadcasts (
   target_role text NOT NULL,                    -- 创建订阅时从冻结快照读取，仅作审计展示
   target_role_kind text NOT NULL,               -- role | hub | verify | report
   attempt int NOT NULL DEFAULT 1,
-  delivery_status text NOT NULL,                -- planned | injected | failed | skipped | unknown
-  skip_reason text,
+  delivery_status text NOT NULL,                -- planned | injected | failed | unknown
   error_code text,
   error_message text,                           -- 脱敏后 ≤500 字符，禁止原始异常/凭据
   title text,                                   -- 冗余展示，避免联表
@@ -138,12 +141,8 @@ CREATE TABLE canvas_broadcasts (
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT canvas_broadcasts_attempt_check CHECK (attempt >= 1),
   CONSTRAINT canvas_broadcasts_not_self_check CHECK (source_job_id <> target_job_id),
-  CONSTRAINT canvas_broadcasts_skip_reason_check CHECK (
-    (delivery_status = 'skipped' AND skip_reason IS NOT NULL)
-    OR (delivery_status <> 'skipped' AND skip_reason IS NULL)
-  ),
   CONSTRAINT canvas_broadcasts_status_check
-    CHECK (delivery_status IN ('planned','injected','failed','skipped','unknown')),
+    CHECK (delivery_status IN ('planned','injected','failed','unknown')),
   CONSTRAINT canvas_broadcasts_source_type_check
     CHECK (source_node_type IN ('fact','finding')),
   CONSTRAINT canvas_broadcasts_target_kind_check
@@ -151,7 +150,7 @@ CREATE TABLE canvas_broadcasts (
   CONSTRAINT canvas_broadcasts_timestamps_check CHECK (
     (delivery_status = 'planned' AND injected_at IS NULL AND finished_at IS NULL)
     OR (delivery_status = 'injected' AND injected_at IS NOT NULL AND finished_at IS NOT NULL)
-    OR (delivery_status IN ('failed','skipped','unknown') AND finished_at IS NOT NULL)
+    OR (delivery_status IN ('failed','unknown') AND finished_at IS NOT NULL)
   ),
   CONSTRAINT canvas_broadcasts_error_code_check CHECK (
     (delivery_status IN ('failed','unknown') AND error_code IS NOT NULL)
@@ -169,16 +168,16 @@ CREATE INDEX canvas_broadcasts_status_idx ON canvas_broadcasts (delivery_status,
 - `(source_node_id, target_job_id, attempt)` 是**逻辑投递幂等键**；不额外存一份可漂移的 hash。同一 source/target 的通知重放不得重复创建同一 `attempt`。显式重试才递增 `attempt`，并保留上一条记录，不能覆盖历史。
 - `created_at` 即 planned 时间，不再重复存 `planned_at`。`planned → injected | failed` 是主状态机：先落 `planned` 再调用 `sendMessage`，返回成功后改 `injected`；异常改 `failed`。`injected` 只代表平台注入成功，不代表模型读取。
 - 进程在 `planned` 后、终态更新前崩溃时，无法判断消息是在 send 前还是 send 后中断；启动对账在 `decision_deadline_at` 后将其标为 `unknown/error_code=ack_lost`。默认不自动重发，以避免底层 API 无幂等键时重复注入；若底层以后提供稳定 message id，再把它纳入协议。
-- 状态迁移统一走一个 Scheduler 内部函数：只允许 `planned→injected|failed|unknown`，终态不可回写；`skipped` 在目标校验事务内直接创建为终态。Phase 1 没有公开重试 API，`failed/unknown→planned` 非法。
+- 状态迁移统一走一个 Scheduler 内部函数：只允许 `planned→injected|failed|unknown`，终态不可回写。目标校验在进入候选集合前完成，不满足条件的目标不产生账本行。Phase 1 没有公开重试 API，`failed/unknown→planned` 非法。
 - `decision_deadline_at` 由服务端配置计算并在插入时强制写入；Reaper/启动对账都复用同一“过期 planned → unknown”函数。Phase 3 若开放重试，只能在同一 source/target 的事务锁内取 `MAX(attempt)+1`，并写入操作者/原因审计。
-- 统一转移函数必须按矩阵写全字段并更新 `updated_at`：`planned` 的 `finished_at/injected_at` 为空；`injected` 同时写 `injected_at/finished_at`；`failed` 写 `finished_at + error_code`；`unknown` 写 `finished_at + error_code=ack_lost`；`skipped` 创建时即写 `finished_at + skip_reason`。任何终态缺少矩阵必填字段都应在事务内失败。
-- `skipped` 只用于**已经识别出具体目标**但确定不应注入的情况（目标已终态、策略拒绝）。`source==target` 从候选集合排除，不制造账本噪声。
+- 统一转移函数必须按矩阵写全字段并更新 `updated_at`：`planned` 的 `finished_at/injected_at` 为空；`injected` 同时写 `injected_at/finished_at`；`failed` 写 `finished_at + error_code`；`unknown` 写 `finished_at + error_code=ack_lost`。任何终态缺少矩阵必填字段都应在事务内失败。
+- 目标已终态、策略拒绝、没有活动 Attempt 或不属于同一画布时，在候选集合阶段排除；`source==target` 同样不制造账本噪声。只有实际进入投递流程的目标才写入 `planned`。
 - 当前订阅表是进程内 Map。在单实例下，“没有目标”可打 `no_local_subscriber` 日志/指标；它不能成为权威 DB 记录，因为多实例下某实例没有本地订阅者，不等于全局没有订阅者。若未来支持多 Scheduler 实例，必须先增加带 `instance_id + lease_expires_at` 的持久订阅登记或明确的单消费者分片，再把全局 `no_subscriber` 升格为账本状态。
 - `error_message`、`payload_preview` 必须先做凭据/Token/Authorization 脱敏，再按字节截断；DB 和 API 均不保存完整 `body_json` 或原始异常堆栈。
 - 应用层在同一事务校验 source node、source job、target job 均属于 `canvas_id`；现有表结构无法用单列 FK 表达该跨表一致性。
 - `source_job_id`/`target_job_id` 不级联删除，避免清理 Job 时静默抹掉审计链；归档不删账本。只有明确硬删整个画布时，按“broadcasts → edges/nodes → jobs/canvas”的受控顺序清理，并在审计日志记录。
-- 现有 `wipeCanvasRuntimeData` 的删除顺序必须在 v13 同批修改：先删 `canvas_broadcasts`，再删 edges/nodes、jobs、canvas。硬删 smoke 要覆盖“有广播行”和“无广播行”两种画布；否则新 FK 会直接阻断现有硬删路径。
-- **schema 变更**：bump `SCHEMA_VERSION`（当前 v12 → v15），更新空库基线；按本仓库当前启动纪律，旧库版本不匹配时重建，不能假设存在增量迁移。发布前必须先让当前任务收敛或明确取消，做数据库备份并验证项目导出/恢复路径；不能在运行中 Job 存在时直接重建。
+- 现有 `wipeCanvasRuntimeData` 的删除顺序必须与当前 schema 基线同步：先删 `canvas_broadcasts`，再删 edges/nodes、jobs、canvas。硬删 smoke 要覆盖“有广播行”和“无广播行”两种画布；否则新 FK 会直接阻断现有硬删路径。
+- **schema 变更**：改表时直接 bump `SCHEMA_VERSION` 并更新空库基线；按本仓库当前启动纪律，旧库版本不匹配时重建，不能假设存在增量迁移。发布前必须先让当前任务收敛或明确取消，做数据库备份并验证项目导出/恢复路径；不能在运行中 Job 存在时直接重建。
 
 ### 不采用的备选：写入目标 Job 的 `events`
 
@@ -231,7 +230,7 @@ CREATE INDEX canvas_broadcasts_status_idx ON canvas_broadcasts (delivery_status,
 | 情况 | 行为 |
 |------|------|
 | 无本地 running 订阅者 | 不插入目标账本行；记录 `no_local_subscriber` 日志/指标，并在 UI 说明“无记录不等于证明未投递” |
-| 目标已终态/策略拒绝 | 插入目标明确的终态 `skipped` 行，同时写 `skip_reason/finished_at`，保留审计上下文 |
+| 目标已终态/策略拒绝 | 发送前从候选集合排除，不插入账本行；候选筛选日志使用固定低基数原因 |
 | source == target | 在候选集合过滤，不写账本、不调用 `sendMessage` |
 | 节点非 fact/finding | 防御性过滤；不生成广播账本行（数据库触发器本身也只监听 fact/finding） |
 | sendMessage 失败 | 保留原 `planned` 行并更新为 `failed`，错误码白名单化、正文脱敏且截断 |
@@ -249,7 +248,7 @@ CREATE INDEX canvas_broadcasts_status_idx ON canvas_broadcasts (delivery_status,
 | GET | `/jobs/:id/broadcasts?after=&limit=&status=` | 该 Job **作为接收方** 的投递列表 |
 | GET | `/canvases/:id/broadcasts?after=&limit=&status=` | 画布级广播时间线 |
 
-采用 keyset cursor，不用 offset：默认 `limit=50`，范围 `1..100`；按 `(created_at DESC, id DESC)` 排序，`after` 是包含这两个值的 opaque base64url cursor。可按一个或多个规范状态 `planned,injected,failed,skipped,unknown` 过滤，响应为 `{items,next_cursor,has_more}`。`since` 只作为短期兼容参数，不能替代 cursor。API 只返回脱敏/截断字段，不暴露原始异常、完整 prompt 或凭据。
+采用 keyset cursor，不用 offset：默认 `limit=50`，范围 `1..100`；按 `(created_at DESC, id DESC)` 排序，`after` 是包含这两个值的 opaque base64url cursor。可按一个或多个规范状态 `planned,injected,failed,unknown` 过滤，响应为 `{items,next_cursor,has_more}`。`since` 只作为短期兼容参数，不能替代 cursor。API 只返回脱敏/截断字段，不暴露原始异常、完整 prompt 或凭据。
 
 权限检查先从 Job/Canvas 解析 project，再应用调用者的 project/任务 scope；不能用 `target_job_id` 直接跨项目探测。`tasks:read` 允许查看同项目账本，写入/重试仍是 Scheduler 内部动作（若未来开放人工重试，另设显式 `tasks:operate` 且要求审计）。
 
@@ -274,7 +273,7 @@ OpenAPI、`skills/deepsonar-management/` 与前端 API 类型同步一笔，并�
 `JobDetailPanel`：
 
 1. **事件 Tab** 旁新增 **「画布注入」** Tab；避免使用暗示模型已读的「收到」作为状态名称。
-2. 每条展示：时间、来源角色/Job 类型、node_type、title、`attempt`、`planned/injected/failed/skipped/unknown`；`unknown` 明确显示为「平台未能确认注入结果」。
+2. 每条展示：时间、来源角色/Job 类型、node_type、title、`attempt`、`planned/injected/failed/unknown`；`unknown` 明确显示为「平台未能确认注入结果」。
 3. 展开可看 `payload_preview`（截断 body）。
 4. **实时流**：订阅现有 WS，识别 `type === 'canvas.broadcast'`，渲染独立卡片（与 tool.call 区分），文案如「画布增量已注入平台 · fact · {title}」。不得显示「模型已收到/已处理」。
 
@@ -306,7 +305,7 @@ OpenAPI、`skills/deepsonar-management/` 与前端 API 类型同步一笔，并�
 
 ### Prometheus（可选，与现有 metrics 风格一致）
 
-- `deepsonar_canvas_broadcast_attempts_total{outcome=injected|failed|skipped|unknown,reason=…}`（每个 attempt 只在终态计一次；`reason` 仅用低基数白名单）
+- `deepsonar_canvas_broadcast_attempts_total{outcome=injected|failed|unknown,reason=…}`（每个 attempt 只在终态计一次；`reason` 仅用低基数白名单）
 - `deepsonar_canvas_broadcast_planned`（当前未决行数，gauge）
 - `deepsonar_canvas_broadcast_no_local_subscriber_total`（单实例观测 counter，不宣称全局无订阅者）
 - `deepsonar_canvas_broadcast_subscribers`（当前订阅 Map 大小，gauge）
@@ -335,11 +334,11 @@ OpenAPI、`skills/deepsonar-management/` 与前端 API 类型同步一笔，并�
 4. 以 `database/schema.sql` + `apps/scheduler/src/db.ts` 的现实启动行为为准，先修正 `ARCHITECTURE §17.2` 中任何暗示在线增量迁移的旧描述；本发布不引入第二套迁移框架。
 5. 对旧数据做 edge invalid/duplicate 与硬删路径预检；默认 fail closed。精确重复 edge 只有在生成可审计清单后才可按 `(created_at,id)` 保留最早一条，非法 edge type 不做猜测映射。
 
-### Phase 1（最小完整闭环，建议先做）
+### Phase 1（最小完整闭环，A 已落地的部分）
 
-1. 表 `canvas_broadcasts` + `SCHEMA_VERSION` bump；加入 `planned` 超时对账为 `unknown`。
-2. `canvas-updates.ts`：先抢占 `planned`、再注入、再写终态；结构化成功/失败/不确定日志 + `publishStream(canvas.broadcast)`。
-3. API：两个带权限和 cursor 的只读列表端点；OpenAPI、前端类型、`deepsonar-management` 同批同步。
+1. [x] 表 `canvas_broadcasts` + `SCHEMA_VERSION` bump；加入 `planned` 超时对账为 `unknown`。
+2. [x] `canvas-updates.ts`：先抢占 `planned`、再注入、再写终态；结构化成功/失败/不确定日志。
+3. [部分] Job 详情已投影广播/Attempt/usage；画布级 cursor API 与前端活动条仍待后续独立工作。
 4. 前端：`JobDetailPanel` 广播列表 + 实时流卡片；旧 Job 显示版本化空态。
 5. 项目导入导出新增模块键 `canvas_broadcasts`，依赖 `tasks`（其中必须包含相关 canvas/job/node）：`project_full` 与 `evidence_archive` 默认包含，`configuration` 不包含，`custom` 选择后自动补 `tasks`。包内使用独立数据文件并进入 manifest/checksum/sanitize/UUID remap；缺任一 source/target/node 依赖时整模块拒绝，不能静默丢行。包内重复自然键直接报错；目标侧碰撞若内容完全一致可幂等跳过，字段不同则报告 conflict，不覆盖历史。
 

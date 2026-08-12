@@ -33,7 +33,9 @@ import {
   terminalShellCommand,
   writeTerminalInput,
   GATEWAY_PROXY_SCRIPT,
+  AgentboxRunner,
 } from "./agentbox.js";
+import { NoopRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 
 type GatewayResponse = { statusCode?: number; body: string };
@@ -126,6 +128,17 @@ test("terminal shell command prefers interactive Bash and safely falls back to i
     buildTerminalShellCommand(),
     "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec /bin/sh -i; fi",
   );
+});
+
+test("Noop provision 遵守 Attempt 标识并响应取消信号", async () => {
+  const runner = new NoopRunner();
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    runner.provision({ jobId: "job-1", attemptId: "attempt-1", image: "image", network: "none", signal: controller.signal }),
+    /provision 已取消/,
+  );
+  assert.equal(typeof (new AgentboxRunner() as { cancelProvision?: unknown }).cancelProvision, "function");
 });
 
 test("terminal input writes raw tab, backspace, and Ctrl+C bytes without translation", async () => {

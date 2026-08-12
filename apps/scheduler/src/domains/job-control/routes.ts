@@ -24,6 +24,7 @@ import { projectJobProviderFields, projectJobSnapshot } from "../credential/proj
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
+import { projectContextDiagnostics } from "../context/index.js";
 
 const CreateJobBody = z.object({
   project_id: z.string().uuid(),
@@ -304,9 +305,28 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "not found" });
-    const [events, findings] = await Promise.all([
+    const [events, findings, attempts, effects, broadcasts, usage] = await Promise.all([
       sql`SELECT id, job_seq, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 50`,
       sql`SELECT id, fingerprint, title, severity, location, verify_status FROM findings WHERE job_id = ${id}`,
+      sql`SELECT id, attempt_no, status, phase, replay_policy, cancel_requested, cancel_requested_at,
+                 snapshot_identity_json, state_json, sandbox_id, session_id, outcome_json, error,
+                 started_at, finished_at, created_at, updated_at
+            FROM job_attempts WHERE job_id = ${id} ORDER BY attempt_no DESC`,
+      sql`SELECT id, attempt_id, effect_id, effect_kind, step, replay_policy, status,
+                 resource_identity_json, intent_json, settlement_json, evidence_ref, error,
+                 created_at, effect_started_at, settled_at, updated_at
+            FROM job_attempt_effects WHERE job_id = ${id} ORDER BY step, created_at`,
+      sql`SELECT id, source_job_id, source_node_id, target_job_id, attempt_id, effect_id,
+                 source_node_type, target_role, target_role_kind, attempt, delivery_status,
+                 title, preview, payload_sha256, payload_chars, error, planned_at, delivered_at,
+                 deadline_at, created_at, updated_at
+            FROM canvas_broadcasts
+           WHERE source_job_id = ${id} OR target_job_id = ${id}
+           ORDER BY created_at DESC LIMIT 100`,
+      sql`SELECT id, attempt_id, effect_id, request_no, provider, model, input_tokens,
+                 output_tokens, total_tokens, adjustment_tokens, settlement_status, source,
+                 observed_at, created_at
+            FROM job_usage_ledger WHERE job_id = ${id} ORDER BY request_no DESC LIMIT 100`,
     ]);
     const snapshot = job.agent_snapshot_json;
     const missingModules =
@@ -319,6 +339,21 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       payload_json: projectJobPayload(job.payload_json),
       agent_snapshot_json: projectJobSnapshot(snapshot),
     };
+    const payloadRecord = job.payload_json && typeof job.payload_json === "object" && !Array.isArray(job.payload_json)
+      ? job.payload_json as Record<string, unknown>
+      : {};
+    const runtimeEvidence = payloadRecord.runtime_evidence && typeof payloadRecord.runtime_evidence === "object" && !Array.isArray(payloadRecord.runtime_evidence)
+      ? payloadRecord.runtime_evidence as Record<string, unknown>
+      : {};
+    const attemptContext = attempts
+      .map((attempt) => {
+        const state = attempt.state_json && typeof attempt.state_json === "object" && !Array.isArray(attempt.state_json)
+          ? attempt.state_json as Record<string, unknown>
+          : null;
+        return state?.runtime_context;
+      })
+      .find((value) => value !== undefined);
+    const contextDiagnostics = projectContextDiagnostics(runtimeEvidence.context ?? attemptContext ?? null);
     return {
       job: safeJob,
       events: events.map((event) => ({
@@ -326,7 +361,12 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         payload_json: projectJobEventPayload(event.payload_json),
       })),
       findings,
+      attempts,
+      effects,
+      broadcasts,
+      usage,
       missing_modules: missingModules,
+      context_diagnostics: contextDiagnostics,
     };
   });
 

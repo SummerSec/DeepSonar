@@ -47,10 +47,9 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   const dispatcherSource = readFileSync(new URL("../../dispatcher.ts", import.meta.url), "utf8");
   const routesSource = readFileSync(new URL("../job-control/routes.ts", import.meta.url), "utf8");
 
-  // These multi-source CAS operations intentionally remain outside the pure
-  // matrix: Reaper handles three active sources for execution timeout, while
-  // boot reconcile requeues two provisioning sources in one operation.  The
-  // source guards and metadata patches are now owned by application methods.
+  // 这些多来源 CAS 操作有意不放入纯状态矩阵：Reaper 处理三类执行超时来源，
+  // 启动对账按 Attempt 效果账本区分可重排和必须 orphan 的 provision 来源。
+  // 来源守卫与元数据补丁统一由 application 方法持有。
   assert.equal(canTransition("claimed", "timeout"), false);
   assert.equal(canTransition("provisioning", "timeout"), false);
   assert.match(lifecycleSource, /reapExecutionTimeout/);

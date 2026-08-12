@@ -1,6 +1,6 @@
 import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
+import { api, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
@@ -63,6 +63,93 @@ function ConfigField({ label, value, title }: { label: string; value: string; ti
       <div className="mt-1 break-all font-mono text-[12px] text-zinc-200" title={title ?? value}>
         {value}
       </div>
+    </div>
+  );
+}
+
+function ContextDiagnosticsView({ diagnostics }: { diagnostics: ContextDiagnostics | null }) {
+  if (!diagnostics) {
+    return <p className="font-mono text-[12px] text-zinc-600">该运行尚未记录上下文生命周期摘要。</p>;
+  }
+  const observationLabel = diagnostics.compaction.observation === "observed"
+    ? "已观测"
+    : diagnostics.compaction.observation === "unsupported"
+      ? "适配器不支持"
+      : "未知";
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <ConfigField label="上下文 ID" value={diagnostics.context_id} />
+        <ConfigField label="版本" value={String(diagnostics.context_revision)} />
+        <ConfigField label="Attempt ID" value={diagnostics.attempt_id ?? "—"} />
+        <ConfigField label="适配器" value={`${diagnostics.adapter_id} ${diagnostics.adapter_version}`} />
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <ConfigField label="运行身份摘要" value={diagnostics.runtime_identity} />
+        <ConfigField label="变换链摘要" value={diagnostics.transform_chain_digest} />
+      </div>
+      <div className="font-mono text-[11px] text-zinc-400">
+        <span className="text-zinc-600">压缩观测：</span>{observationLabel}
+        <span className="ml-3 text-zinc-600">策略：</span>{diagnostics.compaction.policy}
+        {diagnostics.compaction.reason && <span className="ml-3 text-zinc-500">{diagnostics.compaction.reason}</span>}
+      </div>
+      <ol className="space-y-1.5 font-mono text-[10px] text-zinc-500">
+        {diagnostics.transforms.map((transform) => (
+          <li key={`${transform.revision}:${transform.stage}`} className="flex flex-wrap gap-x-2 gap-y-1 border-l border-white/[.08] pl-3">
+            <span className="text-zinc-300">r{transform.revision} {transform.stage}</span>
+            <span>{transform.source}</span>
+            {transform.budget && <span>预算 {transform.budget.observed ?? "?"}/{transform.budget.limit} {transform.budget.unit}</span>}
+            {transform.omission && <span className="text-amber-300">省略 {transform.omission.count ?? "?"}：{transform.omission.reason}</span>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
+  const latestAttempt = detail.attempts[0] ?? null;
+  const unknownEffects = detail.effects.filter((effect) => effect.status === "unknown" || effect.status === "effect_pending");
+  const deliveryCounts = detail.broadcasts.reduce<Record<string, number>>((counts, delivery) => {
+    counts[delivery.delivery_status] = (counts[delivery.delivery_status] ?? 0) + 1;
+    return counts;
+  }, {});
+  const totalTokens = detail.usage.reduce((total, row) => total + Number(row.total_tokens || 0), 0);
+  if (!latestAttempt && detail.effects.length === 0 && detail.broadcasts.length === 0 && detail.usage.length === 0) {
+    return <p className="font-mono text-[12px] text-zinc-600">该运行尚未记录执行账本。</p>;
+  }
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <ConfigField
+          label="最新 Attempt"
+          value={latestAttempt ? `#${latestAttempt.attempt_no} · ${latestAttempt.status}` : "—"}
+        />
+        <ConfigField label="执行阶段" value={latestAttempt?.phase ?? "—"} />
+        <ConfigField label="外部效果" value={`${detail.effects.length} · 未决 ${unknownEffects.length}`} />
+        <ConfigField label="模型用量" value={`${detail.usage.length} 次 · ${totalTokens} tokens`} />
+      </div>
+      <div className="font-mono text-[11px] text-zinc-400">
+        <span className="text-zinc-600">增量投递：</span>
+        injected {deliveryCounts.injected ?? 0}
+        <span className="ml-3">planned {deliveryCounts.planned ?? 0}</span>
+        <span className="ml-3">failed {deliveryCounts.failed ?? 0}</span>
+        <span className="ml-3">unknown {deliveryCounts.unknown ?? 0}</span>
+      </div>
+      {unknownEffects.length > 0 && (
+        <div>
+          <div className="mb-1 font-mono text-[10px] text-amber-300">未决或未知效果</div>
+          <ol className="space-y-1 font-mono text-[10px] text-zinc-500">
+            {unknownEffects.slice(0, 5).map((effect) => (
+              <li key={effect.id} className="flex flex-wrap gap-x-2 border-l border-amber-400/30 pl-3">
+                <span className="text-zinc-300">{effect.effect_kind}</span>
+                <span>{effect.status}</span>
+                <span className="break-all">{effect.effect_id}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }
@@ -629,6 +716,20 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                     )}
                   </div>
                 )}
+              </section>
+
+              <section className="theme-surface rounded-2xl p-4 ring-1">
+                <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                  执行账本
+                </div>
+                <ExecutionLedgerView detail={detail} />
+              </section>
+
+              <section className="theme-surface rounded-2xl p-4 ring-1">
+                <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                  上下文生命周期
+                </div>
+                <ContextDiagnosticsView diagnostics={detail.context_diagnostics} />
               </section>
 
               {stream.length > 0 && (

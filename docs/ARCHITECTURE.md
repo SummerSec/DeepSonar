@@ -114,6 +114,14 @@ pending → claimed → provisioning → running → succeeded
   - 发现 `运行时长 > timeout_sec` → 标记 `timeout` → 同上回收
 - **超时与孤儿由调度器判定，不信任 Agent 自报**。harness 上报 `done/failed` 是善意路径，Reaper 是兜底路径
 
+### 3.4 Job Attempt、效果账本与启动恢复
+
+`jobs` 是宏观生命周期，`job_attempts` 是一次具体执行的 Scheduler-owned 程序计数器。领取时在同一事务锁定 Job 并创建活动 Attempt，数据库部分唯一索引保证同一 Job 只有一个活动 Attempt。Attempt total state 只保留 phase、快照身份、资源/会话身份、取消标记和有界结果，不接受 Agent 直接写入。
+
+每个可能产生外部副作用的动作都在 `job_attempt_effects` 记录 effect kind/id、intent、输入摘要与 `effect_pending`，观察到结果后写 settlement；所有 effect id/kind、JSON、错误文本均由应用层执行低基数和大小校验。默认 replay policy 为 `never`，进程崩溃或响应不确定时只能收口 `unknown`，不能凭 Promise 或重启自动重放。只有明确声明幂等的销毁动作可使用 `safe`。
+
+provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；资源身份、效果 settlement 与 `jobs.sandbox_id` 在同一个数据库事务落账。Job 终态和 Attempt 终态也在同一事务提交。启动 reconcile 只将“Attempt 为 preparing 且没有效果记录”的 Job 重排；其余 provision 未知窗口标记 orphan，清理容器、共享卷、短期 Token、画布/报告和 Plane，避免重复创建。
+
 ### 3.4 Agent 工具白名单（只提案）
 
 | 工具名 | 谁可调用 | 调度器落地动作 |
@@ -154,7 +162,7 @@ loop:
   4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
   5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
-  7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成任务总 Report
+  7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
 ```
 
 ### 4.3 审计 → 验证链（单一决策点）
@@ -165,7 +173,7 @@ loop:
 4. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
 5. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
 6. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
-7. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 幂等派发该画布唯一任务总 Report。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
+7. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
 8. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
 
 ### 4.4 Scheduler bounded contexts（Issue #37）
@@ -197,6 +205,8 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 - 人处理完后调用 `POST /jobs/{id}/resume` → Job 重新入队（`pending`），恢复上下文从 events/findings 表重建
 - 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径，而是用 verdict=`needs_human` 把 Finding 收口为可报告终态
 
+恢复或重启后的每次执行均可在 Job 详情投影 Attempt、effect 和资源身份；`agent_run`、`agent_resume`、`cancel`、`timeout` 的效果记录用于区分可继续的同会话恢复和不可安全重放的未知窗口。
+
 ---
 
 ## 5. 模块拆分与技术选型
@@ -216,7 +226,7 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 - DB：Postgres（`jobs` / `events` / `findings` / `canvas_nodes` / `canvas_edges`）
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
 - 画布：**React Flow（@xyflow/react，MIT）+ elkjs 服务端布局**。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
-- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 三家可换：**claude-code（默认）/ opencode / codex**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
+- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 四类可换：**claude-code（默认）/ opencode / codex / pi**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
 - Plane：自托管 Community + API Token
 
 暂不引入 Multica/ClawTeam，避免与 Plane 双看板；接口预留「执行器可替换」。
@@ -426,6 +436,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - SDK normalized event stream → 文本/进度 → `progress` 事件
 - 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、执行同源严格 schema 校验并返回 `schema_validated / pending_scheduler_validation`，不声称业务已落库，不写文件、不连接调度器
 - Scheduler 同时提供独立于管理 OpenAPI 的 Job 控制面：`GET /control/v1/jobs/:jobId/capabilities`、`GET /control/v1/jobs/:jobId/openapi.json` 与 `POST /control/v1/jobs/:jobId/operations/:operationId`。前两者和 OpenAPI paths 都按当前 capability token 的精确 operation allowlist 过滤；写调用要求 UUID `Idempotency-Key`，同 key 重放不得重复执行，跨 operation 重用返回冲突。
+- Pi 使用同一 Job 控制面但不注入 MCP：静态 `deepsonar-control` Skill 引导先调用 `/agent/capabilities_list`，再按冻结 operation 调用 HTTP API。Pi 运行时固定为 `pi --mode rpc --no-approve --no-extensions`，通过持久 JSONL framer 处理任意字节分块；只有 `agent_settled` 作为 Agent 侧静止信号，终态仍必须经过 `mark_job_done` 完成门。
 - Job 进入真实执行时，Scheduler 从冻结的 `agent_snapshot_json.platform_tools` 签发独立短期 capability token，仅存 hash 并绑定 `job_id`、`project_id`、operation 列表和 TTL，通过 `DEEPSONAR_API_BASE_URL` / `DEEPSONAR_API_TOKEN` 注入 CLI 环境。它不复用 Credential/Model Gateway token，不写回 snapshot、workspace、运行清单、日志或 evidence，并在成功、失败、超时、取消或孤儿终态撤销；鉴权还要求 Job 仍在运行。
 - API operation 不直接复制 `event-ingestion`：路由调用进程内注册的当前 Job runtime handler；只读 operation 返回冻结角色/资产目录，语义写 operation 复用 MCP 的 `onSemanticEvent` 闭包、payload_file/共享资产宿主读取、计数和 Hub/done 延迟终态，再进入 Scheduler 权威事务。Agent 每次可选 MCP 或 API，但相同语义写入不得跨通道重复提交。
 - 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块只登记 bounded pending；收到同一 `tool_use_id` 的合法非错误 `user.tool_result`（`is_error` 省略或为 `false`）后才转换为 `{v:1,event_id(UUID),type,payload}`，串行 `await onSemanticEvent`。显式错误或畸形 `is_error` 结果丢弃 pending，Agent 可用新的 call id 重试；重复结果/重放不重复释放。
@@ -439,7 +450,17 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 沙箱内不注入调度器数据库、管理 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期模型 Job token。平台控制 API 只注入另一枚按 operation 限权的短期 token；二者均随终态撤销并随一次性沙箱销毁
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
 
-### 8.1 Agent 配置体系（RoleConfig）
+### 8.1 Agent Runtime Context 生命周期（#138）
+
+真实 Agent 的上下文不是调度器可以直接读取的 prompt 缓存，而是由 Scheduler、Runtime Adapter 和 Provider 共同形成的执行状态。Scheduler 在启动 Agent 前为当前 Attempt 生成稳定的 `context_id`，并以 `context_revision` 和摘要链记录输入变换：初始输入、GraphScope 投影、字符预算省略、摘要交接以及已明确观测到的 Provider 压缩。每个变换只持有输入/输出 digest、版本、预算、来源和有界省略说明，不保存 prompt、模型上下文或 Provider 原文。
+
+上下文状态同时写入活动 `job_attempts.state_json.runtime_context` 和 `jobs.payload_json.runtime_evidence.context`。前者与 `attempt_id` 绑定并在同一数据库事务中更新，后者保留其他运行证据字段。状态、变换链和压缩事件均有数量/字节上限；Job 详情 API 只投影最近的有界摘要。
+
+Runtime Adapter 只有在收到包含完整上下文身份、revision、链 digest、边界及输入/输出 digest 的 `context.compacted` 事件时才上报已观测压缩。重复事件按 `event_id` 幂等，乱序、跨 Attempt、链不一致或身份不一致直接拒绝。Provider 仅暴露开始/结束标记，或适配器声明不支持时，状态分别标为 `unknown`/`unsupported`，不能伪造 revision 或输出 digest。
+
+任何同会话恢复都必须使用首次运行时已经观测并绑定的会话身份，与当前持久状态逐字段匹配；适配器需要额外查询时可提供 `getResumeContextIdentity`，但实际身份缺失、revision/链 digest 不一致均 fail closed，不得使用 latest 或新会话。Pi 还必须传递并匹配精确的 `sessionFile`。恢复身份和诊断不包含原始上下文内容。
+
+### 8.2 Agent 配置体系（RoleConfig）
 
 配置按“全局缺省 → 项目覆盖 → Job 冻结快照”生效，不存在旧 Profile 回退：
 
@@ -466,15 +487,18 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 **Model Gateway 上游纪律：** Scheduler 的上游单次超时默认 3,000 秒（`DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS=3000000`），但每次 attempt 都受 Job `started_at + timeout_sec` 的绝对截止时间约束，实际 timeout 为两者较小值；退避等待也不得跨过该截止时间。只有在 Scheduler 尚未向沙箱客户端发送响应头或响应体时，网络/超时与 HTTP `408/429/500/502/503/504` 才可最多执行 3 次 attempt，使用指数退避和 jitter；`400/401/403` 等永久错误不重试。取得最终 Response 后沿用流式直通，SSE 或普通响应体读取失败不触发重放。`job_tokens.used_requests` 仍按一次客户端请求只加一次；上游 attempt/retry/exhausted 指标只带 provider/reason 等低基数标签，禁止请求体、URL 和 Job ID。网络/超时耗尽固定返回 `502` 的 `upstream_unreachable`，最终上游 HTTP 状态和响应体原样透传。
 
+每次 Gateway 请求写入 `job_usage_ledger`，通过 `attempt_id + effect_id` 幂等关联 Job Attempt；只保留 provider/model、请求序号、输入/输出/总 token 及 `settled|unknown|not_reported`，不落 prompt、响应正文、请求头和凭据。跨 chunk 的 SSE usage 只在完整记录边界解析并去重。响应已经发给 Worker 后账本写入失败不抛出未处理异常，同时递增低基数失败指标并留下 effect 对账线索。
+
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
-平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 同时派生既有 MCP allowlist 与 API operation allowlist；关闭项不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。现有 capability 当前同时映射 MCP/API；后续新增平台能力只注册 API operation，不再新增 MCP 工具。Pi Agent CLI 的 Runtime Adapter 不属于本阶段。
+平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 同时派生既有 MCP allowlist 与 API operation allowlist；关闭项不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。现有 capability 当前同时映射 MCP/API；后续新增平台能力只注册 API operation，不再新增 MCP 工具。Pi 的控制能力仅走 HTTP API，且必须使用 `get_state` 返回的精确 `sessionFile` 恢复，不选择 latest。
 
-### 8.2 可信运行镜像与独立市场
+### 8.3 可信运行镜像与独立市场
 
 镜像市场是受治理的 OCI 目录，不是任意容器执行入口。`runtime_images` 表示产品身份，`runtime_image_versions` 表示不可变版本，`project_runtime_images` 表示项目显式启用/固定版本，`runtime_image_scans` 保留每次准入或复扫证据。
 
 - 官方 `deepsonar-base` 供 explore/analyze/review/code/hub/report，`deepsonar-audit` 供 audit；两者以固定 digest 的 `node:22-bookworm-slim` 为底（满足当前 Claude Code 的 Node 版本要求），共用 `agent-harness/runtime-images.json` 版本/来源/摘要单一定义，本地 image DSL 与生产 Dockerfile 均消费该约束并由 CI 检测漂移。
+- Base、Audit 与 Kali 官方运行时均固定安装 `@earendil-works/pi-coding-agent@0.84.1`，清单记录 npm `sha512` integrity；Docker 构建通过 `npm view ... dist.integrity` 实际核验该摘要后才安装。Pi 的 `models.json` 只写入 Gateway 地址与短期环境变量引用，长期 Provider 密钥不进入快照、工作区或 evidence。
 - **镜像体积是准入硬门槛**：按角色拆包、`--no-install-recommends`、不安装重复 Agent SDK/CLI、构建后清理包缓存，并在断网冒烟中以 gzip 压缩分发包检查 `maxSizeMiB`、同时报告解压层大小。重型扫描器只进入专项镜像，不允许为了“可能用到”扩张默认 base。
 - `deepsonar-kali-minimal`（市场名 Kali Test）仅是 test 的官方默认镜像：固定官方 `kali-last-release` digest，预装 Python 3.10–3.14、固定 digest 的 Temurin JDK 8/11/17（默认 17，不含 21）、固定官方 Apache Maven 3.9.16、Kali 仓库的 Go/Rust 与清单化审计 CLI；Maven 位于 `/opt/deepsonar/maven` 且不预置 `.m2` 缓存。不安装 `kali-linux-*` / `kali-tools-*` metapackage、GUI、桌面或默认工具全集。Python 运行时构建后禁止联网补装，Java/Python/Maven 均提供明确的版本化命令。系统 verify 默认使用最小 Base，需要专项工具时通过 RoleConfig 显式覆盖。
 - Runtime-test Worker 只消费上述镜像内的预构建工具链，禁止在 Job 内冷装/下载 JDK、Maven、Gradle 或编译器；工具缺失时必须回传结构化 inconclusive/needs_human 证据。Java/Python/Go/Rust 的静态—动态能力和证据硬门见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
@@ -498,7 +522,7 @@ RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表
 
 发布清单的 `size_bytes` 来自不可变 OCI manifest/index 的压缩层描述符：分别汇总目标平台层大小，清单记录其中最大的平台大小，并保留各平台大小作为发布证据。该值不是本机解压后的 Docker 占用，避免不同构建机的本地 inspect 结果影响市场元数据。
 
-### 8.3 Git 模块源（skill_sources）
+### 8.4 Git 模块源（skill_sources）
 
 Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
 
@@ -510,7 +534,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - catalog 与最终展开集合的内容哈希覆盖 plugin/name/description 与文件内容；Job 证据 manifest/runtime evidence/API 详情均保留 missing_modules，旧快照按空数组兼容。Runtime materializer 在 mkdir/upload 前对 command/subAgent/skill 名称及 skill 文件相对路径做 normalize/resolve 子树校验，路径穿越、绝对路径和控制字符直接拒绝
 - 内容在 sync 时缓存，跑任务不再访问 Git —— 断网/私有网络也能跑
 
-### 8.4 图语义与 hub 循环（Cairn 式自驱审计）
+### 8.5 图语义与 hub 循环（Cairn 式自驱审计）
 
 画布升级为 **fact-intent 二分图**（参考 Cairn 的 blackboard 架构）：agent 不直接决定下一步，只把发现写进画布；**hub agent 读整张图做决策**。
 
@@ -526,7 +550,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
 - Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
 
-### 8.5 图上下文预算与读图作用域
+### 8.6 图上下文预算与读图作用域
 
 调度器在服务端按 Job 类型生成分级图投影，不把整张过程图直接注入每个沙箱：
 
@@ -599,7 +623,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - [ ] Harness 对接 Claude Code
 - [ ] 前端：打开项目画布（React Flow），只读轮询或 WS
 - [ ] `emit_finding` / `emit_progress` / `mark_job_done` 真实可用
-- [ ] token 用量与成本记账
+- [x] Model Gateway token 用量账本（按 Job Attempt/effect 关联；成本定价另行治理）
 
 **验收**：对真实仓库一个小模块跑出真实 finding 并上图。
 
@@ -610,7 +634,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - [x] 普通 Worker `request_human` / `resume` 与 Verify `needs_human` 收口分流
 - [ ] Plane 可选自动建子 Issue
 
-**验收**：验证范围内 Finding 自动出现验证节点，低于阈值项不创建 Verify 且不阻塞；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；每条 `confirmed` Finding 有独立版本化报告；验证范围内 Finding 收敛后自动生成任务总报告。
+**验收**：验证范围内 Finding 自动出现验证节点，低于阈值项不创建 Verify 且不阻塞；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；每条 `confirmed` Finding 有独立版本化报告；验证范围内 Finding 收敛后自动生成版本化任务总报告，输入未变幂等、输入变化追加版本。
 
 ### Phase 4 — 多项目与打磨（持续）
 
@@ -760,7 +784,7 @@ CANVAS_LAYOUT=auto
 - **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
 - **运行时选 TwillAI/agentbox-sdk（MIT）**：TS SDK 统一驱动沙箱与 Agent，事件走控制通道不经沙箱网络（化解"审计沙箱断网"与"事件回调"的矛盾，沙箱内零凭据）。已知风险：0.1.x 早期项目（2026-07 仍活跃），靠 runtime-adapter 接口隔离，最坏情况 fork local-docker provider（代码薄）
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
-- **不做 token 成本配额**（明确决策，如需观测后期再加用量字段）
+- **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算
 - **不评估 Claude Agent SDK**：只用 CLI 路线（经 agentbox-sdk 的 claude-code provider）
 - **不引入低代码 LLM 编排平台（Flowise / Dify / n8n / Langflow）**：它们是完整产品而非可嵌入组件，无法替代沙箱调度（不管容器生命周期、无 lease/reaper、无 Plane 同步），且会与 Claude Code CLI 的 agentic loop 重复、制造第二控制面；Flowise 另有默认无认证的安全记录问题（RAXE-2026-033）与被收购后的路线图不确定性。其画布 UI 底层即 React Flow，反向印证画布选型
 - **画布引擎选 React Flow 而非 tldraw/Excalidraw**：画布本质是结构化节点-边图而非白板；React Flow（MIT）与 nodes/edges 表 1:1 映射、节点即 React 组件（finding 卡片可交互）；tldraw 生产商用有授权费用、Excalidraw 无法嵌入 React 节点。若二期需要手绘标注/多人白板协同，再单独评估 tldraw

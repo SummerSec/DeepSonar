@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { config } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
@@ -20,6 +21,15 @@ import { planeWriteback } from "./plane-sync.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { ensureRuntimeImageAvailable } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import {
+  beginEffect,
+  createOrGetActiveAttempt,
+  getActiveAttempt,
+  markEffectUnknown,
+  settleEffect,
+  settleAttemptTerminal,
+  updateAttemptResource,
+} from "./domains/job-attempt/index.js";
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
 import {
@@ -53,7 +63,32 @@ export type DispatchCandidate = {
   credential_id: unknown;
   model: unknown;
   credential_metadata: unknown;
+  agent_snapshot_json?: unknown;
 };
+
+function attemptSnapshotIdentity(snapshot: unknown): Record<string, string> {
+  const value = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+    ? snapshot as Record<string, unknown>
+    : {};
+  const runtimeImage = value.runtime_image && typeof value.runtime_image === "object" && !Array.isArray(value.runtime_image)
+    ? value.runtime_image as Record<string, unknown>
+    : {};
+  const adapter = value.agent_runtime && typeof value.agent_runtime === "object" && !Array.isArray(value.agent_runtime)
+    ? value.agent_runtime as Record<string, unknown>
+    : {};
+  const identity = {
+    ...(typeof value.agent_cli === "string" ? { agent_cli: value.agent_cli } : {}),
+    ...(typeof value.snapshot_sha256 === "string" ? { snapshot_sha256: value.snapshot_sha256 } : {}),
+    ...(typeof adapter.adapter_id === "string" ? { adapter_id: adapter.adapter_id } : {}),
+    ...(typeof adapter.adapter_version === "string" ? { adapter_version: adapter.adapter_version } : {}),
+    ...(typeof runtimeImage.image_ref === "string" ? { runtime_image_ref: runtimeImage.image_ref } : {}),
+    ...(typeof runtimeImage.image_key === "string" ? { runtime_image_key: runtimeImage.image_key } : {}),
+  };
+  if (!identity.snapshot_sha256) {
+    identity.snapshot_sha256 = createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  }
+  return identity;
+}
 
 export interface GraphEligibilityState {
   activeHub?: boolean;
@@ -418,9 +453,8 @@ async function graphEligibilityReasonFromDb(
 }
 
 /**
- * Claim pending jobs under the dispatcher advisory lock without provisioning
- * or executing them. This narrow entry point is used by integration tests and
- * keeps the database-side quota decision independently verifiable.
+ * 在调度器 advisory lock 下抢占 pending Job，但不执行 provision 或 Agent。
+ * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 export async function claimPendingJobs(): Promise<{ id: string }[]> {
   // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
@@ -429,8 +463,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
   const claimedJobs = await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
-    // global_settings.effective_rules is the sole dispatcher authority;
-    // environment defaults are resolved inside globalRules before claim.
+    // global_settings.effective_rules 是调度器唯一权威；环境缺省值在
+    // 抢占前由 globalRules 解析。
     const rules = await globalRules(tx as unknown as typeof sql);
     const active = await tx`
       SELECT project_id,
@@ -456,8 +490,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const cliCounts = new Map<string, number>();
     for (const row of active) {
       const projectId = row.project_id as string;
-      // Historical Jobs may lack agent_cli; use the platform constant only,
-      // never the mutable AGENT_PROVIDER environment value.
+      // 历史 Job 可能缺少 agent_cli；仅使用平台常量，禁止读取可变的
+      // AGENT_PROVIDER 环境变量。
       const cli = String(row.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
       const provider = String(row.credential_provider ?? "");
       const credentialId = String(row.credential_id ?? "");
@@ -484,7 +518,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       const pending = cursor
         ? await tx`
             SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
-                   j.priority, j.created_at::text AS created_at_key,
+                   j.priority, j.created_at::text AS created_at_key, j.agent_snapshot_json,
                    j.agent_snapshot_json->>'agent_cli' AS agent_cli,
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
@@ -503,7 +537,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
             FOR UPDATE OF j SKIP LOCKED`
         : await tx`
             SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
-                   j.priority, j.created_at::text AS created_at_key,
+                   j.priority, j.created_at::text AS created_at_key, j.agent_snapshot_json,
                    j.agent_snapshot_json->>'agent_cli' AS agent_cli,
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
@@ -557,6 +591,12 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         if (skipReason) continue;
         const row = await lifecycle.claimPendingJob(job.id as string);
         if (!row) continue;
+        await createOrGetActiveAttempt(
+          tx as unknown as typeof sql,
+          String(job.id),
+          attemptSnapshotIdentity(job.agent_snapshot_json),
+          { "deepsonar.job": String(job.id) },
+        );
         // A Finding Report is queued as `pending`; it becomes visible as
         // `generating` only after the DB claim succeeds.  Keep this update in
         // the same transaction as the jobs CAS so a report can never advertise
@@ -595,10 +635,15 @@ export async function dispatchOnce(): Promise<number> {
 async function runJob(jobId: string) {
   let handle: { sandboxId: string } | null = null;
   let sharedAssetsVolumeName: string | null = null;
+  let attemptId: string | null = null;
+  let provisionEffectId: string | null = null;
   const lifecycle = createSqlJobLifecycleApplication();
   try {
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
     if (!job) return;
+    const attempt = await getActiveAttempt(sql, jobId);
+    if (!attempt) throw new Error(`job ${jobId} 缺少持久 Attempt`);
+    attemptId = String(attempt.id);
 
     // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
     // provision 纳入同一异常保护 + 独立超时（§8.3：provision 异常不得让 job 永久卡住）
@@ -636,9 +681,26 @@ async function runJob(jobId: string) {
         }),
       });
     }
-    handle = await withTimeout(
-      runner.provision({
+    provisionEffectId = `provision:${String(attempt.attempt_no)}`;
+    await sql.begin(async (tx) => {
+      await beginEffect(tx as unknown as typeof sql, attemptId!, {
+        effectId: provisionEffectId!,
+        kind: "provision",
+        inputDigest: String(
+          attempt.snapshot_identity_json && typeof attempt.snapshot_identity_json === "object"
+            ? (attempt.snapshot_identity_json as Record<string, unknown>).snapshot_sha256 ?? ""
+            : "",
+        ).replace(/^sha256:/, "") || null,
+        resourceIdentity: { job_id: jobId, attempt_id: attemptId },
+        intent: { image_ref: runtimeImage, network: useReal ? (allowEgress ? "egress" : "restricted") : "none" },
+      });
+    });
+    try {
+      const provisionAbort = new AbortController();
+      const provisionInput = {
         jobId,
+        attemptId: attemptId!,
+        resourceLabels: { "deepsonar.job": jobId, "deepsonar.attempt": attemptId! },
         image: runtimeImage,
         env: useReal ? { DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0" } : undefined,
         network: useReal ? (allowEgress ? "egress" : "restricted") : "none",
@@ -646,20 +708,66 @@ async function runJob(jobId: string) {
         expectedContract: snapshot.runtime_image.contract_version,
         expectedToolsManifestSha256: snapshot.runtime_image.tools_manifest_sha256,
         sharedAssetsMount: sharedAssetsVolumeName ? { volumeName: sharedAssetsVolumeName } : undefined,
-        // The Job snapshot is the only runtime resource authority. Never read
-        // mutable server config here; pending/running Jobs stay reproducible.
+        // Job 快照是运行时资源的唯一权威；这里不读取可变服务配置，保证
+        // pending/running Job 的执行仍可复现。
         limits: snapshot.sandbox_limits,
-      }),
-      config.timeouts.provisionSec * 1000,
-      `provision 超时（${config.timeouts.provisionSec}s）`,
-    );
-    await sql`UPDATE jobs SET sandbox_id = ${handle.sandboxId} WHERE id = ${jobId}`;
+        // provision 超时或取消时，运行时适配器必须真正终止外部创建并清理迟到资源。
+        signal: provisionAbort.signal,
+      } as Parameters<typeof runner.provision>[0] & { signal?: AbortSignal };
+      const cancellableRunner = runner as typeof runner & {
+        cancelProvision?: (input: { jobId: string; attemptId: string }) => Promise<void>;
+      };
+      handle = await withProvisionTimeout(
+        runner.provision(provisionInput),
+        config.timeouts.provisionSec * 1000,
+        `provision 超时（${config.timeouts.provisionSec}s）`,
+        () => {
+          provisionAbort.abort();
+          void cancellableRunner.cancelProvision?.({ jobId, attemptId: attemptId! }).catch(() => {});
+        },
+        (lateHandle) => runner.destroy(lateHandle).catch(() => {}),
+      );
+    } catch (error) {
+      await sql.begin(async (tx) => {
+        await markEffectUnknown(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
+      }).catch(() => {});
+      throw error;
+    }
+    await sql.begin(async (tx) => {
+      await settleEffect(tx as unknown as typeof sql, attemptId!, provisionEffectId!, {
+        status: "settled",
+        outcome: { sandbox_id: handle?.sandboxId ?? null },
+      });
+      await updateAttemptResource(tx as unknown as typeof sql, attemptId!, {
+        sandboxId: handle?.sandboxId ?? null,
+        phase: "provisioned",
+      });
+      const [bound] = await tx`
+        UPDATE jobs SET sandbox_id = ${handle?.sandboxId ?? null}
+        WHERE id = ${jobId} AND status = 'provisioning'
+        RETURNING id`;
+      if (!bound) throw new Error(`job ${jobId} 在 provision 收口前已失去 provisioning 状态`);
+    });
 
     // running：开 lease（竞态守卫：此时被 cancel 则放弃执行，直接走 finally 回收）
     const lease = new Date(Date.now() + config.timeouts.leaseTtlSec * 1000);
     if (!(await lifecycle.transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
       return;
     }
+    await sql.begin(async (tx) => {
+      const started = await beginEffect(tx as unknown as typeof sql, attemptId!, {
+        effectId: `agent_run:${String(attempt.attempt_no)}`,
+        kind: "agent_run",
+        inputDigest: String(
+          attempt.snapshot_identity_json && typeof attempt.snapshot_identity_json === "object"
+            ? (attempt.snapshot_identity_json as Record<string, unknown>).snapshot_sha256 ?? ""
+            : "",
+        ).replace(/^sha256:/, "") || null,
+        resourceIdentity: { job_id: jobId, attempt_id: attemptId, sandbox_id: handle!.sandboxId },
+        intent: { runner: useReal ? "real" : "fake", job_type: String(job.type) },
+      });
+      if (!started) throw new Error(`job ${jobId} 的 Attempt 已不再活动，禁止启动 agent_run`);
+    });
     startLeaseRenewal(jobId, handle);
 
     // 画布：job 节点（如不存在）——claim 时由 routes/planeSync 建 root 之外的 job 节点
@@ -682,14 +790,20 @@ async function runJob(jobId: string) {
     const details = e && typeof e === "object" && "code" in e
       ? (e as { code?: unknown; metadata?: { bucket?: unknown; retry_after_sec?: unknown; limit?: unknown } })
       : null;
-    // Preserve a stable, low-cardinality observation for rate-limit failures
-    // after the executor boundary. Do not serialize event payload content.
+    // 对执行器边界后的限流错误保留稳定、低基数观测，不序列化事件正文。
     const msg = details?.code === "event_rate_limited"
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
     inc("deepsonar_jobs_failed_total", { reason: "exception" });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
-    const failedRow = await createSqlJobLifecycleApplication().failExecution(jobId, msg);
+    const failedRow = await sql.begin(async (tx) => {
+      const txLifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
+      const row = await txLifecycle.failExecution(jobId, msg);
+      if (row) {
+        await settleAttemptTerminal(tx as unknown as typeof sql, jobId, "failed", { reason: "dispatcher_exception" }, msg);
+      }
+      return row;
+    });
     const failed = failedRow ? [failedRow] : [];
     await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
     if (failed[0]?.type === "verify_finding") {
@@ -734,11 +848,35 @@ async function runJob(jobId: string) {
   }
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
-  ]);
+function withProvisionTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+  onTimeout: () => void,
+  onLateResolve: (value: T) => Promise<unknown>,
+): Promise<T> {
+  let timedOut = false;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      timedOut = true;
+      onTimeout();
+      reject(new Error(message));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        if (timedOut) {
+          void onLateResolve(value).catch(() => {});
+          return;
+        }
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        if (!timedOut) reject(error);
+      },
+    );
+  });
 }
 
 /** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */

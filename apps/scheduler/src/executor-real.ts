@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { normalizeRuntimeErrorDetails, runRealAgent } from "@deepsonar/runtime-sandbox";
+import {
+  contextIdentity,
+  normalizeRuntimeErrorDetails,
+  runRealAgent,
+  type ContextState,
+} from "@deepsonar/runtime-sandbox";
 import {
   DonePayload,
   ControlEventEnvelope,
@@ -70,6 +75,7 @@ import { inc } from "./metrics.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
 import {
   hasProviderSettingsConfig,
+  materializeProviderSettings,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
 import {
@@ -90,6 +96,11 @@ import {
   invalidVerification,
 } from "./control-input.js";
 import { EventRateLimitError } from "./domains/event-ingestion/rate-limit.js";
+import {
+  applyRuntimeContextEvent,
+  createJobRuntimeContext,
+  persistJobRuntimeContext,
+} from "./domains/context/index.js";
 
 function invalidToolPayload(
   tool: PlatformToolName,
@@ -193,7 +204,7 @@ async function ingestSemanticEventBundle(
   await ingestEventBundle(jobId, events);
 }
 
-/** Rebuild only the Scheduler-owned stable error shape after the sandbox's string result boundary. */
+/** 沙箱字符串结果越界后，只重建 Scheduler 管理的稳定错误结构。 */
 export function reconstructAgentRunError(
   message: string,
   details?: { code?: unknown; metadata?: unknown },
@@ -588,7 +599,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   // Historical Jobs created before platform defaults were frozen may lack
   // agent_cli; use the code-level compatibility constant, never AGENT_PROVIDER.
   const cliName = snapshot.agent_cli || PLATFORM_DEFAULT_AGENT_CLI;
-  const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex";
+  const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex" | "pi";
   const model = snapshot.model ?? undefined;
   const reasoning = snapshot.reasoning ?? undefined;
   const rules = await rulesForProject(sql, job.project_id as string);
@@ -640,6 +651,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   const materializedProviderConfig = hasMaterializedProviderConfig(snapshot.settings_config_json);
   let runtimeConfigFiles = snapshot.config_files.map((item) => ({ ...item }));
   let runtimeGatewayRouted = false;
+  let gatewayToken: string | null = null;
   for (const key of snapshot.env_keys) {
     if (!config.runtime.isEnvKeyAllowed(key)) {
       console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
@@ -669,7 +681,22 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       allowedModels: model ? [model] : credentialModels,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
     });
-    if (materializedProviderConfig) {
+    gatewayToken = jt.plaintext;
+    registerJobEvidenceSecrets(jobId, [gatewayToken]);
+    env.DEEPSONAR_GATEWAY_TOKEN = gatewayToken;
+    if (provider === "pi" && !materializedProviderConfig) {
+      runtimeConfigFiles = materializeProviderSettings({
+        agentCli: "pi",
+        settingsConfig: {
+          provider: currentCredentialProvider,
+          baseUrl: "https://gateway.invalid",
+          api: currentCredentialProvider === "anthropic" ? "anthropic-messages" : "openai-responses",
+          models: [{ id: model || (currentCredentialProvider === "anthropic" ? "claude-sonnet-4-5" : "gpt-5") }],
+        },
+        overrides: { model },
+      });
+    }
+    if (materializedProviderConfig || provider === "pi") {
       runtimeConfigFiles = routeMaterializedProviderFilesThroughGateway({
         agentCli: provider,
         files: runtimeConfigFiles,
@@ -680,7 +707,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       if (mapping.baseUrlKey) delete env[mapping.baseUrlKey];
       runtimeGatewayRouted = true;
     }
-    if (!materializedProviderConfig) {
+    if (!materializedProviderConfig && provider !== "pi") {
       for (const k of mapping.secretKeys) env[k] = jt.plaintext;
       if (mapping.baseUrlKey) {
         env[mapping.baseUrlKey] = config.gateway.sandboxUrl;
@@ -949,10 +976,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     command: "node",
     args: ["/workspace/.deepsonar/control-mcp.mjs"],
   };
-  const mcps = [
-    ...snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME),
-    controlMcp,
-  ];
+  const useControlMcp = provider !== "pi";
+  const mcps = useControlMcp
+    ? [
+        ...snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME),
+        controlMcp,
+      ]
+    : snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME);
   const moduleEvidence = moduleEvidenceFromSnapshot(snapshot);
   const componentManifest = {
     v: 1,
@@ -972,11 +1002,16 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     mcps: { names: componentNames(mcps), count: mcps.length, sha256: jsonHash(mcps) },
     subagents: { names: componentNames(snapshot.subagents), count: snapshot.subagents.length, sha256: jsonHash(snapshot.subagents) },
     provider_files: runtimeConfigFiles.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
+    pi_extensions: provider === "pi"
+      ? runtimeConfigFiles
+        .filter((f) => f.path.startsWith(".pi/agent/extensions/"))
+        .map((f) => ({ path: f.path, sha256: f.content_sha256 }))
+      : [],
     provider_gateway_routed: runtimeGatewayRouted,
     system_tools: controlToolNames,
     disabled_system_tools: disabledControlToolNames,
     system_tool_guide: toolGuide,
-    system_mcp: { name: CONTROL_MCP_NAME, script_sha256: sha256(CONTROL_MCP_SERVER) },
+    system_mcp: useControlMcp ? { name: CONTROL_MCP_NAME, script_sha256: sha256(CONTROL_MCP_SERVER) } : null,
     result_contract: contract,
     runtime_image: {
       image: snapshot.runtime_image.image_ref,
@@ -991,7 +1026,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       workspace_catalog: SHARED_ASSETS_WORKSPACE_CATALOG,
       note: "No download tool; open mount_path. Bytes materialised by Scheduler BlobStore (fs|s3).",
     },
-    semantic_event_transport: platformApiEnabled
+    semantic_event_transport: provider === "pi"
+      ? "job_scoped_control_api"
+      : platformApiEnabled
       ? "local_mcp_or_job_scoped_control_api"
       : "local_mcp_over_agentbox_control_channel",
     canvas_update_delivery: "agent_attach_sendMessage",
@@ -1014,7 +1051,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const workspaceFiles: Record<string, string> = {
     ...buildInstructionWorkspaceFiles(instructions),
     "/workspace/.deepsonar/runtime-manifest.json": JSON.stringify(componentManifest, null, 2),
-    "/workspace/.deepsonar/control-mcp.mjs": CONTROL_MCP_SERVER,
+    ...(useControlMcp ? { "/workspace/.deepsonar/control-mcp.mjs": CONTROL_MCP_SERVER } : {}),
   };
   if ((snapshot.shared_assets?.length ?? 0) > 0) {
     // Catalog metadata always available even if the named volume is empty in fake mode;
@@ -1022,13 +1059,67 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     workspaceFiles[SHARED_ASSETS_WORKSPACE_CATALOG] = `${JSON.stringify(sharedAssetCatalog, null, 2)}\n`;
   }
   for (const file of runtimeConfigFiles) {
-    workspaceFiles[`/workspace/${file.path}`] = file.content;
+    const target = provider === "pi" && file.path.startsWith(".pi/")
+      ? `/workspace/.deepsonar-home/${file.path}`
+      : `/workspace/${file.path}`;
+    workspaceFiles[target] = file.content;
   }
 
   const runtimeImage = snapshot.runtime_image?.image_ref;
   if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
 
   // ---------- 证据链（§10.3）：镜像 digest / provider / 模型 / prompt 版本随 job 冻结 ----------
+  const [activeAttempt] = await sql`
+    SELECT id, attempt_no, snapshot_identity_json
+      FROM job_attempts
+     WHERE job_id = ${jobId} AND status = 'active'
+     ORDER BY attempt_no DESC
+     LIMIT 1`;
+  if (!activeAttempt?.id) throw new Error(`job ${jobId} 没有活动 Attempt，拒绝启动真实 Agent`);
+  const attemptId = String(activeAttempt.id);
+  const snapshotDigest = activeAttempt?.snapshot_identity_json && typeof activeAttempt.snapshot_identity_json === "object"
+    ? (activeAttempt.snapshot_identity_json as Record<string, unknown>).snapshot_sha256
+    : null;
+  const runtimeIdentity = String(snapshot.runtime_image.image_digest ?? snapshot.runtime_image.image_ref ?? runtimeImage);
+  const graphContextSplit = graph
+    ? (() => {
+        const index = initialInput.indexOf(graph.yaml);
+        if (index < 0) return null;
+        return {
+          before: initialInput.slice(0, index),
+          after: initialInput.slice(index + graph.yaml.length),
+        };
+      })()
+    : null;
+  const graphMaxChars = graph
+    ? graph.scope === "hub"
+      ? config.graph.maxYamlCharsHub
+      : graph.scope === "agent"
+        ? config.graph.maxYamlCharsAgent
+        : graph.scope === "verify"
+          ? config.graph.maxYamlCharsVerify
+          : config.graph.maxYamlCharsReport
+    : null;
+  let runtimeContext: ContextState = createJobRuntimeContext({
+    attemptId,
+    adapterId: snapshot.agent_runtime.adapter_id,
+    adapterVersion: snapshot.agent_runtime.adapter_version,
+    runtimeIdentity,
+    compactionPolicy: snapshot.agent_runtime.capabilities.contextCompactionPolicy,
+    snapshotDigest: typeof snapshotDigest === "string" ? snapshotDigest : null,
+    initialInput: graphContextSplit?.before ?? initialInput,
+    graph: graph && graphContextSplit
+      ? {
+          yaml: graph.yaml,
+          truncated: graph.truncated,
+          omitted: graph.omitted,
+          maxChars: graphMaxChars ?? graph.yamlChars,
+          suffix: graphContextSplit?.after,
+        }
+      : null,
+  });
+  await persistJobRuntimeContext(sql, jobId, runtimeContext);
+  const runtimeContextIdentity = contextIdentity(runtimeContext);
   const runtimeEvidence: Record<string, unknown> = {
     image: runtimeImage,
     image_digest: snapshot.runtime_image.image_digest,
@@ -1067,6 +1158,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     skill_revisions: moduleEvidence.skill_revisions,
     shared_assets_revision: snapshot.shared_assets_revision ?? null,
     shared_asset_count: snapshot.shared_assets?.length ?? 0,
+    context: runtimeContext,
     recorded_at: new Date().toISOString(),
   };
   await sql`
@@ -1119,10 +1211,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   ) => {
     let event: ControlEventEnvelope;
     try {
-      // Hub references need the graph-aware parser first so malformed values
-      // retain the stable invalid_node_ref contract instead of becoming a
-      // generic Zod error.  ControlEventEnvelope then enforces the external
-      // no-Scheduler-owned-fields boundary for every tool.
+      // Hub 引用先经过图感知解析器，使畸形值保留稳定 invalid_node_ref 契约，
+      // 而不是退化成通用 Zod 错误；随后由 ControlEventEnvelope 对所有工具执行
+      // 禁止外部写入 Scheduler 管理字段的边界。
       let payload = raw.payload;
       if (raw.type === "fact" || raw.type === "finding" || raw.type === "hub_decision") {
         payload = await expandWorkspacePayloadFile(
@@ -1285,9 +1376,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
   // 「当前动作」直接更新节点显示态（throttle 1.5s；非语义事件，不进 events 表）
   let lastActionPush = 0;
-  const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(job.sandbox_id ?? job.id ?? "unknown"));
+  const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(attemptId ?? job.sandbox_id ?? job.id ?? "unknown"));
   const evidenceAttemptId = evidenceWriter.attemptId;
-  // Advertise stream cursors only after their evidence line is persisted.
+  // 只有证据行持久化后才发布实时流游标。
   let streamPublishTail: Promise<void> = Promise.resolve();
 
   // Capability tokens are minted only after the real execution boundary is
@@ -1371,16 +1462,27 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       reasoning,
       env,
       input: initialInput,
+      contextIdentity: runtimeContextIdentity,
+      onContextEvent: async (event) => {
+        runtimeContext = applyRuntimeContextEvent(runtimeContext, event);
+        await persistJobRuntimeContext(sql, jobId, runtimeContext);
+        return contextIdentity(runtimeContext);
+      },
       systemPrompt: PLATFORM_SYSTEM_PROMPT,
       // 完整运行快照：workspace 文件由系统生成，其余组件由 agentbox setup 差量上传。
       skills: runtimeSkills as never,
       commands: snapshot.commands as never,
       mcps: mcps as never,
       subAgents: snapshot.subagents as never,
+      piExtensions: provider === "pi"
+        ? runtimeConfigFiles
+          .filter((file) => file.path.startsWith(".pi/agent/extensions/"))
+          .map((file) => `/workspace/.deepsonar-home/${file.path}`)
+        : [],
       workspaceFiles,
       semanticToolEvents: semanticToolEventsFor(controlToolNames),
       onSemanticEvent,
-      secretValues: platformToken ? [platformToken] : undefined,
+      secretValues: [platformToken, gatewayToken].filter((value): value is string => Boolean(value)),
       onRunReady: async ({ sendMessage, readWorkspaceFile }) => {
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;
         if (platformApiEnabled) {

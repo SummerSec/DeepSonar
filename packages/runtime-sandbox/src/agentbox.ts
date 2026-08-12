@@ -20,7 +20,13 @@ import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
-import { requireAgentCliRuntimeAdapter, type AgentCliRuntimeSnapshot } from "./runtime-adapters.js";
+import { assertContextResume, type ContextIdentity } from "./context-contract.js";
+import {
+  parsePiJsonlRecord,
+  PiJsonlFramer,
+  requireAgentCliRuntimeAdapter,
+  type AgentCliRuntimeSnapshot,
+} from "./runtime-adapters.js";
 import type { ProvisionInput, RunHandle, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 
 const execFileP = promisify(execFile);
@@ -144,8 +150,9 @@ if (process.platform === "win32") {
     args[0]?.startsWith("/") ? path.posix.join(...args) : origJoin(...args)) as typeof path.join;
 }
 
-/** jobId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
+/** sandboxId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
 const sandboxes = new Map<string, Sandbox>();
+const provisioningSandboxes = new Map<string, Sandbox>();
 const terminalSessions = new Map<string, Set<SandboxTerminalSession>>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
 const GATEWAY_NETWORK = "deepsonar-sandbox-gateway";
@@ -605,6 +612,8 @@ function hardenCreateContainer(
 
 export class AgentboxRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
+    if (input.signal?.aborted) throw new Error("provision 已取消");
+    const provisionKey = `${input.jobId}:${input.attemptId}`;
     const extraHosts: string[] = [];
     const readonlyBinds = sharedAssetsVolumeBinds(input.sharedAssetsMount);
     if (input.sharedAssetsMount) {
@@ -620,7 +629,11 @@ export class AgentboxRunner implements SandboxRunner {
       image: input.image,
       workingDir: "/workspace",
       env: input.env,
-      tags: { "deepsonar.job": input.jobId },
+      tags: {
+        "deepsonar.job": input.jobId,
+        "deepsonar.attempt": input.attemptId,
+        ...(input.resourceLabels ?? {}),
+      },
       // SEC-03：CPU/内存硬限制（SDK 原生透传 NanoCpus/Memory）
       resources: {
         cpu: input.limits?.cpu ?? 2,
@@ -636,8 +649,21 @@ export class AgentboxRunner implements SandboxRunner {
         autoRemove: true,
       },
     });
+    provisioningSandboxes.set(provisionKey, sandbox);
+    let aborted = false;
+    const abort = () => {
+      aborted = true;
+      void sandbox.delete().catch(() => {});
+    };
+    input.signal?.addEventListener("abort", abort, { once: true });
     hardenCreateContainer(sandbox, input.limits, extraHosts, readonlyBinds);
-    await sandbox.findOrProvision();
+    try {
+      await sandbox.findOrProvision();
+      if (aborted || input.signal?.aborted) throw new Error("provision 已取消");
+    } finally {
+      provisioningSandboxes.delete(provisionKey);
+      input.signal?.removeEventListener("abort", abort);
+    }
     const id = sandbox.id ?? `unknown-${input.jobId}`;
     sandboxes.set(id, sandbox);
     try {
@@ -669,6 +695,11 @@ export class AgentboxRunner implements SandboxRunner {
       throw new RuntimeImageContractError(error instanceof Error ? error.message : String(error));
     }
     return { sandboxId: id };
+  }
+
+  async cancelProvision(input: { jobId: string; attemptId: string }): Promise<void> {
+    const sandbox = provisioningSandboxes.get(`${input.jobId}:${input.attemptId}`);
+    if (sandbox) await sandbox.delete().catch(() => {});
   }
 
   async destroy(handle: RunHandle): Promise<void> {
@@ -777,6 +808,7 @@ export class RuntimeImageContractError extends Error {
 export interface DeepSonarContainer {
   containerId: string;
   jobId: string;
+  attemptId: string;
   state: string;
 }
 
@@ -800,7 +832,12 @@ export async function listDeepSonarContainers(): Promise<DeepSonarContainer[]> {
           .map((kv) => kv.trim())
           .find((kv) => kv.startsWith("deepsonar.job="))
           ?.slice("deepsonar.job=".length);
-        return { containerId, jobId: jobId ?? "", state };
+        const attemptId = labels
+          .split(",")
+          .map((kv) => kv.trim())
+          .find((kv) => kv.startsWith("deepsonar.attempt="))
+          ?.slice("deepsonar.attempt=".length);
+        return { containerId, jobId: jobId ?? "", attemptId: attemptId ?? "", state };
       })
       .filter((c) => c.containerId && c.jobId);
   } catch (e) {
@@ -820,7 +857,7 @@ export async function forceRemoveContainer(containerId: string): Promise<void> {
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export interface RealAgentSpec {
-  provider: "claude-code" | "open-code" | "codex";
+  provider: "claude-code" | "open-code" | "codex" | "pi";
   adapter?: AgentCliRuntimeSnapshot;
   runtimeImageKey?: string;
   /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
@@ -837,6 +874,8 @@ export interface RealAgentSpec {
   commands?: AgentCommandConfig[];
   mcps?: AgentMcpConfig[];
   subAgents?: AgentSubAgentConfig[];
+  /** Pi 仅显式加载由 Scheduler 冻结的 Extension，项目 .pi 不参与自动发现。 */
+  piExtensions?: readonly string[];
   /** 本 Job 动态工作区：指令文件、Provider 配置等；只允许 /workspace 下的绝对路径。 */
   workspaceFiles?: Record<string, string>;
   /** 运行后要读回的文件 */
@@ -869,7 +908,16 @@ export interface RealAgentSpec {
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
   onEvent?: (event: Record<string, unknown>) => void;
-  /** Exact short-lived secrets to redact before telemetry/evidence/session output. */
+  /** 上下文压缩摘要；不得携带原始 prompt 或 provider 原文。可返回更新后的身份。 */
+  onContextEvent?: (event: Record<string, unknown>) => void | ContextIdentity | Promise<void | ContextIdentity>;
+  /** 恢复前由调度器冻结的上下文身份。 */
+  contextIdentity?: ContextIdentity;
+  /** 恢复前查询适配器实际身份；返回不一致或缺失时 fail closed。 */
+  getResumeContextIdentity?: (input: {
+    sessionId: string;
+    sessionFile?: string;
+  }) => ContextIdentity | Promise<ContextIdentity>;
+  /** telemetry/evidence/session 输出前必须精确脱敏的短期密钥。 */
   secretValues?: readonly string[];
   /** 非语义运行流告警；告警不会进入控制事件或写库。 */
   onWarning?: (warning: { code: string; detail?: string }) => void;
@@ -880,12 +928,13 @@ export interface RealAgentResult {
   files: Record<string, string>;
   /** CLI 原始 Session；由 provider 专属 Adapter 在沙箱销毁前读回。 */
   session?: SessionBundle;
+  sessionFile?: string;
   error?: string;
-  /** Distinguish fail-closed host semantic validation from a Provider/CLI run failure. */
+  /** 区分宿主语义校验失败关闭与 Provider/CLI 运行失败。 */
   errorKind?: "semantic" | "runner";
-  /** The last terminal CLI attempt, even when an older runner error leaked across retries. */
+  /** 最后一次 CLI 终态尝试；旧 runner 错误跨重试残留时仍以此为准。 */
   terminalOutcome?: "success" | "failure";
-  /** Scheduler-owned semantic failure details; never carries arbitrary Error fields. */
+  /** Scheduler 管理的语义失败详情；不携带任意 Error 字段。 */
   errorDetails?: RuntimeErrorDetails;
 }
 
@@ -908,9 +957,8 @@ function boundedRateLimitNumber(value: unknown, max: number): number | undefined
 }
 
 /**
- * Preserve only the Scheduler-owned rate-limit code and bounded metadata when
- * a semantic callback crosses the generic sandbox result boundary.  Error
- * stacks, arbitrary properties, and payload-bearing metadata are discarded.
+ * 语义回调跨越通用沙箱结果边界时，只保留 Scheduler 管理的限流码和有界元数据；
+ * 丢弃错误栈、任意属性和携带 payload 的元数据。
  */
 export function normalizeRuntimeErrorDetails(error: unknown): RuntimeErrorDetails | undefined {
   if (!error || typeof error !== "object") return undefined;
@@ -1304,6 +1352,8 @@ export function skillMaterializationPath(
     ? `${RUNTIME_HOME}/.codex/skills`
     : provider === "open-code"
       ? `${RUNTIME_HOME}/.config/opencode/skills`
+      : provider === "pi"
+        ? `${RUNTIME_HOME}/.pi/agent/skills`
       : `${CLAUDE_DIR}/skills`;
   const root = strictChildPath(
     skillsRoot,
@@ -1361,7 +1411,7 @@ export function materializationPathCollisions(
  * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
  * embedded skills → 当前 CLI 的标准 skills 目录（Claude `.claude/skills`、
- * Codex `.codex/skills`、OpenCode `.config/opencode/skills`）；repo skills 需出网安装，尽力而为。
+ * Codex `.codex/skills`、OpenCode `.config/opencode/skills`、Pi `.pi/agent/skills`）；repo skills 需出网安装，尽力而为。
  */
 async function materializeAgentFiles(
   sandbox: Sandbox,
@@ -1404,8 +1454,9 @@ async function materializeAgentFiles(
   // repo 形式 skill：需要出网，失败只告警不阻断
   for (const skill of spec.skills ?? []) {
     if ("files" in skill || !skill.repo) continue;
+    const skillAgent = provider === "open-code" ? "opencode" : provider === "claude-code" ? "claude-code" : provider;
     const res = await sandbox.run(
-      `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent claude -y`,
+      `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent ${shellQuote(skillAgent)} -y`,
       { timeoutMs: 120_000, env: cliEnv },
     ).catch(() => null);
     if (!res || res.exitCode !== 0) console.warn(`[real-agent] repo skill 安装失败: ${skill.name}`);
@@ -1835,6 +1886,8 @@ export function mapCliEvent(
   isError?: boolean;
   errorDetail?: string;
   sessionId?: string;
+  sessionFile?: string;
+  settled?: boolean;
   semanticEvents: Array<Record<string, unknown>>;
   warnings: Array<{ code: string; detail?: string }>;
 } {
@@ -2010,6 +2063,23 @@ export function mapCliEvent(
     emit({ type: "run.completed", text: safeText || (line.subtype as string) });
     return { finalText: safeText, isError, errorDetail: isError ? safeText || `agent result: ${String(line.subtype)}` : undefined, semanticEvents, warnings };
   }
+  if (type === "agent_settled") {
+    const text = typeof line.result === "string" ? redactSecretValues(line.result, secretValues) : "";
+    emit({ type: "run.settled", sessionId: line.session_id, sessionFile: line.session_file });
+    return {
+      finalText: text,
+      isError: false,
+      sessionId: typeof line.session_id === "string" ? line.session_id : undefined,
+      sessionFile: typeof line.session_file === "string" ? line.session_file : undefined,
+      settled: true,
+      semanticEvents,
+      warnings,
+    };
+  }
+  if (type === "agent_end") {
+    emit({ type: "run.agent_end" });
+    return { semanticEvents, warnings };
+  }
   return { semanticEvents, warnings };
 }
 
@@ -2064,9 +2134,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
-  // Compare capability maps by key, not JSON.stringify: agent_snapshot_json is
-  // stored as Postgres JSONB, which does not preserve object key insertion order.
-  // A pure stringify equality would fail every Job whose freeze round-tripped DB.
+  // 按键比较能力映射，不使用 JSON.stringify：Postgres JSONB 不保留对象键插入顺序，
+  // 单纯字符串比较会误拒绝所有经过数据库往返的冻结 Job。
   const capabilityValues = (value: object | undefined): Map<string, unknown> => {
     const out = new Map<string, unknown>();
     if (!value) return out;
@@ -2112,7 +2181,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   await ensureRuntimeHome(sandbox);
   await materializeAgentFiles(sandbox, spec, cliEnv);
   const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;
-  await sandbox.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
+  if (spec.provider !== "pi") {
+    await sandbox.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
+  }
   let systemPromptPath: string | null = null;
   if (spec.systemPrompt) {
     systemPromptPath = `${RUNTIME_DIR}/system-prompt.txt`;
@@ -2129,6 +2200,21 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     ...(systemPromptPath ? { systemPromptPath } : {}),
   });
 
+  let expectedContextIdentity = spec.contextIdentity;
+  let observedResumeContextIdentity: ContextIdentity | undefined;
+  const assertResumeIdentity = async (): Promise<void> => {
+    if (!expectedContextIdentity) return;
+    const actual = spec.getResumeContextIdentity
+      ? await spec.getResumeContextIdentity({ sessionId, ...(sessionFile ? { sessionFile } : {}) })
+      : observedResumeContextIdentity;
+    if (!actual) throw new Error("CONTEXT_RESUME_IDENTITY_UNKNOWN");
+    assertContextResume(expectedContextIdentity, actual);
+    if (spec.provider === "pi") {
+      if (!sessionFile) throw new Error("CONTEXT_RESUME_SESSION_FILE_MISSING");
+      if (actual.session_file !== sessionFile) throw new Error("CONTEXT_RESUME_SESSION_FILE_MISMATCH");
+      expectedContextIdentity = { ...expectedContextIdentity, session_file: sessionFile };
+    }
+  };
   const adapterContext = {
     sandbox,
     cwd: "/workspace",
@@ -2138,13 +2224,14 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     input: spec.input,
     mcpConfigPath,
     ...(systemPromptPath ? { systemPromptPath } : {}),
+    ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
+    ...(spec.piExtensions ? { piExtensions: spec.piExtensions } : {}),
   };
   let exec = await adapter.start(adapterContext);
   // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
   // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
   let stdinClosed = false;
-  const writeUserMessage = async (content: string) => {
-    const encoded = adapter.encodeInput(content);
+  const writeEncoded = async (encoded: string) => {
     if (!encoded) return;
     if (!exec.write) throw new Error("沙箱 exec 不支持 stdin 写入");
     const rawStream = (exec.raw as { stream?: { destroyed?: boolean; writableEnded?: boolean; writable?: boolean } } | undefined)?.stream;
@@ -2159,14 +2246,22 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       throw new Error(`agent stdin 写入失败: ${msg}`);
     }
   };
+  const writeInitialMessage = async (content: string) => writeEncoded(adapter.encodeInput(content));
+  const writeSteerMessage = async (content: string) => writeEncoded(
+    adapter.encodeSteer ? adapter.encodeSteer(content) : adapter.encodeInput(content),
+  );
+  const writeFollowUpMessage = async (content: string) => writeEncoded(
+    adapter.encodeFollowUp ? adapter.encodeFollowUp(content) : adapter.encodeInput(content),
+  );
+  if (adapter.encodeGetState) await writeEncoded(adapter.encodeGetState());
   const disposeMessageSource = await spec.onRunReady?.({
-    sendMessage: writeUserMessage,
+    sendMessage: writeSteerMessage,
     readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
   });
   try {
-    // Register the Job-scoped runtime handler before the first prompt enters
-    // stdin, so a fast CLI cannot race its initial API discovery/call.
-    await writeUserMessage(spec.input);
+    // 在首条 prompt 写入 stdin 前注册 Job 级运行 handler，避免 CLI 的首次 API
+    // 发现/调用与宿主注册发生竞态。
+    await writeInitialMessage(spec.input);
   } catch (error) {
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
     throw error;
@@ -2174,7 +2269,12 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
   const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
-  const adapterState = { sessionId: undefined as string | undefined, finalText: undefined as string | undefined };
+  const adapterState = {
+    sessionId: undefined as string | undefined,
+    sessionFile: undefined as string | undefined,
+    finalText: undefined as string | undefined,
+    ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
+  };
 
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
@@ -2182,6 +2282,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let stdoutBuffer = "";
   let finalText = "";
   let sessionId = "";
+  let sessionFile = "";
   let runError: string | undefined;
   let terminalOutcome: RealAgentResult["terminalOutcome"];
   let semanticErrorDetails: RuntimeErrorDetails | undefined;
@@ -2189,9 +2290,16 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let sessionResumeAttempts = 0;
   let resumeSkipNotice: string | undefined;
   const sessionResumeMessage = "上游请求暂时失败，请在当前会话中继续完成原任务，不要开启新会话；不要重复已成功的工具调用或副作用，只继续未完成的步骤。";
-  // These values describe only the process currently being consumed.  They
-  // must be reset before every completion-gate resume; otherwise a previous
-  // final text/result can mask a later process exit.
+  const bindObservedResumeIdentity = () => {
+    if (!expectedContextIdentity || !sessionId) return;
+    if (spec.provider === "pi" && !sessionFile) return;
+    observedResumeContextIdentity = {
+      ...expectedContextIdentity,
+      ...(spec.provider === "pi" ? { session_file: sessionFile } : {}),
+    };
+  };
+  // 这些值只描述当前消费的进程；每次完成门恢复前必须重置，避免旧进程的
+  // final text/result 掩盖后续进程退出。
   let attemptFinalText = "";
   let attemptExitCode = 0;
   let attemptTerminalResult: TerminalProcessAttempt["terminalResult"];
@@ -2216,6 +2324,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       let resumedExec: typeof exec | undefined;
       let resumedInput: string | undefined;
       let processError: unknown;
+      const piFramer = spec.provider === "pi" ? new PiJsonlFramer() : undefined;
       try {
         for await (const chunk of exec) {
           if (chunk.type === "stderr") {
@@ -2226,14 +2335,22 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             attemptExitCode = chunk.exitCode ?? 0;
             continue;
           }
-          stdoutBuffer += chunk.chunk;
-          // stream-json 按行解析，未完成的行留给下一个 chunk
-          let idx: number;
-          while ((idx = stdoutBuffer.indexOf("\n")) >= 0) {
-            const line = stdoutBuffer.slice(0, idx).trim();
-            stdoutBuffer = stdoutBuffer.slice(idx + 1);
+          const lines: string[] = [];
+          if (piFramer) {
+            lines.push(...piFramer.push(chunk.chunk ?? ""));
+          } else {
+            stdoutBuffer += chunk.chunk ?? "";
+            // 其他 CLI 按行解析，未完成的行留给下一个 chunk。
+            let idx: number;
+            while ((idx = stdoutBuffer.indexOf("\n")) >= 0) {
+              lines.push(stdoutBuffer.slice(0, idx));
+              stdoutBuffer = stdoutBuffer.slice(idx + 1);
+            }
+          }
+          for (const rawLine of lines) {
+            const line = piFramer ? rawLine : rawLine.trim();
             if (!line) continue;
-            const parsedLine = parseRuntimeLine(line);
+            const parsedLine = piFramer ? { parsed: parsePiJsonlRecord(line) } : parseRuntimeLine(line);
             if (!parsedLine.parsed) {
               if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
               continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
@@ -2241,7 +2358,29 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             const rawParsed = parsedLine.parsed;
             const decodedEvents = adapter.decodeOutput(rawParsed, adapterState);
             if (adapterState.sessionId && !sessionId) sessionId = adapterState.sessionId;
+            if (adapterState.sessionFile && !sessionFile) sessionFile = adapterState.sessionFile;
+            bindObservedResumeIdentity();
             for (const parsed of decodedEvents) {
+              if (parsed.type === "context.compacted" || parsed.type === "context.compaction_unknown") {
+                const safeContextEvent = redactToolTelemetry(parsed, undefined, 0, secretValues) as Record<string, unknown>;
+                spec.onEvent?.(safeContextEvent);
+                const updatedContextIdentity = await spec.onContextEvent?.(safeContextEvent);
+                if (parsed.type === "context.compacted" && expectedContextIdentity && updatedContextIdentity) {
+                  expectedContextIdentity = updatedContextIdentity;
+                } else if (parsed.type === "context.compacted" && expectedContextIdentity) {
+                  expectedContextIdentity = {
+                    ...expectedContextIdentity,
+                    context_id: String(parsed.context_id ?? expectedContextIdentity.context_id),
+                    context_revision: Number(parsed.context_revision ?? expectedContextIdentity.context_revision),
+                    adapter_id: String(parsed.adapter_id ?? expectedContextIdentity.adapter_id),
+                    adapter_version: String(parsed.adapter_version ?? expectedContextIdentity.adapter_version),
+                    runtime_identity: String(parsed.runtime_identity ?? expectedContextIdentity.runtime_identity),
+                    transform_chain_digest: String(parsed.transform_chain_digest ?? expectedContextIdentity.transform_chain_digest),
+                  };
+                }
+                if (parsed.type === "context.compacted") bindObservedResumeIdentity();
+                continue;
+              }
               const outcome = mapCliEvent(parsed, (e) => {
                 const safeEvent = redactToolTelemetry(e, undefined, 0, secretValues) as Record<string, unknown>;
                 spec.onEvent?.(safeEvent);
@@ -2257,7 +2396,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                 }
               }, semanticToolEvents, semanticToolState, secretValues);
               for (const warning of outcome.warnings) spec.onWarning?.(warning);
-              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta"].includes(String(parsed.type))) {
+              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta", "agent_settled", "agent_end"].includes(String(parsed.type))) {
                 spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
               }
               for (const event of outcome.semanticEvents) {
@@ -2293,14 +2432,15 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                       `错误: ${message}\n` +
                       "请根据错误修正参数并重新调用该工具（或改用 payload_file）；不要 mark_job_done，直到契约要求的提交成功。";
                     if (adapter.capabilities.incrementalMessages) {
-                      await writeUserMessage(nudge);
+                      await writeFollowUpMessage(nudge);
                     } else if (sessionId) {
-                      // Non-incremental CLIs: resume same session with the error so
-                      // the model can still recover instead of dying mid-run.
+                      // 非增量 CLI 在同一会话带错误恢复，使模型能修正而不是中途终止。
                       try {
-                        resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
+                        await assertResumeIdentity();
+                        resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: nudge, sessionId, ...(sessionFile ? { sessionFile } : {}) });
                         resumedInput = nudge;
                       } catch (resumeError) {
+                        if (resumeError instanceof Error && resumeError.message.startsWith("CONTEXT_RESUME_")) throw resumeError;
                         spec.onWarning?.({
                           code: "control_tool_reject_resume_failed",
                           detail: resumeError instanceof Error ? resumeError.message : String(resumeError),
@@ -2317,20 +2457,20 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
               // 首次捕获后保持 session ID 不变；恢复进程只能继续原会话，不能把
               // 后续输出中的其他 ID 提升为新的恢复目标。
               if (outcome.sessionId && !sessionId) sessionId = outcome.sessionId;
+              if (outcome.sessionFile && !sessionFile) sessionFile = outcome.sessionFile;
+              bindObservedResumeIdentity();
               if (outcome.isError !== undefined) {
                 attemptTerminalResult = {
                   isError: outcome.isError,
                   ...(outcome.errorDetail !== undefined ? { errorDetail: outcome.errorDetail } : {}),
                 };
                 terminalOutcome = outcome.isError ? "failure" : "success";
-                // Replace the previous attempt's outcome even when the provider
-                // omits final text but still emits a terminal success/failure.
+                // 即使 Provider 省略最终文本，只要发出终态成功/失败，也覆盖上一轮结果。
                 runError = resolveTerminalRunError(outcome);
               }
               if (outcome.finalText !== undefined) {
-                // Each completion-gate attempt has its own terminal outcome. A
-                // later success clears a transient Provider error; if retries
-                // exhaust, the last failed attempt remains authoritative.
+                // 每次完成门尝试都有独立终态。后续成功清除临时 Provider 错误；
+                // 重试耗尽时以最后一次失败为准。
                 attemptFinalText = outcome.finalText;
                 finalText = outcome.finalText;
                 if (outcome.isError !== true && spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
@@ -2338,10 +2478,11 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                   const nudge = spec.nudgeMessage ??
                     "协议要求的系统工具调用还没有完成。请立即通过平台 MCP 工具提交（不要只用文本描述），然后结束本轮。";
                   if (adapter.capabilities.incrementalMessages) {
-                    await writeUserMessage(nudge);
+                    await writeFollowUpMessage(nudge);
                   } else {
                     if (!sessionId) throw new Error(`AGENT_CLI_COMPLETION_GATE_SESSION_MISSING: ${adapter.id}`);
-                    resumedExec = await adapter.resume({ ...adapterContext, input: nudge, sessionId });
+                    await assertResumeIdentity();
+                    resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: nudge, sessionId, ...(sessionFile ? { sessionFile } : {}) });
                     resumedInput = nudge;
                   }
                 } else {
@@ -2357,6 +2498,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             }
           }
         }
+        if (piFramer) piFramer.finish();
       } catch (error) {
         processError = error;
       }
@@ -2393,9 +2535,11 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             spec.onEvent?.({ type: "run.retrying", reason, attempt, delayMs });
             await waitForCliSessionResume(attempt);
             try {
-              resumedExec = await adapter.resume({ ...adapterContext, input: sessionResumeMessage, sessionId });
+              await assertResumeIdentity();
+              resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: sessionResumeMessage, sessionId, ...(sessionFile ? { sessionFile } : {}) });
               resumedInput = sessionResumeMessage;
             } catch (resumeError) {
+              if (resumeError instanceof Error && resumeError.message.startsWith("CONTEXT_RESUME_")) throw resumeError;
               const detail = runtimeErrorText(resumeError).slice(0, 280) || "unknown_resume_error";
               spec.onWarning?.({ code: "cli_session_resume_failed", detail });
               runError = `AGENT_CLI_RESUME_FAILED: ${adapter.id}`;
@@ -2425,7 +2569,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       attemptTerminalResult = undefined;
       attemptCloseReason = undefined;
       attemptStderrTail = "";
-      if (adapter.capabilities.incrementalMessages && resumedInput) await writeUserMessage(resumedInput);
+      if (adapter.capabilities.incrementalMessages && resumedInput) await writeFollowUpMessage(resumedInput);
     }
   } catch (e) {
     // An exception while handling the current attempt is the latest runner
@@ -2461,6 +2605,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
           readText: (filePath) => readSandboxFileText(sandbox, filePath),
         },
         sessionId,
+        sessionFile || undefined,
       ).catch((error) => ({
         cli: spec.provider,
         sessionId,
@@ -2496,5 +2641,6 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         : {}),
     ...(semanticErrorDetails ? { errorDetails: semanticErrorDetails } : {}),
     ...(terminalOutcome ? { terminalOutcome } : {}),
+    ...(sessionFile ? { sessionFile } : {}),
   };
 }

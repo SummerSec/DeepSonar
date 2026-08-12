@@ -23,11 +23,14 @@ GET /auth/status
 GET /canvases/:id
 GET /canvases/:id/convergence
 GET /control/v1/jobs/:jobId/capabilities
+GET /control/v1/jobs/:jobId/agent/capabilities_list
 GET /control/v1/jobs/:jobId/openapi.json
 GET /control/v1/jobs/:jobId/operations/:operationId
 GET /canvases/:id/delta
 GET /canvases/:id/nodes/:nodeId
 GET /canvases/:id/report
+GET /canvases/:id/report/availability
+GET /canvases/:id/reports
 GET /canvases/:id/summary
 GET /credentials
 GET /credentials/:id
@@ -115,6 +118,7 @@ POST /canvases/:id/convergence/stop-after-gate
 POST /control/v1/jobs/:jobId/operations/:operationId
 POST /canvases/:id/jobs/cancel-active
 POST /canvases/:id/report/retry
+POST /canvases/:id/report/refresh
 POST /credentials
 POST /credentials/:id/models
 POST /credentials/models/preview
@@ -189,6 +193,8 @@ GET /canvases/{id}
 GET /canvases/{id}/delta
 GET /canvases/{id}/nodes/{nodeId}
 GET /canvases/{id}/report
+GET /canvases/{id}/report/availability
+GET /canvases/{id}/reports
 GET /canvases/{id}/summary
 GET /credentials
 GET /credentials/{id}
@@ -255,6 +261,7 @@ POST /auth/change-username
 POST /auth/login
 POST /auth/logout
 POST /canvases/{id}/report/retry
+POST /canvases/{id}/report/refresh
 POST /credentials
 POST /credentials/{id}/models
 POST /credentials/models/preview

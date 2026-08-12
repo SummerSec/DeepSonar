@@ -74,6 +74,29 @@ test("materializeProviderSettings writes Codex auth + config with reasoning", ()
   assert.match(files[1]!.content, /wire_api = "responses"/);
 });
 
+test("Pi models.json 支持 provider、模型解析和网关改写", () => {
+  const settings = legacySettingsConfig({
+    provider: "openai",
+    secret: "long-lived",
+    metadata: { base_url: "https://api.openai.com/v1" },
+    agentCli: "pi",
+    model: "gpt-5",
+  });
+  assert.equal(extractModelFromSettings("pi", settings), "gpt-5");
+  assert.equal(extractBaseUrlFromSettings(settings), "https://api.openai.com/v1");
+  assert.deepEqual(extractModelsFromSettings(settings), ["gpt-5"]);
+  const [file] = materializeProviderSettings({ agentCli: "pi", settingsConfig: settings });
+  assert.equal(file?.path, ".pi/agent/models.json");
+  const routed = routeMaterializedProviderFilesThroughGateway({
+    agentCli: "pi",
+    files: [file!],
+    gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway",
+    jobToken: "deepsonarjob_12345678_test-token-value",
+  });
+  assert.match(routed[0]!.content, /DEEPSONAR_GATEWAY_TOKEN/);
+  assert.doesNotMatch(routed[0]!.content, /long-lived|api\.openai\.com/);
+});
+
 test("materializeProviderSettings returns empty for empty settings", () => {
   assert.deepEqual(materializeProviderSettings({ agentCli: "claude-code", settingsConfig: {} }), []);
   assert.equal(hasProviderSettingsConfig({}), false);

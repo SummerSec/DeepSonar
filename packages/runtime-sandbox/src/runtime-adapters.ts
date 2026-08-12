@@ -1,6 +1,7 @@
 import type { AsyncCommandHandle, Sandbox } from "agentbox-sdk";
+import type { ContextIdentity } from "./context-contract.js";
 
-export type AgentCliId = "claude-code" | "codex" | "open-code";
+export type AgentCliId = "claude-code" | "codex" | "open-code" | "pi";
 
 /** How an adapter keeps a long-running non-interactive session bounded. */
 export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-summary" | "unsupported";
@@ -8,6 +9,8 @@ export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-sum
 export interface AgentCliCapabilities {
   streamEvents: boolean;
   controlMcp: boolean;
+  /** Job 级 HTTP 控制 API 的发现与调用，不注册 MCP。 */
+  platformControlApi: boolean;
   incrementalMessages: boolean;
   completionGate: boolean;
   sessionCapture: boolean;
@@ -26,18 +29,27 @@ export interface AdapterStartContext {
   input: string;
   mcpConfigPath: string;
   systemPromptPath?: string;
+  /** Scheduler 冻结的上下文身份；适配器不得自行生成或替换。 */
+  contextIdentity?: ContextIdentity;
+  /** 仅允许加载已由 Scheduler 冻结的 Pi Extension 绝对路径。 */
+  piExtensions?: readonly string[];
 }
 
 export interface AdapterResumeContext extends AdapterStartContext {
   sessionId: string;
+  /** Pi 必须使用 get_state 返回的精确 Session 文件恢复。 */
+  sessionFile?: string;
 }
 
 export interface AdapterRuntimeState {
   sessionId?: string;
+  sessionFile?: string;
   finalText?: string;
   /** Text/reasoning already observed from provider delta events. */
   streamedText?: string;
   streamedReasoning?: string;
+  /** 当前 Job 的上下文身份，仅用于验证明确的压缩事件。 */
+  contextIdentity?: ContextIdentity;
 }
 
 export interface RuntimeAdapter {
@@ -49,16 +61,111 @@ export interface RuntimeAdapter {
   resume(context: AdapterResumeContext): Promise<AsyncCommandHandle>;
   materialize?(context: AdapterStartContext): Promise<void>;
   encodeInput(content: string): string;
+  /** 多消息模式运行时可选的显式 RPC 排队命令。 */
+  encodeSteer?(content: string): string;
+  encodeFollowUp?(content: string): string;
+  /** 可选的会话状态查询命令。 */
+  encodeGetState?(): string;
   decodeOutput(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[];
 }
 
 export const REQUIRED_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)[] = [
   "streamEvents",
-  "controlMcp",
   "completionGate",
   "sessionCapture",
   "contextCompaction",
 ];
+
+export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)[] = [
+  "controlMcp",
+  "platformControlApi",
+];
+
+/** Pi 官方 RPC 只按 LF 分隔 JSONL；U+2028/U+2029 始终是字符串数据。 */
+export class PiJsonlFramer {
+  private buffer = "";
+  private ended = false;
+  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
+
+  push(chunk: string | Uint8Array): string[] {
+    if (this.ended) throw new Error("PI_RPC_FRAMER_ENDED");
+    this.buffer += typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
+    const lines: string[] = [];
+    while (true) {
+      const index = this.buffer.indexOf("\n");
+      if (index < 0) break;
+      const line = this.buffer.slice(0, index);
+      this.buffer = this.buffer.slice(index + 1);
+      lines.push(line.endsWith("\r") ? line.slice(0, -1) : line);
+    }
+    return lines;
+  }
+
+  finish(): string[] {
+    if (this.ended) return [];
+    this.ended = true;
+    try {
+      this.buffer += this.decoder.decode();
+    } catch {
+      this.buffer = "";
+      throw new Error("PI_RPC_INVALID_UTF8");
+    }
+    if (!this.buffer) return [];
+    const length = this.buffer.length;
+    this.buffer = "";
+    throw new Error(`PI_RPC_TRUNCATED_FRAME: ${length}`);
+  }
+}
+
+const PI_RPC_EVENT_TYPES = new Set([
+  "response",
+  "context.compacted",
+  "context.compaction",
+  "agent_start",
+  "agent_end",
+  "agent_settled",
+  "turn_start",
+  "turn_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "compaction_start",
+  "compaction_end",
+  "auto_retry_start",
+  "auto_retry_end",
+  "queue_update",
+  "error",
+  "extension_error",
+  "before_agent_start",
+  "session_start",
+  "session_switch",
+  "session_fork",
+  "branch_summary_generation_start",
+  "branch_summary_generation_end",
+  "model_select",
+  "steering_delta",
+  "follow_up",
+]);
+
+export function parsePiJsonlRecord(line: string, maxBytes = 1024 * 1024): Record<string, unknown> {
+  if (Buffer.byteLength(line, "utf8") > maxBytes) throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
+  if (!line) throw new Error("PI_RPC_EMPTY_FRAME");
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    throw new Error("PI_RPC_INVALID_JSON");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("PI_RPC_RECORD_NOT_OBJECT");
+  const record = value as Record<string, unknown>;
+  if (typeof record.type !== "string" || !PI_RPC_EVENT_TYPES.has(record.type)) {
+    throw new Error("PI_RPC_UNEXPECTED_EVENT");
+  }
+  return record;
+}
 
 const ALL_IMAGE_KEYS = Object.freeze([
   "deepsonar-base",
@@ -75,6 +182,45 @@ const ALL_IMAGE_KEYS = Object.freeze([
 function unknownRuntimeEvent(): Record<string, unknown>[] {
   // Keep provider-specific metadata out of host telemetry.
   return [{ type: "unknown_runtime" }];
+}
+
+function contextEventFromLine(
+  line: Record<string, unknown>,
+  state: AdapterRuntimeState,
+): Record<string, unknown>[] {
+  const raw = line.context && typeof line.context === "object" && !Array.isArray(line.context)
+    ? { ...(line.context as Record<string, unknown>), type: "context.compacted" }
+    : line;
+  if (raw.type !== "context.compacted") return [];
+  const identity = state.contextIdentity;
+  const required = [
+    "event_id",
+    "context_id",
+    "context_revision",
+    "adapter_id",
+    "adapter_version",
+    "runtime_identity",
+    "transform_chain_digest",
+    "policy",
+    "boundary",
+    "input_digest",
+    "output_digest",
+  ];
+  if (!identity || required.some((key) => raw[key] === undefined)) {
+    return [{ type: "context.compaction_unknown", source: "adapter", reason: "压缩事件缺少完整上下文身份或摘要" }];
+  }
+  const event: Record<string, unknown> = {
+    ...raw,
+    type: "context.compacted",
+    source: raw.source === "provider" ? "provider" : "adapter",
+  };
+  return [event as unknown as Record<string, unknown>];
+}
+
+function contextObservationFromProviderLine(line: Record<string, unknown>): Record<string, unknown>[] {
+  const type = String(line.type ?? line.event ?? "");
+  if (!["compaction_start", "compaction_end", "context.compaction", "context.compacting"].includes(type)) return [];
+  return [{ type: "context.compaction_unknown", source: "provider", reason: `provider_event:${type}` }];
 }
 
 function shellQuote(value: string): string {
@@ -221,6 +367,10 @@ function rememberSession(line: Record<string, unknown>, state: AdapterRuntimeSta
 }
 
 function decodeCodex(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  const contextEvents = contextEventFromLine(line, state);
+  if (contextEvents.length > 0) return contextEvents;
+  const contextObservation = contextObservationFromProviderLine(line);
+  if (contextObservation.length > 0) return contextObservation;
   const type = String(line.type ?? line.event ?? "");
   rememberSession(line, state);
   if (type === "thread.started" || type === "session.started") {
@@ -286,6 +436,10 @@ function decodeCodex(line: Record<string, unknown>, state: AdapterRuntimeState):
 }
 
 function decodeOpenCode(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  const contextEvents = contextEventFromLine(line, state);
+  if (contextEvents.length > 0) return contextEvents;
+  const contextObservation = contextObservationFromProviderLine(line);
+  if (contextObservation.length > 0) return contextObservation;
   const type = String(line.type ?? line.event ?? "");
   rememberSession(line, state);
   if (type === "session.created" || type === "session.started" || type === "run.started") {
@@ -355,6 +509,7 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
   return Object.freeze({
     streamEvents: false,
     controlMcp: false,
+    platformControlApi: false,
     incrementalMessages: false,
     completionGate: false,
     sessionCapture: false,
@@ -396,7 +551,13 @@ const claude = Object.freeze<RuntimeAdapter>({
   start: (context) => sandboxClaude(context.sandbox, context),
   resume: (context) => sandboxClaude(context.sandbox, context, context.sessionId),
   encodeInput: (content) => JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n",
-  decodeOutput: (line) => [line],
+  decodeOutput: (line, state) => {
+    const contextEvents = contextEventFromLine(line, state);
+    if (contextEvents.length > 0) return contextEvents;
+    const contextObservation = contextObservationFromProviderLine(line);
+    if (contextObservation.length > 0) return contextObservation;
+    return [line];
+  },
 });
 
 function codexConfigArg(key: string, value: string): string {
@@ -449,10 +610,8 @@ const openCode = Object.freeze<RuntimeAdapter>({
     return sandbox.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" } });
   },
   materialize: async ({ sandbox }) => {
-    // OpenCode's supported config is JSON. Merge the Scheduler-owned MCP
-    // descriptor into the per-Job config after provider files are uploaded.
-    // Automatic compaction is the upstream bounded-session policy; preserve an
-    // explicit RoleConfig value instead of silently changing it.
+    // OpenCode 使用 JSON 配置；Provider 文件上传后将 Scheduler 管理的 MCP 描述
+    // 合并到单 Job 配置。自动压缩是上游有界会话策略，显式 RoleConfig 值保持不变。
     await sandbox.run(
       "node -e 'const fs=require(\"node:fs\");const p=\"/workspace/.opencode/config.json\";let c={};try{c=JSON.parse(fs.readFileSync(p,\"utf8\"))}catch{};const compaction=c.compaction&&typeof c.compaction===\"object\"&&!Array.isArray(c.compaction)?c.compaction:{};if(!Object.prototype.hasOwnProperty.call(compaction,\"auto\"))compaction.auto=true;c.compaction=compaction;const m=JSON.parse(fs.readFileSync(\"/workspace/.deepsonar/mcp.json\",\"utf8\")).mcpServers||{};c.mcp=Object.fromEntries(Object.entries(m).map(([n,s])=>[n,s.type===\"stdio\"?{type:\"local\",command:[s.command,...(s.args||[])],environment:s.env||{}}:{type:\"remote\",url:s.url,headers:s.headers||{}}]));fs.mkdirSync(\"/workspace/.opencode\",{recursive:true});fs.writeFileSync(p,JSON.stringify(c)+\"\\n\")'",
       { cwd: "/workspace" },
@@ -462,10 +621,157 @@ const openCode = Object.freeze<RuntimeAdapter>({
   decodeOutput: decodeOpenCode,
 });
 
+function piTextFromMessageEvent(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
+    ? line.assistantMessageEvent as Record<string, unknown>
+    : {};
+  const type = String(event.type ?? "");
+  const delta = typeof event.delta === "string" ? event.delta : "";
+  if (type === "text_delta" && delta) {
+    rememberStreamDelta(state, "text", delta);
+    state.finalText = `${state.finalText ?? ""}${delta}`;
+    return [{ type: "assistant", message: { content: [{ type: "text", text: delta }] } }];
+  }
+  if ((type === "thinking_delta" || type === "reasoning_delta") && delta) {
+    rememberStreamDelta(state, "reasoning", delta);
+    return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: delta }] } }];
+  }
+  if (type === "text_end" && typeof event.content === "string") {
+    const unseen = unseenCompleteText(state, "text", event.content);
+    if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
+  }
+  if (type === "thinking_end" && typeof event.content === "string") {
+    const unseen = unseenCompleteText(state, "reasoning", event.content);
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
+  }
+  if (type === "toolcall_end") {
+    const toolCall = event.toolCall;
+    if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
+      const record = toolCall as Record<string, unknown>;
+      const id = String(record.id ?? "");
+      const name = String(record.name ?? "");
+      const args = record.arguments ?? {};
+      return id && name
+        ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: args }] } }]
+        : [{ type: "unknown_runtime" }];
+    }
+  }
+  return [];
+}
+
+function piSessionState(line: Record<string, unknown>, state: AdapterRuntimeState): void {
+  const data = line.data && typeof line.data === "object" && !Array.isArray(line.data)
+    ? line.data as Record<string, unknown>
+    : {};
+  if (typeof data.sessionId === "string" && data.sessionId) state.sessionId = data.sessionId;
+  if (typeof data.sessionFile === "string" && data.sessionFile) state.sessionFile = data.sessionFile;
+}
+
+function piMessageText(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string" && record.text) return record.text;
+  if (!Array.isArray(record.content)) return undefined;
+  const text = record.content
+    .map((item) => item && typeof item === "object" && !Array.isArray(item) ? (item as Record<string, unknown>).text : undefined)
+    .filter((item): item is string => typeof item === "string" && item.length > 0)
+    .join("");
+  return text || undefined;
+}
+
+function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  const contextEvents = contextEventFromLine(line, state);
+  if (contextEvents.length > 0) return contextEvents;
+  const contextObservation = contextObservationFromProviderLine(line);
+  if (contextObservation.length > 0) return contextObservation;
+  const type = String(line.type ?? "");
+  if (type === "response") {
+    if (line.command === "get_state" && line.success === true) piSessionState(line, state);
+    if (line.success === false) {
+      const error = typeof line.error === "string" ? line.error : "Pi RPC command failed";
+      return [{ type: "result", subtype: "error", is_error: true, result: error }];
+    }
+    return [];
+  }
+  if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
+  if (type === "message_update") return piTextFromMessageEvent(line, state);
+  if (type === "message_end") {
+    const message = line.message;
+    const text = piMessageText(message);
+    const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
+    if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
+  }
+  if (type === "agent_settled") {
+    return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "" }];
+  }
+  if (type === "agent_end") return [{ type: "agent_end" }];
+  if (type === "error" || type === "extension_error") {
+    return [{ type: "result", subtype: "error", is_error: true, result: textFrom(line.error ?? line.message) ?? "Pi runtime failed" }];
+  }
+  if (["tool_execution_start", "tool_execution_end"].includes(type)) {
+    const tool = line.toolCall && typeof line.toolCall === "object" && !Array.isArray(line.toolCall)
+      ? line.toolCall as Record<string, unknown>
+      : line;
+    const id = String(tool.id ?? tool.callId ?? "");
+    const name = String(tool.name ?? tool.toolName ?? "");
+    if (!id || !name) return [{ type: "unknown_runtime" }];
+    return type === "tool_execution_start"
+      ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: tool.arguments ?? {} }] } }]
+      : [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(tool.error), content: tool.result ?? tool.output ?? "" }] } }];
+  }
+  return ["turn_start", "turn_end", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end"].includes(type)
+    ? []
+    : unknownRuntimeEvent();
+}
+
+function sandboxPi(sandbox: Sandbox, context: AdapterStartContext, sessionFile?: string): Promise<AsyncCommandHandle> {
+  const extensions = (context.piExtensions ?? []).map((extension) => {
+    if (!extension.startsWith("/workspace/.deepsonar-home/.pi/agent/extensions/") || extension.includes("/../") || extension.includes("\0")) {
+      throw new Error("PI_EXTENSION_PATH_INVALID");
+    }
+    return ` -e ${shellQuote(extension)}`;
+  }).join("");
+  let command = `pi --mode rpc --no-approve --no-extensions --session-dir /workspace/.deepsonar-home/.pi/agent${extensions}`;
+  if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
+  if (context.model) command += ` --model ${shellQuote(context.model)}`;
+  return sandbox.runAsync(command, { cwd: context.cwd, env: context.env });
+}
+
+const pi = Object.freeze<RuntimeAdapter>({
+  id: "pi",
+  version: "0.84.1",
+  capabilities: fixedCapabilities({
+    streamEvents: true,
+    controlMcp: false,
+    platformControlApi: true,
+    incrementalMessages: true,
+    completionGate: true,
+    sessionCapture: true,
+    contextCompaction: true,
+    contextCompactionPolicy: "automatic",
+    reasoningEffort: true,
+    interactiveTerminal: false,
+  }),
+  compatibleImageKeys: ALL_IMAGE_KEYS,
+  start: (context) => sandboxPi(context.sandbox, context),
+  resume: (context) => {
+    if (!context.sessionFile) throw new Error("PI_SESSION_FILE_MISSING");
+    return sandboxPi(context.sandbox, context, context.sessionFile);
+  },
+  encodeInput: (content) => `${JSON.stringify({ type: "prompt", message: content })}\n`,
+  encodeSteer: (content) => `${JSON.stringify({ type: "steer", message: content })}\n`,
+  encodeFollowUp: (content) => `${JSON.stringify({ type: "follow_up", message: content })}\n`,
+  encodeGetState: () => `${JSON.stringify({ type: "get_state" })}\n`,
+  decodeOutput: decodePi,
+});
+
 export const AGENT_CLI_RUNTIME_ADAPTERS: Readonly<Record<AgentCliId, RuntimeAdapter>> = Object.freeze({
   "claude-code": claude,
   codex,
   "open-code": openCode,
+  pi,
 });
 
 export function getAgentCliRuntimeAdapter(id: unknown): RuntimeAdapter | undefined {
@@ -482,6 +788,9 @@ export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): R
   }
   for (const capability of REQUIRED_RUNTIME_CAPABILITIES) {
     if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
+  }
+  if (!adapter.capabilities.controlMcp && !adapter.capabilities.platformControlApi) {
+    throw new Error(`AGENT_CLI_CONTROL_CAPABILITY_MISSING: ${adapter.id}`);
   }
   if (adapter.capabilities.contextCompactionPolicy === "unsupported") {
     throw new Error(`AGENT_CLI_CONTEXT_COMPACTION_UNSUPPORTED: ${adapter.id}`);

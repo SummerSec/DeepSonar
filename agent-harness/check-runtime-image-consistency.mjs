@@ -121,6 +121,16 @@ for (const [packageName, argName] of [["@openai/codex", "CODEX"], ["opencode-ai"
     expect(kaliDockerfile.includes(`${packageName}@\${${argName}_VERSION}`), `Kali ${packageName} must be installed from the pinned Docker ARG`);
   }
 }
+const piPackage = "@earendil-works/pi-coding-agent";
+const piManifest = config.npm[piPackage];
+expect(piManifest?.version === "0.84.1", "Pi Coding Agent version must remain pinned");
+expect(piManifest?.integrity === "sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==", "Pi Coding Agent integrity drift");
+const piInstallRef = `${piPackage}@\${PI_CODING_AGENT_VERSION}`;
+const piIntegrityCheck = `npm view ${piInstallRef} dist.integrity`;
+expect(dockerfile.includes("ARG PI_CODING_AGENT_VERSION=0.84.1") && dockerfile.includes(piInstallRef), "Pi Coding Agent must be installed from the pinned Docker ARG");
+expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=0.84.1") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
+expect(dockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==") && dockerfile.includes(piIntegrityCheck), "Pi Coding Agent integrity must be verified during the base image build");
+expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==") && kaliDockerfile.includes(piIntegrityCheck), "Kali Pi Coding Agent integrity must be verified during the image build");
 const aptArgs = {
   git: "GIT", python3: "PYTHON", "python3-venv": "PYTHON", "ca-certificates": "CA_CERTIFICATES",
   curl: "CURL", ripgrep: "RIPGREP", jq: "JQ", file: "FILE", unzip: "UNZIP", "xz-utils": "XZ", binutils: "BINUTILS",

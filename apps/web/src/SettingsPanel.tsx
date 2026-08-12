@@ -378,7 +378,7 @@ export function SettingsPanel({
     </div>
   );
 
-  const setCliLimit = (cli: "claude-code" | "codex" | "open-code", raw: string) => {
+  const setCliLimit = (cli: "claude-code" | "codex" | "open-code" | "pi", raw: string) => {
     setRules((current) => {
       if (!current) return current;
       const next = { ...(current.maxConcurrentByAgentCli ?? {}) };
@@ -801,8 +801,8 @@ export function SettingsPanel({
                   </div>
                 </div>
                 <div className="px-4 py-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    {(["claude-code", "codex", "open-code"] as const).map((cli) => (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                    {(["claude-code", "codex", "open-code", "pi"] as const).map((cli) => (
                       <div key={cli}>
                         <label className={labelCls}>{cli}</label>
                         <input

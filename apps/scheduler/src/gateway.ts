@@ -23,6 +23,7 @@ import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
+import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 
@@ -300,17 +301,125 @@ function upstreamAuthHeaders(provider: string, secret: string): Record<string, s
   }
 }
 
-/** 从 SSE 流片段/JSON 文本里尽力提取 usage（不累加精确账单，只用于额度熔断） */
-function extractUsage(text: string): number {
-  let total = 0;
+/** 从 SSE 流片段/JSON 文本里尽力提取 usage（不累加精确账单，只用于额度熔断）。 */
+export type UsageBreakdown = { input: number; output: number; total: number };
+
+export function extractUsageBreakdown(text: string): UsageBreakdown {
+  let input = 0;
+  let output = 0;
   for (const m of text.matchAll(/"usage"\s*:\s*\{[^}]*?"input_tokens"\s*:\s*(\d+)[^}]*?"output_tokens"\s*:\s*(\d+)/g)) {
-    total += Number(m[1]) + Number(m[2]);
+    input += Number(m[1]);
+    output += Number(m[2]);
   }
   // OpenAI 格式 prompt_tokens/completion_tokens
   for (const m of text.matchAll(/"usage"\s*:\s*\{[^}]*?"prompt_tokens"\s*:\s*(\d+)[^}]*?"completion_tokens"\s*:\s*(\d+)/g)) {
-    total += Number(m[1]) + Number(m[2]);
+    input += Number(m[1]);
+    output += Number(m[2]);
   }
-  return total;
+  return { input, output, total: input + output };
+}
+
+/**
+ * 按完整行扫描网关响应，保留跨 chunk 的尾巴，并按完整记录去重。
+ * SSE/JSON 的 usage 记录在 chunk 边界重叠时只计一次，避免额度重复累加。
+ */
+export function createGatewayUsageScanner(): {
+  push: (chunk: string | Uint8Array) => void;
+  finish: () => UsageBreakdown;
+} {
+  let tail = "";
+  let input = 0;
+  let output = 0;
+  let total = 0;
+  const seen = new Set<string>();
+  const observe = (line: string): void => {
+    const record = extractUsageBreakdown(line);
+    if (record.total <= 0) return;
+    const key = createHash("sha256").update(line).digest("hex");
+    if (seen.has(key)) return;
+    seen.add(key);
+    input += record.input;
+    output += record.output;
+    total += record.total;
+  };
+  return {
+    push(chunk) {
+      tail += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      const lines = tail.split(/\r?\n/u);
+      tail = lines.pop() ?? "";
+      for (const line of lines) observe(line);
+    },
+    finish() {
+      if (tail) observe(tail);
+      return { input, output, total };
+    },
+  };
+}
+
+type GatewayUsageLedgerInput = {
+  jobId: string;
+  projectId: string;
+  attemptId: string;
+  effectId: string;
+  requestNo: number;
+  provider: string;
+  model: string;
+  usage: UsageBreakdown;
+  status: "settled" | "unknown" | "not_reported";
+  source: "gateway_response" | "gateway_stream" | "gateway_error";
+};
+
+async function appendUsageLedger(
+  db: typeof sql,
+  input: GatewayUsageLedgerInput,
+): Promise<void> {
+  await db`
+    INSERT INTO job_usage_ledger ${db({
+      job_id: input.jobId,
+      project_id: input.projectId,
+      attempt_id: input.attemptId,
+      effect_id: input.effectId,
+      request_no: input.requestNo,
+      provider: input.provider.slice(0, 100),
+      model: input.model.slice(0, 200),
+      input_tokens: input.usage.input,
+      output_tokens: input.usage.output,
+      total_tokens: input.usage.total,
+      adjustment_tokens: input.usage.total - input.usage.input - input.usage.output,
+      settlement_status: input.status,
+      source: input.source,
+    })}
+    ON CONFLICT (attempt_id, effect_id) DO NOTHING`;
+}
+
+async function trySettleGatewayUsage(
+  input: GatewayUsageLedgerInput,
+  effectStatus: "settled" | "unknown",
+  error?: unknown,
+): Promise<void> {
+  try {
+    await sql.begin(async (tx) => {
+      await appendUsageLedger(tx as unknown as typeof sql, input);
+      if (effectStatus === "unknown") {
+        await markEffectUnknown(tx as unknown as typeof sql, input.attemptId, input.effectId, error ?? "模型请求结果无法确认");
+      } else {
+        await settleEffect(tx as unknown as typeof sql, input.attemptId, input.effectId, {
+          status: "settled",
+          outcome: {
+            response_status: input.status,
+            total_tokens: input.usage.total,
+            source: input.source,
+          },
+        });
+      }
+    });
+  } catch (settlementError) {
+    // 响应已经可能发送给 Worker，不能把账本写失败变成未处理异常；
+    // 额度缓存仍按已观察用量更新，同时保留低基数指标和脱敏错误日志，
+    // 由运维根据 effect_id 对账，不假装账本已成功。
+    inc("deepsonar_usage_ledger_write_failures_total", { source: input.source });
+    console.error(`[gateway] 模型请求结算失败 effect=${input.effectId}:`, settlementError instanceof Error ? settlementError.message : String(settlementError));
+  }
 }
 
 function deny(reply: FastifyReply, code: number, error: string, code2: string) {
@@ -346,8 +455,10 @@ export function registerGateway(app: FastifyInstance): void {
       if (!m) return deny(reply, 401, "缺少或非法 DEEPSONAR_JOB_TOKEN", "invalid_token");
 
       const [jt] = await sql`
-        SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec
+        SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec,
+               a.id AS attempt_id, a.attempt_no
         FROM job_tokens jt JOIN jobs j ON j.id = jt.job_id
+        LEFT JOIN job_attempts a ON a.job_id = j.id AND a.status = 'active'
         WHERE jt.token_prefix = ${m[1]}`;
       if (!jt) return deny(reply, 401, "token 不存在", "invalid_token");
       const a = Buffer.from(jt.token_hash as string, "utf8");
@@ -448,8 +559,35 @@ export function registerGateway(app: FastifyInstance): void {
       const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
       const url = `${baseUrl.replace(/\/$/, "")}/${upstreamPath}${qs}`;
 
-      // 转发（流式直通；请求数先计，token 数响应后补记）
-      await sql`UPDATE job_tokens SET used_requests = used_requests + 1 WHERE id = ${jt.id}`;
+      const gatewayAttemptId = typeof jt.attempt_id === "string" ? jt.attempt_id : null;
+      if (!gatewayAttemptId) return deny(reply, 409, "Job 缺少活动 Attempt，拒绝无账本模型请求", "attempt_state_missing");
+      const model = rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
+        ? String((rawBody as { model?: unknown }).model ?? "")
+        : "";
+      // 转发（流式直通；请求数先计，token 数响应后补记）。请求序号
+      // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
+      const gatewayInputDigest = createHash("sha256").update(bodyBuf ?? Buffer.alloc(0)).digest("hex");
+      const requestIntent = await sql.begin(async (tx) => {
+        const [requestCounter] = await tx`
+          UPDATE job_tokens
+             SET used_requests = used_requests + 1
+           WHERE id = ${jt.id} AND status = 'active' AND used_requests < max_requests
+           RETURNING used_requests`;
+        if (!requestCounter) return null;
+        const requestNo = Number(requestCounter.used_requests);
+        const effectId = `gateway_model_request:${String(jt.id)}:${requestNo}`;
+        const effectStarted = await beginEffect(tx as unknown as typeof sql, gatewayAttemptId, {
+          effectId,
+          kind: "gateway_model_request",
+          inputDigest: gatewayInputDigest,
+          resourceIdentity: { job_token_id: String(jt.id), request_no: requestNo },
+          intent: { provider: safeProvider, model: model.slice(0, 200), method: req.method },
+        });
+        if (!effectStarted) throw new Error("Job 的活动 Attempt 已结束");
+        return { requestNo, effectId };
+      });
+      if (!requestIntent) return deny(reply, 429, "请求数额度用尽", "quota_exhausted");
+      const { requestNo, effectId: gatewayEffectId } = requestIntent;
       const headers: Record<string, string> = {
         "content-type": (req.headers["content-type"] as string) ?? "application/json",
         accept: (req.headers.accept as string) ?? "application/json",
@@ -477,6 +615,18 @@ export function registerGateway(app: FastifyInstance): void {
           },
         });
       } catch (error) {
+        await trySettleGatewayUsage({
+          jobId: String(jt.job_id),
+          projectId: String(jt.project_id),
+          attemptId: gatewayAttemptId,
+          effectId: gatewayEffectId,
+          requestNo,
+          provider: safeProvider,
+          model,
+          usage: { input: 0, output: 0, total: 0 },
+          status: "unknown",
+          source: "gateway_error",
+        }, "unknown", error);
         if (!(error instanceof GatewayUpstreamUnreachableError)) throw error;
         recordGatewayRetryMetrics(safeProvider, error.attempts, error.retryReasons, error.reason);
         inc("deepsonar_provider_errors_total", { provider: safeProvider });
@@ -501,28 +651,54 @@ export function registerGateway(app: FastifyInstance): void {
       });
       if (!upstream.body) {
         reply.raw.end();
+        await trySettleGatewayUsage({
+          jobId: String(jt.job_id),
+          projectId: String(jt.project_id),
+          attemptId: gatewayAttemptId,
+          effectId: gatewayEffectId,
+          requestNo,
+          provider: safeProvider,
+          model,
+          usage: { input: 0, output: 0, total: 0 },
+          status: "not_reported",
+          source: isSse ? "gateway_stream" : "gateway_response",
+        }, "settled");
         return;
-      }      let scanned = 0;
-      let usageTail = "";
+      }
+      const usageScanner = createGatewayUsageScanner();
       const reader = upstream.body.getReader();
+      let streamInterrupted = false;
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           if (value) {
             reply.raw.write(value);
-            // 只扫每个 chunk 的文本，累积用量（usage 片段可能跨 chunk，拼尾扫）
-            const text = usageTail + Buffer.from(value).toString("utf8");
-            const found = extractUsage(text);
-            if (found > 0) scanned += found;
-            usageTail = text.slice(-512);
+            // 只解析完整 SSE/JSON 行；保留未完成行，避免重叠尾巴导致
+            // 同一 usage JSON 在相邻 chunk 中被重复累计。
+            usageScanner.push(value);
           }
         }
       } catch {
         // 客户端/上游断流：尽力收尾
+        streamInterrupted = true;
       } finally {
         reply.raw.end();
       }
+      const usage = usageScanner.finish();
+      const scanned = usage.total;
+      await trySettleGatewayUsage({
+        jobId: String(jt.job_id),
+        projectId: String(jt.project_id),
+        attemptId: gatewayAttemptId,
+        effectId: gatewayEffectId,
+        requestNo,
+        provider: safeProvider,
+        model,
+        usage,
+        status: streamInterrupted ? "unknown" : scanned > 0 ? "settled" : "not_reported",
+        source: isSse ? "gateway_stream" : "gateway_response",
+      }, streamInterrupted ? "unknown" : "settled", streamInterrupted ? "模型响应流中断" : undefined);
       if (scanned > 0) {
         inc("deepsonar_model_tokens_total", { provider: safeProvider }, scanned);
         await sql`UPDATE job_tokens SET used_tokens = used_tokens + ${scanned} WHERE id = ${jt.id}`;

@@ -23,6 +23,28 @@ export function extractModelFromSettings(agentCli: string, settingsConfig: unkno
     const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(config);
     return match?.[1] || match?.[2] || null;
   }
+  if (agentCli === "pi") {
+    const providers = asObject(settings.providers);
+    const providerEntries = Object.keys(providers).length > 0
+      ? Object.values(providers)
+      : [settings];
+    for (const rawProvider of providerEntries) {
+      const provider = asObject(rawProvider);
+      const models = provider.models;
+      if (Array.isArray(models)) {
+        const model = models.find((item) => {
+          const id = asObject(item).id;
+          return typeof id === "string" && id.trim();
+        });
+        const id = asObject(model).id;
+        if (typeof id === "string" && id.trim()) return id.trim();
+      } else {
+        const modelId = Object.keys(asObject(models)).find((id) => id.trim());
+        if (modelId) return modelId.trim();
+      }
+    }
+    return null;
+  }
   const modelIds = Object.keys(asObject(settings.models));
   return modelIds.find((model) => model.trim())?.trim() ?? null;
 }

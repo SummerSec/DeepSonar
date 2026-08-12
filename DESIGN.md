@@ -30,7 +30,7 @@ Job     1 ── * events（语义）
 Job     1 ──  transcript / evidence（冷存储）
 Finding * ── 1 project + job + optional node
 Finding 1 ── * finding_verification_rounds
-Canvas  1 ── 1 task_reports（任务总报告）
+Canvas  1 ── * task_reports（版本化任务总报告）
 Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 ```
 
@@ -42,7 +42,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 | **Fact** | 工作角色增量产出；可带 verification 证据块 |
 | **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`）；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
 | **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
-| **Task report** | 画布收敛后生成的任务总报告；汇总全部 Finding，SARIF 仅含 `confirmed` |
+| **Task report** | 画布收敛后按输入摘要版本化；相同输入幂等，输入变化时追加版本并保留历史 |
 | **Root** | 画布根；阶段如 `analysis_complete` / `reporting` / `succeeded` |
 
 ## 4. 控制闭环（Hub）
@@ -54,7 +54,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
     → finalizeJob → 再 hub_reason
     → 每个 Finding confirmed → 独立版本化 Finding Report（冻结输入）
     → 验证范围内 Finding ∈ {confirmed, needs_human} 且无活跃工作
-    → Hub complete → Task Report（系统角色）
+    → Hub complete → 版本化 Task Report（系统角色，默认读取最新版本）
 ```
 
 纪律：
@@ -71,7 +71,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
 - **验证范围（#133）**：`minVerifySeverity` 同时控制自动 Verify 与收敛集合；明确低于阈值的 Finding 保持 `pending` 并记录 `below_min_verify_severity` 策略标记，不创建 Verify Job/round、不阻塞 Hub complete/Report。缺失或未知 severity 保守地继续验证；`info` 即严格全量模式。
-- **双轨报告（#43）**：收敛门通过后，Scheduler 为每个画布幂等派发一个 Task Report；每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。Finding 报告输入写入 `report-input.json` 并记录 checksum，`pending/generating` 期间每个 Finding 只允许一个活跃版本；手动刷新/重试创建下一版本，失败只更新报告行，不改变 Finding 状态。
+- **双轨报告（#43/#142）**：收敛门通过后，Scheduler 为画布派发版本化 Task Report；每版冻结 `report-input.json` 与 checksum，相同输入幂等，输入变化时追加版本，失败同输入重试复用版本。每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。两类报告在 `pending/generating` 期间都只允许同一目标一个活跃版本，失败只更新报告行，不改变 Finding 状态。
 - **通用 Finding 协议（#44）**：`profile`、`category`、`tags`、`evidence_refs` 是跨安全、质量、合规等领域的通用字段；严重度可不提供，CVSS 评分可选。有效协议由全局、项目、任务三层按任务 > 项目 > 全局合并，在建画布时写入 `target_json.effective_finding_protocol` 冻结；Job 和 Agent 只读取该快照。Scheduler 校验 profile/字段边界、去重并决定 Verify，受支持的 CVSS 4.0/3.1 向量由系统重算，协议显式接受的未知版本保留原始向量/指标。
 
 ## 5. Job 与并发
@@ -85,6 +85,13 @@ pending → claimed → provisioning → running
 - Lease + Reaper：超时/孤儿**调度器判定**，不信任 Agent 自报。
 - 唤醒：`pg_notify('deepsonar_jobs')` 为主；轮询可关。
 - 优先级：资格与排序分离（图阶段 / 收敛证据 vs 固定优先级），避免 priority 通胀。
+
+### 5.1 Job Attempt 与外部效果
+
+- 每次 Job 领取在 `job_attempts` 建立一个 Scheduler-owned Attempt；`(job_id)` 的活动唯一索引与事务行锁保证并发 claim 只产生一个活动 Attempt。
+- Attempt 的 total state 持久化 `phase`、快照身份、sandbox/session/resource identity 和取消标记。外部动作先在 `job_attempt_effects` 写入 intent 与 `effect_pending`，完成后同事务写 settlement；`replay_policy` 默认 `never`，未确认窗口只标记 `unknown`，不因重启自动重放。
+- provision 的 Attempt、效果、资源身份和 `jobs.sandbox_id` 在同一个事务收口；超时通过 `AbortSignal`/runtime cancel 真正终止创建，迟到资源立即销毁。Job 与 Attempt 终态也在同一事务提交。
+- 启动对账按 Attempt phase/effect 账本分类：只有尚未开始且无效果的 `preparing` 可回到 `pending`；`effect_pending/unknown` 统一转 `orphan`，清理沙箱、Token、画布和外部同步。
 
 ## 6. 配置层级
 
@@ -132,6 +139,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 - 出网：`allow_egress` 任务级冻结；所有 real Job 的模型请求都经 Scheduler-owned gateway proxy。允许出网的沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，并通过同时接入两网的固定 proxy 到达 Scheduler。
 - Model Gateway 上游单次超时默认为 3,000 秒，但每次 attempt 取 `min(3_000_000ms, Job 剩余时间)`；仅在客户端响应头/响应体尚未开始发送前，对网络/超时和 HTTP 408/429/500/502/503/504 做最多 3 次指数退避加 jitter，永久 HTTP 错误不重试，已开始的 SSE/响应体绝不重放。Job 的 `used_requests` 按沙箱客户端请求只递增一次；上游 attempt/retry/exhausted 仅记录 provider、reason 等低基数指标，不记录请求体、URL 或 Job ID。网络/超时耗尽返回稳定 `502 upstream_unreachable`，最终上游 HTTP 响应原样直通。
 - Gateway 重试耗尽并导致 Agent CLI 退出后，runtime runner 只对明确的 HTTP 408/429/500/502/503/504、timeout 与 network 错误，在原沙箱使用已捕获的原 session ID 最多恢复 3 次（1/2/4 秒退避）。Claude Code 使用 `--resume`，Codex 使用 `exec resume`，OpenCode 使用 `--session`；400/401/403、普通退出、缺 session 或恢复耗尽均直接失败，不允许 `--continue`、latest session 或新会话兜底。恢复过程写入低基数 `run.retrying` / `run.retry_skipped`，已成功控制副作用继续由运行时去重与数据库幂等键保护。
+- Model Gateway 的每次请求同时写入 `job_usage_ledger`，关联 `attempt_id + effect_id`；只保留 provider/model、输入/输出/总 token、请求序号和 `settled|unknown|not_reported`，不保存 prompt、响应正文、请求头或凭据。流式 usage 按完整记录去重，响应已发送后账本写失败计指标并保留可对账的 effect 标识，不制造未处理异常。
 
 ## 10. 前端信息架构
 
@@ -162,7 +170,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | Provider 配置（CC Switch 模型） | #99 | **已落地（三类配置方言）**：LLM `provider` 是协议（Anthropic Messages / OpenAI Responses），不是厂商预设。`credentials` 存 `agent_cli` + 完整 `settings_config_json` + `meta_json`；管理 API 仅返回 `[已保存密钥]` 脱敏投影。角色绑定 Credential 配置文件，`RoleConfig.model` 仅作可选高级覆盖；所有门禁与 Job 冻结统一解析 `effectiveModel = RoleConfig.model ?? Credential settings model ?? null`。显式 `allowed_model_ids` 只约束 effective model，settings 模型不会静默开启白名单。Job 快照仅保存无密钥配置结构；运行时物化 `.claude/settings.json` / `.codex/*` / `.opencode/config.json` 时统一改写到 Model Gateway，并注入短期 Job token。 |
 | 治理多 CLI Runtime Adapter | #100 | **已落地**：Scheduler 通过显式注册表驱动 Claude Code、Codex、OpenCode 的官方非交互结构化协议；能力、适配器版本和兼容 runtime image 在创建 Job 时校验并冻结到 `agent_snapshot_json`。未注册 CLI、缺失必需能力或镜像不兼容均在执行前 fail closed。详见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)。 |
 | 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
-| 双轨报告 | #43 | **已完成**：任务收敛后保留一份 Task Report；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report，支持手动刷新/重试并限制单 Finding 同时一个活跃报告，不修改 Finding 状态 |
+| 双轨报告 | #43/#142 | **已完成**：任务收敛后按冻结输入摘要生成版本化 Task Report，默认返回最新版本并保留历史；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report。两条轨道都限制同一目标同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | **已完成**：通用 `profile/category/tags/evidence_refs` 与可选 severity/scoring；协议按任务>项目>全局解析并随画布冻结；Agent 通过严格 MCP 提案，Scheduler 重算 CVSS 4.0/3.1、保留协议允许的未知版本原始数据；Web/报告支持标识、筛选与分组 |
 | 任务卡片状态 | #46 | 任务级相位与 `active_count` 同源 |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
@@ -171,7 +179,9 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 项目镜像策略 | #130 | **已完成**：项目创建与设置支持 `inherit_global` / `project_managed`；项目托管映射集中绑定全部角色到项目已启用的可信镜像，缺项使用 Base；项目 RoleConfig 不再接受独立镜像覆盖，Job 创建时只按项目策略解析并冻结 immutable digest |
 | 临时上游错误恢复 | #131 | **已完成**：Gateway 在响应交付前有界重试；CLI 仍因明确临时错误退出时，runner 在原沙箱按原 session ID 有界恢复，永久错误和缺 session 均 fail closed |
 | Verify 严重度收敛 | #133 | **已完成**：`minVerifySeverity` 同时限定自动 Verify 与收敛集合；低于阈值的 Finding 保留为策略排除项，不占 Verify 资源、不阻塞报告；`info` 保留严格全量模式 |
-| 平台 OpenAPI + 静态控制 Skill | #135 | **第一阶段已落地**：现有 MCP 保持不变；真实 Job 注入静态 `deepsonar-control` Skill，并以独立短期 capability token 访问按冻结 operation allowlist 过滤的 `/control/v1/jobs/:jobId` capabilities/OpenAPI/operation API。API 与 MCP 共用宿主 semantic handler 和 Scheduler 权威副作用；未来新平台工具只扩展 API。Pi Agent Runtime Adapter 留在后续阶段。 |
+| 平台 OpenAPI + 静态控制 Skill | #135 | **第一阶段已落地**：现有 MCP 保持不变；真实 Job 注入静态 `deepsonar-control` Skill，并以独立短期 capability token 访问按冻结 operation allowlist 过滤的 `/control/v1/jobs/:jobId` capabilities/OpenAPI/operation API。API 与 MCP 共用宿主 semantic handler 和 Scheduler 权威副作用；未来新平台工具只扩展 API。 |
+| Agent Runtime Context 生命周期与恢复身份 | #138 | **已落地基础契约**：Executor 为每个 Attempt 生成稳定 `context_id`/revision 与只含摘要的 transform manifest，按 attempt state 和 Job runtime evidence 持久化；`context.compacted` 严格校验身份、链摘要、顺序并支持幂等重放，无法观测或不支持时显式记录而不伪造压缩。恢复前必须取得实际上下文身份并逐字段匹配，缺失或不一致则拒绝恢复；Pi 使用精确 session 文件，不选择 latest。Job 详情只展示有界诊断，不展示 prompt 或 provider 原文。 |
+| Pi Coding Agent RPC Runtime Adapter 与 Capability API | #140 | **已落地**：Pi 固定使用 `pi --mode rpc --no-approve` 的严格 LF JSONL 协议，平台控制通过 Job 级 HTTP Capability API，不物化或注入 MCP；`agent_settled` 只提供运行时静止信号，Job 成功仍须经过 `mark_job_done` 完成门。`get_state` 返回的精确 `sessionFile` 用于恢复，暂态错误最多同会话重试三次；模型配置经 Gateway 物化为 `models.json`。项目 `.pi` 不自动加载，默认 `--no-extensions`，受治理扩展才通过冻结配置显式 `--extension` 加载。 |
 
 ## 12. 仓库地图
 
@@ -182,7 +192,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v23）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
+| `database/schema.sql` | 唯一 schema 基线（当前 v27）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

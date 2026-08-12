@@ -5,6 +5,10 @@
 
 export interface ProvisionInput {
   jobId: string;
+  /** Scheduler 持久 Attempt 的稳定标识，所有外部资源必须带上该标签。 */
+  attemptId: string;
+  /** 仅允许 Scheduler 生成的低基数资源标签。 */
+  resourceLabels?: Record<string, string>;
   image: string;
   env?: Record<string, string>;
   /** Scheduler-owned per-Job volume mounted read-only at /workspace/.deepsonar/shared. */
@@ -18,6 +22,8 @@ export interface ProvisionInput {
   expectedToolsManifestSha256?: string | null;
   /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
   limits?: SandboxLimits;
+  /** provision 超时/取消时必须中止外部资源创建。 */
+  signal?: AbortSignal;
 }
 
 export interface SharedAssetsMount {
@@ -57,6 +63,8 @@ export interface SandboxTerminalSession {
 
 export interface SandboxRunner {
   provision(input: ProvisionInput): Promise<RunHandle>;
+  /** 取消尚未返回句柄的 provision，必须销毁已创建或正在创建的资源。 */
+  cancelProvision?(input: { jobId: string; attemptId: string }): Promise<void>;
   destroy(handle: RunHandle): Promise<void>;
   /** Reaper 探测：控制通道是否存活（§3.3 lease 依据） */
   isAlive(handle: RunHandle): Promise<boolean>;
@@ -67,8 +75,10 @@ export interface SandboxRunner {
 /** Phase 0 骨架：不起真实沙箱，只走状态机 */
 export class NoopRunner implements SandboxRunner {
   async provision(input: ProvisionInput): Promise<RunHandle> {
+    if (input.signal?.aborted) throw new Error("provision 已取消");
     return { sandboxId: `noop-${input.jobId}` };
   }
+  async cancelProvision(): Promise<void> {}
   async destroy(_handle: RunHandle): Promise<void> {}
   async isAlive(_handle: RunHandle): Promise<boolean> {
     return true;
@@ -112,6 +122,9 @@ export type {
 } from "./cli-session-adapters.js";
 export {
   AGENT_CLI_RUNTIME_ADAPTERS,
+  CONTROL_RUNTIME_CAPABILITIES,
+  PiJsonlFramer,
+  parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,
   getAgentCliRuntimeAdapter,
@@ -126,3 +139,37 @@ export type {
   AdapterStartContext,
   RuntimeAdapter,
 } from "./runtime-adapters.js";
+export {
+  CONTEXT_CONTRACT_VERSION,
+  CONTEXT_MAX_COMPACTIONS,
+  CONTEXT_MAX_EVENT_IDS,
+  CONTEXT_MAX_JSON_BYTES,
+  CONTEXT_MAX_TRANSFORMS,
+  appendContextTransform,
+  applyContextCompactedEvent,
+  assertContextResume,
+  contextCompactionEventFromRuntime,
+  contextDigest,
+  contextIdentity,
+  contextTextDigest,
+  createContextState,
+  markContextCompactionUnobservable,
+  stableContextJson,
+  validateContextResume,
+  validateContextState,
+} from "./context-contract.js";
+export type {
+  ContextBoundary,
+  ContextBudget,
+  ContextCompactionEvent,
+  ContextCompactionStatus,
+  ContextIdentity,
+  ContextObservation,
+  ContextOmission,
+  ContextResumeMatch,
+  ContextResumeMismatch,
+  ContextSource,
+  ContextState,
+  ContextTransformManifest,
+  ContextTransformStage,
+} from "./context-contract.js";

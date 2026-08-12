@@ -267,7 +267,7 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
 }
 
 export function registerPlatformControlRoutes(app: FastifyInstance): void {
-  app.get("/control/v1/jobs/:jobId/capabilities", async (req, reply) => {
+  const sendCapabilities = async (req: FastifyRequest, reply: FastifyReply) => {
     const principal = await authenticateRequest(req as CapabilityRequest, reply);
     if (!principal) return;
     return reply.header("cache-control", "no-store").send(buildCapabilitiesProjection({
@@ -277,7 +277,10 @@ export function registerPlatformControlRoutes(app: FastifyInstance): void {
       expiresAt: principal.expiresAt,
       operationIds: principal.operationIds,
     }));
-  });
+  };
+
+  app.get("/control/v1/jobs/:jobId/capabilities", sendCapabilities);
+  app.get("/control/v1/jobs/:jobId/agent/capabilities_list", sendCapabilities);
 
   app.get("/control/v1/jobs/:jobId/openapi.json", async (req, reply) => {
     const principal = await authenticateRequest(req as CapabilityRequest, reply);

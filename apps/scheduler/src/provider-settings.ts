@@ -15,9 +15,10 @@ const CONFIG_FILE_PATHS: Record<string, string> = {
   "claude-code": ".claude/settings.json",
   codex: ".codex/config.toml",
   "open-code": ".opencode/config.json",
+  pi: ".pi/agent/models.json",
 };
 
-export type ProviderAgentCli = "claude-code" | "codex" | "open-code";
+export type ProviderAgentCli = "claude-code" | "codex" | "open-code" | "pi";
 
 export interface MaterializedConfigFile {
   path: string;
@@ -30,7 +31,7 @@ export interface ProviderSettingsOverrides {
   reasoning?: "low" | "medium" | "high" | "xhigh" | null;
 }
 
-const AGENT_CLIS = new Set<string>(["claude-code", "codex", "open-code"]);
+const AGENT_CLIS = new Set<string>(["claude-code", "codex", "open-code", "pi"]);
 
 export function isProviderAgentCli(value: unknown): value is ProviderAgentCli {
   return typeof value === "string" && AGENT_CLIS.has(value);
@@ -140,6 +141,24 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
       if (item.path === configSource.path) return file(item.path, `${stringifyToml(config)}\n`);
       return { ...item };
     });
+  }
+
+  if (input.agentCli === "pi") {
+    const source = byPath.get(".pi/agent/models.json");
+    if (!source) throw new Error("受限网络缺少冻结的 Pi models.json");
+    const settings = scrubRuntimeSecretFields(parseJsonObject(source.content, source.path)) as Record<string, unknown>;
+    const providers = asObject(settings.providers);
+    if (Object.keys(providers).length === 0) throw new Error("受限网络无法定位 Pi provider");
+    for (const [providerId, rawProvider] of Object.entries(providers)) {
+      const provider = asObject(rawProvider);
+      provider.baseUrl = gatewayBaseUrl;
+      provider.apiKey = "$DEEPSONAR_GATEWAY_TOKEN";
+      providers[providerId] = provider;
+    }
+    settings.providers = providers;
+    return input.files.map((item) => item.path === source.path
+      ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
+      : { ...item });
   }
 
   const source = byPath.get(".opencode/config.json");
@@ -263,6 +282,17 @@ requires_openai_auth = true
     };
   }
 
+  if (input.agentCli === "pi") {
+    const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
+    const model = input.model?.trim() || (input.provider === "anthropic" ? "claude-sonnet-4-5" : "gpt-5");
+    return {
+      provider: input.provider,
+      baseUrl: endpoint,
+      api: input.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
+      models: [{ id: model }],
+    };
+  }
+
   // OpenCode stores one provider fragment. Runtime materialization wraps it in
   // the CLI's provider map and selects the first declared model.
   const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
@@ -333,6 +363,32 @@ requires_openai_auth = true
     ];
   }
 
+  if (input.agentCli === "pi") {
+    const source = structuredClone(settings) as Record<string, unknown>;
+    const configuredProviders = asObject(source.providers);
+    const providerSource = Object.keys(configuredProviders).length > 0
+      ? configuredProviders
+      : { deepsonar: source };
+    const providers = Object.fromEntries(Object.entries(providerSource).map(([providerId, rawProvider]) => {
+      const provider = structuredClone(asObject(rawProvider));
+      if (Array.isArray(provider.models)) {
+        provider.models = provider.models.filter((model): model is Record<string, unknown> => Boolean(model && typeof model === "object" && !Array.isArray(model)));
+      } else if (provider.models && typeof provider.models === "object" && !Array.isArray(provider.models)) {
+        provider.models = Object.entries(provider.models as Record<string, unknown>).map(([id, rawModel]) => ({ id, ...asObject(rawModel) }));
+      } else {
+        provider.models = [];
+      }
+      if (input.overrides?.model?.trim()) {
+        const models = provider.models as Array<Record<string, unknown>>;
+        const existing = models.find((model) => model.id === input.overrides!.model!.trim());
+        if (!existing) models.unshift({ id: input.overrides.model.trim() });
+      }
+      return [providerId, provider];
+    }));
+    const content = `${JSON.stringify({ providers }, null, 2)}\n`;
+    return [file(expectedPath, content)];
+  }
+
   // OpenCode's settingsConfig is the selected provider fragment, matching CC
   // Switch. The live CLI file needs the outer provider map.
   const providerId = "deepsonar";
@@ -386,6 +442,15 @@ export function extractBaseUrlFromSettings(settingsConfig: unknown): string | nu
     const value = options[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
   }
+  const providers = asObject(settings.providers);
+  const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
+  for (const rawProvider of providerEntries) {
+    const provider = asObject(rawProvider);
+    for (const key of ["baseUrl", "baseURL", "base_url"]) {
+      const value = provider[key];
+      if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
+    }
+  }
   return null;
 }
 
@@ -403,6 +468,16 @@ export function extractModelsFromSettings(settingsConfig: unknown): string[] {
   push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
   push(env.ANTHROPIC_SMALL_FAST_MODEL);
   for (const model of Object.keys(asObject(settings.models))) push(model);
+  const providers = asObject(settings.providers);
+  const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
+  for (const rawProvider of providerEntries) {
+    const provider = asObject(rawProvider);
+    if (Array.isArray(provider.models)) {
+      for (const rawModel of provider.models) push(asObject(rawModel).id);
+    } else {
+      for (const model of Object.keys(asObject(provider.models))) push(model);
+    }
+  }
   if (typeof settings.config === "string") {
     const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     push(match?.[1] || match?.[2]);

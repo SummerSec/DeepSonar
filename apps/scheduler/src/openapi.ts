@@ -418,22 +418,103 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/canvases/{id}/report",
-    summary: "画布任务报告元数据",
+    summary: "画布最新任务报告元数据",
     scope: "tasks:read",
     tags: ["Reports"],
     responses: {
       "200": {
         type: "object",
-        required: ["id", "canvas_id", "project_id", "status"],
+        required: ["id", "canvas_id", "project_id", "version", "status", "input_uri", "input_sha256"],
         properties: {
           id: { type: "string", format: "uuid" },
           canvas_id: { type: "string" },
           project_id: { type: "string", format: "uuid" },
+          version: { type: "integer", minimum: 1 },
           status: { type: "string", enum: ["pending", "generating", "succeeded", "failed"] },
+          input_uri: { type: "string" },
+          input_sha256: { type: "string" },
           markdown_uri: { type: "string", nullable: true },
           sarif_uri: { type: "string", nullable: true },
           summary_json: { type: "object", additionalProperties: true },
           error: { type: "string", nullable: true },
+        },
+      },
+      "404": {
+        description: "任务报告尚未生成，返回当前服务端完成门阻塞原因",
+        type: "object",
+        required: ["error", "reason", "blocking_findings"],
+        properties: {
+          error: { type: "string" },
+          reason: {
+            type: "string",
+            enum: [
+              "canvas_not_found",
+              "root_not_found",
+              "root_not_ready",
+              "active_work",
+              "no_role_work",
+              "findings_not_converged",
+              "report_not_dispatched",
+            ],
+          },
+          root_status: { type: "string", nullable: true },
+          min_verify_severity: { type: "string", nullable: true },
+          blockers: { type: "array", items: { type: "string" } },
+          blocking_findings: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["finding_id", "title", "verify_status", "issue"],
+              properties: {
+                finding_id: { type: "string" },
+                title: { type: "string" },
+                severity: { type: "string", nullable: true },
+                verify_status: { type: "string" },
+                issue: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/reports",
+    summary: "按版本倒序读取画布任务报告历史",
+    scope: "tasks:read",
+    tags: ["Reports"],
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/report/availability",
+    summary: "读取任务报告完成门状态",
+    description: "报告尚未生成时返回服务端权威的 Root、活跃工作、阈值和阻塞 Finding 状态；不修改任务状态。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["reason", "blocking_findings"],
+        properties: {
+          reason: { type: "string" },
+          root_status: { type: "string", nullable: true },
+          min_verify_severity: { type: "string", nullable: true },
+          blockers: { type: "array", items: { type: "string" } },
+          blocking_findings: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["finding_id", "title", "verify_status", "issue"],
+              properties: {
+                finding_id: { type: "string" },
+                title: { type: "string" },
+                severity: { type: "string", nullable: true },
+                verify_status: { type: "string" },
+                issue: { type: "string" },
+              },
+            },
+          },
         },
       },
     },
@@ -495,6 +576,14 @@ const OPS: Op[] = [
         content: { "application/json": { schema: ErrorSchema } },
       },
     },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/report/refresh",
+    summary: "按当前收敛输入刷新任务报告",
+    description: "输入摘要不变时幂等返回；发生变化时追加版本，不覆盖历史报告。",
+    scope: "jobs:control",
+    tags: ["Reports"],
   },
 
   // settings
@@ -639,7 +728,7 @@ const OPS: Op[] = [
       additionalProperties: false,
       required: ["agent_cli"],
       properties: {
-        agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex"] },
+        agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi"] },
       },
     },
   },
@@ -993,7 +1082,7 @@ const OPS: Op[] = [
         provider: { type: "string", description: "LLM 仅允许协议 ID anthropic（Anthropic Messages）或 openai（OpenAI Responses）；OCI 使用 registry host" },
         secret: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
-        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code"], nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi"], nullable: true },
         settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置；运行时物化为 Agent 沙箱配置文件" },
         meta: { type: "object", additionalProperties: true },
         metadata: {
@@ -1025,7 +1114,7 @@ const OPS: Op[] = [
         provider: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
         metadata: { $ref: "#/components/schemas/CredentialMetadata" },
-        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code"], nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi"], nullable: true },
         settings_config: { type: "object", additionalProperties: true, description: "API 返回的 [已保存密钥] 可原样回传，服务端保留原值" },
         meta: { type: "object", additionalProperties: true },
       },
@@ -1063,7 +1152,7 @@ const OPS: Op[] = [
       type: "object",
       required: ["agent_cli", "provider", "secret"],
       properties: {
-        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code"] },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi"] },
         provider: { type: "string", enum: ["anthropic", "openai"] },
         secret: { type: "string", minLength: 1, maxLength: 4096 },
         base_url: { type: "string", format: "uri" },
@@ -1080,7 +1169,7 @@ const OPS: Op[] = [
     scope: "agents:read",
     tags: ["Credentials"],
     query: {
-      agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex"] },
+      agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi"] },
       model: { type: "string", minLength: 1, maxLength: 200 },
     },
   },
@@ -1464,7 +1553,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         RoleConfigInput: {
           type: "object",
           properties: {
-            agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex"] },
+            agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi"] },
             model: { type: "string", nullable: true },
             reasoning: { $ref: "#/components/schemas/ReasoningEffort" },
             env_keys: { type: "array", items: { type: "string" } },

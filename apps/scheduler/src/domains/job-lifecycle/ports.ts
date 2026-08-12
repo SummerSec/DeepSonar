@@ -1,15 +1,19 @@
 import type { sql } from "../../db.js";
 import type { JobTransitionPlan } from "./transition-policy.js";
 
-/** The postgres tagged client (or a transaction client) supplied by a caller. */
+/** 调用方提供的 postgres 标记客户端或事务客户端。 */
 export type JobLifecycleDatabase = typeof sql;
 
-/** Rows returned by lifecycle CAS operations.  Callers deliberately project the
- * fields they need (sandbox/type/canvas metadata) without coupling the domain
- * to a generated database model. */
+/** 生命周期 CAS 操作返回的行；调用方按需投影，避免绑定生成式数据库模型。 */
 export type JobLifecycleRow = Record<string, unknown>;
 
 export type JobTransitionRow = JobLifecycleRow;
+
+/** 启动恢复对 provision 阶段 Job 的明确分类，避免把 orphan 当作重排成功。 */
+export type ProvisionReconcileResult = {
+  requeued: JobLifecycleRow[];
+  orphaned: JobLifecycleRow[];
+};
 
 export interface JobTransitionRequest extends JobTransitionPlan {
   jobId: string;
@@ -23,7 +27,7 @@ export interface JobLifecycleOperations {
   reapExecutionTimeout: () => Promise<JobLifecycleRow[]>;
   reapProvisionTimeout: (provisionSec: number) => Promise<JobLifecycleRow[]>;
   reapLeaseOrphans: () => Promise<JobLifecycleRow[]>;
-  reconcileProvisioning: () => Promise<JobLifecycleRow[]>;
+  reconcileProvisioning: () => Promise<ProvisionReconcileResult>;
   reconcileRunning: () => Promise<JobLifecycleRow[]>;
   cancelJob: (jobId: string, error: string) => Promise<JobLifecycleRow | null>;
   cancelJobsOnCanvas: (canvasId: string, error: string, preserveExistingError?: boolean, clearRuntimeMetadata?: boolean) => Promise<JobLifecycleRow[]>;

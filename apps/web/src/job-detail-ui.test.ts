@@ -35,9 +35,10 @@ test("changing jobs resets terminal state and tears down the previous terminal",
 
 test("results keep one vertical scroller while Markdown remains fully visible", () => {
   const resultStart = panel.indexOf('tab === "result"');
-  const liveStart = panel.indexOf('tab === "live"');
-  assert.ok(resultStart >= 0 && liveStart > resultStart);
-  const result = panel.slice(resultStart, liveStart);
+  const liveStart = panel.indexOf('tab === "live"', resultStart);
+  const scrollStart = panel.indexOf("overflow-x-hidden overflow-y-auto");
+  assert.ok(resultStart >= 0 && scrollStart >= 0 && liveStart > resultStart);
+  const result = panel.slice(scrollStart, liveStart);
   assert.equal((result.match(/overflow-y-auto/g) ?? []).length, 1);
   assert.doesNotMatch(result, /max-h-\[40vh\]\s+overflow-y-auto/);
   assert.match(result, /MarkdownView markdown=\{dispatchPrompt\} scrollable=\{false\}/);
@@ -45,4 +46,20 @@ test("results keep one vertical scroller while Markdown remains fully visible", 
   assert.match(result, /navigator\.clipboard\?\.writeText\(dispatchPrompt\)/);
   assert.match(markdown, /scrollable = true/);
   assert.match(markdown, /scrollable \? "max-h-\[65vh\] overflow-auto" : "overflow-visible"/);
+});
+
+test("运行详情展示有界上下文诊断，而不读取原始 prompt", () => {
+  assert.match(panel, /上下文生命周期/);
+  assert.match(panel, /context_diagnostics/);
+  assert.match(panel, /压缩观测/);
+  assert.match(panel, /transform_chain_digest/);
+  assert.doesNotMatch(panel, /runtime_context\.prompt/);
+});
+
+test("运行详情展示 Attempt、外部效果、投递和用量摘要", () => {
+  assert.match(panel, /执行账本/);
+  assert.match(panel, /latestAttempt/);
+  assert.match(panel, /unknownEffects/);
+  assert.match(panel, /deliveryCounts/);
+  assert.match(panel, /totalTokens/);
 });

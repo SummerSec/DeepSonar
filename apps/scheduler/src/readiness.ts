@@ -589,6 +589,8 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
         const missing = REQUIRED_RUNTIME_CAPABILITIES.filter((capability) => !adapter.capabilities[capability]);
         if (missing.length > 0) {
           checks.push(fail("AGENT_CLI_CAPABILITY_MISSING", `${role.name} 的 ${adapter.id} 缺少必需运行能力：${missing.join(", " )}。`, roleConfigFix(input.scope), { role: summary }));
+        } else if (!adapter.capabilities.controlMcp && !adapter.capabilities.platformControlApi) {
+          checks.push(fail("AGENT_CLI_CONTROL_CAPABILITY_MISSING", `${role.name} 的 ${adapter.id} 未提供控制 MCP 或 Job 控制 API。`, roleConfigFix(input.scope), { role: summary }));
         } else if (typeof adapter.resume !== "function") {
           checks.push(fail("AGENT_CLI_RESUME_UNSUPPORTED", `${role.name} 的 ${adapter.id} 不支持进程级同会话恢复。`, roleConfigFix(input.scope), { role: summary }));
         } else if (!adapter.compatibleImageKeys.includes(imageKey)) {

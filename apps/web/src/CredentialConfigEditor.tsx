@@ -10,7 +10,7 @@ import { CcSwitchOpenCodeFields, defaultOpenCodeSettings } from "./CcSwitchOpenC
 import { formatJsonObject, validateJsonObjectText } from "./json-text";
 import { defaultCodexToml, validateTomlText } from "./toml-text";
 
-export type AgentCli = "claude-code" | "codex" | "open-code";
+export type AgentCli = "claude-code" | "codex" | "open-code" | "pi";
 
 export const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
 const SECRET_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)/iu;
@@ -79,6 +79,10 @@ export function providerProtocolLabel(
 
 export function extractSecretFromSettings(settings: Record<string, unknown> | null | undefined): string {
   if (!settings) return "";
+  const providers = settings.providers && typeof settings.providers === "object" && !Array.isArray(settings.providers)
+    ? settings.providers as Record<string, unknown>
+    : {};
+  const piProvider = Object.values(providers).find((value) => value && typeof value === "object" && !Array.isArray(value)) as Record<string, unknown> | undefined;
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
     ? settings.env as Record<string, unknown>
     : {};
@@ -104,6 +108,8 @@ export function extractSecretFromSettings(settings: Record<string, unknown> | nu
     const value = options[key];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
+  const piKey = piProvider?.apiKey;
+  if (typeof piKey === "string" && piKey.trim()) return piKey.trim();
   return "";
 }
 
@@ -129,6 +135,11 @@ export function extractBaseUrlFromSettingsClient(settings: Record<string, unknow
     const value = options[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
   }
+  const providers = settings.providers && typeof settings.providers === "object" && !Array.isArray(settings.providers)
+    ? settings.providers as Record<string, unknown>
+    : {};
+  const firstProvider = Object.values(providers).find((value) => value && typeof value === "object" && !Array.isArray(value)) as Record<string, unknown> | undefined;
+  if (typeof firstProvider?.baseUrl === "string" && firstProvider.baseUrl.trim()) return firstProvider.baseUrl.trim().replace(/\/+$/u, "");
   return "";
 }
 
@@ -327,6 +338,11 @@ export function CredentialConfigEditor({
       onSettingsJsonChange(formatJsonObject({ env }));
       return;
     }
+    if (cli === "pi") {
+      const providerKey = nextProvider === "anthropic" ? "anthropic-messages" : "openai-responses";
+      onSettingsJsonChange(formatJsonObject({ providers: { deepsonar: { baseUrl: baseUrl.trim(), api: providerKey, apiKey: secret ? MASKED_SECRET_PLACEHOLDER : "", models: [] } } }));
+      return;
+    }
     onSettingsJsonChange(formatJsonObject(defaultOpenCodeSettings(
       secret ? MASKED_SECRET_PLACEHOLDER : "",
       baseUrl,
@@ -346,6 +362,7 @@ export function CredentialConfigEditor({
           <option value="claude-code">Claude Code（settings.json）</option>
           <option value="codex">Codex（config.toml + auth.json）</option>
           <option value="open-code">OpenCode（config.json）</option>
+          <option value="pi">Pi Coding Agent（models.json）</option>
         </select>
         <select
           value={provider}

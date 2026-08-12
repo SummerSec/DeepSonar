@@ -51,6 +51,7 @@ import {
   type FindingVerificationLegacyPort,
 } from "./domains/finding-verification/index.js";
 import { createReportConvergenceApplication } from "./domains/report-convergence/index.js";
+import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 
 export { sha16 } from "./domains/event-ingestion/index.js";
@@ -205,7 +206,7 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
   if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (!["claude-code", "codex", "open-code"].includes(key)) return fallback;
+    if (!["claude-code", "codex", "open-code", "pi"].includes(key)) return fallback;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
     out[key] = value;
   }
@@ -1175,6 +1176,18 @@ export async function finalizeJob(
     console.warn(`[finalize] job ${jobId} 已不在 running，跳过重复 ${status} 终态提交`);
     return false;
   }
+  // Job 与 Attempt 的终态必须在同一事务提交；Attempt 没有活动行时兼容
+  // 早期手工/导入 Job，但不会凭空创建第二套生命周期。
+  await settleAttemptTerminal(
+    tx,
+    jobId,
+    status === "succeeded" ? "succeeded" : "failed",
+    {
+      job_status: status,
+      summary: result?.summary ?? null,
+    },
+    result?.error,
+  );
   if (((updated.canvas_id as string | null) ?? null) !== candidateJobCanvasId) {
     throw new Error(`job ${jobId} canvas changed while finalizing`);
   }
@@ -1415,6 +1428,7 @@ export const CONFIG_FILE_PATHS: Record<string, string> = {
   "claude-code": ".claude/settings.json",
   codex: ".codex/config.toml",
   "open-code": ".opencode/config.json",
+  pi: ".pi/agent/models.json",
 };
 
 export function validateConfigFilePath(agentCli: string, p: string): string | null {
@@ -1426,6 +1440,9 @@ export function validateConfigFilePath(agentCli: string, p: string): string | nu
   if (norm !== p || norm.startsWith("..") || norm.includes("/../")) return "路径不允许 .. 或非规范形式";
   const allowed = CONFIG_FILE_PATHS[agentCli];
   if (!allowed) return `未知 agent_cli: ${agentCli}`;
+  if (agentCli === "pi" && /^\.pi\/agent\/extensions\/[A-Za-z0-9._-]+\.(?:cjs|js|mjs|ts)$/u.test(norm)) {
+    return null;
+  }
   if (norm !== allowed) return `该 CLI 首期只允许固定配置文件：${allowed}`;
   return null;
 }
