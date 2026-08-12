@@ -441,9 +441,11 @@ expect(
     releaseWorkflow.includes('mapfile -t selected_sources') &&
     !releaseWorkflow.includes('platform_args+=(--platform "$target_platforms")') &&
     !releaseWorkflow.includes('retry_imagetools_create --prefer-index=false "${platform_args[@]}"') &&
-    (releaseWorkflow.match(/publish_tags true "\$ACR_TAGS" "\$\{selected_sources\[@\]\}"/g) ?? []).length >= 5 &&
-    (releaseWorkflow.match(/publish_tags false "\$GHCR_TAGS" "\$source_ref"/g) ?? []).length >= 5,
-  "ACR/Docker Hub copies must select exact runnable platform descriptor digests while GHCR retains the source index",
+    (releaseWorkflow.match(/publish_tags false "\$GHCR_TAGS" "\$\{selected_sources\[@\]\}"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/clean_digest="\$\(docker buildx imagetools inspect "\$canonical_tag"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/publish_tags true "\$ACR_TAGS" "\$clean_source"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/DIGEST: \$\{\{ steps\.publish\.outputs\.digest \}\}/g) ?? []).length >= 5,
+  "version tags must share one clean runnable canonical digest while src tags retain provenance",
 );
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");

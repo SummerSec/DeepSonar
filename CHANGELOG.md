@@ -6,6 +6,12 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+## [0.1.27] - 2026-08-13
+
+### Fixed
+
+- Fixed registry release evidence by using the clean runnable GHCR version index as the canonical digest shared with ACR and Docker Hub, while retaining full provenance on immutable `src-*` tags.
+
 ## [0.1.26] - 2026-08-13
 
 ### Fixed
@@ -153,6 +159,7 @@ Changes intended for the next release go here before a release section is dated 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.27]: https://github.com/SummerSec/DeepSonar/compare/v0.1.26...v0.1.27
 [0.1.26]: https://github.com/SummerSec/DeepSonar/compare/v0.1.25...v0.1.26
 [0.1.25]: https://github.com/SummerSec/DeepSonar/compare/v0.1.24...v0.1.25
 [0.1.23]: https://github.com/SummerSec/DeepSonar/compare/v0.1.22...v0.1.23

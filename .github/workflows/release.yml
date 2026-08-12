@@ -292,6 +292,7 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
+        id: publish
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
@@ -337,9 +338,14 @@ jobs:
           selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
           mapfile -t selected_sources <<< "$selected_sources_text"
           [[ ${#selected_sources[@]} -gt 0 ]]
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
-          publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -347,7 +353,7 @@ jobs:
       - name: 保存 base manifest digest
         env:
           IMAGE_KEY: deepsonar-base
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -533,6 +539,7 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
+        id: publish
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
@@ -578,9 +585,14 @@ jobs:
           selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
           mapfile -t selected_sources <<< "$selected_sources_text"
           [[ ${#selected_sources[@]} -gt 0 ]]
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
-          publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -588,7 +600,7 @@ jobs:
       - name: 保存运行时 manifest digest
         env:
           IMAGE_KEY: deepsonar-${{ matrix.name }}
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -1580,6 +1592,7 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
+        id: publish
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
@@ -1625,9 +1638,14 @@ jobs:
           selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
           mapfile -t selected_sources <<< "$selected_sources_text"
           [[ ${#selected_sources[@]} -gt 0 ]]
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
-          publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -1635,7 +1653,7 @@ jobs:
       - name: 保存 OpenHarmony manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-test
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -1807,6 +1825,7 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
+        id: publish
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
@@ -1852,9 +1871,14 @@ jobs:
           selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
           mapfile -t selected_sources <<< "$selected_sources_text"
           [[ ${#selected_sources[@]} -gt 0 ]]
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
-          publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -1862,7 +1886,7 @@ jobs:
       - name: 保存 OpenHarmony Audit manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-audit
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
@@ -2034,6 +2058,7 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
+        id: publish
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
@@ -2079,9 +2104,14 @@ jobs:
           selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
           mapfile -t selected_sources <<< "$selected_sources_text"
           [[ ${#selected_sources[@]} -gt 0 ]]
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
-          publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -2089,7 +2119,7 @@ jobs:
       - name: 保存 OpenHarmony Fuzz manifest digest
         env:
           IMAGE_KEY: deepsonar-openharmony-fuzz
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
           PLATFORMS: linux/amd64,linux/arm64
           GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
