@@ -318,25 +318,28 @@ jobs:
             done
           }
           publish_tags() {
-            local use_retry="$1" tags="$2" source="$3" target_platforms="${4:-}"
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
             local tag_args=()
             while IFS= read -r tag; do
               [[ -n "$tag" ]] || continue
               tag_args+=(-t "$tag")
             done <<< "$tags"
             [[ ${#tag_args[@]} -gt 0 ]]
-            local platform_args=()
-            if [[ -n "$target_platforms" ]]; then platform_args+=(--platform "$target_platforms"); fi
             if [[ "$use_retry" == "true" ]]; then
-              retry_imagetools_create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             else
-              docker buildx imagetools create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             fi
           }
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref" "$PLATFORMS"; fi
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref" "$PLATFORMS"; then
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -556,25 +559,28 @@ jobs:
             done
           }
           publish_tags() {
-            local use_retry="$1" tags="$2" source="$3" target_platforms="${4:-}"
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
             local tag_args=()
             while IFS= read -r tag; do
               [[ -n "$tag" ]] || continue
               tag_args+=(-t "$tag")
             done <<< "$tags"
             [[ ${#tag_args[@]} -gt 0 ]]
-            local platform_args=()
-            if [[ -n "$target_platforms" ]]; then platform_args+=(--platform "$target_platforms"); fi
             if [[ "$use_retry" == "true" ]]; then
-              retry_imagetools_create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             else
-              docker buildx imagetools create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             fi
           }
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref" "$PLATFORMS"; fi
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref" "$PLATFORMS"; then
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -1600,25 +1606,28 @@ jobs:
             done
           }
           publish_tags() {
-            local use_retry="$1" tags="$2" source="$3" target_platforms="${4:-}"
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
             local tag_args=()
             while IFS= read -r tag; do
               [[ -n "$tag" ]] || continue
               tag_args+=(-t "$tag")
             done <<< "$tags"
             [[ ${#tag_args[@]} -gt 0 ]]
-            local platform_args=()
-            if [[ -n "$target_platforms" ]]; then platform_args+=(--platform "$target_platforms"); fi
             if [[ "$use_retry" == "true" ]]; then
-              retry_imagetools_create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             else
-              docker buildx imagetools create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             fi
           }
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref" "$PLATFORMS"; fi
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref" "$PLATFORMS"; then
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -1824,25 +1833,28 @@ jobs:
             done
           }
           publish_tags() {
-            local use_retry="$1" tags="$2" source="$3" target_platforms="${4:-}"
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
             local tag_args=()
             while IFS= read -r tag; do
               [[ -n "$tag" ]] || continue
               tag_args+=(-t "$tag")
             done <<< "$tags"
             [[ ${#tag_args[@]} -gt 0 ]]
-            local platform_args=()
-            if [[ -n "$target_platforms" ]]; then platform_args+=(--platform "$target_platforms"); fi
             if [[ "$use_retry" == "true" ]]; then
-              retry_imagetools_create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             else
-              docker buildx imagetools create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             fi
           }
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref" "$PLATFORMS"; fi
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref" "$PLATFORMS"; then
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -2048,25 +2060,28 @@ jobs:
             done
           }
           publish_tags() {
-            local use_retry="$1" tags="$2" source="$3" target_platforms="${4:-}"
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
             local tag_args=()
             while IFS= read -r tag; do
               [[ -n "$tag" ]] || continue
               tag_args+=(-t "$tag")
             done <<< "$tags"
             [[ ${#tag_args[@]} -gt 0 ]]
-            local platform_args=()
-            if [[ -n "$target_platforms" ]]; then platform_args+=(--platform "$target_platforms"); fi
             if [[ "$use_retry" == "true" ]]; then
-              retry_imagetools_create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             else
-              docker buildx imagetools create --prefer-index=false "${platform_args[@]}" "${tag_args[@]}" "$source"
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
             fi
           }
           source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
-          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$source_ref" "$PLATFORMS"; fi
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "${selected_sources[@]}"; fi
           publish_tags false "$GHCR_TAGS" "$source_ref"
-          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$source_ref" "$PLATFORMS"; then
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "${selected_sources[@]}"; then
             echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
             echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
             exit 1

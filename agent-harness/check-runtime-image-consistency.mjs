@@ -436,12 +436,14 @@ expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 
 expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length >= 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
 expect((releaseWorkflow.match(/::warning::Docker Hub 标签发布失败/g) ?? []).length >= 6, "所有运行时镜像发布必须把 Docker Hub 复制失败降级为警告");
 expect(
-  releaseWorkflow.includes('local use_retry="$1" tags="$2" source="$3" target_platforms="${4:-}"') &&
-    releaseWorkflow.includes('platform_args+=(--platform "$target_platforms")') &&
-    (releaseWorkflow.match(/publish_tags true "\$ACR_TAGS" "\$source_ref" "\$PLATFORMS"/g) ?? []).length >= 5 &&
-    (releaseWorkflow.match(/publish_tags true "\$DOCKERHUB_TAGS" "\$source_ref" "\$PLATFORMS"/g) ?? []).length >= 5 &&
+  (releaseWorkflow.match(/agent-harness\/select-runtime-platform-sources\.sh/g) ?? []).length >= 5 &&
+    releaseWorkflow.includes('selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh') &&
+    releaseWorkflow.includes('mapfile -t selected_sources') &&
+    !releaseWorkflow.includes('platform_args+=(--platform "$target_platforms")') &&
+    !releaseWorkflow.includes('retry_imagetools_create --prefer-index=false "${platform_args[@]}"') &&
+    (releaseWorkflow.match(/publish_tags true "\$ACR_TAGS" "\$\{selected_sources\[@\]\}"/g) ?? []).length >= 5 &&
     (releaseWorkflow.match(/publish_tags false "\$GHCR_TAGS" "\$source_ref"/g) ?? []).length >= 5,
-  "ACR/Docker Hub copies must filter source indexes to concrete target platforms while GHCR retains provenance",
+  "ACR/Docker Hub copies must select exact runnable platform descriptor digests while GHCR retains the source index",
 );
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");

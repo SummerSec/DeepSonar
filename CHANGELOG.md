@@ -1,10 +1,16 @@
-# Changelog
+﻿# Changelog
 
 Release entries are maintained from verified tag and repository changes. The immutable `vX.Y.Z` Git tag is the product release version. Root and workspace package versions remain private internal package metadata (`0.1.11`) and are not release identifiers.
 
 ## [Unreleased]
 
 Changes intended for the next release go here before a release section is dated and tagged.
+
+## [0.1.26] - 2026-08-13
+
+### Fixed
+
+- Fixed ACR and Docker Hub promotion for attested BuildKit indexes by selecting exact runnable platform manifest digests before cross-registry assembly.
 
 ## [0.1.25] - 2026-08-13
 
@@ -147,6 +153,7 @@ Changes intended for the next release go here before a release section is dated 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.26]: https://github.com/SummerSec/DeepSonar/compare/v0.1.25...v0.1.26
 [0.1.25]: https://github.com/SummerSec/DeepSonar/compare/v0.1.24...v0.1.25
 [0.1.23]: https://github.com/SummerSec/DeepSonar/compare/v0.1.22...v0.1.23
 [0.1.21]: https://github.com/SummerSec/DeepSonar/compare/v0.1.20...v0.1.21
