@@ -345,7 +345,7 @@ jobs:
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         run: |
           set -euo pipefail
-          echo "${{ matrix.toolset }} build unchanged: reused previously validated immutable src cache; pull, local tag, and duplicate smoke skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.toolset }} build unchanged: reused previously validated immutable src cache; duplicate image smoke skipped" >> "$GITHUB_STEP_SUMMARY"
       - name: Free disk for Kali toolchain image
         if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
         run: |
@@ -385,9 +385,22 @@ jobs:
           cache-to: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
             type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
+      - name: Load reused base runtime for Pi RPC smoke
+        if: ${{ matrix.toolset == 'base' && steps.resolve.outputs.skip == 'true' }}
+        env:
+          SOURCE_IMAGE: ${{ steps.resolve.outputs.src_ref }}
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_IMAGE"
+          docker pull "$SOURCE_IMAGE"
+          docker tag "$SOURCE_IMAGE" deepsonar-base:ci
+          docker image inspect deepsonar-base:ci >/dev/null
       - name: Offline hardened smoke
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         run: node agent-harness/test-runtime-image.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
+      - name: Pi RPC real Docker smoke
+        if: ${{ matrix.toolset == 'base' }}
+        run: node agent-harness/test-pi-rpc.mjs deepsonar-base:ci
       - name: Maven online package smoke
         if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
         run: node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:ci

@@ -86,17 +86,49 @@ export class PiJsonlFramer {
   private buffer = "";
   private ended = false;
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
+  private readonly maxBytes: number;
+
+  constructor(maxBytes = 1024 * 1024) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error("PI_RPC_MAX_BYTES_INVALID");
+    this.maxBytes = maxBytes;
+  }
 
   push(chunk: string | Uint8Array): string[] {
     if (this.ended) throw new Error("PI_RPC_FRAMER_ENDED");
-    this.buffer += typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
+    if (typeof chunk === "string") {
+      this.buffer += chunk;
+    } else {
+      try {
+        this.buffer += this.decoder.decode(chunk, { stream: true });
+      } catch {
+        this.ended = true;
+        this.buffer = "";
+        throw new Error("PI_RPC_INVALID_UTF8");
+      }
+    }
     const lines: string[] = [];
     while (true) {
       const index = this.buffer.indexOf("\n");
       if (index < 0) break;
       const line = this.buffer.slice(0, index);
       this.buffer = this.buffer.slice(index + 1);
-      lines.push(line.endsWith("\r") ? line.slice(0, -1) : line);
+      const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
+      if (!normalized) {
+        this.ended = true;
+        this.buffer = "";
+        throw new Error("PI_RPC_EMPTY_FRAME");
+      }
+      if (Buffer.byteLength(normalized, "utf8") > this.maxBytes) {
+        this.ended = true;
+        this.buffer = "";
+        throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
+      }
+      lines.push(normalized);
+    }
+    if (Buffer.byteLength(this.buffer, "utf8") > this.maxBytes) {
+      this.ended = true;
+      this.buffer = "";
+      throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
     }
     return lines;
   }
@@ -129,6 +161,7 @@ const PI_RPC_EVENT_TYPES = new Set([
   "message_start",
   "message_update",
   "message_end",
+  "bash_execution_update",
   "tool_execution_start",
   "tool_execution_update",
   "tool_execution_end",
@@ -136,6 +169,9 @@ const PI_RPC_EVENT_TYPES = new Set([
   "compaction_end",
   "auto_retry_start",
   "auto_retry_end",
+  "summarization_retry_scheduled",
+  "summarization_retry_attempt_start",
+  "summarization_retry_finished",
   "queue_update",
   "error",
   "extension_error",

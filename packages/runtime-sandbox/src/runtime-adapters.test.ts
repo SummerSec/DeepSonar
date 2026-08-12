@@ -83,9 +83,17 @@ test("Pi JSONL framing 对半帧、非法 UTF-8、空行和未知事件失败关
   const invalidUtf8 = new PiJsonlFramer();
   invalidUtf8.push(new Uint8Array([0xe2, 0x82]));
   assert.throws(() => invalidUtf8.finish(), /PI_RPC_INVALID_UTF8/);
+  const invalidUtf8Frame = new PiJsonlFramer();
+  assert.throws(() => invalidUtf8Frame.push(new Uint8Array([0xff])), /PI_RPC_INVALID_UTF8/);
+  assert.throws(() => invalidUtf8Frame.push("{}\n"), /PI_RPC_FRAMER_ENDED/);
   assert.throws(() => parsePiJsonlRecord(""), /PI_RPC_EMPTY_FRAME/);
+  const emptyLine = new PiJsonlFramer();
+  assert.throws(() => emptyLine.push("\r\n"), /PI_RPC_EMPTY_FRAME/);
+  assert.throws(() => emptyLine.push("{}\n"), /PI_RPC_FRAMER_ENDED/);
   assert.throws(() => parsePiJsonlRecord(JSON.stringify({ type: "future_event" })), /PI_RPC_UNEXPECTED_EVENT/);
   assert.throws(() => parsePiJsonlRecord("[]"), /PI_RPC_RECORD_NOT_OBJECT/);
+  const oversized = new PiJsonlFramer(8);
+  assert.throws(() => oversized.push('{"type":"response"}\n'), /PI_RPC_MESSAGE_TOO_LARGE/);
 });
 
 test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", async () => {
