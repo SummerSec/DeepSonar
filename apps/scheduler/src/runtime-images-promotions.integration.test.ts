@@ -12,6 +12,7 @@ if (!testDatabaseUrl) {
   test("Docker Hub/ACR-only v2 catalog demotes the stale GitHub projection", async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.AGENT_MODE = "fake";
+    process.env.DEEPSONAR_IMAGE_REGISTRY = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec";
     const { migrate, sql } = await import("./db.js");
     const { applyOfficialRuntimeCatalog } = await import("./runtime-images.js");
     await migrate();
@@ -82,6 +83,47 @@ if (!testDatabaseUrl) {
       assert.equal(rows[0].promoted_at, null, "stale GitHub projection must be demoted");
     } finally {
       await sql`DELETE FROM runtime_images WHERE id = ${imageId}`;
+    }
+  });
+
+  test("official catalog stores the deployment registry ref for admission scans", async () => {
+    const { applyOfficialRuntimeCatalog } = await import("./runtime-images.js");
+    const { sql } = await import("./db.js");
+    const imageKey = `deepsonar-admission-${randomUUID().slice(0, 8)}`;
+    const digest = `sha256:${"c".repeat(64)}`;
+    const githubRef = `ghcr.io/summersec/${imageKey}@${digest}`;
+    const acrRef = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${digest}`;
+    try {
+      await applyOfficialRuntimeCatalog({
+        schema: "deepsonar.registry/v2",
+        schema_version: 2,
+        source: "remote",
+        images: [{
+          image_key: imageKey,
+          name: "Admission fixture",
+          description: "fixture",
+          publisher: "SummerSec",
+          source_kind: "official",
+          project_opt_in: false,
+          versions: [{
+            version: "0.1.0",
+            image_ref: githubRef,
+            digest,
+            platforms: ["linux/amd64"],
+            registry_refs: { github: githubRef, "aliyun-acr": acrRef },
+          }],
+        }],
+      });
+
+      const [row] = await sql`
+        SELECT v.image_ref, v.resolved_ref
+        FROM runtime_image_versions v
+        JOIN runtime_images i ON i.id = v.runtime_image_id
+        WHERE i.image_key = ${imageKey} AND v.digest = ${digest}`;
+      assert.equal(row?.image_ref, acrRef);
+      assert.equal(row?.resolved_ref, acrRef);
+    } finally {
+      await sql`DELETE FROM runtime_images WHERE image_key = ${imageKey}`;
     }
   });
 }

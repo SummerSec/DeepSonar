@@ -9,6 +9,7 @@ import {
   parseRuntimeImageRegistry,
   runtimeImageRefForChannel,
   runtimeImageRegistryNextSyncDelayMs,
+  selectRuntimeImageRef,
   shouldReconcileRuntimeImagePromotions,
   validateRuntimeImageRegistryPolicy,
   type RuntimeImageRegistry,
@@ -314,6 +315,27 @@ test("promotion digest projection excludes Docker Hub-only versions", () => {
   };
   assert.deepEqual(legacyProjectedRegistryDigests([dockerOnly]), []);
   assert.deepEqual(legacyProjectedRegistryDigests([dockerOnly, github]), [DIGEST]);
+});
+
+test("catalog admission ref follows the configured deployment registry", () => {
+  const githubRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  const acrRef = `crpi.example.com/summersec/deepsonar-base@${DIGEST}`;
+  const version = {
+    version: "0.1.0",
+    image_ref: githubRef,
+    digest: DIGEST,
+    registry_refs: { github: githubRef, "aliyun-acr": acrRef },
+  };
+  assert.equal(selectRuntimeImageRef("deepsonar-base", version, "crpi.example.com/summersec"), acrRef);
+  assert.equal(selectRuntimeImageRef("deepsonar-base", version, ""), githubRef);
+  assert.throws(
+    () => selectRuntimeImageRef("deepsonar-base", version, "registry.internal/summersec"),
+    /没有匹配 DEEPSONAR_IMAGE_REGISTRY/,
+  );
+  assert.throws(
+    () => selectRuntimeImageRef("deepsonar-base", version, "https://crpi.example.com/summersec"),
+    /必须是 registry\/namespace 基址/,
+  );
 });
 
 test("OCI digest parser rejects URL/userinfo/port/tag/query/traversal/uppercase ambiguity", () => {

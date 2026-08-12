@@ -232,6 +232,44 @@ export function runtimeImageRefForChannel(
     : null;
 }
 
+function immutableImageRepository(imageRef: string): string {
+  const at = imageRef.lastIndexOf("@");
+  return (at >= 0 ? imageRef.slice(0, at) : imageRef).trim().toLowerCase().replace(/\/+$/, "");
+}
+
+function normalizePreferredRegistry(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/\/+$/, "");
+  if (!normalized) return "";
+  if (normalized.includes("://") || normalized.includes("@") || normalized.includes("?") || normalized.includes("#")) {
+    throw new Error("DEEPSONAR_IMAGE_REGISTRY 必须是 registry/namespace 基址");
+  }
+  return normalized;
+}
+
+/**
+ * 从已解析清单的 registry_refs 中选择部署 registry 下的不可变引用。
+ * 配置为空时保留清单的 image_ref；配置存在但没有精确匹配时拒绝同步，
+ * 防止准入 Worker 退回到部署不可达的 GitHub 投影。
+ */
+export function selectRuntimeImageRef(
+  imageKey: string,
+  version: RuntimeImageRegistryVersion,
+  preferredRegistry = config.images.preferredRegistry,
+): string {
+  const preferred = normalizePreferredRegistry(preferredRegistry);
+  if (!preferred) {
+    if (typeof version.image_ref === "string" && version.image_ref) return version.image_ref;
+    throw new Error(`官方镜像 ${imageKey}@${version.version} 缺少 image_ref`);
+  }
+  const matches = Object.values(version.registry_refs ?? {})
+    .filter((ref): ref is string => typeof ref === "string")
+    .filter((ref) => immutableImageRepository(ref).startsWith(`${preferred}/`));
+  if (matches.length !== 1) {
+    throw new Error(`官方镜像 ${imageKey}@${version.version} 没有匹配 DEEPSONAR_IMAGE_REGISTRY=${preferred} 的已核验 registry_ref`);
+  }
+  return matches[0]!;
+}
+
 export function localImageDigest(imageRef: string): string | null {
   const trimmed = imageRef.trim();
   const withPrefix = trimmed.match(/^sha256:[0-9a-f]{64}$/);
@@ -778,6 +816,14 @@ export async function applyOfficialRuntimeCatalog(
     return sourceImage && sourceImage.versions.length === 0 ? [override.image_key] : [];
   }));
   const registry = applyEnv ? registryWithEnvOverrides(loadedRegistry) : loadedRegistry;
+  const selectedRefs = new Map<RuntimeImageRegistryVersion, string>();
+  // 先完成纯函数预检，避免清单只同步了前半部分后才因 registry 不匹配失败。
+  for (const item of registry.images) {
+    for (const version of item.versions) {
+      if (!version.image_ref) continue;
+      selectedRefs.set(version, selectRuntimeImageRef(item.image_key, version));
+    }
+  }
   for (const item of registry.images) {
     const [image] = await sql`
       INSERT INTO runtime_images ${sql({
@@ -805,11 +851,13 @@ export async function applyOfficialRuntimeCatalog(
       // legacy promotion state below, but never create an unusable version
       // row that cannot be selected by legacy consumers.
       if (!version.image_ref) continue;
+      const selectedRef = selectedRefs.get(version);
+      if (!selectedRef) continue;
       const envOnly = envOnlyKeys.has(item.image_key);
       const source = envOnly ? "env-configured" : "static-registry";
       const values = {
-        runtime_image_id: image.id, version: version.version, image_ref: version.image_ref ?? null,
-        resolved_ref: version.image_ref ?? null, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
+        runtime_image_id: image.id, version: version.version, image_ref: selectedRef,
+        resolved_ref: selectedRef, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
         platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
         size_bytes: version.size_bytes ?? null, scan_summary_json: { source, contract: "declared" } as never,
         trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(),

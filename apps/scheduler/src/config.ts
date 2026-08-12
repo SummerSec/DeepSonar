@@ -249,6 +249,8 @@ export const config = {
     officialBaseRef: str("DEEPSONAR_OFFICIAL_BASE_IMAGE"),
     officialAuditRef: str("DEEPSONAR_OFFICIAL_AUDIT_IMAGE"),
     officialKaliMinimalRef: str("DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE"),
+    /** 部署使用的 registry/namespace 基址；官方清单同步时只选择该基址下的已核验 ref。 */
+    preferredRegistry: str("DEEPSONAR_IMAGE_REGISTRY").trim().replace(/\/+$/, ""),
     /** 私有 GitHub Release 清单的短期/部署级读取凭据；永不返回 API。 */
     registryGithubToken: str("DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN"),
     registrySyncSec: int("DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC", 3600),
