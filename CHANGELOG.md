@@ -6,6 +6,14 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+## [0.1.25] - 2026-08-13
+
+### Fixed
+
+- Fixed Chrome Fuzz arm64 builds by using static ELF and runtime-contract checks under QEMU while retaining executable smoke tests on native arm64 runners.
+- Fixed ACR and Docker Hub image promotion by filtering to supported platforms so unsupported provenance-attestation descriptors are not copied, while GHCR promotion retains provenance.
+- Added a hard gate to public `POST /jobs` that requires the requested project role to be enabled.
+
 ## [0.1.24] - 2026-08-12
 
 ### Added
@@ -139,6 +147,7 @@ Changes intended for the next release go here before a release section is dated 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.25]: https://github.com/SummerSec/DeepSonar/compare/v0.1.24...v0.1.25
 [0.1.23]: https://github.com/SummerSec/DeepSonar/compare/v0.1.22...v0.1.23
 [0.1.21]: https://github.com/SummerSec/DeepSonar/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/SummerSec/DeepSonar/compare/v0.1.19...v0.1.20

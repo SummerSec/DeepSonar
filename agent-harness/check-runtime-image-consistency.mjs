@@ -435,6 +435,14 @@ expect(releaseWorkflow.includes("group: release-runtime-images-${{ github.reposi
 expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 不得取消正在执行的旧发布");
 expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length >= 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
 expect((releaseWorkflow.match(/::warning::Docker Hub 标签发布失败/g) ?? []).length >= 6, "所有运行时镜像发布必须把 Docker Hub 复制失败降级为警告");
+expect(
+  releaseWorkflow.includes('local use_retry="$1" tags="$2" source="$3" target_platforms="${4:-}"') &&
+    releaseWorkflow.includes('platform_args+=(--platform "$target_platforms")') &&
+    (releaseWorkflow.match(/publish_tags true "\$ACR_TAGS" "\$source_ref" "\$PLATFORMS"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/publish_tags true "\$DOCKERHUB_TAGS" "\$source_ref" "\$PLATFORMS"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/publish_tags false "\$GHCR_TAGS" "\$source_ref"/g) ?? []).length >= 5,
+  "ACR/Docker Hub copies must filter source indexes to concrete target platforms while GHCR retains provenance",
+);
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");

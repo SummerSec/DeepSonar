@@ -10,6 +10,8 @@ import {
   normalizePendingJobPriority,
   priorityMatchesJob,
   resolveAgentSnapshotForJob,
+  roleNameForJobType,
+  rolesForProject,
   triggerHubFromHumanComment,
 } from "../../core.js";
 import { sql } from "../../db.js";
@@ -39,6 +41,16 @@ const PriorityBody = z.object({ priority: z.number().int() });
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 const STREAMABLE_JOB_STATUSES = new Set(["running", "waiting_human"]);
 
+/** Public ordinary Job creation is constrained by the project's role catalog. */
+export function isPublicJobTypeAllowed(
+  jobType: string,
+  enabledRoles: readonly { name: string }[],
+): boolean {
+  const roleName = roleNameForJobType(jobType.trim().toLowerCase());
+  if (roleName === "verify") return true;
+  return enabledRoles.some((role) => role.name === roleName.trim().toLowerCase());
+}
+
 export function registerJobControlRoutes(app: FastifyInstance): void {
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
@@ -50,6 +62,9 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const systemJobTypes = new Set(["hub_reason", "hub", "verify_finding", "report"]);
     if (systemJobTypes.has(body.type.trim().toLowerCase())) {
       return reply.code(409).send({ error: "scheduler-owned system Job types cannot be created through the public endpoint" });
+    }
+    if (!isPublicJobTypeAllowed(body.type, await rolesForProject(sql, body.project_id))) {
+      return reply.code(409).send({ error: "role is not enabled for project" });
     }
     // Scheduling lanes are scheduler-owned.  A public caller may include
     // arbitrary payload metadata, but cannot smuggle convergence_evidence (or
