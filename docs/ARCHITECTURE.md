@@ -581,7 +581,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 | finding 内容含恶意 HTML/JS | finding 一律当纯数据存储；画布前端渲染防 XSS（不渲染 raw HTML） |
 | 事件通道被滥用（伪造 finding、刷事件） | 事件不经沙箱网络，只走 SDK 控制通道；沙箱内无调度器凭据；payload schema 校验 + 大小上限 + 每 Job 持久化固定窗口速率限制 |
 | 任务内容诱导 Agent 指定恶意镜像 | Hub 不输出镜像 ID；Scheduler 只从可信目录和 RoleConfig 解析并冻结 digest；未准入/未项目启用版本无法建 Job |
-| 第三方镜像供应链投毒 | 独立准入 Worker + 固定 digest 扫描器 + 验签/SBOM/漏洞/凭据/恶意文件检查 + 管理员提升 + 周期复扫自动撤销 |
+| 第三方镜像供应链投毒 | 独立准入 Worker + 固定 digest 扫描器 + 验签/SBOM/漏洞/凭据/恶意文件检查 + 管理员提升 + 周期复扫自动撤销；官方镜像每次扫描均按 `DEEPSONAR_IMAGE_REGISTRY` 选择同 digest 的已核验引用，缺少部署源证据时 fail closed，不回退其他 registry |
 
 ### 9.2 资源配置（MVP 默认）
 
