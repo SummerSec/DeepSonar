@@ -38,7 +38,7 @@
     "ci:integration:canvas-lifecycle": "pnpm --filter @deepsonar/scheduler exec tsx --test src/canvas-lifecycle-projection.integration.test.ts",
     "ci:unit:role-colors": "pnpm --filter @deepsonar/scheduler exec tsx --test src/role-colors.test.ts src/canvas-delta.test.ts && pnpm --filter @deepsonar/web exec tsx --test src/role-colors.test.ts",
     "ci:integration:role-colors": "pnpm --filter @deepsonar/scheduler exec tsx --test src/role-colors.integration.test.ts",
-    "ci:unit:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.test.ts",
+    "ci:unit:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.test.ts src/task-report-version.test.ts",
     "ci:unit:finding-protocol": "pnpm --filter @deepsonar/scheduler exec tsx --test src/finding-protocol.test.ts",
     "ci:integration:finding-protocol": "pnpm --filter @deepsonar/scheduler exec tsx --test src/finding-protocol.integration.test.ts",
     "ci:unit:shared-assets": "pnpm --filter @deepsonar/scheduler exec tsx --test src/shared-assets.test.ts src/blob-store/blob-store.test.ts src/domains/shared-assets/catalog.test.ts",

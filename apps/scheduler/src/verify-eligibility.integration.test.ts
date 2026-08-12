@@ -17,7 +17,7 @@ if (!testDatabaseUrl) {
 
     const { migrate, sql } = await import("./db.js");
     const { FIXED_PRIORITY, fixedPriorityForJob, maybeTriggerHub } = await import("./core.js");
-    const { buildReportInput, maybeDispatchReport } = await import("./report.js");
+    const { buildReportInput, maybeDispatchReport, refreshTaskReport } = await import("./report.js");
     const {
       canvasFindingsConverged,
       createVerifyRound,
@@ -33,6 +33,7 @@ if (!testDatabaseUrl) {
     const findingId = randomUUID();
     let lowCanvasId: string | null = null;
     let lowFindingId: string | null = null;
+    const thresholdFindingIds: string[] = [];
     const snapshot = { agent_cli: "claude-code", credential_id: null, credential_provider: null, model: null };
     try {
       await sql`
@@ -181,6 +182,38 @@ if (!testDatabaseUrl) {
         INSERT INTO findings (id, project_id, job_id, node_id, fingerprint, title, severity, summary)
         VALUES (${lowFindingId}, ${projectId}, ${lowOriginJobId}, ${lowFindingNode.id as string},
           ${`verify-eligibility-low-${lowFindingId}`}, 'below threshold finding', 'medium', 'policy skip fixture')`;
+      thresholdFindingIds.push(lowFindingId);
+
+      const criticalFindingId = randomUUID();
+      const highFindingId = randomUUID();
+      const lowSeverityFindingId = randomUUID();
+      const thresholdFixtures = [
+        { id: criticalFindingId, title: "已收敛严重 Finding", severity: "critical", verifyStatus: "confirmed" },
+        { id: highFindingId, title: "已收敛高危 Finding", severity: "high", verifyStatus: "confirmed" },
+        { id: lowSeverityFindingId, title: "阈值外低危 Finding", severity: "low", verifyStatus: "pending" },
+      ] as const;
+      for (const fixture of thresholdFixtures) {
+        const [node] = await sql`
+          INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+          VALUES (${lowCanvasId}, 'finding', ${fixture.title}, ${fixture.verifyStatus === "confirmed" ? "succeeded" : "pending"}, ${sql.json({})})
+          RETURNING id`;
+        await sql`
+          INSERT INTO findings (id, project_id, job_id, node_id, fingerprint, title, severity, summary, verify_status, raw_json)
+          VALUES (
+            ${fixture.id}, ${projectId}, ${lowOriginJobId}, ${node.id as string},
+            ${`verify-eligibility-${fixture.id}`}, ${fixture.title}, ${fixture.severity},
+            ${fixture.verifyStatus === "confirmed" ? "已确认集成夹具" : "策略排除集成夹具"},
+            ${fixture.verifyStatus},
+            ${sql.json(fixture.verifyStatus === "pending" ? {
+              verification_state: { eligibility: "below_min_verify_severity", min_verify_severity: "high" },
+            } : {})})`;
+        thresholdFindingIds.push(fixture.id);
+        if (fixture.verifyStatus === "confirmed") {
+          await sql`
+            INSERT INTO finding_verification_rounds (finding_id, attempt, status, final_outcome, summary, finished_at)
+            VALUES (${fixture.id}, 1, 'confirmed', 'confirmed', '集成夹具已确认', now())`;
+        }
+      }
 
       const [lowFinding] = await sql`SELECT * FROM findings WHERE id = ${lowFindingId}`;
       await evaluateFollowup(sql, {
@@ -198,10 +231,10 @@ if (!testDatabaseUrl) {
       const [{ verify_jobs: lowVerifyJobs, rounds: lowRounds, human_nodes: lowHumanNodes }] = await sql`
         SELECT
           (SELECT COUNT(*)::int FROM jobs WHERE canvas_id = ${lowCanvasId} AND type = 'verify_finding') AS verify_jobs,
-          (SELECT COUNT(*)::int FROM finding_verification_rounds WHERE finding_id = ${lowFindingId}) AS rounds,
+          (SELECT COUNT(*)::int FROM finding_verification_rounds WHERE finding_id = ANY(${thresholdFindingIds}::uuid[])) AS rounds,
           (SELECT COUNT(*)::int FROM canvas_nodes WHERE canvas_id = ${lowCanvasId} AND node_type = 'human') AS human_nodes`;
       assert.equal(lowVerifyJobs, 0);
-      assert.equal(lowRounds, 0);
+      assert.equal(lowRounds, 2);
       assert.equal(lowHumanNodes, 0);
       const [lowState] = await sql`SELECT verify_status, raw_json FROM findings WHERE id = ${lowFindingId}`;
       assert.equal(lowState.verify_status, "pending");
@@ -213,10 +246,18 @@ if (!testDatabaseUrl) {
       assert.equal((await canvasFindingsConverged(sql, lowCanvasId, { projectId })).ok, true);
       assert.equal((await evaluateAnalysisCompleteGate(sql, lowCanvasId)).ok, true);
       const lowReportInput = await buildReportInput(lowCanvasId, sql);
-      assert.equal(lowReportInput.statistics.findings_total, 1);
-      assert.equal(lowReportInput.statistics.excluded_count, 1);
+      assert.equal(lowReportInput.statistics.findings_total, 4);
+      assert.equal(lowReportInput.statistics.confirmed_count, 2);
+      assert.equal(lowReportInput.statistics.excluded_count, 2);
       assert.equal(lowReportInput.statistics.needs_human_count, 0);
-      assert.equal(lowReportInput.excluded_findings[0]?.id, lowFindingId);
+      assert.deepEqual(
+        lowReportInput.excluded_findings.map((finding) => finding.severity).sort(),
+        ["low", "medium"],
+      );
+      assert.deepEqual(
+        lowReportInput.confirmed_findings.map((finding) => finding.severity).sort(),
+        ["critical", "high"],
+      );
 
       await sql`
         UPDATE canvas_nodes SET status = 'analysis_complete'
@@ -226,20 +267,45 @@ if (!testDatabaseUrl) {
       );
       assert.equal(lowReportDispatch.dispatched, true);
       const [lowReportJob] = await sql`
-        SELECT type, payload_json FROM jobs
+        SELECT id, type, payload_json FROM jobs
         WHERE canvas_id = ${lowCanvasId} AND type = 'report'
         ORDER BY created_at DESC LIMIT 1`;
       assert.equal(lowReportJob.type, "report");
-      assert.equal((lowReportJob.payload_json as Record<string, unknown>).excluded_count, 1);
+      assert.equal((lowReportJob.payload_json as Record<string, unknown>).excluded_count, 2);
+      const [firstTaskReport] = await sql`
+        SELECT id, version, status, input_sha256, report_job_id
+        FROM task_reports WHERE canvas_id = ${lowCanvasId}`;
+      assert.equal(Number(firstTaskReport.version), 1);
+      assert.equal(firstTaskReport.status, "generating");
+      assert.equal(firstTaskReport.report_job_id, lowReportJob.id);
+
+      await sql`
+        UPDATE jobs SET status = 'succeeded', finished_at = now()
+        WHERE id = ${lowReportJob.id}`;
+      await sql`
+        UPDATE task_reports SET status = 'succeeded', updated_at = now()
+        WHERE id = ${firstTaskReport.id}`;
+      await sql`
+        UPDATE findings SET summary = '输入变化后仍保留在下一版报告' WHERE id = ${criticalFindingId}`;
+      const refreshed = await refreshTaskReport(lowCanvasId);
+      assert.equal(refreshed.ok, true);
+      assert.ok(refreshed.report_id);
+      const taskReports = await sql`
+        SELECT version, status, input_sha256
+        FROM task_reports WHERE canvas_id = ${lowCanvasId} ORDER BY version`;
+      assert.deepEqual(taskReports.map((report) => Number(report.version)), [1, 2]);
+      assert.equal(taskReports[0]?.status, "succeeded");
+      assert.equal(taskReports[1]?.status, "generating");
+      assert.notEqual(taskReports[0]?.input_sha256, taskReports[1]?.input_sha256);
       const [{ lowTaskReports }] = await sql`
         SELECT COUNT(*)::int AS "lowTaskReports" FROM task_reports WHERE canvas_id = ${lowCanvasId}`;
-      assert.equal(Number(lowTaskReports), 1);
+      assert.equal(Number(lowTaskReports), 2);
 
     } finally {
       await sql.begin(async (tx) => {
         if (lowFindingId && lowCanvasId) {
-          await tx`DELETE FROM finding_verification_rounds WHERE finding_id = ${lowFindingId}`;
-          await tx`DELETE FROM findings WHERE id = ${lowFindingId}`;
+          await tx`DELETE FROM finding_verification_rounds WHERE finding_id = ANY(${thresholdFindingIds}::uuid[])`;
+          await tx`DELETE FROM findings WHERE id = ANY(${thresholdFindingIds}::uuid[])`;
           await tx`DELETE FROM task_reports WHERE canvas_id = ${lowCanvasId}`;
           await tx`DELETE FROM canvas_edges WHERE canvas_id = ${lowCanvasId}`;
           await tx`DELETE FROM canvas_nodes WHERE canvas_id = ${lowCanvasId}`;
