@@ -215,13 +215,15 @@ export async function updateAttemptResource(
   attemptId: string,
   resource: { sandboxId?: string | null; sessionId?: string | null; phase?: AttemptPhase },
 ): Promise<AttemptRow | null> {
-  const sandboxId = resource.sandboxId === undefined ? undefined : String(resource.sandboxId).slice(0, 255);
-  const sessionId = resource.sessionId === undefined ? undefined : String(resource.sessionId).slice(0, 255);
-  return updateState(db, attemptId, {
-    phase: resource.phase,
-    sandbox_id: sandboxId,
-    session_id: sessionId,
-  });
+  const patch: Partial<AttemptState> & { phase?: AttemptPhase } = {};
+  if (resource.phase !== undefined) patch.phase = resource.phase;
+  if (resource.sandboxId !== undefined) {
+    patch.sandbox_id = resource.sandboxId === null ? null : String(resource.sandboxId).slice(0, 255);
+  }
+  if (resource.sessionId !== undefined) {
+    patch.session_id = resource.sessionId === null ? null : String(resource.sessionId).slice(0, 255);
+  }
+  return updateState(db, attemptId, patch);
 }
 
 export async function updateAttemptContext(
