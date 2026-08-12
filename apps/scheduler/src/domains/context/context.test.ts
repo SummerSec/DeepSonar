@@ -49,6 +49,39 @@ test("压缩未知状态不增加 revision 且不暴露上下文正文", () => {
   assert.equal(unknown.compaction.observation, "unknown");
   assert.equal(unknown.context_revision, 0);
   assert.doesNotMatch(JSON.stringify(projectContextDiagnostics(unknown)), /机密输入/);
+  assert.equal(projectContextDiagnostics(unknown)?.last_compaction, null);
+});
+
+test("可观测压缩诊断保留有界 boundary 与 tail 摘要", () => {
+  const initial = createJobRuntimeContext({
+    attemptId: "attempt-context-boundary",
+    adapterId: "codex",
+    adapterVersion: "1.0.0",
+    runtimeIdentity: digest("a"),
+    compactionPolicy: "automatic",
+    initialInput: "输入",
+  });
+  const compacted = applyRuntimeContextEvent(initial, {
+    type: "context.compacted",
+    event_id: "compact-boundary-1",
+    context_id: initial.context_id,
+    context_revision: 1,
+    adapter_id: initial.adapter_id,
+    adapter_version: initial.adapter_version,
+    runtime_identity: initial.runtime_identity,
+    transform_chain_digest: initial.transform_chain_digest,
+    policy: initial.policy,
+    boundary: { kind: "tail", retained_tail_count: 6, retained_tail_digest: digest("b") },
+    input_digest: initial.transforms.at(-1)!.output_digest,
+    output_digest: digest("c"),
+    budget: { unit: "tokens", limit: 4096, observed: 3900 },
+    omission: { kind: "history", count: 12, reason: "自动压缩", truncated: true },
+    source: "adapter",
+  });
+  const diagnostics = projectContextDiagnostics(compacted);
+  assert.equal(diagnostics?.last_compaction?.boundary.retained_tail_count, 6);
+  assert.equal(diagnostics?.last_compaction?.boundary.retained_tail_digest, digest("b"));
+  assert.equal(diagnostics?.last_compaction?.omission?.count, 12);
 });
 
 test("上下文持久化通过单事务写入 Job 证据", async () => {

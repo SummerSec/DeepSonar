@@ -126,6 +126,13 @@ export interface ContextDiagnostics {
     source: string;
   }>;
   compaction: ContextState["compaction"];
+  last_compaction: {
+    event_id: string;
+    boundary: ContextCompactionEvent["boundary"];
+    budget: ContextCompactionEvent["budget"];
+    omission: ContextCompactionEvent["omission"];
+    source: ContextCompactionEvent["source"];
+  } | null;
 }
 
 export function projectContextDiagnostics(value: unknown): ContextDiagnostics | null {
@@ -136,6 +143,7 @@ export function projectContextDiagnostics(value: unknown): ContextDiagnostics | 
     return null;
   }
   const state = value as ContextState;
+  const lastCompaction = state.compactions.at(-1);
   return {
     context_id: state.context_id,
     context_revision: state.context_revision,
@@ -155,5 +163,14 @@ export function projectContextDiagnostics(value: unknown): ContextDiagnostics | 
       source: item.source,
     })),
     compaction: state.compaction,
+    last_compaction: lastCompaction
+      ? {
+          event_id: lastCompaction.event_id,
+          boundary: lastCompaction.boundary,
+          budget: lastCompaction.budget,
+          omission: lastCompaction.omission,
+          source: lastCompaction.source,
+        }
+      : null,
   };
 }
