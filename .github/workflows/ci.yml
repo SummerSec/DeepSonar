@@ -400,7 +400,13 @@ jobs:
         run: node agent-harness/test-runtime-image.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
       - name: Pi RPC real Docker smoke
         if: ${{ matrix.toolset == 'base' }}
-        run: node agent-harness/test-pi-rpc.mjs deepsonar-base:ci
+        run: |
+          set -o pipefail
+          node agent-harness/test-pi-rpc.mjs deepsonar-base:ci 2>&1 | tee /tmp/pi-rpc-smoke.log || {
+            detail="$(tail -c 8000 /tmp/pi-rpc-smoke.log | tr '\n' ' ')"
+            echo "::error title=Pi RPC real Docker smoke::${detail}"
+            exit 1
+          }
       - name: Maven online package smoke
         if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
         run: node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:ci

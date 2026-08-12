@@ -51,13 +51,14 @@ class StrictJsonlReader {
     }
   }
 
-  finish() {
+  finish(exitDetail = "") {
     if (this.#ended) return;
     try {
       this.#buffer += this.#decoder.decode();
       if (this.#buffer) throw new Error("Pi 输出以半帧结束");
       this.#ended = true;
-      for (const waiter of this.#waiters.splice(0)) waiter.reject(new Error("Pi RPC 进程已结束"));
+      const suffix = exitDetail ? `：${exitDetail}` : "";
+      for (const waiter of this.#waiters.splice(0)) waiter.reject(new Error(`Pi RPC 进程已结束${suffix}`));
     } catch (error) {
       this.fail(error);
     }
@@ -96,9 +97,13 @@ class StrictJsonlReader {
 }
 
 function dockerArgs(paths, containerName, sessionFile) {
+  const hostUser = typeof process.getuid === "function" && typeof process.getgid === "function"
+    ? `${process.getuid()}:${process.getgid()}`
+    : null;
   const args = [
-    "run", "--rm", "--name", containerName, "--network", "none", "--cap-drop", "ALL",
+    "run", "--rm", "--interactive", "--name", containerName, "--network", "none", "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges", "--cpus", "1", "--memory", "1g", "--pids-limit", "256",
+    ...(hostUser ? ["--user", hostUser] : []),
     "-v", `${paths.agentDir}:${SESSION_ROOT}`,
     "-v", `${paths.governedDir}:${SESSION_ROOT}/extensions:ro`,
     "-v", `${paths.projectDir}:/workspace/.pi/extensions:ro`,
@@ -117,9 +122,16 @@ function startPi(paths, containerName, sessionFile) {
   const reader = new StrictJsonlReader();
   const stderr = [];
   child.stdout.on("data", (chunk) => reader.push(chunk));
-  child.stdout.on("end", () => reader.finish());
   child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
   child.on("error", (error) => reader.fail(error));
+  child.on("close", (code, signal) => {
+    const stderrTail = stderr.join("").trim().slice(-4096);
+    reader.finish([
+      `exit=${code ?? "null"}`,
+      `signal=${signal ?? "none"}`,
+      stderrTail ? `stderr=${stderrTail}` : "",
+    ].filter(Boolean).join("；"));
+  });
   return { child, containerName, reader, stderr };
 }
 
