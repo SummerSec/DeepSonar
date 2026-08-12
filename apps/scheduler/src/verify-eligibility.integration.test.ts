@@ -161,7 +161,11 @@ if (!testDatabaseUrl) {
       lowFindingId = randomUUID();
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
-        VALUES (${lowCanvasId}, ${projectId}, 'Below threshold finding', ${sql.json({})})`;
+        VALUES (${lowCanvasId}, ${projectId}, 'Below threshold finding', ${sql.json({
+          network_policy: { allow_egress: false },
+        })})`;
+      const [lowCanvas] = await sql`SELECT target_json FROM canvases WHERE id = ${lowCanvasId}`;
+      assert.deepEqual((lowCanvas.target_json as Record<string, unknown>).network_policy, { allow_egress: false });
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${lowCanvasId}, 'root', 'root', 'active', ${sql.json({})})`;
