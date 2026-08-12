@@ -56,6 +56,7 @@ test("capabilities projection does not expose a token and points to same-level o
   });
   assert.equal(projection.openapi_url, "/control/v1/jobs/00000000-0000-4000-8000-000000000001/openapi.json");
   assert.equal(projection.operations[0]?.invoke_url, "/control/v1/jobs/00000000-0000-4000-8000-000000000001/operations/emit_fact");
+  assert.deepEqual(projection.operations[0]?.input_schema, ControlToolInputSchemasJson.emit_fact);
   assert.equal("token" in projection, false);
 });
 

@@ -143,6 +143,7 @@ export interface PlatformCapabilitiesProjection {
     description: string;
     read_only: boolean;
     event_type: string | null;
+    input_schema: ControlJsonSchema;
     input_schema_url: string;
     invoke_url: string;
   }>;
@@ -172,13 +173,14 @@ function operationSummarySchema() {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["operation_id", "summary", "description", "read_only", "input_schema_url", "invoke_url"],
+    required: ["operation_id", "summary", "description", "read_only", "input_schema", "input_schema_url", "invoke_url"],
     properties: {
       operation_id: { type: "string" },
       summary: { type: "string" },
       description: { type: "string" },
       read_only: { type: "boolean" },
       event_type: { type: "string", nullable: true },
+      input_schema: { type: "object", additionalProperties: true },
       input_schema_url: { type: "string" },
       invoke_url: { type: "string" },
     },
@@ -202,6 +204,7 @@ export function buildCapabilitiesProjection(input: {
       description: definition.description,
       read_only: definition.readOnly,
       event_type: definition.eventType,
+      input_schema: cloneSchema(definition.inputSchema),
       input_schema_url: `${base}/operations/${encodeURIComponent(definition.operationId)}`,
       invoke_url: `${base}/operations/${encodeURIComponent(definition.operationId)}`,
     }));
