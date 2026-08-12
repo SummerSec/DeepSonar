@@ -117,6 +117,10 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   const scanId = row.scan_id as string;
   const versionId = row.id as string;
   const imageRef = row.image_ref as string;
+  const scanSeed = row.scan_seed && typeof row.scan_seed === "object"
+    ? row.scan_seed as Record<string, unknown>
+    : {};
+  const restoreOfficialTrust = row.source_kind === "official" && scanSeed.restore_official_trust === true;
   if (!allowedRegistries.has(registryOf(imageRef))) throw new Error(`registry not allowed: ${registryOf(imageRef)}`);
 
   await sql`UPDATE runtime_image_scans SET status = 'running' WHERE id = ${scanId}`;
@@ -176,7 +180,9 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
         sbom_json = ${tx.json(sbom as never)}, signature_json = ${tx.json(signature as never)},
         scan_summary_json = ${tx.json(scanSummary as never)}, size_bytes = ${Number(inspect.Size ?? 0)},
         scanned_at = now(),
-        trust_status = CASE WHEN trust_status = 'trusted' THEN 'trusted' ELSE 'quarantined' END,
+        trust_status = CASE WHEN trust_status = 'trusted' OR ${restoreOfficialTrust} THEN 'trusted' ELSE 'quarantined' END,
+        approved_by = CASE WHEN ${restoreOfficialTrust} THEN 'official-catalog-rescan' ELSE approved_by END,
+        approved_at = CASE WHEN ${restoreOfficialTrust} THEN now() ELSE approved_at END,
         status_reason = NULL, updated_at = now()
       WHERE id = ${versionId} AND trust_status <> 'revoked'`;
     await tx`
@@ -193,7 +199,11 @@ async function inspectAndScan(row: Record<string, unknown>) {
 
 async function fail(row: Record<string, unknown>, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  const revoke = row.trust_status === "trusted";
+  const scanSeed = row.scan_seed && typeof row.scan_seed === "object"
+    ? row.scan_seed as Record<string, unknown>
+    : {};
+  const revoke = row.trust_status === "trusted"
+    || (row.source_kind === "official" && scanSeed.restore_official_trust === true);
   await sql.begin(async (tx) => {
     await tx`UPDATE runtime_image_scans SET status = 'failed', error = ${message}, finished_at = now() WHERE id = ${row.scan_id as string}`;
     await tx`

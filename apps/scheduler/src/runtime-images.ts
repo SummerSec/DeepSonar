@@ -899,9 +899,9 @@ export async function applyOfficialRuntimeCatalog(
         }
       } else {
         // A digest present in the trusted official catalog is authoritative for
-        // that exact digest: it can repair a previously disabled/quarantined
-        // catalog row, but revoked rows stay revoked until an administrator
-        // explicitly changes them.
+        // that exact digest. A revoked row is only re-scanned when the trusted
+        // catalog moves its admission pull reference to another registry; a
+        // same-ref sync must preserve genuine security revocations.
         const [saved] = await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
@@ -911,12 +911,41 @@ export async function applyOfficialRuntimeCatalog(
               THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
             tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
             size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
-            trust_status = CASE WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
-              THEN 'trusted' ELSE runtime_image_versions.trust_status END,
-            approved_by = CASE WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
-              THEN EXCLUDED.approved_by ELSE runtime_image_versions.approved_by END,
-            approved_at = CASE WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
-              THEN EXCLUDED.approved_at ELSE runtime_image_versions.approved_at END,
+            trust_status = CASE
+              WHEN runtime_image_versions.trust_status = 'revoked'
+                AND runtime_image_versions.image_ref IS DISTINCT FROM EXCLUDED.image_ref THEN 'quarantined'
+              WHEN runtime_image_versions.trust_status IN ('quarantined', 'scanning')
+                AND runtime_image_versions.status_reason = 'official registry reference changed; admission rescan required'
+                THEN runtime_image_versions.trust_status
+              WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
+                THEN 'trusted'
+              ELSE runtime_image_versions.trust_status
+            END,
+            status_reason = CASE
+              WHEN runtime_image_versions.trust_status = 'revoked'
+                AND runtime_image_versions.image_ref IS DISTINCT FROM EXCLUDED.image_ref
+                THEN 'official registry reference changed; admission rescan required'
+              ELSE runtime_image_versions.status_reason
+            END,
+            revoked_at = CASE
+              WHEN runtime_image_versions.trust_status = 'revoked'
+                AND runtime_image_versions.image_ref IS DISTINCT FROM EXCLUDED.image_ref THEN NULL
+              ELSE runtime_image_versions.revoked_at
+            END,
+            approved_by = CASE
+              WHEN runtime_image_versions.status_reason = 'official registry reference changed; admission rescan required'
+                THEN runtime_image_versions.approved_by
+              WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
+                THEN EXCLUDED.approved_by
+              ELSE runtime_image_versions.approved_by
+            END,
+            approved_at = CASE
+              WHEN runtime_image_versions.status_reason = 'official registry reference changed; admission rescan required'
+                THEN runtime_image_versions.approved_at
+              WHEN runtime_image_versions.trust_status IN ('disabled', 'quarantined', 'scanning', 'rejected')
+                THEN EXCLUDED.approved_at
+              ELSE runtime_image_versions.approved_at
+            END,
             updated_at = now()
           RETURNING id`;
         if (!saved?.id) continue;
@@ -938,6 +967,17 @@ export async function applyOfficialRuntimeCatalog(
               evidence_json = EXCLUDED.evidence_json,
               updated_at = now()`;
         }
+        await sql`
+          INSERT INTO runtime_image_scans (runtime_image_version_id, result_json)
+          SELECT ${saved.id}, ${sql.json({ restore_official_trust: true, reason: "registry_reference_changed" } as never)}
+          FROM runtime_image_versions v
+          WHERE v.id = ${saved.id}
+            AND v.trust_status = 'quarantined'
+            AND v.status_reason = 'official registry reference changed; admission rescan required'
+            AND NOT EXISTS (
+              SELECT 1 FROM runtime_image_scans s
+              WHERE s.runtime_image_version_id = v.id AND s.status IN ('queued', 'claimed', 'running')
+            )`;
       }
       appliedDigests.add(digest);
     }

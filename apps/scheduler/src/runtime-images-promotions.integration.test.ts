@@ -126,4 +126,66 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM runtime_images WHERE image_key = ${imageKey}`;
     }
   });
+
+  test("revoked official digest is re-scanned only when its admission registry ref changes", async () => {
+    const { applyOfficialRuntimeCatalog } = await import("./runtime-images.js");
+    const { sql } = await import("./db.js");
+    const imageKey = `deepsonar-revoked-${randomUUID().slice(0, 8)}`;
+    const digest = `sha256:${"d".repeat(64)}`;
+    const githubRef = `ghcr.io/summersec/${imageKey}@${digest}`;
+    const acrRef = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${digest}`;
+    const catalog = {
+      schema: "deepsonar.registry/v2" as const,
+      schema_version: 2 as const,
+      source: "remote" as const,
+      images: [{
+        image_key: imageKey,
+        name: "Revoked fixture",
+        description: "fixture",
+        publisher: "SummerSec",
+        source_kind: "official" as const,
+        project_opt_in: false,
+        versions: [{
+          version: "0.1.0",
+          image_ref: githubRef,
+          digest,
+          platforms: ["linux/amd64"],
+          registry_refs: { github: githubRef, "aliyun-acr": acrRef },
+        }],
+      }],
+    };
+    try {
+      const [image] = await sql`
+        INSERT INTO runtime_images (image_key, name, description, publisher, source_kind, official)
+        VALUES (${imageKey}, 'Revoked fixture', 'fixture', 'SummerSec', 'official', true)
+        RETURNING id`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, status_reason, revoked_at)
+        VALUES
+          (${image.id}, '0.1.0', ${githubRef}, ${githubRef}, ${digest}, ${sql.json(["linux/amd64"] as never)},
+           'revoked', 'ghcr pull unauthorized', now())`;
+
+      await applyOfficialRuntimeCatalog(catalog);
+      const [recovered] = await sql`
+        SELECT v.id, v.image_ref, v.trust_status, v.status_reason,
+          (SELECT count(*)::int FROM runtime_image_scans s
+           WHERE s.runtime_image_version_id = v.id AND s.status = 'queued'
+             AND s.result_json @> ${sql.json({ restore_official_trust: true } as never)}) AS queued_scans
+        FROM runtime_image_versions v WHERE v.runtime_image_id = ${image.id} AND v.digest = ${digest}`;
+      assert.equal(recovered.image_ref, acrRef);
+      assert.equal(recovered.trust_status, "quarantined");
+      assert.equal(recovered.queued_scans, 1);
+
+      await applyOfficialRuntimeCatalog(catalog);
+      const [sameRef] = await sql`
+        SELECT v.trust_status,
+          (SELECT count(*)::int FROM runtime_image_scans s WHERE s.runtime_image_version_id = v.id) AS scan_count
+        FROM runtime_image_versions v WHERE v.id = ${recovered.id}`;
+      assert.equal(sameRef.trust_status, "quarantined", "扫描成功前重复同步不得提前恢复信任");
+      assert.equal(sameRef.scan_count, 1, "同一引用重复同步不得重复排队");
+    } finally {
+      await sql`DELETE FROM runtime_images WHERE image_key = ${imageKey}`;
+    }
+  });
 }
