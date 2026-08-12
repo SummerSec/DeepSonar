@@ -93,12 +93,12 @@ if (!testDatabaseUrl) {
         VALUES (${ownCanvasId}, 'root', 'root', 'analysis_complete', ${sql.json({})}),
                (${otherCanvasId}, 'root', 'root', 'analysis_complete', ${sql.json({})})`;
       await sql`
-        INSERT INTO task_reports (id, canvas_id, project_id, status, summary_json, markdown_uri, sarif_uri)
+        INSERT INTO task_reports (id, canvas_id, project_id, version, status, input_uri, input_sha256, summary_json, markdown_uri, sarif_uri)
         VALUES
-          (${ownReportId}, ${ownCanvasId}, ${ownProjectId}, 'succeeded', ${sql.json({ confirmed_count: 1 })},
+          (${ownReportId}, ${ownCanvasId}, ${ownProjectId}, 1, 'succeeded', 'reports/test/v1/report-input.json', ${"0".repeat(64)}, ${sql.json({ confirmed_count: 1 })},
             ${path.posix.join("reports", ownCanvasId, "report.md")},
             ${path.posix.join("reports", ownCanvasId, "report.sarif.json")}),
-          (${otherReportId}, ${otherCanvasId}, ${otherProjectId}, 'succeeded', ${sql.json({})},
+          (${otherReportId}, ${otherCanvasId}, ${otherProjectId}, 1, 'succeeded', 'reports/test/v1/report-input.json', ${"0".repeat(64)}, ${sql.json({})},
             ${path.posix.join("reports", otherCanvasId, "report.md")}, NULL)`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)

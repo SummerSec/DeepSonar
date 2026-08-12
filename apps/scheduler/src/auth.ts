@@ -95,6 +95,8 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /canvases/:id/delta": "tasks:read",
   "GET /canvases/:id/nodes/:nodeId": "tasks:read",
   "GET /canvases/:id/report": "tasks:read",
+  "GET /canvases/:id/report/availability": "tasks:read",
+  "GET /canvases/:id/reports": "tasks:read",
   "GET /findings/:id/report": "findings:read",
   "POST /findings/:id/report": "jobs:control",
   // Internal resolver marker: authHook maps it to tasks:read or findings:read
@@ -102,6 +104,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /reports/:id/markdown": "report:read",
   "GET /reports/:id/sarif": "tasks:read",
   "POST /canvases/:id/report/retry": "jobs:control",
+  "POST /canvases/:id/report/refresh": "jobs:control",
   "POST /tasks/:canvasId/retry": "jobs:control",
   "POST /tasks/:canvasId/resume-session": "jobs:control",
   "POST /tasks/:canvasId/archive": "tasks:write",

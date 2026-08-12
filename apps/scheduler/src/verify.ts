@@ -1190,7 +1190,7 @@ export async function canvasFindingsConverged(
 
   const careSeveritiesForRounds = careSeverities(minVerifySeverity);
   const openRounds = await tx`
-    SELECT r.id, r.finding_id FROM finding_verification_rounds r
+    SELECT r.id, r.finding_id, f.title, f.severity, f.verify_status FROM finding_verification_rounds r
     JOIN findings f ON f.id = r.finding_id
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId}
@@ -1201,7 +1201,19 @@ export async function canvasFindingsConverged(
         OR lower(f.severity) = ANY(${careSeveritiesForRounds})
       )
     LIMIT 5`;
-  for (const r of openRounds) blockers.push(`open_round:${r.id}`);
+  for (const r of openRounds) {
+    blockers.push(`open_round:${r.id}`);
+    if (!problems.some((problem) => problem.finding_id === r.finding_id)) {
+      problems.push({
+        finding_id: r.finding_id as string,
+        title: String(r.title ?? ""),
+        severity: String(r.severity ?? "").toLowerCase(),
+        verify_status: String(r.verify_status ?? ""),
+        issue: "Finding 仍有未关闭的 verification round",
+        in_care_scope: true,
+      });
+    }
+  }
 
   return { ok: blockers.length === 0 && problems.length === 0, blockers, problems };
 }

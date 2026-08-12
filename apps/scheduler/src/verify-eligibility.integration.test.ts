@@ -17,7 +17,7 @@ if (!testDatabaseUrl) {
 
     const { migrate, sql } = await import("./db.js");
     const { FIXED_PRIORITY, fixedPriorityForJob, maybeTriggerHub } = await import("./core.js");
-    const { buildReportInput } = await import("./report.js");
+    const { buildReportInput, maybeDispatchReport } = await import("./report.js");
     const {
       canvasFindingsConverged,
       createVerifyRound,
@@ -214,11 +214,29 @@ if (!testDatabaseUrl) {
       assert.equal(lowReportInput.statistics.needs_human_count, 0);
       assert.equal(lowReportInput.excluded_findings[0]?.id, lowFindingId);
 
+      await sql`
+        UPDATE canvas_nodes SET status = 'analysis_complete'
+        WHERE canvas_id = ${lowCanvasId} AND node_type = 'root'`;
+      const lowReportDispatch = await sql.begin((tx) =>
+        maybeDispatchReport(tx as unknown as typeof sql, lowCanvasId as string),
+      );
+      assert.equal(lowReportDispatch.dispatched, true);
+      const [lowReportJob] = await sql`
+        SELECT type, payload_json FROM jobs
+        WHERE canvas_id = ${lowCanvasId} AND type = 'report'
+        ORDER BY created_at DESC LIMIT 1`;
+      assert.equal(lowReportJob.type, "report");
+      assert.equal((lowReportJob.payload_json as Record<string, unknown>).excluded_count, 1);
+      const [{ lowTaskReports }] = await sql`
+        SELECT COUNT(*)::int AS "lowTaskReports" FROM task_reports WHERE canvas_id = ${lowCanvasId}`;
+      assert.equal(Number(lowTaskReports), 1);
+
     } finally {
       await sql.begin(async (tx) => {
         if (lowFindingId && lowCanvasId) {
           await tx`DELETE FROM finding_verification_rounds WHERE finding_id = ${lowFindingId}`;
           await tx`DELETE FROM findings WHERE id = ${lowFindingId}`;
+          await tx`DELETE FROM task_reports WHERE canvas_id = ${lowCanvasId}`;
           await tx`DELETE FROM canvas_edges WHERE canvas_id = ${lowCanvasId}`;
           await tx`DELETE FROM canvas_nodes WHERE canvas_id = ${lowCanvasId}`;
           await tx`DELETE FROM jobs WHERE canvas_id = ${lowCanvasId}`;

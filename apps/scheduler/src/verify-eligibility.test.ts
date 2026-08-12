@@ -8,6 +8,7 @@ import {
   shouldWakeEvidenceHub,
 } from "./core.js";
 import { graphEligibilityReason, loadGraphEligibilityBatch } from "./dispatcher.js";
+import { classifyTaskReportAvailability } from "./report.js";
 
 test("Verify scope uses only explicit known lower severities as exclusions", () => {
   assert.equal(isSeverityInVerifyScope("high", "critical"), true);
@@ -16,6 +17,39 @@ test("Verify scope uses only explicit known lower severities as exclusions", () 
   assert.equal(isSeverityInVerifyScope("info", "low"), true, "info keeps the existing full strict mode");
   assert.equal(isSeverityInVerifyScope("high", null), true, "unscored Findings stay in scope");
   assert.equal(isSeverityInVerifyScope("high", "future-severity"), true, "unknown values stay in scope");
+});
+
+test("报告可用性按服务端完成门返回阈值内阻塞 Finding", () => {
+  const availability = classifyTaskReportAvailability({
+    rootStatus: "analysis_complete",
+    minVerifySeverity: "high",
+    blockers: ["finding:finding-1:pending"],
+    problems: [{
+      finding_id: "finding-1",
+      title: "未收敛问题",
+      severity: "high",
+      verify_status: "pending",
+      issue: "Finding 未收敛",
+      in_care_scope: true,
+    }, {
+      finding_id: "finding-1",
+      title: "重复问题",
+      severity: "high",
+      verify_status: "pending",
+      issue: "重复阻塞原因",
+      in_care_scope: true,
+    }, {
+      finding_id: "finding-low",
+      title: "策略排除项",
+      severity: "medium",
+      verify_status: "pending",
+      issue: "低于阈值",
+      in_care_scope: false,
+    }],
+  });
+  assert.equal(availability.reason, "findings_not_converged");
+  assert.equal(availability.min_verify_severity, "high");
+  assert.deepEqual(availability.blocking_findings.map((finding) => finding.finding_id), ["finding-1"]);
 });
 
 test("five Hub rounds do not inflate child or Verify priority", () => {

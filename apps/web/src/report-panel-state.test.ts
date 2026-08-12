@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ReportPanelAsyncGuard, resetReportPanelState } from "./report-panel-state";
+import { ReportPanelAsyncGuard, resetReportPanelState, taskReportAvailabilityLabel } from "./report-panel-state";
 
 test("canvas changes invalidate late poll and download completions", async () => {
   const guard = new ReportPanelAsyncGuard("canvas-a");
@@ -29,6 +29,8 @@ test("canvas changes invalidate late poll and download completions", async () =>
   assert.equal(guard.isCurrentContext(contextA), false);
   assert.equal(guard.isCurrentCanvas(contextA), false);
   assert.equal(reset.report, null);
+  assert.equal(reset.missing, null);
+  assert.equal(reset.loading, true);
   assert.equal(reset.markdown, null);
   assert.equal(reset.error, null);
   assert.equal(reset.downloadError, null);
@@ -37,6 +39,11 @@ test("canvas changes invalidate late poll and download completions", async () =>
   await Promise.all([latePoll, lateDownload]);
   assert.deepEqual(appliedReports, []);
   assert.deepEqual(downloadErrors, []);
+});
+
+test("报告状态标签保持服务端原因，不在前端推断收敛状态", () => {
+  assert.equal(taskReportAvailabilityLabel("findings_not_converged"), "配置阈值范围内仍有 Finding 未收敛");
+  assert.equal(taskReportAvailabilityLabel("active_work"), "仍有工作正在执行");
 });
 
 test("only the newest overlapping poll request can update state", () => {

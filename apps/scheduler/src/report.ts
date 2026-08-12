@@ -18,6 +18,7 @@ import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
 import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
+import { planTaskReportVersion } from "./task-report-version.js";
 
 type Tx = typeof sql;
 
@@ -25,9 +26,9 @@ function sha256(data: string | Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-function reportDir(canvasId: string): string {
+function reportDir(canvasId: string, version: number): string {
   const safe = canvasId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
-  return path.join(config.storage.blobDir, "reports", safe || "unknown");
+  return path.join(config.storage.blobDir, "reports", safe || "unknown", `v${version}`);
 }
 
 function findingReportDir(findingId: string, version: number): string {
@@ -40,10 +41,9 @@ const ACTIVE_REPORT_JOB_STATUSES = ["pending", "claimed", "provisioning", "runni
 const TERMINAL_REPORT_JOB_STATUSES = ["succeeded", "failed", "timeout", "cancelled", "orphan"];
 
 /**
- * Repair a report row left active after its linked Job reached a terminal
- * state before the normal report finalizer ran.  The Job lifecycle remains
- * authoritative; this only projects an already committed terminal state into
- * the derived finding_reports row so the next version can be queued.
+ * 修复关联 Job 已进入终态、但常规 finalizer 尚未执行而遗留的活跃报告行。
+ * Job lifecycle 仍是权威；这里只把已提交终态投影到派生 finding_reports，
+ * 使下一版本可以入队。
  */
 async function reconcileTerminalFindingReportJob(
   tx: Tx,
@@ -653,9 +653,8 @@ export interface FindingReportDispatchResult {
 }
 
 /**
- * Create one versioned report Job for a confirmed Finding.
- * The Finding row is the serialization lock, so automatic and manual triggers
- * cannot create overlapping active versions.
+ * 为 confirmed Finding 创建一个版本化报告 Job。
+ * Finding 行作为串行锁，自动与手工触发不会创建重叠的活跃版本。
  */
 export async function maybeDispatchFindingReport(
   tx: Tx,
@@ -745,9 +744,8 @@ export async function maybeDispatchFindingReport(
       project_id: projectId,
       version,
       report_job_id: job.id,
-      // The report job is queued until the dispatcher claims it.  The claim
-      // transaction advances this row to `generating` together with the Job
-      // CAS, so status reflects executable lifecycle rather than enqueue time.
+      // 报告 Job 在调度器抢占前保持 pending；抢占事务会随 Job CAS 一并把
+      // 此行推进到 generating，使状态表达实际执行生命周期而非入队时刻。
       status: "pending",
       input_uri: inputUri,
       input_sha256: inputSha,
@@ -861,9 +859,8 @@ export async function maybeDispatchReport(
   bounced?: boolean;
   problems?: FindingStatusProblem[];
 }> {
-  // Canonical report ingress lock order is canvas -> task_reports -> jobs.
-  // Every caller that can retry/dispatch a report must follow this order so
-  // concurrent finalize/retry paths cannot deadlock or race the ingress key.
+  // 报告入口统一锁顺序为 canvas -> task_reports -> jobs。所有重试/派发入口
+  // 都必须遵守，避免并发 finalize/retry 死锁或竞争 ingress key。
   const [canvas] = await tx`
     SELECT id, project_id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
   if (!canvas) return { dispatched: false, reason: "no_canvas" };
@@ -871,7 +868,7 @@ export async function maybeDispatchReport(
     SELECT id, status FROM canvas_nodes
     WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
   if (!root) return { dispatched: false, reason: "no_root" };
-  if (root.status !== "analysis_complete" && root.status !== "reporting") {
+  if (!["analysis_complete", "reporting", "succeeded"].includes(String(root.status))) {
     return { dispatched: false, reason: `root_status:${root.status}` };
   }
 
@@ -900,8 +897,12 @@ export async function maybeDispatchReport(
   }
 
   const [existing] = await tx`
-    SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId} FOR UPDATE`;
-  if (existing?.status === "succeeded") return { dispatched: false, reason: "already_succeeded" };
+    SELECT id, version, status, report_job_id, input_uri, input_sha256
+    FROM task_reports
+    WHERE canvas_id = ${canvasId}
+    ORDER BY version DESC
+    LIMIT 1
+    FOR UPDATE`;
   if (existing?.status === "generating" || existing?.status === "pending") {
     if (existing.report_job_id) {
       const [j] = await tx`SELECT status FROM jobs WHERE id = ${existing.report_job_id as string}`;
@@ -909,6 +910,28 @@ export async function maybeDispatchReport(
         return { dispatched: false, reason: "report_in_flight" };
       }
     }
+  }
+
+  // 先冻结并摘要本轮确定性输入。成功版本只在输入摘要未变化时幂等返回；
+  // Finding、验证结论或范围变化后追加新版本，绝不覆盖历史产物。
+  const reportInput = await buildReportInput(canvasId, tx as unknown as typeof sql);
+  const inputBytes = JSON.stringify(reportInput, null, 2);
+  const inputSha = sha256(inputBytes);
+  const versionPlan = planTaskReportVersion(
+    existing
+      ? { version: Number(existing.version), status: String(existing.status), input_sha256: String(existing.input_sha256) }
+      : null,
+    inputSha,
+  );
+  if (versionPlan.alreadySucceeded) {
+    return { dispatched: false, reason: "already_succeeded" };
+  }
+  const { reuseVersion, version } = versionPlan;
+  if (existing && ["pending", "generating"].includes(String(existing.status)) && !reuseVersion) {
+    await tx`
+      UPDATE task_reports SET status = 'failed',
+        error = COALESCE(error, '关联报告 Job 已结束但报告未收口'), updated_at = now()
+      WHERE id = ${existing.id as string}`;
   }
 
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
@@ -941,13 +964,12 @@ export async function maybeDispatchReport(
       WHERE id = ${held.id as string}`;
   }
 
-  // 派发前冻结确定性输入，供 Report Agent 消费
-  const reportInput = await buildReportInput(canvasId, tx as unknown as typeof sql);
-  const dir = reportDir(canvasId);
+  // 派发前冻结版本化输入，供 Report Agent 与终态收口共同消费。
+  const dir = reportDir(canvasId, version);
   await mkdir(dir, { recursive: true });
   const inputPath = path.join(dir, "report-input.json");
-  await writeFile(inputPath, JSON.stringify(reportInput, null, 2), "utf8");
-  const inputUri = path.posix.join("reports", path.basename(dir), "report-input.json");
+  await writeFile(inputPath, inputBytes, "utf8");
+  const inputUri = path.posix.join("reports", canvasId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) || "unknown", `v${version}`, "report-input.json");
 
   const [job] = await tx`
     INSERT INTO jobs ${tx({
@@ -960,7 +982,9 @@ export async function maybeDispatchReport(
       payload_json: {
         scheduling_purpose: "report",
         kind: "task_report",
+        report_version: version,
         report_input_uri: inputUri,
+        report_input_sha256: inputSha,
         findings_total: reportInput.statistics.findings_total,
         confirmed_count: reportInput.statistics.confirmed_count,
         needs_human_count: reportInput.statistics.needs_human_count,
@@ -974,32 +998,27 @@ export async function maybeDispatchReport(
   const reportJobId = job?.id as string | undefined;
   if (!reportJobId) return { dispatched: false, reason: "insert_failed" };
 
-  if (existing) {
+  if (reuseVersion) {
     await tx`
       UPDATE task_reports SET
         status = 'generating',
         report_job_id = ${reportJobId},
+        input_uri = ${inputUri},
+        input_sha256 = ${inputSha},
         error = null,
         updated_at = now()
-      WHERE canvas_id = ${canvasId}`;
+      WHERE id = ${existing.id as string}`;
   } else {
-    try {
-      await tx`
-        INSERT INTO task_reports ${tx({
-          canvas_id: canvasId,
-          project_id: projectId,
-          report_job_id: reportJobId,
-          status: "generating",
-        })}`;
-    } catch {
-      await tx`
-        UPDATE task_reports SET
-          status = 'generating',
-          report_job_id = ${reportJobId},
-          error = null,
-          updated_at = now()
-        WHERE canvas_id = ${canvasId}`;
-    }
+    await tx`
+      INSERT INTO task_reports ${tx({
+        canvas_id: canvasId,
+        project_id: projectId,
+        version,
+        report_job_id: reportJobId,
+        status: "generating",
+        input_uri: inputUri,
+        input_sha256: inputSha,
+      })}`;
   }
 
   await tx`
@@ -1017,18 +1036,19 @@ export async function maybeDispatchReport(
         job_id: reportJobId,
         node_type: "report",
         title: "任务报告",
-        body_json: { type: "report" } as never,
+        body_json: { type: "report", version } as never,
         x: 60,
         y: 520,
         status: "pending",
       })}`;
   } else {
     await tx`
-      UPDATE canvas_nodes SET job_id = ${reportJobId}, status = 'pending', updated_at = now()
+      UPDATE canvas_nodes SET job_id = ${reportJobId}, status = 'pending',
+        body_json = body_json || ${tx.json({ version })}, updated_at = now()
       WHERE id = ${existingNode[0].id as string}`;
   }
 
-  console.info(`[report] canvas ${canvasId} 派发 Report Job ${reportJobId}`);
+  console.info(`[report] canvas ${canvasId} 派发任务报告 v${version} Job ${reportJobId}`);
   return { dispatched: true };
 }
 
@@ -1103,9 +1123,8 @@ export async function finalizeReportJob(
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job || job.type !== "report" || !job.canvas_id) return;
   const canvasId = job.canvas_id as string;
-  // Recovery/reaper callers invoke this function directly, outside
-  // finalizeJob. Keep their lock order identical to canonical ingress/retry:
-  // canvas -> task_reports -> jobs/nodes.
+  // Recovery/Reaper 会绕过 finalizeJob 直接调用本函数，因此锁顺序必须与
+  // 标准派发/重试入口一致：canvas -> task_reports -> jobs/nodes。
   const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
   if (!canvas) return;
 
@@ -1118,7 +1137,7 @@ export async function finalizeReportJob(
   if (opts.failed) {
     await tx`
       UPDATE task_reports SET status = 'failed', error = ${opts.error ?? "report_failed"}, updated_at = now()
-      WHERE canvas_id = ${canvasId}`;
+      WHERE report_job_id = ${jobId}`;
     await tx`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
       WHERE job_id = ${jobId} AND node_type = 'report'`;
@@ -1126,8 +1145,19 @@ export async function finalizeReportJob(
     return;
   }
 
-  const input = await buildReportInput(canvasId, tx as unknown as typeof sql);
-  const dir = reportDir(canvasId);
+  const [report] = await tx`
+    SELECT id, version, input_uri, input_sha256
+    FROM task_reports
+    WHERE canvas_id = ${canvasId} AND report_job_id = ${jobId}
+    FOR UPDATE`;
+  if (!report) throw new Error(`task report not found for job ${jobId}`);
+  const inputBytes = await readReportBlob(String(report.input_uri));
+  if (sha256(inputBytes) !== report.input_sha256) {
+    throw new Error(`task report input digest mismatch: ${report.id}`);
+  }
+  const input = JSON.parse(inputBytes.toString("utf8")) as ReportInput;
+  const version = Number(report.version);
+  const dir = reportDir(canvasId, version);
   await mkdir(dir, { recursive: true });
 
   const reportJson = {
@@ -1168,8 +1198,9 @@ export async function finalizeReportJob(
   const mdSha = sha256(markdown);
   const sarifSha = sha256(sarifStr);
   // 相对 blob 根的 URI
-  const mdUri = path.posix.join("reports", path.basename(dir), "report.md");
-  const sarifUri = path.posix.join("reports", path.basename(dir), "report.sarif.json");
+  const safeCanvasId = canvasId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) || "unknown";
+  const mdUri = path.posix.join("reports", safeCanvasId, `v${version}`, "report.md");
+  const sarifUri = path.posix.join("reports", safeCanvasId, `v${version}`, "report.sarif.json");
 
   const summaryJson = {
     confirmed_count: input.statistics.confirmed_count,
@@ -1190,11 +1221,11 @@ export async function finalizeReportJob(
       sarif_sha256 = ${sarifSha},
       error = null,
       updated_at = now()
-    WHERE canvas_id = ${canvasId}`;
+    WHERE id = ${report.id as string}`;
 
   await tx`
     UPDATE canvas_nodes SET status = 'succeeded',
-      body_json = body_json || ${tx.json({ summary: summaryJson })},
+      body_json = body_json || ${tx.json({ summary: summaryJson, version })},
       updated_at = now()
     WHERE job_id = ${jobId} AND node_type = 'report'`;
 
@@ -1202,7 +1233,7 @@ export async function finalizeReportJob(
     UPDATE canvas_nodes SET status = 'succeeded', updated_at = now()
     WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
 
-  console.info(`[report] canvas ${canvasId} 报告成功，Root → succeeded`);
+  console.info(`[report] canvas ${canvasId} 任务报告 v${version} 成功，Root → succeeded`);
 }
 
 export async function readReportBlob(uri: string): Promise<Buffer> {
@@ -1211,8 +1242,122 @@ export async function readReportBlob(uri: string): Promise<Buffer> {
 }
 
 export async function getTaskReport(canvasId: string) {
-  const [row] = await sql`SELECT * FROM task_reports WHERE canvas_id = ${canvasId}`;
+  const [row] = await sql`
+    SELECT * FROM task_reports WHERE canvas_id = ${canvasId}
+    ORDER BY version DESC LIMIT 1`;
   return row ?? null;
+}
+
+export async function listTaskReports(canvasId: string) {
+  return sql`
+    SELECT * FROM task_reports WHERE canvas_id = ${canvasId}
+    ORDER BY version DESC`;
+}
+
+export type TaskReportAvailabilityReason =
+  | "canvas_not_found"
+  | "root_not_found"
+  | "root_not_ready"
+  | "active_work"
+  | "no_role_work"
+  | "findings_not_converged"
+  | "report_not_dispatched";
+
+export interface TaskReportBlockingFinding {
+  finding_id: string;
+  title: string;
+  severity: string | null;
+  verify_status: string;
+  issue: string;
+}
+
+export interface TaskReportAvailability {
+  reason: TaskReportAvailabilityReason;
+  root_status: string | null;
+  min_verify_severity: string | null;
+  blockers: string[];
+  blocking_findings: TaskReportBlockingFinding[];
+}
+
+/** 将完成门结果转换成报告面板可直接展示的服务端状态。 */
+export function classifyTaskReportAvailability(input: {
+  canvasExists?: boolean;
+  rootStatus: string | null;
+  minVerifySeverity: string | null;
+  blockers: string[];
+  problems: FindingStatusProblem[];
+}): TaskReportAvailability {
+  let reason: TaskReportAvailabilityReason = "report_not_dispatched";
+  if (input.canvasExists === false) reason = "canvas_not_found";
+  else if (input.rootStatus === null) reason = "root_not_found";
+  else if (![
+    "analysis_complete",
+    "reporting",
+    "succeeded",
+  ].includes(input.rootStatus)) reason = "root_not_ready";
+  else if (input.blockers.includes("active_work")) reason = "active_work";
+  else if (input.blockers.includes("no_role_work")) reason = "no_role_work";
+  else if (input.blockers.length > 0) reason = "findings_not_converged";
+
+  const seen = new Set<string>();
+  const blockingFindings = input.problems
+    .filter((problem) => problem.finding_id && problem.in_care_scope)
+    .filter((problem) => {
+      if (seen.has(problem.finding_id)) return false;
+      seen.add(problem.finding_id);
+      return true;
+    })
+    .slice(0, 20)
+    .map((problem) => ({
+      finding_id: problem.finding_id,
+      title: problem.title,
+      severity: problem.severity || null,
+      verify_status: problem.verify_status,
+      issue: problem.issue,
+    }));
+
+  return {
+    reason,
+    root_status: input.rootStatus,
+    min_verify_severity: input.minVerifySeverity,
+    blockers: input.blockers.slice(0, 20),
+    blocking_findings: blockingFindings,
+  };
+}
+
+/** 查询不存在任务报告时的权威阻塞原因；不修改任何报告或画布状态。 */
+export async function getTaskReportAvailability(canvasId: string): Promise<TaskReportAvailability> {
+  const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${canvasId}`;
+  if (!canvas) {
+    return classifyTaskReportAvailability({
+      canvasExists: false,
+      rootStatus: null,
+      minVerifySeverity: null,
+      blockers: [],
+      problems: [],
+    });
+  }
+
+  const [root] = await sql`
+    SELECT status FROM canvas_nodes
+    WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+  if (!root) {
+    return classifyTaskReportAvailability({
+      rootStatus: null,
+      minVerifySeverity: null,
+      blockers: [],
+      problems: [],
+    });
+  }
+
+  const meta = await careSeverityMeta(sql, canvas.project_id as string);
+  const gate = await evaluateAnalysisCompleteGate(sql, canvasId);
+  return classifyTaskReportAvailability({
+    rootStatus: String(root.status),
+    minVerifySeverity: meta.minVerifySeverity,
+    blockers: gate.blockers,
+    problems: gate.problems,
+  });
 }
 
 export async function getTaskReportById(id: string) {
@@ -1248,16 +1393,16 @@ export async function createFindingReport(
 export async function retryReport(canvasId: string): Promise<{ ok: boolean; reason?: string }> {
   return sql.begin(async (txRaw) => {
     const tx = txRaw as unknown as Tx;
-    // Match maybeDispatchReport's canvas -> task_reports lock order.
+    // 与 maybeDispatchReport 保持 canvas -> task_reports 锁顺序。
     const [canvas] = await tx`
       SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
     if (!canvas) return { ok: false, reason: "no_canvas" };
     const [report] = await tx`
-      SELECT id, status, report_job_id FROM task_reports WHERE canvas_id = ${canvasId} FOR UPDATE`;
+      SELECT id, status, report_job_id FROM task_reports
+      WHERE canvas_id = ${canvasId}
+      ORDER BY version DESC LIMIT 1 FOR UPDATE`;
     if (!report) return { ok: false, reason: "no_report" };
-    if (report.status === "succeeded") {
-      return { ok: false, reason: "already_succeeded" };
-    }
+    if (report.status === "succeeded") return { ok: false, reason: "already_succeeded" };
 
     const [root] = await tx`
       SELECT status FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
@@ -1296,7 +1441,7 @@ export async function retryReport(canvasId: string): Promise<{ ok: boolean; reas
 
     await tx`
       UPDATE task_reports SET status = 'pending', error = null, updated_at = now()
-      WHERE canvas_id = ${canvasId}`;
+      WHERE id = ${report.id as string}`;
 
     // Root 保持 analysis_complete，便于 maybeDispatchReport 入队
     if (root.status === "reporting") {
@@ -1307,5 +1452,18 @@ export async function retryReport(canvasId: string): Promise<{ ok: boolean; reas
 
     const r = await maybeDispatchReport(tx, canvasId);
     return { ok: r.dispatched, reason: r.reason };
+  });
+}
+
+/** 检查当前收敛输入；仅在摘要变化时追加任务报告版本。 */
+export async function refreshTaskReport(canvasId: string): Promise<{ ok: boolean; report_id?: string; reason?: string }> {
+  return sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as Tx;
+    const result = await maybeDispatchReport(tx, canvasId);
+    if (!result.dispatched) return { ok: result.reason === "already_succeeded", reason: result.reason };
+    const [latest] = await tx`
+      SELECT id FROM task_reports WHERE canvas_id = ${canvasId}
+      ORDER BY version DESC LIMIT 1`;
+    return { ok: true, report_id: latest?.id as string | undefined };
   });
 }

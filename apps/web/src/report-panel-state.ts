@@ -1,8 +1,9 @@
+import type { TaskReportAvailability } from "./api";
+
 /**
- * Async context guards used by ReportPanel.
+ * ReportPanel 使用的异步上下文护栏。
  *
- * A canvas switch or report replacement creates a new immutable context. Any
- * request that captured the previous context must ignore its late completion.
+ * 切换画布或替换报告会创建新的不可变上下文；旧请求的迟到结果必须忽略。
  */
 export type ReportPanelContext = Readonly<{
   canvasId: string;
@@ -19,13 +20,26 @@ export type ReportPanelPollToken = Readonly<{
 export function resetReportPanelState() {
   return {
     report: null,
-    missing: false,
+    missing: null as TaskReportAvailability | null,
+    loading: true,
     markdown: null,
     error: null,
     retrying: false,
     downloading: null,
     downloadError: null,
   } as const;
+}
+
+export function taskReportAvailabilityLabel(reason: TaskReportAvailability["reason"]): string {
+  switch (reason) {
+    case "canvas_not_found": return "任务画布不存在";
+    case "root_not_found": return "任务根节点尚未创建";
+    case "root_not_ready": return "分析尚未进入报告阶段";
+    case "active_work": return "仍有工作正在执行";
+    case "no_role_work": return "尚未产出普通角色结果";
+    case "findings_not_converged": return "配置阈值范围内仍有 Finding 未收敛";
+    case "report_not_dispatched": return "完成门已通过，报告任务尚未入队";
+  }
 }
 
 export class ReportPanelAsyncGuard {
@@ -96,8 +110,8 @@ export class ReportPanelAsyncGuard {
   }
 
   /**
-   * React StrictMode may replay layout effects (cleanup then setup) without
-   * unmounting the component. Re-arm the guard only for that next setup.
+   * React StrictMode 可能在不卸载组件时重放 layout effect（先清理再设置）；
+   * 只为下一次设置重新激活护栏。
    */
   reactivate(canvasId: string, reportId: string | null, reportStatus: string | null): void {
     if (!this.disposed) return;

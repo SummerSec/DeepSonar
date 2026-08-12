@@ -1,21 +1,23 @@
 import { ArrowsClockwise, DownloadSimple, FileArrowDown, FileText } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, type TaskReport } from "./api";
+import { api, TaskReportUnavailableError, type TaskReport, type TaskReportAvailability } from "./api";
 import { MarkdownView } from "./MarkdownView";
-import { ReportPanelAsyncGuard, resetReportPanelState } from "./report-panel-state";
+import { ReportPanelAsyncGuard, resetReportPanelState, taskReportAvailabilityLabel } from "./report-panel-state";
 import { SEVERITY_COLOR } from "./semantics";
 import { EmptyState, formatTime } from "./ui";
 
 /**
  * 任务报告面板（§8）：Hub 宣布分析完成后调度器自动生成任务级报告。
- * 轮询 /canvases/:id/report（404 = 还没有报告）；失败可显式重试。
+ * 轮询 /canvases/:id/report；未生成时展示服务端返回的完成门状态。
  */
 export function ReportPanel({ canvasId }: { canvasId: string }) {
   const [report, setReport] = useState<TaskReport | null>(null);
-  const [missing, setMissing] = useState(false); // 404 = 还没有报告
+  const [missing, setMissing] = useState<TaskReportAvailability | null>(null);
+  const [loading, setLoading] = useState(true);
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [downloading, setDownloading] = useState<"markdown" | "sarif" | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const guardRef = useRef<ReportPanelAsyncGuard | null>(null);
@@ -23,24 +25,24 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   const guard = guardRef.current;
   guard.update(canvasId, report?.id ?? null, report?.status ?? null);
 
-  // Invalidate every pending callback when the panel leaves the tree. React
-  // StrictMode may replay this layout effect, so setup re-arms only a guard
-  // disposed by the preceding development-only cleanup.
+  // 面板卸载时使所有未完成回调失效。React StrictMode 可能重放此 effect，
+  // 因此只重新激活刚在开发模式清理的护栏。
   useLayoutEffect(() => {
     guard.reactivate(canvasId, report?.id ?? null, report?.status ?? null);
     return () => guard.dispose();
   }, [guard]);
 
-  // Clear all canvas-scoped state before the new canvas can paint. The guard
-  // is updated during render, so late promises are invalidated even before
-  // this layout effect runs.
+  // 新画布绘制前清除所有画布级状态。护栏在 render 阶段已更新，迟到 Promise
+  // 即使早于此 effect 完成也会被忽略。
   useLayoutEffect(() => {
     const reset = resetReportPanelState();
     setReport(reset.report);
     setMissing(reset.missing);
+    setLoading(reset.loading);
     setMarkdown(reset.markdown);
     setError(reset.error);
     setRetrying(reset.retrying);
+    setRefreshing(false);
     setDownloading(reset.downloading);
     setDownloadError(reset.downloadError);
   }, [canvasId]);
@@ -54,15 +56,18 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
         const r = await api.canvasReport(canvasId);
         if (stop || !guard.isCurrentPoll(token)) return;
         setReport(r);
-        setMissing(false);
+        setMissing(null);
+        setLoading(false);
         setError(null);
       } catch (e) {
         if (stop || !guard.isCurrentPoll(token)) return;
-        // 404 = 还没有报告（Hub 未宣布完成）；其它错误才展示
-        if (String(e).includes("404")) {
+        if (e instanceof TaskReportUnavailableError) {
           setReport(null);
-          setMissing(true);
+          setMissing(e.availability);
+          setLoading(false);
+          setError(null);
         } else {
+          setLoading(false);
           setError(String(e));
         }
       }
@@ -106,14 +111,57 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
     );
   }
 
-  // 无报告：Hub 还未宣布分析完成
+  if (loading) {
+    return (
+      <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
+        <EmptyState title="正在读取任务报告状态" />
+      </div>
+    );
+  }
+
+  // 无报告：展示服务端完成门的权威原因和阻塞 Finding。
   if (missing || !report) {
     return (
       <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
-        <EmptyState
-          title="暂无任务报告"
-          hint="Hub 宣布分析完成后，调度器会自动生成任务级报告（已确认漏洞 / 排除项 / 验证统计 / 局限性声明）。"
-        />
+        {missing ? (
+          <div className="mx-auto min-w-0 max-w-3xl p-1">
+            <div className="text-[15px] font-medium text-zinc-200">任务报告尚未生成</div>
+            <div className="mt-2 text-[13px] leading-6 text-zinc-400">
+              {taskReportAvailabilityLabel(missing.reason)}
+            </div>
+            {missing.min_verify_severity && (
+              <div className="mt-3 text-[12px] text-zinc-500">
+                当前自动验证阈值：<span className="font-mono text-zinc-300">{missing.min_verify_severity}</span>
+              </div>
+            )}
+            {missing.blocking_findings.length > 0 && (
+              <div className="mt-5">
+                <div className="text-[12px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+                  阻塞 Finding
+                </div>
+                <ul className="mt-2 divide-y divide-white/[.06] rounded-md border border-white/[.06]">
+                  {missing.blocking_findings.map((finding) => (
+                    <li key={finding.finding_id} className="px-3 py-3">
+                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px] text-zinc-200">
+                        <span
+                          className="font-mono text-[11px] uppercase"
+                          style={{ color: SEVERITY_COLOR[finding.severity ?? ""] ?? "#a1a1aa" }}
+                        >
+                          {finding.severity ?? "未评分"}
+                        </span>
+                        <span className="break-words">{finding.title || finding.finding_id}</span>
+                        <span className="font-mono text-[11px] text-zinc-600">{finding.verify_status}</span>
+                      </div>
+                      <div className="mt-1 break-words text-[12px] leading-5 text-zinc-500">{finding.issue}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : (
+          <EmptyState title="暂无任务报告" hint="调度器尚未返回任务报告状态。" />
+        )}
       </div>
     );
   }
@@ -124,7 +172,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
       <div className="flex h-full min-h-0 min-w-0 items-center justify-center overflow-x-hidden overflow-y-auto overscroll-contain p-5">
         <div className="flex items-center gap-3 rounded-[10px] border border-ink-700 bg-ink-900/60 px-6 py-4 text-[14px] text-zinc-400">
           <ArrowsClockwise size={16} className="animate-spin text-acc-400" />
-          报告生成中…（分析已完成，正在汇总已确认漏洞与验证统计）
+          任务报告 v{report.version} 生成中…（正在汇总已确认漏洞与验证统计）
         </div>
       </div>
     );
@@ -136,7 +184,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
       <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
         <div className="max-w-2xl min-w-0 rounded-[10px] border border-red-900/60 bg-red-950/40 px-5 py-4">
           <div className="flex items-center gap-2 text-[15px] font-medium text-red-300">
-            <FileText size={16} /> 报告生成失败
+            <FileText size={16} /> 任务报告 v{report.version} 生成失败
           </div>
           {report.error && (
             <div className="mt-3 break-words text-red-200/80"><MarkdownView markdown={report.error} scrollable={false} /></div>
@@ -190,6 +238,29 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
   return (
     <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5">
       <div className="mx-auto flex min-w-0 max-w-4xl flex-col gap-4">
+        <div className="flex items-center justify-between gap-3 font-mono text-[12px] text-zinc-500">
+          <span>任务报告 v{report.version} · 输入 {report.input_sha256.slice(0, 12)}</span>
+          <button
+            type="button"
+            title="检查新版本"
+            aria-label="检查新版本"
+            disabled={refreshing}
+            onClick={async () => {
+              setRefreshing(true);
+              try {
+                await api.refreshReport(canvasId);
+                setError(null);
+              } catch (e) {
+                setError(e instanceof Error ? e.message : String(e));
+              } finally {
+                setRefreshing(false);
+              }
+            }}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[.05] hover:text-zinc-200 disabled:opacity-50"
+          >
+            <ArrowsClockwise size={15} className={refreshing ? "animate-spin" : ""} />
+          </button>
+        </div>
         {/* 摘要统计卡片 */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-[20px] bg-white/[.03] px-4 py-4 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">

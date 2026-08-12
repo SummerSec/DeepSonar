@@ -139,8 +139,8 @@ if (!testDatabaseUrl) {
           ${sql.json(reportSnapshot)}, ${sql.json({ kind: 'task_report', scheduling_purpose: 'report' })}
         )`;
       await sql`
-        INSERT INTO task_reports (canvas_id, project_id, report_job_id, status)
-        VALUES (${canvasId}, ${projectId}, ${reportJobId}, 'pending')`;
+        INSERT INTO task_reports (canvas_id, project_id, version, report_job_id, status, input_uri, input_sha256)
+        VALUES (${canvasId}, ${projectId}, 1, ${reportJobId}, 'pending', 'reports/test/v1/report-input.json', ${"0".repeat(64)})`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
         VALUES (${canvasId}, ${reportJobId}, 'report', 'Task Report', 'pending', ${sql.json({ type: 'report' })})`;

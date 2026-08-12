@@ -4,6 +4,7 @@ import {
   api,
   parseContentDispositionFilename,
   setLocalToken,
+  TaskReportUnavailableError,
 } from "./api";
 
 type Anchor = {
@@ -144,4 +145,52 @@ test("setLocalToken keeps session and API token precedence explicit", () => {
   installStorage();
   setLocalToken("deepsonar_user_session");
   assert.equal((globalThis as { localStorage: { getItem(key: string): string | null } }).localStorage.getItem("deepsonar_session"), "deepsonar_user_session");
+});
+
+test("任务报告 404 会读取服务端 availability 并保留阻塞 Finding", async () => {
+  installStorage({ deepsonar_session: "deepsonar_user_test_token" });
+  const availability = {
+    reason: "findings_not_converged",
+    root_status: "analysis_complete",
+    min_verify_severity: "high",
+    blockers: ["finding:finding-1:pending"],
+    blocking_findings: [{
+      finding_id: "finding-1",
+      title: "待验证问题",
+      severity: "high",
+      verify_status: "pending",
+      issue: "Finding 未收敛",
+    }],
+  } as const;
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    if (String(input).endsWith("/report")) return new Response(JSON.stringify({ error: "report not found" }), { status: 404 });
+    return new Response(JSON.stringify(availability), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  await assert.rejects(
+    api.canvasReport("canvas-1"),
+    (error: unknown) => {
+      assert.ok(error instanceof TaskReportUnavailableError);
+      assert.equal(error.availability.blocking_findings[0]?.finding_id, "finding-1");
+      return true;
+    },
+  );
+  assert.deepEqual(requests, ["/api/canvases/canvas-1/report", "/api/canvases/canvas-1/report/availability"]);
+});
+
+test("任务报告 availability 请求失败时保留原始 404 错误", async () => {
+  installStorage({ deepsonar_session: "deepsonar_user_test_token" });
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({ error: String(input).endsWith("/report") ? "report not found" : "service unavailable" }), {
+      status: String(input).endsWith("/report") ? 404 : 503,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await assert.rejects(api.canvasReport("canvas-2"), /\/canvases\/canvas-2\/report -> 404: report not found/);
+  assert.deepEqual(requests, ["/api/canvases/canvas-2/report", "/api/canvases/canvas-2/report/availability"]);
 });

@@ -6,8 +6,11 @@ import {
   getFindingReport,
   getFindingReportById,
   getTaskReport,
+  getTaskReportAvailability,
   getTaskReportById,
+  listTaskReports,
   readReportBlob,
+  refreshTaskReport,
   retryReport,
 } from "../../report.js";
 
@@ -18,10 +21,23 @@ function reportDownloadFilename(reportId: string, extension: "md" | "sarif"): st
 
 /** Report route adapter; shared auth/ownership hooks remain on the parent app. */
 export function registerReportRoutes(app: FastifyInstance): void {
+  app.get("/canvases/:id/reports", async (req) => {
+    const { id } = req.params as { id: string };
+    return listTaskReports(id);
+  });
+
+  app.get("/canvases/:id/report/availability", async (req) => {
+    const { id } = req.params as { id: string };
+    return getTaskReportAvailability(id);
+  });
+
   app.get("/canvases/:id/report", async (req, reply) => {
     const { id } = req.params as { id: string };
     const report = await getTaskReport(id);
-    if (!report) return reply.code(404).send({ error: "report not found" });
+    if (!report) {
+      const availability = await getTaskReportAvailability(id);
+      return reply.code(404).send({ error: "report not found", ...availability });
+    }
     return report;
   });
 
@@ -104,6 +120,23 @@ export function registerReportRoutes(app: FastifyInstance): void {
     });
     if (!result.ok) return reply.code(409).send(result);
     await sql`SELECT pg_notify('deepsonar_jobs', 'report_retry')`;
+    return result;
+  });
+
+  app.post("/canvases/:id/report/refresh", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found" });
+    const result = await refreshTaskReport(id);
+    await audit(req, {
+      action: "report.refresh",
+      resourceType: "canvas",
+      resourceId: id,
+      projectId: canvas.project_id as string,
+      after: result,
+    });
+    if (!result.ok) return reply.code(409).send(result);
+    if (result.report_id) await sql`SELECT pg_notify('deepsonar_jobs', 'report_refresh')`;
     return result;
   });
 }
