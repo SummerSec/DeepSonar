@@ -95,9 +95,9 @@ class StrictJsonlReader {
   }
 }
 
-function dockerArgs(paths, sessionFile) {
+function dockerArgs(paths, containerName, sessionFile) {
   const args = [
-    "run", "--rm", "--network", "none", "--cap-drop", "ALL",
+    "run", "--rm", "--name", containerName, "--network", "none", "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges", "--cpus", "1", "--memory", "1g", "--pids-limit", "256",
     "-v", `${paths.agentDir}:${SESSION_ROOT}`,
     "-v", `${paths.governedDir}:${SESSION_ROOT}/extensions:ro`,
@@ -112,15 +112,15 @@ function dockerArgs(paths, sessionFile) {
   return args;
 }
 
-function startPi(paths, sessionFile) {
-  const child = spawn("docker", dockerArgs(paths, sessionFile), { stdio: ["pipe", "pipe", "pipe"] });
+function startPi(paths, containerName, sessionFile) {
+  const child = spawn("docker", dockerArgs(paths, containerName, sessionFile), { stdio: ["pipe", "pipe", "pipe"] });
   const reader = new StrictJsonlReader();
   const stderr = [];
   child.stdout.on("data", (chunk) => reader.push(chunk));
   child.stdout.on("end", () => reader.finish());
   child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
   child.on("error", (error) => reader.fail(error));
-  return { child, reader, stderr };
+  return { child, containerName, reader, stderr };
 }
 
 async function waitForResponse(runtime, command) {
@@ -130,15 +130,34 @@ async function waitForResponse(runtime, command) {
   }
 }
 
+function waitForChildExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => child.once("exit", resolve));
+}
+
 async function stopPi(runtime) {
   if (runtime.child.exitCode !== null) return;
-  runtime.child.kill("SIGTERM");
+  try {
+    execFileSync("docker", ["stop", "--time", "5", runtime.containerName], { stdio: "ignore" });
+  } catch {
+    runtime.child.kill("SIGTERM");
+  }
   await Promise.race([
-    new Promise((resolve) => runtime.child.once("exit", resolve)),
+    waitForChildExit(runtime.child),
     sleep(REQUEST_TIMEOUT_MS).then(() => {
       if (runtime.child.exitCode === null) runtime.child.kill("SIGKILL");
     }),
   ]);
+}
+
+async function killPi(runtime) {
+  try {
+    execFileSync("docker", ["kill", "--signal", "KILL", runtime.containerName], { stdio: "ignore" });
+  } catch (error) {
+    const stderr = runtime.stderr.join("").slice(-2000);
+    fail(`无法强杀 Pi 容器 ${runtime.containerName}：${error instanceof Error ? error.message : String(error)}${stderr ? `；stderr=${stderr}` : ""}`);
+  }
+  await waitForChildExit(runtime.child);
 }
 
 async function waitForMarker(marker, minimumLines) {
@@ -195,7 +214,7 @@ export default function (pi) {
 `);
   let runtime;
   try {
-    runtime = startPi(paths);
+    runtime = startPi(paths, `deepsonar-pi-rpc-${process.pid}-initial`);
     runtime.child.stdin.write(`${JSON.stringify({ type: "get_state", id: "first-state" })}\n`);
     const firstResponse = await waitForResponse(runtime, "get_state");
     assert(firstResponse.success === true, "首次 get_state 未成功");
@@ -227,11 +246,10 @@ export default function (pi) {
     runtime.child.stdin.write(`${JSON.stringify({ type: "get_state", id: "second-state" })}\n`);
     const secondResponse = await waitForResponse(runtime, "get_state");
     assert(secondResponse.success === true && secondResponse.data.sessionFile === sessionFile, "失败 RPC 后 sessionFile 发生漂移");
-    runtime.child.kill("SIGKILL");
-    await new Promise((resolve) => runtime.child.once("exit", resolve));
+    await killPi(runtime);
     runtime = undefined;
 
-    runtime = startPi(paths, sessionFile);
+    runtime = startPi(paths, `deepsonar-pi-rpc-${process.pid}-resume`, sessionFile);
     runtime.child.stdin.write(`${JSON.stringify({ type: "get_state", id: "resume-state" })}\n`);
     const resumed = await waitForResponse(runtime, "get_state");
     assert(resumed.success === true && resumed.data.sessionFile === sessionFile, "重启恢复未使用精确 sessionFile");
