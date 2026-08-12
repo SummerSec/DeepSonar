@@ -286,6 +286,22 @@ expect(chromeFuzzDockerfile.includes("pkg-config") && chromeFuzzDockerfile.inclu
 expect(chromeFuzzDockerfile.includes("FROM --platform=$BUILDPLATFORM ${BASE_IMAGE} AS v8-build-rootfs") && !chromeFuzzDockerfile.includes("clang_base_path=\"/usr/lib/llvm-16\"") && chromeFuzzDockerfile.includes("target_cpu=arm64") && chromeFuzzDockerfile.includes("install-sysroot.py --arch=arm64") && chromeFuzzDockerfile.includes("debian_bullseye_arm64-sysroot") && chromeFuzzPreflight.includes("third_party/llvm-build/Release+Asserts/bin/clang++") && chromeFuzzPreflight.includes("--target=aarch64-linux-gnu") && chromeFuzzPreflight.includes("/usr/bin/ninja") && chromeFuzzPreflight.includes("file -Lb") && chromeFuzzPreflight.includes("libclang_rt[.]builtins"), "Chrome Fuzz arm64 must use V8's pinned x86_64 Clang, sysroot, and compiler runtime as a checked cross-toolchain");
 expect(chromeFuzzConfig.apt["libclang-rt-16-dev"]?.version === "16.0.6-15~deb12u1" && chromeFuzzConfig.apt["libfuzzer-16-dev"]?.version === "16.0.6-15~deb12u1", "Chrome Fuzz must declare verified Bookworm compiler-rt/libFuzzer package names");
 expect(chromeFuzzEnv.includes(".fuzz.actual == true") && chromeFuzzSmoke.includes("actual V8 d8") && chromeFuzzSmoke.includes("-runs=1") && !chromeFuzzDockerfile.includes("toy"), "Chrome Fuzz must fail closed without real d8/libFuzzer");
+const chromeFuzzRuntimeFinal = chromeFuzzDockerfile.slice(chromeFuzzDockerfile.indexOf("FROM runtime-rootfs AS runtime-final"));
+const chromeFuzzRuntimeChecks = chromeFuzzRuntimeFinal.slice(chromeFuzzRuntimeFinal.indexOf('case "$TARGETARCH" in'), chromeFuzzRuntimeFinal.lastIndexOf("esac") + 4);
+const chromeFuzzAmd64Checks = chromeFuzzRuntimeChecks.slice(chromeFuzzRuntimeChecks.indexOf("amd64)"), chromeFuzzRuntimeChecks.indexOf("arm64)"));
+const chromeFuzzArm64Checks = chromeFuzzRuntimeChecks.slice(chromeFuzzRuntimeChecks.indexOf("arm64)"), chromeFuzzRuntimeChecks.lastIndexOf("*)"));
+expect(
+  /FROM runtime-rootfs AS runtime-final\r?\nARG TARGETARCH/.test(chromeFuzzRuntimeFinal) &&
+    chromeFuzzAmd64Checks.includes("/opt/deepsonar/bin/d8 --version") &&
+    chromeFuzzAmd64Checks.includes("/opt/deepsonar/bin/chrome-fuzz-env.sh --check") &&
+    chromeFuzzArm64Checks.includes("file -Lb /opt/deepsonar/bin/d8") &&
+    chromeFuzzArm64Checks.includes("test -x /opt/deepsonar/bin/d8") &&
+    chromeFuzzArm64Checks.includes("test -x /opt/deepsonar/bin/v8_json_libfuzzer") &&
+    chromeFuzzArm64Checks.includes("test -f /opt/deepsonar/lib/libsanitizer_shared_hooks.so") &&
+    !chromeFuzzArm64Checks.includes("/opt/deepsonar/bin/d8 --version") &&
+    !chromeFuzzArm64Checks.includes("/opt/deepsonar/bin/chrome-fuzz-env.sh --check"),
+  "Chrome Fuzz build-time checks must run dynamically on amd64 and use gated static checks on arm64",
+);
 for (const [file, content] of [
   ["chrome-audit-env.sh", chromeAuditEnv], ["chrome-audit-scan.sh", chromeAuditScan],
   ["chrome-headless.sh", chromeHeadless], ["chrome-test-env.sh", chromeTestEnv],

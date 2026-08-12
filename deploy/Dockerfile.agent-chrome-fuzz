@@ -143,11 +143,11 @@ RUN set -eux; \
   test -f out/release/libsanitizer_shared_hooks.so
 
 FROM runtime-rootfs AS runtime-final
+ARG TARGETARCH
 COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/d8 /opt/deepsonar/bin/d8
 COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer
 COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/libsanitizer_shared_hooks.so /opt/deepsonar/lib/libsanitizer_shared_hooks.so
 ENV LD_LIBRARY_PATH=/opt/deepsonar/lib
-RUN /opt/deepsonar/bin/d8 --version | grep -E '^V8'
 
 COPY deploy/chrome-fuzz-env.sh /tmp/chrome-fuzz-env.sh
 COPY deploy/chrome-fuzz-smoke.sh /tmp/chrome-fuzz-smoke.sh
@@ -167,7 +167,22 @@ ENV IS_SANDBOX=1 \
     LD_LIBRARY_PATH=/opt/deepsonar/lib \
     PATH=/opt/deepsonar/bin:/usr/lib/llvm-16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
-RUN /opt/deepsonar/bin/chrome-fuzz-env.sh --check
+RUN set -eux; \
+  case "$TARGETARCH" in \
+    amd64) \
+      /opt/deepsonar/bin/d8 --version | grep -E '^V8'; \
+      /opt/deepsonar/bin/chrome-fuzz-env.sh --check \
+      ;; \
+    arm64) \
+      d8_file="$(file -Lb /opt/deepsonar/bin/d8)"; \
+      case "$d8_file" in *ELF*ARM*aarch64*) ;; *) echo "unexpected arm64 d8 format: $d8_file" >&2; exit 1 ;; esac; \
+      test -x /opt/deepsonar/bin/d8; \
+      test -x /opt/deepsonar/bin/v8_json_libfuzzer; \
+      test -f /opt/deepsonar/lib/libsanitizer_shared_hooks.so; \
+      jq -e '.contract == "deepsonar.runtime.contract/v1" and .imageKey == "deepsonar-chrome-fuzz" and .fuzz.target == "d8" and .fuzz.libfuzzer_target == "v8_json_libfuzzer" and .fuzz.actual == true' /opt/deepsonar/tool-manifest.json >/dev/null \
+      ;; \
+    *) echo "unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac
 
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
