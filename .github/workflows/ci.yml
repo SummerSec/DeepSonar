@@ -71,6 +71,9 @@ jobs:
       - name: Runtime image registry contract unit
         run: pnpm ci:unit:runtime-images
 
+      - name: Image admission registry selection unit
+        run: pnpm ci:unit:image-admission
+
       - name: Runtime image destination evidence unit
         run: pnpm ci:unit:runtime-image-record
 
