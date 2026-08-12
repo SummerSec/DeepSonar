@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import postgres from "postgres";
+import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
 
 const execFileP = promisify(execFile);
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://deepsonar:deepsonar@localhost:5432/deepsonar";
@@ -11,6 +12,7 @@ const workerId = process.env.DEEPSONAR_IMAGE_ADMISSION_WORKER_ID ?? `admission-$
 const pollMs = Math.max(1_000, Number(process.env.DEEPSONAR_IMAGE_ADMISSION_POLL_MS ?? 5_000));
 const updateCheckMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_UPDATE_CHECK_SEC ?? 21_600) * 1_000);
 const continuousRescanMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_RESCAN_SEC ?? 86_400) * 1_000);
+const preferredRegistry = normalizePreferredRegistry(process.env.DEEPSONAR_IMAGE_REGISTRY ?? "");
 const allowedRegistries = new Set((process.env.DEEPSONAR_ALLOWED_IMAGE_REGISTRIES ?? "ghcr.io,docker.io,registry-1.docker.io").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
 const scannerImages = {
   cosign: process.env.DEEPSONAR_COSIGN_IMAGE ?? "",
@@ -59,7 +61,7 @@ async function registrySession(row: Record<string, unknown>): Promise<() => Prom
   const metadata = credential.public_metadata_json as Record<string, unknown>;
   const registry = String(metadata.registry ?? "").trim().toLowerCase();
   const username = String(metadata.username ?? "").trim();
-  if (registry !== registryOf(row.image_ref as string) || !username) throw new Error("registry Credential metadata does not match image registry");
+  if (registry !== registryOf((row.scan_image_ref ?? row.image_ref) as string) || !username) throw new Error("registry Credential metadata does not match image registry");
   await dockerLogin(registry, username, decryptCredential(credential as never));
   return async () => { await docker(["logout", registry], 30_000).catch(() => {}); };
 }
@@ -109,14 +111,31 @@ async function claimScan(): Promise<Record<string, unknown> | null> {
       JOIN runtime_image_versions v ON v.id = s.runtime_image_version_id
       JOIN runtime_images ri ON ri.id = v.runtime_image_id
       WHERE s.id = ${scan.id as string}`;
-    return row as Record<string, unknown>;
+    const result = row as Record<string, unknown>;
+    const refs = await tx`
+      SELECT image_ref FROM runtime_image_version_refs
+      WHERE version_id = ${result.id as string}`;
+    try {
+      result.scan_image_ref = selectAdmissionImageRef({
+        sourceKind: String(result.source_kind),
+        imageKey: String(result.image_key),
+        imageRef: String(result.image_ref ?? ""),
+        digest: typeof result.digest === "string" ? result.digest : null,
+        preferredRegistry,
+        registryRefs: refs.map((ref) => String(ref.image_ref)),
+      });
+    } catch (error) {
+      result.scan_selection_error = error instanceof Error ? error.message : String(error);
+    }
+    return result;
   });
 }
 
 async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   const scanId = row.scan_id as string;
   const versionId = row.id as string;
-  const imageRef = row.image_ref as string;
+  if (row.scan_selection_error) throw new Error(String(row.scan_selection_error));
+  const imageRef = row.scan_image_ref as string;
   const scanSeed = row.scan_seed && typeof row.scan_seed === "object"
     ? row.scan_seed as Record<string, unknown>
     : {};
@@ -192,6 +211,7 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
 }
 
 async function inspectAndScan(row: Record<string, unknown>) {
+  if (row.scan_selection_error) throw new Error(String(row.scan_selection_error));
   const closeRegistrySession = await registrySession(row);
   try { await inspectAndScanAuthorized(row); }
   finally { await closeRegistrySession(); }

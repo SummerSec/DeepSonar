@@ -142,6 +142,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      DEEPSONAR_IMAGE_REGISTRY: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}
       DEEPSONAR_IMAGE_SCAN_VOLUME: deepsonar_admission_scan
     volumes:
       # Rootless Podman: set DEEPSONAR_DOCKER_SOCK to the user podman.sock path.
