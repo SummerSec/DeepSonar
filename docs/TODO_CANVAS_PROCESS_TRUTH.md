@@ -1,79 +1,90 @@
 # TODO：画布过程真相增强（广播可见性 + 连线/布局第一性）
 
-> 状态：A 部分已落地（四态投递账本、Attempt 关联、启动未知对账）；B 连线/布局仍按本文后续分期推进。
-> 本文含两块独立但同属「画布可读性」的方案，可分期落地：
-> **A. Fact/Finding 广播可见性** — 投递账本 + 日志/实时流 + 前端
-> **B. 连线规则与布局第一性收敛** — 边模型统一 + 语义布局
-> 相关代码：`apps/scheduler/src/canvas-updates.ts`、`core.ts`、`verify.ts`、`apps/web/src/layout.ts`、`JobDetailPanel`
+> **状态（as-built，2026-08）**  
+> - **A. Fact/Finding 广播**：注入路径 + `canvas_broadcasts` 投递账本 + API + 画布 UI **已落地**（见下方「A as-built」与根目录 `DESIGN.md` §4.2）。  
+> - **B. 连线/布局第一性**：仍按本文后续分期推进，**未**因 A 完成而取消。  
+> 相关代码：`apps/scheduler/src/canvas-updates.ts`、`domains/canvas/routes.ts`、`database/schema.sql`（`canvas_broadcasts`）、`apps/web/src/canvas-broadcasts.ts`、`CanvasView.tsx`  
 > 说明：A 不改变广播语义；B 不改变调度/派生逻辑，只收敛图语法与视觉层。
 
 ## 评估结论
 
-- **问题成立**：运行中的真实画布已经证明广播会进入 Agent 会话文本，但平台无法结构化回答“向哪个 Job 注入、何时、结果如何”；同一画布的落库坐标也已有 20 组重叠，而屏幕依赖前端二次 ELK 掩盖。
-- **A 值得先做，但不是简单加日志**：采用独立投递账本、`planned→injected|failed|unknown` 状态机和自然幂等键；承认 send 前后崩溃无法 exactly-once，Phase 1 偏向不重复注入。当前进程内订阅不能证明全局 `no_subscriber`。
+- **A 已解决「无法回答投递给谁」**：独立表 `canvas_broadcasts`、`planned→injected|unknown`（及失败路径）、`GET /canvases/:id/broadcasts`、画布广播面板。真注入仍走 `sendMessage`；`injected` ≠ 模型已读。
+- **A 的边界仍有效**：仅并发 running 目标；仅 `incrementalMessages=true` 的 CLI 订阅（Claude Code / Pi；Codex / OpenCode 不追加）。进程内订阅不能证明跨进程全局 `no_subscriber`。
 - **B 不应重写调度语义**：权威边类型是八类，不是原草案的六类。先修契约漂移、数据库唯一性和 Report 可视连接，再做按因果 round 的服务端权威布局；保留现有 Verify/Hub/Report 门禁。
-- **当前任务不是失败样本**：31 个 pending Verify、2 个 running Test 和暂时没有 Report 都符合任务仍在收敛中的状态；本方案不得以此触发取消、重试或热重建。
+- **历史观测样本（2026-08-03）**仅作布局 B 的动机（坐标重叠、Verify 门禁等），**不再**描述「无 broadcast API / 无账本」——该缺口 A 已补。
 - **发布必须等任务收敛**：schema 基线已按仓库当前版本纪律重建；后续 B 的结构变更仍须先备份和恢复演练，不在运行中任务上直接实施。
 
 ---
 
 # A. Fact/Finding 广播可见性
 
-## 问题
+## A as-built（当前实现）
 
-当前链路已实现「同画布运行中 Worker 增量通知」：
+### 真注入链路
 
 ```
 emit_fact/finding → canvas_nodes INSERT
-  → pg_notify(deepsonar_canvas_events)
+  → pg_notify('deepsonar_canvas_events')
   → canvas-updates.ts LISTEN
-  → Agent.attach/sendMessage 追加「DeepSonar 画布增量通知」
+  → 过滤 fact|finding、组装「DeepSonar 画布增量通知」
+  → 对同画布已 subscribe 的目标 Job 调用 sendMessage
+  → canvas_broadcasts：planned → injected | unknown
 ```
 
-但**广播没有平台级的可观测账本**：
+| 层 | as-built |
+|----|----------|
+| 注入 | `executor-real` `onRunReady`：`incrementalMessages === true` 时 `subscribeCanvasUpdates(canvasId, jobId, sendMessage)` |
+| 数据库 | 表 `canvas_broadcasts`；幂等键 `(source_node_id, target_job_id, attempt)`；关联 active Attempt + effect `canvas_delivery` |
+| API | `GET /canvases/:id/broadcasts`（`tasks:read`）；Job 详情可带 broadcasts 投影 |
+| 前端 | 画布广播状态面板、源/目标聚合、overlay；`broadcastStatusLabel`；**禁止**「模型已收到」文案 |
+| 启动对账 | reconcile 可将未决 planned 标为 unknown（进程崩溃窗口） |
 
-| 层 | 现状 |
-|----|------|
-| Scheduler 日志 | 仅失败 `console.warn`，成功无结构化 info |
-| 数据库 | 只存 fact/finding 节点与 source job 的 `events`；**无「投递给谁」记录** |
-| 实时流 stream-bus | 只推 tool/text 等 CLI 事件，不推广播投递 |
-| 前端 | 运行详情/事件/实时流没有结构化广播记录；Job 事件文本/Session 里可能出现通知痕迹，但无法按来源、目标、状态筛选 |
+### 能力与目标门禁
 
-因此：事实入库能查到，**是否注入其他 Agent、注入谁、何时、成败** 无法从前端或运维日志可靠确认；文本痕迹不能替代平台账本。
+| 条件 | 行为 |
+|------|------|
+| CLI `incrementalMessages` 为 false（Codex / OpenCode） | **不订阅** → 无运行时追加、通常无账本行（不是“注入失败”） |
+| 无 active Attempt / 非活跃状态 | 不进入投递集合 |
+| 源 Job == 目标 Job | 跳过 |
+| 后启动 Job | **不**补发历史 fact（Hub 整图） |
 
-### 运行中只读观测基线（2026-08-03 约 21:17 CST）
+### 术语
 
-以下数字来自任务仍在运行时的只读 API/画布观察，用于校准方案，不是验收失败：
+`injected` = 平台已成功调用 CLI 增量输入（`sendMessage` 返回成功并结算账本）。**不**表示模型已读取、理解或采纳。UI/API/日志禁止写「模型已收到/已处理」。
 
-- 单项目、单个活跃画布；共 43 个 Job：31 个 `pending` Verify、2 个 `running` Test、10 个 `succeeded`。
-- 共 31 个 Finding：29 个 `verifying`、2 个 `pending/rework`；任务未收敛前没有 Report 属于预期状态，不能把它当异常。
-- 画布有 90 个节点、89 条边；每个 Finding 恰有 1 条 `verifies` 边，当前没有重复边。
-- 边分布为：`child=1`、`from=9`（`root→intent` 5、`finding→intent` 4）、`next=2`、`produces=31`、`to=15`、`verifies=31`。
-- 数据库坐标出现 20 组重叠、共 40 个节点，主要是并行来源产生的 Finding/Verify 节点共用偏移坐标；这验证了 B 的「落库占位坐标不可作为最终布局」风险。
-- 两个已 `succeeded` 的 Verify 因缺 `independent_review` / `runtime_test` 被硬门正确收口为 `rework`，Hub 已派出 `review`/`test` 补证；说明 Verify/Hub 门禁在运行中生效。
-- Job 事件文本可看到新 Finding 通知痕迹，但当前 OpenAPI 没有 broadcast endpoint，也没有结构化投递账本。
+### 仍可选增强（不阻塞「A 已落地」）
 
----
-
-## 目标
-
-1. **可审计**：每个已识别目标的广播注入尝试有持久化记录（DB 为真相），并能区分成功、失败与结果不确定。
-2. **可实时看**：运行中 Job 的实时流能看到「平台已尝试/完成画布增量注入」。
-3. **可按画布看**：任务工作台能看到「谁 → 谁、什么节点、哪次 attempt」。
-4. **不破坏边界**：仍由 Scheduler 唯一投递；Agent 不互调；不经目标出网。
-5. **兼容旧数据**：无记录的历史 Job 不报错，仅显示「该版本没有结构化投递记录」；账本随画布保留并进入导入导出。
-
-非目标（本期不做）：
-
-- 改变广播语义（例如广播给未 running 的 Job、重放历史全量图）。
-- 把完整 CLI Session 当唯一真相（Session 可能缺失/截断）。
-- 让 Agent 自己上报「我收到了广播」（不可信）。
-
-**术语边界**：本文使用 `injected` 表示 `Agent.attach(...).sendMessage(...)` 已被平台调用并返回成功（平台接受了注入）；它不表示模型已经读取、理解或采纳消息。UI、API、日志禁止把 `injected` 文案写成「模型已收到/已处理」。
+- stream-bus 推 `canvas.broadcast` 卡片（Phase 计划中；账本已可查）
+- 成功路径更结构化的 Scheduler 日志
+- 多 Scheduler 副本下的订阅拓扑（当前进程内 Map）
 
 ---
 
-## 推荐方案（分层）
+## 历史问题陈述（归档，2026-08 前）
+
+> 以下描述的是**落地投递账本之前**的缺口，仅作设计背景；**不要**当作当前现状。
+
+当时注入链路已存在，但缺少平台级投递账本与 API，前端只能靠 Session/事件文本猜痕迹。A 的目标正是补齐可审计、可按画布查询的账本。
+
+---
+
+## 目标（A，已满足主路径）
+
+1. **可审计**：每个已识别目标的广播注入尝试有持久化记录（DB 为真相），并能区分成功与结果不确定。✅  
+2. **可按画布看**：任务工作台能看到「谁 → 谁、什么节点、状态」。✅  
+3. **不破坏边界**：仍由 Scheduler 唯一投递；Agent 不互调；不经目标出网。✅  
+4. **兼容旧数据**：无记录的历史 Job 不报错。✅  
+5. **可实时看（stream）**：运行中 WS 独立广播卡片 — **可选增强**，非 A 关闭条件。
+
+非目标（仍不做）：
+
+- 改变广播语义（广播给未 running 的 Job、重放历史全量图）。
+- 把完整 CLI Session 当唯一真相。
+- 让 Agent 自己上报「我收到了广播」。
+
+---
+
+## 推荐方案（分层，实现对照）
 
 ### 总览
 

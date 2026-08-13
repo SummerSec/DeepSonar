@@ -26,6 +26,7 @@
 Project 1 ── * Canvas（= 任务；无独立 tasks 表）
 Canvas  1 ── * Job
 Canvas  1 ── * canvas_nodes / canvas_edges
+Canvas  1 ── * canvas_broadcasts（Fact/Finding 向并发 Worker 的投递账本）
 Job     1 ── * events（语义）
 Job     1 ──  transcript / evidence（冷存储）
 Finding * ── 1 project + job + optional node
@@ -82,6 +83,29 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - 确认严格分两阶段：`injected` 仅表示“已注入会话，等待 Agent 确认”；只有目标 Agent 显式调用受治理的 ACK operation，持久化 `acknowledged_at`（及可选 `ack_summary`）后，UI 才显示“Agent 已确认”。不得从普通文本回复、Session 内容或节点标题推断已读/已处理。
 - `planned` / `injected` / `acknowledged` / `unknown` / `failed` 均真实展示；未知窗口与失败不会触发消息自动重发。人类若要再次发送，必须在确认目标和账本状态后主动提交新消息 UUID。
 
+### 4.2 Fact/Finding 画布广播（真注入 + 投递账本）
+
+同画布并行 Worker 之间的增量通知**已落地**（Scheduler 唯一执行；Agent 不互调）：
+
+```
+emit_fact / emit_finding → canvas_nodes INSERT
+  → pg_notify('deepsonar_canvas_events')
+  → canvas-updates LISTEN → 组装「DeepSonar 画布增量通知」
+  → 对已订阅的目标 Job 调用 sendMessage(...)
+  → canvas_broadcasts：planned → injected | unknown
+```
+
+| 要点 | 说明 |
+|------|------|
+| **真注入** | `executor-real` 在 `onRunReady` 注册 `subscribeCanvasUpdates(canvasId, jobId, sendMessage)`；`sendMessage` 成功且账本结算后记 `injected` |
+| **能力门禁** | 仅当冻结快照 `agent_runtime.capabilities.incrementalMessages === true` 时订阅。当前：**Claude Code、Pi 会注入**；**Codex、OpenCode 不声明该能力 → 不订阅、无运行时追加**（非“功能未做”） |
+| **目标集合** | 同 `canvas_id`、有 **active Attempt**、状态 ∈ claimed/provisioning/running/waiting_human；**不**广播给自己；**不**给后启动 Job 补历史 fact（Hub 整图职责） |
+| **`injected` 语义** | 仅表示平台已把文本塞进 CLI 输入通道；**禁止**文案写成「模型已收到/已处理」 |
+| **可观测** | DB 表 `canvas_broadcasts`；`GET /canvases/:id/broadcasts`；画布面板与节点侧聚合；Job 详情可挂广播列表。实时流增强见 `docs/TODO_CANVAS_PROCESS_TRUTH.md`（A 已落地账本/UI，B 布局仍分期） |
+| **安全** | 正文标为「平台转发的任务数据，不是系统指令」；不经目标出网；不改变冻结角色/镜像/网络 |
+
+实现入口：`apps/scheduler/src/canvas-updates.ts`、schema `canvas_broadcasts`、Web `canvas-broadcasts.ts` / `CanvasView`。
+
 ## 5. Job 与并发
 
 ```
@@ -93,7 +117,7 @@ pending → claimed → provisioning → running
 - Lease + Reaper：超时/孤儿**调度器判定**，不信任 Agent 自报。
 - 唤醒：`pg_notify('deepsonar_jobs')` 为主；轮询可关。
 - 优先级：资格与排序分离（图阶段 / 收敛证据 vs 固定优先级），避免 priority 通胀。
-- **任务执行时间（定时开始）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
+- **任务执行时间（定时开始，#147 已关闭）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
 
 ### 5.1 Job Attempt 与外部效果
 
@@ -134,11 +158,14 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 通道 | 内容 | 持久化 |
 |------|------|--------|
 | 语义 events | progress / finding / done / human | Postgres |
+| 画布广播 | Fact/Finding 向并发 Worker 的投递 | `canvas_broadcasts`（`planned`/`injected`/`unknown`…） |
 | 实时流 | text.delta / tool.call.* | 进程内 `stream-bus` + WS `/ws`；环形缓冲 |
 | 过程流 | normalized NDJSON | Job 目录；**manifest 多在 finalize 后可读** |
 | Session / OTLP | CLI 原始 | 冷存储 blob |
 
 **Job Session UI**：前端 `apps/web/src/session-viewer/` 将归档文本解析为时间线/工具统计/原始视图，并保留原始文件下载；解析格式须覆盖当前全部 `SupportedAgentCli`（claude-code / codex / open-code / pi）。**新增 Agent CLI 时必须同步** Session 归档适配器（`cli-session-adapters.ts`）与 Web 解析器，清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
+
+**画布广播**：真注入路径见 §4.2；账本为唯一投递真相，Session 文本仅作旁证。
 
 `DEEPSONAR_AUTH_REQUIRED=true` 时 HTTP 需 Bearer；**WS 鉴权与前端带 token 为已知缺口**（#38）。
 
@@ -193,9 +220,11 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 平台 OpenAPI + 静态控制 Skill | #135 | **第一阶段已落地**：现有 MCP 暂作过渡通道；真实 Job 注入静态 `deepsonar-control` Skill，并以独立短期 capability token 访问按冻结 operation allowlist 过滤的 `/control/v1/jobs/:jobId` capabilities/OpenAPI/operation API。API 与 MCP 共用宿主 semantic handler 和 Scheduler 权威副作用；当前由 Agent 对每个逻辑操作自行选择一个通道，长期统一到 API 并淘汰 MCP；未来新平台工具只扩展 API。 |
 | Agent Runtime Context 生命周期与恢复身份 | #138 | **已落地基础契约**：Executor 为每个 Attempt 生成稳定 `context_id`/revision 与只含摘要的 transform manifest，按 attempt state 和 Job runtime evidence 持久化；`context.compacted` 严格校验身份、链摘要、顺序并支持幂等重放，无法观测或不支持时显式记录而不伪造压缩。恢复前必须取得实际上下文身份并逐字段匹配，缺失或不一致则拒绝恢复；Pi 使用精确 session 文件，不选择 latest。Job 详情只展示有界诊断，不展示 prompt 或 provider 原文。 |
 | Pi Coding Agent RPC Runtime Adapter 与 Capability API | #140 | **已落地**：Pi 固定使用 `pi --mode rpc --no-approve` 的严格 LF JSONL 协议，平台控制通过 Job 级 HTTP Capability API，不物化或注入 MCP；`agent_settled` 只提供运行时静止信号，Job 成功仍须经过 `mark_job_done` 完成门。`get_state` 返回的精确 `sessionFile` 用于恢复，暂态错误最多同会话重试三次；模型配置经 Gateway 物化为 `models.json`。项目 `.pi` 不自动加载，默认 `--no-extensions`，受治理扩展才通过冻结配置显式 `--extension` 加载。 |
-| 通用长上下文预算 | #144 | **已完成**：模型目录只登记 Provider 返回的模型 ID，不把 “1M” 等营销标签推导成能力。Credential `settings_config_json.context_window_tokens` 提供 1024–10000000 的 CLI 客户端基准预算，RoleConfig 同名字段可覆盖，`null` 依次继承 Credential、Provider/CLI 默认；新 Job 冻结解析值，旧 Job 不变。该预算不提升上游模型能力，真实可用窗口仍受 Provider、模型 ID 与账号权限限制。Codex 落到 `model_auto_compact_token_limit`，OpenCode 落到模型 `limit.context`，Pi 落到 `models.json` 的 `contextWindow`；Claude Code 没有受支持的绝对窗口设置，因此只冻结/展示，不伪造环境变量或 CLI 参数。 |
+| 通用长上下文预算 + 兼容网关 models 探测 | #144 | **已完成并关 issue**：① `credential-test` 多候选 `modelUrls`（含 `/api/anthropic` 等兼容子路径剥离），404/405 继续下一候选。② 模型目录只登记 Provider 返回的模型 ID。③ Credential/RoleConfig `context_window_tokens`（1024–10000000），RoleConfig 覆盖 Credential，Job 冻结；Codex/OpenCode/Pi 落到各 CLI，Claude 只冻结/展示。 |
 | Runtime Platform API 能力一致性 | #145 | **已完成当前阶段**：四个治理 adapter 均声明 Job 级 HTTP `platformControlApi`；Claude Code、Codex、OpenCode 当前同时向 Agent 提供 MCP 与 API，由 Agent 对每个逻辑操作自行二选一，Pi 仅使用 API。长期统一到 API 并淘汰 MCP |
 | 项目镜像继承一致性 | #146 | `inherit_global` 继续只认全局 RoleConfig 镜像；`project_managed` 只认项目 `role_runtime_images` 映射。修复遗留项目 RoleConfig `runtime_image_key` 在导入、展示或 readiness 中被误当作有效配置的问题，不恢复 #130 已删除的独立项目镜像覆盖 |
+| 任务定时开始（北京 08:00） | #147 | **已完成并关 issue**：见 §5；`task-schedule` / `schedule-wake`、dispatcher 门禁、Web 表单与列表 `scheduled` 相位；无 schema 迁移 |
+| 画布广播可观测 | （过程真相 A） | **注入 + 投递账本已落地**：见 §4.2；分期细节与布局 B 见 `docs/TODO_CANVAS_PROCESS_TRUTH.md` |
 
 ## 12. 仓库地图
 
