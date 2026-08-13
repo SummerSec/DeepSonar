@@ -578,10 +578,10 @@ function sandboxClaude(
 
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
-  version: "2.1.220",
+  version: "2.1.231",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  // Claude Code 2.1.220 is the governed minimum image version.  That
+  // Claude Code 2.1.231 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
   // an adapter whose pinned minimum does not support it.
   start: (context) => sandboxClaude(context.sandbox, context),
@@ -626,11 +626,11 @@ const codex = Object.freeze<RuntimeAdapter>({
 
 const openCode = Object.freeze<RuntimeAdapter>({
   id: "open-code",
-  version: "1.18.15",
+  version: "1.18.18",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
-    // OpenCode's governed minimum supports --thinking and emits a structured
+    // OpenCode's governed pin supports --thinking and emits a structured
     // `reasoning` JSON event when the selected model exposes one.
     let command = `opencode run --format json --thinking --dangerously-skip-permissions --pure`;
     if (model) command += ` --model ${shellQuote(model)}`;

@@ -27,9 +27,9 @@ The current registry contains:
 
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.220 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
+| `claude-code` | Claude Code 2.1.231 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
 | `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default | `model_context_window` | Official reasoning summary/item events when emitted |
-| `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
+| `open-code` | OpenCode 1.18.18 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
 | `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
 
 四个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
@@ -86,7 +86,7 @@ never infers or fabricates reasoning from ordinary text, tool output, or
 terminal lines. If the selected CLI/model does not emit a supported reasoning
 event, the live and archived stream simply contains no reasoning block.
 
-Claude partial frames are enabled only for the pinned 2.1.220 governed minimum
+Claude partial frames are enabled only for the pinned 2.1.231 governed minimum
 above. `content_block_delta` `thinking_delta`/`text_delta` frames are
 normalized to `reasoning.delta`/`text.delta`; the later complete assistant
 message remains accepted for compatibility but is de-duplicated against those

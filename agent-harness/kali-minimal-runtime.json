@@ -22,9 +22,9 @@
     "cargo": { "version": "dpkg", "license": "Apache-2.0 OR MIT", "capabilities": ["rust-package-manager"] }
   },
   "npm": {
-    "@anthropic-ai/claude-code": { "version": "2.1.220", "license": "Commercial", "capabilities": ["agent-runtime"], "agent_cli": "claude-code", "compatible_image_keys": ["deepsonar-kali-minimal"] },
+    "@anthropic-ai/claude-code": { "version": "2.1.231", "license": "Commercial", "capabilities": ["agent-runtime"], "agent_cli": "claude-code", "compatible_image_keys": ["deepsonar-kali-minimal"] },
     "@openai/codex": { "version": "0.147.0", "license": "Apache-2.0", "capabilities": ["agent-runtime"], "agent_cli": "codex", "compatible_image_keys": ["deepsonar-kali-minimal"] },
-    "opencode-ai": { "version": "1.18.15", "license": "MIT", "capabilities": ["agent-runtime"], "agent_cli": "open-code", "compatible_image_keys": ["deepsonar-kali-minimal"] },
+    "opencode-ai": { "version": "1.18.18", "license": "MIT", "capabilities": ["agent-runtime"], "agent_cli": "open-code", "compatible_image_keys": ["deepsonar-kali-minimal"] },
     "@earendil-works/pi-coding-agent": { "version": "0.84.1", "integrity": "sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==", "license": "MIT", "capabilities": ["agent-runtime", "rpc", "platform-control-api"], "agent_cli": "pi", "compatible_image_keys": ["deepsonar-kali-minimal"] }
   },
   "downloads": {
