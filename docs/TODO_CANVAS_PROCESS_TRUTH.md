@@ -1,10 +1,10 @@
-# TODO：画布过程真相增强（广播可见性 + 连线/布局第一性）
+# 画布过程真相增强（广播可见性 + 连线/布局第一性）
 
-> **状态（as-built，2026-08）**  
-> - **A. Fact/Finding 广播**：注入路径 + `canvas_broadcasts` 投递账本 + API + 画布 UI **已落地**（见下方「A as-built」与根目录 `DESIGN.md` §4.2）。  
-> - **B. 连线/布局第一性**：仍按本文后续分期推进，**未**因 A 完成而取消。  
-> 相关代码：`apps/scheduler/src/canvas-updates.ts`、`domains/canvas/routes.ts`、`database/schema.sql`（`canvas_broadcasts`）、`apps/web/src/canvas-broadcasts.ts`、`CanvasView.tsx`  
-> 说明：A 不改变广播语义；B 不改变调度/派生逻辑，只收敛图语法与视觉层。
+> **状态（2026-08-13）**  
+> - **A. Fact/Finding 广播**：**as-built 已交付**（注入 + `canvas_broadcasts` + API + 画布 UI）。见「A as-built」与 `DESIGN.md` §4.2。  
+> - **B. 连线/布局第一性**：**进行中 / 未完** — Web 已声明八类 `edge_type` 与样式；**服务端权威 layout_revision 布局**等仍按本文 B 分期，勿标整篇「未实现」。  
+> 索引：[`README.md`](README.md)。  
+> 相关代码：`canvas-updates.ts`、`domains/canvas/`、`canvas_broadcasts`、`apps/web/src/canvas-broadcasts.ts`、`CanvasView.tsx`、`api.ts` EdgeType。
 
 ## 评估结论
 

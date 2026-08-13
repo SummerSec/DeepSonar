@@ -1,8 +1,11 @@
 # Scheduler bounded contexts and lock matrix
 
-This note records the dependency and lock contracts for the incremental
-Scheduler split tracked by Issue #37.  It is intentionally a design boundary,
-not a schema or API change.  PostgreSQL and the Scheduler remain the only
+> **Status: as-built (Issue #37 closed).** This note is the current domain
+> boundary and lock contract, not a pending redesign. Prefer the live modules
+> under `apps/scheduler/src/domains/*` if this text drifts.
+
+This note records the dependency and lock contracts for the Scheduler split
+tracked by Issue #37. PostgreSQL and the Scheduler remain the only
 execution-state and side-effect authority.
 
 ## Context map

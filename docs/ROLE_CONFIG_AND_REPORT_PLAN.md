@@ -1,11 +1,12 @@
 # 角色配置统一 + 单决策中枢 + 验证与自动报告流水线（修订实施方案）
 
-> 日期：2026-08-01
+> 日期：2026-08-01  
 >
-> 状态：**历史方案稿**（RoleConfig / 双轨 Report 主路径已 as-built，见 `DESIGN.md`）。  
-> 保留作设计推演参考；冲突时以 `DESIGN.md`、OpenAPI 与代码为准。
+> **状态：as-built + 历史推演**（RoleConfig 三层、Hub 唯一决策、自动 Verify、双轨 Task/Finding Report **产品主路径已落地**）。  
+> 文首之后的「实施方案」段落保留作考古；**勿当未完成清单**。冲突时以 `DESIGN.md`、OpenAPI 与代码为准。  
+> 索引：[`README.md`](README.md)。
 >
-> 相关：`docs/ARCHITECTURE.md` §4.3 / §8.1 / §8.3
+> 相关：`DESIGN.md` §4–§6 · `docs/ARCHITECTURE.md`
 
 ## 1. 已确认的业务目标
 

@@ -270,11 +270,12 @@ DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
 
 ## 当前事实入口
 
-- [DESIGN.md](DESIGN.md) — as-built 设计摘要与开放 Issue 索引
+- [DESIGN.md](DESIGN.md) — as-built 设计摘要与演进索引
+- [docs/README.md](docs/README.md) — 专题文档索引（哪些已 as-built、哪些是历史方案）
 - [database/schema.sql](database/schema.sql) — 数据结构唯一基线
 - [database/README.md](database/README.md) — schema 启动与重建规则
 - `/api/openapi.json` — 当前 HTTP API 契约
-- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 未完成能力与演进方案
+- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 可选；可能为空，以 DESIGN §11 + 代码为准
 
 ## License
 

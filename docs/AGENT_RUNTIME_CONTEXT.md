@@ -1,5 +1,8 @@
 # Agent Runtime Context 契约
 
+> **状态：as-built（#138 已关）** — 与 `packages/runtime-sandbox` context 契约及 Executor 持久化路径对齐。  
+> 冲突时以代码与 `DESIGN.md` §11 为准。索引见 [`README.md`](README.md)。
+
 本文档说明 #138 的上下文生命周期边界。它记录可审计的身份和变换摘要，不把模型上下文变成调度器的第二份 prompt 存储。
 
 ## 状态

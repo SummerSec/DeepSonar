@@ -7,8 +7,9 @@ DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度�
 **设计入口（必读顺序）**
 
 1. **`DESIGN.md`（仓库根）** — 当前 as-built 设计摘要、实体模型、Hub 闭环、配置覆盖、已知演进（Issues）；**改功能/提方案先读它**。
-2. **`docs/ARCHITECTURE.md`** — 完整架构、威胁建模、存储与状态机细则；与 `DESIGN.md` 冲突时以本文件 + 代码为准，并应回写 `DESIGN.md`。
-3. 专题计划在 `docs/TODO_*.md` / `docs/*_PLAN.md`；开放演进以 GitHub Issues 为准（`DESIGN.md` §11 有索引）。
+2. **`docs/ARCHITECTURE.md`** — 完整架构、威胁建模、存储与状态机细则；与 `DESIGN.md` 冲突时以代码 + `DESIGN.md` 为准，并应回写 `DESIGN.md`。
+3. **`docs/README.md`** — 专题文档索引与 **as-built / 历史方案 / 进行中** 状态表（大量 `*_PLAN.md` / `TODO_*.md` 主路径已落地，勿当未实现清单）。
+4. 开放演进以 `DESIGN.md` §11 与代码为准（GitHub Issues 可能为空）。
 
 ## 常用命令
 

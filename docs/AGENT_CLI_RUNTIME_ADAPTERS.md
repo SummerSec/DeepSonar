@@ -1,5 +1,10 @@
 # Governed Agent CLI Runtime Adapters
 
+> **Status: as-built (Issue #100 + Pi #140).** Pinned CLI versions live in
+> `agent-harness/runtime-images.json` and `packages/runtime-sandbox/src/runtime-adapters.ts`.
+> New CLI onboarding must also cover Session archive + Web session viewer (below).
+> Index: [`README.md`](README.md).
+
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
 
