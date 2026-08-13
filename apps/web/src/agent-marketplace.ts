@@ -140,7 +140,7 @@ export function parseAgentPack(input: string): AgentPack {
   const envKeys = stringArray(rawConfig.env_keys, "config.env_keys");
   const envVars = validateEnvironment(envKeys, record(rawConfig.env_vars ?? {}, "config.env_vars"));
   const agentCliValue = String(rawConfig.agent_cli ?? DEFAULT_CONFIG.agent_cli);
-  if (!["claude-code", "open-code", "codex", "pi"].includes(agentCliValue)) throw new Error("config.agent_cli 不受支持");
+  if (!["claude-code", "open-code", "codex", "pi", "dsh"].includes(agentCliValue)) throw new Error("config.agent_cli 不受支持");
   const agentCli = agentCliValue as RoleConfigInput["agent_cli"];
   const reasoning = rawConfig.reasoning ?? null;
   if (reasoning !== null && !["low", "medium", "high", "xhigh"].includes(String(reasoning))) throw new Error("config.reasoning 不受支持");

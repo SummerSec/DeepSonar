@@ -10,7 +10,7 @@ import { CcSwitchOpenCodeFields, defaultOpenCodeSettings } from "./CcSwitchOpenC
 import { formatJsonObject, validateJsonObjectText } from "./json-text";
 import { defaultCodexToml, validateTomlText } from "./toml-text";
 
-export type AgentCli = "claude-code" | "codex" | "open-code" | "pi";
+export type AgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
 
 export const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
 const SECRET_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)/iu;
@@ -71,6 +71,7 @@ export function providerProtocolLabel(
   if (!providerCatalog.some((item) => item.provider === provider)) return "未识别协议";
   if (agentCli === "claude-code") return "Anthropic Messages";
   if (agentCli === "codex") return "OpenAI Responses";
+  if (agentCli === "dsh") return "DeepSeek Chat Completions";
   const entry = providerCatalog.find((item) => item.provider === provider);
   return entry?.provider === "anthropic"
     ? "Anthropic Messages"
@@ -220,7 +221,7 @@ export function buildSettingsConfigFromEditor(input: {
         env.ANTHROPIC_AUTH_TOKEN = secret.trim();
         env.ANTHROPIC_API_KEY = secret.trim();
         settings.env = env;
-      } else {
+      } else if (agentCli !== "dsh") {
         const options = settings.options && typeof settings.options === "object" && !Array.isArray(settings.options)
           ? settings.options as Record<string, unknown>
           : {};
@@ -244,6 +245,14 @@ export function buildSettingsConfigFromEditor(input: {
     if (url) env.ANTHROPIC_BASE_URL = url;
     else if (provider === "anthropic") env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
     return { ok: true, pastedAsIs: false, settings: patchContextWindowTokens({ env }, parsedContextWindowTokens) };
+  }
+  if (agentCli === "dsh") {
+    return { ok: true, pastedAsIs: false, settings: patchContextWindowTokens({
+      provider: "deepseek",
+      baseURL: baseUrl.trim().replace(/\/+$/u, "") || "https://api.deepseek.com",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      models: [{ id: "deepseek-v4-flash", contextWindow: 1_000_000 }],
+    }, parsedContextWindowTokens) };
   }
   // open-code
   return {
@@ -386,6 +395,15 @@ export function CredentialConfigEditor({
       onSettingsJsonChange(formatJsonObject({ providers: { deepsonar: { baseUrl: baseUrl.trim(), api: providerKey, apiKey: secret ? MASKED_SECRET_PLACEHOLDER : "", models: [] } } }));
       return;
     }
+    if (cli === "dsh") {
+      onSettingsJsonChange(formatJsonObject({
+        provider: "deepseek",
+        baseURL: baseUrl.trim() || "https://api.deepseek.com",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        models: [{ id: "deepseek-v4-flash", contextWindow: 1_000_000 }],
+      }));
+      return;
+    }
     onSettingsJsonChange(formatJsonObject(defaultOpenCodeSettings(
       secret ? MASKED_SECRET_PLACEHOLDER : "",
       baseUrl,
@@ -406,6 +424,7 @@ export function CredentialConfigEditor({
           <option value="codex">Codex（config.toml + auth.json）</option>
           <option value="open-code">OpenCode（config.json）</option>
           <option value="pi">Pi Coding Agent（models.json）</option>
+          <option value="dsh">DeepSeek Harness（JSON-RPC）</option>
         </select>
         <select
           value={provider}
@@ -498,6 +517,18 @@ export function CredentialConfigEditor({
           onNotice={onNotice}
           onError={onError}
         />
+      ) : agentCli === "dsh" ? (
+        <div className="cc-switch-form">
+          <label className="cc-switch-field"><span className="cc-switch-label">DeepSeek API Key</span>
+            <input type="password" value={secret} onChange={(event) => onSecretChange(event.target.value)} className="theme-input-surface cc-switch-input" autoComplete="off" />
+          </label>
+          <label className="cc-switch-field"><span className="cc-switch-label">Base URL</span>
+            <input value={baseUrl} onChange={(event) => onBaseUrlChange(event.target.value.trim().replace(/\/+$/u, ""))} className="theme-input-surface cc-switch-input" placeholder="https://api.deepseek.com" />
+          </label>
+          <label className="cc-switch-field"><span className="cc-switch-label">DSH Provider 配置 JSON</span>
+            <textarea value={settingsJson} onChange={(event) => onSettingsJsonChange(event.target.value)} rows={12} className={`theme-input-surface cc-switch-json ${!settingsValidation.ok ? "border-red-700/80" : ""}`} spellCheck={false} />
+          </label>
+        </div>
       ) : (
         <CcSwitchOpenCodeFields
           settingsJson={settingsJson}
