@@ -36,7 +36,7 @@ The current registry contains:
 | `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default | `model_context_window` | Official reasoning summary/item events when emitted |
 | `open-code` | OpenCode 1.18.18 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
 | `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
-| `dsh` | DeepSeek Harness 0.1.0-rc.6 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL | yes | 由 `@deepseek-ai/dsh-plugin-context-manager-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `agent/stream/event` 的结构化 reasoning 事件 |
+| `dsh` | DeepSeek Harness 0.1.0-rc.6 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
 
 五个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
 只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，
