@@ -1,4 +1,10 @@
-/** Agent CLI 原始 Session 发现适配器；不同 CLI 不共享目录假设。 */
+/**
+ * Agent CLI 原始 Session 发现适配器；不同 CLI 不共享目录假设。
+ *
+ * 新增 CLI 时：在此扩展 SupportedAgentCli + CLI_SESSION_ADAPTERS，并同步
+ * apps/web/src/session-viewer/parseAgentSession.ts（Job Session 时间线/统计）。
+ * 完整清单：docs/AGENT_CLI_RUNTIME_ADAPTERS.md「Session 归档 + Web 查看器」。
+ */
 
 export type SupportedAgentCli = "claude-code" | "codex" | "open-code" | "pi";
 

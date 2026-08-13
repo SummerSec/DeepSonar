@@ -107,6 +107,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - **设计变更**：先对齐 `DESIGN.md`；结构性/安全相关再改 `docs/ARCHITECTURE.md`，并更新 `DESIGN.md` §11 与相关 Issue。
 - 全仓库 TypeScript ESM；`shared-types`（zod schema）是前后端/事件 payload 单源，改 schema 从这里改。
 - 新增 job 类型 = 字符串新值 +（如需真实执行）在 `agent_roles` 注册，无需迁移；dispatcher 的 `isRealType` 自动识别。
+- **新增 Agent CLI**：除 runtime adapter（`runtime-adapters.ts`）外，必须同步 **Session 归档**（`cli-session-adapters.ts`）与 **Job Session 查看器**（`apps/web/src/session-viewer/parseAgentSession.ts` + 测试）；保留下载原始文件。清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
 - 改表 = 直接改 `database/schema.sql` + bump `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`，然后重建数据库；不写 migration、不留旧结构 fallback。
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。

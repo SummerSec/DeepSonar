@@ -58,6 +58,27 @@ be registered or admitted:
 4. Do not admit the adapter until the declaration, tests, and bounded-session
    behavior (when needed) are complete.
 
+### Session 归档 + Web 查看器（必做，勿只接运行时）
+
+新增或升级 Agent CLI 时，**运行时适配器 ≠ Session 可观测性已完成**。Job 详情
+`Session` 页依赖两层独立实现；缺一则前端只能空态或「原始」里看不懂的 dump：
+
+| 层 | 位置 | 职责 |
+| --- | --- | --- |
+| **Session 归档** | `packages/runtime-sandbox/src/cli-session-adapters.ts`（`SupportedAgentCli` + `CLI_SESSION_ADAPTERS`） | 按 CLI 发现/导出原始 session（JSONL / vendor export），写入 Job evidence；`sessionCapture: true` 才启用 |
+| **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 工具统计 / Token / 原始；**保留下载原始文件** |
+
+接入新 CLI 的强制清单（与 compaction 并列 fail-closed 心智）：
+
+1. **扩展 `SupportedAgentCli`**，并实现 `AgentCliSessionAdapter.exportSession`：只依赖本次运行的 session identity（及 Pi 的受治理 `sessionFile`），禁止扫共享 DB / latest / 跨 Job 路径；超大体积与路径越界 fail closed（见现有 Claude/Codex/OpenCode/Pi 适配器）。
+2. **runtime adapter** 声明 `sessionCapture: true`，并保证流里能捕获稳定 `sessionId`（Pi 还要 `sessionFile`），否则归档永远空。
+3. **扩展 Web 解析**：在 `parseAgentSession.ts` 增加该 CLI 的行/文档解析（或 `cli` hint 下的专用路径），更新 `normalizeSessionCli` / `sessionCliLabel`，并补 `parseAgentSession.test.ts` 样例（至少：用户消息、助手、一次 tool_call + tool_result、Token 若可得）。
+4. **不要假设**「Codex 目录结构」或「Claude JSONL」可复用；每种 CLI 的 on-disk / export 形态单独适配。参考外部 [agent-session-viewer](https://github.com/cuteribs/agent-session-viewer) 仅作 UX/格式灵感，**不 vendor 整站**。
+5. **验收**：真实或 fixture 归档经 `GET /jobs/:id/evidence/session` 可读；Job 详情 Session 标签出现时间线/统计；「下载原始文件」仍指向未改写的归档字节；解析失败时仍可看「原始」与下载。
+6. 若暂不支持归档：显式保持 `sessionCapture: false`，并在 UI/空态文案中可区分「未实现」与「运行失败」；**禁止**半吊子路径猜测冒充归档。
+
+当前已适配查看器的 CLI：`claude-code`、`codex`、`open-code`、`pi`（与 runtime registry 对齐）。后续每加一个 adapter，**同步 PR 应包含 session adapter + parseAgentSession + 测试**，不要拆成「先跑起来以后再做 Session」。
+
 `reasoningEffort` is an input/configuration capability; it does not guarantee
 that a provider exposes its internal reasoning in output. The runtime only
 normalizes an explicitly structured reasoning event (`reasoning.delta`) and

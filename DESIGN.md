@@ -138,6 +138,8 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 过程流 | normalized NDJSON | Job 目录；**manifest 多在 finalize 后可读** |
 | Session / OTLP | CLI 原始 | 冷存储 blob |
 
+**Job Session UI**：前端 `apps/web/src/session-viewer/` 将归档文本解析为时间线/工具统计/原始视图，并保留原始文件下载；解析格式须覆盖当前全部 `SupportedAgentCli`（claude-code / codex / open-code / pi）。**新增 Agent CLI 时必须同步** Session 归档适配器（`cli-session-adapters.ts`）与 Web 解析器，清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
+
 `DEEPSONAR_AUTH_REQUIRED=true` 时 HTTP 需 Bearer；**WS 鉴权与前端带 token 为已知缺口**（#38）。
 
 ## 9. 安全边界

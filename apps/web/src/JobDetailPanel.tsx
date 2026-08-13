@@ -1,4 +1,4 @@
-import { DownloadSimple, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
+import { PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
@@ -8,12 +8,13 @@ import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
 import { humanMessageStatusLabel } from "./human-messages";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
+import { SessionViewer } from "./session-viewer/SessionViewer";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 
 /**
  * 运行详情（画布节点 / 运行列表共用）：
  * - 结果：下发 prompt + 运行摘要 + 产出（已结束默认）
- * - 实时流 / 事件 / 原始 Session / 产出发现 / 运行配置
+ * - 实时流 / 事件 / Session（时间线/统计/原始 + 下载）/ 产出发现 / 运行配置
  */
 type DetailTab = "result" | "live" | "events" | "session" | "findings" | "config";
 const ACTIVE = new Set(["claimed", "provisioning", "running", "waiting_human"]);
@@ -450,8 +451,8 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     ["events", "事件", jobEvents.length || detail?.events.length || null, true],
     [
       "session",
-      "原始 Session",
-      evidence?.manifest.files.filter((f) => f.kind === "main" || f.kind === "subagent").length ?? null,
+      "Session",
+      evidence?.manifest.files.filter((f) => f.kind === "main" || f.kind === "subagent" || f.kind === "vendor_export").length ?? null,
       true,
     ],
     ["findings", "产出发现", detail?.findings.length ?? null, true],
@@ -884,42 +885,25 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           )}
 
           {detail && tab === "session" && (
-            <div className="h-full min-h-0 overflow-y-auto p-4">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <span className="text-[12px] text-zinc-500">
-                  {evidence
-                    ? `${evidence.manifest.cli} · session ${evidence.manifest.session_id ?? "unknown"}`
-                    : active
-                      ? "Session 将在运行终态前归档"
-                      : "没有 Session 归档"}
-                </span>
-                {evidence && session && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      api.downloadJobSession(jobId).catch((e) => setDownloadError(String(e)))
-                    }
-                    className="theme-surface ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[11px] text-zinc-300 ring-1 hover:opacity-90"
-                  >
-                    <DownloadSimple size={13} /> 下载原始文件
-                  </button>
-                )}
-              </div>
-              {downloadError && <p className="mb-3 text-[11px] text-red-300">{downloadError}</p>}
+            <div className="flex h-full min-h-0 flex-col p-4">
               {session ? (
-                <>
-                  <pre className="theme-input-surface max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-2xl border p-4 font-mono text-[11px] leading-5 text-zinc-400">
-                    {session.text}
-                  </pre>
-                  {session.truncated && (
-                    <p className="mt-2 text-[10px] text-amber-300">
-                      页面预览已截断，请下载完整原始文件。
-                    </p>
-                  )}
-                </>
+                <SessionViewer
+                  text={session.text}
+                  truncated={session.truncated}
+                  cli={evidence?.manifest.cli}
+                  sessionId={evidence?.manifest.session_id}
+                  downloadError={downloadError}
+                  onDownload={() =>
+                    api.downloadJobSession(jobId).catch((e) => setDownloadError(String(e)))
+                  }
+                />
               ) : (
                 <div className="theme-surface rounded-2xl p-8 text-center text-[13px] text-zinc-600 ring-1">
-                  该 CLI 未生成可归档的独立 Session，或此运行发生在归档功能上线前。
+                  {active
+                    ? "Session 将在运行终态前归档；支持 Claude Code / Codex / OpenCode / Pi。"
+                    : evidence?.manifest.capture_error
+                      ? `Session 归档失败：${evidence.manifest.capture_error}`
+                      : "该 CLI 未生成可归档的独立 Session，或此运行发生在归档功能上线前。"}
                 </div>
               )}
             </div>
