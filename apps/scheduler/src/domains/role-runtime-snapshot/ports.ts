@@ -45,6 +45,8 @@ export interface RoleRuntimeSnapshotResult {
   role_description: string;
   instructions_markdown: string | null;
   platform_tools: PlatformToolName[];
+  /** 最终冻结的通用客户端上下文预算；null 表示 Provider/CLI 默认值。 */
+  context_window_tokens: number | null;
   /** Full provider settings profile frozen with the Job and materialized verbatim for the CLI. */
   settings_config_json: unknown;
   config_files: { path: string; content: string; content_sha256: string }[];

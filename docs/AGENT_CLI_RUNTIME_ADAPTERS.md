@@ -25,16 +25,18 @@ is consumed as structured JSON events; terminal text is never scraped.
 
 The current registry contains:
 
-| Adapter | CLI | Protocol | Incremental messages | Context policy | Structured reasoning |
-| --- | --- | --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.220 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | `stream_event` thinking/text deltas and complete assistant blocks |
-| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default; no unsupported adapter flag is added | Official reasoning summary/item events when emitted |
-| `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | Structured `reasoning`/`thinking` parts when emitted |
-| `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `message_update` 的结构化文本/思考事件 |
+| Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
+| --- | --- | --- | --- | --- | --- | --- |
+| `claude-code` | Claude Code 2.1.220 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
+| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default | `model_context_window` | Official reasoning summary/item events when emitted |
+| `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
+| `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
 
 四个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
 只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，
 每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 不依赖 MCP，只使用 HTTP Capability API。
+
+通用 `context_window_tokens` 范围为 1024–10000000。Credential 顶层值是客户端基准，RoleConfig 同名值优先；两者为空时保留 Provider / CLI 默认，建 Job 时冻结解析结果。它只控制客户端预算/压缩落点，不提高 Provider、模型 ID 或账号实际开放的上游窗口；模型目录也只登记 ID，不根据名称或营销标签推断长上下文能力。
 
 宿主只恢复明确的临时上游故障（HTTP 408/429/500/502/503/504、timeout 和
 network）。它在同一沙箱内按已捕获的精确 session ID 最多恢复三次，并使用

@@ -18,6 +18,28 @@ test("agent pack parser accepts a credential-free v1 package", () => {
   assert.deepEqual(pack.config.credentials, []);
 });
 
+test("agent pack round-trips a validated context window budget and defaults it to null", () => {
+  const base = {
+    schema: AGENT_PACK_SCHEMA,
+    name: "context_pack",
+    title: "Context pack",
+    description: "Context budget fixture",
+    publisher: "local",
+    version: "1.0.0",
+  };
+  assert.equal(parseAgentPack(JSON.stringify({ ...base, config: {} })).config.context_window_tokens, null);
+  assert.equal(
+    parseAgentPack(JSON.stringify({ ...base, config: { context_window_tokens: 1_000_000 } })).config.context_window_tokens,
+    1_000_000,
+  );
+  for (const invalid of [1023, 10_000_001, 1024.5, "1000000"]) {
+    assert.throws(
+      () => parseAgentPack(JSON.stringify({ ...base, config: { context_window_tokens: invalid } })),
+      /context_window_tokens/,
+    );
+  }
+});
+
 test("agent pack parser rejects credentials and secret-like environment keys", () => {
   const base = {
     schema: AGENT_PACK_SCHEMA,

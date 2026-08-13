@@ -19,9 +19,8 @@ import {
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
-import { resolveEffectiveModel } from "../../provider-settings.js";
+import { parseContextWindowTokens, resolveEffectiveModel } from "../../provider-settings.js";
 import { parseSandboxLimitsOverride } from "../role-runtime-snapshot/sandbox-limits.js";
-
 const ReasoningEffort = z.enum(["low", "medium", "high", "xhigh"]);
 const RoleBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
@@ -37,6 +36,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     agent_cli: z.enum(["claude-code", "open-code", "codex", "pi"]).default("claude-code"),
     model: z.string().nullish(),
     reasoning: ReasoningEffort.nullish(),
+    context_window_tokens: z.unknown().optional(),
     env_keys: z.array(z.string()).default([]),
     env_vars: z.record(z.string(), z.string()).default({}),
     modules: z.array(z.string()).default([]),
@@ -72,6 +72,11 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       return "sandbox_limits numeric overrides are only allowed on project RoleConfigs";
     }
     const envErr = validateEnvVars(body.env_vars);
+    try {
+      parseContextWindowTokens(body.context_window_tokens);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
     if (envErr) return envErr;
     for (const key of body.env_keys) {
       if (!config.runtime.isEnvKeyAllowed(key)) return `env_key 不在白名单: ${key}`;
@@ -172,8 +177,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       agent_cli: body.agent_cli,
       model: body.model ?? null,
       reasoning: body.reasoning ?? null,
-      env_keys: body.env_keys as never,
+      context_window_tokens: parseContextWindowTokens(body.context_window_tokens),
       env_vars_json: body.env_vars as never,
+      env_keys: body.env_keys as never,
       modules_json: body.modules as never,
       skills_json: body.skills as never,
       commands_json: body.commands as never,
@@ -264,7 +270,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       WHERE role_config_id = ${configId} ORDER BY path`;
     return {
       ...(cfg as Record<string, unknown>),
-      // 项目镜像由项目策略解析，历史 RoleConfig 列值不得再展示为有效配置。
+      context_window_tokens: cfg.context_window_tokens == null ? null : Number(cfg.context_window_tokens),
       runtime_image_key: cfg.project_id ? null : cfg.runtime_image_key ?? null,
       credentials: creds.map((credential) => ({
         ...credential,
@@ -428,9 +434,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const rows = await sql`
       SELECT rc.id, rc.role_id, r.name AS role_name, r.title AS role_title,
              r.kind AS role_kind, r.builtin AS role_builtin, r.ui_color AS role_ui_color,
-             rc.project_id, p.name AS project_name, rc.agent_cli, rc.model, rc.version,
+             rc.project_id, p.name AS project_name, rc.agent_cli, rc.model,
+             rc.context_window_tokens, rc.version,
              CASE WHEN rc.project_id IS NULL THEN rc.runtime_image_key ELSE NULL END AS runtime_image_key,
-             rc.sandbox_limits_json,
              c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
              c.provider AS credential_provider, c.status AS credential_status
       FROM role_configs rc
@@ -453,6 +459,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         r.name`;
     return rows.map((row) => ({
       ...row,
+      context_window_tokens: row.context_window_tokens == null ? null : Number(row.context_window_tokens),
       runtime_image_key: row.runtime_image_key ?? null,
       role_kind: row.role_kind ?? "role",
       role_builtin: Boolean(row.role_builtin),

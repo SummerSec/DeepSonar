@@ -24,6 +24,7 @@ const DEFAULT_CONFIG: RoleConfigInput = {
   agent_cli: "claude-code",
   model: null,
   reasoning: null,
+  context_window_tokens: null,
   env_keys: [],
   env_vars: {},
   modules: [],
@@ -39,7 +40,7 @@ const DEFAULT_CONFIG: RoleConfigInput = {
 };
 
 const CONFIG_KEYS = new Set([
-  "agent_cli", "model", "reasoning", "env_keys", "env_vars", "modules", "skills", "commands", "mcps",
+  "agent_cli", "model", "reasoning", "context_window_tokens", "env_keys", "env_vars", "modules", "skills", "commands", "mcps",
   "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "credentials", "config_files",
 ]);
 const SECRET_FIELD = /^(?:api_?key|access_token|api_token|auth_token|refresh_token|client_secret|private_key|secret|password|authorization|cookie|credential(?:s|_id)?)$/i;
@@ -143,10 +144,20 @@ export function parseAgentPack(input: string): AgentPack {
   const agentCli = agentCliValue as RoleConfigInput["agent_cli"];
   const reasoning = rawConfig.reasoning ?? null;
   if (reasoning !== null && !["low", "medium", "high", "xhigh"].includes(String(reasoning))) throw new Error("config.reasoning 不受支持");
+  const rawContextWindowTokens = rawConfig.context_window_tokens ?? null;
+  if (rawContextWindowTokens !== null && (
+    typeof rawContextWindowTokens !== "number"
+    || !Number.isSafeInteger(rawContextWindowTokens)
+    || rawContextWindowTokens < 1_024
+    || rawContextWindowTokens > 10_000_000
+  )) {
+    throw new Error("config.context_window_tokens 必须是 1024–10000000 的整数或 null");
+  }
   const config: RoleConfigInput = {
     agent_cli: agentCli,
     model: nullableString(rawConfig.model, "config.model"),
     reasoning: reasoning as RoleConfigInput["reasoning"],
+    context_window_tokens: rawContextWindowTokens as number | null,
     env_keys: envKeys,
     env_vars: envVars,
     modules: stringArray(rawConfig.modules, "config.modules"),

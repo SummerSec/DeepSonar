@@ -36,7 +36,7 @@ import {
   type Encrypted,
 } from "../../credentials.js";
 import { CredentialProbeError, listCredentialModels, listCredentialModelsPreview, testCredential } from "../../credential-test.js";
-import { extractBaseUrlFromSettings, normalizeProviderSettings, resolveEffectiveModel } from "../../provider-settings.js";
+import { extractBaseUrlFromSettings, normalizeProviderSettings, parseContextWindowTokens, resolveEffectiveModel } from "../../provider-settings.js";
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   PLATFORM_DEFAULT_AGENT_CLI,
@@ -71,7 +71,13 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     /** CC Switch agent_cli column for this profile (llm_provider only). */
     agent_cli: AgentCliSchema.nullable().optional(),
     /** Full CLI settingsConfig (may include plaintext keys); empty = legacy env path. */
-    settings_config: z.record(z.string(), z.unknown()).optional(),
+    settings_config: z.record(z.string(), z.unknown()).optional().superRefine((value, ctx) => {
+      try {
+        parseContextWindowTokens(value?.context_window_tokens);
+      } catch (error) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : String(error), path: ["context_window_tokens"] });
+      }
+    }),
     /** Manager-only meta (apiFormat, fullUrl, reasoning maps, …). */
     meta: z.record(z.string(), z.unknown()).optional(),
   });
@@ -738,10 +744,15 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         name: z.string().trim().min(1).max(100).optional(),
         provider: z.string().trim().min(1).max(50).optional(),
         project_id: z.string().uuid().nullable().optional(),
-        /** 整体替换 public_metadata_json（非密钥：base_url 等）；传 {} 可清空 */
         metadata: z.record(z.string(), z.unknown()).optional(),
         agent_cli: AgentCliSchema.nullable().optional(),
-        settings_config: z.record(z.string(), z.unknown()).optional(),
+        settings_config: z.record(z.string(), z.unknown()).optional().superRefine((value, ctx) => {
+          try {
+            parseContextWindowTokens(value?.context_window_tokens);
+          } catch (error) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : String(error), path: ["context_window_tokens"] });
+          }
+        }),
         meta: z.record(z.string(), z.unknown()).optional(),
       })
       .refine((b) => b.name !== undefined || b.provider !== undefined || b.project_id !== undefined || b.metadata !== undefined || b.agent_cli !== undefined || b.settings_config !== undefined || b.meta !== undefined, {

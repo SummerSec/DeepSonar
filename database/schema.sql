@@ -1065,6 +1065,7 @@ CREATE TABLE role_configs (
   agent_cli text NOT NULL DEFAULT 'claude-code',
   model text,
   reasoning text,
+  context_window_tokens int,
   env_keys text[] NOT NULL DEFAULT '{}',
   env_vars_json jsonb NOT NULL DEFAULT '{}',
   modules_json jsonb NOT NULL DEFAULT '[]',
@@ -1080,7 +1081,9 @@ CREATE TABLE role_configs (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT role_configs_reasoning_check
-    CHECK (reasoning IS NULL OR reasoning IN ('low', 'medium', 'high', 'xhigh'))
+    CHECK (reasoning IS NULL OR reasoning IN ('low', 'medium', 'high', 'xhigh')),
+  CONSTRAINT role_configs_context_window_tokens_check
+    CHECK (context_window_tokens IS NULL OR (context_window_tokens >= 1024 AND context_window_tokens <= 10000000))
 );
 CREATE UNIQUE INDEX role_configs_global_uniq
   ON role_configs (role_id) WHERE project_id IS NULL;

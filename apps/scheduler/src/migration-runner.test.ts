@@ -24,6 +24,8 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.equal(SCHEMA_VERSION, 28);
   assert.match(body, /runtime_registry_channel\s+text\s+NOT\s+NULL\s+DEFAULT\s+'aliyun-acr'/i);
   assert.match(body, /sandbox_limits_json\s+jsonb\s+NOT\s+NULL\s+DEFAULT\s+'\{\}'/i);
+  assert.match(body, /context_window_tokens\s+int/i);
+  assert.match(body, /context_window_tokens\s+IS\s+NULL\s+OR\s+\(context_window_tokens\s+>=\s+1024\s+AND\s+context_window_tokens\s+<=\s+10000000\)/i);
   assert.match(body, /'deepsonar-chrome-audit'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /'deepsonar-chrome-test'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /'deepsonar-chrome-fuzz'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);

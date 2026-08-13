@@ -182,6 +182,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
           agent_cli: rc.agent_cli,
           model: rc.model,
           reasoning: rc.reasoning,
+          context_window_tokens: rc.context_window_tokens,
           env_keys: rc.env_keys,
           env_vars: safe,
           env_vars_redacted: redacted_keys,
@@ -563,6 +564,15 @@ export async function applyPlatformImport(
 
         const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
         const model = typeof rc.model === "string" && rc.model ? rc.model : null;
+        const rawContextWindowTokens = rc.context_window_tokens ?? null;
+        if (rawContextWindowTokens !== null && (
+          typeof rawContextWindowTokens !== "number"
+          || !Number.isSafeInteger(rawContextWindowTokens)
+          || rawContextWindowTokens < 1_024
+          || rawContextWindowTokens > 10_000_000
+        )) {
+          throw new Error(`全局 RoleConfig ${roleName}.context_window_tokens 必须是 1024–10000000 的整数或 null`);
+        }
         const moduleSelectors = rc.modules_json == null
           ? []
           : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${roleName}.modules_json`);
@@ -579,6 +589,7 @@ export async function applyPlatformImport(
             agent_cli: agentCli,
             model,
             reasoning: (rc.reasoning as string) ?? null,
+            context_window_tokens: rawContextWindowTokens as number | null,
             env_keys: (rc.env_keys as string[]) ?? [],
             env_vars_json: ((rc.env_vars as object) ?? {}) as never,
             // Preserve legal plugin/source selectors exactly; resolution waits

@@ -143,6 +143,29 @@ export function extractBaseUrlFromSettingsClient(settings: Record<string, unknow
   return "";
 }
 
+export const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
+export const CONTEXT_WINDOW_TOKENS_MAX = 10_000_000;
+
+export function extractContextWindowTokens(settings: Record<string, unknown> | null | undefined): string {
+  const value = settings?.context_window_tokens;
+  return typeof value === "number" && Number.isSafeInteger(value) ? String(value) : "";
+}
+
+export function parseContextWindowTokens(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < CONTEXT_WINDOW_TOKENS_MIN || value > CONTEXT_WINDOW_TOKENS_MAX) {
+    throw new Error(`上下文预算必须是 ${CONTEXT_WINDOW_TOKENS_MIN}–${CONTEXT_WINDOW_TOKENS_MAX} 的整数`);
+  }
+  return value;
+}
+
+function patchContextWindowTokens(settings: Record<string, unknown>, value: number | null): Record<string, unknown> {
+  if (value === null) delete settings.context_window_tokens;
+  else settings.context_window_tokens = value;
+  return settings;
+}
+
 /** Build settingsConfig object from editor state (create & edit share this). */
 export function buildSettingsConfigFromEditor(input: {
   agentCli: AgentCli;
@@ -152,10 +175,17 @@ export function buildSettingsConfigFromEditor(input: {
   secret: string;
   baseUrl: string;
   provider: string;
+  contextWindowTokens: string;
   /** When empty and settings empty, synthesize default skeleton. */
   allowEmptyDefault?: boolean;
 }): { ok: true; settings: Record<string, unknown>; pastedAsIs: boolean } | { ok: false; error: string } {
-  const { agentCli, settingsJson, tomlText, authJson, secret, baseUrl, provider } = input;
+  const { agentCli, settingsJson, tomlText, authJson, secret, baseUrl, provider, contextWindowTokens } = input;
+  let parsedContextWindowTokens: number | null;
+  try {
+    parsedContextWindowTokens = parseContextWindowTokens(contextWindowTokens);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
   if (agentCli === "codex") {
     const toml = validateTomlText(tomlText);
     if (!toml.ok) return { ok: false, error: `config.toml 无效：${toml.error}${toml.line ? `（约第 ${toml.line} 行）` : ""}` };
@@ -166,13 +196,14 @@ export function buildSettingsConfigFromEditor(input: {
       : tomlText.replace(/\r\n/g, "\n");
     const authSettings = auth.empty ? {} : structuredClone(auth.value);
     if (secret.trim()) authSettings.OPENAI_API_KEY = secret.trim();
+    const settings = patchContextWindowTokens({
+      auth: Object.keys(authSettings).length > 0 ? authSettings : { OPENAI_API_KEY: secret },
+      config: configText,
+    }, parsedContextWindowTokens);
     return {
       ok: true,
       pastedAsIs: !auth.empty || !toml.empty,
-      settings: {
-        auth: Object.keys(authSettings).length > 0 ? authSettings : { OPENAI_API_KEY: secret },
-        config: configText,
-      },
+      settings,
     };
   }
   const validation = validateJsonObjectText(settingsJson);
@@ -197,7 +228,7 @@ export function buildSettingsConfigFromEditor(input: {
         settings.options = options;
       }
     }
-    return { ok: true, pastedAsIs: true, settings };
+    return { ok: true, pastedAsIs: true, settings: patchContextWindowTokens(settings, parsedContextWindowTokens) };
   }
   if (input.allowEmptyDefault === false) {
     return { ok: false, error: "settingsConfig 不能为空" };
@@ -212,13 +243,13 @@ export function buildSettingsConfigFromEditor(input: {
     const url = baseUrl.trim().replace(/\/+$/u, "");
     if (url) env.ANTHROPIC_BASE_URL = url;
     else if (provider === "anthropic") env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
-    return { ok: true, pastedAsIs: false, settings: { env } };
+    return { ok: true, pastedAsIs: false, settings: patchContextWindowTokens({ env }, parsedContextWindowTokens) };
   }
   // open-code
   return {
     ok: true,
     pastedAsIs: false,
-    settings: defaultOpenCodeSettings(secret, baseUrl, provider),
+    settings: patchContextWindowTokens(defaultOpenCodeSettings(secret, baseUrl, provider), parsedContextWindowTokens),
   };
 }
 
@@ -245,6 +276,8 @@ export function CredentialConfigEditor({
   onTomlTextChange,
   authJson,
   onAuthJsonChange,
+  contextWindowTokens,
+  onContextWindowTokensChange,
   modelOptions = [],
   onFetchModels,
   fetchingModels = false,
@@ -280,6 +313,8 @@ export function CredentialConfigEditor({
   onAuthJsonChange: (value: string) => void;
   modelOptions?: string[];
   onFetchModels?: () => void;
+  contextWindowTokens: string;
+  onContextWindowTokensChange: (value: string) => void;
   fetchingModels?: boolean;
   canFetchModels?: boolean;
   onNotice?: (message: string) => void;
@@ -298,7 +333,15 @@ export function CredentialConfigEditor({
     );
     return entries;
   }, [agentCli, providerCatalog]);
-  const configValid = agentCli === "codex" ? tomlValidation.ok && authValidation.ok : settingsValidation.ok;
+  const contextWindowValid = useMemo(() => {
+    try {
+      parseContextWindowTokens(contextWindowTokens);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [contextWindowTokens]);
+  const configValid = (agentCli === "codex" ? tomlValidation.ok && authValidation.ok : settingsValidation.ok) && contextWindowValid;
   const secretFromConfig = useMemo(() => {
     if (agentCli === "codex") {
       if (authValidation.ok && !authValidation.empty) return extractSecretFromSettings({ auth: authValidation.value });
@@ -401,6 +444,26 @@ export function CredentialConfigEditor({
             : projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
         </select>
       </div>
+      <label className="block">
+        <span className="mb-1.5 block font-mono text-[11px] text-zinc-500">CLI 客户端上下文预算（tokens，可选）</span>
+        <input
+          type="number"
+          min={CONTEXT_WINDOW_TOKENS_MIN}
+          max={CONTEXT_WINDOW_TOKENS_MAX}
+          step={1}
+          value={contextWindowTokens}
+          onChange={(event) => onContextWindowTokensChange(event.target.value)}
+          className="theme-input-surface w-full"
+          placeholder="留空使用 Provider / CLI 默认"
+          aria-label="CLI 客户端上下文预算"
+          aria-invalid={!contextWindowValid}
+        />
+        <span className={`mt-1 block text-[11px] ${contextWindowValid ? "text-zinc-600" : "text-red-300"}`}>
+          {contextWindowValid
+            ? `范围 ${CONTEXT_WINDOW_TOKENS_MIN}–${CONTEXT_WINDOW_TOKENS_MAX}；只限制 CLI 客户端预算，不会提升上游模型能力。`
+            : `请输入 ${CONTEXT_WINDOW_TOKENS_MIN}–${CONTEXT_WINDOW_TOKENS_MAX} 的整数。`}
+        </span>
+      </label>
 
       {agentCli === "claude-code" ? (
         <CcSwitchClaudeFields

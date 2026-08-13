@@ -352,6 +352,8 @@ export interface JobDetail {
     finished_at: string | null;
     payload_json: Record<string, unknown>;
     agent_snapshot_json: Record<string, unknown>;
+    /** 冻结的通用客户端上下文预算；Claude 仅展示。 */
+    context_window_tokens?: number | null;
   };
   events: JobEvent[];
   findings: { id: string; severity: string; title: string; verify_status: string }[];
@@ -785,9 +787,10 @@ export interface BindableRoleConfig {
   role_ui_color?: string | null;
   project_id: string | null;
   project_name: string | null;
-  scope: "global" | "project";
   agent_cli: "claude-code" | "open-code" | "codex" | "pi";
   model: string | null;
+  context_window_tokens: number | null;
+  scope: "global" | "project";
   /** null = 系统默认底座（deepsonar-base） */
   runtime_image_key: string | null;
   version: number;
@@ -1067,8 +1070,10 @@ export type RoleConfigInput = {
   model?: string | null;
   /** 思考强度；null = provider 默认 */
   reasoning?: ReasoningEffort | null;
-  env_keys: string[];
+  /** 通用客户端上下文预算；不会提升上游模型能力。 */
+  context_window_tokens?: number | null;
   /** 非敏感环境变量（疑似密钥名会被后端拒绝，引导改用 Credential） */
+  env_keys: string[];
   env_vars: Record<string, string>;
   /** 原始模块 selector：source:module（兼容）/source:plugin:path/source:source:*。 */
   modules: string[];
@@ -1096,9 +1101,9 @@ export interface RoleConfigView {
   agent_cli: "claude-code" | "open-code" | "codex" | "pi";
   model: string | null;
   reasoning: ReasoningEffort | null;
+  context_window_tokens: number | null;
   env_keys: string[];
   env_vars_json: Record<string, string>;
-  /** 保存原始 selector 意图；Job 创建时才按当前 trusted catalog 展开。 */
   modules_json: string[];
   skills_json: Record<string, unknown>[];
   commands_json: Record<string, unknown>[];

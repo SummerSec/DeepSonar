@@ -10,7 +10,9 @@ import {
   legacySettingsConfig,
   materializeProviderSettings,
   normalizeProviderSettings,
+  parseContextWindowTokens,
   providerSettingsForJobSnapshot,
+  resolveContextWindowTokens,
   resolveEffectiveModel,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
@@ -269,4 +271,43 @@ test("Job snapshot Provider settings retain routing/model data but no long-lived
     config: 'model = "gpt-5"\n\n',
   });
   assert.doesNotMatch(JSON.stringify(snapshot), /long-lived|nested-secret|plain-token|plain-key|toml-secret/);
+});
+
+test("context_window_tokens enforces bounds and RoleConfig precedence", () => {
+  for (const invalid of [1023, 10_000_001, 1024.5, "128000"]) {
+    assert.throws(() => parseContextWindowTokens(invalid), /安全整数/);
+  }
+  assert.equal(parseContextWindowTokens(1024), 1024);
+  assert.equal(parseContextWindowTokens(10_000_000), 10_000_000);
+  assert.equal(parseContextWindowTokens(null), null);
+  assert.equal(resolveContextWindowTokens({ settingsConfig: { context_window_tokens: 64_000 } }), 64_000);
+  assert.equal(resolveContextWindowTokens({ roleContextWindowTokens: 128_000, settingsConfig: { context_window_tokens: 64_000 } }), 128_000);
+  assert.equal(resolveContextWindowTokens({ roleContextWindowTokens: null, settingsConfig: { context_window_tokens: 64_000 } }), 64_000);
+});
+
+test("OpenCode context_window_tokens requires an existing output limit", () => {
+  assert.throws(
+    () => materializeProviderSettings({
+      agentCli: "open-code",
+      settingsConfig: { context_window_tokens: 64_000, models: { "gpt-5": { name: "gpt-5" } } },
+    }),
+    /缺少既有 limit\.output/,
+  );
+});
+test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {
+  assert.throws(() => materializeProviderSettings({ agentCli: "codex", settingsConfig: { context_window_tokens: 1023 } }), /1024/);
+  const settings = { context_window_tokens: 128000, config: 'model = "gpt-5"\n[model_providers.custom]\nbase_url = "https://example"\n', auth: { OPENAI_API_KEY: "secret" } };
+  const snapshot = providerSettingsForJobSnapshot(settings);
+  assert.equal(snapshot.context_window_tokens, 128000);
+  const codex = materializeProviderSettings({ agentCli: "codex", settingsConfig: snapshot });
+  assert.match(codex[1]!.content, /model_context_window = 128000/);
+  const openCode = materializeProviderSettings({ agentCli: "open-code", settingsConfig: { context_window_tokens: 64000, models: { "gpt-5": { name: "gpt-5", limit: { output: 4096 } } } } });
+  const openCodeModel = (JSON.parse(openCode[0]!.content) as { provider: { deepsonar: { models: Record<string, { limit: Record<string, number> }> } } }).provider.deepsonar.models["gpt-5"];
+  assert.deepEqual(openCodeModel.limit, { output: 4096, context: 64000 });
+  const pi = materializeProviderSettings({ agentCli: "pi", settingsConfig: { context_window_tokens: 32000, provider: "openai", models: [{ id: "gpt-5" }] } });
+  const piModel = (JSON.parse(pi[0]!.content) as { providers: { deepsonar: { models: Array<{ contextWindow: number }> } } }).providers.deepsonar.models[0];
+  assert.equal(piModel.contextWindow, 32000);
+  const claude = materializeProviderSettings({ agentCli: "claude-code", settingsConfig: { context_window_tokens: 32000, env: { ANTHROPIC_MODEL: "claude" } } });
+  const claudeConfig = JSON.parse(claude[0]!.content) as Record<string, unknown>;
+  assert.equal(claudeConfig.context_window_tokens, undefined);
 });

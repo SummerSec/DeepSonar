@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { buildSettingsConfigFromEditor } from "./CredentialConfigEditor";
 
 const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
 const panel = readFileSync(new URL("./CredentialsPanel.tsx", import.meta.url), "utf8");
@@ -63,6 +64,59 @@ test("Provider account flow keeps the happy path on one surface", () => {
   assert.match(claudeFields, /获取模型列表/);
   assert.match(claudeFields, /模型配置/);
   assert.match(flow, /配置文件 ·/);
+});
+
+test("Provider create/edit persists a validated top-level context window budget", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const roleEditor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+  const jobDetail = readFileSync(new URL("./JobDetailPanel.tsx", import.meta.url), "utf8");
+  for (const marker of [
+    "contextWindowTokens: string",
+    "patchContextWindowTokens",
+    "settings.context_window_tokens = value",
+    "delete settings.context_window_tokens",
+    "1_024",
+    "10_000_000",
+    "不会提升上游模型能力",
+  ]) {
+    assert.ok(editor.includes(marker), `credential editor should preserve context budget contract: ${marker}`);
+  }
+  assert.match(flow, /setEditContextWindowTokens\(extractContextWindowTokens\(settings\)\)/);
+  assert.match(flow, /contextWindowTokens: createContextWindowTokens/);
+  assert.match(flow, /contextWindowTokens: editContextWindowTokens/);
+  assert.match(roleEditor, /context_window_tokens: contextWindowTokensFromForm\(form\.context_window_tokens\)/);
+  assert.match(roleEditor, /cfg\.context_window_tokens == null \? "" : String\(cfg\.context_window_tokens\)/);
+  assert.match(jobDetail, /snapStr\(snapshot, "context_window_tokens"\)/);
+  assert.match(jobDetail, /CLI 客户端上下文预算/);
+});
+
+test("settings builder patches or removes the top-level context budget for every CLI shape", () => {
+  const common = {
+    settingsJson: "{}",
+    tomlText: "model = \"gpt-5\"",
+    authJson: "{}",
+    secret: "secret",
+    baseUrl: "https://example.test/v1",
+    provider: "openai",
+  };
+  for (const agentCli of ["claude-code", "open-code", "pi", "codex"] as const) {
+    const added = buildSettingsConfigFromEditor({ ...common, agentCli, contextWindowTokens: "1000000" });
+    assert.equal(added.ok, true);
+    if (added.ok) assert.equal(added.settings.context_window_tokens, 1_000_000);
+    const removed = buildSettingsConfigFromEditor({
+      ...common,
+      agentCli,
+      settingsJson: '{"context_window_tokens":1000000}',
+      contextWindowTokens: "",
+    });
+    assert.equal(removed.ok, true);
+    if (removed.ok) assert.equal("context_window_tokens" in removed.settings, false);
+  }
+  for (const contextWindowTokens of ["1023", "10000001", "1024.5", "not-a-number"]) {
+    const invalid = buildSettingsConfigFromEditor({ ...common, agentCli: "claude-code", contextWindowTokens });
+    assert.equal(invalid.ok, false);
+    if (!invalid.ok) assert.match(invalid.error, /1024.*10000000/);
+  }
 });
 
 test("项目角色镜像只能由项目镜像策略管理", () => {

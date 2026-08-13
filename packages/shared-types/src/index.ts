@@ -52,6 +52,11 @@ export const ROLE_UI_COLOR_ASSIGNABLE = [
   "#fef08a",
 ] as const;
 
+/** 通用客户端上下文预算；不会提升上游模型能力。 */
+export const CONTEXT_WINDOW_TOKENS_MIN = 1024;
+export const CONTEXT_WINDOW_TOKENS_MAX = 10_000_000;
+export const ContextWindowTokens = z.number().int().safe().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX).nullable();
+export type ContextWindowTokens = z.infer<typeof ContextWindowTokens>;
 // ---------- 枚举（一律字符串，不用 DB enum，见 ARCHITECTURE §17.1） ----------
 
 export const JobStatus = z.enum([

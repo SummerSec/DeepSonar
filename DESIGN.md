@@ -190,7 +190,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 平台 OpenAPI + 静态控制 Skill | #135 | **第一阶段已落地**：现有 MCP 暂作过渡通道；真实 Job 注入静态 `deepsonar-control` Skill，并以独立短期 capability token 访问按冻结 operation allowlist 过滤的 `/control/v1/jobs/:jobId` capabilities/OpenAPI/operation API。API 与 MCP 共用宿主 semantic handler 和 Scheduler 权威副作用；当前由 Agent 对每个逻辑操作自行选择一个通道，长期统一到 API 并淘汰 MCP；未来新平台工具只扩展 API。 |
 | Agent Runtime Context 生命周期与恢复身份 | #138 | **已落地基础契约**：Executor 为每个 Attempt 生成稳定 `context_id`/revision 与只含摘要的 transform manifest，按 attempt state 和 Job runtime evidence 持久化；`context.compacted` 严格校验身份、链摘要、顺序并支持幂等重放，无法观测或不支持时显式记录而不伪造压缩。恢复前必须取得实际上下文身份并逐字段匹配，缺失或不一致则拒绝恢复；Pi 使用精确 session 文件，不选择 latest。Job 详情只展示有界诊断，不展示 prompt 或 provider 原文。 |
 | Pi Coding Agent RPC Runtime Adapter 与 Capability API | #140 | **已落地**：Pi 固定使用 `pi --mode rpc --no-approve` 的严格 LF JSONL 协议，平台控制通过 Job 级 HTTP Capability API，不物化或注入 MCP；`agent_settled` 只提供运行时静止信号，Job 成功仍须经过 `mark_job_done` 完成门。`get_state` 返回的精确 `sessionFile` 用于恢复，暂态错误最多同会话重试三次；模型配置经 Gateway 物化为 `models.json`。项目 `.pi` 不自动加载，默认 `--no-extensions`，受治理扩展才通过冻结配置显式 `--extension` 加载。 |
-| Anthropic 兼容网关模型探测 | #144 | **健康检查缺陷已修复**：模型目录按有序候选探测，兼容子路径仅在 404/405 时剥离回退；长上下文模型变体仍需独立定义跨 Credential、RoleConfig、Runtime Adapter 与 Gateway 的映射契约 |
+| 通用长上下文预算 | #144 | **已完成**：模型目录只登记 Provider 返回的模型 ID，不把 “1M” 等营销标签推导成能力。Credential `settings_config_json.context_window_tokens` 提供 1024–10000000 的 CLI 客户端基准预算，RoleConfig 同名字段可覆盖，`null` 依次继承 Credential、Provider/CLI 默认；新 Job 冻结解析值，旧 Job 不变。该预算不提升上游模型能力，真实可用窗口仍受 Provider、模型 ID 与账号权限限制。Codex 落到 `model_auto_compact_token_limit`，OpenCode 落到模型 `limit.context`，Pi 落到 `models.json` 的 `contextWindow`；Claude Code 没有受支持的绝对窗口设置，因此只冻结/展示，不伪造环境变量或 CLI 参数。 |
 | Runtime Platform API 能力一致性 | #145 | **已完成当前阶段**：四个治理 adapter 均声明 Job 级 HTTP `platformControlApi`；Claude Code、Codex、OpenCode 当前同时向 Agent 提供 MCP 与 API，由 Agent 对每个逻辑操作自行二选一，Pi 仅使用 API。长期统一到 API 并淘汰 MCP |
 | 项目镜像继承一致性 | #146 | `inherit_global` 继续只认全局 RoleConfig 镜像；`project_managed` 只认项目 `role_runtime_images` 映射。修复遗留项目 RoleConfig `runtime_image_key` 在导入、展示或 readiness 中被误当作有效配置的问题，不恢复 #130 已删除的独立项目镜像覆盖 |
 
@@ -203,7 +203,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v27）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
+| `database/schema.sql` | 唯一 schema 基线（当前 v28）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

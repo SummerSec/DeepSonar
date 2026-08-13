@@ -346,6 +346,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const snapshot = (detail?.job.agent_snapshot_json ?? null) as Record<string, unknown> | null;
   const agentCli = snapStr(snapshot, "agent_cli");
   const model = snapStr(snapshot, "model");
+  const contextWindowTokens = snapStr(snapshot, "context_window_tokens");
   const roleName = snapStr(snapshot, "name");
   const credentialId = snapStr(snapshot, "credential_id");
   const runtimeImageKey = snapRuntimeImageKey(snapshot);
@@ -965,6 +966,11 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                     <div className="grid gap-2 sm:grid-cols-2">
                       <ConfigField label="CLI 工具 (agent_cli)" value={agentCli} />
                       <ConfigField label="模型 (model)" value={model} />
+                      <ConfigField
+                        label="CLI 客户端上下文预算"
+                        value={contextWindowTokens === "—" ? "Provider / CLI 默认" : `${contextWindowTokens} tokens`}
+                        title="创建 Job 时冻结；这是客户端预算，不代表或提升上游模型能力。"
+                      />
                       <ConfigField label="角色 (name)" value={roleName} />
                       <ConfigField label="角色类型 (role_kind)" value={snapStr(snapshot, "role_kind")} />
                       <ConfigField

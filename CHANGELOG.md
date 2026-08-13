@@ -6,6 +6,10 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+### Added
+
+- 增加通用 CLI 客户端上下文预算：Credential 基准、RoleConfig 覆盖、Job 冻结展示、Agent 配置包和平台导入导出均使用 1024–10000000 的统一范围；Codex/OpenCode/Pi 物化到各自受支持落点，Claude Code 只冻结展示且不伪造绝对窗口设置。该预算不会提升 Provider、模型或账号的上游能力。Refs #144
+
 ### Fixed
 
 - 修复 Job 控制能力元数据：Claude Code、Codex、OpenCode 与 Pi 现在均如实声明已注入的 HTTP Platform Control API；支持 MCP 的运行时仍保留过渡通道，由 Agent 对每次逻辑操作自行二选一。

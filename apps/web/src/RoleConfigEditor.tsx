@@ -32,7 +32,7 @@ import {
 } from "./module-selector-state";
 
 /**
- * 角色配置编辑器：指令 / 平台工具 / 模块。
+ * 角色配置编辑器：指令 / 平台工具 / 模块 / CLI 客户端上下文预算覆盖。
  * Agent CLI、模型、LLM 凭据、settings/env 由 Provider 账号页承接；运行镜像由镜像页承接。
  * 保存时保留已有 agent_cli / credential / model / reasoning / env / runtime_image 绑定。
  */
@@ -63,6 +63,7 @@ interface ConfigForm {
   agent_cli: string;
   model: string;
   reasoning: ReasoningForm;
+  context_window_tokens: string;
   credential_id: string;
   env_keys: string[];
   env_vars: Record<string, string>;
@@ -86,6 +87,7 @@ const EMPTY: ConfigForm = {
   agent_cli: "claude-code",
   model: "",
   reasoning: "",
+  context_window_tokens: "",
   credential_id: "",
   env_keys: [],
   env_vars: {},
@@ -108,6 +110,7 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     agent_cli: cfg.agent_cli,
     model: cfg.model ?? "",
     reasoning: (cfg.reasoning as ReasoningForm | null) ?? "",
+    context_window_tokens: cfg.context_window_tokens == null ? "" : String(cfg.context_window_tokens),
     credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
     env_keys: cfg.env_keys ?? [],
     env_vars: cfg.env_vars_json ?? {},
@@ -139,6 +142,15 @@ function numericSandboxOverride(raw: string, label: string, min: number, max: nu
   const value = Number(raw);
   if (!Number.isFinite(value) || (integer && !Number.isSafeInteger(value)) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}${integer ? " (integer)" : ""}`);
+  }
+  return value;
+}
+
+function contextWindowTokensFromForm(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1_024 || value > 10_000_000) {
+    throw new Error("上下文预算必须是 1024–10000000 的整数");
   }
   return value;
 }
@@ -345,11 +357,12 @@ export function RoleConfigEditor({
 
   const submit = () => {
     try {
-      // agent_cli / 模型 / 凭据 / env / settings 由 Provider 页管理，原样回传。
+      // Provider 页管理 CLI、模型、凭据与 settings；这里编辑上下文预算覆盖并原样保留其余字段。
       const body: RoleConfigInput = {
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         model: form.model.trim() || null,
         reasoning: form.reasoning || null,
+        context_window_tokens: contextWindowTokensFromForm(form.context_window_tokens),
         env_keys: form.env_keys,
         env_vars: form.env_vars,
         modules: form.modules,
@@ -473,6 +486,27 @@ export function RoleConfigEditor({
                 );
               })}
             </div>
+          </div>
+          <div className="mt-4 border-t border-ink-700/60 pt-4">
+            <label className={labelCls}>
+              CLI 客户端上下文预算（tokens）
+              <HelpTip>
+                可选的 RoleConfig 覆盖，留空继承 Provider 账号 settings_config_json 顶层值，再留空则使用 Provider / CLI 默认。
+                这是 CLI 客户端预算，不会提升上游模型能力；Claude Code 仅冻结并展示该值，不伪造不受支持的绝对窗口设置。
+              </HelpTip>
+            </label>
+            <input
+              type="number"
+              min={1024}
+              max={10_000_000}
+              step={1}
+              value={form.context_window_tokens}
+              onChange={(event) => setForm((current) => ({ ...current, context_window_tokens: event.target.value }))}
+              placeholder="留空继承 Provider / CLI 默认"
+              className={inputCls}
+              aria-label="RoleConfig CLI 客户端上下文预算"
+            />
+            <span className="mt-1 block text-[11px] text-zinc-600">整数范围 1024–10000000；只影响下一 Job 的冻结客户端预算。</span>
           </div>
           <div className="mt-4 border-t border-ink-700/60 pt-4">
             <label className={labelCls}>

@@ -353,6 +353,16 @@ async function importRoleConfigs(
 
     const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
     const model = typeof rc.model === "string" && rc.model ? rc.model : null;
+    const rawContextWindowTokens = rc.context_window_tokens ?? null;
+    if (rawContextWindowTokens !== null && (
+      typeof rawContextWindowTokens !== "number"
+      || !Number.isSafeInteger(rawContextWindowTokens)
+      || rawContextWindowTokens < 1_024
+      || rawContextWindowTokens > 10_000_000
+    )) {
+      throw new Error(`RoleConfig ${roleName} 的 context_window_tokens 非法`);
+    }
+    const contextWindowTokens = rawContextWindowTokens as number | null;
 
     if (skipExisting) {
       const [ex] = await tx`
@@ -374,11 +384,9 @@ async function importRoleConfigs(
         agent_cli: agentCli,
         model,
         reasoning: (rc.reasoning as string) ?? null,
+        context_window_tokens: contextWindowTokens,
         env_keys: (rc.env_keys as string[]) ?? [],
         env_vars_json: ((rc.env_vars as object) ?? {}) as never,
-        // Keep legal plugin/source selectors byte-for-byte through transfer;
-        // they are resolved against the target's current trusted catalog only
-        // when a new Job snapshot is created.
         modules_json: moduleSelectors as never,
         skills_json: ((rc.skills_json as unknown) ?? []) as never,
         commands_json: ((rc.commands_json as unknown) ?? []) as never,
@@ -387,7 +395,6 @@ async function importRoleConfigs(
         platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
         sandbox_limits_json: sandboxLimits as never,
         instructions_markdown: (rc.instructions_markdown as string) ?? null,
-        // 项目 RoleConfig 的镜像由 projects.config_json 策略管理，清空导入包中的遗留列值。
         runtime_image_key: null,
         version: 1,
       })}

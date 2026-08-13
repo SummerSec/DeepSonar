@@ -24,6 +24,7 @@ import {
   type AgentCli,
   buildSettingsConfigFromEditor,
   CredentialConfigEditor,
+  extractContextWindowTokens,
   extractBaseUrlFromSettingsClient,
   extractSecretFromSettings,
   providerProtocolLabel,
@@ -193,6 +194,7 @@ export function ProviderAccountFlow({
   const [createSettingsJson, setCreateSettingsJson] = useState("");
   const [createTomlText, setCreateTomlText] = useState("");
   const [createAuthJson, setCreateAuthJson] = useState("");
+  const [createContextWindowTokens, setCreateContextWindowTokens] = useState("");
   const [createProjectId, setCreateProjectId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [editingCredentialId, setEditingCredentialId] = useState("");
@@ -203,6 +205,7 @@ export function ProviderAccountFlow({
   const [editSettingsJson, setEditSettingsJson] = useState("");
   const [editTomlText, setEditTomlText] = useState("");
   const [editAuthJson, setEditAuthJson] = useState("");
+  const [editContextWindowTokens, setEditContextWindowTokens] = useState("");
   const [editApiKey, setEditApiKey] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editOriginalSettings, setEditOriginalSettings] = useState<Record<string, unknown> | null>(null);
@@ -465,6 +468,7 @@ export function ProviderAccountFlow({
     setEditProvider(credential.provider);
     setEditAgentCli(cli);
     setEditProjectId(credential.project_id ?? "");
+    setEditContextWindowTokens(extractContextWindowTokens(settings));
     if (cli === "codex") {
       const auth = settings.auth && typeof settings.auth === "object" && !Array.isArray(settings.auth)
         ? settings.auth as Record<string, unknown>
@@ -517,6 +521,7 @@ export function ProviderAccountFlow({
       secret: createSecret,
       baseUrl: createBaseUrl,
       provider: createProvider,
+      contextWindowTokens: createContextWindowTokens,
       allowEmptyDefault: true,
     });
     if (!built.ok) {
@@ -550,6 +555,7 @@ export function ProviderAccountFlow({
       setCreateSettingsJson("");
       setCreateTomlText("");
       setCreateAuthJson("");
+      setCreateContextWindowTokens("");
       setSelectedCredentialId(created.id);
       setEditingCredentialId("");
       setShowCreate(false);
@@ -606,6 +612,7 @@ export function ProviderAccountFlow({
       secret: createSecret,
       baseUrl: createBaseUrl,
       provider: createProvider,
+      contextWindowTokens: createContextWindowTokens,
       allowEmptyDefault: true,
     });
     if (!built.ok) {
@@ -643,6 +650,7 @@ export function ProviderAccountFlow({
       secret: editApiKey,
       baseUrl: editBaseUrl,
       provider: editProvider,
+      contextWindowTokens: editContextWindowTokens,
       allowEmptyDefault: true,
     });
     if (!built.ok) {
@@ -920,6 +928,8 @@ export function ProviderAccountFlow({
               onTomlTextChange={setCreateTomlText}
               authJson={createAuthJson}
               onAuthJsonChange={setCreateAuthJson}
+              contextWindowTokens={createContextWindowTokens}
+              onContextWindowTokensChange={setCreateContextWindowTokens}
               modelOptions={createModels}
               onFetchModels={discoverCreateModels}
               fetchingModels={createDiscovering}
@@ -1032,6 +1042,8 @@ export function ProviderAccountFlow({
                         onTomlTextChange={setEditTomlText}
                         authJson={editAuthJson}
                         onAuthJsonChange={setEditAuthJson}
+                        contextWindowTokens={editContextWindowTokens}
+                        onContextWindowTokensChange={setEditContextWindowTokens}
                         modelOptions={models}
                         onFetchModels={discoverModels}
                         fetchingModels={discovering}

@@ -6,6 +6,11 @@
  */
 import { createHash } from "node:crypto";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import {
+  CONTEXT_WINDOW_TOKENS_MAX,
+  CONTEXT_WINDOW_TOKENS_MIN,
+  ContextWindowTokens,
+} from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { extractModelFromSettings } from "./provider-effective-model.js";
 export { extractModelFromSettings, resolveEffectiveModel } from "./provider-effective-model.js";
@@ -29,6 +34,27 @@ export interface MaterializedConfigFile {
 export interface ProviderSettingsOverrides {
   model?: string | null;
   reasoning?: "low" | "medium" | "high" | "xhigh" | null;
+  /** 通用客户端上下文预算；不会改变上游模型能力。 */
+  context_window_tokens?: number | null;
+}
+
+/** 校验通用客户端上下文预算；null 表示沿用 Provider/CLI 默认值。 */
+export function parseContextWindowTokens(value: unknown, fieldName = "context_window_tokens"): number | null {
+  if (value === undefined) return null;
+  const parsed = ContextWindowTokens.safeParse(value);
+  if (parsed.success) return parsed.data;
+  throw new Error(`${fieldName} 必须是 ${CONTEXT_WINDOW_TOKENS_MIN}..${CONTEXT_WINDOW_TOKENS_MAX} 范围内的安全整数，或 null`);
+}
+
+/** RoleConfig 覆盖优先于 Credential settings 顶层通用字段。 */
+export function resolveContextWindowTokens(input: {
+  roleContextWindowTokens?: unknown;
+  settingsConfig?: unknown;
+}): number | null {
+  const roleValue = parseContextWindowTokens(input.roleContextWindowTokens);
+  if (input.roleContextWindowTokens != null) return roleValue;
+  const settings = asObject(input.settingsConfig);
+  return parseContextWindowTokens(settings.context_window_tokens);
 }
 
 const AGENT_CLIS = new Set<string>(["claude-code", "codex", "open-code", "pi"]);
@@ -58,6 +84,11 @@ function parseJsonObject(content: string, path: string): Record<string, unknown>
   return parsed as Record<string, unknown>;
 }
 
+/** 从 settingsConfig 顶层读取并校验通用上下文预算。 */
+export function extractContextWindowTokens(settingsConfig: unknown): number | null {
+  return parseContextWindowTokens(asObject(settingsConfig).context_window_tokens);
+}
+
 const RUNTIME_SECRET_FIELD = /(?:^|_)(?:api_?key|access_?token|api_?token|auth_?token|oauth_?token|refresh_?token|client_?secret|private_?key|key|token|secret|password|authorization|cookie)$/iu;
 
 function scrubRuntimeSecretFields(value: unknown): unknown {
@@ -69,10 +100,13 @@ function scrubRuntimeSecretFields(value: unknown): unknown {
       .map(([key, entry]) => [key, scrubRuntimeSecretFields(entry)]),
   );
 }
-
 /** Secret-free Provider profile persisted into immutable Job snapshots. */
 export function providerSettingsForJobSnapshot(settingsConfig: unknown): Record<string, unknown> {
-  const snapshot = scrubRuntimeSecretFields(structuredClone(asObject(settingsConfig))) as Record<string, unknown>;
+  const source = asObject(settingsConfig);
+  const contextWindowTokens = parseContextWindowTokens(source.context_window_tokens);
+  const snapshot = scrubRuntimeSecretFields(structuredClone(source)) as Record<string, unknown>;
+  if (contextWindowTokens == null) delete snapshot.context_window_tokens;
+  else snapshot.context_window_tokens = contextWindowTokens;
   if (typeof snapshot.config === "string" && snapshot.config.trim()) {
     try {
       const parsed = scrubRuntimeSecretFields(parseToml(snapshot.config)) as Record<string, unknown>;
@@ -231,6 +265,14 @@ function applyCodexTomlOverrides(toml: string, overrides?: ProviderSettingsOverr
       next = `${effortLine}\n${next}`;
     }
   }
+  const contextWindowTokens = overrides?.context_window_tokens != null
+    ? parseContextWindowTokens(overrides.context_window_tokens)
+    : null;
+  if (contextWindowTokens != null) {
+    const contextLine = `model_context_window = ${contextWindowTokens}`;
+    if (/^\s*model_context_window\s*=/m.test(next)) next = next.replace(/^\s*model_context_window\s*=.*$/m, contextLine);
+    else next = `${contextLine}\n${next}`;
+  }
   return next;
 }
 
@@ -249,7 +291,6 @@ export function legacySettingsConfig(input: {
     : undefined;
   const mapping = PROVIDER_ENV_MAP[input.provider];
   const defaultBase = mapping?.defaultBaseUrl;
-
   if (input.agentCli === "claude-code") {
     const env: Record<string, string> = {
       ANTHROPIC_API_KEY: input.secret,
@@ -258,7 +299,6 @@ export function legacySettingsConfig(input: {
     if (input.model?.trim()) env.ANTHROPIC_MODEL = input.model.trim();
     return { env };
   }
-
   if (input.agentCli === "codex") {
     const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
     const model = input.model?.trim() || "gpt-5";
@@ -281,7 +321,6 @@ requires_openai_auth = true
       config,
     };
   }
-
   if (input.agentCli === "pi") {
     const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
     const model = input.model?.trim() || (input.provider === "anthropic" ? "claude-sonnet-4-5" : "gpt-5");
@@ -292,7 +331,6 @@ requires_openai_auth = true
       models: [{ id: model }],
     };
   }
-
   // OpenCode stores one provider fragment. Runtime materialization wraps it in
   // the CLI's provider map and selects the first declared model.
   const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
@@ -327,17 +365,19 @@ export function materializeProviderSettings(input: {
   const settings = asObject(input.settingsConfig);
   const expectedPath = CONFIG_FILE_PATHS[input.agentCli];
   if (!expectedPath) throw new Error(`missing CONFIG_FILE_PATHS for ${input.agentCli}`);
-
+  const contextWindowTokens = input.overrides?.context_window_tokens != null
+    ? parseContextWindowTokens(input.overrides.context_window_tokens)
+    : extractContextWindowTokens(settings);
   if (input.agentCli === "claude-code") {
     const clone = structuredClone(settings) as Record<string, unknown>;
+    delete clone.context_window_tokens;
     const env = asObject(clone.env);
     if (input.overrides?.model?.trim()) env.ANTHROPIC_MODEL = input.overrides.model.trim();
-    // Claude Code primarily uses env; keep full object for any extra CLI fields.
+    // Claude Code has no supported absolute context-window setting.
     clone.env = env;
     const content = `${JSON.stringify(clone, null, 2)}\n`;
     return [file(expectedPath, content)];
   }
-
   if (input.agentCli === "codex") {
     const auth = asObject(settings.auth);
     const authContent = `${JSON.stringify(Object.keys(auth).length ? auth : { OPENAI_API_KEY: "" }, null, 2)}\n`;
@@ -355,46 +395,63 @@ wire_api = "responses"
 requires_openai_auth = true
 `;
     }
-    configToml = applyCodexTomlOverrides(configToml, input.overrides);
+    configToml = applyCodexTomlOverrides(configToml, {
+      ...input.overrides,
+      context_window_tokens: contextWindowTokens,
+    });
     if (!configToml.endsWith("\n")) configToml += "\n";
     return [
       file(".codex/auth.json", authContent),
       file(".codex/config.toml", configToml),
     ];
   }
-
   if (input.agentCli === "pi") {
     const source = structuredClone(settings) as Record<string, unknown>;
+    delete source.context_window_tokens;
     const configuredProviders = asObject(source.providers);
     const providerSource = Object.keys(configuredProviders).length > 0
       ? configuredProviders
       : { deepsonar: source };
+    const selectedModelId = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
     const providers = Object.fromEntries(Object.entries(providerSource).map(([providerId, rawProvider]) => {
       const provider = structuredClone(asObject(rawProvider));
+      let models: Array<Record<string, unknown>>;
       if (Array.isArray(provider.models)) {
-        provider.models = provider.models.filter((model): model is Record<string, unknown> => Boolean(model && typeof model === "object" && !Array.isArray(model)));
+        models = provider.models.filter((model): model is Record<string, unknown> => Boolean(model && typeof model === "object" && !Array.isArray(model)));
       } else if (provider.models && typeof provider.models === "object" && !Array.isArray(provider.models)) {
-        provider.models = Object.entries(provider.models as Record<string, unknown>).map(([id, rawModel]) => ({ id, ...asObject(rawModel) }));
+        models = Object.entries(provider.models as Record<string, unknown>).map(([id, rawModel]) => ({ id, ...asObject(rawModel) }));
       } else {
-        provider.models = [];
+        models = [];
       }
-      if (input.overrides?.model?.trim()) {
-        const models = provider.models as Array<Record<string, unknown>>;
-        const existing = models.find((model) => model.id === input.overrides!.model!.trim());
-        if (!existing) models.unshift({ id: input.overrides.model.trim() });
+      if (selectedModelId && !models.some((model) => model.id === selectedModelId)) models.unshift({ id: selectedModelId });
+      if (contextWindowTokens != null) {
+        const target = models.find((model) => model.id === selectedModelId) ?? models[0];
+        if (target) target.contextWindow = contextWindowTokens;
       }
+      provider.models = models;
       return [providerId, provider];
     }));
     const content = `${JSON.stringify({ providers }, null, 2)}\n`;
     return [file(expectedPath, content)];
   }
-
-  // OpenCode's settingsConfig is the selected provider fragment, matching CC
-  // Switch. The live CLI file needs the outer provider map.
+  // OpenCode's settingsConfig is the selected provider fragment. The schema
+  // requires both limit.context and limit.output when limit is present.
   const providerId = "deepsonar";
   const clone = structuredClone(settings) as Record<string, unknown>;
+  delete clone.context_window_tokens;
   const modelIds = Object.keys(asObject(clone.models));
   const selectedModel = input.overrides?.model?.trim() || modelIds[0] || null;
+  if (contextWindowTokens != null && selectedModel) {
+    const models = asObject(clone.models);
+    const selected = asObject(models[selectedModel]);
+    const existingLimit = asObject(selected.limit);
+    if (typeof existingLimit.output !== "number") {
+      throw new Error(`OpenCode 模型 ${selectedModel} 缺少既有 limit.output，无法安全写入 context_window_tokens`);
+    }
+    selected.limit = { ...existingLimit, context: contextWindowTokens };
+    models[selectedModel] = selected;
+    clone.models = models;
+  }
   const fullConfig: Record<string, unknown> = {
     $schema: "https://opencode.ai/config.json",
     provider: { [providerId]: clone },

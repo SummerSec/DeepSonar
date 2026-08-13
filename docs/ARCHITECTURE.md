@@ -479,9 +479,9 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 
 | 层 | 位置 | 内容 |
 |----|------|------|
-| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关、Provider 配置文件与 Credential 引用；全局 RoleConfig 的可信镜像绑定 |
-| 决策 | 全局 RoleConfig + 项目 RoleConfig + `projects.config_json.rules` + `projects.config_json` 镜像策略 | 项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
-| 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照；Executor 不读取旧配置或为缺失快照降级 |
+| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关、Provider 配置文件与 Credential 引用；全局 RoleConfig 的可信镜像绑定 |
+| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；两者均为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
+| 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含解析后的客户端上下文预算）；Executor 不读取旧配置或为缺失快照降级 |
 
 项目镜像策略不改表：`projects.config_json.image_strategy` 缺省为
 `inherit_global`，该策略下每个 Job 角色的镜像只读取全局 RoleConfig 的
@@ -497,6 +497,8 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 `EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
 
 Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
+
+`context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Codex `model_auto_compact_token_limit`、OpenCode 模型 `limit.context`、Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。
 
 **Model Gateway 上游纪律：** Scheduler 的上游单次超时默认 3,000 秒（`DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS=3000000`），但每次 attempt 都受 Job `started_at + timeout_sec` 的绝对截止时间约束，实际 timeout 为两者较小值；退避等待也不得跨过该截止时间。只有在 Scheduler 尚未向沙箱客户端发送响应头或响应体时，网络/超时与 HTTP `408/429/500/502/503/504` 才可最多执行 3 次 attempt，使用指数退避和 jitter；`400/401/403` 等永久错误不重试。取得最终 Response 后沿用流式直通，SSE 或普通响应体读取失败不触发重放。`job_tokens.used_requests` 仍按一次客户端请求只加一次；上游 attempt/retry/exhausted 指标只带 provider/reason 等低基数标签，禁止请求体、URL 和 Job ID。网络/超时耗尽固定返回 `502` 的 `upstream_unreachable`，最终上游 HTTP 状态和响应体原样透传。
 

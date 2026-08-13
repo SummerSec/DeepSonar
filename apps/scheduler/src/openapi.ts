@@ -1508,7 +1508,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           additionalProperties: false,
           required: [
             "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "model", "version",
-            "runtime_image_key", "sandbox_limits_json",
+            "runtime_image_key", "sandbox_limits_json", "context_window_tokens",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "scope", "can_bind",
             "credential_provider_valid", "role_kind", "role_builtin",
           ],
@@ -1524,6 +1524,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             project_name: { type: "string", nullable: true },
             agent_cli: { type: "string" },
             model: { type: "string", nullable: true },
+            context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "通用客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
             runtime_image_key: { type: "string", nullable: true },
             sandbox_limits_json: { $ref: "#/components/schemas/SandboxLimitsOverride" },
             version: { type: "integer" },
@@ -1639,7 +1640,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi"] },
             model: { type: "string", nullable: true },
             reasoning: { $ref: "#/components/schemas/ReasoningEffort" },
-            env_keys: { type: "array", items: { type: "string" } },
+            context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
             env_vars: { type: "object", additionalProperties: { type: "string" } },
             modules: {
               type: "array",
