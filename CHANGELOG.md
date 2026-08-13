@@ -1,10 +1,16 @@
-﻿# Changelog
+# Changelog
 
 Release entries are maintained from verified tag and repository changes. The immutable `vX.Y.Z` Git tag is the product release version. Root and workspace package versions remain private internal package metadata (`0.1.11`) and are not release identifiers.
 
 ## [Unreleased]
 
 Changes intended for the next release go here before a release section is dated and tagged.
+
+### Fixed
+
+- 修复 Job 控制能力元数据：Claude Code、Codex、OpenCode 与 Pi 现在均如实声明已注入的 HTTP Platform Control API；支持 MCP 的运行时仍保留过渡通道，由 Agent 对每次逻辑操作自行二选一。
+- 修复 Anthropic 兼容子路径网关的模型发现与凭据健康检查：按有界有序候选探测模型端点，且仅在 HTTP 404/405 时回退。
+- 修复项目镜像策略投影不一致：`inherit_global` 继续继承全局镜像，`project_managed` 只使用项目角色映射；项目 RoleConfig 的遗留 `runtime_image_key` 不再通过写入、导入导出、展示或 readiness 生效。
 
 ## [0.1.27] - 2026-08-13
 
