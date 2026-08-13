@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 27);
+INSERT INTO schema_meta (id, version) VALUES ('global', 28);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -539,6 +539,56 @@ CREATE TABLE canvas_nodes (
 CREATE INDEX canvas_nodes_canvas_idx ON canvas_nodes (canvas_id);
 CREATE UNIQUE INDEX canvas_nodes_root_uniq
   ON canvas_nodes (canvas_id) WHERE node_type = 'root';
+
+-- Durable human-to-Agent message ledger. Delivery and acknowledgement are
+-- distinct: injected means transport into the session only.
+CREATE TABLE human_messages (
+  id uuid PRIMARY KEY,
+  canvas_id text NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+  human_node_id uuid NOT NULL REFERENCES canvas_nodes(id) ON DELETE CASCADE,
+  target_kind text NOT NULL,
+  target_node_id uuid REFERENCES canvas_nodes(id) ON DELETE SET NULL,
+  target_job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  body text NOT NULL,
+  delivery_status text NOT NULL DEFAULT 'planned',
+  error text,
+  planned_at timestamptz NOT NULL DEFAULT now(),
+  delivery_started_at timestamptz,
+  delivered_at timestamptz,
+  acknowledged_at timestamptz,
+  ack_summary text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT human_messages_target_kind_check CHECK (target_kind IN ('hub', 'job')),
+  CONSTRAINT human_messages_body_check CHECK (char_length(body) BETWEEN 1 AND 8000),
+  CONSTRAINT human_messages_status_check CHECK (delivery_status IN ('planned','injected','acknowledged','unknown','failed')),
+  CONSTRAINT human_messages_ack_check CHECK (
+    (delivery_status = 'acknowledged' AND acknowledged_at IS NOT NULL)
+    OR (delivery_status <> 'acknowledged' AND acknowledged_at IS NULL)
+  ),
+  CONSTRAINT human_messages_ack_summary_check CHECK (ack_summary IS NULL OR char_length(ack_summary) <= 500),
+  CONSTRAINT human_messages_error_check CHECK (error IS NULL OR char_length(error) <= 500)
+);
+CREATE INDEX human_messages_canvas_idx ON human_messages (canvas_id, planned_at DESC, id DESC);
+CREATE INDEX human_messages_target_idx ON human_messages (target_job_id, delivery_status, planned_at);
+
+CREATE TABLE human_message_attachments (
+  message_id uuid NOT NULL REFERENCES human_messages(id) ON DELETE CASCADE,
+  version_id uuid NOT NULL REFERENCES shared_asset_versions(id),
+  filename text NOT NULL,
+  workspace_path text NOT NULL,
+  content_sha256 text NOT NULL,
+  bytes bigint NOT NULL,
+  PRIMARY KEY (message_id, version_id),
+  CONSTRAINT human_message_attachments_filename_check CHECK (char_length(filename) BETWEEN 1 AND 240),
+  CONSTRAINT human_message_attachments_path_check CHECK (
+    workspace_path LIKE '/workspace/.deepsonar/inbox/%'
+    AND workspace_path !~ '(^|/)\.\.(/|$)'
+  ),
+  CONSTRAINT human_message_attachments_sha_check CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT human_message_attachments_bytes_check CHECK (bytes >= 0)
+);
+CREATE INDEX human_message_attachments_version_idx ON human_message_attachments (version_id);
 
 CREATE TABLE canvas_edges (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

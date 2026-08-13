@@ -1,9 +1,11 @@
-import { Prohibit, SealCheck, Stop, TreeStructure, X } from "@phosphor-icons/react";
+import { PaperPlaneTilt, Prohibit, SealCheck, Stop, TreeStructure, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
-import { api, type CanvasNode, type JobDetail } from "./api";
+import { api, type CanvasBroadcastItem, type CanvasHumanMessage, type CanvasNode, type JobDetail } from "./api";
+import { broadcastStatusLabel, BROADCAST_STATUS_COLOR } from "./canvas-broadcasts";
 import { LiveStream } from "./LiveStream";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
+import { humanMessageStatusLabel } from "./human-messages";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
 const CANCELLABLE_NODE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
@@ -49,10 +51,16 @@ export function Sidebar({
   node,
   onClose,
   onTraceFinding,
+  broadcastItems = [],
+  messages = [],
+  onSendMessage,
 }: {
   node: CanvasNode;
   onClose: () => void;
   onTraceFinding?: () => void;
+  broadcastItems?: readonly CanvasBroadcastItem[];
+  messages?: readonly CanvasHumanMessage[];
+  onSendMessage?: () => void;
 }) {
   const confirm = useConfirmDialog();
   const [job, setJob] = useState<JobDetail | null>(null);
@@ -170,6 +178,11 @@ export function Sidebar({
               查看链路
             </button>
           )}
+          {onSendMessage && (
+            <button type="button" onClick={onSendMessage} className="human-message-inline-action" title="向此活动运行发送消息">
+              <PaperPlaneTilt size={12} /> 发消息
+            </button>
+          )}
           {canForceExit && (
             <button
               type="button"
@@ -244,6 +257,50 @@ export function Sidebar({
                     </button>
                   </div>
                 </div>
+              )}
+              {messages.length > 0 && (
+                <section className="human-message-detail-section mb-3" aria-label="人工消息明细">
+                  <div className="human-message-detail-heading"><span>{node.node_type === "human" ? "人工消息" : "发往此节点"}</span><strong>{messages.length}</strong></div>
+                  <ol>{messages.map((message) => <li key={message.id}>
+                    <div className="human-message-detail-meta"><strong>{humanMessageStatusLabel(message.status)}</strong><span>{new Date(message.planned_at).toLocaleString()}</span></div>
+                    <p>{message.body}</p>
+                    {message.attachments.length > 0 && <ul>{message.attachments.map((attachment) => <li key={attachment.version_id}>{attachment.filename ?? attachment.logical_key ?? attachment.version_id}<small>{attachment.bytes.toLocaleString()} bytes · {attachment.content_type ?? attachment.content_sha256.slice(0, 12)}</small></li>)}</ul>}
+                    {message.delivered_at && <small>投递：{new Date(message.delivered_at).toLocaleString()}</small>}
+                    {message.acknowledged_at && <small>ACK：{new Date(message.acknowledged_at).toLocaleString()}{message.ack_summary ? ` · ${message.ack_summary}` : ""}</small>}
+                    {message.error && <small className="is-error">{message.error}</small>}
+                  </li>)}</ol>
+                </section>
+              )}
+              {(node.node_type === "fact" || node.node_type === "finding") && (
+                <section className="broadcast-sidebar-section mb-3" aria-label="广播目标明细">
+                  <div className="broadcast-sidebar-heading">
+                    <span>广播目标投递</span>
+                    <strong>{broadcastItems.length}</strong>
+                  </div>
+                  {broadcastItems.length === 0 ? (
+                    <p className="broadcast-sidebar-empty">账本中暂无目标投递。</p>
+                  ) : (
+                    <ol className="broadcast-sidebar-list">
+                      {broadcastItems.map((item) => (
+                        <li key={item.id}>
+                          <span
+                            className="broadcast-status-dot"
+                            style={{ background: BROADCAST_STATUS_COLOR[item.delivery_status] }}
+                          />
+                          <div>
+                            <strong>{item.target_node_title ?? item.target_role ?? "目标节点暂不可见"}</strong>
+                            <span>{item.target_role_kind ?? item.target_node_type ?? "运行目标"} · 第 {item.attempt} 次</span>
+                            <span style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
+                              {broadcastStatusLabel(item.delivery_status)}
+                            </span>
+                            {item.error && <small>{item.error}</small>}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  <p className="broadcast-sidebar-note">“已注入 Agent 会话”仅表示传输完成，不表示 Agent 已阅读或处理。</p>
+                </section>
               )}
               {Boolean(node.body_json?.severity) && (
                 <div className="mb-2 flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-850 px-3 py-2">

@@ -18,6 +18,7 @@ import {
 import type { ReactNode } from "react";
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
 import type { CanvasNode } from "./api";
+import type { BroadcastNodeStats } from "./canvas-broadcasts";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
 export type DEEPSONARNodeData = {
@@ -32,6 +33,9 @@ export type DEEPSONARNodeData = {
   onExpandNode?: () => void;
   /** 收起本节点后继 */
   onCollapseNode?: () => void;
+  /** 广播账本派生统计；不属于画布拓扑数据。 */
+  broadcastSource?: BroadcastNodeStats;
+  broadcastTarget?: BroadcastNodeStats;
 };
 export type DEEPSONARNode = Node<DEEPSONARNodeData, string>;
 export type SemanticNodeKind =
@@ -136,6 +140,8 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
     (n.body_json?.last_progress as { message?: string } | undefined)?.message ?? null;
   const target = n.body_json?.target as Record<string, unknown> | undefined;
   const targetText = target ? String(target.content ?? "") : null;
+  const sourceBroadcasts = data.broadcastSource;
+  const targetBroadcasts = data.broadcastTarget;
 
   const childCount = data.childCount ?? 0;
   const isExpanded = Boolean(data.isExpanded);
@@ -253,6 +259,19 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                     style={{ color: verification.color, borderColor: `${verification.color}66` }}
                   >
                     {verification.label}
+                  </span>
+                )}
+                {(semantic === "fact" || semantic === "finding") && Boolean(sourceBroadcasts?.total) && (
+                  <span className="broadcast-node-badge is-source" title="该 Fact/Finding 的广播目标数">
+                    广播 {sourceBroadcasts?.total}
+                  </span>
+                )}
+                {Boolean(targetBroadcasts?.total) && (
+                  <span
+                    className="broadcast-node-badge is-target"
+                    title="该节点是 Fact/Finding 广播的接收节点；已注入仅表示写入 Agent 会话"
+                  >
+                    接收 {targetBroadcasts?.total}
                   </span>
                 )}
               </div>

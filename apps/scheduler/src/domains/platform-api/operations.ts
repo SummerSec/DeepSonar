@@ -67,6 +67,12 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: false,
     eventType: "human",
   },
+  ack_human_message: {
+    summary: "Acknowledge an injected human message",
+    description: "Explicitly acknowledge a human message targeted to the current Job. Text output never implies acknowledgement.",
+    readOnly: false,
+    eventType: "human_message_ack",
+  },
 };
 
 function cloneSchema(value: ControlJsonSchema): ControlJsonSchema {

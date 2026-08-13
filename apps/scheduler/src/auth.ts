@@ -91,6 +91,9 @@ const ROUTE_SCOPES: Record<string, string> = {
   "DELETE /projects/:id/integrations/plane": "integrations:write",
   "POST /projects/:id/integrations/plane/sync": "integrations:write",
   "GET /canvases/:id": "tasks:read",
+  "GET /canvases/:id/broadcasts": "tasks:read",
+  "GET /canvases/:id/messages": "tasks:read",
+  "POST /canvases/:id/messages": "tasks:write",
   "GET /canvases/:id/summary": "tasks:read",
   "GET /canvases/:id/delta": "tasks:read",
   "GET /canvases/:id/nodes/:nodeId": "tasks:read",
@@ -261,10 +264,9 @@ export function requiredScopeForRoute(method: string, routeUrl: string): string 
   return requiredScope(method, routeUrl);
 }
 
-function hasScope(actor: Actor, scope: string | null): boolean {
+export function actorHasScope(actor: Actor, scope: string | null): boolean {
   if (!scope) return true;
-  // Management implies read access for the read-only local image detector;
-  // callers may hold either images:read or images:manage as documented.
+  // Management implies the corresponding asset/image read capability.
   if (scope === "images:read" && actor.scopes.includes("images:manage")) return true;
   if ((scope === "assets:read" || scope === "assets:write") && actor.scopes.includes("assets:manage")) return true;
   return actor.scopes.includes("admin") || actor.scopes.includes(scope);
@@ -382,7 +384,7 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
       : [];
     scope = report?.finding_report_id ? "findings:read" : "tasks:read";
   }
-  if (config.auth.required && !hasScope(actor, scope)) {
+  if (config.auth.required && !actorHasScope(actor, scope)) {
     return denyAudited(403, `scope 不足：需要 ${scope ?? "认证"}`, "insufficient_scope");
   }
 

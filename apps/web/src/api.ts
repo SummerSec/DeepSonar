@@ -125,6 +125,85 @@ export interface CanvasDelta {
   live?: boolean;
 }
 
+export type CanvasBroadcastDeliveryStatus = "planned" | "injected" | "failed" | "unknown";
+
+export interface CanvasBroadcastItem {
+  id: string;
+  source_job_id: string;
+  source_node_id: string;
+  source_node_type: "fact" | "finding";
+  target_job_id: string;
+  target_node_id: string | null;
+  target_node_type: "intent" | "job" | "report" | null;
+  target_node_title: string | null;
+  target_role: string | null;
+  target_role_kind: string | null;
+  attempt: number;
+  delivery_status: CanvasBroadcastDeliveryStatus;
+  title: string;
+  error: string | null;
+  planned_at: string;
+  delivered_at: string | null;
+}
+
+export interface CanvasBroadcastPage {
+  canvas_id: string;
+  items: CanvasBroadcastItem[];
+  total: number;
+  truncated: boolean;
+}
+
+export type CanvasHumanMessageStatus = "planned" | "injected" | "acknowledged" | "unknown" | "failed";
+
+export interface CanvasHumanMessageAttachment {
+  version_id: string;
+  asset_id?: string;
+  logical_key?: string;
+  filename?: string;
+  workspace_path?: string;
+  content_sha256: string;
+  bytes: number;
+  content_type?: string;
+}
+
+/** Durable human-to-runtime ledger. `injected` is transport-only; only `acknowledged` is an Agent ACK. */
+export interface CanvasHumanMessage {
+  id: string;
+  canvas_id: string;
+  human_node_id: string;
+  target_kind: "hub" | "job";
+  target_node_id: string | null;
+  target_job_id: string;
+  body: string;
+  attachments: CanvasHumanMessageAttachment[];
+  status: CanvasHumanMessageStatus;
+  delivery_status?: CanvasHumanMessageStatus;
+  planned_at: string;
+  delivered_at: string | null;
+  acknowledged_at: string | null;
+  ack_summary: string | null;
+  error: string | null;
+}
+
+type CanvasHumanMessageWire = Omit<CanvasHumanMessage, "status"> & {
+  status?: CanvasHumanMessageStatus;
+  delivery_status?: CanvasHumanMessageStatus;
+};
+
+export interface CanvasHumanMessagePage {
+  canvas_id: string;
+  items: CanvasHumanMessage[];
+  total: number;
+  truncated: boolean;
+}
+
+export interface CreateCanvasHumanMessage {
+  message_id: string;
+  target: { kind: "hub" } | { kind: "job"; node_id: string };
+  body: string;
+  attachment_version_ids: string[];
+}
+
 /** Bounded keyset response shared by jobs, findings, events, and evidence. */
 export interface PageEnvelope<T> {
   items: T[];
@@ -1553,6 +1632,32 @@ export const api = {
   canvasSummary: (canvasId: string) => get<CanvasData & { projection?: "L0"; watermark?: string; live?: boolean }>(`/canvases/${canvasId}/summary`),
   canvasDelta: (canvasId: string, since: string) =>
     get<CanvasDelta>(`/canvases/${canvasId}/delta?since=${encodeURIComponent(since)}`),
+  canvasBroadcasts: (canvasId: string, limit = 500) =>
+    get<CanvasBroadcastPage>(
+      `/canvases/${canvasId}/broadcasts${qs({ limit: String(Math.min(1_000, Math.max(1, Math.trunc(limit)))) })}`,
+    ),
+  canvasMessages: async (canvasId: string, limit = 100) => {
+    const page = await get<Omit<CanvasHumanMessagePage, "items"> & { items: CanvasHumanMessageWire[] }>(
+      `/canvases/${canvasId}/messages${qs({ limit: String(Math.min(500, Math.max(1, Math.trunc(limit)))) })}`,
+    );
+    return {
+      ...page,
+      items: page.items.map((item) => ({
+        ...item,
+        // The database field is delivery_status. Keep the UI contract on one status key.
+        status: item.status ?? item.delivery_status ?? "unknown",
+        attachments: Array.isArray(item.attachments) ? item.attachments : [],
+      })),
+    };
+  },
+  createCanvasMessage: async (canvasId: string, message: CreateCanvasHumanMessage) => {
+    const created = await send<CanvasHumanMessageWire>("POST", `/canvases/${canvasId}/messages`, message);
+    return {
+      ...created,
+      status: created.status ?? created.delivery_status ?? "unknown",
+      attachments: Array.isArray(created.attachments) ? created.attachments : [],
+    };
+  },
   canvasNode: (canvasId: string, nodeId: string) =>
     get<{ node: CanvasNode; projection: "L1" }>(`/canvases/${canvasId}/nodes/${nodeId}`),
   canvasConvergence: (canvasId: string) =>

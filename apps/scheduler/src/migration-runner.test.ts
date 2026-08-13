@@ -21,7 +21,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 27);
+  assert.equal(SCHEMA_VERSION, 28);
   assert.match(body, /runtime_registry_channel\s+text\s+NOT\s+NULL\s+DEFAULT\s+'aliyun-acr'/i);
   assert.match(body, /sandbox_limits_json\s+jsonb\s+NOT\s+NULL\s+DEFAULT\s+'\{\}'/i);
   assert.match(body, /'deepsonar-chrome-audit'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
@@ -32,6 +32,12 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.match(body, /CREATE TABLE job_attempt_effects\s*\(/i);
   assert.match(body, /CREATE TABLE canvas_broadcasts\s*\(/i);
   assert.match(body, /delivery_status IN \('planned', 'injected', 'failed', 'unknown'\)/i);
+  assert.match(body, /CREATE TABLE human_messages\s*\(/i);
+  assert.match(body, /CREATE TABLE human_message_attachments\s*\(/i);
+  assert.match(body, /delivery_started_at\s+timestamptz/i);
+  assert.match(body, /human_messages_status_check[\s\S]+planned[\s\S]+injected[\s\S]+acknowledged[\s\S]+unknown[\s\S]+failed/i);
+  assert.match(body, /version_id\s+uuid\s+NOT\s+NULL\s+REFERENCES\s+shared_asset_versions\(id\)/i);
+  assert.match(body, /workspace_path\s+LIKE\s+'\/workspace\/\.deepsonar\/inbox\/%'/i);
   assert.match(body, /CREATE TABLE job_usage_ledger\s*\(/i);
   assert.match(body, /job_capability_tokens[\s\S]+operation_ids\s+text\[\]/i);
   assert.match(body, /job_capability_tokens[\s\S]+expires_at\s+timestamptz/i);

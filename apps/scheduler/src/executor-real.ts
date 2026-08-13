@@ -18,6 +18,7 @@ import {
   HumanPayload,
   ProgressPayload,
   PublishSharedAssetPayload,
+  AckHumanMessagePayload,
   allowedPlatformTools,
   type PlatformToolName,
   type VerifyVerdict,
@@ -72,6 +73,7 @@ import {
   revokeJobCapabilityTokens,
 } from "./domains/platform-api/tokens.js";
 import { inc } from "./metrics.js";
+import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/canvas/human-messages.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
 import {
   hasProviderSettingsConfig,
@@ -118,6 +120,7 @@ function invalidToolPayload(
     list_available_roles: CONTROL_INPUT_ERROR_CODES.invalidPayload,
     list_shared_assets: CONTROL_INPUT_ERROR_CODES.invalidPayload,
     publish_shared_asset: CONTROL_INPUT_ERROR_CODES.invalidPayload,
+    ack_human_message: CONTROL_INPUT_ERROR_CODES.invalidPayload,
   }[tool];
   return new ControlInputError(code, message, path);
 }
@@ -1239,6 +1242,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       done: "mark_job_done",
       human: "request_human",
       shared_asset_publish: "publish_shared_asset",
+      human_message_ack: "ack_human_message",
     };
     const requiredTool = toolForEvent[event.type];
     if (!controlToolNames.includes(requiredTool)) {
@@ -1279,6 +1283,16 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         const controlError = sharedAssetPublishControlError(error);
         if (controlError) throw controlError;
         throw error;
+      }
+      return;
+    }
+    if (event.type === "human_message_ack") {
+      const payload = AckHumanMessagePayload.parse(event.payload);
+      try {
+        await acknowledgeHumanMessage(jobId, payload.message_id, payload.summary);
+      } catch (error) {
+        const code = String((error as { code?: string }).code ?? "HUMAN_MESSAGE_ACK_REJECTED");
+        throw invalidToolPayload("ack_human_message", `${code}: ${error instanceof Error ? error.message : "ack rejected"}`, "message_id");
       }
       return;
     }
@@ -1504,16 +1518,18 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       semanticToolEvents: semanticToolEventsFor(controlToolNames),
       onSemanticEvent,
       secretValues: [platformToken, gatewayToken].filter((value): value is string => Boolean(value)),
-      onRunReady: async ({ sendMessage, readWorkspaceFile }) => {
+      onRunReady: async ({ sendMessage, readWorkspaceFile, writeWorkspaceFile }) => {
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;
         if (platformApiEnabled) {
           registerRuntimeHandler(jobId, runtimePlatformHandler, platformOperations);
           platformRuntimeRegistered = true;
         }
+        const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile });
         const disposeCanvas = canvasId && snapshot.agent_runtime?.capabilities.incrementalMessages === true
           ? await subscribeCanvasUpdates(canvasId, jobId, sendMessage)
           : undefined;
         return async () => {
+          await disposeHumanMessages();
           if (typeof disposeCanvas === "function") await disposeCanvas();
           if (platformRuntimeRegistered) {
             unregisterRuntimeHandler(jobId);

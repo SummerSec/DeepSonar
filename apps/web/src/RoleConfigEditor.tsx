@@ -51,6 +51,7 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
   submit_hub_decision: { title: "Hub 决策", description: "允许 Hub 提交完成结论或下一批派发意图。" },
   mark_job_done: { title: "正常完成", description: "提交 Job 最终摘要并形成合法终态。" },
   request_human: { title: "请求人工", description: "遇到授权或高风险阻塞时结束本轮并请求人工介入。" },
+  ack_human_message: { title: "确认人工消息", description: "仅在当前 Job 实际收到人工消息后显式 ACK；普通文本回复不会确认。" },
 };
 
 // ---------- 表单状态 ----------

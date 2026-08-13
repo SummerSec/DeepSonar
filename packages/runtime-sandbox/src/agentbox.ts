@@ -910,6 +910,8 @@ export interface RealAgentSpec {
   onRunReady?: (control: {
     sendMessage(content: string): Promise<void>;
     readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer>;
+    /** Scheduler-only binary write into the immutable human-message inbox. */
+    writeWorkspaceFile(filePath: string, bytes: Buffer): Promise<void>;
   }) =>
     void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
   /**
@@ -1244,6 +1246,72 @@ export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: strin
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+export const HUMAN_INBOX_WRITER_SCRIPT = String.raw`
+import os
+import sys
+
+workspace, message_id, filename = sys.argv[1:]
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+fds = []
+try:
+    current = os.open(workspace, flags)
+    fds.append(current)
+    for component in (".deepsonar", "inbox", message_id):
+        try:
+            os.mkdir(component, 0o700, dir_fd=current)
+        except FileExistsError:
+            pass
+        child = os.open(component, flags, dir_fd=current)
+        fds.append(child)
+        current = child
+    output = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=current)
+    try:
+        while True:
+            chunk = sys.stdin.buffer.read(65536)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(output, view)
+                view = view[written:]
+        os.fsync(output)
+    finally:
+        os.close(output)
+finally:
+    for descriptor in reversed(fds):
+        os.close(descriptor)
+`;
+
+async function execFileWithInput(file: string, args: string[], bytes: Buffer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(file, args, { timeout: 15_000, maxBuffer: 1024 * 1024 }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+    child.stdin?.on("error", reject);
+    child.stdin?.end(bytes);
+  });
+}
+
+/** Scheduler-owned, descriptor-relative write boundary for human-message attachments. */
+export async function writeHumanInboxWorkspaceFile(
+  sandbox: Pick<Sandbox, "raw">,
+  filePath: string,
+  bytes: Buffer,
+): Promise<void> {
+  const normalized = path.posix.normalize(filePath);
+  const match = /^\/workspace\/\.deepsonar\/inbox\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([A-Za-z0-9._-]{1,240})$/iu.exec(filePath);
+  if (normalized !== filePath || !match) throw new Error("human_message_workspace_path_forbidden");
+  const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
+  const containerId = inspected?.Id;
+  if (!containerId) throw new Error("human_message_container_unavailable");
+  try {
+    await execFileWithInput("docker", ["exec", "-i", containerId, "python3", "-c", HUMAN_INBOX_WRITER_SCRIPT, "/workspace", match[1], match[2]], bytes);
+  } catch {
+    throw new Error("human_message_workspace_write_rejected");
+  }
 }
 
 const RUNTIME_DIR = "/workspace/.deepsonar";
@@ -2161,6 +2229,7 @@ function semanticToolNameForEvent(event: Record<string, unknown>): string {
     done: "mark_job_done",
     human: "request_human",
     shared_asset_publish: "publish_shared_asset",
+    human_message_ack: "ack_human_message",
   };
   return map[type] ?? (type ? `control:${type}` : "control_tool");
 }
@@ -2292,6 +2361,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const disposeMessageSource = await spec.onRunReady?.({
     sendMessage: writeSteerMessage,
     readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+    writeWorkspaceFile: (filePath, bytes) => writeHumanInboxWorkspaceFile(sandbox, filePath, bytes),
   });
   try {
     // 在首条 prompt 写入 stdin 前注册 Job 级运行 handler，避免 CLI 的首次 API

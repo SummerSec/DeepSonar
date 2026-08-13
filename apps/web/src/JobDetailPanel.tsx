@@ -1,11 +1,12 @@
-import { DownloadSimple, Stop, X } from "@phosphor-icons/react";
+import { DownloadSimple, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
+import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
+import { humanMessageStatusLabel } from "./human-messages";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 
@@ -154,7 +155,7 @@ function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
   );
 }
 
-export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
+export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }: { jobId: string; onClose: () => void; messages?: readonly CanvasHumanMessage[]; onSendMessage?: () => void }) {
   const confirm = useConfirmDialog();
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [evidence, setEvidence] = useState<JobEvidence | null>(null);
@@ -497,6 +498,11 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                 )}
               </div>
             )}
+            {onSendMessage && active && (
+              <button type="button" onClick={onSendMessage} className="human-message-inline-action">
+                <PaperPlaneTilt size={14} /> 发消息
+              </button>
+            )}
           </div>
           <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
             {detail && ACTIVE.has(detail.job.status) && (
@@ -612,6 +618,19 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                 </div>
               )}
 
+              {messages.length > 0 && (
+                <section className="human-message-detail-section" aria-label="人工消息">
+                  <div className="human-message-detail-heading"><span>人工消息</span><strong>{messages.length}</strong></div>
+                  <ol>{messages.map((message) => <li key={message.id}>
+                    <div className="human-message-detail-meta"><strong>{humanMessageStatusLabel(message.status)}</strong><span>{new Date(message.planned_at).toLocaleString()}</span></div>
+                    <p>{message.body}</p>
+                    {message.attachments.length > 0 && <ul>{message.attachments.map((attachment) => <li key={attachment.version_id}>{attachment.filename ?? attachment.logical_key ?? attachment.version_id}<small>{attachment.bytes.toLocaleString()} bytes · {attachment.content_type ?? attachment.content_sha256.slice(0, 12)}</small></li>)}</ul>}
+                    {message.delivered_at && <small>投递：{new Date(message.delivered_at).toLocaleString()}</small>}
+                    {message.acknowledged_at && <small>ACK：{new Date(message.acknowledged_at).toLocaleString()}{message.ack_summary ? ` · ${message.ack_summary}` : ""}</small>}
+                    {message.error && <small className="is-error">{message.error}</small>}
+                  </li>)}</ol>
+                </section>
+              )}
               <section className="theme-surface rounded-2xl p-4 ring-1">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400/90">

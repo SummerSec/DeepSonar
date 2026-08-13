@@ -774,6 +774,12 @@ export const HubDecisionPayload = z
   });
 export type HubDecisionPayload = z.infer<typeof HubDecisionPayload>;
 
+export const AckHumanMessagePayload = z.object({
+  message_id: z.string().uuid(),
+  summary: z.string().max(500).regex(/\S/u).optional(),
+}).strict();
+export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
+
 export const ControlToolPayloadSchemas = {
   list_available_roles: ListAvailableRolesPayload,
   list_shared_assets: ListSharedAssetsPayload,
@@ -784,6 +790,7 @@ export const ControlToolPayloadSchemas = {
   submit_hub_decision: HubDecisionPayload,
   mark_job_done: DonePayload,
   request_human: HumanPayload,
+  ack_human_message: AckHumanMessagePayload,
 } as const;
 export type ControlToolPayload = {
   [K in keyof typeof ControlToolPayloadSchemas]: z.infer<(typeof ControlToolPayloadSchemas)[K]>;
@@ -838,6 +845,7 @@ export const ControlEventEnvelope = z.discriminatedUnion("type", [
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactDirectPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human_message_ack"), payload: AckHumanMessagePayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("shared_asset_publish"), payload: PublishSharedAssetPayload }).strict(),
 ]);
@@ -875,6 +883,7 @@ export const PlatformToolName = z.enum([
   "request_human",
   "list_shared_assets",
   "publish_shared_asset",
+  "ack_human_message",
 ]);
 export type PlatformToolName = z.infer<typeof PlatformToolName>;
 export type PlatformToolConfig = Partial<Record<PlatformToolName, boolean>>;
@@ -1000,6 +1009,7 @@ export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "submit_hub_decision",
   "mark_job_done",
   "request_human",
+  "ack_human_message",
 ];
 
 /**
@@ -1014,9 +1024,9 @@ export function allowedPlatformTools(
   return ALL_PLATFORM_TOOLS.slice();
 }
 
-/** 关闭后 Job 无法形成合法终态的工具，配置层不可禁用。仅 mark_job_done。 */
+/** These Job-wide control capabilities cannot be disabled by RoleConfig. */
 export function requiredPlatformTools(_roleKind: "role" | "hub" | "system"): PlatformToolName[] {
-  return ["mark_job_done"];
+  return ["mark_job_done", "ack_human_message"];
 }
 
 /** 空配置代表启用该角色全部合法工具；显式 false 才关闭可选工具。 */

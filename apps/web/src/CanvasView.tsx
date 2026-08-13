@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { CaretDown, CaretUp, Eye, EyeSlash, Funnel, TreeStructure, X } from "@phosphor-icons/react";
+import { Broadcast, CaretDown, CaretUp, Eye, EyeSlash, Funnel, PaperPlaneTilt, TreeStructure, X } from "@phosphor-icons/react";
 import {
   Background,
   BackgroundVariant,
@@ -12,7 +12,8 @@ import {
   type Node,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { api, type CanvasData, type CanvasNode, type FindingTrace } from "./api";
+import { api, type CanvasBroadcastPage, type CanvasData, type CanvasHumanMessage, type CanvasHumanMessagePage, type CanvasNode, type FindingTrace } from "./api";
+import { BROADCAST_STATUS_COLOR, broadcastStatusLabel, deriveCanvasBroadcasts, type CanvasBroadcastProjection } from "./canvas-broadcasts";
 import {
   applyCanvasDelta,
   CANVAS_SKELETON_REFRESH_MS,
@@ -36,6 +37,8 @@ import { elkLayout, layoutNodes, NODE_W } from "./layout";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
 import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
+import { HumanMessageComposer } from "./HumanMessageComposer";
+import { humanMessageStatusLabel, isActiveHumanMessageTarget, messagesForCanvasNode } from "./human-messages";
 import { Sidebar } from "./Sidebar";
 import { consumeViewportFit, resolveViewportNodeIds } from "./canvas-viewport";
 import { findingTraceIds, traceDisplayIds, type TraceFocusMode } from "./finding-trace-focus";
@@ -48,6 +51,8 @@ export const ELK_NODE_THRESHOLD = 200;
 const FULL_GRAPH_MIN_ZOOM = 0.05;
 const FOCUSED_GRAPH_MIN_ZOOM = 0.2;
 export const CANVAS_DELTA_POLL_MS = 3_000;
+export const CANVAS_BROADCAST_POLL_MS = 3_000;
+export const CANVAS_MESSAGE_POLL_MS = 3_000;
 
 type ExpandHandlers = {
   expandNode: (id: string) => void;
@@ -144,6 +149,7 @@ function toFlow(
   focusNodeIds: ReadonlySet<string>,
   focusEdgeIds: ReadonlySet<string>,
   focusMode: TraceFocusMode,
+  broadcasts: CanvasBroadcastProjection,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodeColors = new Map(data.nodes.map((node) => [node.id, nodeDisplayColor(node)]));
   return {
@@ -164,6 +170,8 @@ function toFlow(
           isExpanded: expanded,
           onExpandNode: childCount > 0 ? () => handlers.expandNode(n.id) : undefined,
           onCollapseNode: childCount > 0 ? () => handlers.collapseNode(n.id) : undefined,
+          broadcastSource: broadcasts.sourceStats.get(n.id),
+          broadcastTarget: broadcasts.targetStats.get(n.id),
         },
         draggable: false,
         connectable: false,
@@ -172,26 +180,46 @@ function toFlow(
           : undefined,
       };
     }),
-    edges: data.edges.map((e) => {
-      const st = EDGE_STYLE[e.edge_type] ?? EDGE_STYLE.child;
-      const sourceColor = nodeColors.get(e.from_node_id) ?? SEMANTIC_STYLE.note.color;
-      return {
-        id: e.id,
-        source: e.from_node_id,
-        target: e.to_node_id,
+    edges: [
+      ...data.edges.map((e) => {
+        const st = EDGE_STYLE[e.edge_type] ?? EDGE_STYLE.child;
+        const sourceColor = nodeColors.get(e.from_node_id) ?? SEMANTIC_STYLE.note.color;
+        return {
+          id: e.id,
+          source: e.from_node_id,
+          target: e.to_node_id,
+          type: "smoothstep",
+          animated: true,
+          className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
+          style: {
+            stroke: sourceColor,
+            strokeWidth: 1.8,
+            opacity: focusNodeIds.size > 0 && focusMode === "dim" && !focusEdgeIds.has(e.id) ? 0.08 : 0.9,
+            strokeDasharray: st.dash || undefined,
+            "--deepsonar-edge-speed": st.speed,
+          } as CSSProperties,
+          markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: sourceColor },
+        };
+      }),
+      ...broadcasts.overlayEdges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
         type: "smoothstep",
-        animated: true,
-        className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
+        animated: edge.status === "planned" || edge.status === "injected",
+        className: `deepsonar-edge broadcast-overlay-edge is-${edge.status}`,
+        label: edge.attempts > 1 ? `广播 ×${edge.attempts}` : "广播",
+        labelStyle: { fill: BROADCAST_STATUS_COLOR[edge.status], fontSize: 10 },
         style: {
-          stroke: sourceColor,
-          strokeWidth: 1.8,
-          opacity: focusNodeIds.size > 0 && focusMode === "dim" && !focusEdgeIds.has(e.id) ? 0.08 : 0.9,
-          strokeDasharray: st.dash || undefined,
-          "--deepsonar-edge-speed": st.speed,
+          stroke: BROADCAST_STATUS_COLOR[edge.status],
+          strokeWidth: 2.2,
+          strokeDasharray: "5 5",
+          opacity: 0.95,
+          "--deepsonar-edge-speed": "2.2s",
         } as CSSProperties,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: sourceColor },
-      };
-    }),
+        markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: BROADCAST_STATUS_COLOR[edge.status] },
+      })),
+    ],
   };
 }
 
@@ -291,6 +319,11 @@ export function CanvasView({
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [broadcastPage, setBroadcastPage] = useState<CanvasBroadcastPage | null>(null);
+  const [broadcastError, setBroadcastError] = useState<string | null>(null);
+  const [messagePage, setMessagePage] = useState<CanvasHumanMessagePage | null>(null);
+  const [messageError, setMessageError] = useState<string | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const [elkResult, setElkResult] = useState<{
     key: string;
     positions: Map<string, { x: number; y: number }>;
@@ -318,6 +351,8 @@ export function CanvasView({
   const syncGenerationRef = useRef(0);
   const deltaInFlightRef = useRef<number | null>(null);
   const summaryInFlightRef = useRef<number | null>(null);
+  const broadcastInFlightRef = useRef<number | null>(null);
+  const messageInFlightRef = useRef<number | null>(null);
   const focusedNodeRef = useRef("");
   const clearSelected = useCallback(() => {
     nodeRequestRef.current += 1;
@@ -462,6 +497,64 @@ export function CanvasView({
       clearInterval(summaryTimer);
     };
   }, [canvasId, clearSelected, onData]);
+
+  // 广播账本独立于 topology delta 轮询；失败不能污染或阻断画布同步。
+  useEffect(() => {
+    let alive = true;
+    const generation = syncGenerationRef.current;
+    broadcastInFlightRef.current = null;
+    const loadBroadcasts = async () => {
+      if (broadcastInFlightRef.current === generation) return;
+      broadcastInFlightRef.current = generation;
+      try {
+        const next = await api.canvasBroadcasts(canvasId);
+        if (!alive || generation !== syncGenerationRef.current) return;
+        setBroadcastPage(next);
+        setBroadcastError(null);
+      } catch (cause) {
+        if (alive) setBroadcastError(String(cause));
+      } finally {
+        if (broadcastInFlightRef.current === generation) broadcastInFlightRef.current = null;
+      }
+    };
+    setBroadcastPage(null);
+    setBroadcastError(null);
+    void loadBroadcasts();
+    const timer = setInterval(() => void loadBroadcasts(), CANVAS_BROADCAST_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [canvasId]);
+
+  // 人工消息账本与 topology/broadcast 各自轮询；ACK 状态不得由节点文本推断。
+  useEffect(() => {
+    let alive = true;
+    const generation = syncGenerationRef.current;
+    messageInFlightRef.current = null;
+    const loadMessages = async () => {
+      if (messageInFlightRef.current === generation) return;
+      messageInFlightRef.current = generation;
+      try {
+        const next = await api.canvasMessages(canvasId, 100);
+        if (!alive || generation !== syncGenerationRef.current) return;
+        setMessagePage(next);
+        setMessageError(null);
+      } catch (cause) {
+        if (alive) setMessageError(String(cause));
+      } finally {
+        if (messageInFlightRef.current === generation) messageInFlightRef.current = null;
+      }
+    };
+    setMessagePage(null);
+    setMessageError(null);
+    void loadMessages();
+    const timer = setInterval(() => void loadMessages(), CANVAS_MESSAGE_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [canvasId]);
 
   useEffect(() => {
     if (data) onData?.(data);
@@ -681,6 +774,11 @@ export function CanvasView({
     [expandNode, collapseNode],
   );
 
+  const broadcasts = useMemo(
+    () => deriveCanvasBroadcasts(broadcastPage?.items ?? [], data?.nodes ?? []),
+    [broadcastPage?.items, data?.nodes],
+  );
+
   // 只物化当前展示子图的 flow 节点，坐标来自最新布局
   const { visibleNodes, visibleEdges } = useMemo(() => {
     if (!data || displayIds.size === 0) return { visibleNodes: [] as Node[], visibleEdges: [] as Edge[] };
@@ -707,10 +805,12 @@ export function CanvasView({
       traceActive ? traceIds.nodeIds : new Set<string>(),
       traceActive ? traceIds.edgeIds : new Set<string>(),
       traceMode,
+      broadcasts,
     );
     return { visibleNodes: flow.nodes, visibleEdges: flow.edges };
   }, [
     collapsedIds,
+    broadcasts,
     data,
     depths,
     displayIds,
@@ -835,6 +935,52 @@ export function CanvasView({
         <div className="absolute right-4 top-4 z-20 rounded-md border border-red-900/60 bg-red-950/80 px-3 py-2 font-mono text-[10px] text-red-300">
           同步失败：{error}
         </div>
+      )}
+      {broadcastError && (
+        <div className="broadcast-sync-error">广播账本同步失败：{broadcastError}</div>
+      )}
+      <button type="button" className="human-message-launch" onClick={() => setComposerOpen(true)}>
+        <PaperPlaneTilt size={16} weight="fill" />
+        <span><strong>发消息</strong><small>{selected ? `当前选择：${selected.title}` : "Hub 或 active 运行节点"}</small></span>
+      </button>
+      {messageError && <div className="human-message-sync-error">消息账本同步失败：{messageError}</div>}
+      {messagePage && messagePage.total > 0 && (
+        <section className="human-message-status-panel" aria-label="最近人工消息">
+          <div><strong>人工消息</strong><span>{messagePage.total}{messagePage.truncated ? "+" : ""} 条</span></div>
+          <ol>{messagePage.items.slice(0, 5).map((message) => <li key={message.id} onClick={() => {
+            const humanNode = data.nodes.find((node) => node.id === message.human_node_id);
+            if (humanNode) setSelected(humanNode);
+          }}>
+            <span className={`is-${message.status}`} />
+            <p><strong>{message.target_kind === "hub" ? "Hub" : data.nodes.find((node) => node.id === message.target_node_id)?.title ?? "运行节点"}</strong><small>{message.body}</small></p>
+            <em className={`is-${message.status}`}>{humanMessageStatusLabel(message.status)}</em>
+          </li>)}</ol>
+          <p>“已注入会话”只代表传输完成；只有显式 ACK 才是“Agent 已确认”。</p>
+        </section>
+      )}
+      {broadcastPage && broadcastPage.total > 0 && (
+        <section className="broadcast-status-panel" aria-label="最近广播状态">
+          <div className="broadcast-status-panel-heading">
+            <Broadcast size={14} />
+            <strong>最近广播</strong>
+            <span>{broadcastPage.total}{broadcastPage.truncated ? "+" : ""} 条</span>
+          </div>
+          <ol>
+            {broadcastPage.items.slice(0, 5).map((item) => (
+              <li key={item.id}>
+                <span style={{ background: BROADCAST_STATUS_COLOR[item.delivery_status] }} />
+                <div>
+                  <strong>{item.title}</strong>
+                  <small>{item.target_node_title ?? item.target_role ?? "目标节点暂不可见"}</small>
+                </div>
+                <em style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
+                  {broadcastStatusLabel(item.delivery_status)}
+                </em>
+              </li>
+            ))}
+          </ol>
+          <p>“已注入”仅表示内容进入 Agent 会话，不表示已阅读或处理。</p>
+        </section>
       )}
       {traceActive && (
         <div className="surface-shell absolute left-4 top-4 z-20 max-w-[calc(100%-2rem)] rounded-[14px] p-1">
@@ -1127,7 +1273,12 @@ export function CanvasView({
       */}
       {selected &&
         (selected.job_id && ["intent", "job"].includes(selected.node_type) ? (
-          <JobDetailPanel jobId={selected.job_id} onClose={clearSelected} />
+          <JobDetailPanel
+            jobId={selected.job_id}
+            onClose={clearSelected}
+            messages={(messagePage?.items ?? []).filter((message) => message.target_job_id === selected.job_id)}
+            onSendMessage={() => setComposerOpen(true)}
+          />
         ) : (
           <Sidebar
             node={selected}
@@ -1137,8 +1288,27 @@ export function CanvasView({
                 ? () => onTraceFinding(findingIdByNodeId.get(selected.id) as string)
                 : undefined
             }
+            messages={messagesForCanvasNode(messagePage?.items ?? [], selected.id)}
+            onSendMessage={isActiveHumanMessageTarget(selected) ? () => setComposerOpen(true) : undefined}
+            broadcastItems={broadcasts.sourceItems.get(selected.id) ?? []}
           />
         ))}
+      {composerOpen && (
+        <HumanMessageComposer
+          canvasId={canvasId}
+          projectId={data.canvas?.project_id ?? null}
+          selectedNode={selected}
+          onClose={() => setComposerOpen(false)}
+          onSent={(created: CanvasHumanMessage) => {
+            setMessagePage((current) => current ? {
+              ...current,
+              items: [created, ...current.items.filter((item) => item.id !== created.id)],
+              total: current.total + (current.items.some((item) => item.id === created.id) ? 0 : 1),
+            } : { canvas_id: canvasId, items: [created], total: 1, truncated: false });
+            setComposerOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
+import { actorHasScope } from "../../auth.js";
 import {
   drainNonGateVerifies,
   fixedPriorityForJob,
@@ -14,6 +15,8 @@ import {
 import { sql } from "../../db.js";
 import { cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { buildCanvasDelta, cursorGap, parseCanvasRevision } from "../../canvas-delta.js";
+import { parseCanvasBroadcastLimit } from "./broadcast-contract.js";
+import { createHumanMessage, listHumanMessages } from "./human-messages.js";
 
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 
@@ -171,6 +174,127 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       watermark: String(canvas.change_revision ?? 0),
       live: Number(canvas.active_count ?? 0) > 0,
     };
+  });
+
+  /**
+   * Fact/Finding 广播投递账本。`injected` 仅表示内容已注入 Agent
+   * 会话，不表示 Agent 已阅读或处理。
+   */
+  app.get("/canvases/:id/broadcasts", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { limit?: unknown };
+    const limit = parseCanvasBroadcastLimit(query.limit);
+    const result = await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${id} FOR SHARE`;
+      if (!canvas) return null;
+      const [count] = await tx`
+        SELECT COUNT(*)::int AS total
+        FROM canvas_broadcasts
+        WHERE canvas_id = ${id}`;
+      const items = await tx`
+        SELECT b.id, b.source_job_id, b.source_node_id, b.source_node_type,
+               b.target_job_id,
+               target.id AS target_node_id,
+               target.node_type AS target_node_type,
+               target.title AS target_node_title,
+               b.target_role, b.target_role_kind, b.attempt,
+               b.delivery_status, b.title, b.error, b.planned_at, b.delivered_at
+        FROM canvas_broadcasts b
+        LEFT JOIN LATERAL (
+          SELECT n.id, n.node_type, n.title
+          FROM canvas_nodes n
+          WHERE n.canvas_id = b.canvas_id
+            AND n.job_id = b.target_job_id
+            AND n.node_type IN ('intent', 'job', 'report')
+          ORDER BY CASE n.node_type
+            WHEN 'intent' THEN 1
+            WHEN 'job' THEN 2
+            WHEN 'report' THEN 3
+          END, n.created_at, n.id
+          LIMIT 1
+        ) target ON true
+        WHERE b.canvas_id = ${id}
+        ORDER BY b.planned_at DESC, b.id DESC
+        LIMIT ${limit}`;
+      return { items, total: Number(count?.total ?? 0) };
+    });
+    if (!result) {
+      return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    }
+    return {
+      canvas_id: id,
+      items: result.items,
+      total: result.total,
+      truncated: result.total > result.items.length,
+    };
+  });
+
+  app.get("/canvases/:id/messages", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const rawLimit = (req.query as { limit?: unknown }).limit;
+    const parsed = typeof rawLimit === "string" && /^[1-9]\d*$/u.test(rawLimit) ? Number(rawLimit) : 100;
+    const limit = Math.min(parsed, 500);
+    const [canvas] = await sql`SELECT id FROM canvases WHERE id=${id}`;
+    if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    const result = await listHumanMessages(id, limit);
+    return { canvas_id: id, ...result };
+  });
+
+  app.post("/canvases/:id/messages", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [messageCanvas] = await sql`SELECT project_id FROM canvases WHERE id=${id}`;
+    if (!messageCanvas) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    const body = z.object({
+      message_id: z.string().uuid(),
+      target: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("hub") }).strict(),
+        z.object({ kind: z.literal("job"), node_id: z.string().uuid() }).strict(),
+      ]),
+      body: z.string().min(1).max(8_000).regex(/\S/u),
+      attachment_version_ids: z.array(z.string().uuid()).max(20).default([]),
+    }).strict().parse(req.body);
+    if (body.attachment_version_ids.length > 0 && (!req.actor || !actorHasScope(req.actor, "assets:read"))) {
+      await audit(req, {
+        action: "canvas.human_message.create",
+        projectId: String(messageCanvas.project_id),
+        resourceType: "human_message",
+        resourceId: body.message_id,
+        result: "denied",
+        errorCode: "ASSETS_READ_REQUIRED",
+      });
+      return reply.code(403).send({ error: "附件消息需要 assets:read scope", error_code: "ASSETS_READ_REQUIRED" });
+    }
+    try {
+      const message = await createHumanMessage({
+        id: body.message_id,
+        canvasId: id,
+        target: body.target,
+        body: body.body,
+        attachmentVersionIds: [...new Set(body.attachment_version_ids)],
+      });
+      await audit(req, {
+        action: "canvas.human_message.create",
+        projectId: String(messageCanvas.project_id),
+        resourceType: "human_message",
+        result: "ok",
+        after: { canvas_id: id, target_kind: body.target.kind, attachment_count: body.attachment_version_ids.length },
+      });
+      return reply.code(202).send(message);
+    } catch (error) {
+      const statusCode = Number((error as { statusCode?: number }).statusCode ?? 500);
+      await audit(req, {
+        action: "canvas.human_message.create",
+        projectId: String(messageCanvas.project_id),
+        result: "error",
+        resourceId: body.message_id,
+        errorCode: statusCode === 404 ? "CANVAS_NOT_FOUND" : statusCode === 409 ? "TARGET_NOT_ACTIVE" : "HUMAN_MESSAGE_REJECTED",
+      });
+      return reply.code(statusCode).send({
+        error: error instanceof Error ? error.message : "human message rejected",
+        error_code: statusCode === 404 ? "CANVAS_NOT_FOUND" : statusCode === 409 ? "TARGET_NOT_ACTIVE" : "HUMAN_MESSAGE_REJECTED",
+      });
+    }
   });
 
   /** L1 on-demand hydration for one node; large body_json never enters L0. */

@@ -98,6 +98,19 @@ Finding        可派生  Followup Job（verify 等，由规则引擎决定）
 
 **布局纪律**：节点坐标由**服务端 auto-layout 分配**——分层 DAG 布局用 **elkjs**（比 dagre 更适合"链 + 分支"结构），坐标在节点落库时算好写入 `canvas_nodes.x/y`。Agent 不能提案坐标；画布布局不在 Agent 权限内。前端只读渲染（`nodesDraggable=false`）。
 
+#### 人工消息投递与两阶段 ACK
+
+画布允许人类向 Hub 或 active `intent` / `job` / `report` 节点发送文字与多文件，但消息账本不是拓扑本体：`human_messages` 与 `human_message_attachments` 持久化原始正文、目标、不可变资产版本及投递状态；服务端另建 `human` 节点用于过程可视化，Web 的状态 panel、target badge 和详情均由独立 `GET /canvases/:id/messages` 轮询派生，不把消息字段合并进 L0/L1 topology 数据。
+
+附件先通过项目共享资产 API 上传，key 使用消息 UUID 命名空间和安全文件名；只有整批上传成功，才用所有 `version_id` 创建消息。运行时校验 blob 摘要/字节数后，将不可变版本写入 `/workspace/.deepsonar/inbox/<message-id>/` 动态收件箱，再把正文、附件路径与显式 ACK 要求注入目标会话。部分上传失败不创建残缺消息；已上传资产留在项目资产账本中供审计。
+
+投递语义是明确的两阶段协议：
+
+1. `injected`：运行时已写入附件并把文字注入会话，UI 文案固定为“已注入会话，等待 Agent 确认”；这不是已读或已处理。
+2. `acknowledged`：目标 Agent 通过受治理的 `ack_human_message` operation 显式确认，服务端记录 `acknowledged_at` 与可选 `ack_summary`，UI 才显示“Agent 已确认”。普通自然语言输出、Session 文本、节点状态和文件访问均不能推断 ACK。
+
+`planned`、`unknown` 与 `failed` 保留真实未决/不确定性。消息发送和投递效果遵循 `replay_policy=never`：前端不静默重试 POST，Scheduler/重启恢复也不自动重放未知效果；再次发送必须由人类创建新的 message UUID。
+
 ### 3.3 Job 状态机与 Lease
 
 ```

@@ -31,6 +31,7 @@ export const CONTROL_SEMANTIC_EVENT_TYPES = {
   mark_job_done: "done",
   request_human: "human",
   publish_shared_asset: "shared_asset_publish",
+  ack_human_message: "human_message_ack",
 } as const;
 
 const SEMANTIC_PAYLOAD_SIZE_HINT =
@@ -61,6 +62,7 @@ const TOOL_ERROR_CODES = {
   list_available_roles: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidPayload)},
   list_shared_assets: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidPayload)},
   publish_shared_asset: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidPayload)},
+  ack_human_message: ${JSON.stringify(CONTROL_INPUT_ERROR_CODES.invalidPayload)},
 };
 const TOOL_INPUT_SCHEMAS = ${JSON.stringify(ControlToolInputSchemasJson)};
 const MAX_REFERENCES_PER_FROM = ${HUB_REFERENCE_LIMITS.perFrom};
@@ -120,6 +122,7 @@ const descriptions = {
   request_human: "提交至少 8 个非空白字符的人工介入理由；只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
   list_shared_assets: "分页列出本 Job 创建时冻结的只读共享资产目录。没有单独的下载工具：用返回的 mount_path/read_path 以普通文件工具直接读取（Scheduler 已从本地或 S3 兼容存储预挂载）。可按 scope 或逻辑 key 前缀过滤。",
   publish_shared_asset: "提议把 /workspace 下普通工作文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止发布平台运行目录或 CLI 用户/配置目录中的内容。",
+  ack_human_message: "明确确认当前 Job 已接收并纳入处理一条人工消息。message_id 必须来自注入消息；普通文本回复不会确认。可选 summary 最长 500 字符。",
 };
 const descriptionCautions = {
   list_available_roles: "Hub 派发前调用；必须原样复制返回的 name，不得猜测、缩写或使用已禁用及 system 角色。",
@@ -133,6 +136,7 @@ const descriptionCautions = {
   request_human: "仅在必要授权、凭据或高风险审批阻塞时调用一次；调用后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
   list_shared_assets: "用于发现本 Job 冻结的只读资产，再按返回路径读取；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取，可安全重复查询。",
   publish_shared_asset: "只发布普通 /workspace 中可复用的工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
+  ack_human_message: "仅在实际收到对应人工消息后调用；成功后该消息进入 acknowledged。不要猜测 message_id，不得确认其他 Job 的消息。仅在返回 isError 后重试。",
 };
 const definitions = Object.fromEntries(
   Object.keys(TOOL_INPUT_SCHEMAS).map((name) => [name, {
