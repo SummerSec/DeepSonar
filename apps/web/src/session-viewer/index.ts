@@ -1,5 +1,7 @@
 export { SessionViewer, type SessionViewerProps } from "./SessionViewer";
 export {
+  cacheHitRate,
+  formatCacheHitRate,
   formatTokenCount,
   normalizeSessionCli,
   parseAgentSession,

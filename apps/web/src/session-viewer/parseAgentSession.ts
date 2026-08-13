@@ -773,3 +773,26 @@ export function formatTokenCount(value: number): string {
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
   return String(Math.round(value));
 }
+
+/**
+ * Prompt cache 命中率：cache_read / (input + cache_read + cache_write)。
+ * 分母为会话侧可见的 prompt 相关 Token（未缓存输入 + 缓存命中读 + 缓存写入）；
+ * 无 usage 或分母为 0 时返回 null。
+ */
+export function cacheHitRate(totals: {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+}): number | null {
+  const input = Math.max(0, totals.input || 0);
+  const cacheRead = Math.max(0, totals.cacheRead || 0);
+  const cacheWrite = Math.max(0, totals.cacheWrite || 0);
+  const denom = input + cacheRead + cacheWrite;
+  if (denom <= 0) return null;
+  return cacheRead / denom;
+}
+
+export function formatCacheHitRate(rate: number | null): string {
+  if (rate == null || !Number.isFinite(rate)) return "—";
+  return `${(rate * 100).toFixed(1)}%`;
+}

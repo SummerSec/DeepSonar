@@ -1,6 +1,8 @@
 import { CaretDown, CaretRight, DownloadSimple } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import {
+  cacheHitRate,
+  formatCacheHitRate,
   formatTokenCount,
   parseAgentSession,
   sessionCliLabel,
@@ -79,6 +81,16 @@ function ItemCard({ item }: { item: SessionTimelineItem }) {
               out {formatTokenCount(item.tokens.output ?? 0)}
               {(item.tokens.cacheRead ?? 0) > 0 && ` · cacheR ${formatTokenCount(item.tokens.cacheRead ?? 0)}`}
               {(item.tokens.cacheWrite ?? 0) > 0 && ` · cacheW ${formatTokenCount(item.tokens.cacheWrite ?? 0)}`}
+              {(() => {
+                const rate = cacheHitRate({
+                  input: item.tokens.input ?? 0,
+                  cacheRead: item.tokens.cacheRead ?? 0,
+                  cacheWrite: item.tokens.cacheWrite ?? 0,
+                });
+                return rate != null && (item.tokens.cacheRead ?? 0) > 0
+                  ? ` · hit ${formatCacheHitRate(rate)}`
+                  : "";
+              })()}
             </div>
           )}
           {!open && hasBody && (
@@ -110,6 +122,14 @@ export function SessionViewer({
   const [kindFilter, setKindFilter] = useState<SessionItemKind | "all">("all");
 
   const parsed = useMemo(() => parseAgentSession(text, { cli }), [text, cli]);
+  const hitRate = useMemo(
+    () => cacheHitRate({
+      input: parsed.totals.input,
+      cacheRead: parsed.totals.cacheRead,
+      cacheWrite: parsed.totals.cacheWrite,
+    }),
+    [parsed.totals.input, parsed.totals.cacheRead, parsed.totals.cacheWrite],
+  );
 
   const filteredItems = useMemo(() => {
     if (kindFilter === "all") return parsed.items;
@@ -159,7 +179,7 @@ export function SessionViewer({
 
       {downloadError && <p className="text-[11px] text-red-300">{downloadError}</p>}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         <StatChip label="条目" value={String(parsed.items.length)} />
         <StatChip label="工具调用" value={String(counts.tool_call ?? 0)} />
         <StatChip
@@ -169,6 +189,15 @@ export function SessionViewer({
         <StatChip
           label="输出 Token"
           value={formatTokenCount(parsed.totals.output)}
+        />
+        <StatChip
+          label="缓存读"
+          value={formatTokenCount(parsed.totals.cacheRead)}
+        />
+        <StatChip
+          label="缓存命中率"
+          value={formatCacheHitRate(hitRate)}
+          title="cache_read / (input + cache_read + cache_write)"
         />
       </div>
 
@@ -226,12 +255,26 @@ export function SessionViewer({
           <div className="space-y-4">
             <section className="theme-surface rounded-2xl p-4 ring-1">
               <h3 className="mb-3 text-[12px] font-medium text-zinc-300">Token 汇总</h3>
-              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 <TokenStat label="输入" value={parsed.totals.input} />
                 <TokenStat label="输出" value={parsed.totals.output} />
                 <TokenStat label="缓存读" value={parsed.totals.cacheRead} />
                 <TokenStat label="缓存写" value={parsed.totals.cacheWrite} />
+                <div>
+                  <dt className="font-mono text-[10px] text-zinc-600">缓存命中率</dt>
+                  <dd className="font-mono text-[13px] text-zinc-200" title="cache_read / (input + cache_read + cache_write)">
+                    {formatCacheHitRate(hitRate)}
+                    {hitRate != null && (
+                      <span className="ml-1 text-[10px] text-zinc-600">
+                        ({formatTokenCount(parsed.totals.cacheRead)} / {formatTokenCount(parsed.totals.input + parsed.totals.cacheRead + parsed.totals.cacheWrite)})
+                      </span>
+                    )}
+                  </dd>
+                </div>
               </dl>
+              <p className="mt-3 font-mono text-[10px] leading-4 text-zinc-600">
+                命中率 = 缓存读 / (输入 + 缓存读 + 缓存写)。数据来自 Session 中的 usage 字段；CLI 未报告缓存用量时显示 —。
+              </p>
             </section>
             <section className="theme-surface rounded-2xl p-4 ring-1">
               <h3 className="mb-3 text-[12px] font-medium text-zinc-300">工具调用统计</h3>
@@ -302,9 +345,9 @@ function normalizeForDisplay(cli?: string | null): string {
   return cli.trim().toLowerCase();
 }
 
-function StatChip({ label, value }: { label: string; value: string }) {
+function StatChip({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="theme-surface rounded-xl px-3 py-2 ring-1">
+    <div className="theme-surface rounded-xl px-3 py-2 ring-1" title={title}>
       <div className="font-mono text-[10px] uppercase tracking-wide text-zinc-600">{label}</div>
       <div className="mt-0.5 font-mono text-[14px] text-zinc-200">{value}</div>
     </div>

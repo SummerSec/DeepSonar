@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cacheHitRate,
+  formatCacheHitRate,
   formatTokenCount,
   normalizeSessionCli,
   parseAgentSession,
@@ -182,4 +184,35 @@ test("formatTokenCount uses compact units", () => {
   assert.equal(formatTokenCount(0), "0");
   assert.equal(formatTokenCount(999), "999");
   assert.match(formatTokenCount(1500), /1\.5k/);
+});
+
+test("cacheHitRate is cache_read over prompt-side tokens", () => {
+  assert.equal(cacheHitRate({ input: 0, cacheRead: 0, cacheWrite: 0 }), null);
+  assert.equal(cacheHitRate({ input: 100, cacheRead: 0, cacheWrite: 0 }), 0);
+  // 900 cache hit / (100 input + 900 read + 0 write) = 90%
+  assert.equal(cacheHitRate({ input: 100, cacheRead: 900, cacheWrite: 0 }), 0.9);
+  assert.equal(formatCacheHitRate(0.9), "90.0%");
+  assert.equal(formatCacheHitRate(null), "—");
+});
+
+test("Claude usage totals feed cache hit rate", () => {
+  const text = [
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: "ok",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 10,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    }),
+  ].join("\n");
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  assert.equal(result.totals.input, 100);
+  assert.equal(result.totals.cacheRead, 900);
+  assert.equal(cacheHitRate(result.totals), 0.9);
 });
