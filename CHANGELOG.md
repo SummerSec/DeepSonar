@@ -6,15 +6,31 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+## [0.1.28] - 2026-08-13
+
 ### Added
 
 - 增加通用 CLI 客户端上下文预算：Credential 基准、RoleConfig 覆盖、Job 冻结展示、Agent 配置包和平台导入导出均使用 1024–10000000 的统一范围；Codex/OpenCode/Pi 物化到各自受支持落点，Claude Code 只冻结展示且不伪造绝对窗口设置。该预算不会提升 Provider、模型或账号的上游能力。Refs #144
+- Added DeepSeek Harness as a governed fifth Agent CLI using the official unattended JSON-RPC server, deterministic multi-turn sessions, exact-session recovery, structured event streaming, completion gating, and Job Session archival/viewing.
+
+### Changed
+
+- Pinned Claude Code 2.1.231, OpenCode 1.18.18, and the official DSH 0.1.0-rc.6 JSON-RPC package closure in governed runtime images.
+- Database schema is now v30. Existing databases must be rebuilt from `database/schema.sql`; the project intentionally provides no in-place migration path.
 
 ### Fixed
 
-- 修复 Job 控制能力元数据：Claude Code、Codex、OpenCode 与 Pi 现在均如实声明已注入的 HTTP Platform Control API；支持 MCP 的运行时仍保留过渡通道，由 Agent 对每次逻辑操作自行二选一。
+- 修复 Job 控制能力元数据：Claude Code、Codex、OpenCode、Pi 与 DSH 现在均如实声明已注入的 HTTP Platform Control API；支持 MCP 的运行时仍保留过渡通道，由 Agent 对每次逻辑操作自行二选一。
 - 修复 Anthropic 兼容子路径网关的模型发现与凭据健康检查：按有界有序候选探测模型端点，且仅在 HTTP 404/405 时回退。
 - 修复项目镜像策略投影不一致：`inherit_global` 继续继承全局镜像，`project_managed` 只使用项目角色映射；项目 RoleConfig 的遗留 `runtime_image_key` 不再通过写入、导入导出、展示或 readiness 生效。
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.28` tag. Rebuild existing databases for schema v30 before starting the Scheduler.
+
+### Runtime Images
+
+- Base, audit, and Kali images include only the pinned DSH machine runtime and official JSON-RPC components; DSH TUI, Web UI, skins, and `dsh-cc-tui` are explicitly excluded.
 
 ## [0.1.27] - 2026-08-13
 
@@ -169,6 +185,7 @@ Changes intended for the next release go here before a release section is dated 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.28]: https://github.com/SummerSec/DeepSonar/compare/v0.1.27...v0.1.28
 [0.1.27]: https://github.com/SummerSec/DeepSonar/compare/v0.1.26...v0.1.27
 [0.1.26]: https://github.com/SummerSec/DeepSonar/compare/v0.1.25...v0.1.26
 [0.1.25]: https://github.com/SummerSec/DeepSonar/compare/v0.1.24...v0.1.25
