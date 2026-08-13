@@ -1,6 +1,6 @@
 import { Crosshair } from "@phosphor-icons/react";
 import type { CanvasSummary } from "./api";
-import { deriveTaskLifecycle } from "./task-lifecycle";
+import { deriveTaskLifecycle, readScheduledStartAt } from "./task-lifecycle";
 
 /** 画布目标的自然语言单行展示。 */
 export function targetLine(target: Record<string, unknown> | undefined): string {
@@ -43,6 +43,8 @@ export function TaskList({
               rootStatus: c.root_status,
               reportStatus: c.report_status,
               endedAt: c.ended_at,
+              startedAt: c.started_at,
+              scheduledStartAt: readScheduledStartAt(c.target_json),
             });
             const active = lifecycle.isActive;
             const selected = c.id === selectedId;

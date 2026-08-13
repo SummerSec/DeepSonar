@@ -1576,8 +1576,17 @@ export const api = {
       /** 省略则继承项目设置；服务端在任务创建时冻结。 */
       allow_egress?: boolean;
       finding_protocol?: FindingProtocolConfig;
+      /** ISO-8601；到点前不领取 Job。与 schedule_beijing_8am 同时给出时本字段优先。 */
+      scheduled_start_at?: string;
+      /** 下一北京时间 08:00（Asia/Shanghai）开始。 */
+      schedule_beijing_8am?: boolean;
     },
-  ) => send<{ canvas_id: string; job: { id: string; status: string } }>("POST", `/projects/${projectId}/tasks`, t),
+  ) =>
+    send<{ canvas_id: string; job: { id: string; status: string }; scheduled_start_at?: string | null }>(
+      "POST",
+      `/projects/${projectId}/tasks`,
+      t,
+    ),
   /** 任务创建前的 Scheduler 权威就绪检查；网络覆盖只作用于本次任务。 */
   readiness: (projectId: string, opts?: { allow_egress?: boolean; material_source?: string }) =>
     get<ReadinessResponse>(
@@ -1586,11 +1595,11 @@ export const api = {
         material_source: opts?.material_source,
       })}`,
     ),
-  /** 恢复会话：继续执行（恢复 Job / 唤醒 Hub），不删历史 */
+  /** 恢复会话：继续执行（恢复 Job / 唤醒 Hub / 清除定时立即开始），不删历史 */
   resumeTaskSession: (canvasId: string) =>
     send<{
       canvas_id: string;
-      action: "already_running" | "resume_job" | "wake_hub";
+      action: "already_running" | "resume_job" | "wake_hub" | "start_now";
       job?: { id: string; status: string } | null;
       message?: string;
     }>("POST", `/tasks/${canvasId}/resume-session`),

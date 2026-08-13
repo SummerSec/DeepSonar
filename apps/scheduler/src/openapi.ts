@@ -267,6 +267,15 @@ const OPS: Op[] = [
         title: { type: "string" },
         content: { type: "string" },
         allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
+        scheduled_start_at: {
+          type: "string",
+          format: "date-time",
+          description: "定时开始（ISO-8601）；到点前 Job 保持 pending。与 schedule_beijing_8am 同时给出时以本字段为准",
+        },
+        schedule_beijing_8am: {
+          type: "boolean",
+          description: "为 true 时在下一北京时间 08:00（Asia/Shanghai）开始；scheduled_start_at 优先",
+        },
       },
     },
   },

@@ -58,8 +58,8 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, allow_egress?}`；省略出网字段时继承项目默认值 |
-| POST | /tasks/:canvasId/resume-session | jobs:control | 恢复该任务的会话入口 |
+| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, allow_egress?, schedule_beijing_8am?, scheduled_start_at?}`；省略出网字段时继承项目默认值；`schedule_beijing_8am=true` 在下一北京时间 08:00 开始，`scheduled_start_at`（ISO）优先 |
+| POST | /tasks/:canvasId/resume-session | jobs:control | 恢复该任务的会话入口；仅 pending 且仍有定时门时清除门禁并立即调度（`action=start_now`） |
 | POST | /tasks/:canvasId/archive | tasks:write | 归档任务 |
 | POST | /tasks/:canvasId/unarchive | tasks:write | 取消归档 |
 | DELETE | /tasks/:canvasId | tasks:write | 删除任务 |

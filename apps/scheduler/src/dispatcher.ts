@@ -38,6 +38,8 @@ import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
+import { bindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js";
+import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -60,6 +62,7 @@ export type DispatchCandidate = {
   finding_id?: unknown;
   type?: unknown;
   payload_json?: unknown;
+  canvas_target_json?: unknown;
   agent_cli: unknown;
   credential_provider: unknown;
   credential_id: unknown;
@@ -525,9 +528,11 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
                    j.agent_snapshot_json->>'model' AS model,
-                   c.public_metadata_json AS credential_metadata
+                   c.public_metadata_json AS credential_metadata,
+                   cv.target_json AS canvas_target_json
             FROM jobs j
             LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
+            LEFT JOIN canvases cv ON cv.id = j.canvas_id
             WHERE j.status = 'pending'
               AND (
                 j.priority < ${cursor.priority}
@@ -544,9 +549,11 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
                    j.agent_snapshot_json->>'model' AS model,
-                   c.public_metadata_json AS credential_metadata
+                   c.public_metadata_json AS credential_metadata,
+                   cv.target_json AS canvas_target_json
             FROM jobs j
             LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
+            LEFT JOIN canvases cv ON cv.id = j.canvas_id
             WHERE j.status = 'pending'
             ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
             LIMIT ${pendingPageSize}
@@ -566,6 +573,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
 
       for (const job of pending) {
         if (claimed.length >= slots) break;
+        // Task-level schedule gate: hold every job on the canvas until start_at.
+        if (canvasScheduleBlocksDispatch((job as DispatchCandidate).canvas_target_json)) continue;
         const graphSkip = await graphEligibilityReasonFromDb(
           tx as unknown as typeof sql,
           job as DispatchCandidate,
@@ -1290,10 +1299,18 @@ export function kickDispatcher() {
 }
 
 export function startDispatcher() {
+  // Wire schedule wake before any kick so future start_at can re-arm safely.
+  bindScheduleWake(kickDispatcher);
+
   // 事件源：DB LISTEN/NOTIFY（0005_job_events.sql；NOTIFY 提交后投递，与事务可见性一致）
   const listenPromise = sql.listen("deepsonar_jobs", () => kickDispatcher());
   // 启动补跑： scheduler 停机期间堆积的 pending job 不会产生新事件，先清一次
-  void listenPromise.then(() => kickDispatcher()).catch((e) => console.error("[dispatcher] LISTEN 失败:", e));
+  void listenPromise
+    .then(() => {
+      kickDispatcher();
+      void refreshScheduleWakeFromDb();
+    })
+    .catch((e) => console.error("[dispatcher] LISTEN 失败:", e));
 
   // 兜底轮询默认关闭；DEEPSONAR_DISPATCH_POLL_SEC>0 显式开启（调试/极端场景用）
   let timer: ReturnType<typeof setInterval> | null = null;

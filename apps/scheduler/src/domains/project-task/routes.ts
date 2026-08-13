@@ -28,6 +28,8 @@ import {
   freezeAgentSnapshotNetworkPolicy,
 } from "../role-runtime-snapshot/index.js";
 import { PROJECT_IMAGE_STRATEGIES } from "../role-runtime-snapshot/application.js";
+import { noteScheduleWakeAt } from "../../schedule-wake.js";
+import { clearTaskSchedule, resolveCreateTaskSchedule } from "../../task-schedule.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -50,6 +52,10 @@ const CreateTaskBody = z.object({
   content: z.string().trim().min(1).max(20_000),
   allow_egress: z.boolean().optional(),
   finding_protocol: FindingProtocolConfig.optional(),
+  /** ISO-8601 timestamptz; omit for immediate start. Wins over schedule_beijing_8am. */
+  scheduled_start_at: z.string().datetime().optional(),
+  /** When true (and scheduled_start_at omitted), start at next 08:00 Asia/Shanghai. */
+  schedule_beijing_8am: z.boolean().optional(),
 });
 const TriggerTaskBody = z.object({
   event_id: z.string().trim().min(1).max(200),
@@ -235,6 +241,16 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     if (!project) return reply.code(404).send({ error: "project not found" });
     if (project.status !== "active") return reply.code(409).send({ error: "项目已归档，不能新建任务" });
 
+    let schedule;
+    try {
+      schedule = resolveCreateTaskSchedule({
+        scheduled_start_at: body.scheduled_start_at,
+        schedule_beijing_8am: body.schedule_beijing_8am,
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+
     let canvasId: string;
     try {
       canvasId = await ensureCanvasForTask({
@@ -248,6 +264,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           ...(body.allow_egress !== undefined
             ? { network_policy: { allow_egress: body.allow_egress } }
             : {}),
+          ...(schedule ? { schedule } : {}),
         },
       });
     } catch (error) {
@@ -265,9 +282,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         content: body.content,
         goal: body.content,
         trigger: { kind: "user_task" },
+        ...(schedule ? { schedule } : {}),
       },
     });
     if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
+    if (schedule) noteScheduleWakeAt(schedule.start_at);
     await audit(req, {
       action: "task.create",
       resourceType: "job",
@@ -277,9 +296,14 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         title: body.title,
         canvas_id: canvasId,
         allow_egress: body.allow_egress ?? "project_default",
+        scheduled_start_at: schedule?.start_at ?? null,
       },
     });
-    return reply.code(201).send({ canvas_id: canvasId, job });
+    return reply.code(201).send({
+      canvas_id: canvasId,
+      job,
+      scheduled_start_at: schedule?.start_at ?? null,
+    });
   });
 
   // 事件入口：监控、Webhook、CI 等机器事件与人工任务共用 Hub 决策链路。
@@ -345,6 +369,32 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         AND status IN ('pending','claimed','provisioning','running','waiting_human')
       ORDER BY created_at DESC LIMIT 5`;
     if (active.length > 0) {
+      // Only-pending + future schedule: "resume" means start now (clear gate).
+      const onlyPending = active.every((row) => String(row.status) === "pending");
+      const target = (canvas.target_json ?? {}) as Record<string, unknown>;
+      const hasSchedule = Boolean(
+        target.schedule && typeof target.schedule === "object" && !Array.isArray(target.schedule),
+      );
+      if (onlyPending && hasSchedule) {
+        const cleared = clearTaskSchedule({ ...target });
+        await sql`
+          UPDATE canvases SET target_json = ${sql.json(cleared as never)}
+          WHERE id = ${canvasId}`;
+        await audit(req, {
+          action: "task.resume_session",
+          resourceType: "canvas",
+          resourceId: canvasId,
+          projectId,
+          after: { canvas_id: canvasId, mode: "start_now", cleared_schedule: true },
+        });
+        await sql`SELECT pg_notify('deepsonar_jobs', 'resume_session')`;
+        return reply.code(200).send({
+          canvas_id: canvasId,
+          action: "start_now" as const,
+          jobs: active,
+          message: "已清除定时门禁，任务立即进入调度",
+        });
+      }
       return {
         canvas_id: canvasId,
         action: "already_running" as const,
@@ -450,7 +500,8 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
     if (active.length > 0) return reply.code(409).send({ error: "该任务仍有活动 job，请先取消后再重试" });
 
-    const target = { ...((canvas.target_json ?? {}) as Record<string, unknown>) };
+    // Retry is an explicit "run again now" — drop any leftover schedule gate.
+    const target = clearTaskSchedule({ ...((canvas.target_json ?? {}) as Record<string, unknown>) });
     delete target.convergence;
     const title = (canvas.title as string) || "任务";
     const content =
@@ -497,7 +548,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       );
       await wipeCanvasRuntimeData(tx, canvasId);
 
-      // 重置意图上的收敛态，保留用户任务内容
+      // 重置意图上的收敛态与定时门，保留用户任务内容
       await tx`
         UPDATE canvases SET target_json = ${tx.json(target as never)}
         WHERE id = ${canvasId}`;

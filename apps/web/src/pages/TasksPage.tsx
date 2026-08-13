@@ -1,14 +1,16 @@
-import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Pause, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
+import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Clock, Pause, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type Project } from "../api";
 import { FindingProtocolEditor } from "../FindingProtocolEditor";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
-import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle } from "../task-lifecycle";
+import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, formatElapsed, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived";
+/** 立即开始，或指定墙钟时间（按浏览器本地时区选择，提交为 ISO UTC）。 */
+type ScheduleMode = "immediate" | "at";
 interface PlaneInfo { enabled: boolean; web_url: string; workspace_slug: string; ready_state: string; }
 const inputCls =
   "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
@@ -19,6 +21,83 @@ const NETWORK_OPTIONS = [
   { value: "deny" as const, label: "禁止出网" },
 ];
 
+function formatBeijingTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleString("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }) + "（北京时间）";
+  } catch {
+    return iso;
+  }
+}
+
+/** datetime-local value (YYYY-MM-DDTHH:mm) in the user's local wall clock. */
+function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Next 08:00 Asia/Shanghai as a local datetime-local string for the picker. */
+function nextBeijing8amLocalValue(from: Date = new Date()): string {
+  // Asia/Shanghai is fixed UTC+8; 08:00 Beijing = 00:00 UTC same calendar day.
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(from).filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
+  ) as Record<string, string>;
+  let y = Number(parts.year);
+  let m = Number(parts.month);
+  let d = Number(parts.day);
+  const hour = Number(parts.hour);
+  const minute = Number(parts.minute);
+  const second = Number(parts.second);
+  if (hour > 8 || (hour === 8 && (minute > 0 || second > 0))) {
+    const pivot = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    pivot.setUTCDate(pivot.getUTCDate() + 1);
+    const next = Object.fromEntries(
+      fmt.formatToParts(pivot).filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
+    ) as Record<string, string>;
+    y = Number(next.year);
+    m = Number(next.month);
+    d = Number(next.day);
+  }
+  const utc = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)); // 08:00 Beijing
+  return toDatetimeLocalValue(utc);
+}
+
+function parseDatetimeLocalToIso(value: string): string | null {
+  if (!value.trim()) return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+/** Past wall-clock times cannot schedule a future wake; surface before submit. */
+function scheduleTimeIssue(localValue: string, nowMs = Date.now()): string | null {
+  if (!localValue.trim()) return "请选择开始时间";
+  const iso = parseDatetimeLocalToIso(localValue);
+  if (!iso) return "开始时间格式无效";
+  if (Date.parse(iso) <= nowMs) {
+    return "开始时间不能是过去的时间。历史时刻不会触发调度，请改选未来时间，或改用「立即开始」。";
+  }
+  return null;
+}
+
 function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | null }) {
   const [open, setOpen] = useState(false);
   const projectUrl = plane ? `${plane.web_url}/${plane.workspace_slug}/projects/${project.plane_project_id}/issues/` : null;
@@ -26,10 +105,18 @@ function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | n
 }
 
 function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
-  const [form, setForm] = useState<{ title: string; content: string; network: "project" | "allow" | "deny" }>({ title: "", content: "", network: "project" });
+  const [form, setForm] = useState<{ title: string; content: string; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
+    title: "",
+    content: "",
+    network: "project",
+    schedule: "immediate",
+    startAtLocal: nextBeijing8amLocalValue(),
+  });
   const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Tick so past-time warnings update if the form stays open across a boundary. */
+  const [clock, setClock] = useState(() => Date.now());
   useEffect(() => {
     let active = true;
     api.settings(projectId).then((settings) => {
@@ -37,6 +124,19 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
     }).catch(() => {});
     return () => { active = false; };
   }, [projectId]);
+  useEffect(() => {
+    if (form.schedule !== "at") return;
+    const timer = window.setInterval(() => setClock(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [form.schedule]);
+
+  const scheduleIssue = form.schedule === "at" ? scheduleTimeIssue(form.startAtLocal, clock) : null;
+  const scheduledPreview = useMemo(() => {
+    if (form.schedule !== "at" || scheduleIssue) return null;
+    const iso = parseDatetimeLocalToIso(form.startAtLocal);
+    return iso ? formatBeijingTime(iso) : null;
+  }, [form.schedule, form.startAtLocal, scheduleIssue]);
+
   return (
     <div className="surface-shell mb-5 deepsonar-reveal">
       <form
@@ -45,6 +145,14 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
           e.preventDefault();
           if (!form.title.trim()) return flash("请写明希望得到的结果");
           if (!form.content.trim()) return flash("请补充必要背景或边界");
+          let scheduledStartAt: string | undefined;
+          if (form.schedule === "at") {
+            const issue = scheduleTimeIssue(form.startAtLocal);
+            if (issue) return flash(issue);
+            const iso = parseDatetimeLocalToIso(form.startAtLocal);
+            if (!iso) return flash("请选择合法的开始时间");
+            scheduledStartAt = iso;
+          }
           setSubmitting(true);
           try {
             const result = await api.createTask(projectId, {
@@ -52,8 +160,13 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
               content: form.content.trim(),
               ...(form.network === "project" ? {} : { allow_egress: form.network === "allow" }),
               ...(findingProtocol ? { finding_protocol: findingProtocol } : {}),
+              ...(scheduledStartAt ? { scheduled_start_at: scheduledStartAt } : {}),
             });
-            flash("任务已入队，Hub 正在决定执行路径");
+            if (result.scheduled_start_at) {
+              flash(`任务已入队，将于 ${formatBeijingTime(result.scheduled_start_at) ?? "计划时间"} 开始执行`);
+            } else {
+              flash("任务已入队，Hub 正在决定执行路径");
+            }
             onDone(result.canvas_id);
           } catch (error) {
             flash(`创建失败：${error instanceof Error ? error.message : error}`);
@@ -126,6 +239,107 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
               })}
             </div>
           </fieldset>
+
+          {/* 执行时间：立即 / 指定时间 集中在同一面板 */}
+          <section className="rounded-xl border border-white/[.06] bg-white/[.015] p-4" aria-labelledby="task-schedule-heading">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-violet-400/[.1] text-violet-300 ring-1 ring-violet-400/20">
+                <Clock size={15} weight="light" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 id="task-schedule-heading" className="text-[13px] font-medium text-zinc-200">执行时间</h3>
+                <p className="mt-0.5 text-[11px] leading-5 text-zinc-600">
+                  立即开始，或指定到点后自动入调度；到点前可在列表里提前「立即开始」。
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="执行时间">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={form.schedule === "immediate"}
+                onClick={() => setForm({ ...form, schedule: "immediate" })}
+                className={`rounded-lg border px-3.5 py-2.5 text-left transition-colors ${
+                  form.schedule === "immediate"
+                    ? "border-acc-400/35 bg-acc-500/[.08] text-zinc-100"
+                    : "theme-input-surface text-zinc-400 hover:border-white/[.12] hover:text-zinc-200"
+                }`}
+              >
+                <span className="block text-[13px] leading-6">立即开始</span>
+                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-600">提交后立刻进入调度</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={form.schedule === "at"}
+                onClick={() => setForm({
+                  ...form,
+                  schedule: "at",
+                  startAtLocal: form.startAtLocal || nextBeijing8amLocalValue(),
+                })}
+                className={`rounded-lg border px-3.5 py-2.5 text-left transition-colors ${
+                  form.schedule === "at"
+                    ? "border-acc-400/35 bg-acc-500/[.08] text-zinc-100"
+                    : "theme-input-surface text-zinc-400 hover:border-white/[.12] hover:text-zinc-200"
+                }`}
+              >
+                <span className="block text-[13px] leading-6">指定时间</span>
+                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-600">到点后自动开始</span>
+              </button>
+            </div>
+
+            {form.schedule === "at" && (
+              <div className="mt-3 space-y-3 border-t border-white/[.05] pt-3">
+                <label className="block">
+                  <span className={labelCls}>开始时刻（本机时区）</span>
+                  <input
+                    type="datetime-local"
+                    value={form.startAtLocal}
+                    min={toDatetimeLocalValue(new Date(clock))}
+                    onChange={(e) => setForm({ ...form, startAtLocal: e.target.value })}
+                    aria-invalid={Boolean(scheduleIssue)}
+                    aria-describedby={scheduleIssue ? "task-schedule-error" : "task-schedule-hint"}
+                    className={`${inputCls} [color-scheme:dark] ${
+                      scheduleIssue
+                        ? "border-red-500/45 focus:border-red-400/60"
+                        : ""
+                    }`}
+                    required
+                  />
+                </label>
+                {scheduleIssue ? (
+                  <div
+                    id="task-schedule-error"
+                    role="alert"
+                    className="flex items-start gap-2 rounded-lg bg-red-500/[.08] px-3 py-2.5 text-[11px] leading-5 text-red-200 ring-1 ring-red-500/25"
+                  >
+                    <WarningCircle size={14} className="mt-0.5 shrink-0 text-red-300" weight="fill" />
+                    <span>{scheduleIssue}</span>
+                  </div>
+                ) : (
+                  <p id="task-schedule-hint" className="text-[11px] leading-5 text-zinc-600">
+                    必须选择<strong className="font-medium text-zinc-400">未来</strong>时刻；过去的时间不会触发调度。
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, startAtLocal: nextBeijing8amLocalValue() })}
+                    className="rounded-full bg-violet-400/[.08] px-3 py-1.5 text-[11px] text-violet-200 ring-1 ring-violet-400/20 transition-colors hover:bg-violet-400/[.14]"
+                  >
+                    下一北京时间 08:00
+                  </button>
+                  {scheduledPreview && (
+                    <span className="font-mono text-[10px] text-zinc-500">
+                      将于 {scheduledPreview} 开始
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+
           {effectiveFindingProtocol && (
             <FindingProtocolEditor
               value={findingProtocol}
@@ -137,13 +351,26 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
         </div>
 
         <div className="mt-6 flex flex-col gap-3 border-t border-white/[.045] pt-4 sm:flex-row sm:items-center">
-          <div className="flex items-center gap-2 text-[11px] text-zinc-600">
-            <Sparkle size={13} className="shrink-0 text-acc-400" />
-            提交后立即进入任务工作台，执行过程可实时追踪
+          <div className={`flex items-center gap-2 text-[11px] ${scheduleIssue ? "text-red-300" : "text-zinc-600"}`}>
+            {scheduleIssue ? (
+              <>
+                <WarningCircle size={13} className="shrink-0" weight="fill" />
+                请修正开始时间后再提交
+              </>
+            ) : (
+              <>
+                <Sparkle size={13} className="shrink-0 text-acc-400" />
+                {form.schedule === "at" && scheduledPreview
+                  ? `将于 ${scheduledPreview} 自动开始；列表可提前启动`
+                  : "提交后立即进入任务工作台，执行过程可实时追踪"}
+              </>
+            )}
           </div>
           <div className="flex gap-2 sm:ml-auto">
             <SecondaryButton type="button" onClick={onCancel}>稍后再说</SecondaryButton>
-            <PrimaryButton type="submit" busy={submitting}>交给系统</PrimaryButton>
+            <PrimaryButton type="submit" busy={submitting} disabled={Boolean(scheduleIssue)}>
+              交给系统
+            </PrimaryButton>
           </div>
         </div>
       </form>
@@ -191,10 +418,13 @@ export function TasksPage() {
       rootStatus: c.root_status,
       reportStatus: c.report_status,
       endedAt: c.ended_at,
+      startedAt: c.started_at,
+      scheduledStartAt: readScheduledStartAt(c.target_json),
+      nowMs: clock,
     }).isActive);
     if (filter === "findings") return canvases.filter((c) => c.finding_count > 0);
     return canvases;
-  }, [canvases, filter]);
+  }, [canvases, filter, clock]);
   if (!projectId) return null;
   if (loading) return <PageSkeleton rows={3} />;
   const activeCount = canvases.filter((canvas) => deriveTaskLifecycle({
@@ -204,6 +434,9 @@ export function TasksPage() {
     rootStatus: canvas.root_status,
     reportStatus: canvas.report_status,
     endedAt: canvas.ended_at,
+    startedAt: canvas.started_at,
+    scheduledStartAt: readScheduledStartAt(canvas.target_json),
+    nowMs: clock,
   }).isActive).length;
   const findingCount = canvases.reduce((total, canvas) => total + canvas.finding_count, 0);
   const visibleCount = canvases.length;
@@ -221,6 +454,7 @@ export function TasksPage() {
       {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && filter !== "archived" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
         <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((canvas, index) => {
+            const scheduledStartAt = readScheduledStartAt(canvas.target_json);
             const lifecycle = deriveTaskLifecycle({
               status: canvas.status,
               activeCount: canvas.active_count,
@@ -228,15 +462,31 @@ export function TasksPage() {
               rootStatus: canvas.root_status,
               reportStatus: canvas.report_status,
               endedAt: canvas.ended_at,
+              startedAt: canvas.started_at,
+              scheduledStartAt,
+              nowMs: clock,
             });
             const isActive = lifecycle.isActive;
+            const isScheduled = lifecycle.status === "scheduled";
             const isArchived = lifecycle.status === "archived";
-            const runningElapsed = canvas.started_at
+            // 生命周期从「实际开始执行」起算，未真正开始则为「未开始」。
+            const executionElapsed = canvas.started_at
               ? formatElapsed(canvas.started_at, lifecycle.isActive ? null : lifecycle.endedAt, clock)
-              : isActive
-                ? "等待启动"
-                : "—";
-            const lifecycleElapsed = formatElapsed(canvas.created_at, lifecycle.isActive ? null : lifecycle.endedAt, clock);
+              : "未开始";
+            // 开始执行：已开始显示实际时刻；定时未开始显示计划时刻；其它未开始显示 —。
+            const startExecValue = canvas.started_at
+              ? relativeTime(canvas.started_at)
+              : isScheduled && scheduledStartAt
+                ? (formatBeijingTime(scheduledStartAt) ?? "定时等待")
+                : isActive
+                  ? "等待启动"
+                  : "—";
+            const startExecTitle = canvas.started_at
+              ? `实际开始 ${formatTime(canvas.started_at)}`
+              : isScheduled && scheduledStartAt
+                ? `计划开始 ${formatBeijingTime(scheduledStartAt) ?? scheduledStartAt}`
+                : "尚未有 Job 实际开始";
+            const scheduleLabel = isScheduled ? formatBeijingTime(scheduledStartAt) : null;
             return (
               <article key={canvas.id} className="surface-shell deepsonar-reveal" style={{ animationDelay: `${index * 40}ms` }}>
                 <div className="surface-core flex flex-col gap-2.5 p-3">
@@ -245,9 +495,11 @@ export function TasksPage() {
                       className={`relative mt-0.5 grid size-6 shrink-0 place-items-center rounded-md ring-1 ${
                         isArchived
                           ? "bg-zinc-500/[.08] text-zinc-500 ring-white/[.06]"
-                          : isActive
-                            ? "bg-run-400/[.08] text-run-400 ring-run-400/15"
-                            : "bg-white/[.03] text-zinc-500 ring-white/[.055]"
+                          : isScheduled
+                            ? "bg-violet-400/[.08] text-violet-300 ring-violet-400/15"
+                            : isActive
+                              ? "bg-run-400/[.08] text-run-400 ring-run-400/15"
+                              : "bg-white/[.03] text-zinc-500 ring-white/[.055]"
                       }`}
                     >
                       {isActive && !isArchived
@@ -262,7 +514,9 @@ export function TasksPage() {
                         {canvas.title}
                       </Link>
                       <p className="mt-0.5 line-clamp-1 text-[10px] leading-4 text-zinc-600">
-                        {targetLine(canvas.target_json) || "任务正在等待范围解析"}
+                        {scheduleLabel
+                          ? `计划 ${scheduleLabel} 开始`
+                          : targetLine(canvas.target_json) || "任务正在等待范围解析"}
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-0.5">
@@ -284,8 +538,22 @@ export function TasksPage() {
                   </div>
                   <div className="grid grid-cols-3 gap-x-2 gap-y-1 border-t border-white/[.045] pt-2">
                     <LifecycleValue label="创建" value={relativeTime(canvas.created_at)} title={formatTime(canvas.created_at)} />
-                    <LifecycleValue label="运行" value={runningElapsed} title={canvas.started_at ? (lifecycle.isActive ? "从首个实际开始到现在" : lifecycle.endedAt ? "从首个实际开始到终态结束" : undefined) : "尚未有 Job 实际开始"} tone={isActive ? "#65e6b4" : undefined} />
-                    <LifecycleValue label="生命周期" value={lifecycleElapsed} title="从画布创建到结束（或现在）" />
+                    <LifecycleValue
+                      label="开始执行"
+                      value={startExecValue}
+                      title={startExecTitle}
+                      tone={isScheduled ? "#a78bfa" : canvas.started_at && isActive ? "#65e6b4" : undefined}
+                    />
+                    <LifecycleValue
+                      label="生命周期"
+                      value={executionElapsed}
+                      title={
+                        canvas.started_at
+                          ? (lifecycle.isActive ? "从实际开始执行到现在" : "从实际开始执行到终态结束")
+                          : "生命周期从实际开始执行起算；尚未开始"
+                      }
+                      tone={canvas.started_at && isActive ? "#65e6b4" : undefined}
+                    />
                   </div>
                   <div className="flex flex-wrap items-center gap-1 border-t border-white/[.045] pt-2">
                 <span className="font-mono text-[8px] text-zinc-700">
@@ -308,6 +576,25 @@ export function TasksPage() {
                       取消
                     </button>
                   )}
+                  {!isArchived && isScheduled && (
+                    <button
+                      title="清除定时门禁，立即进入调度"
+                      onClick={async () => {
+                        try {
+                          const r = await api.resumeTaskSession(canvas.id);
+                          if (r.action === "start_now") flash(r.message ?? "已立即开始");
+                          else if (r.action === "already_running") flash(r.message ?? "任务已在执行");
+                          else flash("已提交启动请求");
+                        } catch (e) {
+                          flash(`立即开始失败：${e instanceof Error ? e.message : e}`);
+                        }
+                      }}
+                      className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-violet-300 transition-colors hover:bg-violet-500/[.08] hover:text-violet-200"
+                    >
+                      <AirplaneTakeoff size={11} />
+                      立即开始
+                    </button>
+                  )}
                   {!isArchived && !isActive && canvas.job_count > 0 && (
                     <button
                       title="继续执行：恢复中断 Job 或唤醒 Hub（保留历史）"
@@ -316,6 +603,7 @@ export function TasksPage() {
                           const r = await api.resumeTaskSession(canvas.id);
                           if (r.action === "already_running") flash(r.message ?? "任务已在执行");
                           else if (r.action === "resume_job") flash("已恢复会话，继续执行");
+                          else if (r.action === "start_now") flash(r.message ?? "已立即开始");
                           else flash("已恢复会话，Hub 继续决策");
                         } catch (e) {
                           flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);

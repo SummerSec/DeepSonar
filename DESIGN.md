@@ -93,6 +93,7 @@ pending → claimed → provisioning → running
 - Lease + Reaper：超时/孤儿**调度器判定**，不信任 Agent 自报。
 - 唤醒：`pg_notify('deepsonar_jobs')` 为主；轮询可关。
 - 优先级：资格与排序分离（图阶段 / 收敛证据 vs 固定优先级），避免 priority 通胀。
+- **任务执行时间（定时开始）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
 
 ### 5.1 Job Attempt 与外部效果
 

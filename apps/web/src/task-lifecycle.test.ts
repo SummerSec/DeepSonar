@@ -150,3 +150,29 @@ test("analysis complete and report generation remain explicit phases", () => {
     "reporting",
   );
 });
+
+test("pending jobs before schedule start_at show scheduled (still active)", () => {
+  const lifecycle = deriveTaskLifecycle({
+    activeCount: 1,
+    jobCount: 1,
+    startedAt: null,
+    scheduledStartAt: "2026-08-14T00:00:00.000Z",
+    nowMs: Date.parse("2026-08-13T12:00:00.000Z"),
+  });
+  assert.equal(lifecycle.status, "scheduled");
+  assert.equal(lifecycle.label, "定时等待");
+  assert.equal(lifecycle.isActive, true);
+});
+
+test("schedule gate opens after start_at even without started_at", () => {
+  assert.equal(
+    deriveTaskLifecycle({
+      activeCount: 1,
+      jobCount: 1,
+      startedAt: null,
+      scheduledStartAt: "2026-08-14T00:00:00.000Z",
+      nowMs: Date.parse("2026-08-14T00:00:00.000Z"),
+    }).status,
+    "running",
+  );
+});

@@ -17,6 +17,7 @@ export const ACTIVE_TASK_JOB_STATUSES = new Set([
 
 export type TaskLifecycleStatus =
   | "archived"
+  | "scheduled"
   | "running"
   | "failed"
   | "completed"
@@ -41,6 +42,12 @@ export interface TaskLifecycleInput {
   reportStatus?: string | null;
   /** Scheduler lifecycle end timestamp. */
   endedAt?: string | null;
+  /** First actual job start; null means the canvas has not left the queue. */
+  startedAt?: string | null;
+  /** Future ISO start gate from target_json.schedule.start_at. */
+  scheduledStartAt?: string | null;
+  /** Optional clock override for tests / live tick. */
+  nowMs?: number;
 }
 
 export interface TaskLifecycleProjection {
@@ -58,6 +65,7 @@ export const TASK_LIFECYCLE_META: Record<
   { label: string; color: string }
 > = {
   archived: { label: "已归档", color: "#71717a" },
+  scheduled: { label: "定时等待", color: "#a78bfa" },
   running: { label: "进行中", color: "#65e6b4" },
   failed: { label: "失败", color: "#f87171" },
   completed: { label: "已完成", color: "#65e6b4" },
@@ -65,6 +73,17 @@ export const TASK_LIFECYCLE_META: Record<
   analysis_complete: { label: "分析完成 · 等待报告", color: "#34d399" },
   idle: { label: "空闲", color: "#7f8796" },
 };
+
+/** Read schedule.start_at from canvas target_json when present and parseable. */
+export function readScheduledStartAt(targetJson: unknown): string | null {
+  if (!targetJson || typeof targetJson !== "object" || Array.isArray(targetJson)) return null;
+  const schedule = (targetJson as Record<string, unknown>).schedule;
+  if (!schedule || typeof schedule !== "object" || Array.isArray(schedule)) return null;
+  const raw = (schedule as Record<string, unknown>).start_at;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
 
 function count(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
@@ -88,10 +107,10 @@ function isReportGeneration(value: string): boolean {
 
 /**
  * Derive the one task lifecycle used by cards, filters, and the workbench.
- * Precedence is intentional: archived > active work > failure > report phase >
- * analysis complete > completion > terminal fallback > idle. In particular, a
- * stale root or last Job terminal status can never hide active work, a report
- * that is still being generated, or a failure.
+ * Precedence is intentional: archived > scheduled wait > active work > failure >
+ * report phase > analysis complete > completion > terminal fallback > idle.
+ * In particular, a stale root or last Job terminal status can never hide
+ * active work, a report that is still being generated, or a failure.
  */
 export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecycleProjection {
   const jobs = input.jobs ?? [];
@@ -121,9 +140,20 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
   // success marker, but it must remain idle until execution exists and has a
   // consistent terminal timestamp.
   const hasCompletion = hasJobs && Boolean(input.endedAt) && (isSuccess(rootStatus) || isSuccess(reportStatus));
+  const nowMs = typeof input.nowMs === "number" && Number.isFinite(input.nowMs) ? input.nowMs : Date.now();
+  const scheduledMs =
+    typeof input.scheduledStartAt === "string" && input.scheduledStartAt.trim()
+      ? Date.parse(input.scheduledStartAt)
+      : Number.NaN;
+  const waitingOnSchedule =
+    Number.isFinite(scheduledMs) &&
+    scheduledMs > nowMs &&
+    !input.startedAt &&
+    activeCount > 0;
 
   let status: TaskLifecycleStatus;
   if (archived) status = "archived";
+  else if (waitingOnSchedule) status = "scheduled";
   else if (activeCount > 0) status = "running";
   else if (hasFailure) status = "failed";
   else if (hasReportPhase) status = "reporting";
@@ -138,7 +168,9 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
   return {
     status,
     ...TASK_LIFECYCLE_META[status],
-    isActive: status === "running",
+    // Scheduled tasks still occupy the active queue (pending Jobs) so list
+    // filters that look at isActive continue to surface them.
+    isActive: status === "running" || status === "scheduled",
     activeCount,
     hasJobs,
     endedAt: input.endedAt ?? null,

@@ -30,7 +30,7 @@ import { FindingDetailPanel } from "../FindingDetailPanel";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
-import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle } from "../task-lifecycle";
+import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import {
   DataTable,
   EmptyState,
@@ -322,6 +322,7 @@ export function TaskCanvasPage() {
   // Keep the scheduler-governed phase fields as a fallback while the L0 node
   // projection is still loading; the node values win once they are present.
   const canvasStatus = (meta as ({ status?: string } | null))?.status;
+  const scheduledStartAt = readScheduledStartAt(meta?.target_json);
   const taskLifecycle = deriveTaskLifecycle({
     status: canvasStatus,
     activeCount: meta?.active_count,
@@ -330,14 +331,35 @@ export function TaskCanvasPage() {
     rootStatus,
     reportStatus,
     endedAt: meta?.ended_at,
+    startedAt: meta?.started_at,
+    scheduledStartAt,
+    nowMs: clock,
   });
   const lifecycleActive = taskLifecycle.isActive;
-  const runningElapsed = meta?.started_at
+  const isScheduled = taskLifecycle.status === "scheduled";
+  // 生命周期从实际开始执行起算；定时排队阶段不算进生命周期。
+  const executionElapsed = meta?.started_at
     ? formatElapsed(meta.started_at, lifecycleActive ? null : taskLifecycle.endedAt, clock)
-    : lifecycleActive
-      ? "等待启动"
-      : "—";
-  const lifecycleElapsed = meta ? formatElapsed(meta.created_at, lifecycleActive ? null : taskLifecycle.endedAt, clock) : "—";
+    : "未开始";
+  const startExecValue = meta?.started_at
+    ? relativeTime(meta.started_at)
+    : isScheduled && scheduledStartAt
+      ? new Date(scheduledStartAt).toLocaleString("zh-CN", {
+          timeZone: "Asia/Shanghai",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }) + "（北京）"
+      : lifecycleActive
+        ? "等待启动"
+        : "—";
+  const startExecTitle = meta?.started_at
+    ? `实际开始 ${formatTime(meta.started_at)}`
+    : isScheduled && scheduledStartAt
+      ? `计划开始 ${new Date(scheduledStartAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）`
+      : "尚未有 Job 实际开始";
 
   /** 强制退出画布上全部活动 Job（含 running） */
   const forceExitActive = async () => {
@@ -374,6 +396,7 @@ export function TaskCanvasPage() {
       const r = await api.resumeTaskSession(canvasId);
       if (r.action === "already_running") flash(r.message ?? "任务已在执行");
       else if (r.action === "resume_job") flash("已恢复会话，继续执行中断的 Job");
+      else if (r.action === "start_now") flash(r.message ?? "已清除定时门禁，任务立即进入调度");
       else flash("已恢复会话，Hub 继续决策");
     } catch (e) {
       flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);
@@ -546,12 +569,29 @@ export function TaskCanvasPage() {
             {msg ? ` · ${msg}` : ""}
           </span>
           {meta && (
-            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-5">
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-4">
               <LifecycleDatum label="创建" value={relativeTime(meta.created_at)} title={formatTime(meta.created_at)} />
-              <LifecycleDatum label="首个开始" value={meta.started_at ? relativeTime(meta.started_at) : "等待启动"} title={meta.started_at ? formatTime(meta.started_at) : "尚未有 Job 实际开始"} />
-              <LifecycleDatum label="运行耗时" value={runningElapsed} title={meta.started_at ? (lifecycleActive ? "从首个实际开始到现在" : taskLifecycle.endedAt ? "从首个实际开始到终态结束" : undefined) : undefined} active={lifecycleActive} />
-              <LifecycleDatum label="生命周期" value={lifecycleElapsed} title="从画布创建到结束（或现在）" />
-              <LifecycleDatum label="结束" value={lifecycleActive ? "进行中" : taskLifecycle.endedAt ? formatTime(taskLifecycle.endedAt) : "—"} title={taskLifecycle.endedAt && !lifecycleActive ? formatTime(taskLifecycle.endedAt) : undefined} />
+              <LifecycleDatum
+                label="开始执行"
+                value={startExecValue}
+                title={startExecTitle}
+                active={Boolean(meta.started_at) && lifecycleActive}
+              />
+              <LifecycleDatum
+                label="生命周期"
+                value={executionElapsed}
+                title={
+                  meta.started_at
+                    ? (lifecycleActive ? "从实际开始执行到现在" : "从实际开始执行到终态结束")
+                    : "生命周期从实际开始执行起算；尚未开始"
+                }
+                active={Boolean(meta.started_at) && lifecycleActive}
+              />
+              <LifecycleDatum
+                label="结束"
+                value={isScheduled ? "定时等待" : lifecycleActive ? "进行中" : taskLifecycle.endedAt ? formatTime(taskLifecycle.endedAt) : "—"}
+                title={taskLifecycle.endedAt && !lifecycleActive ? formatTime(taskLifecycle.endedAt) : undefined}
+              />
             </div>
           )}
         </div>
