@@ -112,7 +112,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
 - RoleConfig `modules` 现为 `"<source_id>:<module_id>"` 逐条勾选（整插件挂载见 #33）。
-- 实时流：`stream-bus` + `/ws`；`AUTH_REQUIRED` 下 WS 鉴权与运行中过程流可读性见 #38。
+- 实时流：`stream-bus` + 短时 `POST /auth/ws-ticket` → `/ws?ticket=`（#38 已关）；运行中可读 inflight `stream.ndjson`；多 Scheduler 副本不共享内存 bus。
 - Windows 探库：避免 PowerShell 弄坏 `node -e` 模板字符串；临时 `apps/scheduler/*.mjs` 跑完即删。
 
 ## 工程原则
