@@ -170,6 +170,8 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const [eventsCursor, setEventsCursor] = useState<string | null>(null);
   const [eventsHasMore, setEventsHasMore] = useState(false);
   const [session, setSession] = useState<{ text: string; truncated: boolean } | null>(null);
+  const [sessionLoad, setSessionLoad] = useState<"loading" | "ready" | "missing" | "error">("loading");
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>("live");
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -208,6 +210,8 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     setEventsCursor(null);
     setEventsHasMore(false);
     setSession(null);
+    setSessionLoad("loading");
+    setSessionError(null);
     setError(null);
     setDownloadError(null);
     setEventTypeFilter("");
@@ -250,8 +254,25 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
       }).catch(() => {});
       api
         .jobSession(jobId)
-        .then((v) => alive && setSession({ text: v.text, truncated: v.truncated }))
-        .catch(() => {});
+        .then((v) => {
+          if (!alive) return;
+          setSession({ text: v.text, truncated: v.truncated });
+          setSessionLoad("ready");
+          setSessionError(null);
+        })
+        .catch((e) => {
+          if (!alive) return;
+          setSession(null);
+          const msg = String(e);
+          // 404 / not found：无归档；其它错误显式展示，避免静默成空页
+          if (/\b404\b/i.test(msg) || /not found|无.*session|session.*missing/i.test(msg)) {
+            setSessionLoad("missing");
+            setSessionError(null);
+          } else {
+            setSessionLoad("error");
+            setSessionError(msg);
+          }
+        });
     };
 
     loadCore().then(() => {
@@ -885,25 +906,56 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           )}
 
           {detail && tab === "session" && (
-            <div className="flex h-full min-h-0 flex-col p-4">
-              {session ? (
+            <div className="min-h-0 space-y-3 p-4">
+              {sessionLoad === "loading" && (
+                <div className="theme-surface rounded-2xl p-8 text-center text-[13px] text-zinc-500 ring-1">
+                  正在加载 Session 归档…
+                </div>
+              )}
+              {sessionLoad === "error" && (
+                <div className="rounded-2xl bg-red-950/20 p-6 text-[13px] text-red-300 ring-1 ring-red-400/20">
+                  <p className="font-medium">Session 归档读取失败</p>
+                  <p className="mt-2 font-mono text-[11px] text-red-200/80">{sessionError}</p>
+                </div>
+              )}
+              {sessionLoad === "ready" && session && (
                 <SessionViewer
                   text={session.text}
                   truncated={session.truncated}
                   cli={evidence?.manifest.cli}
                   sessionId={evidence?.manifest.session_id}
+                  sourceLabel="CLI Session 归档"
                   downloadError={downloadError}
                   onDownload={() =>
                     api.downloadJobSession(jobId).catch((e) => setDownloadError(String(e)))
                   }
                 />
-              ) : (
-                <div className="theme-surface rounded-2xl p-8 text-center text-[13px] text-zinc-600 ring-1">
-                  {active
-                    ? "Session 将在运行终态前归档；支持 Claude Code / Codex / OpenCode / Pi。"
-                    : evidence?.manifest.capture_error
-                      ? `Session 归档失败：${evidence.manifest.capture_error}`
-                      : "该 CLI 未生成可归档的独立 Session，或此运行发生在归档功能上线前。"}
+              )}
+              {sessionLoad === "missing" && stream.length > 0 && (
+                <>
+                  <p className="text-[11px] text-amber-300/90">
+                    无 CLI 原始 Session 文件；以下为过程流（normalized stream）回退视图，不可下载原始 Session。
+                  </p>
+                  <SessionViewer
+                    text={stream.map((row) => JSON.stringify(row)).join("\n")}
+                    cli={evidence?.manifest.cli ?? agentCli}
+                    sourceLabel="过程流回退"
+                  />
+                </>
+              )}
+              {sessionLoad === "missing" && stream.length === 0 && (
+                <div className="theme-surface space-y-2 rounded-2xl p-8 text-center text-[13px] text-zinc-500 ring-1">
+                  <p>
+                    {active
+                      ? "Session 将在运行终态前归档（Claude Code / Codex / OpenCode / Pi）。"
+                      : evidence?.manifest.capture_error
+                        ? `Session 归档失败：${evidence.manifest.capture_error}`
+                        : "该 Job 没有可归档的 CLI Session。"}
+                  </p>
+                  <p className="font-mono text-[11px] leading-5 text-zinc-600">
+                    常见原因：AGENT_MODE=fake（不会落盘 Session）、运行中尚未 finalize、
+                    或该 CLI 未成功捕获 session_id。有归档时标签会显示文件数，并出现时间线 / 统计 / 原始。
+                  </p>
                 </div>
               )}
             </div>

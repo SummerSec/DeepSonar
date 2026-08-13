@@ -16,6 +16,8 @@ export type SessionViewerProps = {
   /** evidence.manifest.cli：claude-code / codex / open-code / pi */
   cli?: string | null;
   sessionId?: string | null;
+  /** 数据来源说明，如「CLI Session 归档」或「过程流回退」 */
+  sourceLabel?: string | null;
   onDownload?: () => void;
   downloadError?: string | null;
 };
@@ -100,6 +102,7 @@ export function SessionViewer({
   truncated,
   cli,
   sessionId,
+  sourceLabel,
   onDownload,
   downloadError,
 }: SessionViewerProps) {
@@ -127,10 +130,12 @@ export function SessionViewer({
     ["raw", "原始"],
   ];
 
+  // 高度交给外层 Job 详情滚动区，避免 h-full 嵌套导致内容高度塌成 0
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex min-h-0 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[12px] text-zinc-500">
+          {sourceLabel ? `${sourceLabel} · ` : ""}
           {sessionCliLabel(cli ?? parsed.format)}
           {sessionId ? ` · session ${sessionId}` : ""}
           {parsed.format !== "unknown" && parsed.format !== normalizeForDisplay(cli) && !cli
@@ -200,7 +205,7 @@ export function SessionViewer({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0">
         {tab === "timeline" && (
           filteredItems.length ? (
             <ol className="space-y-2">
