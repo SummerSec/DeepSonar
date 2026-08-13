@@ -2,164 +2,175 @@
 
 ## Goal
 
-Add `@deepseek-ai/dsh` as the fifth governed DeepSonar Agent CLI, identified by
-`agent_cli: "dsh"`, with the same end-to-end guarantees as the existing Claude
-Code, Codex, OpenCode, and Pi adapters: frozen runtime configuration, Job-scoped
-Gateway credentials, Scheduler-owned control effects, bounded Session capture,
-and a structured Web Session viewer.
+Add DeepSeek Harness as the fifth governed DeepSonar Agent CLI, identified by
+`agent_cli: "dsh"`, without embedding a terminal UI. The integration must keep
+one durable DSH Session alive for initial input, live canvas/human follow-ups,
+completion-gate corrections, and bounded same-session recovery while preserving
+DeepSonar's Scheduler-owned authority and Job sandbox.
 
-The first supported upstream release is exactly `@deepseek-ai/dsh@0.1.0-rc.6`.
-It is an RC published on 2026-08-13, so the runtime image verifies the npm
-integrity and protocol tests pin the observed behavior rather than accepting a
-moving range.
+The supported upstream release is exactly `0.1.0-rc.6`. All DSH packages used
+by the image are pinned to that version and their npm integrity is verified.
 
 ## Confirmed upstream contract
 
-- Executable: `dsh`.
-- One-shot invocation: `dsh --profile headless "<task>"`.
-- The headless profile creates one fresh persisted Session, prints the final
-  assistant text to stdout, and exits `0` only for a completed turn.
-- Provider configuration accepts `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and a
-  model selection in `$DSH_HOME/settings.yaml` under `llm-deepseek` plus the
-  `agent-default-model` patch row.
-- Native DeepSeek traffic is streaming `POST {baseURL}/chat/completions` with
-  `Authorization: Bearer <key>`.
-- DSH supports stdio and Streamable HTTP MCP; stdio tools are model-facing as
-  `mcp__<serverName>__<rawName>`.
-- Workspace instructions load from `AGENTS.md` and `CLAUDE.md`.
-- Sessions persist below `$DSH_HOME/sessions` as JSONL, Zstandard-compressed by
-  default. DeepSonar selects uncompressed JSONL for bounded host-side capture.
-- DSH owns automatic compaction and tool-result pruning.
-- The headless profile has no interactive follow-up or documented resume
-  command in `0.1.0-rc.6`.
+The official rc.6 release contains an unattended process interface separate
+from the `dsh` TUI/Web surfaces:
+
+- `@deepseek-ai/dsh-sdk-jsonrpc-demo` provides `dsh-jsonrpc-agent`.
+- `@deepseek-ai/dsh-sdk-jsonrpc-server` serves LF-delimited JSON-RPC 2.0 over
+  stdio. Stdout is protocol-only and diagnostics are written to stderr.
+- Requests are `initialize`, `session/prompt`, and `shutdown`.
+- Notifications are `session.event`, `session.status`, `subagent.started`, and
+  `subagent.finished`.
+- `session/prompt` invokes `Agent.followup` on a stable caller-supplied
+  `sessionId`; repeated prompts therefore continue the same live Session.
+- `session.event` carries the complete durable Session event envelope. A turn
+  is owned from its `agent/inbox/spliced` receipt through the next root
+  `session.status: idle` notification.
+- The protocol has no per-turn cancel or steer method. Job cancellation closes
+  the runtime process. Messages arriving during a turn use another
+  `session/prompt`, which DSH queues through the same Agent inbox.
+- The runtime is configured by an external `cordis.yml`; it has no default
+  configuration and must not load a stdout logger.
+
+The existing `dsh --profile headless` implementation is superseded. Headless
+is one fresh Session and cannot meet the approved multi-turn contract.
 
 ## Architecture
 
-### Runtime adapter
+### Runtime adapter and JSON-RPC lifecycle
 
-Extend the existing runtime adapter registry with `dsh`; do not add a parallel
-Executor path. The adapter starts the fixed headless command and uses stdout as
-the final-answer stream. Because stdout is not a structured event stream, the
-adapter emits only normalized text/result lifecycle records. Semantic control
-events therefore use the existing Job-scoped platform HTTP API, never parsing
-DSH prose and never treating an unobservable MCP call as Scheduler-confirmed.
+Keep the existing `RuntimeAdapter`/Agentbox execution path. DSH starts
+`dsh-jsonrpc-agent /workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml` and
+uses the adapter's existing JSONL framing.
 
-The sandbox owns a per-Job home at `/workspace/.deepsonar-home/.dsh` through
-`DSH_HOME`. DeepSonar materializes a Job-specific profile patch that:
+DeepSonar generates a stable Job-scoped Session ID before launch. The adapter
+sends two frames before the first user prompt:
 
-- selects the frozen RoleConfig model;
-- sets Session persistence to `compression: none` under the governed DSH home;
-- disables the bundled direct web-search tool and telemetry;
-- permits non-control RoleConfig MCP servers through DSH's native client, while
-  deliberately omitting the `deepsonar-control` MCP server in this release;
-- disables DSH telemetry (`DSH_TELEMETRY_DISABLED=1`);
-- retains DSH's native automatic compaction; and
-- selects non-interactive tool approval inside the already isolated Agentbox
-  sandbox so headless execution cannot wait for an unavailable human prompt.
+1. `initialize` with `/workspace`, provider `deepseek-official`, the frozen
+   model, and an optional frozen output-token cap;
+2. `session/prompt` with the stable Session ID and one text content block.
 
-DSH also receives the existing static `deepsonar-control` Skill and Job-scoped
-HTTP capability token. The HTTP API validates requests against the frozen
-Scheduler capability snapshot and remains the only semantic-effect path for
-DSH. This restriction can be removed only if a future pinned headless protocol
-exposes structured MCP tool-use/tool-result events to the host.
+Every later `sendMessage` and completion-gate nudge sends another
+`session/prompt` for the same Session ID. JSON-RPC request IDs are local
+correlation values and are never treated as Session or semantic-event IDs.
+
+The adapter validates the initialize response's server identity, validates
+every root Session notification against the frozen Session ID, and projects
+durable DSH events into the existing normalized stream:
+
+- assistant text/reasoning chunks -> progress deltas;
+- assistant messages -> final text;
+- tool-call/tool-result content -> normalized tool telemetry;
+- `turn/end` reason -> provider success/failure;
+- root `session.status: idle` -> one settled interval.
+
+The settled interval does not automatically end the process. If the completion
+gate is open, Agentbox sends another prompt. Once the gate passes, Agentbox
+sends `shutdown`, waits for its response, then closes stdin. Transport loss,
+malformed JSON-RPC, mismatched Session IDs, or idle without a durable receipt
+fails closed.
+
+Across a bounded runner retry, the adapter starts a new JSON-RPC process with
+the same governed `sessionId` and persisted Session root, initializes it, then
+sends the recovery prompt. It never mints a replacement Session. This resumes
+durable conversation state; process-owned shell state is not promised across a
+process failure.
+
+### Governed Cordis composition
+
+DeepSonar materializes one complete `deepsonar.cordis.yml`; it does not load
+DSH profiles, user patches, project `.dsh` plugins, or third-party TUI bundles.
+The composition contains only:
+
+- official SDK JSON-RPC server;
+- DSH Agent/loop, DeepSeek LLM adapter, Session persistence/checkpointing;
+- system prompt plus repository instruction loading;
+- the minimum coding tools already allowed by the Agentbox sandbox;
+- DSH automatic compaction and tool-result pruning;
+- optional validated non-control MCP servers; and
+- no console logger, TUI, Web server, ask-user UI, browser client, theme,
+  keyboard, ANSI rendering, or direct web-search rows.
+
+Session persistence is uncompressed JSONL at
+`/workspace/.deepsonar-home/.dsh/sessions`. `DSH_TELEMETRY_DISABLED=1` is set
+independently of composition. The existing static `deepsonar-control` Skill and
+Job-scoped HTTP capability API remain the semantic-effect path; DSH MCP must
+not receive `deepsonar-control` until its tool events are mapped to the same
+host validation contract.
 
 ### Model Gateway and credentials
 
-Credential settings for `dsh` use a small DeepSeek-native document:
-
-```json
-{
-  "apiKey": "<long-lived secret before freezing>",
-  "baseURL": "https://api.deepseek.com",
-  "models": [{ "id": "deepseek-v4-flash" }]
-}
-```
-
-At Job materialization, long-lived secret fields are scrubbed. The sandbox copy
-uses only:
+Credential settings use a DeepSeek-native document with `apiKey`, `baseURL`,
+and model metadata. Long-lived secrets are scrubbed before Job freezing. The
+runtime receives only:
 
 - `DEEPSEEK_API_KEY=<short-lived Job Gateway token>`;
 - `DEEPSEEK_BASE_URL=<fixed /gateway base URL>`;
-- `$DSH_HOME/settings.yaml` selecting the frozen model and preserving safe
-  context/output metadata.
+- frozen model metadata without the secret value.
 
-The current Gateway wildcard already maps `/gateway/chat/completions` to the
-credential upstream's `/chat/completions` and replaces the bearer credential.
-Allowed-model and quota checks remain Scheduler-owned. DSH-specific attribution
-headers are forwarded but do not affect authorization.
+The existing Gateway maps `/gateway/chat/completions` to the configured
+upstream, replaces bearer credentials, and enforces allowed model and quota.
 
-### Session identity and archive
+### Session archive and viewer
 
-DSH generates a `session-<uuid>` identity internally but headless stdout does
-not expose it. The runtime records the pre-run Session directory baseline and,
-after exit, accepts exactly one newly created governed Session artifact. It
-reads the immutable header to obtain the Session ID, rejects zero/multiple new
-Sessions, path traversal, compressed or non-JSONL artifacts, malformed headers,
-and a total over 32 MiB. It never scans the host home, guesses `latest`, or
-crosses the Job-owned `DSH_HOME`.
+The adapter already owns the exact Session ID, so archive capture never scans
+for a guessed `latest` Session. The DSH Session exporter resolves only that ID
+under the fixed Job-owned root, rejects path/symlink escape, compressed or
+ambiguous artifacts, malformed headers, header-ID mismatch, and aggregate data
+over 32 MiB.
 
-The raw JSONL is stored through the existing Job evidence/session pipeline.
-The Web parser recognizes DSH header and event rows, then projects user and
-assistant messages, reasoning, tool calls/results, completion/error boundaries,
-and token/cache usage when present. Raw download remains available.
+The Web viewer projects supported DSH user/assistant/reasoning/tool/usage rows
+into the existing timeline and keeps raw JSONL download for unknown rows.
 
-### Resume and failure policy
+### Images and schema
 
-`0.1.0-rc.6` headless provides no documented resume surface. The adapter
-therefore declares no runtime session resume capability and never starts a new
-DSH Session as an implicit retry. Provider retries and compaction remain DSH's
-own durable-step policy; once the CLI exits, DeepSonar applies its normal Job
-terminal semantics. A future DSH version may add explicit resume support only
-after a new pinned protocol test.
+Official images install exact rc.6 packages required by the unattended runtime
+and composition. Image verification checks the `dsh-jsonrpc-agent` executable,
+package versions/integrities, and a no-provider protocol boot smoke. Installing
+only the base `dsh` launcher is insufficient.
 
-### Runtime images and schema
-
-All official Agent images install exactly `@deepseek-ai/dsh@0.1.0-rc.6` and
-verify its npm integrity before installation. Runtime manifests declare
-`agent_cli: "dsh"` and compatible image keys. Image-size budgets change only
-when measured compressed image evidence requires it.
-
-The `credentials.agent_cli` check adds `dsh`; because the schema is a single
-baseline, bump `SCHEMA_VERSION` and require database recreation. RoleConfig's
-free string field needs no migration.
+The credential `agent_cli` check adds `dsh`; the single baseline schema bumps
+from 29 to 30 with no migration or compatibility fallback.
 
 ## Security and failure handling
 
-- Long-lived DeepSeek credentials never enter Job snapshots, workspace files,
-  evidence, Session JSONL, or the DSH process environment.
-- DSH telemetry is disabled independently of upstream defaults.
-- Platform-control API discovery and requests fail closed; schema validation
-  and effects still occur in the existing Scheduler control path.
-- DSH's bundled web search must not bypass the Job Gateway. The governed patch
-  disables model-facing `tool-web`/DeepSeek search for this adapter until it can
-  use a Scheduler-owned allowlisted proxy.
-- The DSH home and profile are Job-local. Project-provided `.dsh` content is not
-  auto-loaded as configuration or plugins.
-- Unsupported/malformed output is retained only in bounded process evidence and
-  cannot become a semantic event by text parsing.
+- Long-lived provider credentials never enter snapshots, workspace files,
+  evidence, Sessions, or the DSH environment.
+- Stdout accepts only bounded JSON-RPC frames; prose and malformed frames are
+  protocol failures, never semantic events.
+- Direct DSH search, telemetry, Web/TUI, approval UI, and dynamically installed
+  project plugins are absent from the composition.
+- The Job-scoped HTTP control API validates every request against the frozen
+  Scheduler capability snapshot.
+- Job cancel/timeout terminates the owned runtime process because rc.6 exposes
+  no prompt-cancel method.
+- Same-session recovery validates frozen context identity and Session ID before
+  sending a recovery prompt.
 
 ## Testing and acceptance
 
-1. Adapter tests first fail for the absent `dsh` registry entry, then cover the
-   exact command, environment, patch, capability declarations, output lifecycle,
-   and explicit lack of resume.
-2. Provider tests cover legacy settings, model/base URL extraction, secret
-   scrubbing, Job Gateway rewrite, and materialized DSH YAML.
-3. Session tests use literal DSH JSONL fixtures for single-session capture,
-   ambiguous/malformed/oversized rejection, and Web timeline/usage projection.
-4. Runtime image consistency tests cover version, integrity, CLI identity, and
-   all compatible official images.
-5. Schema/version consistency, focused package tests, full `pnpm typecheck`,
-   `pnpm build`, and runtime-image consistency checks pass.
-6. A local smoke using the installed `dsh 0.1.0-rc.6`, an isolated `DSH_HOME`,
-   a mock `/chat/completions` endpoint, and a mock Job control HTTP API
-   demonstrates one headless run, Gateway-shaped authentication, Session
-   creation, and archive parsing without a real Provider key.
+1. Adapter tests cover exact command/env, deterministic Session ID, initialize,
+   prompt/follow-up/shutdown frames, response correlation, Session-ID mismatch,
+   durable event projection, idle settlement, and same-ID process recovery.
+2. Cordis tests assert the minimal row allowlist and the absence of all TUI,
+   Web, theme, logger, approval UI, and direct-search rows.
+3. Provider tests cover model/base URL extraction, secret scrubbing, and Job
+   Gateway environment rewrite.
+4. Session tests cover exact-ID export and malformed/oversized/path-escape
+   rejection; Web tests cover DSH message/reasoning/tool/usage projection.
+5. Image checks cover every exact rc.6 package and `dsh-jsonrpc-agent` boot.
+6. A deterministic mock Chat Completions smoke runs two prompts on one Session,
+   verifies Gateway-shaped authentication, receives two idle intervals, performs
+   protocol shutdown, and captures one uncompressed Session without a real key.
+7. Focused tests, `pnpm typecheck`, `pnpm build`, schema consistency, image
+   consistency, and `git diff --check` all pass.
 
 ## Out of scope
 
-- DSH Web/TUI embedding or exposing its browser UI.
+- Any DSH Web/TUI embedding, terminal skin, theme, React/Ink, ANSI renderer,
+  keyboard mapping, or PTY automation.
+- Third-party `dsh-cc-tui` runtime code or dependency.
 - Dynamic DSH plugin installation from RoleConfig or project content.
-- DSH-to-DSH Session resume before an upstream headless resume contract exists.
-- Replacing the existing MCP or Job-scoped HTTP platform APIs.
-- Enabling DSH's direct web-search provider or any direct outbound model path.
+- Inventing per-turn cancel/steer methods absent from the official rc.6 wire.
+- Replacing DeepSonar's Scheduler authority, MCP, or Job-scoped control API.
