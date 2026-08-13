@@ -41,7 +41,7 @@ is one fresh Session and cannot meet the approved multi-turn contract.
 ### Runtime adapter and JSON-RPC lifecycle
 
 Keep the existing `RuntimeAdapter`/Agentbox execution path. DSH starts
-`dsh-jsonrpc-agent /workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml` and
+the official packaged JSON-RPC entrypoint with `/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml` and
 uses the adapter's existing JSONL framing.
 
 DeepSonar generates a stable Job-scoped Session ID before launch. The adapter

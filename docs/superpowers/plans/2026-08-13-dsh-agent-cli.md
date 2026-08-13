@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Pin every installed `@deepseek-ai/dsh-*` runtime package to exactly `0.1.0-rc.6`; do not use `latest`, `next`, `^`, or `~` in governed manifests/install commands.
-- Use `agent_cli: "dsh"` and executable `dsh-jsonrpc-agent`; remove production use of `dsh --profile headless`.
+- Use `agent_cli: "dsh"` and the official packaged JSON-RPC entrypoint; remove production use of `dsh --profile headless`.
 - Set `DSH_HOME=/workspace/.deepsonar-home/.dsh`, `DSH_CORDIS_CONFIG=/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml`, `DSH_SESSION_ROOT=/workspace/.deepsonar-home/.dsh/sessions`, `DSH_CWD=/workspace`, `DSH_TELEMETRY_DISABLED=1`, and `DSH_PERMISSION_MODE=danger-full-access` inside the existing Agentbox sandbox.
 - Use only official wire methods `initialize`, `session/prompt`, and `shutdown`; do not invent cancel, steer, or resume methods.
 - Reuse one deterministic governed Session ID for all messages and process recovery; never create a replacement Session as retry fallback.
@@ -133,4 +133,3 @@
 - [ ] Document official JSON-RPC multi-turn behavior, no UI/TUI dependency, HTTP-only platform control, same-ID recovery limits, schema v30, and image closure.
 - [ ] Run `pnpm ci:unit:runtime-sandbox`, focused provider/executor/credential/Web tests, `pnpm ci:test:transfer-schema`, `pnpm ci:images`, the new smoke, `pnpm typecheck`, `pnpm build`, and `git diff --check`.
 - [ ] Commit as `docs: document and verify DSH JSON-RPC compatibility`.
-

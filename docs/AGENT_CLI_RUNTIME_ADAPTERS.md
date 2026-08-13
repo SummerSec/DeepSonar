@@ -31,10 +31,11 @@ The current registry contains:
 | `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default | `model_context_window` | Official reasoning summary/item events when emitted |
 | `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
 | `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
+| `dsh` | DeepSeek Harness 0.1.0-rc.6 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL | yes | 由 `@deepseek-ai/dsh-plugin-context-manager-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `agent/stream/event` 的结构化 reasoning 事件 |
 
-四个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
+五个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
 只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，
-每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 不依赖 MCP，只使用 HTTP Capability API。
+每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 与 DSH 不依赖 MCP，只使用 HTTP Capability API。
 
 通用 `context_window_tokens` 范围为 1024–10000000。Credential 顶层值是客户端基准，RoleConfig 同名值优先；两者为空时保留 Provider / CLI 默认，建 Job 时冻结解析结果。它只控制客户端预算/压缩落点，不提高 Provider、模型 ID 或账号实际开放的上游窗口；模型目录也只登记 ID，不根据名称或营销标签推断长上下文能力。
 
@@ -77,7 +78,7 @@ be registered or admitted:
 5. **验收**：真实或 fixture 归档经 `GET /jobs/:id/evidence/session` 可读；Job 详情 Session 标签出现时间线/统计；「下载原始文件」仍指向未改写的归档字节；解析失败时仍可看「原始」与下载。
 6. 若暂不支持归档：显式保持 `sessionCapture: false`，并在 UI/空态文案中可区分「未实现」与「运行失败」；**禁止**半吊子路径猜测冒充归档。
 
-当前已适配查看器的 CLI：`claude-code`、`codex`、`open-code`、`pi`（与 runtime registry 对齐）。后续每加一个 adapter，**同步 PR 应包含 session adapter + parseAgentSession + 测试**，不要拆成「先跑起来以后再做 Session」。
+当前已适配查看器的 CLI：`claude-code`、`codex`、`open-code`、`pi`、`dsh`（与 runtime registry 对齐）。后续每加一个 adapter，**同步 PR 应包含 session adapter + parseAgentSession + 测试**，不要拆成「先跑起来以后再做 Session」。
 
 `reasoningEffort` is an input/configuration capability; it does not guarantee
 that a provider exposes its internal reasoning in output. The runtime only
