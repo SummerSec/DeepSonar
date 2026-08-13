@@ -1183,6 +1183,13 @@ export interface PlainFinalOutputResult {
   text: string;
   stderr: string;
   events: Array<Record<string, unknown>>;
+  error?: string;
+  terminalOutcome?: "success" | "failure";
+}
+
+export interface PlainFinalOutputOptions {
+  adapterId?: string;
+  completionGate?: boolean;
 }
 
 /** Normalize a one-shot CLI's plain stdout without interpreting prose as control events. */
@@ -1191,12 +1198,21 @@ export function normalizePlainFinalOutput(
   stderr: string,
   exitCode: number,
   _onSemanticEvent?: (event: Record<string, unknown>) => void,
+  options: PlainFinalOutputOptions = {},
 ): PlainFinalOutputResult {
   if (Buffer.byteLength(stdout, "utf8") > PLAIN_FINAL_MAX_BYTES) {
     throw new Error("AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE");
   }
   const text = stdout.trim();
-  const events = exitCode === 0
+  const adapterId = options.adapterId ?? "dsh";
+  const error = exitCode !== 0
+    ? (stderr.trim() || `agent CLI exited with code ${exitCode}`)
+    : !text
+      ? `AGENT_CLI_PLAIN_OUTPUT_EMPTY: ${adapterId}`
+      : options.completionGate === false
+        ? `AGENT_CLI_COMPLETION_GATE_UNSATISFIED: ${adapterId}`
+        : undefined;
+  const events = !error
     ? [
         { type: "run.started" },
         { type: "run.completed", text },
@@ -1204,9 +1220,14 @@ export function normalizePlainFinalOutput(
       ]
     : [
         { type: "run.started" },
-        { type: "run.failed", error: stderr.trim() || `agent CLI exited with code ${exitCode}` },
+        { type: "run.failed", error },
       ];
-  return { text, stderr, events };
+  return {
+    text,
+    stderr,
+    events,
+    ...(error ? { error, terminalOutcome: "failure" as const } : { terminalOutcome: "success" as const }),
+  };
 }
 
 /**
@@ -2668,15 +2689,19 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
         }
       }
       if (adapter.outputMode === "plain-final" && !processError) {
-        const plainResult = normalizePlainFinalOutput(stdoutBuffer, attemptStderrTail, attemptExitCode);
+        const plainResult = normalizePlainFinalOutput(
+          stdoutBuffer,
+          attemptStderrTail,
+          attemptExitCode,
+          undefined,
+          { adapterId: adapter.id, completionGate: spec.completionGate?.() ?? true },
+        );
         for (const event of plainResult.events) spec.onEvent?.(event);
         attemptFinalText = plainResult.text;
         finalText = plainResult.text;
         attemptTerminalResult = {
-          isError: attemptExitCode !== 0,
-          ...(attemptExitCode !== 0
-            ? { errorDetail: plainResult.stderr.trim() || `agent CLI exited with code ${attemptExitCode}` }
-            : {}),
+          isError: plainResult.terminalOutcome !== "success",
+          ...(plainResult.error ? { errorDetail: plainResult.error } : {}),
         };
       }
       const processErrorText = processError

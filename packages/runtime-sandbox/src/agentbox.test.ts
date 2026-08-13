@@ -282,6 +282,36 @@ test("plain-final output synthesizes only a normalized successful result", () =>
   assert.deepEqual(observedSemanticEvents, []);
 });
 
+test("plain-final output fails closed when the completion gate is unsatisfied", () => {
+  const result = normalizePlainFinalOutput(
+    "final answer from dsh",
+    "",
+    0,
+    undefined,
+    { adapterId: "dsh", completionGate: false },
+  );
+  assert.equal(result.error, "AGENT_CLI_COMPLETION_GATE_UNSATISFIED: dsh");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.events.some((event) => event.type === "run.completed"), false);
+  assert.equal(result.events.at(-1)?.type, "run.failed");
+  assert.equal(result.events.some((event) => event.type === "run.retrying"), false);
+});
+
+test("plain-final output rejects an empty successful stdout", () => {
+  const result = normalizePlainFinalOutput(
+    " \r\n",
+    "provider diagnostic",
+    0,
+    undefined,
+    { adapterId: "dsh", completionGate: true },
+  );
+  assert.equal(result.error, "AGENT_CLI_PLAIN_OUTPUT_EMPTY: dsh");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.events.some((event) => event.type === "run.completed"), false);
+  assert.equal(result.events.at(-1)?.type, "run.failed");
+  assert.equal(result.stderr, "provider diagnostic");
+});
+
 test("plain-final output is bounded at 1 MiB and preserves stderr on failure", () => {
   assert.throws(
     () => normalizePlainFinalOutput("x".repeat(1024 * 1024 + 1), "diagnostic", 0, () => {}),
