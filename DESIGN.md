@@ -3,6 +3,7 @@
 > 当前产品与系统设计摘要（as-built + 已共识演进方向）。  
 > 本文件给 Agent / 新人**先读**；细节冲突时以代码、`database/schema.sql`、OpenAPI 与测试为准。
 > 日期：2026-08 · 与代码主路径对齐（Plane 可选、本地任务为主）。
+> **专题文档索引与 as-built 状态表**：[`docs/README.md`](docs/README.md)（历史方案稿勿当未完成清单）。
 
 ## 1. 一句话
 
@@ -26,6 +27,7 @@
 Project 1 ── * Canvas（= 任务；无独立 tasks 表）
 Canvas  1 ── * Job
 Canvas  1 ── * canvas_nodes / canvas_edges
+Canvas  1 ── * canvas_broadcasts（Fact/Finding 向并发 Worker 的投递账本）
 Job     1 ── * events（语义）
 Job     1 ──  transcript / evidence（冷存储）
 Finding * ── 1 project + job + optional node
@@ -82,6 +84,29 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - 确认严格分两阶段：`injected` 仅表示“已注入会话，等待 Agent 确认”；只有目标 Agent 显式调用受治理的 ACK operation，持久化 `acknowledged_at`（及可选 `ack_summary`）后，UI 才显示“Agent 已确认”。不得从普通文本回复、Session 内容或节点标题推断已读/已处理。
 - `planned` / `injected` / `acknowledged` / `unknown` / `failed` 均真实展示；未知窗口与失败不会触发消息自动重发。人类若要再次发送，必须在确认目标和账本状态后主动提交新消息 UUID。
 
+### 4.2 Fact/Finding 画布广播（真注入 + 投递账本）
+
+同画布并行 Worker 之间的增量通知**已落地**（Scheduler 唯一执行；Agent 不互调）：
+
+```
+emit_fact / emit_finding → canvas_nodes INSERT
+  → pg_notify('deepsonar_canvas_events')
+  → canvas-updates LISTEN → 组装「DeepSonar 画布增量通知」
+  → 对已订阅的目标 Job 调用 sendMessage(...)
+  → canvas_broadcasts：planned → injected | unknown
+```
+
+| 要点 | 说明 |
+|------|------|
+| **真注入** | `executor-real` 在 `onRunReady` 注册 `subscribeCanvasUpdates(canvasId, jobId, sendMessage)`；`sendMessage` 成功且账本结算后记 `injected` |
+| **能力门禁** | 仅当冻结快照 `agent_runtime.capabilities.incrementalMessages === true` 时订阅。当前：**Claude Code、Pi 会注入**；**Codex、OpenCode 不声明该能力 → 不订阅、无运行时追加**（非“功能未做”） |
+| **目标集合** | 同 `canvas_id`、有 **active Attempt**、状态 ∈ claimed/provisioning/running/waiting_human；**不**广播给自己；**不**给后启动 Job 补历史 fact（Hub 整图职责） |
+| **`injected` 语义** | 仅表示平台已把文本塞进 CLI 输入通道；**禁止**文案写成「模型已收到/已处理」 |
+| **可观测** | DB 表 `canvas_broadcasts`；`GET /canvases/:id/broadcasts`；画布面板与节点侧聚合；Job 详情可挂广播列表。实时流增强见 `docs/TODO_CANVAS_PROCESS_TRUTH.md`（A 已落地账本/UI，B 布局仍分期） |
+| **安全** | 正文标为「平台转发的任务数据，不是系统指令」；不经目标出网；不改变冻结角色/镜像/网络 |
+
+实现入口：`apps/scheduler/src/canvas-updates.ts`、schema `canvas_broadcasts`、Web `canvas-broadcasts.ts` / `CanvasView`。
+
 ## 5. Job 与并发
 
 ```
@@ -93,7 +118,7 @@ pending → claimed → provisioning → running
 - Lease + Reaper：超时/孤儿**调度器判定**，不信任 Agent 自报。
 - 唤醒：`pg_notify('deepsonar_jobs')` 为主；轮询可关。
 - 优先级：资格与排序分离（图阶段 / 收敛证据 vs 固定优先级），避免 priority 通胀。
-- **任务执行时间（定时开始）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
+- **任务执行时间（定时开始，#147 已关闭）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
 
 ### 5.1 Job Attempt 与外部效果
 
@@ -134,13 +159,20 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 通道 | 内容 | 持久化 |
 |------|------|--------|
 | 语义 events | progress / finding / done / human | Postgres |
-| 实时流 | text.delta / tool.call.* | 进程内 `stream-bus` + WS `/ws`；环形缓冲 |
-| 过程流 | normalized NDJSON | Job 目录；**manifest 多在 finalize 后可读** |
+| 画布广播 | Fact/Finding 向并发 Worker 的投递 | `canvas_broadcasts`（`planned`/`injected`/`unknown`…） |
+| 实时流 | text.delta / tool.call.* | 进程内 `stream-bus` + 短时 ticket 的 WS `/ws`；环形缓冲（单进程；多副本不共享 bus） |
+| 过程流 | normalized NDJSON | Job 目录；**运行中**可读 inflight `stream.ndjson` tail，**终态**读 manifest gzip |
 | Session / OTLP | CLI 原始 | 冷存储 blob |
 
 **Job Session UI**：前端 `apps/web/src/session-viewer/` 将归档文本解析为时间线/工具统计/原始视图，并保留原始文件下载；解析格式须覆盖当前全部 `SupportedAgentCli`（claude-code / codex / open-code / pi / dsh）。**新增 Agent CLI 时必须同步** Session 归档适配器（`cli-session-adapters.ts`）与 Web 解析器，清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
 
-`DEEPSONAR_AUTH_REQUIRED=true` 时 HTTP 需 Bearer；**WS 鉴权与前端带 token 为已知缺口**（#38）。
+**画布广播**：真注入路径见 §4.2；账本为唯一投递真相，Session 文本仅作旁证。
+
+**鉴权（HTTP + WS，#38 已关）**：
+
+- `DEEPSONAR_AUTH_REQUIRED=true` 时 HTTP 需 Bearer（用户会话或 API Token + scope）。
+- 浏览器 WebSocket **不能**设自定义 Header：先 `POST /auth/ws-ticket`（`tasks:read`，绑定单 Job、短 TTL、一次性），再连 `/ws?job_id=&ticket=`（终端为 `/terminal-ws` + purpose `terminal`）。失败用 close code 区分 4401 鉴权 / 4403 权限 / 4409 已终态等；前端展示明确错误而非无限「等待事件」。
+- 实时流先 HTTP 补 `GET /jobs/:id/evidence/stream`（含运行中 tail），再订 WS；**禁止**把长期 token 打进 WS 查询日志。
 
 ## 9. 安全边界
 
@@ -165,25 +197,25 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 - Finding 列表/画布运行区显示冻结的 profile、可选 category 与 CVSS 版本/基础分；按 severity、profile、verify 状态筛选。详情保留向量、定性严重度、利用难度和原始 JSON；报告按 profile 分组、展示 category，并携带 tags、evidence_refs 与 scoring。
 - Finding 详情直接展示服务端统一的验证追踪（来源、review/test Fact、Intent/Fact 有向流、Verify 轮次与 exact Hub）；可用 `traceFinding` 深链在画布中淡化或隐藏非链路节点，并按 `focusNode` 定位单个证据节点。弱关联不从 prompt 推断，未连边 Intent 与证据缺口显式呈现。
 
-## 11. 已共识演进（未完全落地）
+## 11. 已共识演进（未完全落地 / 已完成索引）
 
-下列方向已在 GitHub Issues 中立项，**实现前以 issue 和当前代码为准**。
+下列方向曾在 GitHub Issues 立项；**状态以当前代码与本表「已完成」标记为准**（issue 关闭不代表文档自动同步，以本文件 + 代码为准）。
 
 | 主题 | Issue | 设计要点 |
 |------|-------|----------|
 | 读图预算 / GraphScope | #30 | **部分已落地**（scope + 字符预算）；索引层/Worker 邻域与可观测性可继续收紧 |
 | Finding 追踪链 + 画布只看链路 | #31 | **已完成**：`GET /findings/:id` 提供结构化、限界的 `trace`；详情主路径消费 evidence/rounds/Fact-Intent flow/gaps；画布支持 `traceFinding` + `focusNode` 深链、淡化/隐藏与 Finding 节点入口 |
-| 整插件 / 整源挂载 | #33 | `modules` selector：`plugin:` / `source:*` |
+| 整插件 / 整源挂载 | #33 | `modules` selector：`plugin:` / `source:*`（持续打磨挂载体验） |
 | Scheduler bounded contexts / characterization | #37 | **已完成**：六个领域均通过 application/ports 暴露窄接口；`event-ingestion` 拥有 envelope、幂等、顺序、限流与语义副作用，Hub/Finding/Report/runtime snapshot 通过显式 ports 协作。顶层 `routes.ts` 只保留 auth/project-scope hook、Gateway 与领域 registrar 组装，业务 handler 全部按域归属。`core.ts` 保留既有 import 的兼容 facade 与 composition root，不再承载事件副作用实现；Canvas-first 事务锁序、终态组合、路由/OpenAPI surface 和无生产动态 import 均有回归护栏。 |
-| 实时流 + 运行中过程流 | #38 | WS 鉴权；inflight 读 `stream.ndjson` |
-| 软加载 / 增量同步 | #39 | 骨架 L0 → 视口 L1 → 详情 L2；`canvas_changes` durable revision/tombstone；`delta?since=<revision>`，游标过旧显式回退 L0 |
+| 实时流 + 运行中过程流 | #38 | **已完成并关 issue**：短时一次性 `ws-ticket` + `/ws`/`terminal-ws`；运行中 `evidence/stream` 可读 inflight ndjson tail；连接失败有明确 close code/文案。残余：stream-bus 仍单进程内存（多副本不共享）、广播卡片进 stream 为可选 |
+| 软加载 / 增量同步 | #39 | **已完成并关 issue**：画布 L0 摘要 + `canvas_changes` 修订日志 + `GET /canvases/:id/delta?since=`；前端 `CanvasView` 轮询 delta，过旧回退全量 L0；大 body 不塞列表主路径 |
 | 分层共享资产 | #41 | **已实现**：platform/project/finding 三级不可变版本库，CAS blob、配额/MIME/path 校验、人工上传/归档/下载、Agent `list_shared_assets`/`publish_shared_asset`、项目 platform opt-in、Finding 隔离、Job 精确版本快照，以及带 Job 标签的 `:ro` named volume 自动注入/回收；项目/平台/Finding UI 已接入。字节经可插拔 BlobStore（`BLOB_STORE=fs|s3`，官方生产 Compose 默认使用 PGSTY Silo，仍兼容任意 S3 服务）；Agent **无单独下载工具**，list 返回 `mount_path`/`read_path` 用普通文件工具读取，publish 由 Scheduler 写 BlobStore。 |
 | Provider 配置（CC Switch 模型） | #99 | **已落地（五类 CLI 配置方言）**：LLM `provider` 是协议（Anthropic Messages / OpenAI-compatible），不是厂商预设。`credentials` 存 `agent_cli` + 完整 `settings_config_json` + `meta_json`；管理 API 仅返回 `[已保存密钥]` 脱敏投影。角色绑定 Credential 配置文件，`RoleConfig.model` 仅作可选高级覆盖；所有门禁与 Job 冻结统一解析 `effectiveModel = RoleConfig.model ?? Credential settings model ?? null`。显式 `allowed_model_ids` 只约束 effective model，settings 模型不会静默开启白名单。Job 快照仅保存无密钥配置结构；运行时按 CLI 物化受治理配置并统一改写到 Model Gateway，仅注入短期 Job token。 |
 | 治理多 CLI Runtime Adapter | #100 | **已落地**：Scheduler 通过显式注册表驱动 Claude Code、Codex、OpenCode、Pi 与 DSH 的官方非交互结构化协议；能力、适配器版本和兼容 runtime image 在创建 Job 时校验并冻结到 `agent_snapshot_json`。未注册 CLI、缺失必需能力或镜像不兼容均在执行前 fail closed。详见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)。 |
-| 节点/边着色 + Agent 专色 | #42 | 边随源节点色；新建 role 分配未占用色 |
+| 节点/边着色 + Agent 专色 | #42 | **已完成**：边随源节点色；新建 role 分配未占用色（`agent_roles.ui_color`） |
 | 双轨报告 | #43/#142 | **已完成**：任务收敛后按冻结输入摘要生成版本化 Task Report，默认返回最新版本并保留历史；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report。两条轨道都限制同一目标同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | **已完成**：通用 `profile/category/tags/evidence_refs` 与可选 severity/scoring；协议按任务>项目>全局解析并随画布冻结；Agent 通过严格 MCP 提案，Scheduler 重算 CVSS 4.0/3.1、保留协议允许的未知版本原始数据；Web/报告支持标识、筛选与分组 |
-| 任务卡片状态 | #46 | 任务级相位与 `active_count` 同源 |
+| 任务卡片状态 | #46 | **已完成**：任务级相位与 `active_count` 同源；勿用 `last_job_status=succeeded` 当任务完成 |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
 | 官方运行镜像多 channel catalog | #70、#143 | **已完成**：v2 canonical digest/platform/size + `registry_refs`/`registry_evidence` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 按 ACR→GHCR→Docker Hub 发布并对每个可用目的地执行真实 `imagetools inspect`，配置通道失败时清单生成 fail-closed，v2 Release asset 与 bundled fallback 同步；schema v23 新库默认选择 `aliyun-acr`，平台全局通道由 Scheduler 落库并经 `GET /runtime-images/registry` 的 `selected_channel` 读取、`PATCH /runtime-images/registry/channel`（`images:manage`）切换，Job 创建时冻结所选 digest/ref，pull/resolution 对未发布通道 fail-closed；官方目录同步和独立准入 Worker 的首次扫描、恢复扫描、周期复扫均按部署 `DEEPSONAR_IMAGE_REGISTRY` 从同一 digest 的已有发布证据中选择引用，配置不匹配或证据缺失时拒绝扫描，绝不回退到 GHCR。若同一官方 digest 曾因旧 registry 引用不可达而被撤销，目录切换到已证明的新 registry 引用时会回到隔离态并仅排队一次恢复扫描；扫描成功才恢复官方信任，部署源上的真实扫描失败重新撤销，同引用的真实安全撤销不会被目录同步覆盖；Web 市场提供固定三选项通道选择器，与 CPU 平台筛选分离，展示加载/403/切换状态并在切换后刷新清单与镜像行 |
 | Chrome audit/test/fuzz 专项运行时 | #118 | **已实现发布基础设施**：三个官方 project-opt-in 镜像分别提供 C++ 静态分析、固定 Chromium/CDP 与固定 V8 源码构建的真实 `d8` + `v8_json_libfuzzer`；每个镜像同时声明 amd64/arm64、来源 SHA256/完整包闭包、工具清单与大小预算。V8 与 Chromium 版本语义分开声明；Job 仍只消费准入后的 immutable digest；核心 CI 与 Chrome amd64 合同冒烟已拆为路径过滤的 `.github/workflows/ci.yml` / `.github/workflows/chrome-runtime.yml`；Chrome Fuzz amd64 按正常目标架构构建并执行 smoke，arm64 在 x86 runner 上使用固定 Chromium Clang 与 arm64 sysroot 交叉构建，QEMU 仅用于组装，真实 `d8`/`v8_json_libfuzzer` smoke 在 `ubuntu-24.04-arm` 原生 runner 执行，原生 smoke 通过前不得组装发布 index；Release 还须完成多 registry inspect 后才生成 catalog |
@@ -193,9 +225,11 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 平台 OpenAPI + 静态控制 Skill | #135 | **第一阶段已落地**：现有 MCP 暂作过渡通道；真实 Job 注入静态 `deepsonar-control` Skill，并以独立短期 capability token 访问按冻结 operation allowlist 过滤的 `/control/v1/jobs/:jobId` capabilities/OpenAPI/operation API。API 与 MCP 共用宿主 semantic handler 和 Scheduler 权威副作用；当前由 Agent 对每个逻辑操作自行选择一个通道，长期统一到 API 并淘汰 MCP；未来新平台工具只扩展 API。 |
 | Agent Runtime Context 生命周期与恢复身份 | #138 | **已落地基础契约**：Executor 为每个 Attempt 生成稳定 `context_id`/revision 与只含摘要的 transform manifest，按 attempt state 和 Job runtime evidence 持久化；`context.compacted` 严格校验身份、链摘要、顺序并支持幂等重放，无法观测或不支持时显式记录而不伪造压缩。恢复前必须取得实际上下文身份并逐字段匹配，缺失或不一致则拒绝恢复；Pi 使用精确 session 文件，不选择 latest。Job 详情只展示有界诊断，不展示 prompt 或 provider 原文。 |
 | Pi Coding Agent RPC Runtime Adapter 与 Capability API | #140 | **已落地**：Pi 固定使用 `pi --mode rpc --no-approve` 的严格 LF JSONL 协议，平台控制通过 Job 级 HTTP Capability API，不物化或注入 MCP；`agent_settled` 只提供运行时静止信号，Job 成功仍须经过 `mark_job_done` 完成门。`get_state` 返回的精确 `sessionFile` 用于恢复，暂态错误最多同会话重试三次；模型配置经 Gateway 物化为 `models.json`。项目 `.pi` 不自动加载，默认 `--no-extensions`，受治理扩展才通过冻结配置显式 `--extension` 加载。 |
-| 通用长上下文预算 | #144 | **已完成**：模型目录只登记 Provider 返回的模型 ID，不把 “1M” 等营销标签推导成能力。Credential `settings_config_json.context_window_tokens` 提供 1024–10000000 的 CLI 客户端基准预算，RoleConfig 同名字段可覆盖，`null` 依次继承 Credential、Provider/CLI 默认；新 Job 冻结解析值，旧 Job 不变。该预算不提升上游模型能力，真实可用窗口仍受 Provider、模型 ID 与账号权限限制。Codex 落到 `model_auto_compact_token_limit`，OpenCode 落到模型 `limit.context`，Pi 落到 `models.json` 的 `contextWindow`；Claude Code 没有受支持的绝对窗口设置，因此只冻结/展示，不伪造环境变量或 CLI 参数。 |
+| 通用长上下文预算 + 兼容网关 models 探测 | #144 | **已完成并关 issue**：① `credential-test` 多候选 `modelUrls`（含 `/api/anthropic` 等兼容子路径剥离），404/405 继续下一候选。② 模型目录只登记 Provider 返回的模型 ID。③ Credential/RoleConfig `context_window_tokens`（1024–10000000），RoleConfig 覆盖 Credential，Job 冻结；Codex/OpenCode/Pi 落到各 CLI，Claude 只冻结/展示。 |
 | Runtime Platform API 能力一致性 | #145 | **已完成当前阶段**：五个治理 adapter 均声明 Job 级 HTTP `platformControlApi`；Claude Code、Codex、OpenCode 当前同时向 Agent 提供 MCP 与 API，由 Agent 对每个逻辑操作自行二选一，Pi 与 DSH 仅使用 API。长期统一到 API 并淘汰 MCP |
 | 项目镜像继承一致性 | #146 | `inherit_global` 继续只认全局 RoleConfig 镜像；`project_managed` 只认项目 `role_runtime_images` 映射。修复遗留项目 RoleConfig `runtime_image_key` 在导入、展示或 readiness 中被误当作有效配置的问题，不恢复 #130 已删除的独立项目镜像覆盖 |
+| 任务定时开始（北京 08:00） | #147 | **已完成并关 issue**：见 §5；`task-schedule` / `schedule-wake`、dispatcher 门禁、Web 表单与列表 `scheduled` 相位；无 schema 迁移 |
+| 画布广播可观测 | （过程真相 A） | **注入 + 投递账本已落地**：见 §4.2；分期细节与布局 B 见 `docs/TODO_CANVAS_PROCESS_TRUTH.md` |
 
 ## 12. 仓库地图
 
@@ -241,7 +275,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 新增控制工具 checklist：定义严格 Zod payload + 同源 JSON Schema；列出禁止输入/错误码/业务白名单；MCP 与宿主各有合法/非法测试；core 事务断言失败全回滚；确认不写控制文件、不把普通文本当语义事件；更新本表、平台工具说明和 CI 冒烟。
 
 1. **不扩大 Agent 权限**：镜像、凭据、派生、状态机终态只在调度器。  
-2. **改表 = 改基线 + bump 版本 + 重建库验证**。短期**不**做 #34 类增量 migration（产品与 schema 仍在快速迭代，过早迁移会锁死演进）；生产数据靠备份 + `.deepsonarpack`，破坏性变更在 Release 写明。  
+2. **改表 = 改基线 + bump 版本 + 重建库验证**。短期**不**做 #34 类增量 migration（产品与 schema 仍在快速迭代，过早迁移会锁死演进）；生产数据靠备份 + **`.deepsonarpack` 导入导出（产品主路径已 as-built：`apps/scheduler/src/transfer/`，见 `docs/TODO_DATABASE_IMPORT_EXPORT_PLAN.md`）**，破坏性变更在 Release 写明。Credential 仅迁元数据，不导出明文 Secret。
 3. **列表 API 不塞大 body**；大字段详情/按需（#39）。  
 4. **进 prompt 的内容当不可信**；共享资产只读挂载（#41）。  
 5. **配置覆盖：任务 > 项目 > 全局**；Job 只认冻结快照。  

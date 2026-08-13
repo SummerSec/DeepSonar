@@ -1,5 +1,7 @@
 # Shared Asset BlobStore
 
+> **Status: as-built (Issue #41).** Index: [`README.md`](README.md).
+
 Shared assets keep **metadata in PostgreSQL** and **bytes in a pluggable BlobStore**.
 
 - DB: `shared_assets` / `shared_asset_versions` / `shared_asset_blobs` (`content_sha256`, logical `blob_uri`)

@@ -1,7 +1,8 @@
 # Hub 统一任务入口与事件触发实施方案
 
-> 状态：**历史方案稿**（Hub 入口与事件触发已 as-built，见 `DESIGN.md`）。  
-> 冲突时以 `DESIGN.md`、OpenAPI 与代码为准。
+> **状态：as-built + 历史推演**（`hub_reason` 唯一决策、Web 建任务为主、Plane/events 可选）。  
+> 冲突时以 `DESIGN.md`、OpenAPI 与代码为准；**勿把下文「改造前问题」当当前缺陷**。  
+> 索引：[`README.md`](README.md)。
 >
 > 适用范围：任务创建、Agent 编排、Finding 验证、任务画布  
 > 核心结论：`hub_reason` 是唯一决策入口；执行角色由 Hub 下发意图、Scheduler 落地。

@@ -7,8 +7,9 @@ DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度�
 **设计入口（必读顺序）**
 
 1. **`DESIGN.md`（仓库根）** — 当前 as-built 设计摘要、实体模型、Hub 闭环、配置覆盖、已知演进（Issues）；**改功能/提方案先读它**。
-2. **`docs/ARCHITECTURE.md`** — 完整架构、威胁建模、存储与状态机细则；与 `DESIGN.md` 冲突时以本文件 + 代码为准，并应回写 `DESIGN.md`。
-3. 专题计划在 `docs/TODO_*.md` / `docs/*_PLAN.md`；开放演进以 GitHub Issues 为准（`DESIGN.md` §11 有索引）。
+2. **`docs/ARCHITECTURE.md`** — 完整架构、威胁建模、存储与状态机细则；与 `DESIGN.md` 冲突时以代码 + `DESIGN.md` 为准，并应回写 `DESIGN.md`。
+3. **`docs/README.md`** — 专题文档索引与 **as-built / 历史方案 / 进行中** 状态表（大量 `*_PLAN.md` / `TODO_*.md` 主路径已落地，勿当未实现清单）。
+4. 开放演进以 `DESIGN.md` §11 与代码为准（GitHub Issues 可能为空）。
 
 ## 常用命令
 
@@ -112,7 +113,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
 - RoleConfig `modules` 现为 `"<source_id>:<module_id>"` 逐条勾选（整插件挂载见 #33）。
-- 实时流：`stream-bus` + `/ws`；`AUTH_REQUIRED` 下 WS 鉴权与运行中过程流可读性见 #38。
+- 实时流：`stream-bus` + 短时 `POST /auth/ws-ticket` → `/ws?ticket=`（#38 已关）；运行中可读 inflight `stream.ndjson`；多 Scheduler 副本不共享内存 bus。
 - Windows 探库：避免 PowerShell 弄坏 `node -e` 模板字符串；临时 `apps/scheduler/*.mjs` 跑完即删。
 
 ## 工程原则

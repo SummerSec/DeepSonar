@@ -1,9 +1,13 @@
 # DeepSonar 项目方案（优化版）
 
-> 版本：v1.1（在 v1.0 评审基础上合入崩溃恢复、幂等性、威胁建模、单一决策点等修正）
-> 日期：2026-07-31
+> 版本：v1.1+（持续与代码对齐）  
+> 日期：2026-07-31 起稿 · **2026-08-13 状态：as-built 主路径以本地库 / Web 建项目任务为准**  
+> **阅读**：产品摘要先读仓库根 `DESIGN.md`；本文件为架构细则。冲突时以 **代码 + schema + OpenAPI + DESIGN** 为准。  
+> 文档目录索引：[`docs/README.md`](README.md)。
 
-**一句话**：以 Plane 管理多审计项目进度，以无限画布承载每次运行的过程与发现链，以沙箱调度层安全执行多类 Agent（审计 → 验证 → …），Agent 只提「提案」，系统负责真正下发与记账。
+**一句话（as-built）**：以**本地库为管理真相**（Web 直接建项目/任务；Plane 为**可选**集成），以任务画布为过程真相，以一次性沙箱为执行真相，以调度器为唯一副作用执行者；多角色 Agent 只提案，系统落地与记账。
+
+> 下文部分章节仍保留早期「Plane 为主」叙述，仅作演进背景；**不要**再按「必须先接 Plane」实施。
 
 ---
 
@@ -457,7 +461,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 非 JSON/未知 runtime 行、未知控制命名空间工具和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；控制工具的 normalized telemetry 仅保留 toolName/callId 与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列
 - 同一 `tool_use.id` 只有合法非错误 `tool_result` 才生成一次语义事件；pending 有上限，Job 终态会丢弃残留并记低基数告警。`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
 - 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
-- 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限
+- 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限。仅当 Job 冻结能力 `incrementalMessages=true` 时订阅（Claude Code / Pi；Codex / OpenCode 不追加）。每次投递写入 `canvas_broadcasts`（`planned`→`injected`|`unknown`），`injected` 仅表示平台已调用 sendMessage 成功，不表示模型已读；查询 `GET /canvases/:id/broadcasts`。产品摘要见 `DESIGN.md` §4.2
 - 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
 - 沙箱内不注入调度器数据库、管理 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期模型 Job token。平台控制 API 只注入另一枚按 operation 限权的短期 token；二者均随终态撤销并随一次性沙箱销毁
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定

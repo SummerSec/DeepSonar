@@ -1,5 +1,7 @@
 # DeepSonar 一键部署
 
+> **状态：运维 as-built**。索引：[`README.md`](README.md)。
+
 与代码、`deploy/deploy.sh` / `deploy/deploy.ps1` 对齐的部署说明。根目录 `README.md` 为快速入口；细节以本文件与脚本为准。
 
 ## 1. 组成

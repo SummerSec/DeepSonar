@@ -16,9 +16,9 @@
     "binutils": { "version": "2.40-2", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"], "toolsets": ["audit"] }
   },
   "npm": {
-    "@anthropic-ai/claude-code": { "version": "2.1.220", "license": "Commercial", "capabilities": ["agent-runtime"], "agent_cli": "claude-code", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
+    "@anthropic-ai/claude-code": { "version": "2.1.231", "license": "Commercial", "capabilities": ["agent-runtime"], "agent_cli": "claude-code", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
     "@openai/codex": { "version": "0.147.0", "license": "Apache-2.0", "capabilities": ["agent-runtime"], "agent_cli": "codex", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
-    "opencode-ai": { "version": "1.18.15", "license": "MIT", "capabilities": ["agent-runtime"], "agent_cli": "open-code", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
+    "opencode-ai": { "version": "1.18.18", "license": "MIT", "capabilities": ["agent-runtime"], "agent_cli": "open-code", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
     "@earendil-works/pi-coding-agent": { "version": "0.84.1", "integrity": "sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==", "license": "MIT", "capabilities": ["agent-runtime", "rpc", "platform-control-api"], "agent_cli": "pi", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
     "@deepseek-ai/dsh": { "version": "0.1.0-rc.6", "integrity": "sha512-brpZfED7ieRa2PQ5tUxMhHrM1pb2CmKFVM/f6yMULBDMicahk+Z2OsHgTwTDnoiZm23Ftu9rQz0NN4pflaoJcg==", "license": "Apache-2.0", "capabilities": ["agent-runtime", "json-rpc", "platform-control-api"], "agent_cli": "dsh", "compatible_image_keys": ["deepsonar-base", "deepsonar-audit"] },
     "@deepseek-ai/dsh-sdk-jsonrpc-demo": { "version": "0.1.0-rc.6", "integrity": "sha512-LfKyOVUhA0p65+JrlvSBoC7lE6W/VbN5/ubEVgZw2NYDhdPNAg0KhC7fWtahfdycGOTjp8fyUn+rhzLsRmS9eQ==", "license": "Apache-2.0", "capabilities": ["json-rpc-runtime"] },

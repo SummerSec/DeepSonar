@@ -1,5 +1,8 @@
 # Official runtime-image registry contract (Issue #70, Slices A+B+C)
 
+> **Status: as-built.** Index: [`README.md`](README.md). Release procedure:
+> [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md).
+
 Slices A+B define the catalog trust boundary and the release evidence that
 feeds it. Slice C adds a Scheduler-owned global channel selector and makes
 pull/resolution consume that channel exactly. A missing reference on the
