@@ -12,6 +12,26 @@ const dockerfile = readFileSync(new URL("../deploy/Dockerfile.agent", import.met
 const localDefinition = readFileSync(new URL("./image.mjs", import.meta.url), "utf8");
 const kaliConfig = JSON.parse(readFileSync(new URL("./kali-minimal-runtime.json", import.meta.url), "utf8"));
 const kaliDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8");
+const dshForbidden = ["dsh-cc-tui", "@deepseek-ai/dsh-app-tui", "@deepseek-ai/dsh-app-web"];
+for (const forbidden of dshForbidden) {
+  if (JSON.stringify(config).includes(forbidden) || JSON.stringify(kaliConfig).includes(forbidden) || dockerfile.includes(forbidden) || kaliDockerfile.includes(forbidden)) {
+    throw new Error(`DSH machine runtime must not install UI package ${forbidden}`);
+  }
+}
+for (const packageName of [
+  "@deepseek-ai/dsh",
+  "@deepseek-ai/dsh-sdk-jsonrpc-demo",
+  "@deepseek-ai/dsh-sdk-jsonrpc-server",
+  "@deepseek-ai/dsh-sdk-jsonrpc-protocol",
+  "@deepseek-ai/dsh-agent-spine-demo",
+]) {
+  if (config.npm[packageName]?.version !== "0.1.0-rc.6" || kaliConfig.npm[packageName]?.version !== "0.1.0-rc.6") {
+    throw new Error(`${packageName} must be pinned to 0.1.0-rc.6 in base and Kali manifests`);
+  }
+  if (!config.npm[packageName]?.integrity || !kaliConfig.npm[packageName]?.integrity) {
+    throw new Error(`${packageName} must carry npm integrity in base and Kali manifests`);
+  }
+}
 const openHarmonyDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony", import.meta.url), "utf8");
 const openHarmonyAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-audit", import.meta.url), "utf8");
 const openHarmonyFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-fuzz", import.meta.url), "utf8");

@@ -22,6 +22,12 @@ ARG CODEX_VERSION=0.147.0
 ARG OPENCODE_VERSION=1.18.15
 ARG PI_CODING_AGENT_VERSION=0.84.1
 ARG PI_CODING_AGENT_INTEGRITY=sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==
+ARG DSH_VERSION=0.1.0-rc.6
+ARG DSH_INTEGRITY=sha512-brpZfED7ieRa2PQ5tUxMhHrM1pb2CmKFVM/f6yMULBDMicahk+Z2OsHgTwTDnoiZm23Ftu9rQz0NN4pflaoJcg==
+ARG DSH_JSONRPC_DEMO_INTEGRITY=sha512-LfKyOVUhA0p65+JrlvSBoC7lE6W/VbN5/ubEVgZw2NYDhdPNAg0KhC7fWtahfdycGOTjp8fyUn+rhzLsRmS9eQ==
+ARG DSH_JSONRPC_SERVER_INTEGRITY=sha512-VQsoRpqUG55+T0kQtX82P9izWlA5VHBs61vpBvSv/Uv6G40ebmWXB37M5izkCNV4bcWojVfTbKXJus2ruO2ZrA==
+ARG DSH_JSONRPC_PROTOCOL_INTEGRITY=sha512-0ZDQdLXLc4Uq1WvjopUTAQTxeTNvAJBiSSCrVdCWC/sOwC8ThQfzC48z9kcd7xmjfM1JqOiztBtQ62/Tw2Qt8A==
+ARG DSH_AGENT_SPINE_INTEGRITY=sha512-urMS7CReaddhybJZCaPA8oI4VbD/A+62mLTOb2E4b8EKgZ55sMsOGfpkMZmFIs9nqJqxdFUmcxPXWKVMVtpb5w==
 ARG NODE_VERSION=22.23.2
 ARG UV_VERSION=0.11.32
 ARG UV_AMD64_SHA256=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
@@ -72,11 +78,21 @@ RUN set -eu; arch="$(dpkg --print-architecture)"; \
 
 RUN set -eu; \
   test "$(npm view @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} dist.integrity)" = "$PI_CODING_AGENT_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh@${DSH_VERSION} dist.integrity)" = "$DSH_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-sdk-jsonrpc-demo@${DSH_VERSION} dist.integrity)" = "$DSH_JSONRPC_DEMO_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-sdk-jsonrpc-server@${DSH_VERSION} dist.integrity)" = "$DSH_JSONRPC_SERVER_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-sdk-jsonrpc-protocol@${DSH_VERSION} dist.integrity)" = "$DSH_JSONRPC_PROTOCOL_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-agent-spine-demo@${DSH_VERSION} dist.integrity)" = "$DSH_AGENT_SPINE_INTEGRITY"; \
   npm install -g --omit=dev --no-audit --no-fund \
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
   @openai/codex@${CODEX_VERSION} \
   opencode-ai@${OPENCODE_VERSION} \
   @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
+  @deepseek-ai/dsh@${DSH_VERSION} \
+  @deepseek-ai/dsh-sdk-jsonrpc-demo@${DSH_VERSION} \
+  @deepseek-ai/dsh-sdk-jsonrpc-server@${DSH_VERSION} \
+  @deepseek-ai/dsh-sdk-jsonrpc-protocol@${DSH_VERSION} \
+  @deepseek-ai/dsh-agent-spine-demo@${DSH_VERSION} \
   && npm cache clean --force
 
 RUN set -eu; arch="$(dpkg --print-architecture)"; \
