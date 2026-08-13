@@ -813,7 +813,33 @@ const pi = Object.freeze<RuntimeAdapter>({
 function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<AsyncCommandHandle> {
   const patchPath = "/workspace/.deepsonar-home/.dsh/deepsonar.patch.json";
   const command = `dsh --profile headless --patch ${patchPath} ${promptArg(context.input)}`;
-  return sandbox.runAsync(command, { cwd: context.cwd, env: context.env });
+  return sandbox.runAsync(command, {
+    cwd: context.cwd,
+    env: {
+      ...context.env,
+      DSH_HOME: "/workspace/.deepsonar-home/.dsh",
+      DSH_TELEMETRY_DISABLED: "1",
+    },
+  });
+}
+
+async function materializeDsh(context: AdapterStartContext): Promise<void> {
+  const home = "/workspace/.deepsonar-home/.dsh";
+  const patch = [
+    {
+      id: "agent-default-model",
+      config: { provider: "deepseek-official", model: context.model || "deepseek-v4-flash" },
+    },
+    {
+      id: "session-persistence-jsonl",
+      config: { root: `${home}/sessions`, compression: "none", packChunks: false },
+    },
+    { id: "tool-web", disabled: true },
+    { id: "web", disabled: true },
+    { id: "web-search-deepseek", disabled: true },
+    { id: "session-telemetry-otel", disabled: true },
+  ];
+  await context.sandbox.uploadFile(`${JSON.stringify(patch, null, 2)}\n`, `${home}/deepsonar.patch.json`);
 }
 
 const dsh = Object.freeze<RuntimeAdapter>({
@@ -834,6 +860,7 @@ const dsh = Object.freeze<RuntimeAdapter>({
   }),
   compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
   start: (context) => sandboxDsh(context.sandbox, context),
+  materialize: materializeDsh,
   resume: async () => {
     throw new Error("DSH_HEADLESS_RESUME_UNSUPPORTED");
   },

@@ -872,7 +872,7 @@ export async function forceRemoveContainer(containerId: string): Promise<void> {
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export interface RealAgentSpec {
-  provider: "claude-code" | "open-code" | "codex" | "pi";
+  provider: "claude-code" | "open-code" | "codex" | "dsh" | "pi";
   adapter?: AgentCliRuntimeSnapshot;
   runtimeImageKey?: string;
   /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
@@ -1509,6 +1509,8 @@ export function skillMaterializationPath(
     ? `${RUNTIME_HOME}/.codex/skills`
     : provider === "open-code"
       ? `${RUNTIME_HOME}/.config/opencode/skills`
+      : provider === "dsh"
+        ? `${RUNTIME_HOME}/.dsh/skills`
       : provider === "pi"
         ? `${RUNTIME_HOME}/.pi/agent/skills`
       : `${CLAUDE_DIR}/skills`;
@@ -2800,7 +2802,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     }
   }
   // 在沙箱销毁前按 CLI 专属规则归档原始 Session。捕获失败不覆盖 Agent 的主运行结果。
-  const rawSession = sessionId
+  // DSH headless does not emit its generated Session ID; its governed
+  // post-run discovery adapter is added with the Session capture surface.
+  const rawSession = sessionId && spec.provider !== "dsh"
     ? await CLI_SESSION_ADAPTERS[spec.provider].exportSession(
         {
           run: (command) => sandbox.run(command, { timeoutMs: 20_000, env: cliEnv }),

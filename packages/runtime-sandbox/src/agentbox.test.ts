@@ -1241,6 +1241,10 @@ test("embedded skill 使用当前 Agent CLI 的标准目录", () => {
     skillMaterializationPath("deepsonar-control", "SKILL.md", "open-code"),
     "/workspace/.deepsonar-home/.config/opencode/skills/deepsonar-control/SKILL.md",
   );
+  assert.equal(
+    skillMaterializationPath("deepsonar-control", "SKILL.md", "dsh"),
+    "/workspace/.deepsonar-home/.dsh/skills/deepsonar-control/SKILL.md",
+  );
   assert.deepEqual(
     materializationPathCollisions({
       provider: "codex",

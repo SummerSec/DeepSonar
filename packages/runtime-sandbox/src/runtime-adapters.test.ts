@@ -20,10 +20,12 @@ function fakeSandbox(): {
   commands: string[];
   envs: Record<string, string>[];
   runCommands: string[];
+  uploads: Array<{ path: string; content: string }>;
 } {
   const commands: string[] = [];
   const envs: Record<string, string>[] = [];
   const runCommands: string[] = [];
+  const uploads: Array<{ path: string; content: string }> = [];
   const sandbox = {
     runAsync: async (command: string, options: { env?: Record<string, string> }) => {
       commands.push(command);
@@ -34,8 +36,11 @@ function fakeSandbox(): {
       runCommands.push(command);
       return {} as never;
     },
+    uploadFile: async (content: string, path: string) => {
+      uploads.push({ path, content });
+    },
   } as never;
-  return { sandbox, commands, envs, runCommands };
+  return { sandbox, commands, envs, runCommands, uploads };
 }
 
 test("内置注册表明确、不可变且能力完整", () => {
@@ -93,10 +98,40 @@ test("DSH headless adapter uses the governed patch path and rejects resume", asy
   assert.equal(adapter.version, "0.1.0-rc.6");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(adapter.encodeInput("ignored"), "");
+  assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
+  assert.equal(fake.envs[0]?.DSH_TELEMETRY_DISABLED, "1");
   await assert.rejects(
     adapter.resume({ ...context, sessionId: "dsh-session" }),
     /DSH_HEADLESS_RESUME_UNSUPPORTED/u,
   );
+});
+
+test("DSH materializes a static governed Cordis patch", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  const fake = fakeSandbox();
+  const context = {
+    sandbox: fake.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "task",
+    model: "deepseek-v4-flash",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+  } as const;
+  await adapter.materialize?.(context);
+  assert.equal(fake.uploads.length, 1);
+  assert.equal(fake.uploads[0]?.path, "/workspace/.deepsonar-home/.dsh/deepsonar.patch.json");
+  const patch = JSON.parse(fake.uploads[0]?.content ?? "null") as Array<Record<string, unknown>>;
+  const row = (id: string) => patch.find((item) => item.id === id) as Record<string, unknown> | undefined;
+  assert.deepEqual(row("agent-default-model")?.config, { provider: "deepseek-official", model: "deepseek-v4-flash" });
+  assert.deepEqual(row("session-persistence-jsonl")?.config, {
+    root: "/workspace/.deepsonar-home/.dsh/sessions",
+    compression: "none",
+    packChunks: false,
+  });
+  for (const id of ["tool-web", "web", "web-search-deepseek", "session-telemetry-otel"]) {
+    assert.equal(row(id)?.disabled, true);
+  }
+  assert.equal(patch.some((item) => JSON.stringify(item).includes("!!js")), false);
 });
 
 test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {
