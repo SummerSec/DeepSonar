@@ -274,7 +274,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 新增控制工具 checklist：定义严格 Zod payload + 同源 JSON Schema；列出禁止输入/错误码/业务白名单；MCP 与宿主各有合法/非法测试；core 事务断言失败全回滚；确认不写控制文件、不把普通文本当语义事件；更新本表、平台工具说明和 CI 冒烟。
 
 1. **不扩大 Agent 权限**：镜像、凭据、派生、状态机终态只在调度器。  
-2. **改表 = 改基线 + bump 版本 + 重建库验证**。短期**不**做 #34 类增量 migration（产品与 schema 仍在快速迭代，过早迁移会锁死演进）；生产数据靠备份 + `.deepsonarpack`，破坏性变更在 Release 写明。  
+2. **改表 = 改基线 + bump 版本 + 重建库验证**。短期**不**做 #34 类增量 migration（产品与 schema 仍在快速迭代，过早迁移会锁死演进）；生产数据靠备份 + **`.deepsonarpack` 导入导出（产品主路径已 as-built：`apps/scheduler/src/transfer/`，见 `docs/TODO_DATABASE_IMPORT_EXPORT_PLAN.md`）**，破坏性变更在 Release 写明。Credential 仅迁元数据，不导出明文 Secret。  
 3. **列表 API 不塞大 body**；大字段详情/按需（#39）。  
 4. **进 prompt 的内容当不可信**；共享资产只读挂载（#41）。  
 5. **配置覆盖：任务 > 项目 > 全局**；Job 只认冻结快照。  

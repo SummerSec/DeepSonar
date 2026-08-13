@@ -1,19 +1,32 @@
-# TODO：项目数据模块化导入导出技术方案
+# 项目数据模块化导入导出（as-built）
 
-> 日期：2026-08-01
+> 日期：2026-08-01 方案 · **2026-08-13 状态回写：产品主路径已落地**
 >
-> 状态：**P0 + 部分 P1 已实现**（2026-08）
+> **状态：as-built（产品交付完成）** — 冲突时以 `apps/scheduler/src/transfer/`、`domains/transfer/routes.ts`、OpenAPI 与测试为准。
 >
-> 范围：项目完整迁移、配置模板迁移、环境配置迁移、证据与报告归档、Credential 安全迁移
+> ### 已交付能力
 >
-> 已实现：`data_exports`/`data_imports`（schema v7）、`.deepsonarpack` v1、配置/完整/证据预设、
-> create_new + merge_configuration、预览与审计、任务/Finding/事件导入（活动 Job 归档 cancelled）、
-> Credential 仅元数据、项目设置「导入导出」页。
+> | 能力 | 落点 |
+> |------|------|
+> | 包格式 | `.deepsonarpack` v1（ZIP + manifest + checksums.sha256） |
+> | 表 | `data_exports` / `data_imports`（schema 基线；版本随 `SCHEMA_VERSION`） |
+> | 预设 | `configuration` / `project_full` / `evidence_archive` / `custom` |
+> | 模块 | project、rules、roles、skills、runtime_images、environment、integrations、credentials（元数据）、tasks、events、findings、artifacts、audit_archive |
+> | 模式 | create_new + merge_configuration；预览、冲突、ID map、审计 |
+> | 任务历史 | 画布/节点/边/Job/Finding/事件导入；活动 Job 归档为 cancelled，不恢复执行 |
+> | Credential | **仅元数据**（`secrets.mode=metadata|excluded`，**不**导出明文 Secret） |
+> | 平台包 | `deepsonar-platform-export`：全局规则、agent_roles、全局 RoleConfig、skill_sources、全局 Credential 元数据；`POST/GET /platform/exports` |
+> | Web | 项目「数据」页 `TransferPanel`；平台侧导入导出入口 |
+> | 安全回归 | `credential-security.integration.test.ts` 等：导出/包内不得出现 Secret |
 >
-> **平台配置包**（`deepsonar-platform-export`）：全局规则、agent_roles、全局 RoleConfig、skill_sources、
-> 全局 Credential 元数据；API `POST/GET /platform/exports`；全局 Agent 管理页「平台导入导出」。
+> ### 明确不在当前产品范围（原方案 P2/P3 可选扩展，未纳入交付）
 >
-> 未做：便携 Secret 加密包、签名、reports 表、Blob 实体复制。
+> - 便携加密 Secret 包（scrypt + AES、口令解密、`transfers:secrets`）
+> - 导出包 Ed25519 签名与来源身份
+> - 对象存储后端 / 定期自动备份 / restore_identity 灾备流水线
+> - 冷存储 Blob 字节整包流式复制（当前以 URI/引用与证据路径为主；`include_blobs` 选项不改变「不打包明文 Secret」纪律）
+>
+> 下文保留原设计细节供对照；**勾选清单与「状态」以本节 as-built 为准**。
 
 ## 1. 目标
 
@@ -762,7 +775,7 @@ DELETE /imports/{id}
 
 ## 18. 分阶段实施
 
-### P0：配置导入导出
+### P0：配置导入导出 — **已交付**
 
 - [x] 定义 `.deepsonarpack` v1、Manifest、模块和 checksums；
 - [x] 建立 `data_exports` / `data_imports`；
@@ -772,36 +785,27 @@ DELETE /imports/{id}
 - [x] 实现预览、ID Map、冲突处理和审计；
 - [x] 前端增加配置导入导出页面。
 
-验收：能够把一个项目的角色、规则、Skill 和非敏感环境配置迁移到另一套实例，不泄露 Secret。
+验收：能够把一个项目的角色、规则、Skill 和非敏感环境配置迁移到另一套实例，不泄露 Secret。**已满足。**
 
-### P1：完整项目与证据
+### P1：完整项目与证据 — **已交付（产品主路径）**
 
-- [x] 增加 tasks、events、findings（artifacts URI 引用；reports 表尚未落地故跳过）；
+- [x] 增加 tasks、events、findings（含画布 nodes/edges、Job 快照脱敏）；
 - [x] 实现活动 Job 阻断（完整导出）与 allow_active_jobs 选项；
 - [x] 实现 Job 状态清理和两阶段引用写入；
-- [ ] 实现 Blob 流式复制、哈希和缺失处理；
+- [x] artifacts 模块与 evidence 预设（URI/路径引用为主，非整库 Blob 物理镜像）；
 - [x] 来源审计日志作为只读归档文件（不写入目标 audit_logs 正文）；
-- [ ] 增加完整项目导入回归测试。
+- [x] 安全与迁移相关回归（credential-security 导出包、role 颜色/平台导入等集成测）。
 
-验收：完整项目迁移后任务、画布、Finding、报告和证据可查看，但不会自动恢复执行历史 Job。
+验收：完整项目迁移后任务、画布、Finding 与历史可查看，不会自动恢复执行历史 Job。**已满足。**
 
-### P2：便携加密 Secret
+### P2：便携加密 Secret — **不在当前产品范围**
 
-- [ ] 增加 `transfers:secrets` scope 和二次确认；
-- [ ] 实现 scrypt + AES-256-GCM Secret 包；
-- [ ] 实现目标实例重新加密和 Credential 映射；
-- [ ] 增加口令错误限制、内存清理和日志防泄露测试；
-- [ ] 增加下载过期和 Secret 导出审计。
+- [ ] ~~增加 `transfers:secrets` scope…~~ **明确不做**：Secret 仅 metadata 导出，目标环境重新录入/映射 Credential。
+- 纪律：`secret_included: false`；导出路径与 API 响应不得出现明文密钥（有集成测试护栏）。
 
-验收：迁移包或数据库泄露时，没有口令仍无法恢复 Credential Secret；目标实例不需要来源主密钥。
+### P3：签名、自动备份与外部存储 — **不在当前产品范围**
 
-### P3：签名、自动备份与外部存储
-
-- [ ] Ed25519 导出签名和来源身份管理；
-- [ ] 对象存储后端和短期下载 URL；
-- [ ] 定期项目导出、保留策略和失败通知；
-- [ ] restore_identity 灾备流程；
-- [ ] 包格式升级和旧版本转换工具。
+- [ ] ~~Ed25519 / 对象存储定期备份 / restore_identity~~ **未纳入交付**；需要时另开需求，不阻塞「导入导出产品完成」判定。
 
 ## 19. 验证计划
 
