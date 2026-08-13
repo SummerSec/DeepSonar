@@ -56,7 +56,7 @@
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [TODO_CANVAS_PROCESS_TRUTH.md](TODO_CANVAS_PROCESS_TRUTH.md) | **A as-built · B 进行中** | 广播注入+账本已落地；连线/服务端权威布局 B 仍分期 |
+| [TODO_CANVAS_PROCESS_TRUTH.md](TODO_CANVAS_PROCESS_TRUTH.md) | **A as-built · B 主路径可用** | 广播已交付；布局为服务端落点+前端 ELK。**全图 `layout_revision` 权威重算暂缓 → #148** |
 
 ---
 
