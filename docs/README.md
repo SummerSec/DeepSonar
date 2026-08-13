@@ -33,6 +33,7 @@
 | [RUNTIME_IMAGE_REGISTRY_CONTRACT.md](RUNTIME_IMAGE_REGISTRY_CONTRACT.md) | **as-built**（#70） | 官方镜像 catalog v2、通道、fail-closed |
 | [RUNTIME_TEST_TOOLCHAINS.md](RUNTIME_TEST_TOOLCHAINS.md) | **as-built** | Kali Test / Verify Base 工具链边界 |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
+| [AGENT_RUNTIME_AND_CAPABILITY_IMAGE_ARCHITECTURE.md](AGENT_RUNTIME_AND_CAPABILITY_IMAGE_ARCHITECTURE.md) | **目标架构 / 非 as-built** | CLI 平面 × 能力平面 → 发布期 bake 产品镜像；禁止运行时拼盘 |
 | [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；改 CLI 钉死后需发版才出新镜像 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署与生产拓扑 |
 
