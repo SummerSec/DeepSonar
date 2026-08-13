@@ -1,7 +1,9 @@
 import type { AsyncCommandHandle, Sandbox } from "agentbox-sdk";
 import type { ContextIdentity } from "./context-contract.js";
 
-export type AgentCliId = "claude-code" | "codex" | "open-code" | "pi";
+export type AgentCliId = "claude-code" | "codex" | "dsh" | "open-code" | "pi";
+
+export type AgentCliOutputMode = "jsonl" | "plain-final";
 
 /** How an adapter keeps a long-running non-interactive session bounded. */
 export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-summary" | "unsupported";
@@ -55,6 +57,7 @@ export interface AdapterRuntimeState {
 export interface RuntimeAdapter {
   readonly id: AgentCliId;
   readonly version: string;
+  readonly outputMode: AgentCliOutputMode;
   readonly capabilities: Readonly<AgentCliCapabilities>;
   readonly compatibleImageKeys: readonly string[];
   start(context: AdapterStartContext): Promise<AsyncCommandHandle>;
@@ -579,6 +582,7 @@ function sandboxClaude(
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.220",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   // Claude Code 2.1.220 is the governed minimum image version.  That
@@ -616,6 +620,7 @@ function sandboxCodex(sandbox: Sandbox, context: AdapterStartContext, sessionId?
 const codex = Object.freeze<RuntimeAdapter>({
   id: "codex",
   version: "0.147.0",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxCodex(context.sandbox, context),
@@ -627,6 +632,7 @@ const codex = Object.freeze<RuntimeAdapter>({
 const openCode = Object.freeze<RuntimeAdapter>({
   id: "open-code",
   version: "1.18.15",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
@@ -778,6 +784,7 @@ function sandboxPi(sandbox: Sandbox, context: AdapterStartContext, sessionFile?:
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
   version: "0.84.1",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
     controlMcp: false,
@@ -803,9 +810,41 @@ const pi = Object.freeze<RuntimeAdapter>({
   decodeOutput: decodePi,
 });
 
+function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<AsyncCommandHandle> {
+  const patchPath = "/workspace/.deepsonar-home/.dsh/deepsonar.patch.json";
+  const command = `dsh --profile headless --patch ${patchPath} ${promptArg(context.input)}`;
+  return sandbox.runAsync(command, { cwd: context.cwd, env: context.env });
+}
+
+const dsh = Object.freeze<RuntimeAdapter>({
+  id: "dsh",
+  version: "0.1.0-rc.6",
+  outputMode: "plain-final",
+  capabilities: fixedCapabilities({
+    streamEvents: true,
+    controlMcp: false,
+    platformControlApi: true,
+    incrementalMessages: false,
+    completionGate: true,
+    sessionCapture: true,
+    contextCompaction: true,
+    contextCompactionPolicy: "automatic",
+    reasoningEffort: false,
+    interactiveTerminal: false,
+  }),
+  compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
+  start: (context) => sandboxDsh(context.sandbox, context),
+  resume: async () => {
+    throw new Error("DSH_HEADLESS_RESUME_UNSUPPORTED");
+  },
+  encodeInput: () => "",
+  decodeOutput: () => [],
+});
+
 export const AGENT_CLI_RUNTIME_ADAPTERS: Readonly<Record<AgentCliId, RuntimeAdapter>> = Object.freeze({
   "claude-code": claude,
   codex,
+  dsh,
   "open-code": openCode,
   pi,
 });

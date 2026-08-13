@@ -36,6 +36,7 @@ import {
   GATEWAY_PROXY_SCRIPT,
   AgentboxRunner,
   mergeObservedSessionIdentity,
+  normalizePlainFinalOutput,
 } from "./agentbox.js";
 import { NoopRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
@@ -261,6 +262,35 @@ test("a clean process exit without a structured terminal result is a runner fail
     error: "agent CLI exited without a structured terminal result",
     terminalOutcome: "failure",
   });
+});
+
+test("plain-final output synthesizes only a normalized successful result", () => {
+  const observedSemanticEvents: Record<string, unknown>[] = [];
+  const result = normalizePlainFinalOutput(
+    "  final answer from dsh\r\n",
+    "provider warning\n",
+    0,
+    (event) => observedSemanticEvents.push(event),
+  );
+  assert.equal(result.text, "final answer from dsh");
+  assert.equal(result.stderr, "provider warning\n");
+  assert.deepEqual(result.events, [
+    { type: "run.started" },
+    { type: "run.completed", text: "final answer from dsh" },
+    { type: "run.settled" },
+  ]);
+  assert.deepEqual(observedSemanticEvents, []);
+});
+
+test("plain-final output is bounded at 1 MiB and preserves stderr on failure", () => {
+  assert.throws(
+    () => normalizePlainFinalOutput("x".repeat(1024 * 1024 + 1), "diagnostic", 0, () => {}),
+    /AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE/u,
+  );
+  const failed = normalizePlainFinalOutput("partial", "fatal diagnostic", 17, () => {});
+  assert.equal(failed.text, "partial");
+  assert.equal(failed.stderr, "fatal diagnostic");
+  assert.equal(failed.events.at(-1)?.type, "run.failed");
 });
 
 test("CLI 同会话恢复只接受明确的临时上游错误", () => {

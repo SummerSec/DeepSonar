@@ -1177,6 +1177,38 @@ export function resolveTerminalProcessOutcome(
   };
 }
 
+const PLAIN_FINAL_MAX_BYTES = 1024 * 1024;
+
+export interface PlainFinalOutputResult {
+  text: string;
+  stderr: string;
+  events: Array<Record<string, unknown>>;
+}
+
+/** Normalize a one-shot CLI's plain stdout without interpreting prose as control events. */
+export function normalizePlainFinalOutput(
+  stdout: string,
+  stderr: string,
+  exitCode: number,
+  _onSemanticEvent?: (event: Record<string, unknown>) => void,
+): PlainFinalOutputResult {
+  if (Buffer.byteLength(stdout, "utf8") > PLAIN_FINAL_MAX_BYTES) {
+    throw new Error("AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE");
+  }
+  const text = stdout.trim();
+  const events = exitCode === 0
+    ? [
+        { type: "run.started" },
+        { type: "run.completed", text },
+        { type: "run.settled" },
+      ]
+    : [
+        { type: "run.started" },
+        { type: "run.failed", error: stderr.trim() || `agent CLI exited with code ${exitCode}` },
+      ];
+  return { text, stderr, events };
+}
+
 /**
  * 读沙箱内文本文件。SDK 的 downloadFile 直接返回 docker getArchive 的原始 tar 字节
  * （首行是 tar 头里的文件名），不能当文件内容用；这里走 exec cat。
@@ -2455,6 +2487,14 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             attemptExitCode = chunk.exitCode ?? 0;
             continue;
           }
+          if (adapter.outputMode === "plain-final") {
+            const next = `${stdoutBuffer}${chunk.chunk ?? ""}`;
+            if (Buffer.byteLength(next, "utf8") > PLAIN_FINAL_MAX_BYTES) {
+              throw new Error("AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE");
+            }
+            stdoutBuffer = next;
+            continue;
+          }
           const lines: string[] = [];
           if (piFramer) {
             lines.push(...piFramer.push(chunk.chunk ?? ""));
@@ -2626,6 +2666,18 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             processError ??= error;
           }
         }
+      }
+      if (adapter.outputMode === "plain-final" && !processError) {
+        const plainResult = normalizePlainFinalOutput(stdoutBuffer, attemptStderrTail, attemptExitCode);
+        for (const event of plainResult.events) spec.onEvent?.(event);
+        attemptFinalText = plainResult.text;
+        finalText = plainResult.text;
+        attemptTerminalResult = {
+          isError: attemptExitCode !== 0,
+          ...(attemptExitCode !== 0
+            ? { errorDetail: plainResult.stderr.trim() || `agent CLI exited with code ${attemptExitCode}` }
+            : {}),
+        };
       }
       const processErrorText = processError
         ? [runtimeErrorText(processError), attemptStderrTail].filter(Boolean).join(": ")

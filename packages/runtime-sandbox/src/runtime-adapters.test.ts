@@ -39,7 +39,7 @@ function fakeSandbox(): {
 }
 
 test("内置注册表明确、不可变且能力完整", () => {
-  assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "codex", "open-code", "pi"]);
+  assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "codex", "dsh", "open-code", "pi"]);
   assert.ok(REQUIRED_RUNTIME_CAPABILITIES.includes("contextCompaction"));
   for (const id of Object.keys(AGENT_CLI_RUNTIME_ADAPTERS)) {
     const adapter = getAgentCliRuntimeAdapter(id);
@@ -59,14 +59,44 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-openharmony-audit").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("codex", "deepsonar-chrome-fuzz").id, "codex");
-  for (const id of ["claude-code", "codex", "open-code", "pi"] as const) {
+  for (const id of ["claude-code", "codex", "dsh", "open-code", "pi"] as const) {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.platformControlApi, true);
   }
   for (const id of ["claude-code", "codex", "open-code"] as const) {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, true);
   }
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.controlMcp, false);
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.outputMode, "plain-final");
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.controlMcp, false);
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.platformControlApi, true);
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
+});
+
+test("DSH headless adapter uses the governed patch path and rejects resume", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  const fake = fakeSandbox();
+  const context = {
+    sandbox: fake.sandbox,
+    env: {},
+    cwd: "/workspace",
+    input: "task with 'quoted' data",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    model: "ignored-model",
+    reasoning: "high",
+  } as const;
+  await adapter.start(context);
+  assert.match(
+    fake.commands[0] ?? "",
+    /^dsh --profile headless --patch \/workspace\/\.deepsonar-home\/\.dsh\/deepsonar\.patch\.json /u,
+  );
+  assert.match(fake.commands[0] ?? "", /task with '"'"'quoted'"'"' data/u);
+  assert.equal(adapter.version, "0.1.0-rc.6");
+  assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
+  assert.equal(adapter.encodeInput("ignored"), "");
+  await assert.rejects(
+    adapter.resume({ ...context, sessionId: "dsh-session" }),
+    /DSH_HEADLESS_RESUME_UNSUPPORTED/u,
+  );
 });
 
 test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {
