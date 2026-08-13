@@ -110,6 +110,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
       { resource_id: credentialId, action: "credential.test", at: "2026-08-03T12:00:00.000Z", result: "ok", after_json: { ok: true } },
       { resource_id: credentialId, action: "credential.models_discover", at: "2026-08-03T12:00:00.000Z", result: "ok", after_json: { model_count: 1 } },
     ],
+    projectImagePolicy: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
     ...overrides,
   };
 }
@@ -125,6 +126,32 @@ test("real preflight accepts governed role, credential, evidence and image proje
   assert.equal(JSON.stringify(result).includes("ciphertext"), false);
   assert.equal(JSON.stringify(result).includes("ANTHROPIC_API_KEY"), false);
 });
+test("readiness follows strategy and ignores legacy project image column", () => {
+  const inherited = evaluateReadiness(baseInput({
+    projectImagePolicy: { image_strategy: "inherit_global", role_runtime_images: { audit: "deepsonar-chrome-audit" } },
+    roles: baseInput().roles.map((role) => role.name === "audit"
+      ? { ...role, project_runtime_image_key: "deepsonar-chrome-audit", global_runtime_image_key: "openharmony" }
+      : role),
+    runtimeImages: [
+      ...(baseInput().runtimeImages ?? []).filter((image) => image.image_key === "deepsonar-base"),
+      { ...baseInput().runtimeImages![0], image_key: "openharmony", official: true, project_opt_in: false, project_enabled: null },
+    ],
+  }));
+  const inheritedAudit = inherited.checks.find((check) => check.role?.name === "audit" && check.runtime_image);
+  assert.equal(inheritedAudit?.role?.runtime_image_key, "openharmony");
+  assert.equal(inheritedAudit?.runtime_image?.image_key, "openharmony");
+
+  const managed = evaluateReadiness(baseInput({
+    projectImagePolicy: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
+    roles: baseInput().roles.map((role) => role.name === "audit"
+      ? { ...role, project_runtime_image_key: "deepsonar-chrome-audit", global_runtime_image_key: "openharmony" }
+      : role),
+  }));
+  const managedAudit = managed.checks.find((check) => check.role?.name === "audit" && check.runtime_image);
+  assert.equal(managedAudit?.role?.runtime_image_key, "deepsonar-audit");
+  assert.equal(managedAudit?.runtime_image?.image_key, "deepsonar-audit");
+});
+
 
 test("real preflight resolves an allowlisted model from Credential settings when RoleConfig model is null", () => {
   const input = baseInput({
@@ -142,6 +169,17 @@ test("real preflight resolves an allowlisted model from Credential settings when
   const result = evaluateReadiness(input);
   assert.equal(result.ready, true);
   assert.equal(result.checks.some((check) => check.code === "MODEL_REQUIRED_BY_ALLOWLIST"), false);
+});
+
+test("readiness repair metadata covers disabled runtime images", () => {
+  const result = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"
+      ? { ...image, image_enabled: false }
+      : image),
+  }));
+  const check = result.checks.find((item) => item.code === "RUNTIME_IMAGE_DISABLED" && item.role?.name === "audit");
+  assert.equal(check?.fix?.action, "runtime_images");
+  assert.equal(check?.fix?.scope, "project");
 });
 
 test("real preflight accepts a bare immutable digest from the runtime resolver", () => {

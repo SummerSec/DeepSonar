@@ -273,9 +273,7 @@ async function collectRoles(
         skill_revisions_note: "content resolved on target via skill-sources sync",
       });
     }
-    if (modules.includes("runtime_images") && rc.runtime_image_key) {
-      imageRefs.push({ role_name: rc.role_name, runtime_image_key: rc.runtime_image_key });
-    }
+    // 项目 RoleConfig 的 runtime_image_key 是遗留字段，不进入项目镜像策略导出。
 
     const filesRows = await sql`
       SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${rc.id as string}`;
@@ -318,8 +316,8 @@ async function collectRoles(
       subagents_json: rc.subagents_json,
       platform_tools_json: rc.platform_tools_json,
       sandbox_limits_json: rc.sandbox_limits_json,
-      instructions_markdown: rc.instructions_markdown,
-      runtime_image_key: rc.runtime_image_key,
+      // 项目镜像仅由 projects.config_json.image_strategy/role_runtime_images 管理。
+      runtime_image_key: null,
       version: rc.version,
       files: filesRows,
       credentials: binds.map((b) => ({

@@ -387,7 +387,8 @@ async function importRoleConfigs(
         platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
         sandbox_limits_json: sandboxLimits as never,
         instructions_markdown: (rc.instructions_markdown as string) ?? null,
-        runtime_image_key: (rc.runtime_image_key as string) ?? null,
+        // 项目 RoleConfig 的镜像由 projects.config_json 策略管理，清空导入包中的遗留列值。
+        runtime_image_key: null,
         version: 1,
       })}
       RETURNING id`;

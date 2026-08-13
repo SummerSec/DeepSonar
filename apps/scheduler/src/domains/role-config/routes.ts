@@ -60,7 +60,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     db: typeof sql = sql,
   ): Promise<string | null> {
     if (projectId && body.runtime_image_key != null) {
-      return "项目 RoleConfig 不再直接设置 runtime_image_key，请使用项目镜像策略";
+      return "项目 RoleConfig 不再直接设置 runtime_image_key，请传 null 并使用项目镜像策略";
     }
     let sandboxLimits: ReturnType<typeof parseSandboxLimitsOverride>;
     try {
@@ -182,7 +182,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       platform_tools_json: body.platform_tools as never,
       sandbox_limits_json: parseSandboxLimitsOverride(body.sandbox_limits) as never,
       instructions_markdown: body.instructions_markdown ?? null,
-      runtime_image_key: body.runtime_image_key ?? null,
+      runtime_image_key: projectId ? null : body.runtime_image_key ?? null,
     };
     let configId: string;
     if (existing) {
@@ -264,6 +264,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       WHERE role_config_id = ${configId} ORDER BY path`;
     return {
       ...(cfg as Record<string, unknown>),
+      // 项目镜像由项目策略解析，历史 RoleConfig 列值不得再展示为有效配置。
+      runtime_image_key: cfg.project_id ? null : cfg.runtime_image_key ?? null,
       credentials: creds.map((credential) => ({
         ...credential,
         ...projectCredentialProvider(credential.kind ?? "llm_provider", credential.provider),
@@ -372,7 +374,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     }
     const projectId = row.project_id ? String(row.project_id) : null;
     if (projectId) {
-      return reply.code(400).send({ error: "项目 RoleConfig 不再直接设置 runtime_image_key，请使用项目镜像策略" });
+      return reply.code(400).send({ error: "项目 RoleConfig 不再直接设置 runtime_image_key，请传 null 并使用项目镜像策略" });
     }
     if (body.runtime_image_key) {
       const [image] = await sql`
@@ -427,7 +429,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       SELECT rc.id, rc.role_id, r.name AS role_name, r.title AS role_title,
              r.kind AS role_kind, r.builtin AS role_builtin, r.ui_color AS role_ui_color,
              rc.project_id, p.name AS project_name, rc.agent_cli, rc.model, rc.version,
-             rc.runtime_image_key, rc.sandbox_limits_json,
+             CASE WHEN rc.project_id IS NULL THEN rc.runtime_image_key ELSE NULL END AS runtime_image_key,
+             rc.sandbox_limits_json,
              c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
              c.provider AS credential_provider, c.status AS credential_status
       FROM role_configs rc

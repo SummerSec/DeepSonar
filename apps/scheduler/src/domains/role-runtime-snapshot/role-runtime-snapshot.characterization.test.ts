@@ -24,9 +24,10 @@ test("项目镜像策略按全局继承与项目托管分别选择镜像", () =>
   });
   const inherited = parseProjectImagePolicy({
     image_strategy: "inherit_global",
-    role_runtime_images: { audit: "deepsonar-audit" },
+    // 遗留项目 RoleConfig 镜像值不在策略输入中，必须继承全局 RoleConfig。
+    role_runtime_images: { audit: "deepsonar-chrome-audit" },
   });
-  assert.equal(runtimeImageKeyForProjectPolicy(inherited, "audit", "custom-audit"), "custom-audit");
+  assert.equal(runtimeImageKeyForProjectPolicy(inherited, "audit", "openharmony"), "openharmony");
 
   const managed = parseProjectImagePolicy({
     image_strategy: "project_managed",

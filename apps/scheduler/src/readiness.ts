@@ -21,6 +21,11 @@ import {
   localImageDigest,
   readRuntimeRegistryChannel,
 } from "./runtime-images.js";
+import {
+  parseProjectImagePolicy,
+  runtimeImageKeyForProjectPolicy,
+  type ProjectImagePolicy,
+} from "./domains/role-runtime-snapshot/application.js";
 
 const EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -103,6 +108,8 @@ export interface ReadinessEvaluationInput {
   networkSource: "global" | "project" | "task_override";
   materialSource?: ReadinessMaterialSource;
   roles: ReadinessRoleRow[];
+  /** 项目镜像策略；项目 RoleConfig 的遗留 runtime_image_key 不参与解析。 */
+  projectImagePolicy?: ProjectImagePolicy;
   credentials?: ReadinessCredentialRow[];
   runtimeImages?: ReadinessRuntimeImageRow[];
   audits?: ReadinessAuditRow[];
@@ -273,16 +280,23 @@ function pass(
   return { code, state: "pass", severity: "info", fix: null, ...context, message };
 }
 
-function effectiveRole(row: ReadinessRoleRow): EffectiveRole {
+function effectiveRole(row: ReadinessRoleRow, projectImagePolicy?: ProjectImagePolicy): EffectiveRole {
   const project = row.project_config_id !== null;
   const global = row.global_config_id !== null;
+  const runtimeImageKey = project
+    ? runtimeImageKeyForProjectPolicy(
+      projectImagePolicy ?? parseProjectImagePolicy(undefined),
+      row.name,
+      row.global_runtime_image_key,
+    )
+    : row.global_runtime_image_key;
   return {
     ...row,
     configId: project ? row.project_config_id : row.global_config_id,
     configScope: project ? "project" : global ? "global" : "platform_default",
     agentCli: project ? row.project_agent_cli : row.global_agent_cli ?? "claude-code",
     model: project ? row.project_model : row.global_model,
-    runtimeImageKey: project ? row.project_runtime_image_key : row.global_runtime_image_key,
+    runtimeImageKey,
   };
 }
 
@@ -403,7 +417,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
   const credentials = input.credentials ?? [];
   const audits = input.audits ?? [];
   const images = input.runtimeImages ?? [];
-  const roles = input.roles.map(effectiveRole);
+  const roles = input.roles.map((row) => effectiveRole(row, input.projectImagePolicy));
   const hub = roles.find((role) => role.kind === "hub" && role.name === "hub_reason");
   const workers = roles.filter((role) => role.kind === "role");
   const credentialByConfig = new Map<string, ReadinessCredentialRow[]>();
@@ -603,7 +617,15 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     if (input.executionMode === "fake") {
       checks.push(pass("RUNTIME_IMAGE_SKIPPED_FAKE", `${role.name} 在 fake 模式使用 NoopRunner；real 模式才会校验可信 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     } else if (!image) {
-      checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 不存在或未被 Scheduler 选中。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
+      const inherited = Boolean(input.scope.projectId && input.projectImagePolicy?.image_strategy !== "project_managed");
+      checks.push(fail(
+        "RUNTIME_IMAGE_UNAVAILABLE",
+        inherited
+          ? `${role.name} 继承全局 RoleConfig 的 runtime image ${imageKey}，该镜像不可用；如需项目镜像请切换 project_managed 并配置角色映射。`
+          : `${role.name} 所需 runtime image ${imageKey} 不存在或未被 Scheduler 选中。`,
+        runtimeImagesFix(input.scope),
+        { role: summary, runtime_image: runtimeSummary },
+      ));
     } else if (!image.image_enabled) {
       checks.push(fail("RUNTIME_IMAGE_DISABLED", `${role.name} 所需 runtime image ${imageKey} 已被禁用。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (!input.scope.projectId && !(image.official === true && image.project_opt_in === false)) {
@@ -752,7 +774,11 @@ export async function loadReadiness(
         AND action IN ('credential.test', 'credential.models_discover')
       ORDER BY at DESC
       LIMIT 500`;
-  const imageKeys = [...new Set(roles.map((role) => role.project_runtime_image_key ?? role.global_runtime_image_key ?? defaultRuntimeImageKey(role.name)))];
+  const imagePolicy = parseProjectImagePolicy(projectConfig);
+  const imageKeys = [...new Set(roles.map((role) => {
+    if (!projectId) return role.global_runtime_image_key ?? defaultRuntimeImageKey(role.name);
+    return runtimeImageKeyForProjectPolicy(imagePolicy, role.name, role.global_runtime_image_key) ?? defaultRuntimeImageKey(role.name);
+  }))];
   const selectedChannel = await readRuntimeRegistryChannel(db);
   const images = await db`
     SELECT ri.image_key, ri.enabled AS image_enabled, ri.project_opt_in, ri.source_kind, ri.official,
@@ -799,6 +825,7 @@ export async function loadReadiness(
     networkSource,
     materialSource: options.materialSource,
     roles,
+    projectImagePolicy: imagePolicy,
     credentials: credentials as unknown as ReadinessCredentialRow[],
     runtimeImages: images as unknown as ReadinessRuntimeImageRow[],
     audits: audits as unknown as ReadinessAuditRow[],
