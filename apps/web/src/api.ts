@@ -16,7 +16,7 @@ export type { EffectiveFindingProtocol, FindingProtocolConfig } from "@deepsonar
 
 export interface Project {
   id: string;
-  /** 可空：NULL = 纯本地项目（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md） */
+  /** 可空：NULL = 纯本地项目（Plane 为可选绑定） */
   plane_project_id: string | null;
   canvas_id: string;
   name: string;

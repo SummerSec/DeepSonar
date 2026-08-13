@@ -1,6 +1,6 @@
 /**
  * 任务级最终报告：收敛后幂等派发 Report Job，确定性输入 + 产物校验 + SARIF。
- * 见 docs/TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md §5
+ * As-built 语义见根目录 DESIGN.md（双轨 Task/Finding Report）。
  */
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";

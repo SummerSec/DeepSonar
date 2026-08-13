@@ -138,7 +138,8 @@ done
 .\deploy\deploy.ps1 down
 ```
 
-部署行为以 `deploy/deploy.sh`、`deploy/deploy.ps1` 与 `deploy/docker-compose.prod.yml` 为准。
+部署行为以 `deploy/deploy.sh`、`deploy/deploy.ps1` 与 `deploy/docker-compose.prod.yml` 为准。  
+更完整的部署说明见 [`docs/ONE_CLICK_DEPLOYMENT.md`](docs/ONE_CLICK_DEPLOYMENT.md) 与 [`deploy/README.md`](deploy/README.md)。
 
 ## 本地开发
 

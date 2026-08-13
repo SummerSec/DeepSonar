@@ -1,311 +1,160 @@
-# DeepSonar 一键部署教程
+# DeepSonar 一键部署
 
-本文说明如何使用仓库内脚本一次启动 PostgreSQL、Scheduler 和 Web 控制台。部署采用 Docker Compose，数据库数据和 Blob 数据写入具名 volume，普通停止或升级不会删除。
+与代码、`deploy/deploy.sh` / `deploy/deploy.ps1` 对齐的部署说明。根目录 `README.md` 为快速入口；细节以本文件与脚本为准。
 
-## 1. 部署组成
+## 1. 组成
 
 ```text
 浏览器 :8080
     ↓
-Web Gateway
-    ├─ /       React 静态文件
-    └─ /api/*  Scheduler :3100（含 WebSocket）
-                    ↓
-              PostgreSQL 16
-
-独立 Image Admission Worker 通过 Docker Socket 对隔离镜像执行准入/周期复扫；它不在 Scheduler 进程内执行第三方层内容。
+Web Gateway（SPA + /api → Scheduler）
+    ↓
+Scheduler :3100  ←→  PostgreSQL 16
+    ↓                 ↑
+Image Admission       PGSTY Silo（共享资产 S3 API，默认 127.0.0.1:9000）
+（docker.sock 扫描）  blob volume（证据/报告本地）
 ```
-
-相关文件：
 
 | 文件 | 用途 |
 |------|------|
-| `deploy/docker-compose.prod.yml` | PostgreSQL、Scheduler、Image Admission、Web 基础服务 |
-| `deploy/docker-compose.real.yml` | real 模式覆盖：挂载 Docker Socket |
-| `deploy/Dockerfile.scheduler` | Scheduler 运行镜像 |
-| `deploy/Dockerfile.image-admission` | 第三方 OCI 镜像独立准入 Worker |
-| `deploy/Dockerfile.web` | Web 构建和最小 Node Gateway 运行镜像 |
-| `deploy/web-server.mjs` | SPA、API 和 WebSocket 反向代理 |
-| `deploy/.env.example` | 部署环境变量模板 |
-| `deploy/deploy.ps1` | Windows 一键脚本 |
-| `deploy/deploy.sh` | Linux/macOS 一键脚本 |
+| `deploy/docker-compose.prod.yml` | PostgreSQL、Silo、Scheduler、Image Admission、Web、备份 |
+| `deploy/docker-compose.real.yml` | real 模式：挂载 Docker Socket |
+| `deploy/docker-compose.online.yml` | 空兼容层（旧脚本 `-f` 仍可用；推荐直接用 prod + pull） |
+| `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` | 平台服务镜像 |
+| `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony） |
+| `deploy/.env.example` | 环境变量模板（Release 会同步版本号） |
+| `deploy/runtime-image-registry.json` | 官方运行时清单（bundled fallback） |
+| `deploy/deploy.sh` / `deploy.ps1` | 一键脚本 |
+| `deploy/pull-runtime-images.sh` | 按清单批量 pull Agent 镜像 |
+| `deploy/prepare-runtime-images.sh` / `.ps1` | 本地检测/可选 adopt 本机镜像 |
 
-## 2. 前置要求
+## 2. 前置
 
-- Docker Engine/Desktop 24 或更新版本；
-- Docker Compose v2，命令为 `docker compose`；
-- 至少 4 CPU、8 GB 内存、10 GB 可用磁盘；
-- real 模式额外要求 Docker 主机能够运行 Agentbox 镜像；
-- Linux/macOS 健康检查需要 `curl`。
+- Docker 24+、Compose v2（`docker compose`）
+- 建议 ≥ 4 CPU / 8 GB 内存 / 20 GB 磁盘
+- real 模式需可跑 Agent 沙箱（挂载 docker.sock）
 
-验证环境：
+## 3. 默认路径：从 ACR 拉取后 real 启动
 
-```bash
-docker version
-docker compose version
-```
-
-## 3. 首次部署
-
-### 3.1 Windows
-
-在仓库根目录运行：
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\deploy\deploy.ps1 up
-```
-
-### 3.2 Linux / macOS
+**默认不是 fake，也不是本地 build。**
 
 ```bash
+# Linux / macOS
 chmod +x deploy/deploy.sh
-./deploy/deploy.sh up
+./deploy/deploy.sh up              # = up real pull
+./deploy/deploy.sh up fake pull    # 仅状态机
+./deploy/deploy.sh up real build   # 本地 Dockerfile 构建平台镜像
 ```
-
-首次执行会从 `deploy/.env.example` 生成 `deploy/.env`，并自动生成：
-
-- `POSTGRES_PASSWORD`；
-- `DEEPSONAR_ADMIN_TOKEN`；
-- `deploy/master.key`：Provider Credential 的 AES-256-GCM 主密钥。
-
-`deploy/.env` 和 `deploy/master.key` 已加入 `.gitignore`。不要把密码、模型密钥、管理员 Token 或主密钥提交到 Git；主密钥丢失后，数据库中的 Provider Credential 将无法解密。
-
-启动成功后访问：
-
-```text
-http://127.0.0.1:8080
-```
-
-容器首次启动会在空数据库中自动创建人类管理员 `admin` / `Deep@Sonar66`。默认口令是公开的本地/演示引导值，不会在重启时覆盖已修改的密码；生产或公网部署必须在首次登录后立即修改密码，并建议修改登录名。修改会话账号不会影响 API Token 服务账号。
-
-可修改 `deploy/.env` 中的 `DEEPSONAR_WEB_PORT` 改变端口，然后重新执行部署脚本。
-
-## 4. 首次使用人类账号与 API Token
-
-容器部署强制设置 `DEEPSONAR_AUTH_REQUIRED=true`。首次打开控制台时可以先用默认人类账号登录：
-
-1. 用户名填 `admin`，密码填 `Deep@Sonar66`；
-2. 立即在「Agent 管理 → 我的账号」修改密码，并建议修改登录名；修改后旧会话会失效，页面会自动换发新会话。
-
-随后再配置 API Token 服务账号：
-
-1. 打开 `deploy/.env`；
-2. 复制 `DEEPSONAR_ADMIN_TOKEN` 的值；
-3. 在控制台全局设置的“API Token”页面，把它填入“本机调用令牌”；
-4. 创建长期使用的数据库 Token；
-5. 保存新 Token 明文；它只在创建时显示一次；
-6. 使用新 Token 后，可以轮换部署环境中的引导 Token。
-
-建议 scope：
-
-| 用途 | Scope |
-|------|-------|
-| 浏览控制台 | `projects:read,tasks:read,findings:read,agents:read,skills:read,integrations:read` |
-| 创建任务或事件 | `tasks:write` |
-| 控制 Job | `jobs:control` |
-| 管理 Agent/Skill | `agents:write,skills:write` |
-| 查看/导入镜像 | `images:read,images:manage` |
-| 批准/拒绝/撤销镜像 | `images:approve` |
-| 管理 Token | `tokens:manage` |
-
-外部事件 Token 应绑定到单一项目，并只授予 `tasks:write`。
-
-## 5. fake 与 real 模式
-
-### 5.1 fake 模式
-
-一键部署默认使用 fake 模式：
 
 ```powershell
-.\deploy\deploy.ps1 up -Mode fake
+# Windows
+Set-ExecutionPolicy -Scope Process Bypass
+.\deploy\deploy.ps1 -Action up -Mode real -NoBuild
+.\deploy\deploy.ps1 -Action up -Mode fake -NoBuild
 ```
 
-```bash
-./deploy/deploy.sh up fake
-```
+脚本会：
 
-fake 不调用模型、不启动审计沙箱，但会真实运行数据库状态机、Hub、Finding、Verify、画布和事件幂等，适合安装验收。
+1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token、Silo 凭据）；
+2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交）；
+3. 按 `DEEPSONAR_IMAGE_TAG`（无 `v` 前缀）从阿里云 ACR 拉取  
+   `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
+4. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
+5. 健康检查后输出访问地址；后台可准备运行时镜像（不阻塞主服务）。
 
-### 5.2 real 模式
+访问：**http://127.0.0.1:8080**
 
-real 模式会把 `/var/run/docker.sock` 挂载给 Scheduler。Docker Socket 基本等价于宿主机 Docker 管理权限，因此只能在受控主机运行。
+### 登录
 
-1. 构建官方 base/audit 镜像，并运行一致性检查。gzip 压缩后的可分发镜像包体积是 CI 硬门槛，并同时输出解压层大小；默认 base 使用 Node 22 Debian slim（满足 Claude Code 运行要求），审计工具只进入 audit：
+空库首次启动创建人类管理员（生产必须立刻改密）：
 
-```bash
-DEEPSONAR_IMAGE_TOOLSET=base npx agentbox image build --provider local-docker --file agent-harness/image.mjs
-DEEPSONAR_IMAGE_TOOLSET=audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs
-pnpm ci:images
-docker build -f deploy/Dockerfile.agent-kali-minimal -t deepsonar-kali-minimal:local .
-node agent-harness/test-runtime-image.mjs deepsonar-kali-minimal:local kali-minimal agent-harness/kali-minimal-runtime.json
-node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:local
-```
+| 字段 | 值 |
+|------|-----|
+| 用户名 | `admin` |
+| 密码 | `Deep@Sonar66` |
 
-2. 推送或转换为 registry digest 引用，写入 `deploy/.env`。`DOCKER_IMAGE_AUDIT` 只是升级期兼容值，新 Job 只使用目录内的 digest：
+容器部署 `DEEPSONAR_AUTH_REQUIRED=true`。`DEEPSONAR_ADMIN_TOKEN` 为 API/本机调用引导 Token，与人类会话账号独立。
+
+### 镜像标签
+
+- 平台镜像用 Release 版本号（ACR 标签**无** `v` 前缀，不发 `latest`）。
+- `deploy/.env.example` 与 `runtime-image-registry.json` 随 Release 回写。
+- 固定版本时显式设置：
 
 ```dotenv
-DEEPSONAR_OFFICIAL_BASE_IMAGE=ghcr.io/<owner>/deepsonar-base@sha256:<digest>
-DEEPSONAR_OFFICIAL_AUDIT_IMAGE=ghcr.io/<owner>/deepsonar-audit@sha256:<digest>
-DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=ghcr.io/<owner>/deepsonar-kali-minimal@sha256:<digest>
-DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
+DEEPSONAR_IMAGE_REGISTRY=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
+DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 ```
 
-角色使用的 `agent_cli`、`model` 和 `env_vars` 不在部署环境变量中选择；请在 Agents / RoleConfig UI 或 API 中配置，创建 Job 时由 Scheduler 冻结快照。`AGENT_MODE` 仍只表示 fake/real 基础设施运行模式。Provider 凭据必须存入 Settings / Credentials，再绑定到 RoleConfig；长期密钥不会下发给沙箱。
+## 4. fake 与 real
 
-正式 `v*` Release 会为六项官方运行时生成 v2 清单，并按 ACR（已配置时）→ GHCR → Docker Hub 顺序复制到各目的地。Docker Hub 使用同一个仓库 `docker.io/sumsec/deepsonar`：
+| 模式 | 用途 | 要点 |
+|------|------|------|
+| `fake` | 验收状态机 / Hub / 画布 / 幂等 | 不启真实沙箱、不调上游模型 |
+| `real`（默认） | 真实 Agent 执行 | 挂载 docker.sock；Job 只认目录内不可变 digest |
 
-```text
-sumsec/deepsonar:base-<version>
-sumsec/deepsonar:audit-<version>
-sumsec/deepsonar:kali-minimal-<version>
-```
+CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + RoleConfig，Job 创建时冻结。`AGENT_MODE` 只表示 fake/real。
 
-在 GitHub 仓库 `Settings → Secrets and variables → Actions` 中配置 `DOCKERHUB_USERNAME=sumsec` 与具有 Read & Write 权限的 `DOCKERHUB_TOKEN`。未配置时 Release 仍发布 GHCR，并在 `registry_evidence` 中记录 Docker Hub unavailable。每个已发布目的地都必须通过 `imagetools inspect`，最终部署配置使用发布后解析出的 `name@sha256:<digest>`，不能把可变 tag 冻结进 Job。
+官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底。`DOCKER_IMAGE_AUDIT` 为历史兼容字段，**不能**用可变 tag 越过市场信任。
 
-3. 若要从独立的“镜像市场”页导入第三方镜像，还要将 Cosign、Syft、Trivy、ClamAV 扫描器引用配成 `name@sha256:digest`，并校对 `DEEPSONAR_ALLOWED_IMAGE_REGISTRIES`。扫描器未固定时 Worker 会拒绝准入，不会退回 tag。
+发布与多 channel 细节：[`RELEASE_RUNTIME_IMAGES.md`](./RELEASE_RUNTIME_IMAGES.md)、[`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](./RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
 
-使用 Codex/OpenAI 兼容端点时，在 Settings / Credentials 中创建 OpenAI Credential（包括密钥与可选 Base URL），再在 RoleConfig 中把目标角色的 `agent_cli` 设为 `codex`，选择该 Credential 和允许的 `model`；不要使用旧的 provider/model 环境变量作为生效配置。
+### 专项运行时（可选）
 
-4. 启动 real 模式：
+| image key | 用途 |
+|-----------|------|
+| `deepsonar-base` / `deepsonar-audit` | 默认角色底座 / 审计 |
+| `deepsonar-kali-minimal` | Test 默认（无 metapackage/GUI） |
+| `deepsonar-openharmony-*` | OH 源码 test/audit/fuzz（project opt-in） |
+| `deepsonar-chrome-*` | Chrome audit/test/fuzz（project opt-in） |
 
-```powershell
-.\deploy\deploy.ps1 up -Mode real
-```
+Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
+
+本地批量 pull Agent 镜像：
 
 ```bash
-./deploy/deploy.sh up real
+./deploy/pull-runtime-images.sh --file deploy/runtime-image-registry.json
+# 或带 Scheduler：
+# DEEPSONAR_URL=http://127.0.0.1:8080/api DEEPSONAR_TOKEN=… ./deploy/pull-runtime-images.sh
 ```
 
-5. 在独立“镜像市场”页检查官方版本；项目内的“镜像市场”用于启用第三方可信版本，“角色配置”可覆盖默认镜像。只有 `test` 默认使用 `deepsonar-kali-minimal`（Kali Test）；系统 `verify` 默认使用最小 Base。Kali Test 预装 Python 3.10–3.14、JDK 8/11/17（默认 17，不含 21）、Apache Maven 3.9.16、Go 与 Rust；Maven 位于 `/opt/deepsonar/maven`，不预置 `.m2` 缓存，但不安装任何 `kali-linux-*` / `kali-tools-*` metapackage。
+本机 tag 的 `detect-local` / `adopt-local` 见 `prepare-runtime-images.*`：检测只读，adopt 须管理员显式确认，不进入导出清单。
 
-需要 `runtime_test` 时不要把 Test 绑回 Base，也不要在沙箱内下载 JDK/Maven；Verify 只有在项目级 RoleConfig 中显式选择已准入的动态镜像时才使用该工具链。静态/动态矩阵与真实证据边界见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
+## 5. 数据库 schema
 
-如需 OpenHarmony 源码专项工作，可在项目中显式启用下列官方镜像（均为 `project_opt_in`，不把全量源码烘焙进镜像，也不等于板级固件）：
+- **唯一基线**：`database/schema.sql` + `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`
+- 空库启动：套用基线；非空：校验版本与表结构，不符 **fail closed**
+- **无增量 migration**；改表 = 改基线 + bump 版本 + **重建库**
+- 手工：`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql`
 
-| 镜像 key | 用途 | Dockerfile |
-|----------|------|------------|
-| `deepsonar-openharmony-test` | 源码同步与产品构建验证 | `deploy/Dockerfile.agent-openharmony` |
-| `deepsonar-openharmony-audit` | 高危静态审计（Clang/clang-tidy/cppcheck/sparse + ASan/UBSan 工具链） | `deploy/Dockerfile.agent-openharmony-audit` |
-| `deepsonar-openharmony-fuzz` | 动态验证与 Fuzz（libFuzzer / AFL++ + ASan/UBSan） | `deploy/Dockerfile.agent-openharmony-fuzz` |
+## 6. 对象存储
 
-默认全局 RoleConfig 仍是 `audit → deepsonar-audit`、`test → deepsonar-kali-minimal`。做 OpenHarmony 高危挖掘时，在项目镜像市场启用对应镜像后，把项目级 RoleConfig 覆盖为：`audit → deepsonar-openharmony-audit`，`test`/`verify` → `deepsonar-openharmony-fuzz`（按需）。
+生产 Compose 默认 `BLOB_STORE=s3` 指向内部 Silo（`http://silo:9000`）。证据/报告仍写本地 `BLOB_DIR` volume。切换外部 S3 见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)；切换前先迁移并校验对象。
 
-```bash
-# 需先有 deepsonar-base:local
-docker build -f deploy/Dockerfile.agent-openharmony \
-  --build-arg BASE_IMAGE=deepsonar-base:local \
-  -t deepsonar-openharmony-test:local .
-docker build -f deploy/Dockerfile.agent-openharmony-audit \
-  --build-arg BASE_IMAGE=deepsonar-base:local \
-  -t deepsonar-openharmony-audit:local .
-docker build -f deploy/Dockerfile.agent-openharmony-fuzz \
-  --build-arg BASE_IMAGE=deepsonar-base:local \
-  -t deepsonar-openharmony-fuzz:local .
-
-docker run --rm -it -w /workspace deepsonar-openharmony-test:local \
-  openharmony-init.sh --branch master --jobs "$(nproc)"
-docker run --rm -it -w /workspace deepsonar-openharmony-audit:local \
-  openharmony-audit-env.sh --check
-docker run --rm -it -w /workspace deepsonar-openharmony-fuzz:local \
-  openharmony-fuzz-env.sh --check
-```
-
-同步和完整编译需要任务允许出网，并准备足够的磁盘和内存；构建时必须指定实际的 `product_name`。`openharmony-init.sh` 默认使用 `https://gitcode.com/openharmony/manifest.git` 与 `master`，可用 `--group`、`--manifest-file`、`--jobs` 和 `--source-dir` 做必要调整；`openharmony-build.sh` 会将其他参数原样传递给源码根目录的 `./build.sh`。Audit 镜像提供 `openharmony-audit-scan.sh`（clang-tidy/cppcheck/sparse）；Fuzz 镜像提供 `openharmony-fuzz-build.sh`（编译 libFuzzer/AFL harness）。
-
-### 5.3 启动后的运行时镜像准备
-
-`deploy/local-daemon.sh start` 与 `deploy/deploy.sh up` 会在服务健康后后台运行 `deploy/prepare-runtime-images.sh`，日志写入 `data/logs/runtime-images.log`，不会阻塞主服务启动。脚本优先读取 API/静态注册表并拉取不可变版本；无版本或拉取失败时，逐项构建 `deepsonar-base:local`、`deepsonar-audit:local` 与 `deepsonar-kali-minimal:local`，单项失败不会阻断其他项。
-
-默认不执行 `git pull`。只有显式设置 `DEEPSONAR_RUNTIME_IMAGE_GIT_PULL=true` 且 worktree clean 时，脚本才执行 `git pull --ff-only`；dirty worktree 只记录跳过，绝不执行 stash、reset 或 merge。可用 `--dry-run` 或 `DEEPSONAR_RUNTIME_IMAGE_BUILD=false` 做无构建验证。
-
-本地构建或已有本地 tag 先通过 Scheduler 的 `detect-local` 取得完整 image ID、RepoDigest、contract、架构和产品匹配证据；检测是 transport 与 trust 分离的只读候选检查，不会自动登记。只有管理员在 UI/CLI 中核对不可变 image ID 并二次确认 `adopt-local` 后，才会产生当前机器 `local-docker` 专用 trusted 版本。该版本不会进入导出 registry 清单；生产、多机部署仍应使用 registry manifest 的 `name@sha256:<digest>`。OpenHarmony 镜像在 base、audit、Kali 流程后准备，并依赖本地 `deepsonar-base:local`，整体准备仍由部署脚本后台异步执行。
-
-Linux/macOS 的后台准备流程默认也只检测、不改变 trust；需要由运维显式授权本机候选时，直接运行 `deploy/prepare-runtime-images.sh --adopt`。后台守护进程和一键部署不会代替管理员自动授权。
-
-Windows 用户可以在自行 `docker pull`、`docker build` 或 `docker load` 后运行检测脚本；脚本不会直改数据库，也不会因为 mutable tag 自动信任：
-
-```powershell
-# 使用现有本地 tag，只检测（默认不 pull/build/load）
-.\deploy\prepare-runtime-images.ps1 -LocalImage deepsonar-base=deepsonar-base:local
-
-# 可选：按受信目录拉取不可变 ref，再映射到本地 tag 后检测
-.\deploy\prepare-runtime-images.ps1 -Pull -LocalImage deepsonar-base=deepsonar-base:local
-
-# 可选：在当前工作树构建官方 base（audit/Kali/OpenHarmony 也可按 image-key 指定）
-.\deploy\prepare-runtime-images.ps1 -Build -LocalImage deepsonar-base=deepsonar-base:local
-
-# 可选：加载归档后指定其中的 tag；-Adopt 会对每个 adoptable 候选逐项要求输入 ADOPT
-.\deploy\prepare-runtime-images.ps1 -LoadPath .\deepsonar-base.tar -LocalImage deepsonar-base=deepsonar-base:local -Adopt
-```
-
-`detect-local` 需要 `images:read`；`adopt-local` 需要管理员角色或 `images:approve`。`expected_image_id` 用于防止检测后本地 tag 被替换。脚本读取 `DEEPSONAR_TOKEN`，否则仅从本地 `.env`/`deploy/.env` 读取 `DEEPSONAR_ADMIN_TOKEN`，不会打印或写入 token。
-
-Scheduler 若要访问私有 GitHub Release 目录，可配置 `DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN`；仅 Scheduler 读取 SummerSec/DeepSonar Release metadata/asset，权限应最小化为 `contents:read`，不下发沙箱。未配置时使用 bundled last-known-good fallback，目录来源、回退和错误会在镜像市场 UI 显示。
-
-Scheduler 启动时及其后每隔 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC`（默认 3600 秒）从固定的官方 GitHub Release 地址获取最新 `runtime-image-registry.json`，失败时回退当前部署内置清单；全局页“同步市场”会立即执行同一条受信任同步路径，不接受任意 URL。正式发布版本优先，`DEEPSONAR_OFFICIAL_*_IMAGE` 只在官方清单尚无版本时作为启动兜底。历史版本继续保留用于项目显式固定与 Job 快照，但不会保持默认 promoted 状态。同步后可用“异步拉取”按顺序拉取清单内远程不可变版本；本地 raw image ID 不会被 pull。
-
-## 6. 数据库 schema 基线
-
-正常 Compose 部署无需手工导入数据库：Scheduler 启动时在 reserved session 上持有 PostgreSQL
-session advisory lock。空库一次性套用 `database/schema.sql` 得到当前版本；已是当前版本则
-校验表结构后 no-op；版本不符或结构漂移 fail closed。**无增量 migration**，改表须重建库。
-
-仓库 schema 入口：
-
-```text
-database/schema.sql
-```
-
-它是压平后的最终态 PostgreSQL DDL，不依赖 `psql \ir`，可用于全新外部
-PostgreSQL、托管 PostgreSQL SQL 控制台、审阅和 CI。手工初始化：
-
-```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
-```
-
-结构变更：直接改 `schema.sql`、bump `SCHEMA_VERSION`，然后对空库重新应用基线。
-
-## 7. 日常操作
-
-### Windows
-
-```powershell
-.\deploy\deploy.ps1 status
-.\deploy\deploy.ps1 logs
-.\deploy\deploy.ps1 check
-.\deploy\deploy.ps1 down
-```
-
-### Linux / macOS
+## 7. 运维命令
 
 ```bash
 ./deploy/deploy.sh status
 ./deploy/deploy.sh logs
 ./deploy/deploy.sh check
-./deploy/deploy.sh down
+./deploy/deploy.sh pull          # 仅拉平台镜像
+./deploy/deploy.sh down          # 保留 postgres / blob / silo volume
 ```
-
-`down` 只停止并删除容器和网络，不删除 `postgres_data`、`blob_data` volume。
-
-## 8. 升级
-
-```bash
-git pull
-./deploy/deploy.sh up
-```
-
-或 Windows：
 
 ```powershell
-git pull
-.\deploy\deploy.ps1 up
+.\deploy\deploy.ps1 status
+.\deploy\deploy.ps1 logs
+.\deploy\deploy.ps1 down
 ```
 
-脚本会重新构建镜像。Scheduler 会在启动时持锁执行 v12→v15 migration；迁移失败则回滚且
-不会推进版本，修复发布包后重启即可重试。升级前必须完成备份和隔离恢复演练。
+健康检查：
 
-升级前必须备份：
+```bash
+curl -s http://127.0.0.1:8080/api/health
+# {"ok":true,"ts":…}
+```
+
+### 备份
 
 ```bash
 docker compose -p deepsonar --env-file deploy/.env \
@@ -313,100 +162,33 @@ docker compose -p deepsonar --env-file deploy/.env \
   pg_dump -U deepsonar -d deepsonar -Fc > deepsonar.dump
 ```
 
-建议把 dump 恢复到独立 PostgreSQL 实例并读取关键业务表及 `schema_meta`，确认恢复
-有效后再切换部署。不要删除 `postgres_data` volume 或手工重放 migration；若需要恢复，
-停止 Scheduler，将备份恢复到新实例并切换 `DATABASE_URL`。项目不提供 down migration，
-v13 应用回退仍需保留已新增结构。
+恢复到**独立实例**校验后再切流量。不要 `down --volumes` 除非确认可丢数据。
 
-## 9. 健康检查
+### 升级
 
 ```bash
-curl http://127.0.0.1:8080/api/health
+git pull
+./deploy/deploy.sh up            # pull 模式：拉新 tag；build 模式：重建
 ```
 
-期望：
+schema 大版本变化时须按基线重建库（无升级路径）。升级前先备份。
 
-```json
-{"ok":true,"ts":1785580000000}
-```
+## 8. 常见问题
 
-查看服务状态：
+| 现象 | 处理 |
+|------|------|
+| API 401 | 鉴权开启为预期；配置控制台 Token / 人类登录 |
+| Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
+| real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
+| real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
+| 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |
 
-```bash
-docker compose -p deepsonar --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml ps
-```
+## 9. 上线检查
 
-PostgreSQL、Scheduler、Image Admission 和 Web 都应为 running（带 healthcheck 的服务应为 healthy）。
-
-## 10. 常见问题
-
-### 10.1 Web 可以打开，但 API 返回 401
-
-这是容器部署的预期行为。把 `deploy/.env` 中的 `DEEPSONAR_ADMIN_TOKEN` 填入控制台“本机调用令牌”。
-
-### 10.2 Scheduler 一直不健康
-
-```bash
-./deploy/deploy.sh logs
-```
-
-重点检查：
-
-- PostgreSQL 密码或 DATABASE_URL；
-- migration SQL 错误；
-- `deploy/.env` 是否仍有 `change-me-`；
-- 端口和 Docker 资源是否充足。
-
-### 10.3 real 模式找不到 Docker
-
-确认使用了 real 覆盖文件，并检查：
-
-```bash
-docker compose -p deepsonar --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml -f deploy/docker-compose.real.yml \
-  exec scheduler docker version
-```
-
-### 10.4 real 模式无可信 Agent 镜像
-
-`DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`（以及启用时的 `DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE`）必须是可拉取的 `name@sha256:digest`。`DOCKER_IMAGE_AUDIT` 只保留为旧配置兼容，不会让可移动 tag 越过市场信任边界：
-
-```bash
-docker images
-```
-
-### 10.5 如何彻底删除数据
-
-部署脚本故意不提供自动清库参数。确认备份且明确不再需要数据后，才手工执行 Compose `down --volumes`。该操作不可恢复，会删除 PostgreSQL 和 Blob volume。
-
-### Issue #70 runtime catalog note
-
-Official runtime releases now emit `deepsonar.registry/v2`. The release
-workflow publishes ACR (if configured), GHCR, then Docker Hub, inspects every
-published destination, and requires one canonical digest across channels.
-Optional channels are represented as unavailable evidence when credentials or
-publication are absent; they are never guessed or selected as a fallback.
-`runtime-image-registry-v2.json` is attached to the GitHub Release and the
-bundled `deploy/runtime-image-registry.json` is synchronized from the same
-validated payload. Scheduler Slice C stores a global selected channel through
-`PATCH /runtime-images/registry/channel` and apply/pull consume only that
-channel's immutable reference. A v2 item without a reference for the selected
-channel is skipped or fails closed; it cannot resurrect an old promoted row or
-rewrite an existing Job snapshot.
-
-## 11. 上线检查表
-
-- [ ] `deploy/.env` 不含占位符且未提交 Git；
-- [ ] 多 Scheduler / 分布式时共享资产使用 `BLOB_STORE=s3` 与任意 S3 兼容存储（见 `docs/SHARED_ASSET_BLOB_STORE.md`）；单机可保持 `BLOB_STORE=fs`；
-- [ ] `DEEPSONAR_AUTH_REQUIRED=true`；
-- [ ] 已创建长期数据库 API Token；
-- [ ] 外部事件 Token 绑定单项目且只有 `tasks:write`；
-- [ ] real 模式模型凭据可用；
-- [ ] Agent 镜像存在；
-- [ ] 官方 base/audit/kali-minimal 引用均为 digest，并通过断网硬化冒烟（含 `mvn -v`）与联网最小 Maven POM package、大小预算；其中 kali-minimal 仅是 Test 默认环境，Verify 默认使用 Base；
-- [ ] 第三方准入需要的四个扫描器均以 digest 固定；
-- [ ] PostgreSQL、Scheduler、Image Admission、Web 状态正常；
-- [ ] `pnpm typecheck` 和 `pnpm build` 通过；
-- [ ] fake 模式 API 冒烟通过；
-- [ ] 已完成数据库备份和恢复演练。
+- [ ] `deploy/.env` / `master.key` 无占位符且未进 Git
+- [ ] `DEEPSONAR_AUTH_REQUIRED=true`，已改默认管理员密码
+- [ ] 已建长期 API Token；外部事件 Token 单项目 + `tasks:write`
+- [ ] real：官方 base/audit（及所用专项）均为 digest 且可 pull
+- [ ] 第三方准入扫描器（若用）均为 digest
+- [ ] PostgreSQL / Silo / Scheduler / Image Admission / Web 正常
+- [ ] 已备份并演练恢复

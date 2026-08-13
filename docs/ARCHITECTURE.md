@@ -158,8 +158,7 @@ provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；取消�
 
 ### 4.1 项目初始化
 
-> 2026-08-01 起（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md）：**本地库为唯一真相，Plane 降级为可选集成**。
-> 默认路径是 Web 直接创建：`POST /projects`（plane_project_id 可空）→ `POST /projects/{id}/tasks`（同事务建任务画布 + root + pending job）。
+> **本地库为唯一真相，Plane 为可选集成。** Web 直接创建：`POST /projects`（plane_project_id 可空）→ `POST /projects/{id}/tasks`（同事务建任务画布 + root + pending job）。
 
 1. 默认：在 Web「项目」页新建本地项目（或 `POST /projects`）
 2. 可选：在项目「设置 → Plane 集成」绑定 Plane Project；绑定后 Ready 状态的 issue 只需标题和自然语言描述即可被认领
@@ -614,50 +613,13 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 ---
 
-## 10. 分阶段规划
+## 10. 演进与 as-built
 
-### Phase 0 — 骨架（约 3～5 天）
+MVP 分阶段 checklist 已过时（主路径早已落地：本地任务、Hub 闭环、Verify/Report、镜像市场、多 CLI 等）。
 
-- [ ] Postgres schema（含 event_id / fingerprint / lease 字段，一次建对）
-- [ ] Scheduler 空转：手动插入 job → running → succeeded
-- [ ] Reaper：lease 过期 → orphan → 回收（先用假沙箱测）
-- [ ] agentbox-sdk（local-docker）跑通 findOrProvision / run / delete + claude-code 冒烟
-- [ ] Plane API：读一个 Issue、改状态、写评论
-
-### Phase 1 — 单类型闭环（约 1～2 周）
-
-- [ ] `audit_module` 一种任务类型
-- [ ] 轮询 Plane Ready → claim → 沙箱 → 假 Agent（脚本模拟 finding）
-- [ ] Event API（幂等）+ 画布节点落库（可先无 UI，只存 JSON 用简单页展示）
-- [ ] 结束回写 Plane；杀沙箱/杀调度器演练 Reaper 兜底
-
-**验收**：Plane 一条任务变成 Done，库里有 finding，画布有节点；中途杀掉沙箱任务能转 orphan/failed 而不悬挂。
-
-### Phase 2 — 真 Agent + 画布 UI（约 1～2 周）
-
-- [ ] Harness 对接 Claude Code
-- [ ] 前端：打开项目画布（React Flow），只读轮询或 WS
-- [ ] `emit_finding` / `emit_progress` / `mark_job_done` 真实可用
-- [x] Model Gateway token 用量账本（按 Job Attempt/effect 关联；成本定价另行治理）
-
-**验收**：对真实仓库一个小模块跑出真实 finding 并上图。
-
-### Phase 3 — 派生验证（约 1 周）
-
-- [x] 规则引擎（按 `minVerifySeverity` 自动验证，未评分保守验证）+ fingerprint 去重 + 多轮/深度/频次护栏
-- [x] verify Worker（独立沙箱策略）+ 冻结证据快照 + `verifies` 边
-- [x] 普通 Worker `request_human` / `resume` 与 Verify `needs_human` 收口分流
-- [ ] Plane 可选自动建子 Issue
-
-**验收**：验证范围内 Finding 自动出现验证节点，低于阈值项不创建 Verify 且不阻塞；证据不足回弹 Hub 补证并再验；重复 Finding 不重复落库；每条 `confirmed` Finding 有独立版本化报告；验证范围内 Finding 收敛后自动生成版本化任务总报告，输入未变幂等、输入变化追加版本。
-
-### Phase 4 — 多项目与打磨（持续）
-
-- [ ] 全局/每项目限流、失败重试策略、reconcile 定时任务
-- [ ] 画布分组、过滤 job、节点详情侧栏
-- [ ] 配置化任务类型（第二种 audit 规则 / 依赖扫描等）
-- [ ] （可选）Lead Agent 做模块拆分提案（仍只提案，进规则引擎）
-- [ ] （可选）执行器换成 agentbox；编排对接 ClawTeam，接口不变
+- **当前 as-built**：根目录 `DESIGN.md`、本文件与代码
+- **开放演进**：GitHub Issues（`DESIGN.md` §11 索引）
+- **部署**：[ONE_CLICK_DEPLOYMENT.md](./ONE_CLICK_DEPLOYMENT.md)、`deploy/README.md`
 
 ---
 
@@ -666,18 +628,19 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 ```text
 deepsonar/
   apps/
-    scheduler/          # 核心调度（含 canvas-api，第一期合并）
-    web/                # 画布前端（React + React Flow）
+    scheduler/          # Fastify 调度、Hub、Verify、Gateway
+    web/                # React 工作台与画布
+    image-admission/    # 第三方镜像准入 Worker
   packages/
-    plane-client/
-    runtime-sandbox/    # agentbox-sdk 封装（local-docker / e2b / daytona 可切）
-    shared-types/       # job/event/finding schema（前后端单源）
-  agent-harness/        # 沙箱镜像定义 + hooks/MCP 白名单工具约定
-  deploy/
-    docker-compose.yml  # postgres + scheduler + web
+    plane-client/       # 可选 Plane 集成
+    runtime-sandbox/    # agentbox-sdk（local-docker / e2b / daytona）
+    shared-types/       # zod 契约单源
+  agent-harness/        # 镜像定义、指纹、冒烟
+  deploy/               # Compose、一键脚本、运行时清单（见 deploy/README.md）
+  database/schema.sql   # 唯一 schema 基线
   docs/
     ARCHITECTURE.md     # 本文档
-    EVENT_SCHEMA.md     # 事件 JSON Schema（待补）
+    ONE_CLICK_DEPLOYMENT.md
 ```
 
 ---

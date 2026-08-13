@@ -2,7 +2,8 @@
 
 > 日期：2026-08-01
 >
-> 状态：待实施（已完成架构评审修订）
+> 状态：**历史方案稿**（RoleConfig / 双轨 Report 主路径已 as-built，见 `DESIGN.md`）。  
+> 保留作设计推演参考；冲突时以 `DESIGN.md`、OpenAPI 与代码为准。
 >
 > 相关：`docs/ARCHITECTURE.md` §4.3 / §8.1 / §8.3
 
@@ -701,12 +702,10 @@ python agent-harness/test-report-flow.py
 
 实施完成后同步更新：
 
-- `docs/ARCHITECTURE.md`：角色定义、RoleConfig、Graph scope、Verify 和 Report 状态机；
-- `docs/PRODUCTION_HARDENING_AND_OPTIMIZATION_PLAN.md`：对应工作包状态；
-- `docs/AGENTBOX_RUNTIME_IMAGE_AND_TOOL_MARKETPLACE_TODO.md`：角色与可信运行镜像绑定；
-- `database/schema.sql` 与 `database/README.md`：最终态 Schema 和迁移覆盖；
-- `README.md`：角色配置和最终报告使用入口；
-- `AGENTS.md`：把“Profile 三层配置”改为“角色定义 → 项目 RoleConfig → Job Snapshot”。
+- `docs/ARCHITECTURE.md` / 根目录 `DESIGN.md`：as-built 状态机与配置层级；
+- `database/schema.sql` 与 `database/README.md`：唯一基线 Schema；
+- `README.md` / `AGENTS.md`：角色配置与报告入口；
+- 镜像绑定与市场：以代码与 `docs/RELEASE_RUNTIME_IMAGES.md` 为准（旧镜像市场 TODO 已删除）。
 
 `CLAUDE.md` 当前指向 `AGENTS.md`，只需更新真实目标文件，不单独维护重复内容。
 

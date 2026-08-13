@@ -1,9 +1,10 @@
 # Hub 统一任务入口与事件触发实施方案
 
-> 状态：实施基线（2026-08-01）
+> 状态：**历史方案稿**（Hub 入口与事件触发已 as-built，见 `DESIGN.md`）。  
+> 冲突时以 `DESIGN.md`、OpenAPI 与代码为准。
 >
-> 适用范围：DeepSonar 任务创建、Agent 编排、Finding 验证、风险验收和任务画布
-> 核心结论：`hub_reason` 是唯一决策入口；Audit/Verify/Test 等 Agent 都是 Hub 下发的执行角色。
+> 适用范围：任务创建、Agent 编排、Finding 验证、任务画布  
+> 核心结论：`hub_reason` 是唯一决策入口；执行角色由 Hub 下发意图、Scheduler 落地。
 
 ## 1. 为什么要这样改
 

@@ -1,6 +1,6 @@
 /**
  * Finding 多轮 Verify：自动派生、证据硬门、统一收口、Hub 回弹与再验。
- * 见 docs/TODO_VERIFY_CONFIRMED_ONLY_AND_HUB_BOUNCE.md
+ * As-built 语义见根目录 DESIGN.md（Verify / 收敛 / minVerifySeverity）。
  *
  * Core owns composition and supplies the transaction-aware convergence helpers.
  * The static imports make this dependency visible to the bounded-context map.
