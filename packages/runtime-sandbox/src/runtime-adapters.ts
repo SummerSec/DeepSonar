@@ -877,6 +877,7 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
+    dshHome: !!js process.env.DSH_HOME ?? '/workspace/.deepsonar-home/.dsh'
     includeHarnessIdentity: false
     includeRuntimeContext: false
     persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a software engineering agent.'

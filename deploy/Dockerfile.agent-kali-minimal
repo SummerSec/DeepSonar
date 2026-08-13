@@ -27,6 +27,9 @@ ARG DSH_JSONRPC_DEMO_INTEGRITY=sha512-LfKyOVUhA0p65+JrlvSBoC7lE6W/VbN5/ubEVgZw2N
 ARG DSH_JSONRPC_SERVER_INTEGRITY=sha512-VQsoRpqUG55+T0kQtX82P9izWlA5VHBs61vpBvSv/Uv6G40ebmWXB37M5izkCNV4bcWojVfTbKXJus2ruO2ZrA==
 ARG DSH_PROTOCOL_INTEGRITY=sha512-0ZDQdLXLc4Uq1WvjopUTAQTxeTNvAJBiSSCrVdCWC/sOwC8ThQfzC48z9kcd7xmjfM1JqOiztBtQ62/Tw2Qt8A==
 ARG DSH_AGENT_SPINE_INTEGRITY=sha512-urMS7CReaddhybJZCaPA8oI4VbD/A+62mLTOb2E4b8EKgZ55sMsOGfpkMZmFIs9nqJqxdFUmcxPXWKVMVtpb5w==
+ARG DSH_SKILL_INTEGRITY=sha512-VyRlCOASIRuTflKwn4NvbdAXxSPnnLJ+RAQUI4GK5pOtPwI2DhJrbovqpyp5kNAkZMsqvIeHWu5PcCEJ+FpQ2w==
+ARG DSH_SKILL_FILESYSTEM_INTEGRITY=sha512-NCgz8lCAdvd0oSGIF0EKg1OXfIC7x9r0an7mgC19F0DGzYZJe5ve6AwEYpSvKITE3V8W4NbUzLKyyZG3VH5QtQ==
+ARG DSH_TOOL_SKILL_INTEGRITY=sha512-AebSfHSt6j0PXuN3yK9+X4aC6tHSnFdm2hZglII7aEHr/lL9UbynPb3NTumh6thXZ9Earvwhf9JdOxHMsjHqfw==
 ARG NODE_VERSION=22.23.2
 ARG UV_VERSION=0.11.32
 ARG UV_AMD64_SHA256=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
@@ -81,6 +84,9 @@ RUN set -eu; \
   test "$(npm view @deepseek-ai/dsh-sdk-jsonrpc-server@${DSH_VERSION} dist.integrity)" = "$DSH_JSONRPC_SERVER_INTEGRITY"; \
   test "$(npm view @deepseek-ai/dsh-sdk-protocol@${DSH_VERSION} dist.integrity)" = "$DSH_PROTOCOL_INTEGRITY"; \
   test "$(npm view @deepseek-ai/dsh-agent-spine-demo@${DSH_VERSION} dist.integrity)" = "$DSH_AGENT_SPINE_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-skill@${DSH_VERSION} dist.integrity)" = "$DSH_SKILL_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-skill-filesystem@${DSH_VERSION} dist.integrity)" = "$DSH_SKILL_FILESYSTEM_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-tool-skill@${DSH_VERSION} dist.integrity)" = "$DSH_TOOL_SKILL_INTEGRITY"; \
   npm install -g --omit=dev --no-audit --no-fund \
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
   @openai/codex@${CODEX_VERSION} \
@@ -90,6 +96,9 @@ RUN set -eu; \
   @deepseek-ai/dsh-sdk-jsonrpc-server@${DSH_VERSION} \
   @deepseek-ai/dsh-sdk-protocol@${DSH_VERSION} \
   @deepseek-ai/dsh-agent-spine-demo@${DSH_VERSION} \
+  @deepseek-ai/dsh-skill@${DSH_VERSION} \
+  @deepseek-ai/dsh-skill-filesystem@${DSH_VERSION} \
+  @deepseek-ai/dsh-tool-skill@${DSH_VERSION} \
   @deepseek-ai/dsh-llm-deepseek@${DSH_VERSION} \
   @deepseek-ai/dsh-sandbox-local@${DSH_VERSION} \
   @deepseek-ai/dsh-sandbox-policy@${DSH_VERSION} \

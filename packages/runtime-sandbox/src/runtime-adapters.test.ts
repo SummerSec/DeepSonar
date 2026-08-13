@@ -161,6 +161,7 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /@deepseek-ai\/dsh-session-persistence-jsonl/);
   assert.match(config, /@deepseek-ai\/dsh-compaction-basic/);
   assert.match(config, /skills:\n\s+enabled: true/);
+  assert.match(config, /dshHome: !!js process\.env\.DSH_HOME \?\? '\/workspace\/\.deepsonar-home\/\.dsh'/);
   assert.match(config, /root: !!js process\.env\.DSH_SESSION_ROOT/);
   assert.doesNotMatch(config, /dsh-(?:app-tui|app-web|web-search|ask-user|theme)|telemetry-otel/);
 });
