@@ -74,6 +74,13 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     '- 示例：`{"scope":"project","source_path":"/workspace/dist/repro.sh","key":"scripts/repro.sh","content_type":"text/x-shellscript"}`',
     '- 二进制/PoC 示例：`{"scope":"finding","source_path":"/workspace/poc/harness","key":"openharmony/poc/harness.bin","content_type":"application/octet-stream"}`',
   ].join("\n"),
+  ack_human_message: [
+    "### `ack_human_message` — 确认已收到并纳入处理一条人工消息",
+    "- 参数：`message_id`（必填，UUID，必须来自注入到本 Job 的人工消息）；`summary`（可选，最多 500 字符，简述如何纳入当前工作）。",
+    "- 时机：阅读并纳入该人工消息后调用；平台只有在此 ACK 后才把消息标为「Agent 已确认」。普通文本回复、Session 内容或节点标题都不会被视为确认。",
+    "- 边界：只能确认当前 Job 收件箱中的消息；不得猜测 message_id 或确认其他 Job 的消息。每个 message_id 成功 ACK 一次即可。",
+    '- 示例：`{"message_id":"<uuid>","summary":"已按补充范围调整探索重点"}`',
+  ].join("\n"),
 };
 
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
@@ -87,6 +94,7 @@ const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
   list_shared_assets: "注意：只读取返回的冻结挂载路径；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取。",
   publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
+  ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；仅在返回 isError 后重试。",
 };
 
 export function platformToolGuide(toolNames: string[]): string {

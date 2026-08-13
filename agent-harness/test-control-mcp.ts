@@ -28,9 +28,10 @@ const restrictedTools = resolvePlatformTools("explore", "role", {
   emit_progress: false,
   request_human: false,
   mark_job_done: false, // required: still forced on
+  ack_human_message: false, // required: still forced on
 });
-// All platform tools are selectable for every Agent; only mark_job_done is required.
-// Explicit false disables optional tools; mark_job_done stays even if set false.
+// All platform tools are selectable; mark_job_done + ack_human_message are required
+// and cannot be disabled. Explicit false only turns off optional tools.
 const expectedRestricted = [
   "list_available_roles",
   "list_shared_assets",
@@ -39,6 +40,7 @@ const expectedRestricted = [
   "emit_finding",
   "submit_hub_decision",
   "mark_job_done",
+  "ack_human_message",
 ].join(",");
 if (restrictedTools.join(",") !== expectedRestricted) {
   throw new Error(`unexpected restricted platform tools: ${restrictedTools.join(",")}`);
@@ -53,16 +55,18 @@ for (const expected of [
   "mount_path",
   "publish_shared_asset",
   "BlobStore",
+  "ack_human_message",
+  "message_id",
 ]) {
-  if (!restrictedGuide.includes(expected)) throw new Error(`shared-asset platform guide missing: ${expected}`);
+  if (!restrictedGuide.includes(expected)) throw new Error(`shared-asset/ack platform guide missing: ${expected}`);
 }
-// Only mark_job_done is forced; Hub-only tools may be turned off explicitly.
+// Required tools stay forced; Hub-only tools may be turned off explicitly.
 const hubTools = resolvePlatformTools("hub_reason", "hub", { list_available_roles: false });
 if (hubTools.includes("list_available_roles")) {
   throw new Error("optional Hub tool list_available_roles should honor explicit false");
 }
-for (const required of ["submit_hub_decision", "mark_job_done"]) {
-  if (!hubTools.some((name) => name === required)) throw new Error(`default-on tool missing: ${required}`);
+for (const required of ["submit_hub_decision", "mark_job_done", "ack_human_message"]) {
+  if (!hubTools.some((name) => name === required)) throw new Error(`required tool missing: ${required}`);
 }
 for (const systemRole of ["verify", "report"]) {
   const tools = resolvePlatformTools(systemRole, "system", {});
@@ -71,9 +75,14 @@ for (const systemRole of ["verify", "report"]) {
     throw new Error(`${systemRole} should allow selecting request_human by default`);
   }
   if (!tools.includes("mark_job_done")) throw new Error(`${systemRole} missing required mark_job_done`);
+  if (!tools.includes("ack_human_message")) throw new Error(`${systemRole} missing required ack_human_message`);
   const withoutHuman = resolvePlatformTools(systemRole, "system", { request_human: false });
   if (withoutHuman.includes("request_human")) {
     throw new Error(`${systemRole} must honor explicit request_human=false`);
+  }
+  const withoutAck = resolvePlatformTools(systemRole, "system", { ack_human_message: false });
+  if (!withoutAck.includes("ack_human_message")) {
+    throw new Error(`${systemRole} must keep required ack_human_message even when set false`);
   }
 }
 
@@ -109,6 +118,7 @@ const child = spawn(process.execPath, [scriptPath], {
       "submit_hub_decision",
       "mark_job_done",
       "request_human",
+      "ack_human_message",
     ]),
     DEEPSONAR_AVAILABLE_ROLES_JSON: JSON.stringify([
       { name: "review", title: "复核", description: "独立复核证据" },
@@ -240,11 +250,20 @@ send(31, "tools/call", {
   name: "emit_finding",
   arguments: { title: "超长 Finding", summary: "x".repeat(10_001) },
 });
+const humanMessageId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+send(32, "tools/call", {
+  name: "ack_human_message",
+  arguments: { message_id: humanMessageId, summary: "已纳入当前工作" },
+});
+send(33, "tools/call", {
+  name: "ack_human_message",
+  arguments: { message_id: humanMessageId, extra: true },
+});
 
 await new Promise<void>((resolve, reject) => {
   const deadline = setTimeout(() => reject(new Error("MCP response timeout")), 5_000);
   const timer = setInterval(() => {
-    if (replies.trim().split("\n").length >= 31) {
+    if (replies.trim().split("\n").length >= 33) {
       clearTimeout(deadline);
       clearInterval(timer);
       resolve();
@@ -267,6 +286,7 @@ const descriptionCautions: Record<string, string> = {
   request_human: "不得再调用 mark_job_done",
   list_shared_assets: "不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取",
   publish_shared_asset: "不得发布平台运行目录或 CLI 用户/配置目录中的内容",
+  ack_human_message: "不要猜测 message_id，不得确认其他 Job 的消息",
 };
 for (const [name, caution] of Object.entries(descriptionCautions)) {
   const advertised = toolsReply?.result?.tools?.find((tool: { name?: string }) => tool.name === name);
@@ -303,7 +323,7 @@ const statusOf = (id: number) => {
   const text = reply?.result?.content?.[0]?.text;
   try { return JSON.parse(text ?? "null"); } catch { return null; }
 };
-for (const id of [5, 7, 9, 11, 13, 15, 24]) {
+for (const id of [5, 7, 9, 11, 13, 15, 24, 32]) {
   const status = statusOf(id);
   if (status?.status !== "schema_validated" || status.phase !== "pending_scheduler_validation") {
     throw new Error(`unexpected valid control tool response ${id}: ${JSON.stringify(rpcReplies.find((item) => item.id === id))}`);
@@ -318,6 +338,7 @@ const assertError = (id: number, code: string) => {
 assertError(4, "unknown_field");
 assertError(6, "invalid_progress");
 assertError(8, "unknown_field");
+assertError(33, "unknown_field");
 assertError(10, "invalid_payload");
 assertError(12, "invalid_node_ref");
 const invalidRefText = rpcReplies.find((reply) => reply.id === 12)?.result?.content?.[0]?.text ?? "";
