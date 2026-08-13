@@ -18,6 +18,14 @@ ARG CODEX_VERSION=0.147.0
 ARG OPENCODE_VERSION=1.18.18
 ARG PI_CODING_AGENT_VERSION=0.84.1
 ARG PI_CODING_AGENT_INTEGRITY=sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==
+ARG DSH_VERSION=0.1.0-rc.6
+ARG DSH_JSONRPC_DEMO_INTEGRITY=sha512-LfKyOVUhA0p65+JrlvSBoC7lE6W/VbN5/ubEVgZw2NYDhdPNAg0KhC7fWtahfdycGOTjp8fyUn+rhzLsRmS9eQ==
+ARG DSH_JSONRPC_SERVER_INTEGRITY=sha512-VQsoRpqUG55+T0kQtX82P9izWlA5VHBs61vpBvSv/Uv6G40ebmWXB37M5izkCNV4bcWojVfTbKXJus2ruO2ZrA==
+ARG DSH_PROTOCOL_INTEGRITY=sha512-0ZDQdLXLc4Uq1WvjopUTAQTxeTNvAJBiSSCrVdCWC/sOwC8ThQfzC48z9kcd7xmjfM1JqOiztBtQ62/Tw2Qt8A==
+ARG DSH_AGENT_SPINE_INTEGRITY=sha512-urMS7CReaddhybJZCaPA8oI4VbD/A+62mLTOb2E4b8EKgZ55sMsOGfpkMZmFIs9nqJqxdFUmcxPXWKVMVtpb5w==
+ARG DSH_SKILL_INTEGRITY=sha512-VyRlCOASIRuTflKwn4NvbdAXxSPnnLJ+RAQUI4GK5pOtPwI2DhJrbovqpyp5kNAkZMsqvIeHWu5PcCEJ+FpQ2w==
+ARG DSH_SKILL_FILESYSTEM_INTEGRITY=sha512-NCgz8lCAdvd0oSGIF0EKg1OXfIC7x9r0an7mgC19F0DGzYZJe5ve6AwEYpSvKITE3V8W4NbUzLKyyZG3VH5QtQ==
+ARG DSH_TOOL_SKILL_INTEGRITY=sha512-AebSfHSt6j0PXuN3yK9+X4aC6tHSnFdm2hZglII7aEHr/lL9UbynPb3NTumh6thXZ9Earvwhf9JdOxHMsjHqfw==
 ARG SEMGREP_VERSION=1.172.0
 ARG GITLEAKS_VERSION=8.30.1
 ARG SHELLCHECK_VERSION=0.11.0
@@ -42,11 +50,36 @@ RUN set -eu; \
 
 RUN set -eu; \
   test "$(npm view @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} dist.integrity)" = "$PI_CODING_AGENT_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-sdk-jsonrpc-demo@${DSH_VERSION} dist.integrity)" = "$DSH_JSONRPC_DEMO_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-sdk-jsonrpc-server@${DSH_VERSION} dist.integrity)" = "$DSH_JSONRPC_SERVER_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-sdk-protocol@${DSH_VERSION} dist.integrity)" = "$DSH_PROTOCOL_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-agent-spine-demo@${DSH_VERSION} dist.integrity)" = "$DSH_AGENT_SPINE_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-skill@${DSH_VERSION} dist.integrity)" = "$DSH_SKILL_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-skill-filesystem@${DSH_VERSION} dist.integrity)" = "$DSH_SKILL_FILESYSTEM_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-tool-skill@${DSH_VERSION} dist.integrity)" = "$DSH_TOOL_SKILL_INTEGRITY"; \
   npm install -g --omit=dev --no-audit --no-fund \
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
   @openai/codex@${CODEX_VERSION} \
   opencode-ai@${OPENCODE_VERSION} \
   @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
+  @deepseek-ai/dsh-sdk-jsonrpc-demo@${DSH_VERSION} \
+  @deepseek-ai/dsh-sdk-jsonrpc-server@${DSH_VERSION} \
+  @deepseek-ai/dsh-sdk-protocol@${DSH_VERSION} \
+  @deepseek-ai/dsh-agent-spine-demo@${DSH_VERSION} \
+  @deepseek-ai/dsh-skill@${DSH_VERSION} \
+  @deepseek-ai/dsh-skill-filesystem@${DSH_VERSION} \
+  @deepseek-ai/dsh-tool-skill@${DSH_VERSION} \
+  @deepseek-ai/dsh-llm-deepseek@${DSH_VERSION} \
+  @deepseek-ai/dsh-sandbox-local@${DSH_VERSION} \
+  @deepseek-ai/dsh-sandbox-policy@${DSH_VERSION} \
+  @deepseek-ai/dsh-bash-local@${DSH_VERSION} \
+  @deepseek-ai/dsh-fs-local@${DSH_VERSION} \
+  @deepseek-ai/dsh-tool-bash@${DSH_VERSION} \
+  @deepseek-ai/dsh-tool-str-replace-editor@${DSH_VERSION} \
+  @deepseek-ai/dsh-session-persistence-jsonl@${DSH_VERSION} \
+  @deepseek-ai/dsh-session-checkpoint-policy@${DSH_VERSION} \
+  @deepseek-ai/dsh-token-meter@${DSH_VERSION} \
+  @deepseek-ai/dsh-compaction-basic@${DSH_VERSION} \
   && npm cache clean --force
 
 RUN set -eu; if [ "$TOOLSET" = audit ]; then \

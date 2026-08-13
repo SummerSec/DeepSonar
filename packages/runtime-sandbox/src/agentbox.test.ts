@@ -36,6 +36,7 @@ import {
   GATEWAY_PROXY_SCRIPT,
   AgentboxRunner,
   mergeObservedSessionIdentity,
+  normalizePlainFinalOutput,
 } from "./agentbox.js";
 import { NoopRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
@@ -261,6 +262,65 @@ test("a clean process exit without a structured terminal result is a runner fail
     error: "agent CLI exited without a structured terminal result",
     terminalOutcome: "failure",
   });
+});
+
+test("plain-final output synthesizes only a normalized successful result", () => {
+  const observedSemanticEvents: Record<string, unknown>[] = [];
+  const result = normalizePlainFinalOutput(
+    "  final answer from dsh\r\n",
+    "provider warning\n",
+    0,
+    (event) => observedSemanticEvents.push(event),
+  );
+  assert.equal(result.text, "final answer from dsh");
+  assert.equal(result.stderr, "provider warning\n");
+  assert.deepEqual(result.events, [
+    { type: "run.started" },
+    { type: "run.completed", text: "final answer from dsh" },
+    { type: "run.settled" },
+  ]);
+  assert.deepEqual(observedSemanticEvents, []);
+});
+
+test("plain-final output fails closed when the completion gate is unsatisfied", () => {
+  const result = normalizePlainFinalOutput(
+    "final answer from dsh",
+    "",
+    0,
+    undefined,
+    { adapterId: "dsh", completionGate: false },
+  );
+  assert.equal(result.error, "AGENT_CLI_COMPLETION_GATE_UNSATISFIED: dsh");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.events.some((event) => event.type === "run.completed"), false);
+  assert.equal(result.events.at(-1)?.type, "run.failed");
+  assert.equal(result.events.some((event) => event.type === "run.retrying"), false);
+});
+
+test("plain-final output rejects an empty successful stdout", () => {
+  const result = normalizePlainFinalOutput(
+    " \r\n",
+    "provider diagnostic",
+    0,
+    undefined,
+    { adapterId: "dsh", completionGate: true },
+  );
+  assert.equal(result.error, "AGENT_CLI_PLAIN_OUTPUT_EMPTY: dsh");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.events.some((event) => event.type === "run.completed"), false);
+  assert.equal(result.events.at(-1)?.type, "run.failed");
+  assert.equal(result.stderr, "provider diagnostic");
+});
+
+test("plain-final output is bounded at 1 MiB and preserves stderr on failure", () => {
+  assert.throws(
+    () => normalizePlainFinalOutput("x".repeat(1024 * 1024 + 1), "diagnostic", 0, () => {}),
+    /AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE/u,
+  );
+  const failed = normalizePlainFinalOutput("partial", "fatal diagnostic", 17, () => {});
+  assert.equal(failed.text, "partial");
+  assert.equal(failed.stderr, "fatal diagnostic");
+  assert.equal(failed.events.at(-1)?.type, "run.failed");
 });
 
 test("CLI 同会话恢复只接受明确的临时上游错误", () => {
@@ -1140,6 +1200,25 @@ test("Codex session discovery falls back to HOME when CODEX_HOME is unset", asyn
   }, "session-1");
 
   assert.match(command, /base="\$\{CODEX_HOME:-\$\{HOME:-\/root\}\/\.codex\}\/sessions"/);
+  });
+
+test("DSH session discovery uses the deterministic exact session directory", async () => {
+  let command = "";
+  const sourcePath = "/workspace/.deepsonar-home/.dsh/sessions/project/session-context-1/session.jsonl";
+  const bundle = await CLI_SESSION_ADAPTERS.dsh.exportSession({
+    async run(value) {
+      command = value;
+      return { exitCode: 0, stdout: `${sourcePath}\n`, stderr: "" };
+    },
+    async readText(value) {
+      return value === sourcePath ? '{"type":"session","id":"session-context-1"}\n' : null;
+    },
+  }, "session-context-1");
+  assert.match(command, /\/workspace\/\.deepsonar-home\/\.dsh\/sessions/);
+  assert.match(command, /\/session-context-1\/session\.jsonl/);
+  assert.equal(bundle.cli, "dsh");
+  assert.equal(bundle.artifacts[0]?.sourcePath, sourcePath);
+  assert.equal(bundle.artifacts[0]?.kind, "main");
 });
 
 test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () => {
@@ -1180,6 +1259,10 @@ test("embedded skill 使用当前 Agent CLI 的标准目录", () => {
   assert.equal(
     skillMaterializationPath("deepsonar-control", "SKILL.md", "open-code"),
     "/workspace/.deepsonar-home/.config/opencode/skills/deepsonar-control/SKILL.md",
+  );
+  assert.equal(
+    skillMaterializationPath("deepsonar-control", "SKILL.md", "dsh"),
+    "/workspace/.deepsonar-home/.dsh/skills/deepsonar-control/SKILL.md",
   );
   assert.deepEqual(
     materializationPathCollisions({

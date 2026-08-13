@@ -33,7 +33,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
 
   const RoleConfigPutBody = z.object({
-    agent_cli: z.enum(["claude-code", "open-code", "codex", "pi"]).default("claude-code"),
+    agent_cli: z.enum(["claude-code", "open-code", "codex", "pi", "dsh"]).default("claude-code"),
     model: z.string().nullish(),
     reasoning: ReasoningEffort.nullish(),
     context_window_tokens: z.unknown().optional(),
@@ -306,7 +306,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   app.patch("/role-configs/:id/agent-cli", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({
-      agent_cli: z.enum(["claude-code", "open-code", "codex", "pi"]),
+      agent_cli: z.enum(["claude-code", "open-code", "codex", "pi", "dsh"]),
     }).parse(req.body);
     const actorProjectId = req.actor?.projectId ?? null;
     const [row] = await sql`

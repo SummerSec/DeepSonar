@@ -872,7 +872,7 @@ export async function forceRemoveContainer(containerId: string): Promise<void> {
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export interface RealAgentSpec {
-  provider: "claude-code" | "open-code" | "codex" | "pi";
+  provider: "claude-code" | "open-code" | "codex" | "dsh" | "pi";
   adapter?: AgentCliRuntimeSnapshot;
   runtimeImageKey?: string;
   /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
@@ -1177,6 +1177,59 @@ export function resolveTerminalProcessOutcome(
   };
 }
 
+const PLAIN_FINAL_MAX_BYTES = 1024 * 1024;
+
+export interface PlainFinalOutputResult {
+  text: string;
+  stderr: string;
+  events: Array<Record<string, unknown>>;
+  error?: string;
+  terminalOutcome?: "success" | "failure";
+}
+
+export interface PlainFinalOutputOptions {
+  adapterId?: string;
+  completionGate?: boolean;
+}
+
+/** Normalize a one-shot CLI's plain stdout without interpreting prose as control events. */
+export function normalizePlainFinalOutput(
+  stdout: string,
+  stderr: string,
+  exitCode: number,
+  _onSemanticEvent?: (event: Record<string, unknown>) => void,
+  options: PlainFinalOutputOptions = {},
+): PlainFinalOutputResult {
+  if (Buffer.byteLength(stdout, "utf8") > PLAIN_FINAL_MAX_BYTES) {
+    throw new Error("AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE");
+  }
+  const text = stdout.trim();
+  const adapterId = options.adapterId ?? "dsh";
+  const error = exitCode !== 0
+    ? (stderr.trim() || `agent CLI exited with code ${exitCode}`)
+    : !text
+      ? `AGENT_CLI_PLAIN_OUTPUT_EMPTY: ${adapterId}`
+      : options.completionGate === false
+        ? `AGENT_CLI_COMPLETION_GATE_UNSATISFIED: ${adapterId}`
+        : undefined;
+  const events = !error
+    ? [
+        { type: "run.started" },
+        { type: "run.completed", text },
+        { type: "run.settled" },
+      ]
+    : [
+        { type: "run.started" },
+        { type: "run.failed", error },
+      ];
+  return {
+    text,
+    stderr,
+    events,
+    ...(error ? { error, terminalOutcome: "failure" as const } : { terminalOutcome: "success" as const }),
+  };
+}
+
 /**
  * 读沙箱内文本文件。SDK 的 downloadFile 直接返回 docker getArchive 的原始 tar 字节
  * （首行是 tar 头里的文件名），不能当文件内容用；这里走 exec cat。
@@ -1456,6 +1509,8 @@ export function skillMaterializationPath(
     ? `${RUNTIME_HOME}/.codex/skills`
     : provider === "open-code"
       ? `${RUNTIME_HOME}/.config/opencode/skills`
+      : provider === "dsh"
+        ? `${RUNTIME_HOME}/.dsh/skills`
       : provider === "pi"
         ? `${RUNTIME_HOME}/.pi/agent/skills`
       : `${CLAUDE_DIR}/skills`;
@@ -2332,6 +2387,14 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     ...(spec.piExtensions ? { piExtensions: spec.piExtensions } : {}),
   };
   let exec = await adapter.start(adapterContext);
+  const adapterState = {
+    sessionId: spec.contextIdentity?.session_id,
+    sessionFile: spec.contextIdentity?.session_file,
+    finalText: undefined as string | undefined,
+    model: spec.model,
+    cwd: "/workspace",
+    ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
+  };
   // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
   // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
   let stdinClosed = false;
@@ -2350,12 +2413,12 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       throw new Error(`agent stdin 写入失败: ${msg}`);
     }
   };
-  const writeInitialMessage = async (content: string) => writeEncoded(adapter.encodeInput(content));
+  const writeInitialMessage = async (content: string) => writeEncoded(adapter.encodeInput(content, adapterState));
   const writeSteerMessage = async (content: string) => writeEncoded(
-    adapter.encodeSteer ? adapter.encodeSteer(content) : adapter.encodeInput(content),
+    adapter.encodeSteer ? adapter.encodeSteer(content, adapterState) : adapter.encodeInput(content, adapterState),
   );
   const writeFollowUpMessage = async (content: string) => writeEncoded(
-    adapter.encodeFollowUp ? adapter.encodeFollowUp(content) : adapter.encodeInput(content),
+    adapter.encodeFollowUp ? adapter.encodeFollowUp(content, adapterState) : adapter.encodeInput(content, adapterState),
   );
   if (adapter.encodeGetState) await writeEncoded(adapter.encodeGetState());
   const disposeMessageSource = await spec.onRunReady?.({
@@ -2374,13 +2437,6 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
   const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
-  const adapterState = {
-    sessionId: undefined as string | undefined,
-    sessionFile: undefined as string | undefined,
-    finalText: undefined as string | undefined,
-    ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
-  };
-
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
   let progressBuffer = "";
@@ -2455,6 +2511,14 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             attemptExitCode = chunk.exitCode ?? 0;
             continue;
           }
+          if (adapter.outputMode === "plain-final") {
+            const next = `${stdoutBuffer}${chunk.chunk ?? ""}`;
+            if (Buffer.byteLength(next, "utf8") > PLAIN_FINAL_MAX_BYTES) {
+              throw new Error("AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE");
+            }
+            stdoutBuffer = next;
+            continue;
+          }
           const lines: string[] = [];
           if (piFramer) {
             lines.push(...piFramer.push(chunk.chunk ?? ""));
@@ -2480,6 +2544,14 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             await observeSessionIdentity({ sessionId: adapterState.sessionId, sessionFile: adapterState.sessionFile });
             bindObservedResumeIdentity();
             for (const parsed of decodedEvents) {
+              if (parsed.type === "runtime_outbound" && typeof parsed.content === "string") {
+                await writeEncoded(parsed.content);
+                continue;
+              }
+              if (parsed.type === "runtime_shutdown_ack") {
+                closeStdin("terminal_result");
+                continue;
+              }
               if (parsed.type === "context.compacted" || parsed.type === "context.compaction_unknown") {
                 const safeContextEvent = redactToolTelemetry(parsed, undefined, 0, secretValues) as Record<string, unknown>;
                 spec.onEvent?.(safeContextEvent);
@@ -2603,6 +2675,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                     resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: nudge, sessionId, ...(sessionFile ? { sessionFile } : {}) });
                     resumedInput = nudge;
                   }
+                } else if (adapter.encodeShutdown) {
+                  await writeEncoded(adapter.encodeShutdown(adapterState));
                 } else {
                   closeStdin("terminal_result");
                 }
@@ -2626,6 +2700,22 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             processError ??= error;
           }
         }
+      }
+      if (adapter.outputMode === "plain-final" && !processError) {
+        const plainResult = normalizePlainFinalOutput(
+          stdoutBuffer,
+          attemptStderrTail,
+          attemptExitCode,
+          undefined,
+          { adapterId: adapter.id, completionGate: spec.completionGate?.() ?? true },
+        );
+        for (const event of plainResult.events) spec.onEvent?.(event);
+        attemptFinalText = plainResult.text;
+        finalText = plainResult.text;
+        attemptTerminalResult = {
+          isError: plainResult.terminalOutcome !== "success",
+          ...(plainResult.error ? { errorDetail: plainResult.error } : {}),
+        };
       }
       const processErrorText = processError
         ? [runtimeErrorText(processError), attemptStderrTail].filter(Boolean).join(": ")
@@ -2694,7 +2784,10 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       attemptTerminalResult = undefined;
       attemptCloseReason = undefined;
       attemptStderrTail = "";
-      if (adapter.capabilities.incrementalMessages && resumedInput) await writeFollowUpMessage(resumedInput);
+      if (adapter.capabilities.incrementalMessages && resumedInput) {
+        if (spec.provider === "dsh") await writeInitialMessage(resumedInput);
+        else await writeFollowUpMessage(resumedInput);
+      }
     }
   } catch (e) {
     // An exception while handling the current attempt is the latest runner

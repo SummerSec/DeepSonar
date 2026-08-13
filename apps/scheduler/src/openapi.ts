@@ -820,7 +820,7 @@ const OPS: Op[] = [
       additionalProperties: false,
       required: ["agent_cli"],
       properties: {
-        agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi"] },
+        agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi", "dsh"] },
       },
     },
   },
@@ -1174,7 +1174,7 @@ const OPS: Op[] = [
         provider: { type: "string", description: "LLM 仅允许协议 ID anthropic（Anthropic Messages）或 openai（OpenAI Responses）；OCI 使用 registry host" },
         secret: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
-        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi"], nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi", "dsh"], nullable: true },
         settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置；运行时物化为 Agent 沙箱配置文件" },
         meta: { type: "object", additionalProperties: true },
         metadata: {
@@ -1206,7 +1206,7 @@ const OPS: Op[] = [
         provider: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
         metadata: { $ref: "#/components/schemas/CredentialMetadata" },
-        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi"], nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi", "dsh"], nullable: true },
         settings_config: { type: "object", additionalProperties: true, description: "API 返回的 [已保存密钥] 可原样回传，服务端保留原值" },
         meta: { type: "object", additionalProperties: true },
       },
@@ -1244,7 +1244,7 @@ const OPS: Op[] = [
       type: "object",
       required: ["agent_cli", "provider", "secret"],
       properties: {
-        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi"] },
+        agent_cli: { type: "string", enum: ["claude-code", "codex", "open-code", "pi", "dsh"] },
         provider: { type: "string", enum: ["anthropic", "openai"] },
         secret: { type: "string", minLength: 1, maxLength: 4096 },
         base_url: { type: "string", format: "uri" },
@@ -1261,7 +1261,7 @@ const OPS: Op[] = [
     scope: "agents:read",
     tags: ["Credentials"],
     query: {
-      agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi"] },
+      agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi", "dsh"] },
       model: { type: "string", minLength: 1, maxLength: 200 },
     },
   },
@@ -1646,7 +1646,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         RoleConfigInput: {
           type: "object",
           properties: {
-            agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi"] },
+            agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi", "dsh"] },
             model: { type: "string", nullable: true },
             reasoning: { $ref: "#/components/schemas/ReasoningEffort" },
             context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },

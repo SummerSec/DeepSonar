@@ -99,7 +99,7 @@ test("settings builder patches or removes the top-level context budget for every
     baseUrl: "https://example.test/v1",
     provider: "openai",
   };
-  for (const agentCli of ["claude-code", "open-code", "pi", "codex"] as const) {
+  for (const agentCli of ["claude-code", "open-code", "pi", "codex", "dsh"] as const) {
     const added = buildSettingsConfigFromEditor({ ...common, agentCli, contextWindowTokens: "1000000" });
     assert.equal(added.ok, true);
     if (added.ok) assert.equal(added.settings.context_window_tokens, 1_000_000);
@@ -116,6 +116,31 @@ test("settings builder patches or removes the top-level context budget for every
     const invalid = buildSettingsConfigFromEditor({ ...common, agentCli: "claude-code", contextWindowTokens });
     assert.equal(invalid.ok, false);
     if (!invalid.ok) assert.match(invalid.error, /1024.*10000000/);
+  }
+});
+
+test("DSH provider editor exposes machine configuration without TUI surface", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /DeepSeek Harness（JSON-RPC）/u);
+  assert.match(editor, /DEEPSEEK_API_KEY/);
+  assert.match(editor, /deepseek-v4-flash/);
+  assert.doesNotMatch(editor, /dsh-cc-tui|dsh-app-tui|dsh-app-web/);
+  const settings = buildSettingsConfigFromEditor({
+    agentCli: "dsh",
+    settingsJson: "",
+    tomlText: "",
+    authJson: "",
+    secret: "secret",
+    baseUrl: "https://api.deepseek.com/",
+    provider: "openai",
+    contextWindowTokens: "128000",
+  });
+  assert.equal(settings.ok, true);
+  if (settings.ok) {
+    assert.equal(settings.settings.baseURL, "https://api.deepseek.com");
+    assert.equal(settings.settings.apiKeyEnv, "DEEPSEEK_API_KEY");
+    assert.equal(settings.settings.context_window_tokens, 128000);
+    assert.doesNotMatch(JSON.stringify(settings.settings), /secret/);
   }
 });
 

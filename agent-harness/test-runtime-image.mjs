@@ -9,7 +9,14 @@ const config = JSON.parse(readFileSync(configUrl, "utf8"));
 if (!image || !["base", "audit", "kali-minimal"].includes(toolset)) {
   throw new Error("usage: node test-runtime-image.mjs <image> <base|audit|kali-minimal> [config-json]");
 }
-const commands = ["git --version", "rg --version", "jq --version", "file --version", "python3 --version", "node --version", "claude --version"];
+const commands = [
+  "git --version", "rg --version", "jq --version", "file --version", "python3 --version", "node --version", "claude --version",
+  "test -f /usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js",
+  "test \"$(node -p \"require('/usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/package.json').version\")\" = 0.1.0-rc.6",
+  "test ! -d /usr/local/lib/node_modules/@deepseek-ai/dsh",
+  "! find /usr/local/lib/node_modules/@deepseek-ai -maxdepth 1 -type d \\( -name 'dsh-client-ui-*' -o -name 'dsh-client-web*' -o -name 'dsh-web-*' -o -name 'dsh-tool-ask-user' \\) | grep -q .",
+  "test ! -d /usr/local/lib/node_modules/dsh-cc-tui",
+];
 if (toolset !== "base") commands.push("semgrep --version", "gitleaks version", "shellcheck --version", "objdump --version");
 if (toolset === "kali-minimal") commands.push(
   "uv --version",

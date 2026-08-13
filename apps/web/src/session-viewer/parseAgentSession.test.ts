@@ -129,6 +129,28 @@ test("parses OpenCode stream events with cli hint", () => {
   assert.ok(result.items.some((item) => item.kind === "tool_call" && item.toolName === "read"));
 });
 
+test("parses DSH durable JSONL messages, reasoning, tools, and usage", () => {
+  const text = [
+    JSON.stringify({ type: "session", version: 0, id: "session-dsh" }),
+    JSON.stringify({ type: "user/message", data: { message: { content: [{ type: "text", text: "检查入口" }] } } }),
+    JSON.stringify({ type: "assistant/message", data: { message: { content: [
+      { type: "reasoning", text: "先定位" },
+      { type: "tool-call", id: "t1", name: "bash", arguments: { command: "pwd" } },
+      { type: "text", text: "完成" },
+    ], usage: { input_tokens: 40, output_tokens: 12 } } } }),
+    JSON.stringify({ type: "user/message", data: { message: { content: [{ type: "tool-result", toolCallId: "t1", content: "ok" }] } } }),
+  ].join("\n");
+  const result = parseAgentSession(text, { cli: "dsh" });
+  assert.equal(result.format, "dsh");
+  assert.equal(sessionCliLabel("dsh"), "DeepSeek Harness");
+  assert.ok(result.items.some((item) => item.kind === "user" && item.body?.includes("检查")));
+  assert.ok(result.items.some((item) => item.kind === "assistant" && item.body?.includes("先定位")));
+  assert.ok(result.items.some((item) => item.kind === "tool_call" && item.toolName === "bash"));
+  assert.ok(result.items.some((item) => item.kind === "tool_result"));
+  assert.ok(result.totals.input >= 40);
+  assert.ok(result.totals.output >= 12);
+});
+
 test("parses Pi RPC session events with cli hint", () => {
   const text = [
     JSON.stringify({ type: "agent_start" }),

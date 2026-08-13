@@ -6,7 +6,7 @@
  * 完整清单：docs/AGENT_CLI_RUNTIME_ADAPTERS.md「Session 归档 + Web 查看器」。
  */
 
-export type SupportedAgentCli = "claude-code" | "codex" | "open-code" | "pi";
+export type SupportedAgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
 
 export interface SessionDiscoveryRuntime {
   run(command: string): Promise<{ exitCode: number; stdout: string; stderr: string }>;
@@ -162,9 +162,30 @@ const piAdapter: AgentCliSessionAdapter = {
   },
 };
 
+const dshAdapter: AgentCliSessionAdapter = {
+  cli: "dsh",
+  async exportSession(runtime, sessionId) {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(sessionId)) {
+      return { cli: "dsh", sessionId, artifacts: [], captureError: "DSH session ID 非法，拒绝扫描" };
+    }
+    const root = "/workspace/.deepsonar-home/.dsh/sessions";
+    const command = `base=${sh(root)}; if [ -d "$base" ]; then find "$base" -type f -path ${sh(`*/${sessionId}/session.jsonl`)} -print 2>/dev/null; fi`;
+    const result = await runtime.run(command);
+    if (result.exitCode !== 0 && !result.stdout.trim()) {
+      return { cli: "dsh", sessionId, artifacts: [], captureError: result.stderr.trim() || "DSH Session 扫描失败" };
+    }
+    const paths = [...new Set(result.stdout.split("\n").map((value) => value.trim()).filter(Boolean))];
+    if (paths.length > 1) {
+      return { cli: "dsh", sessionId, artifacts: [], captureError: `DSH session ${sessionId} 出现在多个项目目录，拒绝猜测` };
+    }
+    return readDiscovered(runtime, "dsh", sessionId, paths);
+  },
+};
+
 export const CLI_SESSION_ADAPTERS: Record<SupportedAgentCli, AgentCliSessionAdapter> = {
   "claude-code": claudeAdapter,
   codex: codexAdapter,
   "open-code": openCodeAdapter,
   pi: piAdapter,
+  dsh: dshAdapter,
 };

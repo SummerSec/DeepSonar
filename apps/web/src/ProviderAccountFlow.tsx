@@ -47,6 +47,7 @@ const cliLabel: Record<string, string> = {
   "open-code": "OpenCode",
   codex: "Codex",
   pi: "Pi Coding Agent",
+  dsh: "DeepSeek Harness",
 };
 
 /** Resolve hub / system / role even if bindable API omits role_kind (legacy scheduler). */
@@ -1201,6 +1202,7 @@ export function ProviderAccountFlow({
                     <option value="codex">codex（Codex）</option>
                     <option value="open-code">open-code（OpenCode）</option>
                     <option value="pi">pi（Pi Coding Agent）</option>
+                    <option value="dsh">dsh（DeepSeek Harness）</option>
                   </select>
                 </label>
               </div>
@@ -1237,7 +1239,7 @@ export function ProviderAccountFlow({
                   const isSystem = kind === "system";
                   const isHub = kind === "hub";
                   const isBuiltin = isBuiltinBindableRole(roleConfig);
-                  const roleCli = (["claude-code", "codex", "open-code", "pi"].includes(roleConfig.agent_cli)
+                  const roleCli = (["claude-code", "codex", "open-code", "pi", "dsh"].includes(roleConfig.agent_cli)
                     ? roleConfig.agent_cli
                     : "claude-code") as AgentCli;
                   const incompatible = Boolean(
@@ -1332,6 +1334,7 @@ export function ProviderAccountFlow({
                           <option value="codex">codex</option>
                           <option value="open-code">open-code</option>
                           <option value="pi">pi</option>
+                          <option value="dsh">dsh</option>
                         </select>
                       </label>
                       {roleConfig.project_id ? (

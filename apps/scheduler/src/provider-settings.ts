@@ -21,9 +21,10 @@ const CONFIG_FILE_PATHS: Record<string, string> = {
   codex: ".codex/config.toml",
   "open-code": ".opencode/config.json",
   pi: ".pi/agent/models.json",
+  dsh: ".dsh/settings.yaml",
 };
 
-export type ProviderAgentCli = "claude-code" | "codex" | "open-code" | "pi";
+export type ProviderAgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
 
 export interface MaterializedConfigFile {
   path: string;
@@ -57,7 +58,7 @@ export function resolveContextWindowTokens(input: {
   return parseContextWindowTokens(settings.context_window_tokens);
 }
 
-const AGENT_CLIS = new Set<string>(["claude-code", "codex", "open-code", "pi"]);
+const AGENT_CLIS = new Set<string>(["claude-code", "codex", "open-code", "pi", "dsh"]);
 
 export function isProviderAgentCli(value: unknown): value is ProviderAgentCli {
   return typeof value === "string" && AGENT_CLIS.has(value);
@@ -193,6 +194,16 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     return input.files.map((item) => item.path === source.path
       ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
       : { ...item });
+  }
+
+  if (input.agentCli === "dsh") {
+    const source = byPath.get(".dsh/settings.yaml");
+    if (!source) throw new Error("受限网络缺少冻结的 DSH settings.yaml");
+    if (!/^\s*baseURL:\s*.+$/mu.test(source.content)) {
+      throw new Error("受限网络无法定位 DSH baseURL");
+    }
+    const content = source.content.replace(/^\s*baseURL:\s*.+$/mu, `    baseURL: ${JSON.stringify(gatewayBaseUrl)}`);
+    return input.files.map((item) => item.path === source.path ? file(item.path, content) : { ...item });
   }
 
   const source = byPath.get(".opencode/config.json");
@@ -331,6 +342,14 @@ requires_openai_auth = true
       models: [{ id: model }],
     };
   }
+  if (input.agentCli === "dsh") {
+    return {
+      provider: "deepseek",
+      baseURL: baseUrl || defaultBase || "https://api.deepseek.com",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      models: [{ id: input.model?.trim() || "deepseek-v4-flash" }],
+    };
+  }
   // OpenCode stores one provider fragment. Runtime materialization wraps it in
   // the CLI's provider map and selects the first declared model.
   const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
@@ -432,6 +451,31 @@ requires_openai_auth = true
       return [providerId, provider];
     }));
     const content = `${JSON.stringify({ providers }, null, 2)}\n`;
+    return [file(expectedPath, content)];
+  }
+  if (input.agentCli === "dsh") {
+    const sourceModels = Array.isArray(settings.models)
+      ? settings.models.map(asObject)
+      : Object.entries(asObject(settings.models)).map(([id, value]) => ({ id, ...asObject(value) }));
+    const selectedModel = input.overrides?.model?.trim()
+      || extractModelFromSettings("dsh", settings)
+      || "deepseek-v4-flash";
+    const selected: Record<string, unknown> = sourceModels.find((item) => item.id === selectedModel) ?? { id: selectedModel };
+    const contextWindow = contextWindowTokens
+      ?? (typeof selected.contextWindow === "number" ? selected.contextWindow : 1_000_000);
+    const baseURL = extractBaseUrlFromSettings(settings) ?? "https://api.deepseek.com";
+    const apiKeyEnv = typeof settings.apiKeyEnv === "string" && settings.apiKeyEnv.trim()
+      ? settings.apiKeyEnv.trim()
+      : "DEEPSEEK_API_KEY";
+    const content = `- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    apiKeyEnv: ${JSON.stringify(apiKeyEnv)}
+    baseURL: ${JSON.stringify(baseURL)}
+    models:
+      - id: ${JSON.stringify(selectedModel)}
+        contextWindow: ${contextWindow}
+`;
     return [file(expectedPath, content)];
   }
   // OpenCode's settingsConfig is the selected provider fragment. The schema

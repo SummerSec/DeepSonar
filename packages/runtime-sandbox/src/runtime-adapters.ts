@@ -1,7 +1,9 @@
 import type { AsyncCommandHandle, Sandbox } from "agentbox-sdk";
 import type { ContextIdentity } from "./context-contract.js";
 
-export type AgentCliId = "claude-code" | "codex" | "open-code" | "pi";
+export type AgentCliId = "claude-code" | "codex" | "dsh" | "open-code" | "pi";
+
+export type AgentCliOutputMode = "jsonl" | "plain-final";
 
 /** How an adapter keeps a long-running non-interactive session bounded. */
 export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-summary" | "unsupported";
@@ -50,20 +52,28 @@ export interface AdapterRuntimeState {
   streamedReasoning?: string;
   /** 当前 Job 的上下文身份，仅用于验证明确的压缩事件。 */
   contextIdentity?: ContextIdentity;
+  model?: string;
+  cwd?: string;
+  dshRequestSerial?: number;
+  dshInitializeRequestId?: string;
+  dshTurnError?: string;
+  dshInitialInput?: string;
 }
 
 export interface RuntimeAdapter {
   readonly id: AgentCliId;
   readonly version: string;
+  readonly outputMode: AgentCliOutputMode;
   readonly capabilities: Readonly<AgentCliCapabilities>;
   readonly compatibleImageKeys: readonly string[];
   start(context: AdapterStartContext): Promise<AsyncCommandHandle>;
   resume(context: AdapterResumeContext): Promise<AsyncCommandHandle>;
   materialize?(context: AdapterStartContext): Promise<void>;
-  encodeInput(content: string): string;
+  encodeInput(content: string, state?: AdapterRuntimeState): string;
   /** 多消息模式运行时可选的显式 RPC 排队命令。 */
-  encodeSteer?(content: string): string;
-  encodeFollowUp?(content: string): string;
+  encodeSteer?(content: string, state?: AdapterRuntimeState): string;
+  encodeFollowUp?(content: string, state?: AdapterRuntimeState): string;
+  encodeShutdown?(state?: AdapterRuntimeState): string;
   /** 可选的会话状态查询命令。 */
   encodeGetState?(): string;
   decodeOutput(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[];
@@ -579,6 +589,7 @@ function sandboxClaude(
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.231",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   // Claude Code 2.1.231 is the governed pin (npm latest). That
@@ -616,6 +627,7 @@ function sandboxCodex(sandbox: Sandbox, context: AdapterStartContext, sessionId?
 const codex = Object.freeze<RuntimeAdapter>({
   id: "codex",
   version: "0.147.0",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxCodex(context.sandbox, context),
@@ -627,6 +639,7 @@ const codex = Object.freeze<RuntimeAdapter>({
 const openCode = Object.freeze<RuntimeAdapter>({
   id: "open-code",
   version: "1.18.18",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
@@ -778,6 +791,7 @@ function sandboxPi(sandbox: Sandbox, context: AdapterStartContext, sessionFile?:
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
   version: "0.84.1",
+  outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
     controlMcp: false,
@@ -803,9 +817,242 @@ const pi = Object.freeze<RuntimeAdapter>({
   decodeOutput: decodePi,
 });
 
+function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<AsyncCommandHandle> {
+  const configPath = "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml";
+  const packagedBin = "/usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js";
+  const systemPrompt = context.systemPromptPath
+    ? `DSH_SYSTEM_PROMPT="$(cat ${shellQuote(context.systemPromptPath)})" `
+    : "";
+  const command = `${systemPrompt}node ${packagedBin} ${configPath}`;
+  return sandbox.runAsync(command, {
+    cwd: context.cwd,
+    env: {
+      ...context.env,
+      DSH_HOME: "/workspace/.deepsonar-home/.dsh",
+      DSH_CORDIS_CONFIG: configPath,
+      DSH_SESSION_ROOT: "/workspace/.deepsonar-home/.dsh/sessions",
+      DSH_CWD: context.cwd,
+      DSH_MODEL: context.model || "deepseek-v4-flash",
+      DSH_TELEMETRY_DISABLED: "1",
+      DSH_PERMISSION_MODE: "danger-full-access",
+    },
+  });
+}
+
+async function materializeDsh(context: AdapterStartContext): Promise<void> {
+  const home = "/workspace/.deepsonar-home/.dsh";
+  const config = `# DeepSonar governed unattended DSH composition. No UI or presentation plugins.
+- id: sdk-jsonrpc-server
+  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
+  config:
+    maxTokensAsSuccess: true
+
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseURL: !!js process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
+    streamIdleTimeoutMs: 172800000
+    models:
+      - id: !!js process.env.DSH_MODEL ?? 'deepseek-v4-flash'
+        contextWindow: !!js Number(process.env.DSH_CONTEXT_WINDOW ?? 1000000)
+
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: bash-local
+  name: '@deepseek-ai/dsh-bash-local'
+
+- id: fs-local
+  name: '@deepseek-ai/dsh-fs-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    dshHome: !!js process.env.DSH_HOME ?? '/workspace/.deepsonar-home/.dsh'
+    includeHarnessIdentity: false
+    includeRuntimeContext: false
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a software engineering agent.'
+    workspaceContext: false
+    skills:
+      enabled: true
+    toolBash: true
+    toolJobs: false
+
+- id: bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  config:
+    timeoutMs: 300000
+
+- id: str-replace-editor
+  name: '@deepseek-ai/dsh-tool-str-replace-editor'
+  config:
+    maxOutputChars: 16000
+
+- id: sessions
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
+    compression: none
+
+- id: session-checkpoints
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1
+`;
+  await context.sandbox.uploadFile(config, `${home}/deepsonar.cordis.yml`);
+}
+
+function dshSessionId(state?: AdapterRuntimeState): string {
+  if (state?.sessionId) return state.sessionId;
+  const contextId = state?.contextIdentity?.context_id;
+  if (!contextId || !/^[A-Za-z0-9_-]{1,96}$/u.test(contextId)) throw new Error("DSH_SESSION_IDENTITY_MISSING");
+  state.sessionId = `session-${contextId}`;
+  return state.sessionId;
+}
+
+function dshRequest(method: string, params: Record<string, unknown>, state?: AdapterRuntimeState): string {
+  if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");
+  state.dshRequestSerial = (state.dshRequestSerial ?? 0) + 1;
+  const id = `deepsonar-${method.replaceAll("/", "-")}-${state.dshRequestSerial}`;
+  if (method === "initialize") state.dshInitializeRequestId = id;
+  return `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
+}
+
+function dshPrompt(content: string, state?: AdapterRuntimeState): string {
+  return dshRequest("session/prompt", {
+    sessionId: dshSessionId(state),
+    contentBlocks: [{ type: "text", text: content }],
+  }, state);
+}
+
+function dshContentBlocks(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
+}
+
+function dshToolInput(value: unknown): unknown {
+  if (typeof value !== "string") return value ?? {};
+  if (!value.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  if (Object.prototype.hasOwnProperty.call(line, "id") && !line.method) {
+    if (line.error && typeof line.error === "object") {
+      const error = line.error as Record<string, unknown>;
+      return [{ type: "result", subtype: "error", is_error: true, result: String(error.message ?? "DSH JSON-RPC request failed") }];
+    }
+    if (line.id === state.dshInitializeRequestId) {
+      const result = line.result && typeof line.result === "object" ? line.result as Record<string, unknown> : {};
+      const serverInfo = result.serverInfo && typeof result.serverInfo === "object" ? result.serverInfo as Record<string, unknown> : {};
+      if (serverInfo.name !== "deepseek-harness-sdk-runtime") {
+        return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SERVER_IDENTITY_INVALID" }];
+      }
+      return [{ type: "runtime_outbound", content: dshPrompt(state.dshInitialInput ?? "", state) }];
+    }
+    if (String(line.id).startsWith("deepsonar-shutdown-")) return [{ type: "runtime_shutdown_ack" }];
+    return [];
+  }
+  const method = String(line.method ?? "");
+  const params = line.params && typeof line.params === "object" && !Array.isArray(line.params) ? line.params as Record<string, unknown> : {};
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+  if (sessionId && sessionId !== dshSessionId(state)) {
+    return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+  }
+  if (method === "session.event") {
+    const event = params.event && typeof params.event === "object" && !Array.isArray(params.event) ? params.event as Record<string, unknown> : {};
+    const data = event.data && typeof event.data === "object" && !Array.isArray(event.data) ? event.data as Record<string, unknown> : {};
+    if (event.type === "assistant/chunk") {
+      const chunk = data.chunk && typeof data.chunk === "object" && !Array.isArray(data.chunk) ? data.chunk as Record<string, unknown> : {};
+      if (chunk.type === "text-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "text", text: chunk.text }] } }];
+      if (chunk.type === "reasoning-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: chunk.text }] } }];
+      return [];
+    }
+    if (event.type === "assistant/message" || event.type === "user/message") {
+      const message = data.message && typeof data.message === "object" && !Array.isArray(data.message) ? data.message as Record<string, unknown> : {};
+      const content = dshContentBlocks(message.content).map((block) => {
+        if (block.type === "tool-call") return { type: "tool_use", id: block.id, name: block.name, input: dshToolInput(block.arguments) };
+        if (block.type === "tool-result") return { type: "tool_result", tool_use_id: block.toolCallId, content: block.content, is_error: block.isError === true };
+        if (block.type === "reasoning") return { type: "thinking", thinking: block.text };
+        return block;
+      });
+      if (event.type === "assistant/message") {
+        state.finalText = content.filter((block) => block.type === "text" && typeof (block as Record<string, unknown>).text === "string").map((block) => String((block as Record<string, unknown>).text)).join("") || state.finalText;
+        return [{ type: "assistant", message: { id: message.id, content } }];
+      }
+      return [{ type: "user", message: { id: message.id, content } }];
+    }
+    if (event.type === "turn/end") {
+      const reason = data.reason && typeof data.reason === "object" && !Array.isArray(data.reason) ? data.reason as Record<string, unknown> : {};
+      if (reason.kind !== "completed" && reason.kind !== "max-tokens") state.dshTurnError = `DSH turn ended: ${String(reason.kind ?? "unknown")}`;
+    }
+    return [];
+  }
+  if (method === "session.status" && params.status === "idle") {
+    if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
+    return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
+  }
+  return [];
+}
+
+const dsh = Object.freeze<RuntimeAdapter>({
+  id: "dsh",
+  version: "0.1.0-rc.6",
+  outputMode: "jsonl",
+  capabilities: fixedCapabilities({
+    streamEvents: true,
+    controlMcp: false,
+    platformControlApi: true,
+    incrementalMessages: true,
+    completionGate: true,
+    sessionCapture: true,
+    contextCompaction: true,
+    contextCompactionPolicy: "automatic",
+    reasoningEffort: false,
+    interactiveTerminal: false,
+  }),
+  compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
+  start: (context) => sandboxDsh(context.sandbox, context),
+  materialize: materializeDsh,
+  resume: (context) => sandboxDsh(context.sandbox, context),
+  encodeInput: (content, state) => {
+    if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");
+    state.dshInitialInput = content;
+    state.finalText = undefined;
+    return dshRequest("initialize", { cwd: state.cwd ?? "/workspace", provider: "deepseek-official", model: state.model ?? "deepseek-v4-flash" }, state);
+  },
+  encodeSteer: dshPrompt,
+  encodeFollowUp: dshPrompt,
+  encodeShutdown: (state) => dshRequest("shutdown", {}, state),
+  decodeOutput: decodeDsh,
+});
+
 export const AGENT_CLI_RUNTIME_ADAPTERS: Readonly<Record<AgentCliId, RuntimeAdapter>> = Object.freeze({
   "claude-code": claude,
   codex,
+  dsh,
   "open-code": openCode,
   pi,
 });

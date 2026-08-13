@@ -294,6 +294,44 @@ test("OpenCode context_window_tokens requires an existing output limit", () => {
     /缺少既有 limit\.output/,
   );
 });
+
+test("DSH materializes DeepSeek settings without persisting the long-lived credential", () => {
+  const files = materializeProviderSettings({
+    agentCli: "dsh",
+    settingsConfig: {
+      provider: "deepseek",
+      baseURL: "https://api.deepseek.com",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      models: {
+        "deepseek-v4-flash": {
+          name: "deepseek-v4-flash",
+          contextWindow: 128000,
+          outputLimit: 8192,
+        },
+      },
+      env: { DEEPSEEK_API_KEY: "long-lived-key" },
+    },
+  });
+
+  assert.equal(files.length, 1);
+  assert.equal(files[0]?.path, ".dsh/settings.yaml");
+  assert.doesNotMatch(files[0]?.content ?? "", /long-lived-key/);
+  assert.match(files[0]?.content ?? "", /llm-deepseek/);
+  assert.match(files[0]?.content ?? "", /apiKeyEnv/);
+});
+
+test("DSH settings expose the DeepSeek model and upstream base URL", () => {
+  const settings = {
+    apiKey: "long-lived-key",
+    baseURL: "https://api.deepseek.com",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    models: [{ id: "deepseek-v4-flash", contextWindow: 128000, outputLimit: 8192 }],
+  };
+  assert.equal(extractModelFromSettings("dsh", settings), "deepseek-v4-flash");
+  assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "dsh", settingsConfig: settings }), "deepseek-v4-flash");
+  assert.equal(extractBaseUrlFromSettings(settings), "https://api.deepseek.com");
+});
+
 test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {
   assert.throws(() => materializeProviderSettings({ agentCli: "codex", settingsConfig: { context_window_tokens: 1023 } }), /1024/);
   const settings = { context_window_tokens: 128000, config: 'model = "gpt-5"\n[model_providers.custom]\nbase_url = "https://example"\n', auth: { OPENAI_API_KEY: "secret" } };

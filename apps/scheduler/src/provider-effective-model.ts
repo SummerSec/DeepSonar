@@ -45,6 +45,10 @@ export function extractModelFromSettings(agentCli: string, settingsConfig: unkno
     }
     return null;
   }
+  if (agentCli === "dsh" && Array.isArray(settings.models)) {
+    const model = settings.models.map(asObject).find((item) => typeof item.id === "string" && item.id.trim());
+    return typeof model?.id === "string" ? model.id.trim() : null;
+  }
   const modelIds = Object.keys(asObject(settings.models));
   return modelIds.find((model) => model.trim())?.trim() ?? null;
 }

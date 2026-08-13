@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 29);
+INSERT INTO schema_meta (id, version) VALUES ('global', 30);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -814,7 +814,7 @@ CREATE TABLE credentials (
   CONSTRAINT credentials_model_catalog_check
     CHECK (jsonb_typeof(model_catalog_json) = 'array' AND jsonb_array_length(model_catalog_json) <= 200),
   CONSTRAINT credentials_agent_cli_check CHECK (
-    agent_cli IS NULL OR agent_cli IN ('claude-code', 'codex', 'open-code')
+    agent_cli IS NULL OR agent_cli IN ('claude-code', 'codex', 'open-code', 'pi', 'dsh')
   ),
   CONSTRAINT credentials_settings_config_object_check CHECK (jsonb_typeof(settings_config_json) = 'object'),
   CONSTRAINT credentials_meta_object_check CHECK (jsonb_typeof(meta_json) = 'object')

@@ -374,7 +374,7 @@ def _credentials_create(_pos, f):
 
 def _credentials_models_preview(_pos, f):
     body = {
-        "agent_cli": need(f.get("agent-cli"), "--agent-cli claude-code|codex|open-code"),
+        "agent_cli": need(f.get("agent-cli"), "--agent-cli claude-code|codex|open-code|pi|dsh"),
         "provider": need(f.get("provider"), "--provider anthropic|openai"),
         "secret": need(f.get("secret"), "--secret"),
     }
@@ -927,7 +927,7 @@ COMMANDS = {
     "role-configs.bindable": lambda pos, f: call("GET", "/role-configs/bindable"),
     "role-configs.agent-cli": lambda pos, f: call(
         "PATCH", f"/role-configs/{_p0(pos, 'roleConfigId')}/agent-cli",
-        {"agent_cli": need(f.get("agent-cli") or f.get("cli"), "--agent-cli claude-code|codex|open-code")}),
+        {"agent_cli": need(f.get("agent-cli") or f.get("cli"), "--agent-cli claude-code|codex|open-code|pi|dsh")}),
     "role-configs.runtime-image": lambda pos, f: call(
         "PATCH", f"/role-configs/{_p0(pos, 'roleConfigId')}/runtime-image",
         {"runtime_image_key": (
