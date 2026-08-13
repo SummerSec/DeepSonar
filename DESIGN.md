@@ -203,7 +203,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v28）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
+| `database/schema.sql` | 唯一 schema 基线（当前 v29）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
