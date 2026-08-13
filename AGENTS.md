@@ -90,7 +90,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 ### 数据与迁移
 
-- **Schema**：`database/schema.sql` 是唯一基线（当前 v22）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 migration**，改表 = 改基线 + bump 版本 + 重建库。
+- **Schema**：`database/schema.sql` 是唯一基线（当前 v29，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 migration**，改表 = 改基线 + bump 版本 + 重建库。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
 - **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
 - **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。

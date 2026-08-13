@@ -155,7 +155,7 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100
 ```
 
-默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema v23 新库默认选择阿里云 ACR 通道，管理员仍可在市场切换 GHCR / Docker Hub / ACR。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
+默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 为准（现为 v29）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
 
 ### 官方运行时镜像与语言能力
 
