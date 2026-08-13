@@ -71,13 +71,13 @@ test("内置注册表明确、不可变且能力完整", () => {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, true);
   }
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.controlMcp, false);
-  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.outputMode, "plain-final");
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.outputMode, "jsonl");
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.controlMcp, false);
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.platformControlApi, true);
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
 });
 
-test("DSH headless adapter uses the governed patch path and rejects resume", async () => {
+test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const fake = fakeSandbox();
   const context = {
@@ -86,27 +86,62 @@ test("DSH headless adapter uses the governed patch path and rejects resume", asy
     cwd: "/workspace",
     input: "task with 'quoted' data",
     mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    systemPromptPath: "/workspace/.deepsonar/system-prompt.txt",
     model: "ignored-model",
     reasoning: "high",
   } as const;
   await adapter.start(context);
-  assert.match(
-    fake.commands[0] ?? "",
-    /^dsh --profile headless --patch \/workspace\/\.deepsonar-home\/\.dsh\/deepsonar\.patch\.json /u,
-  );
-  assert.match(fake.commands[0] ?? "", /task with '"'"'quoted'"'"' data/u);
+  assert.match(fake.commands[0] ?? "", /^DSH_SYSTEM_PROMPT="\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
   assert.equal(adapter.version, "0.1.0-rc.6");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
-  assert.equal(adapter.encodeInput("ignored"), "");
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
+  assert.equal(fake.envs[0]?.DSH_CORDIS_CONFIG, "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml");
+  assert.equal(fake.envs[0]?.DSH_SESSION_ROOT, "/workspace/.deepsonar-home/.dsh/sessions");
+  assert.equal(fake.envs[0]?.DSH_CWD, "/workspace");
+  assert.equal(fake.envs[0]?.DSH_MODEL, "ignored-model");
   assert.equal(fake.envs[0]?.DSH_TELEMETRY_DISABLED, "1");
-  await assert.rejects(
-    adapter.resume({ ...context, sessionId: "dsh-session" }),
-    /DSH_HEADLESS_RESUME_UNSUPPORTED/u,
-  );
+  assert.equal(fake.envs[0]?.DSH_PERMISSION_MODE, "danger-full-access");
+  assert.equal(adapter.capabilities.incrementalMessages, true);
+  await adapter.resume({ ...context, sessionId: "session-existing" });
+  assert.equal(fake.commands[1], fake.commands[0]);
 });
 
-test("DSH materializes a static governed Cordis patch", async () => {
+test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  const state = { contextIdentity: {
+    context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
+    adapter_id: "dsh", adapter_version: "0.1.0-rc.6", runtime_identity: "runtime",
+    transform_chain_digest: `sha256:${"a".repeat(64)}`,
+  }, model: "deepseek-v4-flash", cwd: "/workspace" };
+  const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
+  assert.equal(init.method, "initialize");
+  assert.deepEqual(init.params, { cwd: "/workspace", provider: "deepseek-official", model: "deepseek-v4-flash" });
+  const initEvents = adapter.decodeOutput({ jsonrpc: "2.0", id: init.id, result: { serverInfo: { name: "deepseek-harness-sdk-runtime", version: "0.0.1" } } }, state);
+  assert.equal(initEvents[0]?.type, "runtime_outbound");
+  const prompt = JSON.parse(String(initEvents[0]?.content).trim()) as Record<string, unknown>;
+  assert.equal(prompt.method, "session/prompt");
+  assert.equal((prompt.params as Record<string, unknown>).sessionId, "session-ctx_0123456789abcdef0123456789abcdef");
+  const follow = JSON.parse(adapter.encodeFollowUp?.("second", state).trim() ?? "null") as Record<string, unknown>;
+  assert.equal((follow.params as Record<string, unknown>).sessionId, (prompt.params as Record<string, unknown>).sessionId);
+  assert.equal((JSON.parse(adapter.encodeShutdown?.(state).trim() ?? "null") as Record<string, unknown>).method, "shutdown");
+});
+
+test("DSH malformed tool arguments fail soft without breaking later events", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  const state = { sessionId: "session-safe" };
+  const events = adapter.decodeOutput({ jsonrpc: "2.0", method: "session.event", params: {
+    sessionId: "session-safe",
+    event: { type: "assistant/message", data: { message: { id: "m1", content: [
+      { type: "tool-call", id: "t1", name: "bash", arguments: "{" },
+      { type: "text", text: "still alive" },
+    ] } } },
+  } }, state);
+  const content = ((events[0]?.message as { content?: Array<Record<string, unknown>> })?.content ?? []);
+  assert.deepEqual(content[0]?.input, {});
+  assert.equal(content[1]?.text, "still alive");
+});
+
+test("DSH materializes a governed UI-less Cordis composition", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const fake = fakeSandbox();
   const context = {
@@ -119,19 +154,15 @@ test("DSH materializes a static governed Cordis patch", async () => {
   } as const;
   await adapter.materialize?.(context);
   assert.equal(fake.uploads.length, 1);
-  assert.equal(fake.uploads[0]?.path, "/workspace/.deepsonar-home/.dsh/deepsonar.patch.json");
-  const patch = JSON.parse(fake.uploads[0]?.content ?? "null") as Array<Record<string, unknown>>;
-  const row = (id: string) => patch.find((item) => item.id === id) as Record<string, unknown> | undefined;
-  assert.deepEqual(row("agent-default-model")?.config, { provider: "deepseek-official", model: "deepseek-v4-flash" });
-  assert.deepEqual(row("session-persistence-jsonl")?.config, {
-    root: "/workspace/.deepsonar-home/.dsh/sessions",
-    compression: "none",
-    packChunks: false,
-  });
-  for (const id of ["tool-web", "web", "web-search-deepseek", "session-telemetry-otel"]) {
-    assert.equal(row(id)?.disabled, true);
-  }
-  assert.equal(patch.some((item) => JSON.stringify(item).includes("!!js")), false);
+  assert.equal(fake.uploads[0]?.path, "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml");
+  const config = fake.uploads[0]?.content ?? "";
+  assert.match(config, /@deepseek-ai\/dsh-sdk-jsonrpc-server/);
+  assert.match(config, /@deepseek-ai\/dsh-agent-spine-demo/);
+  assert.match(config, /@deepseek-ai\/dsh-session-persistence-jsonl/);
+  assert.match(config, /@deepseek-ai\/dsh-compaction-basic/);
+  assert.match(config, /skills:\n\s+enabled: true/);
+  assert.match(config, /root: !!js process\.env\.DSH_SESSION_ROOT/);
+  assert.doesNotMatch(config, /dsh-(?:app-tui|app-web|web-search|ask-user|theme)|telemetry-otel/);
 });
 
 test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {

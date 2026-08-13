@@ -2,7 +2,7 @@
  * Parse Agent CLI session archives (JSONL / NDJSON / OpenCode export JSON)
  * into a timeline suitable for the Job Session viewer.
  *
- * Formats: DeepSonar SupportedAgentCli (claude-code / codex / open-code / pi).
+ * Formats: DeepSonar SupportedAgentCli (claude-code / codex / open-code / pi / dsh).
  * UX inspiration only: github.com/cuteribs/agent-session-viewer (do not vendor).
  *
  * When adding a new Agent CLI:
@@ -39,7 +39,7 @@ export type SessionToolStat = {
 };
 
 /** DeepSonar 支持的 Agent CLI（与 runtime-sandbox SupportedAgentCli 对齐）。 */
-export type SupportedSessionCli = "claude-code" | "codex" | "open-code" | "pi";
+export type SupportedSessionCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
 
 export type SessionFormat = SupportedSessionCli | "ndjson" | "unknown";
 
@@ -63,7 +63,7 @@ export type ParseAgentSessionOptions = {
   cli?: string | null;
 };
 
-const SUPPORTED_CLI = new Set<SupportedSessionCli>(["claude-code", "codex", "open-code", "pi"]);
+const SUPPORTED_CLI = new Set<SupportedSessionCli>(["claude-code", "codex", "open-code", "pi", "dsh"]);
 
 export function normalizeSessionCli(cli?: string | null): SupportedSessionCli | undefined {
   if (!cli) return undefined;
@@ -72,6 +72,7 @@ export function normalizeSessionCli(cli?: string | null): SupportedSessionCli | 
   if (value === "codex") return "codex";
   if (value === "opencode" || value === "open-code" || value === "open_code") return "open-code";
   if (value === "pi") return "pi";
+  if (value === "dsh" || value === "deepseek-harness") return "dsh";
   return SUPPORTED_CLI.has(value as SupportedSessionCli) ? (value as SupportedSessionCli) : undefined;
 }
 
@@ -81,6 +82,7 @@ export function sessionCliLabel(cli?: string | null): string {
   if (normalized === "codex") return "Codex";
   if (normalized === "open-code") return "OpenCode";
   if (normalized === "pi") return "Pi";
+  if (normalized === "dsh") return "DeepSeek Harness";
   return cli?.trim() || "未知 CLI";
 }
 
@@ -662,6 +664,38 @@ function parseGenericRow(row: Record<string, unknown>, index: number): SessionTi
   }];
 }
 
+function parseDshRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
+  const type = asString(row.type) ?? "event";
+  if (type === "session" || type === "turn/start" || type === "turn/end") {
+    return [{ id: String(index), kind: "system", title: type, body: stringifyBody(row) }];
+  }
+  const data = asRecord(row.data) ?? row;
+  const message = asRecord(data.message) ?? data;
+  const content = Array.isArray(message.content) ? message.content : [];
+  const timestamp = asString(row.timestamp) ?? (typeof row.time === "number" ? new Date(row.time).toISOString() : undefined);
+  if (type === "user/message" || type === "assistant/message") {
+    const items: SessionTimelineItem[] = [];
+    const roleKind: SessionItemKind = type === "user/message" ? "user" : "assistant";
+    const text = contentToText(content);
+    if (text) items.push({ id: `${index}-message`, kind: roleKind, title: roleKind === "user" ? "用户" : "DSH", body: text, timestamp, tokens: extractUsage(message) });
+    for (const [blockIndex, rawBlock] of content.entries()) {
+      const block = asRecord(rawBlock);
+      if (!block) continue;
+      if (block.type === "tool-call") items.push({ id: `${index}-call-${blockIndex}`, kind: "tool_call", title: `调用 ${String(block.name ?? "tool")}`, toolName: asString(block.name), body: stringifyBody(block.arguments), timestamp });
+      if (block.type === "tool-result") items.push({ id: `${index}-result-${blockIndex}`, kind: "tool_result", title: "工具结果", body: stringifyBody(block.content), timestamp, isError: block.isError === true });
+      if (block.type === "reasoning" && typeof block.text === "string") items.push({ id: `${index}-reasoning-${blockIndex}`, kind: "assistant", title: "DSH reasoning", body: block.text, timestamp });
+    }
+    return items;
+  }
+  if (type === "assistant/chunk") {
+    const chunk = asRecord(data.chunk) ?? {};
+    return typeof chunk.text === "string" ? [{ id: String(index), kind: "assistant", title: chunk.type === "reasoning-delta" ? "DSH reasoning" : "DSH", body: chunk.text, timestamp }] : [];
+  }
+  if (type === "tool/call") return [{ id: String(index), kind: "tool_call", title: `调用 ${String(data.name ?? "tool")}`, toolName: asString(data.name), body: stringifyBody(data.arguments ?? data.input), timestamp }];
+  if (type === "tool/result") return [{ id: String(index), kind: "tool_result", title: "工具结果", toolName: asString(data.name), body: stringifyBody(data.content ?? data.result), timestamp, isError: data.isError === true }];
+  return parseGenericRow(row, index);
+}
+
 function parseObjectRows(
   rows: Record<string, unknown>[],
   preferred?: SupportedSessionCli,
@@ -686,6 +720,7 @@ function parseObjectRows(
       else if (format === "codex") parsed = parseCodexRow(row, index);
       else if (format === "pi") parsed = parsePiRow(row, index);
       else if (format === "open-code") parsed = parseOpenCodeRow(row, index);
+      else if (format === "dsh") parsed = parseDshRow(row, index);
       else parsed = parseGenericRow(row, index);
     } catch {
       totals.skipped += 1;

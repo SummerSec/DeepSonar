@@ -15,7 +15,7 @@ type ViewerTab = "timeline" | "stats" | "raw";
 export type SessionViewerProps = {
   text: string;
   truncated?: boolean;
-  /** evidence.manifest.cli：claude-code / codex / open-code / pi */
+  /** evidence.manifest.cli：claude-code / codex / open-code / pi / dsh */
   cli?: string | null;
   sessionId?: string | null;
   /** 数据来源说明，如「CLI Session 归档」或「过程流回退」 */

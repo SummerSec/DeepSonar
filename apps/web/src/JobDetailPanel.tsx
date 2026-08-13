@@ -947,7 +947,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                 <div className="theme-surface space-y-2 rounded-2xl p-8 text-center text-[13px] text-zinc-500 ring-1">
                   <p>
                     {active
-                      ? "Session 将在运行终态前归档（Claude Code / Codex / OpenCode / Pi）。"
+                      ? "Session 将在运行终态前归档（Claude Code / Codex / OpenCode / Pi / DSH）。"
                       : evidence?.manifest.capture_error
                         ? `Session 归档失败：${evidence.manifest.capture_error}`
                         : "该 Job 没有可归档的 CLI Session。"}

@@ -1200,6 +1200,25 @@ test("Codex session discovery falls back to HOME when CODEX_HOME is unset", asyn
   }, "session-1");
 
   assert.match(command, /base="\$\{CODEX_HOME:-\$\{HOME:-\/root\}\/\.codex\}\/sessions"/);
+  });
+
+test("DSH session discovery uses the deterministic exact session directory", async () => {
+  let command = "";
+  const sourcePath = "/workspace/.deepsonar-home/.dsh/sessions/project/session-context-1/session.jsonl";
+  const bundle = await CLI_SESSION_ADAPTERS.dsh.exportSession({
+    async run(value) {
+      command = value;
+      return { exitCode: 0, stdout: `${sourcePath}\n`, stderr: "" };
+    },
+    async readText(value) {
+      return value === sourcePath ? '{"type":"session","id":"session-context-1"}\n' : null;
+    },
+  }, "session-context-1");
+  assert.match(command, /\/workspace\/\.deepsonar-home\/\.dsh\/sessions/);
+  assert.match(command, /\/session-context-1\/session\.jsonl/);
+  assert.equal(bundle.cli, "dsh");
+  assert.equal(bundle.artifacts[0]?.sourcePath, sourcePath);
+  assert.equal(bundle.artifacts[0]?.kind, "main");
 });
 
 test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () => {

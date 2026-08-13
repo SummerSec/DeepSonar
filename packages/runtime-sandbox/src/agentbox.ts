@@ -2387,6 +2387,14 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     ...(spec.piExtensions ? { piExtensions: spec.piExtensions } : {}),
   };
   let exec = await adapter.start(adapterContext);
+  const adapterState = {
+    sessionId: spec.contextIdentity?.session_id,
+    sessionFile: spec.contextIdentity?.session_file,
+    finalText: undefined as string | undefined,
+    model: spec.model,
+    cwd: "/workspace",
+    ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
+  };
   // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
   // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
   let stdinClosed = false;
@@ -2405,12 +2413,12 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       throw new Error(`agent stdin 写入失败: ${msg}`);
     }
   };
-  const writeInitialMessage = async (content: string) => writeEncoded(adapter.encodeInput(content));
+  const writeInitialMessage = async (content: string) => writeEncoded(adapter.encodeInput(content, adapterState));
   const writeSteerMessage = async (content: string) => writeEncoded(
-    adapter.encodeSteer ? adapter.encodeSteer(content) : adapter.encodeInput(content),
+    adapter.encodeSteer ? adapter.encodeSteer(content, adapterState) : adapter.encodeInput(content, adapterState),
   );
   const writeFollowUpMessage = async (content: string) => writeEncoded(
-    adapter.encodeFollowUp ? adapter.encodeFollowUp(content) : adapter.encodeInput(content),
+    adapter.encodeFollowUp ? adapter.encodeFollowUp(content, adapterState) : adapter.encodeInput(content, adapterState),
   );
   if (adapter.encodeGetState) await writeEncoded(adapter.encodeGetState());
   const disposeMessageSource = await spec.onRunReady?.({
@@ -2429,13 +2437,6 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
   const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
-  const adapterState = {
-    sessionId: undefined as string | undefined,
-    sessionFile: undefined as string | undefined,
-    finalText: undefined as string | undefined,
-    ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
-  };
-
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
   let progressBuffer = "";
@@ -2543,6 +2544,14 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
             await observeSessionIdentity({ sessionId: adapterState.sessionId, sessionFile: adapterState.sessionFile });
             bindObservedResumeIdentity();
             for (const parsed of decodedEvents) {
+              if (parsed.type === "runtime_outbound" && typeof parsed.content === "string") {
+                await writeEncoded(parsed.content);
+                continue;
+              }
+              if (parsed.type === "runtime_shutdown_ack") {
+                closeStdin("terminal_result");
+                continue;
+              }
               if (parsed.type === "context.compacted" || parsed.type === "context.compaction_unknown") {
                 const safeContextEvent = redactToolTelemetry(parsed, undefined, 0, secretValues) as Record<string, unknown>;
                 spec.onEvent?.(safeContextEvent);
@@ -2666,6 +2675,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                     resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: nudge, sessionId, ...(sessionFile ? { sessionFile } : {}) });
                     resumedInput = nudge;
                   }
+                } else if (adapter.encodeShutdown) {
+                  await writeEncoded(adapter.encodeShutdown(adapterState));
                 } else {
                   closeStdin("terminal_result");
                 }
@@ -2773,7 +2784,10 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       attemptTerminalResult = undefined;
       attemptCloseReason = undefined;
       attemptStderrTail = "";
-      if (adapter.capabilities.incrementalMessages && resumedInput) await writeFollowUpMessage(resumedInput);
+      if (adapter.capabilities.incrementalMessages && resumedInput) {
+        if (spec.provider === "dsh") await writeInitialMessage(resumedInput);
+        else await writeFollowUpMessage(resumedInput);
+      }
     }
   } catch (e) {
     // An exception while handling the current attempt is the latest runner
@@ -2802,9 +2816,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     }
   }
   // 在沙箱销毁前按 CLI 专属规则归档原始 Session。捕获失败不覆盖 Agent 的主运行结果。
-  // DSH headless does not emit its generated Session ID; its governed
-  // post-run discovery adapter is added with the Session capture surface.
-  const rawSession = sessionId && spec.provider !== "dsh"
+  const rawSession = sessionId
     ? await CLI_SESSION_ADAPTERS[spec.provider].exportSession(
         {
           run: (command) => sandbox.run(command, { timeoutMs: 20_000, env: cliEnv }),
