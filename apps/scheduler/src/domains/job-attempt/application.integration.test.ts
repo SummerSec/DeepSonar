@@ -38,7 +38,12 @@ if (!testDatabaseUrl) {
         sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId, { agent_cli: "claude-code" })),
         sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId, { agent_cli: "claude-code" })),
       ]);
-      assert.equal(new Set(second.map((row) => String(row.id))).size, 1);
+      const concurrentIds = new Set(second.map((row) => String(row.id)));
+      assert.equal(concurrentIds.size, 1);
+      assert.equal([...concurrentIds][0], firstAttemptId, "并发 createAttempt 必须复用同一 active Attempt");
+      const [activeBeforeContext] = await sql`
+        SELECT id, status FROM job_attempts WHERE job_id = ${jobId} AND status = 'active'`;
+      assert.equal(String(activeBeforeContext?.id ?? ""), firstAttemptId);
       const initialContext = createJobRuntimeContext({
         attemptId: firstAttemptId,
         adapterId: "pi",
