@@ -9,8 +9,9 @@ test("connection success/failure returns fixed health category and safe URL", as
   const encrypted = encryptSecret("super-secret");
   const originalFetch = globalThis.fetch;
   try {
+    const successUrls: string[] = [];
     globalThis.fetch = (async (input) => {
-      assert.equal(String(input), "https://provider.example/v1/models");
+      successUrls.push(String(input));
       return new Response(JSON.stringify({ data: [] }), { status: 200 });
     }) as typeof fetch;
     const success = await testCredential({
@@ -19,15 +20,22 @@ test("connection success/failure returns fixed health category and safe URL", as
       ...encrypted,
       public_metadata_json: { base_url: "https://provider.example/v1///" },
     });
+    assert.deepEqual(successUrls, ["https://provider.example/v1/models"]);
     assert.equal(success.ok, true);
     assert.equal(success.source_url, "https://provider.example/v1/models");
-    globalThis.fetch = (async () => new Response("Bearer super-secret", { status: 401 })) as typeof fetch;
+
+    const failureUrls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      failureUrls.push(String(input));
+      return new Response("Bearer super-secret", { status: 401 });
+    }) as typeof fetch;
     const failure = await testCredential({
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
       public_metadata_json: { base_url: "https://provider.example/v1" },
     });
+    assert.deepEqual(failureUrls, ["https://provider.example/v1/models"]);
     assert.equal(failure.ok, false);
     assert.equal(failure.category, "authentication");
     assert.equal(failure.detail.includes("super-secret"), false);
@@ -67,6 +75,101 @@ test("status-only probes best-effort cancel successful and failed response bodie
       public_metadata_json: { base_url: "https://provider.example/v1" },
     });
     assert.equal(cancelled, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("connection test falls back on 404/405 and reports the last missing candidate", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  let cancelled = 0;
+  try {
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      const status = urls.length === 1 ? 404 : 405;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("secret upstream body"));
+        },
+        cancel() {
+          cancelled += 1;
+        },
+      }), { status });
+    }) as typeof fetch;
+    const result = await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "https://provider.example/v2" },
+    });
+    assert.deepEqual(urls, [
+      "https://provider.example/v2/models",
+      "https://provider.example/v2/v1/models",
+    ]);
+    assert.equal(cancelled, 2);
+    assert.equal(result.ok, false);
+    assert.equal(result.detail, "Provider 连接失败（unknown，HTTP 405）");
+    assert.equal(result.source_url, "https://provider.example/v2/v1/models");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("preview discovery strips Anthropic compatibility suffix and de-duplicates candidates", async () => {
+  const { listCredentialModelsPreview } = await import("./credential-test.js");
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  try {
+    globalThis.fetch = (async (input, init) => {
+      urls.push(String(input));
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer super-secret");
+      assert.equal(new Headers(init?.headers).get("x-api-key"), "super-secret");
+      if (String(input) === "https://provider.example/models") {
+        return new Response(JSON.stringify({ models: ["claude-sonnet"] }), { status: 200 });
+      }
+      return new Response("not found", { status: urls.length === 2 ? 405 : 404 });
+    }) as typeof fetch;
+    const result = await listCredentialModelsPreview({
+      provider: "anthropic",
+      kind: "llm_provider",
+      public_metadata_json: { base_url: "https://provider.example/api/anthropic/" },
+    }, "super-secret");
+    assert.deepEqual(urls, [
+      "https://provider.example/api/anthropic/v1/models",
+      "https://provider.example/v1/models",
+      "https://provider.example/models",
+    ]);
+    assert.equal(new Set(urls).size, urls.length);
+    assert.deepEqual(result.models, ["claude-sonnet"]);
+    assert.equal(result.source_url, "https://provider.example/models");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("saved discovery uses the ordinary model endpoint", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { listCredentialModels } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  try {
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ data: [{ id: "model-a" }] }), { status: 200 });
+    }) as typeof fetch;
+    const result = await listCredentialModels({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "https://provider.example" },
+    });
+    assert.deepEqual(urls, ["https://provider.example/v1/models"]);
+    assert.equal(result.source_url, "https://provider.example/v1/models");
   } finally {
     globalThis.fetch = originalFetch;
   }

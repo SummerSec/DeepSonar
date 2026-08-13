@@ -24,6 +24,11 @@ type CredentialProbe = {
   settings_config_json?: unknown;
 };
 
+type CredentialRequestInput = Pick<
+  CredentialProbe,
+  "provider" | "kind" | "public_metadata_json" | "settings_config_json"
+>;
+
 export type CredentialProbeResult = {
   ok: boolean;
   detail: string;
@@ -58,13 +63,33 @@ function safeSourceUrl(url: string): string {
   }
 }
 
-function modelsUrl(root: string): string {
+const ANTHROPIC_COMPAT_SUFFIXES = [
+  "/api/claudecode",
+  "/apps/anthropic",
+  "/api/anthropic",
+  "/api/coding",
+  "/claudecode",
+  "/anthropic",
+  "/step_plan",
+  "/coding",
+  "/claude",
+] as const;
+
+function modelUrls(root: string): string[] {
   const normalized = safeSourceUrl(root);
-  if (/\/v\d+$/iu.test(normalized)) return `${normalized}/models`;
-  return `${normalized}/v1/models`;
+  const candidates = /\/v\d+$/iu.test(normalized)
+    ? [`${normalized}/models`, `${normalized}/v1/models`]
+    : [`${normalized}/v1/models`];
+  const lower = normalized.toLowerCase();
+  const suffix = ANTHROPIC_COMPAT_SUFFIXES.find((candidate) => lower.endsWith(candidate));
+  if (suffix) {
+    const compatibilityRoot = normalized.slice(0, -suffix.length).replace(/\/+$/u, "");
+    candidates.push(`${compatibilityRoot}/v1/models`, `${compatibilityRoot}/models`);
+  }
+  return [...new Set(candidates.map(safeSourceUrl))];
 }
 
-function modelRequest(cred: CredentialProbe, secret: string): { url: string; headers: Record<string, string> } {
+function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
   const mapping = PROVIDER_ENV_MAP[cred.provider];
   if (!isProviderKnown(cred.provider) || !mapping) throw new CredentialProbeError("Provider 未在服务器允许列表", "configuration");
   const metadata = projectCredentialMetadata(cred.kind ?? "llm_provider", cred.provider, cred.public_metadata_json);
@@ -75,11 +100,10 @@ function modelRequest(cred: CredentialProbe, secret: string): { url: string; hea
   if (!baseUrl) {
     throw new CredentialProbeError("Credential 缺少 Provider URL 配置（请在 metadata.base_url 或 settingsConfig 中填写）", "configuration");
   }
-  const url = modelsUrl(baseUrl || "https://api.openai.com");
   return {
-    url,
+    urls: modelUrls(baseUrl),
     headers: cred.provider === "anthropic"
-      ? { "x-api-key": secret, "anthropic-version": "2023-06-01" }
+      ? { Authorization: `Bearer ${secret}`, "x-api-key": secret, "anthropic-version": "2023-06-01" }
       : { Authorization: `Bearer ${secret}` },
   };
 }
@@ -126,13 +150,46 @@ function isAbortError(error: unknown): boolean {
       (error as { code?: unknown }).code === "ABORT_ERR"));
 }
 
-/** Release an upstream body on every status-only probe path. */
+/** 在不读取正文的路径释放上游响应体。 */
 async function cancelResponseBody(response: Response): Promise<void> {
   try {
     await response.body?.cancel();
   } catch {
-    // Best-effort cleanup must never mask the fixed health result.
+    // 清理失败不得掩盖固定的健康检查结果。
   }
+}
+
+type CandidateRequestSuccess = { ok: true; url: string; response: Response };
+type CandidateRequestFailure = { ok: false; url: string; status: number };
+type CandidateRequestResult = CandidateRequestSuccess | CandidateRequestFailure;
+
+/** 仅在 404/405 时按顺序尝试下一候选，其他失败立即返回。 */
+async function requestModelCandidate(
+  request: { urls: string[]; headers: Record<string, string> },
+  timeoutMs: number,
+): Promise<CandidateRequestResult> {
+  let lastMissing: CandidateRequestFailure | undefined;
+  for (const url of request.urls) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: request.headers,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      const category: CredentialHealthErrorCategory = isAbortError(error) ? "timeout" : "network";
+      throw new CredentialProbeError(detailForCategory(category), category);
+    }
+    if (response.ok) return { ok: true, url, response };
+
+    await cancelResponseBody(response);
+    const failure: CandidateRequestFailure = { ok: false, url, status: response.status };
+    if (response.status !== 404 && response.status !== 405) return failure;
+    lastMissing = failure;
+  }
+  // modelUrls 始终至少产生一个候选；此处保留显式配置错误以防未来调用约束变化。
+  if (!lastMissing) throw new CredentialProbeError("Provider URL 配置无效", "configuration");
+  return lastMissing;
 }
 
 /** Read a bounded JSON body without ever buffering an untrusted response in full. */
@@ -172,26 +229,63 @@ async function readJsonBounded(response: Response): Promise<unknown> {
   }
 }
 
-async function summarizeResponse(url: string, response: Response): Promise<CredentialProbeResult> {
-  const sourceUrl = safeSourceUrl(url);
-  if (response.ok) {
-    await cancelResponseBody(response);
+function modelRows(payload: unknown): unknown[] {
+  if (!payload || typeof payload !== "object") return [];
+  if ("data" in payload && Array.isArray(payload.data)) return payload.data;
+  if ("models" in payload && Array.isArray(payload.models)) return payload.models;
+  return [];
+}
+
+function modelId(row: unknown): string {
+  if (typeof row === "string") return row;
+  if (row && typeof row === "object" && "id" in row && typeof row.id === "string") return row.id;
+  return "";
+}
+
+async function summarizeResponse(result: CandidateRequestResult): Promise<CredentialProbeResult> {
+  const sourceUrl = safeSourceUrl(result.url);
+  if (result.ok) {
+    await cancelResponseBody(result.response);
     return {
       ok: true,
-      detail: `连接成功（HTTP ${response.status}）`,
+      detail: `连接成功（HTTP ${result.response.status}）`,
       source_url: sourceUrl,
       fetched_at: now(),
     };
   }
-  await cancelResponseBody(response);
-  const category = categoryForStatus(response.status);
-  // Never read or persist upstream body text: it routinely contains URLs,
-  // request IDs, or accidental key echoes.  The status/category is enough.
+  const category = categoryForStatus(result.status);
+  // 不读取或持久化上游正文；其中可能包含 URL、请求 ID 或意外回显的密钥。
   return {
     ok: false,
-    detail: detailForCategory(category, response.status),
+    detail: detailForCategory(category, result.status),
     category,
     source_url: sourceUrl,
+    fetched_at: now(),
+  };
+}
+
+function assertModelCatalogSupported(provider: string): void {
+  if (!['anthropic', 'openai'].includes(provider)) {
+    throw new CredentialProbeError("该 Provider 暂不支持模型目录", "configuration");
+  }
+}
+
+async function listCredentialModelsWithSecret(
+  cred: CredentialRequestInput,
+  secret: string,
+): Promise<{ models: string[]; source_url: string; fetched_at: string }> {
+  assertModelCatalogSupported(cred.provider);
+  const result = await requestModelCandidate(modelRequest(cred, secret), 15_000);
+  if (!result.ok) {
+    const category = categoryForStatus(result.status);
+    throw new CredentialProbeError(detailForCategory(category, result.status), category);
+  }
+  const payload = await readJsonBounded(result.response);
+  const models = normalizeModelCatalog(modelRows(payload).map(modelId));
+  if (models.length === 0) throw new CredentialProbeError(detailForCategory("invalid_response"), "invalid_response");
+  return {
+    models: models.slice(0, CREDENTIAL_MODEL_CATALOG_MAX).map((model) => model.slice(0, CREDENTIAL_MODEL_ID_MAX_LENGTH)),
+    source_url: safeSourceUrl(result.url),
     fetched_at: now(),
   };
 }
@@ -202,49 +296,14 @@ export async function listCredentialModels(cred: CredentialProbe): Promise<{
   source_url: string;
   fetched_at: string;
 }> {
-  if (!['anthropic', 'openai'].includes(cred.provider)) {
-    throw new CredentialProbeError("该 Provider 暂不支持模型目录", "configuration");
-  }
+  assertModelCatalogSupported(cred.provider);
   let secret: string;
   try {
     secret = decryptSecret(cred);
   } catch {
     throw new CredentialProbeError("Credential 解密失败", "configuration");
   }
-  const request = modelRequest(cred, secret);
-  const sourceUrl = safeSourceUrl(request.url);
-  let response: Response;
-  try {
-    response = await fetch(sourceUrl, { headers: request.headers, signal: AbortSignal.timeout(15_000) });
-  } catch (error) {
-    const category: CredentialHealthErrorCategory = isAbortError(error)
-      ? "timeout"
-      : "network";
-    throw new CredentialProbeError(detailForCategory(category), category);
-  }
-  if (!response.ok) {
-    await cancelResponseBody(response);
-    const category = categoryForStatus(response.status);
-    throw new CredentialProbeError(detailForCategory(category, response.status), category);
-  }
-
-  const payload = await readJsonBounded(response) as { data?: unknown; models?: unknown };
-  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
-  const models = normalizeModelCatalog(rows.map((row) => {
-    if (typeof row === "string") return row;
-    if (row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string") {
-      return String((row as { id: string }).id);
-    }
-    return "";
-  }));
-  if (models.length === 0) throw new CredentialProbeError(detailForCategory("invalid_response"), "invalid_response");
-  // normalizeModelCatalog enforces the same bounded limits used by the DB;
-  // retain the constants in this module as an explicit contract guard.
-  return {
-    models: models.slice(0, CREDENTIAL_MODEL_CATALOG_MAX).map((model) => model.slice(0, CREDENTIAL_MODEL_ID_MAX_LENGTH)),
-    source_url: sourceUrl,
-    fetched_at: now(),
-  };
+  return listCredentialModelsWithSecret(cred, secret);
 }
 
 /** Probe an unsaved credential without writing its secret or model catalog. */
@@ -253,27 +312,7 @@ export async function listCredentialModelsPreview(
   secret: string,
 ): Promise<{ models: string[]; source_url: string; fetched_at: string }> {
   if (!secret.trim()) throw new CredentialProbeError("Credential 缺少 API Key", "configuration");
-  if (!['anthropic', 'openai'].includes(cred.provider)) {
-    throw new CredentialProbeError("该 Provider 暂不支持模型目录", "configuration");
-  }
-  const request = modelRequest(cred as CredentialProbe, secret);
-  const sourceUrl = safeSourceUrl(request.url);
-  let response: Response;
-  try {
-    response = await fetch(sourceUrl, { headers: request.headers, signal: AbortSignal.timeout(15_000) });
-  } catch (error) {
-    throw new CredentialProbeError(detailForCategory(isAbortError(error) ? "timeout" : "network"), isAbortError(error) ? "timeout" : "network");
-  }
-  if (!response.ok) {
-    await cancelResponseBody(response);
-    const category = categoryForStatus(response.status);
-    throw new CredentialProbeError(detailForCategory(category, response.status), category);
-  }
-  const payload = await readJsonBounded(response) as { data?: unknown; models?: unknown };
-  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
-  const models = normalizeModelCatalog(rows.map((row) => typeof row === "string" ? row : row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string" ? String((row as { id: string }).id) : ""));
-  if (models.length === 0) throw new CredentialProbeError(detailForCategory("invalid_response"), "invalid_response");
-  return { models: models.slice(0, CREDENTIAL_MODEL_CATALOG_MAX).map((model) => model.slice(0, CREDENTIAL_MODEL_ID_MAX_LENGTH)), source_url: sourceUrl, fetched_at: now() };
+  return listCredentialModelsWithSecret(cred, secret);
 }
 
 /**
@@ -302,12 +341,8 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
         fetched_at: now(),
       };
     }
-    const request = modelRequest(cred, secret);
-    const response = await fetch(safeSourceUrl(request.url), {
-      headers: request.headers,
-      signal: AbortSignal.timeout(10_000),
-    });
-    return await summarizeResponse(request.url, response);
+    const result = await requestModelCandidate(modelRequest(cred, secret), 10_000);
+    return await summarizeResponse(result);
   } catch (error) {
     if (error instanceof CredentialProbeError) {
       return { ok: false, detail: error.message, category: error.category, fetched_at: now() };
