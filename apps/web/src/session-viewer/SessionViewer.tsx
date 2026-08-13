@@ -179,7 +179,7 @@ export function SessionViewer({
 
       {downloadError && <p className="text-[11px] text-red-300">{downloadError}</p>}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
         <StatChip label="条目" value={String(parsed.items.length)} />
         <StatChip label="工具调用" value={String(counts.tool_call ?? 0)} />
         <StatChip
@@ -193,6 +193,12 @@ export function SessionViewer({
         <StatChip
           label="缓存读"
           value={formatTokenCount(parsed.totals.cacheRead)}
+          title="cache_read_input_tokens：从 prompt cache 命中读取"
+        />
+        <StatChip
+          label="缓存写"
+          value={formatTokenCount(parsed.totals.cacheWrite)}
+          title="cache_creation_*：本轮写入/建立 cache；多为 0 表示沿用既有 cache"
         />
         <StatChip
           label="缓存命中率"

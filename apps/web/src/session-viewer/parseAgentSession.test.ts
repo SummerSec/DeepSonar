@@ -216,3 +216,25 @@ test("Claude usage totals feed cache hit rate", () => {
   assert.equal(result.totals.cacheRead, 900);
   assert.equal(cacheHitRate(result.totals), 0.9);
 });
+
+test("Claude nested cache_creation ephemeral fields count as cache write", () => {
+  const text = JSON.stringify({
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: "warm",
+      usage: {
+        input_tokens: 50,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation: {
+          ephemeral_5m_input_tokens: 2000,
+          ephemeral_1h_input_tokens: 500,
+        },
+      },
+    },
+  });
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  assert.equal(result.totals.cacheWrite, 2500);
+});

@@ -142,6 +142,25 @@ function pushUsage(
   totals.cacheWrite += tokens.cacheWrite ?? 0;
 }
 
+/** Claude 可能把写入拆在 cache_creation.ephemeral_*，而不只顶层 cache_creation_input_tokens。 */
+function cacheWriteFromUsage(usage: Record<string, unknown>): number | undefined {
+  const top =
+    asNumber(usage.cache_creation_input_tokens)
+    ?? asNumber(usage.cache_write_tokens)
+    ?? asNumber(usage.cache_creation_tokens);
+  const nested = asRecord(usage.cache_creation);
+  if (nested) {
+    const parts = [
+      asNumber(nested.ephemeral_5m_input_tokens) ?? 0,
+      asNumber(nested.ephemeral_1h_input_tokens) ?? 0,
+      asNumber(nested.ephemeral_input_tokens) ?? 0,
+    ];
+    const nestedSum = parts.reduce((a, b) => a + b, 0);
+    if (nestedSum > 0) return (top ?? 0) > 0 ? Math.max(top ?? 0, nestedSum) : nestedSum;
+  }
+  return top;
+}
+
 function extractUsage(rec: Record<string, unknown>): SessionTimelineItem["tokens"] | undefined {
   const usage = asRecord(rec.usage) ?? asRecord(rec.token_usage) ?? asRecord(rec.tokens);
   if (usage) {
@@ -152,9 +171,7 @@ function extractUsage(rec: Record<string, unknown>): SessionTimelineItem["tokens
         asNumber(usage.cache_read_input_tokens)
         ?? asNumber(usage.cache_read_tokens)
         ?? asNumber(usage.cached_tokens),
-      cacheWrite:
-        asNumber(usage.cache_creation_input_tokens)
-        ?? asNumber(usage.cache_write_tokens),
+      cacheWrite: cacheWriteFromUsage(usage),
     };
   }
   if (rec.type === "token_count" || rec.type === "token_usage") {
@@ -162,7 +179,7 @@ function extractUsage(rec: Record<string, unknown>): SessionTimelineItem["tokens
       input: asNumber(rec.input_tokens) ?? asNumber(rec.input),
       output: asNumber(rec.output_tokens) ?? asNumber(rec.output),
       cacheRead: asNumber(rec.cache_read_input_tokens),
-      cacheWrite: asNumber(rec.cache_creation_input_tokens),
+      cacheWrite: cacheWriteFromUsage(rec),
     };
   }
   return undefined;
