@@ -9,9 +9,9 @@ provider-specific CLI protocols.
 real Agent CLIs. Each registered adapter declares:
 
 - a stable adapter id and installed CLI version;
-- required capabilities (`streamEvents`, `controlMcp`, `completionGate`,
-  `sessionCapture`, and `contextCompaction`), plus optional incremental
-  messaging and reasoning support;
+- required capabilities (`streamEvents`, `completionGate`, `sessionCapture`,
+  and `contextCompaction`), plus explicit control-channel capabilities and optional
+  incremental messaging and reasoning support;
 - the governed runtime image keys on which it may run;
 - a fixed command invocation and structured input/output codec.
 - 显式的同 session 恢复操作，用于进程级故障恢复。运行中 stdin 增量消息与
@@ -32,8 +32,9 @@ The current registry contains:
 | `open-code` | OpenCode 1.18.15 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | Structured `reasoning`/`thinking` parts when emitted |
 | `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `message_update` 的结构化文本/思考事件 |
 
-四个适配器均声明 `contextCompaction: true`，只有上下文策略受支持时才准入。Pi
-不依赖 MCP 控制通道；其平台控制能力通过 Job 级 HTTP Capability API 提供。
+四个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
+只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，
+每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 不依赖 MCP，只使用 HTTP Capability API。
 
 宿主只恢复明确的临时上游故障（HTTP 408/429/500/502/503/504、timeout 和
 network）。它在同一沙箱内按已捕获的精确 session ID 最多恢复三次，并使用

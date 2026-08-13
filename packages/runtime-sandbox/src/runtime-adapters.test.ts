@@ -59,9 +59,13 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-openharmony-audit").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("codex", "deepsonar-chrome-fuzz").id, "codex");
+  for (const id of ["claude-code", "codex", "open-code", "pi"] as const) {
+    assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.platformControlApi, true);
+  }
+  for (const id of ["claude-code", "codex", "open-code"] as const) {
+    assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, true);
+  }
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.controlMcp, false);
-  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.platformControlApi, true);
-  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.codex.capabilities.platformControlApi, false);
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
 });
 

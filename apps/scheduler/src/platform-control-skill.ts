@@ -19,8 +19,8 @@ description: 使用受治理的 DeepSonar Job 控制 API 提交运行提案、�
 ## 传输方式
 
 本地 \`deepsonar-control\` MCP 和 Job 级 HTTP 控制 API 最终进入同一 Scheduler 事件流。
-Pi 只能使用 HTTP API；其他 CLI 对每个逻辑操作必须在 MCP 与 API 中二选一，不得重复提交，
-也不得在一次已接受的调用后切换通道。普通文本不是提交。
+Pi 只能使用 HTTP API；其他 CLI 由 Agent 对每个逻辑操作自行在 MCP 与 API 中自行二选一，不得重复提交，
+也不得在一次已接受的调用后切换通道。HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。普通文本不是提交。
 
 ## 能力发现与鉴权
 

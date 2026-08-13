@@ -9,7 +9,7 @@ export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-sum
 export interface AgentCliCapabilities {
   streamEvents: boolean;
   controlMcp: boolean;
-  /** Job 级 HTTP 控制 API 的发现与调用，不注册 MCP。 */
+  /** 平台向该运行时提供 Job 级 HTTP 控制 API；可与 controlMcp 并存。 */
   platformControlApi: boolean;
   incrementalMessages: boolean;
   completionGate: boolean;
@@ -579,7 +579,7 @@ function sandboxClaude(
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.220",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   // Claude Code 2.1.220 is the governed minimum image version.  That
   // contract supports partial stream-json frames; do not pass this flag to
@@ -616,7 +616,7 @@ function sandboxCodex(sandbox: Sandbox, context: AdapterStartContext, sessionId?
 const codex = Object.freeze<RuntimeAdapter>({
   id: "codex",
   version: "0.147.0",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxCodex(context.sandbox, context),
   resume: (context) => sandboxCodex(context.sandbox, context, context.sessionId),
@@ -627,7 +627,7 @@ const codex = Object.freeze<RuntimeAdapter>({
 const openCode = Object.freeze<RuntimeAdapter>({
   id: "open-code",
   version: "1.18.15",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
     // OpenCode's governed minimum supports --thinking and emits a structured
