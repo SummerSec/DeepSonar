@@ -206,7 +206,7 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
   if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (!["claude-code", "codex", "open-code", "pi"].includes(key)) return fallback;
+    if (!["claude-code", "codex", "open-code", "pi", "dsh"].includes(key)) return fallback;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
     out[key] = value;
   }
@@ -1429,6 +1429,7 @@ export const CONFIG_FILE_PATHS: Record<string, string> = {
   codex: ".codex/config.toml",
   "open-code": ".opencode/config.json",
   pi: ".pi/agent/models.json",
+  dsh: ".dsh/settings.yaml",
 };
 
 export function validateConfigFilePath(agentCli: string, p: string): string | null {

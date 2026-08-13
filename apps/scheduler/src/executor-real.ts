@@ -603,7 +603,7 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   // Historical Jobs created before platform defaults were frozen may lack
   // agent_cli; use the code-level compatibility constant, never AGENT_PROVIDER.
   const cliName = snapshot.agent_cli || PLATFORM_DEFAULT_AGENT_CLI;
-  const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex" | "pi";
+  const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex" | "pi" | "dsh";
   const model = snapshot.model ?? undefined;
   const reasoning = snapshot.reasoning ?? undefined;
   const rules = await rulesForProject(sql, job.project_id as string);
@@ -716,6 +716,13 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       if (mapping.baseUrlKey) {
         env[mapping.baseUrlKey] = config.gateway.sandboxUrl;
       }
+    }
+    if (provider === "dsh") {
+      for (const key of mapping.secretKeys) delete env[key];
+      if (mapping.baseUrlKey) delete env[mapping.baseUrlKey];
+      env.DEEPSEEK_API_KEY = jt.plaintext;
+      env.DEEPSEEK_BASE_URL = config.gateway.sandboxUrl;
+      runtimeGatewayRouted = true;
     }
     if (provider === "claude-code") {
       const gatewayBase = config.gateway.sandboxUrl;

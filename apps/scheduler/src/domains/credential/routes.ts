@@ -60,7 +60,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
                         agent_cli, settings_config_json, meta_json,
                         created_at, created_by`;
 
-  const AgentCliSchema = z.enum(["claude-code", "codex", "open-code", "pi"]);
+  const AgentCliSchema = z.enum(["claude-code", "codex", "open-code", "pi", "dsh"]);
   const CredentialBody = z.object({
     name: z.string().trim().min(1).max(100),
     kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]).default("llm_provider"),
@@ -1132,7 +1132,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const actorProjectId = req.actor?.projectId ?? null;
     const queryResult = z.object({
-      agent_cli: z.enum(["claude-code", "open-code", "codex", "pi"]).default("claude-code"),
+      agent_cli: z.enum(["claude-code", "open-code", "codex", "pi", "dsh"]).default("claude-code"),
       model: z.string().trim().min(1).max(200).optional(),
     }).safeParse(req.query);
     if (!queryResult.success) return reply.code(400).send({ error: "兼容性查询参数非法" });
