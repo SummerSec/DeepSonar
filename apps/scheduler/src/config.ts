@@ -93,8 +93,8 @@ export const config = {
   },
 
   timeouts: {
-    auditSec: int("DEFAULT_AUDIT_TIMEOUT_SEC", 7200),
-    verifySec: int("DEFAULT_VERIFY_TIMEOUT_SEC", 3600),
+    auditSec: int("DEFAULT_AUDIT_TIMEOUT_SEC", 18_000),
+    verifySec: int("DEFAULT_VERIFY_TIMEOUT_SEC", 10_800),
     /** provision（起沙箱）独立超时（§8.3）；claimed/provisioning 超过该时长由 reaper 判 failed */
     provisionSec: int("PROVISION_TIMEOUT_SEC", 300),
     leaseTtlSec: int("LEASE_TTL_SEC", 120),

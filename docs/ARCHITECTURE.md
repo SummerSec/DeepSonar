@@ -661,8 +661,8 @@ MAX_GLOBAL_JOBS=20             # global_settings 未配置时的启动默认
 MAX_JOBS_PER_PROJECT=5         # global_settings 未配置时的启动默认
 PROVISION_CONCURRENCY=2        # global_settings.maxConcurrentProvisioning 缺失时的 fallback；DB claim admission，不是 semaphore
 
-DEFAULT_AUDIT_TIMEOUT_SEC=7200
-DEFAULT_VERIFY_TIMEOUT_SEC=3600
+DEFAULT_AUDIT_TIMEOUT_SEC=18000
+DEFAULT_VERIFY_TIMEOUT_SEC=10800
 LEASE_TTL_SEC=120
 HEARTBEAT_INTERVAL_SEC=30
 REAPER_INTERVAL_SEC=30
