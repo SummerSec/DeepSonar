@@ -6,6 +6,33 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+## [0.1.30] - 2026-08-15
+
+### Added
+
+- Added `standard | compose` task kinds with explicit confirmed-Finding seed selection, immutable seed snapshots, read-only Canvas projection, governed retry validation, and matching Tasks/Findings Web entry points. Closes #161.
+- Added DeepSeek Harness Provider YAML for arbitrary Pi-AI routes, task/default execution modes, model-owned third-party reasoning mappings, and governed subagent routing through `dsh-reasoning-settings`.
+- Added searchable multi-select filters and redesigned Canvas broadcast and Agent Session inspection surfaces.
+
+### Changed
+
+- Provider-owned reasoning now uses each CLI's native contract: Claude Code `effortLevel`, Codex `model_reasoning_effort`, OpenCode `--variant`, Pi `--thinking`, and canonical DSH effort IDs mapped by model YAML.
+- Runtime and Scheduler session handling now preserve exact CLI session identity, bounded diagnostics, cancellation, provisioning reconciliation, and API-only control semantics across all governed Agent CLIs.
+
+### Fixed
+
+- Fixed Finding verification, human evidence priority, convergence, shared-asset cleanup, and project runtime-image policy boundaries.
+- Fixed the runtime-image marketplace CI smoke after RoleConfig reasoning removal and made its Job cleanup retry PostgreSQL deadlocks without leaking active real-mode sandboxes.
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.30` tag; runtime image tags use `0.1.30` without the `v` prefix.
+- Database schema is now v34. Existing databases must be rebuilt from `database/schema.sql`; the project intentionally provides no in-place migration path.
+
+### Runtime Images
+
+- Base, audit, and Kali images install the checksum-pinned `dsh-reasoning-settings@0.3.0` host plugin alongside the official DSH 0.1.0-rc.6 runtime; generated headless Cordis compositions mount its inheritance and subagent-routing controls.
+
 ## [0.1.29] - 2026-08-14
 
 ### Fixed
@@ -191,6 +218,7 @@ Changes intended for the next release go here before a release section is dated 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.30]: https://github.com/SummerSec/DeepSonar/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/SummerSec/DeepSonar/compare/v0.1.28...v0.1.29
 [0.1.28]: https://github.com/SummerSec/DeepSonar/compare/v0.1.27...v0.1.28
 [0.1.27]: https://github.com/SummerSec/DeepSonar/compare/v0.1.26...v0.1.27
