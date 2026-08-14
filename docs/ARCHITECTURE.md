@@ -175,8 +175,8 @@ loop:
   1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
   2. 原子 claim（DB advisory lock 串行化配额判断）→ 读取 `global_settings.effective_rules` 的全局/每项目 cap，再按“Provider → Credential → Model ID → Agent CLI”检查资源配额 → 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher；规则更新也会 notify，后续 claim 热生效
   3. Canvas：创建/更新 job 节点（running）
-  4. Runtime：起沙箱（agentbox-sdk），注入任务包（repo gitClone、task.json、hooks/MCP 白名单工具）
-  5. 启动 Agent（claude-code server 进程模式）；事件经 SDK 控制通道回传，调度器维护 lease
+  4. Runtime：起沙箱（agentbox-sdk），注入任务包、静态控制 Skill 与冻结 API operation allowlist
+  5. 启动冻结的 Agent CLI；文本流经 Runtime Adapter 回传，语义事件经 Job 级控制 API 回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
   7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
 ```
@@ -184,13 +184,14 @@ loop:
 ### 4.3 审计 → 验证链（单一决策点）
 
 1. `hub_reason` 根据目标派发 `audit` 等角色，审计角色输出结构化 Finding
-2. Finding 只是待证实假设；Scheduler 按 `minVerifySeverity` 决定自动验证范围，低于阈值的不派生 Verify，缺失或未知 severity 保守验证；设置为 `info` 即严格全量模式
-3. 派生前按 `fingerprint` 去重；同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
-4. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
-5. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
-6. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
-7. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
-8. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
+2. Finding 只是待证实假设；Scheduler 按 `minVerifySeverity` 决定自动验证范围，低于阈值的不派生 Verify，且 Hub 对该 Finding 派发 review/test 会在任何 Job/节点副作用前稳定拒绝；缺失或未知 severity 保守验证，设置为 `info` 即严格全量模式
+3. 派生前按 `fingerprint` 去重；Hub 的 review/test 若引用 Finding，必须只引用一个同画布 canonical Finding 节点，Scheduler 据此冻结 `jobs.finding_id` 与 `verification_followup`。多 Finding、映射歧义或 Verify trigger 错配使整次 Hub 决策回滚；analyze/explore 可保留多来源引用
+4. 同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
+5. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
+6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
+7. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
+8. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
+9. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
 
 ### 4.4 Scheduler bounded contexts（Issue #37）
 
@@ -219,6 +220,7 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 
 - `request_human` → Job 转 `waiting_human`，Plane 标 Blocked，画布出 human 节点
 - 人处理完后调用 `POST /jobs/{id}/resume` → Job 重新入队（`pending`），恢复上下文从 events/findings 表重建
+- 若同画布等待的是 `hub_reason`，Finding 详情可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` 仍只有系统 Verify 能写
 - 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径，而是用 verdict=`needs_human` 把 Finding 收口为可报告终态
 
 恢复或重启后的每次执行均可在 Job 详情投影 Attempt、effect 和资源身份；`agent_run`、`agent_resume`、`cancel`、`timeout` 的效果记录用于区分可继续的同会话恢复和不可安全重放的未知窗口。
@@ -438,7 +440,7 @@ Job 事件仍必须经过本摄入硬门。
 系统按 Job 冻结快照动态组装：
 
 - `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令；两份文件由同一内容生成并保持逐字一致
-- 平台内置且不可覆盖的静态 `deepsonar-control` Skill：只描述 capabilities/OpenAPI discovery、短期 Bearer Token、UUID `Idempotency-Key`、错误处理与 MCP/API 选择规则；Skill 内容对所有 Job 相同，不携带动态权限清单
+- 平台内置且不可覆盖的静态 `deepsonar-control` Skill：只描述 capabilities/OpenAPI discovery、短期 Bearer Token、UUID `Idempotency-Key`、HTTP 错误处理与 API-only 规则；Skill 内容对所有 Job 相同，不携带动态权限清单
 - Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
 - 非敏感环境变量、白名单 `env_keys`、按 Job 签发的短期模型凭据，以及只在执行期注入的短期平台 API capability token；两类 token 权限域与存储表完全分离
 - 画布创建时冻结的 Finding 协议说明：模式、默认/允许 profile、CVSS 默认/接受版本和必评分 profile；运行中以协议名和来源显著标识
@@ -447,19 +449,16 @@ Job 事件仍必须经过本摄入硬门。
 
 Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结，Hub 与 Worker 共用。该开关只控制目标网络能力；模型通道始终经 Scheduler Model Gateway 和 Scheduler-owned gateway proxy。允许出网时沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge。proxy 同时加入两网，但只转发固定 Scheduler 上游的 `/gateway` 与 `/control/v1/`，拒绝 CONNECT、任意目标和其他路径。
 
-**平台控制双通道**：现有 MCP 控制通道保持不变；需要同步业务响应的 CLI 可使用平台 API。两条通道最终汇入同一个运行中 Job semantic handler：
+**平台控制 API-only**：所有治理 CLI 都由 Agent 使用自身 HTTP 工具调用 Job 级控制 API；Runtime Adapter 只驱动 CLI 协议，不代发 HTTP，也不注入或回退控制 MCP。调用最终汇入同一个运行中 Job semantic handler：
 
 - SDK normalized event stream → 文本/进度 → `progress` 事件
-- 系统按 Job 动态注入本地 `deepsonar-control` MCP；MCP 只暴露、执行同源严格 schema 校验并返回 `schema_validated / pending_scheduler_validation`，不声称业务已落库，不写文件、不连接调度器
-- Scheduler 同时提供独立于管理 OpenAPI 的 Job 控制面：`GET /control/v1/jobs/:jobId/capabilities`、`GET /control/v1/jobs/:jobId/openapi.json` 与 `POST /control/v1/jobs/:jobId/operations/:operationId`。前两者和 OpenAPI paths 都按当前 capability token 的精确 operation allowlist 过滤；写调用要求 UUID `Idempotency-Key`，同 key 重放不得重复执行，跨 operation 重用返回冲突。
-- Pi 使用同一 Job 控制面但不注入 MCP：静态 `deepsonar-control` Skill 引导先调用 `/agent/capabilities_list`，再按冻结 operation 调用 HTTP API。Pi 运行时固定为 `pi --mode rpc --no-approve --no-extensions`，通过持久 JSONL framer 处理任意字节分块；只有 `agent_settled` 作为 Agent 侧静止信号，终态仍必须经过 `mark_job_done` 完成门。
+- Scheduler 提供独立于管理 OpenAPI 的 Job 控制面：`GET /control/v1/jobs/:jobId/capabilities`、`GET /control/v1/jobs/:jobId/openapi.json` 与 `POST /control/v1/jobs/:jobId/operations/:operationId`。前两者和 OpenAPI paths 都按当前 capability token 的精确 operation allowlist 过滤；写调用要求 UUID `Idempotency-Key`，同 key 重放不得重复执行，跨 operation 重用返回冲突。
+- 静态 `deepsonar-control` Skill 引导 Agent 先读取 capabilities/OpenAPI，再按冻结 operation 调用 HTTP API。Pi 运行时固定为 `pi --mode rpc --no-approve --no-extensions`，通过持久 JSONL framer 处理任意字节分块；只有 `agent_settled` 作为 Agent 侧静止信号，终态仍必须经过 `mark_job_done` 完成门。
 - Job 进入真实执行时，Scheduler 从冻结的 `agent_snapshot_json.platform_tools` 签发独立短期 capability token，仅存 hash 并绑定 `job_id`、`project_id`、operation 列表和 TTL，通过 `DEEPSONAR_API_BASE_URL` / `DEEPSONAR_API_TOKEN` 注入 CLI 环境。它不复用 Credential/Model Gateway token，不写回 snapshot、workspace、运行清单、日志或 evidence，并在成功、失败、超时、取消或孤儿终态撤销；鉴权还要求 Job 仍在运行。
-- API operation 不直接复制 `event-ingestion`：路由调用进程内注册的当前 Job runtime handler；只读 operation 返回冻结角色/资产目录，语义写 operation 复用 MCP 的 `onSemanticEvent` 闭包、payload_file/共享资产宿主读取、计数和 Hub/done 延迟终态，再进入 Scheduler 权威事务。当前 Claude Code、Codex 与 OpenCode 可由 Agent 对每个逻辑操作自行选择 MCP 或 API，但相同语义写入不得跨通道重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 仅使用 API。
-- 宿主从 Claude `stream-json` 的 `assistant` `tool_use` 块只登记 bounded pending；收到同一 `tool_use_id` 的合法非错误 `user.tool_result`（`is_error` 省略或为 `false`）后才转换为 `{v:1,event_id(UUID),type,payload}`，串行 `await onSemanticEvent`。显式错误或畸形 `is_error` 结果丢弃 pending，Agent 可用新的 call id 重试；重复结果/重放不重复释放。
-- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边。MCP 子进程与 Scheduler 之间没有同步业务 ack；如需该能力，须另立受治理宿主 IPC 设计。
+- API operation 不直接复制 `event-ingestion`：路由调用进程内注册的当前 Job runtime handler；只读 operation 返回冻结角色/资产目录，语义写 operation 复用 `onSemanticEvent`、payload_file/共享资产宿主读取、计数和 Hub/done 延迟终态，再进入 Scheduler 权威事务。API 返回 `accepted` 只表示 Scheduler 接收了输入；HTTP 错误要求 Agent 修正请求，不允许切换控制传输。
+- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边；HTTP 响应同步返回最终接收或稳定拒绝结果。
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
-- 非 JSON/未知 runtime 行、未知控制命名空间工具和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；控制工具的 normalized telemetry 仅保留 toolName/callId 与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列
-- 同一 `tool_use.id` 只有合法非错误 `tool_result` 才生成一次语义事件；pending 有上限，Job 终态会丢弃残留并记低基数告警。`list_available_roles` 仅返回动态角色清单，不生成语义事件。控制事件不依赖 Agent 可写文件，Hub 决策、人工请求与 done 同样通过动态工具提交
+- 非 JSON/未知 runtime 行、伪造的控制 MCP tool call 和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；平台控制 telemetry 仅保留 operation/调用标识与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列。
 - 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
 - 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限。仅当 Job 冻结能力 `incrementalMessages=true` 时订阅（Claude Code / Pi；Codex / OpenCode 不追加）。每次投递写入 `canvas_broadcasts`（`planned`→`injected`|`unknown`），`injected` 仅表示平台已调用 sendMessage 成功，不表示模型已读；查询 `GET /canvases/:id/broadcasts`。产品摘要见 `DESIGN.md` §4.2
 - 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
@@ -509,7 +508,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；Anthropic 兼容子路径按有序候选探测，仅 HTTP 404/405 允许剥离子路径后继续，鉴权、限流、网络、超时与上游错误均立即失败且不读取错误正文。启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
-平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 同时派生既有 MCP allowlist 与 API operation allowlist；关闭项不会出现在当次控制 MCP、动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。现有 capability 当前同时映射 MCP/API；后续新增平台能力只注册 API operation，不再新增 MCP 工具。Pi 的控制能力仅走 HTTP API，且必须使用 `get_state` 返回的精确 `sessionFile` 恢复，不选择 latest。
+平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 只派生 API operation allowlist；关闭项不会出现在动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。所有治理 CLI 的控制能力只走 HTTP API；冻结 adapter 缺少 `platformControlApi` 或 operation 时执行前 fail closed。Pi 恢复必须使用 `get_state` 返回的精确 `sessionFile`，不选择 latest。
 
 ### 8.3 可信运行镜像与独立市场
 
@@ -529,7 +528,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 - `runtime_data_layers` / `runtime_data_layer_versions` 为 Trivy/OSV 等离线库预留可版本化、只读、digest 准入模型；尚未准入的数据层不得挂载进运行沙箱。
 - Shared Assets 使用 `shared_assets`（逻辑对象）+ append-only `shared_asset_versions` + SHA-256 `shared_asset_blobs`（CAS 元数据）分离内容与引用；字节经可插拔 **BlobStore**（`BLOB_STORE=fs|s3`）存放，逻辑键为 `shared-assets/sha256/<aa>/<sha256>`，**不**进入 PostgreSQL JSONB、画布或 Graph YAML。`fs` 落在 `BLOB_DIR`；`s3` 为任意 S3 兼容 API（AWS / MinIO / Garage / SeaweedFS / 云 OSS 等，**不锁定厂商**），Job 注入前 `materializeLocal` 到本地缓存。详见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)。scope 为 `platform | project | finding`：项目资产自动选择，platform 仅在项目显式 opt-in 后选择，finding 仅对同项目且 Job 绑定该 `finding_id` 的 review/test/verify/report/Hub 链选择。
 - Job 创建事务计算排序后的精确 version/hash/path 清单和 `shared_assets_revision`，写入 `agent_snapshot_json` 与 `job_shared_asset_versions`；后续资产更新不会改变已建 Job。prompt 只说明只读目录和 bounded catalog，不注入文件正文。Agent publish 只能从普通 `/workspace` 的单一已打开正则文件描述符做有界读取，拒绝 symlink、路径逃逸和平台运行/CLI 用户配置目录自复制；宿主执行前后校验 Job/lease/sandbox，数据库触发器再锁 Job 做原子终态门禁。Agent 不能 publish platform，也不能覆盖 human/platform key，自有 key 仅追加版本。
-- Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，受限 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。CLI 的可写 `HOME=/workspace/.deepsonar-home` 位于该只读挂载父树之外，因此 Docker 创建 `.deepsonar` 挂载父目录时不会阻断 CLI 用户目录初始化。任意 host bind、任意 target、无标签卷和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 均只按可信标签删除终态/孤儿 Job 卷。
+- Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，受限 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。CLI 的可写 `HOME=/workspace/.deepsonar-home` 位于该只读挂载父树之外，因此 Docker 创建 `.deepsonar` 挂载父目录时不会阻断 CLI 用户目录初始化。任意 host bind、任意 target 和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 删除失败时做 3 次指数退避；启动对账合并可信 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，经 Name/Driver/Scope/可选标签复核后也能回收无标签历史孤儿卷。对账完成后更新残留孤儿数量和最大年龄 gauge，清理失败单独累计 counter。
 - 上传由 Scheduler 服务端计算 SHA-256，并在 scope 级 advisory transaction lock 内执行配额检查；内容类型与扩展名必须同时命中白名单，单文件与 scope 总额均受配置约束。归档只改变逻辑状态，历史版本与 Job 引用不删；CAS 垃圾回收只能在无 version/Job 引用并过保留期后执行。HTTP 目录和本地 `list_shared_assets` 均按 `limit/offset` 分页；真正的按需 fetch 需要独立可信 IPC，当前不开放写 socket 或控制文件。
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
