@@ -489,6 +489,19 @@ expect(
     (releaseWorkflow.match(/DIGEST: \$\{\{ steps\.publish\.outputs\.digest \}\}/g) ?? []).length >= 5,
   "version tags must share one clean runnable canonical digest while src tags retain provenance",
 );
+const chromeReleaseBlock = releaseWorkflow.slice(
+  releaseWorkflow.indexOf("  chrome-images:"),
+  releaseWorkflow.indexOf("  kali-minimal:"),
+);
+expect(
+  chromeReleaseBlock.includes('mapfile -t amd64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$amd64_source" "linux/amd64")') &&
+    chromeReleaseBlock.includes('mapfile -t arm64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$arm64_source" "linux/arm64")') &&
+    chromeReleaseBlock.includes('source_refs=("${amd64_sources[0]}" "${arm64_sources[0]}")') &&
+    chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"') &&
+    chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"') &&
+    !chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"'),
+  "Chrome release must strip per-architecture attestations before canonical assembly and cross-registry copy",
+);
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
