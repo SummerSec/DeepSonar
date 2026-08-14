@@ -822,6 +822,7 @@ function sandboxPi(sandbox: Sandbox, context: AdapterStartContext, sessionFile?:
   let command = `pi --mode rpc --no-approve --no-extensions --session-dir /workspace/.deepsonar-home/.pi/agent${extensions}`;
   if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
+  if (context.reasoning) command += ` --thinking ${shellQuote(context.reasoning)}`;
   return sandbox.runAsync(command, { cwd: context.cwd, env: context.env });
 }
 
@@ -897,6 +898,14 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
 - id: llm-pi-ai
   name: '@deepseek-ai/dsh-llm-pi-ai'
   config: ${JSON.stringify(context.dshProvider.config)}
+
+- id: reasoning-settings
+  name: dsh-reasoning-settings
+  config:
+    subagentRouting: true
+    inheritRoute: true
+    resolveModelOnly: true
+    inheritReasoning: true
 
 - id: sandbox
   name: '@deepseek-ai/dsh-sandbox-local'

@@ -3,7 +3,7 @@ import test from "node:test";
 import { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings, parseDshPiAiSettings } from "./dsh-pi-ai-settings.js";
 
 const thirdPartySettings = {
-  reasoning: "thinking-v2.5",
+  reasoning: "high",
   context_window_tokens: 128_000,
   config: `llm-pi-ai:
   providers:
@@ -16,6 +16,7 @@ const thirdPartySettings = {
           reasoningEfforts:
             low: low
             high: high
+            max: thinking-v2.5
 agent-default-model:
   provider: feei
   model: gpt-5.6
@@ -27,7 +28,9 @@ test("DSH accepts an arbitrary llm-pi-ai provider route from settings YAML", () 
   assert.equal(parsed.provider, "feei");
   assert.equal(parsed.protocol, "openai-responses");
   assert.deepEqual(parsed.modelIds, ["gpt-5.6"]);
-  assert.equal(parsed.reasoning, "thinking-v2.5");
+  assert.equal(parsed.reasoning, "high");
+  const model = (parsed.profile.models as Array<Record<string, unknown>>)[0]!;
+  assert.deepEqual(model.reasoningEfforts, { low: "low", high: "high", max: "thinking-v2.5" });
 });
 
 test("DSH runtime projection routes third-party profiles through the Job Gateway", () => {
@@ -40,6 +43,21 @@ test("DSH runtime projection routes third-party profiles through the Job Gateway
   assert.equal(profile.reasoning, "max");
   assert.equal((profile.models as Array<Record<string, unknown>>)[0]?.contextWindow, 256_000);
   assert.equal(JSON.stringify(runtime).includes("ai.feei.cn"), false);
+});
+
+test("DSH reasoning uses canonical levels while model mappings own custom wire values", () => {
+  assert.throws(
+    () => parseDshPiAiSettings({ ...thirdPartySettings, reasoning: "thinking-v2.5" }, "openai"),
+    /第三方传输值请配置到模型 reasoningEfforts/,
+  );
+  assert.throws(
+    () => buildDshPiAiRuntimeProjection({ settingsConfig: thirdPartySettings, credentialProvider: "openai", gatewayBaseUrl: "http://gateway/gateway", reasoning: "xhigh" }),
+    /未声明运行 reasoning 档位 xhigh/,
+  );
+  const fromYaml = parseDshPiAiSettings({
+    config: thirdPartySettings.config.replace("  model: gpt-5.6", "  model: gpt-5.6\n  reasoningEffort: max"),
+  }, "openai");
+  assert.equal(fromYaml.reasoning, "max");
 });
 
 test("DSH rejects secret-bearing or multi-route Provider YAML", () => {

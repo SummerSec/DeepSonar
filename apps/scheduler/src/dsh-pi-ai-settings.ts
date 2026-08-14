@@ -1,4 +1,4 @@
-import { CONTEXT_WINDOW_TOKENS_MAX, CONTEXT_WINDOW_TOKENS_MIN, isReasoningValue } from "@deepsonar/shared-types";
+import { CONTEXT_WINDOW_TOKENS_MAX, CONTEXT_WINDOW_TOKENS_MIN, DSH_REASONING_EFFORTS, isDshReasoningEffort } from "@deepsonar/shared-types";
 import { parseDocument, stringify } from "yaml";
 
 export const DSH_PI_AI_PLUGIN = "@deepseek-ai/dsh-llm-pi-ai";
@@ -95,7 +95,7 @@ export function parseDshPiAiSettings(
   const piAi = object(root["llm-pi-ai"], "DSH YAML 缺少 llm-pi-ai");
   exactKeys(piAi, new Set(["providers"]), "llm-pi-ai");
   const defaultModel = object(root["agent-default-model"], "DSH YAML 缺少 agent-default-model");
-  exactKeys(defaultModel, new Set(["provider", "model"]), "agent-default-model");
+  exactKeys(defaultModel, new Set(["provider", "model", "reasoningEffort"]), "agent-default-model");
   const selectedRoute = typeof defaultModel.provider === "string" ? defaultModel.provider.trim() : "";
   if (!ROUTE_RE.test(selectedRoute)) throw new Error("DSH provider route 必须匹配 [A-Za-z0-9][A-Za-z0-9._-]{0,63}");
   const selectedDefaultModel = typeof defaultModel.model === "string" ? defaultModel.model.trim() : "";
@@ -137,6 +137,18 @@ export function parseDshPiAiSettings(
     model.id = id;
     if (model.contextWindow !== undefined) positiveInt(model.contextWindow, `models[${index}].contextWindow`, CONTEXT_WINDOW_TOKENS_MAX);
     if (model.maxTokens !== undefined) positiveInt(model.maxTokens, `models[${index}].maxTokens`, CONTEXT_WINDOW_TOKENS_MAX);
+    if (model.reasoningEfforts !== undefined && model.reasoningEfforts !== false) {
+      const efforts = object(model.reasoningEfforts, `DSH pi-ai models[${index}].reasoningEfforts 必须是对象或 false`);
+      for (const [effort, wireValue] of Object.entries(efforts)) {
+        if (!isDshReasoningEffort(effort)) throw new Error(`DSH pi-ai reasoningEfforts 档位必须是 ${DSH_REASONING_EFFORTS.join(" | ")}`);
+        if (wireValue === null && effort === "off") continue;
+        if (typeof wireValue !== "string" || !wireValue.trim() || wireValue.length > 128 || /[\p{C}]/u.test(wireValue)) {
+          throw new Error(`DSH pi-ai reasoningEfforts.${effort} 必须是 1..128 字符的传输值${effort === "off" ? "或 null" : ""}`);
+        }
+        efforts[effort] = wireValue.trim();
+      }
+      model.reasoningEfforts = efforts;
+    }
     return model;
   });
   profile.models = models;
@@ -146,8 +158,20 @@ export function parseDshPiAiSettings(
   if (contextWindowTokens != null && contextWindowTokens < CONTEXT_WINDOW_TOKENS_MIN) {
     throw new Error(`DSH context_window_tokens 不能小于 ${CONTEXT_WINDOW_TOKENS_MIN}`);
   }
-  const reasoning = settings.reasoning == null ? null : String(settings.reasoning).trim();
-  if (reasoning !== null && !isReasoningValue(reasoning)) throw new Error("DSH reasoning 格式无效");
+  const configuredReasoning = settings.reasoning ?? defaultModel.reasoningEffort ?? profile.reasoning;
+  const reasoning = configuredReasoning == null ? null : String(configuredReasoning).trim();
+  if (reasoning !== null && !isDshReasoningEffort(reasoning)) {
+    throw new Error(`DSH reasoning 必须是 ${DSH_REASONING_EFFORTS.join(" | ")}；第三方传输值请配置到模型 reasoningEfforts`);
+  }
+  if (reasoning && reasoning !== "off") {
+    for (const model of models) {
+      if (model.reasoningEfforts === false) throw new Error(`DSH 模型 ${String(model.id)} 已禁用 reasoning，不能使用默认档位 ${reasoning}`);
+      if (model.reasoningEfforts && typeof model.reasoningEfforts === "object"
+        && !Object.prototype.hasOwnProperty.call(model.reasoningEfforts, reasoning)) {
+        throw new Error(`DSH 模型 ${String(model.id)} 未声明默认 reasoning 档位 ${reasoning}`);
+      }
+    }
+  }
   const modelIds = [...seen];
   if (!modelIds.includes(selectedDefaultModel)) throw new Error(`DSH 默认模型 ${selectedDefaultModel} 未在 provider models 中声明`);
   return {
@@ -179,6 +203,16 @@ export function buildDshPiAiRuntimeProjection(input: {
   profile.retryPolicy = { mode: "normal", maxRetries: 0 };
   profile.streamIdleTimeoutMs = 300_000;
   const reasoning = input.reasoning?.trim() || parsed.reasoning;
+  if (reasoning && !isDshReasoningEffort(reasoning)) throw new Error(`DSH runtime reasoning 必须是 ${DSH_REASONING_EFFORTS.join(" | ")}`);
+  if (reasoning && reasoning !== "off") {
+    for (const model of profile.models as Array<Record<string, unknown>>) {
+      if (model.reasoningEfforts === false) throw new Error(`DSH 模型 ${String(model.id)} 已禁用 reasoning，不能使用运行档位 ${reasoning}`);
+      if (model.reasoningEfforts && typeof model.reasoningEfforts === "object"
+        && !Object.prototype.hasOwnProperty.call(model.reasoningEfforts, reasoning)) {
+        throw new Error(`DSH 模型 ${String(model.id)} 未声明运行 reasoning 档位 ${reasoning}`);
+      }
+    }
+  }
   if (reasoning) profile.reasoning = reasoning;
   else delete profile.reasoning;
   if (input.contextWindowTokens != null) {

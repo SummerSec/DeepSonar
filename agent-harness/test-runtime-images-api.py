@@ -11,11 +11,14 @@ import urllib.request
 import uuid
 
 BASE = os.environ.get("DEEPSONAR_BASE", "http://127.0.0.1:3100").rstrip("/")
+TOKEN = os.environ.get("DEEPSONAR_TOKEN", "").strip()
 
 
-def req(method: str, path: str, body=None, expect: int = 200):
+def req(method: str, path: str, body=None, expect: int | tuple[int, ...] = 200):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"content-type": "application/json"} if data is not None else {}
+    if TOKEN:
+        headers["authorization"] = "Bearer " + TOKEN
     request = urllib.request.Request(BASE + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -24,7 +27,8 @@ def req(method: str, path: str, body=None, expect: int = 200):
     except urllib.error.HTTPError as error:
         code = error.code
         payload = json.loads(error.read().decode("utf-8") or "{}")
-    assert code == expect, f"{method} {path} -> {code} (expected {expect}): {payload}"
+    expected = (expect,) if isinstance(expect, int) else expect
+    assert code in expected, f"{method} {path} -> {code} (expected {expected}): {payload}"
     return payload
 
 
@@ -120,7 +124,6 @@ def main() -> None:
     invalid = {
         "agent_cli": explore["agent_cli"],
         "model": explore["model"],
-        "reasoning": explore["reasoning"],
         "env_keys": explore["env_keys"],
         "env_vars": explore["env_vars_json"],
         "modules": explore["modules_json"],
@@ -196,6 +199,10 @@ def main() -> None:
     usage = req("GET", f"/runtime-image-versions/{version_id}/usage")
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}
     req("POST", f"/runtime-image-versions/{version_id}/status", {"status": "rejected", "reason": "CI cleanup"})
+    for created_job in (job, test_job, verify_job, dynamic_verify_job):
+        current = req("GET", f"/jobs/{created_job['id']}")
+        if current["job"]["status"] in {"pending", "claimed", "provisioning", "running"}:
+            req("POST", f"/jobs/{created_job['id']}/cancel", {"force": True, "reason": "runtime image API smoke cleanup"}, (200, 409))
     req("POST", f"/projects/{project_id}/archive")
     print("OK: standalone market, specialist image opt-in, system sandbox default, quarantine gate, project binding gate, immutable Job snapshot")
 

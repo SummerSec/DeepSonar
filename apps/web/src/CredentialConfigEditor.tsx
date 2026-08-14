@@ -2,7 +2,7 @@
  * Shared create/edit editor for Provider credentials (CC Switch layout for Claude).
  * Create and edit use the same field set and save-as-is settingsConfig rules.
  */
-import { REASONING_VALUE_MAX_LENGTH, isReasoningValue } from "@deepsonar/shared-types";
+import { CLAUDE_CODE_REASONING_EFFORTS, CODEX_REASONING_EFFORTS, DSH_REASONING_EFFORTS, PI_REASONING_EFFORTS, REASONING_VALUE_MAX_LENGTH, isClaudeCodeReasoningEffort, isCodexReasoningEffort, isDshReasoningEffort, isPiReasoningEffort, isReasoningValue } from "@deepsonar/shared-types";
 import { useMemo } from "react";
 import type { Project, ProviderAccountCatalogItemView } from "./api";
 import { CcSwitchClaudeFields } from "./CcSwitchClaudeFields";
@@ -225,6 +225,23 @@ function validateDshYamlText(text: string): { ok: boolean; empty: boolean; error
     : { ok: true, empty: false };
 }
 
+function dshModelReasoningEfforts(text: string): ReadonlySet<string> | null {
+  const document = parseDocument(text, { customTags: [], prettyErrors: false });
+  if (document.errors.length > 0) return null;
+  const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
+  const selected = root["agent-default-model"] as Record<string, unknown> | undefined;
+  const route = typeof selected?.provider === "string" ? selected.provider : "";
+  const modelId = typeof selected?.model === "string" ? selected.model : "";
+  const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
+  const providers = piAi?.providers as Record<string, unknown> | undefined;
+  const profile = providers?.[route] as Record<string, unknown> | undefined;
+  const models = Array.isArray(profile?.models) ? profile.models : [];
+  const model = models.find((entry) => (entry as Record<string, unknown>)?.id === modelId) as Record<string, unknown> | undefined;
+  if (model?.reasoningEfforts === false) return new Set(["off"]);
+  if (!model?.reasoningEfforts || typeof model.reasoningEfforts !== "object" || Array.isArray(model.reasoningEfforts)) return null;
+  return new Set(Object.keys(model.reasoningEfforts));
+}
+
 function patchDshBaseUrl(settingsYaml: string, credentialProvider: string, baseUrl: string): string {
   if (!settingsYaml.trim()) return defaultDshProviderYaml(credentialProvider, baseUrl);
   const document = parseDocument(settingsYaml, { customTags: [], prettyErrors: false });
@@ -262,6 +279,18 @@ export function buildSettingsConfigFromEditor(input: {
     parsedReasoning = parseProviderReasoning(reasoning);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (agentCli === "dsh" && parsedReasoning && !isDshReasoningEffort(parsedReasoning)) {
+    return { ok: false, error: `DSH 思考强度必须是 ${DSH_REASONING_EFFORTS.join(" / ")}；第三方传输值请写入模型 reasoningEfforts` };
+  }
+  if (agentCli === "claude-code" && parsedReasoning && !isClaudeCodeReasoningEffort(parsedReasoning)) {
+    return { ok: false, error: `Claude Code 思考强度必须是 ${CLAUDE_CODE_REASONING_EFFORTS.join(" / ")}` };
+  }
+  if (agentCli === "codex" && parsedReasoning && !isCodexReasoningEffort(parsedReasoning)) {
+    return { ok: false, error: `Codex 思考强度必须是 ${CODEX_REASONING_EFFORTS.join(" / ")}` };
+  }
+  if (agentCli === "pi" && parsedReasoning && !isPiReasoningEffort(parsedReasoning)) {
+    return { ok: false, error: `Pi 思考强度必须是 ${PI_REASONING_EFFORTS.join(" / ")}` };
   }
   if (agentCli === "codex") {
     const toml = validateTomlText(tomlText);
@@ -425,7 +454,15 @@ export function CredentialConfigEditor({
     );
     return entries;
   }, [agentCli, providerCatalog]);
-  const reasoningValid = !reasoning.trim() || isReasoningValue(reasoning.trim());
+  const dshSupportedReasoning = useMemo(() => agentCli === "dsh" ? dshModelReasoningEfforts(settingsJson) : null, [agentCli, settingsJson]);
+  const reasoningOptions = agentCli === "claude-code" ? CLAUDE_CODE_REASONING_EFFORTS
+    : agentCli === "codex" ? CODEX_REASONING_EFFORTS
+      : agentCli === "pi" ? PI_REASONING_EFFORTS : DSH_REASONING_EFFORTS;
+  const reasoningValid = !reasoning.trim() || (agentCli === "dsh"
+    ? isDshReasoningEffort(reasoning.trim()) && (dshSupportedReasoning === null || dshSupportedReasoning.has(reasoning.trim()))
+    : agentCli === "claude-code" ? isClaudeCodeReasoningEffort(reasoning.trim())
+      : agentCli === "codex" ? isCodexReasoningEffort(reasoning.trim())
+        : agentCli === "pi" ? isPiReasoningEffort(reasoning.trim()) : isReasoningValue(reasoning.trim()));
   const contextWindowValid = useMemo(() => {
     try {
       parseContextWindowTokens(contextWindowTokens);
@@ -457,6 +494,10 @@ export function CredentialConfigEditor({
       ? provider
       : (nextProviders[0]?.provider ?? "");
     onAgentCliChange(cli);
+    if (cli === "dsh" && reasoning && !isDshReasoningEffort(reasoning)) onReasoningChange("");
+    if (cli === "claude-code" && reasoning && !isClaudeCodeReasoningEffort(reasoning)) onReasoningChange("");
+    if (cli === "codex" && reasoning && !isCodexReasoningEffort(reasoning)) onReasoningChange("");
+    if (cli === "pi" && reasoning && !isPiReasoningEffort(reasoning)) onReasoningChange("");
     if (nextProvider !== provider) onProviderChange(nextProvider);
     if (cli === "codex") {
       onTomlTextChange(defaultCodexToml(baseUrl.trim() || "https://api.openai.com/v1"));
@@ -553,29 +594,40 @@ export function CredentialConfigEditor({
       <label className="block">
         <span className="mb-1.5 block font-mono text-[11px] text-zinc-500">模型思考强度（Provider 默认）</span>
         <div className="grid grid-cols-4 overflow-hidden rounded-md border border-zinc-800" role="group" aria-label="Provider 模型思考强度快捷值">
-          {["", "off", "minimal", "low", "medium", "high", "xhigh", "max"].map((effort) => (
+          {["", ...reasoningOptions].map((effort) => (
             <button
               key={effort || "default"}
               type="button"
+              disabled={agentCli === "dsh" && Boolean(effort) && dshSupportedReasoning !== null && !dshSupportedReasoning.has(effort)}
               aria-pressed={reasoning === effort}
-              className={`min-h-9 px-2 text-[12px] transition-colors ${reasoning === effort ? "bg-emerald-500/15 text-emerald-200" : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"}`}
+              className={`min-h-9 px-2 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${reasoning === effort ? "bg-emerald-500/15 text-emerald-200" : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"}`}
               onClick={() => onReasoningChange(effort)}
             >
               {effort || "默认"}
             </button>
           ))}
         </div>
-        <input
-          value={reasoning}
-          maxLength={REASONING_VALUE_MAX_LENGTH}
-          onChange={(event) => onReasoningChange(event.target.value)}
-          className="theme-input-surface mt-2 w-full font-mono"
-          placeholder="自定义模型 token，留空使用 Provider 默认"
-          aria-label="Provider 模型思考强度"
-          aria-invalid={!reasoningValid}
-        />
+        {agentCli === "open-code" && (
+          <input
+            value={reasoning}
+            maxLength={REASONING_VALUE_MAX_LENGTH}
+            onChange={(event) => onReasoningChange(event.target.value)}
+            className="theme-input-surface mt-2 w-full font-mono"
+            placeholder="自定义模型 token，留空使用 Provider 默认"
+            aria-label="Provider 模型思考强度"
+            aria-invalid={!reasoningValid}
+          />
+        )}
         <span className={`mt-1 block text-[11px] ${reasoningValid ? "text-zinc-600" : "text-red-300"}`}>
-          {reasoningValid ? "按 Provider / 模型原样传递；实际支持值由所选模型决定。" : "仅允许 1–64 个字母、数字、点、下划线或短横线。"}
+          {agentCli === "dsh"
+            ? (reasoningValid ? "规范档位由所选模型的 reasoningEfforts 声明；第三方实际传输值在 YAML 中自定义。" : `请选择 ${DSH_REASONING_EFFORTS.join(" / ")} 之一。`)
+            : agentCli === "claude-code"
+              ? (reasoningValid ? "写入 Claude Code settings.json 的 effortLevel；是否启用扩展思考由 Claude 独立控制。" : `请选择 ${CLAUDE_CODE_REASONING_EFFORTS.join(" / ")} 之一。`)
+              : agentCli === "codex"
+                ? (reasoningValid ? "写入 Codex config.toml，并在启动时冻结为 model_reasoning_effort。" : `请选择 ${CODEX_REASONING_EFFORTS.join(" / ")} 之一。`)
+                : agentCli === "pi"
+                  ? (reasoningValid ? "启动与恢复时通过 Pi --thinking 参数注入。" : `请选择 ${PI_REASONING_EFFORTS.join(" / ")} 之一。`)
+                  : (reasoningValid ? "作为 OpenCode --variant 原样传递；实际支持值由所选模型决定。" : "仅允许 1–64 个字母、数字、点、下划线或短横线。")}
         </span>
       </label>
       <label className="block">

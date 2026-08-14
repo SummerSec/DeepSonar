@@ -9,7 +9,13 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   CONTEXT_WINDOW_TOKENS_MAX,
   CONTEXT_WINDOW_TOKENS_MIN,
+  CLAUDE_CODE_REASONING_EFFORTS,
+  CODEX_REASONING_EFFORTS,
   ContextWindowTokens,
+  PI_REASONING_EFFORTS,
+  isClaudeCodeReasoningEffort,
+  isCodexReasoningEffort,
+  isPiReasoningEffort,
   isReasoningValue,
   type ReasoningValue,
 } from "@deepsonar/shared-types";
@@ -236,7 +242,26 @@ export function normalizeProviderSettings(
     parseDshPiAiSettings(clone, credentialProvider);
     return clone;
   }
+  const configuredReasoning = typeof clone.reasoning === "string" ? clone.reasoning.trim() : "";
+  if (agentCli === "codex") {
+    const config = typeof clone.config === "string" ? clone.config : "";
+    const match = /^\s*model_reasoning_effort\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(config);
+    const effort = configuredReasoning || match?.[1] || match?.[2] || "";
+    if (effort && !isCodexReasoningEffort(effort)) throw new Error(`Codex reasoning 必须是 ${CODEX_REASONING_EFFORTS.join(" | ")}`);
+    if (effort) clone.reasoning = effort;
+    return clone;
+  }
+  if (agentCli === "pi") {
+    if (configuredReasoning && !isPiReasoningEffort(configuredReasoning)) throw new Error(`Pi reasoning 必须是 ${PI_REASONING_EFFORTS.join(" | ")}`);
+    return clone;
+  }
   if (agentCli !== "claude-code") return clone;
+  const configuredEffort = clone.reasoning ?? clone.effortLevel;
+  if (configuredEffort != null && !isClaudeCodeReasoningEffort(String(configuredEffort).trim())) {
+    throw new Error(`Claude Code reasoning 必须是 ${CLAUDE_CODE_REASONING_EFFORTS.join(" | ")}`);
+  }
+  if (configuredEffort != null) clone.reasoning = String(configuredEffort).trim();
+  delete clone.effortLevel;
   const env = asObject(clone.env);
   const main = typeof env.ANTHROPIC_MODEL === "string" && env.ANTHROPIC_MODEL.trim()
     ? env.ANTHROPIC_MODEL.trim()
@@ -313,7 +338,7 @@ export function legacySettingsConfig(input: {
     };
     if (baseUrl || defaultBase) env.ANTHROPIC_BASE_URL = baseUrl || defaultBase!;
     if (input.model?.trim()) env.ANTHROPIC_MODEL = input.model.trim();
-    return { env };
+    return { env, ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}) };
   }
   if (input.agentCli === "codex") {
     const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
@@ -343,17 +368,21 @@ requires_openai_auth = true
       baseUrl: endpoint,
       api: input.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
       models: [{ id: model }],
+      ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
     };
   }
   if (input.agentCli === "dsh") {
     const anthropic = input.provider === "anthropic";
-    return defaultDshPiAiSettings({
-      route: anthropic ? "anthropic" : "deepseek",
-      protocol: anthropic ? "anthropic-messages" : "openai-completions",
-      baseURL: baseUrl || defaultBase || (anthropic ? "https://api.anthropic.com" : "https://api.deepseek.com"),
-      model: input.model?.trim() || (anthropic ? "claude-sonnet-4-5" : "deepseek-v4-flash"),
-      contextWindow: anthropic ? 200_000 : 1_000_000,
-    });
+    return {
+      ...defaultDshPiAiSettings({
+        route: anthropic ? "anthropic" : "deepseek",
+        protocol: anthropic ? "anthropic-messages" : "openai-completions",
+        baseURL: baseUrl || defaultBase || (anthropic ? "https://api.anthropic.com" : "https://api.deepseek.com"),
+        model: input.model?.trim() || (anthropic ? "claude-sonnet-4-5" : "deepseek-v4-flash"),
+        contextWindow: anthropic ? 200_000 : 1_000_000,
+      }),
+      ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
+    };
   }
   // OpenCode stores one provider fragment. Runtime materialization wraps it in
   // the CLI's provider map and selects the first declared model.
@@ -369,6 +398,7 @@ requires_openai_auth = true
     models: input.model?.trim()
       ? { [input.model.trim()]: { name: input.model.trim() } }
       : {},
+    ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
   };
 }
 
@@ -399,7 +429,12 @@ export function materializeProviderSettings(input: {
   if (input.agentCli === "claude-code") {
     const clone = structuredClone(settings) as Record<string, unknown>;
     delete clone.context_window_tokens;
+    const reasoning = input.overrides?.reasoning?.trim() || (typeof clone.reasoning === "string" ? clone.reasoning.trim() : "");
     delete clone.reasoning;
+    if (reasoning) {
+      if (!isClaudeCodeReasoningEffort(reasoning)) throw new Error(`Claude Code reasoning 必须是 ${CLAUDE_CODE_REASONING_EFFORTS.join(" | ")}`);
+      clone.effortLevel = reasoning;
+    }
     const env = asObject(clone.env);
     if (input.overrides?.model?.trim()) env.ANTHROPIC_MODEL = input.overrides.model.trim();
     // Claude Code has no supported absolute context-window setting.
@@ -499,12 +534,18 @@ export function hasProviderSettingsConfig(settingsConfig: unknown): boolean {
 
 export function extractReasoningFromSettings(agentCli: string, settingsConfig: unknown): string | null {
   const settings = asObject(settingsConfig);
-  if (isReasoningValue(settings.reasoning)) return settings.reasoning;
+  if (typeof settings.reasoning === "string") {
+    const reasoning = settings.reasoning.trim();
+    if (agentCli === "claude-code") return isClaudeCodeReasoningEffort(reasoning) ? reasoning : null;
+    if (agentCli === "codex") return isCodexReasoningEffort(reasoning) ? reasoning : null;
+    if (agentCli === "pi" || agentCli === "dsh") return isPiReasoningEffort(reasoning) ? reasoning : null;
+    if (isReasoningValue(reasoning)) return reasoning;
+  }
   if (agentCli !== "codex") return null;
   const config = typeof settings.config === "string" ? settings.config : "";
   const match = /^\s*model_reasoning_effort\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(config);
   const value = match?.[1] || match?.[2] || null;
-  return isReasoningValue(value) ? value : null;
+  return isCodexReasoningEffort(value) ? value : null;
 }
 
 /** Resolve the direct upstream endpoint before Job Gateway projection. */

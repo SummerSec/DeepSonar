@@ -125,6 +125,21 @@ const openHarmonyWorkflow = readFileSync(new URL("../.github/workflows/openharmo
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
+const reasoningPlugin = "dsh-reasoning-settings";
+const reasoningPluginVersion = "0.3.0";
+const reasoningPluginCommit = "5768999dbbbb5088fd27f89c85970fe2f7b2c5c6";
+const reasoningPluginSha256 = "e583207774b2875c4f5914540a8df699b4f0f947b3e3a28722504237ba3dc6e3";
+for (const [manifest, source, label] of [[config, dockerfile, "base"], [kaliConfig, kaliDockerfile, "Kali"]]) {
+  const entry = manifest.npm[reasoningPlugin];
+  expect(entry?.version === reasoningPluginVersion, `${label} reasoning plugin version drift`);
+  expect(entry?.commit === reasoningPluginCommit, `${label} reasoning plugin commit drift`);
+  expect(entry?.sha256 === reasoningPluginSha256, `${label} reasoning plugin SHA-256 drift`);
+  expect(entry?.license === "MIT", `${label} reasoning plugin license drift`);
+  expect(source.includes(`ARG DSH_REASONING_SETTINGS_VERSION=${reasoningPluginVersion}`), `${label} reasoning plugin version ARG missing`);
+  expect(source.includes(`ARG DSH_REASONING_SETTINGS_COMMIT=${reasoningPluginCommit}`), `${label} reasoning plugin commit ARG missing`);
+  expect(source.includes(`ARG DSH_REASONING_SETTINGS_SHA256=${reasoningPluginSha256}`), `${label} reasoning plugin SHA-256 ARG missing`);
+  expect(source.includes("codeload.github.com/JuneLearn/dsh-reasoning-settings/tar.gz/${DSH_REASONING_SETTINGS_COMMIT}"), `${label} reasoning plugin must install the pinned archive`);
+}
 expect(FINGERPRINT_SCHEMA_VERSION === "v2", "fingerprint schema version must be bumped deliberately when semantics change");
 expect(COMMON_FINGERPRINT_PATHS.length === 1 && COMMON_FINGERPRINT_PATHS[0] === ".dockerignore", "all image fingerprints must include the shared .dockerignore input");
 expect(dockerIgnore.trim().length > 0, ".dockerignore must remain present for image-context fingerprinting");

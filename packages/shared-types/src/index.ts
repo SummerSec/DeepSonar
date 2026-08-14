@@ -11,6 +11,32 @@ export function isReasoningValue(value: unknown): value is ReasoningValue {
   return typeof value === "string" && REASONING_VALUE_PATTERN.test(value);
 }
 
+/** Canonical DSH/pi-ai reasoning levels. Provider-specific wire values live in model.reasoningEfforts. */
+export const DSH_REASONING_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type DshReasoningEffort = (typeof DSH_REASONING_EFFORTS)[number];
+export function isDshReasoningEffort(value: unknown): value is DshReasoningEffort {
+  return typeof value === "string" && DSH_REASONING_EFFORTS.some((effort) => effort === value);
+}
+
+/** Claude Code settings.json effortLevel values. Thinking enablement is a separate setting. */
+export const CLAUDE_CODE_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export type ClaudeCodeReasoningEffort = (typeof CLAUDE_CODE_REASONING_EFFORTS)[number];
+export function isClaudeCodeReasoningEffort(value: unknown): value is ClaudeCodeReasoningEffort {
+  return typeof value === "string" && CLAUDE_CODE_REASONING_EFFORTS.some((effort) => effort === value);
+}
+
+/** Codex model_reasoning_effort values supported by the governed CLI pin. */
+export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+export function isCodexReasoningEffort(value: unknown): value is CodexReasoningEffort {
+  return typeof value === "string" && CODEX_REASONING_EFFORTS.some((effort) => effort === value);
+}
+
+/** Pi --thinking values; Pi and DSH share the same canonical vocabulary. */
+export const PI_REASONING_EFFORTS = DSH_REASONING_EFFORTS;
+export type PiReasoningEffort = DshReasoningEffort;
+export const isPiReasoningEffort = isDshReasoningEffort;
+
 /** Bounds and path syntax for large Agent control payloads stored in /workspace. */
 export const WORKSPACE_PAYLOAD_FILE_MAX_BYTES = 512 * 1024;
 export const WORKSPACE_PAYLOAD_FILE_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/;

@@ -25,12 +25,14 @@ test("legacySettingsConfig builds Claude env dialect", () => {
     metadata: { base_url: "https://proxy.example/anthropic" },
     agentCli: "claude-code",
     model: "claude-sonnet-4-5",
+    reasoning: "high",
   });
   assert.deepEqual(settings.env, {
     ANTHROPIC_API_KEY: "sk-test",
     ANTHROPIC_BASE_URL: "https://proxy.example/anthropic",
     ANTHROPIC_MODEL: "claude-sonnet-4-5",
   });
+  assert.equal(settings.reasoning, "high");
 });
 
 test("materializeProviderSettings writes Claude settings.json", () => {
@@ -41,15 +43,33 @@ test("materializeProviderSettings writes Claude settings.json", () => {
         ANTHROPIC_API_KEY: "sk-live",
         ANTHROPIC_BASE_URL: "https://api.anthropic.com",
       },
+      reasoning: "medium",
     },
-    overrides: { model: "claude-opus-4" },
+    overrides: { model: "claude-opus-4", reasoning: "xhigh" },
   });
   assert.equal(files.length, 1);
   assert.equal(files[0]?.path, ".claude/settings.json");
-  const parsed = JSON.parse(files[0]!.content) as { env: Record<string, string> };
+  const parsed = JSON.parse(files[0]!.content) as { env: Record<string, string>; effortLevel?: string; reasoning?: string };
   assert.equal(parsed.env.ANTHROPIC_API_KEY, "sk-live");
   assert.equal(parsed.env.ANTHROPIC_MODEL, "claude-opus-4");
+  assert.equal(parsed.effortLevel, "xhigh");
+  assert.equal(parsed.reasoning, undefined);
   assert.match(files[0]!.content_sha256, /^[0-9a-f]{64}$/);
+});
+
+test("Claude Code normalizes Provider reasoning to official effort levels", () => {
+  const normalized = normalizeProviderSettings("claude-code", { env: {}, effortLevel: "high" });
+  assert.equal(normalized.reasoning, "high");
+  assert.equal(normalized.effortLevel, undefined);
+  assert.throws(() => normalizeProviderSettings("claude-code", { env: {}, reasoning: "max" }), /low \| medium \| high \| xhigh/);
+});
+
+test("Codex and Pi normalize only their governed reasoning levels", () => {
+  const codex = normalizeProviderSettings("codex", { auth: {}, config: "model_reasoning_effort = \"xhigh\"\n" });
+  assert.equal(codex.reasoning, "xhigh");
+  assert.throws(() => normalizeProviderSettings("codex", { reasoning: "max", config: "" }), /Codex reasoning/);
+  assert.equal(normalizeProviderSettings("pi", { reasoning: "max" }).reasoning, "max");
+  assert.throws(() => normalizeProviderSettings("pi", { reasoning: "thinking-v2.5" }), /Pi reasoning/);
 });
 
 test("materializeProviderSettings writes Codex auth + config with reasoning", () => {

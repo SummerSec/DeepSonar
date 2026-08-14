@@ -120,6 +120,27 @@ test("settings builder patches or removes the top-level context budget for every
   }
 });
 
+test("Claude Code accepts only official effortLevel values", () => {
+  const common = { agentCli: "claude-code" as const, settingsJson: "{}", tomlText: "", authJson: "", secret: "secret", baseUrl: "https://api.anthropic.com", provider: "anthropic", contextWindowTokens: "" };
+  const valid = buildSettingsConfigFromEditor({ ...common, reasoning: "xhigh" });
+  assert.equal(valid.ok, true);
+  if (valid.ok) assert.equal(valid.settings.reasoning, "xhigh");
+  const invalid = buildSettingsConfigFromEditor({ ...common, reasoning: "max" });
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.match(invalid.error, /Claude Code/);
+});
+
+test("Codex Pi and OpenCode use their native reasoning controls", () => {
+  const common = { settingsJson: "{}", tomlText: "model = \"gpt-5\"", authJson: "{}", secret: "secret", baseUrl: "https://example.test/v1", provider: "openai", contextWindowTokens: "" };
+  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "codex", reasoning: "xhigh" }).ok, true);
+  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "codex", reasoning: "max" }).ok, false);
+  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "pi", reasoning: "max" }).ok, true);
+  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "pi", reasoning: "thinking-v2.5" }).ok, false);
+  const openCode = buildSettingsConfigFromEditor({ ...common, agentCli: "open-code", reasoning: "thinking-v2.5" });
+  assert.equal(openCode.ok, true);
+  if (openCode.ok) assert.equal(openCode.settings.reasoning, "thinking-v2.5");
+});
+
 test("DSH provider editor exposes machine configuration without TUI surface", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   assert.match(editor, /DeepSeek Harness（JSON-RPC）/u);
@@ -135,7 +156,7 @@ test("DSH provider editor exposes machine configuration without TUI surface", ()
     baseUrl: "https://api.deepseek.com/",
     provider: "openai",
     contextWindowTokens: "128000",
-    reasoning: "thinking-v2.5",
+    reasoning: "high",
   });
   assert.equal(settings.ok, true);
   if (settings.ok) {
@@ -145,9 +166,15 @@ test("DSH provider editor exposes machine configuration without TUI surface", ()
     assert.match(String(settings.settings.config), /api: openai-responses/);
     assert.ok(String(settings.settings.config).includes("baseURL: https://api.deepseek.com"));
     assert.equal(settings.settings.context_window_tokens, 128000);
-    assert.equal(settings.settings.reasoning, "thinking-v2.5");
+    assert.equal(settings.settings.reasoning, "high");
     assert.doesNotMatch(JSON.stringify(settings.settings), /secret/);
   }
+  const invalidEffort = buildSettingsConfigFromEditor({
+    agentCli: "dsh", settingsJson: String(settings.ok ? settings.settings.config : ""), tomlText: "", authJson: "", secret: "secret",
+    baseUrl: "https://api.deepseek.com", provider: "openai", contextWindowTokens: "", reasoning: "thinking-v2.5",
+  });
+  assert.equal(invalidEffort.ok, false);
+  if (!invalidEffort.ok) assert.match(invalidEffort.error, /reasoningEfforts/);
 });
 
 test("reasoning is configured on Provider accounts, not RoleConfig", () => {

@@ -53,7 +53,7 @@ function testDshProvider(reasoning?: string) {
           api: "openai-responses",
           apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN",
           baseURL: "http://deepsonar-gateway:3100/gateway",
-          models: [{ id: "gpt-5.6", reasoningEfforts: { low: "low", high: "high" } }],
+          models: [{ id: "gpt-5.6", reasoningEfforts: { low: "low", high: "high", max: "thinking-v2.5" } }],
           ...(reasoning ? { reasoning } : {}),
         },
       },
@@ -185,6 +185,8 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /tools:\n\s+mode: native/);
   assert.doesNotMatch(config, /dsh-code-runtime-worker-thread/);
   assert.match(config, /@deepseek-ai\/dsh-llm-pi-ai/);
+  assert.match(config, /name: dsh-reasoning-settings/);
+  assert.match(config, /inheritReasoning: true/);
   assert.match(config, /"feei"/);
   assert.doesNotMatch(config, /dsh-llm-deepseek/);
   assert.doesNotMatch(config, /"reasoning"/);
@@ -197,9 +199,10 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(ptcConfig, /tools:\n\s+mode: code/);
   assert.match(ptcConfig, /@deepseek-ai\/dsh-code-runtime-worker-thread/);
   assert.match(ptcConfig, /"reasoning":"max"/);
-  await adapter.materialize?.({ ...context, reasoning: "thinking-v2.5", dshProvider: testDshProvider("thinking-v2.5") });
-  const customConfig = fake.uploads[2]?.content ?? "";
-  assert.match(customConfig, /"reasoning":"thinking-v2\.5"/);
+  await adapter.materialize?.({ ...context, reasoning: "high", dshProvider: testDshProvider("high") });
+  const mappedConfig = fake.uploads[2]?.content ?? "";
+  assert.match(mappedConfig, /"reasoning":"high"/);
+  assert.match(mappedConfig, /"reasoningEfforts":\{"low":"low","high":"high","max":"thinking-v2\.5"\}/);
 });
 
 test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {
@@ -243,11 +246,14 @@ test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", asy
     input: "initial",
     mcpConfigPath: "/workspace/.deepsonar/mcp.json",
     model: "claude-sonnet-4-5",
+    reasoning: "high",
   } as const;
   await adapter.start(context);
   await adapter.resume({ ...context, input: "follow", sessionId: "pi-s1", sessionFile: "/workspace/.deepsonar-home/.pi/agent/s.jsonl" });
   assert.match(fake.commands[0] ?? "", /^pi --mode rpc --no-approve --no-extensions --session-dir \/workspace\/\.deepsonar-home\/\.pi\/agent/);
   assert.doesNotMatch(fake.commands[0] ?? "", /mcp|control-mcp/);
+  assert.match(fake.commands[0] ?? "", /--thinking 'high'/);
+  assert.match(fake.commands[1] ?? "", /--thinking 'high'/);
   assert.match(fake.commands[1] ?? "", /--session '\/workspace\/\.deepsonar-home\/\.pi\/agent\/s\.jsonl'/);
   assert.equal(adapter.encodeGetState?.(), '{"type":"get_state"}\n');
   assert.equal(adapter.encodeSteer?.("即时消息"), '{"type":"steer","message":"即时消息"}\n');
@@ -479,6 +485,8 @@ test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复�
   await adapter.resume({ ...context, input: "nudge", sessionId: "codex-s1" });
   assert.doesNotMatch(fake.commands[0], /mcp_servers\.deepsonar-control|control-mcp/);
   assert.match(fake.commands[0], /model_reasoning_effort/);
+  assert.match(fake.commands[0], /high/);
+  assert.match(fake.commands[1], /model_reasoning_effort/);
   assert.match(fake.commands[0], /gpt-5/);
   assert.match(fake.commands[1], /exec resume/);
   assert.match(fake.commands[1], /codex-s1/);
@@ -527,6 +535,8 @@ test("OpenCode commands pin config path and support same-session resume", async 
   await adapter.resume({ ...context, input: "nudge", sessionId: "oc-s1" });
   assert.match(fake.commands[0], /opencode run/);
   assert.match(fake.commands[0], /--thinking/);
+  assert.match(fake.commands[0], /--variant 'high'/);
+  assert.match(fake.commands[1], /--variant 'high'/);
   assert.match(fake.commands[1], /--session 'oc-s1'/);
   assert.equal(fake.envs[0].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
   assert.equal(fake.envs[1].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
