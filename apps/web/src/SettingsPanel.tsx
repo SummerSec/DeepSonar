@@ -260,6 +260,7 @@ export function SettingsPanel({
     if (!projectId) {
       ruleBody.maxGlobalJobs = rules.maxGlobalJobs;
       ruleBody.maxJobsPerProject = rules.maxJobsPerProject;
+      ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
     }
     try {
@@ -678,6 +679,7 @@ export function SettingsPanel({
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {numField("maxGlobalJobs", "全局活跃 Job 上限", "所有 claimed / provisioning / running Job 的总数。")}
                     {numField("maxJobsPerProject", "每项目活跃 Job 上限", "单个项目的安全 cap；effective 值不会超过全局设置。")}
+                    {numField("maxConcurrentProvisioning", "Provisioning并发上限", "同时处于 claimed / provisioning 阶段的 Job 数量；超出的 Job 保持 pending。")}
                   </div>
                   <div className="mt-2 font-mono text-[10px] text-zinc-600">
                     当前运行 {Object.values(cliActive).reduce((sum, value) => sum + Number(value || 0), 0)} / {rules.maxGlobalJobs}

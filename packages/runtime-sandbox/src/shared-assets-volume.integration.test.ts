@@ -6,14 +6,15 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { DockerSharedAssetsVolumeManager } from "./shared-assets-volume.js";
+import { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager } from "./shared-assets-volume.js";
 import { readSandboxWorkspaceFile } from "./agentbox.js";
 
 const execFileP = promisify(execFile);
 const enabled = process.env.RUN_DOCKER_SHARED_ASSETS_TEST === "1";
 
 test("Docker shared-assets volume is labeled, mounted read-only, and removed", { skip: enabled ? false : "set RUN_DOCKER_SHARED_ASSETS_TEST=1" }, async () => {
-  const manager = new DockerSharedAssetsVolumeManager();
+  await execFileP("docker", ["pull", DEFAULT_SHARED_ASSETS_HELPER_IMAGE]);
+  const manager = new DockerSharedAssetsVolumeManager(DEFAULT_SHARED_ASSETS_HELPER_IMAGE);
   const jobId = randomUUID();
   const temp = await mkdtemp(path.join(os.tmpdir(), "deepsonar-assets-test-"));
   const source = path.join(temp, "fixture.txt");
@@ -22,12 +23,11 @@ test("Docker shared-assets volume is labeled, mounted read-only, and removed", {
   try {
     volume = await manager.prepare({
       jobId,
-      image: process.env.DEEPSONAR_SHARED_ASSET_HELPER_IMAGE || "postgres:16-alpine",
       files: [{ sourcePath: source, relativePath: "project/fixture.txt" }],
       catalog: { version: 1, readonly: true, assets: [{ key: "fixture.txt" }] },
     });
     assert.equal(volume, `deepsonar-assets-${jobId}`);
-    const { stdout } = await execFileP("docker", ["run", "--rm", "-v", `${volume}:/workspace/.deepsonar/shared:ro`, "--entrypoint", "/bin/sh", "postgres:16-alpine", "-c", "cat /workspace/.deepsonar/shared/project/fixture.txt; cat /workspace/.deepsonar/shared/catalog.json; if echo changed > /workspace/.deepsonar/shared/project/fixture.txt 2>/dev/null; then exit 91; fi"]);
+    const { stdout } = await execFileP("docker", ["run", "--pull=never", "--rm", "-v", `${volume}:/workspace/.deepsonar/shared:ro`, "--entrypoint", "/bin/sh", DEFAULT_SHARED_ASSETS_HELPER_IMAGE, "-c", "cat /workspace/.deepsonar/shared/project/fixture.txt; cat /workspace/.deepsonar/shared/catalog.json; if echo changed > /workspace/.deepsonar/shared/project/fixture.txt 2>/dev/null; then exit 91; fi"]);
     assert.match(stdout, /immutable fixture/);
     assert.match(stdout, /\"readonly\": true/);
     assert.equal((await manager.listManaged()).some((item) => item.jobId === jobId), true);
@@ -41,11 +41,12 @@ test("Docker shared-assets volume is labeled, mounted read-only, and removed", {
 });
 
 test("Docker Agent publish reads one bounded regular-file descriptor", { skip: enabled ? false : "set RUN_DOCKER_SHARED_ASSETS_TEST=1" }, async () => {
+  await execFileP("docker", ["pull", DEFAULT_SHARED_ASSETS_HELPER_IMAGE]);
   const name = `deepsonar-assets-read-${randomUUID()}`;
   let containerId = "";
   try {
     const { stdout } = await execFileP("docker", [
-      "run", "-d", "--name", name, "--network", "none", "--entrypoint", "/bin/sh", "postgres:16-alpine", "-c",
+      "run", "--pull=never", "-d", "--name", name, "--network", "none", "--entrypoint", "/bin/sh", DEFAULT_SHARED_ASSETS_HELPER_IMAGE, "-c",
       "mkdir -p /workspace/.deepsonar/shared; printf safe-file > /workspace/result.txt; printf secret > /workspace/.deepsonar/shared/secret.txt; ln -s /workspace/.deepsonar/shared/secret.txt /workspace/link.txt; dd if=/dev/zero of=/workspace/large.bin bs=32 count=1 2>/dev/null; sleep 120",
     ]);
     containerId = stdout.trim();

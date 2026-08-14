@@ -10,6 +10,13 @@ const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 const MANAGED_VOLUME_NAME_RE = /^deepsonar-assets-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 const VOLUME_REMOVE_MAX_ATTEMPTS = 3;
 const VOLUME_REMOVE_RETRY_BASE_DELAY_MS = 100;
+const OCI_NAME_COMPONENT_RE = "[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?";
+const IMMUTABLE_OCI_REF_RE = new RegExp(
+  `^(?:${OCI_NAME_COMPONENT_RE}(?::[0-9]+)?/)*${OCI_NAME_COMPONENT_RE}(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}$`,
+);
+
+export const DEFAULT_SHARED_ASSETS_HELPER_IMAGE =
+  "docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6";
 
 async function docker(...args: string[]): Promise<string> {
   const { stdout } = await execFileP("docker", args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
@@ -29,7 +36,7 @@ export interface SharedAssetVolumeFile {
 }
 
 export interface SharedAssetsVolumeManager {
-  prepare(input: { jobId: string; image: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null>;
+  prepare(input: { jobId: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null>;
   removeForJob(jobId: string): Promise<void>;
   listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>>;
 }
@@ -96,12 +103,18 @@ export class NoopSharedAssetsVolumeManager implements SharedAssetsVolumeManager 
 
 export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManager {
   constructor(
+    private readonly helperImage: string,
     private readonly executeDocker: DockerCommand = docker,
     private readonly wait: Sleep = sleep,
-  ) {}
+  ) {
+    if (!IMMUTABLE_OCI_REF_RE.test(helperImage)) {
+      throw new Error("共享资产 helper 镜像必须是带小写 sha256 digest 的不可变 OCI 引用");
+    }
+  }
 
-  async prepare(input: { jobId: string; image: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null> {
+  async prepare(input: { jobId: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null> {
     if (input.files.length === 0) return null;
+    await this.executeDocker("image", "inspect", this.helperImage);
     const name = volumeName(input.jobId);
     const canonicalJobId = name.slice("deepsonar-assets-".length);
     const helper = `deepsonar-assets-writer-${canonicalJobId}`;
@@ -128,9 +141,9 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
       await writeFile(path.join(staging, "catalog.json"), `${JSON.stringify(input.catalog, null, 2)}\n`, { flag: "wx" });
       helperCleanupRequired = true;
       await this.executeDocker(
-        "create", "--name", helper, "--network", "none", "--cap-drop", "ALL",
+        "create", "--pull=never", "--name", helper, "--network", "none", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--read-only", "-v", `${name}:/assets`,
-        "--entrypoint", "/bin/sh", input.image,
+        this.helperImage,
       );
       await this.executeDocker("cp", `${staging}${path.sep}.`, `${helper}:/assets`);
       volumeCleanupRequired = false;

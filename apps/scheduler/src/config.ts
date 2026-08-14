@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { DEFAULT_SHARED_ASSETS_HELPER_IMAGE } from "@deepsonar/runtime-sandbox";
 
 /** 无依赖 .env 加载（Node 20+；不覆盖已有环境变量） */
 function loadEnvFile() {
@@ -82,6 +83,8 @@ export const config = {
   limits: {
     maxGlobalJobs: int("MAX_GLOBAL_JOBS", 20),
     maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 5),
+    /** Provisioning admission 兜底；落库的全局规则拥有最终权威。 */
+    maxConcurrentProvisioning: boundedInt("PROVISION_CONCURRENCY", 2, 1000),
     maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 60),
     maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 12),
     maxAutoRetries: int("MAX_AUTO_RETRIES", 6),
@@ -230,6 +233,8 @@ export const config = {
   },
 
   sharedAssets: {
+    /** 用于填充共享资产卷的不可变 helper 镜像。 */
+    helperImage: str("DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE", DEFAULT_SHARED_ASSETS_HELPER_IMAGE),
     maxFileBytes: boundedInt("DEEPSONAR_SHARED_ASSET_MAX_FILE_BYTES", 64 * 1024 * 1024, 1024 * 1024 * 1024),
     projectQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_PROJECT_QUOTA_BYTES", 2 * 1024 * 1024 * 1024, 20 * 1024 * 1024 * 1024),
     findingQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_FINDING_QUOTA_BYTES", 256 * 1024 * 1024, 2 * 1024 * 1024 * 1024),

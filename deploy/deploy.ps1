@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [ValidateSet("up", "down", "status", "logs", "check")]
+  [ValidateSet("up", "down", "status", "logs", "check", "pull")]
   [string]$Action = "up",
 
   [ValidateSet("fake", "real")]
@@ -17,6 +17,7 @@ $EnvExample = Join-Path $DeployDir ".env.example"
 $MasterKeyFile = Join-Path $DeployDir "master.key"
 $ComposeFile = Join-Path $DeployDir "docker-compose.prod.yml"
 $RealComposeFile = Join-Path $DeployDir "docker-compose.real.yml"
+$DefaultSharedAssetsHelperImage = "docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6"
 
 function Assert-Command([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -101,6 +102,10 @@ function Initialize-Env {
   } elseif ($raw -notmatch "(?m)^DEEPSONAR_IMAGE_TAG=") {
     Ensure-EnvValue "DEEPSONAR_IMAGE_TAG" $defaultImageTag
   }
+  $raw = Get-Content -LiteralPath $EnvFile -Raw -Encoding UTF8
+  if ($raw -notmatch "(?m)^DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=") {
+    Ensure-EnvValue "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $DefaultSharedAssetsHelperImage
+  }
 
   if (-not (Test-Path -LiteralPath $MasterKeyFile)) {
     [IO.File]::WriteAllText($MasterKeyFile, (New-HexSecret 2), [Text.UTF8Encoding]::new($false))
@@ -114,6 +119,22 @@ function Read-EnvValue([string]$Name, [string]$Default = "") {
     Select-Object -First 1
   if (-not $line) { return $Default }
   return ($line -split "=", 2)[1].Trim()
+}
+
+function Get-SharedAssetsHelperImage {
+  $image = Read-EnvValue "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $DefaultSharedAssetsHelperImage
+  if ($image -notmatch "^[^@\s]+@sha256:[0-9a-f]{64}$") {
+    throw "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE 必须是带 64 位小写 sha256 digest 的 immutable image 引用"
+  }
+  return $image
+}
+
+function Pull-SharedAssetsHelper {
+  if ($Mode -ne "real") { return }
+  $image = Get-SharedAssetsHelperImage
+  Write-Host "[deploy] 拉取共享资产 helper：$image"
+  & docker pull $image
+  if ($LASTEXITCODE -ne 0) { throw "拉取 DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE 失败：$image" }
 }
 
 Assert-Command "docker"
@@ -131,7 +152,16 @@ try {
     "check" {
       & docker @ComposeArgs config --quiet
       if ($LASTEXITCODE -ne 0) { throw "Docker Compose validation failed" }
+      if ($Mode -eq "real") { $null = Get-SharedAssetsHelperImage }
       Write-Host "[deploy] Compose configuration is valid." -ForegroundColor Green
+    }
+    "pull" {
+      Pull-SharedAssetsHelper
+      if ($Mode -eq "real") {
+        Write-Host "[deploy] real 模式共享资产 helper 已拉取。" -ForegroundColor Green
+      } else {
+        Write-Host "[deploy] fake 模式不使用共享资产 helper。" -ForegroundColor Yellow
+      }
     }
     "status" {
       & docker @ComposeArgs ps
@@ -147,6 +177,7 @@ try {
     "up" {
       & docker @ComposeArgs config --quiet
       if ($LASTEXITCODE -ne 0) { throw "Docker Compose validation failed" }
+      Pull-SharedAssetsHelper
 
       $UpArgs = @("up", "-d")
       if (-not $NoBuild) { $UpArgs += "--build" }

@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { SHARED_ASSETS_JOB_LABEL, SHARED_ASSETS_VOLUME_LABEL } from "./agentbox.js";
-import { DockerSharedAssetsVolumeManager } from "./shared-assets-volume.js";
+import { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager } from "./shared-assets-volume.js";
 
 const jobId = "123e4567-e89b-12d3-a456-426614174000";
 const volumeName = `deepsonar-assets-${jobId}`;
 const helperName = `deepsonar-assets-writer-${jobId}`;
+const helperImage = DEFAULT_SHARED_ASSETS_HELPER_IMAGE;
 
 function inspectedVolume(
   name = volumeName,
@@ -35,11 +36,39 @@ async function sourceFile(): Promise<{ directory: string; sourcePath: string }> 
 function prepareInput(sourcePath: string) {
   return {
     jobId,
-    image: "test-image",
     files: [{ sourcePath, relativePath: "fixture.txt" }],
     catalog: { version: 1 },
   };
 }
+
+test("构造器只接受带小写 sha256 digest 的不可变 OCI helper 镜像", () => {
+  for (const image of [
+    "docker.io/library/busybox:latest",
+    `docker.io/library/busybox@sha256:${"A".repeat(64)}`,
+    `docker.io/library/busybox@sha256:${"a".repeat(63)}`,
+    "docker.io/library/busybox",
+  ]) {
+    assert.throws(
+      () => new DockerSharedAssetsVolumeManager(image),
+      /带小写 sha256 digest 的不可变 OCI 引用/,
+    );
+  }
+  assert.doesNotThrow(() => new DockerSharedAssetsVolumeManager(helperImage));
+});
+
+test("helper image inspect 失败时不产生 helper 或卷副作用", async () => {
+  const inspectError = new Error("helper 镜像不在本地");
+  const calls: string[][] = [];
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    calls.push(args);
+    if (args[0] === "image" && args[1] === "inspect") throw inspectError;
+    return "";
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
+  await assert.rejects(manager.prepare(prepareInput("/missing/fixture.txt")), (error: unknown) => error === inspectError);
+  assert.deepEqual(calls, [["image", "inspect", helperImage]]);
+});
 
 test("正常准备会按顺序清理、创建、复制并删除 helper 容器", async () => {
   const { directory, sourcePath } = await sourceFile();
@@ -53,9 +82,10 @@ test("正常准备会按顺序清理、创建、复制并删除 helper 容器", 
   };
 
   try {
-    const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+    const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
     assert.equal(await manager.prepare(prepareInput(sourcePath)), volumeName);
-    assert.deepEqual(calls.slice(0, 4), [
+    assert.deepEqual(calls.slice(0, 5), [
+      ["image", "inspect", helperImage],
       ["rm", "-f", helperName],
       ["volume", "inspect", volumeName, "--format", "{{json .}}"],
       ["volume", "rm", "-f", volumeName],
@@ -64,6 +94,11 @@ test("正常准备会按顺序清理、创建、复制并删除 helper 容器", 
     const createIndex = calls.findIndex((args) => args[0] === "create");
     assert.ok(createIndex > 0);
     assert.deepEqual(calls.slice(createIndex, createIndex + 2).map((args) => args[0]), ["create", "cp"]);
+    assert.deepEqual(calls[createIndex], [
+      "create", "--pull=never", "--name", helperName, "--network", "none", "--cap-drop", "ALL",
+      "--security-opt", "no-new-privileges", "--read-only", "-v", `${volumeName}:/assets`, helperImage,
+    ]);
+    assert.equal(calls[createIndex]?.includes("--entrypoint"), false);
     assert.equal(calls.filter((args) => args[0] === "rm" && args[2] === helperName).length, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -84,7 +119,7 @@ test("docker create 失败也会清理可能已创建的容器和卷", async () 
   };
 
   try {
-    const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+    const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
     await assert.rejects(manager.prepare(prepareInput(sourcePath)), (error: unknown) => error === createError);
     const createIndex = calls.findIndex((args) => args[0] === "create");
     const helperRemoveIndex = calls.findIndex((args, index) => index > createIndex && args[0] === "rm" && args[2] === helperName);
@@ -116,7 +151,7 @@ test("复制失败且容器清理失败时保留复制错误", async () => {
   };
 
   try {
-    const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+    const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
     await assert.rejects(manager.prepare(prepareInput(sourcePath)), (error: unknown) => error === copyError);
     assert.equal(helperRemoves, 2);
     assert.ok(calls.some((args) => args[0] === "volume" && args[1] === "rm"));
@@ -143,7 +178,7 @@ test("复制成功但 helper 清理失败时准备失败并尝试回收卷", asy
   };
 
   try {
-    const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+    const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
     await assert.rejects(manager.prepare(prepareInput(sourcePath)), (error: unknown) => error === cleanupError);
     assert.equal(helperRemoves, 2);
     assert.ok(calls.some((args) => args[0] === "volume" && args[1] === "rm"));
@@ -164,7 +199,7 @@ test("重试准备时每次运行前都会清理固定容器名", async () => {
   };
 
   try {
-    const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+    const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
     await manager.prepare(prepareInput(sourcePath));
     await manager.prepare(prepareInput(sourcePath));
     const volumeCreateIndexes = calls.flatMap((args, index) => args[0] === "volume" && args[1] === "create" ? [index] : []);
@@ -204,7 +239,7 @@ test("listManaged 合并 label 与名称扫描并对重复卷去重", async () =
     throw new Error(`unexpected docker command: ${args.join(" ")}`);
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
   const managed = await manager.listManaged();
   assert.deepEqual(managed.map(({ volumeName: name, jobId: id }) => ({ volumeName: name, jobId: id })), [
     { volumeName, jobId },
@@ -225,7 +260,7 @@ test("listManaged 通过严格名称识别无标签合法卷", async () => {
     throw new Error(`unexpected docker command: ${args.join(" ")}`);
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
   assert.deepEqual(await manager.listManaged(), [{ volumeName, jobId }]);
   assert.equal(calls.filter((args) => args[0] === "volume" && args[1] === "inspect").length, 1);
 });
@@ -246,7 +281,7 @@ test("listManaged 返回 Docker 创建时间供孤儿卷年龄指标使用", asy
     throw new Error(`非预期 Docker 命令：${args.join(" ")}`);
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
   assert.deepEqual(await manager.listManaged(), [{ volumeName, jobId, createdAt }]);
 });
 
@@ -274,7 +309,7 @@ test("listManaged 排除相似、畸形和标签归属不一致的名称", async
     throw new Error(`unexpected docker command: ${args.join(" ")}`);
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker);
   assert.deepEqual(await manager.listManaged(), [{ volumeName, jobId }]);
   assert.deepEqual(inspectedNames, [volumeName, mismatchedVolumeName]);
 });
@@ -292,7 +327,7 @@ test("removeForJob 删除失败时有限重试并在成功后返回", async () =
     throw new Error(`unexpected docker command: ${args.join(" ")}`);
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async () => {});
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker, async () => {});
   await manager.removeForJob(jobId);
   assert.equal(removeAttempts, 3);
 });
@@ -308,7 +343,7 @@ test("removeForJob 仅把明确不存在当作幂等成功", async () => {
     return "";
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async () => {});
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker, async () => {});
   await manager.removeForJob(jobId);
   assert.equal(removeAttempts, 0);
 });
@@ -331,7 +366,7 @@ test("removeForJob 对 inspect 基础设施错误重试且不伪装成卷不存�
     throw new Error(`非预期 Docker 命令：${args.join(" ")}`);
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async (delay) => {
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker, async (delay) => {
     delays.push(delay);
   });
   await manager.removeForJob(jobId);
@@ -352,7 +387,7 @@ test("removeForJob 重试耗尽后继续抛出最终删除错误", async () => {
     throw new Error(`unexpected docker command: ${args.join(" ")}`);
   };
 
-  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async () => {});
+  const manager = new DockerSharedAssetsVolumeManager(helperImage, executeDocker, async () => {});
   await assert.rejects(manager.removeForJob(jobId), (error: unknown) => error === removeError);
   assert.equal(removeAttempts, 3);
 });

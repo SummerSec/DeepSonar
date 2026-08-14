@@ -14,7 +14,7 @@ import {
   PROJECT_IMAGE_STRATEGIES,
 } from "../role-runtime-snapshot/application.js";
 
-const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject"]);
+const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code", "pi", "dsh"]);
 const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
   for (const key of RULE_CONCURRENCY_KEYS) {

@@ -505,6 +505,8 @@ export interface EffectiveRules {
   /** Scheduler-wide hard caps. Persisted global rules are authoritative; env only bootstraps defaults. */
   maxGlobalJobs: number;
   maxJobsPerProject: number;
+  /** Scheduler 全局 provisioning admission 上限，项目规则不得覆盖。 */
+  maxConcurrentProvisioning: number;
   /** Provider 总并发；优先级高于 Credential / Model / Agent CLI。 */
   maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层只读继承。 */

@@ -180,6 +180,8 @@ export interface ProjectRules {
   maxGlobalJobs: number;
   /** Scheduler-wide per-project active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
   maxJobsPerProject: number;
+  /** Scheduler 全局 provisioning admission 上限，项目规则不得覆盖。 */
+  maxConcurrentProvisioning: number;
   /** 全局 Provider 总并发；优先于 Credential / 模型 / Agent CLI 配额。 */
   maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层不得覆盖。 */
@@ -503,6 +505,7 @@ function envDefaultRules(): ProjectRules {
     allowEgress: true,
     maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, 20),
     maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
+    maxConcurrentProvisioning: asConcurrencyLimit(config.limits.maxConcurrentProvisioning, 2),
     maxConcurrentByProvider: {},
     maxConcurrentByAgentCli: {},
   };
@@ -518,6 +521,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
   const maxVerificationRounds = Number(raw.maxVerificationRounds);
   const maxGlobalJobs = asConcurrencyLimit(raw.maxGlobalJobs, base.maxGlobalJobs);
   const maxJobsPerProject = Math.min(maxGlobalJobs, asConcurrencyLimit(raw.maxJobsPerProject, base.maxJobsPerProject));
+  const maxConcurrentProvisioning = asConcurrencyLimit(raw.maxConcurrentProvisioning, base.maxConcurrentProvisioning);
   return {
     minVerifySeverity: min,
     maxFollowupsPerJob: (raw.maxFollowupsPerJob as number) ?? base.maxFollowupsPerJob,
@@ -535,6 +539,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
     maxGlobalJobs,
     maxJobsPerProject,
+    maxConcurrentProvisioning,
     maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
     maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
   };
@@ -584,6 +589,7 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
     ...mergeRulesLayer(r, global),
     maxGlobalJobs: global.maxGlobalJobs,
     maxJobsPerProject: global.maxJobsPerProject,
+    maxConcurrentProvisioning: global.maxConcurrentProvisioning,
     maxConcurrentByProvider: global.maxConcurrentByProvider,
     maxConcurrentByAgentCli: global.maxConcurrentByAgentCli,
   };

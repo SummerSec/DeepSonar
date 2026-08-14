@@ -16,4 +16,6 @@ export const runner: SandboxRunner =
   config.runtime.agentMode === "real" ? new AgentboxRunner() : new NoopRunner();
 
 export const sharedAssetsVolumeManager: SharedAssetsVolumeManager =
-  config.runtime.agentMode === "real" ? new DockerSharedAssetsVolumeManager() : new NoopSharedAssetsVolumeManager();
+  config.runtime.agentMode === "real"
+    ? new DockerSharedAssetsVolumeManager(config.sharedAssets.helperImage)
+    : new NoopSharedAssetsVolumeManager();

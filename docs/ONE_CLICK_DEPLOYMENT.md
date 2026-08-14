@@ -61,8 +61,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交）；
 3. 按 `DEEPSONAR_IMAGE_TAG`（无 `v` 前缀）从阿里云 ACR 拉取  
    `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
-4. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
-5. 健康检查后输出访问地址；后台可准备运行时镜像（不阻塞主服务）。
+4. real 模式显式拉取 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该引用必须带 immutable sha256 digest，拉取失败则停止部署；
+5. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
+6. 健康检查后输出访问地址；后台可准备运行时镜像（不阻塞主服务）。
 
 访问：**http://127.0.0.1:8080**
 
@@ -100,6 +101,20 @@ CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + Rol
 官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底。`DOCKER_IMAGE_AUDIT` 为历史兼容字段，**不能**用可变 tag 越过市场信任。
 
 发布与多 channel 细节：[`RELEASE_RUNTIME_IMAGES.md`](./RELEASE_RUNTIME_IMAGES.md)、[`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](./RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
+
+### 4.1 共享资产 helper 与 provision admission（#158）
+
+real 模式写入共享资产只读卷时使用固定默认 helper：
+`docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6`。
+可在 `deploy/.env` 用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 覆盖，但必须仍是带小写 64 位
+`sha256` digest 的 OCI 引用。`deploy.sh` 和 `deploy.ps1` 在 real 的 `up` 与 `pull` 路径显式执行
+`docker pull`；失败即 fail closed。Job 运行时只用 `--pull=never` 创建 helper，不能因单个 Job
+触发隐式 registry 拉取；fake 模式不预拉也不使用 helper。该 helper 不新增 DeepSonar 发布镜像。
+
+Provision 并发是数据库 claim admission，不是进程内 semaphore：超过全局
+`global_settings.maxConcurrentProvisioning` 的 Job 留在 `pending`，不消耗 `claimed_at`；槽位释放后
+调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。`PROVISION_CONCURRENCY=2` 只在该全局配置
+缺失时作为 fallback。
 
 ### 专项运行时（可选）
 
@@ -139,13 +154,14 @@ Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_T
 ./deploy/deploy.sh status
 ./deploy/deploy.sh logs
 ./deploy/deploy.sh check
-./deploy/deploy.sh pull          # 仅拉平台镜像
+./deploy/deploy.sh pull          # 拉平台镜像；real 默认同时拉 helper
 ./deploy/deploy.sh down          # 保留 postgres / blob / silo volume
 ```
 
 ```powershell
 .\deploy\deploy.ps1 status
 .\deploy\deploy.ps1 logs
+.\deploy\deploy.ps1 -Action pull -Mode real
 .\deploy\deploy.ps1 down
 ```
 
@@ -182,6 +198,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 | API 401 | 鉴权开启为预期；配置控制台 Token / 人类登录 |
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
+| real helper 拉取失败 | 检查 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 是否为可达的 immutable digest 引用；脚本会 fail closed |
 | real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
 | 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |
 
@@ -191,6 +208,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 - [ ] `DEEPSONAR_AUTH_REQUIRED=true`，已改默认管理员密码
 - [ ] 已建长期 API Token；外部事件 Token 单项目 + `tasks:write`
 - [ ] real：官方 base/audit（及所用专项）均为 digest 且可 pull
+- [ ] real：`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 为 immutable digest 且已被部署脚本预拉
 - [ ] 第三方准入扫描器（若用）均为 digest
 - [ ] PostgreSQL / Silo / Scheduler / Image Admission / Web 正常
 - [ ] 已备份并演练恢复

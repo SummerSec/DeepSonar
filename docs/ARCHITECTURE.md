@@ -508,6 +508,8 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；Anthropic 兼容子路径按有序候选探测，仅 HTTP 404/405 允许剥离子路径后继续，鉴权、限流、网络、超时与上游错误均立即失败且不读取错误正文。启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
+Provision admission 是数据库 claim 事务的一部分，而不是进程内 semaphore：effective `global_settings.maxConcurrentProvisioning` 先检查当前 provisioning 资源占用，超额 Job 保持 `pending`，不写入或消耗 `claimed_at`；槽位释放后调度器显式唤醒 pending 队列，重新 claim 并推进到 `running`。`.env` 的 `PROVISION_CONCURRENCY=2` 只在该全局配置缺失时作为 fallback，不能绕过数据库门禁，也不改变其他全局/项目/Provider/凭据配额。
+
 平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 只派生 API operation allowlist；关闭项不会出现在动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。所有治理 CLI 的控制能力只走 HTTP API；冻结 adapter 缺少 `platformControlApi` 或 operation 时执行前 fail closed。Pi 恢复必须使用 `get_state` 返回的精确 `sessionFile`，不选择 latest。
 
 ### 8.3 可信运行镜像与独立市场
@@ -528,7 +530,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 - `runtime_data_layers` / `runtime_data_layer_versions` 为 Trivy/OSV 等离线库预留可版本化、只读、digest 准入模型；尚未准入的数据层不得挂载进运行沙箱。
 - Shared Assets 使用 `shared_assets`（逻辑对象）+ append-only `shared_asset_versions` + SHA-256 `shared_asset_blobs`（CAS 元数据）分离内容与引用；字节经可插拔 **BlobStore**（`BLOB_STORE=fs|s3`）存放，逻辑键为 `shared-assets/sha256/<aa>/<sha256>`，**不**进入 PostgreSQL JSONB、画布或 Graph YAML。`fs` 落在 `BLOB_DIR`；`s3` 为任意 S3 兼容 API（AWS / MinIO / Garage / SeaweedFS / 云 OSS 等，**不锁定厂商**），Job 注入前 `materializeLocal` 到本地缓存。详见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)。scope 为 `platform | project | finding`：项目资产自动选择，platform 仅在项目显式 opt-in 后选择，finding 仅对同项目且 Job 绑定该 `finding_id` 的 review/test/verify/report/Hub 链选择。
 - Job 创建事务计算排序后的精确 version/hash/path 清单和 `shared_assets_revision`，写入 `agent_snapshot_json` 与 `job_shared_asset_versions`；后续资产更新不会改变已建 Job。prompt 只说明只读目录和 bounded catalog，不注入文件正文。Agent publish 只能从普通 `/workspace` 的单一已打开正则文件描述符做有界读取，拒绝 symlink、路径逃逸和平台运行/CLI 用户配置目录自复制；宿主执行前后校验 Job/lease/sandbox，数据库触发器再锁 Job 做原子终态门禁。Agent 不能 publish platform，也不能覆盖 human/platform key，自有 key 仅追加版本。
-- Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，受限 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。CLI 的可写 `HOME=/workspace/.deepsonar-home` 位于该只读挂载父树之外，因此 Docker 创建 `.deepsonar` 挂载父目录时不会阻断 CLI 用户目录初始化。任意 host bind、任意 target 和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 删除失败时做 3 次指数退避；启动对账合并可信 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，经 Name/Driver/Scope/可选标签复核后也能回收无标签历史孤儿卷。对账完成后更新残留孤儿数量和最大年龄 gauge，清理失败单独累计 counter。
+- Scheduler 为有资产的 real Job 创建带精确 Job 归属标签的本地 `deepsonar-assets-*` named volume，固定 digest 的 helper 从冻结 CAS 清单写入文件和 `catalog.json`，再固定以 `:ro` 挂载到 `/workspace/.deepsonar/shared`。默认 helper 为 `docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 可覆盖但必须是 immutable 的小写 64 位 sha256 OCI 引用。real 部署脚本在启动/拉取路径显式预拉 helper，失败即停止；运行时创建 helper 只使用 `--pull=never`，fake 不使用该 helper。CLI 的可写 `HOME=/workspace/.deepsonar-home` 位于该只读挂载父树之外，因此 Docker 创建 `.deepsonar` 挂载父目录时不会阻断 CLI 用户目录初始化。任意 host bind、任意 target 和 Docker 自动创建均被拒绝；provision 后再次检查实际 Mounts.Name 与 `RW=false`。dispatcher finally、Reaper 和启动 reconcile 删除失败时做 3 次指数退避；启动对账合并可信 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，经 Name/Driver/Scope/可选标签复核后也能回收无标签历史孤儿卷。对账完成后更新残留孤儿数量和最大年龄 gauge，清理失败单独累计 counter。
 - 上传由 Scheduler 服务端计算 SHA-256，并在 scope 级 advisory transaction lock 内执行配额检查；内容类型与扩展名必须同时命中白名单，单文件与 scope 总额均受配置约束。归档只改变逻辑状态，历史版本与 Job 引用不删；CAS 垃圾回收只能在无 version/Job 引用并过保留期后执行。HTTP 目录和本地 `list_shared_assets` 均按 `limit/offset` 分页；真正的按需 fetch 需要独立可信 IPC，当前不开放写 socket 或控制文件。
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
@@ -657,6 +659,7 @@ PLANE_READY_STATE=Ready
 
 MAX_GLOBAL_JOBS=20             # global_settings 未配置时的启动默认
 MAX_JOBS_PER_PROJECT=5         # global_settings 未配置时的启动默认
+PROVISION_CONCURRENCY=2        # global_settings.maxConcurrentProvisioning 缺失时的 fallback；DB claim admission，不是 semaphore
 
 DEFAULT_AUDIT_TIMEOUT_SEC=7200
 DEFAULT_VERIFY_TIMEOUT_SEC=3600
@@ -675,6 +678,7 @@ DEEPSONAR_HUB_MAX_INTENTS=6
 
 SANDBOX_PROVIDER=local-docker
 DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
+DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6
 EVENT_PAYLOAD_MAX_KB=256
 
 # Scheduler-authoritative semantic-event fixed-window budgets (Issue #57).

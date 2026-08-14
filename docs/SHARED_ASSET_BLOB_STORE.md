@@ -1,6 +1,6 @@
 # Shared Asset BlobStore
 
-> **Status: as-built (Issue #41).** Index: [`README.md`](README.md).
+> **Status: as-built (Issues #41, #158).** Index: [`README.md`](README.md).
 
 Shared assets keep **metadata in PostgreSQL** and **bytes in a pluggable BlobStore**.
 
@@ -53,6 +53,12 @@ BLOB_S3_SECRET_ACCESS_KEY=
 BLOB_S3_SESSION_TOKEN=
 # Local cache for Job volume materialization (defaults to BLOB_DIR)
 BLOB_S3_CACHE_DIR=./data/blobs
+
+# 仅 real local-docker：写入 Job 只读卷的 helper。
+# 引用必须始终包含 immutable 的小写 sha256 digest。
+DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6
+# 仅在 global_settings.maxConcurrentProvisioning 缺失时使用的 fallback。
+PROVISION_CONCURRENCY=2
 ```
 
 Credential fallbacks: if `BLOB_S3_ACCESS_KEY_ID` / `BLOB_S3_SECRET_ACCESS_KEY` are empty, the client also reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`.
@@ -105,6 +111,16 @@ export BLOB_S3_FORCE_PATH_STYLE=true
 | `publish_shared_asset` | Propose workspace file path | Scheduler `createSharedAsset` → BlobStore put |
 
 Agents never receive S3 credentials and must not curl object storage. There is intentionally **no** `download_shared_asset` control tool: pre-mount keeps the threat boundary (Agent only proposes; Scheduler owns bytes).
+
+### Real 沙箱 helper
+
+local-docker 卷写入器的固定默认值为
+`docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6`。
+`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为另一个以小写 64 位
+`sha256` digest 结尾的 immutable OCI 引用。real 模式的 `deploy.sh` 和
+`deploy.ps1` 在启动前及 real 拉取路径显式拉取该引用；拉取失败即停止部署。
+运行时随后以 `--pull=never` 创建写入器，Job 不能触发隐式 registry 拉取。
+fake 模式不使用也不预拉该 helper；不会发布独立的 helper 镜像，部署引用就是完整的供应链输入。
 
 ## Security notes
 

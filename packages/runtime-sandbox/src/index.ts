@@ -111,7 +111,7 @@ export {
 export { RuntimeImageContractError } from "./agentbox.js";
 export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails } from "./agentbox.js";
 export type { SemanticToolState } from "./agentbox.js";
-export { DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager } from "./shared-assets-volume.js";
+export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager } from "./shared-assets-volume.js";
 export type { SharedAssetsVolumeManager, SharedAssetVolumeFile } from "./shared-assets-volume.js";
 export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 export type {

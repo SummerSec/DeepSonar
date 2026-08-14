@@ -120,6 +120,7 @@ pending → claimed → provisioning → running
 - Lease + Reaper：超时/孤儿**调度器判定**，不信任 Agent 自报。
 - 唤醒：`pg_notify('deepsonar_jobs')` 为主；轮询可关。
 - 优先级：资格与排序分离（图阶段 / 收敛证据 vs 固定优先级），避免 priority 通胀。
+- **Provision admission（#158）**：并发上限由数据库 claim admission 判定，不是进程内 semaphore。超过 `global_settings.maxConcurrentProvisioning` 的 Job 保持 `pending`，不写入/消耗 `claimed_at`；释放槽位后由调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。仅在全局配置缺失时使用 `PROVISION_CONCURRENCY=2`。
 - **任务执行时间（定时开始，#147 已关闭）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
 
 ### 5.1 Job Attempt 与外部效果
@@ -234,6 +235,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 画布广播可观测 | （过程真相 A） | **注入 + 投递账本已落地**：见 §4.2；分期细节与布局 B 见 `docs/TODO_CANVAS_PROCESS_TRUTH.md` |
 | Hub 验证绑定与人工收口 | #153/#154/#155 | **已完成**：review/test 从唯一 canonical Finding 节点绑定验证上下文；below-min、歧义和 trigger 错配在派生前拒绝；Finding 详情提供仅 `needs_human` 的人工入口，并原子恢复同画布等待中的 Hub |
 | 共享资产卷孤儿回收 | #157 | **已完成**：启动对账合并 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，校验本地卷归属并回收无标签孤儿；删除使用 3 次指数退避，暴露清理失败计数、残留孤儿数量和最大年龄指标 |
+| 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
 
 ## 12. 仓库地图
 

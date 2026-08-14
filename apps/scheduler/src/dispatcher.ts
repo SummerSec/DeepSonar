@@ -293,6 +293,11 @@ export function dispatchSlots(maxGlobalJobs: number, totalActive: number): numbe
   return Math.max(0, maxGlobalJobs - totalActive);
 }
 
+/** 允许进入 claimed/provisioning 阶段的额外 Job 数量。 */
+export function provisionSlots(maxConcurrentProvisioning: number, activeProvisioning: number): number {
+  return Math.max(0, maxConcurrentProvisioning - activeProvisioning);
+}
+
 /**
  * Select eligible candidates across one or more pending pages. The caller
  * supplies keyset pages; this helper intentionally keeps scanning later pages
@@ -472,20 +477,27 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     // 抢占前由 globalRules 解析。
     const rules = await globalRules(tx as unknown as typeof sql);
     const active = await tx`
-      SELECT project_id,
+      SELECT status, project_id,
              agent_snapshot_json->>'agent_cli' AS agent_cli,
              agent_snapshot_json->>'credential_id' AS credential_id,
              agent_snapshot_json->>'credential_provider' AS credential_provider,
              agent_snapshot_json->>'model' AS model,
              COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running')
-      GROUP BY project_id,
+      GROUP BY status, project_id,
                agent_snapshot_json->>'agent_cli',
                agent_snapshot_json->>'credential_id',
                agent_snapshot_json->>'credential_provider',
                agent_snapshot_json->>'model'`;
     const totalActive = active.reduce((n, row) => n + Number(row.count), 0);
-    const slots = dispatchSlots(rules.maxGlobalJobs, totalActive);
+    const activeProvisioning = active.reduce(
+      (n, row) => n + (["claimed", "provisioning"].includes(String(row.status)) ? Number(row.count) : 0),
+      0,
+    );
+    const slots = Math.min(
+      dispatchSlots(rules.maxGlobalJobs, totalActive),
+      provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
+    );
     if (slots <= 0) return [] as { id: string }[];
 
     const projectCounts = new Map<string, number>();
@@ -684,7 +696,6 @@ async function runJob(jobId: string) {
       }
       sharedAssetsVolumeName = await sharedAssetsVolumeManager.prepare({
         jobId,
-        image: runtimeImage,
         files,
         catalog: buildJobSharedAssetCatalog({
           revision: snapshot.shared_assets_revision,
@@ -782,6 +793,9 @@ async function runJob(jobId: string) {
     if (!(await lifecycle.transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
       return;
     }
+    // Provisioning admission 统计 claimed/provisioning Job；离开该阶段后
+    // 立即唤醒 dispatcher，让 pending Job 无需等待轮询或终态事件即可占用槽位。
+    kickDispatcher();
     await sql.begin(async (tx) => {
       const started = await beginEffect(tx as unknown as typeof sql, attemptId!, {
         effectId: `agent_run:${String(attempt.attempt_no)}`,

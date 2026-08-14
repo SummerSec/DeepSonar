@@ -14,6 +14,7 @@ REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
 
 # 默认阿里云 ACR；可用 deploy/.env 覆盖
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
+DEFAULT_SHARED_ASSETS_HELPER_IMAGE="docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6"
 REGISTRY_FILE="$SCRIPT_DIR/runtime-image-registry.json"
 DEFAULT_IMAGE_TAG=""
 if [ -f "$REGISTRY_FILE" ]; then
@@ -104,6 +105,7 @@ fi
 # 默认镜像源：阿里云 ACR + 当前发布标签
 ensure_env_kv "DEEPSONAR_IMAGE_REGISTRY" "$DEFAULT_IMAGE_REGISTRY"
 ensure_env_kv "DEEPSONAR_IMAGE_TAG" "$DEFAULT_IMAGE_TAG"
+ensure_env_kv "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" "$DEFAULT_SHARED_ASSETS_HELPER_IMAGE"
 # A previous generated env used latest; normalize only that legacy default.
 if grep -q '^DEEPSONAR_IMAGE_TAG=latest$' "$ENV_FILE"; then
   tmp=$(mktemp)
@@ -137,6 +139,7 @@ fi
 # shellcheck disable=SC1090
 IMAGE_REGISTRY=$(awk -F= '$1=="DEEPSONAR_IMAGE_REGISTRY" {print $2; exit}' "$ENV_FILE")
 IMAGE_TAG=$(awk -F= '$1=="DEEPSONAR_IMAGE_TAG" {print $2; exit}' "$ENV_FILE")
+SHARED_ASSETS_HELPER_IMAGE=$(awk -F= '$1=="DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" {print $2; exit}' "$ENV_FILE")
 IMAGE_REGISTRY=${IMAGE_REGISTRY:-$DEFAULT_IMAGE_REGISTRY}
 IMAGE_TAG=${IMAGE_TAG:-$DEFAULT_IMAGE_TAG}
 
@@ -156,9 +159,26 @@ pull_app_images() {
   done
 }
 
+validate_shared_assets_helper_image() {
+  if ! printf '%s\n' "$SHARED_ASSETS_HELPER_IMAGE" | grep -Eq '^[^@[:space:]]+@sha256:[0-9a-f]{64}$'; then
+    echo "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE 必须是带 64 位 sha256 digest 的 immutable image 引用" >&2
+    exit 1
+  fi
+}
+
+pull_shared_assets_helper() {
+  [ "$MODE" = "real" ] || return 0
+  validate_shared_assets_helper_image
+  echo "[deploy] 拉取共享资产 helper：$SHARED_ASSETS_HELPER_IMAGE"
+  docker pull "$SHARED_ASSETS_HELPER_IMAGE"
+}
+
 case "$ACTION" in
   check)
     "$@" config --quiet
+    if [ "$MODE" = "real" ]; then
+      validate_shared_assets_helper_image
+    fi
     echo "[deploy] Compose 配置有效"
     echo "[deploy] 镜像源: ${IMAGE_REGISTRY} / ${IMAGE_TAG}（默认阿里云 ACR）"
     ;;
@@ -170,6 +190,7 @@ case "$ACTION" in
     ;;
   pull)
     pull_app_images
+    pull_shared_assets_helper
     echo "[deploy] 应用镜像已拉取"
     ;;
   down)
@@ -178,6 +199,7 @@ case "$ACTION" in
     ;;
   up)
     "$@" config --quiet
+    pull_shared_assets_helper
     if [ "$SOURCE" = "build" ]; then
       echo "[deploy] 本地 Dockerfile 构建模式"
       "$@" up -d --build

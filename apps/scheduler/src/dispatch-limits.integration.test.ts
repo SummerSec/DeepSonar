@@ -144,6 +144,7 @@ if (!testDatabaseUrl) {
       await setRules({
         maxGlobalJobs: 4,
         maxJobsPerProject: 4,
+        maxConcurrentProvisioning: 4,
         maxConcurrentByAgentCli: { "claude-code": 4 },
       });
       const firstIds = await Promise.all(Array.from({ length: 4 }, () => insertJob(projectIds[0])));
@@ -161,6 +162,7 @@ if (!testDatabaseUrl) {
       await setRules({
         maxGlobalJobs: 4,
         maxJobsPerProject: 2,
+        maxConcurrentProvisioning: 4,
         maxConcurrentByAgentCli: { "claude-code": 4 },
       });
       const secondIds = await Promise.all(Array.from({ length: 3 }, () => insertJob(projectIds[0])));
@@ -181,6 +183,7 @@ if (!testDatabaseUrl) {
       await setRules({
         maxGlobalJobs: 3,
         maxJobsPerProject: 1,
+        maxConcurrentProvisioning: 3,
         maxConcurrentByAgentCli: { "claude-code": 4 },
       });
       await insertJob(projectIds[0], { status: "claimed" });
@@ -204,6 +207,27 @@ if (!testDatabaseUrl) {
       // guards the timestamp+id cursor, including equal created_at values.
       const noEligibleClaim = await claimWithTimeout(2_000);
       assert.deepEqual(noEligibleClaim, []);
+
+      // Provisioning admission 独立于活跃总量上限，同时统计 claimed 和
+      // provisioning 行。槽位已满时 pending Job 保持不变，避免等待期间
+      // 消耗 claimed_at 租约。
+      await sql`DELETE FROM jobs WHERE id = ANY(${[...jobIds]}::uuid[])`;
+      jobIds.length = 0;
+      await setRules({
+        maxGlobalJobs: 8,
+        maxJobsPerProject: 8,
+        maxConcurrentProvisioning: 2,
+        maxConcurrentByAgentCli: { "claude-code": 8 },
+      });
+      await insertJob(projectIds[0], { status: "claimed" });
+      await insertJob(projectIds[0], { status: "provisioning" });
+      const blockedPendingId = await insertJob(projectIds[0]);
+      const blockedClaim = await claimPendingJobs();
+      assert.deepEqual(blockedClaim, []);
+      const [blockedStatus] = await sql`
+        SELECT status, claimed_at FROM jobs WHERE id = ${blockedPendingId}`;
+      assert.equal(blockedStatus.status, "pending");
+      assert.equal(blockedStatus.claimed_at, null);
     } finally {
       if (!databaseClosed) {
         await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;
