@@ -40,6 +40,7 @@ import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type Sem
 import { HumanMessageComposer } from "./HumanMessageComposer";
 import { humanMessageStatusLabel, isActiveHumanMessageTarget, messagesForCanvasNode } from "./human-messages";
 import { Sidebar } from "./Sidebar";
+import { SearchableMultiSelect } from "./SearchableSelect";
 import { consumeViewportFit, resolveViewportNodeIds } from "./canvas-viewport";
 import { findingTraceIds, traceDisplayIds, type TraceFocusMode } from "./finding-trace-focus";
 
@@ -352,10 +353,10 @@ export function CanvasView({
     positions: Map<string, { x: number; y: number }>;
     mode: "elk" | "fallback";
   } | null>(null);
-  const [kindFilter, setKindFilter] = useState("");
-  const [severityFilter, setSeverityFilter] = useState("");
-  const [roleFilter, setRoleFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [kindFilter, setKindFilter] = useState<string[]>([]);
+  const [severityFilter, setSeverityFilter] = useState<string[]>([]);
+  const [roleFilter, setRoleFilter] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [showContext, setShowContext] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(() =>
@@ -666,7 +667,9 @@ export function CanvasView({
     );
   }, [collapsedIds, data, depths, effectiveMaxDepth, expandedIds]);
 
-  const filterActive = Boolean(kindFilter || severityFilter || roleFilter || statusFilter || query.trim());
+  const filterActive = Boolean(
+    kindFilter.length || severityFilter.length || roleFilter.length || statusFilter.length || query.trim(),
+  );
 
   /**
    * 最终展示集合 = 深度门控 ∩ 属性筛选（可含一跳上下文）。
@@ -689,10 +692,10 @@ export function CanvasView({
           const searchable =
             `${n.title} ${n.node_type} ${role} ${severity} ${n.status ?? ""} ${JSON.stringify(n.body_json ?? {})}`.toLowerCase();
           return (
-            (!kindFilter || semanticNodeKind(n) === kindFilter) &&
-            (!severityFilter || severity === severityFilter) &&
-            (!roleFilter || role === roleFilter) &&
-            (!statusFilter || n.status === statusFilter) &&
+            (kindFilter.length === 0 || kindFilter.includes(semanticNodeKind(n))) &&
+            (severityFilter.length === 0 || severityFilter.includes(severity)) &&
+            (roleFilter.length === 0 || roleFilter.includes(role)) &&
+            (statusFilter.length === 0 || statusFilter.includes(n.status ?? "")) &&
             (!needle || searchable.includes(needle))
           );
         })
@@ -1109,10 +1112,10 @@ export function CanvasView({
                 <button
                   type="button"
                   onClick={() => {
-                    setKindFilter("");
-                    setSeverityFilter("");
-                    setRoleFilter("");
-                    setStatusFilter("");
+                    setKindFilter([]);
+                    setSeverityFilter([]);
+                    setRoleFilter([]);
+                    setStatusFilter([]);
                     setQuery("");
                   }}
                   className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white"
@@ -1197,64 +1200,42 @@ export function CanvasView({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
-                节点类型
-                <select
-                  aria-label="节点类型"
-                  value={kindFilter}
-                  onChange={(e) => setKindFilter(e.target.value)}
-                  className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"
-                >
-                  <option value="">全部类型</option>
-                  {Object.entries(SEMANTIC_STYLE).map(([value, meta]) => (
-                    <option key={value} value={value}>
-                      {meta.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
-                Severity
-                <select
-                  aria-label="画布 Severity"
-                  value={severityFilter}
-                  onChange={(e) => setSeverityFilter(e.target.value)}
-                  className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"
-                >
-                  <option value="">全部级别</option>
-                  {["critical", "high", "medium", "low"].map((v) => (
-                    <option key={v}>{v}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
-                角色
-                <select
-                  aria-label="画布角色"
-                  value={roleFilter}
-                  onChange={(e) => setRoleFilter(e.target.value)}
-                  className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"
-                >
-                  <option value="">全部角色</option>
-                  {roleOptions.map((v) => (
-                    <option key={v}>{v}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
-                状态
-                <select
-                  aria-label="画布状态"
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08]"
-                >
-                  <option value="">全部状态</option>
-                  {statusOptions.map((v) => (
-                    <option key={v}>{v}</option>
-                  ))}
-                </select>
-              </label>
+              <SearchableMultiSelect
+                label="节点类型"
+                ariaLabel="节点类型"
+                value={kindFilter}
+                onChange={setKindFilter}
+                options={Object.entries(SEMANTIC_STYLE).map(([value, meta]) => ({ value, label: meta.label }))}
+                placeholder="全部类型"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+              />
+              <SearchableMultiSelect
+                label="Severity"
+                ariaLabel="画布 Severity"
+                value={severityFilter}
+                onChange={setSeverityFilter}
+                options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))}
+                placeholder="全部级别"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+              />
+              <SearchableMultiSelect
+                label="角色"
+                ariaLabel="画布角色"
+                value={roleFilter}
+                onChange={setRoleFilter}
+                options={roleOptions.map((value) => ({ value, label: value }))}
+                placeholder="全部角色"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+              />
+              <SearchableMultiSelect
+                label="状态"
+                ariaLabel="画布状态"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={statusOptions.map((value) => ({ value, label: value }))}
+                placeholder="全部状态"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+              />
               <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
                 搜索
                 <input

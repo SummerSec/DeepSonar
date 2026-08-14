@@ -12,25 +12,25 @@ const source = (name: string) => readFileSync(path.join(sourceRoot, name), "utf8
 test("Fact URL 深链与四类服务端筛选可独立更新并保留工作台状态", () => {
   const findingId = "11111111-1111-4111-8111-111111111111";
   const jobId = "22222222-2222-4222-8222-222222222222";
-  const initial = new URLSearchParams(`tab=facts&verification_status=verified&evidence_kind=review&finding_id=${findingId}&job_id=${jobId}`);
+  const initial = new URLSearchParams(`tab=facts&verification_status=verified,rejected&evidence_kind=review,test&finding_id=${findingId}&job_id=${jobId}`);
   assert.deepEqual(readFactPageFilters(initial), {
-    verification_status: "verified",
-    evidence_kind: "review",
-    finding_id: findingId,
-    job_id: jobId,
+    verification_status: ["verified", "rejected"],
+    evidence_kind: ["review", "test"],
+    finding_id: [findingId],
+    job_id: [jobId],
   });
 
   const opened = updateFactPageQuery(initial, "fact", "fact-1");
   assert.equal(opened.get("tab"), "facts");
   assert.equal(opened.get("fact"), "fact-1");
-  assert.equal(opened.get("verification_status"), "verified");
+  assert.equal(opened.get("verification_status"), "verified,rejected");
 
-  const cleared = updateFactPageQuery(opened, "evidence_kind", null);
+  const cleared = updateFactPageQuery(opened, "evidence_kind", []);
   assert.equal(cleared.has("evidence_kind"), false);
   assert.equal(cleared.get("fact"), "fact-1");
 
   const partialUuid = readFactPageFilters(new URLSearchParams("tab=facts&finding_id=11111111-1111"));
-  assert.equal(partialUuid.finding_id, "", "半截 UUID 不得进入服务端筛选请求");
+  assert.deepEqual(partialUuid.finding_id, [], "半截 UUID 不得进入服务端筛选请求");
 });
 
 test("Fact 与 Finding 人工动作发送画布作用域路径和严格请求体", async () => {

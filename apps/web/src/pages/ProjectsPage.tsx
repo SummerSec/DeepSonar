@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
+import { SearchableMultiSelect } from "../SearchableSelect";
 import { IntentLaunchRail } from "../components/IntentLaunchRail";
 import {
   hasNewProjectIntent,
@@ -20,7 +21,6 @@ import {
 } from "../dashboard-quick-start";
 import {
   EmptyState,
-  FilterSelect,
   PageHeader,
   PageSkeleton,
   PrimaryButton,
@@ -31,8 +31,8 @@ import {
 const inputCls =
   "w-full border bg-transparent px-3 py-2.5 text-[13px] text-zinc-200 outline-none placeholder:text-zinc-700";
 
-type StatusFilter = "active" | "archived" | "all";
-type SourceFilter = "all" | "local" | "plane";
+type StatusFilter = "active" | "archived";
+type SourceFilter = "local" | "plane";
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -41,8 +41,8 @@ export function ProjectsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter[]>(["active"]);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", description: "" });
 
@@ -105,10 +105,9 @@ export function ProjectsPage() {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return projects.filter((project) => {
-      if (statusFilter === "active" && project.status !== "active") return false;
-      if (statusFilter === "archived" && project.status !== "archived") return false;
-      if (sourceFilter === "plane" && !project.plane_project_id) return false;
-      if (sourceFilter === "local" && project.plane_project_id) return false;
+      if (statusFilter.length > 0 && !statusFilter.includes(project.status)) return false;
+      const source: SourceFilter = project.plane_project_id ? "plane" : "local";
+      if (sourceFilter.length > 0 && !sourceFilter.includes(source)) return false;
       if (!needle) return true;
       const haystack = `${project.name} ${project.description ?? ""} ${project.plane_project_id ?? ""}`.toLowerCase();
       return haystack.includes(needle);
@@ -180,18 +179,18 @@ export function ProjectsPage() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <FilterSelect
-            value={statusFilter === "all" ? "" : statusFilter}
-            onChange={(v) => setStatusFilter((v || "all") as StatusFilter)}
+          <SearchableMultiSelect
+            value={statusFilter}
+            onChange={(value) => setStatusFilter(value as StatusFilter[])}
             placeholder="全部状态"
             options={[
               { value: "active", label: "进行中" },
               { value: "archived", label: "已归档" },
             ]}
           />
-          <FilterSelect
-            value={sourceFilter === "all" ? "" : sourceFilter}
-            onChange={(v) => setSourceFilter((v || "all") as SourceFilter)}
+          <SearchableMultiSelect
+            value={sourceFilter}
+            onChange={(value) => setSourceFilter(value as SourceFilter[])}
             placeholder="全部来源"
             options={[
               { value: "local", label: "本地" },
@@ -222,7 +221,7 @@ export function ProjectsPage() {
         <EmptyState
           title={
             projects.length
-              ? query || statusFilter !== "active" || sourceFilter !== "all"
+              ? query || statusFilter.length !== 1 || statusFilter[0] !== "active" || sourceFilter.length > 0
                 ? "没有匹配的项目"
                 : "没有进行中的项目"
               : "创建你的第一个项目空间"
@@ -233,13 +232,13 @@ export function ProjectsPage() {
               : "项目只定义长期边界；创建后你可以立即用自然语言下达第一项任务。"
           }
           action={
-            showIntentRail ? undefined : query || statusFilter !== "all" || sourceFilter !== "all" ? (
+            showIntentRail ? undefined : query || statusFilter.length > 0 || sourceFilter.length > 0 ? (
               <SecondaryButton
                 type="button"
                 onClick={() => {
                   setQuery("");
-                  setStatusFilter("all");
-                  setSourceFilter("all");
+                  setStatusFilter([]);
+                  setSourceFilter([]);
                 }}
               >
                 清除筛选

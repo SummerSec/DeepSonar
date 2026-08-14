@@ -39,7 +39,7 @@ test("Provider account flow keeps the happy path on one surface", () => {
     assert.ok(editor.includes(marker), `editor should expose ${marker}`);
   }
   assert.ok(
-    editor.indexOf('aria-label="Agent CLI 类型"') < editor.indexOf('aria-label="Provider"'),
+    editor.indexOf('ariaLabel="Agent CLI 类型"') < editor.indexOf('ariaLabel="Provider"'),
     "Agent CLI must be selected before Provider",
   );
   assert.ok(editor.includes("item.compatible_agent_cli.includes(agentCli)"));

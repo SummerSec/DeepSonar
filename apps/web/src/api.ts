@@ -1740,19 +1740,19 @@ export const api = {
   factsPage: (
     canvasId: string,
     opts?: {
-      verification_status?: FactVerificationStatus;
-      evidence_kind?: FactVerification["evidence_kind"];
-      finding_id?: string;
-      job_id?: string;
+      verification_status?: readonly FactVerificationStatus[];
+      evidence_kind?: readonly FactVerification["evidence_kind"][];
+      finding_id?: readonly string[];
+      job_id?: readonly string[];
       after?: string | null;
       limit?: number;
     },
   ) => get<PageEnvelope<FactSummary>>(
     `/canvases/${canvasId}/facts${qs({
-      verification_status: opts?.verification_status,
-      evidence_kind: opts?.evidence_kind,
-      finding_id: opts?.finding_id,
-      job_id: opts?.job_id,
+      verification_status: opts?.verification_status?.join(","),
+      evidence_kind: opts?.evidence_kind?.join(","),
+      finding_id: opts?.finding_id?.join(","),
+      job_id: opts?.job_id?.join(","),
       after: opts?.after,
       limit: opts?.limit ? String(opts.limit) : undefined,
     })}`,

@@ -75,6 +75,10 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "Fact 游标无效", error_code: "INVALID_CURSOR" });
     }
     const limit = query.limit ?? 50;
+    const verificationStatuses = query.verification_status ?? [];
+    const evidenceKinds = query.evidence_kind ?? [];
+    const findingIds = query.finding_id ?? [];
+    const jobIds = query.job_id ?? [];
     const [canvas] = await sql`SELECT id FROM canvases WHERE id = ${id}`;
     if (!canvas) {
       return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
@@ -130,12 +134,12 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
       ) f ON true
       WHERE n.canvas_id = ${id}
         AND n.node_type = 'fact'
-        AND (${query.verification_status ?? null}::text IS NULL OR n.verification_status = ${query.verification_status ?? null})
-        AND (${query.evidence_kind ?? null}::text IS NULL OR (
-          f.id IS NOT NULL AND n.body_json->'verification'->>'evidence_kind' = ${query.evidence_kind ?? null}
+        AND (${verificationStatuses.length} = 0 OR n.verification_status = ANY(${verificationStatuses}::text[]))
+        AND (${evidenceKinds.length} = 0 OR (
+          f.id IS NOT NULL AND n.body_json->'verification'->>'evidence_kind' = ANY(${evidenceKinds}::text[])
         ))
-        AND (${query.finding_id ?? null}::uuid IS NULL OR f.id = ${query.finding_id ?? null}::uuid)
-        AND (${query.job_id ?? null}::uuid IS NULL OR source_job.id = ${query.job_id ?? null}::uuid)
+        AND (${findingIds.length} = 0 OR f.id = ANY(${findingIds}::uuid[]))
+        AND (${jobIds.length} = 0 OR source_job.id = ANY(${jobIds}::uuid[]))
         AND (${cursor?.created_at ?? null}::timestamptz IS NULL
           OR n.created_at < ${cursor?.created_at ?? null}::timestamptz
           OR (n.created_at = ${cursor?.created_at ?? null}::timestamptz AND n.id < ${cursor?.id ?? null}::uuid))

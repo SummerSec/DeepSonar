@@ -32,6 +32,7 @@ import { AccountPanel } from "./AccountPanel";
 import { MarkdownView } from "./MarkdownView";
 import { FindingProtocolEditor } from "./FindingProtocolEditor";
 import { SharedAssetsPanel } from "./SharedAssetsPanel";
+import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 
 /**
@@ -764,14 +765,20 @@ export function SettingsPanel({
                           {imageStrategy === "inherit_global" ? (
                             <div className="font-mono text-[11px] text-zinc-500">全局镜像：{globalImage ?? "全局未绑定（系统默认）"}</div>
                           ) : (
-                            <select
+                            <SearchableSelect
                               value={currentImage}
-                              onChange={(event) => setRoleRuntimeImages((current) => ({ ...current, [role.name]: event.target.value || null }))}
-                              className={inputCls}
-                            >
-                              <option value="">系统基础环境</option>
-                              {projectRuntimeImageChoices.map((image) => <option key={image.image_key} value={image.image_key}>{image.name} · {image.image_key}</option>)}
-                            </select>
+                              onChange={(next) => setRoleRuntimeImages((current) => ({ ...current, [role.name]: next || null }))}
+                              options={[
+                                { value: "", label: "系统基础环境" },
+                                ...projectRuntimeImageChoices.map((image) => ({ value: image.image_key, label: `${image.name} · ${image.image_key}` })),
+                                ...(currentImage && !projectRuntimeImageChoices.some((image) => image.image_key === currentImage)
+                                  ? [{ value: currentImage, label: `${currentImage}（当前 · 需检查启用）` }]
+                                  : []),
+                              ]}
+                              placeholder="选择运行镜像"
+                              ariaLabel={`${role.title || role.name} 的运行镜像`}
+                              className="w-full"
+                            />
                           )}
                         </div>
                       );
@@ -854,22 +861,25 @@ export function SettingsPanel({
                     达到该级别的 Finding 会自动验证；Hub 等它们验完再决策；验完且无活跃任务后停自驱；队列永远高危优先。更低级别不自动验，可在画布人工处理。
                   </HelpTip>
                 </label>
-                <select
+                <SearchableSelect
                   value={rules.minVerifySeverity ?? "high"}
-                  onChange={(e) =>
+                  onChange={(next) =>
                     setRules({
                       ...rules,
-                      minVerifySeverity: e.target.value as EffectiveRules["minVerifySeverity"],
+                      minVerifySeverity: next as EffectiveRules["minVerifySeverity"],
                     })
                   }
-                  className={inputCls}
-                >
-                  <option value="critical">critical — 只动 critical</option>
-                  <option value="high">high — critical + high（推荐）</option>
-                  <option value="medium">medium — 含 medium 及以上</option>
-                  <option value="low">low — 含 low 及以上</option>
-                  <option value="info">info — 全部自动验证</option>
-                </select>
+                  options={[
+                    { value: "critical", label: "critical — 只动 critical" },
+                    { value: "high", label: "high — critical + high（推荐）" },
+                    { value: "medium", label: "medium — 含 medium 及以上" },
+                    { value: "low", label: "low — 含 low 及以上" },
+                    { value: "info", label: "info — 全部自动验证" },
+                  ]}
+                  placeholder="选择最低关注级别…"
+                  ariaLabel="最低关注级别"
+                  clearable={false}
+                />
               </div>
             </section>
 

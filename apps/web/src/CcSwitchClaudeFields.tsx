@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, MagicWand } from "@phosphor-icons/react";
 import { formatJsonObjectText, validateJsonObjectText } from "./json-text";
+import { SearchableSelect } from "./SearchableSelect";
 
 export type ClaudeModelField =
   | "ANTHROPIC_MODEL"
@@ -248,19 +249,16 @@ export function CcSwitchClaudeFields({
                   list={modelOptions.length ? "cc-switch-model-options" : undefined}
                 />
                 {modelOptions.length > 0 ? (
-                  <select
-                    className="theme-input-surface cc-switch-model-select"
+                  <SearchableSelect
                     value={modelOptions.includes(models[field.key]) ? models[field.key] : ""}
-                    onChange={(event) => {
-                      if (event.target.value) handleModelChange(field.key, event.target.value);
+                    onChange={(value) => {
+                      if (value) handleModelChange(field.key, value);
                     }}
-                    aria-label={`${field.label} 从列表选择`}
-                  >
-                    <option value="">列表</option>
-                    {modelOptions.map((id) => (
-                      <option key={id} value={id}>{id}</option>
-                    ))}
-                  </select>
+                    options={modelOptions.map((id) => ({ value: id, label: id }))}
+                    placeholder="列表"
+                    ariaLabel={`${field.label} 从列表选择`}
+                    className="cc-switch-model-select min-w-[110px] [&>button]:h-full [&>button]:min-w-0 [&>button]:w-full"
+                  />
                 ) : null}
               </div>
             </div>

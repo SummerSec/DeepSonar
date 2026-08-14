@@ -13,6 +13,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type Project, type ProjectImageStrategy } from "../api";
 import { useAuth } from "../auth";
+import { SearchableSelect } from "../SearchableSelect";
 import {
   errorMessage,
   hasQuickStartWritePermission,
@@ -268,11 +269,19 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
 
             <div className="intent-launch-form-grid intent-launch-context-grid">
               <div className="intent-launch-field">
-                <label htmlFor={`quick-start-project-${instanceId}`}>项目空间 <span>默认归属</span></label>
-                <select id={`quick-start-project-${instanceId}`} value={selectedProjectId || NEW_PROJECT} onChange={(event) => selectProject(event.target.value)}>
-                  {activeProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-                  <option value={NEW_PROJECT}>{activeProjects.length ? "＋ 新建一个项目空间" : "＋ 现在创建第一个项目空间"}</option>
-                </select>
+                <label>项目空间 <span>默认归属</span></label>
+                <SearchableSelect
+                  value={selectedProjectId}
+                  onChange={selectProject}
+                  options={[
+                    ...activeProjects.map((project) => ({ value: project.id, label: project.name })),
+                    { value: NEW_PROJECT, label: activeProjects.length ? "＋ 新建一个项目空间" : "＋ 现在创建第一个项目空间" },
+                  ]}
+                  placeholder="选择项目空间"
+                  ariaLabel="项目空间"
+                  clearable={false}
+                  className="block [&>button]:min-h-[42px] [&>button]:w-full"
+                />
                 <small>{selectedProject ? `上次使用或当前默认 · ${selectedProject.name}` : "没有可用项目，将在这里创建一个本地项目空间"}</small>
               </div>
               {isCreatingProject && <div className="intent-launch-field">

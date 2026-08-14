@@ -11,6 +11,7 @@ import {
   type Project,
 } from "./api";
 import { useAuth } from "./auth";
+import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 
 /**
@@ -261,16 +262,14 @@ export function TokensPanel() {
           ))}
         </div>
         <div className="mb-2 flex gap-2">
-          <select
+          <SearchableSelect
             value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-zinc-200 outline-none"
-          >
-            <option value="">全部项目（不限定）</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+            onChange={setProjectId}
+            options={projects.map((project) => ({ value: project.id, label: project.name }))}
+            placeholder="全部项目（不限定）"
+            ariaLabel="Token 项目作用域"
+            className="min-w-0 flex-1 [&>button]:w-full"
+          />
           <input
             value={expireDays}
             onChange={(e) => setExpireDays(e.target.value.replace(/\D/g, ""))}

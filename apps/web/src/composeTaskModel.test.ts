@@ -52,12 +52,11 @@ test("compose candidate filters cover every severity, disposition, profile, orig
     finding({ id: "finding-3", title: "Low impact information leak", severity: "low", disposition: "confirmed_vuln", canvas_id: "canvas-3", canvas_title: "Metadata audit", summary: "Limited metadata exposure", tags_json: ["metadata"] }),
     finding({ id: "finding-4", disposition: "rejected_fp" }),
   ];
-  assert.deepEqual(filterComposeSeedCandidates(rows, { severity: "high" }).map((row) => row.id), ["finding-1"]);
-  assert.deepEqual(filterComposeSeedCandidates(rows, { severity: "medium" }).map((row) => row.id), ["finding-2"]);
-  assert.deepEqual(filterComposeSeedCandidates(rows, { severity: "low" }).map((row) => row.id), ["finding-3"]);
-  assert.deepEqual(filterComposeSeedCandidates(rows, { disposition: "accepted" }).map((row) => row.id), ["finding-2"]);
-  assert.deepEqual(filterComposeSeedCandidates(rows, { profile: "quality.bug" }).map((row) => row.id), ["finding-2"]);
-  assert.deepEqual(filterComposeSeedCandidates(rows, { canvasId: "canvas-1" }).map((row) => row.id), ["finding-1"]);
+  assert.deepEqual(filterComposeSeedCandidates(rows, { severities: ["high"] }).map((row) => row.id), ["finding-1"]);
+  assert.deepEqual(filterComposeSeedCandidates(rows, { severities: ["medium", "low"] }).map((row) => row.id), ["finding-2", "finding-3"]);
+  assert.deepEqual(filterComposeSeedCandidates(rows, { dispositions: ["accepted", "confirmed_vuln"] }).map((row) => row.id), ["finding-2", "finding-3"]);
+  assert.deepEqual(filterComposeSeedCandidates(rows, { profiles: ["quality.bug"] }).map((row) => row.id), ["finding-2"]);
+  assert.deepEqual(filterComposeSeedCandidates(rows, { canvasIds: ["canvas-1", "canvas-3"] }).map((row) => row.id), ["finding-1", "finding-3"]);
   assert.deepEqual(filterComposeSeedCandidates(rows, { search: "AUTH" }).map((row) => row.id), ["finding-1"]);
   assert.deepEqual(filterComposeSeedCandidates(rows, { search: "origin audit" }).map((row) => row.id), ["finding-1"]);
 });

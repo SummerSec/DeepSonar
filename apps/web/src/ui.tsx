@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { SearchableSelect } from "./SearchableSelect";
 import { STATUS_COLOR, SEVERITY_COLOR } from "./semantics";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -372,15 +373,7 @@ export function StatCard({ label, value, accent, hint, index = 0 }: { label: str
 }
 
 export function FilterSelect({ value, onChange, options, placeholder, label }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder: string; label?: string }) {
-  return (
-    <label className="filter-control">
-      {label && <span>{label}</span>}
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{placeholder}</option>
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </label>
-  );
+  return <SearchableSelect value={value} onChange={onChange} options={options} placeholder={placeholder} label={label} />;
 }
 
 export function SectionHeading({ title, meta, action }: { title: string; meta?: string; action?: ReactNode }) {

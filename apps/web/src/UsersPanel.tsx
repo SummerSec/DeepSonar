@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type PublicUser } from "./api";
+import { SearchableSelect } from "./SearchableSelect";
 
 export function UsersPanel() {
   const [users, setUsers] = useState<PublicUser[]>([]);
@@ -136,15 +137,18 @@ export function UsersPanel() {
             onChange={(e) => setForm({ ...form, password: e.target.value })}
             className="rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[13px] text-zinc-200"
           />
-          <select
+          <SearchableSelect
             value={form.role}
-            onChange={(e) => setForm({ ...form, role: e.target.value as typeof form.role })}
-            className="rounded-md border border-ink-700 bg-ink-850 px-3 py-2 text-[13px] text-zinc-200"
-          >
-            <option value="admin">admin — 全部权限</option>
-            <option value="operator">operator — 日常运维</option>
-            <option value="viewer">viewer — 只读</option>
-          </select>
+            onChange={(role) => setForm({ ...form, role: role as typeof form.role })}
+            options={[
+              { value: "admin", label: "admin — 全部权限" },
+              { value: "operator", label: "operator — 日常运维" },
+              { value: "viewer", label: "viewer — 只读" },
+            ]}
+            placeholder="选择角色…"
+            ariaLabel="用户角色"
+            clearable={false}
+          />
         </div>
         <button
           type="button"

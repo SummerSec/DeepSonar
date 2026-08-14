@@ -6,6 +6,7 @@ import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
+import { SearchableMultiSelect } from "./SearchableSelect";
 import { humanMessageStatusLabel } from "./human-messages";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SessionViewer } from "./session-viewer/SessionViewer";
@@ -175,7 +176,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const [tab, setTab] = useState<DetailTab>("live");
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [eventTypeFilter, setEventTypeFilter] = useState("");
+  const [eventTypeFilter, setEventTypeFilter] = useState<string[]>([]);
   const [eventQuery, setEventQuery] = useState("");
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [forceBusy, setForceBusy] = useState(false);
@@ -214,7 +215,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     setSessionError(null);
     setError(null);
     setDownloadError(null);
-    setEventTypeFilter("");
+    setEventTypeFilter([]);
     setEventQuery("");
     api.credentials().then((list) => alive && setCredentials(list)).catch(() => {});
     api.authMe().then((me) => {
@@ -358,7 +359,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     if (!detail) return [] as JobEvent[];
     const needle = eventQuery.trim().toLowerCase();
     return jobEvents.filter((e) => {
-      if (eventTypeFilter && e.type !== eventTypeFilter) return false;
+      if (eventTypeFilter.length > 0 && !eventTypeFilter.includes(e.type)) return false;
       if (!needle) return true;
       const blob = `${e.type} ${JSON.stringify(e.payload_json ?? {})}`.toLowerCase();
       return blob.includes(needle);
@@ -367,6 +368,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
 
   const snapshot = (detail?.job.agent_snapshot_json ?? null) as Record<string, unknown> | null;
   const agentCli = snapStr(snapshot, "agent_cli");
+  const dshTaskMode = snapStr(snapshot, "dsh_task_mode");
   const model = snapStr(snapshot, "model");
   const contextWindowTokens = snapStr(snapshot, "context_window_tokens");
   const roleName = snapStr(snapshot, "name");
@@ -834,19 +836,14 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           {detail && tab === "events" && (
             <div className="flex h-full min-h-0 flex-col overflow-hidden">
               <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[.06] px-3 py-2">
-                <select
-                  aria-label="事件类型筛选"
+                <SearchableMultiSelect
+                  ariaLabel="事件类型筛选"
                   value={eventTypeFilter}
-                  onChange={(e) => setEventTypeFilter(e.target.value)}
-                  className="min-h-8 rounded-lg bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08]"
-                >
-                  <option value="">全部类型</option>
-                  {eventTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setEventTypeFilter}
+                  options={eventTypes.map((type) => ({ value: type, label: type }))}
+                  placeholder="全部类型"
+                  className="contents"
+                />
                 <input
                   aria-label="搜索事件"
                   value={eventQuery}
@@ -1001,6 +998,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                     </div>
                     <div className="grid gap-2 sm:grid-cols-2">
                       <ConfigField label="CLI 工具 (agent_cli)" value={agentCli} />
+                      {agentCli === "dsh" && <ConfigField label="DSH 任务模式" value={dshTaskMode} />}
                       <ConfigField label="模型 (model)" value={model} />
                       <ConfigField
                         label="CLI 客户端上下文预算"

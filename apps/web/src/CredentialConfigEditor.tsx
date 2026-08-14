@@ -8,6 +8,7 @@ import { CcSwitchClaudeFields } from "./CcSwitchClaudeFields";
 import { CcSwitchCodexFields } from "./CcSwitchCodexFields";
 import { CcSwitchOpenCodeFields, defaultOpenCodeSettings } from "./CcSwitchOpenCodeFields";
 import { formatJsonObject, validateJsonObjectText } from "./json-text";
+import { SearchableSelect } from "./SearchableSelect";
 import { defaultCodexToml, validateTomlText } from "./toml-text";
 
 export type AgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
@@ -414,33 +415,37 @@ export function CredentialConfigEditor({
   return (
     <div className="provider-flow-create credential-config-editor">
       <div className="provider-flow-create-grid">
-        <select
+        <SearchableSelect
           value={agentCli}
-          onChange={(event) => switchCli(event.target.value as AgentCli)}
-          className="theme-input-surface"
-          aria-label="Agent CLI 类型"
-        >
-          <option value="claude-code">Claude Code（settings.json）</option>
-          <option value="codex">Codex（config.toml + auth.json）</option>
-          <option value="open-code">OpenCode（config.json）</option>
-          <option value="pi">Pi Coding Agent（models.json）</option>
-          <option value="dsh">DeepSeek Harness（JSON-RPC）</option>
-        </select>
-        <select
-          value={provider}
-          onChange={(event) => {
-            const next = event.target.value;
-            onProviderChange(next);
-            if (!providerCatalog.find((item) => item.provider === next)?.supports_base_url) onBaseUrlChange("");
-          }}
-          className="theme-input-surface"
-          aria-label="Provider"
-          disabled={mode === "edit"}
-        >
-          {compatibleProviders.map((item) => (
-            <option key={item.provider} value={item.provider}>{providerProtocolLabel(item.provider, agentCli, providerCatalog)}</option>
-          ))}
-        </select>
+          onChange={(next) => switchCli(next as AgentCli)}
+          options={[
+            { value: "claude-code", label: "Claude Code（settings.json）" },
+            { value: "codex", label: "Codex（config.toml + auth.json）" },
+            { value: "open-code", label: "OpenCode（config.json）" },
+            { value: "pi", label: "Pi Coding Agent（models.json）" },
+            { value: "dsh", label: "DeepSeek Harness（JSON-RPC）" },
+          ]}
+          placeholder="选择 Agent CLI…"
+          ariaLabel="Agent CLI 类型"
+          clearable={false}
+        />
+        <fieldset disabled={mode === "edit"} className="contents">
+          <SearchableSelect
+            value={provider}
+            onChange={(next) => {
+              onProviderChange(next);
+              if (!providerCatalog.find((item) => item.provider === next)?.supports_base_url) onBaseUrlChange("");
+            }}
+            options={compatibleProviders.map((item) => ({
+              value: item.provider,
+              label: providerProtocolLabel(item.provider, agentCli, providerCatalog),
+            }))}
+            placeholder="选择 Provider"
+            ariaLabel="Provider"
+            clearable={false}
+            className="block min-w-0 [&>button]:w-full"
+          />
+        </fieldset>
       </div>
       <div className="provider-flow-create-grid">
         <input
@@ -450,18 +455,18 @@ export function CredentialConfigEditor({
           placeholder="账号名称，如 team-provider"
           aria-label="账号名称"
         />
-        <select
-          value={projectId}
-          onChange={(event) => onProjectIdChange(event.target.value)}
-          disabled={Boolean(actorProjectId) || mode === "edit"}
-          className="theme-input-surface"
-          aria-label="账号作用域"
-        >
-          {!actorProjectId && <option value="">全局账号</option>}
-          {actorProjectId
-            ? <option value={actorProjectId}>项目账号</option>
-            : projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-        </select>
+        <fieldset disabled={Boolean(actorProjectId) || mode === "edit"} className="contents">
+          <SearchableSelect
+            value={projectId}
+            onChange={onProjectIdChange}
+            options={actorProjectId
+              ? [{ value: actorProjectId, label: "项目账号" }]
+              : projects.map((project) => ({ value: project.id, label: project.name }))}
+            placeholder={actorProjectId ? "项目账号" : "全局账号"}
+            ariaLabel="账号作用域"
+            className="block min-w-0 [&>button]:w-full"
+          />
+        </fieldset>
       </div>
       <label className="block">
         <span className="mb-1.5 block font-mono text-[11px] text-zinc-500">CLI 客户端上下文预算（tokens，可选）</span>

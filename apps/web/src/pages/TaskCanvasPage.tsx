@@ -36,11 +36,12 @@ import { readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "..
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
+import { SearchableMultiSelect } from "../SearchableSelect";
+import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import {
   DataTable,
   EmptyState,
-  FilterSelect,
   SeverityBadge,
   StatusBadge,
   formatElapsed,
@@ -128,9 +129,9 @@ export function TaskCanvasPage() {
   const { projectId, canvasId } = useParams<{ projectId: string; canvasId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as Tab) || "canvas";
-  const severity = searchParams.get("severity") ?? "";
-  const profile = searchParams.get("profile") ?? "";
-  const verify = searchParams.get("verify") ?? "";
+  const severities = readMultiSearchParam(searchParams, "severity");
+  const profiles = readMultiSearchParam(searchParams, "profile");
+  const verifyStatuses = readMultiSearchParam(searchParams, "verify");
   const factFilters = readFactPageFilters(searchParams);
   const selectedFact = searchParams.get("fact");
   const selectedFinding = searchParams.get("finding");
@@ -154,8 +155,8 @@ export function TaskCanvasPage() {
   const [factsLoading, setFactsLoading] = useState(true);
   const [factsError, setFactsError] = useState<string | null>(null);
   const [factsRefresh, setFactsRefresh] = useState(0);
-  const [jobStatusFilter, setJobStatusFilter] = useState("");
-  const [jobRoleTypeFilter, setJobRoleTypeFilter] = useState("");
+  const [jobStatusFilters, setJobStatusFilters] = useState<string[]>([]);
+  const [jobRoleTypeFilters, setJobRoleTypeFilters] = useState<string[]>([]);
   const [jobKeyword, setJobKeyword] = useState("");
   const [convergence, setConvergence] = useState<CanvasConvergence | null>(null);
   const [convBusy, setConvBusy] = useState(false);
@@ -556,16 +557,22 @@ export function TaskCanvasPage() {
     setSearchParams(sp, { replace: true });
   };
 
-  const setQuery = (key: "severity" | "profile" | "verify" | "finding" | "job" | "traceFinding" | "focusNode", value: string | null) => {
+  const setQuery = (key: "finding" | "job" | "traceFinding" | "focusNode", value: string | null) => {
     const sp = new URLSearchParams(searchParams);
     if (value) sp.set(key, value);
     else sp.delete(key);
     setSearchParams(sp, { replace: true });
   };
 
-  const setFactQuery = (key: FactFilterKey | "fact", value: string | null) => {
+  const setMultiQuery = (key: "severity" | "profile" | "verify", values: string[]) => {
+    const sp = new URLSearchParams(searchParams);
+    writeMultiSearchParam(sp, key, values);
+    setSearchParams(sp, { replace: true });
+  };
+
+  const setFactQuery = (key: FactFilterKey | "fact", value: string | readonly string[] | null) => {
     const next = updateFactPageQuery(searchParams, key, value);
-    if (key === "fact" && value) {
+    if (key === "fact" && typeof value === "string" && value) {
       next.delete("finding");
       next.delete("job");
     }
@@ -610,7 +617,9 @@ export function TaskCanvasPage() {
       };
     });
   const visibleFindings = findings.filter(
-    (finding) => (!severity || finding.severity === severity) && (!profile || finding.profile === profile) && (!verify || finding.verify_status === verify),
+    (finding) => (!severities.length || severities.includes(finding.severity ?? ""))
+      && (!profiles.length || profiles.includes(finding.profile))
+      && (!verifyStatuses.length || verifyStatuses.includes(finding.verify_status ?? "pending")),
   );
   const findingProtocol = (meta?.target_json?.effective_finding_protocol ?? null) as EffectiveFindingProtocol | null;
   const findingIdByNodeId = useMemo(
@@ -641,16 +650,16 @@ export function TaskCanvasPage() {
   const visibleJobs = useMemo(() => {
     const keyword = jobKeyword.trim().toLowerCase();
     return jobs.filter((job) => {
-      const matchesStatus = !jobStatusFilter || job.status === jobStatusFilter;
-      const matchesRoleType = !jobRoleTypeFilter || job.role_name === jobRoleTypeFilter || job.type === jobRoleTypeFilter;
+      const matchesStatus = !jobStatusFilters.length || jobStatusFilters.includes(job.status);
+      const matchesRoleType = !jobRoleTypeFilters.length || jobRoleTypeFilters.some((value) => job.role_name === value || job.type === value);
       const searchable = [job.id, job.type, job.role_name, job.agent_cli, job.model, job.credential_provider, job.error]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return matchesStatus && matchesRoleType && (!keyword || searchable.includes(keyword));
     });
-  }, [jobKeyword, jobRoleTypeFilter, jobStatusFilter, jobs]);
-  const hasJobFilters = Boolean(jobStatusFilter || jobRoleTypeFilter || jobKeyword);
+  }, [jobKeyword, jobRoleTypeFilters, jobStatusFilters, jobs]);
+  const hasJobFilters = Boolean(jobStatusFilters.length || jobRoleTypeFilters.length || jobKeyword);
 
   const jobElapsed = (job: JobSummary) => {
     if (!job.started_at) return "—";
@@ -958,22 +967,10 @@ export function TaskCanvasPage() {
         {tab === "facts" && (
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-              <FilterSelect
-                label="验证状态"
-                value={factFilters.verification_status}
-                onChange={(value) => setFactQuery("verification_status", value || null)}
-                placeholder="全部状态"
-                options={["unverified", "verifying", "verified", "rejected", "needs_human"].map((value) => ({ value, label: value }))}
-              />
-              <FilterSelect
-                label="证据类型"
-                value={factFilters.evidence_kind}
-                onChange={(value) => setFactQuery("evidence_kind", value || null)}
-                placeholder="全部类型"
-                options={[{ value: "review", label: "独立复核" }, { value: "test", label: "运行测试" }]}
-              />
-              <FilterSelect label="关联 Finding" value={factFilters.finding_id} onChange={(value) => setFactQuery("finding_id", value || null)} placeholder="全部 Finding" options={factFindingFilterOptions} />
-              <FilterSelect label="产出 Job" value={factFilters.job_id} onChange={(value) => setFactQuery("job_id", value || null)} placeholder="全部 Job" options={factJobFilterOptions} />
+              <SearchableMultiSelect label="验证状态" value={factFilters.verification_status} onChange={(values) => setFactQuery("verification_status", values)} placeholder="全部状态" options={["unverified", "verifying", "verified", "rejected", "needs_human"].map((value) => ({ value, label: value }))} />
+              <SearchableMultiSelect label="证据类型" value={factFilters.evidence_kind} onChange={(values) => setFactQuery("evidence_kind", values)} placeholder="全部类型" options={[{ value: "review", label: "独立复核" }, { value: "test", label: "运行测试" }]} />
+              <SearchableMultiSelect label="关联 Finding" value={factFilters.finding_id} onChange={(values) => setFactQuery("finding_id", values)} placeholder="全部 Finding" options={factFindingFilterOptions} />
+              <SearchableMultiSelect label="产出 Job" value={factFilters.job_id} onChange={(values) => setFactQuery("job_id", values)} placeholder="全部 Job" options={factJobFilterOptions} />
               <span className="font-mono text-[10px] text-zinc-500">已加载 {facts.length} 条</span>
             </div>
 
@@ -1043,7 +1040,14 @@ export function TaskCanvasPage() {
 
         {tab === "findings" && (
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
-            <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p><div className="flex flex-wrap gap-2"><FilterSelect label="PROFILE" value={profile} onChange={(v) => setQuery("profile", v || null)} placeholder="全部 profile" options={Array.from(new Set(findings.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} /><FilterSelect label="SEVERITY" value={severity} onChange={(v) => setQuery("severity", v || null)} placeholder="全部 severity" options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))} /><FilterSelect label="VERIFY" value={verify} onChange={(v) => setQuery("verify", v || null)} placeholder="全部验证状态" options={["pending", "verifying", "confirmed", "false_positive", "needs_human"].map((value) => ({ value, label: value }))} /></div></div>
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+              <p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p>
+              <div className="flex flex-wrap gap-2">
+                <SearchableMultiSelect label="PROFILE" value={profiles} onChange={(values) => setMultiQuery("profile", values)} placeholder="全部 profile" options={Array.from(new Set(findings.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} />
+                <SearchableMultiSelect label="SEVERITY" value={severities} onChange={(values) => setMultiQuery("severity", values)} placeholder="全部 severity" options={["critical", "high", "medium", "low", "info"].map((value) => ({ value, label: value }))} />
+                <SearchableMultiSelect label="VERIFY" value={verifyStatuses} onChange={(values) => setMultiQuery("verify", values)} placeholder="全部验证状态" options={["pending", "verifying", "confirmed", "false_positive", "needs_human"].map((value) => ({ value, label: value }))} />
+              </div>
+            </div>
 
             {/* 待人工处理事实：hub 无法自动裁决的 fact，人工确认/排除后才会推进报告 */}
             {humanFacts.length > 0 && (
@@ -1133,15 +1137,15 @@ export function TaskCanvasPage() {
         {tab === "jobs" && (
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="mb-4 flex flex-col gap-3 rounded-2xl bg-white/[.018] p-3 ring-1 ring-white/[.045] sm:flex-row sm:flex-wrap sm:items-end">
-              <FilterSelect value={jobStatusFilter} onChange={setJobStatusFilter} placeholder="全部状态" options={Array.from(new Set(jobs.map((job) => job.status))).sort().map((value) => ({ value, label: value }))} label="状态" />
-              <FilterSelect value={jobRoleTypeFilter} onChange={setJobRoleTypeFilter} placeholder="全部角色 / 类型" options={jobRoleTypeOptions.map((value) => ({ value, label: value }))} label="角色 / Job 类型" />
+              <SearchableMultiSelect value={jobStatusFilters} onChange={setJobStatusFilters} placeholder="全部状态" options={Array.from(new Set(jobs.map((job) => job.status))).sort().map((value) => ({ value, label: value }))} label="状态" />
+              <SearchableMultiSelect value={jobRoleTypeFilters} onChange={setJobRoleTypeFilters} placeholder="全部角色 / 类型" options={jobRoleTypeOptions.map((value) => ({ value, label: value }))} label="角色 / Job 类型" />
               <label className="filter-control min-w-0 flex-1 sm:min-w-[14rem]">
                 <span>关键词</span>
                 <input value={jobKeyword} onChange={(event) => setJobKeyword(event.target.value)} placeholder="ID、模型、凭据等" className="theme-input-surface w-full border px-3 py-1.5 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600" />
               </label>
               <div className="flex items-center gap-3 sm:ml-auto">
                 <span className="font-mono text-[10px] text-zinc-500">显示 {visibleJobs.length} / {jobs.length}</span>
-                {hasJobFilters && <button type="button" onClick={() => { setJobStatusFilter(""); setJobRoleTypeFilter(""); setJobKeyword(""); }} className="font-mono text-[10px] text-acc-400 transition-colors hover:text-acc-300">清空</button>}
+                {hasJobFilters && <button type="button" onClick={() => { setJobStatusFilters([]); setJobRoleTypeFilters([]); setJobKeyword(""); }} className="font-mono text-[10px] text-acc-400 transition-colors hover:text-acc-300">清空</button>}
               </div>
             </div>
             <p className="mb-4 text-[11px] leading-5 text-zinc-600">
@@ -1150,7 +1154,7 @@ export function TaskCanvasPage() {
             {jobs.length === 0 ? (
               <EmptyState title="本任务暂无运行记录" hint="调度领取后会出现在这里" />
             ) : visibleJobs.length === 0 ? (
-              <EmptyState title="没有匹配的运行记录" hint="调整状态、角色 / Job 类型或关键词后重试。" action={<button type="button" onClick={() => { setJobStatusFilter(""); setJobRoleTypeFilter(""); setJobKeyword(""); }} className="rounded-full bg-white/[.05] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.08]">清空筛选</button>} />
+              <EmptyState title="没有匹配的运行记录" hint="调整状态、角色 / Job 类型或关键词后重试。" action={<button type="button" onClick={() => { setJobStatusFilters([]); setJobRoleTypeFilters([]); setJobKeyword(""); }} className="rounded-full bg-white/[.05] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.08]">清空筛选</button>} />
             ) : (
               <>
               <DataTable>

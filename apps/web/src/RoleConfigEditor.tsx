@@ -30,6 +30,7 @@ import {
   toggleSelector,
   type ModulePickerOption,
 } from "./module-selector-state";
+import { SearchableMultiSelect } from "./SearchableSelect";
 
 /**
  * 角色配置编辑器：指令 / 平台工具 / 模块 / CLI 客户端上下文预算覆盖。
@@ -174,7 +175,7 @@ function parseJsonArray(text: string): Record<string, unknown>[] {
 
 function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources: SkillSource[]; sourceDetails: Record<string, SkillSourceDetail>; selected: string[]; onChange: (values: string[]) => void }) {
   const [query, setQuery] = useState("");
-  const [sourceId, setSourceId] = useState("all");
+  const [sourceIds, setSourceIds] = useState<string[]>([]);
   /** Per-plugin open/closed overrides; default is collapsed (search expands matches). */
   const [expandOverrides, setExpandOverrides] = useState<Map<string, boolean>>(() => new Map());
   const options = useMemo<ModulePickerOption[]>(
@@ -189,10 +190,10 @@ function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources:
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return options.filter((option) =>
-      (sourceId === "all" || option.sourceId === sourceId) &&
+      (!sourceIds.length || sourceIds.includes(option.sourceId)) &&
       `${option.name} ${option.description} ${option.plugin} ${option.kind} ${option.sourceName}`.toLowerCase().includes(needle),
     );
-  }, [options, query, sourceId]);
+  }, [options, query, sourceIds]);
   const groups = useMemo(() => groupModuleOptions(options), [options]);
   const visibleKeys = filtered.map((option) => option.key);
   const allVisibleDirectSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selected.includes(key));
@@ -207,7 +208,7 @@ function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources:
     source,
     options: filtered.filter((option) => option.sourceId === source.id),
     total: options.filter((option) => option.sourceId === source.id).length,
-  })).filter(({ source }) => sourceId === "all" || source.id === sourceId);
+  })).filter(({ source }) => !sourceIds.length || sourceIds.includes(source.id));
 
   const visiblePluginKeys = useMemo(() => {
     const keys: string[] = [];
@@ -232,7 +233,7 @@ function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources:
   return <div className="module-picker">
     <div className="module-toolbar">
       <div className="selector-search flex-1"><MagnifyingGlass size={14} weight="light" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、Command、插件或说明" /></div>
-      <select value={sourceId} onChange={(event) => setSourceId(event.target.value)} aria-label="模块来源"><option value="all">全部模块源</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
+      <SearchableMultiSelect value={sourceIds} onChange={setSourceIds} options={sources.map((source) => ({ value: source.id, label: source.name }))} placeholder="全部模块源" ariaLabel="模块来源" className="block [&>button]:w-full" />
     </div>
     <div className="module-summary">
       <span><strong>{selected.length}</strong> 个选择器已选 · 当前显示 {filtered.length} 个模块 · 插件默认折叠</span>

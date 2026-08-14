@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type FindingSummary, type Project } from "../api";
 import { FindingDetailPanel } from "../FindingDetailPanel";
+import { SearchableMultiSelect } from "../SearchableSelect";
+import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
 import { composeSeedTaskUrl, isComposeSeedCandidate, MAX_COMPOSE_SEEDS } from "../composeTaskModel";
 import {
   DataTable,
@@ -61,11 +63,11 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const severity = searchParams.get("severity") ?? "";
-  const profile = searchParams.get("profile") ?? "";
-  const verify = searchParams.get("verify") ?? "";
-  const disposition = searchParams.get("disposition") ?? "";
-  const projectFilter = searchParams.get("project") ?? "";
+  const severities = readMultiSearchParam(searchParams, "severity");
+  const profiles = readMultiSearchParam(searchParams, "profile");
+  const verifyStatuses = readMultiSearchParam(searchParams, "verify");
+  const dispositions = readMultiSearchParam(searchParams, "disposition");
+  const projectFilters = readMultiSearchParam(searchParams, "project");
   const q = searchParams.get("q") ?? "";
   const selectedFinding = searchParams.get("finding");
 
@@ -116,10 +118,16 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     };
   }, [scope, projectId]);
 
-  const setParam = (key: "severity" | "profile" | "verify" | "disposition" | "q" | "project", value: string) => {
+  const setParam = (key: "q", value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+
+  const setMultiParam = (key: "severity" | "profile" | "verify" | "disposition" | "project", values: string[]) => {
+    const next = new URLSearchParams(searchParams);
+    writeMultiSearchParam(next, key, values);
     setSearchParams(next, { replace: true });
   };
 
@@ -149,33 +157,31 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return rows.filter((f) => {
-      if (severity && f.severity !== severity) return false;
-      if (profile && f.profile !== profile) return false;
-      if (verify && f.verify_status !== verify) return false;
-      if (disposition && String(f.disposition ?? "open") !== disposition) return false;
-      if (scope === "global" && projectFilter && f.project_id !== projectFilter) return false;
+      if (severities.length && !severities.includes(f.severity ?? "")) return false;
+      if (profiles.length && !profiles.includes(f.profile)) return false;
+      if (verifyStatuses.length && !verifyStatuses.includes(f.verify_status ?? "pending")) return false;
+      if (dispositions.length && !dispositions.includes(String(f.disposition ?? "open"))) return false;
+      if (scope === "global" && projectFilters.length && !projectFilters.includes(f.project_id)) return false;
       if (!needle) return true;
       const hay =
         `${f.title} ${f.profile} ${f.category ?? ""} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.canvas_title ?? ""} ${f.tags_json.join(" ")} ${f.fingerprint ?? ""}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [rows, severity, profile, verify, disposition, projectFilter, q, scope]);
+  }, [rows, severities, profiles, verifyStatuses, dispositions, projectFilters, q, scope]);
 
   const filterActive = Boolean(
-    severity || profile || verify || disposition || q.trim() || (scope === "global" && projectFilter),
+    severities.length || profiles.length || verifyStatuses.length || dispositions.length || q.trim() || (scope === "global" && projectFilters.length),
   );
   const totalCount = rows.length;
   const filteredCount = visible.length;
   const filterChips = [
-    severity && `风险 ${severity}`,
-    profile && `协议 ${profile}`,
-    verify && `验证 ${verify}`,
-    disposition && `处置 ${disposition}`,
-    scope === "global" &&
-      projectFilter &&
-      `项目 ${projectOptions.find((p) => p.id === projectFilter)?.name ?? projectFilter.slice(0, 8)}`,
-    q.trim() && `搜索 “${q.trim()}”`,
-  ].filter((v): v is string => Boolean(v));
+    ...severities.map((value) => `风险 ${value}`),
+    ...profiles.map((value) => `协议 ${value}`),
+    ...verifyStatuses.map((value) => `验证 ${VERIFY_LABELS[value] ?? value}`),
+    ...dispositions.map((value) => `处置 ${DISPOSITION_LABELS[value] ?? value}`),
+    ...(scope === "global" ? projectFilters.map((value) => `项目 ${projectOptions.find((project) => project.id === value)?.name ?? value.slice(0, 8)}`) : []),
+    ...(q.trim() ? [`搜索 “${q.trim()}”`] : []),
+  ];
 
   const clearFilters = () => {
     const next = new URLSearchParams(searchParams);
@@ -282,35 +288,27 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">风险等级</span>
-                    <select
-                      value={severity}
-                      onChange={(e) => setParam("severity", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按风险等级筛选"
-                    >
-                      <option value="">全部</option>
-                      {SEVERITIES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
+                    <SearchableMultiSelect
+                      value={severities}
+                      onChange={(values) => setMultiParam("severity", values)}
+                      options={SEVERITIES.map((value) => ({ value, label: value }))}
+                      placeholder="全部风险"
+                      ariaLabel="按风险等级筛选"
+                      className="contents"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">标题</span>
-                    <select
-                      value={profile}
-                      onChange={(e) => setParam("profile", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按 Finding profile 筛选"
-                    >
-                      <option value="">全部 profile</option>
-                      {Array.from(new Set(rows.map((finding) => finding.profile))).sort().map((value) => (
-                        <option key={value} value={value}>{value}</option>
-                      ))}
-                    </select>
+                    <SearchableMultiSelect
+                      value={profiles}
+                      onChange={(values) => setMultiParam("profile", values)}
+                      options={Array.from(new Set(rows.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))}
+                      placeholder="全部 profile"
+                      ariaLabel="按 Finding profile 筛选"
+                      className="contents"
+                    />
                     <div className="table-head-search">
                       <MagnifyingGlass size={12} />
                       <input
@@ -340,19 +338,14 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                   <th className="table-head-cell">
                     <div className="table-head-stack">
                       <span className="table-head-label">项目</span>
-                      <select
-                        value={projectFilter}
-                        onChange={(e) => setParam("project", e.target.value)}
-                        className="table-head-control"
-                        aria-label="按项目筛选"
-                      >
-                        <option value="">全部</option>
-                        {projectOptions.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
+                      <SearchableMultiSelect
+                        value={projectFilters}
+                        onChange={(values) => setMultiParam("project", values)}
+                        options={projectOptions.map((project) => ({ value: project.id, label: project.name }))}
+                        placeholder="全部项目"
+                        ariaLabel="按项目筛选"
+                        className="contents"
+                      />
                     </div>
                   </th>
                 )}
@@ -360,28 +353,22 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">验证</span>
-                    <select
-                      value={verify}
-                      onChange={(e) => setParam("verify", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按验证状态筛选"
-                    >
-                      <option value="">全部</option>
-                      {VERIFY_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={disposition}
-                      onChange={(e) => setParam("disposition", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按处置状态筛选"
-                    >
-                      <option value="">全部处置</option>
-                      {DISPOSITION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
+                    <SearchableMultiSelect
+                      value={verifyStatuses}
+                      onChange={(values) => setMultiParam("verify", values)}
+                      options={VERIFY_OPTIONS}
+                      placeholder="全部验证"
+                      ariaLabel="按验证状态筛选"
+                      className="contents"
+                    />
+                    <SearchableMultiSelect
+                      value={dispositions}
+                      onChange={(values) => setMultiParam("disposition", values)}
+                      options={DISPOSITION_OPTIONS}
+                      placeholder="全部处置"
+                      ariaLabel="按处置状态筛选"
+                      className="contents"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">时间</th>
@@ -511,56 +498,11 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
               )}
             </div>
             <div className={`grid gap-2 ${scope === "global" ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-2"}`}>
-              <select
-                value={severity}
-                onChange={(e) => setParam("severity", e.target.value)}
-                className="table-head-control max-w-none"
-                aria-label="Severity"
-              >
-                <option value="">全部 severity</option>
-                {SEVERITIES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-              {scope === "global" && (
-                <select
-                  value={projectFilter}
-                  onChange={(e) => setParam("project", e.target.value)}
-                  className="table-head-control max-w-none"
-                  aria-label="项目"
-                >
-                  <option value="">全部项目</option>
-                  {projectOptions.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <select
-                value={verify}
-                onChange={(e) => setParam("verify", e.target.value)}
-                className="table-head-control max-w-none"
-                aria-label="验证状态"
-              >
-                <option value="">全部验证</option>
-                {VERIFY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={disposition}
-                onChange={(e) => setParam("disposition", e.target.value)}
-                className="table-head-control max-w-none"
-                aria-label="处置状态"
-              >
-                <option value="">全部处置</option>
-                {DISPOSITION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
+              <SearchableMultiSelect value={severities} onChange={(values) => setMultiParam("severity", values)} options={SEVERITIES.map((value) => ({ value, label: value }))} placeholder="全部风险" ariaLabel="Severity" className="contents" />
+              <SearchableMultiSelect value={profiles} onChange={(values) => setMultiParam("profile", values)} options={Array.from(new Set(rows.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} placeholder="全部 profile" ariaLabel="Finding profile" className="contents" />
+              {scope === "global" && <SearchableMultiSelect value={projectFilters} onChange={(values) => setMultiParam("project", values)} options={projectOptions.map((project) => ({ value: project.id, label: project.name }))} placeholder="全部项目" ariaLabel="项目" className="contents" />}
+              <SearchableMultiSelect value={verifyStatuses} onChange={(values) => setMultiParam("verify", values)} options={VERIFY_OPTIONS} placeholder="全部验证" ariaLabel="验证状态" className="contents" />
+              <SearchableMultiSelect value={dispositions} onChange={(values) => setMultiParam("disposition", values)} options={DISPOSITION_OPTIONS} placeholder="全部处置" ariaLabel="处置状态" className="contents" />
             </div>
           </div>
         </div>

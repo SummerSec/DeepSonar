@@ -71,7 +71,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /canvases/:id/summary | tasks:read | 画布摘要 |
 | GET | /canvases/:id/delta | tasks:read | `?since=` 增量图数据 |
 | GET | /canvases/:id/nodes/:nodeId | tasks:read | 节点详情 |
-| GET | /canvases/:id/facts | tasks:read | Fact keyset 分页；支持 `after/limit/verification_status/evidence_kind/finding_id/job_id` |
+| GET | /canvases/:id/facts | tasks:read | Fact keyset 分页；支持 `after/limit`，其余四类筛选接受逗号分隔多值并按同维度 OR |
 | GET | /canvases/:id/facts/:nodeId | tasks:read | Fact 完整正文、结构化 Finding/Job 关联和有界直接链路 |
 | PATCH | /canvases/:id/facts/:nodeId/verification | jobs:control | Fact 人工验证 `{status: verified\|rejected\|needs_human, note?}` |
 

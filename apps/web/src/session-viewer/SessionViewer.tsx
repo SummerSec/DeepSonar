@@ -2,6 +2,7 @@ import { Copy, DownloadSimple } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import "./SessionViewer.css";
 import { MarkdownView } from "../MarkdownView";
+import { SearchableMultiSelect } from "../SearchableSelect";
 import {
   cacheHitRate,
   formatCacheHitRate,
@@ -264,14 +265,16 @@ export function SessionViewer({
   downloadError,
 }: SessionViewerProps) {
   const [tab, setTab] = useState<ViewerTab>("timeline");
-  const [kindFilter, setKindFilter] = useState<SessionItemKind | "all">("all");
+  const [kindFilter, setKindFilter] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
 
   const parsed = useMemo(() => parseAgentSession(text, { cli }), [text, cli]);
   const rows = useMemo(() => buildSessionLedger(parsed.items), [parsed.items]);
   const filteredRows = useMemo(
-    () => filterSessionLedger(rows, { kind: kindFilter, query }),
+    () => filterSessionLedger(rows, { query }).filter(
+      (row) => kindFilter.length === 0 || kindFilter.includes(row.item.kind),
+    ),
     [rows, kindFilter, query],
   );
   const selectedRow = useMemo(
@@ -368,19 +371,17 @@ export function SessionViewer({
                 <button type="button" className="session-viewer__search-clear" onClick={() => setQuery("")} aria-label="清除搜索">×</button>
               )}
             </label>
-            <select
+            <SearchableMultiSelect
               value={kindFilter}
-              onChange={(event) => setKindFilter(event.target.value as SessionItemKind | "all")}
-              className="session-viewer__filter"
-              aria-label="按类型筛选"
-            >
-              <option value="all">全部事件</option>
-              {(Object.keys(KIND_STYLE) as SessionItemKind[]).map((kind) => (
-                <option key={kind} value={kind}>
-                  {KIND_STYLE[kind].label}{counts[kind] ? ` (${counts[kind]})` : ""}
-                </option>
-              ))}
-            </select>
+              onChange={setKindFilter}
+              options={(Object.keys(KIND_STYLE) as SessionItemKind[]).map((kind) => ({
+                value: kind,
+                label: `${KIND_STYLE[kind].label}${counts[kind] ? ` (${counts[kind]})` : ""}`,
+              }))}
+              placeholder="全部事件"
+              ariaLabel="按类型筛选"
+              className="contents"
+            />
             <span className="session-viewer__toolbar-count">
               {filteredRows.length}/{rows.length} rows · {sessionLedgerTurnCount(rows)} turns
             </span>

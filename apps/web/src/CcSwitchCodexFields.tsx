@@ -2,6 +2,7 @@ import { Download, MagicWand } from "@phosphor-icons/react";
 import { useMemo } from "react";
 import { formatJsonObject, formatJsonObjectText, validateJsonObjectText } from "./json-text";
 import { defaultCodexToml, formatTomlText, validateTomlText } from "./toml-text";
+import { SearchableSelect } from "./SearchableSelect";
 
 function tomlString(value: string): string {
   return JSON.stringify(value);
@@ -108,10 +109,14 @@ export function CcSwitchCodexFields({
           <input id="cc-switch-codex-model" value={model}
             onChange={(event) => onTomlTextChange(patchTomlValue(tomlText, "model", event.target.value))}
             className="theme-input-surface cc-switch-input" placeholder="例如 gpt-5-codex" />
-          {modelOptions.length ? <select className="theme-input-surface cc-switch-model-select" value={modelOptions.includes(model) ? model : ""}
-            onChange={(event) => event.target.value && onTomlTextChange(patchTomlValue(tomlText, "model", event.target.value))}>
-            <option value="">列表</option>{modelOptions.map((id) => <option key={id} value={id}>{id}</option>)}
-          </select> : null}
+          {modelOptions.length ? <SearchableSelect
+            value={modelOptions.includes(model) ? model : ""}
+            onChange={(value) => value && onTomlTextChange(patchTomlValue(tomlText, "model", value))}
+            options={modelOptions.map((id) => ({ value: id, label: id }))}
+            placeholder="列表"
+            ariaLabel="模型名称 从列表选择"
+            className="cc-switch-model-select min-w-[110px] [&>button]:h-full [&>button]:min-w-0 [&>button]:w-full"
+          /> : null}
         </div>
         <p className="cc-switch-hint">模型写入 config.toml；角色绑定该配置文件，不需要单独选择 model。</p>
       </div>

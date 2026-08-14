@@ -152,6 +152,8 @@ pending → claimed → provisioning → running
 
 **冲突规则：任务 > 项目 > 全局**（RoleConfig 已如此；Finding 协议等演进配置同此心智）。
 
+DSH RoleConfig 的 `dsh_task_mode` 固定为 `standard | ptc`，默认 `standard`，并随 Job 冻结。Standard 使用 DSH 原生工具呈现；PTC 使用官方 Code Mode（`dsh-tools mode: code`）和受治理的 worker-thread TypeScript runtime，只把 `run_code` 作为模型直接工具。该字段对其他 Agent CLI 无效。DSH 的 `reasoning` 显式支持原生 `llm-deepseek` 公布的 `off | high | max`，物化为 adapter profile 的 `reasoningEffort`；空值保留 Provider 默认。其他 CLI 继续按各自既有档位校验，禁止把不受支持的档位静默映射。
+
 Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项目
 `projects.config_json.finding_protocol`，任务创建请求可用 `finding_protocol` 只覆盖声明的键；列表字段在高层整表替换。解析后的 `EffectiveFindingProtocol`（模式、默认/允许 profiles、评分策略、显示名和来源）随新画布冻结，后续配置修改只影响新任务。
 
@@ -216,6 +218,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；全局调度规则与平台配置包归平台数据。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
 - 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条可用的 confirmed Finding，创建后显示为只读种子背景。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联，并提供人工 `verified` / `rejected` / `needs_human` 收口。
+- 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
 - **任务是否在跑：以 `active_count` / 活跃 Job 为准**；勿把 `last_job_status=succeeded` 当成任务已完成（#46）

@@ -10,10 +10,10 @@ export function isComposeSeedCandidate(finding: FindingSummary): boolean {
 
 export interface ComposeSeedFilters {
   search?: string;
-  severity?: string;
-  profile?: string;
-  disposition?: string;
-  canvasId?: string;
+  severities?: readonly string[];
+  profiles?: readonly string[];
+  dispositions?: readonly string[];
+  canvasIds?: readonly string[];
 }
 
 export function filterComposeSeedCandidates(
@@ -23,10 +23,10 @@ export function filterComposeSeedCandidates(
   const needle = filters.search?.trim().toLowerCase() ?? "";
   return findings.filter((finding) => {
     if (!isComposeSeedCandidate(finding)) return false;
-    if (filters.severity && String(finding.severity ?? "").toLowerCase() !== filters.severity.toLowerCase()) return false;
-    if (filters.profile && finding.profile !== filters.profile) return false;
-    if (filters.disposition && String(finding.disposition ?? "open") !== filters.disposition) return false;
-    if (filters.canvasId && finding.canvas_id !== filters.canvasId) return false;
+    if (filters.severities?.length && !filters.severities.some((value) => value.toLowerCase() === String(finding.severity ?? "").toLowerCase())) return false;
+    if (filters.profiles?.length && !filters.profiles.includes(finding.profile)) return false;
+    if (filters.dispositions?.length && !filters.dispositions.includes(String(finding.disposition ?? "open"))) return false;
+    if (filters.canvasIds?.length && !filters.canvasIds.includes(finding.canvas_id ?? "")) return false;
     if (!needle) return true;
     return [
       finding.title,

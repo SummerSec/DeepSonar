@@ -186,6 +186,12 @@ if (!testDatabaseUrl) {
       });
       assert.equal(filtered.statusCode, 200, filtered.payload);
       assert.deepEqual(filtered.json().items.map((item: { id: string }) => item.id), [legalFactId]);
+      const multiFiltered = await app.inject({
+        method: "GET",
+        url: `/canvases/${canvasId}/facts?verification_status=verified,unverified&job_id=${reviewJobId},${high.originJobId}`,
+      });
+      assert.equal(multiFiltered.statusCode, 200, multiFiltered.payload);
+      assert.deepEqual(multiFiltered.json().items.map((item: { id: string }) => item.id), [lateFactId, plainFactId, legalFactId, spoofFactId]);
       assert.equal((await app.inject({ method: "GET", url: `/canvases/${canvasId}/facts?finding_id=bad` })).statusCode, 400);
       assert.equal((await app.inject({ method: "GET", url: `/canvases/${canvasId}/facts?after=badcursor` })).statusCode, 400);
 

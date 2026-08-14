@@ -1,6 +1,7 @@
 import { Download, MagicWand, Plus, Trash } from "@phosphor-icons/react";
 import { useMemo } from "react";
 import { formatJsonObject, formatJsonObjectText, validateJsonObjectText } from "./json-text";
+import { SearchableSelect } from "./SearchableSelect";
 
 type OpenCodeModel = { name?: string; [key: string]: unknown };
 
@@ -114,11 +115,16 @@ export function CcSwitchOpenCodeFields({
   return (
     <div className="cc-switch-form">
       <div className="cc-switch-field">
-        <label className="cc-switch-label" htmlFor="cc-switch-opencode-npm">接口格式</label>
-        <select id="cc-switch-opencode-npm" value={npm} onChange={(event) => update((draft) => { draft.npm = event.target.value; })}
-          className="theme-input-surface cc-switch-input">
-          {NPM_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
+        <span className="cc-switch-label">接口格式</span>
+        <SearchableSelect
+          value={npm}
+          onChange={(next) => update((draft) => { draft.npm = next; })}
+          options={NPM_OPTIONS.map(([value, label]) => ({ value, label }))}
+          placeholder="选择接口格式…"
+          ariaLabel="接口格式"
+          className="w-full [&>button]:w-full"
+          clearable={false}
+        />
       </div>
       <div className="cc-switch-field">
         <label className="cc-switch-label" htmlFor="cc-switch-opencode-key">API Key</label>
@@ -153,11 +159,14 @@ export function CcSwitchOpenCodeFields({
             </button> : null}
             <button type="button" className="secondary-button !min-h-7 !px-2 !text-[10px]" onClick={addModel}><Plus size={13} />添加</button>
           </div></div>
-        {modelOptions.length > 0 ? <select className="theme-input-surface cc-switch-input" value=""
-          onChange={(event) => addCatalogModel(event.target.value)} aria-label="从模型目录添加">
-          <option value="">从模型目录添加…</option>
-          {modelOptions.filter((id) => !models[id]).map((id) => <option key={id} value={id}>{id}</option>)}
-        </select> : null}
+        {modelOptions.length > 0 ? <SearchableSelect
+          value=""
+          onChange={addCatalogModel}
+          options={modelOptions.filter((id) => !models[id]).map((id) => ({ value: id, label: id }))}
+          placeholder="从模型目录添加…"
+          ariaLabel="从模型目录添加"
+          className="cc-switch-input [&>button]:w-full"
+        /> : null}
         {Object.keys(models).length === 0 ? <p className="cc-switch-hint">至少添加一个运行模型；首个模型作为该配置文件的默认模型。</p> :
           <div className="cc-switch-model-list">{Object.entries(models).map(([id, model]) => (
             <div className="cc-switch-model-entry" key={id}>

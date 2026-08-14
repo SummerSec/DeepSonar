@@ -34,6 +34,7 @@ import {
   restoreRedactedSecrets,
 } from "./CredentialConfigEditor";
 import { formatJsonObject } from "./json-text";
+import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 
 type FlowStep = "account" | "roles" | "effect";
@@ -49,6 +50,14 @@ const cliLabel: Record<string, string> = {
   pi: "Pi Coding Agent",
   dsh: "DeepSeek Harness",
 };
+
+const AGENT_CLI_OPTIONS: ReadonlyArray<{ value: AgentCli; label: string }> = [
+  { value: "claude-code", label: "claude-code（Claude Code）" },
+  { value: "codex", label: "codex（Codex）" },
+  { value: "open-code", label: "open-code（OpenCode）" },
+  { value: "pi", label: "pi（Pi Coding Agent）" },
+  { value: "dsh", label: "dsh（DeepSeek Harness）" },
+];
 
 /** Resolve hub / system / role even if bindable API omits role_kind (legacy scheduler). */
 function resolveBindableRoleKind(roleConfig: BindableRoleConfig): "hub" | "system" | "role" {
@@ -1089,12 +1098,22 @@ export function ProviderAccountFlow({
             <div className="provider-flow-repair">
               <div className="text-[11px] text-amber-300">遗留 Provider 值已隐藏。请选择正确映射以修复。</div>
               <div className="flex gap-2">
-                <select value={repairProvider} onChange={(event) => setRepairProvider(event.target.value)} className="theme-input-surface min-w-0 flex-1">
-                  <option value="">选择 Provider</option>
-                  {catalog.filter((item) => item.kind === "llm_provider").map((item) => <option key={item.provider} value={item.provider}>
-                    {providerProtocolLabel(item.provider, (selectedCredential.agent_cli as AgentCli | null) ?? "claude-code", catalog)}
-                  </option>)}
-                </select>
+                <SearchableSelect
+                  value={repairProvider}
+                  onChange={setRepairProvider}
+                  options={[
+                    ...catalog.filter((item) => item.kind === "llm_provider").map((item) => ({
+                      value: item.provider,
+                      label: providerProtocolLabel(item.provider, (selectedCredential.agent_cli as AgentCli | null) ?? "claude-code", catalog),
+                    })),
+                    ...(repairProvider && !catalog.some((item) => item.kind === "llm_provider" && item.provider === repairProvider)
+                      ? [{ value: repairProvider, label: `${repairProvider}（当前 · 不在目录）` }]
+                      : []),
+                  ]}
+                  placeholder="选择 Provider"
+                  ariaLabel="选择 Provider"
+                  className="min-w-0 flex-1"
+                />
                 <button type="button" onClick={repair} disabled={busy || !repairProvider} className="secondary-button px-3">修复映射</button>
               </div>
             </div>
@@ -1143,47 +1162,35 @@ export function ProviderAccountFlow({
                 </button>
               </div>
               <div className="provider-flow-filter-row">
-                <label className="provider-flow-filter-field" htmlFor="provider-flow-scope-project">
-                  <span>项目</span>
-                  <select
-                    id="provider-flow-scope-project"
-                    className={`theme-input-surface provider-flow-filter-select${
-                      roleScopeFilter !== "all" && roleScopeFilter !== "global" ? " is-active" : ""
-                    }`}
-                    aria-label="选择项目"
-                    value={roleScopeFilter !== "all" && roleScopeFilter !== "global" ? roleScopeFilter : ""}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      setRoleScopeFilter(next || "all");
-                    }}
-                  >
-                    <option value="">选择项目…</option>
-                    {projectsWithRoleConfigs.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.name}
-                        {project.count > 0 ? `（${project.count} 个覆盖）` : "（尚无覆盖）"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="provider-flow-filter-field" htmlFor="provider-flow-account-cli">
+                <SearchableSelect
+                  label="项目"
+                  ariaLabel="选择项目"
+                  value={roleScopeFilter !== "all" && roleScopeFilter !== "global" ? roleScopeFilter : ""}
+                  onChange={(next) => setRoleScopeFilter(next || "all")}
+                  options={[
+                    ...projectsWithRoleConfigs.map((project) => ({
+                      value: project.id,
+                      label: `${project.name}${project.count > 0 ? `（${project.count} 个覆盖）` : "（尚无覆盖）"}`,
+                    })),
+                    ...(roleScopeFilter !== "all" && roleScopeFilter !== "global"
+                      && !projectsWithRoleConfigs.some((project) => project.id === roleScopeFilter)
+                      ? [{ value: roleScopeFilter, label: `${roleScopeFilter}（当前 · 项目不可用）` }]
+                      : []),
+                  ]}
+                  placeholder="选择项目…"
+                  className="provider-flow-filter-field"
+                />
+                <fieldset className="provider-flow-filter-field" disabled={busy || !selectedCredential}>
                   <span>账号目标 CLI</span>
-                  <select
-                    id="provider-flow-account-cli"
-                    className={`theme-input-surface provider-flow-filter-select${
-                      selectedCredential?.agent_cli ? " is-active" : ""
-                    }`}
+                  <SearchableSelect
                     value={selectedCredential?.agent_cli ?? ""}
-                    disabled={busy || !selectedCredential}
-                    onChange={(event) => {
-                      if (!selectedCredential) return;
-                      const next = event.target.value as AgentCli | "";
-                      if (!next) return;
+                    onChange={(next) => {
+                      if (!selectedCredential || !next) return;
                       void (async () => {
                         setBusy(true);
                         setError("");
                         try {
-                          await api.updateCredential(selectedCredential.id, { agent_cli: next });
+                          await api.updateCredential(selectedCredential.id, { agent_cli: next as AgentCli });
                           setNotice(`已限制账号 CLI 为 ${cliLabel[next] ?? next}；CLI 不匹配的角色将标为不可绑定，可先改角色 CLI。`);
                           onChanged();
                         } catch (e) {
@@ -1193,18 +1200,13 @@ export function ProviderAccountFlow({
                         }
                       })();
                     }}
-                  >
-                    {!selectedCredential && <option value="">请先选择账号</option>}
-                    {selectedCredential && !selectedCredential.agent_cli && (
-                      <option value="">未设置 — 请选择以限制绑定</option>
-                    )}
-                    <option value="claude-code">claude-code（Claude Code）</option>
-                    <option value="codex">codex（Codex）</option>
-                    <option value="open-code">open-code（OpenCode）</option>
-                    <option value="pi">pi（Pi Coding Agent）</option>
-                    <option value="dsh">dsh（DeepSeek Harness）</option>
-                  </select>
-                </label>
+                    options={AGENT_CLI_OPTIONS}
+                    placeholder={!selectedCredential ? "请先选择账号" : "未设置 — 请选择以限制绑定"}
+                    ariaLabel="账号目标 CLI"
+                    className="w-full [&>button]:w-full"
+                    clearable={false}
+                  />
+                </fieldset>
               </div>
             </div>
           </div>
@@ -1291,32 +1293,27 @@ export function ProviderAccountFlow({
                           {isSystem ? " · 调度内核" : isHub ? " · Hub" : ""}
                         </small>
                       </span>
-                      <label
+                      <fieldset
                         className="provider-flow-role-cli-wrap"
+                        disabled={busy || !roleConfig.can_bind}
+                        title="修改此角色配置的 Agent CLI（立即保存）"
                         onClick={(event) => event.stopPropagation()}
                         onMouseDown={(event) => event.stopPropagation()}
                       >
                         <span className="provider-flow-role-cli-caption">CLI</span>
-                        <select
-                          className="theme-input-surface provider-flow-role-cli"
+                        <SearchableSelect
                           value={roleCli}
-                          disabled={busy || !roleConfig.can_bind}
-                          title="修改此角色配置的 Agent CLI（立即保存）"
-                          aria-label={`${roleConfig.role_title || roleConfig.role_name} 的 Agent CLI`}
-                          onClick={(event) => event.stopPropagation()}
-                          onMouseDown={(event) => event.stopPropagation()}
-                          onChange={(event) => {
-                            event.stopPropagation();
-                            const next = event.target.value as AgentCli;
+                          ariaLabel={`${roleConfig.role_title || roleConfig.role_name} 的 Agent CLI`}
+                          onChange={(next) => {
                             if (!next || next === roleCli) return;
                             void (async () => {
                               setBusy(true);
                               setError("");
                               try {
-                                await api.updateRoleConfigAgentCli(roleConfig.id, next);
+                                await api.updateRoleConfigAgentCli(roleConfig.id, next as AgentCli);
                                 setRoleConfigs((current) =>
                                   current.map((item) =>
-                                    item.id === roleConfig.id ? { ...item, agent_cli: next } : item,
+                                    item.id === roleConfig.id ? { ...item, agent_cli: next as AgentCli } : item,
                                   ),
                                 );
                                 setNotice(`已将「${roleConfig.role_title || roleConfig.role_name}」CLI 改为 ${cliLabel[next] ?? next}`);
@@ -1329,14 +1326,12 @@ export function ProviderAccountFlow({
                               }
                             })();
                           }}
-                        >
-                          <option value="claude-code">claude-code</option>
-                          <option value="codex">codex</option>
-                          <option value="open-code">open-code</option>
-                          <option value="pi">pi</option>
-                          <option value="dsh">dsh</option>
-                        </select>
-                      </label>
+                          options={AGENT_CLI_OPTIONS.map((option) => ({ ...option, label: option.value }))}
+                          placeholder="选择 CLI…"
+                          className="w-full [&>button]:!min-h-[30px] [&>button]:w-full"
+                          clearable={false}
+                        />
+                      </fieldset>
                       {roleConfig.project_id ? (
                         <span
                           className="provider-flow-role-cli-wrap provider-flow-role-image-wrap"
@@ -1348,23 +1343,17 @@ export function ProviderAccountFlow({
                           <span className="provider-flow-role-image-readonly">由项目镜像策略决定</span>
                         </span>
                       ) : (
-                        <label
+                        <div
                           className="provider-flow-role-cli-wrap provider-flow-role-image-wrap"
                           onClick={(event) => event.stopPropagation()}
                           onMouseDown={(event) => event.stopPropagation()}
                         >
                           <span className="provider-flow-role-cli-caption">镜像</span>
-                          <select
-                            className="theme-input-surface provider-flow-role-cli provider-flow-role-image"
+                          <SearchableSelect
                             value={roleConfig.runtime_image_key ?? ""}
-                            disabled={busy || !roleConfig.can_bind}
-                            title="修改全局角色配置的运行镜像（立即保存；空 = 系统底座）"
-                            aria-label={`${roleConfig.role_title || roleConfig.role_name} 的运行镜像`}
-                            onClick={(event) => event.stopPropagation()}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onChange={(event) => {
-                              event.stopPropagation();
-                              const next = event.target.value.trim() || null;
+                            onChange={(value) => {
+                              if (busy || !roleConfig.can_bind) return;
+                              const next = value.trim() || null;
                               const current = roleConfig.runtime_image_key ?? null;
                               if (next === current) return;
                               void (async () => {
@@ -1389,23 +1378,27 @@ export function ProviderAccountFlow({
                                 }
                               })();
                             }}
-                          >
-                            <option value="">系统底座（默认）</option>
-                            {runtimeImageOptionsFor(roleConfig.project_id).map((image) => (
-                              <option key={image.id} value={image.image_key}>
-                                {runtimeImageOptionLabel(image, roleConfig.project_id)}
-                              </option>
-                            ))}
-                            {roleConfig.runtime_image_key
-                              && !runtimeImageOptionsFor(roleConfig.project_id).some(
-                                (image) => image.image_key === roleConfig.runtime_image_key,
-                              ) && (
-                              <option value={roleConfig.runtime_image_key}>
-                                {roleConfig.runtime_image_key}（当前 · 需检查启用）
-                              </option>
-                            )}
-                          </select>
-                        </label>
+                            options={[
+                              { value: "", label: "系统底座（默认）", disabled: busy || !roleConfig.can_bind },
+                              ...runtimeImageOptionsFor(roleConfig.project_id).map((image) => ({
+                                value: image.image_key,
+                                label: runtimeImageOptionLabel(image, roleConfig.project_id),
+                                disabled: busy || !roleConfig.can_bind,
+                              })),
+                              ...(roleConfig.runtime_image_key
+                                && !runtimeImageOptionsFor(roleConfig.project_id).some((image) => image.image_key === roleConfig.runtime_image_key)
+                                ? [{
+                                    value: roleConfig.runtime_image_key,
+                                    label: `${roleConfig.runtime_image_key}（当前 · 需检查启用）`,
+                                    disabled: busy || !roleConfig.can_bind,
+                                  }]
+                                : []),
+                            ]}
+                            placeholder="系统底座（默认）"
+                            ariaLabel={`${roleConfig.role_title || roleConfig.role_name} 的运行镜像`}
+                            className="min-w-0"
+                          />
+                        </div>
                       )}
                       <span className="provider-flow-role-model">
                         {roleConfig.model
@@ -1455,12 +1448,22 @@ export function ProviderAccountFlow({
               <button type="button" className={mode === "migrate" ? "is-active" : ""} onClick={() => setMode("migrate")}>从账号迁移</button>
             </div>
             {mode === "migrate" && (
-              <select value={sourceCredentialId} onChange={(event) => setSourceCredentialId(event.target.value)} className="theme-input-surface provider-flow-select mt-2">
-                <option value="">选择源账号</option>
-                {sourceOptions.map((credential) => <option key={credential.id} value={credential.id}>
-                  {credential.name} · {providerProtocolLabel(credential.provider, (credential.agent_cli as AgentCli | null) ?? "claude-code", catalog)}
-                </option>)}
-              </select>
+              <SearchableSelect
+                value={sourceCredentialId}
+                onChange={setSourceCredentialId}
+                options={[
+                  ...sourceOptions.map((credential) => ({
+                    value: credential.id,
+                    label: `${credential.name} · ${providerProtocolLabel(credential.provider, (credential.agent_cli as AgentCli | null) ?? "claude-code", catalog)}`,
+                  })),
+                  ...(sourceCredentialId && !sourceOptions.some((credential) => credential.id === sourceCredentialId)
+                    ? [{ value: sourceCredentialId, label: `${sourceCredentialId}（当前 · 账号不可用）` }]
+                    : []),
+                ]}
+                placeholder="选择源账号"
+                ariaLabel="选择迁移源账号"
+                className="mt-2"
+              />
             )}
           </div>
           <div>

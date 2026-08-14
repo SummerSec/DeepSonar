@@ -17,6 +17,7 @@ import {
   type RuntimeImageRegistryChannel,
   type RuntimeImagePullTask,
 } from "../api";
+import { SearchableSelect } from "../SearchableSelect";
 import { EmptyState, HelpTip, PageHeader, PageSkeleton, formatTime } from "../ui";
 
 const TRUST_STYLE: Record<RuntimeImageTrustStatus, string> = {
@@ -707,28 +708,31 @@ export function RuntimeImagesPage() {
               )}
             </div>
             <div className="min-w-0">
-              <label htmlFor="runtime-registry-channel" className="inline-flex items-center font-mono text-[10px] tracking-[.16em] text-zinc-600">
+              <div className="inline-flex items-center font-mono text-[10px] tracking-[.16em] text-zinc-600">
                 OFFICIAL REGISTRY CHANNEL
                 <HelpTip label="官方镜像仓库通道说明">
                   选择服务器治理的官方镜像仓库；不会接受自定义 URL，也不会改变下方 CPU / 平台筛选。
                 </HelpTip>
-              </label>
+              </div>
               <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                <select
-                  id="runtime-registry-channel"
-                  className="field-input min-w-0 flex-1 font-mono text-[12px]"
-                  value={registry?.selected_channel ?? ""}
+                <fieldset
+                  className="min-w-0 flex-1"
                   disabled={!registry || registryLoading || busy !== null || !canManageRegistryChannel}
                   aria-describedby={channelMessage || !canManageRegistryChannel ? "runtime-registry-channel-status" : undefined}
-                  onChange={(event) => void updateRegistryChannel(event.target.value as RuntimeImageRegistryChannel)}
                 >
-                  {!registry && <option value="">{registryLoading ? "加载通道…" : "无法读取通道"}</option>}
-                  {REGISTRY_CHANNEL_OPTIONS.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label} · {option.host}
-                    </option>
-                  ))}
-                </select>
+                  <SearchableSelect
+                    value={registry?.selected_channel ?? ""}
+                    onChange={(next) => void updateRegistryChannel(next as RuntimeImageRegistryChannel)}
+                    options={REGISTRY_CHANNEL_OPTIONS.map((option) => ({
+                      value: option.id,
+                      label: `${option.label} · ${option.host}`,
+                    }))}
+                    placeholder={registryLoading ? "加载通道…" : "无法读取通道"}
+                    ariaLabel="官方镜像仓库通道"
+                    className="w-full [&>button]:w-full"
+                    clearable={false}
+                  />
+                </fieldset>
                 {channelStatus === "pending" && <span className="shrink-0 font-mono text-[10px] text-sky-300">切换中…</span>}
                 {channelStatus === "success" && <span className="shrink-0 font-mono text-[10px] text-emerald-300">已更新</span>}
               </div>
@@ -823,21 +827,21 @@ export function RuntimeImagesPage() {
                 />
               </label>
             ))}
-            <label>
-              <span className="mb-1 block font-mono text-[10px] uppercase tracking-[.12em] text-zinc-600">Registry Credential</span>
-              <select
-                className="field-input w-full"
-                value={form.registry_credential_id}
-                onChange={(event) => setForm({ ...form, registry_credential_id: event.target.value })}
-              >
-                <option value="">公开 registry</option>
-                {credentials.map((credential) => (
-                  <option key={credential.id} value={credential.id}>
-                    {credential.name} · {credential.provider}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SearchableSelect
+              label="Registry Credential"
+              value={form.registry_credential_id}
+              onChange={(next) => setForm({ ...form, registry_credential_id: next })}
+              options={[
+                { value: "", label: "公开 registry" },
+                ...credentials.map((credential) => ({ value: credential.id, label: `${credential.name} · ${credential.provider}` })),
+                ...(form.registry_credential_id && !credentials.some((credential) => credential.id === form.registry_credential_id)
+                  ? [{ value: form.registry_credential_id, label: `${form.registry_credential_id}（当前 · 凭据不可用）` }]
+                  : []),
+              ]}
+              placeholder="公开 registry"
+              ariaLabel="Registry Credential"
+              className="grid gap-1"
+            />
             <label>
               <span className="mb-1 block font-mono text-[10px] uppercase tracking-[.12em] text-zinc-600">说明</span>
               <input
@@ -1161,23 +1165,32 @@ export function RuntimeImagesPage() {
                     为项目固定某一平台的可信 digest。不固定时，调度器按宿主 arch 自动选择。
                   </p>
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                    <select
-                      className="field-input min-w-0 flex-1 font-mono text-[12px]"
+                    <SearchableSelect
                       value={projectVersionPick[selected.image.id] ?? selected.image.selected_version_id ?? ""}
-                      onChange={(event) => setProjectVersionPick((current) => ({
+                      onChange={(next) => setProjectVersionPick((current) => ({
                         ...current,
-                        [selected.image.id]: event.target.value,
+                        [selected.image.id]: next,
                       }))}
-                    >
-                      <option value="">自动（按平台匹配）</option>
-                      {selected.versions
-                        .filter((v) => v.trust_status === "trusted" && versionMatchesPlatform(v, platformFilter))
-                        .map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.version} · {platformLabel(v.platforms_json)} · {shortDigest(v.digest)}
-                          </option>
-                        ))}
-                    </select>
+                      options={(() => {
+                        const current = projectVersionPick[selected.image.id] ?? selected.image.selected_version_id ?? "";
+                        const available = selected.versions.filter(
+                          (version) => version.trust_status === "trusted" && versionMatchesPlatform(version, platformFilter),
+                        );
+                        return [
+                          { value: "", label: "自动（按平台匹配）" },
+                          ...available.map((version) => ({
+                            value: version.id,
+                            label: `${version.version} · ${platformLabel(version.platforms_json)} · ${shortDigest(version.digest)}`,
+                          })),
+                          ...(current && !available.some((version) => version.id === current)
+                            ? [{ value: current, label: `${current}（当前 · 版本不可用）` }]
+                            : []),
+                        ];
+                      })()}
+                      placeholder="自动（按平台匹配）"
+                      ariaLabel="项目版本与 digest"
+                      className="min-w-0 flex-1"
+                    />
                     <button
                       className="primary-button shrink-0"
                       disabled={busy === selected.image.id}

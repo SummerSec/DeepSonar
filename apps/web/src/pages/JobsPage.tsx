@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type JobSummary, type Project } from "../api";
 import { JobDetailPanel } from "../JobDetailPanel";
+import { SearchableMultiSelect } from "../SearchableSelect";
+import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import {
   DataTable,
@@ -40,12 +42,12 @@ const RESUMABLE = new Set(["waiting_human", "orphan", "failed", "timeout"]);
 export function JobsPage() {
   const confirm = useConfirmDialog();
   const [searchParams, setSearchParams] = useSearchParams();
-  const status = searchParams.get("status") ?? "";
-  const typeFilter = searchParams.get("type") ?? "";
-  const projectFilter = searchParams.get("project") ?? "";
-  const canvasFilter = searchParams.get("canvas") ?? "";
-  const cliFilter = searchParams.get("cli") ?? "";
-  const modelFilter = searchParams.get("model") ?? "";
+  const statusFilter = readMultiSearchParam(searchParams, "status");
+  const typeFilter = readMultiSearchParam(searchParams, "type");
+  const projectFilter = readMultiSearchParam(searchParams, "project");
+  const canvasFilter = readMultiSearchParam(searchParams, "canvas");
+  const cliFilter = readMultiSearchParam(searchParams, "cli");
+  const modelFilter = readMultiSearchParam(searchParams, "model");
   const selectedJob = searchParams.get("job");
   const [rows, setRows] = useState<JobSummary[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -98,12 +100,11 @@ export function JobsPage() {
     };
   }, []);
 
-  const setParam = (key: "status" | "type" | "project" | "canvas" | "cli" | "model", value: string) => {
+  const setParam = (key: "status" | "type" | "project" | "canvas" | "cli" | "model", values: string[]) => {
     const next = new URLSearchParams(searchParams);
-    if (value) next.set(key, value);
-    else next.delete(key);
+    writeMultiSearchParam(next, key, values);
     // 切换项目时清空画布筛选，避免跨项目残留
-    if (key === "project") next.delete("canvas");
+    if (key === "project") writeMultiSearchParam(next, "canvas", []);
     setSearchParams(next, { replace: true });
   };
 
@@ -144,7 +145,7 @@ export function JobsPage() {
     const map = new Map<string, string>();
     for (const j of rows) {
       if (!j.canvas_id) continue;
-      if (projectFilter && j.project_id !== projectFilter) continue;
+      if (projectFilter.length && !projectFilter.includes(j.project_id)) continue;
       map.set(j.canvas_id, j.canvas_title ?? j.canvas_id.slice(0, 8));
     }
     return [...map.entries()]
@@ -154,31 +155,33 @@ export function JobsPage() {
 
   const visible = useMemo(() => {
     return rows.filter((j) => {
-      if (status && j.status !== status) return false;
-      if (typeFilter && j.type !== typeFilter) return false;
-      if (projectFilter && j.project_id !== projectFilter) return false;
-      if (canvasFilter && j.canvas_id !== canvasFilter) return false;
-      if (cliFilter && (j.agent_cli ?? "") !== cliFilter) return false;
-      if (modelFilter && (j.model ?? "") !== modelFilter) return false;
+      if (statusFilter.length && !statusFilter.includes(j.status)) return false;
+      if (typeFilter.length && !typeFilter.includes(j.type)) return false;
+      if (projectFilter.length && !projectFilter.includes(j.project_id)) return false;
+      if (canvasFilter.length && !canvasFilter.includes(j.canvas_id ?? "")) return false;
+      if (cliFilter.length && !cliFilter.includes(j.agent_cli ?? "")) return false;
+      if (modelFilter.length && !modelFilter.includes(j.model ?? "")) return false;
       return true;
     });
-  }, [rows, status, typeFilter, projectFilter, canvasFilter, cliFilter, modelFilter]);
+  }, [rows, statusFilter, typeFilter, projectFilter, canvasFilter, cliFilter, modelFilter]);
 
   const filterActive = Boolean(
-    status || typeFilter || projectFilter || canvasFilter || cliFilter || modelFilter,
+    statusFilter.length || typeFilter.length || projectFilter.length || canvasFilter.length || cliFilter.length || modelFilter.length,
   );
   const totalCount = rows.length;
   const filteredCount = visible.length;
   const filterChips = [
-    status && `状态 ${status}`,
-    typeFilter && `类型 ${typeFilter}`,
-    cliFilter && `CLI ${cliFilter}`,
-    modelFilter && `模型 ${modelFilter}`,
-    projectFilter &&
-      `项目 ${projectOptions.find((p) => p.id === projectFilter)?.name ?? projectFilter.slice(0, 8)}`,
-    canvasFilter &&
-      `画布 ${canvasOptions.find((c) => c.id === canvasFilter)?.title ?? canvasFilter.slice(0, 8)}`,
-  ].filter((v): v is string => Boolean(v));
+    ...statusFilter.map((value) => `状态 ${value}`),
+    ...typeFilter.map((value) => `类型 ${value}`),
+    ...cliFilter.map((value) => `CLI ${value}`),
+    ...modelFilter.map((value) => `模型 ${value}`),
+    ...projectFilter.map((value) =>
+      `项目 ${projectOptions.find((project) => project.id === value)?.name ?? value.slice(0, 8)}`,
+    ),
+    ...canvasFilter.map((value) =>
+      `画布 ${canvasOptions.find((canvas) => canvas.id === value)?.title ?? value.slice(0, 8)}`,
+    ),
+  ];
 
   const clearFilters = () => {
     const next = new URLSearchParams(searchParams);
@@ -262,109 +265,79 @@ export function JobsPage() {
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">状态</span>
-                    <select
-                      value={status}
-                      onChange={(e) => setParam("status", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按状态筛选"
-                    >
-                      <option value="">全部</option>
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
+                    <SearchableMultiSelect
+                      value={statusFilter}
+                      onChange={(values) => setParam("status", values)}
+                      options={STATUSES.map((value) => ({ value, label: value }))}
+                      placeholder="全部"
+                      className="w-full [&>button]:min-w-0 [&>button]:w-full"
+                      ariaLabel="按状态筛选"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">类型</span>
-                    <select
+                    <SearchableMultiSelect
                       value={typeFilter}
-                      onChange={(e) => setParam("type", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按类型筛选"
-                    >
-                      <option value="">全部</option>
-                      {typeOptions.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(values) => setParam("type", values)}
+                      options={typeOptions.map((value) => ({ value, label: value }))}
+                      placeholder="全部"
+                      className="w-full [&>button]:min-w-0 [&>button]:w-full"
+                      ariaLabel="按类型筛选"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">CLI 工具</span>
-                    <select
+                    <SearchableMultiSelect
                       value={cliFilter}
-                      onChange={(e) => setParam("cli", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按 CLI 工具筛选"
-                    >
-                      <option value="">全部</option>
-                      {cliOptions.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(values) => setParam("cli", values)}
+                      options={cliOptions.map((value) => ({ value, label: value }))}
+                      placeholder="全部"
+                      className="w-full [&>button]:min-w-0 [&>button]:w-full"
+                      ariaLabel="按 CLI 工具筛选"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">模型</span>
-                    <select
+                    <SearchableMultiSelect
                       value={modelFilter}
-                      onChange={(e) => setParam("model", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按模型筛选"
-                    >
-                      <option value="">全部</option>
-                      {modelOptions.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(values) => setParam("model", values)}
+                      options={modelOptions.map((value) => ({ value, label: value }))}
+                      placeholder="全部"
+                      className="w-full [&>button]:min-w-0 [&>button]:w-full"
+                      ariaLabel="按模型筛选"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">项目</span>
-                    <select
+                    <SearchableMultiSelect
                       value={projectFilter}
-                      onChange={(e) => setParam("project", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按项目筛选"
-                    >
-                      <option value="">全部</option>
-                      {projectOptions.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(values) => setParam("project", values)}
+                      options={projectOptions.map((project) => ({ value: project.id, label: project.name }))}
+                      placeholder="全部"
+                      className="w-full [&>button]:min-w-0 [&>button]:w-full"
+                      ariaLabel="按项目筛选"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">任务画布</span>
-                    <select
+                    <SearchableMultiSelect
                       value={canvasFilter}
-                      onChange={(e) => setParam("canvas", e.target.value)}
-                      className="table-head-control"
-                      aria-label="按任务画布筛选"
-                    >
-                      <option value="">全部</option>
-                      {canvasOptions.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.title}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(values) => setParam("canvas", values)}
+                      options={canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.title }))}
+                      placeholder="全部"
+                      className="w-full [&>button]:min-w-0 [&>button]:w-full"
+                      ariaLabel="按任务画布筛选"
+                    />
                   </div>
                 </th>
                 <th className="table-head-cell">开始</th>
@@ -498,84 +471,54 @@ export function JobsPage() {
       <div className="md:hidden">
         <div className="surface-shell mb-3">
           <div className="surface-core grid grid-cols-2 gap-2 p-3">
-            <select
-              value={status}
-              onChange={(e) => setParam("status", e.target.value)}
-              className="table-head-control max-w-none"
-              aria-label="状态"
-            >
-              <option value="">全部状态</option>
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-            <select
+            <SearchableMultiSelect
+              value={statusFilter}
+              onChange={(values) => setParam("status", values)}
+              options={STATUSES.map((value) => ({ value, label: value }))}
+              placeholder="全部状态"
+              className="w-full [&>button]:min-w-0 [&>button]:w-full"
+              ariaLabel="状态"
+            />
+            <SearchableMultiSelect
               value={typeFilter}
-              onChange={(e) => setParam("type", e.target.value)}
-              className="table-head-control max-w-none"
-              aria-label="类型"
-            >
-              <option value="">全部类型</option>
-              {typeOptions.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-            <select
+              onChange={(values) => setParam("type", values)}
+              options={typeOptions.map((value) => ({ value, label: value }))}
+              placeholder="全部类型"
+              className="w-full [&>button]:min-w-0 [&>button]:w-full"
+              ariaLabel="类型"
+            />
+            <SearchableMultiSelect
               value={cliFilter}
-              onChange={(e) => setParam("cli", e.target.value)}
-              className="table-head-control max-w-none"
-              aria-label="CLI 工具"
-            >
-              <option value="">全部 CLI</option>
-              {cliOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-            <select
+              onChange={(values) => setParam("cli", values)}
+              options={cliOptions.map((value) => ({ value, label: value }))}
+              placeholder="全部 CLI"
+              className="w-full [&>button]:min-w-0 [&>button]:w-full"
+              ariaLabel="CLI 工具"
+            />
+            <SearchableMultiSelect
               value={modelFilter}
-              onChange={(e) => setParam("model", e.target.value)}
-              className="table-head-control max-w-none"
-              aria-label="模型"
-            >
-              <option value="">全部模型</option>
-              {modelOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-            <select
+              onChange={(values) => setParam("model", values)}
+              options={modelOptions.map((value) => ({ value, label: value }))}
+              placeholder="全部模型"
+              className="w-full [&>button]:min-w-0 [&>button]:w-full"
+              ariaLabel="模型"
+            />
+            <SearchableMultiSelect
               value={projectFilter}
-              onChange={(e) => setParam("project", e.target.value)}
-              className="table-head-control max-w-none"
-              aria-label="项目"
-            >
-              <option value="">全部项目</option>
-              {projectOptions.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <select
+              onChange={(values) => setParam("project", values)}
+              options={projectOptions.map((project) => ({ value: project.id, label: project.name }))}
+              placeholder="全部项目"
+              className="w-full [&>button]:min-w-0 [&>button]:w-full"
+              ariaLabel="项目"
+            />
+            <SearchableMultiSelect
               value={canvasFilter}
-              onChange={(e) => setParam("canvas", e.target.value)}
-              className="table-head-control max-w-none"
-              aria-label="任务画布"
-            >
-              <option value="">全部画布</option>
-              {canvasOptions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.title}
-                </option>
-              ))}
-            </select>
+              onChange={(values) => setParam("canvas", values)}
+              options={canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.title }))}
+              placeholder="全部画布"
+              className="w-full [&>button]:min-w-0 [&>button]:w-full"
+              ariaLabel="任务画布"
+            />
           </div>
         </div>
         {visible.length === 0 ? (

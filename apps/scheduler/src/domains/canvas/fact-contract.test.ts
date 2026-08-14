@@ -6,7 +6,13 @@ import { requiredScopeForRoute } from "../../auth.js";
 import { FactListQuery, FactVerificationPatch } from "./fact-contract.js";
 
 test("Fact 查询和人工验证契约严格拒绝非法输入", () => {
-  assert.equal(FactListQuery.safeParse({ limit: "50", verification_status: "verified", evidence_kind: "test" }).success, true);
+  const multi = FactListQuery.safeParse({ limit: "50", verification_status: "verified,rejected,verified", evidence_kind: "review,test" });
+  assert.equal(multi.success, true);
+  if (multi.success) {
+    assert.deepEqual(multi.data.verification_status, ["verified", "rejected"]);
+    assert.deepEqual(multi.data.evidence_kind, ["review", "test"]);
+  }
+  assert.equal(FactListQuery.safeParse({ verification_status: "verified,unknown" }).success, false);
   assert.equal(FactListQuery.safeParse({ limit: "0" }).success, false);
   assert.equal(FactListQuery.safeParse({ limit: "51" }).success, false);
   assert.equal(FactListQuery.safeParse({ finding_id: "not-a-uuid" }).success, false);

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type FindingSummary, type Project } from "../api";
 import { FindingProtocolEditor } from "../FindingProtocolEditor";
+import { SearchableMultiSelect } from "../SearchableSelect";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
@@ -127,10 +128,10 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
   const [seedCandidates, setSeedCandidates] = useState<FindingSummary[]>([]);
   const [selectedSeedIds, setSelectedSeedIds] = useState(() => new Set(initialSeedIds));
   const [seedSearch, setSeedSearch] = useState("");
-  const [seedSeverity, setSeedSeverity] = useState("");
-  const [seedProfile, setSeedProfile] = useState("");
-  const [seedDisposition, setSeedDisposition] = useState("");
-  const [seedCanvas, setSeedCanvas] = useState("");
+  const [seedSeverities, setSeedSeverities] = useState<string[]>([]);
+  const [seedProfiles, setSeedProfiles] = useState<string[]>([]);
+  const [seedDispositions, setSeedDispositions] = useState<string[]>([]);
+  const [seedCanvases, setSeedCanvases] = useState<string[]>([]);
   const [seedLoading, setSeedLoading] = useState(initialSeedIds.length > 0);
   /** Tick so past-time warnings update if the form stays open across a boundary. */
   const [clock, setClock] = useState(() => Date.now());
@@ -166,12 +167,12 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
   const filteredSeedCandidates = useMemo(() => {
     return filterComposeSeedCandidates(seedCandidates, {
       search: seedSearch,
-      severity: seedSeverity,
-      profile: seedProfile,
-      disposition: seedDisposition,
-      canvasId: seedCanvas,
+      severities: seedSeverities,
+      profiles: seedProfiles,
+      dispositions: seedDispositions,
+      canvasIds: seedCanvases,
     });
-  }, [seedCandidates, seedSearch, seedSeverity, seedProfile, seedDisposition, seedCanvas]);
+  }, [seedCandidates, seedSearch, seedSeverities, seedProfiles, seedDispositions, seedCanvases]);
   const scheduledPreview = useMemo(() => {
     if (form.schedule !== "at" || scheduleIssue) return null;
     const iso = parseDatetimeLocalToIso(form.startAtLocal);
@@ -302,22 +303,10 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                 <input value={seedSearch} onChange={(event) => setSeedSearch(event.target.value)} className={inputCls} placeholder="标题、位置、标签…" aria-label="搜索可代入 Finding" />
-                <select value={seedSeverity} onChange={(event) => setSeedSeverity(event.target.value)} className={inputCls} aria-label="按风险筛选种子">
-                  <option value="">全部风险</option>
-                  {SEED_SEVERITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-                <select value={seedProfile} onChange={(event) => setSeedProfile(event.target.value)} className={inputCls} aria-label="按 profile 筛选种子">
-                  <option value="">全部 profile</option>
-                  {[...new Set(seedCandidates.map((finding) => finding.profile))].sort().map((value) => <option key={value} value={value}>{value}</option>)}
-                </select>
-                <select value={seedDisposition} onChange={(event) => setSeedDisposition(event.target.value)} className={inputCls} aria-label="按处置状态筛选种子">
-                  <option value="">全部处置</option>
-                  {DISPOSITION_OPTIONS.filter((option) => ["open", "accepted", "confirmed_vuln"].includes(option.value)).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-                <select value={seedCanvas} onChange={(event) => setSeedCanvas(event.target.value)} className={inputCls} aria-label="按原任务筛选种子">
-                  <option value="">全部原任务</option>
-                  {[...new Map(seedCandidates.filter((finding) => finding.canvas_id).map((finding) => [finding.canvas_id!, finding.canvas_title ?? finding.canvas_id!.slice(0, 8)])).entries()].map(([id, title]) => <option key={id} value={id}>{title}</option>)}
-                </select>
+                <SearchableMultiSelect value={seedSeverities} onChange={setSeedSeverities} options={SEED_SEVERITY_OPTIONS} placeholder="全部风险" ariaLabel="按风险筛选种子" className="block [&>button]:w-full" />
+                <SearchableMultiSelect value={seedProfiles} onChange={setSeedProfiles} options={[...new Set(seedCandidates.map((finding) => finding.profile))].sort().map((value) => ({ value, label: value }))} placeholder="全部 profile" ariaLabel="按 profile 筛选种子" className="block [&>button]:w-full" />
+                <SearchableMultiSelect value={seedDispositions} onChange={setSeedDispositions} options={DISPOSITION_OPTIONS.filter((option) => ["open", "accepted", "confirmed_vuln"].includes(option.value))} placeholder="全部处置" ariaLabel="按处置状态筛选种子" className="block [&>button]:w-full" />
+                <SearchableMultiSelect value={seedCanvases} onChange={setSeedCanvases} options={[...new Map(seedCandidates.filter((finding) => finding.canvas_id).map((finding) => [finding.canvas_id!, finding.canvas_title ?? finding.canvas_id!.slice(0, 8)])).entries()].map(([value, label]) => ({ value, label }))} placeholder="全部原任务" ariaLabel="按原任务筛选种子" className="block [&>button]:w-full" />
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/[.05] pb-2">
                 <span className="text-[10px] text-zinc-600">当前筛选 {filteredSeedCandidates.length} 条</span>

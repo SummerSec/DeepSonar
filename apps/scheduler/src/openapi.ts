@@ -472,16 +472,16 @@ const OPS: Op[] = [
     method: "get",
     path: "/canvases/{id}/facts",
     summary: "画布 Fact 分页列表",
-    description: "按 created_at,id 降序 keyset 分页；Finding 关联仅来自同项目、同画布 canonical Finding 与直接结构化证据边。",
+    description: "按 created_at,id 降序 keyset 分页；四类筛选支持逗号分隔多值，同一参数内按 OR 匹配。Finding 关联仅来自同项目、同画布 canonical Finding 与直接结构化证据边。",
     scope: "tasks:read",
     tags: ["Tasks"],
     query: {
       limit: { type: "integer", minimum: 1, maximum: 50, default: 50 },
       after: { type: "string", maxLength: 512 },
-      verification_status: { type: "string", enum: ["unverified", "verifying", "verified", "rejected", "needs_human"] },
-      evidence_kind: { type: "string", enum: ["review", "test"] },
-      finding_id: { type: "string", format: "uuid" },
-      job_id: { type: "string", format: "uuid" },
+      verification_status: { type: "string", description: "逗号分隔，最多 20 个；值为 unverified|verifying|verified|rejected|needs_human" },
+      evidence_kind: { type: "string", description: "逗号分隔，最多 20 个；值为 review|test" },
+      finding_id: { type: "string", description: "逗号分隔，最多 50 个 Finding UUID" },
+      job_id: { type: "string", description: "逗号分隔，最多 50 个 Job UUID" },
     },
     responses: {
       "200": {

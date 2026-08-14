@@ -22,6 +22,7 @@ import {
   type FindingReport,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
+import { SearchableSelect } from "./SearchableSelect";
 import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { FindingSharedAssets } from "./SharedAssetsPanel";
 import { useConfirmDialog } from "./components/ConfirmDialog";
@@ -1033,17 +1034,15 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                           placeholder="标题（可选）"
                           className="theme-input-surface w-full rounded-md border px-2 py-1.5 text-[11px] outline-none focus:border-acc-500"
                         />
-                        <select
+                        <SearchableSelect
                           value={linkType}
-                          onChange={(e) => setLinkType(e.target.value as FindingLink["link_type"])}
-                          className="theme-input-surface w-full rounded-md border px-2 py-1.5 text-[11px] outline-none"
-                        >
-                          {LINK_TYPES.map((t) => (
-                            <option key={t.value} value={t.value}>
-                              {t.label}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(next) => setLinkType(next as FindingLink["link_type"])}
+                          options={LINK_TYPES}
+                          placeholder="选择链接类型…"
+                          ariaLabel="链接类型"
+                          className="w-full"
+                          clearable={false}
+                        />
                         <div className="flex gap-1.5">
                           <button
                             type="button"
