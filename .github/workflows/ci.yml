@@ -112,6 +112,9 @@ jobs:
       - name: Canvas Fact workbench web unit
         run: pnpm ci:unit:web-facts
 
+      - name: Agent Session viewer web unit
+        run: pnpm ci:unit:web-session-viewer
+
       - name: Report download OpenAPI unit
         run: pnpm ci:unit:report-download-openapi
 
