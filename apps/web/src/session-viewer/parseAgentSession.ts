@@ -120,18 +120,280 @@ function contentToText(content: unknown): string {
   if (!Array.isArray(content)) return stringifyBody(content) ?? "";
   const parts: string[] = [];
   for (const block of content) {
+    if (typeof block === "string") {
+      parts.push(block);
+      continue;
+    }
     const rec = asRecord(block);
     if (!rec) continue;
     if (typeof rec.text === "string") parts.push(rec.text);
     else if (typeof rec.thinking === "string") parts.push(rec.thinking);
+    else if (typeof rec.reasoning === "string") parts.push(rec.reasoning);
     else if (typeof rec.content === "string") parts.push(rec.content);
     else if (rec.type === "tool_use") {
       parts.push(`[tool_use ${String(rec.name ?? "tool")}]`);
     } else if (rec.type === "tool_result") {
       parts.push(`[tool_result ${String(rec.tool_use_id ?? "")}]`);
+    } else if (rec.type === "tool-result" || rec.type === "toolResult") {
+      const result = rec.content ?? rec.output ?? rec.result;
+      if (typeof result === "string") parts.push(result);
+      else if (result != null) parts.push(contentToText(result));
     }
   }
   return parts.join("\n").trim();
+}
+
+/**
+ * Session archives may carry file/image blocks without putting their bytes in
+ * the human-readable text stream. Keep the descriptive fields, but never put
+ * the binary/base64 payload into the viewer body.
+ */
+const ATTACHMENT_BLOCK_TYPES = new Set([
+  "attachment",
+  "document",
+  "file",
+  "image",
+  "image_url",
+  "input_attachment",
+  "input_file",
+  "input_image",
+]);
+
+const ATTACHMENT_BINARY_KEYS = new Set([
+  "base64",
+  "base64_data",
+  "blob",
+  "bytes",
+  "bytes_data",
+  "content_base64",
+  "data_base64",
+  "data",
+  "data_url",
+  "file_data",
+  "image_data",
+  "source_data",
+]);
+
+function normalizedAttachmentKey(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function isBinaryAttachmentKey(key: string, value: unknown): boolean {
+  const normalizedKey = normalizedAttachmentKey(key);
+  if (normalizedKey === "data" && asRecord(value)) return false;
+  if (ATTACHMENT_BINARY_KEYS.has(normalizedKey) || normalizedKey.includes("base64")) return true;
+  return typeof value === "string" && /^data:[^,]+;base64,/iu.test(value);
+}
+
+function normalizedType(value: unknown): string | undefined {
+  const type = asString(value);
+  return type ? type.toLowerCase().replace(/[\s-]+/g, "_") : undefined;
+}
+
+function isAttachmentBlock(block: Record<string, unknown>): boolean {
+  const types = [block.type, block.customType, block.custom_type, block.event];
+  if (types.some((value) => {
+    const type = normalizedType(value);
+    return type ? ATTACHMENT_BLOCK_TYPES.has(type) : false;
+  })) return true;
+  const attachment = asRecord(block.attachment);
+  return Boolean(
+    attachment
+      && (asString(attachment.attachmentId)
+        || asString(attachment.attachment_id)
+        || asString(attachment.mediaType)
+        || asString(attachment.media_type)),
+  );
+}
+
+function sessionAttachmentRow(row: Record<string, unknown>): Record<string, unknown> | undefined {
+  const data = asRecord(row.data);
+  const payload = asRecord(row.payload);
+  const message = asRecord(row.message);
+  const nestedMessage = asRecord(data?.message) ?? asRecord(payload?.message);
+  return [row, data, payload, message, nestedMessage].find(
+    (candidate): candidate is Record<string, unknown> => Boolean(candidate && isAttachmentBlock(candidate)),
+  );
+}
+
+function safeAttachmentValue(value: unknown, depth = 0): unknown {
+  if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return truncate(value, 500);
+  if (depth >= 5) return "[metadata omitted]";
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => safeAttachmentValue(item, depth + 1));
+  const record = asRecord(value);
+  if (!record) return String(value);
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record).slice(0, 80)) {
+    if (isBinaryAttachmentKey(key, child)) continue;
+    result[key] = safeAttachmentValue(child, depth + 1);
+  }
+  return result;
+}
+
+function attachmentItem(
+  index: number,
+  block: Record<string, unknown>,
+  timestamp?: string,
+  suffix = "attachment",
+): SessionTimelineItem {
+  return {
+    id: `${index}-${suffix}`,
+    kind: "system",
+    title: "附件",
+    body: stringifyBody(safeAttachmentValue(block)),
+    timestamp,
+  };
+}
+
+function attachmentItemsFromContent(
+  content: unknown,
+  index: number,
+  timestamp?: string,
+  suffix = "attachment",
+): SessionTimelineItem[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((rawBlock, blockIndex) => {
+    const block = asRecord(rawBlock);
+    return block && isAttachmentBlock(block)
+      ? [attachmentItem(index, block, timestamp, `${suffix}-${blockIndex}`)]
+      : [];
+  });
+}
+
+type SessionMetadataKind = "last-prompt" | "ai-title";
+
+function metadataKind(value: unknown): SessionMetadataKind | undefined {
+  const normalized = normalizedType(value);
+  if (normalized === "last_prompt" || normalized === "lastprompt") return "last-prompt";
+  if (normalized === "ai_title" || normalized === "aititle") return "ai-title";
+  return undefined;
+}
+
+function sessionMetadataKind(row: Record<string, unknown>): SessionMetadataKind | undefined {
+  const data = asRecord(row.data);
+  const payload = asRecord(row.payload);
+  const message = asRecord(row.message);
+  const candidates = [
+    row.customType,
+    row.custom_type,
+    row.event,
+    row.type,
+    row.kind,
+    row.metadataKind,
+    row.metadata_kind,
+    row.metadataType,
+    row.metadata_type,
+    data?.customType,
+    data?.custom_type,
+    data?.event,
+    data?.type,
+    data?.kind,
+    data?.metadataKind,
+    data?.metadata_kind,
+    data?.metadataType,
+    data?.metadata_type,
+    payload?.customType,
+    payload?.custom_type,
+    payload?.event,
+    payload?.type,
+    payload?.kind,
+    payload?.metadataKind,
+    payload?.metadata_kind,
+    payload?.metadataType,
+    payload?.metadata_type,
+    message?.customType,
+    message?.custom_type,
+    message?.event,
+    message?.type,
+    message?.kind,
+    message?.metadataKind,
+    message?.metadata_kind,
+    message?.metadataType,
+    message?.metadata_type,
+  ];
+  for (const candidate of candidates) {
+    const kind = metadataKind(candidate);
+    if (kind) return kind;
+  }
+  if ("lastPrompt" in row || "last_prompt" in row) return "last-prompt";
+  if ("aiTitle" in row || "ai_title" in row) return "ai-title";
+  return row.type === "session_info" && (asString(row.name) || asString(row.title)) ? "ai-title" : undefined;
+}
+
+function metadataValueFromRecord(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  depth = 0,
+): unknown {
+  if (depth > 3) return record;
+  for (const key of keys) {
+    if (!(key in record) || record[key] == null) continue;
+    const value = record[key];
+    const nested = asRecord(value);
+    if (nested) {
+      const nestedValue = metadataValueFromRecord(nested, keys, depth + 1);
+      if (nestedValue !== nested) return nestedValue;
+    }
+    return value;
+  }
+  return record;
+}
+
+function sessionMetadataValue(row: Record<string, unknown>, kind: SessionMetadataKind): unknown {
+  const keys = kind === "last-prompt"
+    ? ["prompt", "lastPrompt", "last_prompt", "content", "text", "message", "value", "data", "payload"]
+    : ["title", "name", "aiTitle", "ai_title", "value", "content", "text", "data", "payload"];
+  const sources = [row, asRecord(row.data), asRecord(row.payload), asRecord(row.message)].filter(
+    (value): value is Record<string, unknown> => Boolean(value),
+  );
+  for (const source of sources) {
+    const value = metadataValueFromRecord(source, keys);
+    if (value !== source) return value;
+  }
+  return row;
+}
+
+function sessionMetadataItem(
+  index: number,
+  row: Record<string, unknown>,
+  kind: SessionMetadataKind,
+  timestamp?: string,
+  suffix = "metadata",
+): SessionTimelineItem {
+  const value = sessionMetadataValue(row, kind);
+  return {
+    id: `${index}-${suffix}`,
+    kind: "system",
+    title: kind === "last-prompt" ? "最后提示" : "会话标题",
+    body: contentToText(value) || stringifyBody(value),
+    timestamp,
+  };
+}
+
+function sessionRowTimestamp(row: Record<string, unknown>): string | undefined {
+  const message = asRecord(row.message);
+  const info = asRecord(row.info);
+  const value = row.timestamp ?? row.created_at ?? row.at ?? message?.timestamp ?? info?.timestamp;
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  return asString(value) ?? (typeof row.time === "number" ? new Date(row.time).toISOString() : asString(row.time));
+}
+
+function parseSessionMetadataRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] | undefined {
+  const kind = sessionMetadataKind(row);
+  if (!kind) return undefined;
+  return [sessionMetadataItem(index, row, kind, sessionRowTimestamp(row), kind)];
+}
+
+function parseSessionSpecialRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] | undefined {
+  const attachment = sessionAttachmentRow(row);
+  if (attachment) {
+    return [attachmentItem(index, attachment, sessionRowTimestamp(row))];
+  }
+  return parseSessionMetadataRow(row, index);
 }
 
 function pushUsage(
@@ -149,14 +411,19 @@ function pushUsage(
 function cacheWriteFromUsage(usage: Record<string, unknown>): number | undefined {
   const top =
     asNumber(usage.cache_creation_input_tokens)
+    ?? asNumber(usage.cacheCreationInputTokens)
     ?? asNumber(usage.cache_write_tokens)
+    ?? asNumber(usage.cacheWriteTokens)
     ?? asNumber(usage.cache_creation_tokens);
-  const nested = asRecord(usage.cache_creation);
+  const nested = asRecord(usage.cache_creation) ?? asRecord(usage.cacheCreation);
   if (nested) {
     const parts = [
       asNumber(nested.ephemeral_5m_input_tokens) ?? 0,
+      asNumber(nested.ephemeral5mInputTokens) ?? 0,
       asNumber(nested.ephemeral_1h_input_tokens) ?? 0,
+      asNumber(nested.ephemeral1hInputTokens) ?? 0,
       asNumber(nested.ephemeral_input_tokens) ?? 0,
+      asNumber(nested.ephemeralInputTokens) ?? 0,
     ];
     const nestedSum = parts.reduce((a, b) => a + b, 0);
     if (nestedSum > 0) return (top ?? 0) > 0 ? Math.max(top ?? 0, nestedSum) : nestedSum;
@@ -164,28 +431,50 @@ function cacheWriteFromUsage(usage: Record<string, unknown>): number | undefined
   return top;
 }
 
+function usageNumber(usage: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = asNumber(usage[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function usageFromRecord(usage: Record<string, unknown>): SessionTimelineItem["tokens"] {
+  const cache = asRecord(usage.cache);
+  return {
+    input: usageNumber(usage, "input_tokens", "inputTokens", "input", "prompt_tokens", "promptTokens"),
+    output: usageNumber(usage, "output_tokens", "outputTokens", "output", "completion_tokens", "completionTokens"),
+    cacheRead: usageNumber(
+      usage,
+      "cache_read_input_tokens",
+      "cacheReadInputTokens",
+      "cache_read_tokens",
+      "cacheReadTokens",
+      "cacheRead",
+      "cached_input_tokens",
+      "cachedInputTokens",
+      "cached_tokens",
+      "cachedTokens",
+    ) ?? usageNumber(cache ?? {}, "read", "cacheRead", "cache_read", "cacheReadTokens"),
+    cacheWrite: cacheWriteFromUsage(usage) ?? usageNumber(usage, "cacheWrite") ?? usageNumber(cache ?? {}, "write", "cacheWrite", "cache_write", "cacheWriteTokens"),
+  };
+}
+
 function extractUsage(rec: Record<string, unknown>): SessionTimelineItem["tokens"] | undefined {
   const usage = asRecord(rec.usage) ?? asRecord(rec.token_usage) ?? asRecord(rec.tokens);
   if (usage) {
-    return {
-      input: asNumber(usage.input_tokens) ?? asNumber(usage.input) ?? asNumber(usage.prompt_tokens),
-      output: asNumber(usage.output_tokens) ?? asNumber(usage.output) ?? asNumber(usage.completion_tokens),
-      cacheRead:
-        asNumber(usage.cache_read_input_tokens)
-        ?? asNumber(usage.cache_read_tokens)
-        ?? asNumber(usage.cached_tokens),
-      cacheWrite: cacheWriteFromUsage(usage),
-    };
+    return usageFromRecord(usage);
   }
   if (rec.type === "token_count" || rec.type === "token_usage") {
-    return {
-      input: asNumber(rec.input_tokens) ?? asNumber(rec.input),
-      output: asNumber(rec.output_tokens) ?? asNumber(rec.output),
-      cacheRead: asNumber(rec.cache_read_input_tokens),
-      cacheWrite: cacheWriteFromUsage(rec),
-    };
+    return usageFromRecord(rec);
   }
   return undefined;
+}
+
+function extractCodexTokenCountUsage(payload: Record<string, unknown>): SessionTimelineItem["tokens"] | undefined {
+  const info = asRecord(payload.info) ?? asRecord(payload.tokenInfo);
+  const last = asRecord(info?.last_token_usage) ?? asRecord(info?.lastTokenUsage);
+  return last ? usageFromRecord(last) : extractUsage(payload);
 }
 
 function detectFormat(
@@ -210,6 +499,7 @@ function detectFormat(
       if (asRecord(row.message) || row.sessionId || row.uuid) return "claude-code";
     }
     if (type === "queue-operation") return "claude-code";
+    if (type === "message" && asRecord(row.message)) return "pi";
     if (
       type === "agent_start"
       || type === "agent_end"
@@ -225,6 +515,15 @@ function detectFormat(
       return "pi";
     }
     if (
+      type === "user/message"
+      || type === "assistant/message"
+      || type === "assistant/chunk"
+      || type === "tool/call"
+      || type === "tool/result"
+    ) {
+      return "dsh";
+    }
+    if (
       type === "step_start"
       || type === "step_finish"
       || type === "text"
@@ -238,12 +537,17 @@ function detectFormat(
     ) {
       return "open-code";
     }
+    if (asRecord(row.info) && Array.isArray(row.parts)) return "open-code";
   }
   if (rows.length > 0) return "ndjson";
   return "unknown";
 }
 
-const CLAUDE_CANVAS_BROADCAST_PREFIX = "[DeepSonar 画布增量通知]";
+const CANVAS_BROADCAST_PREFIX = "[DeepSonar 画布增量通知]";
+
+function isCanvasBroadcast(value: unknown): value is string {
+  return typeof value === "string" && value.trimStart().startsWith(CANVAS_BROADCAST_PREFIX);
+}
 
 function claudeBlockText(block: Record<string, unknown>): string | undefined {
   if (typeof block.thinking === "string") return asString(block.thinking);
@@ -252,23 +556,26 @@ function claudeBlockText(block: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function claudeBroadcastTitle(content: string): string {
+function canvasBroadcastTitle(content: string): string {
   const titleLine = content.split(/\r?\n/).find((line) => /^\s*title\s*:/i.test(line));
   const title = titleLine?.replace(/^\s*title\s*:\s*/i, "").trim();
   return title ? `广播 · ${truncate(title, 200)}` : "画布广播";
 }
 
+function canvasBroadcastItem(index: number, content: string, timestamp?: string): SessionTimelineItem {
+  return {
+    id: `${index}-broadcast`,
+    kind: "broadcast",
+    title: canvasBroadcastTitle(content),
+    body: content,
+    timestamp,
+  };
+}
+
 function claudeQueueOperation(row: Record<string, unknown>, index: number, timestamp?: string): SessionTimelineItem[] {
   if (asString(row.operation)?.toLowerCase() !== "enqueue") return [];
   const content = asString(row.content) ?? asString(row.message);
-  if (!content?.trimStart().startsWith(CLAUDE_CANVAS_BROADCAST_PREFIX)) return [];
-  return [{
-    id: `${index}-broadcast`,
-    kind: "broadcast",
-    title: claudeBroadcastTitle(content),
-    body: content,
-    timestamp,
-  }];
+  return content && isCanvasBroadcast(content) ? [canvasBroadcastItem(index, content, timestamp)] : [];
 }
 
 function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
@@ -288,7 +595,12 @@ function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTim
       for (const [i, block] of content.entries()) {
         const rec = asRecord(block);
         if (!rec) continue;
-        if (rec.type === "tool_use") {
+        const metadata = sessionMetadataKind(rec);
+        if (isAttachmentBlock(rec)) {
+          items.push(attachmentItem(index, rec, ts, `attachment-${i}`));
+        } else if (metadata) {
+          items.push(sessionMetadataItem(index, rec, metadata, ts, `metadata-${i}`));
+        } else if (rec.type === "tool_use") {
           items.push({
             id: `${index}-tool-${i}`,
             kind: "tool_call",
@@ -306,6 +618,7 @@ function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTim
             timestamp: ts,
             isError: rec.is_error === true,
           });
+          items.push(...attachmentItemsFromContent(rec.content, index, ts, `result-attachment-${i}`));
         } else {
           const blockText = claudeBlockText(rec);
           if (blockText) {
@@ -365,6 +678,81 @@ function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTim
   }];
 }
 
+const CODEX_TOOL_CALL_TYPES = new Set([
+  "function_call",
+  "custom_tool_call",
+  "mcp_call",
+  "mcp_tool_call",
+  "tool_call",
+  "tool_use",
+  "tool",
+]);
+
+const CODEX_TOOL_RESULT_TYPES = new Set([
+  "function_call_output",
+  "custom_tool_call_output",
+  "mcp_call_output",
+  "mcp_tool_call_output",
+  "tool_result",
+  "tool_output",
+]);
+
+function codexRoleKind(role: unknown): SessionItemKind {
+  if (role === "user") return "user";
+  if (role === "system") return "system";
+  return "assistant";
+}
+
+function codexRoleTitle(kind: SessionItemKind): string {
+  if (kind === "user") return "用户";
+  if (kind === "system") return "系统";
+  return "助手";
+}
+
+function codexReasoningText(payload: Record<string, unknown>): string {
+  const humanText = (value: unknown): string => typeof value === "string" ? value : Array.isArray(value) ? contentToText(value) : "";
+  return humanText(payload.summary)
+    || asString(payload.text)
+    || humanText(payload.content)
+    || asString(payload.reasoning)
+    || "";
+}
+
+function codexContentItems(
+  content: unknown,
+  index: number,
+  timestamp: string | undefined,
+  roleKind: SessionItemKind,
+): SessionTimelineItem[] {
+  if (!Array.isArray(content)) return [];
+  const title = codexRoleTitle(roleKind);
+  const items: SessionTimelineItem[] = [];
+  for (const [blockIndex, rawBlock] of content.entries()) {
+    const block = asRecord(rawBlock);
+    if (!block) continue;
+    if (isAttachmentBlock(block)) {
+      items.push(attachmentItem(index, block, timestamp, `attachment-${blockIndex}`));
+      continue;
+    }
+    const metadata = sessionMetadataKind(block);
+    if (metadata) {
+      items.push(sessionMetadataItem(index, block, metadata, timestamp, `metadata-${blockIndex}`));
+      continue;
+    }
+    const text = asString(block.text) ?? asString(block.thinking) ?? asString(block.reasoning) ?? asString(block.content);
+    if (!text) continue;
+    const thinking = normalizedType(block.type) === "thinking" || normalizedType(block.type) === "reasoning" || block.thinking != null || block.reasoning != null;
+    items.push({
+      id: `${index}-message-${blockIndex}`,
+      kind: thinking ? "assistant" : roleKind,
+      title: thinking ? "思考" : title,
+      body: text,
+      timestamp,
+    });
+  }
+  return items;
+}
+
 function parseCodexRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
   const type = asString(row.type) ?? "other";
   const payload = asRecord(row.payload) ?? row;
@@ -386,7 +774,18 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
       return [{ id: String(index), kind: "other", title: type, body: stringifyBody(row), timestamp: ts }];
     }
     const itemType = asString(item.type) ?? "item";
-    if (itemType.includes("tool") || itemType === "mcp_call" || itemType === "function_call") {
+    if (CODEX_TOOL_RESULT_TYPES.has(itemType)) {
+      return [{
+        id: `${index}-result`,
+        kind: "tool_result",
+        title: asString(item.name) ? `结果 ${String(item.name)}` : "工具结果",
+        toolName: asString(item.name) ?? asString(item.tool_name),
+        body: stringifyBody(item.output ?? item.result ?? item.error ?? item),
+        timestamp: ts,
+        isError: item.error != null || item.is_error === true,
+      }];
+    }
+    if (CODEX_TOOL_CALL_TYPES.has(itemType)) {
       if (type === "item.completed" && (item.output != null || item.result != null || item.error != null)) {
         return [{
           id: `${index}-result`,
@@ -408,18 +807,27 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
       }];
     }
     if (itemType === "agent_message" || itemType === "message" || itemType === "output_text") {
-      const text = asString(item.text) ?? contentToText(item.content) ?? stringifyBody(item);
-      if (!text || type === "item.started") return [];
+      const kind = codexRoleKind(item.role ?? (itemType === "agent_message" ? "assistant" : undefined));
+      const blockItems = codexContentItems(item.content, index, ts, kind);
+      const text = asString(item.text) ?? contentToText(item.content);
+      if (type === "item.started") return [];
+      if (blockItems.length > 0) {
+        if (asString(item.text)) {
+          blockItems.unshift({ id: String(index), kind, title: codexRoleTitle(kind), body: asString(item.text), timestamp: ts });
+        }
+        return blockItems;
+      }
+      if (!text) return [];
       return [{
         id: String(index),
-        kind: "assistant",
-        title: "助手",
+        kind,
+        title: codexRoleTitle(kind),
         body: text,
         timestamp: ts,
       }];
     }
     if (itemType === "reasoning" || itemType === "thinking" || itemType === "reasoning_summary") {
-      const text = asString(item.text) ?? asString(item.summary) ?? contentToText(item.content);
+      const text = codexReasoningText(item);
       if (!text || type === "item.started") return [];
       return [{ id: String(index), kind: "assistant", title: "思考", body: text, timestamp: ts }];
     }
@@ -451,13 +859,16 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
         title: "Token 用量",
         body: stringifyBody(payload),
         timestamp: ts,
-        tokens: extractUsage(payload) ?? extractUsage(row),
+        tokens: extractCodexTokenCountUsage(payload) ?? extractUsage(row),
       }];
     }
     if (kind === "user_message" || kind === "agent_message" || kind === "assistant_message") {
+      const roleKind: SessionItemKind = kind.startsWith("user") ? "user" : "assistant";
+      const blockItems = codexContentItems(payload.content, index, ts, roleKind);
+      if (blockItems.length > 0) return blockItems;
       return [{
         id: String(index),
-        kind: kind.startsWith("user") ? "user" : "assistant",
+        kind: roleKind,
         title: kind.startsWith("user") ? "用户" : "助手",
         body: asString(payload.message) ?? asString(payload.text) ?? contentToText(payload.content),
         timestamp: ts,
@@ -474,7 +885,17 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
 
   if (type === "response_item") {
     const itemType = asString(payload.type) ?? "response";
-    if (itemType.includes("function_call") || itemType === "tool_call") {
+    if (CODEX_TOOL_RESULT_TYPES.has(itemType)) {
+      return [{
+        id: `${index}-result`,
+        kind: "tool_result",
+        title: "工具结果",
+        body: stringifyBody(payload.output ?? payload.content ?? payload.result ?? payload),
+        timestamp: ts,
+        isError: payload.error != null || payload.is_error === true,
+      }];
+    }
+    if (CODEX_TOOL_CALL_TYPES.has(itemType)) {
       return [{
         id: String(index),
         kind: "tool_call",
@@ -484,15 +905,24 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
         timestamp: ts,
       }];
     }
-    if (itemType.includes("function_call_output") || itemType === "tool_result") {
+    if (itemType === "message") {
+      const kind = codexRoleKind(payload.role);
+      const blockItems = codexContentItems(payload.content, index, ts, kind);
+      const text = asString(payload.text) ?? contentToText(payload.content);
+      if (blockItems.length > 0) return blockItems;
+      if (!text) return [];
       return [{
         id: String(index),
-        kind: "tool_result",
-        title: "工具结果",
-        body: stringifyBody(payload.output ?? payload.content ?? payload),
+        kind,
+        title: codexRoleTitle(kind),
+        body: text,
         timestamp: ts,
-        isError: payload.is_error === true,
       }];
+    }
+    if (itemType === "reasoning") {
+      const text = codexReasoningText(payload);
+      if (!text) return [];
+      return [{ id: String(index), kind: "assistant", title: "思考", body: text, timestamp: ts }];
     }
     return [{
       id: String(index),
@@ -523,10 +953,107 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
   }];
 }
 
+function parsePiPersistedMessage(
+  row: Record<string, unknown>,
+  message: Record<string, unknown>,
+  index: number,
+): SessionTimelineItem[] {
+  const role = asString(message.role) ?? "assistant";
+  const roleKind: SessionItemKind = role === "user" ? "user" : role === "toolResult" || role === "tool_result" ? "tool_result" : "assistant";
+  const timestamp = asString(row.timestamp)
+    ?? asString(row.created_at)
+    ?? asString(message.timestamp)
+    ?? (typeof message.timestamp === "number" ? new Date(message.timestamp).toISOString() : undefined)
+    ?? (typeof row.time === "number" ? new Date(row.time).toISOString() : asString(row.time));
+  const content = message.content;
+  const aggregate = contentToText(content);
+  if (roleKind === "user" && isCanvasBroadcast(aggregate)) {
+    const item = canvasBroadcastItem(index, aggregate, timestamp);
+    const tokens = extractUsage(message) ?? extractUsage(row);
+    if (tokens) item.tokens = tokens;
+    return [item];
+  }
+
+  const items: SessionTimelineItem[] = [];
+  const blocks = Array.isArray(content) ? content : [];
+  for (const [blockIndex, rawBlock] of blocks.entries()) {
+    const block = asRecord(rawBlock);
+    if (!block) continue;
+    const blockType = asString(block.type) ?? "text";
+    if (isAttachmentBlock(block)) {
+      items.push(attachmentItem(index, block, timestamp, `attachment-${blockIndex}`));
+      continue;
+    }
+    const metadata = sessionMetadataKind(block);
+    if (metadata) {
+      items.push(sessionMetadataItem(index, block, metadata, timestamp, `metadata-${blockIndex}`));
+      continue;
+    }
+    if (blockType === "toolCall" || blockType === "tool_call" || blockType === "tool_use") {
+      const name = asString(block.name) ?? asString(block.toolName) ?? "tool";
+      items.push({
+        id: `${index}-call-${blockIndex}`,
+        kind: "tool_call",
+        title: `调用 ${name}`,
+        toolName: name,
+        body: stringifyBody(block.arguments ?? block.input),
+        timestamp,
+      });
+      continue;
+    }
+    if (blockType === "toolResult" || blockType === "tool_result") {
+      const name = asString(block.toolName) ?? asString(block.name);
+      items.push({
+        id: `${index}-result-${blockIndex}`,
+        kind: "tool_result",
+        title: name ? `结果 ${name}` : "工具结果",
+        toolName: name ?? asString(message.toolName),
+        body: contentToText(block.content) || stringifyBody(block.result ?? block.output ?? block.content),
+        timestamp,
+        isError: block.isError === true || block.is_error === true,
+      });
+      continue;
+    }
+    const text = asString(block.text) ?? asString(block.thinking) ?? asString(block.reasoning) ?? asString(block.content);
+    if (!text) continue;
+    const thinking = blockType === "thinking" || blockType === "reasoning" || block.thinking != null || block.reasoning != null;
+    items.push({
+      id: `${index}-${role}-${blockIndex}`,
+      kind: roleKind === "tool_result" ? "tool_result" : roleKind,
+      title: roleKind === "tool_result" ? "工具结果" : thinking ? "思考" : roleKind === "user" ? "用户" : "助手",
+      body: text,
+      timestamp,
+      ...(roleKind === "tool_result" ? { toolName: asString(message.toolName) } : {}),
+      ...(roleKind === "tool_result" ? { isError: message.isError === true || message.is_error === true } : {}),
+    });
+  }
+  if (blocks.length === 0) {
+    const text = asString(message.text) ?? (typeof content === "string" ? content : undefined);
+    if (text) {
+      items.push({
+        id: `${index}-${role}`,
+        kind: roleKind,
+        title: roleKind === "tool_result" ? "工具结果" : roleKind === "user" ? "用户" : "助手",
+        body: text,
+        timestamp,
+        ...(roleKind === "tool_result" ? { toolName: asString(message.toolName) } : {}),
+        isError: roleKind === "tool_result" && (message.isError === true || message.is_error === true) ? true : undefined,
+      });
+    }
+  }
+  const tokens = extractUsage(message) ?? extractUsage(row);
+  if (tokens && items.length > 0) items[0].tokens = tokens;
+  return items;
+}
+
 function parsePiRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
   const type = asString(row.type) ?? "other";
   const ts = asString(row.timestamp) ?? asString(row.time);
+  const persistedMessage = asRecord(row.message);
+  if (type === "message" && persistedMessage) return parsePiPersistedMessage(row, persistedMessage, index);
   if (
+    type === "session"
+    ||
     type === "agent_start"
     || type === "agent_end"
     || type === "agent_settled"
@@ -625,13 +1152,97 @@ function parsePiRow(row: Record<string, unknown>, index: number): SessionTimelin
   }];
 }
 
+function parseOpenCodeVendorMessage(
+  row: Record<string, unknown>,
+  info: Record<string, unknown>,
+  index: number,
+): SessionTimelineItem[] {
+  const role = asString(info.role) ?? "assistant";
+  const roleKind: SessionItemKind = role === "user" ? "user" : role === "system" ? "system" : "assistant";
+  const time = asRecord(info.time);
+  const timestamp = typeof time?.created === "number"
+    ? new Date(time.created).toISOString()
+    : asString(row.timestamp);
+  const parts = Array.isArray(row.parts) ? row.parts : [];
+  const text = contentToText(parts);
+  if (roleKind === "user" && isCanvasBroadcast(text)) {
+    const item = canvasBroadcastItem(index, text, timestamp);
+    const tokens = extractUsage(info) ?? extractUsage(row);
+    if (tokens) item.tokens = tokens;
+    return [item];
+  }
+  const items: SessionTimelineItem[] = [];
+  for (const [partIndex, rawPart] of parts.entries()) {
+    const part = asRecord(rawPart);
+    if (!part) continue;
+    const partType = asString(part.type) ?? "";
+    if (isAttachmentBlock(part)) {
+      items.push(attachmentItem(index, part, timestamp, `attachment-${partIndex}`));
+      continue;
+    }
+    const metadata = sessionMetadataKind(part);
+    if (metadata) {
+      items.push(sessionMetadataItem(index, part, metadata, timestamp, `metadata-${partIndex}`));
+      continue;
+    }
+    if (partType === "text") {
+      const value = asString(part.text);
+      if (value) items.push({ id: `${index}-text-${partIndex}`, kind: roleKind, title: roleKind === "user" ? "用户" : "助手", body: value, timestamp });
+      continue;
+    }
+    if (partType === "reasoning") {
+      const value = asString(part.text);
+      if (value) items.push({ id: `${index}-reasoning-${partIndex}`, kind: "assistant", title: "思考", body: value, timestamp });
+      continue;
+    }
+    if (partType === "tool") {
+      const state = asRecord(part.state) ?? {};
+      const name = asString(part.tool) ?? "tool";
+      items.push({
+        id: `${index}-call-${partIndex}`,
+        kind: "tool_call",
+        title: `调用 ${name}`,
+        toolName: name,
+        body: stringifyBody(state.input ?? state.raw),
+        timestamp,
+      });
+      const status = asString(state.status);
+      if (status === "completed" || status === "error") {
+        const error = state.error;
+        items.push({
+          id: `${index}-result-${partIndex}`,
+          kind: "tool_result",
+          title: `结果 ${name}`,
+          toolName: name,
+          body: stringifyBody(status === "error" ? error : state.output ?? state),
+          timestamp,
+          isError: status === "error",
+        });
+      }
+    }
+  }
+  const tokens = extractUsage(info) ?? extractUsage(row);
+  if (tokens && items.length > 0) items[0].tokens = tokens;
+  return items;
+}
+
 function parseOpenCodeRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
+  const info = asRecord(row.info);
+  if (info && Array.isArray(row.parts) && asString(info.role)) return parseOpenCodeVendorMessage(row, info, index);
   const type = asString(row.type) ?? asString(row.role) ?? "other";
   const ts =
     asString(row.time)
     ?? asString(row.timestamp)
     ?? (typeof row.time === "number" ? new Date(row.time).toISOString() : undefined);
   const part = asRecord(row.part) ?? asRecord(row.delta);
+
+  if (part && isAttachmentBlock(part)) {
+    return [attachmentItem(index, part, ts)];
+  }
+  if (part) {
+    const metadata = sessionMetadataKind(part);
+    if (metadata) return [sessionMetadataItem(index, part, metadata, ts)];
+  }
 
   if (type === "session.created" || type === "session.started" || type === "run.started" || type === "step_start") {
     return [{ id: String(index), kind: "system", title: type, body: stringifyBody(row), timestamp: ts }];
@@ -718,35 +1329,122 @@ function parseGenericRow(row: Record<string, unknown>, index: number): SessionTi
   }];
 }
 
-function parseDshRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
+function dshToolCallId(block: Record<string, unknown>): string | undefined {
+  return asString(block.id)
+    ?? asString(block.callId)
+    ?? asString(block.callID)
+    ?? asString(block.toolCallId)
+    ?? asString(block.toolCallID)
+    ?? asString(block.call_id)
+    ?? asString(block.tool_call_id);
+}
+
+function dshResultBody(data: Record<string, unknown>): string | undefined {
+  const message = asRecord(data.message);
+  if (message) {
+    return contentToText(message.content) || asString(message.text) || stringifyBody(message.content);
+  }
+  if (typeof data.message === "string") return truncate(data.message);
+  return stringifyBody(data.content ?? data.result);
+}
+
+function parseDshRow(
+  row: Record<string, unknown>,
+  index: number,
+  standaloneToolCallIds: ReadonlySet<string> = new Set<string>(),
+): SessionTimelineItem[] {
   const type = asString(row.type) ?? "event";
   if (type === "session" || type === "turn/start" || type === "turn/end") {
     return [{ id: String(index), kind: "system", title: type, body: stringifyBody(row) }];
   }
   const data = asRecord(row.data) ?? row;
   const message = asRecord(data.message) ?? data;
-  const content = Array.isArray(message.content) ? message.content : [];
+  const rawContent = message.content;
+  const content = Array.isArray(rawContent) ? rawContent : [];
   const timestamp = asString(row.timestamp) ?? (typeof row.time === "number" ? new Date(row.time).toISOString() : undefined);
   if (type === "user/message" || type === "assistant/message") {
     const items: SessionTimelineItem[] = [];
     const roleKind: SessionItemKind = type === "user/message" ? "user" : "assistant";
-    const text = contentToText(content);
-    if (text) items.push({ id: `${index}-message`, kind: roleKind, title: roleKind === "user" ? "用户" : "DSH", body: text, timestamp, tokens: extractUsage(message) });
+    const text = Array.isArray(rawContent) ? contentToText(content) : asString(rawContent) ?? "";
+    if (roleKind === "user" && isCanvasBroadcast(text)) {
+      const item = canvasBroadcastItem(index, text, timestamp);
+      const tokens = extractUsage(message) ?? extractUsage(data) ?? extractUsage(row);
+      if (tokens) item.tokens = tokens;
+      return [item];
+    }
+    if (!Array.isArray(rawContent) && text) {
+      const item: SessionTimelineItem = {
+        id: `${index}-message`,
+        kind: roleKind,
+        title: roleKind === "user" ? "用户" : "DSH",
+        body: text,
+        timestamp,
+      };
+      const tokens = extractUsage(message) ?? extractUsage(data) ?? extractUsage(row);
+      if (tokens) item.tokens = tokens;
+      return [item];
+    }
     for (const [blockIndex, rawBlock] of content.entries()) {
       const block = asRecord(rawBlock);
       if (!block) continue;
-      if (block.type === "tool-call") items.push({ id: `${index}-call-${blockIndex}`, kind: "tool_call", title: `调用 ${String(block.name ?? "tool")}`, toolName: asString(block.name), body: stringifyBody(block.arguments), timestamp });
-      if (block.type === "tool-result") items.push({ id: `${index}-result-${blockIndex}`, kind: "tool_result", title: "工具结果", body: stringifyBody(block.content), timestamp, isError: block.isError === true });
-      if (block.type === "reasoning" && typeof block.text === "string") items.push({ id: `${index}-reasoning-${blockIndex}`, kind: "assistant", title: "DSH reasoning", body: block.text, timestamp });
+      if (isAttachmentBlock(block)) {
+        items.push(attachmentItem(index, block, timestamp, `attachment-${blockIndex}`));
+        continue;
+      }
+      const metadata = sessionMetadataKind(block);
+      if (metadata) {
+        items.push(sessionMetadataItem(index, block, metadata, timestamp, `metadata-${blockIndex}`));
+        continue;
+      }
+      if (block.type === "tool-call") {
+        const id = dshToolCallId(block);
+        const name = asString(block.name);
+        if ((id && standaloneToolCallIds.has(id)) || (name && standaloneToolCallIds.has(`name:${name}`))) continue;
+        items.push({ id: `${index}-call-${blockIndex}`, kind: "tool_call", title: `调用 ${String(block.name ?? "tool")}`, toolName: asString(block.name), body: stringifyBody(block.arguments), timestamp });
+        continue;
+      }
+      if (block.type === "tool-result") {
+        items.push({ id: `${index}-result-${blockIndex}`, kind: "tool_result", title: "工具结果", body: contentToText(block.content) || stringifyBody(block.content), timestamp, isError: block.isError === true || block.is_error === true });
+        continue;
+      }
+      if (block.type === "reasoning" && typeof block.text === "string") {
+        items.push({ id: `${index}-reasoning-${blockIndex}`, kind: "assistant", title: "DSH reasoning", body: block.text, timestamp });
+        continue;
+      }
+      if (block.type === "text" && typeof block.text === "string") {
+        items.push({ id: `${index}-text-${blockIndex}`, kind: roleKind, title: roleKind === "user" ? "用户" : "DSH", body: block.text, timestamp });
+      }
     }
+    const tokens = extractUsage(message) ?? extractUsage(data) ?? extractUsage(row);
+    if (tokens && items.length > 0) items[0].tokens = tokens;
     return items;
   }
   if (type === "assistant/chunk") {
-    const chunk = asRecord(data.chunk) ?? {};
-    return typeof chunk.text === "string" ? [{ id: String(index), kind: "assistant", title: chunk.type === "reasoning-delta" ? "DSH reasoning" : "DSH", body: chunk.text, timestamp }] : [];
+    const packedChunk = data.chunk ?? row.chunk;
+    const chunk = asRecord(packedChunk) ?? data;
+    const chunkText = asString(chunk.text)
+      ?? asString(chunk.content)
+      ?? asString(chunk.delta)
+      ?? (typeof packedChunk === "string" ? truncate(packedChunk) : undefined);
+    if (!chunkText) return [];
+    const chunkType = asString(chunk.type) ?? "";
+    return [{ id: String(index), kind: "assistant", title: chunkType.includes("reasoning") ? "DSH reasoning" : "DSH", body: chunkText, timestamp }];
   }
   if (type === "tool/call") return [{ id: String(index), kind: "tool_call", title: `调用 ${String(data.name ?? "tool")}`, toolName: asString(data.name), body: stringifyBody(data.arguments ?? data.input), timestamp }];
-  if (type === "tool/result") return [{ id: String(index), kind: "tool_result", title: "工具结果", toolName: asString(data.name), body: stringifyBody(data.content ?? data.result), timestamp, isError: data.isError === true }];
+  if (type === "tool/result") {
+    const messageRecord = asRecord(data.message);
+    return [{
+      id: String(index),
+      kind: "tool_result",
+      title: asString(data.name) ? `结果 ${String(data.name)}` : "工具结果",
+      toolName: asString(data.name) ?? asString(messageRecord?.toolName),
+      body: dshResultBody(data),
+      timestamp,
+      isError: (data.error != null && !(typeof data.error === "string" && !data.error.trim()))
+        || data.isError === true
+        || data.is_error === true,
+    }];
+  }
   return parseGenericRow(row, index);
 }
 
@@ -757,6 +1455,23 @@ function parseObjectRows(
   const format = detectFormat(rows, preferred);
   const items: SessionTimelineItem[] = [];
   const toolMap = new Map<string, SessionToolStat>();
+  const dshStandaloneToolCallIds = new Set<string>();
+  if (format === "dsh") {
+    for (const row of rows) {
+      if (row.type !== "tool/call") continue;
+      const data = asRecord(row.data) ?? row;
+      const id = asString(data.id)
+        ?? asString(data.callId)
+        ?? asString(data.callID)
+        ?? asString(data.toolCallId)
+        ?? asString(data.toolCallID)
+        ?? asString(data.call_id)
+        ?? asString(data.tool_call_id);
+      if (id) dshStandaloneToolCallIds.add(id);
+      const name = asString(data.name) ?? asString(data.toolName);
+      if (name) dshStandaloneToolCallIds.add(`name:${name}`);
+    }
+  }
   const totals: SessionParseResult["totals"] = {
     input: 0,
     output: 0,
@@ -770,11 +1485,14 @@ function parseObjectRows(
   for (const [index, row] of rows.entries()) {
     let parsed: SessionTimelineItem[] = [];
     try {
-      if (format === "claude-code") parsed = parseClaudeRow(row, index);
+      parsed = parseSessionSpecialRow(row, index) ?? [];
+      if (parsed.length > 0) {
+        // Explicit extension/session metadata is not a user or assistant turn.
+      } else if (format === "claude-code") parsed = parseClaudeRow(row, index);
       else if (format === "codex") parsed = parseCodexRow(row, index);
       else if (format === "pi") parsed = parsePiRow(row, index);
       else if (format === "open-code") parsed = parseOpenCodeRow(row, index);
-      else if (format === "dsh") parsed = parseDshRow(row, index);
+      else if (format === "dsh") parsed = parseDshRow(row, index, dshStandaloneToolCallIds);
       else parsed = parseGenericRow(row, index);
     } catch {
       totals.skipped += 1;

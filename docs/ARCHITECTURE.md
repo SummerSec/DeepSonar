@@ -245,7 +245,7 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 - DB：Postgres（`jobs` / `events` / `findings` / `canvas_nodes` / `canvas_edges`）
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
 - 画布：**React Flow（@xyflow/react，MIT）+ elkjs 服务端布局**。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
-- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 四类可换：**claude-code（默认）/ opencode / codex / pi**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
+- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
 - Plane：自托管 Community + API Token
 
 暂不引入 Multica/ClawTeam，避免与 Plane 双看板；接口预留「执行器可替换」。
@@ -462,7 +462,8 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、伪造的控制 MCP tool call 和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；平台控制 telemetry 仅保留 operation/调用标识与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列。
 - 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
-- 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限。仅当 Job 冻结能力 `incrementalMessages=true` 时订阅（Claude Code / Pi；Codex / OpenCode 不追加）。每次投递写入 `canvas_broadcasts`（`planned`→`injected`|`unknown`），`injected` 仅表示平台已调用 sendMessage 成功，不表示模型已读；查询 `GET /canvases/:id/broadcasts`。产品摘要见 `DESIGN.md` §4.2
+- Session 归档按 CLI 方言独立读取：Claude Code、Codex、Pi、DSH 使用本次沙箱的受治理本地 session artifact；OpenCode 使用 `opencode export <sessionId>` vendor export，受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或超限显式失败；Web 查看器分别解析五类格式并保留原始归档下载
+- 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限。仅当 Job 冻结能力 `incrementalMessages=true` 时订阅（Claude Code / Pi / DSH；Codex / OpenCode 不追加）。每次投递写入 `canvas_broadcasts`（`planned`→`injected`|`unknown`），`injected` 仅表示平台已调用 sendMessage 成功，不表示模型已读。画布广播徽标与连线是账本派生 overlay，不写入 `canvas_nodes` / `canvas_edges`；Job Session 的广播条目来自 CLI 持久化文本，只是旁证，同样不是 ACK。查询 `GET /canvases/:id/broadcasts`。产品摘要见 `DESIGN.md` §4.2
 - 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
 - 沙箱内不注入调度器数据库、管理 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期模型 Job token。平台控制 API 只注入另一枚按 operation 限权的短期 token；二者均随终态撤销并随一次性沙箱销毁
 - lease 由调度器根据控制通道存活状态维护；SDK 通道中断由 Reaper 按 lease 判定
@@ -500,9 +501,9 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 `target_json`。`resolveFindingProtocol` 按任务 > 项目 > 全局覆盖（数组按层替换并去重），生成
 `EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
 
-Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
 compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目、技术态为 `confirmed` 且 disposition 为 `open|accepted|confirmed_vuln`，然后把内容写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。
 
+Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
 
 `context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Codex `model_auto_compact_token_limit`、OpenCode 模型 `limit.context`、Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。
 

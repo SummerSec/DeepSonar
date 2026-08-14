@@ -74,9 +74,23 @@ be registered or admitted:
 | **Session 归档** | `packages/runtime-sandbox/src/cli-session-adapters.ts`（`SupportedAgentCli` + `CLI_SESSION_ADAPTERS`） | 按 CLI 发现/导出原始 session（JSONL / vendor export），写入 Job evidence；`sessionCapture: true` 才启用 |
 | **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 工具统计 / Token / 原始；**保留下载原始文件** |
 
+当前五类 CLI 的归档边界如下；它们是独立格式，不承诺共用 schema：
+
+| CLI | 归档来源/格式 | 明确边界 |
+| --- | --- | --- |
+| `claude-code` | 本次沙箱 `HOME/.claude/projects` 下匹配 `sessionId` 的 JSONL（含主会话与 `subagents`） | 发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
+| `codex` | `CODEX_HOME/sessions`（未设置时 `HOME/.codex/sessions`）的 JSONL | 仅按本次 `sessionId` 发现；发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
+| `open-code` | `opencode export <sessionId>` vendor export | stdout 超过 32 MiB、导出失败或空结果时显式 `captureError` |
+| `pi` | runtime 返回且位于 `/workspace/.deepsonar-home/.pi/agent/` 的受治理 `sessionFile` JSONL | 缺失/路径越界/读取错误或超过 32 MiB 时显式 `captureError` |
+| `dsh` | `/workspace/.deepsonar-home/.dsh/sessions/<project>/<sessionId>/session.jsonl` JSONL | 非法或多项目匹配、发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
+
+查看器为每种 CLI 分别归一化消息、reasoning、tool call/result、usage；仅当对应 CLI 的归档实际持久化了 DeepSonar 注入文本时，才生成 `broadcast` 条目。归档内 malformed 行不伪造结构，保留 `skipped` 计数；原始归档始终可下载。
+
+画布上的广播徽标与连线是 `canvas_broadcasts` 投递账本的派生视觉 overlay，不写入 `canvas_nodes` / `canvas_edges`；Session 页的 `broadcast` 则来自 CLI 实际持久化的注入文本，只作为账本旁证，也不是读取或 ACK 回执。`injected` 只表示 Scheduler/adapter 已成功把文本写入 Agent session 输入。当前 Codex/OpenCode 的 `incrementalMessages` 未订阅运行时广播，因此查看器不会暗示它们收到 live broadcast。
+
 接入新 CLI 的强制清单（与 compaction 并列 fail-closed 心智）：
 
-1. **扩展 `SupportedAgentCli`**，并实现 `AgentCliSessionAdapter.exportSession`：只依赖本次运行的 session identity（及 Pi 的受治理 `sessionFile`），禁止扫共享 DB / latest / 跨 Job 路径；超大体积与路径越界 fail closed（见现有 Claude/Codex/OpenCode/Pi 适配器）。
+1. **扩展 `SupportedAgentCli`**，并实现 `AgentCliSessionAdapter.exportSession`：只依赖本次运行的 session identity（及 Pi 的受治理 `sessionFile`），禁止扫共享 DB / latest / 跨 Job 路径；malformed identity/path、超大体积与导出/读取错误显式 fail closed（见现有 Claude/Codex/OpenCode/Pi/DSH 适配器）。
 2. **runtime adapter** 声明 `sessionCapture: true`，并保证流里能捕获稳定 `sessionId`（Pi 还要 `sessionFile`），否则归档永远空。
 3. **扩展 Web 解析**：在 `parseAgentSession.ts` 增加该 CLI 的行/文档解析（或 `cli` hint 下的专用路径），更新 `normalizeSessionCli` / `sessionCliLabel`，并补 `parseAgentSession.test.ts` 样例（至少：用户消息、助手、一次 tool_call + tool_result、Token 若可得）。
 4. **不要假设**「Codex 目录结构」或「Claude JSONL」可复用；每种 CLI 的 on-disk / export 形态单独适配。参考外部 [agent-session-viewer](https://github.com/cuteribs/agent-session-viewer) 仅作 UX/格式灵感，**不 vendor 整站**。

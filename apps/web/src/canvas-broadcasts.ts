@@ -126,8 +126,8 @@ export function broadcastStatusLabel(status: BroadcastDeliveryStatus): string {
 }
 
 export const BROADCAST_STATUS_COLOR: Record<BroadcastDeliveryStatus, string> = {
-  injected: "#34d399",
-  planned: "#fbbf24",
-  unknown: "#f87171",
-  failed: "#ef4444",
+  injected: "var(--broadcast-injected)",
+  planned: "var(--broadcast-planned)",
+  unknown: "var(--broadcast-unknown)",
+  failed: "var(--broadcast-failed)",
 };

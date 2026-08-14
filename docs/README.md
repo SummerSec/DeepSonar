@@ -27,7 +27,7 @@
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **as-built**（正文仍含早期 Plane 叙述，以 § 后半与 DESIGN 为准） | 威胁建模、状态机、存储、运行时；入口一句话已本地优先 |
-| [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 四 CLI 适配器、能力、Session 归档+查看器接入清单；版本钉死见 runtime-images |
+| [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 五类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；版本钉死见 runtime-images |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built**（#37） | 领域拆分与锁序；非「待实施」 |
 | [RUNTIME_IMAGE_REGISTRY_CONTRACT.md](RUNTIME_IMAGE_REGISTRY_CONTRACT.md) | **as-built**（#70） | 官方镜像 catalog v2、通道、fail-closed |
@@ -82,7 +82,7 @@
 | #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
 | #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |
 | #157 / #158 | **已关**；共享资产孤儿卷回收、busybox helper 预拉、provision admission |
-| #159 / #160 | **已关**；Fact 工作台、Claude Session 时间线归一化（含画布广播） |
+| #159 / #160 | **已关**；Fact 工作台、Agent CLI Session 时间线归一化（#160 起因是 Claude，现覆盖五类归档；画布广播仅在 CLI 归档持久化时展示） |
 | Agent CLI 钉死版本 | 仓库已更新；**正式沙箱镜像**需 `v*` release 后才含新 CLI |
 | #34 增量 migration | **刻意搁置**；坚持基线 + 重建库 |
 | #148 全图 `layout_revision` | **暂缓设计**；过程真相 A 已 as-built，布局继续服务端落点 + 前端 ELK |

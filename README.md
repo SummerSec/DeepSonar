@@ -36,7 +36,7 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 - 新建任务只填标题和内容；Hub / 事件 / 人工评论统一进入调度闭环；
 - Finding 按任务 `minVerifySeverity` 进入自动验证（低于阈值的保留但不占 Verify）；`confirmed` 后生成 Finding 报告，画布收敛后生成任务级报告；
 - **Agent 只提案**：真实 Job 经短期 capability token 调用 Job 级控制 API（`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human` 等）；不注入控制 MCP、失败不回退 MCP；调度器是唯一副作用执行者；
-- 任务详情含画布 / **事实** / Finding / Job / 报告；Finding 与 Fact 均可人工裁决；Session 查看器归一化 Claude 时间线（含画布广播）；
+- 任务详情含画布 / **事实** / Finding / Job / 报告；Finding 与 Fact 均可人工裁决；Session 查看器按五类治理 Agent CLI 各自的归档格式归一化消息、reasoning、tool call/result、usage；归档中存在的画布广播以独立条目展示，并保留原始归档下载；
 - RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场与项目镜像策略可在控制台管理；
 - PostgreSQL 为业务真相；Scheduler 启动时对空库套 schema 基线，已有库只校验版本；
 - **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 Agentbox 起真实沙箱。
@@ -49,6 +49,7 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 - 设置页可在保存前一键读取模型列表；显式 `allowed_model_ids` 只限制实际生效模型，不会由配置文件中的 model 自动生成白名单。
 - 用户密码、Provider API Key 和完整 CLI 配置不会由管理 API 或 Web 明文回显；已保存密钥仅显示占位状态。
 - 适配器契约与 Session 归档清单见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)。
+- Session 归档按 CLI 方言独立处理：Claude Code、Codex、Pi、DSH 使用本次沙箱的受治理本地 session artifact；OpenCode 使用 `opencode export <sessionId>` vendor export，并受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或超限会显式报告，不把五类归档当作同一 schema。
 
 ## 一键部署（推荐：拉取已发布镜像）
 

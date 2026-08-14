@@ -1,5 +1,7 @@
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import {
+  ArrowDownLeft,
+  ArrowUpRight,
   Brain,
   Bug,
   CaretDown,
@@ -124,6 +126,10 @@ function kindIcon(semantic: SemanticNodeKind, size = 16): ReactNode {
   }
 }
 
+function broadcastStatsTitle(stats: BroadcastNodeStats, direction: "发出" | "接收"): string {
+  return `${direction} ${stats.total} 条广播账本记录：已注入 ${stats.injected}，计划 ${stats.planned}，未知 ${stats.unknown}，失败 ${stats.failed}。已注入仅表示写入 Agent 会话，不表示模型已读。`;
+}
+
 function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const n = data.canvas;
   const semantic = semanticNodeKind(n);
@@ -142,13 +148,13 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const targetText = target ? String(target.content ?? "") : null;
   const sourceBroadcasts = data.broadcastSource;
   const targetBroadcasts = data.broadcastTarget;
+  const importedSeed = semantic === "finding" && n.body_json?.origin === "seed" && n.body_json?.readonly === true;
 
   const childCount = data.childCount ?? 0;
   const isExpanded = Boolean(data.isExpanded);
   const hasChildren = childCount > 0;
 
   const verification =
-  const importedSeed = semantic === "finding" && n.body_json?.origin === "seed" && n.body_json?.readonly === true;
     n.node_type === "fact" && n.verification_status
       ? (VERIFICATION_META[n.verification_status] ?? {
           label: n.verification_status,
@@ -241,17 +247,17 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                   {style.label}
                 </span>
                 <span className="font-mono text-[9px] tracking-[0.14em] text-zinc-600">{style.short}</span>
+                {importedSeed && (
+                  <span className="rounded border border-amber-400/25 bg-amber-400/[.08] px-1.5 py-0.5 font-mono text-[9px] text-amber-300" title="从项目已确认 Finding 冻结的只读种子">
+                    SEED · 只读
+                  </span>
+                )}
                 {roleOrType && (
                   <span
                     className="max-w-[7.5rem] truncate rounded border px-1 py-0.5 font-mono text-[10px] uppercase tracking-wider"
                     style={{
                       color: displayColor,
                       borderColor: `${displayColor}55`,
-                {importedSeed && (
-                  <span className="rounded border border-amber-400/25 bg-amber-400/[.08] px-1.5 py-0.5 font-mono text-[9px] text-amber-300" title="从项目已确认 Finding 冻结的只读种子">
-                    SEED · 只读
-                  </span>
-                )}
                       background: `color-mix(in srgb, ${displayColor} 10%, transparent)`,
                     }}
                     title={roleOrType}
@@ -268,16 +274,23 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                   </span>
                 )}
                 {(semantic === "fact" || semantic === "finding") && Boolean(sourceBroadcasts?.total) && (
-                  <span className="broadcast-node-badge is-source" title="该 Fact/Finding 的广播目标数">
-                    广播 {sourceBroadcasts?.total}
+                  <span
+                    className={`broadcast-node-badge is-source${sourceBroadcasts?.failed ? " has-failure" : ""}`}
+                    title={sourceBroadcasts ? broadcastStatsTitle(sourceBroadcasts, "发出") : undefined}
+                  >
+                    <ArrowUpRight size={11} weight="bold" aria-hidden="true" />
+                    <span>发出</span>
+                    <strong>{sourceBroadcasts?.total}</strong>
                   </span>
                 )}
                 {Boolean(targetBroadcasts?.total) && (
                   <span
-                    className="broadcast-node-badge is-target"
-                    title="该节点是 Fact/Finding 广播的接收节点；已注入仅表示写入 Agent 会话"
+                    className={`broadcast-node-badge is-target${targetBroadcasts?.failed ? " has-failure" : ""}`}
+                    title={targetBroadcasts ? broadcastStatsTitle(targetBroadcasts, "接收") : undefined}
                   >
-                    接收 {targetBroadcasts?.total}
+                    <ArrowDownLeft size={11} weight="bold" aria-hidden="true" />
+                    <span>接收</span>
+                    <strong>{targetBroadcasts?.total}</strong>
                   </span>
                 )}
               </div>

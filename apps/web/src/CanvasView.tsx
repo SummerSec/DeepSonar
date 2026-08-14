@@ -201,24 +201,41 @@ function toFlow(
           markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: sourceColor },
         };
       }),
-      ...broadcasts.overlayEdges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: "smoothstep",
-        animated: edge.status === "planned" || edge.status === "injected",
-        className: `deepsonar-edge broadcast-overlay-edge is-${edge.status}`,
-        label: edge.attempts > 1 ? `广播 ×${edge.attempts}` : "广播",
-        labelStyle: { fill: BROADCAST_STATUS_COLOR[edge.status], fontSize: 10 },
-        style: {
-          stroke: BROADCAST_STATUS_COLOR[edge.status],
-          strokeWidth: 2.2,
-          strokeDasharray: "5 5",
-          opacity: 0.95,
-          "--deepsonar-edge-speed": "2.2s",
-        } as CSSProperties,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: BROADCAST_STATUS_COLOR[edge.status] },
-      })),
+      ...broadcasts.overlayEdges.map((edge) => {
+        const statusLabel = broadcastStatusLabel(edge.status);
+        return {
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          type: "smoothstep",
+          animated: edge.status === "planned",
+          className: `deepsonar-edge broadcast-overlay-edge is-${edge.status}`,
+          label: edge.attempts > 1 ? `广播 ×${edge.attempts}` : "广播",
+          ariaLabel: `广播投递叠加层：来源 ${edge.source}，目标 ${edge.target}，${statusLabel}${edge.attempts > 1 ? `，尝试 ${edge.attempts} 次` : ""}`,
+          labelStyle: {
+            fill: BROADCAST_STATUS_COLOR[edge.status],
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: ".08em",
+          },
+          labelBgStyle: {
+            fill: "var(--panel-raised)",
+            fillOpacity: 0.96,
+            stroke: BROADCAST_STATUS_COLOR[edge.status],
+            strokeOpacity: 0.34,
+          },
+          labelBgPadding: [5, 3] as [number, number],
+          labelBgBorderRadius: 4,
+          style: {
+            stroke: BROADCAST_STATUS_COLOR[edge.status],
+            strokeWidth: 2,
+            opacity: edge.status === "unknown" ? 0.72 : edge.status === "failed" ? 0.84 : 0.94,
+            "--deepsonar-edge-speed": "2.2s",
+          } as CSSProperties,
+          markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: BROADCAST_STATUS_COLOR[edge.status] },
+        };
+      }),
     ],
   };
 }
@@ -293,6 +310,10 @@ function Legend() {
               <span className="font-mono text-[9px] text-zinc-500">{it.label}</span>
             </span>
           ))}
+          <span className="broadcast-legend-item">
+            <span className="broadcast-legend-line" aria-hidden="true" />
+            <span>广播投递叠加层</span>
+          </span>
         </div>
       </div>
     </div>
@@ -969,20 +990,24 @@ export function CanvasView({
         <section className="broadcast-status-panel" aria-label="最近广播状态">
           <div className="broadcast-status-panel-heading">
             <Broadcast size={14} />
+            <span className="broadcast-status-panel-kicker">投递账本</span>
             <strong>最近广播</strong>
-            <span>{broadcastPage.total}{broadcastPage.truncated ? "+" : ""} 条</span>
+            <span className="broadcast-status-panel-count">{broadcastPage.total}{broadcastPage.truncated ? "+" : ""} 条</span>
           </div>
           <ol>
             {broadcastPage.items.slice(0, 5).map((item) => (
-              <li key={item.id}>
-                <span style={{ background: BROADCAST_STATUS_COLOR[item.delivery_status] }} />
-                <div>
+              <li key={item.id} className={`broadcast-status-row is-${item.delivery_status}`}>
+                <span className="broadcast-status-rail" aria-hidden="true" />
+                <div className="broadcast-status-copy">
                   <strong>{item.title}</strong>
                   <small>{item.target_node_title ?? item.target_role ?? "目标节点暂不可见"}</small>
                 </div>
-                <em style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
-                  {broadcastStatusLabel(item.delivery_status)}
-                </em>
+                <div className="broadcast-status-meta">
+                  <em className="broadcast-status-state" style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
+                    {broadcastStatusLabel(item.delivery_status)}
+                  </em>
+                  {item.attempt > 1 && <small>attempt ×{item.attempt}</small>}
+                </div>
               </li>
             ))}
           </ol>
