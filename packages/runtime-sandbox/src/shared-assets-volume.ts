@@ -10,6 +10,7 @@ const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 const MANAGED_VOLUME_NAME_RE = /^deepsonar-assets-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 const VOLUME_REMOVE_MAX_ATTEMPTS = 3;
 const VOLUME_REMOVE_RETRY_BASE_DELAY_MS = 100;
+export const SHARED_ASSETS_DOCKER_COMMAND_TIMEOUT_MS = 60_000;
 const OCI_NAME_COMPONENT_RE = "[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?";
 const IMMUTABLE_OCI_REF_RE = new RegExp(
   `^(?:${OCI_NAME_COMPONENT_RE}(?::[0-9]+)?/)*${OCI_NAME_COMPONENT_RE}(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}$`,
@@ -18,9 +19,44 @@ const IMMUTABLE_OCI_REF_RE = new RegExp(
 export const DEFAULT_SHARED_ASSETS_HELPER_IMAGE =
   "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
 
+/** Docker CLI 超时与普通命令失败使用稳定、可观测的错误类别区分。 */
+export class DockerCommandTimeoutError extends Error {
+  readonly code = "DOCKER_COMMAND_TIMEOUT";
+  readonly command: readonly string[];
+  readonly timeoutMs: number;
+
+  constructor(command: readonly string[], timeoutMs: number, cause?: unknown) {
+    super(`Docker 命令超时（${timeoutMs}ms）：docker ${command.join(" ")}`);
+    this.name = "DockerCommandTimeoutError";
+    this.command = [...command];
+    this.timeoutMs = timeoutMs;
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+/** 识别 Node child_process 与测试替身产生的命令超时错误。 */
+export function isDockerCommandTimeout(error: unknown): boolean {
+  if (error instanceof DockerCommandTimeoutError) return true;
+  if (!error || typeof error !== "object") return false;
+  const value = error as { code?: unknown; name?: unknown; killed?: unknown; signal?: unknown };
+  return value.code === "ETIMEDOUT"
+    || value.name === "TimeoutError"
+    || (value.killed === true && value.signal === "SIGTERM");
+}
+
 async function docker(...args: string[]): Promise<string> {
-  const { stdout } = await execFileP("docker", args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
-  return stdout.trim();
+  try {
+    const { stdout } = await execFileP("docker", args, {
+      timeout: SHARED_ASSETS_DOCKER_COMMAND_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return stdout.trim();
+  } catch (error) {
+    if (isDockerCommandTimeout(error)) {
+      throw new DockerCommandTimeoutError(args, SHARED_ASSETS_DOCKER_COMMAND_TIMEOUT_MS, error);
+    }
+    throw error;
+  }
 }
 
 type DockerCommand = (...args: string[]) => Promise<string>;

@@ -4,12 +4,31 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { SHARED_ASSETS_JOB_LABEL, SHARED_ASSETS_VOLUME_LABEL } from "./agentbox.js";
-import { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager } from "./shared-assets-volume.js";
+import {
+  DEFAULT_SHARED_ASSETS_HELPER_IMAGE,
+  DockerCommandTimeoutError,
+  DockerSharedAssetsVolumeManager,
+  SHARED_ASSETS_DOCKER_COMMAND_TIMEOUT_MS,
+  isDockerCommandTimeout,
+} from "./shared-assets-volume.js";
 
 const jobId = "123e4567-e89b-12d3-a456-426614174000";
 const volumeName = `deepsonar-assets-${jobId}`;
 const helperName = `deepsonar-assets-writer-${jobId}`;
 const helperImage = DEFAULT_SHARED_ASSETS_HELPER_IMAGE;
+
+test("Docker 命令超时具有稳定错误类别，不与普通 provision 超时混淆", () => {
+  const command = ["create", "--pull=never", helperImage];
+  const error = new DockerCommandTimeoutError(command, SHARED_ASSETS_DOCKER_COMMAND_TIMEOUT_MS);
+  assert.equal(error.code, "DOCKER_COMMAND_TIMEOUT");
+  assert.equal(error.name, "DockerCommandTimeoutError");
+  assert.equal(error.timeoutMs, 60_000);
+  assert.deepEqual(error.command, command);
+  assert.match(error.message, /Docker 命令超时/);
+  assert.equal(isDockerCommandTimeout(error), true);
+  assert.equal(isDockerCommandTimeout(Object.assign(new Error("child timeout"), { code: "ETIMEDOUT" })), true);
+  assert.equal(isDockerCommandTimeout(new Error("provision 超时")), false);
+});
 
 function inspectedVolume(
   name = volumeName,
