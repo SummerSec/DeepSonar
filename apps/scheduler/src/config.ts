@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { DEFAULT_SHARED_ASSETS_HELPER_IMAGE } from "@deepsonar/runtime-sandbox";
+
+const DEFAULT_SHARED_ASSETS_HELPER_IMAGE =
+  "docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6";
 
 /** 无依赖 .env 加载（Node 20+；不覆盖已有环境变量） */
 function loadEnvFile() {
