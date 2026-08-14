@@ -11,7 +11,7 @@ export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-sum
 export interface AgentCliCapabilities {
   streamEvents: boolean;
   controlMcp: boolean;
-  /** 平台向该运行时提供 Job 级 HTTP 控制 API；可与 controlMcp 并存。 */
+  /** 平台向该运行时提供 Job 级 HTTP 控制 API；请求由 Agent 自己的 HTTP 工具发起。 */
   platformControlApi: boolean;
   incrementalMessages: boolean;
   completionGate: boolean;
@@ -590,7 +590,7 @@ const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.231",
   outputMode: "jsonl",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   // Claude Code 2.1.231 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
@@ -615,9 +615,6 @@ function sandboxCodex(sandbox: Sandbox, context: AdapterStartContext, sessionId?
   let command = sessionId
     ? `codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox`
     : "codex exec --json --dangerously-bypass-approvals-and-sandbox";
-  command += codexConfigArg("mcp_servers.deepsonar-control.required", "true");
-  command += codexConfigArg("mcp_servers.deepsonar-control.command", JSON.stringify("node"));
-  command += codexConfigArg("mcp_servers.deepsonar-control.args", JSON.stringify(["/workspace/.deepsonar/control-mcp.mjs"]));
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += codexConfigArg("model_reasoning_effort", JSON.stringify(context.reasoning));
   command += sessionId ? ` -- ${promptArg(context.input)}` : " -";
@@ -628,7 +625,7 @@ const codex = Object.freeze<RuntimeAdapter>({
   id: "codex",
   version: "0.147.0",
   outputMode: "jsonl",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxCodex(context.sandbox, context),
   resume: (context) => sandboxCodex(context.sandbox, context, context.sessionId),
@@ -640,7 +637,7 @@ const openCode = Object.freeze<RuntimeAdapter>({
   id: "open-code",
   version: "1.18.18",
   outputMode: "jsonl",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: true, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: ({ sandbox, env, cwd, model, reasoning, input }) => {
     // OpenCode's governed pin supports --thinking and emits a structured

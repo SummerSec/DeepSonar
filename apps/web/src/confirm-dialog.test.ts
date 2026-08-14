@@ -26,3 +26,13 @@ test("web confirmations use the themed dialog instead of browser-native confirm"
   assert.match(dialog, /theme-drawer/);
   assert.match(dialog, /tone === "danger"/);
 });
+
+test("Finding 人工入口只在等待中的未确认状态提供 needs_human 收口", () => {
+  const panel = readFileSync(path.join(sourceRoot, "FindingDetailPanel.tsx"), "utf8");
+  assert.match(panel, /has_waiting_human/);
+  assert.match(panel, /verify_status !== "confirmed"/);
+  assert.match(panel, /verify_status !== "needs_human"/);
+  assert.match(panel, /setFindingNeedsHuman/);
+  assert.match(panel, /转人工并恢复 Hub/);
+  assert.doesNotMatch(panel, /setFindingConfirmed|verify_status: "confirmed"/);
+});

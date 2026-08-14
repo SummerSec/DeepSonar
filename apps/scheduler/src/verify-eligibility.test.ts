@@ -9,6 +9,8 @@ import {
 } from "./core.js";
 import { graphEligibilityReason, loadGraphEligibilityBatch } from "./dispatcher.js";
 import { classifyTaskReportAvailability } from "./report.js";
+import { buildVerificationFollowupPayload } from "./verify.js";
+import { resolveHubFindingIntent } from "./domains/event-ingestion/side-effects.js";
 
 test("Verify scope uses only explicit known lower severities as exclusions", () => {
   assert.equal(isSeverityInVerifyScope("high", "critical"), true);
@@ -19,6 +21,65 @@ test("Verify scope uses only explicit known lower severities as exclusions", () 
   assert.equal(isSeverityInVerifyScope("high", "future-severity"), true, "unknown values stay in scope");
 });
 
+test("Hub Finding intent creates a scheduler-owned review/test followup binding", () => {
+  assert.deepEqual(
+    buildVerificationFollowupPayload(
+      { kind: "hub_finding", finding_id: "finding-1", missing_evidence: ["runtime_test"] },
+      ["finding-node-1"],
+      "review",
+    ),
+    {
+      finding_id: "finding-1",
+      required_evidence: ["review"],
+      missing_evidence: ["runtime_test"],
+      trigger_kind: "hub_finding",
+      from: ["finding-node-1"],
+    },
+  );
+  assert.equal(
+    buildVerificationFollowupPayload({ kind: "hub_finding", finding_id: "finding-1" }, ["finding-node-1"], "analyze"),
+    null,
+  );
+  assert.equal(
+    buildVerificationFollowupPayload({ kind: "verify_rework", finding_id: "finding-1" }, [], "test")?.finding_id,
+    "finding-1",
+  );
+});
+
+test("Hub rejects only single-Finding verification binding errors before dispatch", () => {
+  const references = new Map([
+    ["finding-node-1", { node_type: "finding" }],
+    ["finding-node-2", { node_type: "finding" }],
+    ["fact-node-1", { node_type: "fact" }],
+  ]);
+  const findings = new Map([
+    ["finding-node-1", { id: "finding-1", node_id: "finding-node-1", severity: "medium" }],
+  ]);
+  const multiple = resolveHubFindingIntent(
+    "review",
+    ["finding-node-1", "finding-node-2"],
+    references,
+    findings,
+    new Set(),
+  );
+  assert.equal(multiple.finding, null);
+  assert.match(multiple.error ?? "", /只能绑定一个/);
+  const analyze = resolveHubFindingIntent(
+    "analyze",
+    ["finding-node-1", "finding-node-2"],
+    references,
+    findings,
+    new Set(),
+  );
+  assert.equal(analyze.error, undefined);
+  assert.equal(analyze.finding, null);
+  const missing = resolveHubFindingIntent("test", ["finding-node-2"], references, findings, new Set());
+  assert.match(missing.error ?? "", /没有当前项目/);
+  assert.equal(
+    resolveHubFindingIntent("review", ["fact-node-1"], references, findings, new Set()).finding,
+    null,
+  );
+});
 test("报告可用性按服务端完成门返回阈值内阻塞 Finding", () => {
   const availability = classifyTaskReportAvailability({
     rootStatus: "analysis_complete",

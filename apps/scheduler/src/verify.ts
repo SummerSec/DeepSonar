@@ -11,7 +11,7 @@ import { invalidVerification } from "./control-input.js";
 import {
   careSeverities,
   fixedPriorityForJob,
-  isSeverityInVerifyScope,
+  isSeverityInVerifyScope as coreIsSeverityInVerifyScope,
   lockCanvasForConvergence,
   patchCanvasConvergence,
   recoverVerifyJobTerminal,
@@ -22,6 +22,10 @@ import {
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { maybeDispatchFindingReport } from "./report.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
+
+export function isSeverityInVerifyScope(minSeverity: string, severity: unknown): boolean {
+  return coreIsSeverityInVerifyScope(minSeverity, severity);
+}
 
 type Tx = typeof sql;
 type SavepointTx = Tx & {
@@ -195,7 +199,7 @@ export async function createVerifyRound(
   }
 
   if (opts.followupDepth >= rules.maxFollowupDepth) {
-    await markFindingNeedsHuman(tx, findingId, "max_followup_depth", opts.canvasId);
+    await markFindingNeedsHuman(tx, findingId, "max_followup_depth");
     return null;
   }
 
@@ -207,7 +211,7 @@ export async function createVerifyRound(
     SELECT MAX(attempt) AS max_attempt FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
   const nextAttempt = Number(openRound?.attempt ?? ((max_attempt ?? 0) + 1));
   if (nextAttempt > rules.maxVerificationRounds) {
-    await markFindingNeedsHuman(tx, findingId, "max_verification_rounds", opts.canvasId);
+    await markFindingNeedsHuman(tx, findingId, "max_verification_rounds");
     return null;
   }
 
@@ -528,7 +532,6 @@ export async function normalizePendingVerificationRounds(
         tx,
         round.finding_id as string,
         "boot_stale_verify_success",
-        (job.canvas_id as string | null) ?? null,
       );
       return true;
     });
@@ -560,7 +563,7 @@ export async function evaluateFollowup(
   }
 
   if ((job.followup_depth as number) >= rules.maxFollowupDepth) {
-    await markFindingNeedsHuman(tx, findingId, "max_followup_depth", canvasId);
+    await markFindingNeedsHuman(tx, findingId, "max_followup_depth");
     return;
   }
 
@@ -568,7 +571,7 @@ export async function evaluateFollowup(
     SELECT COUNT(*)::int AS count FROM jobs WHERE parent_job_id = ${job.id as string}`;
   if (count >= rules.maxFollowupsPerJob) {
     console.warn(`[verify] job ${job.id} followup 超过上限 ${rules.maxFollowupsPerJob}`);
-    await markFindingNeedsHuman(tx, findingId, "max_followups_per_job", canvasId);
+    await markFindingNeedsHuman(tx, findingId, "max_followups_per_job");
     return;
   }
 
@@ -617,7 +620,7 @@ export async function settleCanvasFindingsAtGuardrail(
         error = ${reason},
         finished_at = COALESCE(finished_at, now())
       WHERE finding_id = ${f.id as string} AND status IN ('pending', 'running')`;
-    await markFindingNeedsHuman(tx, f.id as string, reason, canvasId);
+    await markFindingNeedsHuman(tx, f.id as string, reason);
     settled += 1;
   }
   return { settled };
@@ -911,7 +914,7 @@ export async function maybeReverifyAfterFollowup(
       SET requirements_json = requirements_json || ${tx.json({ no_new_evidence_count: noNewCount } as never)}
       WHERE id = ${prev.id as string}`;
     if (attempt >= rules.maxVerificationRounds || noNewCount >= rules.maxVerificationRounds) {
-      await markFindingNeedsHuman(tx, findingId, "max_verification_rounds_no_new_evidence", canvasId);
+      await markFindingNeedsHuman(tx, findingId, "max_verification_rounds_no_new_evidence");
       return;
     }
     return;
@@ -938,7 +941,8 @@ export function buildVerificationFollowupPayload(
 ): Record<string, unknown> | null {
   if (!trigger) return null;
   const kind = String(trigger.kind ?? "");
-  if (kind !== "verify_rework" && kind !== "verify_failed") return null;
+  if (kind !== "verify_rework" && kind !== "verify_failed" && kind !== "hub_finding") return null;
+  if (kind === "hub_finding" && role !== "review" && role !== "test") return null;
   const findingId = trigger.finding_id as string | undefined;
   if (!findingId) return null;
   const missing = Array.isArray(trigger.missing_evidence)
@@ -1352,17 +1356,45 @@ async function setFindingStatus(
   }
 }
 
-async function markFindingNeedsHuman(
+export async function markFindingNeedsHuman(
   tx: Tx,
   findingId: string,
   reason: string,
-  canvasId: string | null,
-) {
-  const [finding] = await tx`SELECT id, node_id FROM findings WHERE id = ${findingId}`;
-  if (!finding) return;
-  // A waiting-evidence round has no Job to finalize; close it explicitly so
-  // the convergence gate cannot remain blocked after the Finding is handed
-  // to a human.
+  options: { requireWaitingHumanHub?: boolean } = {},
+): Promise<boolean> {
+  const [origin] = await tx`
+    SELECT f.id, f.project_id, f.node_id, f.verify_status,
+           origin.project_id AS origin_project_id, origin.canvas_id AS origin_canvas_id
+    FROM findings f
+    JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+    WHERE f.id = ${findingId}`;
+  if (!origin || origin.verify_status === "confirmed") return false;
+  const canvasId = (origin.origin_canvas_id as string | null) ?? null;
+  const [finding] = await tx`
+    SELECT f.id, f.node_id, f.verify_status, f.project_id,
+           origin.project_id AS origin_project_id, origin.canvas_id AS origin_canvas_id
+    FROM findings f
+    JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+    WHERE f.id = ${findingId}
+    FOR UPDATE`;
+  if (
+    !finding ||
+    finding.verify_status === "confirmed" ||
+    finding.project_id !== finding.origin_project_id ||
+    finding.origin_canvas_id !== canvasId
+  ) return false;
+  if (options.requireWaitingHumanHub) {
+    const [waitingHub] = await tx`
+      SELECT id
+      FROM jobs
+      WHERE canvas_id = ${canvasId as string}
+        AND status = 'waiting_human'
+        AND type = 'hub_reason'
+      LIMIT 1`;
+    if (!waitingHub) return false;
+  }
+  // 等待证据的轮次没有可收口 Job；人工接管 Finding 时显式关闭它，
+  // 避免收敛门继续被该轮次阻塞。
   await tx`
     UPDATE finding_verification_rounds SET
       status = 'needs_human', final_outcome = 'needs_human',
@@ -1375,6 +1407,7 @@ async function markFindingNeedsHuman(
       summary: reason,
     });
   }
+  return true;
 }
 
 /**

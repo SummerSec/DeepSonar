@@ -17,7 +17,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   emit_fact: [
     "### `emit_fact` — 增量提交可验证事实",
     "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
-    "- 长内容或收到 isError/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
+    "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
     "- `verification` 字段：`finding_id`、`evidence_kind`（review|test）、`outcome`（supports|refutes|inconclusive）、`subject_revision` 必填；test 还应含 `steps`、`expected`、`actual`（或 artifact_refs）。",
     "- 时机：每得到一个不在画布中的原子事实立即调用；单 Job 最多 100 条。description 写明证据、来源、推理边界和仍未知内容。",
     '- 普通示例：`{"title":"登录接口使用独立限流键","description":"证据：apps/api/login.ts:42 以 IP 生成键；来源：本地源码；未知：反向代理是否覆盖客户端 IP。"}`',
@@ -26,7 +26,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   emit_finding: [
     "### `emit_finding` — 增量提交通用 Finding",
     "- 直接参数：`title` 至少 8 个非空白字符、`summary` 至少 32 个非空白字符；severity 只能是 `low|medium|high|critical`。`location`、`rule_id`、`suggest_verify` 可选。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
-    "- 长内容或收到 isError/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
+    "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
     "- 时机：有具体位置、触发路径和证据的安全问题一经确认就调用；单 Job 最多 20 条。一般建议验证时设 `suggest_verify: true`，是否派生由调度器决定。",
     '- 示例：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置后令牌未失效，可再次修改密码。","rule_id":"AUTH-RESET-REPLAY","suggest_verify":true}`',
   ].join("\n"),
@@ -34,8 +34,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "### `submit_hub_decision` — 提交 Hub 决策",
     "- 参数只能三选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`，或 `payload_file: \"相对路径\"`（读取 /workspace 下预先 Write 的 JSON）。",
     "- `from` 只能填写本轮画布中的 root/fact/finding id；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
-    "- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{\"payload_file\":\"hub_decision_payload.json\"}`。直接塞大 JSON 会截断并 isError。",
-    "- 成功提交后每个 Job 只能一次；仅当上一次返回 isError / 校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
+    '- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{"payload_file":"hub_decision_payload.json"}`。直接塞大 JSON 可能截断并返回 HTTP 错误响应。',
+    "- 成功提交后每个 Job 只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
     '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',
     '- 派发示例：`{"intents":[{"from":["<root-id>"],"role":"explore","description":"确认目标材料与版本","prompt":"定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。"}]}`',
     '- 大 payload 示例：Write `/workspace/hub_decision_payload.json` 后调用 `{"payload_file":"hub_decision_payload.json"}`',
@@ -86,22 +86,22 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
 const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
-  emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在返回 isError 后重试。",
-  emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 isError 或截断时，写入完整 JSON 后使用 payload_file。",
-  emit_finding: "注意：只提交有证据支撑的 Finding；suggest_verify 只是建议，验证是否派生由 Scheduler 决定；遇到 isError 或截断时用 payload_file 提交完整内容。",
-  submit_hub_decision: "注意：Hub 在 mark_job_done 前调用，complete、intents、payload_file 必须三选一；成功后只允许一次，仅在 isError 或校验失败后重试。",
+  emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在 HTTP 请求失败或参数校验失败后修正并重试。",
+  emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 HTTP 错误响应或截断时，写入完整 JSON 后使用 payload_file。",
+  emit_finding: "注意：只提交有证据支撑的 Finding；suggest_verify 只是建议，验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",
+  submit_hub_decision: "注意：Hub 在 mark_job_done 前调用，complete、intents、payload_file 必须三选一；成功后只允许一次，仅在 HTTP 请求失败或参数校验失败后重试。",
   mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，因此只调用一次，成功后不得重试。",
-  request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
+  request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done，仅在 HTTP 请求失败或参数校验失败后重试。",
   list_shared_assets: "注意：只读取返回的冻结挂载路径；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取。",
-  publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
-  ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；仅在返回 isError 后重试。",
+  publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在 HTTP 请求失败或参数校验失败后重试。",
+  ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；仅在 HTTP 请求失败或参数校验失败后重试。",
 };
 
 export function platformToolGuide(toolNames: string[]): string {
   const enabled = new Set(toolNames);
   const incremental = ["emit_progress", "emit_fact", "emit_finding"].filter((name) => enabled.has(name));
   return [
-    "调用规则：对当前授权 operation，可选择当前 Agent CLI 同名 MCP 或静态 `deepsonar-control` Skill 所述的 Job-scoped control API，单次调用二选一且不得跨通道重复提交；调用 API 时可按静态 Skill 使用受限 HTTP 客户端，但不得用 shell 写控制文件、伪造 MCP 或猜测管理路由。API 成功只表示 `accepted`，MCP 成功只表示 `schema_validated / pending_scheduler_validation`，Scheduler 仍会重验并记账；收到 `isError` 时修正参数后重试，不得把失败调用当作已上报。",
+    "调用规则：对当前授权 operation，只能使用静态 `deepsonar-control` Skill 所述的 Job-scoped control API，由 Agent 通过自身可用的 HTTP 工具直接调用；Runtime Adapter 只负责驱动 CLI 协议，不会代为发起 HTTP 请求。不得使用其他控制通道、shell 写控制文件或猜测管理路由。API 返回 `accepted` 只表示 Scheduler 已接收输入，仍会重验并记账；收到 HTTP 错误响应或参数校验失败时，修正请求后重试，不得把失败调用当作已上报。",
     `生命周期：${incremental.length > 0 ? `${incremental.map((name) => `\`${name}\``).join("、")} 可增量调用；` : ""}正常完成以一次 \`mark_job_done\` 或 API 对应 operation 结束${enabled.has("request_human") ? "，人工阻塞以一次 `request_human` 结束，二者不要同时调用" : ""}。平台收到事件后负责实时入库、画布更新、派生与终态处理。`,
     ...toolNames.flatMap((name) => [PLATFORM_TOOL_USAGE[name], PLATFORM_TOOL_CAUTIONS[name]]).filter((entry): entry is string => Boolean(entry)),
   ].join("\n\n");

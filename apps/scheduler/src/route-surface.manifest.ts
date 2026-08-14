@@ -97,6 +97,7 @@ GET /ws
 PATCH /agent-roles/:id
 PATCH /credentials/:id
 PATCH /findings/:id/disposition
+PATCH /findings/:id/verify-status
 PATCH /gateway/*
 PATCH /global-settings
 PATCH /jobs/:id/priority
@@ -254,6 +255,7 @@ GET /tokens
 PATCH /agent-roles/{id}
 PATCH /canvas-nodes/{id}/verification
 PATCH /credentials/{id}
+PATCH /findings/{id}/verify-status
 PATCH /global-settings
 PATCH /jobs/{id}/priority
 PATCH /projects/{id}

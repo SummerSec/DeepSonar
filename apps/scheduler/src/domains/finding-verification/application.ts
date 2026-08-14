@@ -29,7 +29,8 @@ export interface FindingVerificationApplication {
   findingVerificationSummaries(tx: FindingVerificationTransaction, findingIds: readonly string[]): Promise<Map<string, Record<string, unknown>>>;
   findingVerificationSummary(tx: FindingVerificationTransaction, findingId: string): Promise<Record<string, unknown>>;
   normalizePendingVerificationRounds(db?: FindingVerificationTransaction): Promise<unknown>;
-  buildVerificationFollowupPayload(trigger: Record<string, unknown>, from: string[], role: string): Record<string, unknown>;
+  isSeverityInVerifyScope(minSeverity: string, severity: unknown): boolean;
+  buildVerificationFollowupPayload(trigger: Record<string, unknown> | undefined, from: string[], role: string): Record<string, unknown> | null;
   buildEvidenceSnapshot(rows: readonly Record<string, unknown>[], originJobId: string | null): unknown;
   mapProposedVerdict(raw: string | undefined | null): string;
 }
@@ -57,6 +58,7 @@ export function createFindingVerificationApplication(
     findingVerificationSummaries: ports.findingVerificationSummaries,
     findingVerificationSummary: ports.findingVerificationSummary,
     normalizePendingVerificationRounds: ports.normalizePendingVerificationRounds,
+    isSeverityInVerifyScope: ports.isSeverityInVerifyScope,
     buildVerificationFollowupPayload: ports.buildVerificationFollowupPayload,
     buildEvidenceSnapshot: ports.buildEvidenceSnapshot,
     mapProposedVerdict: ports.mapProposedVerdict,

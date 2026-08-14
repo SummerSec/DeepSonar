@@ -68,7 +68,7 @@ test("内置注册表明确、不可变且能力完整", () => {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.platformControlApi, true);
   }
   for (const id of ["claude-code", "codex", "open-code"] as const) {
-    assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, true);
+    assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, false);
   }
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.controlMcp, false);
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.outputMode, "jsonl");
@@ -379,13 +379,13 @@ test("Codex official reasoning summary events normalize and suppress the repeate
   }, state), []);
 });
 
-test("Codex commands use governed MCP, model, reasoning, and resume arguments", async () => {
+test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复参数", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
   const fake = fakeSandbox();
   const context = { sandbox: fake.sandbox, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
   await adapter.start(context);
   await adapter.resume({ ...context, input: "nudge", sessionId: "codex-s1" });
-  assert.match(fake.commands[0], /mcp_servers\.deepsonar-control\.required=true/);
+  assert.doesNotMatch(fake.commands[0], /mcp_servers\.deepsonar-control|control-mcp/);
   assert.match(fake.commands[0], /model_reasoning_effort/);
   assert.match(fake.commands[0], /gpt-5/);
   assert.match(fake.commands[1], /exec resume/);

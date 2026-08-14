@@ -5,6 +5,7 @@ import {
   ChatCircle,
   DownloadSimple,
   FileText,
+  HandPalm,
   Link as LinkIcon,
   Trash,
   TreeStructure,
@@ -23,6 +24,7 @@ import {
 import { MarkdownView } from "./MarkdownView";
 import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { FindingSharedAssets } from "./SharedAssetsPanel";
+import { useConfirmDialog } from "./components/ConfirmDialog";
 
 const LINK_TYPES: { value: FindingLink["link_type"]; label: string }[] = [
   { value: "related", label: "相关" },
@@ -110,11 +112,13 @@ function TraceRow({
 }
 
 export function FindingDetailPanel({ findingId, onClose }: { findingId: string; onClose: () => void }) {
+  const confirm = useConfirmDialog();
   const [detail, setDetail] = useState<FindingDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [verifyReason, setVerifyReason] = useState("");
   const [comment, setComment] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [linkTitle, setLinkTitle] = useState("");
@@ -229,6 +233,28 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
         note: note.trim() || undefined,
       });
       flash("状态已更新");
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setNeedsHuman = async () => {
+    if (!await confirm({
+      title: "将 Finding 转人工并恢复 Hub？",
+      description: "本次只会写入 needs_human，并重新排队当前等待人工的 Hub。",
+      confirmLabel: "转人工并恢复 Hub",
+    })) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setFindingNeedsHuman(findingId, {
+        verify_status: "needs_human",
+        reason: verifyReason.trim() || undefined,
+      });
+      flash("已交由人工收口");
       await reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -807,6 +833,28 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   <p className="mt-1.5 text-[11px] leading-4 text-zinc-600">
                     Agent / verify 给出，与人工状态独立。
                   </p>
+                  {f.has_waiting_human && f.verify_status !== "confirmed" && f.verify_status !== "needs_human" && (
+                    <div className="mt-3 space-y-2">
+                      <textarea
+                        value={verifyReason}
+                        onChange={(e) => setVerifyReason(e.target.value)}
+                        placeholder="人工收口备注（可选）"
+                        rows={2}
+                        maxLength={2000}
+                        className="theme-input-surface w-full rounded-lg border px-2.5 py-1.5 text-[12px] outline-none focus:border-acc-500"
+                      />
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={setNeedsHuman}
+                        title="将当前 Finding 收口为 needs_human"
+                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-acc-500 px-3 py-2 text-[12px] font-medium text-ink-950 disabled:opacity-40"
+                      >
+                        <HandPalm size={14} />
+                        转人工并恢复 Hub
+                      </button>
+                    </div>
+                  )}
                 </SidebarField>
 
                 <SidebarField label="严重度">

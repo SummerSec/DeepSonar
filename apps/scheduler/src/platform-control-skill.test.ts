@@ -25,9 +25,10 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /GET \$DEEPSONAR_API_BASE_URL\/openapi\.json/);
   assert.match(content, /POST \$DEEPSONAR_API_BASE_URL\/operations\/:operationId/);
   assert.match(content, /Idempotency-Key/);
-  assert.match(content, /Agent.*MCP.*API.*自行二选一/);
-  assert.match(content, /HTTP API 是长期统一控制面.*MCP 仅作为待淘汰的过渡通道/);
-  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "417ebdc6b802394cb0334285331cc6d9ad99c00cf32aaf0d792cda533b815733");
+  assert.match(content, /所有 CLI 都只能使用 .*HTTP.*API/);
+  assert.match(content, /Agent.*HTTP 工具.*Runtime Adapter 只负责驱动 CLI 协议/);
+  assert.match(content, /不要先尝试 MCP.*不要在 API 失败后回退到 MCP/);
+  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "fe059d17de22295bb195e3bf95b7dbfade4fb2806baeca90f3a5d46c9fcffd19");
 });
 
 test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {

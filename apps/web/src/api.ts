@@ -428,6 +428,7 @@ export interface FindingSummary {
   updated_at?: string;
   project_name?: string;
   canvas_id?: string | null;
+  has_waiting_human?: boolean;
 }
 
 export interface FindingComment {
@@ -1799,6 +1800,8 @@ export const api = {
     id: string,
     body: { disposition: FindingDisposition; note?: string },
   ) => send<FindingSummary>("PATCH", `/findings/${id}/disposition`, body),
+  setFindingNeedsHuman: (id: string, body?: { verify_status: "needs_human"; reason?: string }) =>
+    send<FindingSummary>("PATCH", `/findings/${id}/verify-status`, body ?? { verify_status: "needs_human" }),
   addFindingComment: (id: string, body: string, request_hub = true) =>
     send<
       FindingComment & {

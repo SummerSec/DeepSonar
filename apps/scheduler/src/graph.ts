@@ -1,5 +1,5 @@
 import { sql } from "./db.js";
-import { findingVerificationSummaries } from "./verify.js";
+import { findingVerificationSummaries, isSeverityInVerifyScope } from "./verify.js";
 import { config } from "./config.js";
 import {
   GraphNodeReference,
@@ -23,6 +23,7 @@ export interface GraphSnapshotOptions {
   findingId?: string | null;
   relatedNodeIds?: string[];
   maxYamlChars?: number;
+  minVerifySeverity?: string;
 }
 
 export interface GraphSnapshot {
@@ -84,6 +85,7 @@ export interface FindingIndexInput {
   title?: string | null;
   severity?: string | null;
   verify_status?: string | null;
+  verify_required?: boolean;
   verification_attempt?: number | null;
   missing_evidence?: string[];
 }
@@ -105,6 +107,7 @@ export function serializeFindingStatusIndex(
         title: short(finding.title, 56),
         severity: finding.severity,
         verify_status: finding.verify_status,
+        ...(typeof finding.verify_required === "boolean" ? { verify_required: finding.verify_required } : {}),
         verification_attempt: finding.verification_attempt ?? 0,
         missing_evidence: (finding.missing_evidence ?? []).slice(0, 2),
       }),
@@ -113,7 +116,11 @@ export function serializeFindingStatusIndex(
   if (full.join("\n").length <= maxChars) return { lines: full, truncated: false, omitted: 0 };
   const minimum = [
     "findings_index:",
-    ...findings.map((finding) => row({ id: finding.id, verify_status: finding.verify_status })),
+    ...findings.map((finding) => row({
+      id: finding.id,
+      verify_status: finding.verify_status,
+      ...(typeof finding.verify_required === "boolean" ? { verify_required: finding.verify_required } : {}),
+    })),
   ];
   if (minimum.join("\n").length <= maxChars) {
     // The rows are all retained, but optional fields were compressed; expose
@@ -237,6 +244,9 @@ export async function buildGraphSnapshot(
           title: (finding.title ?? findingByNode.get(String(finding.node_id))?.title) as string | null,
           severity: finding.severity as string | null,
           verify_status: finding.verify_status as string | null,
+          ...(options.minVerifySeverity
+            ? { verify_required: isSeverityInVerifyScope(options.minVerifySeverity, finding.severity) }
+            : {}),
           verification_attempt: Number(summary.verification_attempt ?? 0),
           missing_evidence: Array.isArray(summary.missing_evidence) ? summary.missing_evidence as string[] : [],
         };
@@ -319,7 +329,15 @@ export async function buildGraphSnapshot(
           title: short(node.title, 160),
           status: node.status,
           summary: short(body.description ?? body.summary ?? finding?.summary, 420),
-          ...(finding ? { finding_id: finding.id, verify_status: finding.verify_status } : {}),
+          ...(finding
+            ? {
+                finding_id: finding.id,
+                verify_status: finding.verify_status,
+                ...(options.minVerifySeverity
+                  ? { verify_required: isSeverityInVerifyScope(options.minVerifySeverity, finding.severity) }
+                  : {}),
+              }
+            : {}),
         });
       }),
     );

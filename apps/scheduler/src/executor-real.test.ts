@@ -7,14 +7,12 @@ import {
   ingestFactSemanticEvent,
   assertSemanticTerminalExclusivity,
   moduleEvidenceFromSnapshot,
-  normalizeLegacyControlInstructions,
   reconstructAgentRunError,
   recordFirstSemanticDone,
   buildDeferredSemanticTerminalEvents,
   isFinalAgentRunnerError,
   isSemanticAgentRunError,
   runtimeCredentialProviderError,
-  semanticToolEventsFor,
   hasMaterializedProviderConfig,
   buildInstructionWorkspaceFiles,
   sharedAssetPublishControlError,
@@ -22,6 +20,7 @@ import {
 } from "./executor-real.js";
 import { ControlInputError } from "./control-input.js";
 import { expandModules } from "./skill-sources.js";
+import { platformToolGuide } from "./platform-tools.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
@@ -88,6 +87,10 @@ test("real executor passes the reserved Skill to AgentBox without putting the AP
   assert.match(source, /skills:\s*runtimeSkills as never/);
   assert.match(source, /mintJobCapabilityToken\(jobId,\s*\{[\s\S]*operationIds:\s*platformOperations/);
   assert.match(source, /env\.DEEPSONAR_API_TOKEN\s*=\s*platformToken/);
+  assert.match(source, /const controlTransport = "job_scoped_control_api" as const/);
+  assert.match(source, /semanticToolEvents: \{\}/);
+  assert.match(source, /Job-scoped control API 仍可按 deepsonar-control Skill 通过 HTTP 工具调用/);
+  assert.match(source, /verify_required=false.*不得为它派 review\/test 或 request_human/);
   const manifestStart = source.indexOf("const componentManifest = {");
   const manifestEnd = source.indexOf("const sharedAssetCatalog", manifestStart);
   assert.ok(manifestStart >= 0 && manifestEnd > manifestStart);
@@ -96,6 +99,18 @@ test("real executor passes the reserved Skill to AgentBox without putting the AP
   assert.match(manifestSource, /DEEPSONAR_API_TOKEN/);
   assert.doesNotMatch(manifestSource, /platformToken/);
   assert.doesNotMatch(manifestSource, /DEEPSONAR_API_TOKEN\s*:/);
+  assert.match(manifestSource, /system_mcp:\s*null/);
+  assert.match(manifestSource, /semantic_event_transport:\s*controlTransport/);
+  assert.doesNotMatch(manifestSource, /control-mcp\.mjs|local_mcp/);
+});
+
+test("平台工具说明只引导 Agent 直接调用 Job-scoped HTTP API", () => {
+  const guide = platformToolGuide(["emit_fact", "mark_job_done"]);
+  assert.match(guide, /只能使用静态 `deepsonar-control` Skill 所述的 Job-scoped control API/);
+  assert.match(guide, /Agent 通过自身可用的 HTTP 工具直接调用/);
+  assert.match(guide, /API 返回 `accepted`/);
+  assert.match(guide, /HTTP 错误响应/);
+  assert.doesNotMatch(guide, /schema_validated|pending_scheduler_validation|MCP/);
 });
 
 test("deferred Hub terminal events preserve decision-before-done ordering", () => {
@@ -188,12 +203,6 @@ test("ControlEventEnvelope rejects Scheduler-owned fact and Finding fields", () 
     type: "finding",
     payload: { title: "Finding title", severity: "high", summary: "evidence summary with enough durable context" },
   }).success, true);
-});
-
-test("legacy RoleConfig acknowledgement wording is normalized at runtime", () => {
-  const normalized = normalizeLegacyControlInstructions(`成功响应包含 ${"accepted"} ${"event"}；收到 isError 后重试。`);
-  assert.match(normalized, /schema_validated \/ pending_scheduler_validation/);
-  assert.doesNotMatch(normalized, /accepted\s+event/i);
 });
 
 test("module evidence carries structured omissions and defaults old snapshots to []", () => {
@@ -370,15 +379,6 @@ test("runtime recognizes materialized Provider settings for Gateway routing", ()
   assert.equal(hasMaterializedProviderConfig(null), false);
 });
 
-test("semantic tool capture only enables this Job's authorized tools", () => {
-  const semanticTools = semanticToolEventsFor(["list_available_roles", "emit_fact", "mark_job_done"]);
-  assert.deepEqual({ ...semanticTools }, {
-    "mcp__deepsonar-control__emit_fact": "fact",
-    "mcp__deepsonar-control__mark_job_done": "done",
-  });
-  assert.equal(Object.getPrototypeOf(semanticTools), null);
-});
-
 test("late sub-agent completion keeps the first accepted mark_job_done proposal", () => {
   const first = { eventId: "first", summary: "parent completion" };
   const late = { eventId: "late", summary: "sub-agent completion" };
@@ -394,16 +394,6 @@ test("all role Jobs, including audit, may publish shared assets", () => {
   assert.equal(canRolePublishSharedAsset("role"), true);
   assert.equal(canRolePublishSharedAsset("hub"), true);
   assert.equal(canRolePublishSharedAsset("system"), true);
-});
-
-test("semantic tool map rejects prototype keys", () => {
-  const semanticTools = semanticToolEventsFor(["__proto__", "constructor", "toString", "emit_fact"]);
-  assert.deepEqual({ ...semanticTools }, {
-    "mcp__deepsonar-control__emit_fact": "fact",
-  });
-  for (const name of ["__proto__", "constructor", "toString"]) {
-    assert.equal(Object.prototype.hasOwnProperty.call(semanticTools, `mcp__deepsonar-control__${name}`), false);
-  }
 });
 
 test("request_human 与 done/hub 终态双向互斥且重复 human 稳定拒绝", () => {

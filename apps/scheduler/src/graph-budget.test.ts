@@ -11,6 +11,7 @@ test("Hub Finding status index keeps all 357 entries within the 48 KB budget", (
     title: "Finding " + index + " with a deliberately long title that may be compacted",
     severity: index % 3 === 0 ? "critical" : "high",
     verify_status: index % 4 === 0 ? "confirmed" : "pending",
+    verify_required: index % 7 !== 0,
     verification_attempt: index % 5,
     missing_evidence: ["independent_review", "runtime_test"],
   }));
@@ -20,10 +21,11 @@ test("Hub Finding status index keeps all 357 entries within the 48 KB budget", (
   const rows = projection.lines.slice(1).filter((line) => line.trim().startsWith("-"));
   assert.equal(rows.length, findings.length);
   for (const line of rows) {
-    const value = JSON.parse(line.replace(/^\s*-\s*/, "")) as { id: string; verify_status: string };
+    const value = JSON.parse(line.replace(/^\s*-\s*/, "")) as { id: string; verify_status: string; verify_required: boolean };
     const source = findings.find((finding) => finding.id === value.id);
     assert.ok(source);
     assert.equal(value.verify_status, source.verify_status);
+    assert.equal(value.verify_required, source.verify_required);
   }
 });
 
@@ -54,11 +56,13 @@ test("finding index keeps canvas node identity distinct from database finding id
       finding_id: "database-finding",
       title: "A finding with enough detail",
       verify_status: "pending",
+      verify_required: false,
     },
   ], 2_000);
   const row = JSON.parse(projection.lines[1].replace(/^\s*-\s*/, "")) as Record<string, unknown>;
   assert.equal(row.id, "canvas-finding-node");
   assert.equal(row.finding_id, "database-finding");
+  assert.equal(row.verify_required, false);
 });
 
 test("graph projections prioritize open intents and do not repeat the Worker prompt", () => {

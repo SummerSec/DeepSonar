@@ -127,6 +127,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /jobs/:id/resume": "jobs:control",
   "GET /findings": "findings:read",
   "GET /findings/:id": "findings:read",
+  "PATCH /findings/:id/verify-status": "findings:write",
   "PATCH /findings/:id/disposition": "findings:write",
   "POST /findings/:id/comments": "findings:write",
   "DELETE /findings/:id/comments/:commentId": "findings:write",

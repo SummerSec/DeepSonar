@@ -493,6 +493,23 @@ const OPS: Op[] = [
     tags: ["Findings"],
   },
   {
+    method: "patch",
+    path: "/findings/{id}/verify-status",
+    summary: "人工将等待中的 Finding 收口为 needs_human",
+    description: "仅允许同画布存在 waiting_human Hub Job 且尚未 confirmed 的 Finding；confirmed 只能由 Scheduler Verify 收口。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    body: {
+      type: "object",
+      required: ["verify_status"],
+      additionalProperties: false,
+      properties: {
+        verify_status: { type: "string", enum: ["needs_human"] },
+        reason: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+    },
+  },
+  {
     method: "get",
     path: "/findings/{id}/report",
     summary: "读取最新单 Finding 报告元数据",

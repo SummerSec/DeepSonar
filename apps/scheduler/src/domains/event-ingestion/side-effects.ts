@@ -45,12 +45,43 @@ export interface EventIngestionSideEffectApplication {
 export type SchedulingPurpose = "manual" | "discovery" | "convergence_evidence" | "verify" | "report";
 
 export interface EventProjectRules {
+  minVerifySeverity: string;
   maxIntentsPerDecision: number;
   auditTimeoutSec: number;
 }
 
 export interface EventRole {
   name: string;
+}
+
+export interface HubFindingBinding {
+  id: string;
+  node_id: string;
+  severity: unknown;
+}
+
+export function resolveHubFindingIntent(
+  role: string,
+  from: readonly string[],
+  referenceNodes: ReadonlyMap<string, { node_type: string }>,
+  findingByNodeId: ReadonlyMap<string, HubFindingBinding>,
+  ambiguousFindingNodeIds: ReadonlySet<string>,
+): { finding: HubFindingBinding | null; error?: string } {
+  if (role !== "review" && role !== "test") return { finding: null };
+  const findingNodeIds = [...new Set(from.filter((id) => referenceNodes.get(id)?.node_type === "finding"))];
+  if (findingNodeIds.length === 0) return { finding: null };
+  if (findingNodeIds.length > 1) {
+    return { finding: null, error: "review/test intent 只能绑定一个 canonical Finding 节点。" };
+  }
+  const nodeId = findingNodeIds[0];
+  if (ambiguousFindingNodeIds.has(nodeId)) {
+    return { finding: null, error: "canonical Finding 节点对应多个 Finding 记录，无法安全绑定验证目标。" };
+  }
+  const finding = findingByNodeId.get(nodeId);
+  return {
+    finding: finding ?? null,
+    error: finding ? undefined : "canonical Finding 节点没有当前项目画布内的 Finding 记录。",
+  };
 }
 
 export type EventFinalizeResult = {
@@ -615,7 +646,6 @@ export function createEventIngestionSideEffectApplication(
           throw invalidRole(it.role ?? "<missing>", "intents.role");
         }
       }
-      const intents = submittedIntents.slice(0, rules.maxIntentsPerDecision);
       const hubEdges: EventCanvasEdgeInput[] = [];
 
       const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
@@ -630,6 +660,69 @@ export function createEventIngestionSideEffectApplication(
           }
         }
       }
+
+      const findingNodeIds = [
+        ...new Set(
+          [...referenceNodes.values()]
+            .filter((node) => node.node_type === "finding")
+            .map((node) => node.id),
+        ),
+      ];
+      const findingRows = findingNodeIds.length
+        ? (await tx<HubFindingBinding[]>`
+            SELECT f.id, f.node_id, f.severity
+            FROM findings f
+            JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+            JOIN canvas_nodes source ON source.id = f.node_id
+              AND source.canvas_id = ${canvasId}
+              AND source.node_type = 'finding'
+            WHERE f.project_id = ${job.project_id as string}
+              AND origin.canvas_id = ${canvasId}
+              AND f.node_id = ANY(${findingNodeIds}::uuid[])`) as HubFindingBinding[]
+        : [];
+      const findingByNodeId = new Map<string, HubFindingBinding>();
+      const ambiguousFindingNodeIds = new Set<string>();
+      for (const finding of findingRows) {
+        if (findingByNodeId.has(finding.node_id)) {
+          ambiguousFindingNodeIds.add(finding.node_id);
+          continue;
+        }
+        findingByNodeId.set(finding.node_id, finding);
+      }
+
+      for (const [index, intent] of submittedIntents.entries()) {
+        const resolution = resolveHubFindingIntent(
+          intent.role,
+          intent.from,
+          referenceNodes,
+          findingByNodeId,
+          ambiguousFindingNodeIds,
+        );
+        if (resolution.error) {
+          throw invalidVerification(resolution.error, `intents.${index}.from`);
+        }
+        const sourceFinding = resolution.finding;
+        if (
+          ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "") &&
+          (!sourceFinding || decisionTrigger.finding_id !== sourceFinding.id)
+        ) {
+          throw invalidVerification(
+            "Verify trigger 必须与 review/test intent 的 canonical Finding 一致，无法绑定验证目标。",
+            `intents.${index}.from`,
+          );
+        }
+        if (
+          sourceFinding &&
+          !ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, sourceFinding.severity)
+        ) {
+          throw invalidVerification(
+            "该 Finding 低于当前 Verify 最低关注级别，已豁免自动验证；请 complete 或仅处理范围内 Finding。",
+            `intents.${index}.from`,
+          );
+        }
+      }
+
+      const intents = submittedIntents.slice(0, rules.maxIntentsPerDecision);
 
       for (const it of intents) {
         if (roles.length === 0) {
@@ -646,7 +739,22 @@ export function createEventIngestionSideEffectApplication(
 
         // 服务端硬边界：只接受数据库实时查询出的项目可用工作角色，不做默认或回退。
         const role = it.role!;
-        const trigger = decisionTrigger;
+        const sourceFinding = resolveHubFindingIntent(
+          role,
+          it.from,
+          referenceNodes,
+          findingByNodeId,
+          ambiguousFindingNodeIds,
+        ).finding;
+        const trigger = sourceFinding
+          ? {
+              ...decisionTrigger,
+              kind: ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")
+                ? decisionTrigger.kind
+                : "hub_finding",
+              finding_id: sourceFinding.id,
+            }
+          : decisionTrigger;
         // verify_rework/verify_failed 补证不得 hub_followup：否则每个补证成功都会 force Hub，
         // 与「全部补证终态后 maybeReverifyAfterFollowup」冲突。
         const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(

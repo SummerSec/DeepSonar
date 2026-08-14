@@ -20,6 +20,7 @@ test("finding verification application keeps an explicit, transaction-preserving
     findingVerificationSummaries: async () => new Map(),
     findingVerificationSummary: async () => ({ verify_status: "pending" }),
     normalizePendingVerificationRounds: async () => ({ missingJobExamined: 0 }),
+    isSeverityInVerifyScope: () => true,
     buildVerificationFollowupPayload: () => ({ scheduler_owned: true }),
     buildEvidenceSnapshot: () => ({ qualified: false }),
     mapProposedVerdict: () => "rework",

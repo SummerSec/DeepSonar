@@ -18,13 +18,13 @@ description: 使用受治理的 DeepSonar Job 控制 API 提交运行提案、�
 
 ## 传输方式
 
-本地 \`deepsonar-control\` MCP 和 Job 级 HTTP 控制 API 最终进入同一 Scheduler 事件流。
-Pi 只能使用 HTTP API；其他 CLI 由 Agent 对每个逻辑操作自行在 MCP 与 API 中自行二选一，不得重复提交，
-也不得在一次已接受的调用后切换通道。HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。普通文本不是提交。
+所有 CLI 都只能使用 Job 级 HTTP 控制 API；它是所有治理 CLI 的唯一平台控制传输。不要先尝试 MCP，也不要在 API 失败后回退到 MCP。
+HTTP API 由 Agent 通过当前 CLI 可用的 HTTP 工具（例如 curl 或 Node）直接调用，Runtime Adapter 只负责驱动 CLI 协议，
+不会代为发起 HTTP 请求。若运行清单未声明 \`platform_control_api=true\`，Job 必须在启动前失败关闭；普通文本不是提交。
 
 ## 能力发现与鉴权
 
-\`DEEPSONAR_API_BASE_URL\` 已经指向 \`/control/v1/jobs/:jobId\`，不要再拼接 Job ID，
+运行清单声明 \`platform_control_api=true\` 且注入了 API 环境变量时，\`DEEPSONAR_API_BASE_URL\` 已经指向 \`/control/v1/jobs/:jobId\`，不要再拼接 Job ID，
 也不要猜测管理 API。先调用
 \`GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list\`；它只返回本 Job 短期 token 当前获准
 的操作、参数 Schema、必填字段和约束。需要机器可读完整描述时才调用
@@ -46,8 +46,8 @@ Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、p
 
 只能调用能力发现和本 Job 冻结的 \`platform_tools\` 操作，遵守返回的参数 Schema、相对
 \`/workspace\` 的 \`payload_file\`、当前 YAML UUID 引用和 Hub 角色约束。Hub 必须先提交
-决策再完成。API 返回 \`accepted\`（MCP 返回 \`schema_validated / pending_scheduler_validation\`）
-只表示 Scheduler 已接收输入；完成必要工作后必须恰好一次调用已授权的 \`mark_job_done\`。
+决策再完成。API 返回 \`accepted\` 只表示 Scheduler 已接收输入；完成必要工作后必须恰好一次调用已授权的
+\`mark_job_done\`。
 `,
   },
 } as const;
