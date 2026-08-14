@@ -21,7 +21,12 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 30);
+  assert.equal(SCHEMA_VERSION, 31);
+  assert.match(body, /verification_status\s+text/i);
+  assert.match(body, /canvas_nodes_facts_keyset_idx[\s\S]+WHERE\s+node_type\s*=\s*'fact'/i);
+  assert.match(body, /node_type\s*=\s*'fact'\s+AND\s+verification_status\s+IS\s+NOT\s+NULL/i);
+  assert.doesNotMatch(body, /request_human\(\{"reason":"[^"}]+"\}\)/, "内置角色不得保留缺少 subject 的 request_human 示例");
+  assert.match(body, /request_human[\s\S]+platform_blocker[\s\S]+subject_revision/, "内置角色必须说明两类结构化 human subject");
   assert.match(body, /runtime_registry_channel\s+text\s+NOT\s+NULL\s+DEFAULT\s+'aliyun-acr'/i);
   assert.match(body, /sandbox_limits_json\s+jsonb\s+NOT\s+NULL\s+DEFAULT\s+'\{\}'/i);
   assert.match(body, /context_window_tokens\s+int/i);

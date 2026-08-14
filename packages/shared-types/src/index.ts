@@ -182,6 +182,16 @@ export type VerificationEvidence = z.infer<typeof VerificationEvidence>;
 export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact", "report"]);
 export type NodeType = z.infer<typeof NodeType>;
 
+/** 画布 Fact 的人工验证态；与 Finding 技术验证状态相互独立。 */
+export const FactVerificationStatus = z.enum([
+  "unverified",
+  "verifying",
+  "verified",
+  "rejected",
+  "needs_human",
+]);
+export type FactVerificationStatus = z.infer<typeof FactVerificationStatus>;
+
 /**
  * Authoritative task/canvas lifecycle rollup returned by every canvas
  * projection.  The Scheduler owns these values; clients must overwrite them
@@ -351,6 +361,21 @@ export type ProgressPayload = z.infer<typeof ProgressPayload>;
 export const HumanPayload = z
   .object({
     reason: meaningfulText(8, 2000),
+    subject: z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("finding"),
+          finding_id: z.string().uuid(),
+          subject_revision: nonEmptyText(500),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("platform_blocker"),
+          kind: z.enum(["authorization", "credential", "high_risk_action", "business_decision"]),
+        })
+        .strict(),
+    ]),
   })
   .strict();
 export type HumanPayload = z.infer<typeof HumanPayload>;

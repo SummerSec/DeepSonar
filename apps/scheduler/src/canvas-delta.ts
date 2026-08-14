@@ -1,7 +1,7 @@
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
 
 /** The bounded body fields shared by the L0 summary and durable deltas. */
-export function boundedCanvasBody(value: unknown): Record<string, unknown> {
+export function boundedCanvasBody(value: unknown, nodeType?: unknown): Record<string, unknown> {
   const body = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
@@ -34,6 +34,26 @@ export function boundedCanvasBody(value: unknown): Record<string, unknown> {
     type: typeof body.type === "string" ? body.type : null,
     last_progress: lastProgress,
   };
+  if (nodeType === "human") {
+    if (typeof body.reason === "string") bounded.reason = body.reason.slice(0, 500);
+    const rawSubject = asRecord(body.subject);
+    if (rawSubject?.type === "finding") {
+      bounded.subject = {
+        type: "finding",
+        finding_id: typeof rawSubject.finding_id === "string" ? rawSubject.finding_id : null,
+        subject_revision: typeof rawSubject.subject_revision === "string" ? rawSubject.subject_revision.slice(0, 500) : null,
+      };
+      bounded.finding_id = typeof rawSubject.finding_id === "string" ? rawSubject.finding_id : null;
+    } else if (rawSubject?.type === "platform_blocker") {
+      bounded.subject = {
+        type: "platform_blocker",
+        kind: typeof rawSubject.kind === "string" ? rawSubject.kind : null,
+      };
+    } else if (typeof body.finding_id === "string") {
+      bounded.subject = { type: "finding", finding_id: body.finding_id, subject_revision: null };
+      bounded.finding_id = body.finding_id;
+    }
+  }
   if (typeof body.ui_color === "string" && ROLE_UI_COLOR_PATTERN.test(body.ui_color)) {
     bounded.ui_color = body.ui_color.toLowerCase();
   }
@@ -57,13 +77,13 @@ export function projectCanvasNode(value: unknown): Record<string, unknown> | nul
     id: node.id,
     node_type: node.node_type,
     title: typeof node.title === "string" ? node.title : "",
-    body_json: boundedCanvasBody(body),
+    body_json: boundedCanvasBody(body, node.node_type),
     x: Number(node.x ?? 0),
     y: Number(node.y ?? 0),
     w: Number(node.w ?? 240),
     h: Number(node.h ?? 120),
     status: typeof node.status === "string" ? node.status : null,
-    verification_status: typeof body.verification_status === "string" ? body.verification_status : null,
+    verification_status: typeof node.verification_status === "string" ? node.verification_status : null,
     job_id: typeof node.job_id === "string" ? node.job_id : null,
     updated_at: typeof node.updated_at === "string" ? node.updated_at : new Date(0).toISOString(),
   };

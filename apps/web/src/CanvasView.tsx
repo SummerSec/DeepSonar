@@ -305,6 +305,7 @@ export function CanvasView({
   trace,
   focusNodeId,
   findingIdByNodeId,
+  onOpenFact,
   onTraceFinding,
   onExitTrace,
 }: {
@@ -313,6 +314,7 @@ export function CanvasView({
   trace?: FindingTrace | null;
   focusNodeId?: string | null;
   findingIdByNodeId?: ReadonlyMap<string, string>;
+  onOpenFact?: (factId: string) => void;
   onTraceFinding?: (findingId: string) => void;
   onExitTrace?: () => void;
 }) {
@@ -864,6 +866,11 @@ export function CanvasView({
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
       const found = data?.nodes.find((n) => n.id === node.id) ?? null;
+      if (found?.node_type === "fact" && onOpenFact) {
+        clearSelected();
+        onOpenFact(found.id);
+        return;
+      }
       setSelected(found);
       if (!found) return;
       const requestId = ++nodeRequestRef.current;
@@ -901,7 +908,7 @@ export function CanvasView({
         // L0 summary remains usable when an optional L1 hydration races a deleted node.
       });
     },
-    [canvasId, data],
+    [canvasId, clearSelected, data, onOpenFact],
   );
 
   if (!data && error)
@@ -1281,6 +1288,7 @@ export function CanvasView({
           />
         ) : (
           <Sidebar
+            canvasId={canvasId}
             node={selected}
             onClose={clearSelected}
             onTraceFinding={

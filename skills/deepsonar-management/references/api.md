@@ -71,7 +71,9 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /canvases/:id/summary | tasks:read | 画布摘要 |
 | GET | /canvases/:id/delta | tasks:read | `?since=` 增量图数据 |
 | GET | /canvases/:id/nodes/:nodeId | tasks:read | 节点详情 |
-| PATCH | /canvas-nodes/:id/verification | jobs:control | Fact 人工验证 `{status: verified\|rejected\|needs_human, note?}` |
+| GET | /canvases/:id/facts | tasks:read | Fact keyset 分页；支持 `after/limit/verification_status/evidence_kind/finding_id/job_id` |
+| GET | /canvases/:id/facts/:nodeId | tasks:read | Fact 完整正文、结构化 Finding/Job 关联和有界直接链路 |
+| PATCH | /canvases/:id/facts/:nodeId/verification | jobs:control | Fact 人工验证 `{status: verified\|rejected\|needs_human, note?}` |
 
 ### 共享资产
 
@@ -109,6 +111,8 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | --- | --- | --- | --- |
 | GET | /findings | findings:read | Finding 列表；`?project_id=` / `?canvas_id=` |
 | GET | /findings/:id | findings:read | Finding 详情、验证 Jobs、来源事件、评论、链接、验证轮次和 trace |
+| POST | /findings/:id/verify | jobs:control | 人工强制创建下一轮 Scheduler Verify；可选 `{reason?}`，仍受活动任务、轮次和深度护栏约束 |
+| POST | /findings/:id/evidence-jobs | jobs:control | 新建绑定当前 Finding 的补证 Job，body 为 `{role: review\|test}` |
 | PATCH | /findings/:id/disposition | findings:write | `{disposition, note?}` |
 | POST | /findings/:id/comments | findings:write | `{body, request_hub?}`；评论可请求 Hub 继续分析 |
 | DELETE | /findings/:id/comments/:commentId | findings:write | 删除评论 |

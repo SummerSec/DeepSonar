@@ -53,6 +53,9 @@ export function registerRoutes(app: FastifyInstance) {
     if (routeUrl.startsWith("/canvases/:id/nodes/:nodeId") && !isUuid(params.nodeId)) {
       return reply.code(400).send({ error: "invalid canvas node id", error_code: "INVALID_ID" });
     }
+    if (routeUrl.startsWith("/canvases/:id/facts/:nodeId") && !isUuid(params.nodeId)) {
+      return reply.code(400).send({ error: "invalid Fact node id", error_code: "INVALID_ID" });
+    }
     const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
     if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.project_id && !isUuid(query.project_id)) {
       return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });

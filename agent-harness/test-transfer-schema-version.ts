@@ -92,9 +92,11 @@ async function main(): Promise<void> {
     project_id: "project",
     project_name: "test",
   }).schema_version, SCHEMA_VERSION);
-  assert.equal(validateManifestSchemaVersion(SCHEMA_VERSION - 1), SCHEMA_VERSION - 1, "older packs remain importable");
+  assert.throws(() => validateManifestSchemaVersion(SCHEMA_VERSION - 1), (error: unknown) => (
+    error && typeof error === "object" && "code" in error && error.code === "BAD_SCHEMA_VERSION"
+  ));
   assert.throws(() => validateManifestSchemaVersion(SCHEMA_VERSION + 1), (error: unknown) => (
-    error && typeof error === "object" && "code" in error && error.code === "SCHEMA_TOO_NEW"
+    error && typeof error === "object" && "code" in error && error.code === "BAD_SCHEMA_VERSION"
   ));
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "deepsonar-transfer-schema-"));
@@ -102,12 +104,14 @@ async function main(): Promise<void> {
     const current = await openDeepsonarPack(await packWithSchema(tempDir, SCHEMA_VERSION, "deepsonar-project-export"));
     assert.equal(current.manifest.source.schema_version, SCHEMA_VERSION);
 
-    const old = await openDeepsonarPack(await packWithSchema(tempDir, SCHEMA_VERSION - 1, "deepsonar-project-export"));
-    assert.equal(old.manifest.source.schema_version, SCHEMA_VERSION - 1);
+    await assert.rejects(
+      async () => openDeepsonarPack(await packWithSchema(tempDir, SCHEMA_VERSION - 1, "deepsonar-project-export")),
+      (error: unknown) => error && typeof error === "object" && "code" in error && error.code === "BAD_SCHEMA_VERSION",
+    );
 
     await assert.rejects(
       async () => openDeepsonarPack(await packWithSchema(tempDir, SCHEMA_VERSION + 1, "deepsonar-project-export")),
-      (error: unknown) => error && typeof error === "object" && "code" in error && error.code === "SCHEMA_TOO_NEW",
+      (error: unknown) => error && typeof error === "object" && "code" in error && error.code === "BAD_SCHEMA_VERSION",
     );
     await assert.rejects(
       async () => openDeepsonarPack(await packWithSchema(tempDir, 0, "deepsonar-platform-export")),

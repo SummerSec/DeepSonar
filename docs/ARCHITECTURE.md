@@ -148,7 +148,7 @@ provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；取消�
 | `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库（可带 `suggest_verify` 建议字段） |
 | `submit_hub_decision` | hub_reason | 提交 complete 或 intents 提案 |
 | `mark_job_done` | Worker | 结束节点 + 摘要 |
-| `request_human` | Worker | Job 转人工等待 + 画布 human 节点 |
+| `request_human` | Worker | 提交结构化 Finding 或平台阻塞 subject；Scheduler 校验后将 Job 转人工等待并建立 human 节点 |
 
 **明确不在 Agent 权限内**（v1.1 收紧）：
 
@@ -218,9 +218,10 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 
 ### 4.5 人工介入与恢复
 
-- `request_human` → Job 转 `waiting_human`，Plane 标 Blocked，画布出 human 节点
+- `request_human` 必须包含 `reason` 与结构化 `subject`。Finding subject 固定为 canonical `finding_id + subject_revision`，Scheduler 在事件事务内校验同项目、同画布及 `minVerifySeverity`；平台阻塞只接受 `authorization`、`credential`、`high_risk_action`、`business_decision` 四类。reason 只用于展示，禁止从自然语言反推 Finding 或绕过规则。校验通过后 Job 才转 `waiting_human`、Plane 标 Blocked 并建立 human 节点
 - 人处理完后调用 `POST /jobs/{id}/resume` → Job 重新入队（`pending`），恢复上下文从 events/findings 表重建
-- 若同画布等待的是 `hub_reason`，Finding 详情可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` 仍只有系统 Verify 能写
+- Finding 详情可调用 `POST /findings/{id}/verify` 强制新建 Verify round，或调用 `POST /findings/{id}/evidence-jobs` 新建绑定该 Finding 的 review/test 补证 Job。两类动作继续受 follow-up 深度、验证轮次、活动任务唯一性与终态约束，不修改历史 Job；若同画布 Hub 正在等待人工，则在同一事务恢复为 `pending`
+- 若同画布等待的是 `hub_reason`，Finding 详情也可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` 仍只有系统 Verify 能写
 - 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径，而是用 verdict=`needs_human` 把 Finding 收口为可报告终态
 
 恢复或重启后的每次执行均可在 Job 详情投影 Attempt、effect 和资源身份；`agent_run`、`agent_resume`、`cancel`、`timeout` 的效果记录用于区分可继续的同会话恢复和不可安全重放的未知窗口。
@@ -557,8 +558,9 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 画布升级为 **fact-intent 二分图**（参考 Cairn 的 blackboard 架构）：agent 不直接决定下一步，只把发现写进画布；**hub agent 读整张图做决策**。
 
-- 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）
+- 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）。Schema v31 为 Fact 增加独立 `verification_status` 定列（`unverified/verifying/verified/rejected/needs_human`），非 Fact 必须为 `NULL`；该状态不复用节点执行态，也不从证据 outcome 推断
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
+- Fact 过程真相由 `GET /canvases/{id}/facts` 提供服务端 keyset 分页及验证态、证据种类、Finding、来源 Job 筛选；`GET /canvases/{id}/facts/{nodeId}` 返回完整正文和最多一跳的有界 trace；`PATCH /canvases/{id}/facts/{nodeId}/verification` 记录人工结论与审计。结构化 Finding 证据仅在同项目、同画布、canonical Finding 和 `reviewed_by/tested_by` 边同时成立时投影，禁止解析 description 补关联
 - **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 服务端 `GraphScope=hub` 投影；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
 - Hub 可下发工作角色输入 = 自包含 intent prompt + 服务端 `GraphScope=agent` 引用邻域；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）

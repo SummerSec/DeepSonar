@@ -371,22 +371,24 @@ export const shouldWakeEvidenceHub = hubShouldWakeEvidenceHub;
 
 const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
 
-function isSchedulerOwnedVerificationFollowup(payload: Record<string, unknown>, parentJobType?: unknown): boolean {
+export function isSchedulerOwnedVerificationFollowup(payload: Record<string, unknown>, parentJobType?: unknown): boolean {
   const followup = payload.verification_followup;
   if (!followup || typeof followup !== "object" || Array.isArray(followup)) return false;
   const value = followup as Record<string, unknown>;
+  const trustedOrigin = (
+    String(parentJobType ?? "").trim().toLowerCase() === "hub_reason"
+    || value.manual_override === true
+  );
   return (
     value.scheduler_owned === true &&
-    String(parentJobType ?? "")
-      .trim()
-      .toLowerCase() === "hub_reason" &&
+    trustedOrigin &&
     typeof value.finding_id === "string" &&
     value.finding_id.trim().length > 0 &&
     Array.isArray(value.required_evidence)
   );
 }
 
-function schedulerPurposeForPendingNormalization(
+export function schedulerPurposeForPendingNormalization(
   type: string,
   payload: Record<string, unknown>,
   parentJobType?: unknown,
@@ -402,10 +404,28 @@ function schedulerPurposeForPendingNormalization(
       payload: { ...payload, scheduling_purpose: undefined },
     });
   }
-  // Hub-generated verification followups are the one scheduler-owned
-  // non-system lane. Both the Hub parent relation and the server-owned marker
-  // are required; legacy public payloads are ordinary discovery work.
+  // Hub 或 operator 端点生成的 verification followup 是 Scheduler 拥有的
+  // 非系统收敛 lane；公共 createJob 会剥离两个可信标记。
   return isSchedulerOwnedVerificationFollowup(payload, parentJobType) ? "convergence_evidence" : "discovery";
+}
+
+/** 公共 Job 入口不得伪造 Scheduler 拥有的收敛 lane。 */
+export function stripPublicSchedulingMarkers(payload: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = { ...payload };
+  delete sanitized.scheduling_purpose;
+  delete sanitized.scheduler_owned;
+  delete sanitized.manual_override;
+  if (
+    sanitized.verification_followup &&
+    typeof sanitized.verification_followup === "object" &&
+    !Array.isArray(sanitized.verification_followup)
+  ) {
+    const followup = { ...(sanitized.verification_followup as Record<string, unknown>) };
+    delete followup.scheduler_owned;
+    delete followup.manual_override;
+    sanitized.verification_followup = followup;
+  }
+  return sanitized;
 }
 
 function priorityNormalization(row: Record<string, unknown>): {
@@ -719,24 +739,9 @@ export function parseRelatedFindingIds(payload: Record<string, unknown>): string
 export async function createJob(input: CreateJobInput) {
   const requestedPayload = { ...(input.payload ?? {}) };
   const systemType = SCHEDULER_SYSTEM_JOB_TYPES.has(String(input.type ?? "").toLowerCase());
-  const schedulingPayload = { ...requestedPayload };
-  if (!systemType) {
-    delete schedulingPayload.scheduling_purpose;
-    // Scheduler-owned Verify followup markers must never cross the public
-    // createJob/Plane ingress boundary.
-    delete schedulingPayload.scheduler_owned;
-    if (
-      schedulingPayload.verification_followup &&
-      typeof schedulingPayload.verification_followup === "object" &&
-      !Array.isArray(schedulingPayload.verification_followup)
-    ) {
-      const followup = {
-        ...(schedulingPayload.verification_followup as Record<string, unknown>),
-      };
-      delete followup.scheduler_owned;
-      schedulingPayload.verification_followup = followup;
-    }
-  }
+  const schedulingPayload = systemType
+    ? { ...requestedPayload }
+    : stripPublicSchedulingMarkers(requestedPayload);
   const relatedFindingIds = parseRelatedFindingIds(schedulingPayload);
   const snapshotFindingIds = [
     ...new Set([...(input.findingId ? [input.findingId.toLowerCase()] : []), ...relatedFindingIds]),

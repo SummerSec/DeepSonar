@@ -109,6 +109,9 @@ jobs:
       - name: Projects intent launch web unit
         run: pnpm ci:unit:web-quick-start
 
+      - name: Canvas Fact workbench web unit
+        run: pnpm ci:unit:web-facts
+
       - name: Report download OpenAPI unit
         run: pnpm ci:unit:report-download-openapi
 
@@ -194,6 +197,14 @@ jobs:
 
       - name: Verify eligibility unit
         run: pnpm ci:unit:verify-eligibility
+
+      - name: Canvas Fact contract unit
+        run: pnpm ci:unit:canvas-facts
+
+      - name: Canvas Fact and manual verification PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:canvas-facts
 
       - name: Real executor fact verification unit
         run: pnpm ci:unit:executor-real

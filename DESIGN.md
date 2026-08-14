@@ -73,8 +73,8 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
 - **验证范围（#133）**：`minVerifySeverity` 同时控制自动 Verify 与收敛集合；明确低于阈值的 Finding 保持 `pending` 并记录 `below_min_verify_severity` 策略标记，不创建 Verify Job/round、不阻塞 Hub complete/Report。缺失或未知 severity 保守地继续验证；`info` 即严格全量模式。
-- **Hub Finding 绑定（#153 / #154）**：Hub 对 canonical Finding 节点派发 review/test 时，Scheduler 在派生前解析并冻结唯一 `finding_id` 与 `verification_followup`；多 Finding、映射歧义、Verify trigger 不一致或低于 `minVerifySeverity` 的目标使整次决策稳定拒绝。analyze/explore 仍可引用多个来源。
-- **人工验证收口（#155）**：同画布 Hub 处于 `waiting_human` 时，人工可把尚未 confirmed 的 Finding 收口为 `needs_human`；Scheduler 按 canvas-first 顺序加锁，在同一事务关闭等待证据轮次、写人工 blocker、恢复 Hub 为 `pending` 并通知 dispatcher。人工入口绝不开放 `confirmed`。
+- **Hub Finding 绑定（#153 / #154）**：Hub 对 canonical Finding 节点派发 review/test 时，Scheduler 在派生前解析并冻结唯一 `finding_id` 与 `verification_followup`；多 Finding、映射歧义、Verify trigger 不一致或低于 `minVerifySeverity` 的目标使整次决策稳定拒绝。`request_human` 也必须携带结构化 subject：Finding subject 由 Scheduler 校验同项目、同画布 canonical 关系及最低验证级别，平台阻塞则只能使用受限 kind；系统绝不解析 reason 文本推断目标。analyze/explore 仍可引用多个来源。
+- **人工验证收口（#155）**：Finding 详情提供三种显式动作：强制新建受护栏约束的 Verify round、新建绑定 Finding 的 review/test 补证 Job，以及在同画布 Hub 处于 `waiting_human` 时把尚未 confirmed 的 Finding 收口为 `needs_human`。所有动作按 canvas-first 顺序加锁、禁止终态重开并拒绝同类活动 Job；需要恢复时在同一事务将 Hub 转回 `pending` 并通知 dispatcher。人工入口绝不开放 `confirmed`。
 - **双轨报告（#43/#142）**：收敛门通过后，Scheduler 为画布派发版本化 Task Report；每版冻结 `report-input.json` 与 checksum，相同输入幂等，输入变化时追加版本，失败同输入重试复用版本。每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。两类报告在 `pending/generating` 期间都只允许同一目标一个活跃版本，失败只更新报告行，不改变 Finding 状态。
 - **通用 Finding 协议（#44）**：`profile`、`category`、`tags`、`evidence_refs` 是跨安全、质量、合规等领域的通用字段；严重度可不提供，CVSS 评分可选。有效协议由全局、项目、任务三层按任务 > 项目 > 全局合并，在建画布时写入 `target_json.effective_finding_protocol` 冻结；Job 和 Agent 只读取该快照。Scheduler 校验 profile/字段边界、去重并决定 Verify，受支持的 CVSS 4.0/3.1 向量由系统重算，协议显式接受的未知版本保留原始向量/指标。
 
@@ -192,7 +192,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 - 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；全局调度规则与平台配置包归平台数据。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
-- 任务列表 / 任务工作台（画布 · Findings · Jobs · 报告）
+- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联，并提供人工 `verified` / `rejected` / `needs_human` 收口。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
 - **任务是否在跑：以 `active_count` / 活跃 Job 为准**；勿把 `last_job_status=succeeded` 当成任务已完成（#46）
@@ -233,9 +233,10 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 项目镜像继承一致性 | #146 | `inherit_global` 继续只认全局 RoleConfig 镜像；`project_managed` 只认项目 `role_runtime_images` 映射。修复遗留项目 RoleConfig `runtime_image_key` 在导入、展示或 readiness 中被误当作有效配置的问题，不恢复 #130 已删除的独立项目镜像覆盖 |
 | 任务定时开始（北京 08:00） | #147 | **已完成并关 issue**：见 §5；`task-schedule` / `schedule-wake`、dispatcher 门禁、Web 表单与列表 `scheduled` 相位；无 schema 迁移 |
 | 画布广播可观测 | （过程真相 A） | **注入 + 投递账本已落地**：见 §4.2；分期细节与布局 B 见 `docs/TODO_CANVAS_PROCESS_TRUTH.md` |
-| Hub 验证绑定与人工收口 | #153/#154/#155 | **已完成**：review/test 从唯一 canonical Finding 节点绑定验证上下文；below-min、歧义和 trigger 错配在派生前拒绝；Finding 详情提供仅 `needs_human` 的人工入口，并原子恢复同画布等待中的 Hub |
+| Hub 验证绑定与人工收口 | #153/#154/#155 | **已完成**：review/test 与 Finding 人工请求都使用结构化 canonical Finding 绑定；below-min、歧义和 trigger 错配在副作用前拒绝；Finding 详情可强制 Verify、派发绑定的 review/test 补证或收口 `needs_human`，并在需要时原子恢复同画布等待中的 Hub |
 | 共享资产卷孤儿回收 | #157 | **已完成**：启动对账合并 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，校验本地卷归属并回收无标签孤儿；删除使用 3 次指数退避，暴露清理失败计数、残留孤儿数量和最大年龄指标 |
 | 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
+| Fact 过程真相工作台 | #159 | **已完成**：Schema v31 为 Fact 增加独立验证状态；画布提供 Facts 标签、服务端 keyset 分页与筛选、结构化证据/来源详情和人工验证动作。旧的幽灵 `/canvas-nodes/{id}/verification` 契约已删除，读写统一限定在 `/canvases/{id}/facts` 项目作用域内。 |
 
 ## 12. 仓库地图
 
@@ -276,7 +277,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `emit_finding` | 非法 profile/category、空白/超长字段、未接受的评分版本、写入内部 `raw` | `invalid_payload` / `unknown_field` |
 | `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` |
 | `mark_job_done` | 空白 summary、verify 缺 verdict、rework 缺 missing_evidence、非 verify 乱传 verdict | `invalid_done` |
-| `request_human` | 空白/超长 reason、未授权角色 | `invalid_human` / `tool_not_allowed` |
+| `request_human` | 空白/超长 reason、缺失或非法 subject、跨画布 Finding、低于验证阈值的 Finding、未授权角色 | `invalid_human` / `tool_not_allowed` |
 
 新增控制工具 checklist：定义严格 Zod payload + 同源 JSON Schema；列出禁止输入/错误码/业务白名单；MCP 与宿主各有合法/非法测试；core 事务断言失败全回滚；确认不写控制文件、不把普通文本当语义事件；更新本表、平台工具说明和 CI 冒烟。
 

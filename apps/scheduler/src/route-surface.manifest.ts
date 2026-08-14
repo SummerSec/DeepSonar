@@ -29,6 +29,8 @@ GET /control/v1/jobs/:jobId/agent/capabilities_list
 GET /control/v1/jobs/:jobId/openapi.json
 GET /control/v1/jobs/:jobId/operations/:operationId
 GET /canvases/:id/delta
+GET /canvases/:id/facts
+GET /canvases/:id/facts/:nodeId
 GET /canvases/:id/nodes/:nodeId
 GET /canvases/:id/report
 GET /canvases/:id/report/availability
@@ -95,6 +97,7 @@ GET /tokens
 GET /users
 GET /ws
 PATCH /agent-roles/:id
+PATCH /canvases/:id/facts/:nodeId/verification
 PATCH /credentials/:id
 PATCH /findings/:id/disposition
 PATCH /findings/:id/verify-status
@@ -132,8 +135,10 @@ POST /credentials/:id/test
 POST /credentials/batch-bind
 POST /exports/:id/cancel
 POST /findings/:id/comments
+POST /findings/:id/evidence-jobs
 POST /findings/:id/links
 POST /findings/:id/report
+POST /findings/:id/verify
 POST /findings/:id/shared-assets
 POST /gateway/*
 POST /imports
@@ -196,6 +201,8 @@ GET /auth/status
 GET /canvases/{id}
 GET /canvases/{id}/broadcasts
 GET /canvases/{id}/delta
+GET /canvases/{id}/facts
+GET /canvases/{id}/facts/{nodeId}
 GET /canvases/{id}/nodes/{nodeId}
 GET /canvases/{id}/report
 GET /canvases/{id}/report/availability
@@ -253,7 +260,7 @@ GET /skill-sources
 GET /skill-sources/{id}
 GET /tokens
 PATCH /agent-roles/{id}
-PATCH /canvas-nodes/{id}/verification
+PATCH /canvases/{id}/facts/{nodeId}/verification
 PATCH /credentials/{id}
 PATCH /findings/{id}/verify-status
 PATCH /global-settings
@@ -278,6 +285,8 @@ POST /credentials/{id}/test
 POST /credentials/batch-bind
 POST /findings/{id}/report
 POST /findings/{id}/shared-assets
+POST /findings/{id}/evidence-jobs
+POST /findings/{id}/verify
 POST /canvases/{id}/messages
 POST /jobs
 POST /jobs/{id}/cancel

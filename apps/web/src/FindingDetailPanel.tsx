@@ -116,6 +116,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
   const [detail, setDetail] = useState<FindingDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [verificationAction, setVerificationAction] = useState<"needs_human" | "verify" | "review" | "test" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [verifyReason, setVerifyReason] = useState("");
@@ -247,7 +248,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
       description: "本次只会写入 needs_human，并重新排队当前等待人工的 Hub。",
       confirmLabel: "转人工并恢复 Hub",
     })) return;
-    setBusy(true);
+    setVerificationAction("needs_human");
     setError(null);
     try {
       await api.setFindingNeedsHuman(findingId, {
@@ -259,7 +260,46 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setVerificationAction(null);
+    }
+  };
+
+  const forceVerify = async () => {
+    if (!await confirm({
+      title: "立即创建 Scheduler Verify？",
+      description: "平台会创建新的技术验证轮次；confirmed 仍只能由 Scheduler 根据独立证据收口。",
+      confirmLabel: "强制验证",
+    })) return;
+    setVerificationAction("verify");
+    setError(null);
+    try {
+      await api.forceFindingVerify(findingId, { reason: verifyReason.trim() || undefined });
+      flash("已创建技术验证轮次");
+      await reload();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setVerificationAction(null);
+    }
+  };
+
+  const dispatchEvidenceJob = async (role: "review" | "test") => {
+    const label = role === "review" ? "独立复核" : "运行测试";
+    if (!await confirm({
+      title: `派发${label} Job？`,
+      description: `平台会把 ${label} Job 结构化绑定到当前 Finding；技术 confirmed 仍只能由 Scheduler Verify 产生。`,
+      confirmLabel: `派发${label}`,
+    })) return;
+    setVerificationAction(role);
+    setError(null);
+    try {
+      await api.createFindingEvidenceJob(findingId, role);
+      flash(`已派发${label}`);
+      await reload();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setVerificationAction(null);
     }
   };
 
@@ -831,28 +871,62 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                 <SidebarField label="技术验证">
                   <StatusBadge status={f.verify_status} />
                   <p className="mt-1.5 text-[11px] leading-4 text-zinc-600">
-                    Agent / verify 给出，与人工状态独立。
+                    技术 confirmed 只能由 Scheduler Verify 根据独立证据产生。
                   </p>
-                  {f.has_waiting_human && f.verify_status !== "confirmed" && f.verify_status !== "needs_human" && (
+                  {f.verify_status !== "confirmed" && f.verify_status !== "needs_human" && (
                     <div className="mt-3 space-y-2">
                       <textarea
                         value={verifyReason}
                         onChange={(e) => setVerifyReason(e.target.value)}
-                        placeholder="人工收口备注（可选）"
+                        placeholder="强制验证 / 人工收口原因（可选）"
                         rows={2}
                         maxLength={2000}
                         className="theme-input-surface w-full rounded-lg border px-2.5 py-1.5 text-[12px] outline-none focus:border-acc-500"
                       />
                       <button
                         type="button"
-                        disabled={busy}
-                        onClick={setNeedsHuman}
-                        title="将当前 Finding 收口为 needs_human"
+                        disabled={busy || verificationAction !== null}
+                        onClick={() => void forceVerify()}
+                        title="立即创建新的 Scheduler Verify 轮次"
                         className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-acc-500 px-3 py-2 text-[12px] font-medium text-ink-950 disabled:opacity-40"
                       >
-                        <HandPalm size={14} />
-                        转人工并恢复 Hub
+                        <ArrowsClockwise size={14} />
+                        {verificationAction === "verify" ? "创建中…" : "强制验证"}
                       </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={busy || verificationAction !== null}
+                          onClick={() => void dispatchEvidenceJob("review")}
+                          title="派发与当前 Finding 结构化绑定的独立复核 Job"
+                          className="theme-surface inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[11px] text-zinc-300 ring-1 disabled:opacity-40"
+                        >
+                          <TreeStructure size={13} />
+                          {verificationAction === "review" ? "派发中…" : "派发独立复核"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || verificationAction !== null}
+                          onClick={() => void dispatchEvidenceJob("test")}
+                          title="派发与当前 Finding 结构化绑定的运行测试 Job"
+                          className="theme-surface inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[11px] text-zinc-300 ring-1 disabled:opacity-40"
+                        >
+                          <ArrowRight size={13} />
+                          {verificationAction === "test" ? "派发中…" : "派发运行测试"}
+                        </button>
+                      </div>
+                      {f.has_waiting_human && (
+                        <button
+                          type="button"
+                          disabled={busy || verificationAction !== null}
+                          onClick={() => void setNeedsHuman()}
+                          title="将当前 Finding 收口为 needs_human"
+                          className="theme-surface inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] text-amber-300 ring-1 disabled:opacity-40"
+                        >
+                          <HandPalm size={14} />
+                          {verificationAction === "needs_human" ? "处理中…" : "转人工并恢复 Hub"}
+                        </button>
+                      )}
                     </div>
                   )}
                 </SidebarField>

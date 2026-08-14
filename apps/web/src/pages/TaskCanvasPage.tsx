@@ -4,7 +4,9 @@ import {
   DotsThree,
   FileText,
   Graph,
+  HandPalm,
   ListBullets,
+  Note,
   Pause,
   Play,
   SealCheck,
@@ -18,6 +20,7 @@ import {
   type CanvasConvergence,
   type CanvasData,
   type CanvasNode,
+  type FactSummary,
   type FindingTrace,
   type FindingSummary,
   type EffectiveFindingProtocol,
@@ -27,6 +30,8 @@ import { CanvasView } from "../CanvasView";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type PageProgress } from "../canvas-page-sync";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { FindingDetailPanel } from "../FindingDetailPanel";
+import { FactDetailPanel } from "../FactDetailPanel";
+import { readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
@@ -44,7 +49,7 @@ import {
   thCls,
 } from "../ui";
 
-type Tab = "canvas" | "findings" | "jobs" | "report";
+type Tab = "canvas" | "facts" | "findings" | "jobs" | "report";
 
 // Human-gated work is still active; current running elapsed therefore continues
 // from the first actual start while a Job is waiting_human.
@@ -78,12 +83,12 @@ async function loadFindingIndex(canvasId: string): Promise<FindingSummary[]> {
 }
 
 /** 待人工处理事实卡片：needs_human 的 fact 节点，人工确认 / 明确排除（§5.2-6） */
-function HumanFactCard({ node, onDone }: { node: CanvasNode; onDone: (msg: string) => void }) {
+function HumanFactCard({ canvasId, node, onDone }: { canvasId: string; node: CanvasNode; onDone: (msg: string) => void }) {
   const [busy, setBusy] = useState(false);
   const act = async (status: "verified" | "rejected") => {
     setBusy(true);
     try {
-      await api.setFactVerification(node.id, status);
+      await api.setFactVerification(canvasId, node.id, status);
       onDone(status === "verified" ? "已标记为已验证" : "已排除该事实");
     } catch {
       // 失败由下一轮轮询呈现
@@ -125,6 +130,8 @@ export function TaskCanvasPage() {
   const severity = searchParams.get("severity") ?? "";
   const profile = searchParams.get("profile") ?? "";
   const verify = searchParams.get("verify") ?? "";
+  const factFilters = readFactPageFilters(searchParams);
+  const selectedFact = searchParams.get("fact");
   const selectedFinding = searchParams.get("finding");
   const selectedJob = searchParams.get("job");
   const traceFinding = searchParams.get("traceFinding");
@@ -133,12 +140,19 @@ export function TaskCanvasPage() {
   const [meta, setMeta] = useState<CanvasData["canvas"] | null>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [findings, setFindings] = useState<FindingSummary[]>([]);
+  const [facts, setFacts] = useState<FactSummary[]>([]);
   const [findingIndex, setFindingIndex] = useState<FindingSummary[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [findingsCursor, setFindingsCursor] = useState<string | null>(null);
   const [findingsHasMore, setFindingsHasMore] = useState(false);
   const [jobsCursor, setJobsCursor] = useState<string | null>(null);
   const [jobsHasMore, setJobsHasMore] = useState(false);
+  const [factsCursor, setFactsCursor] = useState<string | null>(null);
+  const [factsHasMore, setFactsHasMore] = useState(false);
+  const [factsLoadingMore, setFactsLoadingMore] = useState(false);
+  const [factsLoading, setFactsLoading] = useState(true);
+  const [factsError, setFactsError] = useState<string | null>(null);
+  const [factsRefresh, setFactsRefresh] = useState(0);
   const [jobStatusFilter, setJobStatusFilter] = useState("");
   const [jobRoleTypeFilter, setJobRoleTypeFilter] = useState("");
   const [jobKeyword, setJobKeyword] = useState("");
@@ -146,9 +160,10 @@ export function TaskCanvasPage() {
   const [convBusy, setConvBusy] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
-  const paginationRef = useRef<{ findings: PageProgress | null; jobs: PageProgress | null }>({
+  const paginationRef = useRef<{ findings: PageProgress | null; jobs: PageProgress | null; facts: PageProgress | null }>({
     findings: null,
     jobs: null,
+    facts: null,
   });
   const [clock, setClock] = useState(() => Date.now());
   /** 任务内容 / 审计范围：默认折叠，避免挤占画布 */
@@ -173,7 +188,7 @@ export function TaskCanvasPage() {
     setJobs([]);
     setJobsCursor(null);
     setJobsHasMore(false);
-    paginationRef.current = { findings: null, jobs: null };
+    paginationRef.current = { findings: null, jobs: null, facts: null };
     setMeta(null);
     setNodes([]);
     setConvergence(null);
@@ -217,6 +232,55 @@ export function TaskCanvasPage() {
       clearInterval(t);
     };
   }, [canvasId, projectId]);
+
+  useEffect(() => {
+    if (!canvasId) return;
+    let stop = false;
+    setFacts([]);
+    setFactsCursor(null);
+    setFactsHasMore(false);
+    setFactsLoading(true);
+    setFactsError(null);
+    paginationRef.current.facts = null;
+    const tick = async () => {
+      try {
+        const page = await api.factsPage(canvasId, {
+          verification_status: factFilters.verification_status || undefined,
+          evidence_kind: factFilters.evidence_kind || undefined,
+          finding_id: factFilters.finding_id || undefined,
+          job_id: factFilters.job_id || undefined,
+          limit: 50,
+        });
+        if (stop) return;
+        setFacts((before) => mergeRefreshedPage(page.items, before));
+        setFactsLoading(false);
+        setFactsError(null);
+        if (!paginationRef.current.facts) {
+          paginationRef.current.facts = initializePageProgress(null, page);
+          setFactsCursor(paginationRef.current.facts.cursor);
+          setFactsHasMore(paginationRef.current.facts.hasMore);
+        }
+      } catch (cause) {
+        if (!stop) {
+          setFactsLoading(false);
+          setFactsError(cause instanceof Error ? cause.message : String(cause));
+        }
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 5000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    canvasId,
+    factFilters.evidence_kind,
+    factFilters.finding_id,
+    factFilters.job_id,
+    factFilters.verification_status,
+    factsRefresh,
+  ]);
 
   useEffect(() => {
     if (!traceFinding || !canvasId) {
@@ -265,6 +329,29 @@ export function TaskCanvasPage() {
       setFindingsHasMore(next.has_more);
     } catch (e) {
       setError(String(e));
+    }
+  };
+
+  const loadMoreFacts = async () => {
+    if (!canvasId || !factsHasMore || !factsCursor || factsLoadingMore) return;
+    setFactsLoadingMore(true);
+    try {
+      const next = await api.factsPage(canvasId, {
+        verification_status: factFilters.verification_status || undefined,
+        evidence_kind: factFilters.evidence_kind || undefined,
+        finding_id: factFilters.finding_id || undefined,
+        job_id: factFilters.job_id || undefined,
+        after: factsCursor,
+        limit: 50,
+      });
+      setFacts((before) => appendUniqueRows(before, next.items));
+      paginationRef.current.facts = { cursor: next.next_cursor, hasMore: next.has_more };
+      setFactsCursor(next.next_cursor);
+      setFactsHasMore(next.has_more);
+    } catch (cause) {
+      setFactsError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setFactsLoadingMore(false);
     }
   };
 
@@ -473,6 +560,21 @@ export function TaskCanvasPage() {
     setSearchParams(sp, { replace: true });
   };
 
+  const setFactQuery = (key: FactFilterKey | "fact", value: string | null) => {
+    const next = updateFactPageQuery(searchParams, key, value);
+    if (key === "fact" && value) {
+      next.delete("finding");
+      next.delete("job");
+    }
+    setSearchParams(next, { replace: true });
+  };
+
+  const openFromFact = (kind: "finding" | "job", id: string) => {
+    const next = updateFactPageQuery(searchParams, "fact", null);
+    next.set(kind, id);
+    setSearchParams(next, { replace: true });
+  };
+
   const focusFindingTrace = (findingId: string) => {
     const sp = new URLSearchParams(searchParams);
     sp.delete("tab");
@@ -488,6 +590,22 @@ export function TaskCanvasPage() {
   const humanFacts = nodes.filter(
     (n) => n.node_type === "fact" && n.verification_status === "needs_human",
   );
+  const humanInterventions = nodes
+    .filter((node) => node.node_type === "human")
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .slice(0, 12)
+    .map((node) => {
+      const subject = node.body_json?.subject;
+      const subjectFindingId = subject && typeof subject === "object" && typeof (subject as Record<string, unknown>).finding_id === "string"
+        ? String((subject as Record<string, unknown>).finding_id)
+        : null;
+      return {
+        node,
+        reason: typeof node.body_json?.reason === "string" ? node.body_json.reason : "等待人工判断",
+        findingId: typeof node.body_json?.finding_id === "string" ? node.body_json.finding_id : subjectFindingId,
+        jobId: node.job_id ?? (typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null),
+      };
+    });
   const visibleFindings = findings.filter(
     (finding) => (!severity || finding.severity === severity) && (!profile || finding.profile === profile) && (!verify || finding.verify_status === verify),
   );
@@ -499,6 +617,19 @@ export function TaskCanvasPage() {
         .map((finding) => [finding.node_id as string, finding.id]),
     ),
     [findingIndex, findings],
+  );
+  const factFindingFilterOptions = useMemo(
+    () => Array.from(new Map(
+      [...findingIndex, ...findings].map((finding) => [
+        finding.id,
+        { value: finding.id, label: `${finding.title} · ${finding.id.slice(0, 8)}` },
+      ]),
+    ).values()),
+    [findingIndex, findings],
+  );
+  const factJobFilterOptions = useMemo(
+    () => jobs.map((job) => ({ value: job.id, label: `${job.role_name ?? job.type} · ${job.id.slice(0, 8)}` })),
+    [jobs],
   );
   const jobRoleTypeOptions = useMemo(
     () => Array.from(new Set(jobs.flatMap((job) => [job.role_name, job.type].filter((value): value is string => Boolean(value))))).sort(),
@@ -526,6 +657,7 @@ export function TaskCanvasPage() {
 
   const tabs: { key: Tab; label: string; count?: number; icon: typeof Graph }[] = [
     { key: "canvas", label: "过程画布", icon: Graph },
+    { key: "facts", label: "事实", count: facts.length, icon: Note },
     { key: "findings", label: "本次发现", count: findings.length, icon: ListBullets },
     { key: "jobs", label: "本次运行", count: jobs.length, icon: Target },
     { key: "report", label: "报告", icon: FileText },
@@ -775,24 +907,136 @@ export function TaskCanvasPage() {
       )}
 
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
-        <div className={`min-h-0 flex-1 ${tab === "canvas" ? "" : "hidden"}`}>
-          <CanvasView
-            canvasId={canvasId}
-            onData={onCanvasData}
-            trace={findingTrace}
-            focusNodeId={focusNode}
-            findingIdByNodeId={findingIdByNodeId}
-            onTraceFinding={focusFindingTrace}
-            onExitTrace={() => {
-              const sp = new URLSearchParams(searchParams);
-              sp.delete("traceFinding");
-              sp.delete("focusNode");
-              setSearchParams(sp, { replace: true });
-            }}
-          />
+        <div className={`min-h-0 flex-1 ${tab === "canvas" ? "flex flex-col" : "hidden"}`}>
+          {humanInterventions.length > 0 && (
+            <section className="theme-divider shrink-0 border-b px-3 py-2 sm:px-4" aria-label="人工介入">
+              <div className="mb-2 flex items-center gap-2">
+                <HandPalm size={14} className="text-amber-300" />
+                <h2 className="text-[12px] font-medium text-zinc-300">人工介入</h2>
+                <span className="font-mono text-[9px] text-zinc-600">最近 {humanInterventions.length} 条</span>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {humanInterventions.map(({ node, reason, findingId, jobId }) => (
+                  <div key={node.id} className="theme-surface flex min-w-[260px] max-w-[420px] flex-1 items-start gap-3 rounded-lg px-3 py-2 ring-1">
+                    <div className="min-w-0 flex-1">
+                      <div className="break-words text-[12px] text-zinc-300">{node.title}</div>
+                      <div className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-zinc-600">{reason}</div>
+                    </div>
+                    <div className="flex shrink-0 flex-col gap-1">
+                      {findingId && <button type="button" onClick={() => setQuery("finding", findingId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Finding</button>}
+                      {jobId && <button type="button" onClick={() => setQuery("job", jobId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Job</button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          <div className="min-h-0 flex-1">
+            <CanvasView
+              canvasId={canvasId}
+              onData={onCanvasData}
+              trace={findingTrace}
+              focusNodeId={focusNode}
+              findingIdByNodeId={findingIdByNodeId}
+              onOpenFact={(factId) => setFactQuery("fact", factId)}
+              onTraceFinding={focusFindingTrace}
+              onExitTrace={() => {
+                const sp = new URLSearchParams(searchParams);
+                sp.delete("traceFinding");
+                sp.delete("focusNode");
+                setSearchParams(sp, { replace: true });
+              }}
+            />
+          </div>
         </div>
 
         {tab === "report" && <ReportPanel canvasId={canvasId} />}
+
+        {tab === "facts" && (
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+              <FilterSelect
+                label="验证状态"
+                value={factFilters.verification_status}
+                onChange={(value) => setFactQuery("verification_status", value || null)}
+                placeholder="全部状态"
+                options={["unverified", "verifying", "verified", "rejected", "needs_human"].map((value) => ({ value, label: value }))}
+              />
+              <FilterSelect
+                label="证据类型"
+                value={factFilters.evidence_kind}
+                onChange={(value) => setFactQuery("evidence_kind", value || null)}
+                placeholder="全部类型"
+                options={[{ value: "review", label: "独立复核" }, { value: "test", label: "运行测试" }]}
+              />
+              <FilterSelect label="关联 Finding" value={factFilters.finding_id} onChange={(value) => setFactQuery("finding_id", value || null)} placeholder="全部 Finding" options={factFindingFilterOptions} />
+              <FilterSelect label="产出 Job" value={factFilters.job_id} onChange={(value) => setFactQuery("job_id", value || null)} placeholder="全部 Job" options={factJobFilterOptions} />
+              <span className="font-mono text-[10px] text-zinc-500">已加载 {facts.length} 条</span>
+            </div>
+
+            {factsError ? (
+              <EmptyState title="事实加载失败" hint={factsError} action={<button type="button" onClick={() => setFactsRefresh((value) => value + 1)} className="rounded-md bg-white/[.06] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.1]">重新加载</button>} />
+            ) : factsLoading ? (
+              <div className="p-8 text-center font-mono text-[12px] text-zinc-600">正在加载事实…</div>
+            ) : facts.length === 0 ? (
+              <EmptyState title="没有匹配的事实" />
+            ) : (
+              <>
+                <DataTable>
+                  <table className="w-full min-w-[980px]">
+                    <thead>
+                      <tr>
+                        <th className={thCls}>状态</th>
+                        <th className={thCls}>证据 / 结论</th>
+                        <th className={thCls}>标题</th>
+                        <th className={thCls}>关联 Finding</th>
+                        <th className={thCls}>产出 Job</th>
+                        <th className={thCls}>时间</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {facts.map((fact) => (
+                        <tr key={fact.id} onClick={() => setFactQuery("fact", fact.id)} className="cursor-pointer transition-colors hover:bg-ink-850/80">
+                          <td className={tdCls}><StatusBadge status={fact.verification_status} /></td>
+                          <td className={`${tdCls} font-mono text-[11px] text-zinc-400`}>
+                            {fact.verification ? <><div>{fact.verification.evidence_kind}</div><div className="mt-0.5 text-zinc-600">{fact.verification.outcome}</div></> : "—"}
+                          </td>
+                          <td className={`${tdCls} max-w-[360px]`}>
+                            <div className="break-words font-medium text-zinc-100">{fact.title}</div>
+                            {fact.description && <div className="mt-0.5 line-clamp-2 break-words text-[12px] text-zinc-600">{fact.description}</div>}
+                          </td>
+                          <td className={tdCls} onClick={(event) => event.stopPropagation()}>
+                            {fact.finding ? (
+                              <button type="button" onClick={() => setQuery("finding", fact.finding?.id ?? null)} className="max-w-[220px] text-left text-[12px] text-acc-400 hover:text-acc-300">
+                                <span className="block truncate">{fact.finding.title}</span>
+                                <span className="font-mono text-[9px] text-zinc-600">{fact.finding.id.slice(0, 8)}</span>
+                              </button>
+                            ) : "—"}
+                          </td>
+                          <td className={tdCls} onClick={(event) => event.stopPropagation()}>
+                            {fact.job ? (
+                              <button type="button" onClick={() => setQuery("job", fact.job?.id ?? null)} className="font-mono text-[11px] text-acc-400 hover:text-acc-300">
+                                {fact.job.type} · {fact.job.id.slice(0, 8)}
+                              </button>
+                            ) : fact.job_id ? (
+                              <button type="button" onClick={() => setQuery("job", fact.job_id)} className="font-mono text-[11px] text-acc-400 hover:text-acc-300">{fact.job_id.slice(0, 8)}</button>
+                            ) : "—"}
+                          </td>
+                          <td className={`${tdCls} whitespace-nowrap font-mono text-[11px] text-zinc-500`} title={formatTime(fact.created_at)}>{relativeTime(fact.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </DataTable>
+                {factsHasMore && (
+                  <button type="button" disabled={factsLoadingMore} onClick={() => void loadMoreFacts()} className="mt-3 rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08] disabled:opacity-50">
+                    {factsLoadingMore ? "加载中…" : "加载更多事实"}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {tab === "findings" && (
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
@@ -808,6 +1052,7 @@ export function TaskCanvasPage() {
                   {humanFacts.map((n) => (
                     <HumanFactCard
                       key={n.id}
+                      canvasId={canvasId}
                       node={n}
                       onDone={(m) => {
                         setMsg(m);
@@ -1008,8 +1253,17 @@ export function TaskCanvasPage() {
           </div>
         )}
       </div>
-      {selectedFinding && <FindingDetailPanel findingId={selectedFinding} onClose={() => setQuery("finding", null)} />}
-      {selectedJob && <JobDetailPanel jobId={selectedJob} onClose={() => setQuery("job", null)} />}
+      {selectedFact && (
+        <FactDetailPanel
+          canvasId={canvasId}
+          factId={selectedFact}
+          onClose={() => setFactQuery("fact", null)}
+          onOpenFinding={(findingId) => openFromFact("finding", findingId)}
+          onOpenJob={(jobId) => openFromFact("job", jobId)}
+        />
+      )}
+      {!selectedFact && selectedFinding && <FindingDetailPanel findingId={selectedFinding} onClose={() => setQuery("finding", null)} />}
+      {!selectedFact && selectedJob && <JobDetailPanel jobId={selectedJob} onClose={() => setQuery("job", null)} />}
     </div>
   );
 }

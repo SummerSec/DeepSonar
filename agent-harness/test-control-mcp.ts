@@ -92,6 +92,8 @@ for (const expected of [
   "emit_fact",
   "mark_job_done",
   "request_human",
+  "platform_blocker",
+  "subject_revision",
 ]) {
   assert.match(workerGuide, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `平台工具说明缺少: ${expected}`);
 }

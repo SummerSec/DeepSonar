@@ -103,10 +103,10 @@ if (!testDatabaseUrl) {
         VALUES (${reviewJobId}, ${projectId}, ${canvasId}, 'review', 'succeeded',
           ${fixedPriorityForJob({ type: 'review', purpose: 'convergence_evidence' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
       const [reviewNode] = await sql`
-        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json, verification_status)
         VALUES (${canvasId}, ${reviewJobId}, 'fact', 'review evidence', 'succeeded', ${sql.json({
           verification: { finding_id: findingId, evidence_kind: "review", outcome: "supports" },
-        })})
+        })}, 'unverified')
         RETURNING id`;
       const [afterReviewFinding] = await sql`SELECT * FROM findings WHERE id = ${findingId}`;
       const afterReview = await createVerifyRound(sql, {
@@ -125,7 +125,7 @@ if (!testDatabaseUrl) {
         VALUES (${testJobId}, ${projectId}, ${canvasId}, 'test', 'succeeded',
           ${fixedPriorityForJob({ type: 'test', purpose: 'convergence_evidence' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
       const [testNode] = await sql`
-        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json, verification_status)
         VALUES (${canvasId}, ${testJobId}, 'fact', 'runtime evidence', 'succeeded', ${sql.json({
           verification: {
             finding_id: findingId,
@@ -136,7 +136,7 @@ if (!testDatabaseUrl) {
             expected: "pass",
             actual: "pass",
           },
-        })})
+        })}, 'unverified')
         RETURNING id`;
       const [qualifiedFinding] = await sql`SELECT * FROM findings WHERE id = ${findingId}`;
       const qualified = await createVerifyRound(sql, {

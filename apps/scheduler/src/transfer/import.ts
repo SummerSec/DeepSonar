@@ -2,7 +2,7 @@
  * 项目导入：预览 + create_new / merge_configuration
  */
 import { randomUUID } from "node:crypto";
-import { validateModuleSelectors } from "@deepsonar/shared-types";
+import { FactVerificationStatus, validateModuleSelectors } from "@deepsonar/shared-types";
 import {
   projectCredentialMetadata,
   projectCredentialProvider,
@@ -535,6 +535,19 @@ async function importTasks(
     const canvasId = id_map.canvases[String(n.source_canvas_id)];
     if (!canvasId) continue;
     const jobId = n.source_job_id ? id_map.jobs[String(n.source_job_id)] ?? null : null;
+    const verificationStatus = n.node_type === "fact"
+      ? FactVerificationStatus.safeParse(n.verification_status)
+      : null;
+    if (n.node_type === "fact" && !verificationStatus?.success) {
+      throw Object.assign(new Error("Fact verification_status 不符合 tasks v2 契约"), {
+        code: "BAD_FACT_VERIFICATION_STATUS",
+      });
+    }
+    if (n.node_type !== "fact" && n.verification_status != null) {
+      throw Object.assign(new Error("非 Fact 节点的 verification_status 必须为 null"), {
+        code: "BAD_FACT_VERIFICATION_STATUS",
+      });
+    }
     await tx`
       INSERT INTO canvas_nodes ${tx({
         id: newId,
@@ -548,6 +561,7 @@ async function importTasks(
         w: (n.w as number) ?? 240,
         h: (n.h as number) ?? 120,
         status: (n.status as string) ?? null,
+        verification_status: verificationStatus?.success ? verificationStatus.data : null,
       })}`;
   }
 

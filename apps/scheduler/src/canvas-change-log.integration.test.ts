@@ -29,7 +29,7 @@ if (!testDatabaseUrl) {
 
       const inserted = await Promise.all(Array.from({ length: 24 }, async (_, index) => {
         const [row] = await sql`
-          INSERT INTO canvas_nodes (canvas_id, node_type, title, body_json)
+          INSERT INTO canvas_nodes (canvas_id, node_type, title, body_json, verification_status)
           VALUES (
             ${canvasId}, 'fact', ${`fact-${index}`},
             ${sql.json({
@@ -37,7 +37,7 @@ if (!testDatabaseUrl) {
               description: "d".repeat(500),
               secret: "must-not-enter-change-log",
               last_progress: { message: "m".repeat(500), kind: "k".repeat(100), raw: "secret" },
-            })}
+            })}, 'unverified'
           ) RETURNING id`;
         return String(row.id);
       }));

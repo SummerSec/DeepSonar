@@ -47,8 +47,7 @@ export function buildManifestSource(source: ManifestSourceInput): Manifest["sour
 /**
  * Validate the producing schema against this application.
  *
- * Packs are logical business-data exports, so older baselines remain importable
- * while a pack produced by a newer, unknown baseline must not be applied.
+ * 数据包与当前稳定列契约绑定；不保留旧 schema 的兼容导入路径。
  */
 export function validateManifestSchemaVersion(schemaVersion: unknown): number {
   if (!Number.isInteger(schemaVersion) || (schemaVersion as number) < 1) {
@@ -56,10 +55,10 @@ export function validateManifestSchemaVersion(schemaVersion: unknown): number {
       code: "BAD_SCHEMA_VERSION",
     });
   }
-  if ((schemaVersion as number) > SCHEMA_VERSION) {
+  if ((schemaVersion as number) !== SCHEMA_VERSION) {
     throw Object.assign(
-      new Error(`schema_version ${String(schemaVersion)} too new (current ${SCHEMA_VERSION})`),
-      { code: "SCHEMA_TOO_NEW" },
+      new Error(`schema_version ${String(schemaVersion)} does not match current ${SCHEMA_VERSION}`),
+      { code: "BAD_SCHEMA_VERSION" },
     );
   }
   return schemaVersion as number;

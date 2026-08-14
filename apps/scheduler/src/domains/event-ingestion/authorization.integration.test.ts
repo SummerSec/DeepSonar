@@ -78,7 +78,10 @@ if (!testDatabaseUrl) {
           suggest_verify: false,
         };
         case "hub_decision": return { complete: { from: [], description: "late decision" } };
-        case "human": return { reason: "late operator decision" };
+        case "human": return {
+          reason: "late operator decision",
+          subject: { type: "platform_blocker", kind: "business_decision" },
+        };
         case "done": return { summary: "late completion" };
         default: throw new Error(`unknown test event type ${type}`);
       }
@@ -280,7 +283,10 @@ if (!testDatabaseUrl) {
         v: 1,
         event_id: randomUUID(),
         type: "human",
-        payload: { reason: "operator review" },
+        payload: {
+          reason: "operator review",
+          subject: { type: "platform_blocker", kind: "business_decision" },
+        },
       });
       await sql`UPDATE jobs SET status = 'running' WHERE id = ${humanJob}`;
       await assertRejectedWithoutWrites(humanJob, "done", "duplicate_tool_call");

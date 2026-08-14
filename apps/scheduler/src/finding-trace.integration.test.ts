@@ -81,18 +81,18 @@ if (!testDatabaseUrl) {
         VALUES (${findingId}, ${projectId}, ${sourceJobId}, ${findingNodeId}, 'trace-fingerprint', 'Trace finding', 'high', 'confirmed', ${sql.json({})})`;
       await sql`UPDATE jobs SET finding_id = ${findingId} WHERE id = ${verifyJobId}`;
       await sql`
-        INSERT INTO canvas_nodes (id, canvas_id, job_id, node_type, title, body_json, status, created_at)
+        INSERT INTO canvas_nodes (id, canvas_id, job_id, node_type, title, body_json, status, verification_status, created_at)
         VALUES
-          (${sourceJobNodeId}, ${canvasId}, ${sourceJobId}, 'job', 'audit', ${sql.json({ type: 'audit' })}, 'succeeded', now() - interval '6 minutes'),
-          (${findingNodeId}, ${canvasId}, ${sourceJobId}, 'finding', 'Trace finding', ${sql.json({ severity: 'high' })}, 'confirmed', now() - interval '6 minutes'),
-          (${reviewIntentNodeId}, ${canvasId}, ${reviewJobId}, 'intent', 'review intent', ${sql.json({ role: 'review', description: 'independent review' })}, 'succeeded', now() - interval '5 minutes'),
-          (${reviewNodeId}, ${canvasId}, ${reviewJobId}, 'fact', 'review evidence', ${sql.json({ verification: { finding_id: findingId, evidence_kind: 'review', outcome: 'supports' } })}, 'verified', now() - interval '5 minutes'),
-          (${testIntentNodeId}, ${canvasId}, ${testJobId}, 'intent', 'test intent', ${sql.json({ role: 'test', description: 'runtime test' })}, 'succeeded', now() - interval '4 minutes'),
-          (${testNodeId}, ${canvasId}, ${testJobId}, 'fact', 'test evidence', ${sql.json({ verification: { finding_id: findingId, evidence_kind: 'test', outcome: 'supports' } })}, 'verified', now() - interval '4 minutes'),
-          (${verifyNodeId}, ${canvasId}, ${verifyJobId}, 'job', 'verify', ${sql.json({ type: 'verify_finding' })}, 'succeeded', now() - interval '3 minutes'),
-          (${hubNodeId}, ${canvasId}, ${exactHubJobId}, 'job', 'hub', ${sql.json({ type: 'hub_reason' })}, 'succeeded', now() - interval '2 minutes'),
-          (${pendingIntentNodeId}, ${canvasId}, ${pendingIntentJobId}, 'intent', 'pending follow-up intent', ${sql.json({ role: 'analyze' })}, 'pending', now()),
-          (${unrelatedFactNodeId}, ${canvasId}, ${sourceJobId}, 'fact', 'unrelated source fact', ${sql.json({ description: 'must stay outside the trace' })}, 'verified', now() - interval '1 minute')`;
+          (${sourceJobNodeId}, ${canvasId}, ${sourceJobId}, 'job', 'audit', ${sql.json({ type: 'audit' })}, 'succeeded', NULL, now() - interval '6 minutes'),
+          (${findingNodeId}, ${canvasId}, ${sourceJobId}, 'finding', 'Trace finding', ${sql.json({ severity: 'high' })}, 'confirmed', NULL, now() - interval '6 minutes'),
+          (${reviewIntentNodeId}, ${canvasId}, ${reviewJobId}, 'intent', 'review intent', ${sql.json({ role: 'review', description: 'independent review' })}, 'succeeded', NULL, now() - interval '5 minutes'),
+          (${reviewNodeId}, ${canvasId}, ${reviewJobId}, 'fact', 'review evidence', ${sql.json({ verification: { finding_id: findingId, evidence_kind: 'review', outcome: 'supports' } })}, 'verified', 'verified', now() - interval '5 minutes'),
+          (${testIntentNodeId}, ${canvasId}, ${testJobId}, 'intent', 'test intent', ${sql.json({ role: 'test', description: 'runtime test' })}, 'succeeded', NULL, now() - interval '4 minutes'),
+          (${testNodeId}, ${canvasId}, ${testJobId}, 'fact', 'test evidence', ${sql.json({ verification: { finding_id: findingId, evidence_kind: 'test', outcome: 'supports' } })}, 'verified', 'verified', now() - interval '4 minutes'),
+          (${verifyNodeId}, ${canvasId}, ${verifyJobId}, 'job', 'verify', ${sql.json({ type: 'verify_finding' })}, 'succeeded', NULL, now() - interval '3 minutes'),
+          (${hubNodeId}, ${canvasId}, ${exactHubJobId}, 'job', 'hub', ${sql.json({ type: 'hub_reason' })}, 'succeeded', NULL, now() - interval '2 minutes'),
+          (${pendingIntentNodeId}, ${canvasId}, ${pendingIntentJobId}, 'intent', 'pending follow-up intent', ${sql.json({ role: 'analyze' })}, 'pending', NULL, now()),
+          (${unrelatedFactNodeId}, ${canvasId}, ${sourceJobId}, 'fact', 'unrelated source fact', ${sql.json({ description: 'must stay outside the trace' })}, 'verified', 'verified', now() - interval '1 minute')`;
       const edgeRows = await sql`
         INSERT INTO canvas_edges (canvas_id, from_node_id, to_node_id, edge_type)
         VALUES

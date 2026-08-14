@@ -131,8 +131,8 @@ if (!testDatabaseUrl) {
       );
 
       const [validResult] = await sql<{ id: string }[]>`
-        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
-        VALUES (${canvasId}, 'fact', 'valid fact', 'open', ${sql.json({})})
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json, verification_status)
+        VALUES (${canvasId}, 'fact', 'valid fact', 'open', ${sql.json({})}, 'unverified')
         RETURNING id`;
       const validEventId = randomUUID();
       const accepted = await ingestEvent(jobId, {
@@ -147,12 +147,12 @@ if (!testDatabaseUrl) {
       assert.equal(eventCount, 1);
 
       const [factOne] = await sql<{ id: string }[]>`
-        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
-        VALUES (${canvasId}, 'fact', 'fact one', 'open', ${sql.json({})})
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json, verification_status)
+        VALUES (${canvasId}, 'fact', 'fact one', 'open', ${sql.json({})}, 'unverified')
         RETURNING id`;
       const [factTwo] = await sql<{ id: string }[]>`
-        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
-        VALUES (${canvasId}, 'fact', 'fact two', 'open', ${sql.json({})})
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json, verification_status)
+        VALUES (${canvasId}, 'fact', 'fact two', 'open', ${sql.json({})}, 'unverified')
         RETURNING id`;
       const completePayload = {
         complete: {

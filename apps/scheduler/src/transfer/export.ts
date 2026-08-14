@@ -21,7 +21,7 @@ import {
   type Manifest,
   type PackFile,
 } from "./pack.js";
-import { resolveModules, type ModuleKey, type Preset } from "./modules.js";
+import { FORMAT, FORMAT_VERSION, moduleVersion, resolveModules, type ModuleKey, type Preset } from "./modules.js";
 import { ACTIVE_JOB_STATUSES, filterEnvVars, sanitizeAgentSnapshot } from "./sanitize.js";
 
 function sha256Hex(s: string): string {
@@ -50,8 +50,8 @@ export interface ProjectManifestOptions {
 /** Build the project export manifest with the current Scheduler schema baseline. */
 export function buildProjectManifest(options: ProjectManifestOptions): Manifest {
   return {
-    format: "deepsonar-project-export",
-    format_version: "1.0",
+    format: FORMAT,
+    format_version: FORMAT_VERSION,
     created_at: new Date().toISOString(),
     source: buildManifestSource({
       app_version: "0.0.1",
@@ -64,7 +64,7 @@ export function buildProjectManifest(options: ProjectManifestOptions): Manifest 
     counts: options.counts,
     compatibility: {
       minimum_importer_version: "1.0",
-      module_versions: Object.fromEntries(options.modules.map((m) => [m, 1])),
+      module_versions: Object.fromEntries(options.modules.map((m) => [m, moduleVersion(m)])),
     },
     secrets: { mode: options.credentialsMode === "excluded" ? "excluded" : "metadata", algorithm: null },
     signature: null,
@@ -457,6 +457,7 @@ async function collectTasks(
           w: n.w,
           h: n.h,
           status: n.status,
+          verification_status: n.verification_status,
         })),
       ),
     });

@@ -48,6 +48,7 @@ const TABS: { key: Tab; label: string }[] = [
 
 /** 节点详情侧栏：概览 / 实时流（WS）/ 事件时间线 */
 export function Sidebar({
+  canvasId,
   node,
   onClose,
   onTraceFinding,
@@ -55,6 +56,7 @@ export function Sidebar({
   messages = [],
   onSendMessage,
 }: {
+  canvasId: string;
   node: CanvasNode;
   onClose: () => void;
   onTraceFinding?: () => void;
@@ -107,7 +109,7 @@ export function Sidebar({
   const setVerification = async (status: "verified" | "rejected") => {
     setVerifyBusy(true);
     try {
-      await api.setFactVerification(node.id, status);
+      await api.setFactVerification(canvasId, node.id, status);
       onClose();
     } catch {
       // 失败由画布轮询呈现

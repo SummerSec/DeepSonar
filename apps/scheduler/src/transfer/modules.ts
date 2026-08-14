@@ -5,6 +5,11 @@
 export const FORMAT = "deepsonar-project-export";
 export const FORMAT_VERSION = "1.0";
 
+/** 各模块逻辑数据契约版本；tasks v2 增加 Fact verification_status。 */
+export function moduleVersion(module: ModuleKey): number {
+  return module === "tasks" ? 2 : 1;
+}
+
 export type ModuleKey =
   | "project"
   | "rules"

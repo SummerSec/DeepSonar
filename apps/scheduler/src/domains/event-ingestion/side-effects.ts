@@ -552,6 +552,7 @@ export function createEventIngestionSideEffectApplication(
         x: ((intentNode?.x as number) ?? 100) + 340,
         y: ((intentNode?.y as number) ?? 100) + count * 140,
         status: "open",
+        verification_status: "unverified",
       })}
       RETURNING id`;
       // 'to' 边：意图 → 产出的事实（Cairn Intent.to）
@@ -867,7 +868,38 @@ export function createEventIngestionSideEffectApplication(
     }
 
     if (type === "human") {
-      const p = validatedPayload as { reason: string };
+      const p = validatedPayload as HumanPayload;
+      const canvasId = (job.canvas_id as string | null) ?? null;
+      if (p.subject.type === "finding") {
+        if (!canvasId) {
+          throw new ControlInputError("invalid_human", "Finding 人工请求必须绑定当前 Job 的画布。", "subject.finding_id");
+        }
+        const [finding] = await tx`
+          SELECT f.id, f.severity
+          FROM findings f
+          JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+          JOIN canvas_nodes source ON source.id = f.node_id
+            AND source.canvas_id = ${canvasId}
+            AND source.node_type = 'finding'
+          WHERE f.id = ${p.subject.finding_id}
+            AND f.project_id = ${job.project_id as string}
+            AND origin.canvas_id = ${canvasId}`;
+        if (!finding) {
+          throw new ControlInputError(
+            "invalid_human",
+            "Finding 人工请求只能绑定当前项目、当前画布的 canonical Finding。",
+            "subject.finding_id",
+          );
+        }
+        const rules = await ports.rulesForProject(tx, job.project_id as string);
+        if (!ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, finding.severity)) {
+          throw new ControlInputError(
+            "invalid_human",
+            "该 Finding 低于当前 Verify 最低关注级别，不得以 Finding 阻塞任务。",
+            "subject.finding_id",
+          );
+        }
+      }
       await tx`
       UPDATE jobs SET status = 'waiting_human' WHERE id = ${jobId} AND status = 'running'`;
       const [jobNode] = await tx`
@@ -878,8 +910,8 @@ export function createEventIngestionSideEffectApplication(
           canvas_id: jobNode.canvas_id,
           job_id: jobId,
           node_type: "human",
-          title: p.reason ?? "需要人工介入",
-          body_json: { reason: p.reason } as never,
+          title: p.reason.slice(0, 200),
+          body_json: { reason: p.reason, subject: p.subject } as never,
           x: jobNode.x + 150,
           y: jobNode.y - 160,
           status: "open",

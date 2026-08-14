@@ -25,6 +25,20 @@ test("semantic payloads reject truncated direct content at shared boundaries", (
   assert.equal(HumanPayload.safeParse({ reason: "x" }).success, false);
 });
 
+test("request_human requires one explicit structured subject", () => {
+  assert.equal(HumanPayload.safeParse({
+    reason: "需要人工确认当前风险接受边界。",
+    subject: { type: "finding", finding_id: "00000000-0000-4000-8000-000000000001", subject_revision: "app@abc123" },
+  }).success, true);
+  assert.equal(HumanPayload.safeParse({
+    reason: "需要人工提供隔离测试账号。",
+    subject: { type: "platform_blocker", kind: "credential" },
+  }).success, true);
+  assert.equal(HumanPayload.safeParse({
+    reason: "尝试通过自由文本绕过结构化目标。",
+  }).success, false);
+});
+
 test("semantic tool payloads accept exactly one direct object or payload_file", () => {
   assert.equal(EmitFactPayload.safeParse(fact).success, true);
   assert.equal(EmitFactPayload.safeParse({ payload_file: "fact.json" }).success, true);

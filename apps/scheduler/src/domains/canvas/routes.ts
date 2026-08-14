@@ -17,10 +17,12 @@ import { cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js
 import { buildCanvasDelta, cursorGap, parseCanvasRevision } from "../../canvas-delta.js";
 import { parseCanvasBroadcastLimit } from "./broadcast-contract.js";
 import { createHumanMessage, listHumanMessages } from "./human-messages.js";
+import { registerCanvasFactRoutes } from "./facts.js";
 
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 
 export function registerCanvasRoutes(app: FastifyInstance): void {
+  registerCanvasFactRoutes(app);
   // ---------- 任务画布（§3.2：一任务一画布） ----------
   // 列表：项目下所有任务画布 + rollup 计数
   app.get("/projects/:id/canvases", async (req) => {
@@ -142,6 +144,22 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
               'severity', body_json->>'severity',
               'role', body_json->>'role',
               'type', body_json->>'type',
+              'reason', CASE WHEN node_type = 'human' THEN LEFT(COALESCE(body_json->>'reason', ''), 500) ELSE NULL END,
+              'finding_id', CASE WHEN node_type = 'human' THEN COALESCE(body_json->'subject'->>'finding_id', body_json->>'finding_id') ELSE NULL END,
+              'subject', CASE
+                WHEN node_type <> 'human' THEN NULL
+                WHEN jsonb_typeof(body_json->'subject') = 'object' AND body_json->'subject'->>'type' = 'finding' THEN
+                  jsonb_build_object(
+                    'type', 'finding',
+                    'finding_id', body_json->'subject'->>'finding_id',
+                    'subject_revision', LEFT(COALESCE(body_json->'subject'->>'subject_revision', ''), 500)
+                  )
+                WHEN jsonb_typeof(body_json->'subject') = 'object' AND body_json->'subject'->>'type' = 'platform_blocker' THEN
+                  jsonb_build_object('type', 'platform_blocker', 'kind', body_json->'subject'->>'kind')
+                WHEN body_json ? 'finding_id' THEN
+                  jsonb_build_object('type', 'finding', 'finding_id', body_json->>'finding_id', 'subject_revision', NULL)
+                ELSE NULL
+              END,
               'last_progress', CASE
                 WHEN jsonb_typeof(body_json->'last_progress') = 'object' THEN jsonb_build_object(
                   'message', LEFT(COALESCE(body_json->'last_progress'->>'message', ''), 240),
@@ -152,7 +170,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
               THEN jsonb_build_object('ui_color', lower(body_json->>'ui_color'))
               ELSE '{}'::jsonb
             END AS body_json,
-            x, y, w, h, status, body_json->>'verification_status' AS verification_status, job_id, updated_at
+            x, y, w, h, status, verification_status, job_id, updated_at
           FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
         tx`
           SELECT id, from_node_id, to_node_id, edge_type
@@ -302,7 +320,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const { id, nodeId } = req.params as { id: string; nodeId: string };
     const [node] = await sql`
       SELECT id, canvas_id, node_type, title, body_json, x, y, w, h, status,
-             body_json->>'verification_status' AS verification_status, job_id, updated_at
+             verification_status, job_id, updated_at
       FROM canvas_nodes WHERE id = ${nodeId} AND canvas_id = ${id}`;
     if (!node) return reply.code(404).send({ error: "canvas node not found", error_code: "NODE_NOT_FOUND" });
     return { node, projection: "L1" };

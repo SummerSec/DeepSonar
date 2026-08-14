@@ -103,7 +103,7 @@ export function decodeCursor(raw: unknown, kind: string): CursorPayload | null {
     // malformed-but-decodable cursors become a deterministic 400 rather than
     // a database cast error (500).
     if (!canonicalTimestamp(value.created_at)) return null;
-    if (kind === "jobs" || kind === "findings") {
+    if (kind === "jobs" || kind === "findings" || kind === "facts") {
       if (typeof value.id !== "string" || !UUID_RE.test(value.id)) return null;
       return value as CursorPayload;
     }

@@ -24,8 +24,8 @@ try {
   });
 
   await sql`
-    INSERT INTO canvas_nodes (canvas_id, node_type, title, body_json, status)
-    VALUES (${canvasId}, 'fact', '增量事实', ${{ description: "来自其他 Worker 的证据" } as never}, 'open')`;
+    INSERT INTO canvas_nodes (canvas_id, node_type, title, body_json, status, verification_status)
+    VALUES (${canvasId}, 'fact', '增量事实', ${{ description: "来自其他 Worker 的证据" } as never}, 'open', 'unverified')`;
 
   const message = await Promise.race([
     messageReceived,

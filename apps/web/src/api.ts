@@ -67,7 +67,7 @@ export interface CanvasNode {
   h: number;
   status: string | null;
   /** fact 节点的可信状态（独立于 status 执行状态）：unverified/verifying/verified/rejected/needs_human */
-  verification_status: string | null;
+  verification_status: FactVerificationStatus | null;
   job_id: string | null;
   updated_at: string;
 }
@@ -214,6 +214,61 @@ export interface PageEnvelope<T> {
   live: boolean;
   truncated?: boolean;
   gap?: boolean;
+}
+
+export type FactVerificationStatus = "unverified" | "verifying" | "verified" | "rejected" | "needs_human";
+
+export interface FactVerification {
+  finding_id: string;
+  evidence_kind: "review" | "test";
+  outcome: "supports" | "refutes" | "inconclusive";
+  subject_revision: string;
+}
+
+export interface FactSummary {
+  id: string;
+  canvas_id: string;
+  title: string;
+  description: string;
+  verification_status: FactVerificationStatus;
+  job_id: string | null;
+  created_at: string;
+  updated_at: string;
+  verification: FactVerification | null;
+  finding: {
+    id: string;
+    node_id: string | null;
+    title: string;
+    severity: string | null;
+    verify_status: string;
+  } | null;
+  job: {
+    id: string;
+    type: string;
+    status: string;
+  } | null;
+}
+
+export interface FactTraceNode {
+  id: string;
+  node_type: string;
+  title: string;
+  status: string | null;
+  job_id: string | null;
+}
+
+export interface FactTraceEdge {
+  id: string;
+  from_node_id: string;
+  to_node_id: string;
+  edge_type: string;
+}
+
+export interface FactDetail {
+  fact: Omit<FactSummary, "finding" | "job"> & { body_json: Record<string, unknown> };
+  finding: FactSummary["finding"];
+  job: FactSummary["job"];
+  trace: { nodes: FactTraceNode[]; edges: FactTraceEdge[] };
 }
 
 /** 任务画布的生命周期聚合（由调度器按 Job 时间戳计算）。 */
@@ -1677,6 +1732,38 @@ export const api = {
   },
   canvasNode: (canvasId: string, nodeId: string) =>
     get<{ node: CanvasNode; projection: "L1" }>(`/canvases/${canvasId}/nodes/${nodeId}`),
+  factsPage: (
+    canvasId: string,
+    opts?: {
+      verification_status?: FactVerificationStatus;
+      evidence_kind?: FactVerification["evidence_kind"];
+      finding_id?: string;
+      job_id?: string;
+      after?: string | null;
+      limit?: number;
+    },
+  ) => get<PageEnvelope<FactSummary>>(
+    `/canvases/${canvasId}/facts${qs({
+      verification_status: opts?.verification_status,
+      evidence_kind: opts?.evidence_kind,
+      finding_id: opts?.finding_id,
+      job_id: opts?.job_id,
+      after: opts?.after,
+      limit: opts?.limit ? String(opts.limit) : undefined,
+    })}`,
+  ),
+  fact: (canvasId: string, nodeId: string) =>
+    get<FactDetail>(`/canvases/${canvasId}/facts/${nodeId}`),
+  setFactVerification: (
+    canvasId: string,
+    nodeId: string,
+    status: "verified" | "rejected" | "needs_human",
+    note?: string,
+  ) => send<{ fact: FactSummary }>(
+    "PATCH",
+    `/canvases/${canvasId}/facts/${nodeId}/verification`,
+    { status, note },
+  ),
   canvasConvergence: (canvasId: string) =>
     get<{
       canvas_id: string;
@@ -1804,6 +1891,21 @@ export const api = {
   ) => send<FindingSummary>("PATCH", `/findings/${id}/disposition`, body),
   setFindingNeedsHuman: (id: string, body?: { verify_status: "needs_human"; reason?: string }) =>
     send<FindingSummary>("PATCH", `/findings/${id}/verify-status`, body ?? { verify_status: "needs_human" }),
+  forceFindingVerify: (id: string, body?: { reason?: string }) =>
+    send<{
+      finding_id: string;
+      verify_job_id: string;
+      round_id: string;
+      attempt: number;
+      resumed_job_id: string | null;
+    }>("POST", `/findings/${id}/verify`, body ?? {}),
+  createFindingEvidenceJob: (id: string, role: "review" | "test") =>
+    send<{
+      finding_id: string;
+      job_id: string;
+      role: "review" | "test";
+      resumed_job_id: string | null;
+    }>("POST", `/findings/${id}/evidence-jobs`, { role }),
   addFindingComment: (id: string, body: string, request_hub = true) =>
     send<
       FindingComment & {
@@ -1878,13 +1980,6 @@ export const api = {
     downloadAuthenticatedFile(
       `/reports/${encodeURIComponent(reportId)}/${format}`,
       `report-${safeDownloadFilename(reportId, "unknown")}.${format === "markdown" ? "md" : "sarif"}`,
-    ),
-  /** 人工处理 Fact 验证状态（needs_human 的人工确认/明确排除） */
-  setFactVerification: (nodeId: string, status: "verified" | "rejected" | "needs_human", note?: string) =>
-    send<{ id: string; canvas_id: string; title: string }>(
-      "PATCH",
-      `/canvas-nodes/${nodeId}/verification`,
-      { status, note },
     ),
   projectRoles: (projectId: string) => get<ProjectRole[]>(`/projects/${projectId}/roles`),
   /** 项目数据包导出 */

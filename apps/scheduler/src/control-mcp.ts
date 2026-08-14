@@ -119,7 +119,7 @@ const descriptions = {
   mark_job_done: requireDoneVerdict
     ? "【Verify 专用】结束本 Job。必须同时传 summary（≥8 非空白）和 verdict（confirmed|rework|needs_human；兼容 false_positive）。仅传 summary 会被拒绝。rework 时建议附 missing_evidence。每个 Job 最后调用一次。"
     : "提交本 Job 的最终摘要，至少 8 个非空白字符；非 verify 角色不得传 verdict。每个 Job 最后调用一次。",
-  request_human: "提交至少 8 个非空白字符的人工介入理由；只有缺少必要授权、凭据或高风险操作必须人工确认时调用。",
+  request_human: "提交人工介入请求；reason 为 8-2000 个字符，subject 必须明确为当前 canonical Finding（finding_id + subject_revision）或受限 platform_blocker（authorization|credential|high_risk_action|business_decision）。服务端不从 reason 推断目标。",
   list_shared_assets: "分页列出本 Job 创建时冻结的只读共享资产目录。没有单独的下载工具：用返回的 mount_path/read_path 以普通文件工具直接读取（Scheduler 已从本地或 S3 兼容存储预挂载）。可按 scope 或逻辑 key 前缀过滤。",
   publish_shared_asset: "提议把 /workspace 下普通工作文件发布为项目或当前 Finding 的不可变共享资产版本。Scheduler 经 BlobStore 落库（本地或任意 S3 兼容存储）；禁止发布平台运行目录或 CLI 用户/配置目录中的内容。",
   ack_human_message: "明确确认当前 Job 已接收并纳入处理一条人工消息。message_id 必须来自注入消息；普通文本回复不会确认。可选 summary 最长 500 字符。",
@@ -133,7 +133,7 @@ const descriptionCautions = {
   mark_job_done: requireDoneVerdict
     ? "Verify 必须带 verdict；示例 {\"summary\":\"…\",\"verdict\":\"confirmed\"}。缺少 verdict 会 isError，请立即重试并补上。"
     : "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；结束时只调用一次，首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，成功后不得重试。",
-  request_human: "仅在必要授权、凭据或高风险审批阻塞时调用一次；调用后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
+  request_human: "仅在必要授权、凭据、高风险审批或业务判断阻塞时调用一次；必须显式传结构化 subject，调用后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
   list_shared_assets: "用于发现本 Job 冻结的只读资产，再按返回路径读取；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取，可安全重复查询。",
   publish_shared_asset: "只发布普通 /workspace 中可复用的工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
   ack_human_message: "仅在实际收到对应人工消息后调用；成功后该消息进入 acknowledged。不要猜测 message_id，不得确认其他 Job 的消息。仅在返回 isError 后重试。",

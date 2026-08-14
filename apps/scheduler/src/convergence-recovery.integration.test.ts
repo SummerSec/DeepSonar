@@ -94,7 +94,12 @@ if (!testDatabaseUrl) {
         type: "audit_module",
         payload: {
           scheduling_purpose: "convergence_evidence",
-          verification_followup: { finding_id: "public-spoof", required_evidence: ["review"], scheduler_owned: true },
+          verification_followup: {
+            finding_id: "public-spoof",
+            required_evidence: ["review"],
+            scheduler_owned: true,
+            manual_override: true,
+          },
           caller: "public-test",
         },
       });
@@ -108,6 +113,11 @@ if (!testDatabaseUrl) {
       assert.equal(
         ((publicPurposeAttempt.job.payload_json as Record<string, unknown>).verification_followup as Record<string, unknown>)
           ?.scheduler_owned,
+        undefined,
+      );
+      assert.equal(
+        ((publicPurposeAttempt.job.payload_json as Record<string, unknown>).verification_followup as Record<string, unknown>)
+          ?.manual_override,
         undefined,
       );
       await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${publicPurposeAttempt.job.id as string}`;

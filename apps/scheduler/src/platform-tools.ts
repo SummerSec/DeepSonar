@@ -53,9 +53,12 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   request_human: [
     "### `request_human` — 请求人工介入并结束本轮",
-    "- 参数：`reason`（必填，至少 8 个非空白字符，最多 2000），必须说明阻塞点、已完成工作和需要人工提供的具体内容或授权。",
-    "- 只在缺少必要授权/凭据、必须操作生产环境或动作风险超出任务授权时调用。调用后停止执行，不再调用 `mark_job_done`。",
-    '- 示例：`{"reason":"验证需要生产租户的只读测试账号；已完成静态路径确认，请人工提供隔离账号或批准在测试环境复现。"}`',
+    "- 参数：`reason`（必填，8-2000 字符）与结构化 `subject`（必填）；服务端不会从 reason 推断目标。",
+    "- Finding 阻塞：`subject={type:\"finding\",finding_id,subject_revision}`；只允许当前项目、当前画布且未被最低严重度策略豁免的 canonical Finding。",
+    "- 平台阻塞：`subject={type:\"platform_blocker\",kind}`；kind 只能是 authorization|credential|high_risk_action|business_decision。",
+    "- 调用后停止执行，不再调用 `mark_job_done`。",
+    '- Finding 示例：`{"reason":"需要人工确认风险接受边界和目标版本。","subject":{"type":"finding","finding_id":"<uuid>","subject_revision":"app@abc123"}}`',
+    '- 平台阻塞示例：`{"reason":"缺少隔离测试账号，无法继续动态验证。","subject":{"type":"platform_blocker","kind":"credential"}}`',
   ].join("\n"),
   list_shared_assets: [
     "### `list_shared_assets` — 查询本 Job 冻结的只读共享资产目录",

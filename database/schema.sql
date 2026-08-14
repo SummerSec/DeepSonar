@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 30);
+INSERT INTO schema_meta (id, version) VALUES ('global', 31);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -533,10 +533,22 @@ CREATE TABLE canvas_nodes (
   w real NOT NULL DEFAULT 240,
   h real NOT NULL DEFAULT 120,
   status text,
+  verification_status text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT canvas_nodes_verification_status_check CHECK (
+    verification_status IS NULL
+    OR verification_status IN ('unverified','verifying','verified','rejected','needs_human')
+  ),
+  CONSTRAINT canvas_nodes_fact_verification_status_check CHECK (
+    (node_type = 'fact' AND verification_status IS NOT NULL)
+    OR (node_type <> 'fact' AND verification_status IS NULL)
+  )
 );
 CREATE INDEX canvas_nodes_canvas_idx ON canvas_nodes (canvas_id);
+CREATE INDEX canvas_nodes_facts_keyset_idx
+  ON canvas_nodes (canvas_id, created_at DESC, id DESC)
+  WHERE node_type = 'fact';
 CREATE UNIQUE INDEX canvas_nodes_root_uniq
   ON canvas_nodes (canvas_id) WHERE node_type = 'root';
 
@@ -1230,7 +1242,29 @@ BEGIN
       'severity', body->>'severity',
       'role', body->>'role',
       'type', body->>'type',
-      'last_progress', progress
+      'last_progress', progress,
+      'reason', CASE
+        WHEN p_node->>'node_type' = 'human' THEN left(COALESCE(body->>'reason', ''), 500)
+        ELSE NULL
+      END,
+      'finding_id', CASE
+        WHEN p_node->>'node_type' = 'human' THEN COALESCE(body->'subject'->>'finding_id', body->>'finding_id')
+        ELSE NULL
+      END,
+      'subject', CASE
+        WHEN p_node->>'node_type' <> 'human' THEN NULL
+        WHEN jsonb_typeof(body->'subject') = 'object' AND body->'subject'->>'type' = 'finding' THEN
+          jsonb_build_object(
+            'type', 'finding',
+            'finding_id', body->'subject'->>'finding_id',
+            'subject_revision', left(COALESCE(body->'subject'->>'subject_revision', ''), 500)
+          )
+        WHEN jsonb_typeof(body->'subject') = 'object' AND body->'subject'->>'type' = 'platform_blocker' THEN
+          jsonb_build_object('type', 'platform_blocker', 'kind', body->'subject'->>'kind')
+        WHEN body ? 'finding_id' THEN
+          jsonb_build_object('type', 'finding', 'finding_id', body->>'finding_id', 'subject_revision', NULL)
+        ELSE NULL
+      END
     ) || CASE
       WHEN body->>'ui_color' ~ '^#[0-9A-Fa-f]{6}$'
       THEN jsonb_build_object('ui_color', lower(body->>'ui_color'))
@@ -1241,7 +1275,7 @@ BEGIN
     'w', COALESCE((p_node->>'w')::real, 240),
     'h', COALESCE((p_node->>'h')::real, 120),
     'status', p_node->'status',
-    'verification_status', body->>'verification_status',
+    'verification_status', p_node->'verification_status',
     'job_id', p_node->'job_id',
     'updated_at', p_node->'updated_at'
   );
@@ -1412,7 +1446,7 @@ JOIN (VALUES
 - 阶段进展：调用 `emit_progress`，例如 `{"message":"已确认材料版本，正在提取入口","percent":30}`；可多次调用，不能代替结果上报。
 - 新事实：每得到一个新增原子事实立即调用 `emit_fact`，例如 `{"title":"目标版本为 2.4.1","description":"证据：release.json；来源：工作区制品；未知：是否含私有补丁。"}`；单 Job 最多 100 条。
 - 正常结束：所有事实已提交后只调用一次 `mark_job_done`，例如 `{"summary":"完成材料与版本梳理，提交 4 条事实；仍缺少部署配置。"}`。
-- 人工阻塞：仅缺少必要授权、凭据或必须执行高风险动作时调用 `request_human`，例如 `{"reason":"需要人工提供只读制品访问权；已完成公开材料核对。"}`；调用后停止，不再调用 `mark_job_done`。
+- 人工阻塞：仅缺少必要授权、凭据或必须执行高风险动作时调用 `request_human`，例如 `{"reason":"需要人工提供只读制品访问权；已完成公开材料核对。","subject":{"type":"platform_blocker","kind":"authorization"}}`；调用后停止，不再调用 `mark_job_done`。`subject` 必填；目标为 canonical Finding 时改用 `{"type":"finding","finding_id":"<uuid>","subject_revision":"<版本或提交>"}`。
 - 通过静态 `deepsonar-control` Skill 进行 capabilities/OpenAPI discovery 并调用 Job-scoped HTTP API；由 Agent 使用自身可用的 HTTP 工具直接发起请求，Runtime Adapter 只负责驱动 CLI 协议。禁止调用同名 MCP、写控制文件、猜测管理路由或在 API 失败后回退到 MCP/其他控制通道。API 返回 `accepted` 仅表示 Scheduler 已接收输入，仍会重验并记账；HTTP 错误始终带稳定 `error_code` 和可读消息，修正请求后方可重试，不得把失败调用当作已上报。
 $instructions$),
   ('analyze', $instructions$
@@ -1433,7 +1467,7 @@ $instructions$),
 - 用 `emit_progress({"message":"正在追踪输入到敏感操作的数据流","percent":40})` 增量报告阶段；percent 可省略。
 - 每个新增分析结论单独调用 `emit_fact({"title":"结论标题","description":"证据、推理链、反例检查、未知项"})`，不要把多条事实塞进最终摘要；单 Job 最多 100 条。
 - 正常收尾只调用一次 `mark_job_done({"summary":"已提交哪些事实、覆盖范围和剩余缺口"})`。
-- 只有人工权限/凭据或高风险动作阻塞时调用 `request_human({"reason":"阻塞点、已完成工作、所需人工动作"})` 并停止，不再调用 `mark_job_done`。
+- 只有人工权限/凭据或高风险动作阻塞时调用 `request_human({"reason":"阻塞点、已完成工作、所需人工动作","subject":{"type":"platform_blocker","kind":"authorization"}})` 并停止，不再调用 `mark_job_done`。`subject` 必填；不得从 reason 推断 Finding。
 - 通过静态 `deepsonar-control` Skill 进行 capabilities/OpenAPI discovery 并调用 Job-scoped HTTP API；由 Agent 使用自身可用的 HTTP 工具直接发起请求，Runtime Adapter 只负责驱动 CLI 协议。禁止调用同名 MCP、写控制文件、猜测管理路由或在 API 失败后回退到 MCP/其他控制通道。API 返回 `accepted` 仅表示 Scheduler 已接收输入，仍会重验并记账；HTTP 错误始终带稳定 `error_code` 和可读消息，修正请求后方可重试，不得把失败调用当作已上报。
 $instructions$),
   ('review', $instructions$
@@ -1459,7 +1493,7 @@ $instructions$),
   `{"title":"独立复核：权限前提成立","description":"方法与证据摘要","verification":{"finding_id":"<uuid>","evidence_kind":"review","outcome":"supports","subject_revision":"app@commit或版本","steps":["阅读入口","追踪鉴权"],"expected":"未授权应拒绝","actual":"鉴权可被绕过","limitations":[]}}`
 - `evidence_kind` 固定为 `review`；`outcome` 为 `supports|refutes|inconclusive`；`subject_revision` 必填。无绑定 finding 时 verification 会被忽略，只当普通 fact。
 - 完成时只调用一次 `mark_job_done({"summary":"复核范围、已提交事实/证据和未解决问题"})`。
-- 只有需要人工权限、凭据或高风险操作时调用 `request_human` 并停止。
+- 只有需要人工权限、凭据或高风险操作时调用 `request_human` 并停止，参数必须同时包含 `reason` 与 `subject`；Finding 阻塞使用 `{"type":"finding","finding_id":"<uuid>","subject_revision":"<版本或提交>"}`，平台阻塞使用 `{"type":"platform_blocker","kind":"authorization|credential|high_risk_action|business_decision"}`。
 - 通过静态 `deepsonar-control` Skill 进行 capabilities/OpenAPI discovery 并调用 Job-scoped HTTP API；由 Agent 使用自身可用的 HTTP 工具直接发起请求，Runtime Adapter 只负责驱动 CLI 协议。禁止调用同名 MCP、写控制文件、猜测管理路由或在 API 失败后回退到 MCP/其他控制通道。API 返回 `accepted` 仅表示 Scheduler 已接收输入，仍会重验并记账；HTTP 错误始终带稳定 `error_code` 和可读消息，修正请求后方可重试，不得把失败调用当作已上报。
 $instructions$),
   ('test', $instructions$
@@ -1489,7 +1523,7 @@ Scheduler 会为 Test Job 冻结可信的预构建运行时。开始动态测试
   `{"title":"实测：未授权读取可复现","description":"步骤与响应摘要","verification":{"finding_id":"<uuid>","evidence_kind":"test","outcome":"supports","subject_revision":"app@v1.2.3","environment":"local-docker","steps":["构造请求","发送","观察响应"],"expected":"拒绝或空数据","actual":"返回其他租户记录","artifact_refs":[{"uri":"workspace/poc-output.txt"}]}}`
 - test 证据硬门字段：`subject_revision`、`steps`、`expected`、以及 `actual` 或 `artifact_refs`；缺任一字段不计为合格确认证据。
 - 全部测试事实提交后只调用一次 `mark_job_done({"summary":"执行项、结论、未执行项和原因"})`。
-- 需要生产授权、真实凭据或高风险动作时调用 `request_human` 并停止。
+- 需要生产授权、真实凭据或高风险动作时调用 `request_human` 并停止，并显式传 `subject`；Finding 阻塞使用 finding_id + subject_revision，平台阻塞使用受限的 platform_blocker kind，不得只传 reason。
 - 通过静态 `deepsonar-control` Skill 进行 capabilities/OpenAPI discovery 并调用 Job-scoped HTTP API；由 Agent 使用自身可用的 HTTP 工具直接发起请求，Runtime Adapter 只负责驱动 CLI 协议。禁止调用同名 MCP、写控制文件、猜测管理路由或在 API 失败后回退到 MCP/其他控制通道。API 返回 `accepted` 仅表示 Scheduler 已接收输入，仍会重验并记账；HTTP 错误始终带稳定 `error_code` 和可读消息，修正请求后方可重试，不得把失败调用当作已上报。
 $instructions$),
   ('code', $instructions$
@@ -1510,7 +1544,7 @@ $instructions$),
 - 用 `emit_progress({"message":"补丁已完成，正在执行类型检查","percent":70})` 报告关键阶段。
 - 每个需要画布保留的实现事实调用 `emit_fact({"title":"实现或验证事实","description":"文件、关键 diff、命令、结果和未验证项"})`；单 Job 最多 100 条。
 - 正常结束只调用一次 `mark_job_done({"summary":"修改文件、行为变化、验证结果及工作区销毁后的复现方法"})`。
-- 缺少写权限、部署授权、密钥或必须执行高风险操作时调用 `request_human({"reason":"阻塞点、当前补丁状态、所需人工动作"})` 并停止。
+- 缺少写权限、部署授权、密钥或必须执行高风险操作时调用 `request_human({"reason":"阻塞点、当前补丁状态、所需人工动作","subject":{"type":"platform_blocker","kind":"authorization"}})` 并停止；凭据阻塞应将 kind 改为 `credential`。
 - 通过静态 `deepsonar-control` Skill 进行 capabilities/OpenAPI discovery 并调用 Job-scoped HTTP API；由 Agent 使用自身可用的 HTTP 工具直接发起请求，Runtime Adapter 只负责驱动 CLI 协议。禁止调用同名 MCP、写控制文件、猜测管理路由或在 API 失败后回退到 MCP/其他控制通道。API 返回 `accepted` 仅表示 Scheduler 已接收输入，仍会重验并记账；HTTP 错误始终带稳定 `error_code` 和可读消息，修正请求后方可重试，不得把失败调用当作已上报。
 $instructions$),
   ('audit', $instructions$
@@ -1532,7 +1566,7 @@ $instructions$),
 - 用 `emit_progress({"message":"已完成攻击面枚举，正在验证高风险入口","percent":45})` 上报阶段。
 - 每个证据充分的安全问题立即调用 `emit_finding`：`{"title":"重置令牌可重放","severity":"high","location":"src/auth/reset.ts:88","summary":"触发路径、证据与影响","rule_id":"AUTH-RESET-REPLAY","suggest_verify":true}`。title/severity 必填，严重度仅 `low|medium|high|critical`，单 Job 最多 20 条。**边发现边提交，严禁攒到最后批量补交**——工作区随时可能被回收重启，未提交的结论会全部丢失；行号等细节可以后补，先交证据充分的条目再继续审计。
 - 全部 Finding 已提交后只调用一次 `mark_job_done({"summary":"审计范围、方法、Finding 数量和未覆盖面"})`，不要只在摘要里描述 Finding。
-- 缺少必要授权/凭据或验证动作风险过高时调用 `request_human({"reason":"阻塞点、已有证据和所需人工动作"})` 并停止。
+- 缺少必要授权/凭据或验证动作风险过高时调用 `request_human({"reason":"阻塞点、已有证据和所需人工动作","subject":{"type":"finding","finding_id":"<canonical-finding-uuid>","subject_revision":"<版本或提交>"}})` 并停止；与 Finding 无关的平台阻塞才使用 platform_blocker。
 - 通过静态 `deepsonar-control` Skill 进行 capabilities/OpenAPI discovery 并调用 Job-scoped HTTP API；由 Agent 使用自身可用的 HTTP 工具直接发起请求，Runtime Adapter 只负责驱动 CLI 协议。禁止调用同名 MCP、写控制文件、猜测管理路由或在 API 失败后回退到 MCP/其他控制通道。API 返回 `accepted` 仅表示 Scheduler 已接收输入，仍会重验并记账；HTTP 错误始终带稳定 `error_code` 和可读消息，修正请求后方可重试，不得把失败调用当作已上报。
 $instructions$),
   ('hub_reason', $instructions$
@@ -1569,7 +1603,7 @@ $instructions$),
 - 每轮只调用一次 `submit_hub_decision`，参数严格二选一：完成时 `{"complete":{"from":["<fact-id>"],"description":"由引用节点支持的完成结论"}}`；派发时 `{"intents":[{"from":["<root-or-fact-id>"],"role":"list_available_roles 返回的 name","description":"意图目标","prompt":"给全新 Worker 的完整任务、证据、边界和验收标准；若补证须含 finding_id 与 verification 要求"}]}`。
 - `from` 只能引用本轮画布 root/fact/finding id；role 必须原样命中本轮工具结果；不得同时传 complete 与 intents。
 - 提交决策后只调用一次 `mark_job_done({"summary":"本轮判断依据与派发/完成摘要"})`。
-- 若决策必须依赖人工授权或缺失的关键业务判断，调用 `request_human` 并停止。
+- 若决策必须依赖人工授权或缺失的关键业务判断，调用 `request_human` 并停止；必须显式传 `reason` 与 `subject`，Finding 目标使用 finding_id + subject_revision，非 Finding 业务判断使用 `{"type":"platform_blocker","kind":"business_decision"}`。
 $instructions$),
   ('verify', $instructions$
 ### 长期职责

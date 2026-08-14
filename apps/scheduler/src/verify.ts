@@ -186,6 +186,7 @@ export async function createVerifyRound(
     followupDepth: number;
     priorityBase: number;
     reason?: string;
+    manualOverride?: boolean;
   },
 ): Promise<{ jobId: string; roundId: string; attempt: number } | null> {
   const findingId = opts.finding.id as string;
@@ -193,7 +194,7 @@ export async function createVerifyRound(
   const rules = await rulesForProject(tx as unknown as typeof sql, opts.projectId);
 
   const severity = String(opts.finding.severity ?? "").trim().toLowerCase();
-  if (!isSeverityInVerifyScope(rules.minVerifySeverity, severity)) {
+  if (!opts.manualOverride && !isSeverityInVerifyScope(rules.minVerifySeverity, severity)) {
     await markFindingBelowMinVerifySeverity(tx, findingId, rules.minVerifySeverity);
     return null;
   }
@@ -234,7 +235,7 @@ export async function createVerifyRound(
   // independent evidence is represented explicitly and has no runnable Job.
   // This avoids a pending verify spinning through rework while Hub is waiting
   // for review/test evidence.
-  if (!evidence.qualified && (!openRound || existingRoundIsWaiting)) {
+  if (!opts.manualOverride && !evidence.qualified && (!openRound || existingRoundIsWaiting)) {
     const requirements = {
       ...existingRequirements,
       need_review: true,
@@ -309,6 +310,9 @@ export async function createVerifyRound(
           },
           verification_attempt: nextAttempt,
           reason: opts.reason ?? "auto",
+          ...(opts.manualOverride
+            ? { manual_override: { source: "operator", reason: opts.reason ?? "manual_verify" } }
+            : {}),
         } as never,
         timeout_sec: rules.verifyTimeoutSec,
         followup_depth: opts.followupDepth,
@@ -330,8 +334,9 @@ export async function createVerifyRound(
       need_review: true,
       need_test: true,
       eligibility: "eligible" as VerificationEligibility,
-      missing: [],
+      missing: opts.manualOverride ? evidence.missing : [],
       evidence_signature: signature,
+      ...(opts.manualOverride ? { manual_override: true } : {}),
     };
     const [updated] = await tx`
       UPDATE finding_verification_rounds SET
@@ -352,8 +357,9 @@ export async function createVerifyRound(
           need_review: true,
           need_test: true,
           eligibility: "eligible",
-          missing: [],
+          missing: opts.manualOverride ? evidence.missing : [],
           evidence_signature: signature,
+          ...(opts.manualOverride ? { manual_override: true } : {}),
         } as never,
         evidence_snapshot_json: evidence as never,
       })}

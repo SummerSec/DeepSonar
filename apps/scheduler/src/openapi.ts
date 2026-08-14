@@ -42,6 +42,7 @@ interface Op {
   query?: Record<string, unknown>;
   requiredQuery?: readonly string[];
   responses?: Record<string, unknown>;
+  successStatus?: "200" | "201" | "202";
 }
 
 const ErrorSchema = {
@@ -51,6 +52,64 @@ const ErrorSchema = {
     error_code: { type: "string", description: "稳定机器可读错误代码（若该错误提供）" },
   },
   required: ["error"],
+};
+
+const FactVerificationSchema = {
+  type: "object",
+  nullable: true,
+  additionalProperties: false,
+  required: ["finding_id", "evidence_kind", "outcome", "subject_revision"],
+  properties: {
+    finding_id: { type: "string", format: "uuid" },
+    evidence_kind: { type: "string", enum: ["review", "test"] },
+    outcome: { type: "string", enum: ["supports", "refutes", "inconclusive"] },
+    subject_revision: { type: "string", maxLength: 500 },
+  },
+};
+
+const FactFindingSchema = {
+  type: "object",
+  nullable: true,
+  additionalProperties: false,
+  required: ["id", "node_id", "title", "severity", "verify_status"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    node_id: { type: "string", format: "uuid" },
+    title: { type: "string" },
+    severity: { type: "string", nullable: true },
+    verify_status: { type: "string" },
+  },
+};
+
+const FactJobSchema = {
+  type: "object",
+  nullable: true,
+  additionalProperties: false,
+  required: ["id", "type", "status"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    type: { type: "string" },
+    status: { type: "string" },
+  },
+};
+
+const FactSummarySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "canvas_id", "title", "description", "verification_status", "job_id", "created_at", "updated_at", "verification", "finding", "job"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    canvas_id: { type: "string", format: "uuid" },
+    title: { type: "string" },
+    description: { type: "string", maxLength: 500 },
+    verification_status: { type: "string", enum: ["unverified", "verifying", "verified", "rejected", "needs_human"] },
+    job_id: { type: "string", format: "uuid", nullable: true },
+    created_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
+    verification: FactVerificationSchema,
+    finding: FactFindingSchema,
+    job: FactJobSchema,
+  },
 };
 
 const RuntimeRegistryChannelErrorSchema = {
@@ -395,24 +454,107 @@ const OPS: Op[] = [
     requiredQuery: ["since"],
   },
   { method: "get", path: "/canvases/{id}/nodes/{nodeId}", summary: "画布节点 L1 详情", scope: "tasks:read", tags: ["Tasks"] },
-  { method: "post", path: "/tasks/{canvasId}/resume-session", summary: "恢复会话（继续执行，不删历史）", scope: "jobs:control", tags: ["Tasks"] },
-  { method: "post", path: "/tasks/{canvasId}/retry", summary: "重试任务（清空历史后从意图重跑）", scope: "jobs:control", tags: ["Tasks"] },
+  {
+    method: "get",
+    path: "/canvases/{id}/facts",
+    summary: "画布 Fact 分页列表",
+    description: "按 created_at,id 降序 keyset 分页；Finding 关联仅来自同项目、同画布 canonical Finding 与直接结构化证据边。",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    query: {
+      limit: { type: "integer", minimum: 1, maximum: 50, default: 50 },
+      after: { type: "string", maxLength: 512 },
+      verification_status: { type: "string", enum: ["unverified", "verifying", "verified", "rejected", "needs_human"] },
+      evidence_kind: { type: "string", enum: ["review", "test"] },
+      finding_id: { type: "string", format: "uuid" },
+      job_id: { type: "string", format: "uuid" },
+    },
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["items", "after", "next_cursor", "has_more", "watermark", "live"],
+        properties: {
+          items: { type: "array", items: FactSummarySchema },
+          after: { type: "string", nullable: true },
+          next_cursor: { type: "string", nullable: true },
+          has_more: { type: "boolean" },
+          watermark: { type: "string" },
+          live: { type: "boolean" },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/facts/{nodeId}",
+    summary: "画布 Fact 完整详情与直接证据链路",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["fact", "finding", "job", "trace"],
+        properties: {
+          fact: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "canvas_id", "title", "description", "body_json", "verification_status", "job_id", "created_at", "updated_at", "verification"],
+            properties: {
+              id: { type: "string", format: "uuid" },
+              canvas_id: { type: "string", format: "uuid" },
+              title: { type: "string" },
+              description: { type: "string" },
+              body_json: { type: "object", additionalProperties: true },
+              verification_status: { type: "string", enum: ["unverified", "verifying", "verified", "rejected", "needs_human"] },
+              job_id: { type: "string", format: "uuid", nullable: true },
+              created_at: { type: "string", format: "date-time" },
+              updated_at: { type: "string", format: "date-time" },
+              verification: FactVerificationSchema,
+            },
+          },
+          finding: FactFindingSchema,
+          job: FactJobSchema,
+          trace: {
+            type: "object",
+            additionalProperties: false,
+            required: ["nodes", "edges"],
+            properties: {
+              nodes: { type: "array", maxItems: 101, items: { type: "object", additionalProperties: true } },
+              edges: { type: "array", maxItems: 100, items: { type: "object", additionalProperties: true } },
+            },
+          },
+        },
+      },
+    },
+  },
   {
     method: "patch",
-    path: "/canvas-nodes/{id}/verification",
-    summary: "Fact 人工验证",
+    path: "/canvases/{id}/facts/{nodeId}/verification",
+    summary: "人工更新 Fact 验证态",
     scope: "jobs:control",
     tags: ["Tasks"],
     body: {
       type: "object",
+      additionalProperties: false,
       required: ["status"],
       properties: {
         status: { type: "string", enum: ["verified", "rejected", "needs_human"] },
-        note: { type: "string" },
+        note: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+    },
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["fact"],
+        properties: { fact: FactSummarySchema },
       },
     },
   },
-
+  { method: "post", path: "/tasks/{canvasId}/resume-session", summary: "恢复会话（继续执行，不删历史）", scope: "jobs:control", tags: ["Tasks"] },
+  { method: "post", path: "/tasks/{canvasId}/retry", summary: "重试任务（清空历史后从意图重跑）", scope: "jobs:control", tags: ["Tasks"] },
   // jobs
   {
     method: "post",
@@ -506,6 +648,62 @@ const OPS: Op[] = [
       properties: {
         verify_status: { type: "string", enum: ["needs_human"] },
         reason: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/verify",
+    summary: "人工强制创建下一轮 Verify",
+    description: "显式人工动作可绕过严重度与已有证据门，但不绕过活动 Verify 唯一约束、最大轮次、画布归属和锁序。",
+    scope: "jobs:control",
+    tags: ["Findings"],
+    successStatus: "202",
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: { reason: { type: "string", minLength: 1, maxLength: 2000 } },
+    },
+    responses: {
+      "202": {
+        type: "object",
+        additionalProperties: false,
+        required: ["finding_id", "verify_job_id", "round_id", "attempt", "resumed_job_id"],
+        properties: {
+          finding_id: { type: "string", format: "uuid" },
+          verify_job_id: { type: "string", format: "uuid" },
+          round_id: { type: "string", format: "uuid" },
+          attempt: { type: "integer", minimum: 1 },
+          resumed_job_id: { type: "string", format: "uuid", nullable: true },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/evidence-jobs",
+    summary: "人工创建结构化补证 Job",
+    description: "Scheduler 创建全新的 review/test Job，并冻结 finding_id、runtime snapshot、priority 与 verification_followup。",
+    scope: "jobs:control",
+    tags: ["Findings"],
+    successStatus: "202",
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["role"],
+      properties: { role: { type: "string", enum: ["review", "test"] } },
+    },
+    responses: {
+      "202": {
+        type: "object",
+        additionalProperties: false,
+        required: ["finding_id", "job_id", "role", "resumed_job_id"],
+        properties: {
+          finding_id: { type: "string", format: "uuid" },
+          job_id: { type: "string", format: "uuid" },
+          role: { type: "string", enum: ["review", "test"] },
+          resumed_job_id: { type: "string", format: "uuid", nullable: true },
+        },
       },
     },
   },
@@ -1398,7 +1596,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       })),
     ];
     const declaredResponses = op.responses ?? {};
-    const declaredSuccess = declaredResponses["200"];
+    const successStatus = op.successStatus ?? "200";
+    const declaredSuccess = declaredResponses[successStatus];
     const successResponse = isFullResponse(declaredSuccess)
       ? declaredSuccess
       : {
@@ -1418,13 +1617,13 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       security: op.scope === null ? [] : [{ bearerAuth: [] }],
       "x-deepsonar-scope": op.scope === null ? "exempt" : op.scope,
       responses: {
-        "200": successResponse,
+        [successStatus]: successResponse,
         "400": { description: "参数错误", content: { "application/json": { schema: ErrorSchema } } },
         "401": { description: "未认证", content: { "application/json": { schema: ErrorSchema } } },
         "403": { description: "权限不足", content: { "application/json": { schema: ErrorSchema } } },
         "404": { description: "不存在", content: { "application/json": { schema: ErrorSchema } } },
         "409": { description: "冲突", content: { "application/json": { schema: ErrorSchema } } },
-        ...Object.fromEntries(Object.entries(declaredResponses).filter(([status]) => status !== "200")),
+        ...Object.fromEntries(Object.entries(declaredResponses).filter(([status]) => status !== successStatus)),
       },
     };
     if (op.body) {

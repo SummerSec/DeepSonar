@@ -104,7 +104,10 @@ if (!testDatabaseUrl) {
       const terminalTwo = randomUUID();
       eventIds.push(terminalOne, terminalTwo);
       assert.equal((await app.ingestEvent(jobId, {
-        v: 1, event_id: terminalOne, type: "human", payload: { reason: "operator review" },
+        v: 1, event_id: terminalOne, type: "human", payload: {
+          reason: "operator review",
+          subject: { type: "platform_blocker", kind: "business_decision" },
+        },
       })).deduped, false);
       await assert.rejects(
         app.ingestEvent(jobId, {

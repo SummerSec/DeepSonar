@@ -24,7 +24,10 @@ const STATUS_LABEL: Record<string, string> = {
   orphan: "已失联",
   cancelled: "已取消",
   confirmed: "已确认",
+  unverified: "待验证",
   verifying: "验证中",
+  verified: "已验证",
+  rejected: "已排除",
   false_positive: "已排除",
   needs_human: "待人工",
   // Finding 人工处置

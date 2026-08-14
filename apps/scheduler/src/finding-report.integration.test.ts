@@ -221,7 +221,7 @@ if (!testDatabaseUrl) {
           ${isolatedFindingId}, 1, ${isolatedVerifyJobId}, 'running', ${sql.json({})}, ${sql.json({})}
         )`;
       await sql`
-        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, body_json)
+        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, body_json, verification_status)
         VALUES
           (${canvasId}, ${reviewJobId}, 'fact', 'Independent review', ${sql.json({
             description: "reviewed the finding",
@@ -231,7 +231,7 @@ if (!testDatabaseUrl) {
               outcome: "supports",
               subject_revision: "commit-1",
             },
-          })}),
+          })}, 'unverified'),
           (${canvasId}, ${testJobId}, 'fact', 'Runtime reproduction', ${sql.json({
             description: "reproduced the finding",
             verification: {
@@ -243,7 +243,7 @@ if (!testDatabaseUrl) {
               expected: "request is rejected",
               actual: "request was accepted",
             },
-          })})`;
+          })}, 'unverified')`;
       await sql`
         ALTER TABLE finding_reports
         ADD CONSTRAINT finding_reports_force_failure CHECK (false) NOT VALID`;

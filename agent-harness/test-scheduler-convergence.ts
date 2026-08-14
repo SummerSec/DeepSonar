@@ -84,7 +84,7 @@ async function testConcurrentReverify(): Promise<void> {
   // attributable Fact nodes, otherwise the scheduler correctly keeps the
   // round in waiting_evidence and no Verify job is runnable.
   await sql`
-    INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+    INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json, verification_status)
     VALUES
       (
         ${canvasId}, ${review.id as string}, 'fact', 'review evidence', 'succeeded',
@@ -94,7 +94,7 @@ async function testConcurrentReverify(): Promise<void> {
             evidence_kind: "review",
             outcome: "supports",
           },
-        })}
+        })}, 'unverified'
       ),
       (
         ${canvasId}, ${test.id as string}, 'fact', 'runtime test evidence', 'succeeded',
@@ -108,7 +108,7 @@ async function testConcurrentReverify(): Promise<void> {
             expected: "pass",
             actual: "pass",
           },
-        })}
+        })}, 'unverified'
       )`;
 
   let arrivals = 0;
