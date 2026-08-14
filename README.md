@@ -34,19 +34,21 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 
 - **一任务一画布**（`canvases`，无独立 tasks 表），完整展示决策与执行过程；
 - 新建任务只填标题和内容；Hub / 事件 / 人工评论统一进入调度闭环；
-- Finding 全量进入验证生命周期；confirmed / needs_human 后可生成任务级与 Finding 级报告；
-- Agent 只提案（`emit_*` / `submit_hub_decision` / `mark_job_done`），调度器是唯一副作用执行者；
-- RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场可在控制台管理；
+- Finding 按任务 `minVerifySeverity` 进入自动验证（低于阈值的保留但不占 Verify）；`confirmed` 后生成 Finding 报告，画布收敛后生成任务级报告；
+- **Agent 只提案**：真实 Job 经短期 capability token 调用 Job 级控制 API（`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human` 等）；不注入控制 MCP、失败不回退 MCP；调度器是唯一副作用执行者；
+- 任务详情含画布 / **事实** / Finding / Job / 报告；Finding 与 Fact 均可人工裁决；Session 查看器归一化 Claude 时间线（含画布广播）；
+- RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场与项目镜像策略可在控制台管理；
 - PostgreSQL 为业务真相；Scheduler 启动时对空库套 schema 基线，已有库只校验版本；
 - **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 Agentbox 起真实沙箱。
 
 ## Provider 与 Agent CLI
 
-- `provider` 表示上游协议，仅支持 **Anthropic Messages** 与 **OpenAI Responses**；不内置 Anthropic、Kimi 等厂商预设。
-- `agent_cli` 表示配置方言，当前支持 **Claude Code、Codex、OpenCode**。Credential 保存完整 `settings_config_json`，Job 创建时冻结并原样写入一次性 Agent 沙箱。
+- `provider` 表示上游协议，仅支持 **Anthropic Messages** 与 **OpenAI-compatible**；不内置 Anthropic、Kimi 等厂商预设。
+- `agent_cli` 表示运行时方言，当前治理支持 **Claude Code、Codex、OpenCode、Pi、DSH**（能力与兼容镜像在创建 Job 时校验并冻结到 `agent_snapshot_json`）。Credential 保存完整 `settings_config_json`；Job 只冻结无密钥结构，运行时经 Model Gateway 注入短期 Job token。
+- 五个 CLI 均走 **Job 级 HTTP 控制 API**（`platformControlApi`）；平台注入静态 `deepsonar-control` Skill，说明能力发现与鉴权，不授予额外权限。
 - 设置页可在保存前一键读取模型列表；显式 `allowed_model_ids` 只限制实际生效模型，不会由配置文件中的 model 自动生成白名单。
 - 用户密码、Provider API Key 和完整 CLI 配置不会由管理 API 或 Web 明文回显；已保存密钥仅显示占位状态。
-- 当前 real runtime 仅完整驱动 Claude Code。Codex、OpenCode 及后续更多 CLI 的通用执行适配跟踪见 [Issue #100](https://github.com/SummerSec/DeepSonar/issues/100)。
+- 适配器契约与 Session 归档清单见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)。
 
 ## 一键部署（推荐：拉取已发布镜像）
 
@@ -155,17 +157,21 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100
 ```
 
-默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 为准（现为 v29）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
+默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 为准（现为 **v31**）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
+
+项目镜像策略：`inherit_global`（默认，只认全局 RoleConfig 镜像）或 `project_managed`（项目 `role_runtime_images` 集中绑定；项目 RoleConfig **不接受**独立 `runtime_image_key`）。
 
 ### 官方运行时镜像与语言能力
 
-官方运行时按职责拆包，**镜像选择以 RoleConfig 为准**（Job 创建时冻结 digest），不要用全局 env 指定 CLI 或在沙箱内临时 `apt` 装工具链：
+官方运行时按职责拆包，**镜像选择以项目镜像策略 + 全局/项目映射为准**（Job 创建时冻结不可变 digest），不要用全局 env 指定 CLI 或在沙箱内临时 `apt` 装工具链：
 
 | 镜像 | 默认角色 | 主要能力 | 刻意不含 |
 |------|----------|----------|----------|
 | `deepsonar-base` | explore / analyze / review / code / hub / **verify** | Node 22 slim、git、系统 python3、curl、rg、jq | 多版本语言、JDK、Go、Rust、Maven |
 | `deepsonar-audit` | **audit** | base + Semgrep、Gitleaks、ShellCheck、binutils | 完整应用构建链（如 Maven 起 Spring） |
 | `deepsonar-kali-minimal`（Kali Test） | **test** | 多版本 Python + `uv`、Temurin JDK、Maven、Go、Rust 等 | Kali metapackage/GUI、DinD |
+| `deepsonar-chrome-{audit,test,fuzz}` | Chrome 专项（项目 opt-in） | 静态分析 / Chromium+CDP / 固定 V8 `d8`+libfuzzer | 通用业务审计默认路径 |
+| `deepsonar-openharmony-{audit,test,fuzz}` | OpenHarmony 专项（项目 opt-in） | 对应 OH 审计 / 构建测试 / fuzz 工具链 | 通用业务审计默认路径 |
 
 #### 镜像仓库（中国区 ACR）
 
@@ -178,6 +184,7 @@ crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/<image>:<ve
 | 镜像 | 用途 |
 |------|------|
 | `deepsonar-base` / `deepsonar-audit` / `deepsonar-kali-minimal` | 官方运行时 |
+| `deepsonar-chrome-test` / `-audit` / `-fuzz` | Chrome 专项（项目 opt-in） |
 | `deepsonar-openharmony-test` / `-audit` / `-fuzz` | OpenHarmony 专项（项目 opt-in） |
 | `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` | 平台服务 |
 
@@ -187,6 +194,7 @@ VER=<release-version-without-v>   # 与 GitHub Release 的 vX.Y.Z 对齐
 
 for img in \
   deepsonar-base deepsonar-audit deepsonar-kali-minimal \
+  deepsonar-chrome-test deepsonar-chrome-audit deepsonar-chrome-fuzz \
   deepsonar-openharmony-test deepsonar-openharmony-audit deepsonar-openharmony-fuzz \
   deepsonar-scheduler deepsonar-web deepsonar-image-admission
 do
@@ -263,19 +271,21 @@ DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
 ## 设计约束
 
 - 本地库 = 唯一业务真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者；
-- Agent 只提案；图引用 id 必须是画布 UUID，禁止字段名泄漏（如字面量 `root_id`）；
+- Agent 只提案；控制面默认拒绝（严格 Zod 契约 + Job 状态/角色授权）；图引用 id 必须是画布 UUID，禁止字段名泄漏（如字面量 `root_id`）；
 - 被审计代码与外部事件均为不可信输入；
-- API Token 与模型凭据分离；Job 使用创建时冻结的 snapshot / 镜像 digest；
+- API Token、Job capability token 与模型凭据分离；Job 使用创建时冻结的 snapshot / 镜像 digest；
+- 共享资产经 CAS + 只读 named volume 注入；helper 使用固定 busybox digest，不把业务运行时镜像当拷贝工具；
 - real 模式挂载 Docker Socket，仅限受控主机。
 
 ## 当前事实入口
 
-- [DESIGN.md](DESIGN.md) — as-built 设计摘要与演进索引
+- [DESIGN.md](DESIGN.md) — as-built 设计摘要与演进索引（§11 含已完成能力表）
 - [docs/README.md](docs/README.md) — 专题文档索引（哪些已 as-built、哪些是历史方案）
-- [database/schema.sql](database/schema.sql) — 数据结构唯一基线
+- [CHANGELOG.md](CHANGELOG.md) — 生产变更记录
+- [database/schema.sql](database/schema.sql) — 数据结构唯一基线（与 `SCHEMA_VERSION` 同步 bump）
 - [database/README.md](database/README.md) — schema 启动与重建规则
 - `/api/openapi.json` — 当前 HTTP API 契约
-- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 可选；可能为空，以 DESIGN §11 + 代码为准
+- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 开放项可能很少；未完成能力以 DESIGN §11 + 代码为准（当前刻意暂缓：画布全图 `layout_revision` 权威重算 → [#148](https://github.com/SummerSec/DeepSonar/issues/148)）
 
 ## License
 

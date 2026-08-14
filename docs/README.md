@@ -78,8 +78,14 @@
 | #38 实时流 WS 鉴权 | **已关**；`ws-ticket` + 运行中 stream tail，见 DESIGN §8 |
 | #39 画布 soft-load / delta | **已关**；见 DESIGN §11 |
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
+| #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
+| #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
+| #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |
+| #157 / #158 | **已关**；共享资产孤儿卷回收、busybox helper 预拉、provision admission |
+| #159 / #160 | **已关**；Fact 工作台、Claude Session 时间线归一化（含画布广播） |
 | Agent CLI 钉死版本 | 仓库已更新；**正式沙箱镜像**需 `v*` release 后才含新 CLI |
 | #34 增量 migration | **刻意搁置**；坚持基线 + 重建库 |
+| #148 全图 `layout_revision` | **暂缓设计**；过程真相 A 已 as-built，布局继续服务端落点 + 前端 ELK |
 | 导入导出便携 Secret 加密 / 包签名 | **产品明确不导出明文**；加密包与签名未纳入交付 |
 
 ---
