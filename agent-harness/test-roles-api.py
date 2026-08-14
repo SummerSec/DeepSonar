@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -25,16 +24,27 @@ def expected_hub_enabled() -> bool:
     )
 
 
-def has_two_phase_control_contract(prompt: str) -> bool:
-    """Require the shared two-phase ACK contract used by builtin prompts."""
+def has_job_scoped_http_api_contract(prompt: str) -> bool:
+    """要求内置提示包含 API-only 控制契约。"""
     lowered = prompt.lower()
-    if re.search(r"accepted\s+event", lowered):
+    if any(
+        marker in lowered
+        for marker in (
+            "schema_validated",
+            "pending_scheduler_validation",
+            "accepted event",
+        )
+    ):
         return False
 
     return (
-        "MCP 返回 schema_validated / pending_scheduler_validation 仅表示结构校验阶段状态，"
-        "不代表业务落库成功；Scheduler 仍会二阶段重验与记账。"
-    ) in prompt
+        ("job-scoped control api" in lowered or "job-scoped http api" in lowered)
+        and ("http 工具" in lowered or "http tool" in lowered)
+        and "agent" in lowered
+        and "accepted" in lowered
+        and "禁止调用同名 mcp" in lowered
+        and "api 失败后回退" in lowered
+    )
 
 
 def req(method: str, path: str, body=None, expect: int | None = 200):
@@ -92,9 +102,9 @@ def main() -> None:
         if c.get("role_name") not in {"verify", "report"}
     ]), global_configs
     assert all(
-        has_two_phase_control_contract(c.get("instructions_markdown") or "")
+        has_job_scoped_http_api_contract(c.get("instructions_markdown") or "")
         for c in global_configs
-    ), "每个全局 RoleConfig 都必须说明结构校验不是业务落库成功，且仍需 Scheduler 二阶段"
+    ), "每个全局 RoleConfig 都必须说明 Job-scoped HTTP API-only 控制契约及 accepted 语义"
     assert all(c.get("platform_tools_json") == {} for c in global_configs), global_configs
     by_role = {c["role_name"]: c.get("instructions_markdown") or "" for c in global_configs}
     for role in ("explore", "analyze", "review", "test", "code"):

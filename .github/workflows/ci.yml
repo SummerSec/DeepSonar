@@ -226,7 +226,7 @@ jobs:
           DEEPSONAR_HUB_ENABLED: "true"
         run: pnpm ci:integration:verify-eligibility
 
-      - name: Control MCP protocol smoke
+      - name: Job 控制 API-only 契约冒烟
         run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts
 
       - name: Runtime test policy smoke

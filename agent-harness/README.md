@@ -1,6 +1,6 @@
 # agent-harness — 沙箱镜像与工具约定
 
-ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工具约定」，事件经 agentbox-sdk 控制通道回传（沙箱可断网、零凭据）。
+ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控制约定」。真实 Job 只使用平台注入的静态 `deepsonar-control` Skill 和短期 capability token，语义事件经 Job 级 API 回传（沙箱可断网、零长期凭据）。
 
 ## 官方镜像
 
@@ -43,22 +43,20 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + hooks/MCP 白名单工�
 - 不把完整语言矩阵塞进 base；重型栈（DB/Compose/K8s）用专项镜像或宿主编排，不默认进 Kali metapackage。
 - 证据纪律与矩阵细节见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](../docs/RUNTIME_TEST_TOOLCHAINS.md)。
 
-## 白名单工具注入（§3.4）
+## Job-scoped API 能力（§3.4）
 
-每个 Job 经 agentbox-sdk 动态注入本地 `deepsonar-control` MCP；工具按角色裁剪：
+每个真实 Job 都注入同一份平台内置、不可由 RoleConfig 同名覆盖的静态 `deepsonar-control` Skill。Job 创建时冻结角色允许的 operation，运行时只提供对应的 Job-scoped HTTP API 和短期 capability token：
 
-- `emit_progress` → 调度器 `progress` 事件
-- `emit_fact` → 调度器 `fact` 事件（运行中可多次调用）
-- `emit_finding`（payload = SARIF 子集，见 shared-types FindingPayload）→ `finding` 事件
-- `submit_hub_decision` → 调度器 `hub_decision` 事件
-- `mark_job_done` → `done` 事件
-- `request_human` → `human` 事件
+- Agent 通过自身可用的 HTTP 工具调用 `$DEEPSONAR_API_BASE_URL/agent/capabilities_list` 发现当前 Job 的精确 operation allowlist；需要完整机器可读描述时读取 `$DEEPSONAR_API_BASE_URL/openapi.json`。
+- 语义操作统一调用 `$DEEPSONAR_API_BASE_URL/operations/:operationId`，使用 `Authorization: Bearer $DEEPSONAR_API_TOKEN`、JSON `Content-Type` 和规范 UUID `Idempotency-Key`。
+- `emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human` 等 operation 仍按角色裁剪，分别提交进度、事实、Finding、Hub 决策、完成或人工阻塞提案。
+- API 返回 `accepted` 只表示 Scheduler 已接收输入，仍会按 Job 状态、冻结 operation 和严格 payload 契约重验并记账；HTTP 错误响应按返回的稳定错误码处理，临时错误使用相同幂等键重试。
 
-MCP 只暴露本 Job 获准的控制工具；调度器直接从 Agent CLI 的结构化 `tool_use` 控制流捕获语义事件，不写 Worker 可修改的结果队列，不需要 Scheduler API/数据库凭据，也不受 Worker 目标出网策略影响。沙箱内权限完全开放（`approvalMode: "auto"`），安全边界 = 网络策略 + 一次性容器。
+真实 Job 不注入控制 MCP，不从 CLI 结构化流映射伪造的 MCP tool call，也不在 API 失败后回退其他控制通道；Agent 不持有管理 API、数据库或宿主凭据。沙箱内权限完全开放（`approvalMode: "auto"`），安全边界 = 网络策略 + 一次性容器。
 
 同一画布产生新 Fact/Finding 时，数据库 `NOTIFY` 唤醒调度器；调度器使用 `Agent.attach(...).sendMessage(...)` 给仍在运行的其他 Agent CLI 追加一条增量通知。首次 prompt 仍是完整任务，追加消息只携带提交后的新画布数据。
 
-本地 MCP 协议冒烟：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts`。
+Job 控制 API-only 契约冒烟（文件名保留历史命名）：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts`。
 画布增量消息冒烟（需本地 PostgreSQL）：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-canvas-updates.ts`。
 
 ## CI P0 门禁（`.github/workflows/ci.yml`）
@@ -69,7 +67,7 @@ Chrome/OpenHarmony 专项镜像检查不在核心 workflow 中：分别由 `.git
 
 | 脚本 | 覆盖 |
 |---|---|
-| `test-control-mcp.ts` | 控制 MCP 协议 + 工具说明 |
+| `test-control-mcp.ts` | Job 控制 API-only 契约、静态 Skill、冻结权限与 OpenAPI 投影 |
 | `test-roles-api.py` | 角色注册表 / RoleConfig |
 | `test-hub-loop.py` | Hub→Audit→Finding→Verify→complete |
 | `test-local-project-api.py` | 项目/任务/事件/重试/归档 |
@@ -77,4 +75,4 @@ Chrome/OpenHarmony 专项镜像检查不在核心 workflow 中：分别由 `.git
 | `test-runtime-images-api.py` | 镜像目录、隔离导入、审批门禁、项目启用与 Job digest 冻结 |
 
 环境变量：`DEEPSONAR_BASE`（默认 `http://127.0.0.1:3100`）、`DEEPSONAR_ADMIN_TOKEN`、`DEEPSONAR_HUB_SMOKE_TIMEOUT`。
-本地快捷：`pnpm ci:smoke:mcp` / `ci:smoke:roles` / `ci:smoke:hub` / `ci:smoke:projects` / `ci:smoke:auth`。
+本地快捷：`pnpm ci:smoke:mcp`（历史命令名，现验证 Job 控制 API-only 契约） / `ci:smoke:roles` / `ci:smoke:hub` / `ci:smoke:projects` / `ci:smoke:auth`。
