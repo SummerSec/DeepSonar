@@ -262,7 +262,8 @@ projects
 canvases                              -- 0002 起：一任务一画布
   id, project_id, plane_issue_id, title, target_json, created_at
   -- 唯一约束: (plane_issue_id) WHERE plane_issue_id IS NOT NULL
-  -- 同一 issue 重试复用同一画布；target_json = 自然语言任务 + 冻结的 network_policy.allow_egress
+  -- 同一 issue 重试复用同一画布；target_json 冻结任务内容、网络/Finding 协议及 kind
+  -- compose 另冻结 1–8 条显式选择的 seed_findings 摘要；不增加 tasks/relations 表
 
 jobs
   id, project_id, canvas_id, plane_issue_id, parent_job_id, finding_id,
@@ -413,8 +414,8 @@ Job 事件仍必须经过本摄入硬门。
 
 - `POST /projects`  新建本地项目（plane_project_id 可空；不再预建项目级画布）
 - `GET/PATCH /projects/{id}`、`POST /projects/{id}/archive`  项目详情/改名/归档（归档=软删除，历史保留）
-- `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）
-- `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布，历史保留）
+- `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）；`kind=standard` 禁止种子，`kind=compose` 必须提交同项目 1–8 个当前可代入的 confirmed `seed_finding_ids`
+- `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布）；compose 在 wipe 前重验冻结种子，stale/跨项目/已处置时返回 `COMPOSE_SEEDS_STALE` 且保留现有运行数据
 - `PATCH /jobs/{id}/priority`（仅 pending 可改）
 - `PUT/DELETE /projects/{id}/integrations/plane`、`POST .../plane/sync`  Plane 绑定/解绑/手动补跑
 - `POST /projects/sync`  绑定 Plane 项目（兼容入口；画布随任务认领铸造）
@@ -500,6 +501,8 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 `EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
 
 Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
+compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目、技术态为 `confirmed` 且 disposition 为 `open|accepted|confirmed_vuln`，然后把内容写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。
+
 
 `context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Codex `model_auto_compact_token_limit`、OpenCode 模型 `limit.context`、Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。
 

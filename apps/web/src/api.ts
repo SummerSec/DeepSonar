@@ -14,6 +14,8 @@ import type {
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
 export type { EffectiveFindingProtocol, FindingProtocolConfig } from "@deepsonar/shared-types";
 
+export type TaskKind = "standard" | "compose";
+
 export interface Project {
   id: string;
   /** 可空：NULL = 纯本地项目（Plane 为可选绑定） */
@@ -483,6 +485,7 @@ export interface FindingSummary {
   updated_at?: string;
   project_name?: string;
   canvas_id?: string | null;
+  canvas_title?: string | null;
   has_waiting_human?: boolean;
 }
 
@@ -1634,6 +1637,8 @@ export const api = {
       /** 省略则继承项目设置；服务端在任务创建时冻结。 */
       allow_egress?: boolean;
       finding_protocol?: FindingProtocolConfig;
+      kind?: TaskKind;
+      seed_finding_ids?: string[];
       /** ISO-8601；到点前不领取 Job。与 schedule_beijing_8am 同时给出时本字段优先。 */
       scheduled_start_at?: string;
       /** 下一北京时间 08:00（Asia/Shanghai）开始。 */

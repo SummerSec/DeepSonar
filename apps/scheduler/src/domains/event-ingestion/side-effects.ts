@@ -58,6 +58,7 @@ export interface HubFindingBinding {
   id: string;
   node_id: string;
   severity: unknown;
+  imported?: boolean;
 }
 
 export function resolveHubFindingIntent(
@@ -671,7 +672,7 @@ export function createEventIngestionSideEffectApplication(
       ];
       const findingRows = findingNodeIds.length
         ? (await tx<HubFindingBinding[]>`
-            SELECT f.id, f.node_id, f.severity
+            SELECT f.id, f.node_id, f.severity, false AS imported
             FROM findings f
             JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
             JOIN canvas_nodes source ON source.id = f.node_id
@@ -679,7 +680,19 @@ export function createEventIngestionSideEffectApplication(
               AND source.node_type = 'finding'
             WHERE f.project_id = ${job.project_id as string}
               AND origin.canvas_id = ${canvasId}
-              AND f.node_id = ANY(${findingNodeIds}::uuid[])`) as HubFindingBinding[]
+              AND f.node_id = ANY(${findingNodeIds}::uuid[])
+            UNION ALL
+            SELECT f.id, source.id AS node_id,
+                   COALESCE(source.body_json->>'severity', f.severity) AS severity,
+                   true AS imported
+            FROM canvas_nodes source
+            JOIN findings f ON f.id = (source.body_json->>'finding_id')::uuid
+            WHERE source.canvas_id = ${canvasId}
+              AND source.node_type = 'finding'
+              AND source.id = ANY(${findingNodeIds}::uuid[])
+              AND source.body_json->>'origin' = 'seed'
+              AND source.body_json->>'readonly' = 'true'
+              AND f.project_id = ${job.project_id as string}`) as HubFindingBinding[]
         : [];
       const findingByNodeId = new Map<string, HubFindingBinding>();
       const ambiguousFindingNodeIds = new Set<string>();
@@ -714,6 +727,7 @@ export function createEventIngestionSideEffectApplication(
         }
         if (
           sourceFinding &&
+          !sourceFinding.imported &&
           !ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, sourceFinding.severity)
         ) {
           throw invalidVerification(
@@ -747,7 +761,8 @@ export function createEventIngestionSideEffectApplication(
           findingByNodeId,
           ambiguousFindingNodeIds,
         ).finding;
-        const trigger = sourceFinding
+        const importedSeedFindingId = sourceFinding?.imported ? sourceFinding.id : null;
+        const trigger = sourceFinding && !sourceFinding.imported
           ? {
               ...decisionTrigger,
               kind: ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")
@@ -761,9 +776,12 @@ export function createEventIngestionSideEffectApplication(
         const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
           trigger.kind ?? "",
         );
-        const verificationFollowup = ports.findingVerification.buildVerificationFollowupPayload(trigger, it.from, role);
+        const verificationFollowup = importedSeedFindingId
+          ? null
+          : ports.findingVerification.buildVerificationFollowupPayload(trigger, it.from, role);
         const followupFindingId =
           typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
+        const snapshotFindingId = followupFindingId ?? importedSeedFindingId;
         const snapshot = await freezeAgentSnapshotNetworkPolicy(
           tx,
           canvasId,
@@ -771,7 +789,7 @@ export function createEventIngestionSideEffectApplication(
             tx,
             job.project_id as string,
             role,
-            followupFindingId ? [followupFindingId] : [],
+            snapshotFindingId ? [snapshotFindingId] : [],
           ),
         );
         // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
@@ -797,6 +815,7 @@ export function createEventIngestionSideEffectApplication(
               from: it.from,
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
+            ...(importedSeedFindingId ? { related_finding_ids: [importedSeedFindingId] } : {}),
             ...(verificationFollowup
               ? {
                   verification_followup: {

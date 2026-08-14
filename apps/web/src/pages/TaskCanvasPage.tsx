@@ -29,6 +29,7 @@ import {
 import { CanvasView } from "../CanvasView";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type PageProgress } from "../canvas-page-sync";
 import { useConfirmDialog } from "../components/ConfirmDialog";
+import { composeRetryErrorMessage } from "../composeTaskModel";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { FactDetailPanel } from "../FactDetailPanel";
 import { readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
@@ -497,7 +498,9 @@ export function TaskCanvasPage() {
     if (!canvasId) return;
     const ok = await confirm({
       title: "清空历史并重新执行？",
-      description: "将删除本任务的全部运行历史（Job、画布节点、Finding、报告），并按原意图从零重新执行。此操作不可撤销。",
+      description: meta?.target_json?.kind === "compose"
+        ? "将清空本画布的运行数据，并按冻结种子重新投影后执行。项目历史 Finding 库存不会删除；若种子已失效，系统会拒绝重试。"
+        : "将删除本任务的全部运行历史（Job、画布节点、本轮 Finding、报告），并按原意图从零重新执行。此操作不可撤销。",
       confirmLabel: "清空并重试",
       tone: "danger",
     });
@@ -509,7 +512,7 @@ export function TaskCanvasPage() {
       flash("已清空历史并重新开始执行");
       setScopeOpen(false);
     } catch (e) {
-      flash(`重试失败：${e instanceof Error ? e.message : e}`);
+      flash(composeRetryErrorMessage(e));
     } finally {
       setConvBusy(false);
     }

@@ -1,10 +1,12 @@
-import { MagnifyingGlass, X } from "@phosphor-icons/react";
+import { GitMerge, MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type FindingSummary, type Project } from "../api";
 import { FindingDetailPanel } from "../FindingDetailPanel";
+import { composeSeedTaskUrl, isComposeSeedCandidate, MAX_COMPOSE_SEEDS } from "../composeTaskModel";
 import {
   DataTable,
+  DISPOSITION_OPTIONS,
   EmptyState,
   FilterCountBar,
   PageHeader,
@@ -17,15 +19,52 @@ import {
 } from "../ui";
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
-const VERIFY = ["pending", "verifying", "confirmed", "false_positive", "needs_human"] as const;
+const VERIFY_OPTIONS = [
+  { value: "pending", label: "待验证" },
+  { value: "verifying", label: "验证中" },
+  { value: "confirmed", label: "已确认" },
+  { value: "false_positive", label: "已排除" },
+  { value: "needs_human", label: "待人工" },
+] as const;
+const VERIFY_LABELS = Object.fromEntries(VERIFY_OPTIONS.map((option) => [option.value, option.label]));
+const DISPOSITION_LABELS = Object.fromEntries(DISPOSITION_OPTIONS.map((option) => [option.value, option.label]));
+
+function FindingStateBadges({ finding }: { finding: FindingSummary }) {
+  const verifyStatus = finding.verify_status || "pending";
+  const disposition = finding.disposition || "open";
+  const verifyTone = verifyStatus === "confirmed"
+    ? "border-emerald-400/25 bg-emerald-400/[.08] text-emerald-300"
+    : verifyStatus === "needs_human"
+      ? "border-amber-400/25 bg-amber-400/[.08] text-amber-300"
+      : "border-sky-400/20 bg-sky-400/[.06] text-sky-300";
+  const dispositionTone = disposition === "confirmed_vuln"
+    ? "border-red-400/25 bg-red-400/[.08] text-red-300"
+    : disposition === "open"
+      ? "border-amber-400/25 bg-amber-400/[.08] text-amber-300"
+      : disposition === "accepted"
+        ? "border-sky-400/20 bg-sky-400/[.06] text-sky-300"
+        : "border-zinc-400/20 bg-zinc-400/[.06] text-zinc-400";
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] ${verifyTone}`} title={`技术验证状态：${VERIFY_LABELS[verifyStatus] ?? verifyStatus}`}>
+        技术 · {VERIFY_LABELS[verifyStatus] ?? verifyStatus}
+      </span>
+      <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] ${dispositionTone}`} title={`人工处置状态：${DISPOSITION_LABELS[disposition] ?? disposition}`}>
+        处置 · {DISPOSITION_LABELS[disposition] ?? disposition}
+      </span>
+    </div>
+  );
+}
 
 /** 全局或项目级发现清单 */
 export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const severity = searchParams.get("severity") ?? "";
   const profile = searchParams.get("profile") ?? "";
   const verify = searchParams.get("verify") ?? "";
+  const disposition = searchParams.get("disposition") ?? "";
   const projectFilter = searchParams.get("project") ?? "";
   const q = searchParams.get("q") ?? "";
   const selectedFinding = searchParams.get("finding");
@@ -35,6 +74,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchDraft, setSearchDraft] = useState(q);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     setSearchDraft(q);
@@ -76,7 +116,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     };
   }, [scope, projectId]);
 
-  const setParam = (key: "severity" | "profile" | "verify" | "q" | "project", value: string) => {
+  const setParam = (key: "severity" | "profile" | "verify" | "disposition" | "q" | "project", value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -112,16 +152,17 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       if (severity && f.severity !== severity) return false;
       if (profile && f.profile !== profile) return false;
       if (verify && f.verify_status !== verify) return false;
+      if (disposition && String(f.disposition ?? "open") !== disposition) return false;
       if (scope === "global" && projectFilter && f.project_id !== projectFilter) return false;
       if (!needle) return true;
       const hay =
-        `${f.title} ${f.profile} ${f.category ?? ""} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.fingerprint ?? ""}`.toLowerCase();
+        `${f.title} ${f.profile} ${f.category ?? ""} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.canvas_title ?? ""} ${f.tags_json.join(" ")} ${f.fingerprint ?? ""}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [rows, severity, profile, verify, projectFilter, q, scope]);
+  }, [rows, severity, profile, verify, disposition, projectFilter, q, scope]);
 
   const filterActive = Boolean(
-    severity || profile || verify || q.trim() || (scope === "global" && projectFilter),
+    severity || profile || verify || disposition || q.trim() || (scope === "global" && projectFilter),
   );
   const totalCount = rows.length;
   const filteredCount = visible.length;
@@ -129,6 +170,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     severity && `风险 ${severity}`,
     profile && `协议 ${profile}`,
     verify && `验证 ${verify}`,
+    disposition && `处置 ${disposition}`,
     scope === "global" &&
       projectFilter &&
       `项目 ${projectOptions.find((p) => p.id === projectFilter)?.name ?? projectFilter.slice(0, 8)}`,
@@ -140,6 +182,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     next.delete("severity");
     next.delete("profile");
     next.delete("verify");
+    next.delete("disposition");
     next.delete("q");
     next.delete("project");
     setSearchDraft("");
@@ -149,6 +192,20 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const commitSearch = () => {
     setParam("q", searchDraft.trim());
   };
+  const visibleCandidates = visible.filter(isComposeSeedCandidate);
+  const visibleSelectableCandidates = visibleCandidates.slice(0, MAX_COMPOSE_SEEDS);
+  const selectedCandidates = rows.filter((finding) => selectedIds.has(finding.id) && isComposeSeedCandidate(finding));
+  const toggleSelected = (id: string) => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id);
+    else if (next.size < MAX_COMPOSE_SEEDS) next.add(id);
+    return next;
+  });
+  useEffect(() => {
+    setSelectedIds((current) => new Set(
+      [...current].filter((id) => rows.some((finding) => finding.id === id && isComposeSeedCandidate(finding))),
+    ));
+  }, [rows]);
 
   if (loading) return <PageSkeleton rows={5} />;
 
@@ -169,6 +226,37 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
         onClear={clearFilters}
       />
 
+      {scope === "project" && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-y border-white/[.05] py-3">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-[11px] text-zinc-500">
+              <input
+                type="checkbox"
+                checked={visibleSelectableCandidates.length > 0 && visibleSelectableCandidates.every((finding) => selectedIds.has(finding.id))}
+                onChange={() => setSelectedIds((current) => {
+                  const next = new Set(current);
+                  const allSelected = visibleSelectableCandidates.length > 0 && visibleSelectableCandidates.every((finding) => next.has(finding.id));
+                  if (allSelected) visibleSelectableCandidates.forEach((finding) => next.delete(finding.id));
+                  else for (const finding of visibleSelectableCandidates) { if (next.size < MAX_COMPOSE_SEEDS) next.add(finding.id); }
+                  return next;
+                })}
+                className="accent-emerald-400"
+              />
+              选择当前可代入结果（最多 {MAX_COMPOSE_SEEDS} 条）
+            </label>
+            <span className="font-mono text-[10px] text-zinc-600">{selectedCandidates.length} / {MAX_COMPOSE_SEEDS}</span>
+          </div>
+          <button
+            type="button"
+            disabled={!projectId || selectedCandidates.length === 0}
+            onClick={() => projectId && navigate(composeSeedTaskUrl(projectId, selectedCandidates.map((finding) => finding.id)))}
+            className="inline-flex items-center gap-2 rounded-md bg-acc-500/[.1] px-3 py-2 text-[11px] font-medium text-acc-200 ring-1 ring-acc-400/20 hover:bg-acc-500/[.16] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <GitMerge size={14} />用这些开组合任务
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="mb-4 rounded-[10px] border border-red-900/60 bg-red-950/40 px-4 py-3 text-[15px] text-red-300">
           {error}
@@ -180,7 +268,8 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
         <DataTable>
           <table className="data-table-adaptive w-full">
             <colgroup>
-              <col style={{ width: scope === "global" ? "11%" : "12%" }} />
+              {scope === "project" && <col style={{ width: "5%" }} />}
+              <col style={{ width: scope === "global" ? "11%" : "11%" }} />
               <col style={{ width: scope === "global" ? "28%" : "36%" }} />
               {scope === "global" && <col style={{ width: "14%" }} />}
               <col style={{ width: scope === "global" ? "20%" : "24%" }} />
@@ -189,6 +278,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
             </colgroup>
             <thead>
               <tr>
+                {scope === "project" && <th className="table-head-cell"><span className="sr-only">选择</span></th>}
                 <th className="table-head-cell">
                   <div className="table-head-stack">
                     <span className="table-head-label">风险等级</span>
@@ -277,11 +367,20 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                       aria-label="按验证状态筛选"
                     >
                       <option value="">全部</option>
-                      {VERIFY.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
+                      {VERIFY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
                         </option>
                       ))}
+                    </select>
+                    <select
+                      value={disposition}
+                      onChange={(e) => setParam("disposition", e.target.value)}
+                      className="table-head-control"
+                      aria-label="按处置状态筛选"
+                    >
+                      <option value="">全部处置</option>
+                      {DISPOSITION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                   </div>
                 </th>
@@ -292,7 +391,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
               {visible.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={scope === "global" ? 6 : 5}
+                    colSpan={scope === "global" ? 6 : 6}
                     className="px-4 py-12 text-center text-[13px] text-zinc-600"
                   >
                     {error
@@ -309,6 +408,19 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                     className={`${trHover} cursor-pointer`}
                     onClick={() => openFinding(f.id)}
                   >
+                    {scope === "project" && (
+                      <td className={tdCls}>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${f.title}`}
+                          checked={selectedIds.has(f.id)}
+                          disabled={!isComposeSeedCandidate(f) || (!selectedIds.has(f.id) && selectedIds.size >= MAX_COMPOSE_SEEDS)}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={() => toggleSelected(f.id)}
+                          className="accent-emerald-400 disabled:opacity-30"
+                        />
+                      </td>
+                    )}
                     <td className={tdCls}>
                       <SeverityBadge severity={f.severity} />
                     </td>
@@ -352,7 +464,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                     <td className={`${tdCls} max-w-[220px] truncate font-mono text-[13px] text-zinc-500`}>
                       {f.location || "—"}
                     </td>
-                    <td className={`${tdCls} font-mono text-[13px]`}>{f.verify_status}</td>
+                    <td className={tdCls}><FindingStateBadges finding={f} /></td>
                     <td
                       className={`${tdCls} font-mono text-[13px] text-zinc-500`}
                       title={formatTime(f.created_at)}
@@ -434,11 +546,20 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 aria-label="验证状态"
               >
                 <option value="">全部验证</option>
-                {VERIFY.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
+                {VERIFY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
+              </select>
+              <select
+                value={disposition}
+                onChange={(e) => setParam("disposition", e.target.value)}
+                className="table-head-control max-w-none"
+                aria-label="处置状态"
+              >
+                <option value="">全部处置</option>
+                {DISPOSITION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
           </div>
@@ -451,43 +572,39 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
         ) : (
           <div className="grid gap-3">
             {visible.map((finding) => (
-              <button
-                type="button"
-                key={finding.id}
-                onClick={() => openFinding(finding.id)}
-                className="surface-shell group text-left"
-              >
-                <article className="surface-core p-4">
+              <article key={finding.id} className="surface-shell text-left">
+                <div className="surface-core p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <SeverityBadge severity={finding.severity} />
-                    <span className="font-mono text-[8px] text-zinc-700">
-                      {relativeTime(finding.created_at)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {scope === "project" && (
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${finding.title}`}
+                          checked={selectedIds.has(finding.id)}
+                          disabled={!isComposeSeedCandidate(finding) || (!selectedIds.has(finding.id) && selectedIds.size >= MAX_COMPOSE_SEEDS)}
+                          onChange={() => toggleSelected(finding.id)}
+                          className="accent-emerald-400 disabled:opacity-30"
+                        />
+                      )}
+                      <SeverityBadge severity={finding.severity} />
+                    </div>
+                    <span className="font-mono text-[8px] text-zinc-700">{relativeTime(finding.created_at)}</span>
                   </div>
-                  <h2 className="mt-3 text-[14px] font-medium leading-6 text-zinc-100">
+                  <button type="button" onClick={() => openFinding(finding.id)} className="mt-3 block text-left text-[14px] font-medium leading-6 text-zinc-100 hover:text-acc-300">
                     {finding.title}
-                  </h2>
+                  </button>
                   <div className="mt-1 flex flex-wrap gap-2 font-mono text-[9px] text-zinc-500">
                     <span>{finding.profile}</span>
-                    <span>
-                      {finding.scoring_json?.base_score == null
-                        ? "未评分"
-                        : `${String(finding.scoring_json.standard)} ${String(finding.scoring_json.version)} · ${String(finding.scoring_json.base_score)} · ${String(finding.scoring_json.exploitability_label ?? "难度未知")}`}
-                    </span>
+                    <span>{finding.scoring_json?.base_score == null ? "未评分" : `${String(finding.scoring_json.standard)} ${String(finding.scoring_json.version)} · ${String(finding.scoring_json.base_score)} · ${String(finding.scoring_json.exploitability_label ?? "难度未知")}`}</span>
                   </div>
-                  {finding.summary && (
-                    <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">
-                      {finding.summary}
-                    </p>
-                  )}
+                  {finding.summary && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">{finding.summary}</p>}
                   <div className="mt-3 flex items-center gap-2 border-t border-white/[.045] pt-3 text-[9px] text-zinc-600">
-                    <span className="truncate">{finding.project_name}</span>
-                    <span>·</span>
+                    <span className="truncate">{finding.project_name}</span><span>·</span>
                     <span className="truncate font-mono">{finding.location || "无位置"}</span>
-                    <span className="ml-auto font-mono text-zinc-500">{finding.verify_status}</span>
+                    <div className="ml-auto shrink-0"><FindingStateBadges finding={finding} /></div>
                   </div>
-                </article>
-              </button>
+                </div>
+              </article>
             ))}
           </div>
         )}

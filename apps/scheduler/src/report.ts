@@ -19,6 +19,7 @@ import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapsho
 import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 import { planTaskReportVersion } from "./task-report-version.js";
+import { frozenTaskSeeds } from "./task-compose.js";
 
 type Tx = typeof sql;
 
@@ -98,6 +99,7 @@ export interface ReportInput {
     title: string;
     goal: string;
     project_id: string;
+    kind: "standard" | "compose";
     effective_finding_protocol: Record<string, unknown> | null;
   };
   statistics: {
@@ -111,6 +113,16 @@ export interface ReportInput {
   confirmed_findings: ReportInputFinding[];
   needs_human_findings: ReportInputFinding[];
   excluded_findings: ReportInputFinding[];
+  seed_findings: Array<{
+    title: string;
+    severity: string | null;
+    profile: string;
+    category: string | null;
+    tags: string[];
+    location: string | null;
+    summary: string | null;
+    frozen_disposition: string;
+  }>;
   scope_and_coverage: Record<string, unknown>;
   evidence: unknown[];
 }
@@ -271,6 +283,17 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
   if (!canvas) throw new Error(`canvas not found: ${canvasId}`);
 
   const target = (canvas.target_json ?? {}) as Record<string, unknown>;
+  const seedFindings = frozenTaskSeeds(target);
+  const reportSeedFindings = seedFindings.map((seed) => ({
+    title: seed.title,
+    severity: seed.severity,
+    profile: seed.profile,
+    category: seed.category,
+    tags: seed.tags,
+    location: seed.location,
+    summary: seed.summary,
+    frozen_disposition: seed.disposition,
+  }));
   const findings = await db`
     SELECT f.id, f.title, f.severity, f.profile, f.category, f.tags_json,
            f.evidence_refs_json, f.scoring_json, f.location, f.summary,
@@ -352,6 +375,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
       title: canvas.title as string,
       goal: String(target.goal ?? canvas.title ?? ""),
       project_id: canvas.project_id as string,
+      kind: target.kind === "compose" ? "compose" : "standard",
       effective_finding_protocol:
         (target.effective_finding_protocol as Record<string, unknown> | undefined) ?? null,
     },
@@ -366,8 +390,11 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     confirmed_findings: confirmed,
     needs_human_findings: needsHuman,
     excluded_findings: excluded,
+    seed_findings: reportSeedFindings,
     scope_and_coverage: {
       goal: String(target.goal ?? ""),
+      task_kind: target.kind === "compose" ? "compose" : "standard",
+      seed_count: seedFindings.length,
       network_policy: target.network_policy ?? null,
       effective_finding_protocol: target.effective_finding_protocol ?? null,
     },

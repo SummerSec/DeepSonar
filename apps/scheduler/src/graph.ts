@@ -1,4 +1,5 @@
 import { sql } from "./db.js";
+import { taskTargetForPrompt } from "./task-compose.js";
 import { findingVerificationSummaries, isSeverityInVerifyScope } from "./verify.js";
 import { config } from "./config.js";
 import {
@@ -88,6 +89,7 @@ export interface FindingIndexInput {
   verify_required?: boolean;
   verification_attempt?: number | null;
   missing_evidence?: string[];
+  imported?: boolean;
 }
 
 /**
@@ -110,6 +112,7 @@ export function serializeFindingStatusIndex(
         ...(typeof finding.verify_required === "boolean" ? { verify_required: finding.verify_required } : {}),
         verification_attempt: finding.verification_attempt ?? 0,
         missing_evidence: (finding.missing_evidence ?? []).slice(0, 2),
+        ...(finding.imported ? { imported: true, readonly: true } : {}),
       }),
     ),
   ];
@@ -120,6 +123,7 @@ export function serializeFindingStatusIndex(
       id: finding.id,
       verify_status: finding.verify_status,
       ...(typeof finding.verify_required === "boolean" ? { verify_required: finding.verify_required } : {}),
+      ...(finding.imported ? { imported: true } : {}),
     })),
   ];
   if (minimum.join("\n").length <= maxChars) {
@@ -150,6 +154,7 @@ export async function buildGraphSnapshot(
     SELECT from_node_id, to_node_id, edge_type
     FROM canvas_edges WHERE canvas_id = ${canvasId}`;
   const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
+  const promptTarget = taskTargetForPrompt(target);
   const goal = String(target.goal ?? canvas?.title ?? "");
   const root = nodes.find((node) => node.node_type === "root");
   const facts = nodes.filter((node) => node.node_type === "fact" || node.node_type === "finding");
@@ -170,8 +175,52 @@ export async function buildGraphSnapshot(
     FROM findings f
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId}`;
-  const findingByNode = new Map(findingRows.map((finding) => [String(finding.node_id), finding]));
-  const findingById = new Map(findingRows.map((finding) => [String(finding.id), finding]));
+  interface VisibleFindingRow {
+    id: string;
+    node_id: string;
+    job_id: unknown;
+    title: unknown;
+    severity: unknown;
+    location: unknown;
+    summary: unknown;
+    verify_status: unknown;
+    imported: boolean;
+  }
+  const importedFindingRows: VisibleFindingRow[] = nodes
+    .filter((node) => {
+      const body = (node.body_json ?? {}) as Record<string, unknown>;
+      return node.node_type === "finding" && body.origin === "seed" && body.imported === true;
+    })
+    .map((node) => {
+      const body = (node.body_json ?? {}) as Record<string, unknown>;
+      return {
+        id: String(body.finding_id ?? ""),
+        node_id: String(node.id),
+        job_id: null,
+        title: node.title,
+        severity: body.severity ?? null,
+        location: body.location ?? null,
+        summary: body.summary ?? null,
+        verify_status: "confirmed",
+        imported: true,
+      };
+    });
+  const visibleFindingRows: VisibleFindingRow[] = [
+    ...findingRows.map((finding) => ({
+      id: String(finding.id),
+      node_id: String(finding.node_id),
+      job_id: finding.job_id,
+      title: finding.title,
+      severity: finding.severity,
+      location: finding.location,
+      summary: finding.summary,
+      verify_status: finding.verify_status,
+      imported: false,
+    })),
+    ...importedFindingRows,
+  ];
+  const findingByNode = new Map(visibleFindingRows.map((finding) => [String(finding.node_id), finding]));
+  const findingById = new Map(visibleFindingRows.map((finding) => [String(finding.id), finding]));
   const findingIds = findingRows.flatMap((finding) => (typeof finding.id === "string" ? [finding.id] : []));
   const verificationSummaries =
     scope === "hub" || scope === "verify"
@@ -197,7 +246,7 @@ export async function buildGraphSnapshot(
     kv("truncated", false),
     kv("omitted", {}),
     kv("goal", short(goal, 1_200)),
-    kv("target", boundedJson(target, 2_400)),
+    kv("target", boundedJson(promptTarget, 2_400)),
     kv("root_id", root?.id ?? null),
     kv("root_status", root?.status ?? null),
     kv("node_counts", nodeCounts),
@@ -234,13 +283,13 @@ export async function buildGraphSnapshot(
 
   if (scope === "hub") {
     const index = serializeFindingStatusIndex(
-      findingRows.map((finding) => {
+      visibleFindingRows.map((finding) => {
         const summary = verificationSummaries.get(String(finding.id)) ?? {};
         return {
           // Hub references are canvas-node identities. A finding row can have
           // a distinct database UUID, so never expose that UUID as `id` here.
           id: String(finding.node_id ?? finding.id),
-          finding_id: String(finding.id),
+          ...(finding.imported ? {} : { finding_id: String(finding.id) }),
           title: (finding.title ?? findingByNode.get(String(finding.node_id))?.title) as string | null,
           severity: finding.severity as string | null,
           verify_status: finding.verify_status as string | null,
@@ -249,6 +298,7 @@ export async function buildGraphSnapshot(
             : {}),
           verification_attempt: Number(summary.verification_attempt ?? 0),
           missing_evidence: Array.isArray(summary.missing_evidence) ? summary.missing_evidence as string[] : [],
+          imported: finding.imported,
         };
       }),
       Math.max(128, contentLimit - size() - 1),
@@ -331,7 +381,7 @@ export async function buildGraphSnapshot(
           summary: short(body.description ?? body.summary ?? finding?.summary, 420),
           ...(finding
             ? {
-                finding_id: finding.id,
+                ...(finding.imported ? { imported: true, readonly: true } : { finding_id: finding.id }),
                 verify_status: finding.verify_status,
                 ...(options.minVerifySeverity
                   ? { verify_required: isSeverityInVerifyScope(options.minVerifySeverity, finding.severity) }
@@ -379,17 +429,24 @@ export async function buildGraphSnapshot(
             title: short(node?.title, 160),
             status: node?.status,
             description: short(body.description ?? body.summary ?? finding?.summary, 520),
-            ...(finding ? { finding_id: finding.id, verify_status: finding.verify_status } : {}),
+            ...(finding
+              ? {
+                  ...(finding.imported ? { imported: true, readonly: true } : { finding_id: finding.id }),
+                  verify_status: finding.verify_status,
+                }
+              : {}),
           });
         }),
     );
     addSection(
       "confirmed_background",
-      findingRows
+      visibleFindingRows
         .filter((finding) => finding.verify_status === "confirmed")
         .slice(0, 24)
         .map((finding) => row({
-          finding_id: finding.id,
+          ...(finding.imported
+            ? { node_id: finding.node_id, imported: true, readonly: true }
+            : { finding_id: finding.id }),
           title: short(finding.title, 160),
           severity: finding.severity,
           verify_status: finding.verify_status,

@@ -326,6 +326,20 @@ const OPS: Op[] = [
         title: { type: "string" },
         content: { type: "string" },
         allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
+        kind: {
+          type: "string",
+          enum: ["standard", "compose"],
+          default: "standard",
+          description: "普通任务从空画布开始；组合续挖任务必须显式选择历史 Finding",
+        },
+        seed_finding_ids: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          uniqueItems: true,
+          items: { type: "string", format: "uuid" },
+          description: "仅 compose 可用；同项目、当前 confirmed 且 disposition 可代入的具体 Finding UUID",
+        },
         scheduled_start_at: {
           type: "string",
           format: "date-time",
@@ -623,7 +637,11 @@ const OPS: Op[] = [
     query: {
       project_id: { type: "string", format: "uuid" },
       canvas_id: { type: "string" },
+      severity: { type: "string" },
+      profile: { type: "string" },
+      category: { type: "string" },
       verify_status: { type: "string" },
+      disposition: { type: "string", enum: ["open", "accepted", "confirmed_vuln", "rejected_fp", "resolved", "archived"] },
     },
   },
   {

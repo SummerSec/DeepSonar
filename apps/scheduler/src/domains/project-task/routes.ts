@@ -30,6 +30,14 @@ import {
 import { PROJECT_IMAGE_STRATEGIES } from "../role-runtime-snapshot/application.js";
 import { noteScheduleWakeAt } from "../../schedule-wake.js";
 import { clearTaskSchedule, resolveCreateTaskSchedule } from "../../task-schedule.js";
+import {
+  MAX_TASK_SEED_FINDINGS,
+  TASK_KINDS,
+  TaskSeedInputError,
+  frozenTaskSeeds,
+  insertTaskSeedProjections,
+  validateFrozenTaskSeedsForRetry,
+} from "../../task-compose.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -52,6 +60,8 @@ const CreateTaskBody = z.object({
   content: z.string().trim().min(1).max(20_000),
   allow_egress: z.boolean().optional(),
   finding_protocol: FindingProtocolConfig.optional(),
+  kind: z.enum(TASK_KINDS).default("standard"),
+  seed_finding_ids: z.array(z.string().uuid()).max(MAX_TASK_SEED_FINDINGS).optional(),
   /** ISO-8601 timestamptz; omit for immediate start. Wins over schedule_beijing_8am. */
   scheduled_start_at: z.string().datetime().optional(),
   /** When true (and scheduled_start_at omitted), start at next 08:00 Asia/Shanghai. */
@@ -256,10 +266,13 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       canvasId = await ensureCanvasForTask({
         projectId: id,
         title: body.title,
+        allowComposeSeeds: true,
         target: {
           title: body.title,
           content: body.content,
           goal: body.content,
+          kind: body.kind,
+          ...(body.seed_finding_ids !== undefined ? { seed_finding_ids: body.seed_finding_ids } : {}),
           ...(body.finding_protocol ? { finding_protocol: body.finding_protocol } : {}),
           ...(body.allow_egress !== undefined
             ? { network_policy: { allow_egress: body.allow_egress } }
@@ -268,11 +281,19 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         },
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes("finding protocol")) {
+      if (
+        error instanceof TaskSeedInputError ||
+        (error instanceof Error && error.message.includes("finding protocol"))
+      ) {
         return reply.code(400).send({ error: error.message });
       }
       throw error;
     }
+    const frozenSeedIds = body.kind === "compose"
+      ? frozenTaskSeeds(
+          ((await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`)[0]?.target_json ?? {}) as Record<string, unknown>,
+        ).map((seed) => seed.id)
+      : [];
     const { job, duplicated } = await createJob({
       projectId: id,
       canvasId,
@@ -282,6 +303,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         content: body.content,
         goal: body.content,
         trigger: { kind: "user_task" },
+        ...(body.kind === "compose" ? { related_finding_ids: frozenSeedIds } : {}),
         ...(schedule ? { schedule } : {}),
       },
     });
@@ -297,6 +319,8 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         canvas_id: canvasId,
         allow_egress: body.allow_egress ?? "project_default",
         scheduled_start_at: schedule?.start_at ?? null,
+        kind: body.kind,
+        seed_finding_ids: frozenSeedIds,
       },
     });
     return reply.code(201).send({
@@ -518,7 +542,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       payload.network_policy = target.network_policy;
     }
 
-    const retryResult = await sql.begin(async (tx) => {
+    let retryResult;
+    try {
+      retryResult = await sql.begin(async (tx) => {
       // Retry is a destructive canvas reset. Serialize the whole operation
       // on the same advisory key used by dispatcher claim, then on the canvas
       // row. This prevents a dispatcher from claiming a pending Job after the
@@ -539,31 +565,52 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       if (activeInside.length > 0) return { job: null, reason: "active" as const };
 
       // Resolve and validate against the locked canvas target before deleting
-      // any retry state or inserting the new Hub Job. Agent/Hub payload policy
-      // is intentionally ignored here.
+      // any retry state or inserting the new Hub Job. A compose retry is a new
+      // execution, so disposed or stale seeds fail closed before the wipe.
+      const retryTarget = (lockedCanvas.target_json ?? {}) as Record<string, unknown>;
+      const seedFindings = await validateFrozenTaskSeedsForRetry(
+        tx as unknown as typeof sql,
+        projectId,
+        retryTarget,
+      );
+      if (seedFindings.length > 0) {
+        payload.related_finding_ids = seedFindings.map((seed) => seed.id);
+      }
       const snapshot = await freezeAgentSnapshotNetworkPolicy(
         tx as unknown as typeof sql,
         canvasId,
-        await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "hub_reason"),
+        await resolveAgentSnapshotForJob(
+          tx as unknown as typeof sql,
+          projectId,
+          "hub_reason",
+          seedFindings.map((seed) => seed.id),
+        ),
       );
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态与定时门，保留用户任务内容
       await tx`
-        UPDATE canvases SET target_json = ${tx.json(target as never)}
+        UPDATE canvases SET target_json = ${tx.json(retryTarget as never)}
         WHERE id = ${canvasId}`;
 
-      await tx`
+      const [rootNode] = await tx`
         INSERT INTO canvas_nodes ${tx({
           canvas_id: canvasId,
           job_id: null,
           node_type: "root",
           title,
-          body_json: { target } as never,
+          body_json: { target: retryTarget } as never,
           x: 100,
           y: 100,
           status: "active",
-        })}`;
+        })}
+        RETURNING id`;
+      await insertTaskSeedProjections(
+        tx as unknown as typeof sql,
+        canvasId,
+        rootNode.id as string,
+        retryTarget,
+      );
 
       // 同事务内插入入口 Hub，避免 createJob 另开连接看不到未提交删除
       const [hubJob] = await tx`
@@ -608,7 +655,13 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           })}`;
       }
       return { job: hubJob, reason: undefined };
-    });
+      });
+    } catch (error) {
+      if (error instanceof TaskSeedInputError) {
+        return reply.code(409).send({ error: error.message, error_code: "COMPOSE_SEEDS_STALE" });
+      }
+      throw error;
+    }
 
     if (!retryResult.job) {
       if (retryResult.reason === "archived") {

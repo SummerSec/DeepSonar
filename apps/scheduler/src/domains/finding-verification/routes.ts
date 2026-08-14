@@ -106,7 +106,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
              f.profile, f.category, f.tags_json, f.evidence_refs_json, f.scoring_json,
              f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
              f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
-             p.name AS project_name, j.canvas_id,
+             p.name AS project_name, j.canvas_id, c.title AS canvas_title,
              EXISTS (
                SELECT 1 FROM jobs waiting_job
                WHERE waiting_job.canvas_id = j.canvas_id
@@ -116,6 +116,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       FROM findings f
       JOIN projects p ON p.id = f.project_id
       JOIN jobs j ON j.id = f.job_id
+      JOIN canvases c ON c.id = j.canvas_id
       WHERE (${projectId}::uuid IS NULL OR f.project_id = ${projectId}::uuid)
         AND (${severity}::text IS NULL OR f.severity = ${severity})
         AND (${profile}::text IS NULL OR f.profile = ${profile})

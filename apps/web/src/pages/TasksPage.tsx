@@ -1,12 +1,13 @@
-import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Clock, Pause, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Clock, GitMerge, Pause, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type Project } from "../api";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type FindingSummary, type Project } from "../api";
 import { FindingProtocolEditor } from "../FindingProtocolEditor";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
-import { EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, formatElapsed, formatTime, relativeTime } from "../ui";
+import { composeRetryErrorMessage, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
+import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatElapsed, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived";
 /** 立即开始，或指定墙钟时间（按浏览器本地时区选择，提交为 ISO UTC）。 */
@@ -15,6 +16,13 @@ interface PlaneInfo { enabled: boolean; web_url: string; workspace_slug: string;
 const inputCls =
   "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
 const labelCls = "mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
+const SEED_SEVERITY_OPTIONS = [
+  { value: "critical", label: "严重" },
+  { value: "high", label: "高危" },
+  { value: "medium", label: "中危" },
+  { value: "low", label: "低危" },
+  { value: "info", label: "信息" },
+] as const;
 const NETWORK_OPTIONS = [
   { value: "project" as const, label: "继承项目设置" },
   { value: "allow" as const, label: "允许出网" },
@@ -104,10 +112,11 @@ function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | n
   return <div className="surface-shell mb-4"><div className="surface-core overflow-hidden"><button onClick={() => setOpen((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-run-400/[.08] text-run-400 ring-1 ring-run-400/15"><AirplaneTakeoff size={16} weight="light" /></span><span className="min-w-0 flex-1"><strong className="block text-[12px] font-medium text-zinc-300">Plane 自动下发已启用</strong><small className="block truncate text-[10px] text-zinc-600">Issue 进入 {plane?.ready_state ?? "Ready"} 后会进入同一任务闭环</small></span><CaretDown size={14} className={`text-zinc-600 transition-transform ${open ? "rotate-180" : ""}`} /></button>{open && <div className="border-t border-white/[.045] px-5 py-4 text-[11px] leading-6 text-zinc-500"><ol className="list-decimal space-y-1 pl-4"><li>在 Plane 创建 issue，标题写结果目标，描述补充背景和约束。</li><li>把状态移到「{plane?.ready_state ?? "Ready"}」，系统会自动铸造任务画布并开始调度。</li><li>本地创建与 Plane 下发拥有完全相同的证据、验证与报告流程。</li></ol>{projectUrl && <a href={projectUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1.5 text-acc-300 hover:text-acc-200">打开 Plane 项目<ArrowSquareOut size={12} /></a>}</div>}</div></div>;
 }
 
-function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
-  const [form, setForm] = useState<{ title: string; content: string; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
-    title: "",
-    content: "",
+function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
+  const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
+    title: initialSeedIds.length ? "基于已确认发现继续分析" : "",
+    content: initialSeedIds.length ? "结合选中的已确认发现，寻找仍缺失的利用条件、交互关系或可验证的组合链。" : "",
+    kind: initialSeedIds.length ? "compose" : "standard",
     network: "project",
     schedule: "immediate",
     startAtLocal: nextBeijing8amLocalValue(),
@@ -115,6 +124,14 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
   const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [seedCandidates, setSeedCandidates] = useState<FindingSummary[]>([]);
+  const [selectedSeedIds, setSelectedSeedIds] = useState(() => new Set(initialSeedIds));
+  const [seedSearch, setSeedSearch] = useState("");
+  const [seedSeverity, setSeedSeverity] = useState("");
+  const [seedProfile, setSeedProfile] = useState("");
+  const [seedDisposition, setSeedDisposition] = useState("");
+  const [seedCanvas, setSeedCanvas] = useState("");
+  const [seedLoading, setSeedLoading] = useState(initialSeedIds.length > 0);
   /** Tick so past-time warnings update if the form stays open across a boundary. */
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => {
@@ -125,12 +142,36 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
     return () => { active = false; };
   }, [projectId]);
   useEffect(() => {
+    if (form.kind !== "compose") return;
+    let active = true;
+    setSeedLoading(true);
+    api.findings({ project_id: projectId, verify_status: "confirmed" })
+      .then((items) => {
+        if (!active) return;
+        const eligible = filterComposeSeedCandidates(items);
+        setSeedCandidates(eligible);
+        setSelectedSeedIds((current) => new Set([...current].filter((id) => eligible.some((item) => item.id === id))));
+      })
+      .catch((error) => flash(`加载可代入 Finding 失败：${error instanceof Error ? error.message : error}`))
+      .finally(() => active && setSeedLoading(false));
+    return () => { active = false; };
+  }, [form.kind, projectId]);
+  useEffect(() => {
     if (form.schedule !== "at") return;
     const timer = window.setInterval(() => setClock(Date.now()), 15_000);
     return () => window.clearInterval(timer);
   }, [form.schedule]);
 
   const scheduleIssue = form.schedule === "at" ? scheduleTimeIssue(form.startAtLocal, clock) : null;
+  const filteredSeedCandidates = useMemo(() => {
+    return filterComposeSeedCandidates(seedCandidates, {
+      search: seedSearch,
+      severity: seedSeverity,
+      profile: seedProfile,
+      disposition: seedDisposition,
+      canvasId: seedCanvas,
+    });
+  }, [seedCandidates, seedSearch, seedSeverity, seedProfile, seedDisposition, seedCanvas]);
   const scheduledPreview = useMemo(() => {
     if (form.schedule !== "at" || scheduleIssue) return null;
     const iso = parseDatetimeLocalToIso(form.startAtLocal);
@@ -145,6 +186,10 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
           e.preventDefault();
           if (!form.title.trim()) return flash("请写明希望得到的结果");
           if (!form.content.trim()) return flash("请补充必要背景或边界");
+          if (form.kind === "compose" && selectedSeedIds.size === 0) {
+            return flash("组合续挖任务至少选择 1 条可代入 Finding");
+          }
+          if (selectedSeedIds.size > MAX_COMPOSE_SEEDS) return flash(`组合续挖任务最多选择 ${MAX_COMPOSE_SEEDS} 条 Finding`);
           let scheduledStartAt: string | undefined;
           if (form.schedule === "at") {
             const issue = scheduleTimeIssue(form.startAtLocal);
@@ -158,6 +203,8 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
             const result = await api.createTask(projectId, {
               title: form.title.trim(),
               content: form.content.trim(),
+              kind: form.kind,
+              ...(form.kind === "compose" ? { seed_finding_ids: [...selectedSeedIds] } : {}),
               ...(form.network === "project" ? {} : { allow_egress: form.network === "allow" }),
               ...(findingProtocol ? { finding_protocol: findingProtocol } : {}),
               ...(scheduledStartAt ? { scheduled_start_at: scheduledStartAt } : {}),
@@ -214,6 +261,117 @@ function NewTaskForm({ projectId, onDone, onCancel, flash }: { projectId: string
               rows={5}
             />
           </label>
+
+          <fieldset className="m-0 min-w-0 border-0 p-0">
+            <legend className={`${labelCls} px-0`}>任务类型</legend>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="任务类型">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={form.kind === "standard"}
+                onClick={() => {
+                  setForm({ ...form, kind: "standard" });
+                  setSelectedSeedIds(new Set());
+                }}
+                className={`rounded-lg border px-3.5 py-3 text-left transition-colors ${form.kind === "standard" ? "border-acc-400/35 bg-acc-500/[.08] text-zinc-100" : "theme-input-surface text-zinc-400 hover:border-white/[.12]"}`}
+              >
+                <span className="block text-[13px] font-medium">普通任务</span>
+                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-600">从空画布开始，不代入项目历史发现</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={form.kind === "compose"}
+                onClick={() => setForm({ ...form, kind: "compose" })}
+                className={`rounded-lg border px-3.5 py-3 text-left transition-colors ${form.kind === "compose" ? "border-acc-400/35 bg-acc-500/[.08] text-zinc-100" : "theme-input-surface text-zinc-400 hover:border-white/[.12]"}`}
+              >
+                <span className="flex items-center gap-2 text-[13px] font-medium"><GitMerge size={15} />组合续挖</span>
+                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-600">显式选择已确认发现，在新画布继续找缺口或组合链</span>
+              </button>
+            </div>
+          </fieldset>
+
+          {form.kind === "compose" && (
+            <section className="rounded-lg border border-white/[.07] bg-black/15 p-4" aria-labelledby="compose-seeds-heading">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 id="compose-seeds-heading" className="text-[13px] font-medium text-zinc-200">代入 Finding</h3>
+                  <p className="mt-0.5 text-[11px] leading-5 text-zinc-600">只列出当前仍可用的 confirmed Finding，提交后摘要随任务冻结。</p>
+                </div>
+                <span className={`font-mono text-[10px] ${selectedSeedIds.size ? "text-acc-300" : "text-zinc-600"}`}>{selectedSeedIds.size} / {MAX_COMPOSE_SEEDS}</span>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                <input value={seedSearch} onChange={(event) => setSeedSearch(event.target.value)} className={inputCls} placeholder="标题、位置、标签…" aria-label="搜索可代入 Finding" />
+                <select value={seedSeverity} onChange={(event) => setSeedSeverity(event.target.value)} className={inputCls} aria-label="按风险筛选种子">
+                  <option value="">全部风险</option>
+                  {SEED_SEVERITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <select value={seedProfile} onChange={(event) => setSeedProfile(event.target.value)} className={inputCls} aria-label="按 profile 筛选种子">
+                  <option value="">全部 profile</option>
+                  {[...new Set(seedCandidates.map((finding) => finding.profile))].sort().map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+                <select value={seedDisposition} onChange={(event) => setSeedDisposition(event.target.value)} className={inputCls} aria-label="按处置状态筛选种子">
+                  <option value="">全部处置</option>
+                  {DISPOSITION_OPTIONS.filter((option) => ["open", "accepted", "confirmed_vuln"].includes(option.value)).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <select value={seedCanvas} onChange={(event) => setSeedCanvas(event.target.value)} className={inputCls} aria-label="按原任务筛选种子">
+                  <option value="">全部原任务</option>
+                  {[...new Map(seedCandidates.filter((finding) => finding.canvas_id).map((finding) => [finding.canvas_id!, finding.canvas_title ?? finding.canvas_id!.slice(0, 8)])).entries()].map(([id, title]) => <option key={id} value={id}>{title}</option>)}
+                </select>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/[.05] pb-2">
+                <span className="text-[10px] text-zinc-600">当前筛选 {filteredSeedCandidates.length} 条</span>
+                <button
+                  type="button"
+                  className="text-[10px] text-acc-300 hover:text-acc-200 disabled:text-zinc-700"
+                  disabled={!filteredSeedCandidates.length}
+                  onClick={() => setSelectedSeedIds((current) => {
+                    const next = new Set(current);
+                    for (const finding of filteredSeedCandidates) {
+                      if (next.size >= MAX_COMPOSE_SEEDS) break;
+                      next.add(finding.id);
+                    }
+                    return next;
+                  })}
+                >全选当前结果</button>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {seedLoading ? (
+                  <div className="py-8 text-center text-[11px] text-zinc-600">正在加载候选…</div>
+                ) : filteredSeedCandidates.length === 0 ? (
+                  <div className="py-8 text-center text-[11px] text-zinc-600">没有符合当前筛选的可代入 Finding</div>
+                ) : filteredSeedCandidates.map((finding) => {
+                  const checked = selectedSeedIds.has(finding.id);
+                  const disabled = !checked && selectedSeedIds.size >= MAX_COMPOSE_SEEDS;
+                  return (
+                    <label key={finding.id} className={`flex cursor-pointer items-start gap-3 border-b border-white/[.045] py-3 last:border-0 ${disabled ? "opacity-40" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => setSelectedSeedIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(finding.id)) next.delete(finding.id);
+                          else if (next.size < MAX_COMPOSE_SEEDS) next.add(finding.id);
+                          return next;
+                        })}
+                        className="mt-1 accent-emerald-400"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[12px] font-medium text-zinc-300">{finding.title}</span>
+                          <SeverityBadge severity={finding.severity} />
+                          <span className="rounded-full border border-emerald-400/20 bg-emerald-400/[.07] px-1.5 py-0.5 font-mono text-[8px] text-emerald-300">技术 · 已确认</span>
+                          <span className="rounded-full border border-amber-400/20 bg-amber-400/[.07] px-1.5 py-0.5 font-mono text-[8px] text-amber-300">处置 · {DISPOSITION_OPTIONS.find((option) => option.value === String(finding.disposition ?? "open"))?.label ?? finding.disposition}</span>
+                        </span>
+                        <span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-600">{finding.profile} · {finding.canvas_title ?? "原任务未知"} · {finding.location ?? "无位置"}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           <fieldset className="m-0 min-w-0 border-0 p-0">
             <legend className={`${labelCls} px-0`}>外部网络</legend>
@@ -382,6 +540,11 @@ export function TasksPage() {
   const confirm = useConfirmDialog();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialSeedIds = useMemo(
+    () => parseComposeSeedQuery(searchParams.get("compose")),
+    [searchParams],
+  );
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const [project, setProject] = useState<Project | undefined>();
   const [plane, setPlane] = useState<PlaneInfo | null>(null);
@@ -389,7 +552,7 @@ export function TasksPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(initialSeedIds.length > 0);
   const [clock, setClock] = useState(() => Date.now());
   const flash = (message: string) => { setMsg(message); setTimeout(() => setMsg(null), 3200); };
 
@@ -448,7 +611,7 @@ export function TasksPage() {
       <div className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{visibleCount}</strong>{filter === "archived" ? "已归档" : "全部任务"}</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>
       {error && <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">{error}</div>}
       {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}
-      {creating && <NewTaskForm projectId={projectId} flash={flash} onCancel={() => setCreating(false)} onDone={(canvasId) => navigate(`/projects/${projectId}/tasks/${canvasId}`)} />}
+      {creating && <NewTaskForm projectId={projectId} initialSeedIds={initialSeedIds} flash={flash} onCancel={() => { setCreating(false); setSearchParams({}, { replace: true }); }} onDone={(canvasId) => navigate(`/projects/${projectId}/tasks/${canvasId}`)} />}
       {project?.plane_project_id && <PlaneGuide project={project} plane={plane} />}
 
       {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && filter !== "archived" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
@@ -469,6 +632,7 @@ export function TasksPage() {
             const isActive = lifecycle.isActive;
             const isScheduled = lifecycle.status === "scheduled";
             const isArchived = lifecycle.status === "archived";
+            const isCompose = canvas.target_json?.kind === "compose";
             // 生命周期从「实际开始执行」起算，未真正开始则为「未开始」。
             const executionElapsed = canvas.started_at
               ? formatElapsed(canvas.started_at, lifecycle.isActive ? null : lifecycle.endedAt, clock)
@@ -513,7 +677,12 @@ export function TasksPage() {
                       >
                         {canvas.title}
                       </Link>
-                      <p className="mt-0.5 line-clamp-1 text-[10px] leading-4 text-zinc-600">
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="rounded border border-white/[.07] bg-black/15 px-1.5 py-0.5 font-mono text-[9px] text-zinc-500" title={`完整任务编号：${canvas.id}`}>
+                          编号 · {canvas.id.slice(0, 8)}
+                        </span>
+                      </div>
+                      <p className="mt-1 line-clamp-1 text-[10px] leading-4 text-zinc-600">
                         {scheduleLabel
                           ? `计划 ${scheduleLabel} 开始`
                           : targetLine(canvas.target_json) || "任务正在等待范围解析"}
@@ -526,6 +695,12 @@ export function TasksPage() {
                       >
                         {lifecycle.label}
                       </span>
+                      {isCompose && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/[.08] px-1.5 py-0.5 font-mono text-[8px] text-amber-300 ring-1 ring-amber-400/20">
+                          <GitMerge size={9} aria-hidden="true" />
+                          组合续挖
+                        </span>
+                      )}
                       {canvas.last_job_status && (
                         <span className="font-mono text-[8px] text-zinc-600">Job · {canvas.last_job_status}</span>
                       )}
@@ -621,7 +796,9 @@ export function TasksPage() {
                       onClick={async () => {
                         if (!await confirm({
                           title: "清空历史并重新执行？",
-                          description: "将删除本任务的全部运行历史，并按原意图从零重跑。此操作不可撤销。",
+                          description: isCompose
+                            ? "将清空本画布的运行数据，并按冻结种子重新投影后执行。项目历史 Finding 库存不会删除；若种子已失效，系统会拒绝重试。"
+                            : "将删除本任务的全部运行历史和本轮 Finding，并按原意图从零重跑。此操作不可撤销。",
                           confirmLabel: "清空并重试",
                           tone: "danger",
                         })) return;
@@ -629,7 +806,7 @@ export function TasksPage() {
                           await api.retryTask(canvas.id);
                           flash("已清空历史并重新开始执行");
                         } catch (e) {
-                          flash(`重试失败：${e instanceof Error ? e.message : e}`);
+                          flash(composeRetryErrorMessage(e));
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"

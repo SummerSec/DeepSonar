@@ -53,6 +53,7 @@ import {
 import { createReportConvergenceApplication } from "./domains/report-convergence/index.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
+import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
 
 export { sha16 } from "./domains/event-ingestion/index.js";
 
@@ -819,6 +820,8 @@ export interface EnsureCanvasInput {
   triggerSource?: string;
   triggerEventId?: string;
   triggerPayload?: Record<string, unknown>;
+  /** Scheduler-only authority: only the human task route may select project history. */
+  allowComposeSeeds?: boolean;
 }
 
 function parseStoredFindingProtocolConfig(value: unknown) {
@@ -851,14 +854,19 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
     );
     const taskConfig = parseStoredFindingProtocolConfig(input.target.finding_protocol);
     const effectiveFindingProtocol = resolveFindingProtocol(globalConfig, projectConfig, taskConfig);
-    const target = {
-      ...input.target,
-      effective_finding_protocol: effectiveFindingProtocol,
-      network_policy: {
-        allow_egress:
-          typeof requestedPolicy.allow_egress === "boolean" ? requestedPolicy.allow_egress : effectiveRules.allowEgress,
+    const target = await freezeTaskSeedTarget(
+      tx as unknown as typeof sql,
+      input.projectId,
+      {
+        ...input.target,
+        effective_finding_protocol: effectiveFindingProtocol,
+        network_policy: {
+          allow_egress:
+            typeof requestedPolicy.allow_egress === "boolean" ? requestedPolicy.allow_egress : effectiveRules.allowEgress,
+        },
       },
-    };
+      input.allowComposeSeeds === true,
+    );
     let canvasId: string | null = null;
     let created = false;
 
@@ -922,7 +930,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
 
     if (created) {
       // root 节点：任务目标挂在 body_json.target；canvas_nodes_root_uniq 保证并发安全
-      await tx`
+      const [rootNode] = await tx`
         INSERT INTO canvas_nodes ${tx({
           canvas_id: canvasId,
           job_id: null,
@@ -933,7 +941,16 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
           y: 100,
           status: "active",
         })}
-        ON CONFLICT DO NOTHING`;
+        ON CONFLICT DO NOTHING
+        RETURNING id`;
+      if (rootNode) {
+        await insertTaskSeedProjections(
+          tx as unknown as typeof sql,
+          canvasId,
+          rootNode.id as string,
+          target,
+        );
+      }
     }
     return canvasId;
   });

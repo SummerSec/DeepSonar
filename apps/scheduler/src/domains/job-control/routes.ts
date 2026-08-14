@@ -20,6 +20,7 @@ import { revokeJobTokens } from "../../gateway.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { planeWriteback } from "../../plane-sync.js";
 import { runner } from "../../runtime.js";
+import { TaskSeedInputError } from "../../task-compose.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recoverCancelledDerivedJob } from "./recovery.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
@@ -90,12 +91,20 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       });
     }
     // 一任务一画布：有 issue 复用（重试），无 issue 每次新建 ad-hoc 画布
-    const canvasId = await ensureCanvasForTask({
-      projectId: body.project_id,
-      planeIssueId: body.plane_issue_id,
-      title: body.title ?? `${body.type} 任务`,
-      target: { type: body.type, ...payload },
-    });
+    let canvasId: string;
+    try {
+      canvasId = await ensureCanvasForTask({
+        projectId: body.project_id,
+        planeIssueId: body.plane_issue_id,
+        title: body.title ?? `${body.type} 任务`,
+        target: { type: body.type, ...payload },
+      });
+    } catch (error) {
+      if (error instanceof TaskSeedInputError) {
+        return reply.code(400).send({ error: error.message, error_code: "TASK_SEEDS_NOT_ALLOWED" });
+      }
+      throw error;
+    }
     const { job, duplicated } = await createJob({
       projectId: body.project_id,
       canvasId,

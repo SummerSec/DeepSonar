@@ -148,6 +148,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const hasChildren = childCount > 0;
 
   const verification =
+  const importedSeed = semantic === "finding" && n.body_json?.origin === "seed" && n.body_json?.readonly === true;
     n.node_type === "fact" && n.verification_status
       ? (VERIFICATION_META[n.verification_status] ?? {
           label: n.verification_status,
@@ -246,6 +247,11 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                     style={{
                       color: displayColor,
                       borderColor: `${displayColor}55`,
+                {importedSeed && (
+                  <span className="rounded border border-amber-400/25 bg-amber-400/[.08] px-1.5 py-0.5 font-mono text-[9px] text-amber-300" title="从项目已确认 Finding 冻结的只读种子">
+                    SEED · 只读
+                  </span>
+                )}
                       background: `color-mix(in srgb, ${displayColor} 10%, transparent)`,
                     }}
                     title={roleOrType}
