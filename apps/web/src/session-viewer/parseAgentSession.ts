@@ -17,6 +17,7 @@ export type SessionItemKind =
   | "assistant"
   | "tool_call"
   | "tool_result"
+  | "broadcast"
   | "system"
   | "usage"
   | "other";
@@ -208,6 +209,7 @@ function detectFormat(
     if (type === "user" || type === "assistant" || type === "system" || type === "progress") {
       if (asRecord(row.message) || row.sessionId || row.uuid) return "claude-code";
     }
+    if (type === "queue-operation") return "claude-code";
     if (
       type === "agent_start"
       || type === "agent_end"
@@ -241,16 +243,47 @@ function detectFormat(
   return "unknown";
 }
 
+const CLAUDE_CANVAS_BROADCAST_PREFIX = "[DeepSonar 画布增量通知]";
+
+function claudeBlockText(block: Record<string, unknown>): string | undefined {
+  if (typeof block.thinking === "string") return asString(block.thinking);
+  if (typeof block.text === "string") return asString(block.text);
+  if (block.type !== "tool_result" && typeof block.content === "string") return asString(block.content);
+  return undefined;
+}
+
+function claudeBroadcastTitle(content: string): string {
+  const titleLine = content.split(/\r?\n/).find((line) => /^\s*title\s*:/i.test(line));
+  const title = titleLine?.replace(/^\s*title\s*:\s*/i, "").trim();
+  return title ? `广播 · ${truncate(title, 200)}` : "画布广播";
+}
+
+function claudeQueueOperation(row: Record<string, unknown>, index: number, timestamp?: string): SessionTimelineItem[] {
+  if (asString(row.operation)?.toLowerCase() !== "enqueue") return [];
+  const content = asString(row.content) ?? asString(row.message);
+  if (!content?.trimStart().startsWith(CLAUDE_CANVAS_BROADCAST_PREFIX)) return [];
+  return [{
+    id: `${index}-broadcast`,
+    kind: "broadcast",
+    title: claudeBroadcastTitle(content),
+    body: content,
+    timestamp,
+  }];
+}
+
 function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
   const type = asString(row.type) ?? "other";
   const message = asRecord(row.message);
   const ts = asString(row.timestamp) ?? asString(row.created_at);
   const items: SessionTimelineItem[] = [];
 
+  if (type === "queue-operation") return claudeQueueOperation(row, index, ts);
+
   if (type === "user" || type === "assistant" || type === "system") {
     const role = asString(message?.role) ?? type;
+    const roleKind: SessionItemKind = role === "user" ? "user" : role === "system" ? "system" : "assistant";
+    const roleTitle = role === "user" ? "用户" : role === "system" ? "系统" : "助手";
     const content = message?.content ?? row.content;
-    const text = contentToText(content);
     if (Array.isArray(content)) {
       for (const [i, block] of content.entries()) {
         const rec = asRecord(block);
@@ -273,19 +306,40 @@ function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTim
             timestamp: ts,
             isError: rec.is_error === true,
           });
+        } else {
+          const blockText = claudeBlockText(rec);
+          if (blockText) {
+            const thinking = rec.type === "thinking" || typeof rec.thinking === "string";
+            items.push({
+              id: `${index}-${role}-${i}`,
+              kind: roleKind,
+              title: roleKind === "assistant" && thinking ? "思考" : roleTitle,
+              body: blockText,
+              timestamp: ts,
+            });
+          }
         }
       }
-    }
-    if (text || items.length === 0) {
-      items.unshift({
+      if (items.length === 0) {
+        items.unshift({
+          id: `${index}-${role}`,
+          kind: roleKind,
+          title: roleTitle,
+          timestamp: ts,
+        });
+      }
+    } else {
+      const text = contentToText(content);
+      items.push({
         id: `${index}-${role}`,
-        kind: role === "user" ? "user" : role === "system" ? "system" : "assistant",
-        title: role === "user" ? "用户" : role === "system" ? "系统" : "助手",
+        kind: roleKind,
+        title: roleTitle,
         body: text || undefined,
         timestamp: ts,
-        tokens: extractUsage(row) ?? (message ? extractUsage(message) : undefined),
       });
     }
+    const tokens = extractUsage(row) ?? (message ? extractUsage(message) : undefined);
+    if (tokens && items.length > 0) items[0].tokens = tokens;
     return items;
   }
 

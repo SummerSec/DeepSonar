@@ -29,6 +29,7 @@ const KIND_STYLE: Record<SessionItemKind, { label: string; className: string }> 
   assistant: { label: "助手", className: "bg-emerald-500/15 text-emerald-300 ring-emerald-400/25" },
   tool_call: { label: "工具", className: "bg-violet-500/15 text-violet-300 ring-violet-400/25" },
   tool_result: { label: "结果", className: "bg-amber-500/15 text-amber-300 ring-amber-400/25" },
+  broadcast: { label: "广播", className: "bg-cyan-500/15 text-cyan-300 ring-cyan-400/25" },
   system: { label: "系统", className: "bg-zinc-500/15 text-zinc-300 ring-zinc-400/25" },
   usage: { label: "用量", className: "bg-cyan-500/15 text-cyan-300 ring-cyan-400/25" },
   other: { label: "其他", className: "bg-zinc-600/20 text-zinc-400 ring-zinc-500/20" },

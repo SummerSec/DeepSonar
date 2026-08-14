@@ -47,6 +47,71 @@ test("parses Claude Code user/assistant/tool_use timeline", () => {
   assert.ok(result.totals.output >= 40);
 });
 
+test("Claude 数组块按原顺序解析且用量只累计一次", () => {
+  const text = JSON.stringify({
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "先检查证据" },
+        { type: "text", text: "开始分析" },
+        { type: "tool_use", name: "Read", input: { path: "a.ts" } },
+        { type: "text", text: "继续分析" },
+      ],
+      usage: { input_tokens: 20, output_tokens: 8 },
+    },
+  });
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  assert.deepEqual(result.items.map((item) => [item.kind, item.title, item.body]), [
+    ["assistant", "思考", "先检查证据"],
+    ["assistant", "助手", "开始分析"],
+    ["tool_call", "调用 Read", JSON.stringify({ path: "a.ts" }, null, 2)],
+    ["assistant", "助手", "继续分析"],
+  ]);
+  assert.equal(result.items.filter((item) => item.tokens).length, 1);
+  assert.equal(result.totals.input, 20);
+  assert.equal(result.totals.output, 8);
+});
+
+test("Claude 工具结果用户行不生成占位且混合文本不泄漏结果", () => {
+  const text = [
+    JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "one", content: "工具输出" }] },
+    }),
+    JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "two", content: "另一条输出" },
+          { type: "text", text: "请继续分析" },
+        ],
+      },
+    }),
+  ].join("\n");
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  const users = result.items.filter((item) => item.kind === "user");
+  assert.equal(users.length, 1);
+  assert.equal(users[0]?.body, "请继续分析");
+  assert.equal(result.items.filter((item) => item.kind === "tool_result").length, 2);
+});
+
+test("Claude 只把带前缀的 enqueue 归一化为画布广播", () => {
+  const broadcast = "[DeepSonar 画布增量通知]\nnode_id: node-1\ntitle: 登录旁路\nsource_job_id: job-1";
+  const text = [
+    JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "初始任务 prompt" }),
+    JSON.stringify({ type: "queue-operation", operation: "enqueue", content: `  ${broadcast}` }),
+    JSON.stringify({ type: "queue-operation", operation: "dequeue", content: broadcast }),
+    JSON.stringify({ type: "queue-operation", operation: "remove", content: broadcast }),
+  ].join("\n");
+  const result = parseAgentSession(text);
+  assert.equal(result.format, "claude-code");
+  assert.deepEqual(result.items.map((item) => ({ kind: item.kind, title: item.title, body: item.body })), [
+    { kind: "broadcast", title: "广播 · 登录旁路", body: `  ${broadcast}` },
+  ]);
+});
+
 test("parses Codex event_msg and response_item tool calls", () => {
   const text = [
     JSON.stringify({ type: "session_meta", payload: { id: "s1", model: "gpt-5" } }),
