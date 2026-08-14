@@ -79,6 +79,10 @@ if (!testDatabaseUrl) {
         VALUES (${globalRoleConfigId}, ${roleId}, NULL, 'claude-code', 'claude-sonnet-4-5'),
                (${ownRoleConfigId}, ${roleId}, ${ownProjectId}, 'claude-code', 'claude-sonnet-4-5'),
                (${otherRoleConfigId}, ${roleId}, ${otherProjectId}, 'claude-code', 'claude-sonnet-4-5')`;
+      // 策略迁移后列中可能残留旧项目镜像值；API 投影与写入必须将其视为无效。
+      await sql`
+        UPDATE role_configs SET runtime_image_key = 'legacy-project-image'
+        WHERE id = ${ownRoleConfigId}`;
 
       const createCredential = async (name: string, projectId: string | null) => {
         const id = randomUUID();
@@ -144,6 +148,7 @@ if (!testDatabaseUrl) {
       const projectView = JSON.parse(projectResponse.payload).find((row: { role_id: string }) => row.role_id === roleId);
       assert.ok(projectView?.project_config);
       assert.deepEqual(projectView.project_config.credentials, [], "malformed own binding must be hidden");
+      assert.equal(projectView.project_config.runtime_image_key, null);
       assert.equal(JSON.stringify(projectView).includes(otherCredentialId), false);
       assert.equal(JSON.stringify(projectView).includes("scope-other"), false);
       const crossProjectRead = await inject("GET", `/projects/${otherProjectId}/role-configs`);
@@ -163,6 +168,7 @@ if (!testDatabaseUrl) {
         assert.equal(JSON.stringify(row).includes(otherCredentialId), false);
         assert.equal(JSON.stringify(row).includes("scope-other"), false);
       }
+      assert.equal(bindableOwn.runtime_image_key, null);
       assert.equal(bindable.some((row) => row.id === otherRoleConfigId), false);
 
       const [globalBefore] = await sql`SELECT version FROM role_configs WHERE id = ${globalRoleConfigId}`;
@@ -181,12 +187,33 @@ if (!testDatabaseUrl) {
       const [roleAfterDeniedMutation] = await sql`SELECT description FROM agent_roles WHERE id = ${roleId}`;
       assert.equal(roleAfterDeniedMutation.description, "before");
 
+      const rejectedImagePut = await inject("PUT", `/projects/${ownProjectId}/role-configs/${roleId}`, {
+        agent_cli: "claude-code",
+        runtime_image_key: "deepsonar-chrome-audit",
+        credentials: [],
+      });
+      assert.equal(rejectedImagePut.statusCode, 400, rejectedImagePut.payload);
+      assert.match(JSON.parse(rejectedImagePut.payload).error, /不接受 runtime_image_key/);
+      const [legacyAfterRejectedPut] = await sql`
+        SELECT runtime_image_key FROM role_configs WHERE id = ${ownRoleConfigId}`;
+      assert.equal(legacyAfterRejectedPut.runtime_image_key, "legacy-project-image");
+      const rejectedImagePatch = await inject("PATCH", `/role-configs/${ownRoleConfigId}/runtime-image`, {
+        runtime_image_key: "deepsonar-chrome-audit",
+      });
+      assert.equal(rejectedImagePatch.statusCode, 400, rejectedImagePatch.payload);
+      assert.match(JSON.parse(rejectedImagePatch.payload).error, /不接受 runtime_image_key/);
+
       const ownPut = await inject("PUT", `/projects/${ownProjectId}/role-configs/${roleId}`, {
         agent_cli: "claude-code",
         credentials: [],
       });
       assert.equal(ownPut.statusCode, 200, ownPut.payload);
-      assert.equal(JSON.parse(ownPut.payload).project_id, ownProjectId);
+      const ownPutView = JSON.parse(ownPut.payload);
+      assert.equal(ownPutView.project_id, ownProjectId);
+      assert.equal(ownPutView.runtime_image_key, null);
+      const [legacyAfterClear] = await sql`
+        SELECT runtime_image_key FROM role_configs WHERE id = ${ownRoleConfigId}`;
+      assert.equal(legacyAfterClear.runtime_image_key, null);
       const ownDelete = await inject("DELETE", `/projects/${ownProjectId}/role-configs/${roleId}`);
       assert.equal(ownDelete.statusCode, 200, ownDelete.payload);
       const [ownAfterDelete] = await sql`SELECT id FROM role_configs WHERE id = ${ownRoleConfigId}`;

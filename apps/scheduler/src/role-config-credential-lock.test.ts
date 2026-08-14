@@ -4,6 +4,7 @@ import test from "node:test";
 
 const roleConfigRoutesSource = readFileSync(new URL("./domains/role-config/routes.ts", import.meta.url), "utf8");
 const credentialRoutesSource = readFileSync(new URL("./domains/credential/routes.ts", import.meta.url), "utf8");
+const projectExportSource = readFileSync(new URL("./transfer/export.ts", import.meta.url), "utf8");
 const projectImportSource = readFileSync(new URL("./transfer/import.ts", import.meta.url), "utf8");
 const platformImportSource = readFileSync(new URL("./transfer/platform.ts", import.meta.url), "utf8");
 
@@ -49,11 +50,21 @@ test("项目 RoleConfig 镜像字段由项目策略统一管理", () => {
   const validationEnd = roleConfigRoutesSource.indexOf("async function upsertRoleConfigInTx(", validationStart);
   const validation = roleConfigRoutesSource.slice(validationStart, validationEnd);
   assert.match(validation, /projectId && body\.runtime_image_key != null/);
-  assert.match(validation, /项目 RoleConfig 不再直接设置 runtime_image_key/);
+  assert.match(validation, /项目 RoleConfig 不接受 runtime_image_key/);
+  assert.match(validation, /!projectId && body\.runtime_image_key/);
+  assert.match(roleConfigRoutesSource, /runtime_image_key: projectId \? null : body\.runtime_image_key \?\? null/);
+  assert.match(roleConfigRoutesSource, /runtime_image_key: cfg\.project_id \? null : cfg\.runtime_image_key \?\? null/);
+  assert.match(roleConfigRoutesSource, /runtime_image_key: row\.runtime_image_key \?\? null/);
 
   const runtimePatchStart = roleConfigRoutesSource.indexOf('app.patch("/role-configs/:id/runtime-image"');
   const runtimePatchEnd = roleConfigRoutesSource.indexOf('app.get("/role-configs/bindable"', runtimePatchStart);
   const runtimePatch = roleConfigRoutesSource.slice(runtimePatchStart, runtimePatchEnd);
   assert.match(runtimePatch, /if \(projectId\)/);
-  assert.match(runtimePatch, /项目 RoleConfig 不再直接设置 runtime_image_key/);
+  assert.match(runtimePatch, /项目 RoleConfig 不接受 runtime_image_key/);
+  assert.match(runtimePatch, /!projectId && body\.runtime_image_key/);
+});
+
+test("项目 RoleConfig 导入导出不会把遗留镜像列当作项目策略", () => {
+  assert.match(projectExportSource, /runtime_image_key: null/);
+  assert.match(projectImportSource, /runtime_image_key: null/);
 });

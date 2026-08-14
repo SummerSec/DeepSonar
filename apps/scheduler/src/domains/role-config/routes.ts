@@ -60,7 +60,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     db: typeof sql = sql,
   ): Promise<string | null> {
     if (projectId && body.runtime_image_key != null) {
-      return "项目 RoleConfig 不再直接设置 runtime_image_key，请传 null 并使用项目镜像策略";
+      return "项目 RoleConfig 不接受 runtime_image_key，请使用项目镜像策略";
     }
     let sandboxLimits: ReturnType<typeof parseSandboxLimitsOverride>;
     try {
@@ -88,7 +88,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         return `模块 selector 非法（${selector}）: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
-    if (body.runtime_image_key) {
+    if (!projectId && body.runtime_image_key) {
       const [image] = await db`
         SELECT ri.id, ri.official, ri.project_opt_in,
                EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted') AS has_trusted,
@@ -97,8 +97,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
         WHERE ri.image_key = ${body.runtime_image_key} AND ri.enabled = true`;
       if (!image) return `runtime_image_key 不存在或已禁用: ${body.runtime_image_key}`;
-      // Official catalog (含 project_opt_in 专项如 OpenHarmony) 可先写到 RoleConfig；
-      // Job 解析时仍按项目启用强制。仅第三方必须在项目 RoleConfig 上且已项目启用。
+      // 这里只校验全局 RoleConfig 的镜像绑定；项目 RoleConfig 已在上方拒绝该字段。
       const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official;
       if (!image.has_trusted && !fakeOfficialCatalogImage) return `runtime_image_key 没有可信版本: ${body.runtime_image_key}`;
       if (!image.official && (!projectId || image.project_enabled !== true)) {
@@ -380,9 +379,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     }
     const projectId = row.project_id ? String(row.project_id) : null;
     if (projectId) {
-      return reply.code(400).send({ error: "项目 RoleConfig 不再直接设置 runtime_image_key，请传 null 并使用项目镜像策略" });
+      return reply.code(400).send({ error: "项目 RoleConfig 不接受 runtime_image_key，请使用项目镜像策略" });
     }
-    if (body.runtime_image_key) {
+    if (!projectId && body.runtime_image_key) {
       const [image] = await sql`
         SELECT ri.id, ri.official, ri.project_opt_in,
                EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted') AS has_trusted,
@@ -393,8 +392,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       if (!image) {
         return reply.code(400).send({ error: `runtime_image_key 不存在或已禁用: ${body.runtime_image_key}` });
       }
-      // Official catalog (含 OpenHarmony 等 project_opt_in 专项) 与市场一致可选；
-      // Job 解析时仍要求项目启用。第三方仍须项目启用。
+      // 该 PATCH 只允许修改全局 RoleConfig；项目 RoleConfig 已在上方拒绝镜像字段。
       const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official;
       if (!image.has_trusted && !fakeOfficialCatalogImage) {
         return reply.code(400).send({ error: `runtime_image_key 没有可信版本: ${body.runtime_image_key}` });

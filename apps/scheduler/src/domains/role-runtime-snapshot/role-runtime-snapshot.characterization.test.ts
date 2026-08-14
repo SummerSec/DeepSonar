@@ -24,6 +24,8 @@ test("项目镜像策略按全局继承与项目托管分别选择镜像", () =>
   });
   const inherited = parseProjectImagePolicy({
     image_strategy: "inherit_global",
+    // 项目 RoleConfig 的遗留 runtime_image_key 也不能成为策略输入。
+    runtime_image_key: "deepsonar-chrome-audit",
     // 遗留项目 RoleConfig 镜像值不在策略输入中，必须继承全局 RoleConfig。
     role_runtime_images: { audit: "deepsonar-chrome-audit" },
   });
