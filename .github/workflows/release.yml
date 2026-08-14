@@ -1033,7 +1033,13 @@ jobs:
           arm64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-arm64.json")"
           [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          source_refs=("${IMAGE_NAME}@${amd64_digest}" "${IMAGE_NAME}@${arm64_digest}")
+          amd64_source="${IMAGE_NAME}@${amd64_digest}"
+          arm64_source="${IMAGE_NAME}@${arm64_digest}"
+          mapfile -t amd64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$amd64_source" "linux/amd64")
+          mapfile -t arm64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$arm64_source" "linux/arm64")
+          [[ ${#amd64_sources[@]} -eq 1 ]]
+          [[ ${#arm64_sources[@]} -eq 1 ]]
+          source_refs=("${amd64_sources[0]}" "${arm64_sources[0]}")
           annotation_args=(
             --annotation "index:org.opencontainers.image.title=${{ matrix.title }}"
             --annotation "index:org.opencontainers.image.description=${{ matrix.description }}"
@@ -1064,14 +1070,14 @@ jobs:
           primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
           digest="$(docker buildx imagetools inspect "$primary" | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' | head -n1)"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          immutable_primary="${primary}@${digest}"
+          clean_source="${IMAGE_NAME}@${digest}"
           if [[ "$ACR_CONFIGURED" == "true" ]]; then
             tag_args "$ACR_TAGS" acr_tag_args
-            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"
+            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"
           fi
           if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
             tag_args "$DOCKERHUB_TAGS" dockerhub_tag_args
-            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"; then
               echo '::warning::Docker Hub tag publication failed; refusing an unchecked Chrome release record'
               exit 1
             fi

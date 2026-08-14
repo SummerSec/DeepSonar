@@ -6,6 +6,12 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 Changes intended for the next release go here before a release section is dated and tagged.
 
+## [0.1.29] - 2026-08-14
+
+### Fixed
+
+- Fixed Chrome runtime promotion to strip BuildKit provenance attestations before assembling the clean multi-architecture index copied to ACR and Docker Hub. The failed immutable `v0.1.28` tag is not reused.
+
 ## [0.1.28] - 2026-08-13
 
 ### Added
@@ -185,6 +191,7 @@ Changes intended for the next release go here before a release section is dated 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.29]: https://github.com/SummerSec/DeepSonar/compare/v0.1.28...v0.1.29
 [0.1.28]: https://github.com/SummerSec/DeepSonar/compare/v0.1.27...v0.1.28
 [0.1.27]: https://github.com/SummerSec/DeepSonar/compare/v0.1.26...v0.1.27
 [0.1.26]: https://github.com/SummerSec/DeepSonar/compare/v0.1.25...v0.1.26
