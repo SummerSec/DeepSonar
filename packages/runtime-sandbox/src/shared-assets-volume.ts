@@ -6,7 +6,10 @@ import { promisify } from "node:util";
 import { SHARED_ASSETS_JOB_LABEL, SHARED_ASSETS_VOLUME_LABEL, assertSharedAssetsVolumeOwnership } from "./agentbox.js";
 
 const execFileP = promisify(execFile);
-const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i;
+const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MANAGED_VOLUME_NAME_RE = /^deepsonar-assets-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+const VOLUME_REMOVE_MAX_ATTEMPTS = 3;
+const VOLUME_REMOVE_RETRY_BASE_DELAY_MS = 100;
 
 async function docker(...args: string[]): Promise<string> {
   const { stdout } = await execFileP("docker", args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
@@ -14,6 +17,11 @@ async function docker(...args: string[]): Promise<string> {
 }
 
 type DockerCommand = (...args: string[]) => Promise<string>;
+type Sleep = (delayMs: number) => Promise<void>;
+
+async function sleep(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
 
 export interface SharedAssetVolumeFile {
   sourcePath: string;
@@ -23,12 +31,53 @@ export interface SharedAssetVolumeFile {
 export interface SharedAssetsVolumeManager {
   prepare(input: { jobId: string; image: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null>;
   removeForJob(jobId: string): Promise<void>;
-  listManaged(): Promise<Array<{ volumeName: string; jobId: string }>>;
+  listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>>;
 }
 
 function volumeName(jobId: string): string {
   if (!JOB_ID_RE.test(jobId)) throw new Error("invalid shared-assets Job id");
   return `deepsonar-assets-${jobId.toLowerCase()}`;
+}
+
+function jobIdFromVolumeName(name: string): string | null {
+  return MANAGED_VOLUME_NAME_RE.exec(name)?.[1] ?? null;
+}
+
+interface SharedAssetsVolumeInspection {
+  Name?: unknown;
+  Driver?: unknown;
+  Scope?: unknown;
+  Labels?: unknown;
+  CreatedAt?: unknown;
+}
+
+function isManagedInspection(
+  inspected: SharedAssetsVolumeInspection,
+  name: string,
+  jobId: string,
+): boolean {
+  if (inspected.Name !== name || inspected.Driver !== "local" || inspected.Scope !== "local") return false;
+  const labelsValue = inspected.Labels;
+  if (labelsValue !== undefined && labelsValue !== null && (typeof labelsValue !== "object" || Array.isArray(labelsValue))) {
+    return false;
+  }
+  const labels = labelsValue && typeof labelsValue === "object"
+    ? labelsValue as Record<string, unknown>
+    : {};
+  if (labels[SHARED_ASSETS_VOLUME_LABEL] !== undefined && labels[SHARED_ASSETS_VOLUME_LABEL] !== "true") return false;
+  const labeledJobId = labels[SHARED_ASSETS_JOB_LABEL];
+  if (labeledJobId !== undefined && (typeof labeledJobId !== "string" || !JOB_ID_RE.test(labeledJobId) || labeledJobId.toLowerCase() !== jobId)) {
+    return false;
+  }
+  return true;
+}
+
+function isMissingVolumeError(error: unknown): boolean {
+  const detail = error && typeof error === "object" && "stderr" in error
+    ? String((error as { stderr?: unknown }).stderr ?? "")
+    : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such volume|no volume with name .* found|volume .* (?:not found|does not exist)/i.test(`${message}\n${detail}`);
 }
 
 function safeRelativePath(input: string): string {
@@ -42,21 +91,25 @@ function safeRelativePath(input: string): string {
 export class NoopSharedAssetsVolumeManager implements SharedAssetsVolumeManager {
   async prepare(): Promise<null> { return null; }
   async removeForJob(): Promise<void> {}
-  async listManaged(): Promise<Array<{ volumeName: string; jobId: string }>> { return []; }
+  async listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>> { return []; }
 }
 
 export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManager {
-  constructor(private readonly executeDocker: DockerCommand = docker) {}
+  constructor(
+    private readonly executeDocker: DockerCommand = docker,
+    private readonly wait: Sleep = sleep,
+  ) {}
 
   async prepare(input: { jobId: string; image: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null> {
     if (input.files.length === 0) return null;
     const name = volumeName(input.jobId);
-    const helper = `deepsonar-assets-writer-${input.jobId.toLowerCase()}`;
+    const canonicalJobId = name.slice("deepsonar-assets-".length);
+    const helper = `deepsonar-assets-writer-${canonicalJobId}`;
     await this.executeDocker("rm", "-f", helper).catch(() => "");
-    await this.removeForJob(input.jobId);
-    await this.executeDocker("volume", "create", "--driver", "local", "--label", `${SHARED_ASSETS_VOLUME_LABEL}=true`, "--label", `${SHARED_ASSETS_JOB_LABEL}=${input.jobId}`, name);
+    await this.removeForJob(canonicalJobId);
+    await this.executeDocker("volume", "create", "--driver", "local", "--label", `${SHARED_ASSETS_VOLUME_LABEL}=true`, "--label", `${SHARED_ASSETS_JOB_LABEL}=${canonicalJobId}`, name);
     const inspected = JSON.parse(await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}")) as Record<string, unknown>;
-    assertSharedAssetsVolumeOwnership(inspected, name, input.jobId);
+    assertSharedAssetsVolumeOwnership(inspected, name, canonicalJobId);
 
     const staging = await mkdtemp(path.join(os.tmpdir(), "deepsonar-assets-"));
     let helperCleanupRequired = false;
@@ -96,7 +149,7 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
     }
     if (volumeCleanupRequired) {
       try {
-        await this.executeDocker("volume", "rm", "-f", name);
+        await this.removeVolumeWithRetry(name);
       } catch (error) {
         if (!cleanupFailed) {
           cleanupFailed = true;
@@ -119,25 +172,75 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
 
   async removeForJob(jobId: string): Promise<void> {
     const name = volumeName(jobId);
-    let inspected: Record<string, unknown>;
-    try {
-      inspected = JSON.parse(await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}")) as Record<string, unknown>;
-    } catch { return; }
-    assertSharedAssetsVolumeOwnership(inspected, name, jobId);
-    await this.executeDocker("volume", "rm", "-f", name);
+    const inspected = await this.inspectVolumeWithRetry(name);
+    if (!inspected) return;
+    const canonicalJobId = name.slice("deepsonar-assets-".length);
+    if (!isManagedInspection(inspected, name, canonicalJobId)) {
+      throw new Error("共享资产卷不是该 Job 的本地调度器管理卷");
+    }
+    await this.removeVolumeWithRetry(name);
   }
 
-  async listManaged(): Promise<Array<{ volumeName: string; jobId: string }>> {
-    const names = (await this.executeDocker("volume", "ls", "--filter", `label=${SHARED_ASSETS_VOLUME_LABEL}=true`, "--format", "{{.Name}}"))
-      .split(/\r?\n/).filter(Boolean);
-    const result: Array<{ volumeName: string; jobId: string }> = [];
+  async listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>> {
+    const [labeledNames, prefixedNames] = await Promise.all([
+      this.executeDocker("volume", "ls", "--filter", `label=${SHARED_ASSETS_VOLUME_LABEL}=true`, "--format", "{{.Name}}"),
+      this.executeDocker("volume", "ls", "--filter", "name=deepsonar-assets-", "--format", "{{.Name}}"),
+    ]);
+    const names = new Set([
+      ...labeledNames.split(/\r?\n/).filter(Boolean),
+      ...prefixedNames.split(/\r?\n/).filter(Boolean),
+    ]);
+    const result: Array<{ volumeName: string; jobId: string; createdAt?: string }> = [];
     for (const name of names) {
-      const inspected = JSON.parse(await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}")) as { Labels?: Record<string, string> };
-      const jobId = inspected.Labels?.[SHARED_ASSETS_JOB_LABEL];
+      const jobId = jobIdFromVolumeName(name);
       if (!jobId) continue;
-      assertSharedAssetsVolumeOwnership(inspected, name, jobId);
-      result.push({ volumeName: name, jobId });
+      let inspected: SharedAssetsVolumeInspection;
+      try {
+        inspected = JSON.parse(await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}")) as SharedAssetsVolumeInspection;
+      } catch {
+        continue;
+      }
+      if (!isManagedInspection(inspected, name, jobId)) continue;
+      result.push({
+        volumeName: name,
+        jobId,
+        ...(typeof inspected.CreatedAt === "string" ? { createdAt: inspected.CreatedAt } : {}),
+      });
     }
     return result;
+  }
+
+  private async removeVolumeWithRetry(name: string): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= VOLUME_REMOVE_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await this.executeDocker("volume", "rm", "-f", name);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < VOLUME_REMOVE_MAX_ATTEMPTS) {
+          await this.wait(VOLUME_REMOVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private async inspectVolumeWithRetry(name: string): Promise<Record<string, unknown> | null> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= VOLUME_REMOVE_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return JSON.parse(
+          await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}"),
+        ) as Record<string, unknown>;
+      } catch (error) {
+        if (isMissingVolumeError(error)) return null;
+        lastError = error;
+        if (attempt < VOLUME_REMOVE_MAX_ATTEMPTS) {
+          await this.wait(VOLUME_REMOVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+        }
+      }
+    }
+    throw lastError;
   }
 }

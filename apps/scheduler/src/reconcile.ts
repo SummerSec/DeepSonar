@@ -1,5 +1,6 @@
 import { forceRemoveContainer, listDeepSonarContainers } from "@deepsonar/runtime-sandbox";
 import { sql } from "./db.js";
+import { inc, setGauge } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
@@ -33,7 +34,10 @@ export async function reconcileOnBoot(): Promise<void> {
     if (activeJobIds.has(volume.jobId)) continue;
     await sharedAssetsVolumeManager.removeForJob(volume.jobId)
       .then(() => console.warn(`[reconcile] 回收孤儿共享资产卷 ${volume.volumeName}`))
-      .catch((e) => console.error(`[reconcile] 共享资产卷回收失败 ${volume.volumeName}:`, e instanceof Error ? e.message : e));
+      .catch((e) => {
+        inc("deepsonar_shared_assets_cleanup_failed_total");
+        console.error(`[reconcile] 共享资产卷回收失败 ${volume.volumeName}:`, e instanceof Error ? e.message : e);
+      });
   }
 
   // 1. 孤儿容器（标签指向的 job 已非活动）
@@ -50,7 +54,9 @@ export async function reconcileOnBoot(): Promise<void> {
     console.warn(`[reconcile] ${provisionRecovery.requeued.length} 个 provision 尚未开始的 job 已重置回 pending`);
   }
   for (const job of provisionRecovery.requeued) {
-    await sharedAssetsVolumeManager.removeForJob(job.id as string).catch(() => undefined);
+    await sharedAssetsVolumeManager.removeForJob(job.id as string).catch(() => {
+      inc("deepsonar_shared_assets_cleanup_failed_total");
+    });
   }
 
   // provision 外部效果未知的 Job 已由生命周期事务标记 orphan；执行与 running
@@ -59,7 +65,9 @@ export async function reconcileOnBoot(): Promise<void> {
     const jobId = String(job.id);
     const cid = (job.sandbox_id as string | null) ?? containerByJob.get(jobId);
     if (cid) await forceRemoveContainer(cid).catch(() => {});
-    await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => undefined);
+    await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => {
+      inc("deepsonar_shared_assets_cleanup_failed_total");
+    });
     await closeOrphanJob(job);
   }
 
@@ -82,16 +90,38 @@ export async function reconcileOnBoot(): Promise<void> {
       await forceRemoveContainer(cid)
         .catch((e) => console.error(`[reconcile] 容器回收失败 ${cid}:`, e instanceof Error ? e.message : e));
     }
-    await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => undefined);
+    await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => {
+      inc("deepsonar_shared_assets_cleanup_failed_total");
+    });
     await closeOrphanJob(j);
   }
   if (orphaned.length > 0) {
     console.warn(`[reconcile] ${orphaned.length} 个 running job 已标记 orphan（可 resume）`);
   }
 
+  await refreshSharedAssetsOrphanMetrics();
+
   if (containers.length > 0 || provisionRecovery.requeued.length > 0 || provisionRecovery.orphaned.length > 0 || orphaned.length > 0) {
     console.log(`[reconcile] 完成：容器 ${containers.length}，重置 ${provisionRecovery.requeued.length}，provision orphan ${provisionRecovery.orphaned.length}，running orphan ${orphaned.length}`);
   }
+}
+
+async function refreshSharedAssetsOrphanMetrics(): Promise<void> {
+  const activeJobs = await sql<Array<{ id: string }>>`
+    SELECT id FROM jobs
+     WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`;
+  const activeJobIds = new Set(activeJobs.map((job) => String(job.id)));
+  const remainingOrphans = (await sharedAssetsVolumeManager.listManaged())
+    .filter((volume) => !activeJobIds.has(volume.jobId));
+  const now = Date.now();
+  const oldestAgeSeconds = remainingOrphans.reduce((maximum, volume) => {
+    if (!volume.createdAt) return maximum;
+    const createdAt = Date.parse(volume.createdAt);
+    if (!Number.isFinite(createdAt)) return maximum;
+    return Math.max(maximum, (now - createdAt) / 1_000);
+  }, 0);
+  setGauge("deepsonar_shared_assets_orphan_volumes", remainingOrphans.length);
+  setGauge("deepsonar_shared_assets_orphan_volume_age_seconds", Math.max(0, oldestAgeSeconds));
 }
 
 async function closeOrphanJob(job: Record<string, unknown>): Promise<void> {

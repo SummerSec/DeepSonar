@@ -10,15 +10,18 @@ const jobId = "123e4567-e89b-12d3-a456-426614174000";
 const volumeName = `deepsonar-assets-${jobId}`;
 const helperName = `deepsonar-assets-writer-${jobId}`;
 
-function inspectedVolume(): string {
+function inspectedVolume(
+  name = volumeName,
+  labels: Record<string, string> | null = {
+    [SHARED_ASSETS_VOLUME_LABEL]: "true",
+    [SHARED_ASSETS_JOB_LABEL]: jobId,
+  },
+): string {
   return JSON.stringify({
-    Name: volumeName,
+    Name: name,
     Driver: "local",
     Scope: "local",
-    Labels: {
-      [SHARED_ASSETS_VOLUME_LABEL]: "true",
-      [SHARED_ASSETS_JOB_LABEL]: jobId,
-    },
+    Labels: labels,
   });
 }
 
@@ -175,4 +178,181 @@ test("重试准备时每次运行前都会清理固定容器名", async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("listManaged 合并 label 与名称扫描并对重复卷去重", async () => {
+  const secondJobId = "223e4567-e89b-12d3-a456-426614174000";
+  const secondVolumeName = `deepsonar-assets-${secondJobId}`;
+  const unlabeledJobId = "323e4567-e89b-12d3-a456-426614174000";
+  const unlabeledVolumeName = `deepsonar-assets-${unlabeledJobId}`;
+  const calls: string[][] = [];
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    calls.push(args);
+    if (args[0] === "volume" && args[1] === "ls") {
+      return args[3] === `label=${SHARED_ASSETS_VOLUME_LABEL}=true`
+        ? `${volumeName}\n${secondVolumeName}\n`
+        : `${volumeName}\n${unlabeledVolumeName}\n`;
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      if (args[2] === volumeName) return inspectedVolume();
+      if (args[2] === unlabeledVolumeName) return inspectedVolume(unlabeledVolumeName, null);
+      return inspectedVolume(secondVolumeName, {
+        [SHARED_ASSETS_VOLUME_LABEL]: "true",
+        [SHARED_ASSETS_JOB_LABEL]: secondJobId,
+      });
+    }
+    throw new Error(`unexpected docker command: ${args.join(" ")}`);
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  const managed = await manager.listManaged();
+  assert.deepEqual(managed.map(({ volumeName: name, jobId: id }) => ({ volumeName: name, jobId: id })), [
+    { volumeName, jobId },
+    { volumeName: secondVolumeName, jobId: secondJobId },
+    { volumeName: unlabeledVolumeName, jobId: unlabeledJobId },
+  ]);
+  assert.equal(calls.filter((args) => args[0] === "volume" && args[1] === "inspect").length, 3);
+});
+
+test("listManaged 通过严格名称识别无标签合法卷", async () => {
+  const calls: string[][] = [];
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    calls.push(args);
+    if (args[0] === "volume" && args[1] === "ls") {
+      return args[3] === `label=${SHARED_ASSETS_VOLUME_LABEL}=true` ? "" : `${volumeName}\n`;
+    }
+    if (args[0] === "volume" && args[1] === "inspect") return inspectedVolume(volumeName, null);
+    throw new Error(`unexpected docker command: ${args.join(" ")}`);
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  assert.deepEqual(await manager.listManaged(), [{ volumeName, jobId }]);
+  assert.equal(calls.filter((args) => args[0] === "volume" && args[1] === "inspect").length, 1);
+});
+
+test("listManaged 返回 Docker 创建时间供孤儿卷年龄指标使用", async () => {
+  const createdAt = "2026-08-12T03:00:00Z";
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    if (args[0] === "volume" && args[1] === "ls") return args[3]?.startsWith("label=") ? "" : volumeName;
+    if (args[0] === "volume" && args[1] === "inspect") {
+      return JSON.stringify({
+        Name: volumeName,
+        Driver: "local",
+        Scope: "local",
+        Labels: null,
+        CreatedAt: createdAt,
+      });
+    }
+    throw new Error(`非预期 Docker 命令：${args.join(" ")}`);
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  assert.deepEqual(await manager.listManaged(), [{ volumeName, jobId, createdAt }]);
+});
+
+test("listManaged 排除相似、畸形和标签归属不一致的名称", async () => {
+  const mismatchedVolumeName = "deepsonar-assets-223e4567-e89b-12d3-a456-426614174000";
+  const names = [
+    volumeName,
+    "deepsonar-assets-123e4567-e89b-12d3-a456-42661417400",
+    "deepsonar-assets-123e4567e89b12d3a456426614174000",
+    `${volumeName}-extra`,
+    "deepsonar-assets-not-a-job",
+    `prefix-${volumeName}`,
+    mismatchedVolumeName,
+  ];
+  const inspectedNames: string[] = [];
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    if (args[0] === "volume" && args[1] === "ls") return names.join("\n");
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const name = args[2];
+      inspectedNames.push(name);
+      return name === mismatchedVolumeName
+        ? inspectedVolume(name, { [SHARED_ASSETS_JOB_LABEL]: jobId })
+        : inspectedVolume(name, null);
+    }
+    throw new Error(`unexpected docker command: ${args.join(" ")}`);
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker);
+  assert.deepEqual(await manager.listManaged(), [{ volumeName, jobId }]);
+  assert.deepEqual(inspectedNames, [volumeName, mismatchedVolumeName]);
+});
+
+test("removeForJob 删除失败时有限重试并在成功后返回", async () => {
+  let removeAttempts = 0;
+  const removeError = new Error("卷暂时被占用");
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    if (args[0] === "volume" && args[1] === "inspect") return inspectedVolume(volumeName, null);
+    if (args[0] === "volume" && args[1] === "rm") {
+      removeAttempts += 1;
+      if (removeAttempts < 3) throw removeError;
+      return "";
+    }
+    throw new Error(`unexpected docker command: ${args.join(" ")}`);
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async () => {});
+  await manager.removeForJob(jobId);
+  assert.equal(removeAttempts, 3);
+});
+
+test("removeForJob 仅把明确不存在当作幂等成功", async () => {
+  let removeAttempts = 0;
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const error = new Error(`Error: No such volume: ${volumeName}`);
+      throw error;
+    }
+    if (args[0] === "volume" && args[1] === "rm") removeAttempts += 1;
+    return "";
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async () => {});
+  await manager.removeForJob(jobId);
+  assert.equal(removeAttempts, 0);
+});
+
+test("removeForJob 对 inspect 基础设施错误重试且不伪装成卷不存在", async () => {
+  let inspectAttempts = 0;
+  let removeAttempts = 0;
+  const delays: number[] = [];
+  const daemonError = new Error("Docker daemon unavailable");
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    if (args[0] === "volume" && args[1] === "inspect") {
+      inspectAttempts += 1;
+      if (inspectAttempts < 3) throw daemonError;
+      return inspectedVolume();
+    }
+    if (args[0] === "volume" && args[1] === "rm") {
+      removeAttempts += 1;
+      return "";
+    }
+    throw new Error(`非预期 Docker 命令：${args.join(" ")}`);
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async (delay) => {
+    delays.push(delay);
+  });
+  await manager.removeForJob(jobId);
+  assert.equal(inspectAttempts, 3);
+  assert.equal(removeAttempts, 1);
+  assert.deepEqual(delays, [100, 200]);
+});
+
+test("removeForJob 重试耗尽后继续抛出最终删除错误", async () => {
+  let removeAttempts = 0;
+  const removeError = new Error("Docker daemon unavailable");
+  const executeDocker = async (...args: string[]): Promise<string> => {
+    if (args[0] === "volume" && args[1] === "inspect") return inspectedVolume();
+    if (args[0] === "volume" && args[1] === "rm") {
+      removeAttempts += 1;
+      throw removeError;
+    }
+    throw new Error(`unexpected docker command: ${args.join(" ")}`);
+  };
+
+  const manager = new DockerSharedAssetsVolumeManager(executeDocker, async () => {});
+  await assert.rejects(manager.removeForJob(jobId), (error: unknown) => error === removeError);
+  assert.equal(removeAttempts, 3);
 });
