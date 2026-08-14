@@ -407,6 +407,34 @@ function normalizedToolLines(item: Record<string, unknown>): Record<string, unkn
   ];
 }
 
+function normalizedToolResultLine(item: Record<string, unknown>): Record<string, unknown>[] {
+  const id = callId(item);
+  if (!id) return unknownRuntimeEvent();
+  const nested = item.state && typeof item.state === "object" && !Array.isArray(item.state)
+    ? item.state as Record<string, unknown>
+    : {};
+  const status = String(item.status ?? nested.status ?? "").toLowerCase();
+  const error = Boolean(item.error ?? nested.error) || status === "failed" || status === "error";
+  return [{
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: id, is_error: error, content: toolOutput(item) }] },
+  }];
+}
+
+const CODEX_TOOL_CALL_ITEM_TYPES = new Set([
+  "mcp_tool_call",
+  "mcp_call",
+  "function_call",
+  "custom_tool_call",
+  "tool_call",
+]);
+
+const CODEX_TOOL_RESULT_ITEM_TYPES = new Set([
+  "function_call_output",
+  "custom_tool_call_output",
+  "tool_result",
+]);
+
 function rememberSession(line: Record<string, unknown>, state: AdapterRuntimeState): void {
   const id = line.sessionID ?? line.session_id ?? line.thread_id;
   if (typeof id === "string" && id) state.sessionId = id;
@@ -467,7 +495,8 @@ function decodeCodex(line: Record<string, unknown>, state: AdapterRuntimeState):
       }
       return [];
     }
-    if (itemType.includes("tool") || itemType === "mcp_call") return normalizedToolLines(item);
+    if (CODEX_TOOL_RESULT_ITEM_TYPES.has(itemType)) return normalizedToolResultLine(item);
+    if (CODEX_TOOL_CALL_ITEM_TYPES.has(itemType)) return normalizedToolLines(item);
     return [];
   }
   if (type === "turn.completed" || type === "response.completed") {

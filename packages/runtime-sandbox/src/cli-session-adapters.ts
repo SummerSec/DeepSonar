@@ -111,6 +111,9 @@ const openCodeAdapter: AgentCliSessionAdapter = {
   async exportSession(runtime, sessionId) {
     // OpenCode 官方提供按 session 导出的 JSON；不复制可能混有其它会话与凭据的共享数据库。
     const result = await runtime.run(`opencode export ${sh(sessionId)} 2>/dev/null`);
+    if (Buffer.byteLength(result.stdout) > MAX_SESSION_BYTES) {
+      return { cli: "open-code", sessionId, artifacts: [], captureError: "OpenCode Session 导出超过 32 MiB，已停止归档" };
+    }
     if (result.exitCode === 0 && result.stdout.trim()) {
       return {
         cli: "open-code",

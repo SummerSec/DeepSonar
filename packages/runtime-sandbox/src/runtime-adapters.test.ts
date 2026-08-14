@@ -364,6 +364,62 @@ test("Codex JSONL lifecycle normalizes MCP calls and completion", () => {
   assert.equal(adapter.decodeOutput({ type: "turn.completed" }, state)[0]?.type, "result");
 });
 
+test("Codex modern function and custom tool output items normalize as tool results", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
+  const state = {};
+
+  const functionCall = adapter.decodeOutput({
+    type: "item.started",
+    item: { type: "function_call", name: "shell", call_id: "call-1", arguments: '{"cmd":"pwd"}' },
+  }, state);
+  assert.equal(contentType(functionCall[0]), "tool_use");
+
+  const functionOutput = adapter.decodeOutput({
+    type: "item.completed",
+    item: { type: "function_call_output", call_id: "call-1", output: "/workspace" },
+  }, state);
+  assert.deepEqual(functionOutput, [{
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "call-1", is_error: false, content: "/workspace" }] },
+  }]);
+
+  const customCall = adapter.decodeOutput({
+    type: "item.started",
+    item: { type: "custom_tool_call", name: "shell", call_id: "custom-1", input: '{"cmd":"ls"}' },
+  }, state);
+  assert.equal(contentType(customCall[0]), "tool_use");
+
+  const customOutput = adapter.decodeOutput({
+    type: "item.completed",
+    item: { type: "custom_tool_call_output", call_id: "custom-1", output: "a.ts" },
+  }, state);
+  assert.deepEqual(customOutput, [{
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "custom-1", is_error: false, content: "a.ts" }] },
+  }]);
+
+  assert.deepEqual(adapter.decodeOutput({
+    type: "item.completed",
+    item: { type: "custom_tool_call_output_extra", call_id: "custom-1", output: "must stay unknown" },
+  }, state), []);
+});
+
+test("Codex function_call with an inline output retains call then result ordering", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
+  const events = adapter.decodeOutput({
+    type: "item.completed",
+    item: {
+      type: "function_call",
+      name: "shell",
+      call_id: "call-inline",
+      arguments: '{"cmd":"pwd"}',
+      status: "completed",
+      output: "/workspace",
+    },
+  }, {});
+  assert.deepEqual(events.map(contentType), ["tool_use", "tool_result"]);
+});
+
 test("Codex official reasoning summary events normalize and suppress the repeated complete item", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
   const state = {};

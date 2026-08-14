@@ -39,7 +39,7 @@ import {
   normalizePlainFinalOutput,
 } from "./agentbox.js";
 import { NoopRunner } from "./index.js";
-import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+import { CLI_SESSION_ADAPTERS, type SessionDiscoveryRuntime } from "./cli-session-adapters.js";
 
 type GatewayResponse = { statusCode?: number; body: string };
 
@@ -1219,6 +1219,114 @@ test("DSH session discovery uses the deterministic exact session directory", asy
   assert.equal(bundle.cli, "dsh");
   assert.equal(bundle.artifacts[0]?.sourcePath, sourcePath);
   assert.equal(bundle.artifacts[0]?.kind, "main");
+});
+
+function mockedSessionDiscoveryRuntime(
+  result: { exitCode: number; stdout: string; stderr: string },
+  files: Record<string, string> = {},
+  commands: string[] = [],
+  readPaths: string[] = [],
+): SessionDiscoveryRuntime {
+  return {
+    async run(command) {
+      commands.push(command);
+      return result;
+    },
+    async readText(path) {
+      readPaths.push(path);
+      return files[path] ?? null;
+    },
+  };
+}
+
+test("OpenCode session export preserves the vendor JSON artifact", async () => {
+  const commands: string[] = [];
+  const content = '{"session":"session-open-code"}\n';
+  const bundle = await CLI_SESSION_ADAPTERS["open-code"].exportSession(
+    mockedSessionDiscoveryRuntime({ exitCode: 0, stdout: content, stderr: "" }, {}, commands),
+    "session-open-code",
+  );
+
+  assert.match(commands[0] ?? "", /^opencode export /);
+  assert.deepEqual(bundle.artifacts, [{
+    name: "session-open-code.json",
+    sourcePath: "opencode export session-open-code",
+    content,
+    kind: "vendor_export",
+  }]);
+  assert.equal(bundle.captureError, undefined);
+});
+
+test("OpenCode session export rejects vendor stdout over 32 MiB", async () => {
+  const bundle = await CLI_SESSION_ADAPTERS["open-code"].exportSession(
+    mockedSessionDiscoveryRuntime({
+      exitCode: 0,
+      stdout: "x".repeat(32 * 1024 * 1024 + 1),
+      stderr: "",
+    }),
+    "session-open-code-large",
+  );
+
+  assert.deepEqual(bundle.artifacts, []);
+  assert.match(bundle.captureError ?? "", /32 MiB/);
+});
+
+test("OpenCode session export reports vendor command errors", async () => {
+  const bundle = await CLI_SESSION_ADAPTERS["open-code"].exportSession(
+    mockedSessionDiscoveryRuntime({ exitCode: 1, stdout: "", stderr: "export failed" }),
+    "session-open-code-error",
+  );
+
+  assert.deepEqual(bundle.artifacts, []);
+  assert.equal(bundle.captureError, "export failed");
+});
+
+test("Pi session archive accepts only the exact governed sessionFile", async () => {
+  const sessionFile = "/workspace/.deepsonar-home/.pi/agent/session.jsonl";
+  const readPaths: string[] = [];
+  const content = '{"type":"session","id":"session-pi"}\n';
+  const bundle = await CLI_SESSION_ADAPTERS.pi.exportSession(
+    mockedSessionDiscoveryRuntime({ exitCode: 0, stdout: "", stderr: "" }, { [sessionFile]: content }, [], readPaths),
+    "session-pi",
+    sessionFile,
+  );
+
+  assert.deepEqual(readPaths, [sessionFile]);
+  assert.deepEqual(bundle.artifacts, [{
+    name: "session.jsonl",
+    sourcePath: sessionFile,
+    content,
+    kind: "main",
+  }]);
+  assert.equal(bundle.captureError, undefined);
+});
+
+test("Pi session archive rejects a governed sessionFile path escape", async () => {
+  const readPaths: string[] = [];
+  const bundle = await CLI_SESSION_ADAPTERS.pi.exportSession(
+    mockedSessionDiscoveryRuntime({ exitCode: 0, stdout: "", stderr: "" }, {}, [], readPaths),
+    "session-pi-escape",
+    "/workspace/.deepsonar-home/.pi/agent/../escape.jsonl",
+  );
+
+  assert.deepEqual(readPaths, []);
+  assert.deepEqual(bundle.artifacts, []);
+  assert.match(bundle.captureError ?? "", /sessionFile/);
+});
+
+test("Pi session archive rejects a sessionFile over 32 MiB", async () => {
+  const sessionFile = "/workspace/.deepsonar-home/.pi/agent/session-large.jsonl";
+  const bundle = await CLI_SESSION_ADAPTERS.pi.exportSession(
+    mockedSessionDiscoveryRuntime(
+      { exitCode: 0, stdout: "", stderr: "" },
+      { [sessionFile]: "x".repeat(32 * 1024 * 1024 + 1) },
+    ),
+    "session-pi-large",
+    sessionFile,
+  );
+
+  assert.deepEqual(bundle.artifacts, []);
+  assert.match(bundle.captureError ?? "", /32 MiB/);
 });
 
 test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () => {
