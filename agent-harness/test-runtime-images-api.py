@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -200,9 +201,20 @@ def main() -> None:
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}
     req("POST", f"/runtime-image-versions/{version_id}/status", {"status": "rejected", "reason": "CI cleanup"})
     for created_job in (job, test_job, verify_job, dynamic_verify_job):
-        current = req("GET", f"/jobs/{created_job['id']}")
-        if current["job"]["status"] in {"pending", "claimed", "provisioning", "running"}:
-            req("POST", f"/jobs/{created_job['id']}/cancel", {"force": True, "reason": "runtime image API smoke cleanup"}, (200, 409))
+        for attempt in range(3):
+            current = req("GET", f"/jobs/{created_job['id']}")
+            if current["job"]["status"] not in {"pending", "claimed", "provisioning", "running"}:
+                break
+            cancelled = req(
+                "POST",
+                f"/jobs/{created_job['id']}/cancel",
+                {"force": True, "reason": "runtime image API smoke cleanup"},
+                (200, 409, 500),
+            )
+            if not isinstance(cancelled, dict) or cancelled.get("code") != "40P01":
+                break
+            if attempt < 2:
+                time.sleep(0.2)
     req("POST", f"/projects/{project_id}/archive")
     print("OK: standalone market, specialist image opt-in, system sandbox default, quarantine gate, project binding gate, immutable Job snapshot")
 
