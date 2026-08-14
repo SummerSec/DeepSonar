@@ -149,7 +149,7 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
 
     /** Reaper provision 超时（多来源恢复操作）。 */
     async reapProvisionTimeout(provisionSec) {
-      return atomically(async (tx) => {
+      const timedOut = await atomically(async (tx) => {
         const result = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
                           error = COALESCE(error, '') || 'provision 超时（Reaper 判定）'
@@ -162,6 +162,11 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
         }
         return rows(result as unknown as JobLifecycleRow[]);
       });
+      // 先提交 Job/Attempt 终态，再通知当前进程中止 provider 创建。这样
+      // cancel 与 reaper 共用同一外部效果顺序，并在本次 Reaper 处理返回前
+      // 等待所有中止完成，缩短超时 provision 继续占用宿主资源的窗口。
+      await Promise.all(timedOut.map((row) => interruptProvision(String(row.id))));
+      return timedOut;
     },
 
     /** Reaper lease 恢复：只有过期的 running lease 可进入 orphan。 */

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import type { sql } from "../../db.js";
 import { canTransition as coreCanTransition } from "../../core.js";
 import {
   createJobLifecycleApplication,
+  createSqlJobLifecycleApplication,
   type JobTransitionRequest,
 } from "./application.js";
+import { registerProvisionCancellation } from "../job-attempt/index.js";
 import {
   JOB_STATUSES,
   JOB_TRANSITIONS,
@@ -193,6 +196,54 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
     "canvas-cancel:canvas:reason:true",
     "image-cancel:image:revoked",
   ]);
+});
+
+test("Reaper provision 超时先提交终态，再等待所有 provision 中止句柄完成", async () => {
+  const calls: string[] = [];
+  let releaseCancel!: () => void;
+  const cancelDone = new Promise<void>((resolve) => {
+    releaseCancel = resolve;
+  });
+  const unregister = registerProvisionCancellation("job-provision-timeout", {
+    attemptId: "attempt-provision-timeout",
+    abortController: new AbortController(),
+    cancelProvision: async () => {
+      calls.push("cancel-start");
+      await cancelDone;
+      calls.push("cancel-done");
+    },
+  });
+  const db = Object.assign(
+    ((strings: TemplateStringsArray) => {
+      const query = strings.join(" ").replace(/\s+/gu, " ").trim();
+      if (query.includes("UPDATE jobs SET status = 'failed'")) {
+        calls.push("terminal-committed");
+        return [{ id: "job-provision-timeout", sandbox_id: null }];
+      }
+      // 本测试只验证生命周期顺序，不需要构造活动 Attempt；生产适配器仍会
+      // 对返回的超时行调用终态收口。
+      return [];
+    }) as unknown as typeof sql,
+    { json: (value: unknown) => value },
+  );
+  try {
+    const app = createSqlJobLifecycleApplication(db);
+    const reap = app.reapProvisionTimeout(1);
+    for (let attempt = 0; attempt < 20 && !calls.includes("cancel-start"); attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(calls, ["terminal-committed", "cancel-start"]);
+    let returned = false;
+    void reap.then(() => { returned = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(returned, false);
+    releaseCancel();
+    assert.deepEqual(await reap, [{ id: "job-provision-timeout", sandbox_id: null }]);
+    assert.deepEqual(calls, ["terminal-committed", "cancel-start", "cancel-done"]);
+  } finally {
+    releaseCancel();
+    unregister();
+  }
 });
 
 test("lock-order contract keeps Canvas-aware event ingress out of Job-first transactions", () => {
