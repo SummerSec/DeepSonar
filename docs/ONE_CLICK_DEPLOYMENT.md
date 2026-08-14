@@ -105,7 +105,7 @@ CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + Rol
 ### 4.1 共享资产 helper 与 provision admission（#158）
 
 real 模式写入共享资产只读卷时使用固定默认 helper：
-`docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6`。
+`docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
 可在 `deploy/.env` 用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 覆盖，但必须仍是带小写 64 位
 `sha256` digest 的 OCI 引用。`deploy.sh` 和 `deploy.ps1` 在 real 的 `up` 与 `pull` 路径显式执行
 `docker pull`；失败即 fail closed。Job 运行时只用 `--pull=never` 创建 helper，不能因单个 Job

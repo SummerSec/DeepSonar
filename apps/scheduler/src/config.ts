@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const DEFAULT_SHARED_ASSETS_HELPER_IMAGE =
-  "docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6";
+  "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
 
 /** 无依赖 .env 加载（Node 20+；不覆盖已有环境变量） */
 function loadEnvFile() {

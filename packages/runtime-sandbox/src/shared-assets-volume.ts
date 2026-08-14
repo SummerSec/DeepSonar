@@ -16,7 +16,7 @@ const IMMUTABLE_OCI_REF_RE = new RegExp(
 );
 
 export const DEFAULT_SHARED_ASSETS_HELPER_IMAGE =
-  "docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6";
+  "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
 
 async function docker(...args: string[]): Promise<string> {
   const { stdout } = await execFileP("docker", args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });

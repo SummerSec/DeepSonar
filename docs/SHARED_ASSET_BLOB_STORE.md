@@ -56,7 +56,7 @@ BLOB_S3_CACHE_DIR=./data/blobs
 
 # 仅 real local-docker：写入 Job 只读卷的 helper。
 # 引用必须始终包含 immutable 的小写 sha256 digest。
-DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6
+DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
 # 仅在 global_settings.maxConcurrentProvisioning 缺失时使用的 fallback。
 PROVISION_CONCURRENCY=2
 ```
@@ -115,7 +115,7 @@ Agents never receive S3 credentials and must not curl object storage. There is i
 ### Real 沙箱 helper
 
 local-docker 卷写入器的固定默认值为
-`docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6`。
+`docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为另一个以小写 64 位
 `sha256` digest 结尾的 immutable OCI 引用。real 模式的 `deploy.sh` 和
 `deploy.ps1` 在启动前及 real 拉取路径显式拉取该引用；拉取失败即停止部署。

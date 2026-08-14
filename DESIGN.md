@@ -235,7 +235,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 画布广播可观测 | （过程真相 A） | **注入 + 投递账本已落地**：见 §4.2；分期细节与布局 B 见 `docs/TODO_CANVAS_PROCESS_TRUTH.md` |
 | Hub 验证绑定与人工收口 | #153/#154/#155 | **已完成**：review/test 从唯一 canonical Finding 节点绑定验证上下文；below-min、歧义和 trigger 错配在派生前拒绝；Finding 详情提供仅 `needs_human` 的人工入口，并原子恢复同画布等待中的 Hub |
 | 共享资产卷孤儿回收 | #157 | **已完成**：启动对账合并 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，校验本地卷归属并回收无标签孤儿；删除使用 3 次指数退避，暴露清理失败计数、残留孤儿数量和最大年龄指标 |
-| 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:03ba26f2d749e8791ca5907276dbe832bb0c0be05ad2360293037db3088a4ab6`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
+| 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
 
 ## 12. 仓库地图
 
