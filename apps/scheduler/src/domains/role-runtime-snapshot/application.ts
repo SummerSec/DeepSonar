@@ -1,7 +1,9 @@
 import {
   PlatformToolName,
+  isReasoningValue,
   resolvePlatformTools,
   type PlatformToolConfig,
+  type ReasoningValue,
 } from "@deepsonar/shared-types";
 import {
   allowedModelIds,
@@ -33,7 +35,7 @@ import type {
 
 export type { RoleRuntimeSnapshotApplication, RoleRuntimeSnapshotResult, RoleRuntimeSnapshotTransaction } from "./ports.js";
 export type AgentRuntimeSnapshot = RoleRuntimeSnapshotResult;
-export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+export type ReasoningEffort = ReasoningValue;
 
 export const PLATFORM_DEFAULT_AGENT_CLI = "claude-code";
 export const PLATFORM_DEFAULT_AGENT_MODEL: string | null = null;
@@ -140,6 +142,7 @@ export async function resolveAgentSnapshotForJob(
   const [globalCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`) as Array<Record<string, unknown>>;
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
   const agentCli = typeof cfg?.agent_cli === "string" && cfg.agent_cli.trim() ? cfg.agent_cli.trim() : PLATFORM_DEFAULT_AGENT_CLI;
+  const dshTaskMode = cfg?.dsh_task_mode === "ptc" ? "ptc" : "standard";
 
   const rawModules = cfg?.modules_json;
   if (rawModules != null && !Array.isArray(rawModules)) throw new Error("RoleConfig.modules_json 必须是字符串数组");
@@ -198,7 +201,7 @@ export async function resolveAgentSnapshotForJob(
     : [];
   const roleModel = typeof cfg?.model === "string" && cfg.model.trim() ? cfg.model.trim() : null;
   const reasoningRaw = (cfg?.reasoning as string | null) ?? null;
-  const roleReasoning: ReasoningEffort | null = reasoningRaw === "low" || reasoningRaw === "medium" || reasoningRaw === "high" || reasoningRaw === "xhigh" ? reasoningRaw : null;
+  const roleReasoning: ReasoningEffort | null = isReasoningValue(reasoningRaw) ? reasoningRaw : null;
   // CC Switch path: materialize saved settingsConfig into CLI config files.
   // Manual role_config_files remain as fallback when settingsConfig is empty.
   let configFiles: Array<{ path: string; content: string; content_sha256: string }> =
@@ -220,9 +223,7 @@ export async function resolveAgentSnapshotForJob(
     if (!roleModel) model = resolveEffectiveModel({ roleModel: null, agentCli, settingsConfig: snapshotSettingsConfig }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
     if (!roleReasoning) {
       const fromSettings = extractReasoningFromSettings(agentCli, snapshotSettingsConfig);
-      if (fromSettings === "low" || fromSettings === "medium" || fromSettings === "high" || fromSettings === "xhigh") {
-        reasoning = fromSettings;
-      }
+      if (isReasoningValue(fromSettings)) reasoning = fromSettings;
     }
   }
   const roleKind = role.kind as "role" | "hub" | "system";
@@ -244,6 +245,7 @@ export async function resolveAgentSnapshotForJob(
     role_kind: roleKind,
     ui_color: roleKind === "role" ? normalizeRoleUiColor(role.ui_color) : null,
     agent_cli: agentCli,
+    dsh_task_mode: dshTaskMode,
     agent_runtime: freezeAgentCliRuntime(runtimeAdapter),
     model,
     reasoning,

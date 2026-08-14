@@ -31,7 +31,7 @@ import {
   type Manifest,
   type PackFile,
 } from "./pack.js";
-import { filterEnvVars } from "./sanitize.js";
+import { filterEnvVars, parseTransferredDshTaskMode, parseTransferredReasoning } from "./sanitize.js";
 
 export const PLATFORM_FORMAT = "deepsonar-platform-export";
 export const PLATFORM_FORMAT_VERSION = "1.0";
@@ -180,6 +180,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
           source_id: rc.id,
           role_name: rc.role_name,
           agent_cli: rc.agent_cli,
+          dsh_task_mode: rc.dsh_task_mode,
           model: rc.model,
           reasoning: rc.reasoning,
           context_window_tokens: rc.context_window_tokens,
@@ -563,6 +564,8 @@ export async function applyPlatformImport(
         if (!role) continue;
 
         const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+        const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `全局 RoleConfig ${roleName}`);
+        const reasoning = parseTransferredReasoning(rc.reasoning, `全局 RoleConfig ${roleName}`);
         const model = typeof rc.model === "string" && rc.model ? rc.model : null;
         const rawContextWindowTokens = rc.context_window_tokens ?? null;
         if (rawContextWindowTokens !== null && (
@@ -587,8 +590,9 @@ export async function applyPlatformImport(
             role_id: role.id as string,
             project_id: null,
             agent_cli: agentCli,
+            dsh_task_mode: dshTaskMode,
             model,
-            reasoning: (rc.reasoning as string) ?? null,
+            reasoning,
             context_window_tokens: rawContextWindowTokens as number | null,
             env_keys: (rc.env_keys as string[]) ?? [],
             env_vars_json: ((rc.env_vars as object) ?? {}) as never,

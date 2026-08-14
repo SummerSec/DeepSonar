@@ -28,6 +28,8 @@ export interface AdapterStartContext {
   cwd: string;
   model?: string;
   reasoning?: string;
+  /** DSH preset selection; ignored by other adapters. */
+  dshTaskMode?: "standard" | "ptc";
   input: string;
   mcpConfigPath: string;
   systemPromptPath?: string;
@@ -859,15 +861,28 @@ function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<Asy
       DSH_SESSION_ROOT: "/workspace/.deepsonar-home/.dsh/sessions",
       DSH_CWD: context.cwd,
       DSH_MODEL: context.model || "deepseek-v4-flash",
+      DSH_TASK_MODE: context.dshTaskMode ?? "standard",
       DSH_TELEMETRY_DISABLED: "1",
       DSH_PERMISSION_MODE: "danger-full-access",
     },
   });
 }
 
+function dshReasoningConfig(reasoning: string | undefined): string {
+  if (reasoning === undefined) return "";
+  return `    reasoningEffort: ${JSON.stringify(reasoning)}\n`;
+}
+
 async function materializeDsh(context: AdapterStartContext): Promise<void> {
   const home = "/workspace/.deepsonar-home/.dsh";
-  const config = `# DeepSonar governed unattended DSH composition. No UI or presentation plugins.
+  const taskMode = context.dshTaskMode ?? "standard";
+  const codeRuntime = taskMode === "ptc"
+    ? `
+- id: code-runtime
+  name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+`
+    : "";
+  const config = `# DeepSonar governed unattended DSH composition. No UI plugins.
 - id: sdk-jsonrpc-server
   name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
   config:
@@ -878,7 +893,7 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
   config:
     apiKeyEnv: DEEPSEEK_API_KEY
     baseURL: !!js process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
-    streamIdleTimeoutMs: 172800000
+${dshReasoningConfig(context.reasoning)}    streamIdleTimeoutMs: 172800000
     models:
       - id: !!js process.env.DSH_MODEL ?? 'deepseek-v4-flash'
         contextWindow: !!js Number(process.env.DSH_CONTEXT_WINDOW ?? 1000000)
@@ -907,6 +922,8 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     includeHarnessIdentity: false
     includeRuntimeContext: false
     persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a software engineering agent.'
+    tools:
+      mode: ${taskMode === "ptc" ? "code" : "native"}
     workspaceContext: false
     skills:
       enabled: true
@@ -942,7 +959,7 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     retainRatio: 0.16
     maxTokens: 8192
     compactionRetries: 1
-`;
+${codeRuntime}`;
   await context.sandbox.uploadFile(config, `${home}/deepsonar.cordis.yml`);
 }
 

@@ -868,8 +868,8 @@ export async function forceRemoveContainer(containerId: string): Promise<void> {
 
 // ---------- 真实 Agent 运行（§8 事件通道 + 动态控制 MCP） ----------
 
-/** 与 agentbox-sdk AgentReasoningEffort 对齐 */
-export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+/** Superset of governed CLI-specific reasoning efforts; route validation narrows per adapter. */
+export type ReasoningEffort = string;
 
 export interface RealAgentSpec {
   provider: "claude-code" | "open-code" | "codex" | "dsh" | "pi";
@@ -879,6 +879,8 @@ export interface RealAgentSpec {
   model?: string;
   /** 思考/推理强度；缺省由 provider 默认 */
   reasoning?: ReasoningEffort;
+  /** DSH tool presentation preset; ignored by other providers. */
+  dshTaskMode?: "standard" | "ptc";
   env: Record<string, string>;
   /** Hub 为本 Job 生成的本轮任务消息，等价于各 CLI 的非交互 prompt/input。 */
   input: string;
@@ -2355,6 +2357,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     env: cliEnv,
     model: spec.model,
     reasoning: spec.reasoning,
+    dshTaskMode: spec.dshTaskMode,
     input: spec.input,
     mcpConfigPath,
     ...(systemPromptPath ? { systemPromptPath } : {}),
@@ -2380,6 +2383,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     env: cliEnv,
     model: spec.model,
     reasoning: spec.reasoning,
+    dshTaskMode: spec.dshTaskMode,
     input: spec.input,
     mcpConfigPath,
     ...(systemPromptPath ? { systemPromptPath } : {}),

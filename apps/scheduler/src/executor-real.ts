@@ -1445,6 +1445,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       runtimeImageKey: snapshot.runtime_image.image_key,
       model,
       reasoning,
+      dshTaskMode: snapshot.dsh_task_mode,
       env,
       input: initialInput,
       contextIdentity: runtimeContextIdentity,

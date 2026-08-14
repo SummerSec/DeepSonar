@@ -304,6 +304,7 @@ async function collectRoles(
       source_id: rc.id,
       role_name: rc.role_name,
       agent_cli: rc.agent_cli,
+      dsh_task_mode: rc.dsh_task_mode,
       model: rc.model,
       reasoning: rc.reasoning,
       context_window_tokens: rc.context_window_tokens == null ? null : Number(rc.context_window_tokens),

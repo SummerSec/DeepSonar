@@ -30,6 +30,8 @@ ARG DSH_AGENT_SPINE_INTEGRITY=sha512-urMS7CReaddhybJZCaPA8oI4VbD/A+62mLTOb2E4b8E
 ARG DSH_SKILL_INTEGRITY=sha512-VyRlCOASIRuTflKwn4NvbdAXxSPnnLJ+RAQUI4GK5pOtPwI2DhJrbovqpyp5kNAkZMsqvIeHWu5PcCEJ+FpQ2w==
 ARG DSH_SKILL_FILESYSTEM_INTEGRITY=sha512-NCgz8lCAdvd0oSGIF0EKg1OXfIC7x9r0an7mgC19F0DGzYZJe5ve6AwEYpSvKITE3V8W4NbUzLKyyZG3VH5QtQ==
 ARG DSH_TOOL_SKILL_INTEGRITY=sha512-AebSfHSt6j0PXuN3yK9+X4aC6tHSnFdm2hZglII7aEHr/lL9UbynPb3NTumh6thXZ9Earvwhf9JdOxHMsjHqfw==
+ARG DSH_CODE_RUNTIME_INTEGRITY=sha512-aw8D4IOeMo11A3uxQeE4LFoW3bvaQnVkGFqqtS+lsINDARrOCJHXLUgecoKpys+Lc5erZZ4UQDnymJmL4OCcKA==
+ARG DSH_CODE_RUNTIME_WORKER_INTEGRITY=sha512-I2YX2ZSeQnQrSJGffM2upL+7y7vGsLwKv478gesusgYtT0kH/MOcszO9ZpnV8sIqvlkgzvWgBhXzniGHWh40ZA==
 ARG NODE_VERSION=22.23.2
 ARG UV_VERSION=0.11.32
 ARG UV_AMD64_SHA256=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
@@ -87,6 +89,8 @@ RUN set -eu; \
   test "$(npm view @deepseek-ai/dsh-skill@${DSH_VERSION} dist.integrity)" = "$DSH_SKILL_INTEGRITY"; \
   test "$(npm view @deepseek-ai/dsh-skill-filesystem@${DSH_VERSION} dist.integrity)" = "$DSH_SKILL_FILESYSTEM_INTEGRITY"; \
   test "$(npm view @deepseek-ai/dsh-tool-skill@${DSH_VERSION} dist.integrity)" = "$DSH_TOOL_SKILL_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-code-runtime@${DSH_VERSION} dist.integrity)" = "$DSH_CODE_RUNTIME_INTEGRITY"; \
+  test "$(npm view @deepseek-ai/dsh-code-runtime-worker-thread@${DSH_VERSION} dist.integrity)" = "$DSH_CODE_RUNTIME_WORKER_INTEGRITY"; \
   npm install -g --omit=dev --no-audit --no-fund \
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
   @openai/codex@${CODEX_VERSION} \
@@ -109,6 +113,8 @@ RUN set -eu; \
   @deepseek-ai/dsh-session-persistence-jsonl@${DSH_VERSION} \
   @deepseek-ai/dsh-session-checkpoint-policy@${DSH_VERSION} \
   @deepseek-ai/dsh-token-meter@${DSH_VERSION} \
+  @deepseek-ai/dsh-code-runtime@${DSH_VERSION} \
+  @deepseek-ai/dsh-code-runtime-worker-thread@${DSH_VERSION} \
   @deepseek-ai/dsh-compaction-basic@${DSH_VERSION} \
   && npm cache clean --force
 

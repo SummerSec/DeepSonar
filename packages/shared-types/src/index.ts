@@ -2,6 +2,15 @@ import { z } from "zod";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
 
+/** Model/provider-owned reasoning profile token. The platform stores and forwards it without a fixed vocabulary. */
+export const REASONING_VALUE_MAX_LENGTH = 64;
+export const REASONING_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const ReasoningValue = z.string().trim().min(1).max(REASONING_VALUE_MAX_LENGTH).regex(REASONING_VALUE_PATTERN);
+export type ReasoningValue = z.infer<typeof ReasoningValue>;
+export function isReasoningValue(value: unknown): value is ReasoningValue {
+  return typeof value === "string" && REASONING_VALUE_PATTERN.test(value);
+}
+
 /** Bounds and path syntax for large Agent control payloads stored in /workspace. */
 export const WORKSPACE_PAYLOAD_FILE_MAX_BYTES = 512 * 1024;
 export const WORKSPACE_PAYLOAD_FILE_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/;

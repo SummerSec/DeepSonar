@@ -99,6 +99,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   assert.equal(fake.envs[0]?.DSH_SESSION_ROOT, "/workspace/.deepsonar-home/.dsh/sessions");
   assert.equal(fake.envs[0]?.DSH_CWD, "/workspace");
   assert.equal(fake.envs[0]?.DSH_MODEL, "ignored-model");
+  assert.equal(fake.envs[0]?.DSH_TASK_MODE, "standard");
   assert.equal(fake.envs[0]?.DSH_TELEMETRY_DISABLED, "1");
   assert.equal(fake.envs[0]?.DSH_PERMISSION_MODE, "danger-full-access");
   assert.equal(adapter.capabilities.incrementalMessages, true);
@@ -161,9 +162,21 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /@deepseek-ai\/dsh-session-persistence-jsonl/);
   assert.match(config, /@deepseek-ai\/dsh-compaction-basic/);
   assert.match(config, /skills:\n\s+enabled: true/);
+  assert.match(config, /tools:\n\s+mode: native/);
+  assert.doesNotMatch(config, /dsh-code-runtime-worker-thread/);
+  assert.doesNotMatch(config, /reasoningEffort:/);
   assert.match(config, /dshHome: !!js process\.env\.DSH_HOME \?\? '\/workspace\/\.deepsonar-home\/\.dsh'/);
   assert.match(config, /root: !!js process\.env\.DSH_SESSION_ROOT/);
   assert.doesNotMatch(config, /dsh-(?:app-tui|app-web|web-search|ask-user|theme)|telemetry-otel/);
+
+  await adapter.materialize?.({ ...context, dshTaskMode: "ptc", reasoning: "max" });
+  const ptcConfig = fake.uploads[1]?.content ?? "";
+  assert.match(ptcConfig, /tools:\n\s+mode: code/);
+  assert.match(ptcConfig, /@deepseek-ai\/dsh-code-runtime-worker-thread/);
+  assert.match(ptcConfig, /reasoningEffort: "max"/);
+  await adapter.materialize?.({ ...context, reasoning: "thinking-v2.5" });
+  const customConfig = fake.uploads[2]?.content ?? "";
+  assert.match(customConfig, /reasoningEffort: "thinking-v2\.5"/);
 });
 
 test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {

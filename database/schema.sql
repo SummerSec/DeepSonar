@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 31);
+INSERT INTO schema_meta (id, version) VALUES ('global', 33);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1075,6 +1075,7 @@ CREATE TABLE role_configs (
   role_id uuid NOT NULL REFERENCES agent_roles(id) ON DELETE CASCADE,
   project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
   agent_cli text NOT NULL DEFAULT 'claude-code',
+  dsh_task_mode text NOT NULL DEFAULT 'standard',
   model text,
   reasoning text,
   context_window_tokens int,
@@ -1092,8 +1093,10 @@ CREATE TABLE role_configs (
   version int NOT NULL DEFAULT 1,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT role_configs_dsh_task_mode_check
+    CHECK (dsh_task_mode IN ('standard', 'ptc')),
   CONSTRAINT role_configs_reasoning_check
-    CHECK (reasoning IS NULL OR reasoning IN ('low', 'medium', 'high', 'xhigh')),
+    CHECK (reasoning IS NULL OR reasoning ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'),
   CONSTRAINT role_configs_context_window_tokens_check
     CHECK (context_window_tokens IS NULL OR (context_window_tokens >= 1024 AND context_window_tokens <= 10000000))
 );

@@ -139,8 +139,6 @@ const RuntimeImageChannelUnavailableSchema = {
   },
 };
 
-const ReasoningEnum = ["low", "medium", "high", "xhigh"] as const;
-
 /** 核心 API 操作表（OpenAPI paths 的单一来源） */
 const OPS: Op[] = [
   // meta
@@ -1750,7 +1748,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           type: "object",
           additionalProperties: false,
           required: [
-            "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "model", "version",
+            "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "dsh_task_mode", "model", "version",
             "runtime_image_key", "sandbox_limits_json", "context_window_tokens",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "scope", "can_bind",
             "credential_provider_valid", "role_kind", "role_builtin",
@@ -1766,6 +1764,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             project_id: { type: "string", format: "uuid", nullable: true },
             project_name: { type: "string", nullable: true },
             agent_cli: { type: "string" },
+            dsh_task_mode: { type: "string", enum: ["standard", "ptc"], description: "DSH tool presentation preset; ignored by other CLIs" },
             model: { type: "string", nullable: true },
             context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "通用客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
             runtime_image_key: { type: "string", nullable: true },
@@ -1867,7 +1866,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             },
           },
         },
-        ReasoningEffort: { type: "string", enum: [...ReasoningEnum], nullable: true },
+        ReasoningEffort: { type: "string", minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", nullable: true, description: "Model/provider-owned reasoning profile token; common examples include off, low, medium, high, xhigh, and max." },
         SandboxLimitsOverride: {
           type: "object",
           additionalProperties: false,
@@ -1881,6 +1880,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           type: "object",
           properties: {
             agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi", "dsh"] },
+            dsh_task_mode: { type: "string", enum: ["standard", "ptc"], default: "standard" },
             model: { type: "string", nullable: true },
             reasoning: { $ref: "#/components/schemas/ReasoningEffort" },
             context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },

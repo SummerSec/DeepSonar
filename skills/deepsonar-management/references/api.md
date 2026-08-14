@@ -150,9 +150,10 @@ PUT body：
 
 ```json
 {
-  "agent_cli": "claude-code | open-code | codex",
+  "agent_cli": "claude-code | open-code | codex | pi | dsh",
+  "dsh_task_mode": "standard | ptc",
   "model": "string | null",
-  "reasoning": "low | medium | high | xhigh | null",
+  "reasoning": "off | minimal | low | medium | high | xhigh | max | null",
   "env_keys": ["..."],
   "env_vars": { "KEY": "value" },
   "modules": [

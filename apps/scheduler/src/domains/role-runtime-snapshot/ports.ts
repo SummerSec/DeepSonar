@@ -1,6 +1,6 @@
 import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
-import type { PlatformToolName } from "@deepsonar/shared-types";
+import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
 import type { EffectiveSandboxLimits, FrozenNetworkPolicy } from "./sandbox-limits.js";
@@ -15,10 +15,12 @@ export interface RoleRuntimeSnapshotResult {
   role_kind: "role" | "hub" | "system";
   ui_color: string | null;
   agent_cli: string;
+  /** DSH tool presentation preset frozen for this Job; ignored by other CLIs. */
+  dsh_task_mode: "standard" | "ptc";
   /** Immutable adapter implementation/capability contract captured at Job creation. */
   agent_runtime: AgentCliRuntimeSnapshot;
   model: string | null;
-  reasoning: "low" | "medium" | "high" | "xhigh" | null;
+  reasoning: ReasoningValue | null;
   env_vars: Record<string, string>;
   env_keys: string[];
   credential_id: string | null;

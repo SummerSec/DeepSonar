@@ -45,6 +45,8 @@ for (const packageName of [
   "@deepseek-ai/dsh-session-persistence-jsonl",
   "@deepseek-ai/dsh-session-checkpoint-policy",
   "@deepseek-ai/dsh-token-meter",
+  "@deepseek-ai/dsh-code-runtime",
+  "@deepseek-ai/dsh-code-runtime-worker-thread",
   "@deepseek-ai/dsh-compaction-basic",
 ]) {
   if (config.npm[packageName]?.version !== "0.1.0-rc.6" || kaliConfig.npm[packageName]?.version !== "0.1.0-rc.6") {
@@ -52,6 +54,19 @@ for (const packageName of [
   }
   if (!config.npm[packageName]?.integrity || !kaliConfig.npm[packageName]?.integrity) {
     throw new Error(`${packageName} must carry npm integrity in base and Kali manifests`);
+  }
+}
+for (const [packageName, integrityArg] of [
+  ["@deepseek-ai/dsh-code-runtime", "DSH_CODE_RUNTIME_INTEGRITY"],
+  ["@deepseek-ai/dsh-code-runtime-worker-thread", "DSH_CODE_RUNTIME_WORKER_INTEGRITY"],
+]) {
+  const baseEntry = config.npm[packageName];
+  const kaliEntry = kaliConfig.npm[packageName];
+  if (baseEntry?.license !== "MIT" || kaliEntry?.license !== "MIT") {
+    throw new Error(`${packageName} must declare the published MIT license`);
+  }
+  if (!dockerfile.includes(`ARG ${integrityArg}=${baseEntry.integrity}`) || !kaliDockerfile.includes(`ARG ${integrityArg}=${kaliEntry.integrity}`)) {
+    throw new Error(`${packageName} Docker integrity args must match the governed manifests`);
   }
 }
 const openHarmonyDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony", import.meta.url), "utf8");

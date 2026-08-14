@@ -1,5 +1,5 @@
 /** 环境变量 / 文本 Secret 扫描（导出红线） */
-import { validateModuleSelectors } from "@deepsonar/shared-types";
+import { isReasoningValue, validateModuleSelectors, type ReasoningValue } from "@deepsonar/shared-types";
 import { projectCredentialProvider } from "../credentials.js";
 
 const SENSITIVE_KEY =
@@ -75,6 +75,17 @@ export function sanitizeAgentSnapshot(snap: unknown): Record<string, unknown> {
   return s;
 }
 
+export function parseTransferredDshTaskMode(value: unknown, label: string): "standard" | "ptc" {
+  if (value === undefined || value === null) return "standard";
+  if (value === "standard" || value === "ptc") return value;
+  throw new Error(`${label}.dsh_task_mode 非法`);
+}
+
+export function parseTransferredReasoning(value: unknown, label: string): ReasoningValue | null {
+  if (value === undefined || value === null) return null;
+  if (isReasoningValue(value)) return value;
+  throw new Error(`${label}.reasoning 必须是 1–64 字符的模型配置 token`);
+}
 export const ACTIVE_JOB_STATUSES = [
   "pending",
   "claimed",

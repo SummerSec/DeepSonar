@@ -10,6 +10,8 @@ import {
   CONTEXT_WINDOW_TOKENS_MAX,
   CONTEXT_WINDOW_TOKENS_MIN,
   ContextWindowTokens,
+  isReasoningValue,
+  type ReasoningValue,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { extractModelFromSettings } from "./provider-effective-model.js";
@@ -34,7 +36,7 @@ export interface MaterializedConfigFile {
 
 export interface ProviderSettingsOverrides {
   model?: string | null;
-  reasoning?: "low" | "medium" | "high" | "xhigh" | null;
+  reasoning?: ReasoningValue | null;
   /** 通用客户端上下文预算；不会改变上游模型能力。 */
   context_window_tokens?: number | null;
 }
@@ -313,9 +315,7 @@ export function legacySettingsConfig(input: {
   if (input.agentCli === "codex") {
     const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
     const model = input.model?.trim() || "gpt-5";
-    const effort = input.reasoning && ["low", "medium", "high", "xhigh"].includes(input.reasoning)
-      ? input.reasoning
-      : "high";
+    const effort = input.reasoning?.trim() || "high";
     const config = `model_provider = "custom"
 model = ${tomlEscape(model)}
 model_reasoning_effort = ${tomlEscape(effort)}
@@ -516,8 +516,7 @@ export function extractReasoningFromSettings(agentCli: string, settingsConfig: u
   const config = typeof settings.config === "string" ? settings.config : "";
   const match = /^\s*model_reasoning_effort\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(config);
   const value = match?.[1] || match?.[2] || null;
-  if (value === "low" || value === "medium" || value === "high" || value === "xhigh") return value;
-  return null;
+  return isReasoningValue(value) ? value : null;
 }
 
 /**

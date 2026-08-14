@@ -36,11 +36,11 @@ The current registry contains:
 | `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default | `model_context_window` | Official reasoning summary/item events when emitted |
 | `open-code` | OpenCode 1.18.18 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
 | `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
-| `dsh` | DeepSeek Harness 0.1.0-rc.6 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
+| `dsh` | DeepSeek Harness 0.1.0-rc.6 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（Code Mode `run_code`） | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
 
 五个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
 只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，
-每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 与 DSH 不依赖 MCP，只使用 HTTP Capability API。
+每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 与 DSH 不依赖 MCP，只使用 HTTP Capability API。DSH 的 `dsh_task_mode` 不是 JSON-RPC 初始化参数：适配器在 Job 启动前按冻结值物化 Cordis composition，`standard` 配置 `dsh-tools mode: native`，`ptc` 配置 `mode: code` 并挂载 `@deepseek-ai/dsh-code-runtime-worker-thread`。相关 npm 包在 Base/Audit/Kali 运行镜像中按版本与 integrity 固定。DSH RoleConfig 的显式 `reasoning` 只接受原生 adapter 公布的 `off | high | max`，并物化为 `llm-deepseek.reasoningEffort`；空值不写入配置，保留 Provider 默认。 DSH 动态 Skill 物化到 `${DSH_HOME}/skills/<name>/SKILL.md`，由 `dsh-skill-filesystem` 发现并通过 `dsh-tool-skill` 按需加载；平台内置 `deepsonar-control` Skill 走同一路径。
 
 通用 `context_window_tokens` 范围为 1024–10000000。Credential 顶层值是客户端基准，RoleConfig 同名值优先；两者为空时保留 Provider / CLI 默认，建 Job 时冻结解析结果。它只控制客户端预算/压缩落点，不提高 Provider、模型 ID 或账号实际开放的上游窗口；模型目录也只登记 ID，不根据名称或营销标签推断长上下文能力。
 

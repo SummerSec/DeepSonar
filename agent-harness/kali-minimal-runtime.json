@@ -43,6 +43,8 @@
     "@deepseek-ai/dsh-session-persistence-jsonl": { "version": "0.1.0-rc.6", "integrity": "sha512-US9Q4b5CZJPRRqa/M+WESL5VAOLjfYWjdzb3TQ/7zmpR4/+EQWCOFA9CtDSMh4t1oFOQBjz2+YJJcGu59MKHDA==", "license": "Apache-2.0", "capabilities": ["session"] },
     "@deepseek-ai/dsh-session-checkpoint-policy": { "version": "0.1.0-rc.6", "integrity": "sha512-wdWNyS/95wI3QB9SHeeeQ9HDIWeFQKInI54Wqlw35H+bGGjGZE92nx9QiqiiosoxHedQFBdA0TKgON4EIoxCgg==", "license": "Apache-2.0", "capabilities": ["session"] },
     "@deepseek-ai/dsh-token-meter": { "version": "0.1.0-rc.6", "integrity": "sha512-qU5FT4n1RJXP3Ss8NJ5TTvPo8rZ6cxcrCedp1t0sTAj93SGssAanq47voSmznPP52nwz/SLeunznAIT0jhbsZQ==", "license": "Apache-2.0", "capabilities": ["token-meter"] },
+    "@deepseek-ai/dsh-code-runtime": { "version": "0.1.0-rc.6", "integrity": "sha512-aw8D4IOeMo11A3uxQeE4LFoW3bvaQnVkGFqqtS+lsINDARrOCJHXLUgecoKpys+Lc5erZZ4UQDnymJmL4OCcKA==", "license": "MIT", "capabilities": ["code-runtime-contract"] },
+    "@deepseek-ai/dsh-code-runtime-worker-thread": { "version": "0.1.0-rc.6", "integrity": "sha512-I2YX2ZSeQnQrSJGffM2upL+7y7vGsLwKv478gesusgYtT0kH/MOcszO9ZpnV8sIqvlkgzvWgBhXzniGHWh40ZA==", "license": "MIT", "capabilities": ["code-runtime", "ptc"] },
     "@deepseek-ai/dsh-compaction-basic": { "version": "0.1.0-rc.6", "integrity": "sha512-sqfFPBy1SqsOmaWro/GOAcDkrryjsmJLU/M+V4HZakoE7hLyGVhMElrRG5E5OlplIl2Akntc+YYwX36kDfEItw==", "license": "Apache-2.0", "capabilities": ["compaction"] }
   },
   "downloads": {

@@ -21,7 +21,7 @@ import {
   type OpenedPack,
 } from "./pack.js";
 import { CONFIG_MODULES, isConfigOnly, type ModuleKey } from "./modules.js";
-import { archiveJobStatus } from "./sanitize.js";
+import { archiveJobStatus, parseTransferredDshTaskMode, parseTransferredReasoning } from "./sanitize.js";
 
 export interface PreviewResult {
   compatible: boolean;
@@ -352,6 +352,8 @@ async function importRoleConfigs(
     if (!role) continue; // 自定义角色未创建时跳过（builtin 名应存在）
 
     const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+    const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `RoleConfig ${roleName}`);
+    const reasoning = parseTransferredReasoning(rc.reasoning, `RoleConfig ${roleName}`);
     const model = typeof rc.model === "string" && rc.model ? rc.model : null;
     const rawContextWindowTokens = rc.context_window_tokens ?? null;
     if (rawContextWindowTokens !== null && (
@@ -382,8 +384,9 @@ async function importRoleConfigs(
         role_id: role.id as string,
         project_id: projectId,
         agent_cli: agentCli,
+        dsh_task_mode: dshTaskMode,
         model,
-        reasoning: (rc.reasoning as string) ?? null,
+        reasoning,
         context_window_tokens: contextWindowTokens,
         env_keys: (rc.env_keys as string[]) ?? [],
         env_vars_json: ((rc.env_vars as object) ?? {}) as never,

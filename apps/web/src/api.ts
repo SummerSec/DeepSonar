@@ -9,6 +9,7 @@ import type {
   ProviderAccountCatalogItem,
   PlatformToolConfig,
   ReadinessResponse,
+  ReasoningValue,
 } from "@deepsonar/shared-types";
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
@@ -509,8 +510,8 @@ export interface FindingLink {
   created_at: string;
 }
 
-/** 思考强度（与 agentbox AgentReasoningEffort 对齐） */
-export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+/** Model/provider-owned reasoning profile token, frozen into each Job. */
+export type ReasoningEffort = ReasoningValue;
 
 /** Git 模块源（§8.2） */
 export type SkillTrustStatus = "quarantined" | "trusted" | "disabled";
@@ -849,6 +850,7 @@ export interface BindableRoleConfig {
   project_id: string | null;
   project_name: string | null;
   agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
+  dsh_task_mode: "standard" | "ptc";
   model: string | null;
   context_window_tokens: number | null;
   scope: "global" | "project";
@@ -1128,6 +1130,7 @@ export interface SandboxLimitsOverride {
 
 export type RoleConfigInput = {
   agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
+  dsh_task_mode?: "standard" | "ptc";
   model?: string | null;
   /** 思考强度；null = provider 默认 */
   reasoning?: ReasoningEffort | null;
@@ -1160,6 +1163,7 @@ export interface RoleConfigView {
   role_id: string;
   project_id: string | null;
   agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
+  dsh_task_mode: "standard" | "ptc";
   model: string | null;
   reasoning: ReasoningEffort | null;
   context_window_tokens: number | null;
