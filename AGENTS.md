@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件是仓库内编码 Agent 的工作说明。所有 Agent 均应先按下列顺序核对设计与代码事实，不依赖特定 CLI 或模型。
 
 DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度层安全执行多类 Agent（探索 → 分析 → 验证 → 反馈），Agent 只提「提案」，系统负责真正下发与记账，让复杂执行持续收敛。
 
@@ -18,11 +18,11 @@ pnpm db:up            # 起 Postgres（docker compose，deploy/docker-compose.ym
 pnpm dev              # 调度器（tsx watch，端口 3100；空库自动套用 schema.sql 基线，版本不符拒绝启动）
 pnpm dev:web          # 前端（vite，5173；/api 代理到 3100）
 pnpm build            # 全 workspace tsc 构建
-pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试框架）
+pnpm typecheck        # 全 workspace 类型检查
 ```
 
-- **测试**：无 test runner。`agent-harness/test-*` 是手工 API 冒烟脚本（需调度器运行中），快捷方式 `pnpm ci:smoke:projects`（项目/任务）、`ci:smoke:roles`（角色）、`ci:smoke:hub`（hub 循环）、`ci:smoke:auth`（API Token）、`ci:smoke:images`（镜像市场）、`ci:smoke:mcp`（控制 MCP）；另有 `test-credentials-api.py`、`test-gateway.py`（Model Gateway）、`test-sandbox-hardening.mts`（沙箱硬限制）。
-- **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI、仅项目显式启用。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
+- **测试**：单元与集成测试主要使用 Node.js `node:test`，由 `tsx --test` 执行；根 `package.json` 的 `ci:unit:*`、`ci:integration:*`、`ci:test:*` 是当前可运行入口。`agent-harness/test-*` 还包含需调度器运行的 API 冒烟脚本，常用入口有 `ci:smoke:projects`、`ci:smoke:roles`、`ci:smoke:hub`、`ci:smoke:auth`、`ci:smoke:images` 和 `ci:smoke:mcp`；后者文件名是历史命名，当前验证的是 Job 控制 API-only 契约。改动应按影响面选择脚本，不要只跑 `typecheck` 代替行为测试。
+- **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI，当前是 `test` 角色默认镜像且不要求项目 opt-in。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
 - **运行模式**：默认 `AGENT_MODE=real`（agentbox-sdk 真实沙箱）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
 - **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission 四个 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。核心 CI 在 `.github/workflows/ci.yml`（**PR 与 main 合并后**触发，功能分支每次 push 不再跑；main 上纯 `*.md`/`docs/`/`skills/` 跳过；可 `workflow_dispatch` 手动补跑；同 ref 并发会取消旧 run）；Chrome 与 OpenHarmony 专项 CI 分别在 `.github/workflows/chrome-runtime.yml` / `.github/workflows/openharmony-runtime.yml`，按自身 Dockerfile、配置/脚本、`.dockerignore`、共享 fingerprint/cache 机制或 workflow 变更触发；GHCR 制品发布在 `release.yml`。
@@ -41,7 +41,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 为可选集成，默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
-- **Agent 只提案，不决策**：系统按 Job 动态注入本地控制 MCP，工具为 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集。Fact/Finding 在执行中增量回传；`emit_finding` 只能带 `suggest_verify` 建议，是否派生 verify job 由调度器规则引擎（`core.ts`）唯一决定，有深度（`MAX_FOLLOWUP_DEPTH=12`）与频次护栏。
+- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；五类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 verify/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
 - **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
@@ -65,7 +65,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 | `auth.ts` / `users.ts` | 双轨鉴权：服务/自动化用 API Token（库中只存 sha256），人用用户名密码 + 会话 Token（scrypt，角色 admin/operator/viewer，无用户时 `/auth/bootstrap` 引导）；跨回环部署须 `DEEPSONAR_AUTH_REQUIRED=true` |
 | `credentials.ts` / `audit.ts` / `credential-test.ts` | Provider 凭据库 / append-only 审计（凭据明文永不入审计）/ 凭据连通性测试 |
 | `gateway.ts` | Model Gateway（§6.3）：沙箱持短期单 Job token 经 `/gateway` 访问上游 LLM，不持长期 Provider Key |
-| `control-mcp.ts` | 按 Job 动态注入的本地控制 MCP（`emit_*`/`mark_job_done` 等提案工具的服务端实现） |
+| `domains/platform-api/` | Job 级控制 API、短期 capability token、按冻结权限投影的 capabilities/OpenAPI；真实 Job 的唯一控制入口 |
 | `skill-sources.ts` | Git 托管 skill/command 仓库的浅克隆同步与 catalog 缓存 |
 | `stream-bus.ts` | WS 实时流（前端 `/api` 代理 ws） |
 | `evidence.ts` | 运行证据冷存储：OTLP/NDJSON 按 job 队列化写盘 + gzip |
@@ -75,7 +75,7 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 
 ### Hub 循环（Cairn 式图语义，§8.3）
 
-画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify` 与 `report` 是调度器专用系统角色，Hub 不可下发。**事件触发，无定时任务**，单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
+画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify` 与 `report` 是调度器专用系统角色，Hub 不可下发。**Hub 轮次由事件触发，不靠定时轮询**（任务本身可设置 `scheduled_start_at`），单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
 
 ### 运行时（`packages/runtime-sandbox/`）
 
@@ -85,22 +85,22 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - **最新版本策略**：官方市场从 GitHub Release 的 `latest/runtime-image-registry.json` 同步并只提升最新版本；旧版本仅保留给显式 pin 与历史 Job，实际执行始终使用快照中的 digest，不使用可变 `latest`。
 - 运行镜像由 RoleConfig 的市场 key 选择，Job 创建时冻结已准入的 `name@sha256:digest`、工具清单哈希和扫描 ID；Dispatcher 不重新解析 tag。第三方镜像只能经 `apps/image-admission` 扫描、管理员批准、项目启用后执行，Agent/Hub/任务内容都不能指定镜像引用。
 - 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `deepsonar-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
-- 语义事件由本地 MCP 工具提交，宿主直接从 Agent CLI 的结构化 `tool_use` 控制流捕获并增量回传，**不落 Worker 可写文件，也不经沙箱目标网络**；同一画布的新 Fact/Finding 通过 `Agent.attach(...).sendMessage(...)` 追加给仍在运行的 Agent CLI。终态后销毁沙箱。
+- 语义事件由短期 capability token 授权的 Job 级 HTTP API 提交，经共享 Zod 契约、宿主重验和摄入事务落库；**不落 Worker 可写控制文件，也不从普通 CLI 文本或伪造 MCP tool call 推断事件**。同一画布的新 Fact/Finding 仅对声明 `incrementalMessages` 的 CLI 通过 `Agent.attach(...).sendMessage(...)` 追加；终态后撤销 token 并销毁沙箱。
 - `env_keys` 白名单（`DEEPSONAR_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 RoleConfig 下发变量；长期密钥不进快照或工作区。
 - 沙箱硬限制（cpu/memory/pids/cap-drop-all/no-new-privileges）在 config 的 `sandboxLimits`，0 仅限调试。
 
 ### 数据与迁移
 
-- **Schema**：`database/schema.sql` 是唯一基线（当前 v29，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 migration**，改表 = 改基线 + bump 版本 + 重建库。
+- **Schema**：`database/schema.sql` 是唯一基线（当前 v31，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 migration**，改表 = 改基线 + bump 版本 + 重建库。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
 - **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
-- **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。
+- **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。任务 `kind` 为 `standard` 或 `compose`：后者只能选择同项目 1–8 条当前已确认且 disposition 合法的 Finding，创建时冻结摘要并投影为只读种子节点；重试会重新校验源 Finding，失败则拒绝清空旧运行数据。
 - Finding schema 对齐 SARIF 2.1.0（§6.1）；events 表只放语义事件，原始事件流进冷存储 NDJSON。
 
 ### 前端（`apps/web/`，React 19 + @xyflow/react + elkjs + Tailwind 4）
 
 - 只读渲染（`nodesDraggable=false`）；节点坐标由服务端 elkjs 布局算好落库，Agent 不能提案坐标。
-- 页面（`src/pages/`）：Projects/Tasks/TaskCanvas/Jobs/Findings/Agents/Settings/Dashboard/Login/ProjectData（导入导出）/RuntimeImages（独立镜像市场），经 `/api` 代理访问调度器。
+- 页面（`src/pages/`）：Dashboard、Projects、Tasks、TaskCanvas、Jobs、Findings、Agents、AgentMarketplace、RuntimeImages、PlatformSettings、ProjectData（导入导出）与 Login，经 `/api` 代理访问调度器。
 - Findings 按 GitHub Issues 范式管理：disposition 状态流转 + 评论，评论可触发 hub 继续分析。
 
 ## 开发时的注意事项
@@ -112,17 +112,18 @@ pnpm typecheck        # 全 workspace 类型检查（无 lint、无单元测试�
 - 改表 = 直接改 `database/schema.sql` + bump `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`，然后重建数据库；不写 migration、不留旧结构 fallback。
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
-- RoleConfig `modules` 现为 `"<source_id>:<module_id>"` 逐条勾选（整插件挂载见 #33）。
+- RoleConfig `modules` 支持三类规范 selector：单模块 `"<source_id>:<module_id>"`、整插件 `"<source_id>:plugin:<plugin>"`、整来源 `"<source_id>:source:*"`；展开、冲突排除与最终内容 hash 由服务端 materializer 统一处理。
 - 实时流：`stream-bus` + 短时 `POST /auth/ws-ticket` → `/ws?ticket=`（#38 已关）；运行中可读 inflight `stream.ndjson`；多 Scheduler 副本不共享内存 bus。
 - Windows 探库：避免 PowerShell 弄坏 `node -e` 模板字符串；临时 `apps/scheduler/*.mjs` 跑完即删。
 
 ## 工程原则
 
-1. **不保留向后兼容。** 过时的直接删除，不加兼容层、不写 migration、不留 fallback。
-2. **选择满足当前需求的最简单实现。** 不做预防性抽象，不增加多余的配置层。
-3. **系统分层长。** 先跑通一个最小的端到端版本，再往上加东西；绝不为了未完成的复杂度拆掉能跑的东西。
-4. **组件保持模块化，关注点分离。**
-5. **优先使用成熟且有人维护的库。** 没有明确理由，不要自己重写。
-6. **先检查项目现有依赖能做什么，再考虑新增包或自行实现。** 不要一开始就假设库里没有。
-7. **架构决策往长了做。** 不接受“先这样以后再换”的临时方案。
-8. **先参考成熟产品如何解决同一问题。** 使用已验证的模式，不要从零发明。
+1. **不保留向后兼容。** 过时实现直接删除，不加兼容层、不写增量 migration、不留双轨 fallback。
+2. **极简优先。** 选择满足当前需求的最小方案，尽量少引入概念、状态、配置、依赖和长期维护面；能删除就不新增一层。
+3. **先跑通最小端到端闭环。** 再按真实瓶颈扩展，不为假设中的未来做预防性抽象，也不为未完成的复杂度拆掉可运行主路径。
+4. **模块化且边界清楚。** 关注点分离，但不把简单流程切成只增加跳转成本的薄层。
+5. **成熟开源产品优先。** 协议、解析、布局、鉴权、沙箱、存储等通用问题，默认选经过生产验证且仍有人维护的开源项目；站在巨人的肩膀上，不以自研替代品为目标。
+6. **复用顺序固定。** 先检查仓库现有依赖与平台能力，再调研成熟产品和标准方案，最后才考虑新增包或自行实现。自行实现必须说明现成方案在哪个明确约束上不适用。
+7. **引入依赖要看全生命周期。** 至少核对维护活跃度、许可证、安全记录、生态采用、可替换性和运维成本；不要只因 API 顺手就引入。
+8. **架构决策面向长期。** 核心边界、数据所有权和安全模型不接受“先这样以后再换”的临时方案；局部实现仍保持可删除、可替换。
+9. **参考成熟产品的交互与运维模式。** 优先采用用户已经理解、社区已经验证的做法，不从零发明术语、协议或工作流。
