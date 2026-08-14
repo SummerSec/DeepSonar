@@ -22,12 +22,20 @@ export interface AgentCliCapabilities {
   interactiveTerminal: boolean;
 }
 
+export interface DshProviderRuntimeConfig {
+  provider: string;
+  model: string;
+  config: { providers: Record<string, Record<string, unknown>> };
+}
+
 export interface AdapterStartContext {
   sandbox: Sandbox;
   env: Record<string, string>;
   cwd: string;
   model?: string;
   reasoning?: string;
+  /** Frozen llm-pi-ai route/profile selected from the Provider account. */
+  dshProvider?: DshProviderRuntimeConfig;
   /** DSH preset selection; ignored by other adapters. */
   dshTaskMode?: "standard" | "ptc";
   input: string;
@@ -55,6 +63,7 @@ export interface AdapterRuntimeState {
   /** 当前 Job 的上下文身份，仅用于验证明确的压缩事件。 */
   contextIdentity?: ContextIdentity;
   model?: string;
+  modelProvider?: string;
   cwd?: string;
   dshRequestSerial?: number;
   dshInitializeRequestId?: string;
@@ -846,6 +855,7 @@ const pi = Object.freeze<RuntimeAdapter>({
 });
 
 function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<AsyncCommandHandle> {
+  if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
   const configPath = "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml";
   const packagedBin = "/usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js";
   const systemPrompt = context.systemPromptPath
@@ -860,7 +870,7 @@ function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<Asy
       DSH_CORDIS_CONFIG: configPath,
       DSH_SESSION_ROOT: "/workspace/.deepsonar-home/.dsh/sessions",
       DSH_CWD: context.cwd,
-      DSH_MODEL: context.model || "deepseek-v4-flash",
+      DSH_MODEL: context.dshProvider.model,
       DSH_TASK_MODE: context.dshTaskMode ?? "standard",
       DSH_TELEMETRY_DISABLED: "1",
       DSH_PERMISSION_MODE: "danger-full-access",
@@ -868,12 +878,8 @@ function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<Asy
   });
 }
 
-function dshReasoningConfig(reasoning: string | undefined): string {
-  if (reasoning === undefined) return "";
-  return `    reasoningEffort: ${JSON.stringify(reasoning)}\n`;
-}
-
 async function materializeDsh(context: AdapterStartContext): Promise<void> {
+  if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
   const home = "/workspace/.deepsonar-home/.dsh";
   const taskMode = context.dshTaskMode ?? "standard";
   const codeRuntime = taskMode === "ptc"
@@ -888,15 +894,9 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
   config:
     maxTokensAsSuccess: true
 
-- id: llm-deepseek
-  name: '@deepseek-ai/dsh-llm-deepseek'
-  config:
-    apiKeyEnv: DEEPSEEK_API_KEY
-    baseURL: !!js process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
-${dshReasoningConfig(context.reasoning)}    streamIdleTimeoutMs: 172800000
-    models:
-      - id: !!js process.env.DSH_MODEL ?? 'deepseek-v4-flash'
-        contextWindow: !!js Number(process.env.DSH_CONTEXT_WINDOW ?? 1000000)
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config: ${JSON.stringify(context.dshProvider.config)}
 
 - id: sandbox
   name: '@deepseek-ai/dsh-sandbox-local'
@@ -1073,7 +1073,7 @@ const dsh = Object.freeze<RuntimeAdapter>({
     sessionCapture: true,
     contextCompaction: true,
     contextCompactionPolicy: "automatic",
-    reasoningEffort: false,
+    reasoningEffort: true,
     interactiveTerminal: false,
   }),
   compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
@@ -1084,7 +1084,8 @@ const dsh = Object.freeze<RuntimeAdapter>({
     if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");
     state.dshInitialInput = content;
     state.finalText = undefined;
-    return dshRequest("initialize", { cwd: state.cwd ?? "/workspace", provider: "deepseek-official", model: state.model ?? "deepseek-v4-flash" }, state);
+    if (!state.modelProvider || !state.model) throw new Error("DSH_PROVIDER_IDENTITY_MISSING");
+    return dshRequest("initialize", { cwd: state.cwd ?? "/workspace", provider: state.modelProvider, model: state.model }, state);
   },
   encodeSteer: dshPrompt,
   encodeFollowUp: dshPrompt,

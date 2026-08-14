@@ -43,6 +43,24 @@ function fakeSandbox(): {
   return { sandbox, commands, envs, runCommands, uploads };
 }
 
+function testDshProvider(reasoning?: string) {
+  return {
+    provider: "feei",
+    model: "gpt-5.6",
+    config: {
+      providers: {
+        feei: {
+          api: "openai-responses",
+          apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN",
+          baseURL: "http://deepsonar-gateway:3100/gateway",
+          models: [{ id: "gpt-5.6", reasoningEfforts: { low: "low", high: "high" } }],
+          ...(reasoning ? { reasoning } : {}),
+        },
+      },
+    },
+  } as const;
+}
+
 test("内置注册表明确、不可变且能力完整", () => {
   assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "codex", "dsh", "open-code", "pi"]);
   assert.ok(REQUIRED_RUNTIME_CAPABILITIES.includes("contextCompaction"));
@@ -89,6 +107,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
     systemPromptPath: "/workspace/.deepsonar/system-prompt.txt",
     model: "ignored-model",
     reasoning: "high",
+    dshProvider: testDshProvider("high"),
   } as const;
   await adapter.start(context);
   assert.match(fake.commands[0] ?? "", /^DSH_SYSTEM_PROMPT="\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
@@ -98,7 +117,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   assert.equal(fake.envs[0]?.DSH_CORDIS_CONFIG, "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml");
   assert.equal(fake.envs[0]?.DSH_SESSION_ROOT, "/workspace/.deepsonar-home/.dsh/sessions");
   assert.equal(fake.envs[0]?.DSH_CWD, "/workspace");
-  assert.equal(fake.envs[0]?.DSH_MODEL, "ignored-model");
+  assert.equal(fake.envs[0]?.DSH_MODEL, "gpt-5.6");
   assert.equal(fake.envs[0]?.DSH_TASK_MODE, "standard");
   assert.equal(fake.envs[0]?.DSH_TELEMETRY_DISABLED, "1");
   assert.equal(fake.envs[0]?.DSH_PERMISSION_MODE, "danger-full-access");
@@ -113,10 +132,10 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
     adapter_id: "dsh", adapter_version: "0.1.0-rc.6", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
-  }, model: "deepseek-v4-flash", cwd: "/workspace" };
+  }, model: "gpt-5.6", modelProvider: "feei", cwd: "/workspace" };
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
   assert.equal(init.method, "initialize");
-  assert.deepEqual(init.params, { cwd: "/workspace", provider: "deepseek-official", model: "deepseek-v4-flash" });
+  assert.deepEqual(init.params, { cwd: "/workspace", provider: "feei", model: "gpt-5.6" });
   const initEvents = adapter.decodeOutput({ jsonrpc: "2.0", id: init.id, result: { serverInfo: { name: "deepseek-harness-sdk-runtime", version: "0.0.1" } } }, state);
   assert.equal(initEvents[0]?.type, "runtime_outbound");
   const prompt = JSON.parse(String(initEvents[0]?.content).trim()) as Record<string, unknown>;
@@ -150,7 +169,8 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
     env: {},
     cwd: "/workspace",
     input: "task",
-    model: "deepseek-v4-flash",
+    model: "gpt-5.6",
+    dshProvider: testDshProvider(),
     mcpConfigPath: "/workspace/.deepsonar/mcp.json",
   } as const;
   await adapter.materialize?.(context);
@@ -164,19 +184,22 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /skills:\n\s+enabled: true/);
   assert.match(config, /tools:\n\s+mode: native/);
   assert.doesNotMatch(config, /dsh-code-runtime-worker-thread/);
-  assert.doesNotMatch(config, /reasoningEffort:/);
+  assert.match(config, /@deepseek-ai\/dsh-llm-pi-ai/);
+  assert.match(config, /"feei"/);
+  assert.doesNotMatch(config, /dsh-llm-deepseek/);
+  assert.doesNotMatch(config, /"reasoning"/);
   assert.match(config, /dshHome: !!js process\.env\.DSH_HOME \?\? '\/workspace\/\.deepsonar-home\/\.dsh'/);
   assert.match(config, /root: !!js process\.env\.DSH_SESSION_ROOT/);
   assert.doesNotMatch(config, /dsh-(?:app-tui|app-web|web-search|ask-user|theme)|telemetry-otel/);
 
-  await adapter.materialize?.({ ...context, dshTaskMode: "ptc", reasoning: "max" });
+  await adapter.materialize?.({ ...context, dshTaskMode: "ptc", reasoning: "max", dshProvider: testDshProvider("max") });
   const ptcConfig = fake.uploads[1]?.content ?? "";
   assert.match(ptcConfig, /tools:\n\s+mode: code/);
   assert.match(ptcConfig, /@deepseek-ai\/dsh-code-runtime-worker-thread/);
-  assert.match(ptcConfig, /reasoningEffort: "max"/);
-  await adapter.materialize?.({ ...context, reasoning: "thinking-v2.5" });
+  assert.match(ptcConfig, /"reasoning":"max"/);
+  await adapter.materialize?.({ ...context, reasoning: "thinking-v2.5", dshProvider: testDshProvider("thinking-v2.5") });
   const customConfig = fake.uploads[2]?.content ?? "";
-  assert.match(customConfig, /reasoningEffort: "thinking-v2\.5"/);
+  assert.match(customConfig, /"reasoning":"thinking-v2\.5"/);
 });
 
 test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {

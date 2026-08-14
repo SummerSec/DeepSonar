@@ -1866,7 +1866,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             },
           },
         },
-        ReasoningEffort: { type: "string", minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", nullable: true, description: "Model/provider-owned reasoning profile token; common examples include off, low, medium, high, xhigh, and max." },
         SandboxLimitsOverride: {
           type: "object",
           additionalProperties: false,
@@ -1882,7 +1881,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             agent_cli: { type: "string", enum: ["claude-code", "open-code", "codex", "pi", "dsh"] },
             dsh_task_mode: { type: "string", enum: ["standard", "ptc"], default: "standard" },
             model: { type: "string", nullable: true },
-            reasoning: { $ref: "#/components/schemas/ReasoningEffort" },
             context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
             env_vars: { type: "object", additionalProperties: { type: "string" } },
             modules: {

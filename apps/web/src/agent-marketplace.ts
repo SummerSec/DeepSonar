@@ -1,4 +1,3 @@
-import { isReasoningValue } from "@deepsonar/shared-types";
 import type { AuthMe, RoleConfigInput } from "./api";
 
 export const AGENT_PACK_SCHEMA = "deepsonar.agentpack/v1";
@@ -25,7 +24,6 @@ const DEFAULT_CONFIG: RoleConfigInput = {
   agent_cli: "claude-code",
   dsh_task_mode: "standard",
   model: null,
-  reasoning: null,
   context_window_tokens: null,
   env_keys: [],
   env_vars: {},
@@ -42,7 +40,7 @@ const DEFAULT_CONFIG: RoleConfigInput = {
 };
 
 const CONFIG_KEYS = new Set([
-  "agent_cli", "dsh_task_mode", "model", "reasoning", "context_window_tokens", "env_keys", "env_vars", "modules", "skills", "commands", "mcps",
+  "agent_cli", "dsh_task_mode", "model", "context_window_tokens", "env_keys", "env_vars", "modules", "skills", "commands", "mcps",
   "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "credentials", "config_files",
 ]);
 const SECRET_FIELD = /^(?:api_?key|access_token|api_token|auth_token|refresh_token|client_secret|private_key|secret|password|authorization|cookie|credential(?:s|_id)?)$/i;
@@ -146,8 +144,6 @@ export function parseAgentPack(input: string): AgentPack {
   const agentCli = agentCliValue as RoleConfigInput["agent_cli"];
   const dshTaskMode = String(rawConfig.dsh_task_mode ?? DEFAULT_CONFIG.dsh_task_mode);
   if (!["standard", "ptc"].includes(dshTaskMode)) throw new Error("config.dsh_task_mode 不受支持");
-  const reasoning = rawConfig.reasoning ?? null;
-  if (reasoning !== null && !isReasoningValue(reasoning)) throw new Error("config.reasoning 必须是 1–64 字符的模型配置 token");
   const rawContextWindowTokens = rawConfig.context_window_tokens ?? null;
   if (rawContextWindowTokens !== null && (
     typeof rawContextWindowTokens !== "number"
@@ -161,7 +157,6 @@ export function parseAgentPack(input: string): AgentPack {
     agent_cli: agentCli,
     dsh_task_mode: dshTaskMode as RoleConfigInput["dsh_task_mode"],
     model: nullableString(rawConfig.model, "config.model"),
-    reasoning: reasoning as RoleConfigInput["reasoning"],
     context_window_tokens: rawContextWindowTokens as number | null,
     env_keys: envKeys,
     env_vars: envVars,

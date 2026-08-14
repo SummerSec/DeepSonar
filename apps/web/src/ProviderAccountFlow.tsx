@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { parseDocument } from "yaml";
 import {
   ArrowRight,
   Check,
@@ -25,6 +26,7 @@ import {
   buildSettingsConfigFromEditor,
   CredentialConfigEditor,
   extractContextWindowTokens,
+  extractProviderReasoning,
   extractBaseUrlFromSettingsClient,
   extractSecretFromSettings,
   providerProtocolLabel,
@@ -122,8 +124,23 @@ function modelsFromSettingsConfig(credential: ProviderCredential | null): string
     }
   }
   if (typeof settings.config === "string") {
-    const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
-    push(match?.[1] || match?.[2]);
+    if (settings.config.includes("llm-pi-ai:")) {
+      const document = parseDocument(settings.config, { customTags: [], prettyErrors: false });
+      if (document.errors.length === 0) {
+        const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
+        const selected = root["agent-default-model"] as Record<string, unknown> | undefined;
+        push(selected?.model);
+        const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
+        const providers = piAi?.providers as Record<string, unknown> | undefined;
+        for (const profile of Object.values(providers ?? {})) {
+          const models = (profile as Record<string, unknown>)?.models;
+          if (Array.isArray(models)) for (const model of models) push((model as Record<string, unknown>)?.id);
+        }
+      }
+    } else {
+      const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
+      push(match?.[1] || match?.[2]);
+    }
   }
   return found;
 }
@@ -205,6 +222,7 @@ export function ProviderAccountFlow({
   const [createTomlText, setCreateTomlText] = useState("");
   const [createAuthJson, setCreateAuthJson] = useState("");
   const [createContextWindowTokens, setCreateContextWindowTokens] = useState("");
+  const [createReasoning, setCreateReasoning] = useState("");
   const [createProjectId, setCreateProjectId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [editingCredentialId, setEditingCredentialId] = useState("");
@@ -216,6 +234,7 @@ export function ProviderAccountFlow({
   const [editTomlText, setEditTomlText] = useState("");
   const [editAuthJson, setEditAuthJson] = useState("");
   const [editContextWindowTokens, setEditContextWindowTokens] = useState("");
+  const [editReasoning, setEditReasoning] = useState("");
   const [editApiKey, setEditApiKey] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editOriginalSettings, setEditOriginalSettings] = useState<Record<string, unknown> | null>(null);
@@ -479,6 +498,7 @@ export function ProviderAccountFlow({
     setEditAgentCli(cli);
     setEditProjectId(credential.project_id ?? "");
     setEditContextWindowTokens(extractContextWindowTokens(settings));
+    setEditReasoning(extractProviderReasoning(settings));
     if (cli === "codex") {
       const auth = settings.auth && typeof settings.auth === "object" && !Array.isArray(settings.auth)
         ? settings.auth as Record<string, unknown>
@@ -486,6 +506,12 @@ export function ProviderAccountFlow({
       setEditAuthJson(Object.keys(auth).length > 0 ? formatJsonObject(redactSecretValues(auth) as Record<string, unknown>) : "");
       setEditTomlText(typeof settings.config === "string" ? redactSecretText(settings.config) : "");
       setEditSettingsJson("");
+      setEditApiKey("");
+      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+    } else if (cli === "dsh") {
+      setEditSettingsJson(typeof settings.config === "string" ? settings.config : "");
+      setEditTomlText("");
+      setEditAuthJson("");
       setEditApiKey("");
       setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
     } else {
@@ -532,6 +558,7 @@ export function ProviderAccountFlow({
       baseUrl: createBaseUrl,
       provider: createProvider,
       contextWindowTokens: createContextWindowTokens,
+      reasoning: createReasoning,
       allowEmptyDefault: true,
     });
     if (!built.ok) {
@@ -566,6 +593,7 @@ export function ProviderAccountFlow({
       setCreateTomlText("");
       setCreateAuthJson("");
       setCreateContextWindowTokens("");
+      setCreateReasoning("");
       setSelectedCredentialId(created.id);
       setEditingCredentialId("");
       setShowCreate(false);
@@ -623,6 +651,7 @@ export function ProviderAccountFlow({
       baseUrl: createBaseUrl,
       provider: createProvider,
       contextWindowTokens: createContextWindowTokens,
+      reasoning: createReasoning,
       allowEmptyDefault: true,
     });
     if (!built.ok) {
@@ -661,6 +690,7 @@ export function ProviderAccountFlow({
       baseUrl: editBaseUrl,
       provider: editProvider,
       contextWindowTokens: editContextWindowTokens,
+      reasoning: editReasoning,
       allowEmptyDefault: true,
     });
     if (!built.ok) {
@@ -940,6 +970,8 @@ export function ProviderAccountFlow({
               onAuthJsonChange={setCreateAuthJson}
               contextWindowTokens={createContextWindowTokens}
               onContextWindowTokensChange={setCreateContextWindowTokens}
+              reasoning={createReasoning}
+              onReasoningChange={setCreateReasoning}
               modelOptions={createModels}
               onFetchModels={discoverCreateModels}
               fetchingModels={createDiscovering}
@@ -1054,6 +1086,8 @@ export function ProviderAccountFlow({
                         onAuthJsonChange={setEditAuthJson}
                         contextWindowTokens={editContextWindowTokens}
                         onContextWindowTokensChange={setEditContextWindowTokens}
+                        reasoning={editReasoning}
+                        onReasoningChange={setEditReasoning}
                         modelOptions={models}
                         onFetchModels={discoverModels}
                         fetchingModels={discovering}

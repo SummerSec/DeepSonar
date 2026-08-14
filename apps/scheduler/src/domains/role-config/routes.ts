@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { PlatformToolName, ReasoningValue, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
+import { PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
@@ -35,7 +35,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     agent_cli: z.enum(["claude-code", "open-code", "codex", "pi", "dsh"]).default("claude-code"),
     dsh_task_mode: z.enum(["standard", "ptc"]).default("standard"),
     model: z.string().nullish(),
-    reasoning: ReasoningValue.nullish(),
     context_window_tokens: z.unknown().optional(),
     env_keys: z.array(z.string()).default([]),
     env_vars: z.record(z.string(), z.string()).default({}),
@@ -176,7 +175,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       agent_cli: body.agent_cli,
       dsh_task_mode: body.dsh_task_mode,
       model: body.model ?? null,
-      reasoning: body.reasoning ?? null,
       context_window_tokens: parseContextWindowTokens(body.context_window_tokens),
       env_vars_json: body.env_vars as never,
       env_keys: body.env_keys as never,

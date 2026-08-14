@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
+import { defaultDshPiAiSettings } from "./dsh-pi-ai-settings.js";
 import {
   extractBaseUrlFromSettings,
   extractModelFromSettings,
@@ -295,41 +296,29 @@ test("OpenCode context_window_tokens requires an existing output limit", () => {
   );
 });
 
-test("DSH materializes DeepSeek settings without persisting the long-lived credential", () => {
-  const files = materializeProviderSettings({
-    agentCli: "dsh",
-    settingsConfig: {
-      provider: "deepseek",
-      baseURL: "https://api.deepseek.com",
-      apiKeyEnv: "DEEPSEEK_API_KEY",
-      models: {
-        "deepseek-v4-flash": {
-          name: "deepseek-v4-flash",
-          contextWindow: 128000,
-          outputLimit: 8192,
-        },
-      },
-      env: { DEEPSEEK_API_KEY: "long-lived-key" },
-    },
+test("DSH validates structured Pi AI profiles without writing Provider config into the workspace", () => {
+  const settings = defaultDshPiAiSettings({
+    route: "feei",
+    protocol: "openai-responses",
+    baseURL: "https://ai.feei.cn/v1",
+    model: "gpt-5.6",
+    contextWindow: 128000,
   });
-
-  assert.equal(files.length, 1);
-  assert.equal(files[0]?.path, ".dsh/settings.yaml");
-  assert.doesNotMatch(files[0]?.content ?? "", /long-lived-key/);
-  assert.match(files[0]?.content ?? "", /llm-deepseek/);
-  assert.match(files[0]?.content ?? "", /apiKeyEnv/);
+  const files = materializeProviderSettings({ agentCli: "dsh", settingsConfig: settings });
+  assert.deepEqual(files, []);
+  assert.doesNotMatch(JSON.stringify(settings), /apiKeyEnv|long-lived-key|dsh-llm-deepseek/);
 });
 
-test("DSH settings expose the DeepSeek model and upstream base URL", () => {
-  const settings = {
-    apiKey: "long-lived-key",
-    baseURL: "https://api.deepseek.com",
-    apiKeyEnv: "DEEPSEEK_API_KEY",
-    models: [{ id: "deepseek-v4-flash", contextWindow: 128000, outputLimit: 8192 }],
-  };
-  assert.equal(extractModelFromSettings("dsh", settings), "deepseek-v4-flash");
-  assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "dsh", settingsConfig: settings }), "deepseek-v4-flash");
-  assert.equal(extractBaseUrlFromSettings(settings), "https://api.deepseek.com");
+test("DSH settings expose an arbitrary Pi AI route model and upstream base URL", () => {
+  const settings = defaultDshPiAiSettings({
+    route: "agentrouter",
+    protocol: "openai-responses",
+    baseURL: "https://agentrouter.org/v1",
+    model: "gpt-5.6-sol",
+  });
+  assert.equal(extractModelFromSettings("dsh", settings), "gpt-5.6-sol");
+  assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "dsh", settingsConfig: settings }), "gpt-5.6-sol");
+  assert.equal(extractBaseUrlFromSettings(settings), "https://agentrouter.org/v1");
 });
 
 test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {

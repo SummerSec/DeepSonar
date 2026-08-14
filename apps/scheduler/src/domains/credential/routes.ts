@@ -691,7 +691,12 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     if (body.kind !== "llm_provider" && (body.agent_cli || body.settings_config || body.meta)) {
       return reply.code(400).send({ error: "agent_cli/settings_config/meta 仅适用于 llm_provider" });
     }
-    const settingsConfig = normalizeProviderSettings(body.agent_cli, body.settings_config ?? {});
+    let settingsConfig: Record<string, unknown>;
+    try {
+      settingsConfig = normalizeProviderSettings(body.agent_cli, body.settings_config ?? {}, body.provider);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
     const metaJson = body.meta ?? {};
     // Keep public_metadata.base_url / models in sync with settingsConfig so health
     // probes and binding gates share one closed loop with the CC Switch profile.
@@ -787,10 +792,16 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       if (body.settings_config !== undefined && containsSecretMask(submittedSettingsConfig)) {
         return { error: `settings_config 不接受无法恢复的 ${MASKED_SECRET_PLACEHOLDER} 密钥标记` };
       }
-      const targetSettingsConfig = normalizeProviderSettings(
-        body.agent_cli !== undefined ? body.agent_cli : existing.agent_cli,
-        submittedSettingsConfig,
-      );
+      let targetSettingsConfig: Record<string, unknown>;
+      try {
+        targetSettingsConfig = normalizeProviderSettings(
+          body.agent_cli !== undefined ? body.agent_cli : existing.agent_cli,
+          submittedSettingsConfig,
+          targetProvider,
+        );
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
       const targetAgentCli = body.agent_cli !== undefined
         ? body.agent_cli
         : (existing.agent_cli as string | null) ?? null;

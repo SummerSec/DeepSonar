@@ -484,8 +484,8 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 
 | 层 | 位置 | 内容 |
 |----|------|------|
-| 存储 | `role_configs` / `role_credentials` / `role_config_files` | CLI、模型、reasoning、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关、Provider 配置文件与 Credential 引用；全局 RoleConfig 的可信镜像绑定 |
-| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；两者均为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
+| 存储 | `role_configs` / `role_credentials` / `role_config_files` / Credential `settings_config_json` | RoleConfig 保存 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关与 Credential 引用；Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；全局 RoleConfig 保存可信镜像绑定 |
+| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层 token；两者为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含解析后的客户端上下文预算）；Executor 不读取旧配置或为缺失快照降级 |
 
 项目镜像策略不改表：`projects.config_json.image_strategy` 缺省为

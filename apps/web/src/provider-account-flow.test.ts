@@ -72,8 +72,8 @@ test("Provider create/edit persists a validated top-level context window budget"
   const jobDetail = readFileSync(new URL("./JobDetailPanel.tsx", import.meta.url), "utf8");
   for (const marker of [
     "contextWindowTokens: string",
-    "patchContextWindowTokens",
-    "settings.context_window_tokens = value",
+    "patchProviderOverrides",
+    "settings.context_window_tokens = contextWindowTokens",
     "delete settings.context_window_tokens",
     "1_024",
     "10_000_000",
@@ -98,6 +98,7 @@ test("settings builder patches or removes the top-level context budget for every
     secret: "secret",
     baseUrl: "https://example.test/v1",
     provider: "openai",
+    reasoning: "",
   };
   for (const agentCli of ["claude-code", "open-code", "pi", "codex", "dsh"] as const) {
     const added = buildSettingsConfigFromEditor({ ...common, agentCli, contextWindowTokens: "1000000" });
@@ -122,8 +123,8 @@ test("settings builder patches or removes the top-level context budget for every
 test("DSH provider editor exposes machine configuration without TUI surface", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   assert.match(editor, /DeepSeek Harness（JSON-RPC）/u);
-  assert.match(editor, /DEEPSEEK_API_KEY/);
-  assert.match(editor, /deepseek-v4-flash/);
+  assert.match(editor, /providers/);
+  assert.match(editor, /openai-responses/);
   assert.doesNotMatch(editor, /dsh-cc-tui|dsh-app-tui|dsh-app-web/);
   const settings = buildSettingsConfigFromEditor({
     agentCli: "dsh",
@@ -134,14 +135,27 @@ test("DSH provider editor exposes machine configuration without TUI surface", ()
     baseUrl: "https://api.deepseek.com/",
     provider: "openai",
     contextWindowTokens: "128000",
+    reasoning: "thinking-v2.5",
   });
   assert.equal(settings.ok, true);
   if (settings.ok) {
-    assert.equal(settings.settings.baseURL, "https://api.deepseek.com");
-    assert.equal(settings.settings.apiKeyEnv, "DEEPSEEK_API_KEY");
+    assert.equal(typeof settings.settings.config, "string");
+    assert.match(String(settings.settings.config), /llm-pi-ai:/);
+    assert.match(String(settings.settings.config), /agent-default-model:/);
+    assert.match(String(settings.settings.config), /api: openai-responses/);
+    assert.ok(String(settings.settings.config).includes("baseURL: https://api.deepseek.com"));
     assert.equal(settings.settings.context_window_tokens, 128000);
+    assert.equal(settings.settings.reasoning, "thinking-v2.5");
     assert.doesNotMatch(JSON.stringify(settings.settings), /secret/);
   }
+});
+
+test("reasoning is configured on Provider accounts, not RoleConfig", () => {
+  const providerEditor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const roleEditor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(providerEditor, /模型思考强度（Provider 默认）/);
+  assert.match(providerEditor, /自定义模型 token/);
+  assert.doesNotMatch(roleEditor, /模型思考强度/);
 });
 
 test("项目角色镜像只能由项目镜像策略管理", () => {

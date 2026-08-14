@@ -1,6 +1,5 @@
 import {
   PlatformToolName,
-  isReasoningValue,
   resolvePlatformTools,
   type PlatformToolConfig,
   type ReasoningValue,
@@ -200,19 +199,20 @@ export async function resolveAgentSnapshotForJob(
     ? await db`SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${cfg.id as string} ORDER BY path`
     : [];
   const roleModel = typeof cfg?.model === "string" && cfg.model.trim() ? cfg.model.trim() : null;
-  const reasoningRaw = (cfg?.reasoning as string | null) ?? null;
-  const roleReasoning: ReasoningEffort | null = isReasoningValue(reasoningRaw) ? reasoningRaw : null;
+  const providerReasoning: ReasoningEffort | null = hasSettings
+    ? extractReasoningFromSettings(agentCli, snapshotSettingsConfig)
+    : null;
   // CC Switch path: materialize saved settingsConfig into CLI config files.
   // Manual role_config_files remain as fallback when settingsConfig is empty.
   let configFiles: Array<{ path: string; content: string; content_sha256: string }> =
     manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>;
   let model: string | null = roleModel ?? PLATFORM_DEFAULT_AGENT_MODEL;
-  let reasoning: ReasoningEffort | null = roleReasoning;
+  const reasoning: ReasoningEffort | null = providerReasoning;
   if (hasSettings) {
     const materialized = materializeProviderSettings({
       agentCli,
       settingsConfig: snapshotSettingsConfig,
-      overrides: { model: roleModel, reasoning: roleReasoning, context_window_tokens: contextWindowTokens },
+      overrides: { model: roleModel, reasoning: providerReasoning, context_window_tokens: contextWindowTokens },
     });
     if (materialized.length > 0) {
       const materializedPaths = new Set(materialized.map((item) => item.path));
@@ -221,10 +221,6 @@ export async function resolveAgentSnapshotForJob(
         : materialized;
     }
     if (!roleModel) model = resolveEffectiveModel({ roleModel: null, agentCli, settingsConfig: snapshotSettingsConfig }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
-    if (!roleReasoning) {
-      const fromSettings = extractReasoningFromSettings(agentCli, snapshotSettingsConfig);
-      if (isReasoningValue(fromSettings)) reasoning = fromSettings;
-    }
   }
   const roleKind = role.kind as "role" | "hub" | "system";
   const platformTools = resolvePlatformTools(roleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});

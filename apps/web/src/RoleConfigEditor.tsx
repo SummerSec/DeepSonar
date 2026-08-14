@@ -1,8 +1,6 @@
 import { CaretDown, Check, FloppyDisk, MagnifyingGlass, X } from "@phosphor-icons/react";
 import {
-  REASONING_VALUE_MAX_LENGTH,
   allowedPlatformTools,
-  isReasoningValue,
   requiredPlatformTools,
   type PlatformToolConfig,
   type PlatformToolName,
@@ -37,7 +35,7 @@ import {
 /**
  * 角色配置编辑器：指令 / 平台工具 / 模块 / CLI 客户端上下文预算覆盖。
  * Agent CLI、模型、LLM 凭据、settings/env 由 Provider 账号页承接；运行镜像由镜像页承接。
- * 保存时保留已有 agent_cli / credential / model / reasoning / env / runtime_image 绑定。
+ * 保存时保留已有 agent_cli / credential / model / env / runtime_image 绑定。
  */
 
 const inputCls =
@@ -59,14 +57,11 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
 
 // ---------- 表单状态 ----------
 
-type ReasoningForm = string;
-
 interface ConfigForm {
   /** Provider 闭环字段：UI 不编辑，保存时原样回传。 */
   agent_cli: string;
   dsh_task_mode: "standard" | "ptc";
   model: string;
-  reasoning: ReasoningForm;
   context_window_tokens: string;
   credential_id: string;
   env_keys: string[];
@@ -91,7 +86,6 @@ const EMPTY: ConfigForm = {
   agent_cli: "claude-code",
   dsh_task_mode: "standard",
   model: "",
-  reasoning: "",
   context_window_tokens: "",
   credential_id: "",
   env_keys: [],
@@ -115,7 +109,6 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     agent_cli: cfg.agent_cli,
     dsh_task_mode: cfg.dsh_task_mode ?? "standard",
     model: cfg.model ?? "",
-    reasoning: (cfg.reasoning as ReasoningForm | null) ?? "",
     context_window_tokens: cfg.context_window_tokens == null ? "" : String(cfg.context_window_tokens),
     credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
     env_keys: cfg.env_keys ?? [],
@@ -149,13 +142,6 @@ function numericSandboxOverride(raw: string, label: string, min: number, max: nu
   if (!Number.isFinite(value) || (integer && !Number.isSafeInteger(value)) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}${integer ? " (integer)" : ""}`);
   }
-  return value;
-}
-
-function reasoningFromForm(raw: string): string | null {
-  const value = raw.trim();
-  if (!value) return null;
-  if (!isReasoningValue(value)) throw new Error("思考强度必须是 1–64 字符，仅包含字母、数字、点、下划线或短横线");
   return value;
 }
 
@@ -375,7 +361,6 @@ export function RoleConfigEditor({
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         dsh_task_mode: form.dsh_task_mode,
         model: form.model.trim() || null,
-        reasoning: reasoningFromForm(form.reasoning),
         context_window_tokens: contextWindowTokensFromForm(form.context_window_tokens),
         env_keys: form.env_keys,
         env_vars: form.env_vars,
@@ -522,33 +507,6 @@ export function RoleConfigEditor({
               </div>
             </div>
           )}
-          <div className="mt-4 border-t border-ink-700/60 pt-4">
-            <label className={labelCls}>
-              模型思考强度
-              <HelpTip>该值属于当前 Provider / 模型配置。常用档位可快捷选择，也可输入模型支持的自定义 token；留空使用 Provider 默认。</HelpTip>
-            </label>
-            <div className="grid grid-cols-4 overflow-hidden rounded-md border border-ink-700" role="group" aria-label="模型思考强度快捷值">
-              {["", "off", "minimal", "low", "medium", "high", "xhigh", "max"].map((effort) => (
-                <button
-                  key={effort || "default"}
-                  type="button"
-                  aria-pressed={form.reasoning === effort}
-                  className={`min-h-9 px-2 text-[12px] transition-colors ${form.reasoning === effort ? "bg-acc-500/20 text-acc-200" : "bg-ink-850 text-zinc-500 hover:text-zinc-200"}`}
-                  onClick={() => setForm((current) => ({ ...current, reasoning: effort }))}
-                >
-                  {effort || "默认"}
-                </button>
-              ))}
-            </div>
-            <input
-              className={`${inputCls} mt-2 font-mono`}
-              value={form.reasoning}
-              maxLength={REASONING_VALUE_MAX_LENGTH}
-              placeholder="自定义模型值"
-              aria-label="自定义模型思考强度"
-              onChange={(event) => setForm((current) => ({ ...current, reasoning: event.target.value }))}
-            />
-          </div>
           <div className="mt-4 border-t border-ink-700/60 pt-4">
             <label className={labelCls}>
               CLI 客户端上下文预算（tokens）

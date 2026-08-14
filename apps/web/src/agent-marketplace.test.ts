@@ -24,9 +24,7 @@ test("agent pack validates DSH task mode", () => {
     schema: AGENT_PACK_SCHEMA, name: "dsh_ptc", title: "DSH PTC", description: "PTC preset", publisher: "local", version: "1.0.0",
   };
   assert.equal(parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "dsh", dsh_task_mode: "ptc" } })).config.dsh_task_mode, "ptc");
-  assert.equal(parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "dsh", reasoning: "max" } })).config.reasoning, "max");
-  assert.equal(parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "dsh", reasoning: "thinking-v2.5" } })).config.reasoning, "thinking-v2.5");
-  assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "dsh", reasoning: "not valid" } })), /模型配置 token/);
+  assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "dsh", reasoning: "max" } })), /未知字段: reasoning/);
   assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { dsh_task_mode: "auto" } })), /dsh_task_mode/);
 });
 

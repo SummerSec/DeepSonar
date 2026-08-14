@@ -103,7 +103,7 @@ RUN set -eu; \
   @deepseek-ai/dsh-skill@${DSH_VERSION} \
   @deepseek-ai/dsh-skill-filesystem@${DSH_VERSION} \
   @deepseek-ai/dsh-tool-skill@${DSH_VERSION} \
-  @deepseek-ai/dsh-llm-deepseek@${DSH_VERSION} \
+  @deepseek-ai/dsh-llm-pi-ai@${DSH_VERSION} \
   @deepseek-ai/dsh-sandbox-local@${DSH_VERSION} \
   @deepseek-ai/dsh-sandbox-policy@${DSH_VERSION} \
   @deepseek-ai/dsh-bash-local@${DSH_VERSION} \

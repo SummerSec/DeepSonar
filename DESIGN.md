@@ -152,7 +152,7 @@ pending → claimed → provisioning → running
 
 **冲突规则：任务 > 项目 > 全局**（RoleConfig 已如此；Finding 协议等演进配置同此心智）。
 
-DSH RoleConfig 的 `dsh_task_mode` 固定为 `standard | ptc`，默认 `standard`，并随 Job 冻结。Standard 使用 DSH 原生工具呈现；PTC 使用官方 Code Mode（`dsh-tools mode: code`）和受治理的 worker-thread TypeScript runtime，只把 `run_code` 作为模型直接工具。该字段对其他 Agent CLI 无效。DSH 的 `reasoning` 显式支持原生 `llm-deepseek` 公布的 `off | high | max`，物化为 adapter profile 的 `reasoningEffort`；空值保留 Provider 默认。其他 CLI 继续按各自既有档位校验，禁止把不受支持的档位静默映射。
+DSH RoleConfig 的 `dsh_task_mode` 固定为 `standard | ptc`，默认 `standard`，并随 Job 冻结。Standard 使用 DSH 原生工具呈现；PTC 使用官方 Code Mode（`dsh-tools mode: code`）和受治理的 worker-thread TypeScript runtime，只把 `run_code` 作为模型直接工具。该字段对其他 Agent CLI 无效。模型思考强度统一属于 Provider Credential：`settings_config_json.reasoning` 保存 1–64 字符的模型自定义 token，常见档位只作为 UI 快捷值，不由平台枚举。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai`，Provider 编辑器按官方 `settings.yaml` 格式保存 `llm-pi-ai.providers` 与 `agent-default-model` YAML，可声明任意安全 route 及其 OpenAI/Anthropic 兼容 profile；Job 创建时冻结所选 route/model/reasoning，运行时强制把 `baseURL` 与 `apiKeyEnv` 投影到 Job Model Gateway，长期密钥不进入 Cordis 配置或沙箱。
 
 Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项目
 `projects.config_json.finding_protocol`，任务创建请求可用 `finding_protocol` 只覆盖声明的键；列表字段在高层整表替换。解析后的 `EffectiveFindingProtocol`（模式、默认/允许 profiles、评分策略、显示名和来源）随新画布冻结，后续配置修改只影响新任务。

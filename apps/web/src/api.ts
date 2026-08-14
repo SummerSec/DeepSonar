@@ -9,7 +9,6 @@ import type {
   ProviderAccountCatalogItem,
   PlatformToolConfig,
   ReadinessResponse,
-  ReasoningValue,
 } from "@deepsonar/shared-types";
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
@@ -509,9 +508,6 @@ export interface FindingLink {
   created_by: string | null;
   created_at: string;
 }
-
-/** Model/provider-owned reasoning profile token, frozen into each Job. */
-export type ReasoningEffort = ReasoningValue;
 
 /** Git 模块源（§8.2） */
 export type SkillTrustStatus = "quarantined" | "trusted" | "disabled";
@@ -1132,8 +1128,6 @@ export type RoleConfigInput = {
   agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
   dsh_task_mode?: "standard" | "ptc";
   model?: string | null;
-  /** 思考强度；null = provider 默认 */
-  reasoning?: ReasoningEffort | null;
   /** 通用客户端上下文预算；不会提升上游模型能力。 */
   context_window_tokens?: number | null;
   /** 非敏感环境变量（疑似密钥名会被后端拒绝，引导改用 Credential） */
@@ -1165,7 +1159,6 @@ export interface RoleConfigView {
   agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
   dsh_task_mode: "standard" | "ptc";
   model: string | null;
-  reasoning: ReasoningEffort | null;
   context_window_tokens: number | null;
   env_keys: string[];
   env_vars_json: Record<string, string>;

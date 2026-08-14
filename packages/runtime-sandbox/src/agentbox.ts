@@ -26,6 +26,7 @@ import {
   PiJsonlFramer,
   requireAgentCliRuntimeAdapter,
   type AgentCliRuntimeSnapshot,
+  type DshProviderRuntimeConfig,
 } from "./runtime-adapters.js";
 import type { ProvisionInput, RunHandle, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 
@@ -879,6 +880,8 @@ export interface RealAgentSpec {
   model?: string;
   /** 思考/推理强度；缺省由 provider 默认 */
   reasoning?: ReasoningEffort;
+  /** Frozen llm-pi-ai provider route and profile for DSH. */
+  dshProvider?: DshProviderRuntimeConfig;
   /** DSH tool presentation preset; ignored by other providers. */
   dshTaskMode?: "standard" | "ptc";
   env: Record<string, string>;
@@ -2357,6 +2360,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     env: cliEnv,
     model: spec.model,
     reasoning: spec.reasoning,
+    dshProvider: spec.dshProvider,
     dshTaskMode: spec.dshTaskMode,
     input: spec.input,
     mcpConfigPath,
@@ -2383,6 +2387,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     env: cliEnv,
     model: spec.model,
     reasoning: spec.reasoning,
+    dshProvider: spec.dshProvider,
     dshTaskMode: spec.dshTaskMode,
     input: spec.input,
     mcpConfigPath,
@@ -2395,7 +2400,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     sessionId: spec.contextIdentity?.session_id,
     sessionFile: spec.contextIdentity?.session_file,
     finalText: undefined as string | undefined,
-    model: spec.model,
+    model: spec.dshProvider?.model ?? spec.model,
+    modelProvider: spec.dshProvider?.provider,
     cwd: "/workspace",
     ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
   };

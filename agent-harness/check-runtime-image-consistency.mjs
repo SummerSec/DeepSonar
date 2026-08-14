@@ -35,7 +35,7 @@ for (const packageName of [
   "@deepseek-ai/dsh-skill",
   "@deepseek-ai/dsh-skill-filesystem",
   "@deepseek-ai/dsh-tool-skill",
-  "@deepseek-ai/dsh-llm-deepseek",
+  "@deepseek-ai/dsh-llm-pi-ai",
   "@deepseek-ai/dsh-sandbox-local",
   "@deepseek-ai/dsh-sandbox-policy",
   "@deepseek-ai/dsh-bash-local",

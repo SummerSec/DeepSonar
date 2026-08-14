@@ -2,6 +2,7 @@
  * Shared create/edit editor for Provider credentials (CC Switch layout for Claude).
  * Create and edit use the same field set and save-as-is settingsConfig rules.
  */
+import { REASONING_VALUE_MAX_LENGTH, isReasoningValue } from "@deepsonar/shared-types";
 import { useMemo } from "react";
 import type { Project, ProviderAccountCatalogItemView } from "./api";
 import { CcSwitchClaudeFields } from "./CcSwitchClaudeFields";
@@ -9,6 +10,7 @@ import { CcSwitchCodexFields } from "./CcSwitchCodexFields";
 import { CcSwitchOpenCodeFields, defaultOpenCodeSettings } from "./CcSwitchOpenCodeFields";
 import { formatJsonObject, validateJsonObjectText } from "./json-text";
 import { SearchableSelect } from "./SearchableSelect";
+import { parseDocument, stringify } from "yaml";
 import { defaultCodexToml, validateTomlText } from "./toml-text";
 
 export type AgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
@@ -72,7 +74,6 @@ export function providerProtocolLabel(
   if (!providerCatalog.some((item) => item.provider === provider)) return "未识别协议";
   if (agentCli === "claude-code") return "Anthropic Messages";
   if (agentCli === "codex") return "OpenAI Responses";
-  if (agentCli === "dsh") return "DeepSeek Chat Completions";
   const entry = providerCatalog.find((item) => item.provider === provider);
   return entry?.provider === "anthropic"
     ? "Anthropic Messages"
@@ -124,6 +125,16 @@ export function extractBaseUrlFromSettingsClient(settings: Record<string, unknow
     const value = env[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
   }
+  if (typeof settings.config === "string" && settings.config.includes("llm-pi-ai:")) {
+    const document = parseDocument(settings.config, { customTags: [], prettyErrors: false });
+    if (document.errors.length === 0) {
+      const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
+      const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
+      const providers = piAi?.providers as Record<string, unknown> | undefined;
+      const profile = providers ? Object.values(providers)[0] as Record<string, unknown> | undefined : undefined;
+      if (typeof profile?.baseURL === "string") return profile.baseURL.trim().replace(/\/+$/u, "");
+    }
+  }
   if (typeof settings.config === "string") {
     const nested = /\[model_providers\.[^\]]+\][\s\S]*?base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     if (nested?.[1] || nested?.[2]) return (nested[1] || nested[2])!.replace(/\/+$/u, "");
@@ -141,7 +152,10 @@ export function extractBaseUrlFromSettingsClient(settings: Record<string, unknow
     ? settings.providers as Record<string, unknown>
     : {};
   const firstProvider = Object.values(providers).find((value) => value && typeof value === "object" && !Array.isArray(value)) as Record<string, unknown> | undefined;
-  if (typeof firstProvider?.baseUrl === "string" && firstProvider.baseUrl.trim()) return firstProvider.baseUrl.trim().replace(/\/+$/u, "");
+  for (const key of ["baseUrl", "baseURL", "base_url"]) {
+    const value = firstProvider?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
+  }
   return "";
 }
 
@@ -162,10 +176,68 @@ export function parseContextWindowTokens(raw: string): number | null {
   return value;
 }
 
-function patchContextWindowTokens(settings: Record<string, unknown>, value: number | null): Record<string, unknown> {
-  if (value === null) delete settings.context_window_tokens;
-  else settings.context_window_tokens = value;
+export function extractProviderReasoning(settings: Record<string, unknown> | null | undefined): string {
+  return isReasoningValue(settings?.reasoning) ? settings.reasoning : "";
+}
+
+export function parseProviderReasoning(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (!isReasoningValue(value)) throw new Error("思考强度必须是 1–64 字符，仅包含字母、数字、点、下划线或短横线");
+  return value;
+}
+
+function patchProviderOverrides(
+  settings: Record<string, unknown>,
+  contextWindowTokens: number | null,
+  reasoning: string | null,
+): Record<string, unknown> {
+  if (contextWindowTokens === null) delete settings.context_window_tokens;
+  else settings.context_window_tokens = contextWindowTokens;
+  if (reasoning === null) delete settings.reasoning;
+  else settings.reasoning = reasoning;
   return settings;
+}
+
+function defaultDshPiAiSettings(provider: string, baseUrl: string): Record<string, unknown> {
+  const anthropic = provider === "anthropic";
+  const route = anthropic ? "anthropic" : "openai";
+  const api = anthropic ? "anthropic-messages" : "openai-responses";
+  const endpoint = baseUrl.trim().replace(/\/+$/u, "") || (anthropic ? "https://api.anthropic.com" : "https://api.openai.com/v1");
+  const model = anthropic ? "claude-sonnet-4-5" : "gpt-5";
+  return {
+    config: stringify({
+      "llm-pi-ai": { providers: { [route]: { api, baseURL: endpoint, models: [{ id: model }] } } },
+      "agent-default-model": { provider: route, model },
+    }, { lineWidth: 0 }),
+  };
+}
+
+function defaultDshProviderYaml(provider: string, baseUrl: string): string {
+  return String(defaultDshPiAiSettings(provider, baseUrl).config ?? "");
+}
+
+function validateDshYamlText(text: string): { ok: boolean; empty: boolean; error?: string } {
+  if (!text.trim()) return { ok: true, empty: true };
+  const document = parseDocument(text, { customTags: [], prettyErrors: false });
+  return document.errors.length > 0
+    ? { ok: false, empty: false, error: document.errors[0]?.message ?? "YAML 解析失败" }
+    : { ok: true, empty: false };
+}
+
+function patchDshBaseUrl(settingsYaml: string, credentialProvider: string, baseUrl: string): string {
+  if (!settingsYaml.trim()) return defaultDshProviderYaml(credentialProvider, baseUrl);
+  const document = parseDocument(settingsYaml, { customTags: [], prettyErrors: false });
+  if (document.errors.length > 0) return settingsYaml;
+  const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
+  const defaultModel = root["agent-default-model"] as Record<string, unknown> | undefined;
+  const route = typeof defaultModel?.provider === "string" ? defaultModel.provider : (credentialProvider === "anthropic" ? "anthropic" : "openai");
+  const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
+  const providers = piAi?.providers as Record<string, unknown> | undefined;
+  const profile = providers?.[route] as Record<string, unknown> | undefined;
+  if (!profile) return settingsYaml;
+  profile.baseURL = baseUrl.trim().replace(/\/+$/u, "");
+  return stringify(root, { lineWidth: 0 });
 }
 
 /** Build settingsConfig object from editor state (create & edit share this). */
@@ -178,13 +250,16 @@ export function buildSettingsConfigFromEditor(input: {
   baseUrl: string;
   provider: string;
   contextWindowTokens: string;
+  reasoning: string;
   /** When empty and settings empty, synthesize default skeleton. */
   allowEmptyDefault?: boolean;
 }): { ok: true; settings: Record<string, unknown>; pastedAsIs: boolean } | { ok: false; error: string } {
-  const { agentCli, settingsJson, tomlText, authJson, secret, baseUrl, provider, contextWindowTokens } = input;
+  const { agentCli, settingsJson, tomlText, authJson, secret, baseUrl, provider, contextWindowTokens, reasoning } = input;
   let parsedContextWindowTokens: number | null;
+  let parsedReasoning: string | null;
   try {
     parsedContextWindowTokens = parseContextWindowTokens(contextWindowTokens);
+    parsedReasoning = parseProviderReasoning(reasoning);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -198,14 +273,24 @@ export function buildSettingsConfigFromEditor(input: {
       : tomlText.replace(/\r\n/g, "\n");
     const authSettings = auth.empty ? {} : structuredClone(auth.value);
     if (secret.trim()) authSettings.OPENAI_API_KEY = secret.trim();
-    const settings = patchContextWindowTokens({
+    const settings = patchProviderOverrides({
       auth: Object.keys(authSettings).length > 0 ? authSettings : { OPENAI_API_KEY: secret },
       config: configText,
-    }, parsedContextWindowTokens);
+    }, parsedContextWindowTokens, parsedReasoning);
     return {
       ok: true,
       pastedAsIs: !auth.empty || !toml.empty,
       settings,
+    };
+  }
+  if (agentCli === "dsh") {
+    const config = settingsJson.trim() || defaultDshProviderYaml(provider, baseUrl);
+    const validation = validateDshYamlText(config);
+    if (!validation.ok) return { ok: false, error: `DSH Provider YAML 无效：${validation.error ?? "解析失败"}` };
+    return {
+      ok: true,
+      pastedAsIs: Boolean(settingsJson.trim()),
+      settings: patchProviderOverrides({ config: config.replace(/\r\n/g, "\n") }, parsedContextWindowTokens, parsedReasoning),
     };
   }
   const validation = validateJsonObjectText(settingsJson);
@@ -222,7 +307,7 @@ export function buildSettingsConfigFromEditor(input: {
         env.ANTHROPIC_AUTH_TOKEN = secret.trim();
         env.ANTHROPIC_API_KEY = secret.trim();
         settings.env = env;
-      } else if (agentCli !== "dsh") {
+      } else {
         const options = settings.options && typeof settings.options === "object" && !Array.isArray(settings.options)
           ? settings.options as Record<string, unknown>
           : {};
@@ -230,7 +315,7 @@ export function buildSettingsConfigFromEditor(input: {
         settings.options = options;
       }
     }
-    return { ok: true, pastedAsIs: true, settings: patchContextWindowTokens(settings, parsedContextWindowTokens) };
+    return { ok: true, pastedAsIs: true, settings: patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning) };
   }
   if (input.allowEmptyDefault === false) {
     return { ok: false, error: "settingsConfig 不能为空" };
@@ -245,21 +330,13 @@ export function buildSettingsConfigFromEditor(input: {
     const url = baseUrl.trim().replace(/\/+$/u, "");
     if (url) env.ANTHROPIC_BASE_URL = url;
     else if (provider === "anthropic") env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
-    return { ok: true, pastedAsIs: false, settings: patchContextWindowTokens({ env }, parsedContextWindowTokens) };
-  }
-  if (agentCli === "dsh") {
-    return { ok: true, pastedAsIs: false, settings: patchContextWindowTokens({
-      provider: "deepseek",
-      baseURL: baseUrl.trim().replace(/\/+$/u, "") || "https://api.deepseek.com",
-      apiKeyEnv: "DEEPSEEK_API_KEY",
-      models: [{ id: "deepseek-v4-flash", contextWindow: 1_000_000 }],
-    }, parsedContextWindowTokens) };
+    return { ok: true, pastedAsIs: false, settings: patchProviderOverrides({ env }, parsedContextWindowTokens, parsedReasoning) };
   }
   // open-code
   return {
     ok: true,
     pastedAsIs: false,
-    settings: patchContextWindowTokens(defaultOpenCodeSettings(secret, baseUrl, provider), parsedContextWindowTokens),
+    settings: patchProviderOverrides(defaultOpenCodeSettings(secret, baseUrl, provider), parsedContextWindowTokens, parsedReasoning),
   };
 }
 
@@ -288,6 +365,8 @@ export function CredentialConfigEditor({
   onAuthJsonChange,
   contextWindowTokens,
   onContextWindowTokensChange,
+  reasoning,
+  onReasoningChange,
   modelOptions = [],
   onFetchModels,
   fetchingModels = false,
@@ -325,6 +404,8 @@ export function CredentialConfigEditor({
   onFetchModels?: () => void;
   contextWindowTokens: string;
   onContextWindowTokensChange: (value: string) => void;
+  reasoning: string;
+  onReasoningChange: (value: string) => void;
   fetchingModels?: boolean;
   canFetchModels?: boolean;
   onNotice?: (message: string) => void;
@@ -335,6 +416,7 @@ export function CredentialConfigEditor({
   submitLabel?: string;
 }) {
   const settingsValidation = useMemo(() => validateJsonObjectText(settingsJson), [settingsJson]);
+  const dshYamlValidation = useMemo(() => validateDshYamlText(settingsJson), [settingsJson]);
   const tomlValidation = useMemo(() => validateTomlText(tomlText), [tomlText]);
   const authValidation = useMemo(() => validateJsonObjectText(authJson), [authJson]);
   const compatibleProviders = useMemo(() => {
@@ -343,6 +425,7 @@ export function CredentialConfigEditor({
     );
     return entries;
   }, [agentCli, providerCatalog]);
+  const reasoningValid = !reasoning.trim() || isReasoningValue(reasoning.trim());
   const contextWindowValid = useMemo(() => {
     try {
       parseContextWindowTokens(contextWindowTokens);
@@ -351,8 +434,11 @@ export function CredentialConfigEditor({
       return false;
     }
   }, [contextWindowTokens]);
-  const configValid = (agentCli === "codex" ? tomlValidation.ok && authValidation.ok : settingsValidation.ok) && contextWindowValid;
+  const configValid = (agentCli === "codex"
+    ? tomlValidation.ok && authValidation.ok
+    : agentCli === "dsh" ? dshYamlValidation.ok : settingsValidation.ok) && contextWindowValid && reasoningValid;
   const secretFromConfig = useMemo(() => {
+    if (agentCli === "dsh") return "";
     if (agentCli === "codex") {
       if (authValidation.ok && !authValidation.empty) return extractSecretFromSettings({ auth: authValidation.value });
       return "";
@@ -397,12 +483,7 @@ export function CredentialConfigEditor({
       return;
     }
     if (cli === "dsh") {
-      onSettingsJsonChange(formatJsonObject({
-        provider: "deepseek",
-        baseURL: baseUrl.trim() || "https://api.deepseek.com",
-        apiKeyEnv: "DEEPSEEK_API_KEY",
-        models: [{ id: "deepseek-v4-flash", contextWindow: 1_000_000 }],
-      }));
+      onSettingsJsonChange(defaultDshProviderYaml(nextProvider, baseUrl));
       return;
     }
     onSettingsJsonChange(formatJsonObject(defaultOpenCodeSettings(
@@ -434,6 +515,7 @@ export function CredentialConfigEditor({
             value={provider}
             onChange={(next) => {
               onProviderChange(next);
+              if (agentCli === "dsh") onSettingsJsonChange(defaultDshProviderYaml(next, baseUrl));
               if (!providerCatalog.find((item) => item.provider === next)?.supports_base_url) onBaseUrlChange("");
             }}
             options={compatibleProviders.map((item) => ({
@@ -468,6 +550,34 @@ export function CredentialConfigEditor({
           />
         </fieldset>
       </div>
+      <label className="block">
+        <span className="mb-1.5 block font-mono text-[11px] text-zinc-500">模型思考强度（Provider 默认）</span>
+        <div className="grid grid-cols-4 overflow-hidden rounded-md border border-zinc-800" role="group" aria-label="Provider 模型思考强度快捷值">
+          {["", "off", "minimal", "low", "medium", "high", "xhigh", "max"].map((effort) => (
+            <button
+              key={effort || "default"}
+              type="button"
+              aria-pressed={reasoning === effort}
+              className={`min-h-9 px-2 text-[12px] transition-colors ${reasoning === effort ? "bg-emerald-500/15 text-emerald-200" : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"}`}
+              onClick={() => onReasoningChange(effort)}
+            >
+              {effort || "默认"}
+            </button>
+          ))}
+        </div>
+        <input
+          value={reasoning}
+          maxLength={REASONING_VALUE_MAX_LENGTH}
+          onChange={(event) => onReasoningChange(event.target.value)}
+          className="theme-input-surface mt-2 w-full font-mono"
+          placeholder="自定义模型 token，留空使用 Provider 默认"
+          aria-label="Provider 模型思考强度"
+          aria-invalid={!reasoningValid}
+        />
+        <span className={`mt-1 block text-[11px] ${reasoningValid ? "text-zinc-600" : "text-red-300"}`}>
+          {reasoningValid ? "按 Provider / 模型原样传递；实际支持值由所选模型决定。" : "仅允许 1–64 个字母、数字、点、下划线或短横线。"}
+        </span>
+      </label>
       <label className="block">
         <span className="mb-1.5 block font-mono text-[11px] text-zinc-500">CLI 客户端上下文预算（tokens，可选）</span>
         <input
@@ -524,14 +634,14 @@ export function CredentialConfigEditor({
         />
       ) : agentCli === "dsh" ? (
         <div className="cc-switch-form">
-          <label className="cc-switch-field"><span className="cc-switch-label">DeepSeek API Key</span>
+          <label className="cc-switch-field"><span className="cc-switch-label">Provider API Key</span>
             <input type="password" value={secret} onChange={(event) => onSecretChange(event.target.value)} className="theme-input-surface cc-switch-input" autoComplete="off" />
           </label>
           <label className="cc-switch-field"><span className="cc-switch-label">Base URL</span>
-            <input value={baseUrl} onChange={(event) => onBaseUrlChange(event.target.value.trim().replace(/\/+$/u, ""))} className="theme-input-surface cc-switch-input" placeholder="https://api.deepseek.com" />
+            <input value={baseUrl} onChange={(event) => { const next = event.target.value.trim().replace(/\/+$/u, ""); onBaseUrlChange(next); onSettingsJsonChange(patchDshBaseUrl(settingsJson, provider, next)); }} className="theme-input-surface cc-switch-input" placeholder="https://provider.example/v1" />
           </label>
-          <label className="cc-switch-field"><span className="cc-switch-label">DSH Provider 配置 JSON</span>
-            <textarea value={settingsJson} onChange={(event) => onSettingsJsonChange(event.target.value)} rows={12} className={`theme-input-surface cc-switch-json ${!settingsValidation.ok ? "border-red-700/80" : ""}`} spellCheck={false} />
+          <label className="cc-switch-field"><span className="cc-switch-label">DSH Provider 配置 YAML</span>
+            <textarea value={settingsJson} onChange={(event) => onSettingsJsonChange(event.target.value)} rows={12} className={`theme-input-surface cc-switch-json ${!dshYamlValidation.ok ? "border-red-700/80" : ""}`} spellCheck={false} />
           </label>
         </div>
       ) : (

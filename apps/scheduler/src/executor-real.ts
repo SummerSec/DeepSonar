@@ -26,6 +26,7 @@ import {
   WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import { buildDshPiAiRuntimeProjection } from "./dsh-pi-ai-settings.js";
 import {
   assertJobCanPublishSharedAsset,
   ingestEvent,
@@ -639,6 +640,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   let runtimeConfigFiles = snapshot.config_files.map((item) => ({ ...item }));
   let runtimeGatewayRouted = false;
   let gatewayToken: string | null = null;
+  let activeCredentialProvider: string | null = null;
   for (const key of snapshot.env_keys) {
     if (!config.runtime.isEnvKeyAllowed(key)) {
       console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
@@ -653,6 +655,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       throw new Error(`RoleConfig 绑定的凭据不可用（${cred ? "status=" + String(cred.status) : "不存在"}）`);
     }
     const currentCredentialProvider = String(cred.provider);
+    activeCredentialProvider = currentCredentialProvider;
     const providerError = runtimeCredentialProviderError(provider, snapshot.credential_provider, currentCredentialProvider);
     if (providerError) throw new Error(providerError);
     const mapping = PROVIDER_ENV_MAP[currentCredentialProvider];
@@ -703,8 +706,6 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
     if (provider === "dsh") {
       for (const key of mapping.secretKeys) delete env[key];
       if (mapping.baseUrlKey) delete env[mapping.baseUrlKey];
-      env.DEEPSEEK_API_KEY = jt.plaintext;
-      env.DEEPSEEK_BASE_URL = config.gateway.sandboxUrl;
       runtimeGatewayRouted = true;
     }
     if (provider === "claude-code") {
@@ -1435,6 +1436,18 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     throw new Error("runtime workspace reader is not ready");
   };
 
+  if (provider === "dsh" && !activeCredentialProvider) throw new Error("DSH_CREDENTIAL_PROVIDER_MISSING");
+  const dshProvider = provider === "dsh"
+    ? buildDshPiAiRuntimeProjection({
+        settingsConfig: snapshot.settings_config_json,
+        credentialProvider: activeCredentialProvider!,
+        gatewayBaseUrl: config.gateway.sandboxUrl,
+        model,
+        contextWindowTokens: snapshot.context_window_tokens,
+        reasoning,
+      })
+    : undefined;
+
   let result: Awaited<ReturnType<typeof runRealAgent>>;
   try {
     result = await runRealAgent(
@@ -1445,6 +1458,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       runtimeImageKey: snapshot.runtime_image.image_key,
       model,
       reasoning,
+      dshProvider,
       dshTaskMode: snapshot.dsh_task_mode,
       env,
       input: initialInput,

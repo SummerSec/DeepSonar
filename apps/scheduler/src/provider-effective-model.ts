@@ -1,3 +1,5 @@
+import { parseDshPiAiSettings } from "./dsh-pi-ai-settings.js";
+
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -45,10 +47,7 @@ export function extractModelFromSettings(agentCli: string, settingsConfig: unkno
     }
     return null;
   }
-  if (agentCli === "dsh" && Array.isArray(settings.models)) {
-    const model = settings.models.map(asObject).find((item) => typeof item.id === "string" && item.id.trim());
-    return typeof model?.id === "string" ? model.id.trim() : null;
-  }
+  if (agentCli === "dsh") return parseDshPiAiSettings(settingsConfig).modelIds[0] ?? null;
   const modelIds = Object.keys(asObject(settings.models));
   return modelIds.find((model) => model.trim())?.trim() ?? null;
 }

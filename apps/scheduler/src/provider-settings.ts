@@ -14,6 +14,7 @@ import {
   type ReasoningValue,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
+import { defaultDshPiAiSettings, parseDshPiAiSettings } from "./dsh-pi-ai-settings.js";
 import { extractModelFromSettings } from "./provider-effective-model.js";
 export { extractModelFromSettings, resolveEffectiveModel } from "./provider-effective-model.js";
 
@@ -23,7 +24,6 @@ const CONFIG_FILE_PATHS: Record<string, string> = {
   codex: ".codex/config.toml",
   "open-code": ".opencode/config.json",
   pi: ".pi/agent/models.json",
-  dsh: ".dsh/settings.yaml",
 };
 
 export type ProviderAgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
@@ -199,13 +199,8 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
   }
 
   if (input.agentCli === "dsh") {
-    const source = byPath.get(".dsh/settings.yaml");
-    if (!source) throw new Error("受限网络缺少冻结的 DSH settings.yaml");
-    if (!/^\s*baseURL:\s*.+$/mu.test(source.content)) {
-      throw new Error("受限网络无法定位 DSH baseURL");
-    }
-    const content = source.content.replace(/^\s*baseURL:\s*.+$/mu, `    baseURL: ${JSON.stringify(gatewayBaseUrl)}`);
-    return input.files.map((item) => item.path === source.path ? file(item.path, content) : { ...item });
+    // DSH consumes the separately frozen runtime projection, not a workspace config file.
+    return input.files.map((item) => ({ ...item }));
   }
 
   const source = byPath.get(".opencode/config.json");
@@ -231,8 +226,16 @@ function asObject(value: unknown): Record<string, unknown> {
 }
 
 /** Match CC Switch save semantics for CLI-specific provider fragments. */
-export function normalizeProviderSettings(agentCli: string | null | undefined, settingsConfig: unknown): Record<string, unknown> {
+export function normalizeProviderSettings(
+  agentCli: string | null | undefined,
+  settingsConfig: unknown,
+  credentialProvider?: string | null,
+): Record<string, unknown> {
   const clone = structuredClone(asObject(settingsConfig));
+  if (agentCli === "dsh") {
+    parseDshPiAiSettings(clone, credentialProvider);
+    return clone;
+  }
   if (agentCli !== "claude-code") return clone;
   const env = asObject(clone.env);
   const main = typeof env.ANTHROPIC_MODEL === "string" && env.ANTHROPIC_MODEL.trim()
@@ -255,8 +258,7 @@ export function normalizeProviderSettings(agentCli: string | null | undefined, s
 }
 
 function isEmptySettings(settings: unknown): boolean {
-  const obj = asObject(settings);
-  return Object.keys(obj).length === 0;
+  return Object.keys(asObject(settings)).length === 0;
 }
 
 function tomlEscape(value: string): string {
@@ -288,6 +290,7 @@ function applyCodexTomlOverrides(toml: string, overrides?: ProviderSettingsOverr
   }
   return next;
 }
+
 
 /** Build default settingsConfig from legacy brand credential fields. */
 export function legacySettingsConfig(input: {
@@ -343,12 +346,14 @@ requires_openai_auth = true
     };
   }
   if (input.agentCli === "dsh") {
-    return {
-      provider: "deepseek",
-      baseURL: baseUrl || defaultBase || "https://api.deepseek.com",
-      apiKeyEnv: "DEEPSEEK_API_KEY",
-      models: [{ id: input.model?.trim() || "deepseek-v4-flash" }],
-    };
+    const anthropic = input.provider === "anthropic";
+    return defaultDshPiAiSettings({
+      route: anthropic ? "anthropic" : "deepseek",
+      protocol: anthropic ? "anthropic-messages" : "openai-completions",
+      baseURL: baseUrl || defaultBase || (anthropic ? "https://api.anthropic.com" : "https://api.deepseek.com"),
+      model: input.model?.trim() || (anthropic ? "claude-sonnet-4-5" : "deepseek-v4-flash"),
+      contextWindow: anthropic ? 200_000 : 1_000_000,
+    });
   }
   // OpenCode stores one provider fragment. Runtime materialization wraps it in
   // the CLI's provider map and selects the first declared model.
@@ -380,6 +385,10 @@ export function materializeProviderSettings(input: {
     throw new Error(`unsupported agent_cli for provider settings: ${input.agentCli}`);
   }
   if (isEmptySettings(input.settingsConfig)) return [];
+  if (input.agentCli === "dsh") {
+    parseDshPiAiSettings(input.settingsConfig);
+    return [];
+  }
 
   const settings = asObject(input.settingsConfig);
   const expectedPath = CONFIG_FILE_PATHS[input.agentCli];
@@ -390,6 +399,7 @@ export function materializeProviderSettings(input: {
   if (input.agentCli === "claude-code") {
     const clone = structuredClone(settings) as Record<string, unknown>;
     delete clone.context_window_tokens;
+    delete clone.reasoning;
     const env = asObject(clone.env);
     if (input.overrides?.model?.trim()) env.ANTHROPIC_MODEL = input.overrides.model.trim();
     // Claude Code has no supported absolute context-window setting.
@@ -427,6 +437,7 @@ requires_openai_auth = true
   if (input.agentCli === "pi") {
     const source = structuredClone(settings) as Record<string, unknown>;
     delete source.context_window_tokens;
+    delete source.reasoning;
     const configuredProviders = asObject(source.providers);
     const providerSource = Object.keys(configuredProviders).length > 0
       ? configuredProviders
@@ -453,36 +464,12 @@ requires_openai_auth = true
     const content = `${JSON.stringify({ providers }, null, 2)}\n`;
     return [file(expectedPath, content)];
   }
-  if (input.agentCli === "dsh") {
-    const sourceModels = Array.isArray(settings.models)
-      ? settings.models.map(asObject)
-      : Object.entries(asObject(settings.models)).map(([id, value]) => ({ id, ...asObject(value) }));
-    const selectedModel = input.overrides?.model?.trim()
-      || extractModelFromSettings("dsh", settings)
-      || "deepseek-v4-flash";
-    const selected: Record<string, unknown> = sourceModels.find((item) => item.id === selectedModel) ?? { id: selectedModel };
-    const contextWindow = contextWindowTokens
-      ?? (typeof selected.contextWindow === "number" ? selected.contextWindow : 1_000_000);
-    const baseURL = extractBaseUrlFromSettings(settings) ?? "https://api.deepseek.com";
-    const apiKeyEnv = typeof settings.apiKeyEnv === "string" && settings.apiKeyEnv.trim()
-      ? settings.apiKeyEnv.trim()
-      : "DEEPSEEK_API_KEY";
-    const content = `- id: llm-deepseek
-  name: '@deepseek-ai/dsh-llm-deepseek'
-  config:
-    apiKeyEnv: ${JSON.stringify(apiKeyEnv)}
-    baseURL: ${JSON.stringify(baseURL)}
-    models:
-      - id: ${JSON.stringify(selectedModel)}
-        contextWindow: ${contextWindow}
-`;
-    return [file(expectedPath, content)];
-  }
   // OpenCode's settingsConfig is the selected provider fragment. The schema
   // requires both limit.context and limit.output when limit is present.
   const providerId = "deepsonar";
   const clone = structuredClone(settings) as Record<string, unknown>;
   delete clone.context_window_tokens;
+  delete clone.reasoning;
   const modelIds = Object.keys(asObject(clone.models));
   const selectedModel = input.overrides?.model?.trim() || modelIds[0] || null;
   if (contextWindowTokens != null && selectedModel) {
@@ -511,27 +498,27 @@ export function hasProviderSettingsConfig(settingsConfig: unknown): boolean {
 }
 
 export function extractReasoningFromSettings(agentCli: string, settingsConfig: unknown): string | null {
-  if (agentCli !== "codex") return null;
   const settings = asObject(settingsConfig);
+  if (isReasoningValue(settings.reasoning)) return settings.reasoning;
+  if (agentCli !== "codex") return null;
   const config = typeof settings.config === "string" ? settings.config : "";
   const match = /^\s*model_reasoning_effort\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(config);
   const value = match?.[1] || match?.[2] || null;
   return isReasoningValue(value) ? value : null;
 }
 
-/**
- * Resolve upstream base URL from CC Switch-style settingsConfig for health probes
- * and model catalog discovery (does not use Job Gateway rewriting).
- */
+/** Resolve the direct upstream endpoint before Job Gateway projection. */
 export function extractBaseUrlFromSettings(settingsConfig: unknown): string | null {
   const settings = asObject(settingsConfig);
+  if (typeof settings.config === "string" && settings.config.includes("llm-pi-ai:")) {
+    return parseDshPiAiSettings(settings).upstreamBaseUrl;
+  }
   const env = asObject(settings.env);
   for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]) {
     const value = env[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
   }
   if (typeof settings.config === "string") {
-    // Prefer nested provider table base_url, then any base_url assignment.
     const nested = /\[model_providers\.[^\]]+\][\s\S]*?base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
     if (nested?.[1] || nested?.[2]) return (nested[1] || nested[2])!.replace(/\/+$/u, "");
     const any = /base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
@@ -554,9 +541,13 @@ export function extractBaseUrlFromSettings(settingsConfig: unknown): string | nu
   return null;
 }
 
+
 /** Collect model IDs declared inside settingsConfig (for binding UI / defaults). */
 export function extractModelsFromSettings(settingsConfig: unknown): string[] {
   const settings = asObject(settingsConfig);
+  if (typeof settings.config === "string" && settings.config.includes("llm-pi-ai:")) {
+    return parseDshPiAiSettings(settings).modelIds;
+  }
   const found: string[] = [];
   const push = (value: unknown) => {
     if (typeof value === "string" && value.trim() && !found.includes(value.trim())) found.push(value.trim());

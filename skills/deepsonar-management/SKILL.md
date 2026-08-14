@@ -189,13 +189,12 @@ python scripts/deepsonar-api.py plane sync <projectId>
 python scripts/deepsonar-api.py plane info
 ```
 
-### RoleConfig 示例（Credential 配置文件 + 可选 model 覆盖 + 思考强度 + 镜像）
+### RoleConfig 示例（Credential 绑定 + 可选 model 覆盖 + 镜像）
 
 ```json
 {
   "agent_cli": "claude-code",
   "model": null,
-  "reasoning": "high",
   "env_keys": [],
   "env_vars": {},
   "modules": [],
