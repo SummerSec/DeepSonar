@@ -4,7 +4,7 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 ## [Unreleased]
 
-## [0.1.32] - 2026-08-15
+## [0.1.33] - 2026-08-15
 
 ### Added
 
@@ -20,6 +20,10 @@ Release entries are maintained from verified tag and repository changes. The imm
 - Managed Gateway sidecars now carry a proxy-script revision and are rebuilt when the route contract changes, preventing stale pre-`/control/v1` proxies from surviving upgrades.
 - Provision timeouts now wait for external creation and cleanup to settle, with a final Job/Attempt-label sweep for containers created after cancellation.
 - Image admission validates every scanner digest at startup instead of claiming scans before discovering an empty or mutable scanner configuration. Addresses #165.
+
+### Deployment / Upgrade Notes
+
+- The immutable `v0.1.32` tag failed the release metadata gate before any artifact was published. `v0.1.33` is the first published release containing these changes.
 
 ## [0.1.31] - 2026-08-15
 
@@ -244,6 +248,7 @@ Release entries are maintained from verified tag and repository changes. The imm
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.33]: https://github.com/SummerSec/DeepSonar/compare/v0.1.32...v0.1.33
 [0.1.31]: https://github.com/SummerSec/DeepSonar/compare/v0.1.30...v0.1.31
 [0.1.30]: https://github.com/SummerSec/DeepSonar/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/SummerSec/DeepSonar/compare/v0.1.28...v0.1.29
