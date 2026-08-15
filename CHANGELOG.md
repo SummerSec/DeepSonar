@@ -1,6 +1,6 @@
 # Changelog
 
-Release entries are maintained from verified tag and repository changes. The immutable `vX.Y.Z` Git tag is the product release version. Root and workspace package versions remain private internal package metadata (`0.1.11`) and are not release identifiers.
+发布条目依据已验证的 Git tag 与仓库变更维护，后续新增发布条目统一使用中文。不可变的 `vX.Y.Z` Git tag 是产品发布版本；根目录与 workspace package 的版本仅为私有内部元数据（`0.1.11`），不是发布标识。
 
 ## [Unreleased]
 
