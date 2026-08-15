@@ -274,6 +274,17 @@ async function validateSharedAssetsVolume(volumeName: string, jobId: string): Pr
   assertSharedAssetsVolumeOwnership(inspected, volumeName, jobId);
 }
 
+async function removeAttemptContainers(jobId: string, attemptId: string): Promise<void> {
+  const raw = await docker(
+    "ps", "-aq",
+    "--filter", `label=deepsonar.job=${jobId}`,
+    "--filter", `label=deepsonar.attempt=${attemptId}`,
+  );
+  for (const id of raw.split(/\s+/).filter(Boolean)) {
+    await docker("rm", "-f", id).catch(() => {});
+  }
+}
+
 async function validateSharedAssetsContainer(sandbox: Sandbox, volumeName: string): Promise<void> {
   const raw = sandbox.raw as { container?: { inspect?: () => Promise<SharedAssetsContainerInspection> } } | undefined;
   if (!raw?.container || typeof raw.container.inspect !== "function") {
@@ -338,6 +349,22 @@ const server = http.createServer((req, res) => {
 server.on("connect", (_req, socket) => socket.destroy());
 server.listen(3100, "0.0.0.0");
 `;
+
+export const GATEWAY_PROXY_REVISION = createHash("sha256")
+  .update(GATEWAY_PROXY_SCRIPT)
+  .digest("hex")
+  .slice(0, 16);
+
+export function gatewayProxyReuseAction(input: {
+  managed: string;
+  upstreamHash: string;
+  revision: string;
+  running: string;
+}, expectedUpstreamHash: string): "reuse" | "start" | "replace" | "reject" {
+  if (input.managed !== "true") return "reject";
+  if (input.upstreamHash !== expectedUpstreamHash || input.revision !== GATEWAY_PROXY_REVISION) return "replace";
+  return input.running === "true" ? "reuse" : "start";
+}
 
 /**
  * Docker internal bridge 不做外网 NAT；模型请求由另一个固定目标 sidecar 转发。
@@ -439,28 +466,30 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<{
       throw new Error("Gateway sidecar 上游 URL 必须以 /gateway 为路径");
     }
     const upstreamHash = createHash("sha256").update(upstreamUrl).digest("hex").slice(0, 16);
-    let exists = true;
-    try {
+    let exists = Boolean(await docker("ps", "-a", "--filter", `name=^/${GATEWAY_PROXY}$`, "--format", "{{.ID}}"));
+    if (exists) {
       const state = await docker(
         "inspect", "--format",
-        "{{index .Config.Labels \"deepsonar.gateway-upstream\"}}|{{.State.Running}}",
+        "{{index .Config.Labels \"deepsonar.managed\"}}|{{index .Config.Labels \"deepsonar.gateway-upstream\"}}|{{index .Config.Labels \"deepsonar.gateway-revision\"}}|{{.State.Running}}",
         GATEWAY_PROXY,
       );
-      const [configuredHash, running] = state.split("|");
-      if (configuredHash !== upstreamHash) {
-        throw new Error(`${GATEWAY_PROXY} 已指向其他 Gateway，拒绝复用`);
+      const [managed, configuredHash, revision, running] = state.split("|");
+      const action = gatewayProxyReuseAction({ managed, upstreamHash: configuredHash, revision, running }, upstreamHash);
+      if (action === "reject") throw new Error(`${GATEWAY_PROXY} 不是 DeepSonar 受管容器，拒绝接管`);
+      if (action === "replace") {
+        await docker("rm", "-f", GATEWAY_PROXY);
+        exists = false;
+      } else if (action === "start") {
+        await docker("start", GATEWAY_PROXY);
       }
-      if (running !== "true") await docker("start", GATEWAY_PROXY);
-    } catch (e) {
-      const listed = await docker("ps", "-a", "--filter", `name=^/${GATEWAY_PROXY}$`, "--format", "{{.ID}}");
-      exists = Boolean(listed);
-      if (exists) throw e;
     }
     if (!exists) {
       await docker(
         "run", "-d", "--name", GATEWAY_PROXY, "--restart", "unless-stopped",
         "--network", GATEWAY_NETWORK, "--add-host", "host.docker.internal:host-gateway",
-        "--label", "deepsonar.managed=true", "--label", `deepsonar.gateway-upstream=${upstreamHash}`,
+        "--label", "deepsonar.managed=true",
+        "--label", `deepsonar.gateway-upstream=${upstreamHash}`,
+        "--label", `deepsonar.gateway-revision=${GATEWAY_PROXY_REVISION}`,
         "-e", `DEEPSONAR_GATEWAY_UPSTREAM=${upstreamUrl}`,
         "--entrypoint", "node", image, "-e", GATEWAY_PROXY_SCRIPT,
       );
@@ -676,6 +705,12 @@ export class AgentboxRunner implements SandboxRunner {
     try {
       await sandbox.findOrProvision();
       if (aborted || input.signal?.aborted) throw new Error("provision 已取消");
+    } catch (error) {
+      // Abort may arrive before the engine assigns a container id. Repeat
+      // cleanup after create settles, then sweep the immutable attempt labels.
+      await sandbox.delete().catch(() => {});
+      await removeAttemptContainers(input.jobId, input.attemptId).catch(() => {});
+      throw error;
     } finally {
       provisioningSandboxes.delete(provisionKey);
       unbindAbort();

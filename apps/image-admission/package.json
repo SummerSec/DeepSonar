@@ -8,7 +8,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:registry-ref": "pnpm run build && node --test dist/registry-ref.test.js"
+    "test:registry-ref": "pnpm run build && node --test dist/registry-ref.test.js dist/scanner-config.test.js"
   },
   "dependencies": {
     "postgres": "^3.4.9"

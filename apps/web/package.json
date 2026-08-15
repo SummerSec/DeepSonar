@@ -22,12 +22,13 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.11.2",
     "elkjs": "^0.12.0",
+    "html-to-image": "^1.11.13",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
     "smol-toml": "^1.7.1",
-    "yaml": "^2.9.0",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@rollup/wasm-node": "^4.62.4",

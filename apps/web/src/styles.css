@@ -855,6 +855,34 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   background: color-mix(in srgb, var(--broadcast-target) 8%, transparent);
 }
 .broadcast-node-badge.has-failure { border-color: color-mix(in srgb, var(--broadcast-failed) 60%, var(--line)); }
+.canvas-filter-panel { width: min(760px, calc(100% - 32px)); transition: width 180ms var(--ease-decel); }
+.canvas-filter-panel.is-collapsed { width: min(430px, calc(100% - 32px)); }
+.canvas-export-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-tint) 88%, transparent);
+}
+.canvas-export-button:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); background: var(--surface-raised); }
+.canvas-export-button:disabled { cursor: wait; opacity: .42; }
+.canvas-export-error {
+  position: absolute;
+  left: 16px;
+  top: 76px;
+  z-index: 20;
+  max-width: min(430px, calc(100% - 32px));
+  border: 1px solid rgb(127 29 29 / .65);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: #fca5a5;
+  background: rgb(69 10 10 / .9);
+  font: 400 10px var(--font-mono);
+}
 .broadcast-sync-error {
   position: absolute;
   right: 16px;
@@ -880,12 +908,16 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   background: color-mix(in srgb, var(--panel-raised) 94%, transparent);
   box-shadow: 0 10px 28px rgb(0 0 0 / .24);
   backdrop-filter: blur(12px);
+  transition: width 180ms var(--ease-decel);
 }
-.broadcast-status-panel-heading { display: flex; align-items: center; gap: 7px; padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--text); }
-.broadcast-status-panel-heading > svg { color: var(--broadcast-source); }
-.broadcast-status-panel-kicker { color: var(--broadcast-source); font: 600 8px var(--font-mono); letter-spacing: .12em; }
-.broadcast-status-panel-heading strong { font-size: 11px; }
-.broadcast-status-panel-count { margin-left: auto; color: var(--muted); font: 400 9px var(--font-mono); }
+.broadcast-status-panel.is-collapsed { width: min(250px, calc(100% - 32px)); }
+.broadcast-status-panel-heading { display: flex; width: 100%; min-height: 40px; align-items: center; gap: 7px; border: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.broadcast-status-panel.is-collapsed .broadcast-status-panel-heading { border-bottom: 0; }
+.broadcast-status-panel-heading:hover { background: color-mix(in srgb, var(--surface-raised) 75%, transparent); }
+.broadcast-status-panel-heading > svg { flex: none; color: var(--broadcast-source); }
+.broadcast-status-panel-kicker { color: var(--broadcast-source); font: 600 9px var(--font-mono); }
+.broadcast-status-panel-count { display: inline-flex; min-width: 0; margin-left: auto; align-items: center; gap: 6px; color: var(--muted); font: 400 9px var(--font-mono); white-space: nowrap; }
+.broadcast-status-panel-alert { color: var(--broadcast-failed); font: normal 600 8px var(--font-mono); }
 .broadcast-status-panel ol { margin: 0; padding: 0; list-style: none; }
 .broadcast-status-panel li { display: grid; grid-template-columns: 3px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .broadcast-status-panel li:last-child { border-bottom: 0; }
@@ -899,7 +931,7 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .broadcast-status-copy small, .broadcast-status-meta small { color: var(--muted); font: 400 9px var(--font-mono); }
 .broadcast-status-meta { align-items: flex-end; gap: 2px; }
 .broadcast-status-state { font: 600 9px var(--font-mono); font-style: normal; }
-.broadcast-status-panel > p { margin: 0; padding: 9px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1.5; }
+.broadcast-status-panel > div > p { margin: 0; padding: 9px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1.5; }
 .broadcast-sidebar-section { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-tint); }
 .broadcast-sidebar-heading { display: flex; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 11px; }
 .broadcast-sidebar-heading strong { margin-left: auto; color: var(--muted); font: 500 10px var(--font-mono); }

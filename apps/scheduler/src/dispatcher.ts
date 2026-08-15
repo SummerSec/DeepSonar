@@ -770,9 +770,7 @@ async function runJob(jobId: string) {
           runner.provision(provisionInput),
           config.timeouts.provisionSec * 1000,
           `provision 超时（${config.timeouts.provisionSec}s）`,
-          () => {
-            void interruptProvision(jobId, attemptId!);
-          },
+          () => interruptProvision(jobId, attemptId!),
           (lateHandle) => runner.destroy(lateHandle).catch(() => {}),
         );
       } finally {
@@ -907,35 +905,34 @@ async function runJob(jobId: string) {
   }
 }
 
-function withProvisionTimeout<T>(
+export async function withProvisionTimeout<T>(
   promise: Promise<T>,
   ms: number,
   message: string,
-  onTimeout: () => void,
+  onTimeout: () => Promise<unknown>,
   onLateResolve: (value: T) => Promise<unknown>,
 ): Promise<T> {
-  let timedOut = false;
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      timedOut = true;
-      onTimeout();
-      reject(new Error(message));
-    }, ms);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outcome = await Promise.race([
     promise.then(
-      (value) => {
-        clearTimeout(timer);
-        if (timedOut) {
-          void onLateResolve(value).catch(() => {});
-          return;
-        }
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        if (!timedOut) reject(error);
-      },
-    );
-  });
+      (value) => ({ kind: "resolved" as const, value }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    ),
+    new Promise<{ kind: "timeout" }>((resolve) => {
+      timer = setTimeout(() => resolve({ kind: "timeout" }), ms);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (outcome.kind === "resolved") return outcome.value;
+  if (outcome.kind === "rejected") throw outcome.error;
+
+  await onTimeout().catch(() => {});
+  const settled = await promise.then(
+    (value) => ({ kind: "resolved" as const, value }),
+    () => ({ kind: "rejected" as const }),
+  );
+  if (settled.kind === "resolved") await onLateResolve(settled.value).catch(() => {});
+  throw new Error(message);
 }
 
 /** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */

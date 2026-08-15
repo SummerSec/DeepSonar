@@ -665,7 +665,8 @@ PLANE_READY_STATE=Ready
 
 MAX_GLOBAL_JOBS=20             # global_settings 未配置时的启动默认
 MAX_JOBS_PER_PROJECT=5         # global_settings 未配置时的启动默认
-PROVISION_CONCURRENCY=2        # global_settings.maxConcurrentProvisioning 缺失时的 fallback；DB claim admission，不是 semaphore
+PROVISION_CONCURRENCY=2        # global_settings.maxConcurrentProvisioning 缺失时的 fallback；vfs 主机在 DB 中设为 1
+PROVISION_TIMEOUT_SEC=900       # 生产 Compose 默认；覆盖 rootless vfs 的 4-8 分钟冷 create
 
 DEFAULT_AUDIT_TIMEOUT_SEC=18000
 DEFAULT_VERIFY_TIMEOUT_SEC=10800

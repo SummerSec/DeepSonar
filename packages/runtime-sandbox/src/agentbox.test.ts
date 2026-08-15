@@ -33,7 +33,9 @@ import {
   bindProvisionAbortSignal,
   terminalShellCommand,
   writeTerminalInput,
+  GATEWAY_PROXY_REVISION,
   GATEWAY_PROXY_SCRIPT,
+  gatewayProxyReuseAction,
   AgentboxRunner,
   mergeObservedSessionIdentity,
   normalizePlainFinalOutput,
@@ -493,6 +495,15 @@ test("网关代理在客户端请求中止时销毁上游请求并保持进程�
     await stopGatewayProxy(proxy);
     await closeHttpServer(upstream);
   }
+});
+
+test("managed gateway proxy is replaced when its route implementation is stale", () => {
+  const current = { managed: "true", upstreamHash: "upstream", revision: GATEWAY_PROXY_REVISION, running: "true" };
+  assert.equal(gatewayProxyReuseAction(current, "upstream"), "reuse");
+  assert.equal(gatewayProxyReuseAction({ ...current, running: "false" }, "upstream"), "start");
+  assert.equal(gatewayProxyReuseAction({ ...current, revision: "legacy" }, "upstream"), "replace");
+  assert.equal(gatewayProxyReuseAction({ ...current, upstreamHash: "old" }, "upstream"), "replace");
+  assert.equal(gatewayProxyReuseAction({ ...current, managed: "" }, "upstream"), "reject");
 });
 
 test("restricted gateway proxy forwards only /gateway and /control/v1 and preserves Authorization", async () => {

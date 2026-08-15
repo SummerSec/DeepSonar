@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Broadcast, CaretDown, CaretUp, Eye, EyeSlash, Funnel, PaperPlaneTilt, TreeStructure, X } from "@phosphor-icons/react";
+import { Broadcast, CaretDown, CaretUp, DownloadSimple, Eye, EyeSlash, Funnel, PaperPlaneTilt, TreeStructure, X } from "@phosphor-icons/react";
 import {
   Background,
   BackgroundVariant,
   Controls,
+  getNodesBounds,
+  getViewportForBounds,
   MarkerType,
   MiniMap,
   ReactFlow,
@@ -12,6 +14,7 @@ import {
   type Node,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { toPng } from "html-to-image";
 import { api, type CanvasBroadcastPage, type CanvasData, type CanvasHumanMessage, type CanvasHumanMessagePage, type CanvasNode, type FindingTrace } from "./api";
 import { BROADCAST_STATUS_COLOR, broadcastStatusLabel, deriveCanvasBroadcasts, type CanvasBroadcastProjection } from "./canvas-broadcasts";
 import {
@@ -359,9 +362,10 @@ export function CanvasView({
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [showContext, setShowContext] = useState(true);
-  const [filtersOpen, setFiltersOpen] = useState(() =>
-    typeof window === "undefined" || window.matchMedia("(min-width: 640px)").matches,
-  );
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [broadcastLedgerOpen, setBroadcastLedgerOpen] = useState(false);
+  const [exportingImage, setExportingImage] = useState(false);
+  const [exportImageError, setExportImageError] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceFocusMode>("hide");
   /** 全局深度上限；默认前 3 层。全开 = graphMax；隐藏 = 回到 3 并清空手动覆盖 */
   const [maxDepth, setMaxDepth] = useState(DEFAULT_MAX_DEPTH);
@@ -378,6 +382,7 @@ export function CanvasView({
   const broadcastInFlightRef = useRef<number | null>(null);
   const messageInFlightRef = useRef<number | null>(null);
   const focusedNodeRef = useRef("");
+  const canvasRootRef = useRef<HTMLDivElement>(null);
   const clearSelected = useCallback(() => {
     nodeRequestRef.current += 1;
     setSelected(null);
@@ -852,6 +857,44 @@ export function CanvasView({
     traceMode,
   ]);
 
+  const exportCanvasImage = useCallback(async () => {
+    if (exportingImage || visibleNodes.length === 0) return;
+    const viewport = canvasRootRef.current?.querySelector<HTMLElement>(".react-flow__viewport");
+    const flow = canvasRootRef.current?.querySelector<HTMLElement>(".react-flow");
+    if (!viewport || !flow) {
+      setExportImageError("画布尚未准备好");
+      return;
+    }
+    setExportingImage(true);
+    setExportImageError(null);
+    try {
+      const bounds = getNodesBounds(visibleNodes);
+      const imageWidth = Math.min(4096, Math.max(1600, Math.ceil(bounds.width + 240)));
+      const imageHeight = Math.min(4096, Math.max(900, Math.ceil(bounds.height + 240)));
+      const exportViewport = getViewportForBounds(bounds, imageWidth, imageHeight, 0.2, 1.5, 0.08);
+      const dataUrl = await toPng(viewport, {
+        backgroundColor: getComputedStyle(flow).backgroundColor || "#080a0b",
+        cacheBust: true,
+        height: imageHeight,
+        pixelRatio: 1,
+        style: {
+          height: `${imageHeight}px`,
+          transform: `translate(${exportViewport.x}px, ${exportViewport.y}px) scale(${exportViewport.zoom})`,
+          width: `${imageWidth}px`,
+        },
+        width: imageWidth,
+      });
+      const link = document.createElement("a");
+      link.download = `deepsonar-canvas-${canvasId.slice(0, 8)}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (cause) {
+      setExportImageError(`导出失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setExportingImage(false);
+    }
+  }, [canvasId, exportingImage, visibleNodes]);
+
   const totalNodeCount = data?.nodes.length ?? 0;
 
   const roleOptions = useMemo(() => {
@@ -961,7 +1004,7 @@ export function CanvasView({
     manualOverrideCount > 0 ? ` · 手调 ${manualOverrideCount}` : "";
 
   return (
-    <div className="relative h-full w-full">
+    <div ref={canvasRootRef} className="relative h-full w-full">
       {error && (
         <div className="absolute right-4 top-4 z-20 rounded-md border border-red-900/60 bg-red-950/80 px-3 py-2 font-mono text-[10px] text-red-300">
           同步失败：{error}
@@ -969,6 +1012,9 @@ export function CanvasView({
       )}
       {broadcastError && (
         <div className="broadcast-sync-error">广播账本同步失败：{broadcastError}</div>
+      )}
+      {exportImageError && (
+        <div className="canvas-export-error" role="status">{exportImageError}</div>
       )}
       <button type="button" className="human-message-launch" onClick={() => setComposerOpen(true)}>
         <PaperPlaneTilt size={16} weight="fill" />
@@ -990,31 +1036,49 @@ export function CanvasView({
         </section>
       )}
       {broadcastPage && broadcastPage.total > 0 && (
-        <section className="broadcast-status-panel" aria-label="最近广播状态">
-          <div className="broadcast-status-panel-heading">
+        <section
+          className={`broadcast-status-panel${broadcastLedgerOpen ? " is-open" : " is-collapsed"}`}
+          aria-label="广播账本"
+        >
+          <button
+            type="button"
+            className="broadcast-status-panel-heading"
+            onClick={() => setBroadcastLedgerOpen((open) => !open)}
+            aria-expanded={broadcastLedgerOpen}
+            aria-controls="canvas-broadcast-ledger"
+          >
             <Broadcast size={14} />
-            <span className="broadcast-status-panel-kicker">投递账本</span>
-            <strong>最近广播</strong>
-            <span className="broadcast-status-panel-count">{broadcastPage.total}{broadcastPage.truncated ? "+" : ""} 条</span>
-          </div>
-          <ol>
-            {broadcastPage.items.slice(0, 5).map((item) => (
-              <li key={item.id} className={`broadcast-status-row is-${item.delivery_status}`}>
-                <span className="broadcast-status-rail" aria-hidden="true" />
-                <div className="broadcast-status-copy">
-                  <strong>{item.title}</strong>
-                  <small>{item.target_node_title ?? item.target_role ?? "目标节点暂不可见"}</small>
-                </div>
-                <div className="broadcast-status-meta">
-                  <em className="broadcast-status-state" style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
-                    {broadcastStatusLabel(item.delivery_status)}
-                  </em>
-                  {item.attempt > 1 && <small>attempt ×{item.attempt}</small>}
-                </div>
-              </li>
-            ))}
-          </ol>
-          <p>“已注入”仅表示内容进入 Agent 会话，不表示已阅读或处理。</p>
+            <span className="broadcast-status-panel-kicker">广播账本</span>
+            <span className="broadcast-status-panel-count">
+              {broadcastPage.total}{broadcastPage.truncated ? "+" : ""} 条
+              {broadcastPage.items.some((item) => item.delivery_status === "failed") && (
+                <em className="broadcast-status-panel-alert">有失败</em>
+              )}
+            </span>
+            {broadcastLedgerOpen ? <CaretUp size={12} /> : <CaretDown size={12} />}
+          </button>
+          {broadcastLedgerOpen && (
+            <div id="canvas-broadcast-ledger">
+              <ol>
+                {broadcastPage.items.slice(0, 5).map((item) => (
+                  <li key={item.id} className={`broadcast-status-row is-${item.delivery_status}`}>
+                    <span className="broadcast-status-rail" aria-hidden="true" />
+                    <div className="broadcast-status-copy">
+                      <strong>{item.title}</strong>
+                      <small>{item.target_node_title ?? item.target_role ?? "目标节点暂不可见"}</small>
+                    </div>
+                    <div className="broadcast-status-meta">
+                      <em className="broadcast-status-state" style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
+                        {broadcastStatusLabel(item.delivery_status)}
+                      </em>
+                      {item.attempt > 1 && <small>attempt ×{item.attempt}</small>}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <p>“已注入”仅表示内容进入 Agent 会话，不表示已阅读或处理。</p>
+            </div>
+          )}
         </section>
       )}
       {traceActive && (
@@ -1090,8 +1154,7 @@ export function CanvasView({
       </ReactFlow>
 
       <div
-        className={`surface-shell absolute left-4 ${traceActive ? "top-20 hidden sm:block" : "top-4"} z-10 w-[calc(100%-2rem)] max-w-[980px] rounded-[20px] p-1 xl:w-[calc(100%-13rem)]`}
-        style={{ position: "absolute" }}
+        className={`canvas-filter-panel surface-shell absolute left-4 ${traceActive ? "top-20 hidden sm:block" : "top-4"} z-10 rounded-[20px] p-1 ${filtersOpen ? "is-open" : "is-collapsed"}`}
       >
         {filtersOpen ? (
           <div className="surface-core rounded-[16px] px-4 py-3">
@@ -1125,8 +1188,18 @@ export function CanvasView({
               )}
               <button
                 type="button"
+                onClick={() => void exportCanvasImage()}
+                disabled={exportingImage || visibleNodes.length === 0}
+                className={`${filterActive ? "" : "ml-auto"} canvas-export-button`}
+                title={exportingImage ? "正在导出 PNG" : "导出完整画布为 PNG"}
+                aria-label={exportingImage ? "正在导出画布图片" : "导出画布图片"}
+              >
+                <DownloadSimple size={13} />
+              </button>
+              <button
+                type="button"
                 onClick={() => setFiltersOpen(false)}
-                className={`${filterActive ? "" : "ml-auto"} inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white`}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white"
               >
                 <CaretUp size={11} /> 收起
               </button>
@@ -1258,24 +1331,37 @@ export function CanvasView({
             </label>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setFiltersOpen(true)}
-            className="surface-core flex w-full items-center gap-2 rounded-[16px] px-4 py-3 text-left text-[12px] text-zinc-300 hover:bg-white/[.045]"
-          >
-            <Funnel size={15} className="text-acc-400" />
-            <span>展开筛选</span>
-            {filterActive && (
-              <span className="font-mono text-[10px] text-acc-400">
-                命中 {matchedCount} / {totalNodeCount}
+          <div className="surface-core flex w-full items-stretch rounded-[16px]">
+            <button
+              type="button"
+              onClick={() => setFiltersOpen(true)}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-l-[16px] px-4 py-3 text-left text-[12px] text-zinc-300 hover:bg-white/[.045]"
+              aria-expanded="false"
+            >
+              <Funnel size={15} className="shrink-0 text-acc-400" />
+              <span className="shrink-0">筛选节点</span>
+              {filterActive && (
+                <span className="truncate font-mono text-[10px] text-acc-400">
+                  命中 {matchedCount} / {totalNodeCount}
+                </span>
+              )}
+              <span className="truncate font-mono text-[10px] text-zinc-500">
+                {depthSummary}
+                {manualOverrideHint}
               </span>
-            )}
-            <span className="font-mono text-[10px] text-zinc-500">
-              {depthSummary}
-              {manualOverrideHint}
-            </span>
-            <CaretDown size={12} className="ml-auto text-zinc-600" />
-          </button>
+              <CaretDown size={12} className="ml-auto shrink-0 text-zinc-600" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportCanvasImage()}
+              disabled={exportingImage || visibleNodes.length === 0}
+              className="canvas-export-button m-2 ml-0"
+              title={exportingImage ? "正在导出 PNG" : "导出完整画布为 PNG"}
+              aria-label={exportingImage ? "正在导出画布图片" : "导出画布图片"}
+            >
+              <DownloadSimple size={14} />
+            </button>
+          </div>
         )}
       </div>
       <Legend />

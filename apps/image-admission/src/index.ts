@@ -5,6 +5,7 @@ import { unlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import postgres from "postgres";
 import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
+import { validateScannerImages, type ScannerName } from "./scanner-config.js";
 
 const execFileP = promisify(execFile);
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://deepsonar:deepsonar@localhost:5432/deepsonar";
@@ -14,12 +15,12 @@ const updateCheckMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_UPDATE
 const continuousRescanMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_RESCAN_SEC ?? 86_400) * 1_000);
 const preferredRegistry = normalizePreferredRegistry(process.env.DEEPSONAR_IMAGE_REGISTRY ?? "");
 const allowedRegistries = new Set((process.env.DEEPSONAR_ALLOWED_IMAGE_REGISTRIES ?? "ghcr.io,docker.io,registry-1.docker.io").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
-const scannerImages = {
+const scannerImages = validateScannerImages({
   cosign: process.env.DEEPSONAR_COSIGN_IMAGE ?? "",
   syft: process.env.DEEPSONAR_SYFT_IMAGE ?? "",
   trivy: process.env.DEEPSONAR_TRIVY_IMAGE ?? "",
   clamav: process.env.DEEPSONAR_CLAMAV_IMAGE ?? "",
-};
+});
 const scanVolume = process.env.DEEPSONAR_IMAGE_SCAN_VOLUME ?? "deepsonar_admission_scan";
 const sql = postgres(databaseUrl, { max: 2, connection: { application_name: "deepsonar-image-admission" } });
 
@@ -71,12 +72,8 @@ function registryOf(imageRef: string): string {
   return first.includes(".") || first.includes(":") ? first : "docker.io";
 }
 
-function requireImmutableScanner(name: keyof typeof scannerImages): string {
-  const image = scannerImages[name];
-  if (!/@sha256:[0-9a-f]{64}$/.test(image)) {
-    throw new Error(`DEEPSONAR_${name.toUpperCase()}_IMAGE 必须配置为 digest 引用`);
-  }
-  return image;
+function requireImmutableScanner(name: ScannerName): string {
+  return scannerImages[name];
 }
 
 async function docker(args: string[], timeout = 15 * 60_000, maxBuffer = 64 * 1024 * 1024): Promise<string> {

@@ -4,6 +4,21 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 ## [Unreleased]
 
+### Added
+
+- Added full-topology PNG export to Task Canvas.
+
+### Changed
+
+- Task Canvas node filters and the broadcast ledger now default to compact collapsed docks and expand independently without covering the graph.
+- Production provisioning now defaults to a 900-second budget; rootless Docker `vfs` deployments are documented to serialize provisioning through the database setting.
+
+### Fixed
+
+- Managed Gateway sidecars now carry a proxy-script revision and are rebuilt when the route contract changes, preventing stale pre-`/control/v1` proxies from surviving upgrades.
+- Provision timeouts now wait for external creation and cleanup to settle, with a final Job/Attempt-label sweep for containers created after cancellation.
+- Image admission validates every scanner digest at startup instead of claiming scans before discovering an empty or mutable scanner configuration. Addresses #165.
+
 ## [0.1.31] - 2026-08-15
 
 ### Added

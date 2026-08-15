@@ -114,7 +114,14 @@ real 模式写入共享资产只读卷时使用固定默认 helper：
 Provision 并发是数据库 claim admission，不是进程内 semaphore：超过全局
 `global_settings.maxConcurrentProvisioning` 的 Job 留在 `pending`，不消耗 `claimed_at`；槽位释放后
 调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。`PROVISION_CONCURRENCY=2` 只在该全局配置
-缺失时作为 fallback。
+缺失时作为 fallback。rootless Docker 使用 `vfs` 存储驱动时，GB 级镜像的冷 `create` 会全量复制文件；应把数据库
+`global_settings.maxConcurrentProvisioning` 设为 `1`，并使用生产默认 `PROVISION_TIMEOUT_SEC=900`。只改
+`deploy/.env` 后执行 `docker compose restart` 不会更新既有容器环境，必须执行
+`docker compose up -d --force-recreate scheduler`（或重新运行 `deploy.sh up real pull`）。
+
+沙箱 Gateway 由 Scheduler 动态管理并同时加入普通 bridge 与 restricted internal bridge，不应再手工
+`docker run`，也不应把 upstream 改为无路径的 Scheduler 根 URL。受管代理只暴露 `/gateway` 与
+`/control/v1`；代理脚本或 upstream 指纹变化时会在下一次 provision 前自动重建。
 
 ### 专项运行时（可选）
 
