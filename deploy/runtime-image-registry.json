@@ -12,7 +12,7 @@
       "default_role": "base",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:b46a18805783d562ba304448fecf9bac78a1a4614ff5453fdab91598b4f0a8bc",
           "platforms": [
             "linux/amd64",
@@ -58,7 +58,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:431d572f70c9f982af8cb67bef279a0b54108d48ec8b76890a853806b4a77af6",
           "platforms": [
             "linux/amd64",
@@ -104,7 +104,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:0664e890ad1813037ac7de704e65e3e106df1531bfe91833989ad080142dc7b1",
           "platforms": [
             "linux/amd64",
@@ -150,7 +150,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:93014a2d237236464eca2c377f6b6ca9c46f79da8765290c2b647ae25df43b04",
           "platforms": [
             "linux/amd64",
@@ -196,7 +196,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:738e75e5e77c7f12ad84ab4e6f2c5042ae97e30f7bc44ab2f7dec2c8b0117cb5",
           "platforms": [
             "linux/amd64",
@@ -242,7 +242,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:73bdcd8e69ac5e065976afaa010c8f227dd181a245185266db59953d1ec9b1f8",
           "platforms": [
             "linux/amd64",
@@ -288,7 +288,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:12c578d81a9d0120903c641dfc78c86ed071725795d4cdc17c14a5f1ace0ae15",
           "platforms": [
             "linux/amd64",
@@ -334,7 +334,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:bdaed2f4ec346bfeed7adea4e5881c6cd85410e7126970df0421f9f2801ae8d7",
           "platforms": [
             "linux/amd64",
@@ -380,7 +380,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.30",
+          "version": "0.1.31",
           "digest": "sha256:e7a1fb47e7044f07a0c1f44232cd65cf3fdaa0bc38abcc0cbc5cc9c9b7289551",
           "platforms": [
             "linux/amd64",
