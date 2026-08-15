@@ -4,6 +4,8 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-08-15
+
 ### Added
 
 - Added full-topology PNG export to Task Canvas.
