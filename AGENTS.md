@@ -15,6 +15,7 @@ DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度�
 
 ```bash
 pnpm db:up            # 起 Postgres（docker compose，deploy/docker-compose.yml，deepsonar/deepsonar@localhost:5432）
+pnpm db:rebuild       # 备份后按当前 schema.sql 重建并回填交集列（先 --plan，再 --apply）
 pnpm dev              # 调度器（tsx watch，端口 3100；空库自动套用 schema.sql 基线，版本不符拒绝启动）
 pnpm dev:web          # 前端（vite，5173；/api 代理到 3100）
 pnpm build            # 全 workspace tsc 构建
@@ -91,7 +92,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 数据与迁移
 
-- **Schema**：`database/schema.sql` 是唯一基线（当前 v34，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 migration**，改表 = 改基线 + bump 版本 + 重建库。
+- **Schema**：`database/schema.sql` 是唯一基线（当前 v34，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
 - **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
 - **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。任务 `kind` 为 `standard` 或 `compose`：后者只能选择同项目 1–8 条当前已确认且 disposition 合法的 Finding，创建时冻结摘要并投影为只读种子节点；重试会重新校验源 Finding，失败则拒绝清空旧运行数据。
@@ -109,7 +110,7 @@ pnpm typecheck        # 全 workspace 类型检查
 - 全仓库 TypeScript ESM；`shared-types`（zod schema）是前后端/事件 payload 单源，改 schema 从这里改。
 - 新增 job 类型 = 字符串新值 +（如需真实执行）在 `agent_roles` 注册，无需迁移；dispatcher 的 `isRealType` 自动识别。
 - **新增 Agent CLI**：除 runtime adapter（`runtime-adapters.ts`）外，必须同步 **Session 归档**（`cli-session-adapters.ts`）与 **Job Session 查看器**（`apps/web/src/session-viewer/parseAgentSession.ts` + 测试）；保留下载原始文件。清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
-- 改表 = 直接改 `database/schema.sql` + bump `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`，然后重建数据库；不写 migration、不留旧结构 fallback。
+- 改表 = 直接改 `database/schema.sql` + bump `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`，然后重建数据库；不写增量 ALTER、不留旧结构 fallback。已有库用 `pnpm db:rebuild`。
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
 - RoleConfig `modules` 支持三类规范 selector：单模块 `"<source_id>:<module_id>"`、整插件 `"<source_id>:plugin:<plugin>"`、整来源 `"<source_id>:source:*"`；展开、冲突排除与最终内容 hash 由服务端 materializer 统一处理。

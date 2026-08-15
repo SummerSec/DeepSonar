@@ -801,8 +801,9 @@ CANVAS_LAYOUT=auto
 
 - **唯一真相**：`database/schema.sql` + `SCHEMA_VERSION`；无 `database/migrations/`
 - **启动行为**：空库原子套用基线；非空库校验 `schema_meta.version == SCHEMA_VERSION` 与表/列结构，不符 fail closed
-- **改表**：直接改基线、bump 版本、**重建数据库**；不写 migration、不留旧结构 fallback
-- 业务数据用 `.deepsonarpack` 导入导出，不是 schema 升级工具
+- **改表**：直接改基线、bump 版本、**重建数据库**；不写增量 ALTER、不留旧结构 fallback
+- 运维可将旧库备份后套最新基线，再按列名交集回填（`pnpm db:rebuild`）；Scheduler 启动路径仍 fail closed
+- 跨环境复制项目配置用 `.deepsonarpack`，不是 schema 升级工具
 
 ### 17.3 事件格式版本化
 

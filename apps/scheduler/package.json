@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:migrations": "tsx --test src/migration-runner.test.ts src/db.test.ts"
+    "test:migrations": "tsx --test src/migration-runner.test.ts src/db.test.ts src/schema-rebuild.test.ts",
+    "db:rebuild": "tsx src/schema-rebuild-cli.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1104.0",
@@ -29,5 +30,9 @@
     "@types/node": "^26.1.2",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3"
-  }
+  },
+  "description": "",
+  "main": "index.js",
+  "keywords": [],
+  "author": ""
 }

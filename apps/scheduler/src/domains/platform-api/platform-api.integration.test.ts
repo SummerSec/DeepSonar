@@ -43,6 +43,7 @@ if (!testDatabaseUrl) {
       const { sql, migrate } = dbModule;
       const {
         clearPlatformApiIdempotencyCache,
+        activateProvisionedJobCapabilityTokens,
         mintJobCapabilityToken,
         registerPlatformControlRoutes,
         registerRuntimeHandler,
@@ -64,13 +65,18 @@ if (!testDatabaseUrl) {
           id, project_id, canvas_id, type, status, agent_snapshot_json,
           started_at, timeout_sec, lease_expires_at
         ) VALUES (
-          ${jobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(snapshot)},
+          ${jobId}, ${projectId}, ${canvasId}, 'audit', 'provisioning', ${sql.json(snapshot)},
           now(), 3600, now() + interval '1 hour'
         )`;
 
       const grant = await mintJobCapabilityToken(jobId);
       const auth = { authorization: `Bearer ${grant.token}` };
       const base = `/control/v1/jobs/${jobId}`;
+      const beforeRunning = await app.inject({ method: "GET", url: `${base}/agent/capabilities_list`, headers: auth });
+      assert.equal(beforeRunning.statusCode, 409, beforeRunning.payload);
+      assert.equal(beforeRunning.json().error_code, "CAPABILITY_JOB_NOT_ACTIVE");
+      await sql`UPDATE jobs SET status = 'running', started_at = now() WHERE id = ${jobId}`;
+      assert.equal(await activateProvisionedJobCapabilityTokens(jobId), 1);
       const calls: Array<{ operationId: string; eventId: string; input: unknown }> = [];
       const handler = async (context: { operationId: string; eventId: string; input: unknown }) => {
         calls.push(context);

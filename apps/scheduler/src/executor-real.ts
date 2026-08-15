@@ -70,7 +70,6 @@ import {
 } from "./domains/platform-api/registry.js";
 import {
   mintJobCapabilityToken,
-  revokeJobCapabilityTokens,
 } from "./domains/platform-api/tokens.js";
 import { inc } from "./metrics.js";
 import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/canvas/human-messages.js";
@@ -549,7 +548,46 @@ ${input.toolGuide}
 `;
 }
 
-export async function executeReal(jobId: string, type: string): Promise<void> {
+export interface PreparedPlatformCapability {
+  jobId: string;
+  operationIds: string[];
+  token: string;
+  env: {
+    DEEPSONAR_API_BASE_URL: string;
+    DEEPSONAR_API_TOKEN: string;
+    DEEPSONAR_JOB_ID: string;
+  };
+}
+
+/** Mint while provisioning so Docker Config.Env and the later Agent exec share one grant. */
+export async function preparePlatformCapability(
+  jobId: string,
+  snapshot: AgentRuntimeSnapshot,
+): Promise<PreparedPlatformCapability> {
+  const operationIds = frozenPlatformOperations(snapshot.platform_tools);
+  if (snapshot.agent_runtime?.capabilities.platformControlApi !== true) {
+    throw new Error(`job ${jobId} 的冻结 Agent adapter 不支持 Job-scoped control API`);
+  }
+  if (operationIds.length === 0) throw new Error(`job ${jobId} 没有冻结的平台控制 operation`);
+  const grant = await mintJobCapabilityToken(jobId, { operationIds });
+  const baseUrl = platformApiBaseUrl({ baseUrl: config.platformApi.sandboxUrl, jobId });
+  return {
+    jobId,
+    operationIds,
+    token: grant.token,
+    env: {
+      DEEPSONAR_API_BASE_URL: baseUrl,
+      DEEPSONAR_API_TOKEN: grant.token,
+      DEEPSONAR_JOB_ID: jobId,
+    },
+  };
+}
+
+export async function executeReal(
+  jobId: string,
+  type: string,
+  platformCapability: PreparedPlatformCapability,
+): Promise<void> {
   const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
   if (!job) throw new Error(`job ${jobId} 不存在`);
 
@@ -582,6 +620,16 @@ export async function executeReal(jobId: string, type: string): Promise<void> {
   const platformApiDiscoveryUrl = platformApiEnabled
     ? platformApiBaseUrl({ baseUrl: config.platformApi.sandboxUrl, jobId })
     : null;
+  if (
+    platformCapability.jobId !== jobId
+    || platformCapability.env.DEEPSONAR_JOB_ID !== jobId
+    || platformCapability.env.DEEPSONAR_API_BASE_URL !== platformApiDiscoveryUrl
+    || platformCapability.env.DEEPSONAR_API_TOKEN !== platformCapability.token
+    || platformCapability.operationIds.length !== platformOperations.length
+    || platformCapability.operationIds.some((operation, index) => operation !== platformOperations[index])
+  ) {
+    throw new Error(`job ${jobId} 的预置平台 capability 与冻结快照不一致`);
+  }
   // The platform skill is reserved by name. Never pass a RoleConfig copy to
   // AgentBox, otherwise a role module could shadow control instructions.
   const runtimeSkills = injectPlatformControlSkill(snapshot.skills);
@@ -732,10 +780,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
-  if (platformApiDiscoveryUrl) {
-    env.DEEPSONAR_API_BASE_URL = platformApiDiscoveryUrl;
-    env.DEEPSONAR_JOB_ID = jobId;
-  }
+  if (platformApiDiscoveryUrl) Object.assign(env, platformCapability.env);
   // Verify Job 必须在 mark_job_done 中提交 verdict；通过 API 参数约束让
   // CLI 在宿主软失败循环前拒绝缺少 verdict 的请求。
   if (isVerify) env.DEEPSONAR_CONTROL_REQUIRE_DONE_VERDICT = "1";
@@ -1367,20 +1412,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   // 只有证据行持久化后才发布实时流游标。
   let streamPublishTail: Promise<void> = Promise.resolve();
 
-  // Capability tokens are minted only after the real execution boundary is
-  // ready. The plaintext is passed straight to AgentBox and never enters the
-  // frozen snapshot, manifest, runtime evidence, or workspace files.
-  let platformToken: string | null = null;
+  // The Dispatcher minted this grant at the provisioning boundary so the
+  // container Config.Env and Agent exec receive the same short-lived token.
+  let platformToken: string | null = platformCapability.token;
   let platformRuntimeRegistered = false;
   try {
-  if (platformApiEnabled) {
-    const grant = await mintJobCapabilityToken(jobId, {
-      operationIds: platformOperations,
-    });
-    platformToken = grant.token;
-    registerJobEvidenceSecrets(jobId, [platformToken]);
-    env.DEEPSONAR_API_TOKEN = platformToken;
-  }
+  registerJobEvidenceSecrets(jobId, [platformToken]);
 
   const runtimePlatformHandler = async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
     const operation = context.operationId;
@@ -1649,10 +1686,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       unregisterRuntimeHandler(jobId);
       platformRuntimeRegistered = false;
     }
-    if (platformToken) {
-      await revokeJobCapabilityTokens(jobId).catch(() => {});
-      platformToken = null;
-    }
+    platformToken = null;
     clearJobEvidenceSecrets(jobId);
   }
 }

@@ -32,7 +32,7 @@ import { useConfirmDialog } from "../components/ConfirmDialog";
 import { composeRetryErrorMessage } from "../composeTaskModel";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { FactDetailPanel } from "../FactDetailPanel";
-import { readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
+import { factPageFilterKey, readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
@@ -132,7 +132,11 @@ export function TaskCanvasPage() {
   const severities = readMultiSearchParam(searchParams, "severity");
   const profiles = readMultiSearchParam(searchParams, "profile");
   const verifyStatuses = readMultiSearchParam(searchParams, "verify");
-  const factFilters = readFactPageFilters(searchParams);
+  const factFilterKey = factPageFilterKey(readFactPageFilters(searchParams));
+  const factFilters = useMemo(
+    () => readFactPageFilters(searchParams),
+    [factFilterKey],
+  );
   const selectedFact = searchParams.get("fact");
   const selectedFinding = searchParams.get("finding");
   const selectedJob = searchParams.get("job");
@@ -275,14 +279,7 @@ export function TaskCanvasPage() {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [
-    canvasId,
-    factFilters.evidence_kind,
-    factFilters.finding_id,
-    factFilters.job_id,
-    factFilters.verification_status,
-    factsRefresh,
-  ]);
+  }, [canvasId, factFilterKey, factsRefresh]);
 
   useEffect(() => {
     if (!traceFinding || !canvasId) {

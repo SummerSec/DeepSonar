@@ -276,7 +276,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v31）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库，无增量 migration |
+| `database/schema.sql` | 唯一 schema 基线（当前 v34）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
@@ -311,7 +311,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 新增控制 operation checklist：定义严格 Zod payload + 同源 JSON Schema；列出禁止输入、错误码和业务白名单；Job 级 API、runtime handler 与摄入事务各有合法/非法测试；事务断言失败全回滚；确认不写控制文件、不把普通文本当语义事件；更新本表、静态控制 Skill、动态 OpenAPI 和 CI 冒烟。
 
 1. **不扩大 Agent 权限**：镜像、凭据、派生、状态机终态只在调度器。  
-2. **改表 = 改基线 + bump 版本 + 重建库验证**。短期**不**做 #34 类增量 migration（产品与 schema 仍在快速迭代，过早迁移会锁死演进）；生产数据靠备份 + **`.deepsonarpack` 导入导出（产品主路径已 as-built：`apps/scheduler/src/transfer/`，见 `docs/TODO_DATABASE_IMPORT_EXPORT_PLAN.md`）**，破坏性变更在 Release 写明。Credential 仅迁元数据，不导出明文 Secret。
+2. **改表 = 改基线 + bump 版本 + 重建库验证**。短期**不**做 #34 类增量 ALTER 链（产品与 schema 仍在快速迭代，过早迁移会锁死演进）。同实例升级用 `pnpm db:rebuild`（备份 + 套最新 `schema.sql` + 列交集回填）；跨环境复制仍走 **`.deepsonarpack`**。Credential 仅迁元数据，不导出明文 Secret。
 3. **列表 API 不塞大 body**；大字段详情/按需（#39）。  
 4. **进 prompt 的内容当不可信**；共享资产只读挂载（#41）。  
 5. **配置覆盖：任务 > 项目 > 全局**；Job 只认冻结快照。  

@@ -141,8 +141,9 @@ Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_T
 
 - **唯一基线**：`database/schema.sql` + `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`
 - 空库启动：套用基线；非空：校验版本与表结构，不符 **fail closed**
-- **无增量 migration**；改表 = 改基线 + bump 版本 + **重建库**
-- 手工：`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql`
+- **无增量 ALTER 链**；改表 = 改基线 + bump 版本 + **重建库**
+- 已有数据升级：先停 Scheduler，再 `pnpm db:rebuild -- --plan` / `pnpm db:rebuild -- --apply`（备份 + 套最新 `schema.sql` + 列交集回填；见 `database/README.md`）。生产 Compose 的 Postgres 默认不对外暴露，需从本机经 `deepsonar` Docker 网络连 `postgres:5432`，或临时 `docker compose port`。
+- 手工空库：`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql`
 
 ## 6. 对象存储
 

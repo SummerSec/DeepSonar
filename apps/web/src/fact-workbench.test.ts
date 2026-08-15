@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { api } from "./api";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage } from "./canvas-page-sync";
-import { readFactPageFilters, updateFactPageQuery } from "./fact-page-state";
+import { factPageFilterKey, readFactPageFilters, updateFactPageQuery } from "./fact-page-state";
 
 const sourceRoot = path.resolve(import.meta.dirname);
 const source = (name: string) => readFileSync(path.join(sourceRoot, name), "utf8");
@@ -31,6 +31,37 @@ test("Fact URL 深链与四类服务端筛选可独立更新并保留工作台�
 
   const partialUuid = readFactPageFilters(new URLSearchParams("tab=facts&finding_id=11111111-1111"));
   assert.deepEqual(partialUuid.finding_id, [], "半截 UUID 不得进入服务端筛选请求");
+});
+
+test("Fact 筛选 key 只随内容变化，不随新数组引用变化", () => {
+  const params = new URLSearchParams("tab=facts&verification_status=verified,rejected&evidence_kind=review");
+  const first = readFactPageFilters(params);
+  const second = readFactPageFilters(new URLSearchParams(params));
+  assert.notEqual(first.verification_status, second.verification_status, "解析结果每次都是新数组实例");
+  assert.equal(factPageFilterKey(first), factPageFilterKey(second));
+
+  const changed = readFactPageFilters(new URLSearchParams("tab=facts&verification_status=rejected"));
+  assert.notEqual(factPageFilterKey(first), factPageFilterKey(changed));
+
+  const tabOnly = readFactPageFilters(new URLSearchParams("tab=canvas"));
+  const factOpen = readFactPageFilters(new URLSearchParams("tab=facts&fact=node-1"));
+  assert.equal(factPageFilterKey(tabOnly), factPageFilterKey(factOpen), "tab/fact 深链不得扰动轮询 key");
+});
+
+test("Fact 轮询 interval 依赖稳定筛选 key，不把每渲染新建的数组放进 useEffect", () => {
+  const page = source("pages/TaskCanvasPage.tsx");
+  assert.match(page, /const factFilterKey = factPageFilterKey\(readFactPageFilters\(searchParams\)\)/);
+  assert.match(page, /const factFilters = useMemo\(/);
+  assert.match(page, /\[canvasId, factFilterKey, factsRefresh\]/);
+  const effectStart = page.indexOf("const tick = async () => {");
+  const effectEnd = page.indexOf("[canvasId, factFilterKey, factsRefresh]");
+  assert.ok(effectStart >= 0 && effectEnd > effectStart, "找不到 facts 轮询 effect");
+  const effect = page.slice(effectStart, effectEnd);
+  assert.match(effect, /window\.setInterval\(\(\) => void tick\(\), 5000\)/);
+  assert.doesNotMatch(effect, /factFilters\.evidence_kind,/);
+  assert.doesNotMatch(effect, /factFilters\.finding_id,/);
+  assert.doesNotMatch(effect, /factFilters\.job_id,/);
+  assert.doesNotMatch(effect, /factFilters\.verification_status,/);
 });
 
 test("Fact 与 Finding 人工动作发送画布作用域路径和严格请求体", async () => {

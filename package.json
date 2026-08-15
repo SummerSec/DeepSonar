@@ -76,6 +76,7 @@
     "ci:images": "node agent-harness/check-runtime-image-consistency.mjs && node agent-harness/test-oci-image-size.mjs",
     "db:up": "docker compose -f deploy/docker-compose.yml up -d",
     "db:down": "docker compose -f deploy/docker-compose.yml down",
+    "db:rebuild": "pnpm --filter @deepsonar/scheduler db:rebuild",
     "predev": "pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/plane-client --filter @deepsonar/runtime-sandbox build",
     "predev:web": "pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/plane-client --filter @deepsonar/runtime-sandbox build"
   },

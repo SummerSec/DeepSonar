@@ -4,7 +4,16 @@ Release entries are maintained from verified tag and repository changes. The imm
 
 ## [Unreleased]
 
-Changes intended for the next release go here before a release section is dated and tagged.
+## [0.1.31] - 2026-08-15
+
+### Added
+
+- Added `pnpm db:rebuild` to back up an existing database, apply the current `database/schema.sql` baseline, and copy overlapping columns. Scheduler boot still fail-closes on version mismatch and does not run incremental ALTER statements.
+
+### Fixed
+
+- Fixed Task Canvas Fact polling so the one-second lifecycle clock no longer rebuilds the five-second polling interval and floods `/canvases/:id/facts`. Closes #163.
+- Fixed Job-scoped Platform Control API provisioning so `DEEPSONAR_API_BASE_URL`, `DEEPSONAR_API_TOKEN`, and `DEEPSONAR_JOB_ID` are present in Worker `Config.Env`; authentication remains disabled until the Job reaches `running`, and terminal cleanup revokes the grant. Closes #164.
 
 ## [0.1.30] - 2026-08-15
 
@@ -218,6 +227,7 @@ Changes intended for the next release go here before a release section is dated 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.31]: https://github.com/SummerSec/DeepSonar/compare/v0.1.30...v0.1.31
 [0.1.30]: https://github.com/SummerSec/DeepSonar/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/SummerSec/DeepSonar/compare/v0.1.28...v0.1.29
 [0.1.28]: https://github.com/SummerSec/DeepSonar/compare/v0.1.27...v0.1.28

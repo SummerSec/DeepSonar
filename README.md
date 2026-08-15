@@ -227,7 +227,8 @@ pnpm ci:images
 
 - 完整建库入口：[database/schema.sql](database/schema.sql)
 - 说明：[database/README.md](database/README.md)
-- Scheduler 启动时对空库套基线；已有库只校验版本与结构，不符则 fail closed（无增量 migration，需重建）
+- Scheduler 启动时对空库套基线；已有库只校验版本与结构，不符则 fail closed（无增量 ALTER 链）
+- 已有数据升级：`pnpm db:rebuild -- --plan` 后 `pnpm db:rebuild -- --apply`（备份 + 套最新 `schema.sql` + 列交集回填）
 - 升级前请 `pg_dump -Fc` 并在隔离实例演练恢复
 
 ```bash

@@ -84,9 +84,17 @@ test("real executor round-trips only controlled rate-limit details after string 
 
 test("real executor passes the reserved Skill to AgentBox without putting the API token in the manifest", () => {
   const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   assert.match(source, /skills:\s*runtimeSkills as never/);
-  assert.match(source, /mintJobCapabilityToken\(jobId,\s*\{[\s\S]*operationIds:\s*platformOperations/);
-  assert.match(source, /env\.DEEPSONAR_API_TOKEN\s*=\s*platformToken/);
+  assert.match(source, /preparePlatformCapability[\s\S]*mintJobCapabilityToken\(jobId, \{ operationIds \}\)/);
+  assert.match(source, /DEEPSONAR_API_BASE_URL: baseUrl/);
+  assert.match(source, /DEEPSONAR_API_TOKEN: grant\.token/);
+  assert.match(source, /DEEPSONAR_JOB_ID: jobId/);
+  assert.match(dispatcher, /platformCapability = await preparePlatformCapability\(jobId, snapshot\)/);
+  assert.match(dispatcher, /DEEPSONAR_ALLOW_EGRESS:[\s\S]*\.\.\.platformCapability!\.env/);
+  assert.match(dispatcher, /transitionJob\(jobId, "running"[\s\S]*activateProvisionedJobCapabilityTokens\(jobId\)/);
+  assert.match(dispatcher, /finally \{[\s\S]*revokeJobCapabilityTokens\(jobId\)/);
+  assert.doesNotMatch(source, /env\.DEEPSONAR_API_TOKEN\s*=\s*platformToken/);
   assert.match(source, /const controlTransport = "job_scoped_control_api" as const/);
   assert.match(source, /semanticToolEvents: \{\}/);
   assert.match(source, /Job-scoped control API 仍可按 deepsonar-control Skill 通过 HTTP 工具调用/);

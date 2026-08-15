@@ -38,6 +38,11 @@ export function readFactPageFilters(searchParams: URLSearchParams): FactPageFilt
   };
 }
 
+/** Stable scalar for React effect deps: same filter values → same string, even when arrays are new instances. */
+export function factPageFilterKey(filters: FactPageFilters): string {
+  return FACT_FILTER_KEYS.map((key) => filters[key].join(",")).join("|");
+}
+
 export function updateFactPageQuery(
   searchParams: URLSearchParams,
   key: FactFilterKey | "fact",

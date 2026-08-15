@@ -15,12 +15,13 @@ import {
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { sql } from "./db.js";
 import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/index.js";
-import { executeReal } from "./executor-real.js";
+import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { ensureRuntimeImageAvailable } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
   beginEffect,
   createOrGetActiveAttempt,
@@ -660,6 +661,7 @@ async function runJob(jobId: string) {
   let sharedAssetsVolumeName: string | null = null;
   let attemptId: string | null = null;
   let provisionEffectId: string | null = null;
+  let platformCapability: PreparedPlatformCapability | null = null;
   const lifecycle = createSqlJobLifecycleApplication();
   try {
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
@@ -684,7 +686,12 @@ async function runJob(jobId: string) {
     const runtimeImage = snapshot.runtime_image?.image_ref;
     if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
     if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
-    if (useReal) await ensureRuntimeImageAvailable(runtimeImage);
+    if (useReal) {
+      // Capability authentication remains disabled until `running`, but the
+      // plaintext must exist before Docker creates immutable Config.Env.
+      platformCapability = await preparePlatformCapability(jobId, snapshot);
+      await ensureRuntimeImageAvailable(runtimeImage);
+    }
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {
       const files = [];
@@ -724,7 +731,12 @@ async function runJob(jobId: string) {
         attemptId: attemptId!,
         resourceLabels: { "deepsonar.job": jobId, "deepsonar.attempt": attemptId! },
         image: runtimeImage,
-        env: useReal ? { DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0" } : undefined,
+        env: useReal
+          ? {
+              DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0",
+              ...platformCapability!.env,
+            }
+          : undefined,
         network: useReal ? (allowEgress ? "egress" : "restricted") : "none",
         gatewayUpstreamUrl: useReal ? config.gateway.proxyUpstreamUrl : undefined,
         expectedContract: snapshot.runtime_image.contract_version,
@@ -793,6 +805,7 @@ async function runJob(jobId: string) {
     if (!(await lifecycle.transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
       return;
     }
+    if (platformCapability) await activateProvisionedJobCapabilityTokens(jobId);
     // Provisioning admission 统计 claimed/provisioning Job；离开该阶段后
     // 立即唤醒 dispatcher，让 pending Job 无需等待轮询或终态事件即可占用槽位。
     kickDispatcher();
@@ -815,7 +828,7 @@ async function runJob(jobId: string) {
     // 画布：job 节点（如不存在）——claim 时由 routes/planeSync 建 root 之外的 job 节点
     await ensureJobNode(jobId, job);
 
-    await execute(jobId, job.type);
+    await execute(jobId, job.type, platformCapability);
     // execute 内部通过 done 事件 finalize；若 type 未主动发送 done，这里兜底
     // finalizeJob 有 running 守卫：执行期间被 cancel 时这个兜底 done 会被安全忽略
     const [cur] = await sql`SELECT status FROM jobs WHERE id = ${jobId}`;
@@ -873,6 +886,10 @@ async function runJob(jobId: string) {
     }
   } finally {
     stopLeaseRenewal(jobId);
+    if (platformCapability) {
+      await revokeJobCapabilityTokens(jobId).catch(() => {});
+      platformCapability = null;
+    }
     if (handle) {
       const h = handle;
       await runner.destroy(h).catch((e) => {
@@ -922,9 +939,10 @@ function withProvisionTimeout<T>(
 }
 
 /** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */
-async function execute(jobId: string, type: string) {
+async function execute(jobId: string, type: string, platformCapability: PreparedPlatformCapability | null) {
   if (config.runtime.agentMode === "real" && (await isRealType(type))) {
-    await executeReal(jobId, type);
+    if (!platformCapability) throw new Error(`job ${jobId} 缺少 provision 阶段的平台 capability`);
+    await executeReal(jobId, type, platformCapability);
     return;
   }
   await executeFake(jobId, type);

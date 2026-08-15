@@ -8,6 +8,11 @@ import {
 export const CAPABILITY_TOKEN_PREFIX = "deepsonarcap_";
 export const DEFAULT_CAPABILITY_TTL_SEC = 15 * 60;
 
+export const MINTABLE_JOB_STATUSES = new Set([
+  "provisioning",
+  "running",
+]);
+
 export const ACTIVE_JOB_STATUSES = new Set([
   "running",
 ]);
@@ -233,8 +238,8 @@ export async function mintJobCapabilityToken(
     FROM jobs
     WHERE id = ${jobId}`;
   if (!job) throw new CapabilityTokenError("CAPABILITY_JOB_NOT_FOUND", "Job not found", 404);
-  if (!ACTIVE_JOB_STATUSES.has(String(job.status))) {
-    throw new CapabilityTokenError("CAPABILITY_JOB_NOT_ACTIVE", "Job is no longer active", 409);
+  if (!MINTABLE_JOB_STATUSES.has(String(job.status))) {
+    throw new CapabilityTokenError("CAPABILITY_JOB_NOT_ACTIVE", "Job is not ready for capability minting", 409);
   }
   const snapshot = asSnapshotObject(job.agent_snapshot_json);
   const available = safeOperations(snapshot);
@@ -275,6 +280,30 @@ export async function mintJobCapabilityToken(
     RETURNING id, job_id, project_id, canvas_id, role_name, role_config_id,
               role_config_version, token_prefix, operation_ids, issued_at, expires_at`;
   return outputRow(row as Record<string, unknown>, generated.plaintext);
+}
+
+/** Align grants minted during provisioning to the real deadline once the Job starts. */
+export async function activateProvisionedJobCapabilityTokens(jobId: string, now = new Date()): Promise<number> {
+  const [job] = await sql`
+    SELECT status, started_at, timeout_sec, lease_expires_at
+    FROM jobs
+    WHERE id = ${jobId}`;
+  if (!job) throw new CapabilityTokenError("CAPABILITY_JOB_NOT_FOUND", "Job not found", 404);
+  if (!ACTIVE_JOB_STATUSES.has(String(job.status))) {
+    throw new CapabilityTokenError("CAPABILITY_JOB_NOT_ACTIVE", "Job is no longer active", 409);
+  }
+  const expiresAt = capabilityExpiryForJob({
+    now,
+    startedAt: job.started_at,
+    timeoutSec: job.timeout_sec,
+    leaseExpiresAt: job.lease_expires_at,
+  });
+  const rows = await sql`
+    UPDATE job_capability_tokens
+    SET expires_at = ${expiresAt}
+    WHERE job_id = ${jobId} AND revoked_at IS NULL
+    RETURNING id`;
+  return rows.length;
 }
 
 export const mintCapabilityToken = mintJobCapabilityToken;
