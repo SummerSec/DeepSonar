@@ -234,11 +234,24 @@ def _projects_create(_pos, f):
 def _tasks_create(pos, f):
     title = need(f.get("title"), "--title")
     content = f.get("content") or title
-    body = {"title": title, "content": content}
+    kind = str(f.get("kind") or "standard")
+    if kind not in ("standard", "compose"):
+        raise ApiError("--kind 必须是 standard 或 compose")
+    body = {"title": title, "content": content, "kind": kind}
+    if f.get("seed-finding-ids") is not None:
+        body["seed_finding_ids"] = parse_list_arg(f["seed-finding-ids"], "--seed-finding-ids")
+    if kind == "standard" and body.get("seed_finding_ids"):
+        raise ApiError("standard 任务禁止携带 --seed-finding-ids")
+    if kind == "compose" and not body.get("seed_finding_ids"):
+        raise ApiError("compose 任务必须提供 --seed-finding-ids")
     if f.get("allow-egress") is not None:
         body["allow_egress"] = parse_bool(f["allow-egress"], "--allow-egress")
     if f.get("finding-protocol"):
         body["finding_protocol"] = parse_json_arg(str(f["finding-protocol"]), "--finding-protocol")
+    if f.get("scheduled-start-at"):
+        body["scheduled_start_at"] = f["scheduled-start-at"]
+    if f.get("schedule-beijing-8am") is not None:
+        body["schedule_beijing_8am"] = parse_bool(f["schedule-beijing-8am"], "--schedule-beijing-8am")
     return call("POST", f"/projects/{need(pos[0] if pos else None, 'projectId')}/tasks", body)
 
 
@@ -301,6 +314,8 @@ def _settings_update(_pos, f):
         rules["maxGlobalJobs"] = int(f["max-global-jobs"])
     if f.get("max-jobs-per-project") is not None:
         rules["maxJobsPerProject"] = int(f["max-jobs-per-project"])
+    if f.get("max-concurrent-provisioning") is not None:
+        rules["maxConcurrentProvisioning"] = int(f["max-concurrent-provisioning"])
     if f.get("cli-limits"):
         cli_limits = parse_json_arg(str(f["cli-limits"]), "--cli-limits")
         if not isinstance(cli_limits, dict):
@@ -310,7 +325,7 @@ def _settings_update(_pos, f):
     if f.get("finding-protocol"):
         body["finding_protocol"] = parse_json_arg(str(f["finding-protocol"]), "--finding-protocol")
     if not body:
-        raise ApiError("至少提供 --rules、--finding-protocol、--max-global-jobs、--max-jobs-per-project 或 --cli-limits")
+        raise ApiError("至少提供 --rules、--finding-protocol、--max-global-jobs、--max-jobs-per-project、--max-concurrent-provisioning 或 --cli-limits")
     return call("PATCH", "/global-settings", body)
 
 
@@ -497,6 +512,46 @@ def _runtime_images_adopt_local(pos, f):
         f"/runtime-images/{image_id}/adopt-local",
         {"image_ref": image_ref, "expected_image_id": expected_image_id},
     )
+
+
+def _facts_list(pos, f):
+    return call("GET", query_path(
+        f"/canvases/{need(pos[0] if pos else None, 'canvasId')}/facts",
+        {
+            "limit": f.get("limit"),
+            "after": f.get("after"),
+            "verification_status": f.get("verification-status"),
+            "evidence_kind": f.get("evidence-kind"),
+            "finding_id": f.get("finding-id"),
+            "job_id": f.get("job-id"),
+        },
+    ))
+
+
+def _facts_verify(pos, f):
+    body = {"status": need(f.get("status"), "--status verified|rejected|needs_human")}
+    if f.get("note"):
+        body["note"] = f["note"]
+    canvas_id = need(pos[0] if pos else None, "canvasId")
+    node_id = need(pos[1] if len(pos) > 1 else None, "nodeId")
+    return call("PATCH", f"/canvases/{canvas_id}/facts/{node_id}/verification", body)
+
+
+def _canvas_message_send(pos, f):
+    target_kind = str(need(f.get("target-kind"), "--target-kind hub|job"))
+    if target_kind not in ("hub", "job"):
+        raise ApiError("--target-kind 必须是 hub 或 job")
+    target = {"kind": target_kind}
+    if target_kind == "job":
+        target["node_id"] = need(f.get("target-node-id"), "--target-node-id")
+    body = {
+        "message_id": need(f.get("message-id"), "--message-id UUID"),
+        "target": target,
+        "body": need(f.get("body"), "--body"),
+        "attachment_version_ids": parse_list_arg(f["attachment-version-ids"], "--attachment-version-ids")
+        if f.get("attachment-version-ids") else [],
+    }
+    return call("POST", f"/canvases/{need(pos[0] if pos else None, 'canvasId')}/messages", body)
 
 
 def _findings_list(_pos, f):
@@ -866,6 +921,15 @@ COMMANDS = {
         f"/canvases/{_p0(pos, 'canvasId')}/delta", {"since": f.get("since")})),
     "canvases.node": lambda pos, f: call(
         "GET", f"/canvases/{_p0(pos, 'canvasId')}/nodes/{_p1(pos, 'nodeId')}"),
+    "canvases.broadcasts": lambda pos, f: call("GET", query_path(
+        f"/canvases/{_p0(pos, 'canvasId')}/broadcasts", {"limit": f.get("limit")})),
+    "messages.list": lambda pos, f: call("GET", query_path(
+        f"/canvases/{_p0(pos, 'canvasId')}/messages", {"limit": f.get("limit")})),
+    "messages.send": _canvas_message_send,
+    "facts.list": _facts_list,
+    "facts.get": lambda pos, f: call(
+        "GET", f"/canvases/{_p0(pos, 'canvasId')}/facts/{_p1(pos, 'nodeId')}"),
+    "facts.verify": _facts_verify,
     "canvases.convergence": lambda pos, f: call("GET", f"/canvases/{_p0(pos, 'canvasId')}/convergence"),
     "canvases.pause": lambda pos, f: call("POST", f"/canvases/{_p0(pos, 'canvasId')}/convergence/pause",
                                              {"reason": f["reason"]} if f.get("reason") else None),
@@ -896,12 +960,6 @@ COMMANDS = {
     "imports.apply": _imports_apply,
     "imports.cancel": lambda pos, f: call("POST", f"/imports/{_p0(pos, 'importId')}/cancel"),
     "imports.delete": lambda pos, f: call("DELETE", f"/imports/{_p0(pos, 'importId')}"),
-
-    # ---------- Fact 人工验证（needs_human 的确认/排除；处理后可能推进报告） ----------
-    "nodes.verify": lambda pos, f: call(
-        "PATCH", f"/canvas-nodes/{_p0(pos, 'nodeId')}/verification",
-        {"status": need(f.get("status"), "--status verified|rejected|needs_human"),
-         **({"note": f["note"]} if f.get("note") else {})}),
 
     # ---------- 设置（规则默认值 / 项目覆盖 / 角色启停） ----------
     "settings.get": lambda pos, f: call("GET", "/global-settings"),

@@ -1,6 +1,6 @@
 ---
 name: deepsonar-management
-description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目/任务/Job 生命周期，画布/Finding/报告，RoleConfig（CLI/镜像轻量 PATCH、平台工具全量可选、CVSS 3.1 协议）、Provider 绑定、Skill 模块源、凭据、运行时镜像市场、平台导出模块选择、Plane。当需要以程序化方式操作 DeepSonar 时使用。
+description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目、standard/compose/定时任务、Job 生命周期，画布 Fact/广播/人工消息、Finding/报告，RoleConfig、Provider、Skill 模块源、凭据、运行时镜像市场、平台导入导出与 Plane。当需要以程序化方式操作 DeepSonar 时使用。
 ---
 
 # DeepSonar Management
@@ -47,7 +47,10 @@ python scripts/deepsonar-api.py projects update <projectId> --data '{"descriptio
 python scripts/deepsonar-api.py projects archive <projectId>
 
 # 任务（一次任务 = 一个画布；Hub 会自动跟进）
-python scripts/deepsonar-api.py tasks create <projectId> --title "审计 auth 模块" --content "目标是 https://github.com/org/repo 的 src/auth，自行决定如何获取材料" --allow-egress true
+python scripts/deepsonar-api.py tasks create <projectId> --title "审计 auth 模块" --content "目标是 https://github.com/org/repo 的 src/auth，自行决定如何获取材料" --kind standard --allow-egress true
+python scripts/deepsonar-api.py tasks create <projectId> --title "组合验证" --kind compose --seed-finding-ids '<findingId1>,<findingId2>'
+python scripts/deepsonar-api.py tasks create <projectId> --title "明早执行" --kind standard --schedule-beijing-8am true
+python scripts/deepsonar-api.py tasks create <projectId> --title "定时执行" --kind standard --scheduled-start-at 2026-08-20T01:00:00.000Z
 python scripts/deepsonar-api.py tasks retry <canvasId>
 
 # Job
@@ -71,15 +74,19 @@ python scripts/deepsonar-api.py findings comment <findingId> --body "..." [--req
 python scripts/deepsonar-api.py findings link <findingId> --url https://tracker/item [--link-type ticket]
 python scripts/deepsonar-api.py canvases list <projectId>
 python scripts/deepsonar-api.py canvases get <canvasId>
+python scripts/deepsonar-api.py canvases broadcasts <canvasId> [--limit 100]
+python scripts/deepsonar-api.py facts list <canvasId> [--verification-status needs_human] [--evidence-kind review,test]
+python scripts/deepsonar-api.py facts get <canvasId> <nodeId>
+python scripts/deepsonar-api.py facts verify <canvasId> <nodeId> --status verified [--note "..."]
+python scripts/deepsonar-api.py messages list <canvasId> [--limit 100]
+python scripts/deepsonar-api.py messages send <canvasId> --message-id <uuid> --target-kind hub --body "请继续核查"
+python scripts/deepsonar-api.py messages send <canvasId> --message-id <uuid> --target-kind job --target-node-id <nodeId> --body "请验证此路径" [--attachment-version-ids '<versionId1>,<versionId2>']
 python scripts/deepsonar-api.py reports get <canvasId>
 python scripts/deepsonar-api.py reports finding <findingId>
 python scripts/deepsonar-api.py reports finding-create <findingId>
 python scripts/deepsonar-api.py reports markdown <reportId>     # Markdown 原文
 python scripts/deepsonar-api.py reports sarif <reportId>        # SARIF 原文
 python scripts/deepsonar-api.py reports retry <canvasId>
-
-# Fact 人工验证
-python scripts/deepsonar-api.py nodes verify <nodeId> --status verified [--note "..."]
 
 # 事件注入（幂等 source + event_id）
 python scripts/deepsonar-api.py events push <projectId> --source ci --event-id build-123 --event-type build_done --content "..."
@@ -89,8 +96,10 @@ python scripts/deepsonar-api.py settings get
 python scripts/deepsonar-api.py settings update --rules '{"maxHubRounds": 8}'
 # 调度并发：库内 global_settings.rules_json 优先；.env 仅在库未配置时提供启动默认
 # 代码/env 默认 maxGlobalJobs=20、maxJobsPerProject=5（0 仅暂停对应 CLI）
-python scripts/deepsonar-api.py settings update --rules '{"maxGlobalJobs": 20, "maxJobsPerProject": 5, "maxConcurrentByAgentCli": {"claude-code": 4}}'
-python scripts/deepsonar-api.py settings update --max-global-jobs 20 --max-jobs-per-project 5 --cli-limits '{"claude-code": 4}'
+python scripts/deepsonar-api.py settings update --rules '{"maxGlobalJobs": 20, "maxJobsPerProject": 5, "maxConcurrentProvisioning": 2, "maxConcurrentByAgentCli": {"claude-code": 4}}'
+python scripts/deepsonar-api.py settings update --max-global-jobs 20 --max-jobs-per-project 5 --max-concurrent-provisioning 2 --cli-limits '{"claude-code": 4}'
+# rootless Docker + vfs 主机建议把持久化值设为 1
+python scripts/deepsonar-api.py settings update --max-concurrent-provisioning 1
 python scripts/deepsonar-api.py project-settings get <projectId>
 python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"hubEnabled": true, "allowEgress": true}'
 python scripts/deepsonar-api.py project-settings update <projectId> --roles "explore,analyze,review"

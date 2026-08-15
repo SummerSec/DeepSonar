@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 更新 `deepsonar-management` 项目 Skill：补齐 standard/compose/定时任务、provision 并发、画布 Fact、广播账本与人工消息命令，并移除失效的旧 Fact 验证路径。
+
 ## [0.1.33] - 2026-08-15
 
 ### Added

@@ -44,6 +44,86 @@ class DeepSonarApiCliTest(unittest.TestCase):
             ],
         )
 
+    def test_task_creation_supports_compose_and_scheduling(self):
+        self.run_command(
+            "tasks.create",
+            ["project-id"],
+            {
+                "title": "组合验证",
+                "kind": "compose",
+                "seed-finding-ids": "finding-1,finding-2",
+                "scheduled-start-at": "2026-08-20T01:00:00.000Z",
+                "schedule-beijing-8am": "true",
+            },
+        )
+
+        self.assertEqual(
+            self.calls,
+            [(
+                "POST",
+                "/projects/project-id/tasks",
+                {
+                    "title": "组合验证",
+                    "content": "组合验证",
+                    "kind": "compose",
+                    "seed_finding_ids": ["finding-1", "finding-2"],
+                    "scheduled_start_at": "2026-08-20T01:00:00.000Z",
+                    "schedule_beijing_8am": True,
+                },
+            )],
+        )
+
+    def test_task_creation_rejects_invalid_seed_combinations(self):
+        with self.assertRaisesRegex(self.module["ApiError"], "standard 任务禁止"):
+            self.run_command(
+                "tasks.create", ["project-id"],
+                {"title": "bad", "kind": "standard", "seed-finding-ids": "finding-1"},
+            )
+        with self.assertRaisesRegex(self.module["ApiError"], "compose 任务必须"):
+            self.run_command("tasks.create", ["project-id"], {"title": "bad", "kind": "compose"})
+
+    def test_fact_ledgers_messages_and_provision_limit_use_current_contract(self):
+        self.run_command(
+            "facts.list", ["canvas-id"],
+            {"verification-status": "needs_human", "evidence-kind": "review,test", "limit": "20"},
+        )
+        self.run_command("facts.get", ["canvas-id", "node-id"])
+        self.run_command("facts.verify", ["canvas-id", "node-id"], {"status": "verified", "note": "人工确认"})
+        self.run_command("canvases.broadcasts", ["canvas-id"], {"limit": "10"})
+        self.run_command("messages.list", ["canvas-id"], {"limit": "30"})
+        self.run_command(
+            "messages.send", ["canvas-id"],
+            {
+                "message-id": "message-id",
+                "target-kind": "job",
+                "target-node-id": "target-node-id",
+                "body": "继续验证",
+                "attachment-version-ids": "version-1,version-2",
+            },
+        )
+        self.run_command("settings.update", flags={"max-concurrent-provisioning": "1"})
+
+        self.assertEqual(
+            self.calls,
+            [
+                ("GET", "/canvases/canvas-id/facts?limit=20&verification_status=needs_human&evidence_kind=review%2Ctest", None),
+                ("GET", "/canvases/canvas-id/facts/node-id", None),
+                ("PATCH", "/canvases/canvas-id/facts/node-id/verification", {"status": "verified", "note": "人工确认"}),
+                ("GET", "/canvases/canvas-id/broadcasts?limit=10", None),
+                ("GET", "/canvases/canvas-id/messages?limit=30", None),
+                (
+                    "POST", "/canvases/canvas-id/messages",
+                    {
+                        "message_id": "message-id",
+                        "target": {"kind": "job", "node_id": "target-node-id"},
+                        "body": "继续验证",
+                        "attachment_version_ids": ["version-1", "version-2"],
+                    },
+                ),
+                ("PATCH", "/global-settings", {"rules": {"maxConcurrentProvisioning": 1}}),
+            ],
+        )
+
     def test_credential_read_and_refresh_use_distinct_methods(self):
         self.run_command("credentials.models", ["credential-id"])
         self.run_command("credentials.models-refresh", ["credential-id"])
