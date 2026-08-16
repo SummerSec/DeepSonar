@@ -7,6 +7,7 @@ import {
   countUsers,
   createUser,
   defaultAdminCredentialsActive,
+  issueUserSession,
   listUsers,
   loginUser,
   revokeSession,
@@ -17,6 +18,7 @@ import {
   verifyPassword,
   type UserRole,
 } from "../../users.js";
+import { LoginRateLimitError } from "../../login-rate-limit.js";
 import { issueWsTicket } from "../../ws-tickets.js";
 
 const STREAMABLE_JOB_STATUSES = new Set(["running", "waiting_human"]);
@@ -142,6 +144,13 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         result: "denied",
         errorCode: code,
       });
+      if (e instanceof LoginRateLimitError || code === "LOGIN_RATE_LIMITED") {
+        const retryAfter = e instanceof LoginRateLimitError ? e.retryAfterSec : 300;
+        return reply
+          .code(429)
+          .header("Retry-After", String(retryAfter))
+          .send({ error: msg, error_code: "LOGIN_RATE_LIMITED", retry_after_sec: retryAfter });
+      }
       return reply.code(401).send({ error: msg, error_code: code });
     }
   });
@@ -212,8 +221,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       return reply.code(401).send({ error: "当前密码错误" });
     }
     await setUserPassword(req.actor.id, body.new_password);
-    // 重新登录
-    const session = await loginUser(row.username as string, body.new_password, {
+    const session = await issueUserSession(req.actor.id, {
       ip: req.ip,
       userAgent: req.headers["user-agent"],
     });
@@ -252,7 +260,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       if (!user) return reply.code(404).send({ error: "user not found" });
       // Username changes revoke all existing sessions (including this one),
       // then issue one fresh session for the authenticated browser.
-      const session = await loginUser(user.username, body.current_password, {
+      const session = await issueUserSession(user.id, {
         ip: req.ip,
         userAgent: req.headers["user-agent"],
       });

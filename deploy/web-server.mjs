@@ -1,6 +1,24 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+/** TCP peer only — never reuse a client-supplied X-Forwarded-For. */
+export function clientSocketAddress(remoteAddress) {
+  if (typeof remoteAddress !== "string") return "";
+  const trimmed = remoteAddress.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("::ffff:") ? trimmed.slice(7) : trimmed;
+}
+
+/** Official Web hop reports the inbound TCP peer as the sole XFF value. */
+export function schedulerProxyHeaders(incoming = {}, remoteAddress) {
+  const headers = { ...incoming };
+  const client = clientSocketAddress(remoteAddress);
+  if (client) headers["x-forwarded-for"] = client;
+  else delete headers["x-forwarded-for"];
+  return headers;
+}
 
 const host = process.env.HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? 8080);
@@ -34,7 +52,7 @@ function proxyHttp(req, res) {
       port: scheduler.port,
       method: req.method,
       path: apiPath(req.url),
-      headers: { ...req.headers, host: scheduler.host },
+      headers: { ...schedulerProxyHeaders(req.headers, req.socket.remoteAddress), host: scheduler.host },
     },
     (upstreamRes) => {
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
@@ -83,7 +101,7 @@ server.on("upgrade", (req, socket, head) => {
     port: scheduler.port,
     method: req.method,
     path: apiPath(req.url),
-    headers: { ...req.headers, host: scheduler.host },
+    headers: { ...schedulerProxyHeaders(req.headers, req.socket.remoteAddress), host: scheduler.host },
   });
   upstreamReq.on("upgrade", (upstreamRes, upstreamSocket, upstreamHead) => {
     const lines = [`HTTP/1.1 ${upstreamRes.statusCode ?? 101} ${upstreamRes.statusMessage ?? "Switching Protocols"}`];
@@ -100,6 +118,8 @@ server.on("upgrade", (req, socket, head) => {
   upstreamReq.end();
 });
 
-server.listen(port, host, () => {
-  console.log(`[web] listening on http://${host}:${port}; scheduler=${scheduler.origin}`);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  server.listen(port, host, () => {
+    console.log(`[web] listening on http://${host}:${port}; scheduler=${scheduler.origin}`);
+  });
+}

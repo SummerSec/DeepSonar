@@ -180,12 +180,32 @@ const OPS: Op[] = [
     method: "post",
     path: "/auth/login",
     summary: "用户名密码登录",
+    description:
+      "任意密码校验（含成功）按规范化用户名+客户端 IP 限制 5 次/5 分钟，并按 IP 限制 20 次/5 分钟。超限返回 429 LOGIN_RATE_LIMITED，不泄露用户是否存在。成功登录占额且不清桶。",
     scope: null,
     tags: ["Auth"],
     body: {
       type: "object",
       required: ["username", "password"],
       properties: { username: { type: "string" }, password: { type: "string", format: "password" } },
+    },
+    responses: {
+      "429": {
+        description: "登录校验次数超限",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["error", "error_code"],
+              properties: {
+                error: { type: "string" },
+                error_code: { type: "string", enum: ["LOGIN_RATE_LIMITED"] },
+                retry_after_sec: { type: "integer", minimum: 1 },
+              },
+            },
+          },
+        },
+      },
     },
   },
   {

@@ -39,7 +39,10 @@ async function main() {
   await bootstrapOfficialRuntimeImages();
   await bootstrapSkillSourcesOnBoot();
 
-  const app = Fastify({ logger: { level: "info" } });
+  const app = Fastify({
+    logger: { level: "info" },
+    trustProxy: config.http.trustProxyHops > 0 ? config.http.trustProxyHops : false,
+  });
   await app.register(websocket);
   registerRoutes(app);
 

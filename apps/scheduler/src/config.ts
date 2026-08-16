@@ -39,12 +39,27 @@ function bool(name: string, dflt: boolean): boolean {
   if (v === undefined || v === "") return dflt;
   return ["1", "true", "yes", "on"].includes(v.toLowerCase());
 }
+/** Hop count for Fastify trustProxy; 0 disables. Invalid values use the default. */
+function trustProxyHops(name: string, dflt: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return dflt;
+  const v = Number(raw);
+  return Number.isSafeInteger(v) && v >= 0 && v <= 8 ? v : dflt;
+}
 
 export const config = {
   databaseUrl: str("DATABASE_URL", "postgres://deepsonar:deepsonar@localhost:5432/deepsonar"),
   port: int("SCHEDULER_PORT", 3100),
   /** 监听地址：默认只绑回环（P0 可信网络）；容器部署显式设 0.0.0.0 */
   host: str("SCHEDULER_HOST", "127.0.0.1"),
+  /**
+   * Official compose is Browser → Web → Scheduler. Trust exactly that one hop
+   * so `req.ip` is the TCP peer Web observed. Extra untrusted proxies collapse
+   * the login IP bucket to the last hop Web sees. 0 disables (direct access).
+   */
+  http: {
+    trustProxyHops: trustProxyHops("DEEPSONAR_TRUST_PROXY_HOPS", 1),
+  },
 
   /** 平台 API Token 鉴权（SEC-01/§6.1）；跨出回环部署必须 DEEPSONAR_AUTH_REQUIRED=true */
   auth: {

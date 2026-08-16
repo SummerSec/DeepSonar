@@ -205,6 +205,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 ## 9. 安全边界
 
+- 人类登录暴力破解防护：`POST /auth/login` / `loginUser` 对任意密码校验（成功、错密、未知用户、禁用账号）计数。紧桶是规范化用户名 + 客户端 IP，5 次 / 5 分钟（窗口从首次计入的尝试起算）；粗桶是客户端 IP，20 次 / 5 分钟，防止跨用户名喷洒。成功登录占额且不清桶。额度在同一事务里先锁 IP 再锁 identity（`SELECT … FOR UPDATE`）；IP 已满时不插入 identity 行。过期窗口在同一事务删除。超限返回稳定 `429 LOGIN_RATE_LIMITED`（`retry_after_sec`），登录失败统一 `BAD_CREDENTIALS`，不泄露用户是否存在或是否禁用。计数落在 `login_rate_limits`，跨 Scheduler 重启保留。校验路径始终先付 scrypt 成本（未知用户走固定 dummy），再做占额/返回，避免锁定位比密码校验更便宜而成为用户名预言机。官方拓扑是浏览器 → `deploy/web-server.mjs` → Scheduler：Web 用入站 TCP peer **覆盖** `X-Forwarded-For`（不信任公网自带 XFF），Scheduler 只信任 1 跳（`DEEPSONAR_TRUST_PROXY_HOPS`，默认 1）。再前面加未纳入 hop 策略的代理时，IP 桶会塌缩为 Web 看到的那一跳，等于全站共享；不要把 Scheduler HTTP 暴露到公网。
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
 - 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。项目按全局继承或项目托管策略选择受治理 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome audit/test/fuzz 是官方但 project-opt-in 的专项运行时。
@@ -277,7 +278,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v34）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
+| `database/schema.sql` | 唯一 schema 基线（当前 v35）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
