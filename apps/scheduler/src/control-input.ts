@@ -21,6 +21,13 @@ export const CONTROL_INPUT_ERROR_CODES = {
 
 export type ControlInputErrorCode = (typeof CONTROL_INPUT_ERROR_CODES)[keyof typeof CONTROL_INPUT_ERROR_CODES];
 
+export function controlInputCodeForOperation(operation: string): ControlInputErrorCode {
+  if (operation === "emit_progress") return CONTROL_INPUT_ERROR_CODES.invalidProgress;
+  if (operation === "mark_job_done") return CONTROL_INPUT_ERROR_CODES.invalidDone;
+  if (operation === "request_human") return CONTROL_INPUT_ERROR_CODES.invalidHuman;
+  return CONTROL_INPUT_ERROR_CODES.invalidPayload;
+}
+
 export const INVALID_NODE_REF_MESSAGE =
   "Hub 图引用必须使用当前画布 YAML 中 root/fact/finding 节点的 canonical UUID（YAML root_id 的值）；禁止字段名 root_id、别名或占位符。";
 

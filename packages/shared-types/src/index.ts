@@ -38,11 +38,17 @@ export type PiReasoningEffort = DshReasoningEffort;
 export const isPiReasoningEffort = isDshReasoningEffort;
 
 /** Bounds and path syntax for large Agent control payloads stored in /workspace. */
-export const WORKSPACE_PAYLOAD_FILE_MAX_BYTES = 512 * 1024;
+export const SEMANTIC_EVENT_PAYLOAD_MAX_BYTES = 256 * 1024;
+export const WORKSPACE_PAYLOAD_FILE_MAX_BYTES = SEMANTIC_EVENT_PAYLOAD_MAX_BYTES;
 export const WORKSPACE_PAYLOAD_FILE_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/;
 export function isSafeWorkspacePayloadFile(value: unknown): value is string {
   return typeof value === "string" && value.length >= 1 && value.length <= 200 && WORKSPACE_PAYLOAD_FILE_PATTERN.test(value);
 }
+
+/** Final summaries are duplicated into durable event/node storage, so bound
+ * the Agent-controlled text by its actual UTF-8 storage size, not JS chars. */
+export const DONE_SUMMARY_MAX_BYTES = 8 * 1024;
+const utf8ByteLength = (value: string) => new TextEncoder().encode(value).byteLength;
 
 /** Scheduler-governed role colors.  Keep this palette in the shared package
  * so the API, canvas renderer, and transfer surfaces agree on the same
@@ -417,7 +423,10 @@ export type HumanPayload = z.infer<typeof HumanPayload>;
 
 export const DonePayload = z
   .object({
-    summary: meaningfulText(8, 10000),
+    summary: meaningfulText(8, DONE_SUMMARY_MAX_BYTES).refine(
+      (value) => utf8ByteLength(value) <= DONE_SUMMARY_MAX_BYTES,
+      `summary must not exceed ${DONE_SUMMARY_MAX_BYTES} UTF-8 bytes`,
+    ),
     verdict: VerifyVerdict.optional(),
     // Keep evidence labels canonical at the shared boundary: surrounding
     // whitespace is removed, while blank/whitespace-only entries are rejected.

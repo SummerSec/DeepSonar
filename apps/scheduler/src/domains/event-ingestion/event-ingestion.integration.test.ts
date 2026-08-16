@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -17,7 +17,8 @@ if (!testDatabaseUrl) {
 
     const { migrate, sql } = await import("../../db.js");
     const { createEventIngestionApplication } = await import("./application.js");
-    const { finalizeJob, ingestEvent } = await import("../../core.js");
+    const { createAttempt } = await import("../job-attempt/application.js");
+    const { finalizeJob, ingestEvent, preflightDeferredSemanticEvent } = await import("../../core.js");
     const { ControlInputError } = await import("../../control-input.js");
     await migrate();
 
@@ -387,6 +388,55 @@ if (!testDatabaseUrl) {
         (error: unknown) => error instanceof Error && /invalid_done/.test(error.message),
       );
 
+      const oversizedDoneId = randomUUID();
+      fixture.eventIds.push(oversizedDoneId);
+      await assert.rejects(
+        ingestEvent(jobId, {
+          v: 1,
+          event_id: oversizedDoneId,
+          type: "done",
+          payload: { summary: `${"界".repeat(2730)}ab界` },
+        }),
+        (error: unknown) => error instanceof ControlInputError
+          && error.code === "invalid_done"
+          && error.retryable,
+      );
+      const [oversizedDoneJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+      const [oversizedDoneEvent] = await sql`SELECT 1 FROM events WHERE event_id = ${oversizedDoneId}`;
+      assert.equal(oversizedDoneJob?.status, "running");
+      assert.equal(oversizedDoneEvent, undefined, "rejected done must not persist a terminal event");
+
+      await assert.rejects(
+        preflightDeferredSemanticEvent(jobId, "human", {
+          reason: "cross-canvas finding requires human review",
+          subject: { type: "finding", finding_id: foreignFindingId, subject_revision: "foreign-rev" },
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_human" && error.retryable,
+      );
+      const [rootNode] = await sql<{ id: string }[]>`SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+      await assert.rejects(
+        preflightDeferredSemanticEvent(jobId, "hub_decision", {
+          complete: { from: rootNode ? [rootNode.id] : [], description: "Attempt completion before the verification gate is satisfied." },
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_payload" && error.retryable,
+      );
+      await sql`UPDATE jobs SET payload_json = ${sql.json({ trigger: { kind: "verify_rework", finding_id: verificationFindingId } })} WHERE id = ${jobId}`;
+      await assert.rejects(
+        preflightDeferredSemanticEvent(jobId, "hub_decision", {
+          intents: [{ from: rootNode ? [rootNode.id] : [], role: "analyze", description: "Invalid rework role", prompt: "Analyze instead of using the required independent review or test role." }],
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_role" && error.retryable,
+      );
+      await sql`UPDATE jobs SET payload_json = ${sql.json({})} WHERE id = ${jobId}`;
+      await preflightDeferredSemanticEvent(jobId, "human", {
+        reason: "A valid platform authorization blocker is still handled after the agent exits.",
+        subject: { type: "platform_blocker", kind: "authorization" },
+      });
+      const [preflightJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+      const [preflightEvent] = await sql`SELECT 1 FROM events WHERE job_id = ${jobId} AND type = 'human'`;
+      assert.equal(preflightJob?.status, "running", "accepted preflight must remain read-only");
+      assert.equal(preflightEvent, undefined, "accepted preflight must not ingest the deferred event");
+
       // Simulate a legacy node re-point between the read-only hint preflight
       // and transaction start.  The first Canvas lock must fail closed during
       // the in-transaction node recheck; the retry resolves and writes only
@@ -487,8 +537,10 @@ if (!testDatabaseUrl) {
       // A legacy Job may have only a report node and no jobs.canvas_id.  The
       // terminal path must discover and lock that report Canvas before the
       // Job row, then update the report node normally.
+      const boundarySummary = `${"界".repeat(2730)}ab`;
       await sql.begin(async (tx) => {
-        await finalizeJob(tx as unknown as typeof sql, reportOnlyJobId, "succeeded", { summary: "report-only" });
+        await createAttempt(tx as unknown as typeof sql, reportOnlyJobId, { agent_cli: "claude-code" });
+        await finalizeJob(tx as unknown as typeof sql, reportOnlyJobId, "succeeded", { summary: boundarySummary });
       });
       const [reportOnlyJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${reportOnlyJobId}`;
       const [reportOnlyNode] = await sql<{ status: string; canvas_id: string }[]>`
@@ -496,6 +548,13 @@ if (!testDatabaseUrl) {
       assert.equal(reportOnlyJob?.status, "succeeded");
       assert.equal(reportOnlyNode?.status, "succeeded");
       assert.equal(reportOnlyNode?.canvas_id, canvasId);
+      const [reportOnlyAttempt] = await sql<{ outcome_json: Record<string, unknown> }[]>`
+        SELECT outcome_json FROM job_attempts WHERE job_id = ${reportOnlyJobId}`;
+      assert.deepEqual(reportOnlyAttempt?.outcome_json, {
+        job_status: "succeeded",
+        summary_sha256: createHash("sha256").update(boundarySummary, "utf8").digest("hex"),
+        summary_bytes: 8192,
+      });
 
       await assert.rejects(
         sql.begin(async (tx) => {

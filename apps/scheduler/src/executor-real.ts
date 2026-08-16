@@ -31,6 +31,7 @@ import {
   assertJobCanPublishSharedAsset,
   ingestEvent,
   ingestEventBundle,
+  preflightDeferredSemanticEvent,
   rolesForProject,
   rulesForProject,
   type AgentRuntimeSnapshot,
@@ -92,10 +93,12 @@ import {
 import {
   CONTROL_INPUT_ERROR_CODES,
   ControlInputError,
+  controlInputCodeForOperation,
   invalidControlPayload,
   invalidRole,
   invalidVerification,
 } from "./control-input.js";
+import { assertSemanticEventPayloadSize } from "./domains/event-ingestion/application.js";
 import { EventRateLimitError } from "./domains/event-ingestion/rate-limit.js";
 import {
   applyRuntimeContextEvent,
@@ -109,19 +112,40 @@ function invalidToolPayload(
   message: string,
   path?: string,
 ): ControlInputError {
-  const code = {
-    emit_progress: CONTROL_INPUT_ERROR_CODES.invalidProgress,
-    emit_fact: CONTROL_INPUT_ERROR_CODES.invalidPayload,
-    emit_finding: CONTROL_INPUT_ERROR_CODES.invalidPayload,
-    submit_hub_decision: CONTROL_INPUT_ERROR_CODES.invalidPayload,
-    mark_job_done: CONTROL_INPUT_ERROR_CODES.invalidDone,
-    request_human: CONTROL_INPUT_ERROR_CODES.invalidHuman,
-    list_available_roles: CONTROL_INPUT_ERROR_CODES.invalidPayload,
-    list_shared_assets: CONTROL_INPUT_ERROR_CODES.invalidPayload,
-    publish_shared_asset: CONTROL_INPUT_ERROR_CODES.invalidPayload,
-    ack_human_message: CONTROL_INPUT_ERROR_CODES.invalidPayload,
-  }[tool];
+  const code = controlInputCodeForOperation(tool);
   return new ControlInputError(code, message, path);
+}
+
+export async function expandWorkspacePayloadFile(
+  tool: "emit_fact" | "emit_finding" | "submit_hub_decision",
+  value: unknown,
+  runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
+): Promise<unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const payload = value as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(payload, "payload_file")) return value;
+  if (Object.keys(payload).length !== 1 || !isSafeWorkspacePayloadFile(payload.payload_file)) {
+    throw invalidToolPayload(tool, "payload_file 必须是唯一字段，并且是 /workspace 下的安全相对路径", "payload_file");
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await runtimeControl.readWorkspaceFile(`/workspace/${payload.payload_file}`, WORKSPACE_PAYLOAD_FILE_MAX_BYTES);
+  } catch {
+    throw invalidToolPayload(tool, "无法读取 payload_file，文件必须存在于 /workspace 且不超过 256KiB", "payload_file");
+  }
+  let expanded: unknown;
+  try {
+    expanded = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw invalidToolPayload(tool, "payload_file 不是合法 JSON", "payload_file");
+  }
+  if (!expanded || typeof expanded !== "object" || Array.isArray(expanded)) {
+    throw invalidToolPayload(tool, "payload_file 根必须是对象", "payload_file");
+  }
+  if (Object.prototype.hasOwnProperty.call(expanded, "payload_file")) {
+    throw invalidToolPayload(tool, "payload_file 内容不得再嵌套 payload_file", "payload_file");
+  }
+  return expanded;
 }
 
 const SHARED_ASSET_RETRYABLE_ERROR_CODES = new Set([
@@ -291,7 +315,6 @@ export function buildDeferredSemanticTerminalEvents(input: {
   if (!state.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
 
   const events: EventEnvelopeInput[] = [];
-  let hubNote = "";
   if (input.isHub) {
     const decision = input.hubDecision;
     if (!decision || !state.hub) throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
@@ -302,7 +325,6 @@ export function buildDeferredSemanticTerminalEvents(input: {
         type: "hub_decision",
         payload: { complete: decision.complete },
       });
-      hubNote = `（结论：${decision.complete.description.slice(0, 80)}）`;
     } else {
       const intents = (decision.intents ?? []).slice(0, input.maxIntentsPerDecision);
       if (intents.length > 0) {
@@ -312,9 +334,6 @@ export function buildDeferredSemanticTerminalEvents(input: {
           type: "hub_decision",
           payload: { intents },
         });
-        hubNote = `（派发 ${intents.length} 个意图）`;
-      } else {
-        hubNote = "（无新意图）";
       }
     }
   }
@@ -328,7 +347,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
     event_id: state.done.eventId,
     type: "done",
     payload: {
-      summary: `${state.done.summary}${hubNote}${input.factCount > 0 ? `（增量 fact: ${input.factCount} 条）` : ""}${input.findingCount > 0 ? `（结构化 finding: ${input.findingCount} 条）` : ""}`,
+      summary: state.done.summary,
       ...(input.isVerify && verdict ? { verdict } : {}),
       ...(input.isVerify && state.done.missingEvidence ? { missing_evidence: state.done.missingEvidence } : {}),
     },
@@ -1195,38 +1214,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let factCount = 0;
   const semanticState: DeferredSemanticState = { done: null, hub: null, human: null };
 
-  async function expandWorkspacePayloadFile(
-    tool: "emit_fact" | "emit_finding" | "submit_hub_decision",
-    value: unknown,
-    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
-  ): Promise<unknown> {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-    const payload = value as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(payload, "payload_file")) return value;
-    if (Object.keys(payload).length !== 1 || !isSafeWorkspacePayloadFile(payload.payload_file)) {
-      throw invalidToolPayload(tool, "payload_file 必须是唯一字段，并且是 /workspace 下的安全相对路径", "payload_file");
-    }
-    let bytes: Buffer;
-    try {
-      bytes = await runtimeControl.readWorkspaceFile(`/workspace/${payload.payload_file}`, WORKSPACE_PAYLOAD_FILE_MAX_BYTES);
-    } catch {
-      throw invalidToolPayload(tool, "无法读取 payload_file，文件必须存在于 /workspace 且不超过 512KiB", "payload_file");
-    }
-    let expanded: unknown;
-    try {
-      expanded = JSON.parse(bytes.toString("utf8"));
-    } catch {
-      throw invalidToolPayload(tool, "payload_file 不是合法 JSON", "payload_file");
-    }
-    if (!expanded || typeof expanded !== "object" || Array.isArray(expanded)) {
-      throw invalidToolPayload(tool, "payload_file 根必须是对象", "payload_file");
-    }
-    if (Object.prototype.hasOwnProperty.call(expanded, "payload_file")) {
-      throw invalidToolPayload(tool, "payload_file 内容不得再嵌套 payload_file", "payload_file");
-    }
-    return expanded;
-  }
-
   const onSemanticEvent = async (
     raw: Record<string, unknown>,
     runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
@@ -1246,6 +1233,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       }
       if (raw.type === "hub_decision") payload = parseHubDecisionPayload(payload, graph?.referableIds);
       event = ControlEventEnvelope.parse({ ...raw, payload });
+      assertSemanticEventPayloadSize(event.type, event.payload);
     } catch (error) {
       if (error instanceof ControlInputError) throw error;
       const detail = error instanceof Error ? error.message : String(error);
@@ -1358,6 +1346,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           "submit_hub_decision 已成功接受一次；每个 Job 成功提交后只能一次。仅当上一次 HTTP 请求失败或参数校验失败时才可重试，不要在成功后为“补全参数”再次调用。",
         );
       }
+      await preflightDeferredSemanticEvent(jobId, "hub_decision", event.payload);
       semanticState.hub = { eventId, payload: event.payload };
       return;
     }
@@ -1391,6 +1380,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       if (!parsed.success) throw invalidToolPayload("request_human", "request_human 参数非法");
       assertSemanticTerminalExclusivity(semanticState, "human");
       const p = parsed.data;
+      await preflightDeferredSemanticEvent(jobId, "human", p);
       semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject };
       return;
     }

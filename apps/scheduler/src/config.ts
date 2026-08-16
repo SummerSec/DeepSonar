@@ -185,7 +185,6 @@ export const config = {
   },
 
   events: {
-    payloadMaxKb: int("EVENT_PAYLOAD_MAX_KB", 256),
     /** Persistent per-Job semantic-event fixed-window budgets (Issue #57). */
     rateLimitWindowSec: boundedInt("EVENT_RATE_LIMIT_WINDOW_SEC", 60, 3600),
     rateLimitProgressPerWindow: boundedInt("EVENT_RATE_LIMIT_PROGRESS_PER_WINDOW", 30, 10_000),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { ControlEventEnvelope, EventEnvelope } from "@deepsonar/shared-types";
+import { ControlEventEnvelope, DonePayload, EventEnvelope, WORKSPACE_PAYLOAD_FILE_MAX_BYTES } from "@deepsonar/shared-types";
 import {
   canRolePublishSharedAsset,
   ingestFactSemanticEvent,
@@ -15,6 +15,7 @@ import {
   runtimeCredentialProviderError,
   hasMaterializedProviderConfig,
   buildInstructionWorkspaceFiles,
+  expandWorkspacePayloadFile,
   sharedAssetPublishControlError,
   sharedAssetSourceReadControlError,
 } from "./executor-real.js";
@@ -24,6 +25,32 @@ import { platformToolGuide } from "./platform-tools.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("payload_file expansion uses the semantic byte ceiling and returns stable retryable input errors", async () => {
+  let requestedMax = 0;
+  const expanded = await expandWorkspacePayloadFile("emit_fact", { payload_file: "fact.json" }, {
+    async readWorkspaceFile(path, maxBytes) {
+      assert.equal(path, "/workspace/fact.json");
+      requestedMax = maxBytes;
+      return Buffer.from(JSON.stringify({ title: "事实", description: "这是一个完整且可验证的事实描述。" }));
+    },
+  });
+  assert.equal(requestedMax, WORKSPACE_PAYLOAD_FILE_MAX_BYTES);
+  assert.deepEqual(expanded, { title: "事实", description: "这是一个完整且可验证的事实描述。" });
+
+  await assert.rejects(
+    expandWorkspacePayloadFile("emit_finding", { payload_file: "finding.json" }, {
+      async readWorkspaceFile(_path, maxBytes) {
+        assert.equal(maxBytes, WORKSPACE_PAYLOAD_FILE_MAX_BYTES);
+        throw new Error("file_too_large");
+      },
+    }),
+    (error: unknown) => error instanceof ControlInputError
+      && error.code === "invalid_payload"
+      && error.retryable
+      && error.path === "payload_file",
+  );
+});
 
 test("共享资产已知业务与唯一冲突转换为可重试控制错误，基础设施故障保持失败关闭", () => {
   for (const error of [
@@ -144,7 +171,42 @@ test("deferred Hub terminal events preserve decision-before-done ordering", () =
 
   assert.deepEqual(events.map((event) => event.type), ["hub_decision", "done"]);
   assert.deepEqual((events[0]?.payload as { intents?: unknown[] }).intents, [intent]);
-  assert.equal((events[1]?.payload as { summary?: string }).summary, "Hub completed（派发 1 个意图）");
+  assert.equal((events[1]?.payload as { summary?: string }).summary, "Hub completed");
+});
+
+test("deferred Hub and Worker terminal events preserve an exact 8192-byte summary", () => {
+  const summary = `${"界".repeat(2730)}ab`;
+  const intent = { from: [], role: "code", description: "Implement remediation", prompt: "Implement the complete remediation and verify the result." };
+  for (const input of [
+    { isHub: true, hub: { eventId: "00000000-0000-4000-8000-000000000031", payload: { intents: [intent] } }, hubDecision: { intents: [intent] }, factCount: 0, findingCount: 0 },
+    { isHub: false, hub: null, hubDecision: null, factCount: 100, findingCount: 20 },
+  ]) {
+    const events = buildDeferredSemanticTerminalEvents({
+      state: { hub: input.hub, done: { eventId: "00000000-0000-4000-8000-000000000032", summary }, human: null },
+      isHub: input.isHub,
+      isVerify: false,
+      hubDecision: input.hubDecision,
+      maxIntentsPerDecision: 10,
+      factCount: input.factCount,
+      findingCount: input.findingCount,
+    });
+    const done = events.at(-1)?.payload as { summary: string };
+    assert.equal(done.summary, summary);
+    assert.equal(Buffer.byteLength(done.summary, "utf8"), 8192);
+    assert.equal(DonePayload.safeParse(done).success, true);
+  }
+});
+
+test("Hub and Human authoritative preflight runs before claiming the deferred slot", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.ok(
+    source.indexOf('preflightDeferredSemanticEvent(jobId, "hub_decision", event.payload)')
+      < source.indexOf("semanticState.hub = { eventId, payload: event.payload }"),
+  );
+  assert.ok(
+    source.indexOf('preflightDeferredSemanticEvent(jobId, "human", p)')
+      < source.indexOf("semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject }"),
+  );
 });
 
 test("deferred Verify terminal event preserves verdict and missing evidence", () => {

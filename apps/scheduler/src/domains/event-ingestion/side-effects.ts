@@ -33,6 +33,13 @@ export interface EventSideEffectServices {
 }
 
 export interface EventIngestionSideEffectApplication {
+  preflightDeferredSideEffects(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    type: "hub_decision" | "human",
+    payload: unknown,
+    services?: EventSideEffectServices,
+  ): Promise<void>;
   applySideEffects(
     tx: EventIngestionTransaction,
     jobId: string,
@@ -337,6 +344,214 @@ export function createEventIngestionSideEffectApplication(
     }
   }
 
+  async function validateHumanSubject(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    p: HumanPayload,
+  ): Promise<void> {
+    if (p.subject.type !== "finding") return;
+    const canvasId = (job.canvas_id as string | null) ?? null;
+    if (!canvasId) throw new ControlInputError("invalid_human", "Finding 人工请求必须绑定当前 Job 的画布。", "subject.finding_id");
+    const [finding] = await tx`
+      SELECT f.id, f.severity
+      FROM findings f
+      JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+      JOIN canvas_nodes source ON source.id = f.node_id
+        AND source.canvas_id = ${canvasId} AND source.node_type = 'finding'
+      WHERE f.id = ${p.subject.finding_id}
+        AND f.project_id = ${job.project_id as string}
+        AND origin.canvas_id = ${canvasId}`;
+    if (!finding) throw new ControlInputError("invalid_human", "Finding 人工请求只能绑定当前项目、当前画布的 canonical Finding。", "subject.finding_id");
+    const rules = await ports.rulesForProject(tx, job.project_id as string);
+    if (!ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, finding.severity)) {
+      throw new ControlInputError("invalid_human", "该 Finding 低于当前 Verify 最低关注级别，不得以 Finding 阻塞任务。", "subject.finding_id");
+    }
+  }
+
+  type HubDecisionTrigger = {
+    kind?: string;
+    finding_id?: string;
+    missing_evidence?: string[];
+  };
+
+  async function validateHubDecision(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    job: Record<string, unknown>,
+    payload: unknown,
+    services: EventSideEffectServices,
+    phase: "preflight" | "apply",
+    parsedDecision?: HubDecision,
+  ) {
+    const decision = parsedDecision ?? parseHubDecisionPayload(payload);
+    const canvasId = (job.canvas_id as string | null) ?? null;
+    if (!canvasId) {
+      if (phase === "apply") return null;
+      throw new ControlInputError("invalid_payload", "Hub 决策必须绑定当前 Job 的画布。", "canvas_id");
+    }
+    const referenceNodes = await assertHubDecisionCanvasReferences(tx, canvasId, decision, services.hubReferenceLookup);
+    const rules = await ports.rulesForProject(tx, job.project_id as string);
+    const roles = decision.complete ? [] : await ports.rolesForProject(tx, job.project_id as string);
+    const submittedIntents = decision.intents ?? [];
+    const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as HubDecisionTrigger;
+    const findingByNodeId = new Map<string, HubFindingBinding>();
+    const ambiguousFindingNodeIds = new Set<string>();
+
+    if (decision.complete) {
+      const gate = await ports.findingVerification.evaluateAnalysisCompleteGate(tx, canvasId, { excludeJobId: jobId });
+      if (!gate.ok) {
+        if (phase === "preflight") {
+          throw new ControlInputError(
+            "invalid_payload",
+            "Hub complete 尚未满足当前画布收敛门；请补充工作或请求人工处理。",
+            "complete",
+          );
+        }
+        const detail = gate.problems.length > 0
+          ? gate.problems
+              .slice(0, 8)
+              .map((problem) => problem.finding_id
+                ? `[${problem.severity}] ${problem.title || problem.finding_id}: ${problem.verify_status}（${problem.issue}）`
+                : problem.issue)
+              .join("; ")
+          : gate.blockers.slice(0, 5).join("; ");
+        throw new ControlInputError("invalid_payload", `Hub complete 被拒绝：${detail}`, "complete");
+      }
+      return {
+        decision,
+        canvasId,
+        referenceNodes,
+        rules,
+        roles,
+        submittedIntents,
+        decisionTrigger,
+        findingByNodeId,
+        ambiguousFindingNodeIds,
+      };
+    }
+
+    const enabledNames = new Set(roles.map((role) => role.name));
+    for (const [index, intent] of submittedIntents.entries()) {
+      if (!enabledNames.has(intent.role)) {
+        throw invalidRole(intent.role, phase === "preflight" ? `intents.${index}.role` : "intents.role");
+      }
+    }
+    if (["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")) {
+      for (const [index, intent] of submittedIntents.entries()) {
+        if (intent.role !== "review" && intent.role !== "test") {
+          throw invalidRole(
+            intent.role,
+            phase === "preflight" ? `intents.${index}.role` : "intents.role",
+            ["review", "test"],
+          );
+        }
+      }
+    }
+
+    const findingNodeIds = [
+      ...new Set(
+        [...referenceNodes.values()]
+          .filter((node) => node.node_type === "finding")
+          .map((node) => node.id),
+      ),
+    ];
+    const findingRows = findingNodeIds.length
+      ? (await tx<HubFindingBinding[]>`
+          SELECT f.id, f.node_id, f.severity, false AS imported
+          FROM findings f
+          JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+          JOIN canvas_nodes source ON source.id = f.node_id
+            AND source.canvas_id = ${canvasId}
+            AND source.node_type = 'finding'
+          WHERE f.project_id = ${job.project_id as string}
+            AND origin.canvas_id = ${canvasId}
+            AND f.node_id = ANY(${findingNodeIds}::uuid[])
+          UNION ALL
+          SELECT f.id, source.id AS node_id,
+                 COALESCE(source.body_json->>'severity', f.severity) AS severity,
+                 true AS imported
+          FROM canvas_nodes source
+          JOIN findings f ON f.id = (source.body_json->>'finding_id')::uuid
+          WHERE source.canvas_id = ${canvasId}
+            AND source.node_type = 'finding'
+            AND source.id = ANY(${findingNodeIds}::uuid[])
+            AND source.body_json->>'origin' = 'seed'
+            AND source.body_json->>'readonly' = 'true'
+            AND f.project_id = ${job.project_id as string}`) as HubFindingBinding[]
+      : [];
+    for (const finding of findingRows) {
+      if (findingByNodeId.has(finding.node_id)) {
+        ambiguousFindingNodeIds.add(finding.node_id);
+        continue;
+      }
+      findingByNodeId.set(finding.node_id, finding);
+    }
+    for (const [index, intent] of submittedIntents.entries()) {
+      const resolution = resolveHubFindingIntent(
+        intent.role,
+        intent.from,
+        referenceNodes,
+        findingByNodeId,
+        ambiguousFindingNodeIds,
+      );
+      if (resolution.error) throw invalidVerification(resolution.error, `intents.${index}.from`);
+      const finding = resolution.finding;
+      if (
+        ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")
+        && (!finding || decisionTrigger.finding_id !== finding.id)
+      ) {
+        throw invalidVerification(
+          "Verify trigger 必须与 review/test intent 的 canonical Finding 一致，无法绑定验证目标。",
+          `intents.${index}.from`,
+        );
+      }
+      if (
+        finding
+        && !finding.imported
+        && !ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, finding.severity)
+      ) {
+        throw invalidVerification(
+          phase === "preflight"
+            ? "该 Finding 低于当前 Verify 最低关注级别，已豁免自动验证。"
+            : "该 Finding 低于当前 Verify 最低关注级别，已豁免自动验证；请 complete 或仅处理范围内 Finding。",
+          `intents.${index}.from`,
+        );
+      }
+    }
+    return {
+      decision,
+      canvasId,
+      referenceNodes,
+      rules,
+      roles,
+      submittedIntents,
+      decisionTrigger,
+      findingByNodeId,
+      ambiguousFindingNodeIds,
+    };
+  }
+
+  async function preflightDeferredSideEffects(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    type: "hub_decision" | "human",
+    payload: unknown,
+    services: EventSideEffectServices = {},
+  ): Promise<void> {
+    const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+    if (!job) throw new ControlInputError("job_not_running", "Job 不存在或已不可接受控制输入。", "status");
+    assertSemanticJobRunning(job as Record<string, unknown>, type);
+    assertSemanticToolAuthority(job as Record<string, unknown>, type);
+    await assertTerminalEventHistory(tx, jobId, type);
+    if (type === "human") {
+      const parsed = HumanPayload.safeParse(payload);
+      if (!parsed.success) throw new ControlInputError("invalid_human", "request_human 参数不符合严格契约。");
+      await validateHumanSubject(tx, job as Record<string, unknown>, parsed.data);
+      return;
+    }
+    await validateHubDecision(tx, jobId, job as Record<string, unknown>, payload, services, "preflight");
+  }
+
   async function applySideEffects(
     tx: EventIngestionTransaction,
     jobId: string,
@@ -371,10 +586,8 @@ export function createEventIngestionSideEffectApplication(
               : type === "human"
                 ? parsePayload(HumanPayload, payload, "invalid_human", "request_human")
                 : payload;
-    // Parse Hub references before the event/application can perform any write.
-    // Event-ingestion wraps this callback in the same transaction, so a later
-    // rejection rolls back the event, jobs, nodes, and edges as one decision.
-    const hubDecision: HubDecision | null = type === "hub_decision" ? parseHubDecisionPayload(payload) : null;
+    // Preserve the fail-fast parse boundary before taking the Job row lock.
+    const hubDecision = type === "hub_decision" ? parseHubDecisionPayload(payload) : undefined;
     const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) throw new Error(`job ${jobId} 不存在`);
     assertSemanticJobRunning(job as Record<string, unknown>, type);
@@ -578,41 +791,39 @@ export function createEventIngestionSideEffectApplication(
 
     if (type === "hub_decision") {
       // hub 读图后的决策：complete=目标达成；intents=派发角色 job（§8.3）
-      const p = hubDecision!;
-      const canvasId = (job.canvas_id as string) ?? null;
-      if (!canvasId) return;
-      // Resolve every submitted reference, including intents beyond the runtime
-      // dispatch cap, before role/job/payload/edge side effects begin.
-      const referenceNodes = await assertHubDecisionCanvasReferences(tx, canvasId, p, services.hubReferenceLookup);
+      // Re-run the same read-only authority checks inside the final locked
+      // transaction so state drift after preflight cannot authorize effects.
+      const validation = await validateHubDecision(
+        tx,
+        jobId,
+        job as Record<string, unknown>,
+        payload,
+        services,
+        "apply",
+        hubDecision,
+      );
+      if (!validation) return;
+      const {
+        decision: p,
+        canvasId,
+        referenceNodes,
+        rules,
+        roles,
+        submittedIntents,
+        decisionTrigger,
+        findingByNodeId,
+        ambiguousFindingNodeIds,
+      } = validation;
       const insertHubEdges: HubEdgeBatchInsert = async (edgeTx, edges) => {
         const uniqueEdges = dedupeCanvasEdges(edges);
         if (uniqueEdges.length === 0) return;
         await (services.hubEdgeBatchInsert ?? ports.insertEdgesIfAbsentBatch)(edgeTx, uniqueEdges);
       };
-      const rules = await ports.rulesForProject(tx, job.project_id as string);
 
       if (p.complete?.description) {
         // Hub complete 只是提案：统一完成门（排除当前仍 running 的 Hub 做门检）
         // **不在此处派 Report**：当前 Hub 尚未 mark_job_done；由 finalizeJob 在 Hub succeeded 后派发，
         // 避免 exclude 后抢跑 Report，也避免 Hub 崩溃时报告先于 Hub 终态。
-        const gate = await ports.findingVerification.evaluateAnalysisCompleteGate(tx, canvasId, {
-          excludeJobId: jobId,
-        });
-        if (!gate.ok) {
-          const detail =
-            gate.problems.length > 0
-              ? gate.problems
-                  .slice(0, 8)
-                  .map((x) =>
-                    x.finding_id
-                      ? `[${x.severity}] ${x.title || x.finding_id}: ${x.verify_status}（${x.issue}）`
-                      : x.issue,
-                  )
-                  .join("; ")
-              : gate.blockers.slice(0, 5).join("; ");
-          throw new Error(`Hub complete 被拒绝：${detail}`);
-        }
-
         const [root] = await tx`
         SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
         if (root) {
@@ -636,106 +847,7 @@ export function createEventIngestionSideEffectApplication(
         return;
       }
 
-      // 项目启用的角色（hub 可下发清单）；一个都没启用则不再派生
-      const roles = await ports.rolesForProject(tx, job.project_id as string);
-      const enabledNames = new Set(roles.map((r) => r.name));
-      const submittedIntents = p.intents ?? [];
-      // Validate the complete proposal before applying the runtime dispatch
-      // cap. Otherwise an invalid role after maxIntentsPerDecision could be
-      // silently truncated and the same internal call would appear accepted.
-      for (const it of submittedIntents) {
-        if (!it.role || !enabledNames.has(it.role)) {
-          throw invalidRole(it.role ?? "<missing>", "intents.role");
-        }
-      }
       const hubEdges: EventCanvasEdgeInput[] = [];
-
-      const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as {
-        kind?: string;
-        finding_id?: string;
-        missing_evidence?: string[];
-      };
-      if (["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")) {
-        for (const it of submittedIntents) {
-          if (it.role !== "review" && it.role !== "test") {
-            throw new Error(`Verify 补证只允许派发 review/test，收到 ${it.role ?? "<missing>"}`);
-          }
-        }
-      }
-
-      const findingNodeIds = [
-        ...new Set(
-          [...referenceNodes.values()]
-            .filter((node) => node.node_type === "finding")
-            .map((node) => node.id),
-        ),
-      ];
-      const findingRows = findingNodeIds.length
-        ? (await tx<HubFindingBinding[]>`
-            SELECT f.id, f.node_id, f.severity, false AS imported
-            FROM findings f
-            JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
-            JOIN canvas_nodes source ON source.id = f.node_id
-              AND source.canvas_id = ${canvasId}
-              AND source.node_type = 'finding'
-            WHERE f.project_id = ${job.project_id as string}
-              AND origin.canvas_id = ${canvasId}
-              AND f.node_id = ANY(${findingNodeIds}::uuid[])
-            UNION ALL
-            SELECT f.id, source.id AS node_id,
-                   COALESCE(source.body_json->>'severity', f.severity) AS severity,
-                   true AS imported
-            FROM canvas_nodes source
-            JOIN findings f ON f.id = (source.body_json->>'finding_id')::uuid
-            WHERE source.canvas_id = ${canvasId}
-              AND source.node_type = 'finding'
-              AND source.id = ANY(${findingNodeIds}::uuid[])
-              AND source.body_json->>'origin' = 'seed'
-              AND source.body_json->>'readonly' = 'true'
-              AND f.project_id = ${job.project_id as string}`) as HubFindingBinding[]
-        : [];
-      const findingByNodeId = new Map<string, HubFindingBinding>();
-      const ambiguousFindingNodeIds = new Set<string>();
-      for (const finding of findingRows) {
-        if (findingByNodeId.has(finding.node_id)) {
-          ambiguousFindingNodeIds.add(finding.node_id);
-          continue;
-        }
-        findingByNodeId.set(finding.node_id, finding);
-      }
-
-      for (const [index, intent] of submittedIntents.entries()) {
-        const resolution = resolveHubFindingIntent(
-          intent.role,
-          intent.from,
-          referenceNodes,
-          findingByNodeId,
-          ambiguousFindingNodeIds,
-        );
-        if (resolution.error) {
-          throw invalidVerification(resolution.error, `intents.${index}.from`);
-        }
-        const sourceFinding = resolution.finding;
-        if (
-          ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "") &&
-          (!sourceFinding || decisionTrigger.finding_id !== sourceFinding.id)
-        ) {
-          throw invalidVerification(
-            "Verify trigger 必须与 review/test intent 的 canonical Finding 一致，无法绑定验证目标。",
-            `intents.${index}.from`,
-          );
-        }
-        if (
-          sourceFinding &&
-          !sourceFinding.imported &&
-          !ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, sourceFinding.severity)
-        ) {
-          throw invalidVerification(
-            "该 Finding 低于当前 Verify 最低关注级别，已豁免自动验证；请 complete 或仅处理范围内 Finding。",
-            `intents.${index}.from`,
-          );
-        }
-      }
 
       const intents = submittedIntents.slice(0, rules.maxIntentsPerDecision);
 
@@ -889,36 +1001,7 @@ export function createEventIngestionSideEffectApplication(
     if (type === "human") {
       const p = validatedPayload as HumanPayload;
       const canvasId = (job.canvas_id as string | null) ?? null;
-      if (p.subject.type === "finding") {
-        if (!canvasId) {
-          throw new ControlInputError("invalid_human", "Finding 人工请求必须绑定当前 Job 的画布。", "subject.finding_id");
-        }
-        const [finding] = await tx`
-          SELECT f.id, f.severity
-          FROM findings f
-          JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
-          JOIN canvas_nodes source ON source.id = f.node_id
-            AND source.canvas_id = ${canvasId}
-            AND source.node_type = 'finding'
-          WHERE f.id = ${p.subject.finding_id}
-            AND f.project_id = ${job.project_id as string}
-            AND origin.canvas_id = ${canvasId}`;
-        if (!finding) {
-          throw new ControlInputError(
-            "invalid_human",
-            "Finding 人工请求只能绑定当前项目、当前画布的 canonical Finding。",
-            "subject.finding_id",
-          );
-        }
-        const rules = await ports.rulesForProject(tx, job.project_id as string);
-        if (!ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, finding.severity)) {
-          throw new ControlInputError(
-            "invalid_human",
-            "该 Finding 低于当前 Verify 最低关注级别，不得以 Finding 阻塞任务。",
-            "subject.finding_id",
-          );
-        }
-      }
+      await validateHumanSubject(tx, job as Record<string, unknown>, p);
       await tx`
       UPDATE jobs SET status = 'waiting_human' WHERE id = ${jobId} AND status = 'running'`;
       const [jobNode] = await tx`
@@ -940,5 +1023,5 @@ export function createEventIngestionSideEffectApplication(
     }
   }
 
-  return { applySideEffects };
+  return { preflightDeferredSideEffects, applySideEffects };
 }

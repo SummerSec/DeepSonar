@@ -349,7 +349,7 @@ Agent 输入输出是无界数据（单次运行原始事件流可达数十 MB�
 |------|------|------|
 | 原始事件流（text.delta、工具调用细节） | **冷**：每 job 一个 NDJSON 文件（gzip），`transcripts/{job_id}.ndjson.gz`；jobs 表存 `transcript_uri` | 只追加、极少查；SDK 事件流经调度器缓冲合并（每 2s 或 32KB 一批）后写入 |
 | 语义事件（progress/finding/done/human） | **热**：events 表 | 小行、有索引，驱动调度与画布 |
-| 超限 payload（> `EVENT_PAYLOAD_MAX_KB`） | 行内截断 + 全文进 blob，行里留 `blob_uri` + 头部预览 | 防 TOAST 大行拖垮扫描 |
+| 超限语义 payload（> 固定 256 KiB UTF-8 JSON） | 在暂存/入库前以可重试控制错误拒绝；大正文改走共享资产或拆分语义事件 | 防 TOAST 大行拖垮扫描，且直接参数与 `payload_file` 无绕过差异 |
 | findings / jobs / canvas | **热**：Postgres | 结构化业务数据 |
 | PoC 产物、截图等 | 冷：blob 存储 | 同 transcript 通道 |
 
@@ -457,7 +457,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - Scheduler 提供独立于管理 OpenAPI 的 Job 控制面：`GET /control/v1/jobs/:jobId/capabilities`、`GET /control/v1/jobs/:jobId/openapi.json` 与 `POST /control/v1/jobs/:jobId/operations/:operationId`。前两者和 OpenAPI paths 都按当前 capability token 的精确 operation allowlist 过滤；写调用要求 UUID `Idempotency-Key`，同 key 重放不得重复执行，跨 operation 重用返回冲突。
 - 静态 `deepsonar-control` Skill 引导 Agent 先读取 capabilities/OpenAPI，再按冻结 operation 调用 HTTP API。Pi 运行时固定为 `pi --mode rpc --no-approve --no-extensions`，通过持久 JSONL framer 处理任意字节分块；只有 `agent_settled` 作为 Agent 侧静止信号，终态仍必须经过 `mark_job_done` 完成门。
 - Job 进入真实执行时，Scheduler 从冻结的 `agent_snapshot_json.platform_tools` 签发独立短期 capability token，仅存 hash 并绑定 `job_id`、`project_id`、operation 列表和 TTL，通过 `DEEPSONAR_API_BASE_URL` / `DEEPSONAR_API_TOKEN` 注入 CLI 环境。它不复用 Credential/Model Gateway token，不写回 snapshot、workspace、运行清单、日志或 evidence，并在成功、失败、超时、取消或孤儿终态撤销；鉴权还要求 Job 仍在运行。
-- API operation 不直接复制 `event-ingestion`：路由调用进程内注册的当前 Job runtime handler；只读 operation 返回冻结角色/资产目录，语义写 operation 复用 `onSemanticEvent`、payload_file/共享资产宿主读取、计数和 Hub/done 延迟终态，再进入 Scheduler 权威事务。API 返回 `accepted` 只表示 Scheduler 接收了输入；HTTP 错误要求 Agent 修正请求，不允许切换控制传输。
+- API operation 不直接复制 `event-ingestion`：路由调用进程内注册的当前 Job runtime handler；只读 operation 返回冻结角色/资产目录，语义写 operation 复用 `onSemanticEvent`、payload_file/共享资产宿主读取、计数和 Hub/done 延迟终态，再进入 Scheduler 权威事务。直接参数与展开后的 `payload_file` 共用固定 256 KiB UTF-8 JSON 上限。Hub/Human 的副作用仍延迟到 Agent 退出后执行，但当前 Job、画布引用、角色、Finding 绑定和完成门在返回 `accepted` 前由只读权威事务预检，最终副作用事务再次校验。API 返回 `accepted` 只表示 Scheduler 已接收通过同步校验的输入；HTTP 错误统一返回可重试稳定错误码并要求 Agent 修正请求，不允许切换控制传输。
 - 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边；HTTP 响应同步返回最终接收或稳定拒绝结果。
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、伪造的控制 MCP tool call 和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；平台控制 telemetry 仅保留 operation/调用标识与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列。
@@ -686,7 +686,6 @@ DEEPSONAR_HUB_MAX_INTENTS=6
 SANDBOX_PROVIDER=local-docker
 DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
 DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
-EVENT_PAYLOAD_MAX_KB=256
 
 # Scheduler-authoritative semantic-event fixed-window budgets (Issue #57).
 # progress and terminal/control events use independent buckets.

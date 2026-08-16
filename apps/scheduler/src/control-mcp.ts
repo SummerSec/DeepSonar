@@ -339,7 +339,7 @@ function loadPayloadFile(rel) {
     return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " 无法读取 payload_file=" + rel } };
   }
   if (fileSize > MAX_PAYLOAD_FILE_BYTES) {
-    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 超过 512KiB" } };
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 超过 256KiB" } };
   }
   try {
     raw = readFileSync(path, "utf8");
@@ -347,7 +347,7 @@ function loadPayloadFile(rel) {
     return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " 无法读取 payload_file=" + rel } };
   }
   if (raw.length > MAX_PAYLOAD_FILE_BYTES) {
-    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 超过 512KiB" } };
+    return { error: { code: INVALID_PAYLOAD_CODE, text: "[" + INVALID_PAYLOAD_CODE + "] " + INVALID_PAYLOAD_MESSAGE + " payload_file 超过 256KiB" } };
   }
   let parsed;
   try {

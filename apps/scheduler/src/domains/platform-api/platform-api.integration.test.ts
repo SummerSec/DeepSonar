@@ -27,7 +27,7 @@ if (!testDatabaseUrl) {
     const projectId = randomUUID();
     const canvasId = randomUUID();
     const jobId = randomUUID();
-    const operations = ["emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"];
+    const operations = ["emit_progress", "emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done", "request_human"];
 
     try {
       await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
@@ -100,6 +100,33 @@ if (!testDatabaseUrl) {
         headers: { ...auth, "idempotency-key": key },
         payload,
       } as never) as unknown as Promise<InjectResponse>;
+      const oversizedDone = await invoke("mark_job_done", randomUUID(), {
+        summary: `${"界".repeat(2730)}ab界`,
+      });
+      assert.equal(oversizedDone.statusCode, 422, oversizedDone.payload);
+      assert.deepEqual(oversizedDone.json(), {
+        accepted: false,
+        error: "Platform operation was rejected",
+        error_code: "invalid_done",
+        retryable: true,
+        path: "summary",
+      });
+      assert.equal(calls.length, 0, "oversized done must be rejected before the runtime handler");
+      const [stillRunning] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+      assert.equal(stillRunning?.status, "running");
+      for (const [operation, payload, errorCode] of [
+        ["emit_progress", { message: "" }, "invalid_progress"],
+        ["emit_fact", { title: "missing description" }, "invalid_payload"],
+        ["emit_finding", { title: "short", summary: "short" }, "invalid_payload"],
+        ["submit_hub_decision", {}, "invalid_payload"],
+        ["request_human", { reason: "missing subject" }, "invalid_human"],
+      ] as const) {
+        const rejected = await invoke(operation, randomUUID(), payload);
+        assert.equal(rejected.statusCode, 422, rejected.payload);
+        assert.equal(rejected.json().accepted, false);
+        assert.equal(rejected.json().error_code, errorCode);
+        assert.equal(rejected.json().retryable, true);
+      }
       const factKey = randomUUID();
       const fact = {
         title: "控制 API 事实",
@@ -131,7 +158,7 @@ if (!testDatabaseUrl) {
       assert.equal((await invoke("mark_job_done", randomUUID(), {
         summary: "Platform API 集成闭环已经完成。",
       })).statusCode, 200);
-      assert.deepEqual(calls.map((call) => call.operationId), operations);
+      assert.deepEqual(calls.map((call) => call.operationId), ["emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"]);
 
       const narrowGrant = await mintJobCapabilityToken(jobId, { operationIds: ["emit_fact"] });
       const denied = await app.inject({

@@ -1,8 +1,10 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   EffectiveFindingProtocol as EffectiveFindingProtocolSchema,
   FindingProtocolConfig as FindingProtocolConfigSchema,
   CANONICAL_UUID_PATTERN,
+  SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
   type EventEnvelopeInput,
   type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
@@ -134,7 +136,7 @@ const eventIngestionApplication = createEventIngestionApplication(
     await eventIngestionSideEffectApplication.applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload);
   },
   {
-    maxPayloadBytes: config.events.payloadMaxKb * 1024,
+    maxPayloadBytes: SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
     rateLimit: {
       windowSeconds: config.events.rateLimitWindowSec,
       progressPerWindow: config.events.rateLimitProgressPerWindow,
@@ -146,6 +148,16 @@ const eventIngestionApplication = createEventIngestionApplication(
     },
   },
 );
+
+export async function preflightDeferredSemanticEvent(
+  jobId: string,
+  type: "hub_decision" | "human",
+  payload: unknown,
+): Promise<void> {
+  await sql.begin(async (tx) => {
+    await eventIngestionSideEffectApplication.preflightDeferredSideEffects(tx as unknown as Tx, jobId, type, payload);
+  });
+}
 
 // ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
 //
@@ -1212,7 +1224,12 @@ export async function finalizeJob(
     status === "succeeded" ? "succeeded" : "failed",
     {
       job_status: status,
-      summary: result?.summary ?? null,
+      ...(result?.summary !== undefined
+        ? {
+            summary_sha256: createHash("sha256").update(result.summary, "utf8").digest("hex"),
+            summary_bytes: Buffer.byteLength(result.summary, "utf8"),
+          }
+        : {}),
     },
     result?.error,
   );

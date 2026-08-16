@@ -1,9 +1,11 @@
 import {
   EventEnvelope as EventEnvelopeSchema,
+  SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
   type EventEnvelope,
   type EventEnvelopeInput,
 } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
+import { CONTROL_INPUT_ERROR_CODES, ControlInputError } from "../../control-input.js";
 import {
   consumeEventRateLimit,
   EventRateLimitError,
@@ -35,6 +37,33 @@ export interface EventIngestionApplication {
   ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<EventIngestionResult>;
   /** Append and apply a same-Job semantic terminal bundle atomically. */
   ingestEventBundle(jobId: string, envelopes: readonly EventEnvelopeInput[]): Promise<EventIngestionResult[]>;
+}
+
+function payloadErrorCode(type: string) {
+  if (type === "progress") return CONTROL_INPUT_ERROR_CODES.invalidProgress;
+  if (type === "done") return CONTROL_INPUT_ERROR_CODES.invalidDone;
+  if (type === "human") return CONTROL_INPUT_ERROR_CODES.invalidHuman;
+  return CONTROL_INPUT_ERROR_CODES.invalidPayload;
+}
+
+export function assertSemanticEventPayloadSize(
+  type: string,
+  payload: unknown,
+  maxBytes = SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
+): void {
+  let payloadSize: number;
+  try {
+    payloadSize = Buffer.byteLength(JSON.stringify(payload ?? {}), "utf8");
+  } catch {
+    throw new ControlInputError(payloadErrorCode(type), "语义事件参数无法编码为有界 JSON。", "payload");
+  }
+  if (payloadSize > maxBytes) {
+    throw new ControlInputError(
+      payloadErrorCode(type),
+      `语义事件参数超过 ${maxBytes} UTF-8 字节限制；请减少字段或条目后重试。`,
+      "payload",
+    );
+  }
 }
 
 export interface EventIngestionOptions {
@@ -273,19 +302,33 @@ export function createEventIngestionApplication(
   sideEffects: EventSideEffects,
   options: EventIngestionOptions = {},
 ): EventIngestionApplication {
-  const maxPayloadBytes = options.maxPayloadBytes ?? 256 * 1024;
+  const maxPayloadBytes = options.maxPayloadBytes ?? SEMANTIC_EVENT_PAYLOAD_MAX_BYTES;
   const ingestEventBundle = async (
     jobId: string,
     inputs: readonly EventEnvelopeInput[],
   ): Promise<EventIngestionResult[]> => {
     if (inputs.length === 0) throw new Error("event bundle must not be empty");
-    const envelopes = inputs.map((input) => EventEnvelopeSchema.parse(input));
-    for (const envelope of envelopes) {
-      const payloadSize = Buffer.byteLength(JSON.stringify(envelope.payload ?? {}), "utf8");
-      if (payloadSize > maxPayloadBytes) {
-        throw new Error(`event payload 超限：${payloadSize}B > ${maxPayloadBytes / 1024}KB`);
-      }
-    }
+    const envelopes = inputs.map((input) => {
+      const parsed = EventEnvelopeSchema.safeParse(input);
+      if (parsed.success) return parsed.data;
+      const type = typeof input === "object" && input !== null && "type" in input
+        ? (input as { type?: unknown }).type
+        : undefined;
+      const code = type === "done"
+        ? CONTROL_INPUT_ERROR_CODES.invalidDone
+        : type === "progress"
+          ? CONTROL_INPUT_ERROR_CODES.invalidProgress
+          : type === "human"
+            ? CONTROL_INPUT_ERROR_CODES.invalidHuman
+            : CONTROL_INPUT_ERROR_CODES.invalidPayload;
+      const rejectedPath = parsed.error.issues[0]?.path.at(-1);
+      throw new ControlInputError(
+        code,
+        "语义事件参数不符合严格契约；请修正后重试。",
+        typeof rejectedPath === "string" ? rejectedPath : undefined,
+      );
+    });
+    for (const envelope of envelopes) assertSemanticEventPayloadSize(envelope.type, envelope.payload, maxPayloadBytes);
 
     // A Job's canvas_id is immutable in normal operation.  One retry keeps
     // this boundary safe if a legacy repair path changes it between the

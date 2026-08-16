@@ -17,6 +17,7 @@ import {
   PlatformRuntimeHandlerError,
   type PlatformRuntimeHandlerContext,
 } from "./registry.js";
+import { controlInputCodeForOperation } from "../../control-input.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -122,7 +123,7 @@ function operationDescription(definition: PlatformOperationDefinition): Record<s
 function parseOperationInput(req: CapabilityRequest, definition: PlatformOperationDefinition, fallbackEventId?: string): {
   input: unknown;
   eventId: string;
-  error?: { statusCode: number; errorCode: string; message: string };
+  error?: { statusCode: number; errorCode: string; message: string; retryable?: boolean; path?: string };
 } {
   const raw = req.body;
   let input: unknown = raw === undefined ? {} : raw;
@@ -153,10 +154,17 @@ function parseOperationInput(req: CapabilityRequest, definition: PlatformOperati
   }
   const parsed = schema.safeParse(input);
   if (!parsed.success) {
+    const firstPath = parsed.error.issues[0]?.path[0];
     return {
       input,
       eventId,
-      error: { statusCode: 400, errorCode: "INVALID_INPUT", message: "Operation input is invalid" },
+      error: {
+        statusCode: 422,
+        errorCode: controlInputCodeForOperation(definition.operationId),
+        message: "Platform operation was rejected",
+        retryable: true,
+        ...(typeof firstPath === "string" ? { path: firstPath } : {}),
+      },
     };
   }
   return { input: parsed.data, eventId };
@@ -243,7 +251,18 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
   if (!key) return sendError(reply, 400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required");
   if (!isUuid(key)) return sendError(reply, 400, "IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must be a UUID");
   const parsed = parseOperationInput(req, definition, key);
-  if (parsed.error) return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
+  if (parsed.error) {
+    if (parsed.error.retryable) {
+      return reply.code(parsed.error.statusCode).send({
+        accepted: false,
+        error: parsed.error.message,
+        error_code: parsed.error.errorCode,
+        retryable: true,
+        ...(parsed.error.path ? { path: parsed.error.path } : {}),
+      });
+    }
+    return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
+  }
 
   const cacheKey = idempotencyCacheKey(jobId, key);
   const requestHash = inputHash(parsed.input);
