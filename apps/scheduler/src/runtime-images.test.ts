@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  compareRuntimeImageVersionLabels,
   createServerOwnedRuntimeImageRegistryPolicy,
   ensureRuntimeImageAvailable,
   hostRuntimePlatform,
@@ -9,6 +10,7 @@ import {
   parseRuntimeImageRegistry,
   runtimeImageRefForChannel,
   runtimeImageRegistryNextSyncDelayMs,
+  selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
   shouldReconcileRuntimeImagePromotions,
   validateRuntimeImageRegistryPolicy,
@@ -67,6 +69,58 @@ test("legacy official env refs resolve only through their matching registry chan
   assert.equal(runtimeImageRefForChannel(version, "github"), githubRef);
   assert.equal(runtimeImageRefForChannel(version, "dockerhub"), null);
   assert.equal(runtimeImageRefForChannel(version, "aliyun-acr"), null);
+});
+
+test("async pull defaults to one latest channel ref per product", () => {
+  const older = `sha256:${"b".repeat(64)}`;
+  const newer = `sha256:${"c".repeat(64)}`;
+  const armOnly = `sha256:${"d".repeat(64)}`;
+  const items = selectLatestRuntimeImagePullItems([
+    {
+      image_key: "deepsonar-base",
+      versions: [
+        {
+          version: "0.1.33",
+          image_ref: `ghcr.io/summersec/deepsonar-base@${older}`,
+          digest: older,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${older}` },
+          platforms: ["linux/amd64", "linux/arm64"],
+        },
+        {
+          version: "0.1.34",
+          image_ref: `ghcr.io/summersec/deepsonar-base@${newer}`,
+          digest: newer,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${newer}` },
+          platforms: ["linux/amd64", "linux/arm64"],
+        },
+      ],
+    },
+    {
+      image_key: "deepsonar-audit",
+      versions: [
+        {
+          version: "0.1.34",
+          image_ref: `ghcr.io/summersec/deepsonar-audit@${armOnly}`,
+          digest: armOnly,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-audit@${armOnly}` },
+          platforms: ["linux/arm64"],
+        },
+        {
+          version: "0.1.33",
+          image_ref: `ghcr.io/summersec/deepsonar-audit@${older}`,
+          digest: older,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-audit@${older}` },
+          platforms: ["linux/amd64"],
+        },
+      ],
+    },
+  ], "github", "linux/amd64");
+  assert.deepEqual(items, [
+    { image_key: "deepsonar-base", image_ref: `ghcr.io/summersec/deepsonar-base@${newer}` },
+    // Prefer host platform over a newer arm-only label.
+    { image_key: "deepsonar-audit", image_ref: `ghcr.io/summersec/deepsonar-audit@${older}` },
+  ]);
+  assert.ok(compareRuntimeImageVersionLabels("0.1.34", "0.1.33") > 0);
 });
 
 test("v1 single image_ref is normalized to a known channel without changing the legacy projection", () => {

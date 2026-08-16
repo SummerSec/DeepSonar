@@ -53,8 +53,32 @@ const registry = JSON.parse(fs.readFileSync(file, "utf8"));
 if (!((registry.schema === "deepsonar.registry/v1" || registry.schema === "deepsonar.registry/v2") && Array.isArray(registry.images))) {
   throw new Error("注册表 schema 无效");
 }
+function compareVersionLabels(left, right) {
+  const tokenize = (value) => String(value).trim().toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part));
+  const a = tokenize(left);
+  const b = tokenize(right);
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    const av = a[i];
+    const bv = b[i];
+    if (av === undefined) return -1;
+    if (bv === undefined) return 1;
+    if (typeof av === "number" && typeof bv === "number") {
+      if (av !== bv) return av < bv ? -1 : 1;
+      continue;
+    }
+    if (typeof av === "number") return 1;
+    if (typeof bv === "number") return -1;
+    if (av !== bv) return av < bv ? -1 : 1;
+  }
+  return 0;
+}
+// Default: one immutable ref per product (latest version label). Historical
+// digests stay in the catalog for pin / Job snapshots but are not bulk-pulled.
 for (const image of registry.images) {
   if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
+  const candidates = [];
   for (const version of image.versions) {
     // v2's legacy projection is explicit. Channel-only Docker Hub/ACR
     // versions are skipped until channel-aware pull selection exists.
@@ -62,8 +86,15 @@ for (const image of registry.images) {
     if (!/^.+@sha256:[0-9a-f]{64}$/.test(version.image_ref)) {
       throw new Error(`${image.image_key} ${version.version} 不是不可变 digest`);
     }
-    process.stdout.write(`${version.image_ref}\n`);
+    candidates.push(version);
   }
+  if (candidates.length === 0) continue;
+  candidates.sort((left, right) => {
+    const versionDiff = compareVersionLabels(right.version, left.version);
+    if (versionDiff !== 0) return versionDiff;
+    return String(right.digest || right.image_ref).localeCompare(String(left.digest || left.image_ref));
+  });
+  process.stdout.write(`${candidates[0].image_ref}\n`);
 }
 NODE
 )

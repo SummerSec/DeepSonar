@@ -1195,7 +1195,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/registry/pull",
     summary: "异步拉取同步后的远程不可变镜像",
-    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。",
+    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；默认每个官方产品只拉最新一条可用版本（历史 trusted digest 保留给 pin/Job 快照，不批量预热）。缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     responses: {

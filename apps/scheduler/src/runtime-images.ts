@@ -232,6 +232,80 @@ export function runtimeImageRefForChannel(
     : null;
 }
 
+/**
+ * Compare runtime-image version labels for "latest" selection.
+ * Prefer higher dotted numeric prefixes (0.1.34 > 0.1.33); fall back to
+ * localeCompare so configured-* / platform-suffixed labels stay deterministic.
+ */
+export function compareRuntimeImageVersionLabels(left: string, right: string): number {
+  const tokenize = (value: string): Array<number | string> => {
+    const parts = value.trim().toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    return parts.map((part) => (/^\d+$/.test(part) ? Number(part) : part));
+  };
+  const a = tokenize(left);
+  const b = tokenize(right);
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    const av = a[i];
+    const bv = b[i];
+    if (av === undefined) return -1;
+    if (bv === undefined) return 1;
+    if (typeof av === "number" && typeof bv === "number") {
+      if (av !== bv) return av < bv ? -1 : 1;
+      continue;
+    }
+    if (typeof av === "number") return 1;
+    if (typeof bv === "number") return -1;
+    if (av !== bv) return av < bv ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Default async pull selects at most one immutable ref per product: the
+ * selected-channel version that best matches the host platform and sorts as
+ * the latest label. Historical trusted digests stay in DB for pin/Job
+ * snapshots but are not bulk-pulled.
+ */
+export function selectLatestRuntimeImagePullItems(
+  images: readonly { image_key: string; versions: readonly RuntimeImageRegistryVersion[] }[],
+  channel: RuntimeImageRegistryChannel,
+  hostPlatform: string = hostRuntimePlatform(),
+): Array<{ image_key: string; image_ref: string }> {
+  const items: Array<{ image_key: string; image_ref: string }> = [];
+  for (const image of images) {
+    if (image.versions.length === 0) continue;
+    const candidates: Array<{ version: RuntimeImageRegistryVersion; imageRef: string }> = [];
+    for (const version of image.versions) {
+      const imageRef = runtimeImageRefForChannel(version, channel);
+      if (!imageRef) continue;
+      candidates.push({ version, imageRef });
+    }
+    if (candidates.length === 0) {
+      if (image.versions.some((version) => Object.keys(version.registry_refs ?? {}).length > 0)) {
+        throw new RuntimeImageChannelUnavailableError(channel, image.image_key);
+      }
+      continue;
+    }
+    candidates.sort((left, right) => {
+      const platformRank = (version: RuntimeImageRegistryVersion): number => {
+        const platforms = version.platforms ?? [];
+        if (platforms.length === 0) return 1;
+        return platforms.includes(hostPlatform) ? 0 : 2;
+      };
+      const platformDiff = platformRank(left.version) - platformRank(right.version);
+      if (platformDiff !== 0) return platformDiff;
+      const versionDiff = compareRuntimeImageVersionLabels(right.version.version, left.version.version);
+      if (versionDiff !== 0) return versionDiff;
+      const leftDigest = left.version.digest ?? left.imageRef;
+      const rightDigest = right.version.digest ?? right.imageRef;
+      return rightDigest.localeCompare(leftDigest);
+    });
+    items.push({ image_key: image.image_key, image_ref: candidates[0]!.imageRef });
+  }
+  return items;
+}
+
 function immutableImageRepository(imageRef: string): string {
   const at = imageRef.lastIndexOf("@");
   return (at >= 0 ? imageRef.slice(0, at) : imageRef).trim().toLowerCase().replace(/\/+$/, "");
@@ -1201,23 +1275,15 @@ export async function startRuntimeImagePull(): Promise<RuntimeImagePullTask> {
   }
   const registry = await runtimeImageRegistryWithOverrides();
   const channel = await readRuntimeRegistryChannel(sql);
-  const items: RuntimeImagePullItem[] = [];
-  for (const image of registry.images) {
-    if (image.versions.length === 0) continue;
-    let availableForImage = 0;
-    for (const version of image.versions) {
-      const imageRef = runtimeImageRefForChannel(version, channel);
-      if (!imageRef) continue;
-      availableForImage += 1;
-      items.push({ image_key: image.image_key, image_ref: imageRef, status: "queued", error: null });
-    }
-    // An official version may be present on another channel, but pulling must
-    // never silently cross over to it.  Fail closed when this product has no
-    // selected-channel ref at all.
-    if (availableForImage === 0 && image.versions.some((version) => Object.keys(version.registry_refs ?? {}).length > 0)) {
-      throw new RuntimeImageChannelUnavailableError(channel, image.image_key);
-    }
-  }
+  // Default pull is latest-only per product on the selected channel. Older
+  // trusted digests remain resolvable for pins / frozen Job snapshots.
+  const latest = selectLatestRuntimeImagePullItems(registry.images, channel);
+  const items: RuntimeImagePullItem[] = latest.map((item) => ({
+    image_key: item.image_key,
+    image_ref: item.image_ref,
+    status: "queued",
+    error: null,
+  }));
   if (items.length === 0) throw new RuntimeImageChannelUnavailableError(channel);
   const task: RuntimeImagePullTask = {
     task_id: createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24),

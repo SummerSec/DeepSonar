@@ -516,7 +516,7 @@ export function RuntimeImagesPage() {
     try {
       const result = await api.pullRuntimeImagesRegistry();
       setPullStatus(result.task);
-      setNotice(`已启动异步拉取：${result.task.total} 个远程不可变版本`);
+      setNotice(`已启动异步拉取：${result.task.total} 个最新远程不可变版本（每产品一条）`);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
