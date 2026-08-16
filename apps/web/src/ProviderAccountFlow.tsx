@@ -1362,7 +1362,7 @@ export function ProviderAccountFlow({
                           }}
                           options={AGENT_CLI_OPTIONS.map((option) => ({ ...option, label: option.value }))}
                           placeholder="选择 CLI…"
-                          className="w-full [&>button]:!min-h-[30px] [&>button]:w-full"
+                          className="w-full min-w-0 [&>button]:!min-h-[32px] [&>button]:w-full [&>button]:min-w-0"
                           clearable={false}
                         />
                       </fieldset>
@@ -1430,36 +1430,40 @@ export function ProviderAccountFlow({
                             ]}
                             placeholder="系统底座（默认）"
                             ariaLabel={`${roleConfig.role_title || roleConfig.role_name} 的运行镜像`}
-                            className="min-w-0"
+                            className="w-full min-w-0 [&>button]:!min-h-[32px] [&>button]:w-full [&>button]:min-w-0"
                           />
                         </div>
                       )}
-                      <span className="provider-flow-role-model">
-                        {roleConfig.model
-                          ? `Role 覆盖 · ${roleConfig.model}`
-                          : modelsFromSettingsConfig(selectedCredential)[0]
-                            ? `配置文件 · ${modelsFromSettingsConfig(selectedCredential)[0]}`
-                            : "配置文件 · 未声明模型"}
-                      </span>
-                      <span
-                        className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind ? "is-warning" : ""}`}
-                        title={
-                          !roleConfig.can_bind
-                            ? "全局角色配置可见，但项目操作者只能绑定本项目角色配置"
+                      <span className="provider-flow-role-meta">
+                        <span
+                          className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind ? "is-warning" : roleConfig.credential_name ? "is-bound" : ""}`}
+                          title={
+                            !roleConfig.can_bind
+                              ? "全局角色配置可见，但项目操作者只能绑定本项目角色配置"
+                              : incompatible
+                                ? selectedCredential?.agent_cli
+                                  ? `角色 CLI 与账号目标 CLI（${cliLabel[selectedCredential.agent_cli] ?? selectedCredential.agent_cli}）不一致，请先改 CLI 再勾选绑定`
+                                  : `请选择与 ${cliLabel[roleCli] ?? roleCli} 兼容的 Provider`
+                                : roleConfig.credential_name
+                                  ? `已绑定 · ${roleConfig.credential_name}`
+                                  : undefined
+                          }
+                        >
+                          {!roleConfig.can_bind
+                            ? "只读 · 项目作用域"
                             : incompatible
-                              ? selectedCredential?.agent_cli
-                                ? `角色 CLI 与账号目标 CLI（${cliLabel[selectedCredential.agent_cli] ?? selectedCredential.agent_cli}）不一致，请先改 CLI 再勾选绑定`
-                                : `请选择与 ${cliLabel[roleCli] ?? roleCli} 兼容的 Provider`
-                              : undefined
-                        }
-                      >
-                        {!roleConfig.can_bind
-                          ? "只读 · 项目作用域"
-                          : incompatible
-                            ? "CLI 不匹配 · 可改 CLI"
-                            : roleConfig.credential_name
-                              ? `已绑定 · ${roleConfig.credential_name}`
-                              : "未绑定"}
+                              ? "CLI 不匹配 · 可改 CLI"
+                              : roleConfig.credential_name
+                                ? `已绑定 · ${roleConfig.credential_name}`
+                                : "未绑定"}
+                        </span>
+                        <span className="provider-flow-role-model">
+                          {roleConfig.model
+                            ? `Role 覆盖 · ${roleConfig.model}`
+                            : modelsFromSettingsConfig(selectedCredential)[0]
+                              ? `配置文件 · ${modelsFromSettingsConfig(selectedCredential)[0]}`
+                              : "配置文件 · 未声明模型"}
+                        </span>
                       </span>
                     </div>
                   );

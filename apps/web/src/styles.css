@@ -1692,12 +1692,12 @@ input[type="password"]::-webkit-textfield-decoration-container {
 .provider-flow-count { color: var(--accent); font: 600 20px var(--font-mono); text-align: right; }
 .provider-flow-count.is-muted { color: #9aa6ac; font-size: 16px; }
 .provider-flow-count span { display: block; color: #6f7b80; font-size: 9px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
-.provider-flow-role-list { display: grid; gap: 10px; max-height: 380px; margin-top: 10px; overflow: auto; }
+.provider-flow-role-list { display: grid; gap: 8px; max-height: min(52vh, 440px); margin-top: 10px; overflow: auto; padding-right: 2px; }
 .provider-flow-role-group {
   border: 1px solid rgb(255 255 255 / .07);
-  border-radius: 9px;
+  border-radius: 10px;
   background: rgb(255 255 255 / .015);
-  padding: 8px;
+  padding: 9px;
 }
 .provider-flow-role-group.is-global {
   border-color: color-mix(in srgb, #6ec8ff 22%, var(--line));
@@ -1712,9 +1712,9 @@ input[type="password"]::-webkit-textfield-decoration-container {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 7px;
-  padding: 0 2px 6px;
-  border-bottom: 1px dashed rgb(255 255 255 / .06);
+  margin-bottom: 8px;
+  padding: 0 4px 7px;
+  border-bottom: 1px solid rgb(255 255 255 / .06);
 }
 .provider-flow-role-group-head strong {
   color: #c8d1ce;
@@ -1726,39 +1726,80 @@ input[type="password"]::-webkit-textfield-decoration-container {
   color: #667277;
   font: 500 9px var(--font-mono);
 }
-.provider-flow-role-group-body { display: grid; gap: 5px; }
+.provider-flow-role-group-body { display: grid; gap: 6px; }
+/* 角色绑定行：勾选 | 身份 | CLI | 镜像 | 状态/模型
+   CLI/镜像用固定列宽，避免「系统底座」与长镜像名把控件撑得长短不一 */
 .provider-flow-role {
   --role-accent: var(--accent);
+  --role-cli-col: 148px;
+  --role-image-col: 220px;
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) minmax(110px, 128px) minmax(140px, 168px) auto auto;
+  grid-template-columns: 18px minmax(0, 1.35fr) var(--role-cli-col) var(--role-image-col) minmax(140px, 0.9fr);
   align-items: center;
-  gap: 8px;
-  border: 1px solid rgb(255 255 255 / .07);
-  border-radius: 8px;
-  background: rgb(255 255 255 / .018);
-  padding: 8px 9px;
+  gap: 10px 14px;
+  border: 1px solid rgb(255 255 255 / .08);
+  border-radius: 9px;
+  background: rgb(255 255 255 / .02);
+  padding: 11px 12px;
   cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
 }
-.provider-flow-role.is-disabled-bind { cursor: default; }
+.provider-flow-role.is-disabled-bind { cursor: default; opacity: .72; }
 .provider-flow-role-cli-wrap {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  width: 100%;
   min-width: 0;
   cursor: default;
+}
+.provider-flow-role-image-wrap { width: 100%; min-width: 0; }
+/* 下拉触发器始终吃满列宽；长标签 ellipsis，不按文案伸缩控件 */
+.provider-flow-role-cli-wrap > :not(.provider-flow-role-cli-caption) {
+  min-width: 0;
+  width: 100%;
+}
+.provider-flow-role-cli-wrap .searchable-select-trigger,
+.provider-flow-role-cli-wrap > button {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100%;
+}
+.provider-flow-role-cli-wrap .searchable-select-trigger > span:first-child,
+.provider-flow-role-cli-wrap > button > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .provider-flow-role-cli-caption {
   color: #6f7b80;
   font: 600 9px var(--font-mono);
-  letter-spacing: .04em;
+  letter-spacing: .05em;
   text-transform: uppercase;
 }
+.provider-flow-role-image-readonly {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, #6ec8ff 28%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, #6ec8ff 6%, #0b1012);
+  padding: 0 10px;
+  color: #8eb6c4;
+  font: 500 10px var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .provider-flow-role-cli {
-  min-height: 30px !important;
+  min-height: 32px !important;
   width: 100%;
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)) !important;
-  border-radius: 6px;
+  border-radius: 7px;
   background: color-mix(in srgb, var(--accent) 10%, #0b1012) !important;
   color: #b7f0c8 !important;
   font: 600 10px var(--font-mono) !important;
@@ -1781,54 +1822,112 @@ input[type="password"]::-webkit-textfield-decoration-container {
   opacity: .55;
   cursor: not-allowed;
 }
-@media (max-width: 960px) {
+.provider-flow-role-meta {
+  display: grid;
+  justify-items: end;
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  text-align: right;
+}
+@media (max-width: 1180px) {
   .provider-flow-role {
-    grid-template-columns: 16px minmax(0, 1fr);
-    gap: 6px 8px;
-  }
-  .provider-flow-role-cli-wrap,
-  .provider-flow-role-model,
-  .provider-flow-role-status {
-    grid-column: 2;
+    --role-cli-col: 136px;
+    --role-image-col: 200px;
+    gap: 8px 10px;
   }
 }
-.provider-flow-role:hover { border-color: color-mix(in srgb, var(--role-accent) 28%, var(--line)); }
+@media (max-width: 980px) {
+  .provider-flow-role {
+    grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "check main meta"
+      "check cli image";
+  }
+  .provider-flow-role-check { grid-area: check; align-self: start; margin-top: 3px; }
+  .provider-flow-role-main { grid-area: main; }
+  .provider-flow-role-cli-wrap:not(.provider-flow-role-image-wrap) { grid-area: cli; }
+  .provider-flow-role-image-wrap { grid-area: image; }
+  .provider-flow-role-meta { grid-area: meta; }
+}
+@media (max-width: 640px) {
+  .provider-flow-role {
+    grid-template-columns: 18px minmax(0, 1fr);
+    grid-template-areas:
+      "check main"
+      "check meta"
+      "check cli"
+      "check image";
+    gap: 8px 10px;
+  }
+  .provider-flow-role-cli-wrap:not(.provider-flow-role-image-wrap),
+  .provider-flow-role-image-wrap {
+    width: 100%;
+  }
+  .provider-flow-role-meta {
+    justify-items: start;
+    text-align: left;
+  }
+}
+.provider-flow-role:hover {
+  border-color: color-mix(in srgb, var(--role-accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--role-accent) 5%, #0b1012);
+}
 .provider-flow-role.is-selected {
-  border-color: color-mix(in srgb, var(--role-accent) 46%, var(--line));
-  background: color-mix(in srgb, var(--role-accent) 8%, #0b1012);
+  border-color: color-mix(in srgb, var(--role-accent) 52%, var(--line));
+  background: color-mix(in srgb, var(--role-accent) 10%, #0b1012);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--role-accent) 18%, transparent);
 }
-/* 系统角色（调度内核）：琥珀/橙 — 必须一眼可辨 */
+.provider-flow-role.is-selected:active:not(.is-disabled-bind) {
+  transform: translateY(0.5px);
+}
+/* 系统角色：左色条 + 浅铺底，避免右侧 meta 被深色渐变吞掉 */
 .provider-flow-role.is-system,
 .provider-flow-role[data-role-kind="system"] {
   --role-accent: #f0a35e;
-  border-color: #f0a35e !important;
-  background: linear-gradient(90deg, rgba(240, 163, 94, .22), rgba(11, 16, 18, .92) 42%) !important;
-  box-shadow: inset 5px 0 0 #f0a35e !important;
+  border-color: color-mix(in srgb, #f0a35e 70%, var(--line)) !important;
+  background:
+    linear-gradient(90deg, rgba(240, 163, 94, .16), rgba(240, 163, 94, .04) 38%, transparent 72%),
+    rgb(12 14 15 / .92) !important;
+  box-shadow: inset 4px 0 0 #f0a35e !important;
 }
 .provider-flow-role.is-system.is-selected,
 .provider-flow-role[data-role-kind="system"].is-selected {
-  background: linear-gradient(90deg, rgba(240, 163, 94, .32), rgba(240, 163, 94, .1) 55%) !important;
+  background:
+    linear-gradient(90deg, rgba(240, 163, 94, .24), rgba(240, 163, 94, .08) 42%, transparent 78%),
+    rgb(14 16 16 / .95) !important;
 }
-/* Hub 中枢：品红/紫 — 与系统角色对比鲜明 */
 .provider-flow-role.is-hub,
 .provider-flow-role[data-role-kind="hub"] {
   --role-accent: #c084fc;
-  border-color: #c084fc !important;
-  background: linear-gradient(90deg, rgba(192, 132, 252, .22), rgba(11, 16, 18, .92) 42%) !important;
-  box-shadow: inset 5px 0 0 #c084fc !important;
+  border-color: color-mix(in srgb, #c084fc 70%, var(--line)) !important;
+  background:
+    linear-gradient(90deg, rgba(192, 132, 252, .16), rgba(192, 132, 252, .04) 38%, transparent 72%),
+    rgb(12 14 15 / .92) !important;
+  box-shadow: inset 4px 0 0 #c084fc !important;
 }
 .provider-flow-role.is-hub.is-selected,
 .provider-flow-role[data-role-kind="hub"].is-selected {
-  background: linear-gradient(90deg, rgba(192, 132, 252, .32), rgba(192, 132, 252, .1) 55%) !important;
+  background:
+    linear-gradient(90deg, rgba(192, 132, 252, .24), rgba(192, 132, 252, .08) 42%, transparent 78%),
+    rgb(14 16 16 / .95) !important;
 }
-/* 其他内置角色：青蓝左边线 */
 .provider-flow-role.is-builtin {
   --role-accent: #5ec8d8;
-  border-color: color-mix(in srgb, #5ec8d8 40%, var(--line));
+  border-color: color-mix(in srgb, #5ec8d8 42%, var(--line));
   box-shadow: inset 4px 0 0 #5ec8d8;
 }
 .provider-flow-role input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.provider-flow-role-check { display: grid; width: 16px; height: 16px; place-items: center; border: 1px solid #3f4a4f; border-radius: 4px; color: transparent; }
+.provider-flow-role-check {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1px solid #3f4a4f;
+  border-radius: 4px;
+  color: transparent;
+  transition: border-color .14s ease, background .14s ease, color .14s ease;
+}
 .provider-flow-role.is-selected .provider-flow-role-check {
   border-color: var(--role-accent);
   background: var(--role-accent);
@@ -1839,14 +1938,15 @@ input[type="password"]::-webkit-textfield-decoration-container {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  color: #cbd4d1;
-  font-size: 11px;
-  font-weight: 550;
+  gap: 6px;
+  color: #d4ddda;
+  font-size: 12.5px;
+  font-weight: 560;
+  letter-spacing: -.01em;
 }
 .provider-flow-role-main small {
   display: block;
-  margin-top: 2px;
+  margin-top: 3px;
   overflow: hidden;
   color: #6d797e;
   font: 500 9px var(--font-mono);
@@ -1857,7 +1957,7 @@ input[type="password"]::-webkit-textfield-decoration-container {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  padding: 1px 6px;
+  padding: 1px 7px;
   font: 600 9px var(--font-mono);
   font-style: normal;
   letter-spacing: .02em;
@@ -1880,9 +1980,40 @@ input[type="password"]::-webkit-textfield-decoration-container {
 }
 .provider-flow-role-legend-system { color: #ffc48a; font-weight: 600; }
 .provider-flow-role-legend-hub { color: #e0c3ff; font-weight: 600; }
-.provider-flow-role-model, .provider-flow-role-status { color: #7c888d; font: 500 9px var(--font-mono); white-space: nowrap; }
-.provider-flow-role-status { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
-.provider-flow-role-status.is-warning { color: #dfab62; }
+.provider-flow-role-status {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(255 255 255 / .1);
+  border-radius: 999px;
+  background: rgb(255 255 255 / .04);
+  padding: 3px 8px;
+  overflow: hidden;
+  color: #b0bbb7;
+  font: 600 10px var(--font-mono);
+  letter-spacing: .01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-flow-role-status.is-bound {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent) 78%, #e8f5ee);
+}
+.provider-flow-role-status.is-warning {
+  border-color: rgb(223 171 98 / .4);
+  background: rgb(223 171 98 / .12);
+  color: #e0b56a;
+}
+.provider-flow-role-model {
+  max-width: 100%;
+  overflow: hidden;
+  color: #8a969b;
+  font: 500 10px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .provider-flow-role.is-system .provider-flow-role-main strong { color: #ffe0c0; }
 .provider-flow-role.is-hub .provider-flow-role-main strong { color: #f0e0ff; }
 .provider-flow-empty { border: 1px dashed #334046; padding: 18px; color: #69767b; font-size: 11px; text-align: center; }
@@ -1913,14 +2044,11 @@ input[type="password"]::-webkit-textfield-decoration-container {
   .provider-flow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-flow-arrow { display: none; }
   .provider-flow-grid, .provider-flow-effect-grid { grid-template-columns: minmax(0, 1fr); }
-  .provider-flow-role { grid-template-columns: 16px minmax(0, 1fr) auto; }
-  .provider-flow-role-model { display: none; }
   .provider-flow-create-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 500px) {
   .provider-flow-shell { padding: 12px; }
   .provider-flow-steps { grid-template-columns: minmax(0, 1fr); }
-  .provider-flow-role-status { display: none; }
 }
 
 @media (max-width: 1180px) {
