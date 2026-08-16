@@ -23,6 +23,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.equal(Number(match[1]), SCHEMA_VERSION);
   assert.equal(SCHEMA_VERSION, 35);
   assert.match(body, /CREATE TABLE login_rate_limits/i);
+  assert.match(body, /login_rate_limits_window_idx/i);
   assert.match(body, /verification_status\s+text/i);
   assert.match(body, /canvas_nodes_facts_keyset_idx[\s\S]+WHERE\s+node_type\s*=\s*'fact'/i);
   assert.match(body, /node_type\s*=\s*'fact'\s+AND\s+verification_status\s+IS\s+NOT\s+NULL/i);

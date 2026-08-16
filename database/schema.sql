@@ -1798,5 +1798,6 @@ CREATE TABLE login_rate_limits (
   CONSTRAINT login_rate_limits_count_check CHECK (attempt_count >= 0),
   CONSTRAINT login_rate_limits_key_len CHECK (char_length(key) BETWEEN 1 AND 128)
 );
+CREATE INDEX login_rate_limits_window_idx ON login_rate_limits (window_started_at);
 
 COMMIT;

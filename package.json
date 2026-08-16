@@ -33,7 +33,7 @@
     "ci:integration:event-ingestion": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/event-ingestion.integration.test.ts",
     "ci:integration:event-authorization": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/authorization.integration.test.ts",
     "ci:unit:event-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/rate-limit.test.ts",
-    "ci:unit:login-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/login-rate-limit.test.ts",
+    "ci:unit:login-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/login-rate-limit.test.ts src/login-client-ip.test.ts && node --test deploy/web-server-headers.test.mjs",
     "ci:integration:event-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/rate-limit.integration.test.ts",
     "ci:unit:graph-references": "pnpm --filter @deepsonar/scheduler exec tsx --test src/graph-reference.test.ts src/graph-budget.test.ts",
     "ci:integration:graph-references": "pnpm --filter @deepsonar/scheduler exec tsx --test src/graph-reference.integration.test.ts",

@@ -11,6 +11,8 @@
  * Tight bucket: normalized username + client IP, 5 attempts / 5 minutes.
  * Coarse bucket: client IP, 20 attempts / 5 minutes.
  * Consume happens under SELECT … FOR UPDATE in one transaction.
+ * Lock order is IP then identity so an exhausted IP bucket never inserts
+ * a new identity row. Expired windows are deleted in the same transaction.
  */
 import { sql } from "./db.js";
 
@@ -141,8 +143,9 @@ async function incrementUnlockedBucket(
 
 /**
  * Reserve one verification slot for both buckets in a single transaction.
- * Already-exhausted buckets reject without incrementing; otherwise both
- * counters advance before the caller issues a session or BAD_CREDENTIALS.
+ * IP is locked first: an exhausted IP window returns 429 without inserting
+ * an identity row. Expired windows are deleted before lock so cardinality
+ * cannot grow from stale keys. Fail-closed — a cleanup error aborts login.
  */
 export async function consumeLoginAttempt(input: {
   username: string;
@@ -152,19 +155,25 @@ export async function consumeLoginAttempt(input: {
   const now = input.now ?? new Date();
   const identityKey = loginIdentityKey(input.username, input.ip);
   const ipKey = loginRateLimitKey("ip", input.ip ?? "unknown");
+  const cutoff = new Date(now.getTime() - LOGIN_RATE_LIMIT_WINDOW_MS);
   return sql.begin(async (tx) => {
     const conn = tx as unknown as typeof sql;
-    // Identity then IP — fixed lock order for concurrent login workers.
-    const identity = stateFromRow(await lockBucket(conn, "identity", identityKey, now), now, LOGIN_IDENTITY_ATTEMPT_LIMIT);
+    await conn`DELETE FROM login_rate_limits WHERE window_started_at <= ${cutoff}`;
+    // IP then identity — fixed lock order; spray cannot create identity rows.
     const ip = stateFromRow(await lockBucket(conn, "ip", ipKey, now), now, LOGIN_IP_ATTEMPT_LIMIT);
-    if (identity.limited || ip.limited) {
-      return {
-        limited: true as const,
-        retryAfterSec: Math.max(identity.limited ? identity.retryAfterSec : 0, ip.limited ? ip.retryAfterSec : 0, 1),
-      };
+    if (ip.limited) {
+      return { limited: true as const, retryAfterSec: ip.retryAfterSec };
     }
-    await incrementUnlockedBucket(conn, "identity", identityKey, identity, now);
+    const identity = stateFromRow(
+      await lockBucket(conn, "identity", identityKey, now),
+      now,
+      LOGIN_IDENTITY_ATTEMPT_LIMIT,
+    );
+    if (identity.limited) {
+      return { limited: true as const, retryAfterSec: identity.retryAfterSec };
+    }
     await incrementUnlockedBucket(conn, "ip", ipKey, ip, now);
+    await incrementUnlockedBucket(conn, "identity", identityKey, identity, now);
     return { limited: false as const, retryAfterSec: 0 };
   });
 }

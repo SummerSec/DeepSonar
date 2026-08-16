@@ -102,17 +102,47 @@ if (!testDatabaseUrl) {
         });
         assert.equal(consumed.limited, false);
       }
+      const identityForIp = async (clientIp: string) => {
+        const rows = await sql<{ n: number }[]>`
+          SELECT COUNT(*)::int AS n FROM login_rate_limits
+          WHERE scope = 'identity' AND key LIKE ${`%|${loginRateLimitKey("ip", clientIp)}`}`;
+        return Number(rows[0]?.n ?? 0);
+      };
       const sprayed = await consumeLoginAttempt({
         username: `fresh-${randomUUID().slice(0, 6)}`,
         ip: sprayIp,
         now,
       });
       assert.equal(sprayed.limited, true);
+      const identityAfterLimit = await identityForIp(sprayIp);
+      assert.equal(identityAfterLimit, LOGIN_IP_ATTEMPT_LIMIT);
+      for (let i = 0; i < 8; i += 1) {
+        const extra = await consumeLoginAttempt({
+          username: `more-${i}-${randomUUID().slice(0, 6)}`,
+          ip: sprayIp,
+          now,
+        });
+        assert.equal(extra.limited, true);
+      }
+      assert.equal(await identityForIp(sprayIp), LOGIN_IP_ATTEMPT_LIMIT, "IP lock must not insert new identity rows");
       await assert.rejects(
         () => loginUser(username, password, { ip: sprayIp }, now),
         (error: unknown) => error instanceof LoginRateLimitError,
         "IP lock also rejects a correct password",
       );
+
+      const staleIp = `203.0.113.${200 + Math.floor(Math.random() * 40)}`;
+      assert.equal((await consumeLoginAttempt({ username: `stale-${randomUUID().slice(0, 6)}`, ip: staleIp, now })).limited, false);
+      const laterGc = new Date(now.getTime() + 5 * 60 * 1000);
+      assert.equal((await consumeLoginAttempt({ username: `fresh-${randomUUID().slice(0, 6)}`, ip: staleIp, now: laterGc })).limited, false);
+      const [staleIdentity] = await sql<{ n: number }[]>`
+        SELECT COUNT(*)::int AS n FROM login_rate_limits
+        WHERE scope = 'identity' AND key LIKE ${`%|${loginRateLimitKey("ip", staleIp)}`}`;
+      assert.equal(Number(staleIdentity?.n), 1, "expired identity windows are reclaimed on consume");
+      const [staleIpRows] = await sql<{ n: number }[]>`
+        SELECT COUNT(*)::int AS n FROM login_rate_limits
+        WHERE scope = 'ip' AND key = ${loginRateLimitKey("ip", staleIp)}`;
+      assert.equal(Number(staleIpRows?.n), 1);
 
       const raceUser = `race-${randomUUID().slice(0, 8)}`;
       const raceIp = `192.0.2.${1 + Math.floor(Math.random() * 200)}`;
