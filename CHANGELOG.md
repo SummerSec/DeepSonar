@@ -4,9 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-08-16
+
 ### 变更
 
 - 更新 `deepsonar-management` 项目 Skill：补齐 standard/compose/定时任务、provision 并发、画布 Fact、广播账本与人工消息命令，并移除失效的旧 Fact 验证路径。
+
+### 修复
+
+- 修复 Agent 可纠正的控制输入、schema、payload 与 summary 错误会终止 Agent/Job 的问题，改为返回稳定、可重试的控制错误；`mark_job_done` summary 按 8192 UTF-8 字节限制，Attempt outcome 仅保存摘要哈希与字节数；延迟执行的 Hub/Human 决策在接受前预检，并在最终事务中重新校验。修复 #166。
 
 ## [0.1.33] - 2026-08-15
 
@@ -251,6 +257,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.34]: https://github.com/SummerSec/DeepSonar/compare/v0.1.33...v0.1.34
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
 [0.1.33]: https://github.com/SummerSec/DeepSonar/compare/v0.1.32...v0.1.33
 [0.1.31]: https://github.com/SummerSec/DeepSonar/compare/v0.1.30...v0.1.31
