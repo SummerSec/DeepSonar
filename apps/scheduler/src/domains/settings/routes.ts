@@ -7,11 +7,12 @@ import { isProviderKnown, projectCredentialProvider, UNKNOWN_PROVIDER_ERROR } fr
 import { globalRules, mergeGlobalRulesPatch, PLATFORM_DEFAULT_AGENT_CLI, rulesForProject } from "../../core.js";
 import { sql } from "../../db.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
-import { resolveRuntimeImageForJob } from "../../runtime-images.js";
+import { prepareRuntimeImage, resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 import {
   parseProjectImagePolicy,
   PROJECT_IMAGE_STRATEGIES,
+  runtimeImageKeyForProjectPolicy,
 } from "../role-runtime-snapshot/application.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
@@ -117,6 +118,25 @@ async function validateProjectRuntimeImages(
     }
     await resolveRuntimeImageForJob(sql, projectId, roleName, imageKey);
   }
+}
+
+async function prepareProjectRuntimeImages(projectId: string, cfg: Record<string, unknown>): Promise<void> {
+  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return;
+  const policy = parseProjectImagePolicy(cfg);
+  const roles = await sql`
+    SELECT r.name, rc.runtime_image_key
+    FROM agent_roles r
+    LEFT JOIN role_configs rc ON rc.role_id = r.id AND rc.project_id IS NULL
+    ORDER BY r.name`;
+  const refs = new Set<string>();
+  for (const role of roles) {
+    const roleName = String(role.name);
+    const globalKey = typeof role.runtime_image_key === "string" ? role.runtime_image_key : null;
+    const configuredKey = runtimeImageKeyForProjectPolicy(policy, roleName, globalKey);
+    const snapshot = await resolveRuntimeImageForJob(sql, projectId, roleName, configuredKey);
+    refs.add(snapshot.image_ref);
+  }
+  for (const imageRef of refs) await prepareRuntimeImage(imageRef);
 }
 
 export function registerSettingsRoutes(app: FastifyInstance): void {
@@ -324,6 +344,16 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid finding protocol" });
+    }
+    if (body.image_strategy !== undefined || body.role_runtime_images !== undefined) {
+      try {
+        await prepareProjectRuntimeImages(id, cfg);
+      } catch (error) {
+        return reply.code(409).send({
+          error: error instanceof Error ? error.message : "runtime image preparation failed",
+          code: "runtime_image_prepare_failed",
+        });
+      }
     }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
     // Project rule changes can alter effective task behavior; wake dispatch so

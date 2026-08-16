@@ -236,10 +236,8 @@ case "$ACTION" in
     else
       echo "[deploy] 当前为 real 模式（真实沙箱）；需挂载容器 runtime socket（见 docker-compose.real.yml）"
     fi
-    mkdir -p "$REPO_ROOT/data/logs"
-    nohup env DEEPSONAR_URL="http://127.0.0.1:$port/api" \
-      "$REPO_ROOT/deploy/prepare-runtime-images.sh" \
-      >> "$REPO_ROOT/data/logs/runtime-images.log" 2>&1 < /dev/null &
-    echo "[deploy] 运行时镜像准备已后台启动，日志：$REPO_ROOT/data/logs/runtime-images.log"
+    # Runtime preparation is synchronous: Scheduler warms Base before it starts
+    # dispatching, and project configuration warms any selected specialist refs.
+    echo "[deploy] runtime Base image was prepared before Scheduler enabled dispatch"
     ;;
 esac

@@ -9,7 +9,11 @@ import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
 import { startPlaneSync } from "./plane-sync.js";
 import { startTransferWorker } from "./transfer/worker.js";
-import { bootstrapOfficialRuntimeImages, startRuntimeImageRegistrySync } from "./runtime-images.js";
+import {
+  bootstrapOfficialRuntimeImages,
+  prepareBaseRuntimeImageOnBoot,
+  startRuntimeImageRegistrySync,
+} from "./runtime-images.js";
 import { bootstrapSkillSourcesOnBoot } from "./skill-sources.js";
 import { normalizePendingJobPriorities } from "./core.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
@@ -37,6 +41,7 @@ async function main() {
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();
+  await prepareBaseRuntimeImageOnBoot();
   await bootstrapSkillSourcesOnBoot();
 
   const app = Fastify({ logger: { level: "info" } });

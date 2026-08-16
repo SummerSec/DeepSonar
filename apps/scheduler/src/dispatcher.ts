@@ -19,7 +19,7 @@ import { executeReal, preparePlatformCapability, type PreparedPlatformCapability
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
-import { ensureRuntimeImageAvailable } from "./runtime-images.js";
+import { assertRuntimeImageAvailable } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
@@ -690,7 +690,7 @@ async function runJob(jobId: string) {
       // Capability authentication remains disabled until `running`, but the
       // plaintext must exist before Docker creates immutable Config.Env.
       platformCapability = await preparePlatformCapability(jobId, snapshot);
-      await ensureRuntimeImageAvailable(runtimeImage);
+      await assertRuntimeImageAvailable(runtimeImage);
     }
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {

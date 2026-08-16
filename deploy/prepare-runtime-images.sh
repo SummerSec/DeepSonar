@@ -156,13 +156,7 @@ const builtinKeys = new Set([
 const keys = new Set();
 for (const image of registry.images) {
   if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
-  for (const version of image.versions) {
-    // v2 channel-only entries have no legacy image_ref and are intentionally
-    // unavailable to this legacy prepare path.
-    if (registry.schema === "deepsonar.registry/v2" && !version.image_ref) continue;
-    if (!/^.+@sha256:[0-9a-f]{64}$/.test(version.image_ref)) throw new Error(`${image.image_key} 存在非不可变 digest`);
-    if (builtinKeys.has(image.image_key)) keys.add(image.image_key);
-  }
+  if (image.versions.length > 0 && builtinKeys.has(image.image_key)) keys.add(image.image_key);
 }
 process.stdout.write([...keys].join("\n"));
 NODE
@@ -184,7 +178,20 @@ registry_first_ref() {
 const fs = require("node:fs");
 const registry = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const image = registry.images.find((item) => item.image_key === process.argv[3]);
-const ref = image?.versions?.find((version) => typeof version?.image_ref === "string")?.image_ref;
+const channel = registry.selected_channel || process.env.DEEPSONAR_RUNTIME_REGISTRY_CHANNEL || "aliyun-acr";
+const platform = process.arch === "x64" ? "linux/amd64" : process.arch === "arm64" ? "linux/arm64" : null;
+function legacyChannel(imageRef) {
+  const host = String(imageRef || "").split("/", 1)[0].toLowerCase();
+  if (host === "ghcr.io") return "github";
+  if (host === "docker.io" || host === "index.docker.io") return "dockerhub";
+  if (host.endsWith(".aliyuncs.com")) return "aliyun-acr";
+  return null;
+}
+const versions = image?.versions?.filter((version) => platform && version.platforms?.includes(platform)
+  && (typeof version.registry_refs?.[channel] === "string"
+    || (registry.schema === "deepsonar.registry/v1" && legacyChannel(version.image_ref) === channel))) ?? [];
+versions.sort((left, right) => String(right.version).localeCompare(String(left.version), undefined, { numeric: true }));
+const ref = versions[0]?.registry_refs?.[channel] || versions[0]?.image_ref;
 if (ref) process.stdout.write(ref);
 NODE
 }
@@ -318,8 +325,7 @@ prepare_builtin() {
       pulled_ref="$(registry_first_ref "$TEMP_REGISTRY" "$key")"
       if [[ -z "$pulled_ref" ]] || ! docker tag "$pulled_ref" "$tag"; then
         rm -f "$pull_file"
-        log "$name 的 registry 版本无法建立本地构建标签，回退本地构建"
-        build_one "$name" "$key" "$tag" "$dockerfile" "$toolset" "$base_image"
+        fail_item "$name（无法为选定 channel 的 digest 建立本地标签）"
         return 0
       fi
       rm -f "$pull_file"
@@ -328,7 +334,8 @@ prepare_builtin() {
       return 0
     fi
     rm -f "$pull_file"
-    log "$name 的 registry 拉取失败，回退本地构建"
+    fail_item "$name（选定 channel 的 registry 拉取失败）"
+    return 0
   elif has_version_key "$key"; then
     log "$name 存在不可变版本；dry-run/禁用构建模式不拉取，执行模拟构建"
   else

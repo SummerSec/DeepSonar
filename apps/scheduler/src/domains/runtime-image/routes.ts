@@ -14,6 +14,8 @@ import {
   immutableDigest,
   inspectLocalRuntimeImage,
   localImageDigest,
+  prepareRuntimeImage,
+  resolveRuntimeImageForProjectBinding,
   runtimeImagePullStatus,
   runtimeImageRegistryWithOverrides,
   readRuntimeRegistryChannel,
@@ -750,15 +752,34 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const body = ProjectRuntimeImageBody.parse(req.body);
     const [image] = await sql`SELECT id, enabled FROM runtime_images WHERE id = ${imageId}`;
     if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
-    const [version] = body.version_id
-      ? await sql`SELECT id FROM runtime_image_versions WHERE id = ${body.version_id} AND runtime_image_id = ${imageId} AND trust_status = 'trusted'`
-      : await sql`SELECT id FROM runtime_image_versions WHERE runtime_image_id = ${imageId} AND trust_status = 'trusted' LIMIT 1`;
-    if (body.enabled && !version) return reply.code(409).send({ error: "镜像没有可启用的可信版本" });
+    let selectedVersionId = body.version_id ?? null;
+    try {
+      if (body.enabled) {
+        if (config.runtime.agentMode === "fake") {
+          const [version] = body.version_id
+            ? await sql`SELECT id FROM runtime_image_versions WHERE id = ${body.version_id} AND runtime_image_id = ${imageId} AND trust_status = 'trusted'`
+            : await sql`SELECT id FROM runtime_image_versions WHERE runtime_image_id = ${imageId} AND trust_status = 'trusted' ORDER BY promoted_at DESC NULLS LAST, created_at DESC LIMIT 1`;
+          if (!version) return reply.code(409).send({ error: "镜像没有可启用的可信版本" });
+          selectedVersionId = String(version.id);
+        } else {
+          const snapshot = await resolveRuntimeImageForProjectBinding(sql, imageId, selectedVersionId);
+          selectedVersionId = snapshot.runtime_image_version_id;
+          if (config.runtime.provider === "local-docker") {
+            await prepareRuntimeImage(snapshot.image_ref);
+          }
+        }
+      }
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : "runtime image preparation failed",
+        code: "runtime_image_prepare_failed",
+      });
+    }
     const [row] = await sql`
       INSERT INTO project_runtime_images ${sql({
         project_id: id,
         runtime_image_id: imageId,
-        selected_version_id: body.version_id ?? null,
+        selected_version_id: selectedVersionId,
         enabled: body.enabled,
       } as never)}
       ON CONFLICT (project_id, runtime_image_id) DO UPDATE SET
@@ -771,7 +792,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       resourceType: "runtime_image",
       resourceId: imageId,
       projectId: id,
-      after: { enabled: body.enabled, selected_version_id: body.version_id ?? null },
+      after: { enabled: body.enabled, selected_version_id: selectedVersionId },
     });
     return row;
   });

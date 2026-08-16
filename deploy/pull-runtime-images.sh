@@ -46,12 +46,24 @@ if [[ -n "$temp_file" ]]; then
 fi
 [[ -f "$registry_path" ]] || { echo "找不到注册表：$registry_path" >&2; exit 1; }
 
-mapfile -t image_refs < <(node - "$registry_path" <<'NODE'
+refs_file="$(mktemp)"
+if ! node - "$registry_path" >"$refs_file" <<'NODE'
 const fs = require("node:fs");
 const file = process.argv[2];
 const registry = JSON.parse(fs.readFileSync(file, "utf8"));
 if (!((registry.schema === "deepsonar.registry/v1" || registry.schema === "deepsonar.registry/v2") && Array.isArray(registry.images))) {
   throw new Error("注册表 schema 无效");
+}
+const channel = registry.selected_channel || process.env.DEEPSONAR_RUNTIME_REGISTRY_CHANNEL || "aliyun-acr";
+if (!["github", "dockerhub", "aliyun-acr"].includes(channel)) throw new Error(`invalid selected channel: ${channel}`);
+const platform = process.arch === "x64" ? "linux/amd64" : process.arch === "arm64" ? "linux/arm64" : null;
+if (!platform) throw new Error(`unsupported host architecture: ${process.arch}`);
+function legacyChannel(imageRef) {
+  const host = String(imageRef || "").split("/", 1)[0].toLowerCase();
+  if (host === "ghcr.io") return "github";
+  if (host === "docker.io" || host === "index.docker.io") return "dockerhub";
+  if (host.endsWith(".aliyuncs.com")) return "aliyun-acr";
+  return null;
 }
 function compareVersionLabels(left, right) {
   const tokenize = (value) => String(value).trim().toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
@@ -80,24 +92,36 @@ for (const image of registry.images) {
   if (!Array.isArray(image.versions)) throw new Error(`${image.image_key} versions 无效`);
   const candidates = [];
   for (const version of image.versions) {
-    // v2's legacy projection is explicit. Channel-only Docker Hub/ACR
-    // versions are skipped until channel-aware pull selection exists.
-    if (registry.schema === "deepsonar.registry/v2" && !version.image_ref) continue;
-    if (!/^.+@sha256:[0-9a-f]{64}$/.test(version.image_ref)) {
+    if (!Array.isArray(version.platforms) || !version.platforms.includes(platform)) continue;
+    const imageRef = version.registry_refs?.[channel]
+      || (registry.schema === "deepsonar.registry/v1" && legacyChannel(version.image_ref) === channel ? version.image_ref : null);
+    if (!imageRef) continue;
+    if (!/^.+@sha256:[0-9a-f]{64}$/.test(imageRef)) {
       throw new Error(`${image.image_key} ${version.version} 不是不可变 digest`);
     }
-    candidates.push(version);
+    candidates.push({ ...version, selected_ref: imageRef });
+  }
+  if (image.versions.length > 0 && !image.versions.some((version) => Array.isArray(version.platforms) && version.platforms.includes(platform))) {
+    throw new Error(`${image.image_key} has no version for ${platform}`);
+  }
+  if (candidates.length === 0 && image.versions.length > 0) {
+    throw new Error(`${image.image_key} has no ${channel} reference for ${platform}`);
   }
   if (candidates.length === 0) continue;
   candidates.sort((left, right) => {
     const versionDiff = compareVersionLabels(right.version, left.version);
     if (versionDiff !== 0) return versionDiff;
-    return String(right.digest || right.image_ref).localeCompare(String(left.digest || left.image_ref));
+    return String(right.digest || right.selected_ref).localeCompare(String(left.digest || left.selected_ref));
   });
-  process.stdout.write(`${candidates[0].image_ref}\n`);
+  process.stdout.write(`${candidates[0].selected_ref}\n`);
 }
 NODE
-)
+then
+  rm -f "$refs_file"
+  exit 1
+fi
+mapfile -t image_refs <"$refs_file"
+rm -f "$refs_file"
 
 for image_ref in "${image_refs[@]}"; do
   [[ -n "$image_ref" ]] || continue

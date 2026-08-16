@@ -126,6 +126,25 @@ export class RuntimeImageChannelUnavailableError extends Error {
   }
 }
 
+export class RuntimeImagePlatformUnavailableError extends Error {
+  readonly code = "RUNTIME_IMAGE_PLATFORM_UNAVAILABLE" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string, readonly platform: string) {
+    super(`runtime image ${imageKey} has no trusted version for ${platform}`);
+    this.name = "RuntimeImagePlatformUnavailableError";
+  }
+}
+
+export class RuntimeImageNotReadyError extends Error {
+  readonly code = "runtime_image_not_ready" as const;
+
+  constructor(readonly imageRef: string) {
+    super(`runtime_image_not_ready: runtime image is not prepared locally: ${imageRef}`);
+    this.name = "RuntimeImageNotReadyError";
+  }
+}
+
 function isRuntimeImageRegistryChannel(value: unknown): value is RuntimeImageRegistryChannel {
   return RUNTIME_IMAGE_REGISTRY_CHANNELS.includes(value as RuntimeImageRegistryChannel);
 }
@@ -275,8 +294,12 @@ export function selectLatestRuntimeImagePullItems(
   const items: Array<{ image_key: string; image_ref: string }> = [];
   for (const image of images) {
     if (image.versions.length === 0) continue;
+    const platformVersions = image.versions.filter((version) => version.platforms?.includes(hostPlatform));
+    if (platformVersions.length === 0) {
+      throw new RuntimeImagePlatformUnavailableError(image.image_key, hostPlatform);
+    }
     const candidates: Array<{ version: RuntimeImageRegistryVersion; imageRef: string }> = [];
-    for (const version of image.versions) {
+    for (const version of platformVersions) {
       const imageRef = runtimeImageRefForChannel(version, channel);
       if (!imageRef) continue;
       candidates.push({ version, imageRef });
@@ -288,13 +311,6 @@ export function selectLatestRuntimeImagePullItems(
       continue;
     }
     candidates.sort((left, right) => {
-      const platformRank = (version: RuntimeImageRegistryVersion): number => {
-        const platforms = version.platforms ?? [];
-        if (platforms.length === 0) return 1;
-        return platforms.includes(hostPlatform) ? 0 : 2;
-      };
-      const platformDiff = platformRank(left.version) - platformRank(right.version);
-      if (platformDiff !== 0) return platformDiff;
       const versionDiff = compareRuntimeImageVersionLabels(right.version.version, left.version.version);
       if (versionDiff !== 0) return versionDiff;
       const leftDigest = left.version.digest ?? left.imageRef;
@@ -1249,8 +1265,8 @@ async function ensureRuntimeImageAvailableOnce(
   }
 }
 
-/** Ensure the exact immutable snapshot image is available to local Docker. */
-export async function ensureRuntimeImageAvailable(
+/** Pull and verify the exact immutable snapshot image before it can be selected for work. */
+export async function prepareRuntimeImage(
   imageRef: string,
   dependencies: RuntimeImageEnsureDependencies = defaultRuntimeImageEnsureDependencies(),
 ): Promise<void> {
@@ -1266,6 +1282,28 @@ export async function ensureRuntimeImageAvailable(
     await operation;
   } finally {
     if (runtimeImageEnsureInFlight.get(normalizedRef) === operation) runtimeImageEnsureInFlight.delete(normalizedRef);
+  }
+}
+
+/** Compatibility name for explicit admin preparation callers. */
+export const ensureRuntimeImageAvailable = prepareRuntimeImage;
+
+/** Dispatcher admission is inspect-only: it never turns Job execution into an implicit pull. */
+export async function assertRuntimeImageAvailable(
+  imageRef: string,
+  inspect: RuntimeImageEnsureDependencies["inspect"] = defaultRuntimeImageEnsureDependencies().inspect,
+): Promise<void> {
+  const normalizedRef = imageRef.trim();
+  const expectedDigest = immutableDigest(normalizedRef);
+  if (!expectedDigest) throw new Error("runtime image snapshot must use an immutable digest reference");
+  let inspection: RuntimeImageEnsureInspection;
+  try {
+    inspection = await inspect(normalizedRef);
+  } catch {
+    throw new RuntimeImageNotReadyError(normalizedRef);
+  }
+  if (!localRuntimeImageMatchesRef(inspection, normalizedRef, expectedDigest)) {
+    throw new RuntimeImageNotReadyError(normalizedRef);
   }
 }
 
@@ -1351,6 +1389,19 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
   await syncOfficialRuntimeCatalog();
 }
 
+const BOOTSTRAP_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
+
+/** Base is a scheduler prerequisite, so prepare it before dispatch is enabled. */
+export async function prepareBaseRuntimeImageOnBoot(
+  dependencies: { resolve?: typeof resolveRuntimeImageForJob; prepare?: typeof prepareRuntimeImage } = {},
+): Promise<void> {
+  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return;
+  const resolve = dependencies.resolve ?? resolveRuntimeImageForJob;
+  const prepare = dependencies.prepare ?? prepareRuntimeImage;
+  const snapshot = await resolve(sql, BOOTSTRAP_PROJECT_ID, "startup", "deepsonar-base");
+  await prepare(snapshot.image_ref);
+}
+
 /**
  * 创建 Job 时选择一次并冻结；Executor 不再读取目录或 tag。
  * 未绑定市场镜像时使用平台治理的最小 Base 作为系统沙箱底座，而不是允许 Agent 指定引用。
@@ -1393,14 +1444,10 @@ export async function resolveRuntimeImageForJob(
         ON selected_ref.version_id = v.id AND selected_ref.channel = ${selectedChannel}
       WHERE v.runtime_image_id = ri.id
         AND v.trust_status = 'trusted'
+        AND v.platforms_json @> ${sql.json([hostPlatform])}
         AND (NOT ri.official OR selected_ref.id IS NOT NULL)
         AND (pri.selected_version_id IS NULL OR v.id = pri.selected_version_id)
       ORDER BY
-        CASE
-          WHEN v.platforms_json @> ${sql.json([hostPlatform])} THEN 0
-          WHEN v.platforms_json IS NULL OR jsonb_array_length(v.platforms_json) = 0 THEN 1
-          ELSE 2
-        END,
         v.promoted_at DESC NULLS LAST,
         v.approved_at DESC NULLS LAST,
         v.created_at DESC
@@ -1434,7 +1481,12 @@ export async function resolveRuntimeImageForJob(
                FROM runtime_image_versions v
                JOIN runtime_image_version_refs r ON r.version_id = v.id AND r.channel = ${selectedChannel}
                WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
-             ) AS has_selected_ref
+             ) AS has_selected_ref,
+             EXISTS (
+               SELECT 1 FROM runtime_image_versions v
+               WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
+                 AND v.platforms_json @> ${sql.json([hostPlatform])}
+             ) AS has_host_platform
       FROM runtime_images ri
       LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
       WHERE ri.image_key = ${imageKey}`;
@@ -1443,6 +1495,9 @@ export async function resolveRuntimeImageForJob(
       : image?.project_enabled === true;
     if (image?.official && image.enabled && projectAvailable && image.has_trusted && !image.has_selected_ref) {
       throw new RuntimeImageChannelUnavailableError(selectedChannel, imageKey);
+    }
+    if (image?.enabled && projectAvailable && image.has_trusted && !image.has_host_platform) {
+      throw new RuntimeImagePlatformUnavailableError(imageKey, hostPlatform);
     }
     throw new Error(`角色 ${roleName} 没有可用的可信运行镜像版本（key=${imageKey}）；请先准入 digest 并为项目启用`);
   }
@@ -1464,5 +1519,70 @@ export async function resolveRuntimeImageForJob(
     source_kind: row.source_kind as "official" | "third_party",
     trust_status: "trusted",
     ...(row.registry_channel ? { registry_channel: row.registry_channel as RuntimeImageRegistryChannel } : {}),
+  };
+}
+
+/** Resolve the exact binding candidate before doing network I/O or persisting a project pin. */
+export async function resolveRuntimeImageForProjectBinding(
+  db: typeof sql,
+  imageId: string,
+  selectedVersionId: string | null,
+): Promise<RuntimeImageSnapshot> {
+  const hostPlatform = hostRuntimePlatform();
+  const selectedChannel = await readRuntimeRegistryChannel(db, "share");
+  const [row] = await db`
+    SELECT ri.id AS runtime_image_id, ri.image_key, ri.source_kind, ri.official,
+           v.id AS runtime_image_version_id,
+           CASE WHEN ri.official THEN channel_ref.resolved_ref ELSE v.resolved_ref END AS resolved_ref,
+           CASE WHEN ri.official THEN channel_ref.digest ELSE v.digest END AS digest,
+           CASE WHEN ri.official THEN channel_ref.channel ELSE NULL END AS registry_channel,
+           v.tools_manifest_sha256, v.contract_version,
+           scan.id AS admission_scan_id
+    FROM runtime_images ri
+    JOIN runtime_image_versions v ON v.runtime_image_id = ri.id
+    LEFT JOIN runtime_image_version_refs channel_ref
+      ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
+    LEFT JOIN LATERAL (
+      SELECT s.id FROM runtime_image_scans s
+      WHERE s.runtime_image_version_id = v.id AND s.status = 'succeeded'
+      ORDER BY s.finished_at DESC NULLS LAST LIMIT 1
+    ) scan ON true
+    WHERE ri.id = ${imageId}
+      AND ri.enabled = true
+      AND v.trust_status = 'trusted'
+      AND v.platforms_json @> ${sql.json([hostPlatform])}
+      AND (${selectedVersionId}::uuid IS NULL OR v.id = ${selectedVersionId}::uuid)
+      AND (NOT ri.official OR channel_ref.id IS NOT NULL)
+    ORDER BY v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
+    LIMIT 1`;
+  if (!row) {
+    const [image] = await db`
+      SELECT image_key,
+             EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
+               AND v.platforms_json @> ${sql.json([hostPlatform])}) AS has_host_platform,
+             EXISTS (SELECT 1 FROM runtime_image_versions v JOIN runtime_image_version_refs r ON r.version_id = v.id
+               WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted' AND r.channel = ${selectedChannel}) AS has_selected_ref
+      FROM runtime_images ri WHERE ri.id = ${imageId}`;
+    if (image && !image.has_host_platform) throw new RuntimeImagePlatformUnavailableError(String(image.image_key), hostPlatform);
+    if (image && !image.has_selected_ref) throw new RuntimeImageChannelUnavailableError(selectedChannel, String(image.image_key));
+    throw new Error("runtime image binding has no matching trusted version");
+  }
+  const resolvedRef = row.resolved_ref as string | null;
+  const digest = row.digest as string | null;
+  if (!resolvedRef || !digest || immutableDigest(resolvedRef) !== digest) {
+    throw new Error(`trusted runtime image binding has no consistent immutable reference (key=${row.image_key})`);
+  }
+  return {
+    runtime_image_id: String(row.runtime_image_id),
+    runtime_image_version_id: String(row.runtime_image_version_id),
+    image_key: String(row.image_key),
+    image_ref: resolvedRef,
+    image_digest: digest,
+    tools_manifest_sha256: row.tools_manifest_sha256 ? String(row.tools_manifest_sha256) : null,
+    admission_scan_id: row.admission_scan_id ? String(row.admission_scan_id) : null,
+    contract_version: String(row.contract_version),
+    source_kind: String(row.source_kind) as RuntimeImageSnapshot["source_kind"],
+    trust_status: "trusted",
+    registry_channel: row.registry_channel as RuntimeImageRegistryChannel | null,
   };
 }
