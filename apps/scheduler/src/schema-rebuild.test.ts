@@ -69,5 +69,5 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
      CREATE TABLE role_configs (id uuid);`,
   );
   assert.equal(manifest.has("schema_meta"), true);
-  assert.equal(SCHEMA_VERSION, 34);
+  assert.equal(SCHEMA_VERSION, 35);
 });

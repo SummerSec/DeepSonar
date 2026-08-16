@@ -180,6 +180,9 @@ jobs:
       - name: Semantic event rate-limit unit
         run: pnpm ci:unit:event-rate-limit
 
+      - name: Login brute-force rate-limit unit
+        run: pnpm ci:unit:login-rate-limit
+
       - name: Semantic event rate-limit Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -238,6 +241,11 @@ jobs:
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:users-auth
+
+      - name: Login brute-force rate-limit Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:login-rate-limit
 
       - name: Convergence recovery Postgres integration
         env:

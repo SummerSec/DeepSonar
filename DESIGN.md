@@ -205,6 +205,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 ## 9. 安全边界
 
+- 人类登录暴力破解防护：`POST /auth/login` / `loginUser` 对规范化用户名在 5 分钟窗口内最多 5 次失败校验（窗口从首次计入的失败起算）；成功登录清空该用户名桶，避免合法用户在成功后仍被锁。同时按客户端 IP 限制失败喷洒（20 次/5 分钟）。超限返回稳定 `429 LOGIN_RATE_LIMITED`（`retry_after_sec`），不泄露用户是否存在；计数落在 `login_rate_limits`，跨 Scheduler 重启保留。禁用账号仍返回 `DISABLED`。校验路径始终先付 scrypt 成本（未知用户走固定 dummy），避免锁定位比密码校验更便宜而成为用户名预言机。
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
 - 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。项目按全局继承或项目托管策略选择受治理 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome audit/test/fuzz 是官方但 project-opt-in 的专项运行时。
@@ -277,7 +278,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v34）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
+| `database/schema.sql` | 唯一 schema 基线（当前 v35）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

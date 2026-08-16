@@ -7,6 +7,12 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import {
+  clearUsernameLoginFailures,
+  inspectLoginRateLimits,
+  LoginRateLimitError,
+  recordLoginFailures,
+} from "./login-rate-limit.js";
 
 export type UserRole = "admin" | "operator" | "viewer";
 
@@ -79,6 +85,10 @@ export function verifyPassword(password: string, saltHex: string, hashHex: strin
     return false;
   }
 }
+
+/** Constant-cost dummy so missing usernames are not a cheap oracle vs scrypt. */
+const LOGIN_DUMMY_SALT = "00".repeat(16);
+const LOGIN_DUMMY_HASH = hashPassword("deepsonar-login-dummy", LOGIN_DUMMY_SALT).hash;
 
 export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -208,23 +218,15 @@ export async function createUser(input: {
   }
 }
 
-export async function loginUser(
-  username: string,
-  password: string,
+/** Issue a session for an already-authenticated active user (change-password / change-username). */
+export async function issueUserSession(
+  userId: string,
   meta?: { ip?: string; userAgent?: string },
 ): Promise<{ user: PublicUser; token: string; expires_at: string }> {
-  const uname = username.trim().toLowerCase();
-  const [row] = await sql`SELECT * FROM users WHERE username = ${uname}`;
-  if (!row) {
-    throw Object.assign(new Error("用户名或密码错误"), { code: "BAD_CREDENTIALS" });
-  }
-  if (row.status !== "active") {
+  const [row] = await sql`SELECT * FROM users WHERE id = ${userId}`;
+  if (!row || row.status !== "active") {
     throw Object.assign(new Error("账号已禁用"), { code: "DISABLED" });
   }
-  if (!verifyPassword(password, row.password_salt as string, row.password_hash as string)) {
-    throw Object.assign(new Error("用户名或密码错误"), { code: "BAD_CREDENTIALS" });
-  }
-
   const sess = generateSessionToken();
   const expires = new Date(Date.now() + 7 * 24 * 3600 * 1000); // 7 天
   await sql`
@@ -237,12 +239,47 @@ export async function loginUser(
       user_agent: meta?.userAgent?.slice(0, 500) ?? null,
     })}`;
   await sql`UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = ${row.id as string}`;
-
   return {
     user: toPublicUser(row as Record<string, unknown>),
     token: sess.plaintext,
     expires_at: expires.toISOString(),
   };
+}
+
+export async function loginUser(
+  username: string,
+  password: string,
+  meta?: { ip?: string; userAgent?: string },
+  now: Date = new Date(),
+): Promise<{ user: PublicUser; token: string; expires_at: string }> {
+  const uname = username.trim().toLowerCase();
+  const [row] = await sql`SELECT * FROM users WHERE username = ${uname}`;
+  // Always pay scrypt (real or dummy) before any cheap lockout return.
+  const passwordOk = verifyPassword(
+    password,
+    row ? (row.password_salt as string) : LOGIN_DUMMY_SALT,
+    row ? (row.password_hash as string) : LOGIN_DUMMY_HASH,
+  );
+  const limits = await inspectLoginRateLimits({ username: uname, ip: meta?.ip, now });
+  if (limits.usernameLimited) {
+    throw new LoginRateLimitError(limits.retryAfterSec);
+  }
+  if (!row) {
+    if (limits.ipLimited) throw new LoginRateLimitError(limits.retryAfterSec);
+    await recordLoginFailures({ username: uname, ip: meta?.ip, now });
+    throw Object.assign(new Error("用户名或密码错误"), { code: "BAD_CREDENTIALS" });
+  }
+  if (row.status !== "active") {
+    throw Object.assign(new Error("账号已禁用"), { code: "DISABLED" });
+  }
+  if (!passwordOk) {
+    if (limits.ipLimited) throw new LoginRateLimitError(limits.retryAfterSec);
+    await recordLoginFailures({ username: uname, ip: meta?.ip, now });
+    throw Object.assign(new Error("用户名或密码错误"), { code: "BAD_CREDENTIALS" });
+  }
+
+  await clearUsernameLoginFailures(uname);
+  return issueUserSession(row.id as string, meta);
 }
 
 export async function resolveSessionToken(token: string): Promise<{
