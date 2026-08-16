@@ -1,8 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { renderMetrics } from "../../metrics.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "../../openapi.js";
+import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
 
-export function registerSystemRoutes(app: FastifyInstance): void {
+export function registerSystemRoutes(
+  app: FastifyInstance,
+  dependencies: { runtimeImageStatus?: typeof runtimeImageWarmupStatus } = {},
+): void {
   app.get("/metrics", async (_req, reply) =>
     reply.type("text/plain; version=0.0.4").send(await renderMetrics()));
 
@@ -37,5 +41,9 @@ export function registerSystemRoutes(app: FastifyInstance): void {
     return reply.code(404).send({ error: "api.md not found in workspace" });
   });
 
-  app.get("/health", async () => ({ ok: true, ts: Date.now() }));
+  // Liveness stays HTTP 200 while startup images are preparing or retrying.
+  app.get("/health", async () => {
+    const runtimeImages = (dependencies.runtimeImageStatus ?? runtimeImageWarmupStatus)();
+    return { ok: true, ready: runtimeImages.ready, runtime_images: runtimeImages, ts: Date.now() };
+  });
 }

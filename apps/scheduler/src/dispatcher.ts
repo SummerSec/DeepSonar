@@ -19,7 +19,7 @@ import { executeReal, preparePlatformCapability, type PreparedPlatformCapability
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
-import { assertRuntimeImageAvailable } from "./runtime-images.js";
+import { assertRuntimeImageAvailable, RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
@@ -33,6 +33,13 @@ import {
   settleAttemptTerminal,
   updateAttemptResource,
 } from "./domains/job-attempt/index.js";
+
+export function classifyDispatcherFailure(error: unknown): { reason: string; message: string } {
+  if (error instanceof RuntimeImageNotReadyError) {
+    return { reason: "runtime_image_not_ready", message: `runtime_image_not_ready: ${error.imageRef}` };
+  }
+  return { reason: "exception", message: error instanceof Error ? error.message : String(error) };
+}
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
 import {
@@ -844,16 +851,20 @@ async function runJob(jobId: string) {
       ? (e as { code?: unknown; metadata?: { bucket?: unknown; retry_after_sec?: unknown; limit?: unknown } })
       : null;
     // 对执行器边界后的限流错误保留稳定、低基数观测，不序列化事件正文。
-    const msg = details?.code === "event_rate_limited"
+    const classified = classifyDispatcherFailure(e);
+    const failureReason = classified.reason;
+    const msg = e instanceof RuntimeImageNotReadyError
+      ? classified.message
+      : details?.code === "event_rate_limited"
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
-    inc("deepsonar_jobs_failed_total", { reason: "exception" });
+    inc("deepsonar_jobs_failed_total", { reason: failureReason });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
     const failedRow = await sql.begin(async (tx) => {
       const txLifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
       const row = await txLifecycle.failExecution(jobId, msg);
       if (row) {
-        await settleAttemptTerminal(tx as unknown as typeof sql, jobId, "failed", { reason: "dispatcher_exception" }, msg);
+        await settleAttemptTerminal(tx as unknown as typeof sql, jobId, "failed", { reason: failureReason }, msg);
       }
       return row;
     });

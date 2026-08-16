@@ -8,18 +8,23 @@ import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { runner } from "../../runtime.js";
+import { activateRuntimeImageConfiguration } from "../../runtime-image-config-activation.js";
 import {
   applyUploadedRuntimeCatalog,
   hostRuntimePlatform,
   immutableDigest,
   inspectLocalRuntimeImage,
   localImageDigest,
-  prepareRuntimeImage,
+  requestRuntimeImagePreparation,
+  resolveConfiguredRuntimeImagesForChannel,
   resolveRuntimeImageForProjectBinding,
   runtimeImagePullStatus,
+  runtimeImageVersionPin,
   runtimeImageRegistryWithOverrides,
   readRuntimeRegistryChannel,
   RuntimeImageChannelUnavailableError,
+  RuntimeImagePreparationBusyError,
+  sanitizeRuntimeImageError,
   startRuntimeImagePull,
   syncOfficialRuntimeCatalog,
   updateRuntimeRegistryChannel,
@@ -145,10 +150,30 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       });
     }
     try {
-      const result = await sql.begin(async (txRaw) => {
-        const tx = txRaw as unknown as typeof sql;
-        return updateRuntimeRegistryChannel(tx, parsed.data.channel as RuntimeImageRegistryChannel);
+      const proposedChannel = parsed.data.channel as RuntimeImageRegistryChannel;
+      const currentChannel = await readRuntimeRegistryChannel(sql);
+      if (proposedChannel === currentChannel) {
+        return reply.code(200).send({ selected_channel: currentChannel, previous_channel: currentChannel });
+      }
+      const snapshots = await resolveConfiguredRuntimeImagesForChannel(sql, proposedChannel);
+      const activation = await activateRuntimeImageConfiguration({
+        refs: snapshots.map((snapshot) => ({ image_key: snapshot.image_key, image_ref: snapshot.image_ref })),
+        purpose: `registry_channel:${proposedChannel}`,
+        persist: () => sql.begin(async (txRaw) => {
+          const tx = txRaw as unknown as typeof sql;
+          return updateRuntimeRegistryChannel(tx, proposedChannel);
+        }),
       });
+      if (activation.status === "preparing") {
+        return reply.code(202).send({
+          status: "preparing",
+          saved: false,
+          selected_channel: currentChannel,
+          proposed_channel: proposedChannel,
+          task: activation.task,
+        });
+      }
+      const result = activation.value;
       await audit(req, {
         action: "runtime_image.registry_channel_update",
         resourceType: "global_settings",
@@ -161,9 +186,9 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
         previous_channel: result.previous_channel,
       });
     } catch (error) {
-      return reply.code(500).send({
-        error: error instanceof Error ? error.message : "runtime registry channel update failed",
-        error_code: "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED",
+      return reply.code(error instanceof RuntimeImagePreparationBusyError ? 409 : 500).send({
+        error: sanitizeRuntimeImageError(error) || "runtime registry channel update failed",
+        error_code: error instanceof RuntimeImagePreparationBusyError ? error.code : "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED",
       });
     }
   });
@@ -221,7 +246,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       });
       return reply.code(202).send({ task });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "启动镜像拉取失败";
+      const message = sanitizeRuntimeImageError(error) || "启动镜像拉取失败";
       if (error instanceof RuntimeImageChannelUnavailableError) {
         return reply.code(error.statusCode).send({
           error: message,
@@ -752,7 +777,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const body = ProjectRuntimeImageBody.parse(req.body);
     const [image] = await sql`SELECT id, enabled FROM runtime_images WHERE id = ${imageId}`;
     if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
-    let selectedVersionId = body.version_id ?? null;
+    const selectedVersionId = runtimeImageVersionPin(body.version_id);
     try {
       if (body.enabled) {
         if (config.runtime.agentMode === "fake") {
@@ -760,19 +785,23 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
             ? await sql`SELECT id FROM runtime_image_versions WHERE id = ${body.version_id} AND runtime_image_id = ${imageId} AND trust_status = 'trusted'`
             : await sql`SELECT id FROM runtime_image_versions WHERE runtime_image_id = ${imageId} AND trust_status = 'trusted' ORDER BY promoted_at DESC NULLS LAST, created_at DESC LIMIT 1`;
           if (!version) return reply.code(409).send({ error: "镜像没有可启用的可信版本" });
-          selectedVersionId = String(version.id);
         } else {
           const snapshot = await resolveRuntimeImageForProjectBinding(sql, imageId, selectedVersionId);
-          selectedVersionId = snapshot.runtime_image_version_id;
           if (config.runtime.provider === "local-docker") {
-            await prepareRuntimeImage(snapshot.image_ref);
+            const preparation = await requestRuntimeImagePreparation(
+              [{ image_key: snapshot.image_key, image_ref: snapshot.image_ref }],
+              `project_binding:${id}:${imageId}`,
+            );
+            if (!preparation.ready) {
+              return reply.code(202).send({ status: "preparing", saved: false, task: preparation.task });
+            }
           }
         }
       }
     } catch (error) {
-      return reply.code(409).send({
-        error: error instanceof Error ? error.message : "runtime image preparation failed",
-        code: "runtime_image_prepare_failed",
+      return reply.code(error instanceof RuntimeImagePreparationBusyError ? 409 : 503).send({
+        error: sanitizeRuntimeImageError(error) || "runtime image preparation failed",
+        code: error instanceof RuntimeImagePreparationBusyError ? error.code : "runtime_image_prepare_failed",
       });
     }
     const [row] = await sql`

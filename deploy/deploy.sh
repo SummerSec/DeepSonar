@@ -236,8 +236,6 @@ case "$ACTION" in
     else
       echo "[deploy] 当前为 real 模式（真实沙箱）；需挂载容器 runtime socket（见 docker-compose.real.yml）"
     fi
-    # Runtime preparation is synchronous: Scheduler warms Base before it starts
-    # dispatching, and project configuration warms any selected specialist refs.
-    echo "[deploy] runtime Base image was prepared before Scheduler enabled dispatch"
+    echo "[deploy] Scheduler is live; runtime image readiness is reported by /api/health (Dispatcher waits until ready)"
     ;;
 esac

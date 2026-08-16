@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { config } from "./config.js";
 import {
   assertRuntimeImageAvailable,
   compareRuntimeImageVersionLabels,
@@ -10,8 +9,8 @@ import {
   legacyProjectedRegistryDigests,
   parseOciDigestRef,
   parseRuntimeImageRegistry,
-  prepareBaseRuntimeImageOnBoot,
   runtimeImageRefForChannel,
+  runtimeImageVersionPin,
   RuntimeImageNotReadyError,
   RuntimeImagePlatformUnavailableError,
   runtimeImageRegistryNextSyncDelayMs,
@@ -74,6 +73,12 @@ test("legacy official env refs resolve only through their matching registry chan
   assert.equal(runtimeImageRefForChannel(version, "github"), githubRef);
   assert.equal(runtimeImageRefForChannel(version, "dockerhub"), null);
   assert.equal(runtimeImageRefForChannel(version, "aliyun-acr"), null);
+});
+
+test("omitted project version keeps track-latest semantics", () => {
+  assert.equal(runtimeImageVersionPin(undefined), null);
+  assert.equal(runtimeImageVersionPin(null), null);
+  assert.equal(runtimeImageVersionPin("00000000-0000-0000-0000-000000000001"), "00000000-0000-0000-0000-000000000001");
 });
 
 test("async pull defaults to one latest channel ref per product", () => {
@@ -163,6 +168,17 @@ test("bulk selection is strict about host platform and selected channel", () => 
       platforms: ["linux/amd64"],
     }],
   }], "aliyun-acr", "linux/amd64"), /aliyun-acr/);
+
+  assert.throws(() => selectLatestRuntimeImagePullItems([{
+    image_key: "legacy-unknown-platform",
+    versions: [{
+      version: "legacy",
+      digest: DIGEST,
+      image_ref: armRef,
+      registry_refs: { github: armRef },
+      platforms: [],
+    }],
+  }], "github", "linux/amd64"), /platforms explicitly/);
 });
 
 test("v1 single image_ref is normalized to a known channel without changing the legacy projection", () => {
@@ -471,22 +487,6 @@ test("dispatcher availability assertion is inspect-only", async () => {
     assertRuntimeImageAvailable(imageRef, async () => ({ exists: false })),
     (error: unknown) => error instanceof RuntimeImageNotReadyError && error.code === "runtime_image_not_ready",
   );
-});
-
-test("fake mode never resolves or pulls a startup image", async () => {
-  const runtimeConfig = config.runtime as { agentMode: string };
-  const previousMode = runtimeConfig.agentMode;
-  let calls = 0;
-  runtimeConfig.agentMode = "fake";
-  try {
-    await prepareBaseRuntimeImageOnBoot({
-      resolve: async () => { calls += 1; throw new Error("must not resolve"); },
-      prepare: async () => { calls += 1; },
-    });
-  } finally {
-    runtimeConfig.agentMode = previousMode;
-  }
-  assert.equal(calls, 0);
 });
 
 test("本地已有准确 digest 时不拉取镜像", async () => {

@@ -467,15 +467,23 @@ export function RuntimeImagesPage() {
     setError(null);
     try {
       const result = await api.setRuntimeImagesRegistryChannel(channel);
-      setRegistry((current) => current ? { ...current, selected_channel: result.selected_channel } : current);
+      if ("saved" in result && result.saved === false) {
+        setPullStatus(result.task);
+        setChannelStatus("pending");
+        setChannelMessage(`正在后台准备 ${registryChannelLabel(channel)} 的 ${result.task.total} 个镜像；当前通道未切换，请完成后重试`);
+        return;
+      }
+      if (!result.selected_channel) throw new Error("通道切换响应缺少 selected_channel");
+      const selectedChannel = result.selected_channel;
+      setRegistry((current) => current ? { ...current, selected_channel: selectedChannel } : current);
       try {
         await refreshMarketplace();
         setChannelStatus("success");
-        setChannelMessage(`已切换至 ${registryChannelLabel(result.selected_channel)}，市场数据已刷新`);
+        setChannelMessage(`已切换至 ${registryChannelLabel(selectedChannel)}，市场数据已刷新`);
       } catch (refreshCause) {
         const refreshMessage = refreshCause instanceof Error ? refreshCause.message : String(refreshCause);
         setChannelStatus("error");
-        setChannelMessage(`已切换至 ${registryChannelLabel(result.selected_channel)}，但市场数据刷新失败：${refreshMessage || "请手动刷新"}`);
+        setChannelMessage(`已切换至 ${registryChannelLabel(selectedChannel)}，但市场数据刷新失败：${refreshMessage || "请手动刷新"}`);
       }
     } catch (cause) {
       setChannelStatus("error");
@@ -543,7 +551,12 @@ export function RuntimeImagesPage() {
     if (!projectId) return;
     setBusy(image.id);
     try {
-      await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId);
+      const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId);
+      if ("saved" in result && result.saved === false) {
+        setPullStatus(result.task);
+        setNotice(`正在后台准备 ${image.name}；项目绑定尚未保存，请完成后重试`);
+        return;
+      }
       await reload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

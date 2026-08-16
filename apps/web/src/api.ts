@@ -1054,6 +1054,14 @@ export interface RuntimeImageRegistryChannelUpdate {
   previous_channel: RuntimeImageRegistryChannel;
 }
 
+export interface RuntimeImagePreparingResponse {
+  status: "preparing";
+  saved: false;
+  task: RuntimeImagePullTask;
+  selected_channel?: RuntimeImageRegistryChannel;
+  proposed_channel?: RuntimeImageRegistryChannel;
+}
+
 export type RuntimeImageRegistryCatalog = Omit<
   RuntimeImageRegistry,
   "metadata" | "fallback" | "error" | "checked_at" | "selected_channel"
@@ -1106,6 +1114,7 @@ export interface RuntimeImagePullItem {
 
 export interface RuntimeImagePullTask {
   task_id: string | null;
+  purpose?: string;
   status: "idle" | "queued" | "running" | "succeeded" | "failed";
   started_at: string | null;
   finished_at: string | null;
@@ -1946,7 +1955,7 @@ export const api = {
       image_strategy?: ProjectImageStrategy;
       role_runtime_images?: Record<string, string | null>;
     },
-  ) => send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
+  ) => send<ProjectSettings | RuntimeImagePreparingResponse>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),
   createRole: (r: RoleInput) => send<AgentRole>("POST", "/agent-roles", r),
   updateRole: (id: string, r: Partial<Omit<RoleInput, "name">>) =>
@@ -2094,7 +2103,7 @@ export const api = {
     get<RuntimeImageSummary[]>(`/runtime-images${qs({ project_id: projectId, search })}`),
   runtimeImagesRegistry: () => get<RuntimeImageRegistry>("/runtime-images/registry"),
   setRuntimeImagesRegistryChannel: (channel: RuntimeImageRegistryChannel) =>
-    send<RuntimeImageRegistryChannelUpdate>("PATCH", "/runtime-images/registry/channel", { channel }),
+    send<RuntimeImageRegistryChannelUpdate | RuntimeImagePreparingResponse>("PATCH", "/runtime-images/registry/channel", { channel }),
   syncRuntimeImagesRegistry: () => send<RuntimeImageCatalogSyncResult>("POST", "/runtime-images/registry/sync"),
   /** 手动上传 runtime-image-registry.json 并写入市场（schema deepsonar.registry/v1/v2） */
   applyRuntimeImagesRegistry: (registry: RuntimeImageRegistry | Record<string, unknown>) =>
@@ -2146,7 +2155,7 @@ export const api = {
     imageId: string,
     enabled: boolean,
     versionId?: string | null,
-  ) => send<{ project_id: string; runtime_image_id: string; enabled: boolean; selected_version_id: string | null }>(
+  ) => send<{ project_id: string; runtime_image_id: string; enabled: boolean; selected_version_id: string | null } | RuntimeImagePreparingResponse>(
     "PUT", `/projects/${projectId}/runtime-images/${imageId}`, { enabled, version_id: versionId ?? null },
   ),
   /** 平台 API Token 管理（§6.4，与 Provider Credential 分离） */
@@ -2231,7 +2240,12 @@ export const api = {
   },
   bindCredentialsBatch: (input: CredentialBatchBindingInput) =>
     send<CredentialBatchBindingResult>("POST", "/credentials/batch-bind", input),
-  health: () => get<{ ok: boolean; ts: number }>("/health"),
+  health: () => get<{
+    ok: boolean;
+    ready: boolean;
+    runtime_images: { status: "idle" | "preparing" | "ready" | "failed"; error: string | null; retry_at: string | null };
+    ts: number;
+  }>("/health"),
   /** API schema 文档（OpenAPI 3 JSON；调度器豁免鉴权） */
   openApi: () => get<Record<string, unknown>>("/openapi.json"),
   /** schema 入口：format=openapi|summary|markdown */
