@@ -7,11 +7,17 @@ import { isProviderKnown, projectCredentialProvider, UNKNOWN_PROVIDER_ERROR } fr
 import { globalRules, mergeGlobalRulesPatch, PLATFORM_DEFAULT_AGENT_CLI, rulesForProject } from "../../core.js";
 import { sql } from "../../db.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
-import { resolveRuntimeImageForJob } from "../../runtime-images.js";
+import {
+  requestRuntimeImagePreparation,
+  resolveRuntimeImageForJob,
+  RuntimeImagePreparationBusyError,
+  sanitizeRuntimeImageError,
+} from "../../runtime-images.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 import {
   parseProjectImagePolicy,
   PROJECT_IMAGE_STRATEGIES,
+  runtimeImageKeyForProjectPolicy,
 } from "../role-runtime-snapshot/application.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
@@ -117,6 +123,25 @@ async function validateProjectRuntimeImages(
     }
     await resolveRuntimeImageForJob(sql, projectId, roleName, imageKey);
   }
+}
+
+async function projectRuntimeImageRefs(projectId: string, cfg: Record<string, unknown>) {
+  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return [];
+  const policy = parseProjectImagePolicy(cfg);
+  const roles = await sql`
+    SELECT r.name, rc.runtime_image_key
+    FROM agent_roles r
+    LEFT JOIN role_configs rc ON rc.role_id = r.id AND rc.project_id IS NULL
+    ORDER BY r.name`;
+  const refs = new Map<string, { image_key: string; image_ref: string }>();
+  for (const role of roles) {
+    const roleName = String(role.name);
+    const globalKey = typeof role.runtime_image_key === "string" ? role.runtime_image_key : null;
+    const configuredKey = runtimeImageKeyForProjectPolicy(policy, roleName, globalKey);
+    const snapshot = await resolveRuntimeImageForJob(sql, projectId, roleName, configuredKey);
+    refs.set(snapshot.image_ref, { image_key: snapshot.image_key, image_ref: snapshot.image_ref });
+  }
+  return [...refs.values()];
 }
 
 export function registerSettingsRoutes(app: FastifyInstance): void {
@@ -324,6 +349,22 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid finding protocol" });
+    }
+    if (body.image_strategy !== undefined || body.role_runtime_images !== undefined) {
+      try {
+        const preparation = await requestRuntimeImagePreparation(
+          await projectRuntimeImageRefs(id, cfg),
+          `project_settings:${id}`,
+        );
+        if (!preparation.ready) {
+          return reply.code(202).send({ status: "preparing", saved: false, task: preparation.task });
+        }
+      } catch (error) {
+        return reply.code(error instanceof RuntimeImagePreparationBusyError ? 409 : 503).send({
+          error: sanitizeRuntimeImageError(error) || "runtime image preparation failed",
+          code: error instanceof RuntimeImagePreparationBusyError ? error.code : "runtime_image_prepare_failed",
+        });
+      }
     }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
     // Project rule changes can alter effective task behavior; wake dispatch so

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertRuntimeImageAvailable,
   compareRuntimeImageVersionLabels,
   createServerOwnedRuntimeImageRegistryPolicy,
   ensureRuntimeImageAvailable,
@@ -9,6 +10,9 @@ import {
   parseOciDigestRef,
   parseRuntimeImageRegistry,
   runtimeImageRefForChannel,
+  runtimeImageVersionPin,
+  RuntimeImageNotReadyError,
+  RuntimeImagePlatformUnavailableError,
   runtimeImageRegistryNextSyncDelayMs,
   selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
@@ -71,6 +75,12 @@ test("legacy official env refs resolve only through their matching registry chan
   assert.equal(runtimeImageRefForChannel(version, "aliyun-acr"), null);
 });
 
+test("omitted project version keeps track-latest semantics", () => {
+  assert.equal(runtimeImageVersionPin(undefined), null);
+  assert.equal(runtimeImageVersionPin(null), null);
+  assert.equal(runtimeImageVersionPin("00000000-0000-0000-0000-000000000001"), "00000000-0000-0000-0000-000000000001");
+});
+
 test("async pull defaults to one latest channel ref per product", () => {
   const older = `sha256:${"b".repeat(64)}`;
   const newer = `sha256:${"c".repeat(64)}`;
@@ -121,6 +131,54 @@ test("async pull defaults to one latest channel ref per product", () => {
     { image_key: "deepsonar-audit", image_ref: `ghcr.io/summersec/deepsonar-audit@${older}` },
   ]);
   assert.ok(compareRuntimeImageVersionLabels("0.1.34", "0.1.33") > 0);
+});
+
+test("bulk selection is strict about host platform and selected channel", () => {
+  const armRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  const acrRef = `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`;
+  assert.deepEqual(selectLatestRuntimeImagePullItems([{
+    image_key: "deepsonar-base",
+    versions: [{
+      version: "0.1.0",
+      digest: DIGEST,
+      image_ref: armRef,
+      registry_refs: { github: armRef, "aliyun-acr": acrRef },
+      platforms: ["linux/amd64"],
+    }],
+  }], "aliyun-acr", "linux/amd64"), [{ image_key: "deepsonar-base", image_ref: acrRef }]);
+
+  assert.throws(() => selectLatestRuntimeImagePullItems([{
+    image_key: "deepsonar-base",
+    versions: [{
+      version: "0.1.0",
+      digest: DIGEST,
+      image_ref: armRef,
+      registry_refs: { github: armRef },
+      platforms: ["linux/arm64"],
+    }],
+  }], "github", "linux/amd64"), RuntimeImagePlatformUnavailableError);
+
+  assert.throws(() => selectLatestRuntimeImagePullItems([{
+    image_key: "deepsonar-base",
+    versions: [{
+      version: "0.1.0",
+      digest: DIGEST,
+      image_ref: armRef,
+      registry_refs: { github: armRef },
+      platforms: ["linux/amd64"],
+    }],
+  }], "aliyun-acr", "linux/amd64"), /aliyun-acr/);
+
+  assert.throws(() => selectLatestRuntimeImagePullItems([{
+    image_key: "legacy-unknown-platform",
+    versions: [{
+      version: "legacy",
+      digest: DIGEST,
+      image_ref: armRef,
+      registry_refs: { github: armRef },
+      platforms: [],
+    }],
+  }], "github", "linux/amd64"), /platforms explicitly/);
 });
 
 test("v1 single image_ref is normalized to a known channel without changing the legacy projection", () => {
@@ -420,6 +478,15 @@ test("unknown schema and metadata/channel confusion fail closed", () => {
   assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v3", images: [] }), /schema/i);
   assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v2", schema_version: 1, images: [] }), /disagree/i);
   assert.throws(() => parseRuntimeImageRegistry({ schema: "deepsonar.registry/v1", source: "github", images: [] }), /source|channel/i);
+});
+
+test("dispatcher availability assertion is inspect-only", async () => {
+  const imageRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  await assertRuntimeImageAvailable(imageRef, async () => ({ exists: true, repo_digests: [imageRef] }));
+  await assert.rejects(
+    assertRuntimeImageAvailable(imageRef, async () => ({ exists: false })),
+    (error: unknown) => error instanceof RuntimeImageNotReadyError && error.code === "runtime_image_not_ready",
+  );
 });
 
 test("本地已有准确 digest 时不拉取镜像", async () => {

@@ -287,10 +287,14 @@ export function SettingsPanel({
     if (!projectId) return;
     setImagePolicyBusy(true);
     try {
-      await api.patchSettings(projectId, {
+      const result = await api.patchSettings(projectId, {
         image_strategy: imageStrategy,
         ...(imageStrategy === "project_managed" ? { role_runtime_images: roleRuntimeImages } : {}),
       });
+      if ("saved" in result && result.saved === false) {
+        flash(`正在后台准备 ${result.task.total} 个运行镜像；本次未保存，请在拉取完成后重试`);
+        return;
+      }
       flash("项目镜像策略已保存（下一 job 生效）");
       reload();
     } catch (e) {

@@ -142,7 +142,7 @@ const RuntimeImageChannelUnavailableSchema = {
 /** 核心 API 操作表（OpenAPI paths 的单一来源） */
 const OPS: Op[] = [
   // meta
-  { method: "get", path: "/health", summary: "健康检查", scope: null, tags: ["Meta"] },
+  { method: "get", path: "/health", summary: "存活检查（含 runtime image readiness）", scope: null, tags: ["Meta"] },
   { method: "get", path: "/openapi.json", summary: "OpenAPI 3 JSON schema", scope: null, tags: ["Meta"] },
   { method: "get", path: "/schema", summary: "API schema（默认 OpenAPI JSON；?format=markdown 返回 Markdown）", scope: null, tags: ["Meta"] },
   { method: "get", path: "/schema.md", summary: "API Markdown 文档", scope: null, tags: ["Meta"] },
@@ -1170,7 +1170,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/runtime-images/registry/channel",
     summary: "切换官方运行时镜像分发通道",
-    description: "仅 unscoped/admin actor 可修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。请求体严格为 {channel}，只能选择 github、dockerhub 或 aliyun-acr；不接受额外字段，也不支持 query、env 或请求级覆盖。历史 Job 快照不会被改写。",
+    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图返回 202 preparing/saved:false，旧通道保持有效，准备完成后重试才提交。绝不跨通道回退，历史 Job 快照不改写。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {

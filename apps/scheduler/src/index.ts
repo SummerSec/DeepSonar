@@ -9,7 +9,11 @@ import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
 import { startPlaneSync } from "./plane-sync.js";
 import { startTransferWorker } from "./transfer/worker.js";
-import { bootstrapOfficialRuntimeImages, startRuntimeImageRegistrySync } from "./runtime-images.js";
+import {
+  bootstrapOfficialRuntimeImages,
+  startRuntimeImageRegistrySync,
+} from "./runtime-images.js";
+import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
 import { bootstrapSkillSourcesOnBoot } from "./skill-sources.js";
 import { normalizePendingJobPriorities } from "./core.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
@@ -60,7 +64,8 @@ async function main() {
     console.warn(`[boot] normalized ${normalizedPriorities.updated}/${normalizedPriorities.examined} pending Job priorities`);
   }
 
-  const stopDispatcher = startDispatcher();
+  let stopDispatcher = () => {};
+  let stopRuntimeImageWarmup = () => {};
   const stopReaper = startReaper();
   const stopPlane = startPlaneSync();
   const stopTransfer = startTransferWorker();
@@ -68,6 +73,7 @@ async function main() {
 
   const shutdown = async () => {
     stopDispatcher();
+    stopRuntimeImageWarmup();
     stopReaper();
     stopPlane();
     stopTransfer();
@@ -83,6 +89,10 @@ async function main() {
 
   await app.listen({ port: config.port, host: config.host });
   console.log(`[boot] scheduler 已启动: http://${config.host}:${config.port}`);
+  stopRuntimeImageWarmup = startRuntimeImageWarmupOnBoot(() => {
+    stopDispatcher = startDispatcher();
+    console.log("[runtime-images] startup image set ready; dispatcher enabled");
+  });
 }
 
 main().catch((e) => {

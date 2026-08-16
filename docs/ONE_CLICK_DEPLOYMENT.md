@@ -63,7 +63,7 @@ Set-ExecutionPolicy -Scope Process Bypass
    `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
 4. real 模式显式拉取 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该引用必须带 immutable sha256 digest，拉取失败则停止部署；
 5. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
-6. 健康检查后输出访问地址；后台可准备运行时镜像（不阻塞主服务）。
+6. Scheduler 先监听 `/health`（liveness），再后台准备当前通道（新库默认阿里云 ACR）的 Base、Audit、Kali 等有效默认 digest；`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。
 
 访问：**http://127.0.0.1:8080**
 
@@ -141,6 +141,12 @@ Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_T
 # 或带 Scheduler：
 # DEEPSONAR_URL=http://127.0.0.1:8080/api DEEPSONAR_TOKEN=… ./deploy/pull-runtime-images.sh
 ```
+
+批量脚本严格使用 API 返回的 `selected_channel`；读取静态清单时使用
+`DEEPSONAR_RUNTIME_REGISTRY_CHANNEL`（缺省 `aliyun-acr`）。它只选择宿主平台上每个产品的最新版本，
+所选通道或平台缺失时直接失败，不跨 registry 回退。项目保存 `project_managed` 映射或启用/固定项目镜像时，
+Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准备；配置不落库，完成后需显式重试。Job 运行时 Dispatcher 只检查本地 digest，
+缺失时以 `runtime_image_not_ready` 失败，不会临时触发网络拉取。
 
 本机 tag 的 `detect-local` / `adopt-local` 见 `prepare-runtime-images.*`：检测只读，adopt 须管理员显式确认，不进入导出清单。
 
