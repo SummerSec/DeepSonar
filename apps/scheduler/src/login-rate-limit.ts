@@ -4,18 +4,21 @@
  * Independent of event-ingestion budgets: password verification is a
  * different domain and must not share Job event rows or counters.
  *
- * Window: 5 minutes starting at the first counted failure for that key.
- * Username: 5 failed verifications (the user-facing rule).
- * IP: 20 failed verifications so one host cannot spray usernames unbounded.
- * Successful login clears the username bucket only.
+ * An attempt is any password verification (success, wrong password,
+ * unknown user, or disabled user). Successful login consumes a slot and
+ * does not clear the bucket.
+ *
+ * Tight bucket: normalized username + client IP, 5 attempts / 5 minutes.
+ * Coarse bucket: client IP, 20 attempts / 5 minutes.
+ * Consume happens under SELECT … FOR UPDATE in one transaction.
  */
 import { sql } from "./db.js";
 
 export const LOGIN_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
-export const LOGIN_USERNAME_ATTEMPT_LIMIT = 5;
+export const LOGIN_IDENTITY_ATTEMPT_LIMIT = 5;
 export const LOGIN_IP_ATTEMPT_LIMIT = 20;
 
-export type LoginRateLimitScope = "username" | "ip";
+export type LoginRateLimitScope = "identity" | "ip";
 
 export class LoginRateLimitError extends Error {
   readonly code = "LOGIN_RATE_LIMITED" as const;
@@ -43,11 +46,9 @@ export type LoginBucketState = {
   retryAfterSec: number;
 };
 
-export type LoginRateLimitInspection = {
-  usernameLimited: boolean;
-  ipLimited: boolean;
-  retryAfterSec: number;
-};
+export type LoginAttemptConsumption =
+  | { limited: true; retryAfterSec: number }
+  | { limited: false; retryAfterSec: 0 };
 
 function rowDate(value: Date | string): Date {
   const date = value instanceof Date ? value : new Date(value);
@@ -57,9 +58,16 @@ function rowDate(value: Date | string): Date {
   return date;
 }
 
-export function loginRateLimitKey(scope: LoginRateLimitScope, raw: string): string {
+export function loginRateLimitKey(scope: LoginRateLimitScope | "username", raw: string): string {
   const key = raw.trim().toLowerCase().slice(0, 128);
   return key.length > 0 ? key : "-";
+}
+
+/** Tight 5/5min bucket is per (username, IP) so one host cannot lock a public account globally. */
+export function loginIdentityKey(username: string, ip?: string | null): string {
+  const user = loginRateLimitKey("username", username).slice(0, 64);
+  const host = loginRateLimitKey("ip", ip ?? "unknown").slice(0, 63);
+  return `${user}|${host}`;
 }
 
 /** Pure window math so tests can advance a clock without touching Postgres. */
@@ -114,30 +122,13 @@ async function lockBucket(
   return row;
 }
 
-async function readBucket(
+async function incrementUnlockedBucket(
   tx: typeof sql,
   scope: LoginRateLimitScope,
   key: string,
+  current: LoginBucketState,
   now: Date,
-  limit: number,
-): Promise<LoginBucketState> {
-  const [row] = await tx<RateLimitRow[]>`
-    SELECT scope, key, window_started_at, attempt_count
-    FROM login_rate_limits
-    WHERE scope = ${scope} AND key = ${key}`;
-  return stateFromRow(row, now, limit);
-}
-
-async function incrementBucket(
-  tx: typeof sql,
-  scope: LoginRateLimitScope,
-  key: string,
-  now: Date,
-  limit: number,
-): Promise<LoginBucketState> {
-  const row = await lockBucket(tx, scope, key, now);
-  const current = stateFromRow(row, now, limit);
-  if (current.limited) return current;
+): Promise<void> {
   const nextCount = current.count + 1;
   const windowStartedAt = current.count === 0 ? now : current.windowStartedAt;
   await tx`
@@ -146,43 +137,34 @@ async function incrementBucket(
         attempt_count = ${nextCount},
         updated_at = now()
     WHERE scope = ${scope} AND key = ${key}`;
-  return evaluateLoginRateLimitWindow(windowStartedAt, nextCount, now, limit);
 }
 
-export async function inspectLoginRateLimits(input: {
+/**
+ * Reserve one verification slot for both buckets in a single transaction.
+ * Already-exhausted buckets reject without incrementing; otherwise both
+ * counters advance before the caller issues a session or BAD_CREDENTIALS.
+ */
+export async function consumeLoginAttempt(input: {
   username: string;
   ip?: string | null;
   now?: Date;
-}): Promise<LoginRateLimitInspection> {
+}): Promise<LoginAttemptConsumption> {
   const now = input.now ?? new Date();
-  const usernameKey = loginRateLimitKey("username", input.username);
+  const identityKey = loginIdentityKey(input.username, input.ip);
   const ipKey = loginRateLimitKey("ip", input.ip ?? "unknown");
-  const username = await readBucket(sql, "username", usernameKey, now, LOGIN_USERNAME_ATTEMPT_LIMIT);
-  const ip = await readBucket(sql, "ip", ipKey, now, LOGIN_IP_ATTEMPT_LIMIT);
-  return {
-    usernameLimited: username.limited,
-    ipLimited: ip.limited,
-    retryAfterSec: Math.max(username.limited ? username.retryAfterSec : 0, ip.limited ? ip.retryAfterSec : 0, 1),
-  };
-}
-
-export async function recordLoginFailures(input: {
-  username: string;
-  ip?: string | null;
-  now?: Date;
-}): Promise<void> {
-  const now = input.now ?? new Date();
-  const usernameKey = loginRateLimitKey("username", input.username);
-  const ipKey = loginRateLimitKey("ip", input.ip ?? "unknown");
-  await sql.begin(async (tx) => {
-    // Username then IP — fixed lock order for concurrent login workers.
+  return sql.begin(async (tx) => {
     const conn = tx as unknown as typeof sql;
-    await incrementBucket(conn, "username", usernameKey, now, LOGIN_USERNAME_ATTEMPT_LIMIT);
-    await incrementBucket(conn, "ip", ipKey, now, LOGIN_IP_ATTEMPT_LIMIT);
+    // Identity then IP — fixed lock order for concurrent login workers.
+    const identity = stateFromRow(await lockBucket(conn, "identity", identityKey, now), now, LOGIN_IDENTITY_ATTEMPT_LIMIT);
+    const ip = stateFromRow(await lockBucket(conn, "ip", ipKey, now), now, LOGIN_IP_ATTEMPT_LIMIT);
+    if (identity.limited || ip.limited) {
+      return {
+        limited: true as const,
+        retryAfterSec: Math.max(identity.limited ? identity.retryAfterSec : 0, ip.limited ? ip.retryAfterSec : 0, 1),
+      };
+    }
+    await incrementUnlockedBucket(conn, "identity", identityKey, identity, now);
+    await incrementUnlockedBucket(conn, "ip", ipKey, ip, now);
+    return { limited: false as const, retryAfterSec: 0 };
   });
-}
-
-export async function clearUsernameLoginFailures(username: string): Promise<void> {
-  const key = loginRateLimitKey("username", username);
-  await sql`DELETE FROM login_rate_limits WHERE scope = 'username' AND key = ${key}`;
 }

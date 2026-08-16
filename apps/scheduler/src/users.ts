@@ -7,12 +7,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import { sql } from "./db.js";
-import {
-  clearUsernameLoginFailures,
-  inspectLoginRateLimits,
-  LoginRateLimitError,
-  recordLoginFailures,
-} from "./login-rate-limit.js";
+import { consumeLoginAttempt, LoginRateLimitError } from "./login-rate-limit.js";
 
 export type UserRole = "admin" | "operator" | "viewer";
 
@@ -260,25 +255,14 @@ export async function loginUser(
     row ? (row.password_salt as string) : LOGIN_DUMMY_SALT,
     row ? (row.password_hash as string) : LOGIN_DUMMY_HASH,
   );
-  const limits = await inspectLoginRateLimits({ username: uname, ip: meta?.ip, now });
-  if (limits.usernameLimited) {
-    throw new LoginRateLimitError(limits.retryAfterSec);
+  // Consume after scrypt so 429 is not cheaper than 401 / dummy verify.
+  const consumption = await consumeLoginAttempt({ username: uname, ip: meta?.ip, now });
+  if (consumption.limited) {
+    throw new LoginRateLimitError(consumption.retryAfterSec);
   }
-  if (!row) {
-    if (limits.ipLimited) throw new LoginRateLimitError(limits.retryAfterSec);
-    await recordLoginFailures({ username: uname, ip: meta?.ip, now });
+  if (!row || row.status !== "active" || !passwordOk) {
     throw Object.assign(new Error("用户名或密码错误"), { code: "BAD_CREDENTIALS" });
   }
-  if (row.status !== "active") {
-    throw Object.assign(new Error("账号已禁用"), { code: "DISABLED" });
-  }
-  if (!passwordOk) {
-    if (limits.ipLimited) throw new LoginRateLimitError(limits.retryAfterSec);
-    await recordLoginFailures({ username: uname, ip: meta?.ip, now });
-    throw Object.assign(new Error("用户名或密码错误"), { code: "BAD_CREDENTIALS" });
-  }
-
-  await clearUsernameLoginFailures(uname);
   return issueUserSession(row.id as string, meta);
 }
 

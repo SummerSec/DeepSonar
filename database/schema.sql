@@ -1784,8 +1784,9 @@ CREATE INDEX user_sessions_user_idx ON user_sessions (user_id, created_at DESC);
 CREATE INDEX user_sessions_active_idx ON user_sessions (token_prefix) WHERE revoked_at IS NULL;
 
 -- Durable human-login brute-force counters. One row per (scope, key);
--- Scheduler locks the row instead of scanning attempts. Username buckets
--- enforce 5 failed verifications / 5 minutes; IP buckets bound spraying.
+-- Scheduler locks the row instead of scanning attempts. Identity buckets
+-- (normalized username + client IP) allow 5 attempts / 5 minutes; IP
+-- buckets allow 20 attempts / 5 minutes. Every verification counts.
 CREATE TABLE login_rate_limits (
   scope text NOT NULL,
   key text NOT NULL,
@@ -1793,7 +1794,7 @@ CREATE TABLE login_rate_limits (
   attempt_count int NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (scope, key),
-  CONSTRAINT login_rate_limits_scope_check CHECK (scope IN ('username', 'ip')),
+  CONSTRAINT login_rate_limits_scope_check CHECK (scope IN ('identity', 'ip')),
   CONSTRAINT login_rate_limits_count_check CHECK (attempt_count >= 0),
   CONSTRAINT login_rate_limits_key_len CHECK (char_length(key) BETWEEN 1 AND 128)
 );

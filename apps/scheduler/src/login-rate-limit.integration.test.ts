@@ -9,7 +9,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("loginUser limits 5 failed checks / 5 minutes without username enumeration", async () => {
+  test("loginUser counts every verification and serializes concurrent consumes", async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.AGENT_MODE = "fake";
 
@@ -18,8 +18,9 @@ if (!testDatabaseUrl) {
     const {
       LOGIN_IP_ATTEMPT_LIMIT,
       LoginRateLimitError,
-      inspectLoginRateLimits,
-      recordLoginFailures,
+      consumeLoginAttempt,
+      loginIdentityKey,
+      loginRateLimitKey,
     } = await import("./login-rate-limit.js");
     await migrate();
 
@@ -52,28 +53,23 @@ if (!testDatabaseUrl) {
       for (let i = 0; i < 4; i += 1) {
         await rejectCode(() => loginUser(username, "wrong-password", { ip }, now), "BAD_CREDENTIALS");
       }
-      const recovered = await loginUser(username, password, { ip }, now);
-      assert.equal(recovered.user.username, username);
-
-      for (let i = 0; i < 5; i += 1) {
-        await rejectCode(() => loginUser(username, "wrong-password", { ip }, now), "BAD_CREDENTIALS");
-      }
-      await assert.rejects(
-        () => loginUser(username, "wrong-password", { ip }, now),
-        (error: unknown) => error instanceof LoginRateLimitError && error.retryAfterSec >= 1,
-      );
+      const fifth = await loginUser(username, password, { ip }, now);
+      assert.equal(fifth.user.username, username);
       await assert.rejects(
         () => loginUser(username, password, { ip }, now),
         (error: unknown) => error instanceof LoginRateLimitError,
-        "username lockout also rejects the correct password until the window expires",
+        "successful login consumes a slot and does not clear the bucket",
       );
+
+      const otherIp = `${ip}.9`;
+      const otherHost = await loginUser(username, password, { ip: otherIp }, now);
+      assert.equal(otherHost.user.username, username, "same account from another IP has its own 5-slot bucket");
 
       const later = new Date(now.getTime() + 5 * 60 * 1000);
       const afterWindow = await loginUser(username, password, { ip }, later);
       assert.equal(afterWindow.user.username, username);
 
-      await rejectCode(() => loginUser(unknown, "wrong-password", { ip: `${ip}.1` }, now), "BAD_CREDENTIALS");
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 5; i += 1) {
         await rejectCode(() => loginUser(unknown, "wrong-password", { ip: `${ip}.1` }, now), "BAD_CREDENTIALS");
       }
       await assert.rejects(
@@ -85,26 +81,59 @@ if (!testDatabaseUrl) {
         },
       );
 
-      for (let i = 0; i < 6; i += 1) {
+      for (let i = 0; i < 5; i += 1) {
         await rejectCode(
-          () => loginUser(disabledName, "wrong-password", { ip: `${ip}.2` }, now),
-          "DISABLED",
+          () => loginUser(disabledName, password, { ip: `${ip}.2` }, now),
+          "BAD_CREDENTIALS",
         );
       }
+      await assert.rejects(
+        () => loginUser(disabledName, password, { ip: `${ip}.2` }, now),
+        (error: unknown) => error instanceof LoginRateLimitError,
+        "disabled accounts consume slots and then hit the same limiter",
+      );
 
       const sprayIp = `198.51.100.${1 + Math.floor(Math.random() * 200)}`;
       for (let i = 0; i < LOGIN_IP_ATTEMPT_LIMIT; i += 1) {
-        await recordLoginFailures({ username: `spray-${i}-${randomUUID().slice(0, 6)}`, ip: sprayIp, now });
+        const consumed = await consumeLoginAttempt({
+          username: `spray-${i}-${randomUUID().slice(0, 6)}`,
+          ip: sprayIp,
+          now,
+        });
+        assert.equal(consumed.limited, false);
       }
-      const sprayed = await inspectLoginRateLimits({ username: `fresh-${randomUUID().slice(0, 6)}`, ip: sprayIp, now });
-      assert.equal(sprayed.ipLimited, true);
-      assert.equal(sprayed.usernameLimited, false);
+      const sprayed = await consumeLoginAttempt({
+        username: `fresh-${randomUUID().slice(0, 6)}`,
+        ip: sprayIp,
+        now,
+      });
+      assert.equal(sprayed.limited, true);
       await assert.rejects(
-        () => loginUser(`fresh-${randomUUID().slice(0, 6)}`, "wrong-password", { ip: sprayIp }, now),
+        () => loginUser(username, password, { ip: sprayIp }, now),
         (error: unknown) => error instanceof LoginRateLimitError,
+        "IP lock also rejects a correct password",
       );
-      const spraySuccess = await loginUser(username, password, { ip: sprayIp }, now);
-      assert.equal(spraySuccess.user.username, username, "IP spray lock must not trap a successful account login");
+
+      const raceUser = `race-${randomUUID().slice(0, 8)}`;
+      const raceIp = `192.0.2.${1 + Math.floor(Math.random() * 200)}`;
+      const raced = await createUser({ username: raceUser, password, role: "viewer" });
+      created.push(raced.id);
+      const concurrent = await Promise.allSettled(
+        Array.from({ length: 8 }, () => loginUser(raceUser, password, { ip: raceIp }, now)),
+      );
+      assert.equal(concurrent.filter((result) => result.status === "fulfilled").length, 5);
+      assert.equal(concurrent.filter((result) => result.status === "rejected").length, 3);
+      assert.ok(concurrent.filter((result) => result.status === "rejected").every(
+        (result) => result.status === "rejected" && result.reason instanceof LoginRateLimitError,
+      ));
+      const [identityRow] = await sql<{ attempt_count: number }[]>`
+        SELECT attempt_count FROM login_rate_limits
+        WHERE scope = 'identity' AND key = ${loginIdentityKey(raceUser, raceIp)}`;
+      const [ipRow] = await sql<{ attempt_count: number }[]>`
+        SELECT attempt_count FROM login_rate_limits
+        WHERE scope = 'ip' AND key = ${loginRateLimitKey("ip", raceIp)}`;
+      assert.equal(identityRow?.attempt_count, 5);
+      assert.equal(ipRow?.attempt_count, 5);
     } finally {
       if (created.length) {
         await sql`DELETE FROM user_sessions WHERE user_id IN ${sql(created)}`;

@@ -181,7 +181,7 @@ const OPS: Op[] = [
     path: "/auth/login",
     summary: "用户名密码登录",
     description:
-      "失败校验按规范化用户名 5 次/5 分钟，并按客户端 IP 限制喷洒。超限返回 429 LOGIN_RATE_LIMITED，不泄露用户是否存在。成功登录清空该用户名计数。",
+      "任意密码校验（含成功）按规范化用户名+客户端 IP 限制 5 次/5 分钟，并按 IP 限制 20 次/5 分钟。超限返回 429 LOGIN_RATE_LIMITED，不泄露用户是否存在。成功登录占额且不清桶。",
     scope: null,
     tags: ["Auth"],
     body: {

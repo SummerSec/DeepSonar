@@ -23,7 +23,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /auth/status | 豁免 | 返回 `auth_required`、`has_users`、`bootstrap_available`、`default_admin_credentials_active`（仅默认 admin 仍可用时为 true） |
-| POST | /auth/login | 豁免 | `{username,password}`；返回用户会话。失败校验按用户名 5 次/5 分钟（成功登录清空该用户名计数），并按 IP 限制喷洒；超限 `429 LOGIN_RATE_LIMITED`，不泄露用户是否存在 |
+| POST | /auth/login | 豁免 | `{username,password}`；返回用户会话。任意校验（含成功）按用户名+IP 5 次/5 分钟，并按 IP 20 次/5 分钟；超限 `429 LOGIN_RATE_LIMITED`，不泄露用户是否存在 |
 | POST | /auth/bootstrap | 豁免 | 兼容旧版首次引导；默认管理员种子后返回 409 |
 | POST | /auth/logout | projects:read | 吊销当前用户会话 |
 | GET | /auth/me | projects:read | 当前用户/认证主体 |
