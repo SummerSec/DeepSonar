@@ -4,9 +4,23 @@
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-08-16
+
 ### 变更
 
 - 人类用户名/密码登录增加持久化暴力破解防护：任意校验（含成功）都占额；紧桶为用户名+IP 的 5 次/5 分钟，粗桶为 IP 的 20 次/5 分钟。Web 代理写入入站 TCP peer 的 `X-Forwarded-For`，Scheduler 只信任 1 跳。IP 超限不再插入 identity 行，过期窗口在占额事务内回收。超限返回 `429 LOGIN_RATE_LIMITED`。Schema 升至 v35（`login_rate_limits`）。
+- 官方运行时镜像的默认同步只拉取每个产品在所选 registry 通道上的最新版本；历史可信 digest 继续服务显式 pin 与已冻结 Job 快照。
+- Provider 角色绑定行采用固定 CLI/镜像列宽，并在右侧集中显示绑定状态与模型信息，长镜像标签不再挤压控件。
+
+### 修复
+
+- Scheduler 启动时先监听健康端口并暴露 readiness 详情，在有效 Base/Audit/Kali 镜像全部本地可用前不启用 Dispatcher；准备失败按有界退避持续重试，避免把镜像拉取故障推迟到任务运行期。
+- 项目镜像策略、角色绑定与 registry 通道变更改为异步准备：新引用验证并拉取成功后才原子保存；准备期间返回 `202 saved:false`，旧配置继续生效。Job 遇到缺失镜像时以 `runtime_image_not_ready` 失败并记录可诊断原因。
+- 修复 DSH Provider 设置在 Job 快照中按 TOML 错误解析的问题，现按 DSH 原生 YAML 冻结，同时保留凭据清理边界。
+
+### 部署 / 升级说明
+
+- 本版本包含 Schema v35；已有数据库须先运行 `pnpm db:rebuild -- --plan` 检查，再以 `pnpm db:rebuild -- --apply` 重建回填。
 
 ## [0.1.34] - 2026-08-16
 
@@ -261,6 +275,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.35]: https://github.com/SummerSec/DeepSonar/compare/v0.1.34...v0.1.35
 [0.1.34]: https://github.com/SummerSec/DeepSonar/compare/v0.1.33...v0.1.34
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
 [0.1.33]: https://github.com/SummerSec/DeepSonar/compare/v0.1.32...v0.1.33
