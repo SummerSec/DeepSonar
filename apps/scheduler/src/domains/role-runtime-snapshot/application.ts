@@ -168,7 +168,7 @@ export async function resolveAgentSnapshotForJob(
     : [undefined]) as Array<Record<string, unknown> | undefined>;
   const settingsConfig = llm?.settings_config_json ?? {};
   const hasSettings = hasProviderSettingsConfig(settingsConfig);
-  const snapshotSettingsConfig = providerSettingsForJobSnapshot(settingsConfig);
+  const snapshotSettingsConfig = providerSettingsForJobSnapshot(settingsConfig, agentCli);
   const contextWindowTokens = resolveContextWindowTokens({ roleContextWindowTokens: cfg?.context_window_tokens, settingsConfig: snapshotSettingsConfig });
   if (llm) {
     const provider = String(llm.provider ?? "");

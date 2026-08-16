@@ -341,6 +341,20 @@ test("DSH settings expose an arbitrary Pi AI route model and upstream base URL",
   assert.equal(extractBaseUrlFromSettings(settings), "https://agentrouter.org/v1");
 });
 
+test("Job snapshot freezes DSH YAML config without treating it as TOML", () => {
+  const settings = defaultDshPiAiSettings({
+    route: "feei",
+    protocol: "openai-responses",
+    baseURL: "https://ai.feei.cn/v1",
+    model: "grok-4.6",
+  });
+  const snapshot = providerSettingsForJobSnapshot(settings, "dsh");
+  assert.match(String(snapshot.config), /llm-pi-ai:/);
+  assert.match(String(snapshot.config), /grok-4\.6/);
+  assert.equal(extractModelFromSettings("dsh", snapshot), "grok-4.6");
+  assert.doesNotMatch(JSON.stringify(snapshot), /apiKey|apiKeyEnv/);
+});
+
 test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {
   assert.throws(() => materializeProviderSettings({ agentCli: "codex", settingsConfig: { context_window_tokens: 1023 } }), /1024/);
   const settings = { context_window_tokens: 128000, config: 'model = "gpt-5"\n[model_providers.custom]\nbase_url = "https://example"\n', auth: { OPENAI_API_KEY: "secret" } };

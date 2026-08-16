@@ -6,6 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { parseDocument, stringify as stringifyYaml } from "yaml";
 import {
   CONTEXT_WINDOW_TOKENS_MAX,
   CONTEXT_WINDOW_TOKENS_MIN,
@@ -109,19 +110,54 @@ function scrubRuntimeSecretFields(value: unknown): unknown {
       .map(([key, entry]) => [key, scrubRuntimeSecretFields(entry)]),
   );
 }
+function freezeTomlConfig(config: string): string {
+  const parsed = scrubRuntimeSecretFields(parseToml(config)) as Record<string, unknown>;
+  return `${stringifyToml(parsed)}\n`;
+}
+
+function freezeDshYamlConfig(config: string): string {
+  const document = parseDocument(config, { customTags: [], prettyErrors: false });
+  if (document.errors.length > 0) {
+    throw new Error(document.errors[0]?.message ?? "DSH YAML 解析失败");
+  }
+  const parsed = scrubRuntimeSecretFields(document.toJS({ maxAliasCount: 0 }));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("DSH YAML 根必须是对象");
+  }
+  return stringifyYaml(parsed, { lineWidth: 0 });
+}
+
+function looksLikeDshYaml(config: string): boolean {
+  return /(?:^|\n)\s*llm-pi-ai\s*:/u.test(config) || /(?:^|\n)\s*agent-default-model\s*:/u.test(config);
+}
+
 /** Secret-free Provider profile persisted into immutable Job snapshots. */
-export function providerSettingsForJobSnapshot(settingsConfig: unknown): Record<string, unknown> {
+export function providerSettingsForJobSnapshot(settingsConfig: unknown, agentCli?: string | null): Record<string, unknown> {
   const source = asObject(settingsConfig);
   const contextWindowTokens = parseContextWindowTokens(source.context_window_tokens);
   const snapshot = scrubRuntimeSecretFields(structuredClone(source)) as Record<string, unknown>;
   if (contextWindowTokens == null) delete snapshot.context_window_tokens;
   else snapshot.context_window_tokens = contextWindowTokens;
   if (typeof snapshot.config === "string" && snapshot.config.trim()) {
+    const configText = snapshot.config;
+    const preferYaml = agentCli === "dsh" || looksLikeDshYaml(configText);
     try {
-      const parsed = scrubRuntimeSecretFields(parseToml(snapshot.config)) as Record<string, unknown>;
-      snapshot.config = `${stringifyToml(parsed)}\n`;
-    } catch {
-      throw new Error("Job 快照无法解析 Provider config TOML，拒绝冻结可能含密钥的原始文本");
+      snapshot.config = preferYaml ? freezeDshYamlConfig(configText) : freezeTomlConfig(configText);
+    } catch (primaryError) {
+      if (!preferYaml) {
+        try {
+          snapshot.config = freezeDshYamlConfig(configText);
+        } catch {
+          throw new Error("Job 快照无法解析 Provider config TOML，拒绝冻结可能含密钥的原始文本");
+        }
+      } else {
+        try {
+          snapshot.config = freezeTomlConfig(configText);
+        } catch {
+          throw new Error("Job 快照无法解析 DSH Provider YAML，拒绝冻结可能含密钥的原始文本");
+        }
+      }
+      void primaryError;
     }
   }
   return snapshot;
