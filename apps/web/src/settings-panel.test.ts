@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AuthMe } from "./api";
-import { resolveSettingsSectionTab, resolveSettingsTab, settingsSectionDataNeeds, settingsTabsForActor } from "./SettingsPanel";
+import { nextEnabledRoleNames, resolveSettingsSectionTab, resolveSettingsTab, settingsSectionDataNeeds, settingsTabsForActor } from "./SettingsPanel";
+
+test("project role can be disabled and enabled again", () => {
+  const roles = [
+    { name: "test", enabled: true },
+    { name: "audit", enabled: true },
+  ] as Parameters<typeof nextEnabledRoleNames>[0];
+  assert.deepEqual(nextEnabledRoleNames(roles, "test"), ["audit"]);
+  const disabled = roles.map((role) => ({ ...role, enabled: role.name !== "test" }));
+  assert.deepEqual(nextEnabledRoleNames(disabled, "test"), ["test", "audit"]);
+});
 
 test("global settings accepts repair tabs from the URL", () => {
   assert.equal(resolveSettingsTab(null, "credentials"), "credentials");
