@@ -5,7 +5,7 @@ import { unlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import postgres from "postgres";
 import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
-import { validateScannerImages, type ScannerName } from "./scanner-config.js";
+import { resolveScannerImages, type ScannerName } from "./scanner-config.js";
 
 const execFileP = promisify(execFile);
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://deepsonar:deepsonar@localhost:5432/deepsonar";
@@ -15,12 +15,7 @@ const updateCheckMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_UPDATE
 const continuousRescanMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_RESCAN_SEC ?? 86_400) * 1_000);
 const preferredRegistry = normalizePreferredRegistry(process.env.DEEPSONAR_IMAGE_REGISTRY ?? "");
 const allowedRegistries = new Set((process.env.DEEPSONAR_ALLOWED_IMAGE_REGISTRIES ?? "ghcr.io,docker.io,registry-1.docker.io").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
-const scannerImages = validateScannerImages({
-  cosign: process.env.DEEPSONAR_COSIGN_IMAGE ?? "",
-  syft: process.env.DEEPSONAR_SYFT_IMAGE ?? "",
-  trivy: process.env.DEEPSONAR_TRIVY_IMAGE ?? "",
-  clamav: process.env.DEEPSONAR_CLAMAV_IMAGE ?? "",
-});
+const scannerImages = resolveScannerImages();
 const scanVolume = process.env.DEEPSONAR_IMAGE_SCAN_VOLUME ?? "deepsonar_admission_scan";
 const sql = postgres(databaseUrl, { max: 2, connection: { application_name: "deepsonar-image-admission" } });
 

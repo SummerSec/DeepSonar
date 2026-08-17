@@ -17,6 +17,9 @@ real 模式使用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 写入共享资产只�
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
 该值只能覆盖为 immutable digest；启动和拉取路径会显式预拉，失败即停止部署。fake 模式不使用 helper。
 
+`image-admission` 的 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。
+未设或留空回退官方 pin（见 `deploy/.env.example`）；非法覆盖仍会 fail closed。
+
 完整说明：**[`docs/ONE_CLICK_DEPLOYMENT.md`](../docs/ONE_CLICK_DEPLOYMENT.md)**  
 根目录快速入口：[`README.md`](../README.md)  
 运行时镜像发布：[`docs/RELEASE_RUNTIME_IMAGES.md`](../docs/RELEASE_RUNTIME_IMAGES.md)
