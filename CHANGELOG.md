@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-08-17
+
+### 修复
+
+- `image-admission` 的扫描器环境变量未设置或留空时默认使用官方不可变 `@sha256` digest；显式覆盖仍必须是完整 digest，非法值继续 fail closed。
+- 修复 S33 启动门禁：`project_opt_in` 专项镜像不再阻塞 Dispatcher，官方 Base/Audit/Kali 仍需就绪；`/health` 的 readiness 同时反映 Dispatcher 是否启用，启动预热失败持续输出可诊断日志并按有界退避重试。
+- Attempt outcome 不再持久化完整 summary，仅保留 `summary_sha256` 与 UTF-8 `summary_bytes`；超限输入改为稳定、可重试的控制错误。
+- managed gateway 增加启动预热、`Created` 残留处理和独立的 `docker run` 超时；创建或健康检查失败时按受管标签、owner 与 inspect 得到的容器 ID 限定清理，避免误删其他容器。
+- skill source 启动同步支持可取消超时，等待底层 clone/rev-parse 真正收口后再重试；单个来源失败会汇总但不阻塞同轮后续来源，Scheduler 停止时主动取消同步。
+
+### 发布说明
+
+- 不可变 `v0.1.36` 因缺少 CHANGELOG 章节在发布元数据门禁失败，未发布任何制品；`v0.1.37` 是首个包含以上变化的正式发布。
+
 ## [0.1.35] - 2026-08-16
 
 ### 变更
@@ -275,6 +289,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.37]: https://github.com/SummerSec/DeepSonar/compare/v0.1.36...v0.1.37
 [0.1.35]: https://github.com/SummerSec/DeepSonar/compare/v0.1.34...v0.1.35
 [0.1.34]: https://github.com/SummerSec/DeepSonar/compare/v0.1.33...v0.1.34
 [0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
