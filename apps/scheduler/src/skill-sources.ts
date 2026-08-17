@@ -455,16 +455,43 @@ export async function cloneSkillSource(input: {
   }
 }
 
-/** 同步一个模块源：浅克隆 → 扫描 → catalog + commit sha + 内容哈希落库。返回模块数。 */
+export interface SkillSourceSyncResult {
+  modules: number;
+  changed: boolean;
+  previous_commit_sha: string | null;
+  last_commit_sha: string | null;
+  previous_content_hash: string | null;
+  last_content_hash: string | null;
+  synced_at: string;
+}
+
+/** 目录是否真的变了：只比 commit sha / 内容哈希，synced_at 刷新不算更新。 */
+export function skillSourceCatalogChanged(input: {
+  previousCommitSha?: string | null;
+  previousContentHash?: string | null;
+  lastCommitSha?: string | null;
+  lastContentHash?: string | null;
+}): boolean {
+  return (input.previousCommitSha ?? "") !== (input.lastCommitSha ?? "")
+    || (input.previousContentHash ?? "") !== (input.lastContentHash ?? "");
+}
+
+/** 同步一个模块源：浅克隆 → 扫描 → catalog + commit sha + 内容哈希落库。 */
 export async function syncSkillSource(
   sourceId: string,
   syncedBy?: string | null,
   signal?: AbortSignal,
-): Promise<{ modules: number }> {
+): Promise<SkillSourceSyncResult> {
   if (signal?.aborted) throw abortReason(signal, `skill source ${sourceId} sync`);
   const [src] = await sql`SELECT * FROM skill_sources WHERE id = ${sourceId}`;
   if (!src) throw new Error(`skill source ${sourceId} 不存在`);
   if ((src.trust_status as string) === "disabled") throw new Error("模块源已禁用，不能同步");
+  const previousCommitSha = typeof src.last_commit_sha === "string" && src.last_commit_sha.trim()
+    ? src.last_commit_sha.trim()
+    : null;
+  const previousContentHash = typeof src.last_content_hash === "string" && src.last_content_hash.trim()
+    ? src.last_content_hash.trim()
+    : null;
 
   const tmp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-src-"));
   try {
@@ -484,15 +511,33 @@ export async function syncSkillSource(
     );
     const catalog = scanRepo(tmp);
     assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
-    await sql`
+    const lastCommitSha = commitSha.trim() || null;
+    const lastContentHash = contentHashOf(catalog);
+    const [updated] = await sql`
       UPDATE skill_sources SET
         catalog_json = ${sql.json(catalog as never)},
         synced_at = now(),
-        last_commit_sha = ${commitSha.trim()},
-        last_content_hash = ${contentHashOf(catalog)},
+        last_commit_sha = ${lastCommitSha},
+        last_content_hash = ${lastContentHash},
         synced_by = ${syncedBy ?? null}
-      WHERE id = ${sourceId}`;
-    return { modules: catalog.length };
+      WHERE id = ${sourceId}
+      RETURNING synced_at`;
+    return {
+      modules: catalog.length,
+      changed: skillSourceCatalogChanged({
+        previousCommitSha,
+        previousContentHash,
+        lastCommitSha,
+        lastContentHash,
+      }),
+      previous_commit_sha: previousCommitSha,
+      last_commit_sha: lastCommitSha,
+      previous_content_hash: previousContentHash,
+      last_content_hash: lastContentHash,
+      synced_at: updated?.synced_at instanceof Date
+        ? updated.synced_at.toISOString()
+        : String(updated?.synced_at ?? new Date().toISOString()),
+    };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
