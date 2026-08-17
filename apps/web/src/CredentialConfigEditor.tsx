@@ -593,14 +593,14 @@ export function CredentialConfigEditor({
       </div>
       <label className="block">
         <span className="mb-1.5 block font-mono text-[11px] text-zinc-500">模型思考强度（Provider 默认）</span>
-        <div className="grid grid-cols-4 overflow-hidden rounded-md border border-zinc-800" role="group" aria-label="Provider 模型思考强度快捷值">
+        <div className="provider-flow-effort" role="group" aria-label="Provider 模型思考强度快捷值">
           {["", ...reasoningOptions].map((effort) => (
             <button
               key={effort || "default"}
               type="button"
               disabled={agentCli === "dsh" && Boolean(effort) && dshSupportedReasoning !== null && !dshSupportedReasoning.has(effort)}
               aria-pressed={reasoning === effort}
-              className={`min-h-9 px-2 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${reasoning === effort ? "bg-emerald-500/15 text-emerald-200" : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"}`}
+              className={`provider-flow-effort-btn ${reasoning === effort ? "is-active" : ""}`}
               onClick={() => onReasoningChange(effort)}
             >
               {effort || "默认"}
