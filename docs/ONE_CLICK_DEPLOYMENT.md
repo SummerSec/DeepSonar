@@ -123,6 +123,17 @@ Provision 并发是数据库 claim admission，不是进程内 semaphore：超�
 `docker run`，也不应把 upstream 改为无路径的 Scheduler 根 URL。受管代理只暴露 `/gateway` 与
 `/control/v1`；代理脚本或 upstream 指纹变化时会在下一次 provision 前自动重建。
 
+### 4.2 Image Admission 扫描器镜像
+
+`image-admission` 启动时要求四个扫描器镜像都是不可变 `@sha256:<64 hex>` digest，环境变量为：
+
+- `DEEPSONAR_COSIGN_IMAGE`
+- `DEEPSONAR_SYFT_IMAGE`
+- `DEEPSONAR_TRIVY_IMAGE`
+- `DEEPSONAR_CLAMAV_IMAGE`
+
+未设或留空（含仅空白）时回退 `apps/image-admission` 内置的官方 pin（与 `deploy/.env.example` 相同）。显式覆盖必须仍是 digest；tag 或非法值会 fail closed，进程拒绝启动。Release 回写 `.env.example` 只改 `DEEPSONAR_IMAGE_TAG`，这四行 pin 会原样保留。
+
 ### 专项运行时（可选）
 
 | image key | 用途 |
@@ -214,6 +225,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
 | real helper 拉取失败 | 检查 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 是否为可达的 immutable digest 引用；脚本会 fail closed |
+| image-admission Restarting (1) / 缺 scanner digest | 四个 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。未设或留空会回退官方默认；填了 tag 或非法值仍会启动失败 |
 | real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
 | 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |
 
@@ -224,6 +236,6 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 - [ ] 已建长期 API Token；外部事件 Token 单项目 + `tasks:write`
 - [ ] real：官方 base/audit（及所用专项）均为 digest 且可 pull
 - [ ] real：`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 为 immutable digest 且已被部署脚本预拉
-- [ ] 第三方准入扫描器（若用）均为 digest
+- [ ] 第三方准入扫描器为 digest；未设时使用官方默认 pin，非法覆盖会阻止 image-admission 启动
 - [ ] PostgreSQL / Silo / Scheduler / Image Admission / Web 正常
 - [ ] 已备份并演练恢复
