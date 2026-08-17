@@ -698,6 +698,7 @@ export function extractModelsFromSettings(settingsConfig: unknown): string[] {
   push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
   push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
   push(env.ANTHROPIC_SMALL_FAST_MODEL);
+  push(env.CLAUDE_CODE_SUBAGENT_MODEL);
   for (const model of Object.keys(asObject(settings.models))) push(model);
   const providers = asObject(settings.providers);
   const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
@@ -714,4 +715,34 @@ export function extractModelsFromSettings(settingsConfig: unknown): string[] {
     push(match?.[1] || match?.[2]);
   }
   return found;
+}
+
+/**
+ * Job token 白名单必须覆盖 CLI 别名（如 fable）以及 settings 里解析后的上游 ID。
+ * Claude Code 请求体里的 model 是 ANTHROPIC_DEFAULT_*_MODEL，不是 --model 别名。
+ */
+export function jobGatewayAllowedModels(input: {
+  roleModel?: string | null;
+  upstreamModel?: string | null;
+  settingsConfig: unknown;
+  credentialAllowedModels?: readonly string[];
+}): string[] {
+  const declared: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const model = value.trim();
+    if (model && !declared.includes(model)) declared.push(model);
+  };
+  push(input.roleModel);
+  push(input.upstreamModel);
+  for (const model of extractModelsFromSettings(input.settingsConfig)) push(model);
+  const credential = (input.credentialAllowedModels ?? [])
+    .map((model) => model.trim())
+    .filter(Boolean);
+  if (credential.length === 0) return declared;
+  const allowed = new Set(credential);
+  const role = input.roleModel?.trim() ?? "";
+  const matched = declared.filter((model) => allowed.has(model));
+  if (matched.length === 0) return [];
+  return declared.filter((model) => allowed.has(model) || model === role);
 }

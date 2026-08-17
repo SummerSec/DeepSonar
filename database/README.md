@@ -24,10 +24,12 @@ pnpm db:rebuild -- --plan
 pnpm db:rebuild -- --apply
 ```
 
-生产 Compose 的 `postgres` 默认不映射到宿主机。CLI 会读
-`deploy/.env` 的 `POSTGRES_PASSWORD`，并尝试用
-`deepsonar-postgres-1` 的容器 IP；备份优先本机 `pg_dump`，失败则
-`docker exec` 该容器。开发库（`pnpm db:up`，`localhost:5432`）用默认连接串即可。
+两套库不要同时占 `5432`：
+
+- **独立开发库**：`pnpm db:up`（`deploy/docker-compose.yml`，`deepsonar/deepsonar@localhost:5432`）。
+- **deploy 栈**：`deepsonar-postgres-1`。可选 `pnpm db:up:deploy` 把该库发布到 `127.0.0.1:5432` 并回写 `.env`。
+
+`db:rebuild` 读当前 `DATABASE_URL`；本机 `pg_dump` 失败则 `docker exec` 对应容器。
 
 默认会尝试 `pg_dump -Fc` 到 `data/backups/`，再把 `public` 表移到
 `deepsonar_rebuild_src`，套用当前 `database/schema.sql`，按拓扑序复制交集列，

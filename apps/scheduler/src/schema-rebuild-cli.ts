@@ -94,7 +94,7 @@ Flags:
   --keep-staging     keep schema ${REBUILD_STAGING_SCHEMA} after success
   --no-dump          skip pg_dump (in-database staging still happens first)
   --dump-dir=DIR     custom dump directory (default data/backups)
-  --database-url=URL override DATABASE_URL (prod Compose postgres is not published)
+  --database-url=URL override DATABASE_URL (prod Compose postgres is unpublished unless POSTGRES_BIND / db:up:deploy)
   --no-terminate     do not terminate leftover deepsonar-scheduler backends
 `);
 }

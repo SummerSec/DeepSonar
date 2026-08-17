@@ -31,7 +31,8 @@ real 模式使用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 写入共享资产只�
 | `deploy.sh` / `deploy.ps1` | 一键 up/down/status/logs/pull |
 | `docker-compose.prod.yml` | 生产栈（PG、Silo、scheduler、web、admission、backup） |
 | `docker-compose.real.yml` | real：挂载 docker.sock |
-| `docker-compose.yml` | 仅本地 Postgres（`pnpm db:up`） |
+| `docker-compose.yml` | 独立开发库（`pnpm db:up`） |
+| `ensure-postgres.mjs` | `pnpm db:up:deploy`：开发态改连 prod Postgres |
 | `docker-compose.online.yml` | 空兼容层，勿依赖 |
 | `Dockerfile.*` | 平台服务与 Agent 运行时 |
 | `runtime-image-registry.json` | 官方 Agent 镜像清单（Release 回写） |

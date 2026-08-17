@@ -77,6 +77,7 @@ import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/
 import { resolveFindingProtocol } from "./finding-protocol.js";
 import {
   hasProviderSettingsConfig,
+  jobGatewayAllowedModels,
   materializeProviderSettings,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
@@ -734,14 +735,20 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
     const mapping = PROVIDER_ENV_MAP[currentCredentialProvider];
     if (!mapping) throw new Error(UNKNOWN_PROVIDER_ERROR);
     const credentialModels = allowedModelIds(cred.public_metadata_json);
-    if (upstreamModel && credentialModels.length > 0 && !credentialModels.includes(upstreamModel)) {
-      throw new Error(`模型 ${upstreamModel} 不在 Credential ${cred.id} 的 allowed_model_ids 白名单`);
+    const tokenModels = jobGatewayAllowedModels({
+      roleModel: model,
+      upstreamModel,
+      settingsConfig: snapshot.settings_config_json,
+      credentialAllowedModels: credentialModels,
+    });
+    if (credentialModels.length > 0 && tokenModels.length === 0) {
+      throw new Error(`模型 ${upstreamModel ?? model ?? "(未配置)"} 不在 Credential ${cred.id} 的 allowed_model_ids 白名单`);
     }
     const jt = await mintJobToken({
       jobId: job.id as string,
       projectId: job.project_id as string,
       credentialId: cred.id as string,
-      allowedModels: upstreamModel ? [upstreamModel] : credentialModels,
+      allowedModels: tokenModels,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
     });
     gatewayToken = jt.plaintext;

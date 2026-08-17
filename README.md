@@ -152,7 +152,8 @@ done
 corepack enable
 pnpm install
 cp .env.example .env            # PowerShell: Copy-Item .env.example .env
-pnpm db:up
+pnpm db:up                      # 独立开发库：deepsonar/deepsonar@localhost:5432
+# 若要改连一键部署那份库（与 db:up 互斥）：pnpm db:up:deploy
 # Windows 若 predev 报找不到 tsc，先把 node_modules/.bin 加入 PATH
 pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100

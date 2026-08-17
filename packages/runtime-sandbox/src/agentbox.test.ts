@@ -583,16 +583,16 @@ test("restricted gateway proxy rejects CONNECT even when the target is allowed",
 });
 
 test("docker socket path prefers DOCKER_HOST unix:// sockets", () => {
-  const prev = process.env.DOCKER_HOST;
-  try {
-    delete process.env.DOCKER_HOST;
-    assert.equal(dockerSocketPath(), "/var/run/docker.sock");
-    process.env.DOCKER_HOST = "unix:///tmp/podman-run-1000/podman/podman.sock";
-    assert.equal(dockerSocketPath(), "/tmp/podman-run-1000/podman/podman.sock");
-  } finally {
-    if (prev === undefined) delete process.env.DOCKER_HOST;
-    else process.env.DOCKER_HOST = prev;
-  }
+  assert.equal(dockerSocketPath({}, "linux"), "/var/run/docker.sock");
+  assert.equal(dockerSocketPath({}, "win32"), "//./pipe/docker_engine");
+  assert.equal(
+    dockerSocketPath({ DOCKER_HOST: "unix:///tmp/podman-run-1000/podman/podman.sock" }, "win32"),
+    "/tmp/podman-run-1000/podman/podman.sock",
+  );
+  assert.equal(
+    dockerSocketPath({ DOCKER_HOST: "npipe:////./pipe/docker_engine" }, "linux"),
+    "//./pipe/docker_engine",
+  );
 });
 
 test("shared assets accept only Scheduler-owned named volumes and always mount read-only", () => {

@@ -52,13 +52,22 @@ async function dockerTimed(timeoutMs: number, args: string[], signal?: AbortSign
   }
 }
 
-/** Resolve the engine unix socket path used by the scheduler container / host. */
-export function dockerSocketPath(): string {
-  const host = process.env.DOCKER_HOST?.trim();
-  if (!host || host === "unix:///var/run/docker.sock") return "/var/run/docker.sock";
-  if (host.startsWith("unix://")) return host.slice("unix://".length) || "/var/run/docker.sock";
-  // tcp://… is unsupported for the unix-socket API helper; callers fall back to CLI.
-  return "/var/run/docker.sock";
+const DEFAULT_UNIX_SOCKET = "/var/run/docker.sock";
+/** Same default dockerode / Docker Desktop use on Windows. */
+const DEFAULT_WINDOWS_PIPE = "//./pipe/docker_engine";
+
+/** Resolve the Engine socket used by the scheduler host (unix socket or Windows named pipe). */
+export function dockerSocketPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const host = env.DOCKER_HOST?.trim();
+  if (host?.startsWith("unix://")) return host.slice("unix://".length) || DEFAULT_UNIX_SOCKET;
+  if (host?.startsWith("npipe://")) return host.slice("npipe://".length) || DEFAULT_WINDOWS_PIPE;
+  if (!host || host.startsWith("tcp://") || host.startsWith("http://") || host.startsWith("https://")) {
+    return platform === "win32" ? DEFAULT_WINDOWS_PIPE : DEFAULT_UNIX_SOCKET;
+  }
+  return host;
 }
 
 /**

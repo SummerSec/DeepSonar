@@ -7,6 +7,7 @@ import {
   extractModelFromSettings,
   extractModelsFromSettings,
   extractReasoningFromSettings,
+  jobGatewayAllowedModels,
   hasProviderSettingsConfig,
   legacySettingsConfig,
   materializeProviderSettings,
@@ -247,6 +248,40 @@ test("extractBaseUrlFromSettings reads env and codex toml", () => {
   assert.deepEqual(
     extractModelsFromSettings({ env: { ANTHROPIC_MODEL: "claude-sonnet-4-5" } }),
     ["claude-sonnet-4-5"],
+  );
+});
+
+test("job token allowlist includes Claude alias and resolved fable model", () => {
+  const settings = {
+    env: {
+      ANTHROPIC_MODEL: "grok-4.6",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "grok-4.6",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "grok-4.6",
+    },
+  };
+  assert.deepEqual(
+    extractModelsFromSettings(settings),
+    ["grok-4.6"],
+  );
+  assert.deepEqual(
+    jobGatewayAllowedModels({ roleModel: "fable", settingsConfig: settings }),
+    ["fable", "grok-4.6"],
+  );
+  assert.deepEqual(
+    jobGatewayAllowedModels({
+      roleModel: "fable",
+      settingsConfig: settings,
+      credentialAllowedModels: ["grok-4.6"],
+    }),
+    ["fable", "grok-4.6"],
+  );
+  assert.deepEqual(
+    jobGatewayAllowedModels({
+      roleModel: "fable",
+      settingsConfig: settings,
+      credentialAllowedModels: ["composer-2.5"],
+    }),
+    [],
   );
 });
 

@@ -290,15 +290,33 @@ export async function revokeJobTokens(jobId: string, reason: string): Promise<vo
 }
 
 /** 按 provider 注入真实认证头（与 credential-test.ts 行为一致） */
-function upstreamAuthHeaders(provider: string, secret: string): Record<string, string> {
+export function upstreamAuthHeaders(provider: string, secret: string): Record<string, string> {
   switch (provider) {
     case "anthropic":
-      return { "x-api-key": secret, "anthropic-version": "2023-06-01" };
+      // 官方 Anthropic 认 x-api-key；第三方兼容代理（及本机 Claude Code）认 Bearer。
+      return {
+        authorization: `Bearer ${secret}`,
+        "x-api-key": secret,
+        "anthropic-version": "2023-06-01",
+      };
     case "openai":
       return { authorization: `Bearer ${secret}` };
     default:
       return {};
   }
+}
+
+/** 凭据 base_url 已带 /v1 时，不要把 Claude Code 的 /v1/messages 再拼成 /v1/v1/messages。 */
+export function joinGatewayUpstreamUrl(baseUrl: string, upstreamPath: string, qs = ""): string {
+  const base = baseUrl.replace(/\/+$/u, "");
+  const path = upstreamPath.replace(/^\/+/u, "");
+  const baseVer = /\/(v\d+)$/iu.exec(base)?.[1];
+  const pathVer = /^(v\d+)(?=\/|$)/iu.exec(path)?.[1];
+  if (baseVer && pathVer && baseVer.toLowerCase() === pathVer.toLowerCase()) {
+    const rest = path.slice(pathVer.length).replace(/^\/+/u, "");
+    return `${base}${rest ? `/${rest}` : ""}${qs}`;
+  }
+  return `${base}/${path}${qs}`;
 }
 
 /** 从 SSE 流片段/JSON 文本里尽力提取 usage（不累加精确账单，只用于额度熔断）。 */
@@ -557,7 +575,7 @@ export function registerGateway(app: FastifyInstance): void {
       const baseUrl =
         meta.base_url ?? settingsBaseUrl ?? PROVIDER_ENV_MAP[safeProvider]?.defaultBaseUrl ?? "https://api.anthropic.com";
       const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
-      const url = `${baseUrl.replace(/\/$/, "")}/${upstreamPath}${qs}`;
+      const url = joinGatewayUpstreamUrl(baseUrl, upstreamPath, qs);
 
       const gatewayAttemptId = typeof jt.attempt_id === "string" ? jt.attempt_id : null;
       if (!gatewayAttemptId) return deny(reply, 409, "Job 缺少活动 Attempt，拒绝无账本模型请求", "attempt_state_missing");

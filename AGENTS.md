@@ -14,7 +14,8 @@ DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度�
 ## 常用命令
 
 ```bash
-pnpm db:up            # 起 Postgres（docker compose，deploy/docker-compose.yml，deepsonar/deepsonar@localhost:5432）
+pnpm db:up            # 起独立开发库（deploy/docker-compose.yml，deepsonar/deepsonar@localhost:5432）
+pnpm db:up:deploy     # 改连 deploy 栈同一份 Postgres（deepsonar-postgres-1；与 db:up 互斥，都占 5432）
 pnpm db:rebuild       # 备份后按当前 schema.sql 重建并回填交集列（先 --plan，再 --apply）
 pnpm dev              # 调度器（tsx watch，端口 3100；空库自动套用 schema.sql 基线，版本不符拒绝启动）
 pnpm dev:web          # 前端（vite，5173；/api 代理到 3100）

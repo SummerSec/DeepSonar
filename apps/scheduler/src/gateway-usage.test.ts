@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createGatewayUsageScanner, extractUsageBreakdown } from "./gateway.js";
+import {
+  createGatewayUsageScanner,
+  extractUsageBreakdown,
+  joinGatewayUpstreamUrl,
+  upstreamAuthHeaders,
+} from "./gateway.js";
 
 test("usage JSON 跨 chunk 且完整记录落在前一块尾部时只累计一次", () => {
   const scanner = createGatewayUsageScanner();
@@ -8,6 +13,32 @@ test("usage JSON 跨 chunk 且完整记录落在前一块尾部时只累计一�
   scanner.push('data: {"usage":{"input_tokens":12,');
   scanner.push('"output_tokens":5}}\n');
   assert.deepEqual(scanner.finish(), { input: 12, output: 5, total: 17 });
+});
+
+test("Anthropic 上游同时注入 Bearer 与 x-api-key", () => {
+  assert.deepEqual(upstreamAuthHeaders("anthropic", "sk-test"), {
+    authorization: "Bearer sk-test",
+    "x-api-key": "sk-test",
+    "anthropic-version": "2023-06-01",
+  });
+  assert.deepEqual(upstreamAuthHeaders("openai", "sk-test"), {
+    authorization: "Bearer sk-test",
+  });
+});
+
+test("凭据 base_url 已含 /v1 时去掉 Claude Code 重复的版本前缀", () => {
+  assert.equal(
+    joinGatewayUpstreamUrl("https://ai.feei.cn/v1", "v1/messages"),
+    "https://ai.feei.cn/v1/messages",
+  );
+  assert.equal(
+    joinGatewayUpstreamUrl("https://api.anthropic.com", "v1/messages"),
+    "https://api.anthropic.com/v1/messages",
+  );
+  assert.equal(
+    joinGatewayUpstreamUrl("https://ai.feei.cn/v1/", "/v1/messages", "?beta=1"),
+    "https://ai.feei.cn/v1/messages?beta=1",
+  );
 });
 
 test("OpenAI usage 字段可解析，重复完整行不会重复计费", () => {

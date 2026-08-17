@@ -10,6 +10,8 @@ services:
       POSTGRES_USER: deepsonar
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 deploy/.env 中设置 POSTGRES_PASSWORD}
       POSTGRES_DB: deepsonar
+    ports:
+      - "${POSTGRES_BIND:-127.0.0.1:5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

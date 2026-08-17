@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.38] - 2026-08-17
+
+### 修复
+
+- Model Gateway 对 Anthropic 同时注入 `Authorization: Bearer` 与 `x-api-key`，并在凭据 `base_url` 已含 `/v1` 时避免拼成 `/v1/v1/messages`。
+- Job token 模型白名单同时覆盖 Claude CLI 别名（如 `fable`）与 settings 解析出的上游模型 ID，避免网关 403。
+- Windows 主机解析 Docker Engine 默认走 named pipe，不再误用 unix socket。
+
+### 变更
+
+- 保留 `pnpm db:up` 独立开发库；新增 `pnpm db:up:deploy` 可将开发态改连 deploy 栈 Postgres（`POSTGRES_BIND`，与独立库互斥占用 5432）。
+
 ## [0.1.37] - 2026-08-17
 
 ### 修复
@@ -289,6 +301,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.38]: https://github.com/SummerSec/DeepSonar/compare/v0.1.37...v0.1.38
 [0.1.37]: https://github.com/SummerSec/DeepSonar/compare/v0.1.36...v0.1.37
 [0.1.35]: https://github.com/SummerSec/DeepSonar/compare/v0.1.34...v0.1.35
 [0.1.34]: https://github.com/SummerSec/DeepSonar/compare/v0.1.33...v0.1.34
