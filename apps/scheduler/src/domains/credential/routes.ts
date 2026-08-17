@@ -43,6 +43,7 @@ import {
   PLATFORM_DEFAULT_AGENT_MODEL,
 } from "../../core.js";
 import { sql } from "../../db.js";
+import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/transition-policy.js";
 import {
   containsSecretMask,
   MASKED_SECRET_PLACEHOLDER,
@@ -143,15 +144,24 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     return PROVIDER_CATALOG;
   });
 
-  async function credentialImpact(id: string, actorProjectId: string | null = null): Promise<Record<string, unknown>> {
-    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, terminalJobs] = await Promise.all([
-      sql<{ count: number }[]>`
+  const ACTIVE_FROZEN_JOB_STATUSES = ["claimed", "provisioning", "running", "waiting_human"] as const;
+  const RECOVERABLE_JOB_STATUSES = RESUMABLE_JOB_STATUSES.filter((status) => status !== "waiting_human");
+  const BLOCKING_JOB_STATUSES = ["pending", ...ACTIVE_FROZEN_JOB_STATUSES, ...RECOVERABLE_JOB_STATUSES];
+  const ACTIVE_SCAN_STATUSES = ["queued", "claimed", "running"] as const;
+
+  async function credentialImpact(
+    query: typeof sql,
+    id: string,
+    actorProjectId: string | null = null,
+  ): Promise<Record<string, unknown>> {
+    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans] = await Promise.all([
+      query<{ count: number }[]>`
         SELECT COUNT(DISTINCT rc2.role_config_id)::int AS count
         FROM role_credentials rc2
         JOIN role_configs rc ON rc.id = rc2.role_config_id
         WHERE rc2.credential_id = ${id}
           AND (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})`,
-      sql`
+      query`
         SELECT DISTINCT rc.id AS role_config_id, rc.project_id, rc2.purpose,
                ar.name AS role_name, p.name AS project_name
         FROM role_credentials rc2
@@ -162,15 +172,16 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})
         ORDER BY rc.project_id NULLS FIRST, ar.name
         LIMIT 50`,
-      sql<{ pending_unclaimed: number; active_frozen: number; terminal_historical: number }[]>`
+      query<{ pending_unclaimed: number; active_frozen: number; recoverable: number; terminal_historical: number }[]>`
         SELECT
           COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_unclaimed,
           COUNT(*) FILTER (WHERE status IN ('claimed','provisioning','running','waiting_human'))::int AS active_frozen,
-          COUNT(*) FILTER (WHERE status NOT IN ('pending','claimed','provisioning','running','waiting_human'))::int AS terminal_historical
+          COUNT(*) FILTER (WHERE status IN ('failed','timeout','orphan'))::int AS recoverable,
+          COUNT(*) FILTER (WHERE status IN ('succeeded','cancelled'))::int AS terminal_historical
         FROM jobs
         WHERE agent_snapshot_json->>'credential_id' = ${id}
           AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})`,
-      sql`
+      query`
         SELECT j.id, j.status, j.project_id, p.name AS project_name,
                j.agent_snapshot_json->>'name' AS role_name,
                j.agent_snapshot_json->>'model' AS model,
@@ -182,7 +193,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND j.status = 'pending'
         ORDER BY j.created_at DESC
         LIMIT 50`,
-      sql`
+      query`
         SELECT j.id, j.status, j.project_id, p.name AS project_name,
                j.agent_snapshot_json->>'name' AS role_name,
                j.agent_snapshot_json->>'model' AS model,
@@ -194,7 +205,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND j.status IN ('claimed','provisioning','running','waiting_human')
         ORDER BY j.created_at DESC
         LIMIT 50`,
-      sql`
+      query`
         SELECT j.id, j.status, j.project_id, p.name AS project_name,
                j.agent_snapshot_json->>'name' AS role_name,
                j.agent_snapshot_json->>'model' AS model,
@@ -203,11 +214,34 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         LEFT JOIN projects p ON p.id = j.project_id
         WHERE j.agent_snapshot_json->>'credential_id' = ${id}
           AND (${actorProjectId}::uuid IS NULL OR j.project_id = ${actorProjectId})
-          AND j.status NOT IN ('pending','claimed','provisioning','running','waiting_human')
+          AND j.status IN ('failed','timeout','orphan')
         ORDER BY j.created_at DESC
         LIMIT 50`,
+      query`
+        SELECT j.id, j.status, j.project_id, p.name AS project_name,
+               j.agent_snapshot_json->>'name' AS role_name,
+               j.agent_snapshot_json->>'model' AS model,
+               j.created_at
+        FROM jobs j
+        LEFT JOIN projects p ON p.id = j.project_id
+        WHERE j.agent_snapshot_json->>'credential_id' = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR j.project_id = ${actorProjectId})
+          AND j.status IN ('succeeded','cancelled')
+        ORDER BY j.created_at DESC
+        LIMIT 50`,
+      query<{ active: number }[]>`
+        SELECT COUNT(*) FILTER (WHERE status IN ('queued','claimed','running'))::int AS active
+        FROM runtime_image_scans
+        WHERE result_json->>'registry_credential_id' = ${id}`,
+      query`
+        SELECT s.id, s.status, s.runtime_image_version_id, s.created_at
+        FROM runtime_image_scans s
+        WHERE s.result_json->>'registry_credential_id' = ${id}
+          AND s.status IN ('queued','claimed','running')
+        ORDER BY s.created_at DESC
+        LIMIT 50`,
     ]);
-    const counts = jobCount[0] ?? { pending_unclaimed: 0, active_frozen: 0, terminal_historical: 0 };
+    const counts = jobCount[0] ?? { pending_unclaimed: 0, active_frozen: 0, recoverable: 0, terminal_historical: 0 };
     const item = (job: Record<string, unknown>) => ({
       id: job.id,
       status: job.status,
@@ -217,9 +251,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       model: job.model,
       created_at: job.created_at,
     });
-    const pending = pendingJobs.map(item);
-    const active = activeJobs.map(item);
-    const terminal = terminalJobs.map(item);
     return {
       credential_id: id,
       role_configs: {
@@ -234,9 +265,21 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         })),
       },
       jobs: {
-        pending_unclaimed: { count: Number(counts.pending_unclaimed ?? 0), items: pending },
-        active_frozen: { count: Number(counts.active_frozen ?? 0), items: active },
-        terminal_historical: { count: Number(counts.terminal_historical ?? 0), items: terminal },
+        pending_unclaimed: { count: Number(counts.pending_unclaimed ?? 0), items: pendingJobs.map(item) },
+        active_frozen: { count: Number(counts.active_frozen ?? 0), items: activeJobs.map(item) },
+        recoverable: { count: Number(counts.recoverable ?? 0), items: recoverableJobs.map(item) },
+        terminal_historical: { count: Number(counts.terminal_historical ?? 0), items: terminalJobs.map(item) },
+      },
+      scans: {
+        active: {
+          count: Number(scanCount[0]?.active ?? 0),
+          items: activeScans.map((scan) => ({
+            id: scan.id,
+            status: scan.status,
+            runtime_image_version_id: scan.runtime_image_version_id,
+            created_at: scan.created_at,
+          })),
+        },
       },
     };
   }
@@ -295,7 +338,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       WHERE id = ${id}
         AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
-    const impact = await credentialImpact(id, actorProjectId);
+    const impact = await credentialImpact(sql, id, actorProjectId);
     return credentialView(row as Record<string, unknown>, {
       bound_role_config_count: (impact.role_configs as { count: number }).count,
       impact,
@@ -310,7 +353,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       WHERE id = ${id}
         AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
-    return credentialImpact(id, actorProjectId);
+    return credentialImpact(sql, id, actorProjectId);
   });
 
   /**
@@ -1054,6 +1097,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       name: string;
       kind: string;
       provider: string;
+      project_id: string | null;
       unbound_role_config_count: number;
       revoked_job_token_count: number;
       impact: Record<string, unknown>;
@@ -1080,21 +1124,50 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         };
       }
 
-      const impact = await credentialImpact(id, actorProjectId);
+      // Serialize with resume: lock every non-terminal Job and active scan that
+      // still points at this credential before reading impact on the same tx.
+      await tx`
+        SELECT id FROM jobs
+        WHERE agent_snapshot_json->>'credential_id' = ${id}
+          AND status = ANY(${BLOCKING_JOB_STATUSES as unknown as string[]})
+          AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
+        FOR UPDATE`;
+      await tx`
+        SELECT id FROM runtime_image_scans
+        WHERE result_json->>'registry_credential_id' = ${id}
+          AND status = ANY(${ACTIVE_SCAN_STATUSES as unknown as string[]})
+        FOR UPDATE`;
+
+      const impact = await credentialImpact(tx, id, actorProjectId);
       const boundCount = Number((impact.role_configs as { count: number }).count ?? 0);
       const jobs = impact.jobs as {
         pending_unclaimed: { count: number };
         active_frozen: { count: number };
+        recoverable: { count: number };
       };
+      const scans = impact.scans as { active: { count: number } };
       const pendingCount = Number(jobs.pending_unclaimed.count ?? 0);
       const activeCount = Number(jobs.active_frozen.count ?? 0);
-      if (pendingCount > 0 || activeCount > 0) {
+      const recoverableCount = Number(jobs.recoverable.count ?? 0);
+      const activeScanCount = Number(scans.active.count ?? 0);
+      if (pendingCount > 0 || activeCount > 0 || recoverableCount > 0) {
         return {
           ok: false,
           statusCode: 409,
           body: {
-            error: "credential is still referenced by pending or active jobs",
+            error: "credential is still referenced by pending, active, or recoverable jobs",
             error_code: "CREDENTIAL_IN_USE",
+            impact,
+          },
+        };
+      }
+      if (activeScanCount > 0) {
+        return {
+          ok: false,
+          statusCode: 409,
+          body: {
+            error: "credential is still referenced by an active image-admission scan",
+            error_code: "CREDENTIAL_SCAN_IN_USE",
             impact,
           },
         };
@@ -1118,6 +1191,10 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         RETURNING id`;
       await tx`DELETE FROM job_tokens WHERE credential_id = ${id}`;
       if (boundCount > 0) {
+        await tx`
+          UPDATE role_configs
+          SET version = version + 1, updated_at = now()
+          WHERE id IN (SELECT role_config_id FROM role_credentials WHERE credential_id = ${id})`;
         await tx`DELETE FROM role_credentials WHERE credential_id = ${id}`;
       }
       const [deleted] = await tx`
@@ -1134,6 +1211,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         name: String(existing.name),
         kind: String(existing.kind),
         provider: String(existing.provider),
+        project_id: existing.project_id ? String(existing.project_id) : null,
         unbound_role_config_count: boundCount,
         revoked_job_token_count: revokedTokens.length,
         impact,
@@ -1145,6 +1223,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       action: "credential.delete",
       resourceType: "credential",
       resourceId: id,
+      projectId: result.project_id,
       after: {
         name: result.name,
         kind: result.kind,

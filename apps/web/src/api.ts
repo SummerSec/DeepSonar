@@ -826,7 +826,11 @@ export interface CredentialImpact {
   jobs: {
     pending_unclaimed: { count: number; items: Array<Record<string, unknown>> };
     active_frozen: { count: number; items: Array<Record<string, unknown>> };
+    recoverable: { count: number; items: Array<Record<string, unknown>> };
     terminal_historical: { count: number; items: Array<Record<string, unknown>> };
+  };
+  scans: {
+    active: { count: number; items: Array<Record<string, unknown>> };
   };
 }
 

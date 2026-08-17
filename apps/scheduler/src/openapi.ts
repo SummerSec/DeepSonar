@@ -1433,7 +1433,19 @@ const OPS: Op[] = [
     },
   },
   { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录与绑定影响；无密文）", scope: "agents:read", tags: ["Credentials"] },
-  { method: "get", path: "/credentials/{id}/impact", summary: "凭据只读影响投影（RoleConfig / pending / active / historical Job）", scope: "agents:read", tags: ["Credentials"] },
+  {
+    method: "get",
+    path: "/credentials/{id}/impact",
+    summary: "凭据只读影响投影（RoleConfig / pending / active / recoverable / historical Job / 活动扫描）",
+    scope: "agents:read",
+    tags: ["Credentials"],
+    responses: {
+      "200": {
+        description: "有界影响投影。recoverable = failed/timeout/orphan（可被 resume 原地恢复）；scans.active = queued/claimed/running 的镜像准入扫描。",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialImpact" } } },
+      },
+    },
+  },
   {
     method: "post",
     path: "/credentials",
@@ -1499,7 +1511,7 @@ const OPS: Op[] = [
     method: "delete",
     path: "/credentials/{id}",
     summary: "删除已保存的 Provider 账号",
-    description: "有 pending/active Job 时拒绝。仍绑定 RoleConfig 时需 ?unbind=true。吊销并删除 job_tokens；不改写历史 Job 快照。响应与审计不含密文。",
+    description: "有 pending/active/可恢复 Job 时返回 409 CREDENTIAL_IN_USE。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。仍绑定 RoleConfig 时需 ?unbind=true，并递增受影响 RoleConfig 的 version。吊销并删除 job_tokens；不改写历史 Job 快照。响应与审计不含密文；项目凭据审计保留 project_id。",
     scope: "agents:write",
     tags: ["Credentials"],
     query: {
@@ -1524,8 +1536,26 @@ const OPS: Op[] = [
         },
       },
       "409": {
-        description: "仍被 RoleConfig 绑定或 pending/active Job 引用",
-        content: { "application/json": { schema: ErrorSchema } },
+        description: "仍被 RoleConfig 绑定、pending/active/可恢复 Job 或活动镜像准入扫描引用",
+        content: {
+          "application/json": {
+            schema: {
+              allOf: [
+                { $ref: "#/components/schemas/Error" },
+                {
+                  type: "object",
+                  properties: {
+                    error_code: {
+                      type: "string",
+                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_BOUND", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_CHANGED"],
+                    },
+                    impact: { $ref: "#/components/schemas/CredentialImpact" },
+                  },
+                },
+              ],
+            },
+          },
+        },
       },
     },
   },
@@ -1784,6 +1814,64 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       schemas: {
         Error: ErrorSchema,
         RuntimeRegistryChannelError: RuntimeRegistryChannelErrorSchema,
+        CredentialImpact: {
+          type: "object",
+          required: ["credential_id", "role_configs", "jobs", "scans"],
+          properties: {
+            credential_id: { type: "string", format: "uuid" },
+            role_configs: {
+              type: "object",
+              required: ["count", "items"],
+              properties: {
+                count: { type: "integer", minimum: 0 },
+                items: { type: "array", items: { type: "object", additionalProperties: true } },
+              },
+            },
+            jobs: {
+              type: "object",
+              required: ["pending_unclaimed", "active_frozen", "recoverable", "terminal_historical"],
+              properties: {
+                pending_unclaimed: { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                active_frozen: { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                recoverable: {
+                  allOf: [
+                    { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                    { description: "failed / timeout / orphan；可被 /jobs/:id/resume 或 resume-session 原地恢复为 pending" },
+                  ],
+                },
+                terminal_historical: {
+                  allOf: [
+                    { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                    { description: "succeeded / cancelled；不可恢复，不阻挡删除" },
+                  ],
+                },
+              },
+            },
+            scans: {
+              type: "object",
+              required: ["active"],
+              properties: {
+                active: {
+                  type: "object",
+                  description: "queued / claimed / running 的 runtime_image_scans，result_json.registry_credential_id 指向该凭据",
+                  required: ["count", "items"],
+                  properties: {
+                    count: { type: "integer", minimum: 0 },
+                    items: { type: "array", items: { type: "object", additionalProperties: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        CredentialImpactJobBucket: {
+          type: "object",
+          required: ["count", "items"],
+          properties: {
+            count: { type: "integer", minimum: 0 },
+            items: { type: "array", items: { type: "object", additionalProperties: true } },
+          },
+        },
         CredentialMetadata: {
           type: "object",
           additionalProperties: false,

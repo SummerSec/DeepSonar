@@ -754,8 +754,14 @@ export function ProviderAccountFlow({
       const liveImpact = await api.credentialImpact(credential.id);
       const pending = liveImpact.jobs.pending_unclaimed.count;
       const active = liveImpact.jobs.active_frozen.count;
-      if (pending > 0 || active > 0) {
-        setError(`无法删除「${credential.name}」：仍有 ${pending} 个待领取 Job、${active} 个运行中/冻结 Job。请等待结束或取消后再删。`);
+      const recoverable = liveImpact.jobs.recoverable.count;
+      const activeScans = liveImpact.scans.active.count;
+      if (pending > 0 || active > 0 || recoverable > 0) {
+        setError(`无法删除「${credential.name}」：仍有 ${pending} 个待领取 Job、${active} 个运行中/冻结 Job、${recoverable} 个可恢复 Job。请等待结束、取消或完成恢复后再删。`);
+        return;
+      }
+      if (activeScans > 0) {
+        setError(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`);
         return;
       }
       const bound = liveImpact.role_configs.count;
@@ -1614,7 +1620,9 @@ export function ProviderAccountFlow({
             <span><strong>{previewImpact.role_configs.count}</strong> 已绑定角色配置</span>
             <span><strong>{previewImpact.jobs.pending_unclaimed.count}</strong> pending 冻结</span>
             <span><strong>{previewImpact.jobs.active_frozen.count}</strong> 活跃冻结</span>
-            <span><strong>{previewImpact.jobs.terminal_historical.count}</strong> 终态 / 重试</span>
+            <span><strong>{previewImpact.jobs.recoverable.count}</strong> 可恢复</span>
+            <span><strong>{previewImpact.jobs.terminal_historical.count}</strong> 终态</span>
+            <span><strong>{previewImpact.scans.active.count}</strong> 活动扫描</span>
           </div>
         </div>
         )}

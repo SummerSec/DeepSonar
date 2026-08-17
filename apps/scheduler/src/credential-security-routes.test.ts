@@ -14,7 +14,9 @@ test("credential list/detail/impact use the safe projection and bounded impact",
   assert.match(routes, /bound_role_config_count/);
   assert.match(routes, /pending_unclaimed/);
   assert.match(routes, /active_frozen/);
+  assert.match(routes, /recoverable/);
   assert.match(routes, /terminal_historical/);
+  assert.match(routes, /scans: \{/);
   assert.match(routes, /health_status = \$\{result\.ok \? "ok" : "error"\}/);
   assert.match(routes, /model_catalog_json = \$\{sql\.json\(normalizeModelCatalog/);
   const safeProjection = routes.slice(routes.indexOf("const CRED_SAFE"), routes.indexOf("const CredentialBody"));
