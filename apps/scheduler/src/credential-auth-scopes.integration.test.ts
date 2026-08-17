@@ -77,6 +77,13 @@ if (!testDatabaseUrl) {
         assert.equal(response.statusCode, 403, `${path}: ${response.payload}`);
         assert.match(response.payload, /scope/);
       }
+      const deniedDelete = await app.inject({
+        method: "DELETE",
+        url: `/credentials/${credentialId}`,
+        headers: { authorization: `Bearer ${token.plaintext}` },
+      });
+      assert.equal(deniedDelete.statusCode, 403, deniedDelete.payload);
+      assert.match(deniedDelete.payload, /scope/);
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);

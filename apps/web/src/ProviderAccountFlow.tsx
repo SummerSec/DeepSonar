@@ -9,6 +9,7 @@ import {
   LockKey,
   PencilSimple,
   Plugs,
+  Trash,
   Warning,
 } from "@phosphor-icons/react";
 import {
@@ -39,6 +40,7 @@ import { formatJsonObject } from "./json-text";
 import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 import { showToast } from "./toast";
+import { useConfirmDialog } from "./components/ConfirmDialog";
 
 type FlowStep = "account" | "roles" | "effect";
 
@@ -194,6 +196,7 @@ export function ProviderAccountFlow({
   projects: Project[];
   onChanged: () => void;
 }) {
+  const confirm = useConfirmDialog();
   const [catalog, setCatalog] = useState<ProviderAccountCatalogItemView[]>([]);
   const [roleConfigs, setRoleConfigs] = useState<BindableRoleConfig[]>([]);
   const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
@@ -744,6 +747,48 @@ export function ProviderAccountFlow({
     }
   };
 
+  const deleteAccount = async (credential: ProviderCredential) => {
+    setBusy(true);
+    setError("");
+    try {
+      const liveImpact = await api.credentialImpact(credential.id);
+      const pending = liveImpact.jobs.pending_unclaimed.count;
+      const active = liveImpact.jobs.active_frozen.count;
+      const recoverable = liveImpact.jobs.recoverable.count;
+      const activeScans = liveImpact.scans.active.count;
+      if (pending > 0 || active > 0 || recoverable > 0) {
+        setError(`无法删除「${credential.name}」：仍有 ${pending} 个待领取 Job、${active} 个运行中/冻结 Job、${recoverable} 个可恢复 Job。请等待结束、取消或完成恢复后再删。`);
+        return;
+      }
+      if (activeScans > 0) {
+        setError(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`);
+        return;
+      }
+      const bound = liveImpact.role_configs.count;
+      const historical = liveImpact.jobs.terminal_historical.count;
+      const confirmed = await confirm({
+        title: `删除账号 ${credential.name}？`,
+        description: [
+          "将永久删除该 Provider 账号及其加密密钥，不可撤销。",
+          bound > 0 ? `将同时解除 ${bound} 个角色配置绑定。` : "当前没有角色绑定。",
+          historical > 0 ? `${historical} 条历史 Job 快照会保留，不会被改写。` : "",
+        ].filter(Boolean).join("\n"),
+        confirmLabel: "删除账号",
+        tone: "danger",
+      });
+      if (!confirmed) return;
+      await api.deleteCredential(credential.id, { unbind: bound > 0 });
+      if (selectedCredentialId === credential.id) setSelectedCredentialId("");
+      if (editingCredentialId === credential.id) setEditingCredentialId("");
+      setNotice(`已删除账号「${credential.name}」。`);
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const testConnection = async () => {
     if (!selectedCredential) return;
     setTesting(true);
@@ -1066,6 +1111,14 @@ export function ProviderAccountFlow({
                     >
                       <PencilSimple size={12} /> {editing ? "收起" : "编辑"}
                     </button>
+                    <button
+                      type="button"
+                      className="secondary-button !min-h-7 !px-2 !text-[10px] text-red-300"
+                      onClick={() => void deleteAccount(credential)}
+                      disabled={busy || testing || discovering}
+                    >
+                      <Trash size={12} /> 删除
+                    </button>
                   </div>
                   {editing && (
                     <div className="provider-flow-credential-editor">
@@ -1133,6 +1186,14 @@ export function ProviderAccountFlow({
               </button>
               <button type="button" onClick={discoverModels} disabled={discovering || testing} className="secondary-button">
                 <Lightning size={13} /> {discovering ? "刷新中…" : "刷新模型目录"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void deleteAccount(selectedCredential)}
+                disabled={busy || testing || discovering}
+                className="secondary-button text-red-300"
+              >
+                <Trash size={13} /> 删除账号
               </button>
             </div>
           )}
@@ -1559,7 +1620,9 @@ export function ProviderAccountFlow({
             <span><strong>{previewImpact.role_configs.count}</strong> 已绑定角色配置</span>
             <span><strong>{previewImpact.jobs.pending_unclaimed.count}</strong> pending 冻结</span>
             <span><strong>{previewImpact.jobs.active_frozen.count}</strong> 活跃冻结</span>
-            <span><strong>{previewImpact.jobs.terminal_historical.count}</strong> 终态 / 重试</span>
+            <span><strong>{previewImpact.jobs.recoverable.count}</strong> 可恢复</span>
+            <span><strong>{previewImpact.jobs.terminal_historical.count}</strong> 终态</span>
+            <span><strong>{previewImpact.scans.active.count}</strong> 活动扫描</span>
           </div>
         </div>
         )}

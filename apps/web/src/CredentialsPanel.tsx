@@ -3,7 +3,7 @@ import { api, type Project, type ProviderCredential } from "./api";
 import { ProviderAccountFlow } from "./ProviderAccountFlow";
 
 /**
- * Provider 凭据页：仅托管 ProviderAccountFlow（列表 / 添加 / 编辑 / 绑定）。
+ * Provider 凭据页：仅托管 ProviderAccountFlow（列表 / 添加 / 编辑 / 删除 / 绑定）。
  * 旧三列卡片列表已移除，避免与上方账号列表重复。
  */
 export function CredentialsPanel() {

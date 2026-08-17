@@ -1055,6 +1055,11 @@ COMMANDS = {
     "credentials.status": lambda pos, f: call(
         "POST", f"/credentials/{_p0(pos, 'credentialId')}/status",
         {"status": need(f.get("status"), "--status active|disabled|rotation_required")}),
+    "credentials.delete": lambda pos, f: call(
+        "DELETE",
+        query_path(f"/credentials/{_p0(pos, 'credentialId')}", {
+            "unbind": "true" if f.get("unbind") in (True, "true", "1") else None,
+        })),
     "credentials.test": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/test"),
     # 无 body；用于 RoleConfig 选 model 前发现 Provider 真实目录
     "credentials.models": lambda pos, f: call("GET", f"/credentials/{_p0(pos, 'credentialId')}/models"),
