@@ -2243,6 +2243,7 @@ export const api = {
   health: () => get<{
     ok: boolean;
     ready: boolean;
+    version: string;
     runtime_images: { status: "idle" | "preparing" | "ready" | "failed"; error: string | null; retry_at: string | null };
     dispatcher: { enabled: boolean; started_at: string | null };
     ts: number;

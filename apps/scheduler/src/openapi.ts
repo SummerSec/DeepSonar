@@ -142,7 +142,31 @@ const RuntimeImageChannelUnavailableSchema = {
 /** 核心 API 操作表（OpenAPI paths 的单一来源） */
 const OPS: Op[] = [
   // meta
-  { method: "get", path: "/health", summary: "存活检查（含 runtime image 与 dispatcher readiness）", scope: null, tags: ["Meta"] },
+  {
+    method: "get",
+    path: "/health",
+    summary: "存活检查（含产品版本、runtime image 与 dispatcher readiness）",
+    scope: null,
+    tags: ["Meta"],
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok", "ready", "version", "runtime_images", "dispatcher", "ts"],
+        properties: {
+          ok: { type: "boolean" },
+          ready: { type: "boolean" },
+          version: {
+            type: "string",
+            description: "部署版本：DEEPSONAR_VERSION，否则 DEEPSONAR_IMAGE_TAG；未设置时为空字符串，不用 workspace package.json",
+          },
+          runtime_images: { type: "object", additionalProperties: true },
+          dispatcher: { type: "object", additionalProperties: true },
+          ts: { type: "integer" },
+        },
+      },
+    },
+  },
   { method: "get", path: "/openapi.json", summary: "OpenAPI 3 JSON schema", scope: null, tags: ["Meta"] },
   { method: "get", path: "/schema", summary: "API schema（默认 OpenAPI JSON；?format=markdown 返回 Markdown）", scope: null, tags: ["Meta"] },
   { method: "get", path: "/schema.md", summary: "API Markdown 文档", scope: null, tags: ["Meta"] },

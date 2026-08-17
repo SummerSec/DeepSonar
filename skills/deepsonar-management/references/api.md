@@ -38,7 +38,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /health | 豁免 | 存活检查 `{ok, ready, runtime_images, dispatcher, ts}`；warmup/dispatcher 未就绪时仍 200 且 `ready=false` |
+| GET | /health | 豁免 | 存活检查 `{ok, ready, version, runtime_images, dispatcher, ts}`；`version` 来自 `DEEPSONAR_VERSION` 或 `DEEPSONAR_IMAGE_TAG`；warmup/dispatcher 未就绪时仍 200 且 `ready=false` |
 | GET | /openapi.json | 豁免 | OpenAPI 3.0.3 完整文档 |
 | GET | /schema | 豁免 | `?format=openapi`（默认）/ `summary` / `markdown` |
 | GET | /schema.md | 豁免 | Markdown 契约（本文件） |

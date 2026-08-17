@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type PublicUser } from "./api";
 import { SearchableSelect } from "./SearchableSelect";
+import { inferToastKind, showToast } from "./toast";
 
 export function UsersPanel() {
   const [users, setUsers] = useState<PublicUser[]>([]);
@@ -25,6 +26,7 @@ export function UsersPanel() {
 
   const flash = (m: string) => {
     setMsg(m);
+    showToast(m, inferToastKind(m));
     setTimeout(() => setMsg(null), 3000);
   };
 
@@ -37,7 +39,9 @@ export function UsersPanel() {
       flash("用户已创建");
       reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const detail = e instanceof Error ? e.message : String(e);
+      setError(detail);
+      showToast(detail, "error");
     } finally {
       setBusy(false);
     }
@@ -102,7 +106,9 @@ export function UsersPanel() {
                       await api.resetUserPassword(u.id, pw);
                       flash("密码已重置，旧会话已失效");
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : String(e));
+                      const detail = e instanceof Error ? e.message : String(e);
+                      setError(detail);
+                      showToast(detail, "error");
                     }
                   }}
                 >

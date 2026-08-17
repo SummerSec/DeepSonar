@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "./auth";
 import { api } from "./api";
+import { showToast } from "./toast";
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[13px] text-zinc-200 outline-none focus:border-acc-500";
@@ -23,6 +24,7 @@ export function AccountPanel() {
   const changePassword = async () => {
     if (passwordForm.next !== passwordForm.confirm) {
       setError("两次输入的新密码不一致");
+      showToast("两次输入的新密码不一致", "error");
       return;
     }
     setBusy("password");
@@ -36,8 +38,11 @@ export function AccountPanel() {
       await applySession(result.token);
       setPasswordForm({ current: "", next: "", confirm: "" });
       setMessage("密码已修改，旧会话已失效");
+      showToast("密码已修改，旧会话已失效");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const detail = e instanceof Error ? e.message : String(e);
+      setError(detail);
+      showToast(detail, "error");
     } finally {
       setBusy(null);
     }
@@ -55,8 +60,11 @@ export function AccountPanel() {
       await applySession(result.token);
       setUsernameForm({ current: "", next: result.user.username });
       setMessage("登录名已修改，旧会话已失效");
+      showToast("登录名已修改，旧会话已失效");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const detail = e instanceof Error ? e.message : String(e);
+      setError(detail);
+      showToast(detail, "error");
     } finally {
       setBusy(null);
     }

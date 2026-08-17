@@ -67,6 +67,15 @@ test("RoleConfig and role registry OpenAPI documents project-scope boundaries", 
   assert.match(String(paths["/role-configs/bindable"]?.get?.description), /跨项目绑定/);
 });
 
+test("/health OpenAPI includes deploy version", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const health = paths["/health"]?.get as Record<string, any>;
+  const schema = health.responses["200"].content["application/json"].schema;
+  assert.deepEqual(schema.required, ["ok", "ready", "version", "runtime_images", "dispatcher", "ts"]);
+  assert.equal(schema.properties.version.type, "string");
+});
+
 test("runtime registry channel OpenAPI is strict and project-scope aware", () => {
   const document = buildOpenApiDocument();
   const paths = document.paths as Record<string, Record<string, any>>;

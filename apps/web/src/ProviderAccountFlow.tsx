@@ -38,6 +38,7 @@ import {
 import { formatJsonObject } from "./json-text";
 import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
+import { showToast } from "./toast";
 
 type FlowStep = "account" | "roles" | "effect";
 
@@ -398,6 +399,13 @@ export function ProviderAccountFlow({
     api.credentialProviders().then(setCatalog).catch(() => {});
     api.bindableRoleConfigs().then(setRoleConfigs).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (notice) showToast(notice, "ok");
+  }, [notice]);
+  useEffect(() => {
+    if (error) showToast(error, "error");
+  }, [error]);
 
   useEffect(() => {
     if (!createProvider) {
