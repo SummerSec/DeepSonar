@@ -7,6 +7,7 @@
 
 export const REGISTERED_ROUTE_SURFACE = `
 DELETE /agent-roles/:id
+DELETE /credentials/:id
 DELETE /exports/:id
 DELETE /findings/:id/comments/:commentId
 DELETE /findings/:id/links/:linkId
@@ -191,6 +192,7 @@ PUT /role-configs/global/:roleId
 
 export const OPENAPI_OPERATION_SURFACE = `
 DELETE /agent-roles/{id}
+DELETE /credentials/{id}
 DELETE /projects/{id}/integrations/plane
 DELETE /projects/{id}/role-configs/{roleId}
 DELETE /skill-sources/{id}

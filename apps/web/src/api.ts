@@ -2211,6 +2211,11 @@ export const api = {
     send<ProviderCredential>("POST", `/credentials/${id}/rotate`, { secret }),
   setCredentialStatus: (id: string, status: "active" | "disabled" | "rotation_required") =>
     send<ProviderCredential>("POST", `/credentials/${id}/status`, { status }),
+  deleteCredential: (id: string, opts?: { unbind?: boolean }) =>
+    send<{ ok: boolean; id: string; unbound_role_config_count: number; revoked_job_token_count: number }>(
+      "DELETE",
+      `/credentials/${id}${opts?.unbind ? "?unbind=true" : ""}`,
+    ),
   testCredential: (id: string) =>
     send<{ ok: boolean; detail: string; category?: string; fetched_at?: string }>("POST", `/credentials/${id}/test`),
   credentialModels: (id: string) =>

@@ -282,6 +282,7 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | PATCH | /credentials/:id | agents:write | `{name?, provider?, project_id?, metadata?, agent_cli?, settings_config?, meta?}`；`settings_config` 中 `[已保存密钥]` 由服务端恢复原值 |
 | POST | /credentials/:id/rotate | agents:write | `{secret}` 轮换密钥 |
 | POST | /credentials/:id/status | agents:write | `{status: active\|disabled\|rotation_required}` |
+| DELETE | /credentials/:id | agents:write | 删除已保存账号；pending/active Job 拒绝；绑定 RoleConfig 时需 `?unbind=true`；吊销 `job_tokens`；不改写历史 Job 快照 |
 | POST | /credentials/:id/test | agents:write | 连接测试（无 body；会更新健康证据） |
 | POST | /credentials/:id/models | agents:write | 实时拉取 Provider 模型目录（无 body；用于配置文件模型字段的参考） |
 | POST | /credentials/models/preview | agents:write | `{agent_cli, provider, secret, base_url?, settings_config?}`；未保存账号一键获取模型目录，不落库/审计/回显密钥 |

@@ -9,6 +9,7 @@ const platformTransfer = readFileSync(new URL("./transfer/platform.ts", import.m
 
 test("credential list/detail/impact use the safe projection and bounded impact", () => {
   assert.match(routes, /app\.get\("\/credentials\/:id"/);
+  assert.match(routes, /app\.delete\("\/credentials\/:id"/);
   assert.match(routes, /app\.get\("\/credentials\/:id\/impact"/);
   assert.match(routes, /bound_role_config_count/);
   assert.match(routes, /pending_unclaimed/);

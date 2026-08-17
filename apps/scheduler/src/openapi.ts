@@ -1496,6 +1496,40 @@ const OPS: Op[] = [
     body: { type: "object", required: ["secret"], properties: { secret: { type: "string" } } },
   },
   {
+    method: "delete",
+    path: "/credentials/{id}",
+    summary: "删除已保存的 Provider 账号",
+    description: "有 pending/active Job 时拒绝。仍绑定 RoleConfig 时需 ?unbind=true。吊销并删除 job_tokens；不改写历史 Job 快照。响应与审计不含密文。",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    query: {
+      unbind: { type: "string", enum: ["true", "1"], description: "确认后解除 RoleConfig 绑定并删除" },
+    },
+    responses: {
+      "200": {
+        description: "已删除",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["ok", "id"],
+              properties: {
+                ok: { type: "boolean" },
+                id: { type: "string", format: "uuid" },
+                unbound_role_config_count: { type: "integer" },
+                revoked_job_token_count: { type: "integer" },
+              },
+            },
+          },
+        },
+      },
+      "409": {
+        description: "仍被 RoleConfig 绑定或 pending/active Job 引用",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  },
+  {
     method: "post",
     path: "/credentials/{id}/status",
     summary: "启用/禁用凭据",

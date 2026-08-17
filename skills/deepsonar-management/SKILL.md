@@ -153,6 +153,7 @@ python scripts/deepsonar-api.py credentials models-preview --provider anthropic 
 python scripts/deepsonar-api.py credentials update <id> --data '{"metadata":{"base_url":"https://ai.example/v1"}}'
 python scripts/deepsonar-api.py credentials rotate <id> --secret '...'
 python scripts/deepsonar-api.py credentials status <id> --status active|disabled
+python scripts/deepsonar-api.py credentials delete <id> [--unbind]
 python scripts/deepsonar-api.py credentials test <id>
 python scripts/deepsonar-api.py credentials models <id>   # 已缓存模型目录
 python scripts/deepsonar-api.py credentials models-refresh <id>   # 连接 Provider 刷新目录

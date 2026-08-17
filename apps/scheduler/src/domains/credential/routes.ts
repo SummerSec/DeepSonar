@@ -1037,6 +1037,130 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     return credentialView(row as Record<string, unknown>);
   });
 
+  app.delete("/credentials/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
+    const query = z.object({
+      unbind: z.enum(["true", "1", "false", "0"]).optional(),
+    }).safeParse(req.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: "invalid unbind query", error_code: "REQUEST_INVALID", field: "unbind" });
+    }
+    const unbind = query.data.unbind === "true" || query.data.unbind === "1";
+
+    type DeleteOk = {
+      ok: true;
+      id: string;
+      name: string;
+      kind: string;
+      provider: string;
+      unbound_role_config_count: number;
+      revoked_job_token_count: number;
+      impact: Record<string, unknown>;
+    };
+    type DeleteErr = { ok: false; statusCode: number; body: Record<string, unknown> };
+
+    const result = await sql.begin(async (txRaw): Promise<DeleteOk | DeleteErr> => {
+      const tx = txRaw as unknown as typeof sql;
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+      const [existing] = await tx`
+        SELECT id, name, kind, provider, project_id
+        FROM credentials WHERE id = ${id} FOR UPDATE`;
+      if (!existing) {
+        return { ok: false, statusCode: 404, body: { error: "credential not found", error_code: "CREDENTIAL_NOT_FOUND" } };
+      }
+      if (!credentialMutableToActor(existing.project_id, actorProjectId)) {
+        return {
+          ok: false,
+          statusCode: 403,
+          body: {
+            error: "project-scoped actors may delete only their own project credentials",
+            error_code: "PROJECT_MISMATCH",
+          },
+        };
+      }
+
+      const impact = await credentialImpact(id, actorProjectId);
+      const boundCount = Number((impact.role_configs as { count: number }).count ?? 0);
+      const jobs = impact.jobs as {
+        pending_unclaimed: { count: number };
+        active_frozen: { count: number };
+      };
+      const pendingCount = Number(jobs.pending_unclaimed.count ?? 0);
+      const activeCount = Number(jobs.active_frozen.count ?? 0);
+      if (pendingCount > 0 || activeCount > 0) {
+        return {
+          ok: false,
+          statusCode: 409,
+          body: {
+            error: "credential is still referenced by pending or active jobs",
+            error_code: "CREDENTIAL_IN_USE",
+            impact,
+          },
+        };
+      }
+      if (boundCount > 0 && !unbind) {
+        return {
+          ok: false,
+          statusCode: 409,
+          body: {
+            error: "credential is still bound to RoleConfig; pass unbind=true after confirming",
+            error_code: "CREDENTIAL_BOUND",
+            impact,
+          },
+        };
+      }
+
+      const revokedTokens = await tx`
+        UPDATE job_tokens
+        SET status = 'revoked', revoked_at = COALESCE(revoked_at, now()), revoke_reason = 'credential_deleted'
+        WHERE credential_id = ${id} AND status = 'active'
+        RETURNING id`;
+      await tx`DELETE FROM job_tokens WHERE credential_id = ${id}`;
+      if (boundCount > 0) {
+        await tx`DELETE FROM role_credentials WHERE credential_id = ${id}`;
+      }
+      const [deleted] = await tx`
+        DELETE FROM credentials
+        WHERE id = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
+        RETURNING id`;
+      if (!deleted) {
+        return { ok: false, statusCode: 409, body: { error: "credential changed during delete; retry", error_code: "CREDENTIAL_CHANGED" } };
+      }
+      return {
+        ok: true,
+        id: String(existing.id),
+        name: String(existing.name),
+        kind: String(existing.kind),
+        provider: String(existing.provider),
+        unbound_role_config_count: boundCount,
+        revoked_job_token_count: revokedTokens.length,
+        impact,
+      };
+    });
+
+    if (!result.ok) return reply.code(result.statusCode).send(result.body);
+    await audit(req, {
+      action: "credential.delete",
+      resourceType: "credential",
+      resourceId: id,
+      after: {
+        name: result.name,
+        kind: result.kind,
+        ...projectCredentialProvider(result.kind, result.provider),
+        unbound_role_config_count: result.unbound_role_config_count,
+        revoked_job_token_count: result.revoked_job_token_count,
+      },
+    });
+    return {
+      ok: true,
+      id: result.id,
+      unbound_role_config_count: result.unbound_role_config_count,
+      revoked_job_token_count: result.revoked_job_token_count,
+    };
+  });
+
   // 连接测试：用解密后的凭据对 provider 做一次轻量调用（明文不出进程）
   app.post("/credentials/:id/test", async (req, reply) => {
     const { id } = req.params as { id: string };
