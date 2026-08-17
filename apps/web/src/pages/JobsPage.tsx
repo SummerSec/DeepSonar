@@ -399,6 +399,11 @@ export function JobsPage() {
                       ) : (
                         <span className="text-zinc-600">—</span>
                       )}
+                      {j.upstream_model && j.upstream_model !== j.model && (
+                        <div className="mt-0.5 truncate text-[10px] text-zinc-500" title={j.upstream_model}>
+                          上游 {j.upstream_model}
+                        </div>
+                      )}
                       {j.credential_provider && (
                         <div className="mt-0.5 truncate text-[10px] text-zinc-600" title={j.credential_provider}>
                           via {j.credential_provider}

@@ -2,6 +2,67 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildSettingsConfigFromEditor } from "./CredentialConfigEditor";
+import { boundCredentialLabel, resolvedUpstreamModel, roleModelLabel, sameLast4CredentialCount } from "./ProviderAccountFlow";
+import { claudeMainModelPatch } from "./CcSwitchClaudeFields";
+
+test("bound credential label disambiguates scope, id, and another selected account", () => {
+  const role = {
+    credential_id: "11111111-2222-4333-8444-555555555555",
+    credential_name: "same-name",
+    credential_project_id: "99999999-2222-4333-8444-555555555555",
+    credential_project_name: "red-team",
+  };
+  assert.equal(boundCredentialLabel(role, role.credential_id), "same-name · 项目 red-team #11111111");
+  assert.match(boundCredentialLabel(role, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), /已绑定另一账号/);
+});
+
+test("same-last4 warning catches different credentials in the same provider and CLI", () => {
+  const selected = { provider: "anthropic", agent_cli: "claude-code" as const, last4: "abcd" };
+  assert.equal(sameLast4CredentialCount(selected, [
+    selected,
+    { provider: "anthropic", agent_cli: "claude-code", last4: "abcd" },
+    { provider: "openai", agent_cli: "codex", last4: "abcd" },
+  ]), 2);
+});
+
+test("changing Claude main model preserves explicit Fable and subagent mappings", () => {
+  assert.deepEqual(
+    claudeMainModelPatch({
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "custom-fable",
+      CLAUDE_CODE_SUBAGENT_MODEL: "custom-subagent",
+    }, "old-main", "new-main"),
+    { ANTHROPIC_MODEL: "new-main", ANTHROPIC_SMALL_FAST_MODEL: null },
+  );
+  assert.deepEqual(
+    claudeMainModelPatch({
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "old-main",
+      CLAUDE_CODE_SUBAGENT_MODEL: "old-main",
+    }, "old-main", "new-main"),
+    {
+      ANTHROPIC_MODEL: "new-main",
+      ANTHROPIC_SMALL_FAST_MODEL: null,
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "new-main",
+      CLAUDE_CODE_SUBAGENT_MODEL: "new-main",
+    },
+  );
+});
+
+test("role model display separates the Claude CLI alias from the upstream model", () => {
+  const settings = {
+    env: {
+      ANTHROPIC_MODEL: "grok-4.6",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "grok-4.5",
+    },
+  };
+  assert.equal(resolvedUpstreamModel("claude-code", "fable", settings), "grok-4.5");
+  assert.match(
+    roleModelLabel(
+      { agent_cli: "claude-code", model: "fable" },
+      { settings_config_json: settings },
+    ),
+    /fable.*grok-4\.5.*由别名映射决定/,
+  );
+});
 
 const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
 const panel = readFileSync(new URL("./CredentialsPanel.tsx", import.meta.url), "utf8");

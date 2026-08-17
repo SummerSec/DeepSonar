@@ -443,6 +443,8 @@ export interface JobSummary {
   agent_cli?: string | null;
   /** 冻结快照：所用模型 ID */
   model?: string | null;
+  /** 解析 CLI 别名后实际发送给上游的模型 ID；旧 Job 可能为空。 */
+  upstream_model?: string | null;
   /** 冻结快照：角色名 */
   role_name?: string | null;
   /** 冻结快照：凭据 Provider */
@@ -863,6 +865,8 @@ export interface BindableRoleConfig {
   credential_provider: string | null;
   credential_provider_valid: boolean | null;
   credential_status: string | null;
+  credential_project_id: string | null;
+  credential_project_name: string | null;
   /** Project-scoped actors may inspect global RoleConfigs but cannot mutate/bind them. */
   can_bind: boolean;
 }
@@ -2241,6 +2245,7 @@ export const api = {
       provider_valid: boolean;
       agent_cli: string;
       model: string | null;
+      upstream_model: string | null;
       model_source: "role_override" | "credential_settings" | "none";
       allowed_model_ids: string[];
       compatible: boolean;

@@ -52,11 +52,41 @@ export function extractModelFromSettings(agentCli: string, settingsConfig: unkno
   return modelIds.find((model) => model.trim())?.trim() ?? null;
 }
 
-export function resolveEffectiveModel(input: {
+export function resolveRequestedModel(input: {
   roleModel?: string | null;
   agentCli: string;
   settingsConfig: unknown;
 }): string | null {
   const override = input.roleModel?.trim();
   return override || extractModelFromSettings(input.agentCli, input.settingsConfig);
+}
+
+/** Resolve the model ID that the upstream gateway will actually receive. */
+export function resolveEffectiveModel(input: {
+  roleModel?: string | null;
+  agentCli: string;
+  settingsConfig: unknown;
+}): string | null {
+  const requested = resolveRequestedModel(input);
+  if (!requested || input.agentCli !== "claude-code") return requested;
+
+  const env = asObject(asObject(input.settingsConfig).env);
+  const aliasKey = ({
+    fable: "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    sonnet: "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    opus: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    haiku: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  } as const)[requested.toLowerCase() as "fable" | "sonnet" | "opus" | "haiku"];
+  if (!aliasKey) return requested;
+  const mapped = env[aliasKey];
+  if (typeof mapped === "string" && mapped.trim()) return mapped.trim();
+  const main = env.ANTHROPIC_MODEL;
+  return typeof main === "string" && main.trim() ? main.trim() : requested;
+}
+
+export function snapshotUpstreamModel(snapshot: { model?: unknown; upstream_model?: unknown }): string | null {
+  const upstream = typeof snapshot.upstream_model === "string" ? snapshot.upstream_model.trim() : "";
+  if (upstream) return upstream;
+  const requested = typeof snapshot.model === "string" ? snapshot.model.trim() : "";
+  return requested || null;
 }

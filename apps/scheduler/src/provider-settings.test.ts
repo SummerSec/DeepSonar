@@ -13,8 +13,11 @@ import {
   normalizeProviderSettings,
   parseContextWindowTokens,
   providerSettingsForJobSnapshot,
+  projectProviderRuntimeSnapshot,
   resolveContextWindowTokens,
   resolveEffectiveModel,
+  resolveRequestedModel,
+  snapshotUpstreamModel,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
 
@@ -166,11 +169,46 @@ test("Claude settings persist CC Switch fallback models", () => {
     {
       env: {
         ANTHROPIC_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-sonnet-4-5",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-sonnet-4-5",
         ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-4-5",
         ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-sonnet-4-5",
+        CLAUDE_CODE_SUBAGENT_MODEL: "claude-sonnet-4-5",
       },
     },
+  );
+});
+
+test("Claude aliases preserve the CLI selector and resolve the actual upstream model", () => {
+  const settings = {
+    env: {
+      ANTHROPIC_MODEL: "grok-4.6",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "grok-4.5",
+    },
+  };
+  assert.equal(resolveRequestedModel({ roleModel: "fable", agentCli: "claude-code", settingsConfig: settings }), "fable");
+  assert.equal(resolveEffectiveModel({ roleModel: "fable", agentCli: "claude-code", settingsConfig: settings }), "grok-4.5");
+  const projection = projectProviderRuntimeSnapshot({
+    agentCli: "claude-code",
+    roleModel: "fable",
+    roleContextWindowTokens: 200_000,
+    settingsConfig: { ...settings, reasoning: "high" },
+    defaultModel: null,
+  });
+  assert.equal(projection.model, "fable");
+  assert.equal(projection.upstream_model, "grok-4.5");
+  assert.equal(projection.reasoning, "high");
+  assert.equal(projection.context_window_tokens, 200_000);
+  assert.equal(projection.config_files.length, 1);
+  assert.equal(snapshotUpstreamModel(projection), "grok-4.5");
+  assert.equal(snapshotUpstreamModel({ model: "legacy-model" }), "legacy-model");
+  assert.equal(
+    resolveEffectiveModel({
+      roleModel: "fable",
+      agentCli: "claude-code",
+      settingsConfig: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    }),
+    "grok-4.6",
   );
 });
 

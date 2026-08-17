@@ -80,6 +80,7 @@ import {
   materializeProviderSettings,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
+import { snapshotUpstreamModel } from "./provider-effective-model.js";
 import {
   buildJobSharedAssetCatalog,
   SHARED_ASSETS_READONLY_ROOT,
@@ -394,6 +395,10 @@ export function hasMaterializedProviderConfig(settingsConfig: unknown): boolean 
   return hasProviderSettingsConfig(settingsConfig);
 }
 
+export function credentialAuthorizationModel(snapshot: { model?: unknown; upstream_model?: unknown }): string | null {
+  return snapshotUpstreamModel(snapshot);
+}
+
 /** Normalize module evidence for both the runtime manifest and API payloads.
  * Jobs created before structured missing-module evidence use an empty list. */
 export function moduleEvidenceFromSnapshot(
@@ -656,6 +661,7 @@ export async function executeReal(
   const contract = resultContract(controlToolNames, isHub, isRole, isVerify, isAudit);
   const toolGuide = platformToolGuide(controlToolNames);
   const model = snapshot.model ?? undefined;
+  const upstreamModel = credentialAuthorizationModel(snapshot) ?? undefined;
   const reasoning = snapshot.reasoning ?? undefined;
   const rules = await rulesForProject(sql, job.project_id as string);
   // Hub 决策工具对所有 Agent 可选；启用时才加载可派发角色目录。
@@ -728,14 +734,14 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
     const mapping = PROVIDER_ENV_MAP[currentCredentialProvider];
     if (!mapping) throw new Error(UNKNOWN_PROVIDER_ERROR);
     const credentialModels = allowedModelIds(cred.public_metadata_json);
-    if (model && credentialModels.length > 0 && !credentialModels.includes(model)) {
-      throw new Error(`模型 ${model} 不在 Credential ${cred.id} 的 allowed_model_ids 白名单`);
+    if (upstreamModel && credentialModels.length > 0 && !credentialModels.includes(upstreamModel)) {
+      throw new Error(`模型 ${upstreamModel} 不在 Credential ${cred.id} 的 allowed_model_ids 白名单`);
     }
     const jt = await mintJobToken({
       jobId: job.id as string,
       projectId: job.project_id as string,
       credentialId: cred.id as string,
-      allowedModels: model ? [model] : credentialModels,
+      allowedModels: upstreamModel ? [upstreamModel] : credentialModels,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
     });
     gatewayToken = jt.plaintext;

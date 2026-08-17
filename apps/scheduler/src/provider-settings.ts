@@ -22,8 +22,8 @@ import {
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { defaultDshPiAiSettings, parseDshPiAiSettings } from "./dsh-pi-ai-settings.js";
-import { extractModelFromSettings } from "./provider-effective-model.js";
-export { extractModelFromSettings, resolveEffectiveModel } from "./provider-effective-model.js";
+import { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel } from "./provider-effective-model.js";
+export { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 
 /** Keep in sync with core.CONFIG_FILE_PATHS (avoid circular import via core). */
 const CONFIG_FILE_PATHS: Record<string, string> = {
@@ -313,6 +313,8 @@ export function normalizeProviderSettings(
   setFallback("ANTHROPIC_DEFAULT_HAIKU_MODEL", smallFast ?? main);
   setFallback("ANTHROPIC_DEFAULT_SONNET_MODEL", main ?? smallFast);
   setFallback("ANTHROPIC_DEFAULT_OPUS_MODEL", main ?? smallFast);
+  setFallback("ANTHROPIC_DEFAULT_FABLE_MODEL", main ?? smallFast);
+  setFallback("CLAUDE_CODE_SUBAGENT_MODEL", main ?? smallFast);
   delete env.ANTHROPIC_SMALL_FAST_MODEL;
   clone.env = env;
   return clone;
@@ -584,6 +586,66 @@ export function extractReasoningFromSettings(agentCli: string, settingsConfig: u
   return isCodexReasoningEffort(value) ? value : null;
 }
 
+export interface ProviderRuntimeSnapshotProjection {
+  model: string | null;
+  upstream_model: string | null;
+  reasoning: ReasoningValue | null;
+  context_window_tokens: number | null;
+  settings_config_json: Record<string, unknown>;
+  config_files: MaterializedConfigFile[];
+}
+
+/** Single source for the Provider-owned part of an immutable Job snapshot. */
+export function projectProviderRuntimeSnapshot(input: {
+  agentCli: string;
+  roleModel?: string | null;
+  roleContextWindowTokens?: unknown;
+  settingsConfig: unknown;
+  manualConfigFiles?: MaterializedConfigFile[];
+  defaultModel?: string | null;
+}): ProviderRuntimeSnapshotProjection {
+  const hasSettings = hasProviderSettingsConfig(input.settingsConfig);
+  const settingsConfig = providerSettingsForJobSnapshot(input.settingsConfig, input.agentCli);
+  const contextWindowTokens = resolveContextWindowTokens({
+    roleContextWindowTokens: input.roleContextWindowTokens,
+    settingsConfig,
+  });
+  const roleModel = input.roleModel?.trim() || null;
+  const reasoning = hasSettings
+    ? extractReasoningFromSettings(input.agentCli, settingsConfig) as ReasoningValue | null
+    : null;
+  const manualConfigFiles = input.manualConfigFiles ?? [];
+  let configFiles = manualConfigFiles;
+  let model = roleModel ?? input.defaultModel ?? null;
+  if (hasSettings) {
+    const materialized = materializeProviderSettings({
+      agentCli: input.agentCli,
+      settingsConfig,
+      overrides: { model: roleModel, reasoning, context_window_tokens: contextWindowTokens },
+    });
+    if (materialized.length > 0) {
+      const materializedPaths = new Set(materialized.map((item) => item.path));
+      configFiles = input.agentCli === "pi"
+        ? [...materialized, ...manualConfigFiles.filter((item) => !materializedPaths.has(item.path))]
+        : materialized;
+    }
+    if (!roleModel) {
+      model = resolveRequestedModel({ roleModel: null, agentCli: input.agentCli, settingsConfig })
+        ?? input.defaultModel
+        ?? null;
+    }
+  }
+  const upstreamModel = resolveEffectiveModel({ roleModel: model, agentCli: input.agentCli, settingsConfig }) ?? model;
+  return {
+    model,
+    upstream_model: upstreamModel,
+    reasoning,
+    context_window_tokens: contextWindowTokens,
+    settings_config_json: settingsConfig,
+    config_files: configFiles,
+  };
+}
+
 /** Resolve the direct upstream endpoint before Job Gateway projection. */
 export function extractBaseUrlFromSettings(settingsConfig: unknown): string | null {
   const settings = asObject(settingsConfig);
@@ -631,6 +693,7 @@ export function extractModelsFromSettings(settingsConfig: unknown): string[] {
   };
   const env = asObject(settings.env);
   push(env.ANTHROPIC_MODEL);
+  push(env.ANTHROPIC_DEFAULT_FABLE_MODEL);
   push(env.ANTHROPIC_DEFAULT_SONNET_MODEL);
   push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
   push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);

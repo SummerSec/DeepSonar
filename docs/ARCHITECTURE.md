@@ -485,8 +485,8 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 | 层 | 位置 | 内容 |
 |----|------|------|
 | 存储 | `role_configs` / `role_credentials` / `role_config_files` / Credential `settings_config_json` | RoleConfig 保存 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关与 Credential 引用；Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结，运行时由固定提交的 `dsh-reasoning-settings` 修正 Subagent 继承；全局 RoleConfig 保存可信镜像绑定 |
-| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 物化为官方 `effortLevel` 四档，Codex 冻结为 `model_reasoning_effort`，Pi 冻结为 `--thinking`，OpenCode 冻结为 Provider 自定义 `--variant`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
-| 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含解析后的客户端上下文预算）；Executor 不读取旧配置或为缺失快照降级 |
+| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Codex 冻结为 `model_reasoning_effort`，Pi 冻结为 `--thinking`，OpenCode 冻结为 Provider 自定义 `--variant`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
+| 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含 CLI selector `model`、实际 `upstream_model`、Provider 配置文件与客户端上下文预算）；Executor 仅用 selector 启动 CLI，所有上游治理使用 `upstream_model ?? model`，不读取旧配置或为缺失快照降级 |
 
 项目镜像策略不改表：`projects.config_json.image_strategy` 缺省为
 `inherit_global`，该策略下每个 Job 角色的镜像只读取全局 RoleConfig 的

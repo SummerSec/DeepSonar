@@ -13,6 +13,7 @@ import {
   type ProjectRules,
 } from "./core.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
+import { snapshotUpstreamModel } from "./provider-effective-model.js";
 import { sql } from "./db.js";
 import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/index.js";
 import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
@@ -75,6 +76,7 @@ export type DispatchCandidate = {
   credential_provider: unknown;
   credential_id: unknown;
   model: unknown;
+  upstream_model?: unknown;
   credential_metadata: unknown;
   agent_snapshot_json?: unknown;
 };
@@ -344,7 +346,7 @@ export function dispatchSkipReason(
   const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
   const provider = String(job.credential_provider ?? "");
   const credentialId = String(job.credential_id ?? "");
-  const model = String(job.model ?? "");
+  const model = snapshotUpstreamModel(job) ?? "";
   if ((counts.project.get(projectId) ?? 0) >= rules.maxJobsPerProject) return "project";
   const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
   if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
@@ -490,13 +492,15 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
              agent_snapshot_json->>'credential_id' AS credential_id,
              agent_snapshot_json->>'credential_provider' AS credential_provider,
              agent_snapshot_json->>'model' AS model,
+             agent_snapshot_json->>'upstream_model' AS upstream_model,
              COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running')
       GROUP BY status, project_id,
                agent_snapshot_json->>'agent_cli',
                agent_snapshot_json->>'credential_id',
                agent_snapshot_json->>'credential_provider',
-               agent_snapshot_json->>'model'`;
+               agent_snapshot_json->>'model',
+               agent_snapshot_json->>'upstream_model'`;
     const totalActive = active.reduce((n, row) => n + Number(row.count), 0);
     const activeProvisioning = active.reduce(
       (n, row) => n + (["claimed", "provisioning"].includes(String(row.status)) ? Number(row.count) : 0),
@@ -520,7 +524,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       const cli = String(row.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
       const provider = String(row.credential_provider ?? "");
       const credentialId = String(row.credential_id ?? "");
-      const model = String(row.model ?? "");
+      const model = snapshotUpstreamModel(row) ?? "";
       projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + Number(row.count));
       if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + Number(row.count));
       if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + Number(row.count));
@@ -548,6 +552,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
                    j.agent_snapshot_json->>'model' AS model,
+                   j.agent_snapshot_json->>'upstream_model' AS upstream_model,
                    c.public_metadata_json AS credential_metadata,
                    cv.target_json AS canvas_target_json
             FROM jobs j
@@ -569,6 +574,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
                    j.agent_snapshot_json->>'credential_id' AS credential_id,
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
                    j.agent_snapshot_json->>'model' AS model,
+                   j.agent_snapshot_json->>'upstream_model' AS upstream_model,
                    c.public_metadata_json AS credential_metadata,
                    cv.target_json AS canvas_target_json
             FROM jobs j
@@ -607,7 +613,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
         const provider = String(job.credential_provider ?? "");
         const credentialId = String(job.credential_id ?? "");
-        const model = String(job.model ?? "");
+        const model = snapshotUpstreamModel(job) ?? "";
         const skipReason = dispatchSkipReason(
           job as DispatchCandidate,
           {

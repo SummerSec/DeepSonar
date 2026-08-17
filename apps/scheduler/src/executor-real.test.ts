@@ -14,6 +14,7 @@ import {
   isSemanticAgentRunError,
   runtimeCredentialProviderError,
   hasMaterializedProviderConfig,
+  credentialAuthorizationModel,
   buildInstructionWorkspaceFiles,
   expandWorkspacePayloadFile,
   sharedAssetPublishControlError,
@@ -447,6 +448,11 @@ test("runtime recognizes materialized Provider settings for Gateway routing", ()
   assert.equal(hasMaterializedProviderConfig({ env: { ANTHROPIC_MODEL: "model-id" } }), true);
   assert.equal(hasMaterializedProviderConfig({}), false);
   assert.equal(hasMaterializedProviderConfig(null), false);
+});
+
+test("credential authorization uses upstream model but legacy snapshots fall back to the CLI model", () => {
+  assert.equal(credentialAuthorizationModel({ model: "fable", upstream_model: "grok-4.5" }), "grok-4.5");
+  assert.equal(credentialAuthorizationModel({ model: "legacy-model" }), "legacy-model");
 });
 
 test("late sub-agent completion keeps the first accepted mark_job_done proposal", () => {

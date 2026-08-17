@@ -93,7 +93,7 @@ function isBuiltinBindableRole(roleConfig: BindableRoleConfig): boolean {
 }
 
 /** Models declared inside CC Switch settingsConfig (env / toml / open-code). */
-function modelsFromSettingsConfig(credential: ProviderCredential | null): string[] {
+function modelsFromSettingsConfig(credential: Pick<ProviderCredential, "settings_config_json"> | null): string[] {
   if (!credential?.settings_config_json) return [];
   const settings = credential.settings_config_json;
   const found: string[] = [];
@@ -104,6 +104,7 @@ function modelsFromSettingsConfig(credential: ProviderCredential | null): string
     ? settings.env as Record<string, unknown>
     : {};
   push(env.ANTHROPIC_MODEL);
+  push(env.ANTHROPIC_DEFAULT_FABLE_MODEL);
   push(env.ANTHROPIC_DEFAULT_SONNET_MODEL);
   push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
   push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
@@ -146,6 +147,68 @@ function modelsFromSettingsConfig(credential: ProviderCredential | null): string
     }
   }
   return found;
+}
+
+export function boundCredentialLabel(
+  roleConfig: Pick<BindableRoleConfig, "credential_id" | "credential_name" | "credential_project_id" | "credential_project_name">,
+  selectedCredentialId: string | null,
+): string {
+  if (!roleConfig.credential_id) return "未绑定";
+  const shortId = roleConfig.credential_id.slice(0, 8);
+  const scope = roleConfig.credential_project_id
+    ? `项目 ${roleConfig.credential_project_name ?? `#${roleConfig.credential_project_id.slice(0, 8)}`}`
+    : "全局";
+  const other = selectedCredentialId && roleConfig.credential_id !== selectedCredentialId ? " · 已绑定另一账号" : "";
+  return `${roleConfig.credential_name ?? "未命名"} · ${scope} #${shortId}${other}`;
+}
+
+export function sameLast4CredentialCount(
+  credential: Pick<ProviderCredential, "provider" | "agent_cli" | "last4">,
+  credentials: ReadonlyArray<Pick<ProviderCredential, "provider" | "agent_cli" | "last4">>,
+): number {
+  return credentials.filter((item) =>
+    item.provider === credential.provider
+    && (item.agent_cli ?? null) === (credential.agent_cli ?? null)
+    && item.last4 === credential.last4
+  ).length;
+}
+
+export function resolvedUpstreamModel(
+  agentCli: string,
+  requestedModel: string | null,
+  settingsConfig: Record<string, unknown> | null | undefined,
+): string | null {
+  const settings = settingsConfig ?? {};
+  const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
+    ? settings.env as Record<string, unknown>
+    : {};
+  const main = typeof env.ANTHROPIC_MODEL === "string" ? env.ANTHROPIC_MODEL.trim() : "";
+  const requested = requestedModel?.trim() || main || null;
+  if (!requested || agentCli !== "claude-code") return requested;
+  const aliasKey = ({
+    fable: "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    sonnet: "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    opus: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    haiku: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  } as const)[requested.toLowerCase() as "fable" | "sonnet" | "opus" | "haiku"];
+  const mapped = aliasKey && typeof env[aliasKey] === "string" ? String(env[aliasKey]).trim() : "";
+  return mapped || main || requested;
+}
+
+export function roleModelLabel(
+  roleConfig: Pick<BindableRoleConfig, "agent_cli" | "model">,
+  credential: Pick<ProviderCredential, "settings_config_json"> | null,
+): string {
+  const requested = roleConfig.model?.trim() || modelsFromSettingsConfig(credential)[0] || null;
+  if (!requested) return "配置文件 · 未声明模型";
+  const upstream = resolvedUpstreamModel(roleConfig.agent_cli, requested, credential?.settings_config_json);
+  if (upstream && upstream !== requested) {
+    const aliasHint = ["fable", "sonnet", "opus", "haiku"].includes(requested.toLowerCase())
+      ? "（由别名映射决定）"
+      : "";
+    return `CLI 选择 · ${requested} → 上游 · ${upstream}${aliasHint}`;
+  }
+  return roleConfig.model ? `Role 覆盖 · ${requested}` : `配置文件 · ${requested}`;
 }
 
 function modelIds(credential: ProviderCredential | null): string[] {
@@ -1045,6 +1108,10 @@ export function ProviderAccountFlow({
             {credentials.map((credential) => {
               const selected = selectedCredentialId === credential.id;
               const editing = editingCredentialId === credential.id;
+              const sameLast4Count = sameLast4CredentialCount(credential, credentials);
+              const projectName = credential.project_id
+                ? projects.find((project) => project.id === credential.project_id)?.name ?? `#${credential.project_id.slice(0, 8)}`
+                : null;
               return (
                 <div
                   key={credential.id}
@@ -1069,7 +1136,8 @@ export function ProviderAccountFlow({
                         {credential.agent_cli
                           ? ` · ${cliLabel[credential.agent_cli] ?? credential.agent_cli}`
                           : " · CLI 未设置"}
-                        {credential.scope === "project" ? " · 项目" : " · 全局"}
+                        {credential.scope === "project" ? ` · 项目 ${projectName}` : " · 全局"}
+                        {` · #${credential.id.slice(0, 8)}`}
                       </small>
                     </span>
                     <span className="provider-flow-credential-meta">
@@ -1079,6 +1147,7 @@ export function ProviderAccountFlow({
                         ? (cliLabel[credential.agent_cli] ?? credential.agent_cli)
                         : "CLI 未设"}
                       {" · ····"}{credential.last4}
+                      {sameLast4Count > 1 && ` · ⚠ 同末四位账号 ${sameLast4Count} 个，请核对绑定`}
                     </span>
                   </button>
                   <div className="provider-flow-credential-actions">
@@ -1227,6 +1296,11 @@ export function ProviderAccountFlow({
             <span>指纹 {selectedCredential?.fingerprint?.slice(0, 8) ?? "--------"}</span>
             {currentCatalog.length > 0 && <span>目录 {currentCatalog.length} 个</span>}
           </div>
+          {selectedCredential && (
+            <div className="provider-flow-warning">
+              <Warning size={13} /> 模型目录和连接测试不代表当前 Key 有调用该模型的权限；以具体调用或任务返回的上游 403 为准。
+            </div>
+          )}
           {catalogError && <div className="provider-flow-catalog-error"><Warning size={13} /> {catalogError}</div>}
           {selectedCredential && bindingGateReason && <div className="provider-flow-warning"><Warning size={13} /> {bindingGateReason}</div>}
         </div>
@@ -1354,6 +1428,8 @@ export function ProviderAccountFlow({
                       || (targetCatalog && !targetCatalog.compatible_agent_cli.includes(roleCli))
                     ),
                   );
+                  const boundCredential = credentials.find((credential) => credential.id === roleConfig.credential_id) ?? null;
+                  const modelCredential = roleConfig.credential_id ? boundCredential : selectedCredential;
                   const accent = roleConfig.role_ui_color?.trim() || undefined;
                   const canToggle = roleConfig.can_bind && !incompatible;
                   return (
@@ -1505,7 +1581,7 @@ export function ProviderAccountFlow({
                       )}
                       <span className="provider-flow-role-meta">
                         <span
-                          className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind ? "is-warning" : roleConfig.credential_name ? "is-bound" : ""}`}
+                          className={`provider-flow-role-status ${incompatible || !roleConfig.can_bind || (roleConfig.credential_id && roleConfig.credential_id !== selectedCredential?.id) ? "is-warning" : roleConfig.credential_name ? "is-bound" : ""}`}
                           title={
                             !roleConfig.can_bind
                               ? "全局角色配置可见，但项目操作者只能绑定本项目角色配置"
@@ -1513,25 +1589,17 @@ export function ProviderAccountFlow({
                                 ? selectedCredential?.agent_cli
                                   ? `角色 CLI 与账号目标 CLI（${cliLabel[selectedCredential.agent_cli] ?? selectedCredential.agent_cli}）不一致，请先改 CLI 再勾选绑定`
                                   : `请选择与 ${cliLabel[roleCli] ?? roleCli} 兼容的 Provider`
-                                : roleConfig.credential_name
-                                  ? `已绑定 · ${roleConfig.credential_name}`
-                                  : undefined
+                                : boundCredentialLabel(roleConfig, selectedCredential?.id ?? null)
                           }
                         >
                           {!roleConfig.can_bind
                             ? "只读 · 项目作用域"
                             : incompatible
                               ? "CLI 不匹配 · 可改 CLI"
-                              : roleConfig.credential_name
-                                ? `已绑定 · ${roleConfig.credential_name}`
-                                : "未绑定"}
+                              : boundCredentialLabel(roleConfig, selectedCredential?.id ?? null)}
                         </span>
-                        <span className="provider-flow-role-model">
-                          {roleConfig.model
-                            ? `Role 覆盖 · ${roleConfig.model}`
-                            : modelsFromSettingsConfig(selectedCredential)[0]
-                              ? `配置文件 · ${modelsFromSettingsConfig(selectedCredential)[0]}`
-                              : "配置文件 · 未声明模型"}
+                        <span className="provider-flow-role-model" title={roleModelLabel(roleConfig, modelCredential)}>
+                          {roleModelLabel(roleConfig, modelCredential)}
                         </span>
                       </span>
                     </div>

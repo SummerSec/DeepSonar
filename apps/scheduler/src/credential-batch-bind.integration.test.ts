@@ -61,10 +61,10 @@ if (!testDatabaseUrl) {
       const incompatibleConfigId = randomUUID();
       const refreshConfigId = randomUUID();
       await sql`
-        INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
-        VALUES (${configId}, ${roleId}, ${projectId}, 'claude-code', 'claude-sonnet-4-5'),
-               (${incompatibleConfigId}, ${incompatibleRoleId}, ${projectId}, 'claude-code', 'claude-sonnet-4-5'),
-               (${refreshConfigId}, ${roleId}, NULL, 'claude-code', 'claude-sonnet-4-5')`;
+        INSERT INTO role_configs (id, role_id, project_id, agent_cli, model, context_window_tokens)
+        VALUES (${configId}, ${roleId}, ${projectId}, 'claude-code', 'claude-sonnet-4-5', NULL),
+               (${incompatibleConfigId}, ${incompatibleRoleId}, ${projectId}, 'claude-code', 'claude-sonnet-4-5', NULL),
+               (${refreshConfigId}, ${roleId}, NULL, 'claude-code', 'fable', 321000)`;
 
       const credential = async (
         name: string,
@@ -72,24 +72,33 @@ if (!testDatabaseUrl) {
         credentialProjectId: string | null = null,
         healthStatus: "ok" | "error" = "ok",
         models: string[] = ["claude-sonnet-4-5"],
+        settingsConfig: Record<string, unknown> = {},
       ) => {
         const id = randomUUID();
         const encrypted = encryptSecret(`${name}-secret`);
         await sql`
           INSERT INTO credentials (
             id, name, kind, provider, project_id, ciphertext, nonce, auth_tag, fingerprint, last4,
-            status, last_tested_at, health_status, health_error_category, model_catalog_json, model_catalog_fetched_at
+            status, last_tested_at, health_status, health_error_category, model_catalog_json, model_catalog_fetched_at,
+            agent_cli, settings_config_json
           )
           VALUES (
             ${id}, ${name}, 'llm_provider', ${provider}, ${credentialProjectId}, ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag}, ${id.slice(0, 16)}, 'cret',
-            'active', now(), ${healthStatus}, ${healthStatus === "ok" ? null : "upstream"}, ${sql.json(models as never)}, ${models.length > 0 ? new Date() : null}
+            'active', now(), ${healthStatus}, ${healthStatus === "ok" ? null : "upstream"}, ${sql.json(models as never)}, ${models.length > 0 ? new Date() : null},
+            'claude-code', ${sql.json(settingsConfig as never)}
           )`;
         return id;
       };
       const sourceId = await credential("source", "anthropic", projectId);
       const targetId = await credential("target", "anthropic", projectId);
       const refreshSourceId = await credential("refresh-source", "anthropic");
-      const refreshTargetId = await credential("refresh-target", "anthropic");
+      const refreshTargetId = await credential("refresh-target", "anthropic", null, "ok", ["grok-4.6"], {
+        env: {
+          ANTHROPIC_MODEL: "grok-4.6",
+          ANTHROPIC_DEFAULT_FABLE_MODEL: "grok-4.6",
+        },
+        reasoning: "high",
+      });
       const incompatibleTargetId = await credential("incompatible-target", "openai", projectId);
       const failedHealthId = await credential("failed-health", "anthropic", projectId, "error", []);
       const missingCatalogId = await credential("missing-catalog", "anthropic", projectId, "ok", []);
@@ -103,19 +112,35 @@ if (!testDatabaseUrl) {
       const terminalId = randomUUID();
       const refreshPendingId = randomUUID();
       const refreshActiveId = randomUUID();
+      const refreshTerminalId = randomUUID();
       const snapshot = (roleConfigId: string, credentialId: string) => ({
         role_config_id: roleConfigId,
         credential_id: credentialId,
         credential_provider: "anthropic",
         model: "claude-sonnet-4-5",
       });
+      const oldRefreshSnapshot = {
+        ...snapshot(refreshConfigId, refreshSourceId),
+        credential_name: "refresh-source",
+        model: "fable",
+        upstream_model: "grok-4.5",
+        settings_config_json: {
+          env: { ANTHROPIC_MODEL: "grok-4.5", ANTHROPIC_DEFAULT_FABLE_MODEL: "grok-4.5" },
+          reasoning: "medium",
+        },
+        config_files: [{ path: ".claude/settings.json", content: "old", content_sha256: "old" }],
+        reasoning: "medium",
+        context_window_tokens: 200000,
+        role_config_version: 1,
+      };
       await sql`
         INSERT INTO jobs (id, project_id, type, status, agent_snapshot_json)
         VALUES (${pendingId}, ${projectId}, 'audit', 'pending', ${snapshot(configId, sourceId) as never}),
                (${activeId}, ${projectId}, 'audit', 'running', ${snapshot(configId, sourceId) as never}),
                (${terminalId}, ${projectId}, 'audit', 'succeeded', ${snapshot(configId, sourceId) as never}),
-               (${refreshPendingId}, ${projectId}, 'audit', 'pending', ${snapshot(refreshConfigId, refreshSourceId) as never}),
-               (${refreshActiveId}, ${projectId}, 'audit', 'running', ${snapshot(refreshConfigId, refreshSourceId) as never})`;
+               (${refreshPendingId}, ${projectId}, 'audit', 'pending', ${oldRefreshSnapshot as never}),
+               (${refreshActiveId}, ${projectId}, 'audit', 'running', ${oldRefreshSnapshot as never}),
+               (${refreshTerminalId}, ${projectId}, 'audit', 'succeeded', ${oldRefreshSnapshot as never})`;
 
       const bindResponse = await app.inject({
         method: "POST",
@@ -190,8 +215,18 @@ if (!testDatabaseUrl) {
       assert.equal(refreshImpact.refreshed_pending_job_count, 1);
       const [pendingAfterRefresh] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${refreshPendingId}`;
       const [activeAfterRefresh] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${refreshActiveId}`;
+      const [terminalAfterRefresh] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${refreshTerminalId}`;
       assert.equal(pendingAfterRefresh.agent_snapshot_json.credential_id, refreshTargetId);
-      assert.equal(activeAfterRefresh.agent_snapshot_json.credential_id, refreshSourceId, "refresh never touches active jobs");
+      assert.equal(pendingAfterRefresh.agent_snapshot_json.credential_name, "refresh-target");
+      assert.equal(pendingAfterRefresh.agent_snapshot_json.model, "fable");
+      assert.equal(pendingAfterRefresh.agent_snapshot_json.upstream_model, "grok-4.6");
+      assert.equal(pendingAfterRefresh.agent_snapshot_json.reasoning, "high");
+      assert.equal(pendingAfterRefresh.agent_snapshot_json.context_window_tokens, 321000);
+      assert.equal(pendingAfterRefresh.agent_snapshot_json.settings_config_json.env.ANTHROPIC_DEFAULT_FABLE_MODEL, "grok-4.6");
+      assert.match(pendingAfterRefresh.agent_snapshot_json.config_files[0].content, /grok-4\.6/);
+      assert.ok(pendingAfterRefresh.agent_snapshot_json.role_config_version > oldRefreshSnapshot.role_config_version);
+      assert.deepEqual(activeAfterRefresh.agent_snapshot_json, oldRefreshSnapshot, "refresh never touches active jobs");
+      assert.deepEqual(terminalAfterRefresh.agent_snapshot_json, oldRefreshSnapshot, "refresh never touches terminal jobs");
 
       const failedHealthResponse = await app.inject({
         method: "POST",

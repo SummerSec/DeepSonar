@@ -36,7 +36,15 @@ import {
   type Encrypted,
 } from "../../credentials.js";
 import { CredentialProbeError, listCredentialModels, listCredentialModelsPreview, testCredential } from "../../credential-test.js";
-import { extractBaseUrlFromSettings, normalizeProviderSettings, parseContextWindowTokens, resolveEffectiveModel } from "../../provider-settings.js";
+import {
+  extractBaseUrlFromSettings,
+  normalizeProviderSettings,
+  parseContextWindowTokens,
+  projectProviderRuntimeSnapshot,
+  resolveEffectiveModel,
+  resolveRequestedModel,
+  type ProviderRuntimeSnapshotProjection,
+} from "../../provider-settings.js";
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   PLATFORM_DEFAULT_AGENT_CLI,
@@ -517,7 +525,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       }
 
       const configs = await tx`
-        SELECT rc.id, rc.role_id, rc.project_id, rc.agent_cli, rc.model, rc.version,
+        SELECT rc.id, rc.role_id, rc.project_id, rc.agent_cli, rc.model, rc.context_window_tokens, rc.version,
                ar.name AS role_name
         FROM role_configs rc
         JOIN agent_roles ar ON ar.id = rc.role_id
@@ -536,6 +544,19 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "project credential can only bind RoleConfigs in the same project", body.credential_id, "choose_project_role_config", offending ? String(offending.id) : undefined);
       }
 
+      const manualConfigFiles = await tx`
+        SELECT role_config_id, path, content, content_sha256
+        FROM role_config_files
+        WHERE role_config_id = ANY(${roleConfigIds}::uuid[])
+        ORDER BY role_config_id, path`;
+      const manualFilesByConfig = new Map<string, Array<{ path: string; content: string; content_sha256: string }>>();
+      for (const row of manualConfigFiles) {
+        const configId = String(row.role_config_id);
+        const files = manualFilesByConfig.get(configId) ?? [];
+        files.push({ path: String(row.path), content: String(row.content), content_sha256: String(row.content_sha256) });
+        manualFilesByConfig.set(configId, files);
+      }
+
       const existingBindings = await tx`
         SELECT rc.role_config_id, rc.credential_id, rc.purpose
         FROM role_credentials rc
@@ -547,7 +568,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       }
 
       const normalizedModel = body.model === undefined ? undefined : body.model?.trim() || null;
-      const effectiveModelByConfig = new Map<string, string | null>();
+      const providerSnapshotByConfig = new Map<string, ProviderRuntimeSnapshotProjection>();
       for (const configRow of configs) {
         const configId = String(configRow.id);
         const currentCredentialId = llmByConfig.get(configId) ?? null;
@@ -564,13 +585,22 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         if (target.agent_cli && target.agent_cli !== configRow.agent_cli) {
           return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: Credential 配置文件属于 ${target.agent_cli}，不能绑定到 ${configRow.agent_cli}`, body.credential_id, "choose_model", configId);
         }
+        let providerSnapshot: ProviderRuntimeSnapshotProjection;
+        try {
+          providerSnapshot = projectProviderRuntimeSnapshot({
+            agentCli: String(configRow.agent_cli),
+            roleModel: model,
+            roleContextWindowTokens: configRow.context_window_tokens,
+            settingsConfig: target.settings_config_json,
+            manualConfigFiles: manualFilesByConfig.get(configId) ?? [],
+            defaultModel: PLATFORM_DEFAULT_AGENT_MODEL,
+          });
+        } catch (error) {
+          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId}: ${error instanceof Error ? error.message : String(error)}`, body.credential_id, "choose_model", configId);
+        }
+        providerSnapshotByConfig.set(configId, providerSnapshot);
+        const modelForGate = providerSnapshot.upstream_model;
         const allowed = allowedModelIds(target.public_metadata_json);
-        const modelForGate = resolveEffectiveModel({
-          roleModel: model,
-          agentCli: String(configRow.agent_cli),
-          settingsConfig: target.settings_config_json,
-        }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
-        effectiveModelByConfig.set(configId, modelForGate);
         // Only enforce explicit allowlist. Catalog is not a bind gate.
         if (allowed.length > 0 && !modelForGate) {
           return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId}: Credential 配置文件未声明模型且 RoleConfig 未提供覆盖`, body.credential_id, "choose_model", configId);
@@ -604,17 +634,21 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
                    OR agent_snapshot_json->>'credential_id' = ${sourceCredentialId})
             FOR UPDATE`;
           if (pending.length > 0) {
+            const providerSnapshot = providerSnapshotByConfig.get(configId)!;
+            const refreshedSnapshot = {
+              credential_id: body.credential_id,
+              credential_name: String(target.name),
+              credential_provider: String(target.provider),
+              model: providerSnapshot.model,
+              upstream_model: providerSnapshot.upstream_model,
+              settings_config_json: providerSnapshot.settings_config_json,
+              config_files: providerSnapshot.config_files,
+              reasoning: providerSnapshot.reasoning,
+              context_window_tokens: providerSnapshot.context_window_tokens,
+              role_config_version: nextVersion,
+            };
             await tx`
-              UPDATE jobs SET agent_snapshot_json =
-                jsonb_set(
-                  jsonb_set(
-                    jsonb_set(
-                      jsonb_set(
-                        jsonb_set(agent_snapshot_json, '{credential_id}', to_jsonb(${body.credential_id}::text), true),
-                        '{credential_name}', to_jsonb(${String(target.name)}::text), true),
-                      '{credential_provider}', to_jsonb(${String(target.provider)}::text), true),
-                    '{model}', COALESCE(to_jsonb(${effectiveModelByConfig.get(configId) ?? null}::text), 'null'::jsonb), true),
-                  '{role_config_version}', to_jsonb(${nextVersion}::int), true)
+              UPDATE jobs SET agent_snapshot_json = agent_snapshot_json || ${tx.json(refreshedSnapshot as never)}
               WHERE id = ANY(${pending.map((job) => job.id)}::uuid[])
                 AND status = 'pending'`;
             refreshedPending.push(...pending.map((job) => String(job.id)));
@@ -1364,6 +1398,11 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
     const agentCli = query.agent_cli;
+    const requestedModel = resolveRequestedModel({
+      roleModel: query.model ?? null,
+      agentCli,
+      settingsConfig: cred.settings_config_json,
+    });
     const model = resolveEffectiveModel({
       roleModel: query.model ?? null,
       agentCli,
@@ -1384,7 +1423,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       credential_id: id,
       ...providerProjection,
       agent_cli: agentCli,
-      model,
+      model: requestedModel,
+      upstream_model: model,
       allowed_model_ids: allowed,
       model_source: query.model ? "role_override" : model ? "credential_settings" : "none",
       compatible: !compatibilityError && !profileCliError && !modelError,

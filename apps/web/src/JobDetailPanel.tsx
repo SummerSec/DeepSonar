@@ -370,6 +370,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const agentCli = snapStr(snapshot, "agent_cli");
   const dshTaskMode = snapStr(snapshot, "dsh_task_mode");
   const model = snapStr(snapshot, "model");
+  const upstreamModel = snapStr(snapshot, "upstream_model");
   const contextWindowTokens = snapStr(snapshot, "context_window_tokens");
   const roleName = snapStr(snapshot, "name");
   const credentialId = snapStr(snapshot, "credential_id");
@@ -1000,6 +1001,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                       <ConfigField label="CLI 工具 (agent_cli)" value={agentCli} />
                       {agentCli === "dsh" && <ConfigField label="DSH 任务模式" value={dshTaskMode} />}
                       <ConfigField label="模型 (model)" value={model} />
+                      <ConfigField label="上游模型 (upstream_model)" value={upstreamModel} />
                       <ConfigField
                         label="CLI 客户端上下文预算"
                         value={contextWindowTokens === "—" ? "Provider / CLI 默认" : `${contextWindowTokens} tokens`}

@@ -89,6 +89,12 @@ export function settingsSectionDataNeeds(projectId: string | null, section: Glob
   };
 }
 
+export function nextEnabledRoleNames(roles: ProjectRole[], targetName: string): string[] {
+  return roles
+    .filter((role) => role.name === targetName ? !role.enabled : role.enabled)
+    .map((role) => role.name);
+}
+
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
 const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500";
@@ -332,9 +338,9 @@ export function SettingsPanel({
   /** 勾选启用：立即保存整个 enabled 清单（首次勾选后从默认模式转为显式清单） */
   const toggleRole = async (role: ProjectRole) => {
     if (!projectId) return;
-    const next = roles.filter((r) => (r.name === role.name ? !r.enabled : r.enabled)).filter((r) => r.enabled);
+    const next = nextEnabledRoleNames(roles, role.name);
     try {
-      await api.patchSettings(projectId, { roles: { enabled: next.map((r) => r.name) } });
+      await api.patchSettings(projectId, { roles: { enabled: next } });
       reload();
     } catch (e) {
       flash(`保存失败：${e instanceof Error ? e.message : e}`);
