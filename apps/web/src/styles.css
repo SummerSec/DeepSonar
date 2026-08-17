@@ -456,6 +456,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .rail-status > span, .mobile-menu-foot > span { width: 7px; height: 7px; border: 1px solid #b1ffd0; background: var(--live); animation: live-blink 2.2s var(--ease-decel) infinite; }
 .rail-status strong { display: block; color: #b3babd; font: 500 9px/1.4 var(--font-mono); letter-spacing: .08em; }
 .rail-status small { display: block; color: #50595e; font-size: 11px; }
+.app-toast-stack {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.app-toast {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(104 210 154 / .28);
+  background: color-mix(in srgb, #0d1612 82%, transparent);
+  color: #b8e6c8;
+  font: 500 12px/1.45 var(--font-mono);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+}
+.app-toast.is-error {
+  border-color: rgb(248 113 113 / .28);
+  background: color-mix(in srgb, #1a0d0d 82%, transparent);
+  color: #f3b4b4;
+}
 .mobile-island, .mobile-menu { display: none; }
 
 .skip-link { position: fixed; left: 18px; top: 12px; z-index: 90; padding: 8px 12px; color: white; background: var(--red); font: 500 10px var(--font-mono); transform: translateY(-160%); transition: transform 180ms var(--ease-snap); }
@@ -2363,6 +2388,17 @@ html[data-color-scheme="light"] .nav-icon { background: rgba(255,255,255,.55); }
 html[data-color-scheme="light"] .nav-item.is-active { color: #141a22; background: rgb(var(--accent-rgb) / .09); }
 html[data-color-scheme="light"] .rail-status strong { color: #2a3340; }
 html[data-color-scheme="light"] .rail-status small { color: #788290; }
+html[data-color-scheme="light"] .app-toast {
+  border-color: rgb(16 122 90 / .22);
+  background: #f4faf6;
+  color: #1f5c42;
+  box-shadow: 0 10px 24px rgba(20, 28, 40, .08);
+}
+html[data-color-scheme="light"] .app-toast.is-error {
+  border-color: rgb(185 50 50 / .22);
+  background: #fdf4f4;
+  color: #8a2b2b;
+}
 html[data-color-scheme="light"] .page-header::after { color: #8a939f; background: var(--bg); }
 html[data-color-scheme="light"] .secondary-button,
 html[data-color-scheme="light"] .filter-control,

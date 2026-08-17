@@ -329,6 +329,8 @@ export function RoleConfigEditor({
   sources,
   sourceDetails,
   busy,
+  saved = false,
+  failed = false,
   onSave,
   onCancel,
 }: {
@@ -345,6 +347,8 @@ export function RoleConfigEditor({
   sources: SkillSource[];
   sourceDetails: Record<string, SkillSourceDetail>;
   busy: boolean;
+  saved?: boolean;
+  failed?: boolean;
   onSave: (body: RoleConfigInput) => void;
   onCancel: () => void;
 }) {
@@ -603,7 +607,7 @@ export function RoleConfigEditor({
           disabled={busy}
           className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:opacity-50"
         >
-          <FloppyDisk size={13} /> {busy ? "保存中…" : "保存配置"}
+          <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存配置"}
         </button>
         <button
           onClick={onCancel}

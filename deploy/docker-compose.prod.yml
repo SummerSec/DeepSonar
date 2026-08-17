@@ -114,6 +114,9 @@ services:
       DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: ${DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http://scheduler:3100/gateway}
       # vfs/rootless cold create can take 4-8 minutes; keep the runtime timeout explicit.
       PROVISION_TIMEOUT_SEC: ${PROVISION_TIMEOUT_SEC:-900}
+      # /health.version：显式传入镜像标签；可用 DEEPSONAR_VERSION 覆盖。
+      DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_TAG}
+      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-}
       # stop_grace_period 配合优雅退出（dispatcher drain + fastify close）
     stop_grace_period: 30s
     volumes:

@@ -34,6 +34,7 @@ import { FindingProtocolEditor } from "./FindingProtocolEditor";
 import { SharedAssetsPanel } from "./SharedAssetsPanel";
 import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
+import { inferToastKind, showToast } from "./toast";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -138,6 +139,13 @@ export function SettingsPanel({
   const [roleRuntimeImages, setRoleRuntimeImages] = useState<Record<string, string | null>>({});
   const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
   const [imagePolicyBusy, setImagePolicyBusy] = useState(false);
+  const [imagePolicySaved, setImagePolicySaved] = useState(false);
+  const [imagePolicyFailed, setImagePolicyFailed] = useState(false);
+  const [rulesBusy, setRulesBusy] = useState(false);
+  const [rulesSaved, setRulesSaved] = useState(false);
+  const [rulesFailed, setRulesFailed] = useState(false);
+  const [configSaved, setConfigSaved] = useState(false);
+  const [configFailed, setConfigFailed] = useState(false);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
@@ -240,6 +248,7 @@ export function SettingsPanel({
 
   const flash = (m: string) => {
     setMsg(m);
+    showToast(m, inferToastKind(m));
     setTimeout(() => setMsg(null), 3000);
   };
 
@@ -264,6 +273,9 @@ export function SettingsPanel({
       ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
     }
+    setRulesBusy(true);
+    setRulesSaved(false);
+    setRulesFailed(false);
     try {
       if (projectId) {
         await api.patchSettings(projectId, { rules: ruleBody, finding_protocol: findingProtocol });
@@ -272,9 +284,14 @@ export function SettingsPanel({
         await api.patchGlobalSettings({ rules: ruleBody, finding_protocol: findingProtocol });
       }
       flash("规则已保存（下一 job 生效）");
+      setRulesSaved(true);
+      window.setTimeout(() => setRulesSaved(false), 2000);
       reload();
     } catch (e) {
+      setRulesFailed(true);
       flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setRulesBusy(false);
     }
   };
 
@@ -286,18 +303,24 @@ export function SettingsPanel({
   const saveImagePolicy = async () => {
     if (!projectId) return;
     setImagePolicyBusy(true);
+    setImagePolicySaved(false);
+    setImagePolicyFailed(false);
     try {
       const result = await api.patchSettings(projectId, {
         image_strategy: imageStrategy,
         ...(imageStrategy === "project_managed" ? { role_runtime_images: roleRuntimeImages } : {}),
       });
       if ("saved" in result && result.saved === false) {
+        setImagePolicyFailed(true);
         flash(`正在后台准备 ${result.task.total} 个运行镜像；本次未保存，请在拉取完成后重试`);
         return;
       }
       flash("项目镜像策略已保存（下一 job 生效）");
+      setImagePolicySaved(true);
+      window.setTimeout(() => setImagePolicySaved(false), 2000);
       reload();
     } catch (e) {
+      setImagePolicyFailed(true);
       flash(`保存失败：${e instanceof Error ? e.message : e}`);
     } finally {
       setImagePolicyBusy(false);
@@ -321,13 +344,20 @@ export function SettingsPanel({
   /** 保存角色运行配置（全局缺省 / 项目覆盖共用；全量声明式 PUT） */
   const saveRoleConfig = async (roleId: string, body: RoleConfigInput) => {
     setConfigBusy(true);
+    setConfigSaved(false);
+    setConfigFailed(false);
     try {
       if (projectId) await api.putProjectRoleConfig(projectId, roleId, body);
       else await api.putGlobalRoleConfig(roleId, body);
       flash(projectId ? "项目覆盖已保存（下一 job 生效）" : "全局缺省已保存（下一 job 生效）");
-      setConfigRoleId(null);
+      setConfigSaved(true);
+      window.setTimeout(() => {
+        setConfigRoleId(null);
+        setConfigSaved(false);
+      }, 1200);
       reload();
     } catch (e) {
+      setConfigFailed(true);
       flash(`保存失败：${e instanceof Error ? e.message : e}`);
     } finally {
       setConfigBusy(false);
@@ -559,6 +589,8 @@ export function SettingsPanel({
               sources={sources}
               sourceDetails={sourceDetails}
               busy={configBusy}
+              saved={configSaved}
+              failed={configFailed}
               onSave={(body) => saveRoleConfig(r.id, body)}
               onCancel={() => setConfigRoleId(null)}
             />
@@ -796,7 +828,7 @@ export function SettingsPanel({
                     disabled={imagePolicyBusy}
                     className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
                   >
-                    <FloppyDisk size={13} /> {imagePolicyBusy ? "保存中…" : "保存镜像策略"}
+                    <FloppyDisk size={13} /> {imagePolicyBusy ? "保存中…" : imagePolicySaved ? "已保存" : imagePolicyFailed ? "保存失败" : "保存镜像策略"}
                   </button>
                 </div>
               </section>
@@ -936,9 +968,10 @@ export function SettingsPanel({
 
             <button
               onClick={saveRules}
-              className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
+              disabled={rulesBusy}
+              className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
             >
-              <FloppyDisk size={13} /> 保存规则
+              <FloppyDisk size={13} /> {rulesBusy ? "保存中…" : rulesSaved ? "已保存" : rulesFailed ? "保存失败" : "保存规则"}
             </button>
           </div>
         )}

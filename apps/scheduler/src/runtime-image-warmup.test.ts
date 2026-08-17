@@ -23,9 +23,35 @@ test("/health remains live and reports ready=false while warmup is pending", asy
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);
   assert.equal(response.json().ready, false);
+  assert.equal(typeof response.json().version, "string");
   assert.equal(response.json().runtime_images.status, "preparing");
   assert.equal(response.json().dispatcher.enabled, false);
   await app.close();
+});
+
+test("/health version uses DEEPSONAR_IMAGE_TAG when DEEPSONAR_VERSION is unset", async () => {
+  const previousTag = process.env.DEEPSONAR_IMAGE_TAG;
+  const previousVersion = process.env.DEEPSONAR_VERSION;
+  delete process.env.DEEPSONAR_VERSION;
+  process.env.DEEPSONAR_IMAGE_TAG = "0.1.37";
+  const app = Fastify();
+  registerSystemRoutes(app, {
+    runtimeImageStatus: () => ({
+      status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
+    }),
+    dispatcherStatus: () => ({ enabled: true, started_at: "2026-01-01T00:00:00.000Z" }),
+  });
+  try {
+    const response = await app.inject({ method: "GET", url: "/health" });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().version, "0.1.37");
+  } finally {
+    await app.close();
+    if (previousTag === undefined) delete process.env.DEEPSONAR_IMAGE_TAG;
+    else process.env.DEEPSONAR_IMAGE_TAG = previousTag;
+    if (previousVersion === undefined) delete process.env.DEEPSONAR_VERSION;
+    else process.env.DEEPSONAR_VERSION = previousVersion;
+  }
 });
 
 test("/health ready requires both warmup and dispatcher", async () => {
@@ -39,6 +65,7 @@ test("/health ready requires both warmup and dispatcher", async () => {
   const response = await app.inject({ method: "GET", url: "/health" });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ready, false);
+  assert.equal(typeof response.json().version, "string");
   assert.equal(response.json().dispatcher.enabled, false);
   await app.close();
 });

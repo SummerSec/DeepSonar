@@ -7,6 +7,7 @@ import { DownloadSimple, UploadSimple, ArrowsClockwise } from "@phosphor-icons/r
 import { useCallback, useEffect, useState } from "react";
 import { api, type DataExportRow, type ImportPreview } from "./api";
 import { HelpTip } from "./ui";
+import { inferToastKind, showToast } from "./toast";
 
 const PROJECT_PRESETS = [
   { id: "configuration" as const, label: "配置模板", hint: "规则 / 角色 / Skill / 环境（无任务历史）" },
@@ -48,6 +49,7 @@ export function TransferPanel({
 
   const flash = (m: string) => {
     setMsg(m);
+    showToast(m, inferToastKind(m));
     setTimeout(() => setMsg(null), 4000);
   };
 

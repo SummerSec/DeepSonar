@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { renderMetrics } from "../../metrics.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "../../openapi.js";
+import { resolveProductVersion } from "../../product-version.js";
 import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
 import { dispatcherRuntimeStatus } from "../../startup-status.js";
 
@@ -52,6 +53,7 @@ export function registerSystemRoutes(
     return {
       ok: true,
       ready: runtimeImages.ready && dispatcher.enabled,
+      version: resolveProductVersion(),
       runtime_images: runtimeImages,
       dispatcher,
       ts: Date.now(),
