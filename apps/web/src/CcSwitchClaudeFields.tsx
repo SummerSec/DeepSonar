@@ -13,12 +13,14 @@ import { SearchableSelect } from "./SearchableSelect";
 
 export type ClaudeModelField =
   | "ANTHROPIC_MODEL"
+  | "ANTHROPIC_DEFAULT_FABLE_MODEL"
   | "ANTHROPIC_DEFAULT_HAIKU_MODEL"
   | "ANTHROPIC_DEFAULT_SONNET_MODEL"
   | "ANTHROPIC_DEFAULT_OPUS_MODEL";
 
 const MODEL_FIELDS: Array<{ key: ClaudeModelField; label: string }> = [
   { key: "ANTHROPIC_MODEL", label: "主模型" },
+  { key: "ANTHROPIC_DEFAULT_FABLE_MODEL", label: "Fable 上游模型" },
   { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", label: "Haiku 默认模型" },
   { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", label: "Sonnet 默认模型" },
   { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", label: "Opus 默认模型" },
@@ -44,6 +46,22 @@ function readEnv(config: Record<string, unknown>): Record<string, unknown> {
 function envString(env: Record<string, unknown>, key: string): string {
   const value = env[key];
   return typeof value === "string" ? value : "";
+}
+
+export function claudeMainModelPatch(
+  env: Record<string, unknown>,
+  previousMain: string,
+  nextMain: string,
+): Record<string, string | null> {
+  const patch: Record<string, string | null> = {
+    ANTHROPIC_MODEL: nextMain,
+    ANTHROPIC_SMALL_FAST_MODEL: null,
+  };
+  const fable = envString(env, "ANTHROPIC_DEFAULT_FABLE_MODEL").trim();
+  const subagent = envString(env, "CLAUDE_CODE_SUBAGENT_MODEL").trim();
+  if (!fable || fable === previousMain.trim()) patch.ANTHROPIC_DEFAULT_FABLE_MODEL = nextMain;
+  if (!subagent || subagent === previousMain.trim()) patch.CLAUDE_CODE_SUBAGENT_MODEL = nextMain;
+  return patch;
 }
 
 function extractApiKey(config: Record<string, unknown>): string {
@@ -103,6 +121,7 @@ export function CcSwitchClaudeFields({
 }) {
   const [models, setModels] = useState<Record<ClaudeModelField, string>>({
     ANTHROPIC_MODEL: "",
+    ANTHROPIC_DEFAULT_FABLE_MODEL: "",
     ANTHROPIC_DEFAULT_HAIKU_MODEL: "",
     ANTHROPIC_DEFAULT_SONNET_MODEL: "",
     ANTHROPIC_DEFAULT_OPUS_MODEL: "",
@@ -121,6 +140,9 @@ export function CcSwitchClaudeFields({
     if (nextBase && nextBase !== baseUrl) onBaseUrlChange(nextBase);
     setModels({
       ANTHROPIC_MODEL: envString(env, "ANTHROPIC_MODEL"),
+      ANTHROPIC_DEFAULT_FABLE_MODEL:
+        envString(env, "ANTHROPIC_DEFAULT_FABLE_MODEL")
+        || envString(env, "ANTHROPIC_MODEL"),
       ANTHROPIC_DEFAULT_HAIKU_MODEL:
         envString(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL")
         || envString(env, "ANTHROPIC_SMALL_FAST_MODEL")
@@ -160,11 +182,23 @@ export function CcSwitchClaudeFields({
   };
 
   const handleModelChange = (field: ClaudeModelField, value: string) => {
-    setModels((current) => ({ ...current, [field]: value }));
-    writeEnvPatch({
+    const patch: Record<string, string | null> = {
       [field]: value,
       ANTHROPIC_SMALL_FAST_MODEL: null,
-    });
+    };
+    if (field === "ANTHROPIC_MODEL") {
+      const previousMain = models.ANTHROPIC_MODEL.trim();
+      const env = readEnv(parseConfig(settingsJson));
+      Object.assign(patch, claudeMainModelPatch(env, previousMain, value));
+    }
+    setModels((current) => ({
+      ...current,
+      [field]: value,
+      ...(patch.ANTHROPIC_DEFAULT_FABLE_MODEL != null
+        ? { ANTHROPIC_DEFAULT_FABLE_MODEL: value }
+        : {}),
+    }));
+    writeEnvPatch(patch);
   };
 
   const handleFormat = () => {

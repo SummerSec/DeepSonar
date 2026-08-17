@@ -1916,7 +1916,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           required: [
             "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "dsh_task_mode", "model", "version",
             "runtime_image_key", "sandbox_limits_json", "context_window_tokens",
-            "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "scope", "can_bind",
+            "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "credential_project_id", "credential_project_name", "scope", "can_bind",
             "credential_provider_valid", "role_kind", "role_builtin",
           ],
           properties: {
@@ -1941,6 +1941,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             credential_kind: { type: "string", nullable: true },
             credential_provider: { type: "string", nullable: true },
             credential_status: { type: "string", nullable: true },
+            credential_project_id: { type: "string", format: "uuid", nullable: true },
+            credential_project_name: { type: "string", nullable: true },
             scope: { type: "string", enum: ["global", "project"] },
             can_bind: { type: "boolean" },
             credential_provider_valid: { type: "boolean", nullable: true },

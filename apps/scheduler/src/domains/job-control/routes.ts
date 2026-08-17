@@ -138,6 +138,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
              p.name AS project_name, c.title AS canvas_title,
              j.agent_snapshot_json->>'agent_cli' AS agent_cli,
              j.agent_snapshot_json->>'model' AS model,
+             j.agent_snapshot_json->>'upstream_model' AS upstream_model,
              j.agent_snapshot_json->>'name' AS role_name,
              j.agent_snapshot_json->>'credential_provider' AS credential_provider,
              NULLIF(j.agent_snapshot_json->>'role_config_version', '')::int AS role_config_version

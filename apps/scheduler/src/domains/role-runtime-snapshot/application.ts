@@ -11,12 +11,9 @@ import {
   validateCredentialCompatibility,
 } from "../../credentials.js";
 import {
-  extractReasoningFromSettings,
   hasProviderSettingsConfig,
   isProviderAgentCli,
-  materializeProviderSettings,
-  providerSettingsForJobSnapshot,
-  resolveContextWindowTokens,
+  projectProviderRuntimeSnapshot,
   resolveEffectiveModel,
 } from "../../provider-settings.js";
 import { resolveRuntimeImageForJob } from "../../runtime-images.js";
@@ -168,8 +165,19 @@ export async function resolveAgentSnapshotForJob(
     : [undefined]) as Array<Record<string, unknown> | undefined>;
   const settingsConfig = llm?.settings_config_json ?? {};
   const hasSettings = hasProviderSettingsConfig(settingsConfig);
-  const snapshotSettingsConfig = providerSettingsForJobSnapshot(settingsConfig, agentCli);
-  const contextWindowTokens = resolveContextWindowTokens({ roleContextWindowTokens: cfg?.context_window_tokens, settingsConfig: snapshotSettingsConfig });
+  const manualConfigFiles = cfg
+    ? await db`SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${cfg.id as string} ORDER BY path`
+    : [];
+  const providerSnapshot = projectProviderRuntimeSnapshot({
+    agentCli,
+    roleModel: typeof cfg?.model === "string" ? cfg.model : null,
+    roleContextWindowTokens: cfg?.context_window_tokens,
+    settingsConfig,
+    manualConfigFiles: manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>,
+    defaultModel: PLATFORM_DEFAULT_AGENT_MODEL,
+  });
+  const snapshotSettingsConfig = providerSnapshot.settings_config_json;
+  const contextWindowTokens = providerSnapshot.context_window_tokens;
   if (llm) {
     const provider = String(llm.provider ?? "");
     if (!isProviderKnown(provider)) throw new Error(UNKNOWN_PROVIDER_ERROR);
@@ -195,33 +203,6 @@ export async function resolveAgentSnapshotForJob(
     if (allowed.length > 0 && !configuredModel) throw new Error(`Credential ${llm.id} 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖`);
     if (configuredModel && allowed.length > 0 && !allowed.includes(configuredModel)) throw new Error(`模型 ${configuredModel} 不在 Credential ${llm.id} 的 allowed_model_ids 白名单`);
   }
-  const manualConfigFiles = cfg
-    ? await db`SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${cfg.id as string} ORDER BY path`
-    : [];
-  const roleModel = typeof cfg?.model === "string" && cfg.model.trim() ? cfg.model.trim() : null;
-  const providerReasoning: ReasoningEffort | null = hasSettings
-    ? extractReasoningFromSettings(agentCli, snapshotSettingsConfig)
-    : null;
-  // CC Switch path: materialize saved settingsConfig into CLI config files.
-  // Manual role_config_files remain as fallback when settingsConfig is empty.
-  let configFiles: Array<{ path: string; content: string; content_sha256: string }> =
-    manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>;
-  let model: string | null = roleModel ?? PLATFORM_DEFAULT_AGENT_MODEL;
-  const reasoning: ReasoningEffort | null = providerReasoning;
-  if (hasSettings) {
-    const materialized = materializeProviderSettings({
-      agentCli,
-      settingsConfig: snapshotSettingsConfig,
-      overrides: { model: roleModel, reasoning: providerReasoning, context_window_tokens: contextWindowTokens },
-    });
-    if (materialized.length > 0) {
-      const materializedPaths = new Set(materialized.map((item) => item.path));
-      configFiles = agentCli === "pi"
-        ? [...materialized, ...((manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>).filter((item) => !materializedPaths.has(item.path)))]
-        : materialized;
-    }
-    if (!roleModel) model = resolveEffectiveModel({ roleModel: null, agentCli, settingsConfig: snapshotSettingsConfig }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
-  }
   const roleKind = role.kind as "role" | "hub" | "system";
   const platformTools = resolvePlatformTools(roleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});
   const globalRuntimeImageKey = typeof globalCfg?.runtime_image_key === "string" && globalCfg.runtime_image_key.trim()
@@ -243,8 +224,9 @@ export async function resolveAgentSnapshotForJob(
     agent_cli: agentCli,
     dsh_task_mode: dshTaskMode,
     agent_runtime: freezeAgentCliRuntime(runtimeAdapter),
-    model,
-    reasoning,
+    model: providerSnapshot.model,
+    upstream_model: providerSnapshot.upstream_model,
+    reasoning: providerSnapshot.reasoning,
     env_vars: cfg?.env_vars_json && typeof cfg.env_vars_json === "object" ? cfg.env_vars_json as Record<string, string> : {},
     env_keys: (cfg?.env_keys as string[]) ?? [],
     credential_id: (llm?.id as string) ?? null,
@@ -265,7 +247,7 @@ export async function resolveAgentSnapshotForJob(
     platform_tools: platformTools as PlatformToolName[],
     context_window_tokens: contextWindowTokens,
     settings_config_json: snapshotSettingsConfig,
-    config_files: configFiles,
+    config_files: providerSnapshot.config_files,
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,
     runtime_image_key: runtimeImageKey,

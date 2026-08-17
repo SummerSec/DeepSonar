@@ -435,12 +435,13 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
              rc.context_window_tokens, rc.version,
              CASE WHEN rc.project_id IS NULL THEN rc.runtime_image_key ELSE NULL END AS runtime_image_key,
              c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
-             c.provider AS credential_provider, c.status AS credential_status
+             c.provider AS credential_provider, c.status AS credential_status,
+             c.project_id AS credential_project_id, cp.name AS credential_project_name
       FROM role_configs rc
       JOIN agent_roles r ON r.id = rc.role_id
       LEFT JOIN projects p ON p.id = rc.project_id
       LEFT JOIN LATERAL (
-        SELECT c.id, c.name, c.kind, c.provider, c.status
+        SELECT c.id, c.name, c.kind, c.provider, c.status, c.project_id
         FROM role_credentials rcb
         JOIN credentials c ON c.id = rcb.credential_id
         WHERE rcb.role_config_id = rc.id AND rcb.purpose = 'llm'
@@ -448,6 +449,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         ORDER BY c.created_at DESC
         LIMIT 1
       ) c ON true
+      LEFT JOIN projects cp ON cp.id = c.project_id
       WHERE (${projectScope}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${projectScope})
       ORDER BY
         CASE r.kind WHEN 'system' THEN 0 WHEN 'hub' THEN 1 ELSE 2 END,

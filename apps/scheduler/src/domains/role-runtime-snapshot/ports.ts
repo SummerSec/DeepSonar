@@ -20,6 +20,8 @@ export interface RoleRuntimeSnapshotResult {
   /** Immutable adapter implementation/capability contract captured at Job creation. */
   agent_runtime: AgentCliRuntimeSnapshot;
   model: string | null;
+  /** Actual upstream model ID after resolving CLI aliases such as fable. */
+  upstream_model: string | null;
   reasoning: ReasoningValue | null;
   env_vars: Record<string, string>;
   env_keys: string[];

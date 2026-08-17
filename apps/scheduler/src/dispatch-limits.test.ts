@@ -122,6 +122,31 @@ test("project cap of two blocks the third job", async () => {
   );
 });
 
+test("model concurrency uses upstream model while preserving the CLI selector", () => {
+  const counts = emptyCounts();
+  counts.model.set("credential-1\u0000grok-4.5", 1);
+  assert.equal(
+    dispatchSkipReason(
+      {
+        project_id: "project-1",
+        agent_cli: "claude-code",
+        credential_provider: "anthropic",
+        credential_id: "credential-1",
+        model: "fable",
+        upstream_model: "grok-4.5",
+        credential_metadata: { allowed_model_ids: ["grok-4.5"], model_concurrency: { "grok-4.5": 1 } },
+      },
+      counts,
+      {
+        maxJobsPerProject: 8,
+        maxConcurrentByProvider: {},
+        maxConcurrentByAgentCli: {},
+      },
+    ),
+    "model",
+  );
+});
+
 test("paged scan continues past a 500-job ineligible head", () => {
   const head = Array.from({ length: 500 }, (_, index) => ({ eligible: false, index }));
   const tail = [{ eligible: true, index: 500 }];
