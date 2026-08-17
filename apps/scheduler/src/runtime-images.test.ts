@@ -6,6 +6,7 @@ import {
   createServerOwnedRuntimeImageRegistryPolicy,
   ensureRuntimeImageAvailable,
   hostRuntimePlatform,
+  isStartupRequiredRuntimeImage,
   legacyProjectedRegistryDigests,
   parseOciDigestRef,
   parseRuntimeImageRegistry,
@@ -526,6 +527,13 @@ test("同一 digest 的并发确保请求共用一次拉取", async () => {
   assert.equal(pulls, 1);
   releasePull();
   await assert.rejects(Promise.all([first, second]), /不可用/);
+});
+
+test("bootstrap warmup only requires official non-opt-in images", () => {
+  assert.equal(isStartupRequiredRuntimeImage({ official: true, project_opt_in: false, enabled: true }), true);
+  assert.equal(isStartupRequiredRuntimeImage({ official: true, project_opt_in: true, enabled: true }), false);
+  assert.equal(isStartupRequiredRuntimeImage({ official: false, project_opt_in: false, enabled: true }), false);
+  assert.equal(isStartupRequiredRuntimeImage(null), true);
 });
 
 test("拉取失败返回脱敏错误", async () => {

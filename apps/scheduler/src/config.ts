@@ -156,6 +156,8 @@ export const config = {
     tokenTtlSec: int("DEEPSONAR_JOB_TOKEN_TTL_SEC", 4 * 3600),
     /** 转发上游超时（毫秒；流式为首字节超时） */
     upstreamTimeoutMs: int("DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS", 3_000_000),
+    /** managed gateway `docker run` 独立超时，不占用 Job provision 预算（vfs/慢盘可加大） */
+    createTimeoutSec: int("DEEPSONAR_GATEWAY_CREATE_TIMEOUT_SEC", 600),
   },
 
   /** Job-scoped runtime control API (never the management API). */
@@ -263,6 +265,8 @@ export const config = {
     allowedGitHosts: str("DEEPSONAR_GIT_ALLOWED_HOSTS", ""),
     /** 启动时对已信任且启用的模块源默认执行一次同步。 */
     bootSync: bool("DEEPSONAR_SKILL_SOURCE_BOOT_SYNC", true),
+    /** 启动同步单次超时（秒）；超时后后台重试，不阻塞 listen。 */
+    bootSyncTimeoutSec: int("DEEPSONAR_SKILL_SOURCE_BOOT_SYNC_TIMEOUT_SEC", 20),
   },
 
   /** 可信运行镜像目录由数据库管理；环境变量只负责引导官方 digest 与 registry 边界。 */

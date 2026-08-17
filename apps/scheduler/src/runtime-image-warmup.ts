@@ -10,13 +10,17 @@ export interface RuntimeImageWarmupStatus {
   retry_at: string | null;
 }
 
+export const DISPATCHER_DISABLED_LOG_AFTER = 3;
+
 interface WarmupDependencies {
-  resolveRefs: () => Promise<Array<{ image_ref: string }>>;
+  resolveRefs: () => Promise<Array<{ image_ref: string; image_key?: string }>>;
   prepare: (imageRef: string) => Promise<void>;
+  afterPrepare?: (refs: Array<{ image_ref: string; image_key?: string }>) => Promise<void>;
   onReady: () => void;
   sleep?: (ms: number) => Promise<void>;
   retryDelaysMs?: readonly number[];
   sanitize?: (error: unknown) => string;
+  log?: (level: "warn" | "error", message: string) => void;
 }
 
 export function createRuntimeImageWarmupCoordinator(deps: WarmupDependencies) {
@@ -39,6 +43,7 @@ export function createRuntimeImageWarmupCoordinator(deps: WarmupDependencies) {
         const refs = await deps.resolveRefs();
         state = { ...state, required: new Set(refs.map((item) => item.image_ref)).size };
         for (const ref of new Set(refs.map((item) => item.image_ref))) await deps.prepare(ref);
+        if (deps.afterPrepare) await deps.afterPrepare(refs);
         if (stopped) return;
         state = { ...state, status: "ready", ready: true, error: null, retry_at: null };
         deps.onReady();
@@ -53,7 +58,14 @@ export function createRuntimeImageWarmupCoordinator(deps: WarmupDependencies) {
           error: safeError,
           retry_at: new Date(Date.now() + delay).toISOString(),
         };
-        console.warn(`[runtime-images] startup warmup failed (attempt ${attempt}); retrying in ${delay}ms: ${safeError}`);
+        const log = deps.log ?? ((level, message) => (level === "error" ? console.error(message) : console.warn(message)));
+        log("warn", `[runtime-images] startup warmup failed (attempt ${attempt}); retrying in ${delay}ms: ${safeError}`);
+        if (attempt >= DISPATCHER_DISABLED_LOG_AFTER) {
+          log(
+            "error",
+            `[runtime-images] dispatcher disabled because startup warmup is not ready (attempt ${attempt}): ${safeError}`,
+          );
+        }
         await sleep(delay);
       }
     }
@@ -79,10 +91,14 @@ export function runtimeImageWarmupStatus(): RuntimeImageWarmupStatus {
   };
 }
 
-export function startRuntimeImageWarmupOnBoot(onReady: () => void): () => void {
+export function startRuntimeImageWarmupOnBoot(
+  onReady: () => void,
+  extras: { afterPrepare?: (refs: Array<{ image_ref: string; image_key?: string }>) => Promise<void> } = {},
+): () => void {
   startupCoordinator = createRuntimeImageWarmupCoordinator({
     resolveRefs: () => resolveStartupRuntimeImages(),
     prepare: prepareRuntimeImage,
+    afterPrepare: extras.afterPrepare,
     onReady,
   });
   if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") {

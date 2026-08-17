@@ -10,7 +10,8 @@ import {
   updateAttemptSession,
   type AttemptDatabase,
 } from "./application.js";
-import { buildAttemptState, type AttemptState, type AttemptStatus } from "./model.js";
+import { ControlInputError } from "../../control-input.js";
+import { buildAttemptState, compactAttemptOutcome, type AttemptState, type AttemptStatus } from "./model.js";
 
 type FakeEffect = {
   effect_id: string;
@@ -235,6 +236,29 @@ test("重启看到 effect_pending 时只产生 interrupted/unknown，不自动�
   assert.equal(afterRestart.effect?.status, "unknown");
   await settleEffect(db, "attempt-race-1", "provision:1", { status: "settled", outcome: { sandbox_id: "late" } });
   assert.deepEqual(read(), afterRestart);
+});
+
+test("settleAttemptTerminal 把合法长 CJK summary 收成 hash+bytes，不杀 Attempt", async () => {
+  const { db, read } = fakeAttemptDatabase(attemptState());
+  const summary = `${"界".repeat(2730)}ab`;
+  assert.equal(Buffer.byteLength(summary, "utf8"), 8192);
+  await settleAttemptTerminal(db, "job-race-1", "succeeded", { job_status: "succeeded", summary });
+  const terminal = read();
+  assert.equal(terminal.status, "succeeded");
+  assert.deepEqual(terminal.state.outcome, {
+    ...compactAttemptOutcome({ job_status: "succeeded", summary }),
+  });
+  assert.equal(typeof terminal.state.outcome.summary, "undefined");
+  assert.equal(terminal.state.outcome.summary_bytes, 8192);
+});
+
+test("settleAttemptTerminal 超限 outcome 抛 ControlInputError 而不是裸 Error", async () => {
+  const { db, read } = fakeAttemptDatabase(attemptState());
+  await assert.rejects(
+    settleAttemptTerminal(db, "job-race-1", "succeeded", { extra: "x".repeat(9000) }),
+    (error: unknown) => error instanceof ControlInputError && error.code === "invalid_done" && error.retryable,
+  );
+  assert.equal(read().status, "active");
 });
 
 test("terminal 收口后，迟到的 Agent effect settlement 是幂等 no-op", async () => {

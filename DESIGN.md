@@ -267,6 +267,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | Fact 过程真相工作台 | #159 | **已完成**：Schema v31 为 Fact 增加独立验证状态；画布提供 Facts 标签、服务端 keyset 分页与筛选、结构化证据/来源详情和人工验证动作。旧的幽灵 `/canvas-nodes/{id}/verification` 契约已删除，读写统一限定在 `/canvases/{id}/facts` 项目作用域内。 |
 | Agent CLI Session 时间线归一化 | #160 | **已完成**（Issue 起因是 Claude）：`queue-operation enqueue` 中带平台前缀的画布增量显示为广播，消费/移除记录不产生噪声；`user` 包装的纯 `tool_result` 不再虚增用户消息，assistant 的 thinking/text/tool_use 按原始块顺序展示且 usage 只累计一次；当前五类治理 CLI 各自解析归档格式，广播仅在归档持久化时展示。 |
 | Compose 任务 | 当前主路径 | **已落地**：同项目 confirmed Finding 作为 1–8 条冻结只读种子；Graph 隐藏项目 Finding UUID，重试前重新校验并 fail closed，Task Report 分离种子背景与本次产出。见 §6.1。 |
+| s33 启动门禁 / Attempt outcome / 网关预热 | — | **已修复**：startup warmup 不再把 `project_opt_in` 镜像当作 dispatcher 前置（官方 Base/Audit/Kali 仍 fail-closed）；`/health` 暴露 dispatcher+warmup，连续失败打 error 级「dispatcher disabled」；`mark_job_done` 按 8192 UTF-8 字节收口，Attempt outcome 只存 summary hash/bytes；managed gateway 在 real boot 预热，Created leftover 超时必清，`docker run` 使用独立超时；skill-source boot sync 有显式超时且不阻塞 listen。 |
 
 ## 12. 仓库地图
 

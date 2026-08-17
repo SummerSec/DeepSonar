@@ -3,10 +3,21 @@ import test from "node:test";
 import {
   EFFECT_CRASH_POINTS,
   buildAttemptState,
+  compactAttemptOutcome,
   canReplayEffect,
   effectCrashRecovery,
   validateEffectDescriptor,
 } from "./model.js";
+
+test("compactAttemptOutcome stores summary hash and UTF-8 byte length", () => {
+  const summary = `${"界".repeat(2730)}ab`;
+  assert.equal(Buffer.byteLength(summary, "utf8"), 8192);
+  const compacted = compactAttemptOutcome({ job_status: "succeeded", summary });
+  assert.equal(compacted.summary, undefined);
+  assert.equal(compacted.summary_bytes, 8192);
+  assert.equal(typeof compacted.summary_sha256, "string");
+  assert.equal(String(compacted.summary_sha256).length, 64);
+});
 
 test("Attempt total state 身份和大小边界是确定的", () => {
   const state = buildAttemptState({

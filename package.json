@@ -19,6 +19,7 @@
     "ci:test:lifecycle": "pnpm --filter @deepsonar/web test:lifecycle",
     "ci:unit:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.test.ts",
     "ci:unit:runtime-images": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images.test.ts",
+    "ci:unit:startup-gate": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-image-warmup.test.ts src/skill-sources-boot.test.ts",
     "ci:unit:image-admission": "pnpm --filter @deepsonar/image-admission test:registry-ref",
     "ci:integration:runtime-image-promotions": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images-promotions.integration.test.ts",
     "ci:integration:runtime-image-channels": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images-channel.integration.test.ts",

@@ -89,6 +89,9 @@ jobs:
 
       - run: pnpm -r build
 
+      - name: Scheduler startup gate unit
+        run: pnpm ci:unit:startup-gate
+
       - name: Scheduler public Job role enablement gate
         run: pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/job-control/routes.test.ts
 

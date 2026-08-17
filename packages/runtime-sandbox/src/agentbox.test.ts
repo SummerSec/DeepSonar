@@ -35,7 +35,9 @@ import {
   writeTerminalInput,
   GATEWAY_PROXY_REVISION,
   GATEWAY_PROXY_SCRIPT,
+  gatewayCreateTimeoutMs,
   gatewayProxyReuseAction,
+  shouldRemoveGatewayLeftover,
   AgentboxRunner,
   mergeObservedSessionIdentity,
   normalizePlainFinalOutput,
@@ -501,9 +503,21 @@ test("managed gateway proxy is replaced when its route implementation is stale",
   const current = { managed: "true", upstreamHash: "upstream", revision: GATEWAY_PROXY_REVISION, running: "true" };
   assert.equal(gatewayProxyReuseAction(current, "upstream"), "reuse");
   assert.equal(gatewayProxyReuseAction({ ...current, running: "false" }, "upstream"), "start");
+  assert.equal(gatewayProxyReuseAction({ ...current, running: "false", status: "created" }, "upstream"), "replace");
   assert.equal(gatewayProxyReuseAction({ ...current, revision: "legacy" }, "upstream"), "replace");
   assert.equal(gatewayProxyReuseAction({ ...current, upstreamHash: "old" }, "upstream"), "replace");
   assert.equal(gatewayProxyReuseAction({ ...current, managed: "" }, "upstream"), "reject");
+});
+
+test("Created leftover gateway is removed; healthy running gateway is kept", () => {
+  assert.equal(shouldRemoveGatewayLeftover({ createdByThisRun: true, status: "created", healthy: false }), true);
+  assert.equal(shouldRemoveGatewayLeftover({ createdByThisRun: false, status: "created", healthy: false }), true);
+  assert.equal(shouldRemoveGatewayLeftover({ createdByThisRun: true, status: "running", healthy: true }), false);
+  assert.equal(shouldRemoveGatewayLeftover({ createdByThisRun: true, status: "exited", healthy: false }), true);
+  assert.equal(shouldRemoveGatewayLeftover({ createdByThisRun: false, status: "running", healthy: true }), false);
+  assert.equal(shouldRemoveGatewayLeftover({ createdByThisRun: false, status: "missing", healthy: false }), false);
+  assert.equal(gatewayCreateTimeoutMs({ DEEPSONAR_GATEWAY_CREATE_TIMEOUT_SEC: "600" }), 600_000);
+  assert.ok(gatewayCreateTimeoutMs({}) >= 600_000);
 });
 
 test("restricted gateway proxy forwards only /gateway and /control/v1 and preserves Authorization", async () => {

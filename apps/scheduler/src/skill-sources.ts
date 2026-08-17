@@ -562,34 +562,97 @@ export async function expandModules(
   };
 }
 
-/**
- * 启动时对已信任且启用的模块源各做一次浅克隆同步（默认开启）。
- * 失败只记日志，不阻塞调度器启动；synced_by 标记为 boot。
- */
-export async function bootstrapSkillSourcesOnBoot(): Promise<void> {
-  if (!config.skillSources.bootSync) {
-    console.log("[boot] 跳过模块源启动同步（DEEPSONAR_SKILL_SOURCE_BOOT_SYNC=false）");
-    return;
+export const SKILL_SOURCE_BOOT_SYNC_TIMEOUT_MS = 20_000;
+
+export async function runWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  const sources = await sql`
-    SELECT id, name FROM skill_sources
-    WHERE enabled = true AND trust_status = 'trusted'
-    ORDER BY created_at ASC`;
+}
+
+export async function syncTrustedSkillSourcesOnce(deps: {
+  listSources: () => Promise<Array<{ id: string; name: string }>>;
+  sync: (id: string) => Promise<{ modules: number }>;
+  timeoutMs: number;
+}): Promise<void> {
+  const sources = await deps.listSources();
   if (sources.length === 0) {
     console.log("[boot] 无已信任模块源，跳过启动同步");
     return;
   }
   for (const src of sources) {
-    const name = src.name as string;
-    const id = src.id as string;
     try {
-      const r = await syncSkillSource(id, "boot");
-      console.log(`[boot] 模块源 ${name} 同步完成：${r.modules} 个模块`);
+      const result = await runWithTimeout(deps.sync(src.id), deps.timeoutMs, `skill-source ${src.name} boot sync`);
+      console.log(`[boot] 模块源 ${src.name} 同步完成：${result.modules} 个模块`);
     } catch (error) {
       console.warn(
-        `[boot] 模块源 ${name} 同步失败（不阻塞启动）:`,
+        `[boot] 模块源 ${src.name} 同步失败（不阻塞启动）:`,
         error instanceof Error ? error.message : error,
       );
+      throw error;
     }
   }
+}
+
+/**
+ * 启动同步不阻塞 listen。GitHub 不可达时有界超时并后台重试。
+ */
+export function startSkillSourceBootSync(deps: {
+  enabled?: boolean;
+  listSources?: () => Promise<Array<{ id: string; name: string }>>;
+  sync?: (id: string) => Promise<{ modules: number }>;
+  timeoutMs?: number;
+  retryDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
+} = {}): () => void {
+  const enabled = deps.enabled ?? config.skillSources.bootSync;
+  if (!enabled) {
+    console.log("[boot] 跳过模块源启动同步（DEEPSONAR_SKILL_SOURCE_BOOT_SYNC=false）");
+    return () => {};
+  }
+  const timeoutMs = deps.timeoutMs ?? config.skillSources.bootSyncTimeoutSec * 1000;
+  const delays = deps.retryDelaysMs ?? [5_000, 15_000, 30_000];
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  }));
+  const listSources = deps.listSources ?? (async () => {
+    const rows = await sql`
+      SELECT id, name FROM skill_sources
+      WHERE enabled = true AND trust_status = 'trusted'
+      ORDER BY created_at ASC`;
+    return rows.map((row) => ({ id: String(row.id), name: String(row.name) }));
+  });
+  const sync = deps.sync ?? ((id: string) => syncSkillSource(id, "boot"));
+  let stopped = false;
+  void (async () => {
+    let attempt = 0;
+    while (!stopped) {
+      attempt += 1;
+      try {
+        await syncTrustedSkillSourcesOnce({ listSources, sync, timeoutMs });
+        return;
+      } catch (error) {
+        const delay = delays[Math.min(attempt - 1, delays.length - 1)] ?? 30_000;
+        console.warn(
+          `[boot] 模块源启动同步失败（attempt ${attempt}，${delay}ms 后后台重试）:`,
+          error instanceof Error ? error.message : error,
+        );
+        await sleep(delay);
+      }
+    }
+  })();
+  return () => { stopped = true; };
 }
