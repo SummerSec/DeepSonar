@@ -35,7 +35,10 @@ import {
   writeTerminalInput,
   GATEWAY_PROXY_REVISION,
   GATEWAY_PROXY_SCRIPT,
+  gatewayLeftoverRemovalTarget,
+  gatewayCreateTimeoutMs,
   gatewayProxyReuseAction,
+  shouldRemoveGatewayLeftover,
   AgentboxRunner,
   mergeObservedSessionIdentity,
   normalizePlainFinalOutput,
@@ -501,9 +504,31 @@ test("managed gateway proxy is replaced when its route implementation is stale",
   const current = { managed: "true", upstreamHash: "upstream", revision: GATEWAY_PROXY_REVISION, running: "true" };
   assert.equal(gatewayProxyReuseAction(current, "upstream"), "reuse");
   assert.equal(gatewayProxyReuseAction({ ...current, running: "false" }, "upstream"), "start");
+  assert.equal(gatewayProxyReuseAction({ ...current, running: "false", status: "created" }, "upstream"), "replace");
   assert.equal(gatewayProxyReuseAction({ ...current, revision: "legacy" }, "upstream"), "replace");
   assert.equal(gatewayProxyReuseAction({ ...current, upstreamHash: "old" }, "upstream"), "replace");
   assert.equal(gatewayProxyReuseAction({ ...current, managed: "" }, "upstream"), "reject");
+});
+
+test("网关清理只移除本次创建且不健康的受管容器", () => {
+  const owned = {
+    managed: "true",
+    createOwner: "owner-this-run",
+    expectedCreateOwner: "owner-this-run",
+    status: "created" as const,
+    healthy: false,
+  };
+  assert.equal(shouldRemoveGatewayLeftover(owned), true);
+  assert.equal(shouldRemoveGatewayLeftover({ ...owned, status: "exited" }), true);
+  assert.equal(shouldRemoveGatewayLeftover({ ...owned, status: "running", healthy: true }), false);
+  assert.equal(shouldRemoveGatewayLeftover({ ...owned, status: "missing" }), false);
+  assert.equal(shouldRemoveGatewayLeftover({ ...owned, managed: "" }), false);
+  assert.equal(shouldRemoveGatewayLeftover({ ...owned, createOwner: "owner-other-run" }), false);
+  assert.equal(shouldRemoveGatewayLeftover({ ...owned, expectedCreateOwner: null }), false);
+  assert.equal(gatewayLeftoverRemovalTarget({ ...owned, id: "inspected-container-id" }), "inspected-container-id");
+  assert.equal(gatewayLeftoverRemovalTarget({ ...owned, id: "inspected-container-id", managed: "" }), null);
+  assert.equal(gatewayCreateTimeoutMs({ DEEPSONAR_GATEWAY_CREATE_TIMEOUT_SEC: "600" }), 600_000);
+  assert.ok(gatewayCreateTimeoutMs({}) >= 600_000);
 });
 
 test("restricted gateway proxy forwards only /gateway and /control/v1 and preserves Authorization", async () => {

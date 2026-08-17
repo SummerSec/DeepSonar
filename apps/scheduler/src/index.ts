@@ -13,8 +13,10 @@ import {
   bootstrapOfficialRuntimeImages,
   startRuntimeImageRegistrySync,
 } from "./runtime-images.js";
+import { preheatManagedGateway } from "@deepsonar/runtime-sandbox";
 import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
-import { bootstrapSkillSourcesOnBoot } from "./skill-sources.js";
+import { startSkillSourceBootSync } from "./skill-sources.js";
+import { markDispatcherEnabled } from "./startup-status.js";
 import { normalizePendingJobPriorities } from "./core.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
 import { ensureDefaultAdmin } from "./users.js";
@@ -41,7 +43,7 @@ async function main() {
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();
-  await bootstrapSkillSourcesOnBoot();
+  const stopSkillSourceBootSync = startSkillSourceBootSync();
 
   const app = Fastify({
     logger: { level: "info" },
@@ -73,11 +75,13 @@ async function main() {
 
   const shutdown = async () => {
     stopDispatcher();
+    markDispatcherEnabled(false);
     stopRuntimeImageWarmup();
     stopReaper();
     stopPlane();
     stopTransfer();
     stopRuntimeImageRegistrySync();
+    stopSkillSourceBootSync();
     // 优雅退出（§12.2）：先等在执行的 job 收尾，再关 HTTP 与 DB
     await drainInFlight(15_000);
     await app.close();
@@ -91,7 +95,19 @@ async function main() {
   console.log(`[boot] scheduler 已启动: http://${config.host}:${config.port}`);
   stopRuntimeImageWarmup = startRuntimeImageWarmupOnBoot(() => {
     stopDispatcher = startDispatcher();
+    markDispatcherEnabled(true);
     console.log("[runtime-images] startup image set ready; dispatcher enabled");
+  }, {
+    afterPrepare: async (refs) => {
+      if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return;
+      const base = refs.find((item) => item.image_key === "deepsonar-base") ?? refs[0];
+      if (!base) return;
+      await preheatManagedGateway({
+        upstreamUrl: config.gateway.proxyUpstreamUrl,
+        image: base.image_ref,
+        createTimeoutMs: config.gateway.createTimeoutSec * 1000,
+      });
+    },
   });
 }
 

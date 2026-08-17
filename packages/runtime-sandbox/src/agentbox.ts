@@ -15,7 +15,7 @@ import type {
   AgentSubAgentConfig,
 } from "agentbox-sdk";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -34,8 +34,12 @@ const execFileP = promisify(execFile);
 
 /** docker CLI 兜底（进程重启后内存注册表丢失，按持久化 sandboxId 直查引擎） */
 async function docker(...args: string[]): Promise<string> {
+  return dockerTimed(15_000, args);
+}
+
+async function dockerTimed(timeoutMs: number, args: string[], signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout } = await execFileP("docker", args, { timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+    const { stdout } = await execFileP("docker", args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, signal });
     return stdout.trim();
   } catch (error) {
     const err = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
@@ -164,7 +168,7 @@ export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
 const SHARED_ASSETS_VOLUME_RE = /^deepsonar-assets-[a-z0-9][a-z0-9_.-]{0,62}$/;
 let restrictedNetworkReady: Promise<void> | null = null;
 let gatewayNetworkReady: Promise<void> | null = null;
-let gatewayProxyReady: Promise<void> | null = null;
+let gatewayProxyReady: Promise<{ containerId: string; createOwner: string | null }> | null = null;
 
 type TerminalCommandProcess = {
   write?: (input: string) => Promise<void>;
@@ -355,15 +359,48 @@ export const GATEWAY_PROXY_REVISION = createHash("sha256")
   .digest("hex")
   .slice(0, 16);
 
+export const DEFAULT_GATEWAY_CREATE_TIMEOUT_MS = 600_000;
+
+export function gatewayCreateTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+  fallbackMs = DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
+): number {
+  const raw = Number(env.DEEPSONAR_GATEWAY_CREATE_TIMEOUT_SEC);
+  return Number.isFinite(raw) && raw > 0 ? raw * 1000 : fallbackMs;
+}
+
 export function gatewayProxyReuseAction(input: {
   managed: string;
   upstreamHash: string;
   revision: string;
   running: string;
+  status?: string;
 }, expectedUpstreamHash: string): "reuse" | "start" | "replace" | "reject" {
   if (input.managed !== "true") return "reject";
   if (input.upstreamHash !== expectedUpstreamHash || input.revision !== GATEWAY_PROXY_REVISION) return "replace";
+  if (input.status === "created") return "replace";
   return input.running === "true" ? "reuse" : "start";
+}
+
+export type GatewayLeftoverStatus = "created" | "running" | "exited" | "missing";
+
+export function shouldRemoveGatewayLeftover(input: {
+  managed: string;
+  createOwner: string;
+  expectedCreateOwner: string | null;
+  status: GatewayLeftoverStatus;
+  healthy: boolean;
+}): boolean {
+  if (input.managed !== "true" || !input.expectedCreateOwner || input.createOwner !== input.expectedCreateOwner) return false;
+  if (input.status === "missing") return false;
+  if (input.healthy && input.status === "running") return false;
+  return true;
+}
+
+export function gatewayLeftoverRemovalTarget(
+  input: Parameters<typeof shouldRemoveGatewayLeftover>[0] & { id: string },
+): string | null {
+  return input.id && shouldRemoveGatewayLeftover(input) ? input.id : null;
 }
 
 /**
@@ -454,8 +491,72 @@ async function ensureGatewayNetwork(): Promise<void> {
  * internal bridge 常无嵌入式 DNS，容器名 `deepsonar-gateway-proxy` 解析失败会表现为
  * Claude Code `Unable to connect to API (ENOTIMP)` / curl Could not resolve host。
  */
-async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<{ gatewayIp: string; restrictedIp: string }> {
-  gatewayProxyReady ??= (async () => {
+async function inspectGatewayProxy(): Promise<{
+  exists: boolean;
+  id: string;
+  managed: string;
+  upstreamHash: string;
+  revision: string;
+  createOwner: string;
+  running: string;
+  status: string;
+}> {
+  const id = await docker("ps", "-a", "--filter", `name=^/${GATEWAY_PROXY}$`, "--format", "{{.ID}}");
+  if (!id) {
+    return { exists: false, id: "", managed: "", upstreamHash: "", revision: "", createOwner: "", running: "false", status: "missing" };
+  }
+  const state = await docker(
+    "inspect", "--format",
+    "{{index .Config.Labels \"deepsonar.managed\"}}|{{index .Config.Labels \"deepsonar.gateway-upstream\"}}|{{index .Config.Labels \"deepsonar.gateway-revision\"}}|{{index .Config.Labels \"deepsonar.gateway-create-owner\"}}|{{.State.Running}}|{{.State.Status}}",
+    id,
+  );
+  const [managed, configuredHash, revision, createOwner, running, status] = state.split("|");
+  return {
+    exists: true,
+    id,
+    managed: managed ?? "",
+    upstreamHash: configuredHash ?? "",
+    revision: revision ?? "",
+    createOwner: createOwner ?? "",
+    running: running ?? "false",
+    status: status ?? "",
+  };
+}
+
+function leftoverStatusOf(inspected: { exists: boolean; running: string; status: string }): GatewayLeftoverStatus {
+  if (!inspected.exists || inspected.status === "missing") return "missing";
+  if (inspected.status === "created") return "created";
+  if (inspected.running === "true" || inspected.status === "running") return "running";
+  return "exited";
+}
+
+export async function cleanupUnhealthyManagedGateway(input: { expectedCreateOwner: string | null }): Promise<void> {
+  const inspected = await inspectGatewayProxy().catch(() => ({
+    exists: false, id: "", managed: "", upstreamHash: "", revision: "", createOwner: "", running: "false", status: "missing",
+  }));
+  const removalTarget = gatewayLeftoverRemovalTarget({
+    id: inspected.id,
+    managed: inspected.managed,
+    createOwner: inspected.createOwner,
+    expectedCreateOwner: input.expectedCreateOwner,
+    status: leftoverStatusOf(inspected),
+    healthy: inspected.running === "true" && inspected.status === "running",
+  });
+  if (!removalTarget) return;
+  try {
+    await docker("rm", "-f", removalTarget);
+    gatewayProxyReady = null;
+  } catch {
+    // 下一次 ensure 会重新 inspect；删除失败时保留当前状态，避免并发重复创建。
+  }
+}
+
+async function ensureGatewayProxy(
+  upstreamUrl: string,
+  image: string,
+  options: { createTimeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<{ gatewayIp: string; restrictedIp: string; createOwner: string | null }> {
+  const run = async () => {
     await ensureGatewayNetwork();
     await ensureRestrictedNetwork();
     const parsed = new URL(upstreamUrl);
@@ -466,55 +567,65 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<{
       throw new Error("Gateway sidecar 上游 URL 必须以 /gateway 为路径");
     }
     const upstreamHash = createHash("sha256").update(upstreamUrl).digest("hex").slice(0, 16);
-    let exists = Boolean(await docker("ps", "-a", "--filter", `name=^/${GATEWAY_PROXY}$`, "--format", "{{.ID}}"));
+    const inspected = await inspectGatewayProxy();
+    let exists = inspected.exists;
+    let containerId = inspected.id;
+    let createOwner: string | null = null;
     if (exists) {
-      const state = await docker(
-        "inspect", "--format",
-        "{{index .Config.Labels \"deepsonar.managed\"}}|{{index .Config.Labels \"deepsonar.gateway-upstream\"}}|{{index .Config.Labels \"deepsonar.gateway-revision\"}}|{{.State.Running}}",
-        GATEWAY_PROXY,
-      );
-      const [managed, configuredHash, revision, running] = state.split("|");
-      const action = gatewayProxyReuseAction({ managed, upstreamHash: configuredHash, revision, running }, upstreamHash);
+      const action = gatewayProxyReuseAction({
+        managed: inspected.managed,
+        upstreamHash: inspected.upstreamHash,
+        revision: inspected.revision,
+        running: inspected.running,
+        status: inspected.status,
+      }, upstreamHash);
       if (action === "reject") throw new Error(`${GATEWAY_PROXY} 不是 DeepSonar 受管容器，拒绝接管`);
       if (action === "replace") {
-        await docker("rm", "-f", GATEWAY_PROXY);
+        await docker("rm", "-f", inspected.id);
         exists = false;
+        containerId = "";
       } else if (action === "start") {
-        await docker("start", GATEWAY_PROXY);
+        await docker("start", inspected.id);
       }
     }
     if (!exists) {
-      await docker(
-        "run", "-d", "--name", GATEWAY_PROXY, "--restart", "unless-stopped",
-        "--network", GATEWAY_NETWORK, "--add-host", "host.docker.internal:host-gateway",
-        "--label", "deepsonar.managed=true",
-        "--label", `deepsonar.gateway-upstream=${upstreamHash}`,
-        "--label", `deepsonar.gateway-revision=${GATEWAY_PROXY_REVISION}`,
-        "-e", `DEEPSONAR_GATEWAY_UPSTREAM=${upstreamUrl}`,
-        "--entrypoint", "node", image, "-e", GATEWAY_PROXY_SCRIPT,
-      );
+      createOwner = randomUUID();
+      try {
+        containerId = await dockerTimed(options.createTimeoutMs ?? gatewayCreateTimeoutMs(), [
+          "run", "-d", "--name", GATEWAY_PROXY, "--restart", "unless-stopped",
+          "--network", GATEWAY_NETWORK, "--add-host", "host.docker.internal:host-gateway",
+          "--label", "deepsonar.managed=true",
+          "--label", `deepsonar.gateway-upstream=${upstreamHash}`,
+          "--label", `deepsonar.gateway-revision=${GATEWAY_PROXY_REVISION}`,
+          "--label", `deepsonar.gateway-create-owner=${createOwner}`,
+          "-e", `DEEPSONAR_GATEWAY_UPSTREAM=${upstreamUrl}`,
+          "--entrypoint", "node", image, "-e", GATEWAY_PROXY_SCRIPT,
+        ], options.signal);
+      } catch (error) {
+        await cleanupUnhealthyManagedGateway({ expectedCreateOwner: createOwner });
+        throw error;
+      }
     }
-    const inspect = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<string, unknown>;
+    const inspect = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", containerId)) as Record<string, unknown>;
     if (!(GATEWAY_NETWORK in inspect)) {
-      await docker("network", "connect", "--alias", GATEWAY_PROXY, GATEWAY_NETWORK, GATEWAY_PROXY).catch(async () => {
-        await docker("network", "connect", GATEWAY_NETWORK, GATEWAY_PROXY).catch(() => {});
-        const refreshed = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<string, unknown>;
+      await docker("network", "connect", "--alias", GATEWAY_PROXY, GATEWAY_NETWORK, containerId).catch(async () => {
+        await docker("network", "connect", GATEWAY_NETWORK, containerId).catch(() => {});
+        const refreshed = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", containerId)) as Record<string, unknown>;
         if (!(GATEWAY_NETWORK in refreshed)) throw new Error(`${GATEWAY_PROXY} could not join ${GATEWAY_NETWORK}`);
       });
     }
     if (!(RESTRICTED_NETWORK in inspect)) {
-      // --alias 让 Docker 嵌入 DNS 能解析容器名；Podman rootless 仍可能无 DNS，见 ExtraHosts。
       try {
-        await docker("network", "connect", "--alias", GATEWAY_PROXY, RESTRICTED_NETWORK, GATEWAY_PROXY);
+        await docker("network", "connect", "--alias", GATEWAY_PROXY, RESTRICTED_NETWORK, containerId);
       } catch {
-        await docker("network", "connect", RESTRICTED_NETWORK, GATEWAY_PROXY);
+        await docker("network", "connect", RESTRICTED_NETWORK, containerId);
       }
     }
     let ready = false;
     for (let i = 0; i < 20; i++) {
       try {
         await docker(
-          "exec", GATEWAY_PROXY, "node", "-e",
+          "exec", containerId, "node", "-e",
           "fetch('http://127.0.0.1:3100/_deepsonar_health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         );
         ready = true;
@@ -523,10 +634,20 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<{
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
     }
-    if (!ready) throw new Error(`${GATEWAY_PROXY} 启动后未通过健康检查`);
-  })();
-  await gatewayProxyReady;
-  const nets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", GATEWAY_PROXY)) as Record<
+    if (!ready) {
+      await cleanupUnhealthyManagedGateway({ expectedCreateOwner: createOwner });
+      throw new Error(`${GATEWAY_PROXY} 启动后未通过健康检查`);
+    }
+    return { containerId, createOwner };
+  };
+  if (!gatewayProxyReady) {
+    gatewayProxyReady = run().catch((error) => {
+      gatewayProxyReady = null;
+      throw error;
+    });
+  }
+  const readyGateway = await gatewayProxyReady;
+  const nets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", readyGateway.containerId)) as Record<
     string,
     { IPAddress?: string }
   >;
@@ -534,7 +655,19 @@ async function ensureGatewayProxy(upstreamUrl: string, image: string): Promise<{
   const ip = nets[RESTRICTED_NETWORK]?.IPAddress?.trim();
   if (!gatewayIp) throw new Error(`${GATEWAY_PROXY} is not attached to ${GATEWAY_NETWORK}`);
   if (!ip) throw new Error(`${GATEWAY_PROXY} 未接入 ${RESTRICTED_NETWORK} 或缺少 IPv4`);
-  return { gatewayIp, restrictedIp: ip };
+  return { gatewayIp, restrictedIp: ip, createOwner: readyGateway.createOwner };
+}
+
+export async function preheatManagedGateway(input: {
+  upstreamUrl: string;
+  image: string;
+  createTimeoutMs?: number;
+}): Promise<void> {
+  await ensureGatewayProxy(input.upstreamUrl, input.image, { createTimeoutMs: input.createTimeoutMs });
+}
+
+export function resetManagedGatewayStateForTests(): void {
+  gatewayProxyReady = null;
 }
 
 /**
@@ -665,10 +798,11 @@ export class AgentboxRunner implements SandboxRunner {
     if (input.sharedAssetsMount) {
       await validateSharedAssetsVolume(input.sharedAssetsMount.volumeName, input.jobId);
     }
+    let gatewayCreateOwner: string | null = null;
     if (input.network !== "none") {
       if (!input.gatewayUpstreamUrl) throw new Error("real sandbox missing Gateway upstream URL");
-      const proxyIps = await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image);
-      // 固定主机名 → restricted 网 IP，避免 Podman internal 网无 DNS 时 ANTHROPIC_BASE_URL 不可达
+      const proxyIps = await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image, { signal: input.signal });
+      gatewayCreateOwner = proxyIps.createOwner;
       extraHosts.push(`${GATEWAY_PROXY}:${input.network === "restricted" ? proxyIps.restrictedIp : proxyIps.gatewayIp}`);
     }
     const sandbox = new Sandbox("local-docker", {
@@ -710,6 +844,7 @@ export class AgentboxRunner implements SandboxRunner {
       // cleanup after create settles, then sweep the immutable attempt labels.
       await sandbox.delete().catch(() => {});
       await removeAttemptContainers(input.jobId, input.attemptId).catch(() => {});
+      await cleanupUnhealthyManagedGateway({ expectedCreateOwner: gatewayCreateOwner }).catch(() => {});
       throw error;
     } finally {
       provisioningSandboxes.delete(provisionKey);

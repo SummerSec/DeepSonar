@@ -26,6 +26,15 @@ export {
 
 const execFileP = promisify(execFile);
 
+function abortReason(signal: AbortSignal, label: string): Error {
+  const reason = signal.reason;
+  return reason instanceof Error ? reason : new Error(`${label} 已中止`);
+}
+
+function assertSyncNotAborted(signal: AbortSignal | undefined, label: string): void {
+  if (signal?.aborted) throw abortReason(signal, label);
+}
+
 /** 仓库 URL 校验（§5.1 安全要求）：仅 https（host 白名单复用 DEEPSONAR_GIT_ALLOWED_HOSTS）；禁 file://、本地路径、内嵌凭据 */
 export function validateSourceUrl(url: string): void {
   let parsed: URL;
@@ -189,6 +198,12 @@ function missingForSelector(
 }
 
 type SelectedModule = { source_id: string; module: SourceModule };
+
+type GitExecFile = (
+  file: string,
+  args: string[],
+  options: { timeout: number; signal?: AbortSignal },
+) => Promise<{ stdout: string | Buffer }>;
 
 /**
  * Materializer paths are namespace-specific: skill names and command names can
@@ -414,22 +429,61 @@ function scanRepo(repoRoot: string): SourceModule[] {
   return modules;
 }
 
+/** 克隆指定分支；只有真实分支错误才允许回退默认分支，取消必须原样中止。 */
+export async function cloneSkillSource(input: {
+  repoUrl: string;
+  branch: string;
+  destination: string;
+  signal?: AbortSignal;
+  execFile?: GitExecFile;
+}): Promise<void> {
+  const run = input.execFile ?? execFileP;
+  try {
+    await run(
+      "git",
+      ["clone", "--depth", "1", "--branch", input.branch, input.repoUrl, input.destination],
+      { timeout: 120_000, signal: input.signal },
+    );
+  } catch (error) {
+    // Abort 只表示本次同步已取消，不能把取消误判成分支不存在而切到默认分支。
+    if (input.signal?.aborted) throw error;
+    await run(
+      "git",
+      ["clone", "--depth", "1", input.repoUrl, input.destination],
+      { timeout: 120_000, signal: input.signal },
+    );
+  }
+}
+
 /** 同步一个模块源：浅克隆 → 扫描 → catalog + commit sha + 内容哈希落库。返回模块数。 */
-export async function syncSkillSource(sourceId: string, syncedBy?: string | null): Promise<{ modules: number }> {
+export async function syncSkillSource(
+  sourceId: string,
+  syncedBy?: string | null,
+  signal?: AbortSignal,
+): Promise<{ modules: number }> {
+  if (signal?.aborted) throw abortReason(signal, `skill source ${sourceId} sync`);
   const [src] = await sql`SELECT * FROM skill_sources WHERE id = ${sourceId}`;
   if (!src) throw new Error(`skill source ${sourceId} 不存在`);
   if ((src.trust_status as string) === "disabled") throw new Error("模块源已禁用，不能同步");
 
   const tmp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-src-"));
   try {
-    try {
-      await execFileP("git", ["clone", "--depth", "1", "--branch", src.branch as string, src.repo_url as string, tmp], { timeout: 120_000 });
-    } catch {
-      // 分支不存在等场景：退回默认分支
-      await execFileP("git", ["clone", "--depth", "1", src.repo_url as string, tmp], { timeout: 120_000 });
-    }
-    const { stdout: commitSha } = await execFileP("git", ["-C", tmp, "rev-parse", "HEAD"], { timeout: 15_000 });
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
+    await cloneSkillSource({
+      repoUrl: src.repo_url as string,
+      branch: src.branch as string,
+      destination: tmp,
+      signal,
+      execFile: execFileP,
+    });
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
+    const { stdout: commitSha } = await execFileP(
+      "git",
+      ["-C", tmp, "rev-parse", "HEAD"],
+      { timeout: 15_000, signal },
+    );
     const catalog = scanRepo(tmp);
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
     await sql`
       UPDATE skill_sources SET
         catalog_json = ${sql.json(catalog as never)},
@@ -562,34 +616,146 @@ export async function expandModules(
   };
 }
 
-/**
- * 启动时对已信任且启用的模块源各做一次浅克隆同步（默认开启）。
- * 失败只记日志，不阻塞调度器启动；synced_by 标记为 boot。
- */
-export async function bootstrapSkillSourcesOnBoot(): Promise<void> {
-  if (!config.skillSources.bootSync) {
-    console.log("[boot] 跳过模块源启动同步（DEEPSONAR_SKILL_SOURCE_BOOT_SYNC=false）");
-    return;
+export const SKILL_SOURCE_BOOT_SYNC_TIMEOUT_MS = 20_000;
+
+export async function runWithTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string,
+  parentSignal?: AbortSignal,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeParentAbort: (() => void) | undefined;
+  const controller = new AbortController();
+  const timeoutError = new Error(`${label} 在 ${timeoutMs}ms 后超时`);
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+    throw abortReason(parentSignal, label);
   }
-  const sources = await sql`
-    SELECT id, name FROM skill_sources
-    WHERE enabled = true AND trust_status = 'trusted'
-    ORDER BY created_at ASC`;
+  try {
+    let abortError: Error | undefined;
+    const abort = (error: Error, reason: unknown = error) => {
+      if (!abortError) abortError = error;
+      if (!controller.signal.aborted) controller.abort(reason);
+    };
+    if (parentSignal) {
+      const onAbort = () => abort(abortReason(parentSignal, label), parentSignal.reason);
+      removeParentAbort = () => parentSignal.removeEventListener("abort", onAbort);
+      parentSignal.addEventListener("abort", onAbort, { once: true });
+      if (parentSignal.aborted) onAbort();
+    }
+    const operationPromise = Promise.resolve().then(() => operation(controller.signal));
+    timer = setTimeout(() => abort(timeoutError), timeoutMs);
+    try {
+      const result = await operationPromise;
+      if (abortError) throw abortError;
+      return result;
+    } catch (error) {
+      if (abortError) throw abortError;
+      throw error;
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    removeParentAbort?.();
+  }
+}
+
+export async function syncTrustedSkillSourcesOnce(deps: {
+  listSources: () => Promise<Array<{ id: string; name: string }>>;
+  sync: (id: string, signal: AbortSignal) => Promise<{ modules: number }>;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const sources = await deps.listSources();
+  if (deps.signal?.aborted) throw abortReason(deps.signal, "skill-source boot sync");
   if (sources.length === 0) {
     console.log("[boot] 无已信任模块源，跳过启动同步");
     return;
   }
+  const failures: Array<{ source: string; error: unknown }> = [];
   for (const src of sources) {
-    const name = src.name as string;
-    const id = src.id as string;
+    if (deps.signal?.aborted) throw abortReason(deps.signal, "skill-source boot sync");
     try {
-      const r = await syncSkillSource(id, "boot");
-      console.log(`[boot] 模块源 ${name} 同步完成：${r.modules} 个模块`);
+      const result = await runWithTimeout(
+        (signal) => deps.sync(src.id, signal),
+        deps.timeoutMs,
+        `skill-source ${src.name} boot sync`,
+        deps.signal,
+      );
+      console.log(`[boot] 模块源 ${src.name} 同步完成：${result.modules} 个模块`);
     } catch (error) {
+      if (deps.signal?.aborted) throw error;
       console.warn(
-        `[boot] 模块源 ${name} 同步失败（不阻塞启动）:`,
+        `[boot] 模块源 ${src.name} 同步失败（不阻塞启动）:`,
         error instanceof Error ? error.message : error,
       );
+      failures.push({ source: src.name, error });
     }
   }
+  if (failures.length > 0) {
+    const detail = failures
+      .map(({ source, error }) => `${source}: ${error instanceof Error ? error.message : String(error)}`)
+      .join("; ");
+    throw new AggregateError(failures.map(({ error }) => error), `模块源启动同步失败: ${detail}`);
+  }
+}
+
+/**
+ * 启动同步不阻塞 listen。GitHub 不可达时有界超时并后台重试。
+ */
+export function startSkillSourceBootSync(deps: {
+  enabled?: boolean;
+  listSources?: () => Promise<Array<{ id: string; name: string }>>;
+  sync?: (id: string, signal: AbortSignal) => Promise<{ modules: number }>;
+  timeoutMs?: number;
+  retryDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
+} = {}): () => void {
+  const enabled = deps.enabled ?? config.skillSources.bootSync;
+  if (!enabled) {
+    console.log("[boot] 跳过模块源启动同步（DEEPSONAR_SKILL_SOURCE_BOOT_SYNC=false）");
+    return () => {};
+  }
+  const timeoutMs = deps.timeoutMs ?? config.skillSources.bootSyncTimeoutSec * 1000;
+  const delays = deps.retryDelaysMs ?? [5_000, 15_000, 30_000];
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  }));
+  const listSources = deps.listSources ?? (async () => {
+    const rows = await sql`
+      SELECT id, name FROM skill_sources
+      WHERE enabled = true AND trust_status = 'trusted'
+      ORDER BY created_at ASC`;
+    return rows.map((row) => ({ id: String(row.id), name: String(row.name) }));
+  });
+  const sync = deps.sync ?? ((id: string, signal: AbortSignal) => syncSkillSource(id, "boot", signal));
+  let stopped = false;
+  let currentController: AbortController | undefined;
+  void (async () => {
+    let attempt = 0;
+    while (!stopped) {
+      attempt += 1;
+      const controller = new AbortController();
+      currentController = controller;
+      try {
+        await syncTrustedSkillSourcesOnce({ listSources, sync, timeoutMs, signal: controller.signal });
+        return;
+      } catch (error) {
+        if (stopped || controller.signal.aborted) return;
+        const delay = delays[Math.min(attempt - 1, delays.length - 1)] ?? 30_000;
+        console.warn(
+          `[boot] 模块源启动同步失败（attempt ${attempt}，${delay}ms 后后台重试）:`,
+          error instanceof Error ? error.message : error,
+        );
+        await sleep(delay);
+      } finally {
+        if (currentController === controller) currentController = undefined;
+      }
+    }
+  })();
+  return () => {
+    stopped = true;
+    currentController?.abort(new Error("模块源启动同步已停止"));
+  };
 }

@@ -1438,12 +1438,44 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
 
 const BOOTSTRAP_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
 
-/** Base is a scheduler prerequisite, so prepare it before dispatch is enabled. */
+export type StartupRuntimeImageMeta = {
+  official: boolean;
+  project_opt_in: boolean;
+  enabled: boolean;
+};
+
+/**
+ * Bootstrap has no project semantics. Only official, globally available images
+ * (not project-opt-in) may gate dispatcher readiness.
+ */
+export function isStartupRequiredRuntimeImage(image: StartupRuntimeImageMeta | null): boolean {
+  if (!image) return true;
+  return image.official === true && image.project_opt_in !== true;
+}
+
+async function lookupStartupRuntimeImageMeta(
+  db: typeof sql,
+  imageKey: string,
+): Promise<StartupRuntimeImageMeta | null> {
+  const [row] = await db`
+    SELECT official, project_opt_in, enabled
+    FROM runtime_images
+    WHERE image_key = ${imageKey}`;
+  if (!row) return null;
+  return {
+    official: row.official === true,
+    project_opt_in: row.project_opt_in === true,
+    enabled: row.enabled !== false,
+  };
+}
+
+/** Official defaults are a scheduler prerequisite; opt-in images are not. */
 export async function resolveStartupRuntimeImages(
   db: typeof sql = sql,
   channel?: RuntimeImageRegistryChannel,
   dependencies: {
     listRoles?: () => Promise<Array<{ name: string; runtime_image_key: string | null }>>;
+    lookupImage?: (imageKey: string) => Promise<StartupRuntimeImageMeta | null>;
     resolve?: typeof resolveRuntimeImageForJob;
   } = {},
 ): Promise<RuntimeImageSnapshot[]> {
@@ -1452,9 +1484,16 @@ export async function resolveStartupRuntimeImages(
     FROM agent_roles r
     LEFT JOIN role_configs rc ON rc.role_id = r.id AND rc.project_id IS NULL
     ORDER BY r.name`;
+  const lookup = dependencies.lookupImage ?? ((imageKey: string) => lookupStartupRuntimeImageMeta(db, imageKey));
   const snapshots = new Map<string, RuntimeImageSnapshot>();
   for (const role of roles) {
     const key = typeof role.runtime_image_key === "string" ? role.runtime_image_key : null;
+    const imageKey = key || defaultRuntimeImageKey(String(role.name));
+    const meta = await lookup(imageKey);
+    if (!isStartupRequiredRuntimeImage(meta)) {
+      console.log(`[runtime-images] startup warmup skips project-opt-in image ${imageKey} (bootstrap has no project semantics)`);
+      continue;
+    }
     const snapshot = await (dependencies.resolve ?? resolveRuntimeImageForJob)(db, BOOTSTRAP_PROJECT_ID, String(role.name), key, channel);
     snapshots.set(snapshot.image_ref, snapshot);
   }

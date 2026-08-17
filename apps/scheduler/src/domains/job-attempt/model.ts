@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ContextState } from "@deepsonar/runtime-sandbox";
 
 /**
@@ -129,6 +130,7 @@ export const ATTEMPT_MAX_STATE_BYTES = 32 * 1024;
 export const ATTEMPT_MAX_IDENTITY_BYTES = 4 * 1024;
 export const ATTEMPT_MAX_RESOURCE_BYTES = 4 * 1024;
 export const ATTEMPT_MAX_EFFECT_JSON_BYTES = 8 * 1024;
+export const ATTEMPT_MAX_OUTCOME_BYTES = 8 * 1024;
 export const ATTEMPT_MAX_ERROR_CHARS = 500;
 
 const EFFECT_ID_RE = /^[a-z][a-z0-9_.:-]{1,127}$/u;
@@ -146,6 +148,17 @@ function assertObject(value: unknown, label: string): asserts value is Record<st
 
 export function assertBoundedJson(value: unknown, label: string, maxBytes: number): void {
   if (jsonBytes(value) > maxBytes) throw new Error(`${label} 超过 ${maxBytes} 字节限制`);
+}
+
+/** Persist only summary identity in Attempt outcome; full body stays on canvas_nodes. */
+export function compactAttemptOutcome(outcome: Record<string, unknown>): Record<string, unknown> {
+  if (typeof outcome.summary !== "string") return outcome;
+  const { summary, ...rest } = outcome;
+  return {
+    ...rest,
+    summary_sha256: createHash("sha256").update(summary, "utf8").digest("hex"),
+    summary_bytes: Buffer.byteLength(summary, "utf8"),
+  };
 }
 
 export function normalizeLowCardinalityText(value: unknown, label: string, maxChars: number): string | null {

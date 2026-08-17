@@ -63,7 +63,7 @@ Set-ExecutionPolicy -Scope Process Bypass
    `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
 4. real 模式显式拉取 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该引用必须带 immutable sha256 digest，拉取失败则停止部署；
 5. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
-6. Scheduler 先监听 `/health`（liveness），再后台准备当前通道（新库默认阿里云 ACR）的 Base、Audit、Kali 等有效默认 digest；`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。
+6. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
 
 访问：**http://127.0.0.1:8080**
 

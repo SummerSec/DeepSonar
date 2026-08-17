@@ -2,10 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { renderMetrics } from "../../metrics.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "../../openapi.js";
 import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
+import { dispatcherRuntimeStatus } from "../../startup-status.js";
 
 export function registerSystemRoutes(
   app: FastifyInstance,
-  dependencies: { runtimeImageStatus?: typeof runtimeImageWarmupStatus } = {},
+  dependencies: {
+    runtimeImageStatus?: typeof runtimeImageWarmupStatus;
+    dispatcherStatus?: typeof dispatcherRuntimeStatus;
+  } = {},
 ): void {
   app.get("/metrics", async (_req, reply) =>
     reply.type("text/plain; version=0.0.4").send(await renderMetrics()));
@@ -44,6 +48,13 @@ export function registerSystemRoutes(
   // Liveness stays HTTP 200 while startup images are preparing or retrying.
   app.get("/health", async () => {
     const runtimeImages = (dependencies.runtimeImageStatus ?? runtimeImageWarmupStatus)();
-    return { ok: true, ready: runtimeImages.ready, runtime_images: runtimeImages, ts: Date.now() };
+    const dispatcher = (dependencies.dispatcherStatus ?? dispatcherRuntimeStatus)();
+    return {
+      ok: true,
+      ready: runtimeImages.ready && dispatcher.enabled,
+      runtime_images: runtimeImages,
+      dispatcher,
+      ts: Date.now(),
+    };
   });
 }

@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { validateContextState, type ContextState } from "@deepsonar/runtime-sandbox";
+import { CONTROL_INPUT_ERROR_CODES, ControlInputError } from "../../control-input.js";
 import { sql } from "../../db.js";
 import {
   ATTEMPT_MAX_STATE_BYTES,
   ATTEMPT_MAX_ERROR_CHARS,
   ATTEMPT_MAX_IDENTITY_BYTES,
+  ATTEMPT_MAX_OUTCOME_BYTES,
   ATTEMPT_MAX_RESOURCE_BYTES,
   assertBoundedJson,
   buildAttemptState,
+  compactAttemptOutcome,
   sanitizeError,
   validateEffectDescriptor,
   type AttemptPhase,
@@ -305,7 +308,17 @@ export async function settleAttemptTerminal(
   if (status === "active" || status === "interrupted" || status === "unknown") {
     throw new Error(`Attempt 终态 ${status} 不能通过 terminal 收口`);
   }
-  assertBoundedJson(outcome, "attempt outcome", 8 * 1024);
+  const compacted = compactAttemptOutcome(outcome);
+  try {
+    assertBoundedJson(compacted, "attempt outcome", ATTEMPT_MAX_OUTCOME_BYTES);
+  } catch (boundError) {
+    throw new ControlInputError(
+      CONTROL_INPUT_ERROR_CODES.invalidDone,
+      boundError instanceof Error ? boundError.message : "attempt outcome 超过字节限制",
+      typeof outcome.summary === "string" ? "summary" : undefined,
+    );
+  }
+  outcome = compacted;
   const safeError = error ? sanitizeError(error) : null;
   const [attempt] = await db`SELECT * FROM job_attempts WHERE job_id = ${jobId} AND status = 'active' ORDER BY attempt_no DESC LIMIT 1 FOR UPDATE`;
   if (!attempt) return null;

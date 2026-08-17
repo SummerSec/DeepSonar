@@ -2244,6 +2244,7 @@ export const api = {
     ok: boolean;
     ready: boolean;
     runtime_images: { status: "idle" | "preparing" | "ready" | "failed"; error: string | null; retry_at: string | null };
+    dispatcher: { enabled: boolean; started_at: string | null };
     ts: number;
   }>("/health"),
   /** API schema 文档（OpenAPI 3 JSON；调度器豁免鉴权） */
