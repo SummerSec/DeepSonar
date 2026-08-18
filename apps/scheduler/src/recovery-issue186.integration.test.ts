@@ -29,6 +29,8 @@ if (!testDatabaseUrl) {
       reconcileModule,
       dispatcherModule,
       configModule,
+      coreModule,
+      runtimeSnapshotModule,
     ] = await Promise.all([
       import("fastify"),
       import("@fastify/websocket"),
@@ -39,6 +41,8 @@ if (!testDatabaseUrl) {
       import("./reconcile.js"),
       import("./dispatcher.js"),
       import("./config.js"),
+      import("./core.js"),
+      import("./domains/role-runtime-snapshot/index.js"),
     ]);
     const { sql, migrate } = dbModule;
     await migrate();
@@ -52,13 +56,6 @@ if (!testDatabaseUrl) {
     const canvasId = randomUUID();
     const hubId = randomUUID();
     const workerIds: string[] = Array.from({ length: 5 }, () => randomUUID());
-    const snapshot = {
-      agent_cli: "claude-code",
-      credential_id: null,
-      credential_provider: null,
-      model: null,
-    };
-
     try {
       await sql`
         INSERT INTO projects (id, canvas_id, name, config_json)
@@ -71,6 +68,11 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
+      const snapshot = await runtimeSnapshotModule.freezeAgentSnapshotNetworkPolicy(
+        sql,
+        canvasId,
+        await coreModule.resolveAgentSnapshotForJob(sql, projectId, "audit"),
+      );
       await sql`
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, priority, payload_json,
