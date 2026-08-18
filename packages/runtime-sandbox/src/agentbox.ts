@@ -345,7 +345,7 @@ async function removeAttemptContainers(jobId: string, attemptId: string): Promis
     "--filter", `label=deepsonar.attempt=${attemptId}`,
   );
   for (const id of raw.split(/\s+/).filter(Boolean)) {
-    await docker("rm", "-f", id).catch(() => {});
+    await removeContainerWithRetry(id);
   }
 }
 
@@ -949,7 +949,22 @@ export class AgentboxRunner implements SandboxRunner {
 
   async cancelProvision(input: { jobId: string; attemptId: string }): Promise<void> {
     const sandbox = provisioningSandboxes.get(`${input.jobId}:${input.attemptId}`);
-    if (sandbox) await sandbox.delete().catch(() => {});
+    let sdkError: unknown;
+    if (sandbox) {
+      try {
+        await deleteSandboxBestEffort(sandbox);
+      } catch (error) {
+        sdkError = error;
+      }
+    }
+    try {
+      await removeAttemptContainers(input.jobId, input.attemptId);
+    } catch (error) {
+      throw new AggregateError(
+        [...(sdkError === undefined ? [] : [sdkError]), error],
+        `provision cancellation cleanup failed: ${input.jobId}/${input.attemptId}`,
+      );
+    }
   }
 
   async destroy(handle: RunHandle): Promise<void> {

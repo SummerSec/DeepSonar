@@ -18,6 +18,7 @@ const preferredRegistry = normalizePreferredRegistry(process.env.DEEPSONAR_IMAGE
 const allowedRegistries = new Set((process.env.DEEPSONAR_ALLOWED_IMAGE_REGISTRIES ?? "ghcr.io,docker.io,registry-1.docker.io").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
 const scannerImages = resolveScannerImages();
 const scanVolume = process.env.DEEPSONAR_IMAGE_SCAN_VOLUME ?? "deepsonar_admission_scan";
+const ADMISSION_PROBE_LABEL = "deepsonar.resource=image-admission-probe";
 const sql = postgres(databaseUrl, { max: 2, connection: { application_name: "deepsonar-image-admission" } });
 
 function masterKey(): Buffer {
@@ -75,6 +76,39 @@ function requireImmutableScanner(name: ScannerName): string {
 async function docker(args: string[], timeout = 15 * 60_000, maxBuffer = 64 * 1024 * 1024): Promise<string> {
   const { stdout } = await execFileP("docker", args, { timeout, maxBuffer });
   return stdout.trim();
+}
+
+function isMissingContainer(error: unknown): boolean {
+  const value = error as { stderr?: unknown; stdout?: unknown; message?: unknown };
+  return [value?.stderr, value?.stdout, value?.message, error]
+    .map((part) => String(part ?? ""))
+    .some((part) => /no such container|container .* (?:not found|does not exist)/i.test(part));
+}
+
+async function removeAdmissionProbe(containerId: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      await docker(["rm", "-f", containerId], 120_000);
+      return;
+    } catch (error) {
+      if (isMissingContainer(error)) return;
+      lastError = error;
+      if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** (attempt - 1)));
+    }
+  }
+  throw lastError;
+}
+
+async function cleanupAdmissionProbes(): Promise<void> {
+  const ids = (await docker(["ps", "-aq", "--filter", `label=${ADMISSION_PROBE_LABEL}`], 30_000))
+    .split(/\s+/u)
+    .filter(Boolean);
+  for (const id of ids) {
+    await removeAdmissionProbe(id).catch((error) => {
+      console.error(`[image-admission] probe cleanup failed ${id}:`, error instanceof Error ? error.message : error);
+    });
+  }
 }
 
 async function scanner(name: keyof typeof scannerImages, args: string[]): Promise<string> {
@@ -161,8 +195,15 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   await docker([...hardening, "git --version && rg --version && jq --version && file --version && python3 --version && node --version"]);
   const setuid = (await docker([...hardening, "find / -xdev -type f -perm /6000 -print 2>/dev/null || true"])).split("\n").filter(Boolean);
 
-  const probeId = await docker(["create", resolvedRef]);
+  const probeId = await docker([
+    "create",
+    "--label", "deepsonar.managed=true",
+    "--label", ADMISSION_PROBE_LABEL,
+    "--label", `deepsonar.scan=${scanId}`,
+    resolvedRef,
+  ]);
   const archivePath = `/scan/${scanId}.tar`;
+  let probeError: unknown;
   try {
     await docker(["export", "-o", archivePath, probeId]);
     await docker([
@@ -170,9 +211,13 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
       "--entrypoint", "clamscan", requireImmutableScanner("clamav"),
       "--infected", "--no-summary", archivePath,
     ], 30 * 60_000);
+  } catch (error) {
+    probeError = error;
   } finally {
-    await docker(["rm", "-f", probeId], 30_000).catch(() => {});
+    const cleanupError = await removeAdmissionProbe(probeId).then(() => undefined, (error) => error);
     await unlink(archivePath).catch(() => {});
+    if (probeError) throw probeError;
+    if (cleanupError) throw cleanupError;
   }
 
   const signature = JSON.parse(await scanner("cosign", ["verify", "--output", "json", resolvedRef]));
@@ -301,7 +346,19 @@ async function checkTrackedTags() {
     FROM runtime_image_versions v
     JOIN runtime_images ri ON ri.id = v.runtime_image_id
     WHERE v.trust_status = 'trusted' AND ri.enabled = true
-      AND v.image_ref !~ '@sha256:[0-9a-f]{64}$'`;
+      AND v.image_ref !~ '@sha256:[0-9a-f]{64}$'
+      AND (
+        v.promoted_at IS NOT NULL
+        OR EXISTS (
+          SELECT 1 FROM project_runtime_images p
+          WHERE p.selected_version_id = v.id
+        )
+        OR EXISTS (
+          SELECT 1 FROM jobs j
+          WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = v.id::text
+            AND j.status IN ('pending','claimed','provisioning','running','waiting_human','failed','timeout','orphan')
+        )
+      )`;
   for (const row of tracked) {
     try {
       await docker(["pull", row.image_ref as string]);
@@ -336,6 +393,18 @@ async function queueContinuousRescans() {
     SELECT v.id FROM runtime_image_versions v
     WHERE v.trust_status = 'trusted'
       AND COALESCE(v.scanned_at, '-infinity'::timestamptz) < now() - (${Math.round(continuousRescanMs / 1000)} * interval '1 second')
+      AND (
+        v.promoted_at IS NOT NULL
+        OR EXISTS (
+          SELECT 1 FROM project_runtime_images p
+          WHERE p.selected_version_id = v.id
+        )
+        OR EXISTS (
+          SELECT 1 FROM jobs j
+          WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = v.id::text
+            AND j.status IN ('pending','claimed','provisioning','running','waiting_human','failed','timeout','orphan')
+        )
+      )
       AND NOT EXISTS (
         SELECT 1 FROM runtime_image_scans s WHERE s.runtime_image_version_id = v.id
           AND s.status IN ('queued','claimed','running')
@@ -346,8 +415,17 @@ console.log(`[image-admission] worker=${workerId} poll=${pollMs}ms`);
 const timer = setInterval(() => void tick().catch((error) => console.error("[image-admission] tick failed", error)), pollMs);
 const updateTimer = setInterval(() => void checkTrackedTags().catch((error) => console.error("[image-admission] update check failed", error)), updateCheckMs);
 const rescanTimer = setInterval(() => void queueContinuousRescans().catch((error) => console.error("[image-admission] rescan queue failed", error)), continuousRescanMs);
+const cleanupTimer = setInterval(() => void cleanupAdmissionProbes().catch((error) => console.error("[image-admission] probe cleanup failed", error)), 5 * 60_000);
 void tick();
 void queueContinuousRescans();
-const shutdown = async () => { clearInterval(timer); clearInterval(updateTimer); clearInterval(rescanTimer); await sql.end(); process.exit(0); };
+void cleanupAdmissionProbes().catch((error) => console.error("[image-admission] probe cleanup failed", error));
+const shutdown = async () => {
+  clearInterval(timer);
+  clearInterval(updateTimer);
+  clearInterval(rescanTimer);
+  clearInterval(cleanupTimer);
+  await sql.end();
+  process.exit(0);
+};
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

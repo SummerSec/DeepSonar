@@ -746,7 +746,9 @@ export async function loadReadiness(
     materialSource?: ReadinessMaterialSource;
   } = {},
 ): Promise<ReadinessResponseType> {
-  const hostDisk = await refreshHostDiskPressure();
+  const hostDisk = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker"
+    ? await refreshHostDiskPressure()
+    : undefined;
   const projectId = options.projectId ?? null;
   const scope: ReadinessScopeInput = { kind: projectId ? "project" : "global", projectId };
   const projectRow = projectId

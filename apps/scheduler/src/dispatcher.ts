@@ -492,16 +492,18 @@ async function graphEligibilityReasonFromDb(
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 export async function claimPendingJobs(): Promise<{ id: string }[]> {
-  const disk = await refreshHostDiskPressure();
-  if (!hostDiskAllowsDispatch(disk)) {
-    if (disk.level === "error") {
-      console.error(
-        `[dispatcher] HOST_DISK_PRESSURE ${disk.usedPercent?.toFixed(2)}% >= ${disk.errorPercent}%: new claims paused`,
-      );
-    } else {
-      console.error(`[dispatcher] host disk status unknown at ${disk.path}: new claims paused`);
+  if (config.runtime.agentMode === "real" && config.runtime.provider === "local-docker") {
+    const disk = await refreshHostDiskPressure();
+    if (!hostDiskAllowsDispatch(disk)) {
+      if (disk.level === "error") {
+        console.error(
+          `[dispatcher] HOST_DISK_PRESSURE ${disk.usedPercent?.toFixed(2)}% >= ${disk.errorPercent}%: new claims paused`,
+        );
+      } else {
+        console.error(`[dispatcher] host disk status unknown at ${disk.path}: new claims paused`);
+      }
+      return [];
     }
-    return [];
   }
   // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
   // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。

@@ -6,7 +6,16 @@ import { inc, setGauge } from "./metrics.js";
 import { parseOciDigestRef } from "./runtime-images.js";
 
 const execFileP = promisify(execFile);
-const ACTIVE_OR_QUEUED_JOB_STATUSES = ["pending", "claimed", "provisioning", "running", "waiting_human"] as const;
+const PROTECTED_JOB_STATUSES = [
+  "pending",
+  "claimed",
+  "provisioning",
+  "running",
+  "waiting_human",
+  "failed",
+  "timeout",
+  "orphan",
+] as const;
 const IMAGE_GC_COMMAND_TIMEOUT_MS = 120_000;
 const IMAGE_GC_MAX_BUFFER = 8 * 1024 * 1024;
 
@@ -174,7 +183,7 @@ export async function executeRuntimeImageGcPlan(
 export async function runtimeImageGcOnce(
   executeDocker: DockerCommand = docker,
 ): Promise<RuntimeImageGcExecutionResult> {
-  const [versionRows, projectPins, activeJobRefs] = await Promise.all([
+  const [versionRows, projectPins, jobRefs, activeScanRefs] = await Promise.all([
     sql<Array<{
       id: string;
       runtime_image_id: string;
@@ -204,8 +213,12 @@ export async function runtimeImageGcOnce(
     sql<Array<{ version_id: string }>>`
       SELECT DISTINCT agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' AS version_id
       FROM jobs
-      WHERE status = ANY(${[...ACTIVE_OR_QUEUED_JOB_STATUSES]})
+      WHERE status = ANY(${[...PROTECTED_JOB_STATUSES]})
         AND agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' IS NOT NULL`,
+    sql<Array<{ version_id: string }>>`
+      SELECT DISTINCT runtime_image_version_id AS version_id
+      FROM runtime_image_scans
+      WHERE status IN ('queued','claimed','running')`,
   ]);
   const versions: RuntimeImageGcVersion[] = versionRows.map((row) => ({
     id: String(row.id),
@@ -219,7 +232,7 @@ export async function runtimeImageGcOnce(
   const plan = planRuntimeImageGc(
     versions,
     new Set(projectPins.map((row) => String(row.selected_version_id))),
-    new Set(activeJobRefs.map((row) => String(row.version_id))),
+    new Set([...jobRefs, ...activeScanRefs].map((row) => String(row.version_id))),
   );
   return executeRuntimeImageGcPlan(plan, executeDocker);
 }

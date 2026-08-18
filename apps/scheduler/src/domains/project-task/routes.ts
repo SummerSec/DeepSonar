@@ -448,20 +448,48 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
             )::int AS active_count
           FROM jobs WHERE canvas_id = ${canvasId}`;
         if (Number(work?.pending_count ?? 0) === 0 && Number(work?.active_count ?? 0) === 0) {
-          await maybeTriggerHub(
-            tx as unknown as typeof sql,
-            {
-              id: null,
-              project_id: canvas.project_id as string,
-              canvas_id: canvasId,
-              type: "task_start",
-              priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
-            },
-            {
-              idleWake: true,
-              trigger: { kind: "task_start" },
-            },
-          );
+          const [interruptedWorker] = await tx`
+            SELECT 1
+            FROM jobs j
+            LEFT JOIN agent_roles r ON r.name = j.type
+            LEFT JOIN LATERAL (
+              SELECT outcome_json
+              FROM job_attempts
+              WHERE job_id = j.id
+              ORDER BY attempt_no DESC
+              LIMIT 1
+            ) attempt ON true
+            WHERE j.canvas_id = ${canvasId}
+              AND j.status = 'orphan'
+              AND (
+                r.kind = 'role'
+                OR (
+                  (j.agent_snapshot_json->>'role_kind') = 'role'
+                  AND j.type NOT IN ('hub_reason', 'verify_finding', 'report')
+                )
+              )
+              AND (
+                attempt.outcome_json->>'reason' IN ('scheduler_restart', 'provision_effect_unknown')
+                OR j.error LIKE '%调度器重启（执行中断）%'
+                OR j.error LIKE '%调度器重启（provision 外部效果状态未知）%'
+              )
+            LIMIT 1`;
+          if (!interruptedWorker) {
+            await maybeTriggerHub(
+              tx as unknown as typeof sql,
+              {
+                id: null,
+                project_id: canvas.project_id as string,
+                canvas_id: canvasId,
+                type: "task_start",
+                priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+              },
+              {
+                idleWake: true,
+                trigger: { kind: "task_start" },
+              },
+            );
+          }
         }
       }
 

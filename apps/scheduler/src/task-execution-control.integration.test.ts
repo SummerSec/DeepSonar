@@ -41,12 +41,14 @@ if (!testDatabaseUrl) {
     const scheduledCanvasId = randomUUID();
     const runnableCanvasId = randomUUID();
     const idleCanvasId = randomUUID();
+    const interruptedCanvasId = randomUUID();
     const archivedCanvasId = randomUUID();
     const scheduledPendingId = randomUUID();
     const drainingId = randomUUID();
     const waitingHumanId = randomUUID();
     const failedId = randomUUID();
     const orphanId = randomUUID();
+    const interruptedWorkerId = randomUUID();
     const runnablePendingId = randomUUID();
     const schedule = {
       start_at: "2099-08-20T00:00:00.000Z",
@@ -85,6 +87,15 @@ if (!testDatabaseUrl) {
               reason: "manual_pause",
             },
           } as never)}),
+          (${interruptedCanvasId}, ${projectId}, 'interrupted recovery', ${sql.json({
+            network_policy: { allow_egress: true },
+            execution_control: {
+              paused: true,
+              paused_at: "2026-08-18T09:00:00.000Z",
+              paused_by: "operator",
+              reason: "manual_pause",
+            },
+          } as never)}),
           (${archivedCanvasId}, ${projectId}, 'archived gate', ${sql.json({
             execution_control: {
               paused: true,
@@ -95,7 +106,9 @@ if (!testDatabaseUrl) {
           } as never)})`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
-        VALUES (${idleCanvasId}, 'root', 'idle wake', 'active', '{}'::jsonb)`;
+        VALUES
+          (${idleCanvasId}, 'root', 'idle wake', 'active', '{}'::jsonb),
+          (${interruptedCanvasId}, 'root', 'interrupted recovery', 'active', '{}'::jsonb)`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, priority, agent_snapshot_json)
         VALUES
@@ -104,7 +117,12 @@ if (!testDatabaseUrl) {
           (${waitingHumanId}, ${projectId}, ${scheduledCanvasId}, 'explore', 'waiting_human', 0, '{}'::jsonb),
           (${failedId}, ${projectId}, ${scheduledCanvasId}, 'explore', 'failed', 0, '{}'::jsonb),
           (${orphanId}, ${projectId}, ${scheduledCanvasId}, 'explore', 'orphan', 0, '{}'::jsonb),
+          (${interruptedWorkerId}, ${projectId}, ${interruptedCanvasId}, 'explore', 'orphan', 0,
+            ${sql.json({ role_kind: "role" } as never)}),
           (${runnablePendingId}, ${projectId}, ${runnableCanvasId}, 'explore', 'pending', 0, '{}'::jsonb)`;
+      await sql`
+        UPDATE jobs SET error = '调度器重启（执行中断）'
+        WHERE id = ${interruptedWorkerId}`;
       await sql`
         UPDATE global_settings SET rules_json = ${sql.json({
           ...originalRules as Record<string, unknown>,
@@ -228,6 +246,16 @@ if (!testDatabaseUrl) {
         WHERE canvas_id = ${idleCanvasId} AND type = 'hub_reason'
           AND status IN ('pending','claimed','provisioning','running')`;
       assert.equal(Number(idleHubCount.count), 1, "concurrent start must wake an idle Hub exactly once");
+
+      const interruptedStart = await post(interruptedCanvasId, "start");
+      assert.equal(interruptedStart.statusCode, 200, interruptedStart.payload);
+      const [interruptedHubCount] = await sql`
+        SELECT COUNT(*)::int AS count
+        FROM jobs
+        WHERE canvas_id = ${interruptedCanvasId} AND type = 'hub_reason'`;
+      assert.equal(Number(interruptedHubCount.count), 0, "start must not let a new Hub steal interrupted Worker recovery");
+      const [interruptedWorker] = await sql`SELECT status FROM jobs WHERE id = ${interruptedWorkerId}`;
+      assert.equal(interruptedWorker.status, "orphan", "start must not retry interrupted Workers");
 
       await sql`UPDATE canvases SET status = 'archived', archived_at = now() WHERE id = ${archivedCanvasId}`;
       const archivedStart = await post(archivedCanvasId, "start");

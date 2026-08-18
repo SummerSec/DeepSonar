@@ -45,7 +45,8 @@ async function main() {
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();
-  await refreshHostDiskPressure();
+  const managesLocalDocker = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker";
+  if (managesLocalDocker) await refreshHostDiskPressure();
   const stopSkillSourceBootSync = startSkillSourceBootSync();
 
   const app = Fastify({
@@ -76,9 +77,11 @@ async function main() {
   const stopTransfer = startTransferWorker();
   const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
   const stopRuntimeImageGc = startRuntimeImageGc();
-  const stopHostDiskMonitor = startHostDiskMonitor(() => {
-    if (dispatcherRuntimeStatus().enabled) kickDispatcher();
-  });
+  const stopHostDiskMonitor = managesLocalDocker
+    ? startHostDiskMonitor(() => {
+        if (dispatcherRuntimeStatus().enabled) kickDispatcher();
+      })
+    : () => {};
 
   const shutdown = async () => {
     stopDispatcher();

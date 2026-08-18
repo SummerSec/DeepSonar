@@ -8,7 +8,7 @@ import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
 import { sharedAssetsVolumeManager } from "./runtime.js";
 
-const ACTIVE_JOB_STATUSES = ["claimed", "provisioning", "running"] as const;
+const ACTIVE_JOB_STATUSES = ["claimed", "provisioning", "running", "waiting_human"] as const;
 
 export interface ManagedVolume {
   volumeName: string;
