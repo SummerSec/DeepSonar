@@ -1,0 +1,25 @@
+{
+  "name": "DeepSonar",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "scheduler",
+      "command": "pnpm dev"
+    },
+    {
+      "name": "web",
+      "command": "pnpm dev:web"
+    }
+  ],
+  "ports": [
+    {
+      "name": "scheduler",
+      "port": 3100
+    },
+    {
+      "name": "web",
+      "port": 5173
+    }
+  ]
+}
