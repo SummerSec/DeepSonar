@@ -105,7 +105,6 @@ python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"h
 python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"maxConcurrentJobs": 2}'
 python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"maxConcurrentJobs": null}'
 python scripts/deepsonar-api.py project-settings update <projectId> --roles "explore,analyze,review"
-python scripts/deepsonar-api.py project-settings update <projectId> --roles "explore,analyze,review"
 python scripts/deepsonar-api.py project-settings update <projectId> --roles null
 python scripts/deepsonar-api.py readiness
 python scripts/deepsonar-api.py readiness project <projectId> [--allow-egress true] [--material-source declared]

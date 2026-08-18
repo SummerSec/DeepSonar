@@ -273,6 +273,40 @@ if (!testDatabaseUrl) {
       await sql`UPDATE projects SET config_json = '{}'::jsonb WHERE id = ${projectIds[0]}`;
       const clearedClaim = await claimPendingJobs();
       assert.equal(clearedClaim.some((job) => job.id === pausedId), true);
+
+      // A later global cap reduction must not make the stored project value
+      // poison every subsequent settings save. The effective limit remains
+      // clamped, while the independent project preference stays persisted.
+      await setRules({
+        maxGlobalJobs: 8,
+        maxJobsPerProject: 2,
+        maxConcurrentProvisioning: 8,
+        maxConcurrentByAgentCli: { "claude-code": 8 },
+      });
+      await sql`
+        UPDATE projects
+        SET config_json = ${sql.json({ rules: { maxConcurrentJobs: 4 } } as never)}
+        WHERE id = ${projectIds[0]}`;
+      const Fastify = (await import("fastify")).default;
+      const { registerSettingsRoutes } = await import("./domains/settings/routes.js");
+      const app = Fastify({ logger: false });
+      registerSettingsRoutes(app);
+      try {
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/projects/${projectIds[0]}/settings`,
+          payload: { rules: { maxConcurrentJobs: 4, allowEgress: false } },
+        });
+        assert.equal(response.statusCode, 200);
+        const saved = response.json<{ effective_rules: { maxConcurrentJobs: number } }>();
+        assert.equal(saved.effective_rules.maxConcurrentJobs, 2);
+      } finally {
+        await app.close();
+      }
+      const [storedProject] = await sql`SELECT config_json FROM projects WHERE id = ${projectIds[0]}`;
+      const storedRules = (storedProject.config_json as { rules: Record<string, unknown> }).rules;
+      assert.equal(storedRules.maxConcurrentJobs, 4);
+      assert.equal(storedRules.allowEgress, false);
     } finally {
       if (!databaseClosed) {
         await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;

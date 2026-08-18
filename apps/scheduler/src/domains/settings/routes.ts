@@ -357,13 +357,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       if (Object.prototype.hasOwnProperty.call(body.rules, "maxConcurrentJobs")) {
         if (body.rules.maxConcurrentJobs === null) {
           delete nextRules.maxConcurrentJobs;
-        } else {
-          const global = await globalRules(sql);
-          if (Number(body.rules.maxConcurrentJobs) > global.maxJobsPerProject) {
-            return reply.code(400).send({
-              error: `maxConcurrentJobs 不能超过全局每项目上限 ${global.maxJobsPerProject}`,
-            });
-          }
         }
       }
       cfg.rules = nextRules;
