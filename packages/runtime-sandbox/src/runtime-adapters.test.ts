@@ -183,6 +183,11 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /@deepseek-ai\/dsh-compaction-basic/);
   assert.match(config, /skills:\n\s+enabled: true/);
   assert.match(config, /tools:\n\s+mode: native/);
+  // rc.6 declares toolBash as false | object. Omission keeps the spine's
+  // default bash tool enabled; boolean true makes Cordis reject the plugin.
+  assert.doesNotMatch(config, /^\s+toolBash:/mu);
+  assert.match(config, /^\s+toolJobs: false$/mu);
+  assert.match(config, /^\s+workspaceContext: false$/mu);
   assert.doesNotMatch(config, /dsh-code-runtime-worker-thread/);
   assert.match(config, /@deepseek-ai\/dsh-llm-pi-ai/);
   assert.match(config, /name: dsh-reasoning-settings/);

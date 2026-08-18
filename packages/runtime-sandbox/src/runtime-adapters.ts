@@ -969,7 +969,6 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     workspaceContext: false
     skills:
       enabled: true
-    toolBash: true
     toolJobs: false
 
 - id: bash
