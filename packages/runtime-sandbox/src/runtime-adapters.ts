@@ -95,6 +95,7 @@ export const REQUIRED_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities
   "completionGate",
   "sessionCapture",
   "contextCompaction",
+  "interactiveTerminal",
 ];
 
 export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)[] = [
@@ -203,6 +204,7 @@ const PI_RPC_EVENT_TYPES = new Set([
   "branch_summary_generation_start",
   "branch_summary_generation_end",
   "model_select",
+  "model_change",
   "steering_delta",
   "follow_up",
 ]);
@@ -766,6 +768,34 @@ function piMessageText(value: unknown): string | undefined {
   return text || undefined;
 }
 
+function piUsageTokens(value: unknown): { input: number; output: number } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { input: 0, output: 0 };
+  const record = value as Record<string, unknown>;
+  const usage = record.usage && typeof record.usage === "object" && !Array.isArray(record.usage)
+    ? record.usage as Record<string, unknown>
+    : record;
+  const num = (key: string) => {
+    const raw = usage[key];
+    return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+  };
+  return {
+    input: num("input") || num("inputTokens") || num("input_tokens"),
+    output: num("output") || num("outputTokens") || num("output_tokens"),
+  };
+}
+
+function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): boolean {
+  if (state.finalText || state.streamedText) return false;
+  const text = piMessageText(message);
+  if (text) return false;
+  if (message && typeof message === "object" && !Array.isArray(message)) {
+    const content = (message as Record<string, unknown>).content;
+    if (Array.isArray(content) && content.length > 0) return false;
+  }
+  const usage = piUsageTokens(message);
+  return usage.input === 0 && usage.output === 0;
+}
+
 function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   const contextEvents = contextEventFromLine(line, state);
   if (contextEvents.length > 0) return contextEvents;
@@ -787,6 +817,9 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
     if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+    if (!unseen && isEmptyPiModelResponse(message, state)) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "PI_EMPTY_MODEL_RESPONSE" }];
+    }
     return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
   }
   if (type === "agent_settled") {
@@ -807,7 +840,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
       ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: tool.arguments ?? {} }] } }]
       : [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(tool.error), content: tool.result ?? tool.output ?? "" }] } }];
   }
-  return ["turn_start", "turn_end", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end"].includes(type)
+  return ["turn_start", "turn_end", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "model_select", "model_change"].includes(type)
     ? []
     : unknownRuntimeEvent();
 }
@@ -840,7 +873,7 @@ const pi = Object.freeze<RuntimeAdapter>({
     contextCompaction: true,
     contextCompactionPolicy: "automatic",
     reasoningEffort: true,
-    interactiveTerminal: false,
+    interactiveTerminal: true,
   }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxPi(context.sandbox, context),
@@ -1083,7 +1116,7 @@ const dsh = Object.freeze<RuntimeAdapter>({
     contextCompaction: true,
     contextCompactionPolicy: "automatic",
     reasoningEffort: true,
-    interactiveTerminal: false,
+    interactiveTerminal: true,
   }),
   compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
   start: (context) => sandboxDsh(context.sandbox, context),

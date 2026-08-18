@@ -17,10 +17,11 @@ test("job detail Escape closes the drawer but defers to a nested confirmation", 
 
 test("live terminal is an explicit, permission-gated mount", () => {
   assert.match(workspace, /useState\(false\)/);
-  assert.match(workspace, /desktop && terminalAllowed && desktopTerminalOpen/);
+  assert.match(workspace, /desktop && canOpenTerminal && desktopTerminalOpen/);
   assert.match(workspace, /aria-label="打开终端"/);
   assert.match(workspace, /aria-label="关闭终端"/);
-  assert.match(workspace, /mobileView === "terminal" && terminalAllowed/);
+  assert.match(workspace, /mobileView === "terminal" && canOpenTerminal/);
+  assert.match(workspace, /该 CLI 暂不支持交互终端/);
   assert.doesNotMatch(workspace, /mobileView === "stream" \? "" : "hidden"/);
   assert.doesNotMatch(workspace, /mobileView === "terminal" \? "" : "hidden"/);
 });
@@ -28,8 +29,8 @@ test("live terminal is an explicit, permission-gated mount", () => {
 test("changing jobs resets terminal state and tears down the previous terminal", () => {
   assert.match(workspace, /const \[terminalJobId, setTerminalJobId\] = useState\(jobId\)/);
   assert.match(workspace, /setDesktopTerminalOpen\(false\);[\s\S]*?setMobileView\("stream"\);[\s\S]*?setTerminalJobId\(jobId\);[\s\S]*?\}, \[jobId\]\)/);
-  assert.match(workspace, /desktop && terminalAllowed && desktopTerminalOpen && terminalJobId === jobId/);
-  assert.match(workspace, /mobileView === "terminal" && terminalAllowed && terminalJobId === jobId/);
+  assert.match(workspace, /desktop && canOpenTerminal && desktopTerminalOpen && terminalJobId === jobId/);
+  assert.match(workspace, /mobileView === "terminal" && canOpenTerminal && terminalJobId === jobId/);
   assert.match(workspace, /<TerminalPanel key=\{jobId\}/);
 });
 

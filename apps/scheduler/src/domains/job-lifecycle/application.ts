@@ -73,6 +73,7 @@ export function createJobLifecycleApplication(
     reapExecutionTimeout: requireOperation("reapExecutionTimeout"),
     reapProvisionTimeout: requireOperation("reapProvisionTimeout"),
     reapLeaseOrphans: requireOperation("reapLeaseOrphans"),
+    reapStalledExecution: requireOperation("reapStalledExecution"),
     reconcileProvisioning: requireOperation("reconcileProvisioning"),
     reconcileRunning: requireOperation("reconcileRunning"),
     cancelJob: requireOperation("cancelJob"),
@@ -181,6 +182,27 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "orphan", { reason: "lease_expired" }, "lease 过期（Reaper 判定孤儿）");
+        }
+        return rows(result as unknown as JobLifecycleRow[]);
+      });
+    },
+
+    /** running 但语义事件停摆：lease 心跳不能证明 Agent 还在干活。 */
+    async reapStalledExecution(stallSec) {
+      if (!Number.isSafeInteger(stallSec) || stallSec <= 0) return [];
+      return atomically(async (tx) => {
+        const result = await tx`
+          UPDATE jobs SET status = 'failed', finished_at = now(),
+                          error = COALESCE(error, '') || '产出停滞（Reaper 判定）'
+          WHERE status = 'running'
+            AND started_at IS NOT NULL
+            AND GREATEST(
+              started_at,
+              COALESCE((SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id), started_at)
+            ) + (${stallSec} * interval '1 second') < now()
+          RETURNING id, sandbox_id`;
+        for (const row of result) {
+          await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
         }
         return rows(result as unknown as JobLifecycleRow[]);
       });

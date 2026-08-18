@@ -27,6 +27,7 @@ export interface JobLifecycleOperations {
   reapExecutionTimeout: () => Promise<JobLifecycleRow[]>;
   reapProvisionTimeout: (provisionSec: number) => Promise<JobLifecycleRow[]>;
   reapLeaseOrphans: () => Promise<JobLifecycleRow[]>;
+  reapStalledExecution: (stallSec: number) => Promise<JobLifecycleRow[]>;
   reconcileProvisioning: () => Promise<ProvisionReconcileResult>;
   reconcileRunning: () => Promise<JobLifecycleRow[]>;
   cancelJob: (jobId: string, error: string) => Promise<JobLifecycleRow | null>;

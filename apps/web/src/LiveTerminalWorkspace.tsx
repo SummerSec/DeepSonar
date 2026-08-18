@@ -3,7 +3,16 @@ import { useEffect, useRef, useState } from "react";
 import { LiveStream } from "./LiveStream";
 import { TerminalPanel } from "./TerminalPanel";
 
-export function LiveTerminalWorkspace({ jobId, terminalAllowed }: { jobId: string; terminalAllowed: boolean }) {
+export function LiveTerminalWorkspace({
+  jobId,
+  terminalAllowed,
+  terminalSupported = true,
+}: {
+  jobId: string;
+  terminalAllowed: boolean;
+  terminalSupported?: boolean;
+}) {
+  const canOpenTerminal = terminalAllowed && terminalSupported;
   const [mobileView, setMobileView] = useState<"stream" | "terminal">("stream");
   const [desktopTerminalOpen, setDesktopTerminalOpen] = useState(false);
   const [terminalJobId, setTerminalJobId] = useState(jobId);
@@ -25,11 +34,11 @@ export function LiveTerminalWorkspace({ jobId, terminalAllowed }: { jobId: strin
   }, [jobId]);
 
   useEffect(() => {
-    if (!terminalAllowed) {
+    if (!canOpenTerminal) {
       setDesktopTerminalOpen(false);
       setMobileView("stream");
     }
-  }, [terminalAllowed]);
+  }, [canOpenTerminal]);
 
   const beginResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     const host = hostRef.current;
@@ -48,7 +57,7 @@ export function LiveTerminalWorkspace({ jobId, terminalAllowed }: { jobId: strin
     window.addEventListener("pointerup", end, { once: true });
   };
 
-  if (desktop && terminalAllowed && desktopTerminalOpen && terminalJobId === jobId) {
+  if (desktop && canOpenTerminal && desktopTerminalOpen && terminalJobId === jobId) {
     return (
       <div ref={hostRef} className="grid h-full min-h-0" style={{ gridTemplateColumns: `${streamPercent}% 8px minmax(0, 1fr)` }}>
         <div className="min-h-0 overflow-hidden"><LiveStream jobId={jobId} active /></div>
@@ -84,7 +93,12 @@ export function LiveTerminalWorkspace({ jobId, terminalAllowed }: { jobId: strin
   if (desktop) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        {terminalAllowed && (
+        {terminalAllowed && !terminalSupported && (
+          <div className="border-b border-white/[.06] px-3 py-1.5 font-mono text-[10px] text-zinc-500">
+            该 CLI 暂不支持交互终端
+          </div>
+        )}
+        {canOpenTerminal && (
           <div className="flex shrink-0 justify-end border-b border-white/[.06] px-3 py-1">
             <button
               type="button"
@@ -114,7 +128,7 @@ export function LiveTerminalWorkspace({ jobId, terminalAllowed }: { jobId: strin
           <Waveform size={14} />
           实时流
         </button>
-        {terminalAllowed && (
+        {canOpenTerminal && (
           <button
             type="button"
             onClick={() => setMobileView("terminal")}
@@ -125,7 +139,12 @@ export function LiveTerminalWorkspace({ jobId, terminalAllowed }: { jobId: strin
           </button>
         )}
       </div>
-      {mobileView === "terminal" && terminalAllowed && terminalJobId === jobId ? (
+      {terminalAllowed && !terminalSupported && (
+        <div className="border-b border-white/[.06] px-3 py-1.5 font-mono text-[10px] text-zinc-500">
+          该 CLI 暂不支持交互终端
+        </div>
+      )}
+      {mobileView === "terminal" && canOpenTerminal && terminalJobId === jobId ? (
         <div className="min-h-0 flex-1 overflow-hidden"><TerminalPanel key={jobId} jobId={jobId} active allowed /></div>
       ) : (
         <div className="min-h-0 flex-1 overflow-hidden"><LiveStream jobId={jobId} active /></div>

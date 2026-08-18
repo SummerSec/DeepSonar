@@ -15,7 +15,7 @@ import { planeWriteback } from "./plane-sync.js";
  * - 孤儿：lease 过期 → orphan（沙箱可能已死/调度器崩溃后恢复）
  */
 
-export async function reapOnce(): Promise<{ timeouts: number; orphans: number; provisionStuck: number }> {
+export async function reapOnce(): Promise<{ timeouts: number; orphans: number; provisionStuck: number; stalled: number }> {
   const lifecycle = createSqlJobLifecycleApplication();
   const timedOut = await lifecycle.reapExecutionTimeout();
 
@@ -23,8 +23,9 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
   const provisionStuck = await lifecycle.reapProvisionTimeout(config.timeouts.provisionSec);
 
   const orphaned = await lifecycle.reapLeaseOrphans();
+  const stalled = await lifecycle.reapStalledExecution(config.timeouts.stallSec);
 
-  for (const j of [...timedOut, ...provisionStuck, ...orphaned]) {
+  for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled]) {
     const jobId = j.id as string;
     const sandboxId = j.sandbox_id as string | null | undefined;
     if (sandboxId) {
@@ -40,8 +41,10 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     // §13.1 指标：终局原因计数
     const isTimeout = timedOut.some((x) => x.id === jobId);
     const isProvision = provisionStuck.some((x) => x.id === jobId);
+    const isStalled = stalled.some((x) => x.id === jobId);
     if (isTimeout) inc("deepsonar_jobs_failed_total", { reason: "timeout" });
     else if (isProvision) inc("deepsonar_jobs_failed_total", { reason: "provision_stuck" });
+    else if (isStalled) inc("deepsonar_jobs_failed_total", { reason: "stalled" });
     else inc("deepsonar_jobs_orphan_total");
     // §6.3：终局判定即吊销短期模型 Token
     await revokeJobTokens(jobId, "reaper").catch(() => {});
@@ -54,7 +57,7 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     // verify 收口：不得遗留 verifying；report 失败保持 Root reporting
     const [meta] = await sql`SELECT type, error, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (meta?.type === "verify_finding") {
-      const status = isTimeout ? "timeout" : isProvision ? "failed" : "orphan";
+      const status = isTimeout ? "timeout" : isProvision || isStalled ? "failed" : "orphan";
       await recoverVerifyJobTerminal(jobId, status, (meta.error as string) ?? null).catch((e) =>
         console.error(`[reaper] verify recovery failed:`, e),
       );
@@ -80,7 +83,7 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
             type: meta.type,
             priority: meta.priority ?? 0,
           },
-          isTimeout ? "timeout" : isProvision ? "failed" : "orphan",
+          isTimeout ? "timeout" : isProvision || isStalled ? "failed" : "orphan",
         );
       }).catch((e) => console.error(`[reaper] terminal canvas advance failed:`, e));
     }
@@ -88,14 +91,14 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     await planeWriteback(jobId).catch(() => {});
   }
 
-  return { timeouts: timedOut.length, orphans: orphaned.length, provisionStuck: provisionStuck.length };
+  return { timeouts: timedOut.length, orphans: orphaned.length, provisionStuck: provisionStuck.length, stalled: stalled.length };
 }
 
 export function startReaper() {
   const timer = setInterval(() => {
     void reapOnce()
       .then((r) => {
-        if (r.timeouts + r.orphans + r.provisionStuck > 0) console.log("[reaper]", r);
+        if (r.timeouts + r.orphans + r.provisionStuck + r.stalled > 0) console.log("[reaper]", r);
       })
       .catch((e) => console.error("[reaper]", e));
   }, config.timeouts.reaperIntervalSec * 1000);

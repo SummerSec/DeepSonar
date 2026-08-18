@@ -228,16 +228,25 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     const settings = scrubRuntimeSecretFields(parseJsonObject(source.content, source.path)) as Record<string, unknown>;
     const providers = asObject(settings.providers);
     if (Object.keys(providers).length === 0) throw new Error("受限网络无法定位 Pi provider");
+    const auth: Record<string, { type: "api_key"; key: string }> = {};
     for (const [providerId, rawProvider] of Object.entries(providers)) {
       const provider = asObject(rawProvider);
       provider.baseUrl = gatewayBaseUrl;
       provider.apiKey = "$DEEPSONAR_GATEWAY_TOKEN";
       providers[providerId] = provider;
+      auth[providerId] = { type: "api_key", key: jobToken };
     }
     settings.providers = providers;
-    return input.files.map((item) => item.path === source.path
-      ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
-      : { ...item });
+    const rewritten = input.files
+      .filter((item) => item.path !== ".pi/agent/auth.json" && item.path !== ".pi/agent/settings.json")
+      .map((item) => item.path === source.path
+        ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
+        : { ...item });
+    rewritten.push(file(".pi/agent/auth.json", `${JSON.stringify(auth, null, 2)}\n`));
+    rewritten.push(file(".pi/agent/settings.json", `${JSON.stringify({
+      retry: { enabled: true, maxRetries: 2, provider: { maxRetries: 2 } },
+    }, null, 2)}\n`));
+    return rewritten;
   }
 
   if (input.agentCli === "dsh") {
@@ -715,6 +724,32 @@ export function extractModelsFromSettings(settingsConfig: unknown): string[] {
     push(match?.[1] || match?.[2]);
   }
   return found;
+}
+
+/** Pi CLI --model 需要 provider/model；裸模型 ID 会变成 provider= 空、请求发不出去。 */
+export function qualifyPiModelRef(
+  model: string | undefined,
+  files: readonly MaterializedConfigFile[],
+): string | undefined {
+  if (!model?.trim()) return undefined;
+  const trimmed = model.trim();
+  if (trimmed.includes("/")) return trimmed;
+  const modelsFile = files.find((item) => item.path === ".pi/agent/models.json");
+  if (!modelsFile) return `deepsonar/${trimmed}`;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(modelsFile.content) as unknown;
+  } catch {
+    return `deepsonar/${trimmed}`;
+  }
+  const providers = asObject(asObject(parsed).providers);
+  for (const [providerId, rawProvider] of Object.entries(providers)) {
+    const provider = asObject(rawProvider);
+    const models = Array.isArray(provider.models) ? provider.models : [];
+    if (models.some((raw) => asObject(raw).id === trimmed)) return `${providerId}/${trimmed}`;
+  }
+  const first = Object.keys(providers)[0];
+  return first ? `${first}/${trimmed}` : trimmed;
 }
 
 /**
