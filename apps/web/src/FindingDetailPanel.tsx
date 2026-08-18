@@ -466,12 +466,12 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                       <ProtocolDatum label="利用难度" value={String(f.scoring_json.exploitability_label ?? "未知")} />
                       <div className="col-span-2 sm:col-span-4">
                         <div className="font-mono text-[9px] uppercase text-zinc-600">Vector</div>
-                        <code className="mt-1 block break-all rounded bg-black/20 px-2.5 py-2 font-mono text-[10px] leading-5 text-zinc-400">{String(f.scoring_json.vector ?? "未提供")}</code>
+                        <code className="theme-input-surface mt-1 block break-all rounded px-2.5 py-2 font-mono text-[10px] leading-5 text-zinc-400">{String(f.scoring_json.vector ?? "未提供")}</code>
                       </div>
                       {Boolean(f.scoring_json.metrics) && Object.keys(f.scoring_json.metrics as Record<string, unknown>).length > 0 && (
                         <div className="col-span-2 sm:col-span-4">
                           <div className="font-mono text-[9px] uppercase text-zinc-600">Metrics</div>
-                          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 px-2.5 py-2 font-mono text-[10px] leading-5 text-zinc-400">
+                          <pre className="theme-input-surface mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded px-2.5 py-2 font-mono text-[10px] leading-5 text-zinc-400">
                             {JSON.stringify(f.scoring_json.metrics, null, 2)}
                           </pre>
                         </div>

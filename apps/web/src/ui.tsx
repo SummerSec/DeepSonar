@@ -302,7 +302,7 @@ export function FilterCountBar({
               {chips.map((chip) => (
                 <span
                   key={chip}
-                  className="max-w-[14rem] truncate rounded-full bg-black/30 px-2.5 py-1 font-mono text-[10px] text-zinc-300 ring-1 ring-white/[.1]"
+                  className="theme-chip max-w-[14rem] truncate rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-300 ring-1"
                   title={chip}
                 >
                   {chip}

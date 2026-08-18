@@ -470,7 +470,7 @@ export function SettingsPanel({
         <span className="rounded-full bg-white/[.035] px-2 py-1 font-mono text-[9px] text-zinc-500 ring-1 ring-white/[.06]">全局缺省</span>
       );
     return (
-      <span className="rounded-full bg-black/20 px-2 py-1 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]">未配置</span>
+      <span className="theme-chip rounded-full px-2 py-1 font-mono text-[9px] text-zinc-600 ring-1">未配置</span>
     );
   };
 

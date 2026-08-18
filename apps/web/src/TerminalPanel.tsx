@@ -210,8 +210,8 @@ export function TerminalPanel({ jobId, active, allowed }: { jobId: string; activ
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#080a0b]">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/[.07] px-3">
+    <div className="theme-drawer flex h-full min-h-0 flex-col">
+      <div className="theme-drawer-header flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className={`size-1.5 rounded-full ${state === "connected" ? "bg-emerald-400" : state === "error" ? "bg-red-400" : "bg-zinc-600"}`} />
         <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">{status}</span>
         <span role="status" aria-live="polite" aria-atomic="true" className={copyFeedback ? "font-mono text-[10px] text-zinc-400" : "sr-only"}>{copyFeedback}</span>
@@ -221,7 +221,7 @@ export function TerminalPanel({ jobId, active, allowed }: { jobId: string; activ
         <button type="button" title="重新连接" aria-label="重新连接" onClick={() => setGeneration((value) => value + 1)} className="terminal-tool-button"><ArrowsClockwise size={14} /></button>
         <button type="button" title={state === "connected" ? "断开" : "连接"} aria-label={state === "connected" ? "断开" : "连接"} onClick={() => state === "connected" ? socketRef.current?.close(1000, "manual") : setGeneration((value) => value + 1)} className="terminal-tool-button">{state === "connected" ? <Plugs size={14} /> : <PlugsConnected size={14} />}</button>
       </div>
-      <div ref={hostRef} className="terminal-host min-h-0 flex-1 p-2" />
+      <div ref={hostRef} className="terminal-host min-h-0 flex-1 bg-[#080a0b] p-2" />
     </div>
   );
 }

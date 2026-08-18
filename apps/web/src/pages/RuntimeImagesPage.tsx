@@ -164,7 +164,7 @@ function LocalCandidatePanel({
   onAdopt: () => void;
 }) {
   return (
-    <div className="mt-4 rounded-xl border border-white/[.07] bg-black/20 p-3">
+    <div className="theme-surface mt-4 rounded-xl border p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className={`rounded-full px-2 py-1 font-mono text-[9px] ring-1 ${localCheckStyle(candidate.exists)}`}>本地镜像 {localCheckLabel(candidate.exists)}</span>
         <span className={`rounded-full px-2 py-1 font-mono text-[9px] ring-1 ${localCheckStyle(candidate.contract_valid)}`}>contract {localCheckLabel(candidate.contract_valid)}</span>
@@ -194,7 +194,7 @@ function LocalCandidatePanel({
         </div>
       </dl>
       {candidate.reasons.length > 0 && (
-        <div className="mt-3 rounded-lg bg-white/[.035] px-3 py-2">
+        <div className="theme-surface mt-3 rounded-lg px-3 py-2">
           <div className="font-mono text-[9px] tracking-[.12em] text-zinc-600">CHECK REASONS</div>
           <ul className="mt-1 space-y-1 text-[11px] leading-5 text-zinc-400">
             {candidate.reasons.map((reason, index) => <li key={`${index}:${reason}`}>· {reason}</li>)}
@@ -1110,12 +1110,15 @@ export function RuntimeImagesPage() {
 
       {selected && (
         <div
-          className="fixed inset-0 z-40 flex justify-end bg-black/55"
+          className="theme-overlay fixed inset-0 z-40 flex justify-end backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="镜像详情"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setSelected(null);
           }}
         >
-          <aside className="flex h-full min-h-0 min-w-0 w-full max-w-[620px] flex-col overflow-x-hidden overflow-y-auto overscroll-contain border-l border-white/[.07] bg-[#0e1214] p-4 shadow-2xl sm:p-6">
+          <aside className="theme-drawer flex h-full min-h-0 min-w-0 w-full max-w-[620px] flex-col overflow-x-hidden overflow-y-auto overscroll-contain border-l p-4 sm:p-6">
             <div className="flex min-w-0 items-start gap-3">
               <div className="min-w-0 flex-1">
                 <span className="font-mono text-[9px] tracking-[.16em] text-acc-300">RUNTIME EVIDENCE</span>
@@ -1225,7 +1228,7 @@ export function RuntimeImagesPage() {
                 </div>
               )}
               {selected.versions.filter((version) => versionMatchesPlatform(version, platformFilter)).length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-white/[.1] bg-white/[.02] px-4 py-8 text-center">
+                <div className="theme-surface rounded-2xl border border-dashed px-4 py-8 text-center">
                   <p className="text-[13px] text-zinc-300">
                     {selected.versions.length === 0 ? "还没有任何版本" : `没有匹配 ${platformFilter} 的版本`}
                   </p>
@@ -1245,7 +1248,7 @@ export function RuntimeImagesPage() {
                   const approve = canApproveVersion(version);
                   const isPinned = projectId && selected.image.selected_version_id === version.id;
                   return (
-                    <section key={version.id} className={`min-w-0 rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : "border-white/[.065] bg-white/[.025]"}`}>
+                    <section key={version.id} className={`theme-surface min-w-0 rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : ""}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <strong className="break-words font-mono text-sm font-normal text-zinc-200">{version.version}</strong>
                         <TrustBadge status={version.trust_status} />
@@ -1268,7 +1271,7 @@ export function RuntimeImagesPage() {
                         {version.tools_json.map((tool) => (
                           <span
                             key={tool.name}
-                            className="break-words rounded-full bg-white/[.04] px-2 py-1 font-mono text-[8px] text-zinc-500"
+                            className="theme-chip break-words rounded-full px-2 py-1 font-mono text-[8px] text-zinc-500"
                           >
                             {tool.name} {tool.version}
                           </span>

@@ -39,7 +39,7 @@ export function ProjectLayout() {
             </div>
           </div>
           {project && <span className="hidden rounded-full bg-white/[.03] px-2 py-1 font-mono text-[8px] text-zinc-600 md:inline">{project.plane_project_id ? "PLANE CONNECTED" : "LOCAL"}{project.status === "archived" ? " · ARCHIVED" : ""}</span>}
-          <nav className="-mx-1 flex max-w-full items-center gap-1 overflow-x-auto rounded-full bg-black/20 p-1 [scrollbar-width:none] sm:mx-0 sm:ml-auto">
+          <nav className="theme-surface -mx-1 flex max-w-full items-center gap-1 overflow-x-auto rounded-full p-1 [scrollbar-width:none] sm:mx-0 sm:ml-auto">
             {TABS.map((t) => (
               <NavLink
                 key={t.to}
@@ -47,7 +47,7 @@ export function ProjectLayout() {
                 className={({ isActive }) =>
                   `shrink-0 rounded-full px-3 py-1.5 text-[11px] transition-colors ${
                     isActive
-                      ? "bg-white/[.08] text-zinc-100"
+                      ? "theme-chip text-zinc-100"
                       : "text-zinc-600 hover:bg-white/[.04] hover:text-zinc-300"
                   }`
                 }
