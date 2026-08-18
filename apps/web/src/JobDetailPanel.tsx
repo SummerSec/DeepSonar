@@ -1,4 +1,4 @@
-import { PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
+import { ArrowClockwise, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
@@ -19,6 +19,7 @@ import { SeverityBadge, StatusBadge, formatTime } from "./ui";
  */
 type DetailTab = "result" | "live" | "events" | "session" | "findings" | "config";
 const ACTIVE = new Set(["claimed", "provisioning", "running", "waiting_human"]);
+const RESUMABLE = new Set(["waiting_human", "orphan", "failed", "timeout"]);
 
 const EVENT_COLOR: Record<string, string> = {
   progress: "#38bdf8",
@@ -181,6 +182,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [forceBusy, setForceBusy] = useState(false);
   const [forceMsg, setForceMsg] = useState<string | null>(null);
+  const [rerunBusy, setRerunBusy] = useState<"resume" | "current" | null>(null);
   const [terminalAllowed, setTerminalAllowed] = useState(false);
 
   useEffect(() => {
@@ -405,6 +407,29 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
       setForceBusy(false);
     }
   };
+  const rerun = async (mode: "resume" | "current") => {
+    if (!detail || !RESUMABLE.has(detail.job.status)) return;
+    const useCurrent = mode === "current";
+    if (!await confirm({
+      title: useCurrent ? "按当前配置重新执行？" : "使用旧冻结快照重新执行？",
+      description: useCurrent
+        ? "保留同一 Job、画布与历史 Attempt/effect，按当前 RoleConfig、Credential、项目策略和运行镜像完整重冻快照。"
+        : "保留同一 Job 与画布并创建新 Attempt，不采用当前配置变化；若受治理身份已漂移，服务端会返回 SNAPSHOT_STALE。",
+      confirmLabel: useCurrent ? "当前配置重跑" : "旧快照重跑",
+    })) return;
+    setRerunBusy(mode);
+    setForceMsg(null);
+    try {
+      if (useCurrent) await api.rerunJobCurrent(jobId);
+      else await api.resumeJob(jobId);
+      setForceMsg(useCurrent ? "已按当前配置重新入队" : "已使用旧冻结快照重新入队");
+      setDetail(await api.job(jobId));
+    } catch (e) {
+      setForceMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRerunBusy(null);
+    }
+  };
   const loadMoreEvents = async () => {
     if (!eventsHasMore || !eventsCursor) return;
     try {
@@ -537,6 +562,30 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
             )}
           </div>
           <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
+            {detail && RESUMABLE.has(detail.job.status) && (
+              <>
+                <button
+                  type="button"
+                  disabled={rerunBusy !== null}
+                  onClick={() => void rerun("resume")}
+                  title="使用该 Job 创建时的旧冻结快照；身份漂移时拒绝"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-white/[.04] px-3 py-2 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.08] disabled:opacity-50"
+                >
+                  <ArrowClockwise size={14} />
+                  {rerunBusy === "resume" ? "入队中…" : "旧快照重跑"}
+                </button>
+                <button
+                  type="button"
+                  disabled={rerunBusy !== null}
+                  onClick={() => void rerun("current")}
+                  title="按当前 RoleConfig、凭据和运行镜像重冻快照"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-acc-500/[.08] px-3 py-2 font-mono text-[11px] text-acc-300 ring-1 ring-acc-400/20 transition-colors hover:bg-acc-500/[.14] disabled:opacity-50"
+                >
+                  <ArrowClockwise size={14} weight="bold" />
+                  {rerunBusy === "current" ? "入队中…" : "当前配置重跑"}
+                </button>
+              </>
+            )}
             {detail && ACTIVE.has(detail.job.status) && (
               <button
                 type="button"
@@ -562,7 +611,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
         {forceMsg && (
           <div
             className={`theme-divider shrink-0 border-b px-5 py-2 font-mono text-[11px] ${
-              forceMsg === "已强制退出" ? "text-acc-300" : "text-red-300"
+              forceMsg.startsWith("已") ? "text-acc-300" : "text-red-300"
             }`}
           >
             {forceMsg}

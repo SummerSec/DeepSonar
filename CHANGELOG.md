@@ -11,6 +11,7 @@
 - 每个任务提供数据库权威的 drain pause/start：暂停只阻止新 Job 领取，已运行 Job 安全收尾；列表与画布统一显示暂停中/已暂停状态。
 - 项目可通过 `maxConcurrentJobs` 独立收紧 claim 配额，支持 `0` 暂停项目调度且不放宽全局硬上限。
 - 模块源同步结果区分“已更新”与“已是最新”。
+- 新增 Job 级“按当前配置重新执行”：保留同一 Job、画布与历史 Attempt/effect，按当前 RoleConfig、Credential、项目策略和 runtime image 完整重冻快照。
 
 ### 修复
 
@@ -20,6 +21,7 @@
 - DSH 完整 package closure 统一升级并固定到 `0.1.0-rc.7`，Cordis 使用合法的 agent-spine bash 配置、唯一工具注册和显式固定 integrity 的 subprocess implementation；Base 镜像新建或复用时均执行断网 JSON-RPC 启动冒烟。
 - Agent stderr 以精确脱敏、总量有界的 normalized evidence 保存，Job 错误仍保持短摘要。
 - 本地 Docker/vfs 宿主增加受管容器/卷周期 desired-state 清理、非强制 runtime image GC 和磁盘水位 claim 门禁；禁止 broad prune 和删除非 DeepSonar 资源。
+- Job `resume` 现明确定义为使用旧冻结快照创建新 Attempt；当前 CLI/模型/凭据/runtime identity 漂移或无法解析时稳定返回 `409 SNAPSHOT_STALE`。任务级启动中断批次也会原子拒绝 stale 快照并返回 Job IDs，不再静默使用旧模型。
 
 ### 部署 / 升级说明
 
