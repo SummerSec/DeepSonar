@@ -71,6 +71,9 @@ jobs:
       - name: Runtime image registry contract unit
         run: pnpm ci:unit:runtime-images
 
+      - name: Runtime resource cleanup and disk pressure unit
+        run: pnpm ci:unit:runtime-cleanup
+
       - name: Image admission registry selection unit
         run: pnpm ci:unit:image-admission
 

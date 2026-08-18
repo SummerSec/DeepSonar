@@ -139,6 +139,8 @@ pending → claimed → provisioning → running → succeeded
 
 provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；取消事务先提交 Job/Attempt 终态，随后通知当前进程的 provision 句柄。dispatcher 在调用 provider 前再次校验 Job 仍为 `provisioning`，runtime 在安装 abort listener 后立即重检 signal，避免取消落在句柄注册或监听安装窗口时丢失。资源身份、效果 settlement 与 `jobs.sandbox_id` 在同一个数据库事务落账。Job 终态和 Attempt 终态也在同一事务提交。启动 reconcile 只将“Attempt 为 preparing 且没有效果记录”的 Job 重排；其余 provision 未知窗口标记 orphan，清理容器、共享卷、短期 Token、画布/报告和 Plane，避免重复创建。
 
+Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否的周期 desired-state 对账。Agentbox destroy 先尝试 SDK 删除，但最终必须按容器 ID 执行单次 120 秒、最多 5 次的指数退避 force remove；只有 Docker 明确返回 no-such 才是幂等成功，其他错误必须抛给调用方并计指标。启动 reconcile 和 Reaper 运行期都从 DB 的 `claimed/provisioning/running` Job 与 active Attempt 推导应保留集合，不增加清理表；容器只接受同时具有 canonical UUID `deepsonar.job` / `deepsonar.attempt` 的双标签，卷只接受严格 `deepsonar-assets-<canonical Job UUID>` 名称并复核 local driver/scope 与可选受管标签。对账防重入，失败资源留到下一轮继续重试。任何 broad prune、仅凭模糊前缀删除容器或删除非 DeepSonar 资源均被禁止。
+
 ### 3.4 Agent 工具白名单（只提案）
 
 | 工具名 | 谁可调用 | 调度器落地动作 |
@@ -542,6 +544,8 @@ Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目�
 
 官方运行时市场只从固定 HTTPS 信任边界内的 GitHub Release `latest` 清单同步。Scheduler 启动时同步一次，并按 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC` 定时刷新；远端不可用时回退随部署内置的清单。正式发布清单存在版本时，环境变量镜像引用仅作为无版本场景的启动兜底，不能覆盖正式最新版本。同步后每个官方镜像只有清单首个版本保持 `promoted_at`，历史版本继续保留，供项目显式固定与既有 Job 不可变快照追溯。Issue #70 Slice B 的 v2 发布清单由 release workflow 以 ACR→GHCR→Docker Hub 顺序生成；每个已发布目的地必须通过真实 `docker buildx imagetools inspect` 并与 canonical digest 相等，`registry_evidence` 记录 inspect/provenance，配置目的地发布失败则清单生成 fail-closed。Slice C 将平台全局 `runtime_registry_channel`（新库默认 `aliyun-acr`）落库：`GET /runtime-images/registry` 返回 `selected_channel`，管理员通过 `PATCH /runtime-images/registry/channel`（`images:manage`）在 `github`、`dockerhub`、`aliyun-acr` 间切换；项目限定 token 被拒绝。选择严格过滤 Scheduler 宿主平台，平台元数据为空也明确 fail closed。real/local-docker 先提供 `/health` liveness，再后台准备 Base 及全局有效 Audit/Kali 集合；就绪前不启用 Dispatcher，失败保持 live 并有界退避重试。项目策略/绑定/通道变更缺图时返回 `202 preparing/saved:false`，异步任务完成后重试才提交；通道门禁覆盖当前项目托管映射与显式 pin，成功前旧通道保持有效。省略 `version_id` 仍跟踪最新可信版本。Dispatcher 只 inspect 冻结 ref，缺失以 `runtime_image_not_ready` 分类计入指标和失败原因，执行期不 pull。
 
+本地 runtime image GC 只在 real/local-docker 且 `DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC>0` 时运行。候选必须来自 DB `runtime_image_versions` 与其 ref 账本，且 named immutable ref 的 digest 与版本 digest 一致；保护集合包含所有 `promoted_at` 版本、每产品按时间最近两版（当前 + 上一回滚版）、`project_runtime_images.selected_version_id`，以及 pending/claimed/provisioning/running/waiting_human Job 快照中的 `runtime_image_version_id`。删除前用精确 ancestor 检查全部容器，随后只执行不带 `-f` 的 `docker image rm <known-ref>`；Docker 竞态下的容器引用仍阻止删除。裸 digest、可变 tag、不一致 ref、Docker 检查失败均 fail closed；不调用 `docker image prune` / `docker system prune`，也不处理数据库目录外的服务镜像或第三方资源。
+
 RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表示“系统沙箱”：Scheduler 使用平台治理的最小 Base 底座创建沙箱，并在 Job 快照中记录其不可变 digest，但 RoleConfig 本身保持未绑定状态。Test 与 Audit 可默认绑定专项 Kali/Audit 镜像；其余内置角色默认使用系统沙箱。该选项不允许 Agent、Hub 或任务内容提供任意镜像引用。
 
 发布清单的 `size_bytes` 来自不可变 OCI manifest/index 的压缩层描述符：分别汇总目标平台层大小，清单记录其中最大的平台大小，并保留各平台大小作为发布证据。该值不是本机解压后的 Docker 占用，避免不同构建机的本地 inspect 结果影响市场元数据。
@@ -674,6 +678,12 @@ LEASE_TTL_SEC=120
 HEARTBEAT_INTERVAL_SEC=30
 REAPER_INTERVAL_SEC=30
 
+DEEPSONAR_HOST_DISK_PATH=/
+DEEPSONAR_HOST_DISK_WARNING_PERCENT=85
+DEEPSONAR_HOST_DISK_ERROR_PERCENT=90
+DEEPSONAR_HOST_DISK_CHECK_INTERVAL_SEC=30
+DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC=21600 # 0 关闭
+
 AUTO_VERIFY_SEVERITIES=low,medium,high,critical
 MAX_FOLLOWUPS_PER_JOB=60
 MAX_FOLLOWUP_DEPTH=12
@@ -726,6 +736,7 @@ CANVAS_LAYOUT=auto
 | Agent 胡写、死循环派生 | 白名单工具 + followup 频次/深度护栏 + 超限转人工 |
 | 被审计代码 prompt injection | 见 §9.1 威胁建模（断网、白名单、payload 校验） |
 | 沙箱/调度器崩溃任务悬挂 | Lease + 心跳 + Reaper（§3.3） |
+| vfs 慢删造成僵尸容器/卷和旧镜像堆积 | destroy 有界重试 + 启动/周期 desired-state 对账；DB-known 非强制镜像 GC；`statfs` error 水位暂停新 claim，恢复后 notify |
 | 事件重试产生重复副作用 | event_id 幂等 + finding fingerprint 去重（§6） |
 | 事件顺序错乱（时钟偏差） | 自增 id 全局序 + job_seq 局部序，不信 created_at |
 | 原始事件流撑爆数据库 | 热冷分层（§6.2）：语义事件入库，原始流进文件 |

@@ -246,8 +246,9 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
       let inspected: SharedAssetsVolumeInspection;
       try {
         inspected = JSON.parse(await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}")) as SharedAssetsVolumeInspection;
-      } catch {
-        continue;
+      } catch (error) {
+        if (isMissingVolumeError(error)) continue;
+        throw error;
       }
       if (!isManagedInspection(inspected, name, jobId)) continue;
       result.push({
@@ -266,6 +267,7 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
         await this.executeDocker("volume", "rm", "-f", name);
         return;
       } catch (error) {
+        if (isMissingVolumeError(error)) return;
         lastError = error;
         if (attempt < VOLUME_REMOVE_MAX_ATTEMPTS) {
           await this.wait(VOLUME_REMOVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));

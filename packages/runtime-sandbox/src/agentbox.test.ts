@@ -21,6 +21,7 @@ import {
   resolveTerminalRunError,
   resolveTerminalProcessOutcome,
   parseRuntimeLine,
+  parseDeepSonarContainerRows,
   runtimeCliEnv,
   assertSharedAssetsContainerMount,
   assertSharedAssetsVolumeOwnership,
@@ -40,9 +41,78 @@ import {
   gatewayProxyReuseAction,
   shouldRemoveGatewayLeftover,
   AgentboxRunner,
+  CONTAINER_REMOVE_MAX_ATTEMPTS,
+  CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
   mergeObservedSessionIdentity,
   normalizePlainFinalOutput,
+  removeContainerWithRetry,
 } from "./agentbox.js";
+
+test("container force removal retries exponentially and reports exhaustion", async () => {
+  const calls: string[][] = [];
+  const delays: number[] = [];
+  const failure = new Error("daemon busy");
+  await assert.rejects(
+    removeContainerWithRetry(
+      "container-id",
+      async (...args) => {
+        calls.push(args);
+        throw failure;
+      },
+      async (delay) => {
+        delays.push(delay);
+      },
+    ),
+    (error: unknown) => error === failure,
+  );
+  assert.equal(calls.length, CONTAINER_REMOVE_MAX_ATTEMPTS);
+  assert.deepEqual(
+    delays,
+    Array.from(
+      { length: CONTAINER_REMOVE_MAX_ATTEMPTS - 1 },
+      (_, index) => CONTAINER_REMOVE_RETRY_BASE_DELAY_MS * 2 ** index,
+    ),
+  );
+});
+
+test("container force removal treats only explicit no-such as idempotent success", async () => {
+  let attempts = 0;
+  await removeContainerWithRetry("gone", async () => {
+    attempts += 1;
+    throw new Error("Error response from daemon: No such container: gone");
+  });
+  assert.equal(attempts, 1);
+});
+
+test("Agentbox destroy propagates authoritative container removal failure", async () => {
+  const failure = new Error("vfs removal failed");
+  const runner = new AgentboxRunner(async () => {
+    throw failure;
+  });
+  await assert.rejects(
+    runner.destroy({ sandboxId: "leftover" }),
+    (error: unknown) =>
+      error instanceof AggregateError
+      && error.errors.includes(failure),
+  );
+});
+
+test("managed container parsing requires canonical Job and Attempt labels", () => {
+  const jobId = "11111111-1111-4111-8111-111111111111";
+  const attemptId = "22222222-2222-4222-8222-222222222222";
+  const rows = parseDeepSonarContainerRows([
+    `kept\tdeepsonar.job=${jobId},deepsonar.attempt=${attemptId}\texited`,
+    `missing-attempt\tdeepsonar.job=${jobId}\texited`,
+    `bad-job\tdeepsonar.job=not-a-uuid,deepsonar.attempt=${attemptId}\texited`,
+    `bad-attempt\tdeepsonar.job=${jobId},deepsonar.attempt=not-a-uuid\texited`,
+  ].join("\n"));
+  assert.deepEqual(rows, [{
+    containerId: "kept",
+    jobId,
+    attemptId,
+    state: "exited",
+  }]);
+});
 import { NoopRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS, type SessionDiscoveryRuntime } from "./cli-session-adapters.js";
 

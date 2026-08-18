@@ -50,6 +50,7 @@ import {
 } from "./domains/role-runtime-snapshot/index.js";
 import { bindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js";
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
+import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -490,6 +491,17 @@ async function graphEligibilityReasonFromDb(
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 export async function claimPendingJobs(): Promise<{ id: string }[]> {
+  const disk = await refreshHostDiskPressure();
+  if (!hostDiskAllowsDispatch(disk)) {
+    if (disk.level === "error") {
+      console.error(
+        `[dispatcher] HOST_DISK_PRESSURE ${disk.usedPercent?.toFixed(2)}% >= ${disk.errorPercent}%: new claims paused`,
+      );
+    } else {
+      console.error(`[dispatcher] host disk status unknown at ${disk.path}: new claims paused`);
+    }
+    return [];
+  }
   // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
   // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
   // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
@@ -806,7 +818,10 @@ async function runJob(jobId: string) {
           config.timeouts.provisionSec * 1000,
           `provision 超时（${config.timeouts.provisionSec}s）`,
           () => interruptProvision(jobId, attemptId!),
-          (lateHandle) => runner.destroy(lateHandle).catch(() => {}),
+          (lateHandle) => runner.destroy(lateHandle).catch((error) => {
+            inc("deepsonar_sandbox_cleanup_failed_total");
+            console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
+          }),
         );
       } finally {
         unregisterProvision();

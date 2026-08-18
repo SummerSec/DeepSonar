@@ -26,6 +26,7 @@ import {
   runtimeImageKeyForProjectPolicy,
   type ProjectImagePolicy,
 } from "./domains/role-runtime-snapshot/application.js";
+import { refreshHostDiskPressure, type HostDiskPressureStatus } from "./host-disk.js";
 
 const EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -113,6 +114,7 @@ export interface ReadinessEvaluationInput {
   credentials?: ReadinessCredentialRow[];
   runtimeImages?: ReadinessRuntimeImageRow[];
   audits?: ReadinessAuditRow[];
+  hostDisk?: HostDiskPressureStatus;
 }
 
 type EffectiveRole = ReadinessRoleRow & {
@@ -431,6 +433,31 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       .map((imageKey) => [imageKey, selectRuntimeImageCandidate(images, imageKey, hostPlatform)] as const),
   );
 
+  if (input.hostDisk?.level === "error") {
+    checks.push(fail(
+      "HOST_DISK_PRESSURE",
+      `宿主文件系统 ${input.hostDisk.path} 已用 ${input.hostDisk.usedPercent?.toFixed(2)}%，达到 error 阈值 ${input.hostDisk.errorPercent}%；Dispatcher 已暂停新领取。`,
+      null,
+    ));
+  } else if (input.hostDisk?.level === "warning") {
+    checks.push(attention(
+      "HOST_DISK_PRESSURE",
+      `宿主文件系统 ${input.hostDisk.path} 已用 ${input.hostDisk.usedPercent?.toFixed(2)}%，达到 warning 阈值 ${input.hostDisk.warningPercent}%。`,
+      null,
+    ));
+  } else if (input.hostDisk?.level === "unknown") {
+    checks.push(fail(
+      "HOST_DISK_CHECK_FAILED",
+      `无法读取宿主文件系统 ${input.hostDisk.path} 水位；Dispatcher 按 fail-closed 暂停新领取。`,
+      null,
+    ));
+  } else if (input.hostDisk?.level === "ok") {
+    checks.push(pass(
+      "HOST_DISK_READY",
+      `宿主文件系统 ${input.hostDisk.path} 水位正常（${input.hostDisk.usedPercent?.toFixed(2)}%）。`,
+    ));
+  }
+
   if (input.scope.projectId && input.projectStatus === "archived") {
     checks.push(fail(
       "PROJECT_ARCHIVED",
@@ -719,6 +746,7 @@ export async function loadReadiness(
     materialSource?: ReadinessMaterialSource;
   } = {},
 ): Promise<ReadinessResponseType> {
+  const hostDisk = await refreshHostDiskPressure();
   const projectId = options.projectId ?? null;
   const scope: ReadinessScopeInput = { kind: projectId ? "project" : "global", projectId };
   const projectRow = projectId
@@ -829,5 +857,6 @@ export async function loadReadiness(
     credentials: credentials as unknown as ReadinessCredentialRow[],
     runtimeImages: images as unknown as ReadinessRuntimeImageRow[],
     audits: audits as unknown as ReadinessAuditRow[],
+    hostDisk,
   });
 }
