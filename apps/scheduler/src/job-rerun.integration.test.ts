@@ -408,7 +408,7 @@ if (!testDatabaseUrl) {
       // Task-level interrupted batches and the single-Job fallback both use
       // frozen snapshots. One stale member rejects the entire batch and lists
       // the exact Job IDs; no sibling is partially re-enqueued.
-      const batchCanvasId = `rerun-batch-${randomUUID()}`;
+      const batchCanvasId = randomUUID();
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${batchCanvasId}, ${projectId}, 'stale batch', ${sql.json({
@@ -459,7 +459,7 @@ if (!testDatabaseUrl) {
         ORDER BY id`;
       assert.ok(batchStates.every((job) => job.status === "orphan"));
 
-      const singleCanvasId = `rerun-single-${randomUUID()}`;
+      const singleCanvasId = randomUUID();
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${singleCanvasId}, ${projectId}, 'stale single', ${sql.json({
