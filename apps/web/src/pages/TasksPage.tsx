@@ -761,16 +761,19 @@ export function TasksPage() {
                   )}
                   {!isArchived && !isActive && canvas.job_count > 0 && (
                     <button
-                      title="继续执行：恢复中断 Job 或唤醒 Hub（保留历史）"
+                      title="优先重新执行全部启动中断 Worker（同 Job ID、新 Attempt）；否则恢复单个 Job 或唤醒 Hub"
                       onClick={async () => {
                         try {
                           const r = await api.resumeTaskSession(canvas.id);
                           if (r.action === "already_running") flash(r.message ?? "任务已在执行");
-                          else if (r.action === "resume_job") flash("已恢复会话，继续执行");
+                          else if (r.action === "rerun_interrupted_jobs") {
+                            flash(r.message ?? `已重新入队 ${r.jobs?.length ?? 0} 个中断 Worker（同 Job ID、新 Attempt）`);
+                          }
+                          else if (r.action === "resume_job") flash("已恢复单个可恢复 Job");
                           else if (r.action === "start_now") flash(r.message ?? "已立即开始");
-                          else flash("已恢复会话，Hub 继续决策");
+                          else flash("没有中断 Worker；已唤醒 Hub 继续决策");
                         } catch (e) {
-                          flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);
+                          flash(`继续执行失败：${e instanceof Error ? e.message : e}`);
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"

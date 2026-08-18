@@ -59,7 +59,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?}`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入的 confirmed Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
-| POST | /tasks/:canvasId/resume-session | jobs:control | 恢复该任务的会话入口；仅 pending 且仍有定时门时清除门禁并立即调度（`action=start_now`） |
+| POST | /tasks/:canvasId/resume-session | jobs:control | 继续任务且不删历史；无活动 Job 时优先把全部启动中断的 role Worker 按同 Job ID 重新入队（`action=rerun_interrupted_jobs`，返回 `jobs[]`，Dispatcher 建新 Attempt），旧 Attempt 的 unknown/never effect 不自动重放；无该批次时才恢复单 Job、唤醒 Hub，或在仅 pending 且有定时门时立即开始 |
 | POST | /tasks/:canvasId/archive | tasks:write | 归档任务 |
 | POST | /tasks/:canvasId/unarchive | tasks:write | 取消归档 |
 | DELETE | /tasks/:canvasId | tasks:write | 删除任务 |
@@ -99,7 +99,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
 | GET | /jobs/:id | tasks:read | 详情（含事件） |
 | GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`） |
-| GET | /jobs/:id/evidence | tasks:read | 运行证据 manifest 与 transcript URI |
+| GET | /jobs/:id/evidence | tasks:read | 运行证据 manifest 与 transcript URI；finalized manifest 缺失但 `attempts/*/stream.ndjson` 存在时返回有界 synthetic/inflight manifest；已销毁容器中的 Session 不伪造，以 `capture_error` 明示 |
 | GET | /jobs/:id/evidence/session | tasks:read | 会话证据元数据/摘要 |
 | GET | /jobs/:id/evidence/session/download | tasks:read | NDJSON 会话附件 |
 | GET | /jobs/:id/evidence/stream | tasks:read | 证据流分页（`cursor/limit/tail`） |

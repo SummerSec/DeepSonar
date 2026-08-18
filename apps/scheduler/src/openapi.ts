@@ -112,6 +112,90 @@ const FactSummarySchema = {
   },
 };
 
+const TaskResumeJobSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["id", "status"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    type: { type: "string" },
+    status: { type: "string" },
+  },
+};
+
+const TaskResumeResponseSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["canvas_id", "action"],
+  properties: {
+    canvas_id: { type: "string", format: "uuid" },
+    action: {
+      type: "string",
+      enum: ["already_running", "rerun_interrupted_jobs", "resume_job", "wake_hub", "start_now"],
+    },
+    jobs: {
+      type: "array",
+      description: "实际重新入队或已活动的 Job。rerun_interrupted_jobs 返回全部启动中断 Worker。",
+      items: TaskResumeJobSchema,
+    },
+    job: { ...TaskResumeJobSchema, nullable: true },
+    effects_replayed: {
+      type: "boolean",
+      description: "批量重跑固定为 false；旧 Attempt 的 unknown/never effect 不自动重放。",
+    },
+    message: { type: "string" },
+    convergence: { type: "object", additionalProperties: true },
+  },
+};
+
+const EvidenceFileSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "path", "kind", "bytes", "sha256"],
+  properties: {
+    name: { type: "string" },
+    path: { type: "string" },
+    kind: { type: "string", enum: ["main", "subagent", "vendor_export", "stream", "otlp"] },
+    bytes: { type: "integer", minimum: 0 },
+    sha256: {
+      type: "string",
+      nullable: true,
+      description: "inflight mutable stream 为 null；finalized 文件为完整 SHA-256。",
+    },
+    inflight: { type: "boolean" },
+  },
+};
+
+const JobEvidenceResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["transcript_uri", "manifest"],
+  properties: {
+    transcript_uri: { type: "string", nullable: true },
+    manifest: {
+      type: "object",
+      additionalProperties: false,
+      required: ["v", "job_id", "cli", "session_id", "created_at", "finalized_at", "files"],
+      properties: {
+        v: { type: "integer", enum: [1] },
+        job_id: { type: "string", format: "uuid" },
+        cli: { type: "string" },
+        session_id: { type: "string", nullable: true },
+        created_at: { type: "string", format: "date-time" },
+        finalized_at: { type: "string", format: "date-time", nullable: true },
+        files: { type: "array", items: EvidenceFileSchema },
+        capture_error: {
+          type: "string",
+          description: "Session 无法从已销毁沙箱归档时的明确原因；不代表存在伪造 Session。",
+        },
+        synthetic: { type: "boolean" },
+        inflight: { type: "boolean" },
+        truncated: { type: "boolean" },
+      },
+    },
+  },
+};
+
 const RuntimeRegistryChannelErrorSchema = {
   type: "object",
   additionalProperties: false,
@@ -609,7 +693,16 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "post", path: "/tasks/{canvasId}/resume-session", summary: "恢复会话（继续执行，不删历史）", scope: "jobs:control", tags: ["Tasks"] },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/resume-session",
+    summary: "继续任务：优先批量重跑启动中断 Worker（同 Job ID、新 Attempt）",
+    description:
+      "画布无活动 Job 时，先将全部启动中断的 role Worker 原地重新入队；旧 Attempt 与 unknown/never effect 保留且不自动重放。无该批次时才恢复单个可恢复 Job或唤醒 Hub。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    responses: { "200": TaskResumeResponseSchema },
+  },
   { method: "post", path: "/tasks/{canvasId}/retry", summary: "重试任务（清空历史后从意图重跑）", scope: "jobs:control", tags: ["Tasks"] },
   // jobs
   {
@@ -644,7 +737,16 @@ const OPS: Op[] = [
     query: { project_id: { type: "string", format: "uuid" }, status: { type: "string" } },
   },
   { method: "get", path: "/jobs/{id}", summary: "Job 详情（含事件）", scope: "tasks:read", tags: ["Jobs"] },
-  { method: "get", path: "/jobs/{id}/evidence", summary: "Job 原始证据 manifest", scope: "tasks:read", tags: ["Jobs"] },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence",
+    summary: "Job 原始证据 manifest（含有界 synthetic inflight 回退）",
+    description:
+      "finalized manifest 缺失但 attempts/*/stream.ndjson 存在时返回有界 synthetic/inflight manifest。已销毁沙箱中的 Session 不会伪造，原因通过 capture_error 返回。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    responses: { "200": JobEvidenceResponseSchema },
+  },
   { method: "get", path: "/jobs/{id}/evidence/session", summary: "查看 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
   { method: "get", path: "/jobs/{id}/evidence/session/download", summary: "下载 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
   { method: "get", path: "/jobs/{id}/evidence/stream", summary: "读取历史 normalized stream", scope: "tasks:read", tags: ["Jobs"] },

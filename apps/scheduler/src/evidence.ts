@@ -1,7 +1,7 @@
 import type { SessionBundle } from "@deepsonar/runtime-sandbox";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, opendir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { createGunzip, gzip } from "node:zlib";
@@ -85,7 +85,8 @@ export interface EvidenceFileMeta {
   path: string;
   kind: "main" | "subagent" | "vendor_export" | "stream" | "otlp";
   bytes: number;
-  sha256: string;
+  sha256: string | null;
+  inflight?: boolean;
 }
 
 export interface JobEvidenceManifest {
@@ -94,9 +95,12 @@ export interface JobEvidenceManifest {
   cli: string;
   session_id: string | null;
   created_at: string;
-  finalized_at: string;
+  finalized_at: string | null;
   files: EvidenceFileMeta[];
   capture_error?: string;
+  synthetic?: boolean;
+  inflight?: boolean;
+  truncated?: boolean;
 }
 
 function sha256(data: Buffer | string): string {
@@ -258,6 +262,83 @@ export async function readEvidenceManifest(jobId: string): Promise<JobEvidenceMa
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+const MAX_SYNTHETIC_STREAM_FILES = 32;
+const MAX_SYNTHETIC_ATTEMPT_ENTRIES = 128;
+
+/**
+ * A Scheduler crash can leave durable raw stream files without a finalized
+ * manifest. Expose only bounded metadata for those files. The raw stream is
+ * mutable, so no stable SHA-256 or Session artifact is fabricated.
+ */
+export async function readEvidenceManifestOrInflight(
+  jobId: string,
+  options: { cli?: string | null; captureError?: string } = {},
+): Promise<JobEvidenceManifest | null> {
+  const finalized = await readEvidenceManifest(jobId);
+  if (finalized) return finalized;
+
+  const root = jobDir(jobId);
+  const attemptsRoot = path.join(root, "attempts");
+  const files: EvidenceFileMeta[] = [];
+  let truncated = false;
+  let createdAt = Number.POSITIVE_INFINITY;
+  let inspectedEntries = 0;
+  let directory: Awaited<ReturnType<typeof opendir>>;
+  try {
+    directory = await opendir(attemptsRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    for await (const entry of directory) {
+      inspectedEntries += 1;
+      if (inspectedEntries > MAX_SYNTHETIC_ATTEMPT_ENTRIES) {
+        truncated = true;
+        break;
+      }
+      if (!entry.isDirectory()) continue;
+      if (files.length >= MAX_SYNTHETIC_STREAM_FILES) {
+        truncated = true;
+        break;
+      }
+      const streamPath = path.join(attemptsRoot, entry.name, "stream.ndjson");
+      try {
+        const info = await stat(streamPath);
+        if (!info.isFile()) continue;
+        createdAt = Math.min(createdAt, info.birthtimeMs || info.mtimeMs);
+        files.push({
+          name: "normalized stream (inflight)",
+          path: path.relative(root, streamPath).split(path.sep).join("/"),
+          kind: "stream",
+          bytes: info.size,
+          sha256: null,
+          inflight: true,
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  } finally {
+    await directory.close().catch(() => {});
+  }
+  if (files.length === 0) return null;
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    v: 1,
+    job_id: jobId,
+    cli: options.cli?.trim() || "unknown",
+    session_id: null,
+    created_at: new Date(Number.isFinite(createdAt) ? createdAt : Date.now()).toISOString(),
+    finalized_at: null,
+    files,
+    synthetic: true,
+    inflight: true,
+    ...(truncated ? { truncated: true } : {}),
+    ...(options.captureError ? { capture_error: options.captureError } : {}),
+  };
 }
 
 function resolveManifestFile(jobId: string, file: EvidenceFileMeta): string {

@@ -581,7 +581,8 @@ export interface EvidenceFileMeta {
   path: string;
   kind: "main" | "subagent" | "vendor_export" | "stream" | "otlp";
   bytes: number;
-  sha256: string;
+  sha256: string | null;
+  inflight?: boolean;
 }
 
 export interface JobEvidence {
@@ -592,9 +593,12 @@ export interface JobEvidence {
     cli: string;
     session_id: string | null;
     created_at: string;
-    finalized_at: string;
+    finalized_at: string | null;
     files: EvidenceFileMeta[];
     capture_error?: string;
+    synthetic?: boolean;
+    inflight?: boolean;
+    truncated?: boolean;
   };
 }
 
@@ -1680,12 +1684,14 @@ export const api = {
         material_source: opts?.material_source,
       })}`,
     ),
-  /** 恢复会话：继续执行（恢复 Job / 唤醒 Hub / 清除定时立即开始），不删历史 */
+  /** 继续执行：优先批量重跑启动中断 Worker，其次恢复单 Job / 唤醒 Hub；不删历史 */
   resumeTaskSession: (canvasId: string) =>
     send<{
       canvas_id: string;
-      action: "already_running" | "resume_job" | "wake_hub" | "start_now";
+      action: "already_running" | "rerun_interrupted_jobs" | "resume_job" | "wake_hub" | "start_now";
+      jobs?: Array<{ id: string; type: string; status: string }>;
       job?: { id: string; status: string } | null;
+      effects_replayed?: boolean;
       message?: string;
     }>("POST", `/tasks/${canvasId}/resume-session`),
   /** 重试任务：清空本画布历史后从意图重新执行 */

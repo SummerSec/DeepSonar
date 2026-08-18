@@ -407,8 +407,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * 恢复会话 = 继续执行任务（不删历史）。
-   * 优先级：解除 hub_paused → 恢复最近可恢复 Job → 空闲时强制唤醒 Hub。
+   * 继续执行任务（不删历史）。
+   * 优先级：批量重跑启动中断的角色 Worker → 恢复最近可恢复 Job →
+   * 空闲时强制唤醒 Hub。旧 Attempt/effect 账本只读保留。
    */
   app.post("/tasks/:canvasId/resume-session", async (req, reply) => {
     const { canvasId } = req.params as { canvasId: string };
@@ -466,7 +467,86 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       paused_at: undefined,
     });
 
-    // 优先恢复最近 failed/timeout/orphan（waiting_human 也算可继续）
+    // 启动中断的 sibling role Workers 是一个恢复批次。它们必须先于更新的
+    // hub_reason 原地回到 pending；Dispatcher 仍按同一 Job ID 创建新 Attempt。
+    // 旧 Attempt 上 unknown/never effects 保持原样，绝不由此入口重放。
+    const interruptedWorkers = await sql`
+      SELECT j.id, j.type, j.status, j.created_at
+      FROM jobs j
+      JOIN agent_roles r ON r.name = j.type AND r.kind = 'role'
+      LEFT JOIN LATERAL (
+        SELECT status, outcome_json
+        FROM job_attempts
+        WHERE job_id = j.id
+        ORDER BY attempt_no DESC
+        LIMIT 1
+      ) attempt ON true
+      WHERE j.canvas_id = ${canvasId}
+        AND j.status = 'orphan'
+        AND (
+          attempt.outcome_json->>'reason' IN ('scheduler_restart', 'provision_effect_unknown')
+          OR j.error LIKE '%调度器重启（执行中断）%'
+          OR j.error LIKE '%调度器重启（provision 外部效果状态未知）%'
+        )
+      ORDER BY j.created_at ASC, j.id ASC`;
+    if (interruptedWorkers.length > 0) {
+      const rerunJobs: Array<Record<string, unknown>> = [];
+      for (const worker of interruptedWorkers) {
+        const row = await createSqlJobLifecycleApplication().transitionJob(worker.id as string, "pending", {
+          error: null,
+          lease_expires_at: null,
+          claimed_at: null,
+          started_at: null,
+          finished_at: null,
+          heartbeat_at: null,
+          sandbox_id: null,
+        });
+        if (!row) continue;
+        await normalizePendingJobPriority(worker.id as string);
+        rerunJobs.push({ ...worker, status: row.status });
+      }
+      if (rerunJobs.length > 0) {
+        const ids = rerunJobs.map((job) => String(job.id));
+        await sql`
+          UPDATE canvas_nodes SET status = 'pending', updated_at = now()
+          WHERE job_id = ANY(${ids}) AND node_type = ANY(${["job", "intent"]})`;
+        await audit(req, {
+          action: "task.resume_session",
+          resourceType: "canvas",
+          resourceId: canvasId,
+          projectId,
+          after: {
+            canvas_id: canvasId,
+            mode: "rerun_interrupted_jobs",
+            job_ids: ids,
+            effects_replayed: false,
+          },
+        });
+        await sql`SELECT pg_notify('deepsonar_jobs', 'resume_interrupted_jobs')`;
+        return reply.code(200).send({
+          canvas_id: canvasId,
+          action: "rerun_interrupted_jobs" as const,
+          jobs: rerunJobs,
+          convergence,
+          effects_replayed: false,
+          message: `已重新入队 ${rerunJobs.length} 个启动中断的 Worker；保留原 Job/Attempt，调度时创建新 Attempt`,
+        });
+      }
+      const nowActive = await sql`
+        SELECT id, type, status FROM jobs WHERE canvas_id = ${canvasId}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        ORDER BY created_at DESC LIMIT 5`;
+      if (nowActive.length > 0) {
+        return {
+          canvas_id: canvasId,
+          action: "already_running" as const,
+          jobs: nowActive,
+          message: "中断 Worker 已由另一恢复请求重新入队",
+        };
+      }
+    }
+
+    // 无中断 Worker 批次时，保留原有单 Job 恢复语义。
     const [resumable] = await sql`
       SELECT id, type, status FROM jobs
       WHERE canvas_id = ${canvasId}

@@ -15,7 +15,7 @@ import {
   triggerHubFromHumanComment,
 } from "../../core.js";
 import { sql } from "../../db.js";
-import { readEvidenceManifest, readMainSession, readNormalizedStreamPage } from "../../evidence.js";
+import { readEvidenceManifestOrInflight, readMainSession, readNormalizedStreamPage } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { planeWriteback } from "../../plane-sync.js";
@@ -430,9 +430,20 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
 
   app.get("/jobs/:id/evidence", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [job] = await sql`SELECT id, transcript_uri FROM jobs WHERE id = ${id}`;
+    const [job] = await sql`
+      SELECT id, status, transcript_uri, agent_snapshot_json
+      FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "job not found" });
-    const manifest = await readEvidenceManifest(id);
+    const snapshot = (job.agent_snapshot_json ?? {}) as Record<string, unknown>;
+    const manifest = await readEvidenceManifestOrInflight(id, {
+      cli: typeof snapshot.agent_cli === "string" ? snapshot.agent_cli : null,
+      ...(job.status === "orphan"
+        ? {
+            captureError:
+              "Scheduler 重启后原沙箱已销毁，CLI Session 无法跨容器恢复；未伪造 Session 归档。",
+          }
+        : {}),
+    });
     if (!manifest) return reply.code(404).send({ error: "该 Job 没有持久化运行证据" });
     return { transcript_uri: job.transcript_uri, manifest };
   });

@@ -11,6 +11,7 @@ import {
   appendOtlpEnvelope,
   clearJobEvidenceSecrets,
   parseStreamFile,
+  readEvidenceManifestOrInflight,
   readGzipTail,
   readNormalizedStream,
   readNormalizedStreamPage,
@@ -95,6 +96,40 @@ test("normalized stream publication can wait for delayed evidence persistence", 
   const streamPath = path.join(root, "attempts", "attempt-delay", "stream.ndjson");
   assert.match((await readFile(streamPath, "utf8")), /"seq":1/);
   await rm(root, { recursive: true, force: true });
+});
+
+test("missing finalized manifest exposes a bounded synthetic inflight manifest without a fake Session", async () => {
+  const jobId = "00000000-0000-0000-0000-000000000093";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  try {
+    for (let index = 0; index < 33; index += 1) {
+      const attempt = `attempt-${String(index).padStart(2, "0")}`;
+      const dir = path.join(root, "attempts", attempt);
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, "stream.ndjson"),
+        `${JSON.stringify({ attempt_id: attempt, seq: 1, type: "text.delta", delta: attempt })}\n`,
+      );
+    }
+    const manifest = await readEvidenceManifestOrInflight(jobId, {
+      cli: "claude-code",
+      captureError: "sandbox destroyed; Session unavailable",
+    });
+    assert.ok(manifest);
+    assert.equal(manifest.synthetic, true);
+    assert.equal(manifest.inflight, true);
+    assert.equal(manifest.truncated, true);
+    assert.equal(manifest.files.length, 32);
+    assert.equal(manifest.finalized_at, null);
+    assert.equal(manifest.session_id, null);
+    assert.equal(manifest.capture_error, "sandbox destroyed; Session unavailable");
+    assert.ok(manifest.files.every((file) => file.kind === "stream" && file.sha256 === null && file.inflight));
+
+    const stream = await readNormalizedStreamPage(jobId, { tail: true, limit: 1 });
+    assert.equal(stream.items.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("evidence request applies a total decompression budget across archives", async () => {
