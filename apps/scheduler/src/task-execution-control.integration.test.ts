@@ -214,6 +214,9 @@ if (!testDatabaseUrl) {
         post(idleCanvasId, "start"),
         post(idleCanvasId, "start"),
       ]);
+      for (const response of idleStarts) {
+        assert.equal(response.statusCode, 200, response.payload);
+      }
       assert.deepEqual(
         idleStarts.map((response) => response.json().changed).sort(),
         [false, true],
