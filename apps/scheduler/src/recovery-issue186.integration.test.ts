@@ -157,13 +157,22 @@ if (!testDatabaseUrl) {
         assert.equal((stream.json() as { items: unknown[] }).items.length, 1);
       }
 
-      const resume = await app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` });
-      assert.equal(resume.statusCode, 200, resume.payload);
-      const response = resume.json() as {
+      const resumeResponses = await Promise.all([
+        app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` }),
+        app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` }),
+      ]);
+      assert.ok(resumeResponses.every((resume) => resume.statusCode === 200));
+      const parsedResponses = resumeResponses.map((resume) => resume.json() as {
         action: string;
         effects_replayed: boolean;
         jobs: Array<{ id: string; status: string }>;
-      };
+      });
+      assert.deepEqual(new Set(parsedResponses.map((response) => response.action)), new Set([
+        "rerun_interrupted_jobs",
+        "already_running",
+      ]));
+      const response = parsedResponses.find((candidate) => candidate.action === "rerun_interrupted_jobs");
+      assert.ok(response);
       assert.equal(response.action, "rerun_interrupted_jobs");
       assert.equal(response.effects_replayed, false);
       assert.deepEqual(new Set(response.jobs.map((job) => job.id)), new Set(workerIds));

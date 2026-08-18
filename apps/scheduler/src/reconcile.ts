@@ -136,7 +136,13 @@ export async function finalizeBootOrphanJobs(jobs: readonly Record<string, unkno
     SELECT name FROM agent_roles WHERE kind = 'role'`;
   const roleNames = new Set(roleRows.map((row) => String(row.name)));
   for (const job of jobs) {
-    await closeOrphanJob(job, { deferCanvasAdvance: roleNames.has(String(job.type)) });
+    const snapshot = job.agent_snapshot_json && typeof job.agent_snapshot_json === "object"
+      ? job.agent_snapshot_json as Record<string, unknown>
+      : {};
+    const type = String(job.type);
+    const isRoleWorker = roleNames.has(type)
+      || (snapshot.role_kind === "role" && !["hub_reason", "verify_finding", "report"].includes(type));
+    await closeOrphanJob(job, { deferCanvasAdvance: isRoleWorker });
   }
 }
 
