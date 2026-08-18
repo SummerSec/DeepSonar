@@ -45,6 +45,9 @@ export function TaskList({
               endedAt: c.ended_at,
               startedAt: c.started_at,
               scheduledStartAt: readScheduledStartAt(c.target_json),
+              executionState: c.execution_state,
+              executionActiveCount: c.execution_active_count,
+              pendingCount: c.pending_count,
             });
             const active = lifecycle.isActive;
             const selected = c.id === selectedId;

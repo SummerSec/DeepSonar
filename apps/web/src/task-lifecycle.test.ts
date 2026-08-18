@@ -61,9 +61,36 @@ test("a terminal rollup with ended_at is completed even without root details", (
 
 test("archived always wins over every execution signal", () => {
   assert.equal(
-    deriveTaskLifecycle({ status: "archived", activeCount: 1, rootStatus: "failed" }).status,
+    deriveTaskLifecycle({
+      status: "archived",
+      activeCount: 1,
+      rootStatus: "failed",
+      executionState: "pausing",
+    }).status,
     "archived",
   );
+});
+
+test("execution pause projects draining and settled phases without counting pending as drain work", () => {
+  const pausing = deriveTaskLifecycle({
+    activeCount: 3,
+    executionState: "pausing",
+    executionActiveCount: 1,
+    pendingCount: 2,
+  });
+  assert.equal(pausing.status, "pausing");
+  assert.equal(pausing.label, "暂停中");
+  assert.equal(pausing.isActive, true);
+
+  const paused = deriveTaskLifecycle({
+    activeCount: 2,
+    executionState: "paused",
+    executionActiveCount: 0,
+    pendingCount: 2,
+  });
+  assert.equal(paused.status, "paused");
+  assert.equal(paused.label, "已暂停");
+  assert.equal(paused.isActive, false);
 });
 
 test("a canvas with no Jobs is idle", () => {
@@ -157,6 +184,7 @@ test("pending jobs before schedule start_at show scheduled (still active)", () =
     jobCount: 1,
     startedAt: null,
     scheduledStartAt: "2026-08-14T00:00:00.000Z",
+    executionState: "paused",
     nowMs: Date.parse("2026-08-13T12:00:00.000Z"),
   });
   assert.equal(lifecycle.status, "scheduled");

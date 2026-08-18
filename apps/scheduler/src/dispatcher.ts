@@ -50,6 +50,7 @@ import {
 } from "./domains/role-runtime-snapshot/index.js";
 import { bindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js";
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
+import { canvasExecutionIsPaused } from "./task-execution-control.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -620,8 +621,22 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
 
       for (const job of pending) {
         if (claimed.length >= slots) break;
+        // Canvas execution control is a database-authoritative admission gate.
+        // Lock the Canvas after the candidate Job so a concurrent pause either
+        // linearizes before this re-read (and blocks claim) or after the claim.
+        // The initial join is only a scan hint; it is not authoritative.
+        let canvasTarget = (job as DispatchCandidate).canvas_target_json;
+        if (job.canvas_id) {
+          const [lockedCanvas] = await tx`
+            SELECT target_json FROM canvases
+            WHERE id = ${job.canvas_id as string}
+            FOR SHARE`;
+          if (!lockedCanvas) continue;
+          canvasTarget = lockedCanvas.target_json;
+          if (canvasExecutionIsPaused(canvasTarget)) continue;
+        }
         // Task-level schedule gate: hold every job on the canvas until start_at.
-        if (canvasScheduleBlocksDispatch((job as DispatchCandidate).canvas_target_json)) continue;
+        if (canvasScheduleBlocksDispatch(canvasTarget)) continue;
         const graphSkip = await graphEligibilityReasonFromDb(
           tx as unknown as typeof sql,
           job as DispatchCandidate,

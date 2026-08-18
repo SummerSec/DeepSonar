@@ -248,6 +248,28 @@ export const CanvasLifecycleRollup = z.object({
 });
 export type CanvasLifecycleRollup = z.infer<typeof CanvasLifecycleRollup>;
 
+/** Canvas-level drain pause. Pending Jobs are durable queue entries, not work
+ * that still needs to drain, so they are projected separately. */
+export const TaskExecutionState = z.enum(["pausing", "paused", "running"]);
+export type TaskExecutionState = z.infer<typeof TaskExecutionState>;
+
+export const TaskExecutionControl = z.object({
+  paused: z.boolean(),
+  paused_at: z.string().nullable(),
+  paused_by: z.string().nullable(),
+  reason: z.string().nullable(),
+});
+export type TaskExecutionControl = z.infer<typeof TaskExecutionControl>;
+
+export const TaskExecutionControlResult = z.object({
+  canvas_id: z.string().uuid(),
+  execution_state: TaskExecutionState,
+  active_count: z.number().int().nonnegative(),
+  pending_count: z.number().int().nonnegative(),
+  changed: z.boolean(),
+});
+export type TaskExecutionControlResult = z.infer<typeof TaskExecutionControlResult>;
+
 export const EdgeType = z.enum([
   "child",
   "produces",

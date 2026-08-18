@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { FindingProtocolConfig } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
@@ -32,6 +32,12 @@ import {
 import { PROJECT_IMAGE_STRATEGIES } from "../role-runtime-snapshot/application.js";
 import { noteScheduleWakeAt } from "../../schedule-wake.js";
 import { clearTaskSchedule, resolveCreateTaskSchedule } from "../../task-schedule.js";
+import {
+  TASK_EXECUTION_ACTIVE_STATUSES,
+  readTaskExecutionControl,
+  setTaskExecutionControl,
+  taskExecutionProjection,
+} from "../../task-execution-control.js";
 import {
   MAX_TASK_SEED_FINDINGS,
   TASK_KINDS,
@@ -405,6 +411,115 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     }
     return reply.code(201).send({ canvas_id: canvasId, job, duplicated: false });
   });
+
+  const setExecutionPaused = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    paused: boolean,
+  ) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const actorId = req.actor?.id ?? req.actor?.name ?? null;
+    const result = await sql.begin(async (tx) => {
+      const [canvas] = await tx`
+        SELECT id, project_id, status, target_json
+        FROM canvases WHERE id = ${canvasId}
+        FOR UPDATE`;
+      if (!canvas) return { reason: "not_found" as const };
+      if (!paused && canvas.status === "archived") {
+        return { reason: "archived" as const };
+      }
+
+      const before = readTaskExecutionControl(canvas.target_json);
+      const changed = before.paused !== paused;
+      let target = (canvas.target_json ?? {}) as Record<string, unknown>;
+      if (changed) {
+        target = setTaskExecutionControl(target, paused, actorId);
+        await tx`
+          UPDATE canvases SET target_json = ${tx.json(target as never)}
+          WHERE id = ${canvasId}`;
+      }
+
+      if (!paused && changed) {
+        const [work] = await tx`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+            COUNT(*) FILTER (
+              WHERE status = ANY(${[...TASK_EXECUTION_ACTIVE_STATUSES]})
+            )::int AS active_count
+          FROM jobs WHERE canvas_id = ${canvasId}`;
+        if (Number(work?.pending_count ?? 0) === 0 && Number(work?.active_count ?? 0) === 0) {
+          await maybeTriggerHub(
+            tx as unknown as typeof sql,
+            {
+              id: null,
+              project_id: canvas.project_id as string,
+              canvas_id: canvasId,
+              type: "task_start",
+              priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+            },
+            {
+              idleWake: true,
+              trigger: { kind: "task_start" },
+            },
+          );
+        }
+      }
+
+      const [counts] = await tx`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+          COUNT(*) FILTER (
+            WHERE status = ANY(${[...TASK_EXECUTION_ACTIVE_STATUSES]})
+          )::int AS active_count
+        FROM jobs WHERE canvas_id = ${canvasId}`;
+      return {
+        reason: null,
+        projectId: canvas.project_id as string,
+        before,
+        result: taskExecutionProjection(
+          canvasId,
+          target,
+          Number(counts?.active_count ?? 0),
+          Number(counts?.pending_count ?? 0),
+          changed,
+        ),
+      };
+    });
+
+    if (result.reason === "not_found") {
+      return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    }
+    if (result.reason === "archived") {
+      return reply.code(409).send({
+        error: "任务已归档，请先取消归档再开始",
+        error_code: "TASK_ARCHIVED",
+      });
+    }
+
+    await audit(req, {
+      action: paused ? "task.execution_pause" : "task.execution_start",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId: result.projectId,
+      before: result.before,
+      after: {
+        execution_state: result.result.execution_state,
+        active_count: result.result.active_count,
+        pending_count: result.result.pending_count,
+        changed: result.result.changed,
+      },
+    });
+    if (!paused) {
+      await sql`SELECT pg_notify('deepsonar_jobs', 'task_start')`;
+    }
+    return reply.code(200).send(result.result);
+  };
+
+  app.post("/tasks/:canvasId/pause", async (req, reply) =>
+    setExecutionPaused(req, reply, true));
+
+  app.post("/tasks/:canvasId/start", async (req, reply) =>
+    setExecutionPaused(req, reply, false));
 
   /**
    * 恢复会话 = 继续执行任务（不删历史）。

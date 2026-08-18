@@ -181,6 +181,15 @@ loop:
   7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
 ```
 
+Canvas 级任务暂停是独立于 Hub convergence 和项目并发配额的 claim admission。控制对象保存在
+`canvases.target_json.execution_control={paused,paused_at,paused_by,reason}`，不增加定列。
+pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 `FOR SHARE` 锁定并重读
+同一 Canvas，因此多 Scheduler 进程不会越过已提交的暂停门。暂停不取消沙箱或篡改 Job 终态：
+`claimed/provisioning/running/waiting_human` 继续安全收尾，派生工作可作为 durable `pending`
+保留但不能 claim。start 只清执行门禁并通知 `deepsonar_jobs`；不修改 `target_json.schedule`，
+不把 failed/orphan/cancelled 恢复为 pending。只有本次确实解除暂停且无 pending/活动工作时，
+才复用 Hub Canvas 锁与活动 Hub 去重门补一次仍有资格的 Hub。
+
 ### 4.3 审计 → 验证链（单一决策点）
 
 1. `hub_reason` 根据目标派发 `audit` 等角色，审计角色输出结构化 Finding
@@ -415,12 +424,13 @@ Job 事件仍必须经过本摄入硬门。
 - `POST /projects`  新建本地项目（plane_project_id 可空；不再预建项目级画布）
 - `GET/PATCH /projects/{id}`、`POST /projects/{id}/archive`  项目详情/改名/归档（归档=软删除，历史保留）
 - `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）；`kind=standard` 禁止种子，`kind=compose` 必须提交同项目 1–8 个当前可代入的 confirmed `seed_finding_ids`
+- `POST /tasks/{canvas_id}/pause` / `start`  幂等任务执行门禁（`jobs:control`）；返回 `execution_state`、收尾 `active_count`、`pending_count` 与 `changed`
 - `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布）；compose 在 wipe 前重验冻结种子，stale/跨项目/已处置时返回 `COMPOSE_SEEDS_STALE` 且保留现有运行数据
 - `PATCH /jobs/{id}/priority`（仅 pending 可改）
 - `PUT/DELETE /projects/{id}/integrations/plane`、`POST .../plane/sync`  Plane 绑定/解绑/手动补跑
 - `POST /projects/sync`  绑定 Plane 项目（兼容入口；画布随任务认领铸造）
-- `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup 计数 + 最近一次 job 状态/优先级）
-- `GET  /canvases/{id}`  单任务画布节点/边
+- `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup、`execution_state`、收尾/待领取计数及最近一次 job 状态/优先级）
+- `GET  /canvases/{id}`  单任务画布节点/边；Canvas 元数据带同一执行控制投影
 - `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
 - `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤
 - `GET /findings/{id}`  Finding 详情；返回协议字段、评分原文/规范化结果、验证轮次、来源事件和结构化 trace

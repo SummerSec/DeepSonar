@@ -18,6 +18,7 @@ import { buildCanvasDelta, cursorGap, parseCanvasRevision } from "../../canvas-d
 import { parseCanvasBroadcastLimit } from "./broadcast-contract.js";
 import { createHumanMessage, listHumanMessages } from "./human-messages.js";
 import { registerCanvasFactRoutes } from "./facts.js";
+import { projectTaskExecution } from "../../task-execution-control.js";
 
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 
@@ -31,12 +32,16 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     // 默认只返回 active；status=archived|all 显式筛选
     const statusFilter =
       q.status === "all" ? null : q.status === "archived" ? "archived" : "active";
-    return sql`
+    const rows = await sql`
       SELECT c.id, c.title, c.plane_issue_id, c.target_json, c.created_at,
         c.status, c.archived_at,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
            AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+           AND j.status IN ('claimed','provisioning','running','waiting_human')) AS execution_active_count,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+           AND j.status = 'pending') AS pending_count,
         -- Lifecycle rollups are derived from Job execution timestamps. Pending work and
         -- waiting_human are both active work: pending has no started_at yet, while a
         -- human gate keeps the running interval open until the Job reaches a terminal state.
@@ -64,6 +69,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       WHERE c.project_id = ${id}
         AND (${statusFilter}::text IS NULL OR c.status = ${statusFilter})
       ORDER BY c.created_at DESC`;
+    return rows.map((row) => projectTaskExecution(row as Record<string, unknown>));
   });
 
   // 详情：单任务画布的节点与边
@@ -78,6 +84,10 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
            AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+           AND j.status IN ('claimed','provisioning','running','waiting_human')) AS execution_active_count,
+        (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+           AND j.status = 'pending') AS pending_count,
         (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = c.id) AS started_at,
         (SELECT CASE
            WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
@@ -101,7 +111,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
         FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
     ]);
     return {
-      canvas,
+      canvas: projectTaskExecution(canvas as Record<string, unknown>),
       canvas_id: id,
       nodes,
       edges,
@@ -129,6 +139,10 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
           (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
           (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
              AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+          (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+             AND j.status IN ('claimed','provisioning','running','waiting_human')) AS execution_active_count,
+          (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
+             AND j.status = 'pending') AS pending_count,
           (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = c.id) AS started_at,
           (SELECT CASE
              WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
@@ -181,7 +195,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     if (!result) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
     const { canvas, nodes, edges } = result;
     return {
-      canvas,
+      canvas: projectTaskExecution(canvas as Record<string, unknown>),
       canvas_id: id,
       nodes,
       edges,
@@ -343,10 +357,14 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       const result = await sql.begin(async (txRaw) => {
         const tx = txRaw as unknown as typeof sql;
         const [canvas] = await tx`
-          SELECT id, change_revision, change_floor_revision,
+          SELECT id, target_json, change_revision, change_floor_revision,
             (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id) AS job_count,
             (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id
                AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
+            (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id
+               AND j.status IN ('claimed','provisioning','running','waiting_human')) AS execution_active_count,
+            (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = canvases.id
+               AND j.status = 'pending') AS pending_count,
             (SELECT MIN(j.started_at) FROM jobs j WHERE j.canvas_id = canvases.id) AS started_at,
             (SELECT CASE
                WHEN COUNT(*) FILTER (WHERE j.status IN ('pending','claimed','provisioning','running','waiting_human')) = 0
@@ -385,6 +403,9 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
           floor,
           live: Boolean(canvas.live),
           active_count: Number(canvas.active_count ?? 0),
+          execution_active_count: Number(canvas.execution_active_count ?? 0),
+          pending_count: Number(canvas.pending_count ?? 0),
+          execution_state: projectTaskExecution(canvas as Record<string, unknown>).execution_state,
           job_count: Number(canvas.job_count ?? 0),
           started_at: canvas.started_at,
           ended_at: canvas.ended_at,
@@ -409,6 +430,9 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
         projection: "L0_DELTA",
         live: result.live,
         active_count: result.active_count,
+        execution_active_count: result.execution_active_count,
+        pending_count: result.pending_count,
+        execution_state: result.execution_state,
         job_count: result.job_count,
         started_at: result.started_at,
         ended_at: result.ended_at,

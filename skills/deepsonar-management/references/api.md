@@ -59,15 +59,17 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?}`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入的 confirmed Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
+| POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
+| POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |
 | POST | /tasks/:canvasId/resume-session | jobs:control | 恢复该任务的会话入口；仅 pending 且仍有定时门时清除门禁并立即调度（`action=start_now`） |
 | POST | /tasks/:canvasId/archive | tasks:write | 归档任务 |
 | POST | /tasks/:canvasId/unarchive | tasks:write | 取消归档 |
 | DELETE | /tasks/:canvasId | tasks:write | 删除任务 |
 | POST | /tasks/:canvasId/retry | jobs:control | 同画布重试（复用同一 canvas）；compose 在清空前重验冻结种子，失效时返回 `409 COMPOSE_SEEDS_STALE` 且不清空现有数据 |
 | POST | /projects/:id/events | tasks:write | 外部事件 `{source, event_id, event_type, title?, content?, data?}`，`source+event_id` 幂等 |
-| GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布） |
+| GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布）；投影 `execution_state=pausing|paused|running`、`execution_active_count` 与 `pending_count` |
 | GET | /projects/:id/canvas | tasks:read | 项目当前画布（兼容） |
-| GET | /canvases/:id | tasks:read | 画布节点/边 |
+| GET | /canvases/:id | tasks:read | 画布节点/边；`canvas` 含任务执行控制投影 |
 | GET | /canvases/:id/summary | tasks:read | 画布摘要 |
 | GET | /canvases/:id/delta | tasks:read | `?since=` 增量图数据 |
 | GET | /canvases/:id/nodes/:nodeId | tasks:read | 节点详情 |
