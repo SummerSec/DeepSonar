@@ -194,12 +194,12 @@ if (!testDatabaseUrl) {
         assert.equal(own[1]?.status, "active");
       }
     } finally {
-      await sql`DELETE FROM audit_logs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvas_changes WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      // audit_logs is intentionally append-only and retains its project FK.
+      // Keep the UUID-scoped project shell while removing all schedulable rows.
       await app.close().catch(() => {});
       await sql.end({ timeout: 5 }).catch(() => {});
       await rm(blobDir, { recursive: true, force: true });
