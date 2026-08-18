@@ -251,7 +251,7 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
               error = COALESCE(error, '调度器重启（provision 外部效果状态未知）'),
               claimed_at = NULL, lease_expires_at = NULL
              WHERE id = ${jobId} AND status IN ('claimed','provisioning')
-             RETURNING id, status, sandbox_id, type, canvas_id, project_id, priority, error`;
+             RETURNING id, status, sandbox_id, type, canvas_id, project_id, priority, error, agent_snapshot_json`;
           if (orphaned) {
             await settleAttemptTerminal(
               tx,
@@ -277,7 +277,7 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
           UPDATE jobs SET status = 'orphan', finished_at = now(),
                           error = COALESCE(error, '') || '调度器重启（执行中断）'
           WHERE status = 'running'
-          RETURNING id, sandbox_id, type, canvas_id, project_id, priority, error`;
+          RETURNING id, sandbox_id, type, canvas_id, project_id, priority, error, agent_snapshot_json`;
         for (const row of result) {
           await settleAttemptTerminal(
             tx,
