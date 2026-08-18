@@ -730,9 +730,9 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/tasks/{canvasId}/resume-session",
-    summary: "继续任务：优先批量重跑启动中断 Worker（同 Job ID、新 Attempt）",
+    summary: "继续任务：优先使用旧冻结快照批量重跑启动中断 Worker（同 Job ID、新 Attempt）",
     description:
-      "画布无活动 Job 时，先将全部启动中断的 role Worker 原地重新入队；旧 Attempt 与 unknown/never effect 保留且不自动重放。无该批次时才恢复单个可恢复 Job或唤醒 Hub。",
+      "画布无活动 Job 时，先将全部启动中断的 role Worker 原地重新入队；旧 Attempt 与 unknown/never effect 保留且不自动重放。批次或单 Job 中任一冻结快照相对当前受治理身份过期时返回 409 SNAPSHOT_STALE 与 job_ids，不会静默使用旧模型；调用方应逐 Job 使用 rerun-current。无中断批次时才恢复单个可恢复 Job或唤醒 Hub。",
     scope: "jobs:control",
     tags: ["Tasks"],
     responses: { "200": TaskResumeResponseSchema },
@@ -800,7 +800,18 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/jobs/{id}/resume",
-    summary: "恢复 failed/timeout/orphan/waiting_human → pending；按 type/purpose 重算固定 priority class，忽略历史或调用方 priority",
+    summary: "使用旧冻结快照重新执行（同 Job、新 Attempt）",
+    description:
+      "仅 failed/timeout/orphan/waiting_human。先按当前 RoleConfig/Credential/项目策略解析受治理运行身份；agent_cli/model/upstream_model/credential/runtime adapter/image digest 等身份漂移或当前配置无法解析时返回 409 SNAPSHOT_STALE，并提示调用 rerun-current。成功时保留画布和旧 Attempt/effect，清理执行元数据并原子转 pending。",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+  },
+  {
+    method: "post",
+    path: "/jobs/{id}/rerun-current",
+    summary: "按当前配置重新执行（同 Job、新 Attempt、保留画布）",
+    description:
+      "仅 failed/timeout/orphan/waiting_human。持有 Dispatcher admission lock，并按 Canvas→Job 加锁；复用当前 RoleConfig/Credential/项目网络、共享资产与 runtime image 策略完整重冻 agent_snapshot_json，再原子转 pending。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。",
     scope: "jobs:control",
     tags: ["Jobs"],
   },

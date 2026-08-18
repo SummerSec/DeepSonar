@@ -1,15 +1,12 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { config } from "../../config.js";
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
 import {
   createJob,
   ensureCanvasForTask,
   fixedPriorityForJob,
-  normalizePendingJobPriority,
   priorityMatchesJob,
-  resolveAgentSnapshotForJob,
   roleNameForJobType,
   rolesForProject,
   triggerHubFromHumanComment,
@@ -25,9 +22,13 @@ import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recoverCancelledDerivedJob } from "./recovery.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
-import { recordJobSharedAssets } from "../shared-assets/index.js";
-import { resolveFindingProtocol } from "../../finding-protocol.js";
 import { projectContextDiagnostics } from "../context/index.js";
+import {
+  JOB_NOT_RESUMABLE,
+  SNAPSHOT_STALE,
+  requeueJob,
+  type RequeueJobResult,
+} from "./rerun.js";
 
 const CreateJobBody = z.object({
   project_id: z.string().uuid(),
@@ -41,6 +42,37 @@ const CreateJobBody = z.object({
 const PriorityBody = z.object({ priority: z.number().int() });
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 const STREAMABLE_JOB_STATUSES = new Set(["running", "waiting_human"]);
+
+function sendRequeueError(
+  reply: FastifyReply,
+  result: Exclude<RequeueJobResult, { kind: "ok" }>,
+  mode: "resume-frozen" | "rerun-current",
+) {
+  if (result.kind === "not_found") {
+    return reply.code(404).send({ error: "job not found", error_code: "JOB_NOT_FOUND" });
+  }
+  if (result.kind === "not_resumable") {
+    return reply.code(409).send({
+      error: `Job 状态 ${result.status} 不允许重新入队；仅 failed/timeout/orphan/waiting_human 可操作`,
+      error_code: JOB_NOT_RESUMABLE,
+      status: result.status,
+    });
+  }
+  const currentUnresolvable = Boolean(result.detail.resolution_error)
+    || result.detail.stale_fields.includes("current_snapshot_unresolvable");
+  return reply.code(409).send({
+    error: currentUnresolvable
+      ? "当前受治理运行配置无法解析；请修复 RoleConfig、Credential 或运行镜像配置后重试"
+      : "冻结快照已不是当前受治理运行身份；请调用 POST /jobs/:id/rerun-current 按当前配置重新执行",
+    error_code: SNAPSHOT_STALE,
+    job_ids: [result.detail.job_id],
+    stale_fields: result.detail.stale_fields,
+    ...(result.detail.resolution_error ? { resolution_error: result.detail.resolution_error } : {}),
+    next_action: currentUnresolvable || mode === "rerun-current"
+      ? "fix-current-configuration"
+      : "rerun-current",
+  });
+}
 
 /** Public ordinary Job creation is constrained by the project's role catalog. */
 export function isPublicJobTypeAllowed(
@@ -614,31 +646,54 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     return { canvas_id: canvasId, cancelled, reason };
   });
 
-  // 人工处理后恢复（§4.4/§8.3）：waiting_human/orphan/failed/timeout → pending 重入队
-  // 走原子状态机；清空上一轮执行痕迹；画布节点回到 pending 等再运行
+  // 使用创建期冻结快照重新执行：同 Job、新 Attempt。当前受治理身份已经
+  // 漂移时必须 fail closed，禁止静默继续使用旧 CLI/model/credential/runtime。
   app.post("/jobs/:id/resume", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const row = await createSqlJobLifecycleApplication().transitionJob(id, "pending", {
-      error: null,
-      lease_expires_at: null,
-      claimed_at: null,
-      started_at: null,
-      finished_at: null,
-      heartbeat_at: null,
-      sandbox_id: null,
-    });
-    if (row) await normalizePendingJobPriority(id);
-    if (!row) return reply.code(409).send({ error: "job 不在可恢复状态（succeeded/cancelled 不可恢复，重跑请用 retry）" });
-    await sql`
-      UPDATE canvas_nodes SET status = 'pending', updated_at = now()
-      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent"]})`;
+    const result = await requeueJob(id, "resume-frozen");
+    if (result.kind !== "ok") return sendRequeueError(reply, result, "resume-frozen");
     await audit(req, {
       action: "job.resume",
       resourceType: "job",
       resourceId: id,
-      projectId: (row.project_id as string) ?? null,
+      projectId: (result.job.project_id as string) ?? null,
+      before: { status: result.from_status },
+      after: {
+        status: "pending",
+        execution: "frozen_snapshot",
+        snapshot_refreshed: false,
+      },
     });
-    await sql`SELECT pg_notify('deepsonar_jobs', 'job_resume')`;
-    return row;
+    return {
+      ...result.job,
+      execution: "frozen_snapshot",
+      snapshot_refreshed: false,
+      message: "已使用旧冻结快照重新入队；Dispatcher 将为同一 Job 创建新 Attempt",
+    };
+  });
+
+  // 按当前 RoleConfig/Credential/项目策略完整重冻，再以同 Job、新 Attempt 执行。
+  app.post("/jobs/:id/rerun-current", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const result = await requeueJob(id, "rerun-current");
+    if (result.kind !== "ok") return sendRequeueError(reply, result, "rerun-current");
+    await audit(req, {
+      action: "job.rerun_current",
+      resourceType: "job",
+      resourceId: id,
+      projectId: (result.job.project_id as string) ?? null,
+      before: { status: result.from_status },
+      after: {
+        status: "pending",
+        execution: "current_snapshot",
+        snapshot_refreshed: true,
+      },
+    });
+    return {
+      ...result.job,
+      execution: "current_snapshot",
+      snapshot_refreshed: true,
+      message: "已按当前配置重冻快照并重新入队；画布与历史 Attempt/effect 保持不变",
+    };
   });
 }
