@@ -38,6 +38,7 @@ for (const packageName of [
   "@deepseek-ai/dsh-llm-pi-ai",
   "@deepseek-ai/dsh-sandbox-local",
   "@deepseek-ai/dsh-sandbox-policy",
+  "@deepseek-ai/dsh-subprocess-local",
   "@deepseek-ai/dsh-bash-local",
   "@deepseek-ai/dsh-fs-local",
   "@deepseek-ai/dsh-tool-bash",
@@ -57,6 +58,7 @@ for (const packageName of [
   }
 }
 for (const [packageName, integrityArg] of [
+  ["@deepseek-ai/dsh-subprocess-local", "DSH_SUBPROCESS_LOCAL_INTEGRITY"],
   ["@deepseek-ai/dsh-code-runtime", "DSH_CODE_RUNTIME_INTEGRITY"],
   ["@deepseek-ai/dsh-code-runtime-worker-thread", "DSH_CODE_RUNTIME_WORKER_INTEGRITY"],
 ]) {

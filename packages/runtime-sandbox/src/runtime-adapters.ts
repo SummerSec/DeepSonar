@@ -949,8 +949,14 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     mode: danger-full-access
     workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
 
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+
 - id: bash-local
   name: '@deepseek-ai/dsh-bash-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    timeoutMs: 300000
 
 - id: fs-local
   name: '@deepseek-ai/dsh-fs-local'
@@ -969,12 +975,9 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     workspaceContext: false
     skills:
       enabled: true
+    toolBash:
+      enableRunInBackground: true
     toolJobs: false
-
-- id: bash
-  name: '@deepseek-ai/dsh-tool-bash'
-  config:
-    timeoutMs: 300000
 
 - id: str-replace-editor
   name: '@deepseek-ai/dsh-tool-str-replace-editor'

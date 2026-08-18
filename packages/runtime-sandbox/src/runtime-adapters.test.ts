@@ -181,11 +181,14 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /@deepseek-ai\/dsh-agent-spine-demo/);
   assert.match(config, /@deepseek-ai\/dsh-session-persistence-jsonl/);
   assert.match(config, /@deepseek-ai\/dsh-compaction-basic/);
+  assert.match(config, /name: '@deepseek-ai\/dsh-subprocess-local'/);
   assert.match(config, /skills:\n\s+enabled: true/);
   assert.match(config, /tools:\n\s+mode: native/);
-  // rc.6 declares toolBash as false | object. Omission keeps the spine's
-  // default bash tool enabled; boolean true makes Cordis reject the plugin.
-  assert.doesNotMatch(config, /^\s+toolBash:/mu);
+  // rc.6 declares toolBash as false | object; boolean true is invalid.
+  assert.match(config, /toolBash:\n\s+enableRunInBackground: true/);
+  assert.doesNotMatch(config, /toolBash: true/);
+  assert.doesNotMatch(config, /- id: bash\n/);
+  assert.match(config, /name: '@deepseek-ai\/dsh-bash-local'\n\s+config:\n\s+cwd:[\s\S]*?timeoutMs: 300000/);
   assert.match(config, /^\s+toolJobs: false$/mu);
   assert.match(config, /^\s+workspaceContext: false$/mu);
   assert.doesNotMatch(config, /dsh-code-runtime-worker-thread/);

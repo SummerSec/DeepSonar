@@ -44,8 +44,10 @@ The current registry contains:
 
 Cordis 字段必须按镜像中钉死版本的插件 Schema 生成，不能用布尔“启用”猜测配置形态。当前
 `@deepseek-ai/dsh-agent-spine-demo@0.1.0-rc.6` 的 `toolBash` 是
-`false | @deepseek-ai/dsh-tool-bash.Config`；平台省略该字段即按 spine 默认挂载 bash，
-不得生成非法的 `toolBash: true`。真实 Docker boot smoke 使用与平台 standard mode
+`false | @deepseek-ai/dsh-tool-bash.Config`；平台传入对象并只允许 spine 挂载一次 bash，
+不得生成非法的 `toolBash: true` 或再独立注册同一工具。bash executor 的 subprocess 服务由
+固定 integrity 的 `@deepseek-ai/dsh-subprocess-local` 显式提供，`timeoutMs` 归 executor 配置。
+真实 Docker boot smoke 使用与平台 standard mode
 相同的 14 插件、无 UI composition，断网启动 packaged-bin 并完成 `initialize` 和
 protocol `shutdown`，因此其余配置字段也由实际钉死插件 Schema 一并验证，而不是只做 YAML
 文本断言。
