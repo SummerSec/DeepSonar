@@ -18,6 +18,25 @@ export function consumeViewportFit(
   return { fittedGeneration: generation, shouldFit: true };
 }
 
+export function hasPositiveNodeBounds(
+  nodes: readonly { width?: number | null; height?: number | null }[],
+): boolean {
+  return nodes.some((node) => (node.width ?? 0) > 0 && (node.height ?? 0) > 0);
+}
+
+export function isUsableFlowSize(width: number, height: number): boolean {
+  return width > 1 && height > 1;
+}
+
+export function shouldRecoverViewport(
+  previousWidth: number,
+  previousHeight: number,
+  width: number,
+  height: number,
+): boolean {
+  return !isUsableFlowSize(previousWidth, previousHeight) && isUsableFlowSize(width, height);
+}
+
 export function resolveViewportNodeIds(
   visibleNodeIds: readonly string[],
   traceNodeIds: ReadonlySet<string>,
@@ -28,5 +47,6 @@ export function resolveViewportNodeIds(
   if (focusNodeId && traceNodeIds.has(focusNodeId) && visibleNodeIds.includes(focusNodeId)) {
     return [focusNodeId];
   }
-  return visibleNodeIds.filter((id) => traceNodeIds.has(id));
+  const chain = visibleNodeIds.filter((id) => traceNodeIds.has(id));
+  return chain.length > 0 ? chain : undefined;
 }

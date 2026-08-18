@@ -10,6 +10,7 @@ import {
   MiniMap,
   ReactFlow,
   useReactFlow,
+  useStore,
   type Edge,
   type Node,
 } from "@xyflow/react";
@@ -36,7 +37,7 @@ import {
   isEffectivelyExpanded,
   maxDepthOf,
 } from "./graph-depth";
-import { elkLayout, layoutNodes, NODE_W } from "./layout";
+import { elkLayout, layoutNodes, NODE_H, NODE_W } from "./layout";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
 import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
@@ -44,7 +45,13 @@ import { HumanMessageComposer } from "./HumanMessageComposer";
 import { humanMessageStatusLabel, isActiveHumanMessageTarget, messagesForCanvasNode } from "./human-messages";
 import { Sidebar } from "./Sidebar";
 import { SearchableMultiSelect } from "./SearchableSelect";
-import { consumeViewportFit, resolveViewportNodeIds } from "./canvas-viewport";
+import {
+  consumeViewportFit,
+  hasPositiveNodeBounds,
+  isUsableFlowSize,
+  resolveViewportNodeIds,
+  shouldRecoverViewport,
+} from "./canvas-viewport";
 import { findingTraceIds, traceDisplayIds, type TraceFocusMode } from "./finding-trace-focus";
 
 /** 边类型只控制线型/流速；颜色始终取源节点最终展示色。 */
@@ -77,8 +84,11 @@ function CanvasViewportController({
   focusNodeId?: string | null;
 }) {
   const reactFlow = useReactFlow();
+  const flowWidth = useStore((state) => state.width);
+  const flowHeight = useStore((state) => state.height);
   const latestGenerationRef = useRef(generation);
   const fittedGenerationRef = useRef("");
+  const flowSizeRef = useRef({ width: 0, height: 0 });
   const fitNodeIds = useMemo(
     () => resolveViewportNodeIds(
       nodes.map((node) => node.id),
@@ -88,13 +98,19 @@ function CanvasViewportController({
     ),
     [focusNodeId, nodes, traceActive, traceNodeIds],
   );
+  const sizeReady = isUsableFlowSize(flowWidth, flowHeight);
 
   useEffect(() => {
     latestGenerationRef.current = generation;
   }, [generation]);
 
   useEffect(() => {
-    if (!generation || fittedGenerationRef.current === generation || nodes.length === 0) return;
+    const previous = flowSizeRef.current;
+    if (shouldRecoverViewport(previous.width, previous.height, flowWidth, flowHeight)) {
+      fittedGenerationRef.current = "";
+    }
+    flowSizeRef.current = { width: flowWidth, height: flowHeight };
+    if (!generation || !sizeReady || fittedGenerationRef.current === generation || nodes.length === 0) return;
     const requestGeneration = generation;
     const requestNodeIds = fitNodeIds;
     const expected = new Map(nodes.map((node) => [node.id, node.position]));
@@ -115,29 +131,56 @@ function CanvasViewportController({
       stableFrames = signature && signature === previousSignature ? stableFrames + 1 : 0;
       previousSignature = signature;
       attempts += 1;
-      if (!completeGeneration || stableFrames < 1) {
+      const requestNodes = requestNodeIds?.length
+        ? currentNodes.filter((node) => requestNodeIds.includes(node.id))
+        : currentNodes;
+      const fitTargets = requestNodes.length > 0 ? requestNodes : currentNodes;
+      if (!completeGeneration || stableFrames < 1 || !hasPositiveNodeBounds(fitTargets)) {
         if (attempts < 120) frame = window.requestAnimationFrame(fitWhenMeasured);
         return;
       }
       const decision = consumeViewportFit(fittedGenerationRef.current, generation, true);
       if (!decision.shouldFit) return;
       fittedGenerationRef.current = decision.fittedGeneration;
-      const requestNodes = requestNodeIds
-        ? currentNodes.filter((node) => requestNodeIds.includes(node.id))
-        : currentNodes;
       void reactFlow.fitView({
-        nodes: requestNodes,
-        padding: requestNodeIds ? 0.7 : 0.18,
-        minZoom: requestNodeIds ? FOCUSED_GRAPH_MIN_ZOOM : FULL_GRAPH_MIN_ZOOM,
-        maxZoom: requestNodeIds ? 1.2 : 1.05,
+        nodes: fitTargets,
+        padding: requestNodeIds?.length ? 0.7 : 0.18,
+        minZoom: requestNodeIds?.length ? FOCUSED_GRAPH_MIN_ZOOM : FULL_GRAPH_MIN_ZOOM,
+        maxZoom: requestNodeIds?.length ? 1.2 : 1.05,
         duration: 320,
       });
     };
     frame = window.requestAnimationFrame(fitWhenMeasured);
     return () => window.cancelAnimationFrame(frame);
-  }, [fitNodeIds, generation, nodes, reactFlow]);
+  }, [fitNodeIds, flowHeight, flowWidth, generation, nodes, reactFlow, sizeReady]);
 
   return null;
+}
+
+function CanvasMiniMap({ nodes }: { nodes: Node[] }) {
+  const reactFlow = useReactFlow();
+  return (
+    <MiniMap
+      pannable
+      zoomable
+      ariaLabel="过程画布缩略图"
+      nodeColor={(node) => {
+        const canvasNode = (node.data as { canvas?: CanvasNode }).canvas;
+        return canvasNode ? nodeDisplayColor(canvasNode) : "#2a2a31";
+      }}
+      nodeStrokeColor="#3f3f48"
+      position="top-right"
+      style={{ width: 140, height: 90 }}
+      onClick={(_, position) => {
+        if (nodes.length === 0) return;
+        const zoom = reactFlow.getZoom();
+        void reactFlow.setCenter(position.x, position.y, {
+          duration: 200,
+          zoom: Number.isFinite(zoom) && zoom > 0 ? zoom : 1,
+        });
+      }}
+    />
+  );
 }
 
 function toFlow(
@@ -167,6 +210,7 @@ function toFlow(
         // 布局只对当前可见子图计算，展开/收起后自适应重排
         position: elkPos?.get(n.id) ?? fallbackPos?.get(n.id) ?? { x: n.x, y: n.y },
         width: NODE_W,
+        height: NODE_H[n.node_type] ?? 172,
         data: {
           canvas: n,
           depth,
@@ -1121,6 +1165,7 @@ export function CanvasView({
         </div>
       )}
       <ReactFlow
+        className="h-full w-full"
         nodes={visibleNodes}
         edges={visibleEdges}
         nodeTypes={nodeTypes}
@@ -1129,6 +1174,7 @@ export function CanvasView({
         nodesConnectable={false}
         elementsSelectable
         minZoom={FULL_GRAPH_MIN_ZOOM}
+        maxZoom={2}
         proOptions={{ hideAttribution: false }}
       >
         <CanvasViewportController
@@ -1140,17 +1186,7 @@ export function CanvasView({
         />
         <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} color="#263037" />
         <Controls showInteractive={false} position="bottom-right" />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(node) => {
-            const canvasNode = (node.data as { canvas?: CanvasNode }).canvas;
-            return canvasNode ? nodeDisplayColor(canvasNode) : "#2a2a31";
-          }}
-          nodeStrokeColor="#3f3f48"
-          position="top-right"
-          style={{ width: 140, height: 90 }}
-        />
+        <CanvasMiniMap nodes={visibleNodes} />
       </ReactFlow>
 
       <div
