@@ -76,6 +76,20 @@ if (!testDatabaseUrl) {
           'atomic task create',
           ${sql.json({ rules: { allowEgress: false } } as never)}
         )`;
+      const [baseImage] = await sql`
+        SELECT id FROM runtime_images WHERE image_key = 'deepsonar-base'`;
+      const hostPlatform = runtimeImages.hostRuntimePlatform();
+      const revokedDigest = `sha256:${"b".repeat(64)}`;
+      await sql`
+        INSERT INTO runtime_image_versions (
+          runtime_image_id, version, image_ref, resolved_ref, digest,
+          platforms_json, trust_status, revoked_at
+        ) VALUES (
+          ${baseImage.id as string}, 'issue-203-revoked',
+          ${`ghcr.io/summersec/deepsonar-base@${revokedDigest}`},
+          ${`ghcr.io/summersec/deepsonar-base@${revokedDigest}`},
+          ${revokedDigest}, ${sql.json([hostPlatform])}, 'revoked', now()
+        )`;
 
       const failed = await app.inject({
         method: "POST",
@@ -109,13 +123,10 @@ if (!testDatabaseUrl) {
         { canvases: 0, nodes: 0, jobs: 0, audits: 0 },
       );
 
-      const [baseImage] = await sql`
-        SELECT id FROM runtime_images WHERE image_key = 'deepsonar-base'`;
       const versionId = randomUUID();
       const digest = `sha256:${"a".repeat(64)}`;
       const imageRef =
         `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${digest}`;
-      const hostPlatform = runtimeImages.hostRuntimePlatform();
       await sql`
         INSERT INTO runtime_image_versions (
           id, runtime_image_id, version, image_ref, resolved_ref, digest,
