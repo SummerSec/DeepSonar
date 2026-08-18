@@ -931,7 +931,10 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       // Resolve and validate against the locked canvas target before deleting
       // any retry state or inserting the new Hub Job. A compose retry is a new
       // execution, so disposed or stale seeds fail closed before the wipe.
-      const retryTarget = (lockedCanvas.target_json ?? {}) as Record<string, unknown>;
+      const retryTarget = clearTaskSchedule({
+        ...((lockedCanvas.target_json ?? {}) as Record<string, unknown>),
+      });
+      delete retryTarget.convergence;
       const seedFindings = await validateFrozenTaskSeedsForRetry(
         tx as unknown as typeof sql,
         projectId,
