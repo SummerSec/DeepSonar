@@ -77,6 +77,7 @@ if (!testDatabaseUrl) {
             },
           } as never)}),
           (${idleCanvasId}, ${projectId}, 'idle wake', ${sql.json({
+            network_policy: { allow_egress: true },
             execution_control: {
               paused: true,
               paused_at: "2026-08-18T09:00:00.000Z",
