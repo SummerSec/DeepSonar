@@ -2047,6 +2047,94 @@ function redactSecretValues(value: string, secretValues: readonly string[]): str
   return redacted;
 }
 
+export const RUNTIME_STDERR_EVIDENCE_MAX_BYTES = 1024 * 1024;
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(value.slice(0, mid), "utf8") <= maxBytes) low = mid;
+    else high = mid - 1;
+  }
+  let end = low;
+  if (end > 0 && /[\uD800-\uDBFF]/u.test(value[end - 1]!)) end--;
+  return value.slice(0, end);
+}
+
+/**
+ * Preserve the CLI stderr stream in normalized evidence without retaining an
+ * unbounded in-memory copy. Exact runtime secrets are redacted across arbitrary
+ * SDK chunk boundaries before the total UTF-8 byte budget is applied.
+ */
+export class BoundedRuntimeStderrEvidence {
+  private readonly secrets: string[];
+  private readonly maxSecretLength: number;
+  private pending = "";
+  private capturedBytes = 0;
+  private truncated = false;
+
+  constructor(
+    secretValues: readonly string[],
+    private readonly emit: (event: Record<string, unknown>) => void,
+    private readonly maxBytes = RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
+  ) {
+    this.secrets = [...new Set(secretValues.filter((entry) => entry.length > 0))]
+      .sort((left, right) => right.length - left.length);
+    this.maxSecretLength = this.secrets[0]?.length ?? 0;
+  }
+
+  push(chunk: string): void {
+    if (!chunk || this.truncated) return;
+    this.pending += chunk;
+    this.flush(false);
+  }
+
+  finish(): void {
+    if (this.truncated) return;
+    this.flush(true);
+  }
+
+  private flush(final: boolean): void {
+    let output = "";
+    const requiredLookahead = Math.max(1, this.maxSecretLength);
+    while (this.pending && (final || this.pending.length >= requiredLookahead)) {
+      const secret = this.secrets.find((candidate) => this.pending.startsWith(candidate));
+      if (secret) {
+        output += "[REDACTED]";
+        this.pending = this.pending.slice(secret.length);
+        continue;
+      }
+      const codePoint = String.fromCodePoint(this.pending.codePointAt(0)!);
+      output += codePoint;
+      this.pending = this.pending.slice(codePoint.length);
+    }
+    this.emitBounded(output);
+  }
+
+  private emitBounded(value: string): void {
+    if (!value || this.truncated) return;
+    const remaining = Math.max(0, this.maxBytes - this.capturedBytes);
+    const captured = utf8Prefix(value, remaining);
+    if (captured) {
+      const bytes = Buffer.byteLength(captured, "utf8");
+      this.capturedBytes += bytes;
+      this.emit({ type: "runtime.stderr", chunk: captured });
+    }
+    if (captured.length !== value.length) {
+      this.truncated = true;
+      this.pending = "";
+      this.emit({
+        type: "runtime.stderr.truncated",
+        captured_bytes: this.capturedBytes,
+        max_bytes: this.maxBytes,
+      });
+    }
+  }
+}
+
 /** Exact-value redaction that preserves result/session object shape and size. */
 function redactSecretsDeep(value: unknown, secretValues: readonly string[], seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") return redactSecretValues(value, secretValues);
@@ -2640,6 +2728,10 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let sessionResumeAttempts = 0;
   let resumeSkipNotice: string | undefined;
   const sessionResumeMessage = "上游请求暂时失败，请在当前会话中继续完成原任务，不要开启新会话；不要重复已成功的工具调用或副作用，只继续未完成的步骤。";
+  const stderrEvidence = new BoundedRuntimeStderrEvidence(
+    secretValues,
+    (event) => spec.onEvent?.(event),
+  );
   const bindObservedResumeIdentity = () => {
     if (!expectedContextIdentity || !sessionId) return;
     if (spec.provider === "pi" && !sessionFile) return;
@@ -2693,7 +2785,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       try {
         for await (const chunk of exec) {
           if (chunk.type === "stderr") {
-            attemptStderrTail = (attemptStderrTail + chunk.chunk).slice(-2000);
+            const stderrChunk = chunk.chunk ?? "";
+            attemptStderrTail = (attemptStderrTail + stderrChunk).slice(-2000);
+            stderrEvidence.push(stderrChunk);
             continue;
           }
           if (chunk.type === "exit") {
@@ -2993,6 +3087,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     discardPendingSemanticTools(semanticToolState, (warning) => spec.onWarning?.(warning));
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
+  stderrEvidence.finish();
 
   // 4. 读回结果文件
   const files: Record<string, string> = {};
