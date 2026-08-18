@@ -7,6 +7,7 @@ import {
   globalRules,
   ingestEvent,
   PLATFORM_DEFAULT_AGENT_CLI,
+  projectJobQuotaFromConfig,
   recoverVerifyJobTerminal,
   rolesForProject,
   type AgentRuntimeSnapshot,
@@ -72,6 +73,7 @@ export type DispatchCandidate = {
   type?: unknown;
   payload_json?: unknown;
   canvas_target_json?: unknown;
+  project_config_json?: unknown;
   agent_cli: unknown;
   credential_provider: unknown;
   credential_id: unknown;
@@ -338,7 +340,8 @@ export function scanDispatchPages<T>(
 export function dispatchSkipReason(
   job: DispatchCandidate,
   counts: DispatchCounts,
-  rules: Pick<ProjectRules, "maxJobsPerProject" | "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
+  rules: Pick<ProjectRules, "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
+  projectJobLimit: number,
 ): string | null {
   const projectId = String(job.project_id);
   // Historical snapshots may omit agent_cli; use the platform default rather
@@ -347,7 +350,7 @@ export function dispatchSkipReason(
   const provider = String(job.credential_provider ?? "");
   const credentialId = String(job.credential_id ?? "");
   const model = snapshotUpstreamModel(job) ?? "";
-  if ((counts.project.get(projectId) ?? 0) >= rules.maxJobsPerProject) return "project";
+  if ((counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
   const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
   if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
   const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
@@ -361,6 +364,16 @@ export function dispatchSkipReason(
   const cliLimit = rules.maxConcurrentByAgentCli[cli];
   if (cliLimit !== undefined && (counts.cli.get(cli) ?? 0) >= cliLimit) return "agent_cli";
   return null;
+}
+
+export function projectJobLimitForCandidate(
+  job: Pick<DispatchCandidate, "project_config_json">,
+  globalMaxJobsPerProject: number,
+): number {
+  if (!Object.prototype.hasOwnProperty.call(job, "project_config_json")) {
+    throw new Error("DISPATCH_PROJECT_CONFIG_MISSING");
+  }
+  return projectJobQuotaFromConfig(job.project_config_json, globalMaxJobsPerProject).limit;
 }
 
 /** 等所有在执行的 job 收尾（超时强制返回；超时未完成的由下次启动 reconcile 接管为 orphan） */
@@ -483,8 +496,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
   const claimedJobs = await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
-    // global_settings.effective_rules 是调度器唯一权威；环境缺省值在
-    // 抢占前由 globalRules 解析。
+    // global_settings is the scheduler-wide hard cap; per-project
+    // maxConcurrentJobs may only tighten maxJobsPerProject at claim time.
     const rules = await globalRules(tx as unknown as typeof sql);
     const active = await tx`
       SELECT status, project_id,
@@ -541,7 +554,9 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const pendingPageSize = 500;
     let cursor: { priority: number; createdAt: string; id: string } | null = null;
     while (claimed.length < slots) {
-      // FOR UPDATE 不能锁 outer join 的可空侧；只锁 jobs 行。
+      // Outer joins remain unlocked. Lock the Job for claim and the inner
+      // project row in SHARE mode so a concurrent settings update linearizes
+      // before or after this claim instead of changing policy mid-decision.
       // ORDER BY uses mixed directions, so the keyset predicate is expanded
       // explicitly instead of relying on a tuple comparison.
       const pending = cursor
@@ -553,9 +568,11 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
                    j.agent_snapshot_json->>'model' AS model,
                    j.agent_snapshot_json->>'upstream_model' AS upstream_model,
+                   p.config_json AS project_config_json,
                    c.public_metadata_json AS credential_metadata,
                    cv.target_json AS canvas_target_json
             FROM jobs j
+            JOIN projects p ON p.id = j.project_id
             LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
             LEFT JOIN canvases cv ON cv.id = j.canvas_id
             WHERE j.status = 'pending'
@@ -566,7 +583,8 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
               )
             ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
             LIMIT ${pendingPageSize}
-            FOR UPDATE OF j SKIP LOCKED`
+            FOR UPDATE OF j SKIP LOCKED
+            FOR SHARE OF p`
         : await tx`
             SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
                    j.priority, j.created_at::text AS created_at_key, j.agent_snapshot_json,
@@ -575,15 +593,18 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
                    j.agent_snapshot_json->>'credential_provider' AS credential_provider,
                    j.agent_snapshot_json->>'model' AS model,
                    j.agent_snapshot_json->>'upstream_model' AS upstream_model,
+                   p.config_json AS project_config_json,
                    c.public_metadata_json AS credential_metadata,
                    cv.target_json AS canvas_target_json
             FROM jobs j
+            JOIN projects p ON p.id = j.project_id
             LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
             LEFT JOIN canvases cv ON cv.id = j.canvas_id
             WHERE j.status = 'pending'
             ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
             LIMIT ${pendingPageSize}
-            FOR UPDATE OF j SKIP LOCKED`;
+            FOR UPDATE OF j SKIP LOCKED
+            FOR SHARE OF p`;
 
       if (pending.length === 0) break;
       const last = pending[pending.length - 1] as Record<string, unknown>;
@@ -624,6 +645,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
             cli: cliCounts,
           },
           rules,
+          projectJobLimitForCandidate(job, rules.maxJobsPerProject),
         );
         if (skipReason) continue;
         const row = await lifecycle.claimPendingJob(job.id as string);

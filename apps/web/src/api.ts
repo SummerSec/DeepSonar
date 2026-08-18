@@ -27,6 +27,9 @@ export interface Project {
   created_at?: string;
   updated_at?: string;
   archived_at?: string | null;
+  active_jobs?: number;
+  max_concurrent_jobs?: number;
+  max_concurrent_jobs_source?: "project" | "global";
 }
 
 export interface SharedAsset {
@@ -562,6 +565,9 @@ export interface EffectiveRules {
   /** Scheduler-wide hard caps. Persisted global rules are authoritative; env only bootstraps defaults. */
   maxGlobalJobs: number;
   maxJobsPerProject: number;
+  /** Claim-time effective active-job cap for this project. */
+  maxConcurrentJobs: number;
+  maxConcurrentJobsSource: "project" | "global";
   /** Scheduler 全局 provisioning admission 上限，项目规则不得覆盖。 */
   maxConcurrentProvisioning: number;
   /** Provider 总并发；优先级高于 Credential / Model / Agent CLI。 */
@@ -723,6 +729,8 @@ export interface ProjectSettings {
   effective_finding_protocol: EffectiveFindingProtocol;
   image_strategy: ProjectImageStrategy;
   role_runtime_images: Record<string, string | null>;
+  /** claimed / provisioning / running；waiting_human 不占调度额度。 */
+  active_jobs: number;
 }
 
 export type ProjectImageStrategy = "inherit_global" | "project_managed";

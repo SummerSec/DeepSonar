@@ -21,6 +21,13 @@ import {
 } from "../role-runtime-snapshot/application.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
+const GLOBAL_ONLY_RULE_KEYS = new Set([
+  "maxGlobalJobs",
+  "maxJobsPerProject",
+  "maxConcurrentProvisioning",
+  "maxConcurrentByProvider",
+  "maxConcurrentByAgentCli",
+]);
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code", "pi", "dsh"]);
 const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
   for (const key of RULE_CONCURRENCY_KEYS) {
@@ -28,6 +35,12 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
     const value = rules[key];
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1000) {
       ctx.addIssue({ code: "custom", path: [key], message: `${key} 必须是 1-1000 的整数` });
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentJobs")) {
+    const value = rules.maxConcurrentJobs;
+    if (value !== null && (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000)) {
+      ctx.addIssue({ code: "custom", path: ["maxConcurrentJobs"], message: "maxConcurrentJobs 必须是 0-1000 的整数或 null" });
     }
   }
   if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByAgentCli")) {
@@ -64,8 +77,31 @@ export function parseConcurrencyRulesPatch(input: unknown): Record<string, unkno
   return RulesPatch.parse(input);
 }
 
+export function projectJobQuotaPatchExceedsGlobal(
+  currentQuota: unknown,
+  nextQuota: unknown,
+  globalMaxJobsPerProject: number,
+): boolean {
+  return typeof nextQuota === "number"
+    && nextQuota !== currentQuota
+    && nextQuota > globalMaxJobsPerProject;
+}
+
+const GlobalRulesPatch = RulesPatch.superRefine((rules, ctx) => {
+  if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentJobs")) {
+    ctx.addIssue({ code: "custom", path: ["maxConcurrentJobs"], message: "maxConcurrentJobs 只能在项目设置中配置" });
+  }
+});
+const ProjectRulesPatch = RulesPatch.superRefine((rules, ctx) => {
+  for (const key of GLOBAL_ONLY_RULE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(rules, key)) {
+      ctx.addIssue({ code: "custom", path: [key], message: `${key} 属于全局调度上限，不能在项目设置中修改` });
+    }
+  }
+});
+
 const SettingsPatchBody = z.object({
-  rules: RulesPatch.optional(),
+  rules: ProjectRulesPatch.optional(),
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
   finding_protocol: FindingProtocolConfig.nullable().optional(),
   image_strategy: z.enum(PROJECT_IMAGE_STRATEGIES).optional(),
@@ -75,7 +111,7 @@ const SettingsPatchBody = z.object({
   ).optional(),
 });
 const GlobalSettingsPatchBody = z.object({
-  rules: RulesPatch.optional(),
+  rules: GlobalRulesPatch.optional(),
   finding_protocol: FindingProtocolConfig.nullable().optional(),
 }).refine((body) => body.rules !== undefined || body.finding_protocol !== undefined, {
   message: "at least one global setting is required",
@@ -286,6 +322,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
     );
     const projectProtocol = parseStoredFindingProtocolConfig(cfg.finding_protocol);
+    const [activeRow] = await sql`
+      SELECT COUNT(*)::int AS count FROM jobs
+      WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
     return {
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
@@ -294,6 +333,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_finding_protocol: resolveFindingProtocol(globalProtocol, projectProtocol),
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
+      active_jobs: Number(activeRow?.count ?? 0),
     };
   });
 
@@ -307,7 +347,8 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     }
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
-    const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
+    const beforeQuota = ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs) ?? null;
     const currentImagePolicy = parseProjectImagePolicy(cfg);
     const nextImageStrategy = body.image_strategy ?? currentImagePolicy.image_strategy;
     if (body.role_runtime_images !== undefined && nextImageStrategy !== "project_managed") {
@@ -321,7 +362,25 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       }
     }
     if (body.rules) {
-      cfg.rules = { ...((cfg.rules as Record<string, unknown>) ?? {}), ...body.rules };
+      const currentRules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
+      const nextRules = { ...currentRules, ...body.rules };
+      if (Object.prototype.hasOwnProperty.call(body.rules, "maxConcurrentJobs")) {
+        if (body.rules.maxConcurrentJobs === null) {
+          delete nextRules.maxConcurrentJobs;
+        } else {
+          const global = await globalRules(sql);
+          if (projectJobQuotaPatchExceedsGlobal(
+            currentRules.maxConcurrentJobs,
+            body.rules.maxConcurrentJobs,
+            global.maxJobsPerProject,
+          )) {
+            return reply.code(400).send({
+              error: `maxConcurrentJobs 不能超过全局每项目上限 ${global.maxJobsPerProject}`,
+            });
+          }
+        }
+      }
+      cfg.rules = nextRules;
     }
     if (body.roles) {
       const roles = { ...((cfg.roles as Record<string, unknown>) ?? {}) };
@@ -371,13 +430,23 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     // pending jobs do not wait for the next unrelated enqueue event.
     await sql`SELECT pg_notify('deepsonar_jobs', 'project-settings-updated')`;
     // 项目级 rules 覆盖 / roles 启停都属配置修改
+    const afterQuota = Object.prototype.hasOwnProperty.call(body.rules ?? {}, "maxConcurrentJobs")
+      ? ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs ?? null)
+      : undefined;
     await audit(req, {
       action: "settings.project_update",
       resourceType: "project",
       resourceId: id,
       projectId: id,
-      after: { changed: Object.keys(body).filter((k) => (body as Record<string, unknown>)[k] !== undefined) },
+      before: afterQuota === undefined ? undefined : { maxConcurrentJobs: beforeQuota ?? null },
+      after: {
+        changed: Object.keys(body).filter((k) => (body as Record<string, unknown>)[k] !== undefined),
+        ...(afterQuota === undefined ? {} : { maxConcurrentJobs: afterQuota }),
+      },
     });
+    const [activeRow] = await sql`
+      SELECT COUNT(*)::int AS count FROM jobs
+      WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
     return {
       rules: (cfg.rules ?? {}) as Record<string, unknown>,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
@@ -386,6 +455,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_finding_protocol: effectiveFindingProtocol,
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
+      active_jobs: Number(activeRow?.count ?? 0),
     };
   });
 }

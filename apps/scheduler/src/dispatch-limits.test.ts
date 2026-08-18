@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { config } from "./config.js";
-import { asConcurrencyLimit, globalRules, mergeGlobalRulesPatch, rulesForProject } from "./core.js";
-import { dispatchSkipReason, dispatchSlots, provisionSlots, scanDispatchPages, type DispatchCounts } from "./dispatcher.js";
+import { asConcurrencyLimit, effectiveProjectJobLimit, globalRules, mergeGlobalRulesPatch, rulesForProject } from "./core.js";
+import {
+  dispatchSkipReason,
+  dispatchSlots,
+  projectJobLimitForCandidate,
+  provisionSlots,
+  scanDispatchPages,
+  type DispatchCounts,
+} from "./dispatcher.js";
 import { sql } from "./db.js";
 import { parseConcurrencyRulesPatch } from "./routes.js";
 
@@ -51,11 +58,11 @@ test("effective global caps allow four claude-code jobs when project cap is four
     credential_metadata: {},
   };
   for (let i = 0; i < 4; i += 1) {
-    assert.equal(dispatchSkipReason(candidate, counts, rules), null);
+    assert.equal(dispatchSkipReason(candidate, counts, rules, rules.maxJobsPerProject), null);
     counts.project.set("project-1", (counts.project.get("project-1") ?? 0) + 1);
     counts.cli.set("claude-code", (counts.cli.get("claude-code") ?? 0) + 1);
   }
-  assert.equal(dispatchSkipReason(candidate, counts, rules), "project");
+  assert.equal(dispatchSkipReason(candidate, counts, rules, rules.maxJobsPerProject), "project");
 });
 
 test("CLI cap blocks the fifth job even when project cap is higher", async () => {
@@ -85,6 +92,7 @@ test("CLI cap blocks the fifth job even when project cap is higher", async () =>
       },
       counts,
       rules,
+      rules.maxJobsPerProject,
     ),
     "agent_cli",
   );
@@ -117,6 +125,7 @@ test("project cap of two blocks the third job", async () => {
       },
       counts,
       rules,
+      rules.maxJobsPerProject,
     ),
     "project",
   );
@@ -138,10 +147,10 @@ test("model concurrency uses upstream model while preserving the CLI selector", 
       },
       counts,
       {
-        maxJobsPerProject: 8,
         maxConcurrentByProvider: {},
         maxConcurrentByAgentCli: {},
       },
+      8,
     ),
     "model",
   );
@@ -193,6 +202,8 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
   );
   assert.equal(project.maxGlobalJobs, 4);
   assert.equal(project.maxJobsPerProject, 3);
+  assert.equal(project.maxConcurrentJobs, 3);
+  assert.equal(project.maxConcurrentJobsSource, "global");
   assert.equal(project.maxConcurrentProvisioning, config.limits.maxConcurrentProvisioning);
 });
 
@@ -212,6 +223,12 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByProvider: { anthropic: true } }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByProvider: { anthropic: null } }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentByProvider: { anthropic: {} } }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: true }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: {} }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: -1 }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: 1001 }));
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxConcurrentJobs: 0 }), { maxConcurrentJobs: 0 });
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxConcurrentJobs: null }), { maxConcurrentJobs: null });
   assert.deepEqual(parseConcurrencyRulesPatch({ maxGlobalJobs: 4, maxConcurrentProvisioning: 3, maxConcurrentByAgentCli: { "claude-code": 4 } }), {
     maxGlobalJobs: 4,
     maxConcurrentProvisioning: 3,
@@ -243,4 +260,107 @@ test("provisioning slots never exceed the persisted hard cap", () => {
   assert.equal(provisionSlots(2, 1), 1);
   assert.equal(provisionSlots(2, 2), 0);
   assert.equal(provisionSlots(2, 3), 0);
+});
+
+test("project maxConcurrentJobs inherits, tightens, and cannot widen the global cap", async () => {
+  assert.deepEqual(effectiveProjectJobLimit(6, undefined), { limit: 6, source: "global" });
+  assert.deepEqual(effectiveProjectJobLimit(6, null), { limit: 6, source: "global" });
+  assert.deepEqual(effectiveProjectJobLimit(6, 2), { limit: 2, source: "project" });
+  assert.deepEqual(effectiveProjectJobLimit(6, 0), { limit: 0, source: "project" });
+  assert.deepEqual(effectiveProjectJobLimit(6, 999), { limit: 6, source: "project" });
+
+  const inherited = await rulesForProject(
+    fakeDb(
+      [{ rules_json: { maxGlobalJobs: 12, maxJobsPerProject: 6 } }],
+      [{ config_json: { rules: {} } }],
+    ),
+    "project-1",
+  );
+  assert.equal(inherited.maxConcurrentJobs, 6);
+  assert.equal(inherited.maxConcurrentJobsSource, "global");
+
+  const tightened = await rulesForProject(
+    fakeDb(
+      [{ rules_json: { maxGlobalJobs: 12, maxJobsPerProject: 6 } }],
+      [{ config_json: { rules: { maxConcurrentJobs: 2 } } }],
+    ),
+    "project-1",
+  );
+  assert.equal(tightened.maxJobsPerProject, 6);
+  assert.equal(tightened.maxConcurrentJobs, 2);
+  assert.equal(tightened.maxConcurrentJobsSource, "project");
+
+  const clamped = await rulesForProject(
+    fakeDb(
+      [{ rules_json: { maxGlobalJobs: 12, maxJobsPerProject: 6 } }],
+      [{ config_json: { rules: { maxConcurrentJobs: 20 } } }],
+    ),
+    "project-1",
+  );
+  assert.equal(clamped.maxConcurrentJobs, 6);
+  assert.equal(clamped.maxConcurrentJobsSource, "project");
+});
+
+test("claim candidates carry their project policy and never fall back when it is missing", () => {
+  assert.equal(projectJobLimitForCandidate({
+    project_config_json: { rules: { maxConcurrentJobs: 0 } },
+  }, 6), 0);
+  assert.throws(
+    () => projectJobLimitForCandidate({}, 6),
+    /DISPATCH_PROJECT_CONFIG_MISSING/,
+  );
+});
+
+test("a full project quota does not skip another project's candidate", () => {
+  const counts = emptyCounts();
+  counts.project.set("project-a", 2);
+  const rules = { maxConcurrentByProvider: {}, maxConcurrentByAgentCli: {} };
+  assert.equal(
+    dispatchSkipReason(
+      {
+        project_id: "project-a",
+        agent_cli: "claude-code",
+        credential_provider: "",
+        credential_id: "",
+        model: "",
+        credential_metadata: {},
+      },
+      counts,
+      rules,
+      2,
+    ),
+    "project",
+  );
+  assert.equal(
+    dispatchSkipReason(
+      {
+        project_id: "project-b",
+        agent_cli: "claude-code",
+        credential_provider: "",
+        credential_id: "",
+        model: "",
+        credential_metadata: {},
+      },
+      counts,
+      rules,
+      6,
+    ),
+    null,
+  );
+  assert.equal(
+    dispatchSkipReason(
+      {
+        project_id: "project-c",
+        agent_cli: "claude-code",
+        credential_provider: "",
+        credential_id: "",
+        model: "",
+        credential_metadata: {},
+      },
+      counts,
+      rules,
+      0,
+    ),
+    "project",
+  );
 });

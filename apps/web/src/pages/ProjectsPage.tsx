@@ -359,6 +359,15 @@ export function ProjectsPage() {
                       >
                         {formatTime(project.created_at)}
                       </span>
+                      {typeof project.active_jobs === "number" && typeof project.max_concurrent_jobs === "number" && (
+                        <span
+                          className="font-mono text-[8px] text-zinc-600"
+                          title={project.max_concurrent_jobs_source === "project" ? "项目设置" : "继承全局"}
+                        >
+                          Job {project.active_jobs}/{project.max_concurrent_jobs}
+                          {project.max_concurrent_jobs_source === "global" ? " · 继承全局" : ""}
+                        </span>
+                      )}
                       <div className="ml-auto flex items-center gap-0.5">
                         <button
                           type="button"

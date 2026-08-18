@@ -8,9 +8,11 @@ import {
   createJob,
   ensureCanvasForTask,
   fixedPriorityForJob,
+  globalRules,
   maybeTriggerHub,
   normalizePendingJobPriority,
   patchCanvasConvergence,
+  projectJobQuotaFromConfig,
   resolveAgentSnapshotForJob,
   rulesForProject,
 } from "../../core.js";
@@ -134,6 +136,33 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
   return active.length;
 }
 
+async function withProjectJobQuota<T extends Record<string, unknown>>(
+  rows: T[],
+): Promise<Array<T & {
+  active_jobs: number;
+  max_concurrent_jobs: number;
+  max_concurrent_jobs_source: "project" | "global";
+}>> {
+  if (rows.length === 0) return [];
+  const global = await globalRules(sql);
+  const ids = rows.map((row) => String(row.id));
+  const activeRows = await sql`
+    SELECT project_id, COUNT(*)::int AS count
+    FROM jobs
+    WHERE project_id = ANY(${ids}::uuid[]) AND status IN ('claimed','provisioning','running')
+    GROUP BY project_id`;
+  const activeByProject = new Map(activeRows.map((row) => [String(row.project_id), Number(row.count)]));
+  return rows.map((row) => {
+    const quota = projectJobQuotaFromConfig(row.config_json, global.maxJobsPerProject);
+    return {
+      ...row,
+      active_jobs: activeByProject.get(String(row.id)) ?? 0,
+      max_concurrent_jobs: quota.limit,
+      max_concurrent_jobs_source: quota.source,
+    };
+  });
+}
+
 export function registerProjectTaskRoutes(app: FastifyInstance): void {
   // ---------- 项目绑定（§7 POST /projects/sync） ----------
   app.post("/projects/sync", async (req, reply) => {
@@ -166,10 +195,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
 
   app.get("/projects", async (req) => {
     const actorProjectId = req.actor?.projectId ?? null;
-    return sql`
+    const rows = await sql`
       SELECT * FROM projects
       WHERE (${actorProjectId}::uuid IS NULL OR id = ${actorProjectId})
       ORDER BY created_at DESC`;
+    return withProjectJobQuota(rows as Record<string, unknown>[]);
   });
 
   // ---------- 本地项目 CRUD（阶段 A：Plane 可选化，本地库为唯一真相） ----------
@@ -206,7 +236,8 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const [project] = await sql`SELECT * FROM projects WHERE id = ${id}`;
     if (!project) return reply.code(404).send({ error: "project not found" });
-    return project;
+    const [decorated] = await withProjectJobQuota([project as Record<string, unknown>]);
+    return decorated;
   });
 
   app.patch("/projects/:id", async (req, reply) => {

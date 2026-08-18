@@ -171,6 +171,7 @@ export async function preflightDeferredSemanticEvent(
 /** 严重度从高到低；minVerifySeverity=high 表示 critical+high */
 export const SEVERITY_RANK = ["critical", "high", "medium", "low", "info"] as const;
 export type SeverityRank = (typeof SEVERITY_RANK)[number];
+export type ConcurrentJobsSource = "project" | "global";
 
 export interface ProjectRules {
   /**
@@ -193,6 +194,13 @@ export interface ProjectRules {
   maxGlobalJobs: number;
   /** Scheduler-wide per-project active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
   maxJobsPerProject: number;
+  /**
+   * Claim-time effective active-job cap for this project.
+   * `min(global.maxJobsPerProject, project.maxConcurrentJobs ?? global.maxJobsPerProject)`.
+   */
+  maxConcurrentJobs: number;
+  /** Whether the effective project job cap came from a project override or the global default. */
+  maxConcurrentJobsSource: ConcurrentJobsSource;
   /** Scheduler 全局 provisioning admission 上限，项目规则不得覆盖。 */
   maxConcurrentProvisioning: number;
   /** 全局 Provider 总并发；优先于 Credential / 模型 / Agent CLI 配额。 */
@@ -236,6 +244,33 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
  */
 export function asConcurrencyLimit(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000 ? v : fallback;
+}
+
+/** 0 pauses new claims for that project; omit/invalid inherits the global per-project cap. */
+export function parseProjectJobQuota(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1000 ? v : undefined;
+}
+
+export function effectiveProjectJobLimit(
+  globalMaxJobsPerProject: number,
+  projectMaxConcurrentJobs: unknown,
+): { limit: number; source: ConcurrentJobsSource } {
+  const parsed = parseProjectJobQuota(projectMaxConcurrentJobs);
+  if (parsed === undefined) return { limit: globalMaxJobsPerProject, source: "global" };
+  return { limit: Math.min(globalMaxJobsPerProject, parsed), source: "project" };
+}
+
+export function projectJobQuotaFromConfig(
+  configJson: unknown,
+  globalMaxJobsPerProject: number,
+): { limit: number; source: ConcurrentJobsSource } {
+  const cfg = configJson && typeof configJson === "object" && !Array.isArray(configJson)
+    ? (configJson as Record<string, unknown>)
+    : {};
+  const rules = cfg.rules && typeof cfg.rules === "object" && !Array.isArray(cfg.rules)
+    ? (cfg.rules as Record<string, unknown>)
+    : {};
+  return effectiveProjectJobLimit(globalMaxJobsPerProject, rules.maxConcurrentJobs);
 }
 
 function asProviderLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
@@ -538,6 +573,8 @@ function envDefaultRules(): ProjectRules {
     allowEgress: true,
     maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, 20),
     maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
+    maxConcurrentJobs: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
+    maxConcurrentJobsSource: "global",
     maxConcurrentProvisioning: asConcurrencyLimit(config.limits.maxConcurrentProvisioning, 2),
     maxConcurrentByProvider: {},
     maxConcurrentByAgentCli: {},
@@ -572,6 +609,8 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
     maxGlobalJobs,
     maxJobsPerProject,
+    maxConcurrentJobs: maxJobsPerProject,
+    maxConcurrentJobsSource: "global",
     maxConcurrentProvisioning,
     maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
     maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
@@ -615,13 +654,15 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
   const r = (((p[0]?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
   const gr = ((g[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
   const global = mergeRulesLayer(gr, envDefaultRules());
-  // Concurrency caps are global scheduler hard limits. Keep them visible in
-  // project effective rules, but never let a project rules JSON widen either
-  // cap (or create a second dispatcher truth).
+  const quota = effectiveProjectJobLimit(global.maxJobsPerProject, r.maxConcurrentJobs);
+  // Global scheduler hard caps stay visible, but a project may only tighten
+  // its own claim-time job budget. Provider/CLI maps remain global-only.
   return {
     ...mergeRulesLayer(r, global),
     maxGlobalJobs: global.maxGlobalJobs,
     maxJobsPerProject: global.maxJobsPerProject,
+    maxConcurrentJobs: quota.limit,
+    maxConcurrentJobsSource: quota.source,
     maxConcurrentProvisioning: global.maxConcurrentProvisioning,
     maxConcurrentByProvider: global.maxConcurrentByProvider,
     maxConcurrentByAgentCli: global.maxConcurrentByAgentCli,

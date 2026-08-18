@@ -961,7 +961,17 @@ const OPS: Op[] = [
     summary: "合并更新全局规则",
     scope: "agents:write",
     tags: ["Settings"],
-    body: { type: "object", required: ["rules"], properties: { rules: { type: "object", additionalProperties: true } } },
+    body: {
+      type: "object",
+      required: ["rules"],
+      properties: {
+        rules: {
+          type: "object",
+          additionalProperties: true,
+          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 1–1000；maxConcurrentJobs 只能写在项目设置。",
+        },
+      },
+    },
   },
   { method: "get", path: "/projects/{id}/settings", summary: "项目规则、角色启用与镜像策略", scope: "agents:read", tags: ["Settings"] },
   {
@@ -999,7 +1009,11 @@ const OPS: Op[] = [
     body: {
       type: "object",
       properties: {
-        rules: { type: "object", additionalProperties: true },
+        rules: {
+          type: "object",
+          additionalProperties: true,
+          description: "项目规则覆盖。maxConcurrentJobs 为 0–1000 或 null（清除后继承全局 maxJobsPerProject）；不得修改全局并发键。",
+        },
         roles: {
           type: "object",
           properties: {

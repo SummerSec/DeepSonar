@@ -511,7 +511,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 每次 Gateway 请求写入 `job_usage_ledger`，通过 `attempt_id + effect_id` 幂等关联 Job Attempt；只保留 provider/model、请求序号、输入/输出/总 token 及 `settled|unknown|not_reported`，不落 prompt、响应正文、请求头和凭据。跨 chunk 的 SSE usage 只在完整记录边界解析并去重。响应已经发给 Worker 后账本写入失败不抛出未处理异常，同时递增低基数失败指标并留下 effect 对账线索。
 
-并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；Anthropic 兼容子路径按有序候选探测，仅 HTTP 404/405 允许剥离子路径后继续，鉴权、限流、网络、超时与上游错误均立即失败且不读取错误正文。启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
+并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。项目可在 `projects.config_json.rules.maxConcurrentJobs` 把本项目 claim 预算收到不高于 `maxJobsPerProject` 的值（`0` 暂停新领取）；未设置则继承全局每项目上限。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent`、启用模型 `allowed_model_ids` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；Anthropic 兼容子路径按有序候选探测，仅 HTTP 404/405 允许剥离子路径后继续，鉴权、限流、网络、超时与上游错误均立即失败且不读取错误正文。启用模型白名单后，RoleConfig 必须显式选择其中一个模型。
 
 Provision admission 是数据库 claim 事务的一部分，而不是进程内 semaphore：effective `global_settings.maxConcurrentProvisioning` 先检查当前 provisioning 资源占用，超额 Job 保持 `pending`，不写入或消耗 `claimed_at`；槽位释放后调度器显式唤醒 pending 队列，重新 claim 并推进到 `running`。`.env` 的 `PROVISION_CONCURRENCY=2` 只在该全局配置缺失时作为 fallback，不能绕过数据库门禁，也不改变其他全局/项目/Provider/凭据配额。
 
@@ -712,9 +712,10 @@ CANVAS_LAYOUT=auto
 
 调度并发的运行时权威源是设置页或 `PATCH /global-settings` 写入的
 `global_settings.rules_json`。有效值可通过 `GET /global-settings` 的
-`effective_rules` 查看：包括 `maxGlobalJobs`、`maxJobsPerProject` 与
-`maxConcurrentByAgentCli`。修改规则会发送 `pg_notify('deepsonar_jobs')`，无需
-重启即可影响后续 claim；已运行 Job 不会被强制终止。
+`effective_rules` 查看：包括 `maxGlobalJobs`、`maxJobsPerProject`、
+`maxConcurrentJobs`（项目有效上限）与 `maxConcurrentJobsSource`。项目列表/详情额外返回
+`active_jobs` / `max_concurrent_jobs` / `max_concurrent_jobs_source`。修改规则会发送
+`pg_notify('deepsonar_jobs')`，无需重启即可影响后续 claim；已运行 Job 不会被强制终止。
 
 ---
 

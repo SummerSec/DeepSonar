@@ -102,6 +102,8 @@ python scripts/deepsonar-api.py settings update --max-global-jobs 20 --max-jobs-
 python scripts/deepsonar-api.py settings update --max-concurrent-provisioning 1
 python scripts/deepsonar-api.py project-settings get <projectId>
 python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"hubEnabled": true, "allowEgress": true}'
+python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"maxConcurrentJobs": 2}'
+python scripts/deepsonar-api.py project-settings update <projectId> --rules '{"maxConcurrentJobs": null}'
 python scripts/deepsonar-api.py project-settings update <projectId> --roles "explore,analyze,review"
 python scripts/deepsonar-api.py project-settings update <projectId> --roles null
 python scripts/deepsonar-api.py readiness
