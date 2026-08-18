@@ -213,7 +213,7 @@ if (!testDatabaseUrl) {
                   WHERE link.job_id = j.id AND link.version_id = ${assetVersionId}) AS asset_links,
                (SELECT COUNT(*)::int FROM audit_logs a
                   WHERE a.project_id = c.project_id AND a.action = 'task.create'
-                    AND a.resource_id = j.id) AS audits
+                    AND a.resource_id = j.id::text) AS audits
         FROM canvases c
         JOIN jobs j ON j.canvas_id = c.id AND j.type = 'hub_reason'
         WHERE c.id = ${response.canvas_id}`;
