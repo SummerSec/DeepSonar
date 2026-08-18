@@ -42,7 +42,7 @@ findings:read
 findings:write
 ```
 
-- `jobs:control` 覆盖 cancel / resume / priority / 任务 pause/start/重试 / 报告重试 / Fact 人工验证。
+- `jobs:control` 覆盖 cancel / resume（旧冻结快照）/ rerun-current（当前配置重冻）/ priority / 任务 pause/start/重试 / 报告重试 / Fact 人工验证。
 - 画布广播与人工消息账本读取使用 `tasks:read`；发送人工消息使用 `tasks:write`，引用附件时还需要 `assets:read`。
 
 ## 按需追加

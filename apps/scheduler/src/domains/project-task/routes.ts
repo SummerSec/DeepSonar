@@ -21,6 +21,14 @@ import { revokeJobTokens } from "../../gateway.js";
 import { planePollProject } from "../../plane-sync.js";
 import { runner } from "../../runtime.js";
 import { recoverCancelledDerivedJob } from "../job-control/recovery.js";
+import {
+  SNAPSHOT_STALE,
+  frozenSnapshotStaleDetail,
+  requeueJob,
+  revokeOldRuntimeGrants,
+  type SnapshotStaleDetail,
+} from "../job-control/rerun.js";
+import { markAttemptInterrupted } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
@@ -602,29 +610,29 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       };
     }
 
-    // 清暂停 / auto_stopped，允许继续自驱
-    const convergence = await patchCanvasConvergence(sql, canvasId, {
-      hub_paused: false,
-      auto_stopped: false,
-      paused_reason: undefined,
-      paused_at: undefined,
-    });
-
     // 启动中断的 sibling role Workers 是一个恢复批次。它们必须先于更新的
     // hub_reason 原地回到 pending；Dispatcher 仍按同一 Job ID 创建新 Attempt。
-    // 旧 Attempt 上 unknown/never effects 保持原样，绝不由此入口重放。
+    // 每个 Job 默认使用旧冻结快照；任一快照相对当前受治理身份 stale 时，
+    // 整批 fail closed，禁止部分入队后静默使用旧模型。
     const interruptedBatch = await sql.begin(async (rawTx) => {
       const tx = rawTx as unknown as typeof sql;
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
       const concurrentActive = await tx`
         SELECT id, type, status FROM jobs WHERE canvas_id = ${canvasId}
           AND status IN ('pending','claimed','provisioning','running','waiting_human')
         ORDER BY created_at DESC LIMIT 5`;
       if (concurrentActive.length > 0) {
-        return { jobs: [] as Array<Record<string, unknown>>, active: concurrentActive };
+        return {
+          jobs: [] as Array<Record<string, unknown>>,
+          active: concurrentActive,
+          stale: [] as SnapshotStaleDetail[],
+          convergence: null,
+        };
       }
       const interruptedWorkers = await tx`
-        SELECT j.id, j.type, j.status, j.created_at
+        SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.status,
+               j.payload_json, j.agent_snapshot_json, j.sandbox_id, j.created_at
         FROM jobs j
         LEFT JOIN agent_roles r ON r.name = j.type
         LEFT JOIN LATERAL (
@@ -650,9 +658,32 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           )
         ORDER BY j.created_at ASC, j.id ASC
         FOR UPDATE OF j`;
+      const stale: SnapshotStaleDetail[] = [];
+      for (const worker of interruptedWorkers) {
+        const detail = await frozenSnapshotStaleDetail(tx, worker as Record<string, unknown>);
+        if (detail) stale.push(detail);
+      }
+      if (stale.length > 0) {
+        return {
+          jobs: [] as Array<Record<string, unknown>>,
+          active: [] as Array<Record<string, unknown>>,
+          stale,
+          convergence: null,
+        };
+      }
+      const convergence = interruptedWorkers.length > 0
+        ? await patchCanvasConvergence(tx, canvasId, {
+            hub_paused: false,
+            auto_stopped: false,
+            paused_reason: undefined,
+            paused_at: undefined,
+          })
+        : null;
       const rerunJobs: Array<Record<string, unknown>> = [];
       const lifecycle = createSqlJobLifecycleApplication(tx);
       for (const worker of interruptedWorkers) {
+        await markAttemptInterrupted(tx, worker.id as string, "任务使用旧冻结快照重新执行启动中断 Job");
+        await revokeOldRuntimeGrants(tx, worker.id as string, "task_resume_frozen");
         const row = await lifecycle.transitionJob(worker.id as string, "pending", {
           error: null,
           lease_expires_at: null,
@@ -673,8 +704,23 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           WHERE job_id = ANY(${ids}) AND node_type = ANY(${["job", "intent"]})`;
         await tx`SELECT pg_notify('deepsonar_jobs', 'resume_interrupted_jobs')`;
       }
-      return { jobs: rerunJobs, active: [] as Array<Record<string, unknown>> };
+      return {
+        jobs: rerunJobs,
+        active: [] as Array<Record<string, unknown>>,
+        stale: [] as SnapshotStaleDetail[],
+        convergence,
+      };
     });
+    if (interruptedBatch.stale.length > 0) {
+      const details = interruptedBatch.stale;
+      return reply.code(409).send({
+        error: "启动中断批次包含已过期冻结快照；请对列出的 Job 调用 /jobs/:id/rerun-current",
+        error_code: SNAPSHOT_STALE,
+        job_ids: details.map((detail) => detail.job_id),
+        stale_jobs: details,
+        next_action: "rerun-current",
+      });
+    }
     if (interruptedBatch.active.length > 0) {
       return {
         canvas_id: canvasId,
@@ -684,6 +730,12 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       };
     }
     if (interruptedBatch.jobs.length > 0) {
+      for (const job of interruptedBatch.jobs) {
+        if (!job.sandbox_id) continue;
+        await runner.destroy({ sandboxId: String(job.sandbox_id) }).catch((error) => {
+          console.error(`[task-resume] 沙箱回收失败 ${String(job.sandbox_id)}:`, error);
+        });
+      }
       const ids = interruptedBatch.jobs.map((job) => String(job.id));
       await audit(req, {
         action: "task.resume_session",
@@ -701,9 +753,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         canvas_id: canvasId,
         action: "rerun_interrupted_jobs" as const,
         jobs: interruptedBatch.jobs,
-        convergence,
+        convergence: interruptedBatch.convergence,
         effects_replayed: false,
-        message: `已重新入队 ${interruptedBatch.jobs.length} 个启动中断的 Worker；保留原 Job/Attempt，调度时创建新 Attempt`,
+        message: `已使用旧冻结快照重新入队 ${interruptedBatch.jobs.length} 个启动中断的 Worker；保留原 Job，调度时创建新 Attempt`,
       });
     }
 
@@ -714,19 +766,23 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         AND status IN ('failed','timeout','orphan','waiting_human')
       ORDER BY created_at DESC LIMIT 1`;
     if (resumable) {
-      const row = await createSqlJobLifecycleApplication().transitionJob(resumable.id as string, "pending", {
-        error: null,
-        lease_expires_at: null,
-        claimed_at: null,
-        started_at: null,
-        finished_at: null,
-        heartbeat_at: null,
-      });
-      if (row) {
-        await normalizePendingJobPriority(resumable.id as string);
-        await sql`
-          UPDATE canvas_nodes SET status = 'pending', updated_at = now()
-          WHERE job_id = ${resumable.id as string} AND node_type = ANY(${["job", "intent"]})`;
+      const resumed = await requeueJob(resumable.id as string, "resume-frozen");
+      if (resumed.kind === "snapshot_stale") {
+        return reply.code(409).send({
+          error: "可恢复 Job 的冻结快照已过期；请调用 /jobs/:id/rerun-current",
+          error_code: SNAPSHOT_STALE,
+          job_ids: [resumed.detail.job_id],
+          stale_jobs: [resumed.detail],
+          next_action: "rerun-current",
+        });
+      }
+      if (resumed.kind === "ok") {
+        const convergence = await patchCanvasConvergence(sql, canvasId, {
+          hub_paused: false,
+          auto_stopped: false,
+          paused_reason: undefined,
+          paused_at: undefined,
+        });
         await audit(req, {
           action: "task.resume_session",
           resourceType: "job",
@@ -734,18 +790,24 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           projectId,
           after: { canvas_id: canvasId, mode: "resume_job", from_status: resumable.status },
         });
-        await sql`SELECT pg_notify('deepsonar_jobs', 'resume_session')`;
         return reply.code(200).send({
           canvas_id: canvasId,
           action: "resume_job" as const,
-          job: row,
+          job: resumed.job,
           convergence,
+          message: "已使用旧冻结快照重新入队；同一 Job 将创建新 Attempt",
         });
       }
     }
 
     // 无可恢复 Job：强制唤醒一轮 Hub 继续决策
-    await sql.begin(async (tx) => {
+    const convergence = await sql.begin(async (tx) => {
+      const resumedConvergence = await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
+        hub_paused: false,
+        auto_stopped: false,
+        paused_reason: undefined,
+        paused_at: undefined,
+      });
       await maybeTriggerHub(
         tx as unknown as typeof sql,
         {
@@ -757,6 +819,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         },
         { manual: true, force: true, trigger: { kind: "resume_session" } },
       );
+      return resumedConvergence;
     });
     const [hub] = await sql`
       SELECT id, type, status, created_at FROM jobs

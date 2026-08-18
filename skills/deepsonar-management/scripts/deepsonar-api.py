@@ -905,6 +905,7 @@ COMMANDS = {
     "jobs.cancel": _jobs_cancel,
     "jobs.cancel-active": _jobs_cancel_active,
     "jobs.resume": lambda pos, f: call("POST", f"/jobs/{_p0(pos, 'jobId')}/resume"),
+    "jobs.rerun-current": lambda pos, f: call("POST", f"/jobs/{_p0(pos, 'jobId')}/rerun-current"),
 
     # ---------- 结果 ----------
     "findings.list": _findings_list,
