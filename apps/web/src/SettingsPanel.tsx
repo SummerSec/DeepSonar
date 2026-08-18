@@ -153,6 +153,7 @@ export function SettingsPanel({
   const [configSaved, setConfigSaved] = useState(false);
   const [configFailed, setConfigFailed] = useState(false);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
+  const [projectJobQuota, setProjectJobQuota] = useState("");
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
@@ -201,6 +202,8 @@ export function SettingsPanel({
           setEffectiveFindingProtocol(s.effective_finding_protocol);
           setImageStrategy(s.image_strategy ?? "inherit_global");
           setRoleRuntimeImages(s.role_runtime_images ?? {});
+          const storedQuota = (s.rules as { maxConcurrentJobs?: unknown }).maxConcurrentJobs;
+          setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
         })
         .catch(() => {});
     } else if (globalSection === "agents" && canLoadTab("roles")) {
@@ -278,6 +281,9 @@ export function SettingsPanel({
       ruleBody.maxJobsPerProject = rules.maxJobsPerProject;
       ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
+    } else {
+      const trimmed = projectJobQuota.trim();
+      ruleBody.maxConcurrentJobs = trimmed === "" ? null : Number(trimmed);
     }
     setRulesBusy(true);
     setRulesSaved(false);
@@ -731,24 +737,45 @@ export function SettingsPanel({
               </section>
             )}
 
-            {projectId && (
+            {projectId && settings && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
-                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
-                    <span>调度器并发（全局托管）</span>
+                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                    <span>项目调度配额</span>
                     <HelpTip>
-                      并发 claim 只读全局设置的 effective 值；项目规则不能放宽全局安全 cap。请在全局设置页调整。
+                      该项目所有任务共享此额度，不是每个任务分别拥有 M 个名额。
+                      有效上限 = min(全局每项目上限, 本项设置)；留空则继承全局。
+                      0 表示暂停领取新 Job，已运行 Job 继续完成。
+                      计数口径为 claimed / provisioning / running；pending 与 waiting_human 不占额度。
+                      修改只影响后续 claim，不终止已运行 Job。
                     </HelpTip>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
                   <div>
-                    <div className={labelCls}>全局活跃 Job 上限</div>
-                    <div className="font-mono text-[15px] text-zinc-200">{rules.maxGlobalJobs}</div>
+                    <label className={labelCls}>
+                      最大同时运行 Job 数
+                      <HelpTip>正整数收紧该项目预算；留空继承全局 {rules.maxJobsPerProject}。</HelpTip>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={rules.maxJobsPerProject}
+                      placeholder={`继承全局 ${rules.maxJobsPerProject}`}
+                      value={projectJobQuota}
+                      onChange={(e) => setProjectJobQuota(e.target.value)}
+                      className={inputCls}
+                    />
                   </div>
                   <div>
-                    <div className={labelCls}>每项目活跃 Job 上限</div>
-                    <div className="font-mono text-[15px] text-zinc-200">{rules.maxJobsPerProject}</div>
+                    <div className={labelCls}>当前运行 / 有效上限</div>
+                    <div className="font-mono text-[15px] text-zinc-200">
+                      {settings.active_jobs} / {rules.maxConcurrentJobs}
+                    </div>
+                    <div className="mt-1 font-mono text-[10px] text-zinc-600">
+                      来源：{rules.maxConcurrentJobsSource === "project" ? "项目设置" : "继承全局"}
+                      · 全局硬上限 {rules.maxJobsPerProject}
+                    </div>
                   </div>
                 </div>
               </section>

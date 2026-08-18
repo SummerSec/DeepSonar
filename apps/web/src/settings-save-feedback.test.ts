@@ -25,3 +25,10 @@ test("primary settings save buttons expose busy and saved labels", () => {
   const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
   assert.match(editor, /busy \? "保存中…" : saved \? "已保存"/);
 });
+
+test("project rules expose a claim-time concurrent job quota", () => {
+  assert.match(panel, /最大同时运行 Job 数/);
+  assert.match(panel, /maxConcurrentJobs/);
+  assert.match(panel, /当前运行 \/ 有效上限/);
+  assert.match(panel, /该项目所有任务共享此额度/);
+});

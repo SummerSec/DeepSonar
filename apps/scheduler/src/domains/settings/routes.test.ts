@@ -17,3 +17,30 @@ test("项目镜像策略 PATCH 的非法请求体返回 400", async () => {
   assert.match(response.json<{ error: string }>().error, /invalid project settings rules/);
   await app.close();
 });
+
+test("项目并发配额 PATCH 拒绝非法值与全局键", async () => {
+  const app = Fastify({ logger: false });
+  registerSettingsRoutes(app);
+
+  const globalKey = await app.inject({
+    method: "PATCH",
+    url: "/projects/11111111-1111-4111-8111-111111111111/settings",
+    payload: { rules: { maxJobsPerProject: 2 } },
+  });
+  assert.equal(globalKey.statusCode, 400);
+
+  const invalidQuota = await app.inject({
+    method: "PATCH",
+    url: "/projects/11111111-1111-4111-8111-111111111111/settings",
+    payload: { rules: { maxConcurrentJobs: -1 } },
+  });
+  assert.equal(invalidQuota.statusCode, 400);
+
+  const globalEndpoint = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { rules: { maxConcurrentJobs: 2 } },
+  });
+  assert.equal(globalEndpoint.statusCode, 400);
+  await app.close();
+});

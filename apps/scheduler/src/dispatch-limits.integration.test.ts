@@ -228,6 +228,51 @@ if (!testDatabaseUrl) {
         SELECT status, claimed_at FROM jobs WHERE id = ${blockedPendingId}`;
       assert.equal(blockedStatus.status, "pending");
       assert.equal(blockedStatus.claimed_at, null);
+
+      await sql`DELETE FROM jobs WHERE id = ANY(${[...jobIds]}::uuid[])`;
+      jobIds.length = 0;
+      await setRules({
+        maxGlobalJobs: 8,
+        maxJobsPerProject: 4,
+        maxConcurrentProvisioning: 8,
+        maxConcurrentByAgentCli: { "claude-code": 8 },
+      });
+      await sql`
+        UPDATE projects
+        SET config_json = ${sql.json({ rules: { maxConcurrentJobs: 1 } } as never)}
+        WHERE id = ${projectIds[0]}`;
+      const tightIds = await Promise.all(Array.from({ length: 3 }, () => insertJob(projectIds[0])));
+      const inheritedIds = await Promise.all(Array.from({ length: 2 }, () => insertJob(projectIds[1])));
+      const isolatedClaim = await claimPendingJobs();
+      assert.equal(isolatedClaim.filter((job) => tightIds.includes(job.id)).length, 1);
+      assert.equal(isolatedClaim.filter((job) => inheritedIds.includes(job.id)).length, 2);
+
+      const { rulesForProject } = await import("./core.js");
+      const tightRules = await rulesForProject(sql, projectIds[0]);
+      const inheritedRules = await rulesForProject(sql, projectIds[1]);
+      assert.equal(tightRules.maxJobsPerProject, 4);
+      assert.equal(tightRules.maxConcurrentJobs, 1);
+      assert.equal(tightRules.maxConcurrentJobsSource, "project");
+      assert.equal(inheritedRules.maxConcurrentJobs, 4);
+      assert.equal(inheritedRules.maxConcurrentJobsSource, "global");
+
+      await sql`
+        UPDATE projects
+        SET config_json = ${sql.json({ rules: { maxConcurrentJobs: 0 } } as never)}
+        WHERE id = ${projectIds[0]}`;
+      const pausedId = await insertJob(projectIds[0]);
+      const pausedClaim = await claimPendingJobs();
+      assert.equal(pausedClaim.some((job) => job.id === pausedId), false);
+      const [pausedStatus] = await sql`SELECT status FROM jobs WHERE id = ${pausedId}`;
+      assert.equal(pausedStatus.status, "pending");
+      const [stillRunning] = await sql`
+        SELECT COUNT(*)::int AS count FROM jobs
+        WHERE id = ANY(${tightIds}::uuid[]) AND status = 'claimed'`;
+      assert.equal(Number(stillRunning.count), 1);
+
+      await sql`UPDATE projects SET config_json = '{}'::jsonb WHERE id = ${projectIds[0]}`;
+      const clearedClaim = await claimPendingJobs();
+      assert.equal(clearedClaim.some((job) => job.id === pausedId), true);
     } finally {
       if (!databaseClosed) {
         await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;

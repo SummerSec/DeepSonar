@@ -7,6 +7,7 @@ import {
   globalRules,
   ingestEvent,
   PLATFORM_DEFAULT_AGENT_CLI,
+  projectJobQuotaFromConfig,
   recoverVerifyJobTerminal,
   rolesForProject,
   type AgentRuntimeSnapshot,
@@ -338,7 +339,8 @@ export function scanDispatchPages<T>(
 export function dispatchSkipReason(
   job: DispatchCandidate,
   counts: DispatchCounts,
-  rules: Pick<ProjectRules, "maxJobsPerProject" | "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
+  rules: Pick<ProjectRules, "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
+  projectJobLimit: number,
 ): string | null {
   const projectId = String(job.project_id);
   // Historical snapshots may omit agent_cli; use the platform default rather
@@ -347,7 +349,7 @@ export function dispatchSkipReason(
   const provider = String(job.credential_provider ?? "");
   const credentialId = String(job.credential_id ?? "");
   const model = snapshotUpstreamModel(job) ?? "";
-  if ((counts.project.get(projectId) ?? 0) >= rules.maxJobsPerProject) return "project";
+  if ((counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
   const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
   if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
   const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
@@ -483,9 +485,20 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
   const claimedJobs = await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
-    // global_settings.effective_rules 是调度器唯一权威；环境缺省值在
-    // 抢占前由 globalRules 解析。
+    // global_settings is the scheduler-wide hard cap; per-project
+    // maxConcurrentJobs may only tighten maxJobsPerProject at claim time.
     const rules = await globalRules(tx as unknown as typeof sql);
+    const pendingProjectRows = await tx`
+      SELECT p.id, p.config_json
+      FROM projects p
+      WHERE EXISTS (SELECT 1 FROM jobs j WHERE j.project_id = p.id AND j.status = 'pending')`;
+    const projectJobLimits = new Map<string, number>();
+    for (const row of pendingProjectRows) {
+      projectJobLimits.set(
+        String(row.id),
+        projectJobQuotaFromConfig(row.config_json, rules.maxJobsPerProject).limit,
+      );
+    }
     const active = await tx`
       SELECT status, project_id,
              agent_snapshot_json->>'agent_cli' AS agent_cli,
@@ -624,6 +637,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
             cli: cliCounts,
           },
           rules,
+          projectJobLimits.get(projectId) ?? rules.maxJobsPerProject,
         );
         if (skipReason) continue;
         const row = await lifecycle.claimPendingJob(job.id as string);

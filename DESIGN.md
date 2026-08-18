@@ -133,6 +133,7 @@ pending → claimed → provisioning → running
 - 唤醒：`pg_notify('deepsonar_jobs')` 为主；轮询可关。
 - 优先级：资格与排序分离（图阶段 / 收敛证据 vs 固定优先级），避免 priority 通胀。
 - **Provision admission（#158）**：并发上限由数据库 claim admission 判定，不是进程内 semaphore。超过 `global_settings.maxConcurrentProvisioning` 的 Job 保持 `pending`，不写入/消耗 `claimed_at`；释放槽位后由调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。仅在全局配置缺失时使用 `PROVISION_CONCURRENCY=2`。
+- **项目并发配额（#187）**：全局 `maxJobsPerProject` 仍是每项目安全硬上限。项目可在 `config_json.rules.maxConcurrentJobs` 收紧自己的 claim 预算（`0` 暂停领取新 Job），有效值 `min(全局每项目上限, 项目值 ?? 全局上限)`；不能放宽全局 cap。同一项目下全部任务与 Hub/Worker/Verify/Report 共用该额度。`pending` / `waiting_human` 不占额度（与 Dispatcher 活跃计数一致：`claimed` / `provisioning` / `running`）。修改只影响后续 claim，经 `pg_notify('deepsonar_jobs')` 唤醒，不终止已运行 Job；Job 快照不冻结此配额。
 - **任务执行时间（定时开始，#147 已关闭）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
 
 ### 5.1 Job Attempt 与外部效果
@@ -147,7 +148,7 @@ pending → claimed → provisioning → running
 | 层 | 内容 | 覆盖 |
 |----|------|------|
 | 全局 | `global_settings`、全局 `role_configs`、平台 skill 源、镜像市场 | 缺省 |
-| 项目 | 规则、启用角色、项目 RoleConfig、出网默认、`config_json` 中的镜像策略 | **压过全局** |
+| 项目 | 规则（含 `maxConcurrentJobs` 调度配额）、启用角色、项目 RoleConfig、出网默认、`config_json` 中的镜像策略 | **压过全局**（调度硬 cap 除外：项目只能收紧 `maxConcurrentJobs`） |
 | 任务/画布 | `target_json`、出网覆盖、Finding 协议等 | **压过项目** |
 | Job | `agent_snapshot_json` 创建时冻结 | 执行只认快照 |
 
@@ -265,6 +266,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | Hub 验证绑定与人工收口 | #153/#154/#155 | **已完成**：review/test 与 Finding 人工请求都使用结构化 canonical Finding 绑定；below-min、歧义和 trigger 错配在副作用前拒绝；Finding 详情可强制 Verify、派发绑定的 review/test 补证或收口 `needs_human`，并在需要时原子恢复同画布等待中的 Hub |
 | 共享资产卷孤儿回收 | #157 | **已完成**：启动对账合并 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，校验本地卷归属并回收无标签孤儿；删除使用 3 次指数退避，暴露清理失败计数、残留孤儿数量和最大年龄指标 |
 | 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
+| 项目级最大并发 Job 配额 | #187 | **已完成**：项目 `config_json.rules.maxConcurrentJobs` 只能收紧全局 `maxJobsPerProject`；未设置继承全局；`0` 暂停新 claim。Dispatcher 在 claim 事务内按项目有效上限跳过满额候选且不阻塞其他项目；`effective_rules` 返回有效上限与来源，Web 展示当前运行数。 |
 | Fact 过程真相工作台 | #159 | **已完成**：Schema v31 为 Fact 增加独立验证状态；画布提供 Facts 标签、服务端 keyset 分页与筛选、结构化证据/来源详情和人工验证动作。旧的幽灵 `/canvas-nodes/{id}/verification` 契约已删除，读写统一限定在 `/canvases/{id}/facts` 项目作用域内。 |
 | Agent CLI Session 时间线归一化 | #160 | **已完成**（Issue 起因是 Claude）：`queue-operation enqueue` 中带平台前缀的画布增量显示为广播，消费/移除记录不产生噪声；`user` 包装的纯 `tool_result` 不再虚增用户消息，assistant 的 thinking/text/tool_use 按原始块顺序展示且 usage 只累计一次；当前五类治理 CLI 各自解析归档格式，广播仅在归档持久化时展示。 |
 | Compose 任务 | 当前主路径 | **已落地**：同项目 confirmed Finding 作为 1–8 条冻结只读种子；Graph 隐藏项目 Finding UUID，重试前重新校验并 fail closed，Task Report 分离种子背景与本次产出。见 §6.1。 |
