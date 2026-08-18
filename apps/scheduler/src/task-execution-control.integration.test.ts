@@ -168,7 +168,8 @@ if (!testDatabaseUrl) {
       assert.equal(scheduledProjection.execution_active_count, 0);
     } finally {
       await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)} WHERE id = 'global'`;
-      await sql`DELETE FROM audit_logs WHERE project_id = ${projectId}`;
+      // Audit rows are intentionally append-only; project_id is informational
+      // and does not prevent deleting the isolated test fixture.
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await sql`DELETE FROM projects WHERE id = ${projectId}`;
