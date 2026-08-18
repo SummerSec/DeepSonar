@@ -53,4 +53,5 @@ test("project image drawer and terminal chrome follow theme tokens", () => {
 
   const tasks = readFileSync(path.join(sourceRoot, "pages", "TasksPage.tsx"), "utf8");
   assert.doesNotMatch(tasks, /\[color-scheme:dark\]/);
+  assert.doesNotMatch(tasks, /type="datetime-local"/);
 });

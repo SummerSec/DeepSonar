@@ -1,12 +1,17 @@
 export interface SelectOption {
   value: string;
   label: string;
+  hint?: string;
   keywords?: string[];
   disabled?: boolean;
 }
 
+export function optionTitle(option: Pick<SelectOption, "label" | "hint">): string {
+  return option.hint ? `${option.label} · ${option.hint}` : option.label;
+}
+
 function searchableText(option: SelectOption): string {
-  return [option.label, option.value, ...(option.keywords ?? [])].join(" ").toLowerCase();
+  return [option.label, option.hint, option.value, ...(option.keywords ?? [])].join(" ").toLowerCase();
 }
 
 export function filterSelectOptions(options: readonly SelectOption[], query: string): SelectOption[] {

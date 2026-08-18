@@ -1,7 +1,7 @@
 import { CaretDown, Check, MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { filterSelectOptions, toggleMultiValue, type SelectOption } from "./searchable-select-model";
+import { filterSelectOptions, optionTitle, toggleMultiValue, type SelectOption } from "./searchable-select-model";
 
 interface BaseProps {
   options: readonly SelectOption[];
@@ -46,8 +46,8 @@ function SelectPopup({ options, selected, multiple, clearable, onSelect, onClear
 
   const updatePosition = useCallback(() => {
     const rect = anchor.getBoundingClientRect();
-    const width = Math.min(Math.max(rect.width, 260), Math.max(280, window.innerWidth - 24));
-    const estimatedHeight = Math.min(360, 112 + options.length * 34);
+    const width = Math.min(Math.max(rect.width, 360), Math.max(24, window.innerWidth - 24));
+    const estimatedHeight = Math.min(420, 112 + options.length * 44);
     const above = window.innerHeight - rect.bottom < estimatedHeight && rect.top > estimatedHeight;
     setPosition({
       top: above ? Math.max(12, rect.top - estimatedHeight - 6) : rect.bottom + 6,
@@ -118,11 +118,14 @@ function SelectPopup({ options, selected, multiple, clearable, onSelect, onClear
         {visible.length ? visible.map((option, index) => {
           const checked = selected.includes(option.value);
           const highlighted = index === activeIndex;
-          const rowClass = "flex min-h-8 w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors disabled:opacity-35 " + (checked ? "bg-acc-500/[.12] text-acc-400" : highlighted ? "bg-[var(--surface-tint-strong)] text-[var(--text)]" : "text-[var(--muted)] hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]");
-          const markClass = "grid size-4 shrink-0 place-items-center border " + (multiple ? "rounded " : "rounded-full ") + (checked ? "border-acc-400/50 bg-acc-500/20 text-acc-400" : "border-[var(--line-strong)] text-transparent");
-          return <button id={popupId + "-option-" + index} key={option.value} type="button" role="option" aria-selected={checked} disabled={option.disabled} onMouseEnter={() => setActiveIndex(index)} onClick={() => onSelect(option.value)} className={rowClass}>
+          const rowClass = "flex min-h-8 w-full items-start gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors disabled:opacity-35 " + (checked ? "bg-acc-500/[.12] text-acc-400" : highlighted ? "bg-[var(--surface-tint-strong)] text-[var(--text)]" : "text-[var(--muted)] hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]");
+          const markClass = "grid size-4 shrink-0 place-items-center border mt-0.5 " + (multiple ? "rounded " : "rounded-full ") + (checked ? "border-acc-400/50 bg-acc-500/20 text-acc-400" : "border-[var(--line-strong)] text-transparent");
+          return <button id={popupId + "-option-" + index} key={option.value} type="button" role="option" aria-selected={checked} disabled={option.disabled} title={optionTitle(option)} onMouseEnter={() => setActiveIndex(index)} onClick={() => onSelect(option.value)} className={rowClass}>
             <span className={markClass}><Check size={10} weight="bold" /></span>
-            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block whitespace-normal break-words">{option.label}</span>
+              {option.hint ? <span className="theme-muted mt-0.5 block text-[10px] leading-4">{option.hint}</span> : null}
+            </span>
           </button>;
         }) : <div className="theme-muted px-3 py-8 text-center text-[11px]">{emptyText}</div>}
       </div>
@@ -137,8 +140,8 @@ function SelectPopup({ options, selected, multiple, clearable, onSelect, onClear
   );
 }
 
-function Trigger({ selectedLabels, placeholder, label, ariaLabel, open, popupId, triggerRef, onToggle, className }: {
-  selectedLabels: string[];
+function Trigger({ selectedOptions, placeholder, label, ariaLabel, open, popupId, triggerRef, onToggle, className }: {
+  selectedOptions: readonly SelectOption[];
   placeholder: string;
   label?: string;
   ariaLabel?: string;
@@ -148,17 +151,22 @@ function Trigger({ selectedLabels, placeholder, label, ariaLabel, open, popupId,
   onToggle: () => void;
   className?: string;
 }) {
-  const content: ReactNode = selectedLabels.length === 0
+  const title = selectedOptions.map(optionTitle).join("；") || undefined;
+  const content: ReactNode = selectedOptions.length === 0
     ? <span className="theme-muted">{placeholder}</span>
-    : selectedLabels.length === 1
-      ? <span className="truncate">{selectedLabels[0]}</span>
-      : <span className="truncate">{selectedLabels[0]} <span className="text-acc-300">+{selectedLabels.length - 1}</span></span>;
+    : selectedOptions.length === 1
+      ? <>
+          <span className="searchable-select-trigger-primary">{selectedOptions[0].label}</span>
+          {selectedOptions[0].hint ? <span className="searchable-select-trigger-hint">{selectedOptions[0].hint}</span> : null}
+        </>
+      : <span className="searchable-select-trigger-primary">{selectedOptions[0].label} <span className="text-acc-300">+{selectedOptions.length - 1}</span></span>;
   return <div className={className ?? "filter-control"}>
     {label && <span>{label}</span>}
     <button ref={triggerRef} type="button" role="combobox" aria-label={ariaLabel ?? label ?? placeholder}
+      title={title}
       aria-expanded={open} aria-controls={open ? popupId : undefined} aria-haspopup="listbox" onClick={onToggle}
       className="searchable-select-trigger flex min-h-8 min-w-[9rem] items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-[11px] outline-none transition-colors hover:border-[var(--line-strong)] focus:border-acc-400/35">
-      <span className="min-w-0 flex-1">{content}</span>
+      <span className="searchable-select-trigger-copy min-w-0 flex-1">{content}</span>
       <CaretDown size={12} className={"theme-muted shrink-0 transition-transform " + (open ? "rotate-180" : "")} aria-hidden="true" />
     </button>
   </div>;
@@ -168,9 +176,9 @@ export function SearchableSelect({ value, onChange, options, placeholder, label,
   const popupId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const selectedLabels = options.filter((option) => option.value === value).map((option) => option.label);
+  const selectedOptions = options.filter((option) => option.value === value);
   return <>
-    <Trigger selectedLabels={selectedLabels} placeholder={placeholder} label={label} ariaLabel={ariaLabel} open={open} popupId={popupId} triggerRef={triggerRef} onToggle={() => setOpen((current) => !current)} className={className} />
+    <Trigger selectedOptions={selectedOptions} placeholder={placeholder} label={label} ariaLabel={ariaLabel} open={open} popupId={popupId} triggerRef={triggerRef} onToggle={() => setOpen((current) => !current)} className={className} />
     {open && triggerRef.current && <SelectPopup options={options} selected={value ? [value] : []} multiple={false} clearable={clearable}
       onSelect={(next) => { onChange(next); setOpen(false); }} onClear={() => { onChange(""); setOpen(false); }} onClose={() => setOpen(false)} anchor={triggerRef.current} popupId={popupId} emptyText={emptyText} />}
   </>;
@@ -180,9 +188,9 @@ export function SearchableMultiSelect({ value, onChange, options, placeholder, l
   const popupId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const selectedLabels = options.filter((option) => value.includes(option.value)).map((option) => option.label);
+  const selectedOptions = options.filter((option) => value.includes(option.value));
   return <>
-    <Trigger selectedLabels={selectedLabels} placeholder={placeholder} label={label} ariaLabel={ariaLabel} open={open} popupId={popupId} triggerRef={triggerRef} onToggle={() => setOpen((current) => !current)} className={className} />
+    <Trigger selectedOptions={selectedOptions} placeholder={placeholder} label={label} ariaLabel={ariaLabel} open={open} popupId={popupId} triggerRef={triggerRef} onToggle={() => setOpen((current) => !current)} className={className} />
     {open && triggerRef.current && <SelectPopup options={options} selected={value} multiple clearable
       onSelect={(next) => onChange(toggleMultiValue(value, next))} onClear={() => onChange([])} onClose={() => setOpen(false)} anchor={triggerRef.current} popupId={popupId} emptyText={emptyText} />}
   </>;

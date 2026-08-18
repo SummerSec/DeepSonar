@@ -18,6 +18,16 @@ import {
   type RuntimeImagePullTask,
 } from "../api";
 import { SearchableSelect } from "../SearchableSelect";
+import {
+  formatPullElapsed,
+  isRuntimeImagePullBusyError,
+  projectBindingBusyNotice,
+  projectBindingDeferredNotice,
+  pullHeadline,
+  pullItemStatusLabel,
+  pullPurposeLabel,
+  shortImageRef,
+} from "../runtime-image-pull";
 import { EmptyState, HelpTip, PageHeader, PageSkeleton, formatTime } from "../ui";
 
 const TRUST_STYLE: Record<RuntimeImageTrustStatus, string> = {
@@ -344,16 +354,15 @@ export function RuntimeImagesPage() {
     };
   }, [projectId]);
   useEffect(() => {
-    if (projectId) return;
     void api.runtimeImagesPullStatus().then(setPullStatus).catch((cause) => setError(cause instanceof Error ? `获取拉取状态失败：${cause.message}` : "获取拉取状态失败"));
   }, [projectId]);
   useEffect(() => {
-    if (projectId || !pullStatus || !["queued", "running"].includes(pullStatus.status)) return;
+    if (!pullStatus || !["queued", "running"].includes(pullStatus.status)) return;
     const timer = window.setInterval(() => {
       void api.runtimeImagesPullStatus().then(setPullStatus).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [projectId, pullStatus?.status]);
+  }, [pullStatus?.status]);
   useEffect(() => {
     const timer = setInterval(() => void reload(), 5_000);
     return () => clearInterval(timer);
@@ -561,12 +570,23 @@ export function RuntimeImagesPage() {
       const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId);
       if ("saved" in result && result.saved === false) {
         setPullStatus(result.task);
-        setNotice(`正在后台准备 ${image.name}；项目绑定尚未保存，请完成后重试`);
+        setNotice(projectBindingDeferredNotice(image.name));
         return;
       }
       await reload();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (isRuntimeImagePullBusyError(message)) {
+        try {
+          const task = await api.runtimeImagesPullStatus();
+          setPullStatus(task);
+          setError(projectBindingBusyNotice(task));
+        } catch {
+          setError(projectBindingBusyNotice(null));
+        }
+        return;
+      }
+      setError(message);
     } finally {
       setBusy(null);
     }
@@ -773,24 +793,33 @@ export function RuntimeImagesPage() {
         </section>
       )}
 
-      {!projectId && pullStatus && pullStatus.status !== "idle" && (
+      {pullStatus && pullStatus.status !== "idle" && (
         <section className="surface-shell mb-5">
           <div className="surface-core p-4">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="font-mono text-[10px] tracking-[.16em] text-zinc-500">REGISTRY PULL</div>
-                <div className="mt-1 text-sm text-zinc-200">
-                  {pullStatus.status === "succeeded" ? "拉取完成" : pullStatus.status === "failed" ? "拉取完成，但有失败项" : `拉取进度 ${pullStatus.completed}/${pullStatus.total}`}
-                </div>
+                <div className="mt-1 text-sm text-zinc-200">{pullHeadline(pullStatus)}</div>
+                <p className="mt-1 text-[11px] leading-5 text-zinc-500">
+                  {projectId
+                    ? "本机没有对应 digest 时不会写入项目绑定。拉完后再点启用。"
+                    : "全局单任务拉取；失败项会保留错误原因。"}
+                  {pullStatus.purpose ? ` 来源：${pullPurposeLabel(pullStatus.purpose)}` : ""}
+                  {formatPullElapsed(pullStatus.started_at, pullStatus.finished_at) ? ` · 已用 ${formatPullElapsed(pullStatus.started_at, pullStatus.finished_at)}` : ""}
+                </p>
               </div>
               <span className="font-mono text-xs text-zinc-400">{pullStatus.completed}/{pullStatus.total}</span>
             </div>
             <div className="mt-3 space-y-1 text-xs text-zinc-400">
               {pullStatus.items.map((item) => (
-                <div key={`${item.image_key}:${item.image_ref}`} className="flex items-center justify-between gap-3">
-                  <span className="truncate">{item.image_key} · {item.image_ref}</span>
+                <div key={`${item.image_key}:${item.image_ref}`} className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 break-words" title={item.image_ref}>
+                    {item.image_key} · {shortImageRef(item.image_ref)}
+                  </span>
                   <span className={`max-w-[58%] break-words text-right ${item.status === "failed" ? "text-red-300" : item.status === "succeeded" ? "text-emerald-300" : "text-zinc-500"}`}>
-                    {item.status === "failed" ? (item.error || "失败：Scheduler 未返回具体原因") : item.status}
+                    {item.status === "failed"
+                      ? (item.error || "失败：Scheduler 未返回具体原因")
+                      : pullItemStatusLabel(item.status)}
                   </span>
                 </div>
               ))}

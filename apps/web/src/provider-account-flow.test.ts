@@ -91,6 +91,7 @@ test("Provider account flow keeps the happy path on one surface", () => {
     "CredentialConfigEditor",
     "openEditCredential",
     "provider-flow-credential-list",
+    "runtimeImageSelectOption",
     "buildSettingsConfigFromEditor",
   ]) {
     assert.ok(flow.includes(marker), `flow should expose ${marker}`);

@@ -41,5 +41,12 @@ test("credential add surface and searchable select follow console theme tokens",
   const select = readFileSync(path.join(root, "SearchableSelect.tsx"), "utf8");
   assert.match(select, /searchable-select-popup/);
   assert.match(select, /theme-drawer/);
+  assert.match(select, /optionTitle/);
+  assert.match(select, /whitespace-normal break-words/);
   assert.doesNotMatch(select, /bg-\[#111619\]|bg-black\/20|border-white\/\[\.1\]/);
+  assert.doesNotMatch(select, /flex-1 truncate/);
+
+  const imageWrap = styles.slice(styles.indexOf(".provider-flow-role-image-wrap .searchable-select-trigger {"));
+  assert.match(imageWrap, /white-space: normal/);
+  assert.match(imageWrap, /searchable-select-trigger-primary/);
 });

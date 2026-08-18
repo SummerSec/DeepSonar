@@ -111,6 +111,43 @@
   background: var(--surface-tint);
   border-color: var(--line);
 }
+.searchable-select-trigger-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.searchable-select-trigger-primary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.searchable-select-trigger-hint {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.datetime-local-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.datetime-local-trigger.is-invalid {
+  border-color: color-mix(in srgb, #ef4444 45%, var(--line-strong)) !important;
+}
+.datetime-local-popup input[type="date"],
+.datetime-local-popup input[type="time"] {
+  color-scheme: inherit;
+}
 
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; margin: 0; }
@@ -1822,7 +1859,7 @@ input[type="password"]::-webkit-textfield-decoration-container {
 .provider-flow-role {
   --role-accent: var(--accent);
   --role-cli-col: 148px;
-  --role-image-col: 220px;
+  --role-image-col: 248px;
   display: grid;
   grid-template-columns: 18px minmax(0, 1.35fr) var(--role-cli-col) var(--role-image-col) minmax(140px, 0.9fr);
   align-items: center;
@@ -1862,6 +1899,22 @@ input[type="password"]::-webkit-textfield-decoration-container {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.provider-flow-role-image-wrap .searchable-select-trigger {
+  align-items: flex-start;
+  min-height: 32px;
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.provider-flow-role-image-wrap .searchable-select-trigger > span:first-child,
+.provider-flow-role-image-wrap .searchable-select-trigger-copy,
+.provider-flow-role-image-wrap .searchable-select-trigger-primary,
+.provider-flow-role-image-wrap .searchable-select-trigger-hint {
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
+  word-break: break-word;
 }
 .provider-flow-role-cli-caption {
   color: var(--muted);
@@ -1923,7 +1976,7 @@ input[type="password"]::-webkit-textfield-decoration-container {
 @media (max-width: 1180px) {
   .provider-flow-role {
     --role-cli-col: 136px;
-    --role-image-col: 200px;
+    --role-image-col: 240px;
     gap: 8px 10px;
   }
 }
