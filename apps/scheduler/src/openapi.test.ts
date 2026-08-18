@@ -106,3 +106,17 @@ test("runtime registry channel OpenAPI is strict and project-scope aware", () =>
     ["RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"],
   );
 });
+
+test("task creation OpenAPI documents atomic rollback diagnostics", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const create = paths["/projects/{id}/tasks"]?.post as Record<string, any>;
+  assert.match(String(create.description), /同一事务/);
+  assert.match(String(create.description), /失败均不创建任务/);
+  const codes =
+    create.responses["409"].content["application/json"].schema.properties.error_code.enum;
+  assert.ok(codes.includes("RUNTIME_IMAGE_NO_TRUSTED_VERSION"));
+  assert.ok(codes.includes("RUNTIME_IMAGE_PLATFORM_UNAVAILABLE"));
+  assert.ok(codes.includes("RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"));
+  assert.ok(codes.includes("TASK_RUNTIME_SNAPSHOT_UNAVAILABLE"));
+});

@@ -125,6 +125,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
   const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [creationError, setCreationError] = useState<string | null>(null);
   const [seedCandidates, setSeedCandidates] = useState<FindingSummary[]>([]);
   const [selectedSeedIds, setSelectedSeedIds] = useState(() => new Set(initialSeedIds));
   const [seedSearch, setSeedSearch] = useState("");
@@ -199,6 +200,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
             if (!iso) return flash("请选择合法的开始时间");
             scheduledStartAt = iso;
           }
+          setCreationError(null);
           setSubmitting(true);
           try {
             const result = await api.createTask(projectId, {
@@ -217,7 +219,9 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
             }
             onDone(result.canvas_id);
           } catch (error) {
-            flash(`创建失败：${error instanceof Error ? error.message : error}`);
+            const message = error instanceof Error ? error.message : String(error);
+            setCreationError(message);
+            flash(`创建失败：${message}`);
           } finally {
             setSubmitting(false);
           }
@@ -497,6 +501,11 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           )}
         </div>
 
+        {creationError && (
+          <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/[.06] px-4 py-3 text-[11px] leading-5 text-rose-200">
+            任务未创建：{creationError}
+          </div>
+        )}
         <div className="mt-6 flex flex-col gap-3 border-t border-white/[.045] pt-4 sm:flex-row sm:items-center">
           <div className={`flex items-center gap-2 text-[11px] ${scheduleIssue ? "text-red-300" : "text-zinc-600"}`}>
             {scheduleIssue ? (
