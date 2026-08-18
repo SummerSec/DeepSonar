@@ -152,6 +152,10 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
       calls.push("reap-orphan");
       return [{ id: "orphan" }];
     },
+    reapStalledExecution: async (seconds) => {
+      calls.push(`reap-stall:${seconds}`);
+      return [{ id: "stalled" }];
+    },
     reconcileProvisioning: async () => {
       calls.push("reconcile-provision");
       return { requeued: [{ id: "reset" }], orphaned: [] };
@@ -179,6 +183,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
   assert.deepEqual(await app.reapExecutionTimeout(), [{ id: "timeout" }]);
   assert.deepEqual(await app.reapProvisionTimeout(7), [{ id: "provision" }]);
   assert.deepEqual(await app.reapLeaseOrphans(), [{ id: "orphan" }]);
+  assert.deepEqual(await app.reapStalledExecution(900), [{ id: "stalled" }]);
   assert.deepEqual(await app.reconcileProvisioning(), { requeued: [{ id: "reset" }], orphaned: [] });
   assert.deepEqual(await app.reconcileRunning(), [{ id: "orphan" }]);
   assert.equal((await app.cancelJob("cancel", "reason"))?.status, "cancelled");
@@ -190,6 +195,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
     "reap-timeout",
     "reap-provision:7",
     "reap-orphan",
+    "reap-stall:900",
     "reconcile-provision",
     "reconcile-running",
     "cancel:cancel:reason",

@@ -15,6 +15,7 @@ import {
   parseContextWindowTokens,
   providerSettingsForJobSnapshot,
   projectProviderRuntimeSnapshot,
+  qualifyPiModelRef,
   resolveContextWindowTokens,
   resolveEffectiveModel,
   resolveRequestedModel,
@@ -120,8 +121,16 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
     gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway",
     jobToken: "deepsonarjob_12345678_test-token-value",
   });
+  assert.equal(routed.length, 3);
+  assert.equal(routed[0]?.path, ".pi/agent/models.json");
+  assert.equal(routed[1]?.path, ".pi/agent/auth.json");
+  assert.equal(routed[2]?.path, ".pi/agent/settings.json");
   assert.match(routed[0]!.content, /DEEPSONAR_GATEWAY_TOKEN/);
   assert.doesNotMatch(routed[0]!.content, /long-lived|api\.openai\.com/);
+  assert.match(routed[1]!.content, /deepsonarjob_12345678_test-token-value/);
+  assert.match(routed[1]!.content, /"type": "api_key"/);
+  assert.equal(qualifyPiModelRef("gpt-5", routed), "deepsonar/gpt-5");
+  assert.equal(qualifyPiModelRef("deepsonar/gpt-5", routed), "deepsonar/gpt-5");
 });
 
 test("materializeProviderSettings returns empty for empty settings", () => {

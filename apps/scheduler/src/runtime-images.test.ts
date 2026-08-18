@@ -17,6 +17,7 @@ import {
   runtimeImageRegistryNextSyncDelayMs,
   selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
+  officialCatalogWriteMode,
   shouldReconcileRuntimeImagePromotions,
   validateRuntimeImageRegistryPolicy,
   type RuntimeImageRegistry,
@@ -32,6 +33,8 @@ const registry = (fallback: boolean): RuntimeImageRegistry => ({
 test("bundled fallback 不是可覆盖数据库状态的权威清单", () => {
   assert.equal(shouldReconcileRuntimeImagePromotions(registry(true)), false);
   assert.equal(shouldReconcileRuntimeImagePromotions(registry(false)), true);
+  assert.equal(officialCatalogWriteMode(registry(true)), "insert-only");
+  assert.equal(officialCatalogWriteMode(registry(false)), "authoritative");
 });
 
 test("远端同步失败后缩短下一次重试等待", () => {

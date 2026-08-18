@@ -68,6 +68,11 @@ export function shouldReconcileRuntimeImagePromotions(registry: RuntimeImageRegi
   return registry.fallback !== true;
 }
 
+/** Fallback catalogs may insert missing official rows; they must not rename or overwrite existing trust. */
+export function officialCatalogWriteMode(registry: RuntimeImageRegistry): "authoritative" | "insert-only" {
+  return registry.fallback === true ? "insert-only" : "authoritative";
+}
+
 export function runtimeImageRegistryNextSyncDelayMs(syncIntervalMs: number, fallback: boolean): number {
   return fallback ? Math.min(syncIntervalMs, RUNTIME_IMAGE_REGISTRY_RETRY_MS) : syncIntervalMs;
 }
@@ -913,8 +918,13 @@ export async function applyOfficialRuntimeCatalog(
   loadedRegistry: RuntimeImageRegistry,
   options: { applyEnvOverrides?: boolean } = {},
 ): Promise<RuntimeImageCatalogSyncResult> {
+  const writeMode = officialCatalogWriteMode(loadedRegistry);
+  const insertOnly = writeMode === "insert-only";
   const reconcilePromotions = shouldReconcileRuntimeImagePromotions(loadedRegistry);
   const applyEnv = options.applyEnvOverrides !== false;
+  if (insertOnly) {
+    console.warn("[runtime-images] official registry fallback; insert-only sync (no rename/revoke of existing versions)");
+  }
   const envOverrides = applyEnv ? envOfficialOverrides() : [];
   const envOnlyKeys = new Set(envOverrides.flatMap((override) => {
     const sourceImage = loadedRegistry.images.find((item) => item.image_key === override.image_key);
@@ -969,14 +979,22 @@ export async function applyOfficialRuntimeCatalog(
         promoted_at: reconcilePromotions || envOnly ? new Date() : null,
       } as never;
       if (envOnly || !reconcilePromotions) {
-        // An operator-provided env digest or bundled fallback may fill an empty
-        // catalog, but neither may resurrect a disabled/revoked version or
-        // replace the promoted remote version on a later sync.
+        // Bundled fallback may fill an empty catalog, but must not rename,
+        // overwrite image_ref, or touch trust of versions already in the DB.
+        if (insertOnly) {
+          const [existing] = await sql`
+            SELECT id FROM runtime_image_versions
+            WHERE runtime_image_id = ${image.id}
+              AND (digest = ${digest} OR version = ${version.version})
+            LIMIT 1`;
+          if (existing?.id) continue;
+        }
         const [saved] = await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
-            image_ref = EXCLUDED.image_ref, resolved_ref = EXCLUDED.resolved_ref,
-            version = EXCLUDED.version,
+            image_ref = CASE WHEN ${insertOnly} THEN runtime_image_versions.image_ref ELSE EXCLUDED.image_ref END,
+            resolved_ref = CASE WHEN ${insertOnly} THEN runtime_image_versions.resolved_ref ELSE EXCLUDED.resolved_ref END,
+            version = CASE WHEN ${insertOnly} THEN runtime_image_versions.version ELSE EXCLUDED.version END,
             platforms_json = CASE WHEN jsonb_array_length(EXCLUDED.platforms_json) > 0
               THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
             tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
@@ -1109,6 +1127,32 @@ export async function applyOfficialRuntimeCatalog(
     await sql`
       UPDATE runtime_image_versions SET promoted_at = NULL, updated_at = now()
       WHERE runtime_image_id = ${image.id} AND trust_status = 'disabled'`;
+  }
+  const [trust] = await sql`
+    SELECT count(*)::int AS n
+    FROM runtime_image_versions v
+    JOIN runtime_images ri ON ri.id = v.runtime_image_id
+    WHERE ri.official = true AND v.trust_status = 'trusted'`;
+  if (Number(trust?.n ?? 0) === 0) {
+    console.error("[runtime-images] official trust empty after catalog sync; dispatcher warmup will fail closed");
+    await sql`
+      INSERT INTO audit_logs ${sql({
+        actor_type: "system",
+        actor_id: "scheduler",
+        action: "runtime_image.official_trust_empty",
+        project_id: null,
+        resource_type: "runtime_image_catalog",
+        resource_id: null,
+        request_id: null,
+        ip: null,
+        user_agent: null,
+        before_json: null,
+        after_json: sql.json({ fallback: insertOnly, source: registry.source ?? null } as never),
+        result: "error",
+        error_code: "OFFICIAL_TRUST_EMPTY",
+      })}`.catch((error) => {
+      console.error("[audit] 系统写入失败 runtime_image.official_trust_empty:", error instanceof Error ? error.message : error);
+    });
   }
   return {
     registry,

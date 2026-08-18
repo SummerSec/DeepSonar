@@ -312,6 +312,27 @@ test("适配器只接受带完整身份的压缩事件，缺字段时记录未�
   assert.equal(observed[0]?.context_id, state.contextIdentity.context_id);
 });
 
+test("所有治理 CLI 都声明 interactiveTerminal", () => {
+  for (const adapter of Object.values(AGENT_CLI_RUNTIME_ADAPTERS)) {
+    assert.equal(adapter.capabilities.interactiveTerminal, true, adapter.id);
+    assert.doesNotThrow(() => requireAgentCliRuntimeAdapter(adapter.id));
+  }
+});
+
+test("Pi 空 content 且零 usage 的 message_end 按协议错误失败", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const failed = adapter.decodeOutput({
+    type: "message_end",
+    message: { content: [], usage: { input: 0, output: 0 } },
+  }, {});
+  assert.deepEqual(failed, [{ type: "result", subtype: "error", is_error: true, result: "PI_EMPTY_MODEL_RESPONSE" }]);
+  const state = { streamedText: "已有输出" };
+  assert.deepEqual(adapter.decodeOutput({
+    type: "message_end",
+    message: { content: [], usage: { input: 0, output: 0 } },
+  }, state), []);
+});
+
 test("Pi 只有 agent_settled 产生结算信号，agent_end 不产生成功结果", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const state = {};

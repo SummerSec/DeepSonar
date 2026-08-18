@@ -53,6 +53,8 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.equal(canTransition("claimed", "timeout"), false);
   assert.equal(canTransition("provisioning", "timeout"), false);
   assert.match(lifecycleSource, /reapExecutionTimeout/);
+  assert.match(lifecycleSource, /reapStalledExecution/);
+  assert.match(reaperSource, /reapStalledExecution/);
   assert.match(lifecycleSource, /status IN \('claimed','provisioning','running'\)/);
   assert.match(lifecycleSource, /started_at\s+IS\s+NOT\s+NULL/);
   assert.match(lifecycleSource, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);

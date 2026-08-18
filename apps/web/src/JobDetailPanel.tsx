@@ -367,6 +367,12 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   }, [detail, eventQuery, eventTypeFilter, jobEvents]);
 
   const snapshot = (detail?.job.agent_snapshot_json ?? null) as Record<string, unknown> | null;
+  const terminalSupported = (() => {
+    const runtime = snapshot?.agent_runtime;
+    if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) return false;
+    const capabilities = (runtime as { capabilities?: { interactiveTerminal?: boolean } }).capabilities;
+    return capabilities?.interactiveTerminal === true;
+  })();
   const agentCli = snapStr(snapshot, "agent_cli");
   const dshTaskMode = snapStr(snapshot, "dsh_task_mode");
   const model = snapStr(snapshot, "model");
@@ -805,7 +811,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           {/* 实时流常驻挂载：切换结果/事件 tab 只隐藏，不销毁 WS。 */}
           {detail && active && (
             <div className={`relative flex h-full min-h-0 flex-col overflow-hidden ${tab === "live" ? "" : "hidden"}`}>
-              <LiveTerminalWorkspace jobId={jobId} terminalAllowed={terminalAllowed} />
+              <LiveTerminalWorkspace jobId={jobId} terminalAllowed={terminalAllowed} terminalSupported={terminalSupported} />
             </div>
           )}
           {detail && !active && tab === "live" && (

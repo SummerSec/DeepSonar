@@ -15,7 +15,7 @@ real Agent CLIs. Each registered adapter declares:
 
 - a stable adapter id and installed CLI version;
 - required capabilities (`streamEvents`, `completionGate`, `sessionCapture`,
-  and `contextCompaction`), plus explicit control-channel capabilities and optional
+  `contextCompaction`, and `interactiveTerminal`), plus explicit control-channel capabilities and optional
   incremental messaging and reasoning support; Provider-owned reasoning is projected per CLI (`effortLevel`, `model_reasoning_effort`, `--variant`, `--thinking`, or Pi-AI profile reasoning) instead of copied as a fictitious shared config key;
 - the governed runtime image keys on which it may run;
 - a fixed command invocation and structured input/output codec.
@@ -152,8 +152,9 @@ Pi 的启动命令由适配器固定为 `pi --mode rpc --no-approve --no-extensi
 Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepsonar-control` Skill 固定物化到
 `~/.pi/agent/skills/deepsonar-control/SKILL.md`，引导调用
 `GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list`；返回的每个获准 operation 直接携带输入 JSON Schema，后续请求由短期 Job token 和
-冻结 operation allowlist 再次鉴权。Provider 配置物化为 `.pi/agent/models.json`，模型请求
-统一改写到 Gateway，长期密钥不进入 snapshot、workspace、运行清单或 evidence。
+冻结 operation allowlist 再次鉴权。Provider 配置物化为 `.pi/agent/models.json` 与
+`.pi/agent/auth.json`，`--model` 使用 `provider/model`；模型请求统一改写到 Gateway，
+长期密钥不进入 snapshot、workspace、运行清单或 evidence。空 content / 零 usage 视为协议错误。
 
 项目 `.pi` 目录不会自动加载。RoleConfig 只能冻结受治理的 `.pi/agent/extensions/` 文件；
 默认保留 `--no-extensions`，批准的扩展才通过单独的 `--extension` 参数加载。运行镜像清单

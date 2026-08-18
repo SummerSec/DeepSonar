@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import postgres from "postgres";
 import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
 import { resolveScannerImages, type ScannerName } from "./scanner-config.js";
+import { shouldRevokeOnScanFailure } from "./trust-policy.js";
 
 const execFileP = promisify(execFile);
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://deepsonar:deepsonar@localhost:5432/deepsonar";
@@ -209,20 +210,66 @@ async function inspectAndScan(row: Record<string, unknown>) {
   finally { await closeRegistrySession(); }
 }
 
+async function writeAdmissionAudit(action: string, row: Record<string, unknown>, after: Record<string, unknown>, result = "ok") {
+  await sql`
+    INSERT INTO audit_logs ${sql({
+      actor_type: "system",
+      actor_id: "image-admission",
+      action,
+      project_id: null,
+      resource_type: "runtime_image_version",
+      resource_id: String(row.id ?? ""),
+      request_id: null,
+      ip: null,
+      user_agent: null,
+      before_json: sql.json({
+        image_key: row.image_key ?? null,
+        version: row.version ?? null,
+        trust_status: row.trust_status ?? null,
+      } as never),
+      after_json: sql.json(after as never),
+      result,
+      error_code: result === "ok" ? null : action,
+    })}`.catch((error) => {
+    console.error(`[image-admission] audit failed ${action}:`, error instanceof Error ? error.message : error);
+  });
+}
+
 async function fail(row: Record<string, unknown>, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const scanSeed = row.scan_seed && typeof row.scan_seed === "object"
     ? row.scan_seed as Record<string, unknown>
     : {};
-  const revoke = row.trust_status === "trusted"
-    || (row.source_kind === "official" && scanSeed.restore_official_trust === true);
+  const restoreOfficialTrust = row.source_kind === "official" && scanSeed.restore_official_trust === true;
+  const revoke = shouldRevokeOnScanFailure({
+    sourceKind: row.source_kind,
+    trustStatus: row.trust_status,
+    restoreOfficialTrust,
+    errorMessage: message,
+  });
+  const preserveOfficialTrust = row.source_kind === "official" && row.trust_status === "trusted" && !revoke;
   await sql.begin(async (tx) => {
     await tx`UPDATE runtime_image_scans SET status = 'failed', error = ${message}, finished_at = now() WHERE id = ${row.scan_id as string}`;
+    if (preserveOfficialTrust) {
+      await tx`
+        UPDATE runtime_image_versions SET status_reason = ${message}, updated_at = now()
+        WHERE id = ${row.id as string} AND trust_status = 'trusted'`;
+      return;
+    }
     await tx`
       UPDATE runtime_image_versions SET trust_status = ${revoke ? "revoked" : "rejected"},
         status_reason = ${message}, revoked_at = ${revoke ? new Date() : null}, updated_at = now()
       WHERE id = ${row.id as string} AND trust_status <> 'revoked'`;
   });
+  if (preserveOfficialTrust) {
+    console.error(`[image-admission] ${row.image_key as string}@${row.version as string}: scan failed; official trust preserved (${message})`);
+    await writeAdmissionAudit("runtime_image.trust_preserved", row, {
+      trust_status: "trusted",
+      reason: "scan_failed_without_policy_violation",
+      error: message.slice(0, 300),
+    }, "error");
+    return;
+  }
   if (revoke) {
     const affected = await sql`
       UPDATE jobs SET status = 'cancelled', finished_at = now(), error = ${`runtime image automatically revoked: ${message}`}
@@ -232,6 +279,10 @@ async function fail(row: Record<string, unknown>, error: unknown) {
     for (const job of affected) {
       if (job.sandbox_id) await docker(["rm", "-f", job.sandbox_id as string], 30_000).catch(() => {});
     }
+    await writeAdmissionAudit("runtime_image.revoked", row, {
+      trust_status: "revoked",
+      error: message.slice(0, 300),
+    }, "ok");
   }
   console.error(`[image-admission] ${row.image_key as string}@${row.version as string}: ${message}`);
 }
