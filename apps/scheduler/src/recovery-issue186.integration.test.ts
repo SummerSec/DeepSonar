@@ -51,7 +51,7 @@ if (!testDatabaseUrl) {
     const projectId = randomUUID();
     const canvasId = randomUUID();
     const hubId = randomUUID();
-    const workerIds = Array.from({ length: 5 }, () => randomUUID());
+    const workerIds: string[] = Array.from({ length: 5 }, () => randomUUID());
     const snapshot = {
       agent_cli: "claude-code",
       credential_id: null,
