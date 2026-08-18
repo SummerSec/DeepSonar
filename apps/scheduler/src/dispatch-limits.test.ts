@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { config } from "./config.js";
 import { asConcurrencyLimit, effectiveProjectJobLimit, globalRules, mergeGlobalRulesPatch, rulesForProject } from "./core.js";
-import { dispatchSkipReason, dispatchSlots, provisionSlots, scanDispatchPages, type DispatchCounts } from "./dispatcher.js";
+import {
+  dispatchSkipReason,
+  dispatchSlots,
+  projectJobLimitForCandidate,
+  provisionSlots,
+  scanDispatchPages,
+  type DispatchCounts,
+} from "./dispatcher.js";
 import { sql } from "./db.js";
 import { parseConcurrencyRulesPatch } from "./routes.js";
 
@@ -292,6 +299,16 @@ test("project maxConcurrentJobs inherits, tightens, and cannot widen the global 
   );
   assert.equal(clamped.maxConcurrentJobs, 6);
   assert.equal(clamped.maxConcurrentJobsSource, "project");
+});
+
+test("claim candidates carry their project policy and never fall back when it is missing", () => {
+  assert.equal(projectJobLimitForCandidate({
+    project_config_json: { rules: { maxConcurrentJobs: 0 } },
+  }, 6), 0);
+  assert.throws(
+    () => projectJobLimitForCandidate({}, 6),
+    /DISPATCH_PROJECT_CONFIG_MISSING/,
+  );
 });
 
 test("a full project quota does not skip another project's candidate", () => {
