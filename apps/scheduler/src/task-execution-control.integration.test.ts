@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import postgres from "postgres";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -10,7 +11,17 @@ if (!testDatabaseUrl) {
   }, () => {});
 } else {
   test("pause/start are idempotent, database-authoritative, drain-safe, and schedule-safe", async () => {
-    process.env.DATABASE_URL = testDatabaseUrl;
+    const adminUrl = new URL(testDatabaseUrl);
+    adminUrl.pathname = "/postgres";
+    adminUrl.search = "";
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    const databaseName = `deepsonar_execution_control_${process.pid}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const targetUrl = new URL(testDatabaseUrl);
+    targetUrl.pathname = `/${databaseName}`;
+    targetUrl.search = "";
+    await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
+
+    process.env.DATABASE_URL = targetUrl.toString();
     process.env.AGENT_MODE = "fake";
 
     const Fastify = (await import("fastify")).default;
@@ -18,6 +29,7 @@ if (!testDatabaseUrl) {
     const { migrate, sql } = await import("./db.js");
     const { registerRoutes } = await import("./routes.js");
     const { claimPendingJobs } = await import("./dispatcher.js");
+    const authoritySql = postgres(targetUrl.toString(), { max: 1 });
     await migrate();
 
     const app = Fastify();
@@ -28,6 +40,7 @@ if (!testDatabaseUrl) {
     const projectId = randomUUID();
     const scheduledCanvasId = randomUUID();
     const runnableCanvasId = randomUUID();
+    const idleCanvasId = randomUUID();
     const archivedCanvasId = randomUUID();
     const scheduledPendingId = randomUUID();
     const drainingId = randomUUID();
@@ -42,6 +55,7 @@ if (!testDatabaseUrl) {
     };
     const rulesBefore = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const originalRules = rulesBefore[0]?.rules_json ?? {};
+    let stopListening: (() => Promise<void>) | null = null;
 
     const post = (canvasId: string, action: "pause" | "start") =>
       app.inject({ method: "POST", url: `/tasks/${canvasId}/${action}` });
@@ -55,6 +69,14 @@ if (!testDatabaseUrl) {
         VALUES
           (${scheduledCanvasId}, ${projectId}, 'scheduled drain', ${sql.json({ schedule } as never)}),
           (${runnableCanvasId}, ${projectId}, 'runnable gate', '{}'::jsonb),
+          (${idleCanvasId}, ${projectId}, 'idle wake', ${sql.json({
+            execution_control: {
+              paused: true,
+              paused_at: "2026-08-18T09:00:00.000Z",
+              paused_by: "operator",
+              reason: "manual_pause",
+            },
+          } as never)}),
           (${archivedCanvasId}, ${projectId}, 'archived gate', ${sql.json({
             execution_control: {
               paused: true,
@@ -63,6 +85,9 @@ if (!testDatabaseUrl) {
               reason: "manual_pause",
             },
           } as never)})`;
+      await sql`
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${idleCanvasId}, 'root', 'idle wake', 'active', '{}'::jsonb)`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, priority, agent_snapshot_json)
         VALUES
@@ -95,6 +120,13 @@ if (!testDatabaseUrl) {
       const pausedAt = pausedTarget.target_json.execution_control.paused_at;
       assert.equal(pausedTarget.target_json.execution_control.reason, "manual_pause");
       assert.deepEqual(pausedTarget.target_json.schedule, schedule);
+      const [authorityView] = await authoritySql`
+        SELECT target_json FROM canvases WHERE id = ${scheduledCanvasId}`;
+      assert.equal(
+        authorityView.target_json.execution_control.paused,
+        true,
+        "a separate Scheduler database connection must observe the committed pause gate",
+      );
 
       const duplicatePause = await post(scheduledCanvasId, "pause");
       assert.equal(duplicatePause.statusCode, 200);
@@ -122,6 +154,19 @@ if (!testDatabaseUrl) {
         changed: false,
       });
 
+      let startNotified = false;
+      let resolveNotification!: () => void;
+      const notification = new Promise<void>((resolve) => {
+        resolveNotification = resolve;
+      });
+      const listener = await authoritySql.listen("deepsonar_jobs", (payload) => {
+        if (payload === "task_start") {
+          startNotified = true;
+          resolveNotification();
+        }
+      });
+      stopListening = () => listener.unlisten();
+
       const firstStart = await post(scheduledCanvasId, "start");
       assert.deepEqual(firstStart.json(), {
         canvas_id: scheduledCanvasId,
@@ -130,6 +175,11 @@ if (!testDatabaseUrl) {
         pending_count: 1,
         changed: true,
       });
+      await Promise.race([
+        notification,
+        new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+      ]);
+      assert.equal(startNotified, true, "start must notify all Scheduler dispatch loops");
       const duplicateStart = await post(scheduledCanvasId, "start");
       assert.equal(duplicateStart.json().changed, false);
       const [startedTarget] = await sql`
@@ -153,6 +203,21 @@ if (!testDatabaseUrl) {
         "two Scheduler claim loops may claim the resumed pending Job only once",
       );
 
+      const idleStarts = await Promise.all([
+        post(idleCanvasId, "start"),
+        post(idleCanvasId, "start"),
+      ]);
+      assert.deepEqual(
+        idleStarts.map((response) => response.json().changed).sort(),
+        [false, true],
+      );
+      const [idleHubCount] = await sql`
+        SELECT COUNT(*)::int AS count
+        FROM jobs
+        WHERE canvas_id = ${idleCanvasId} AND type = 'hub_reason'
+          AND status IN ('pending','claimed','provisioning','running')`;
+      assert.equal(Number(idleHubCount.count), 1, "concurrent start must wake an idle Hub exactly once");
+
       await sql`UPDATE canvases SET status = 'archived', archived_at = now() WHERE id = ${archivedCanvasId}`;
       const archivedStart = await post(archivedCanvasId, "start");
       assert.equal(archivedStart.statusCode, 409);
@@ -167,14 +232,12 @@ if (!testDatabaseUrl) {
       assert.equal(scheduledProjection.pending_count, 1);
       assert.equal(scheduledProjection.execution_active_count, 0);
     } finally {
-      await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)} WHERE id = 'global'`;
-      // Audit rows are intentionally append-only; project_id is informational
-      // and does not prevent deleting the isolated test fixture.
-      await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
-      await app.close();
-      await sql.end({ timeout: 5 });
+      if (stopListening) await stopListening().catch(() => undefined);
+      await app.close().catch(() => undefined);
+      await sql.end({ timeout: 5 }).catch(() => undefined);
+      await authoritySql.end({ timeout: 5 }).catch(() => undefined);
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch(() => undefined);
+      await admin.end().catch(() => undefined);
     }
   });
 }
