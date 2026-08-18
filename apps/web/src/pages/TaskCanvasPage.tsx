@@ -473,7 +473,7 @@ export function TaskCanvasPage() {
     }
   };
 
-  /** 恢复会话 = 继续执行（恢复失败 Job / 解除暂停 / 空闲唤醒 Hub），不删历史 */
+  /** 继续执行：优先批量重跑启动中断 Worker；无批次时恢复单 Job 或唤醒 Hub。 */
   const resumeSession = async () => {
     if (!canvasId) return;
     setConvBusy(true);
@@ -481,11 +481,14 @@ export function TaskCanvasPage() {
     try {
       const r = await api.resumeTaskSession(canvasId);
       if (r.action === "already_running") flash(r.message ?? "任务已在执行");
-      else if (r.action === "resume_job") flash("已恢复会话，继续执行中断的 Job");
+      else if (r.action === "rerun_interrupted_jobs") {
+        flash(r.message ?? `已重新入队 ${r.jobs?.length ?? 0} 个中断 Worker（同 Job ID、新 Attempt）`);
+      }
+      else if (r.action === "resume_job") flash("已恢复单个可恢复 Job");
       else if (r.action === "start_now") flash(r.message ?? "已清除定时门禁，任务立即进入调度");
-      else flash("已恢复会话，Hub 继续决策");
+      else flash("没有中断 Worker；已唤醒 Hub 继续决策");
     } catch (e) {
-      flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);
+      flash(`继续执行失败：${e instanceof Error ? e.message : e}`);
     } finally {
       setConvBusy(false);
     }
@@ -774,13 +777,13 @@ export function TaskCanvasPage() {
                     hasActiveJob
                       ? "任务已在执行"
                       : canResumeSession
-                        ? "继续执行：恢复中断 Job 或唤醒 Hub（保留历史）"
+                        ? "优先重新执行全部启动中断 Worker（同 Job ID、新 Attempt）；否则恢复单个 Job 或唤醒 Hub"
                         : "还没有执行记录"
                   }
                   onClick={() => void resumeSession()}
                   className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  恢复会话
+                  继续执行
                 </button>
                 <button
                   type="button"

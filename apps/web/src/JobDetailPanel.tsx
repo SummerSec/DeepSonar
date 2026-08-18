@@ -581,7 +581,9 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                 [
                   "证据",
                   evidence
-                    ? `${evidence.manifest.files.length} files`
+                    ? evidence.manifest.synthetic
+                      ? `${evidence.manifest.files.length} inflight files`
+                      : `${evidence.manifest.files.length} files`
                     : active
                       ? "采集中"
                       : "无归档",
@@ -938,7 +940,9 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
               {sessionLoad === "missing" && stream.length > 0 && (
                 <>
                   <p className="text-[11px] text-amber-300/90">
-                    无 CLI 原始 Session 文件；以下为过程流（normalized stream）回退视图，不可下载原始 Session。
+                    {evidence?.manifest.capture_error
+                      ? `Session 归档不可用：${evidence.manifest.capture_error} 以下仅展示中断前过程流，不可下载原始 Session。`
+                      : "无 CLI 原始 Session 文件；以下为过程流（normalized stream）回退视图，不可下载原始 Session。"}
                   </p>
                   <SessionViewer
                     text={stream.map((row) => JSON.stringify(row)).join("\n")}
