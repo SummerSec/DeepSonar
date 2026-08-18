@@ -122,27 +122,3 @@ export async function audit(req: FastifyRequest, entry: AuditEntry): Promise<voi
     console.error(`[audit] 写入失败 ${entry.action}:`, e instanceof Error ? e.message : e);
   }
 }
-
-/** Scheduler / Worker 系统动作：无 HTTP 请求上下文。 */
-export async function auditSystem(entry: AuditEntry & { actorId?: string }): Promise<void> {
-  try {
-    await sql`
-      INSERT INTO audit_logs ${sql({
-        actor_type: "system",
-        actor_id: entry.actorId ?? "scheduler",
-        action: entry.action,
-        project_id: entry.projectId ?? null,
-        resource_type: entry.resourceType ?? null,
-        resource_id: entry.resourceId ?? null,
-        request_id: null,
-        ip: null,
-        user_agent: null,
-        before_json: entry.before === undefined ? null : sql.json(entry.before as never),
-        after_json: entry.after === undefined ? null : sql.json(entry.after as never),
-        result: entry.result ?? "ok",
-        error_code: entry.errorCode ?? null,
-      })}`;
-  } catch (e) {
-    console.error(`[audit] 系统写入失败 ${entry.action}:`, e instanceof Error ? e.message : e);
-  }
-}

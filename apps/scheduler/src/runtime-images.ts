@@ -3,7 +3,6 @@ import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { auditSystem } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
@@ -1136,13 +1135,23 @@ export async function applyOfficialRuntimeCatalog(
     WHERE ri.official = true AND v.trust_status = 'trusted'`;
   if (Number(trust?.n ?? 0) === 0) {
     console.error("[runtime-images] official trust empty after catalog sync; dispatcher warmup will fail closed");
-    await auditSystem({
-      actorId: "scheduler",
-      action: "runtime_image.official_trust_empty",
-      resourceType: "runtime_image_catalog",
-      after: { fallback: insertOnly, source: registry.source ?? null },
-      result: "error",
-      errorCode: "OFFICIAL_TRUST_EMPTY",
+    await sql`
+      INSERT INTO audit_logs ${sql({
+        actor_type: "system",
+        actor_id: "scheduler",
+        action: "runtime_image.official_trust_empty",
+        project_id: null,
+        resource_type: "runtime_image_catalog",
+        resource_id: null,
+        request_id: null,
+        ip: null,
+        user_agent: null,
+        before_json: null,
+        after_json: sql.json({ fallback: insertOnly, source: registry.source ?? null } as never),
+        result: "error",
+        error_code: "OFFICIAL_TRUST_EMPTY",
+      })}`.catch((error) => {
+      console.error("[audit] 系统写入失败 runtime_image.official_trust_empty:", error instanceof Error ? error.message : error);
     });
   }
   return {
