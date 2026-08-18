@@ -4,6 +4,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import postgres from "postgres";
+import {
+  buildCosignVerifyArgs,
+  resolveCosignVerifyPolicy,
+  skippedSignatureResult,
+  wrapCosignVerifyError,
+} from "./cosign-verify.js";
 import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
 import { resolveScannerImages, type ScannerName } from "./scanner-config.js";
 import { shouldRevokeOnScanFailure } from "./trust-policy.js";
@@ -115,6 +121,20 @@ async function scanner(name: keyof typeof scannerImages, args: string[]): Promis
   return docker(["run", "--rm", "--network", "bridge", "-v", "/var/run/docker.sock:/var/run/docker.sock", requireImmutableScanner(name), ...args]);
 }
 
+async function verifyImageSignature(resolvedRef: string) {
+  const policy = resolveCosignVerifyPolicy();
+  if (policy.mode === "skip") return skippedSignatureResult(policy.reason);
+  if (policy.mode === "misconfigured") throw new Error(`scanner_misconfigured: ${policy.reason}`);
+  try {
+    return {
+      signature: JSON.parse(await scanner("cosign", buildCosignVerifyArgs(resolvedRef, policy))),
+      status: "verified" as const,
+    };
+  } catch (error) {
+    throw wrapCosignVerifyError(error);
+  }
+}
+
 async function claimScan(): Promise<Record<string, unknown> | null> {
   return sql.begin(async (tx) => {
     const [scan] = await tx`
@@ -220,7 +240,7 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
     if (cleanupError) throw cleanupError;
   }
 
-  const signature = JSON.parse(await scanner("cosign", ["verify", "--output", "json", resolvedRef]));
+  const signatureScan = await verifyImageSignature(resolvedRef);
   const sbom = JSON.parse(await scanner("syft", [resolvedRef, "-o", "cyclonedx-json"]));
   const vulnerabilityReport = JSON.parse(await scanner("trivy", ["image", "--scanners", "vuln,secret", "--format", "json", "--severity", "HIGH,CRITICAL", resolvedRef]));
   const criticalCount = ((vulnerabilityReport.Results ?? []) as Array<{ Vulnerabilities?: Array<{ Severity?: string }> }>).flatMap((result) => result.Vulnerabilities ?? []).filter((item) => item.Severity === "CRITICAL").length;
@@ -228,13 +248,13 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   if (criticalCount > 0 || secretCount > 0) throw new Error(`admission policy failed: critical=${criticalCount}, secrets=${secretCount}`);
 
   const platforms = [`${String(inspect.Os ?? "linux")}/${String(inspect.Architecture ?? "unknown")}`];
-  const scanSummary = { contract: "passed", signature: "verified", malware: "clean", licenses: "captured-in-sbom", critical: criticalCount, secrets: secretCount, setuid, worker_id: workerId };
+  const scanSummary = { contract: "passed", signature: signatureScan.status, malware: "clean", licenses: "captured-in-sbom", critical: criticalCount, secrets: secretCount, setuid, worker_id: workerId };
   await sql.begin(async (tx) => {
     await tx`
       UPDATE runtime_image_versions SET resolved_ref = ${resolvedRef}, digest = ${digest},
         platforms_json = ${tx.json(platforms as never)}, tools_json = ${tx.json(manifest.tools as never)},
         tools_manifest_sha256 = ${toolsManifestSha256},
-        sbom_json = ${tx.json(sbom as never)}, signature_json = ${tx.json(signature as never)},
+        sbom_json = ${tx.json(sbom as never)}, signature_json = ${tx.json(signatureScan.signature as never)},
         scan_summary_json = ${tx.json(scanSummary as never)}, size_bytes = ${Number(inspect.Size ?? 0)},
         scanned_at = now(),
         trust_status = CASE WHEN trust_status = 'trusted' OR ${restoreOfficialTrust} THEN 'trusted' ELSE 'quarantined' END,

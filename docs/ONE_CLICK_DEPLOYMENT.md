@@ -134,6 +134,8 @@ Provision 并发是数据库 claim admission，不是进程内 semaphore：超�
 
 未设或留空（含仅空白）时回退 `apps/image-admission` 内置的官方 pin（与 `deploy/.env.example` 相同）。显式覆盖必须仍是 digest；tag 或非法值会 fail closed，进程拒绝启动。Release 回写 `.env.example` 只改 `DEEPSONAR_IMAGE_TAG`，这四行 pin 会原样保留。
 
+Cosign 3 默认不对官方 catalog digest 验签（`signature: skipped`）。要强制验签时同时配置 `DEEPSONAR_COSIGN_KEY`，或 Cosign 3 keyless 的 `DEEPSONAR_COSIGN_CERTIFICATE_IDENTITY`（或 `_REGEXP`）加上 `DEEPSONAR_COSIGN_CERTIFICATE_OIDC_ISSUER`（或 `_REGEXP`）。缺 identity/`--key` 时不会发出 `cosign verify`。
+
 ### 专项运行时（可选）
 
 | image key | 用途 |

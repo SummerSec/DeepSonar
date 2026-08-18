@@ -46,6 +46,13 @@ function sizeLabel(bytes: number | null) {
   return bytes ? `${Math.round(bytes / 1024 / 1024)} MiB` : "—";
 }
 
+function signatureLabel(version: RuntimeImageVersion): string {
+  const status = version.scan_summary_json.signature;
+  if (status === "skipped" || version.signature_json?.skipped) return "跳过";
+  if (status === "verified" || version.signature_json) return "已验证";
+  return "—";
+}
+
 /** 系统默认运行环境（RoleConfig.runtime_image_key=null 时调度器使用的最小 Base） */
 function isSystemBaseRuntime(image: RuntimeImageSummary): boolean {
   return image.image_key === "deepsonar-base";
@@ -1269,7 +1276,7 @@ export function RuntimeImagesPage() {
                       </div>
                       <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-zinc-500">
                         <span>平台 {platformLabel(version.platforms_json)}</span>
-                        <span>签名 {version.signature_json ? "已验证" : "—"}</span>
+                        <span>签名 {signatureLabel(version)}</span>
                         <span>SBOM {version.sbom_json ? "已生成" : "—"}</span>
                         <span>扫描 {formatTime(version.scanned_at)}</span>
                         <span>大小 {version.size_bytes ? `${Math.round(version.size_bytes / 1024 / 1024)} MiB` : "—"}</span>
