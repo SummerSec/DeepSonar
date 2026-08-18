@@ -8,6 +8,8 @@ import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { sharedAssetsVolumeManager } from "./runtime.js";
+import { config } from "./config.js";
+import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
@@ -20,7 +22,8 @@ import { sharedAssetsVolumeManager } from "./runtime.js";
  */
 export async function reconcileOnBoot(): Promise<void> {
   const lifecycle = createSqlJobLifecycleApplication();
-  const containers = await listDeepSonarContainers();
+  const managesLocalDocker = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker";
+  const containers = managesLocalDocker ? await listDeepSonarContainers() : [];
   const activeJobs = await sql`
     SELECT j.id, j.status, j.sandbox_id, a.id AS attempt_id
       FROM jobs j
@@ -100,6 +103,12 @@ export async function reconcileOnBoot(): Promise<void> {
   }
 
   await refreshSharedAssetsOrphanMetrics();
+  if (managesLocalDocker) {
+    const cleanup = await cleanupManagedResourcesOnce();
+    if (cleanup.removedContainers + cleanup.removedVolumes + cleanup.failures > 0) {
+      console.log("[reconcile] desired-state cleanup:", cleanup);
+    }
+  }
 
   if (containers.length > 0 || provisionRecovery.requeued.length > 0 || provisionRecovery.orphaned.length > 0 || orphaned.length > 0) {
     console.log(`[reconcile] 完成：容器 ${containers.length}，重置 ${provisionRecovery.requeued.length}，provision orphan ${provisionRecovery.orphaned.length}，running orphan ${orphaned.length}`);

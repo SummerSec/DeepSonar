@@ -8,6 +8,7 @@ import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { planeWriteback } from "./plane-sync.js";
+import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -95,12 +96,26 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
 }
 
 export function startReaper() {
+  let running = false;
   const timer = setInterval(() => {
-    void reapOnce()
-      .then((r) => {
-        if (r.timeouts + r.orphans + r.provisionStuck + r.stalled > 0) console.log("[reaper]", r);
-      })
-      .catch((e) => console.error("[reaper]", e));
+    if (running) return;
+    running = true;
+    void (async () => {
+      const result = await reapOnce();
+      if (result.timeouts + result.orphans + result.provisionStuck + result.stalled > 0) {
+        console.log("[reaper]", result);
+      }
+      if (config.runtime.agentMode === "real" && config.runtime.provider === "local-docker") {
+        const cleanup = await cleanupManagedResourcesOnce();
+        if (cleanup.removedContainers + cleanup.removedVolumes + cleanup.failures > 0) {
+          console.log("[cleanup]", cleanup);
+        }
+      }
+    })()
+      .catch((e) => console.error("[reaper]", e))
+      .finally(() => {
+        running = false;
+      });
   }, config.timeouts.reaperIntervalSec * 1000);
   return () => clearInterval(timer);
 }

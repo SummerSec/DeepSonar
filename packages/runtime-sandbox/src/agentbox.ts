@@ -31,10 +31,61 @@ import {
 import type { ProvisionInput, RunHandle, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 
 const execFileP = promisify(execFile);
+const CANONICAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const CONTAINER_REMOVE_MAX_ATTEMPTS = 5;
+export const CONTAINER_REMOVE_RETRY_BASE_DELAY_MS = 500;
+export const CONTAINER_REMOVE_TIMEOUT_MS = 120_000;
 
 /** docker CLI 兜底（进程重启后内存注册表丢失，按持久化 sandboxId 直查引擎） */
 async function docker(...args: string[]): Promise<string> {
   return dockerTimed(15_000, args);
+}
+
+type DockerCommand = (...args: string[]) => Promise<string>;
+type Sleep = (delayMs: number) => Promise<void>;
+
+async function sleep(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function deleteSandboxBestEffort(sandbox: Sandbox, timeoutMs = 15_000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      sandbox.delete(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`agentbox delete timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isNoSuchContainerError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such container|no container with name or id .* found|container .* (?:not found|does not exist)/i.test(message);
+}
+
+export async function removeContainerWithRetry(
+  containerId: string,
+  executeDocker: DockerCommand = (...args) => dockerTimed(CONTAINER_REMOVE_TIMEOUT_MS, args),
+  wait: Sleep = sleep,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CONTAINER_REMOVE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await executeDocker("rm", "-f", containerId);
+      return;
+    } catch (error) {
+      if (isNoSuchContainerError(error)) return;
+      lastError = error;
+      if (attempt < CONTAINER_REMOVE_MAX_ATTEMPTS) {
+        await wait(CONTAINER_REMOVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+      }
+    }
+  }
+  throw lastError;
 }
 
 async function dockerTimed(timeoutMs: number, args: string[], signal?: AbortSignal): Promise<string> {
@@ -799,6 +850,10 @@ export function bindProvisionAbortSignal(
 }
 
 export class AgentboxRunner implements SandboxRunner {
+  constructor(
+    private readonly removeContainer: (containerId: string) => Promise<void> = forceRemoveContainer,
+  ) {}
+
   async provision(input: ProvisionInput): Promise<RunHandle> {
     if (input.signal?.aborted) throw new Error("provision 已取消");
     const provisionKey = `${input.jobId}:${input.attemptId}`;
@@ -900,12 +955,33 @@ export class AgentboxRunner implements SandboxRunner {
   async destroy(handle: RunHandle): Promise<void> {
     const sessions = terminalSessions.get(handle.sandboxId);
     terminalSessions.delete(handle.sandboxId);
-    if (sessions) await Promise.allSettled([...sessions].map((session) => session.close()));
+    const sessionFailures: unknown[] = [];
+    if (sessions) {
+      const closed = await Promise.allSettled([...sessions].map((session) => session.close()));
+      sessionFailures.push(...closed.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => result.reason));
+    }
     const s = sandboxes.get(handle.sandboxId);
     sandboxes.delete(handle.sandboxId);
-    await s?.delete().catch(() => {});
-    // 兜底：内存注册表没有（进程重启后）或 SDK 删除失败，按持久化 sandboxId 强删
-    await docker("rm", "-f", handle.sandboxId).catch(() => {});
+    let sdkDeleteError: unknown;
+    if (s) {
+      try {
+        await deleteSandboxBestEffort(s);
+      } catch (error) {
+        sdkDeleteError = error;
+      }
+    }
+    // SDK delete/autoRemove 只是一条尝试；持久化 sandboxId 的引擎删除才是最终确认。
+    try {
+      await this.removeContainer(handle.sandboxId);
+    } catch (error) {
+      throw new AggregateError(
+        [...sessionFailures, ...(sdkDeleteError === undefined ? [] : [sdkDeleteError]), error],
+        `sandbox destroy failed: ${handle.sandboxId}`,
+      );
+    }
+    if (sessionFailures.length > 0) {
+      throw new AggregateError(sessionFailures, `sandbox session cleanup failed: ${handle.sandboxId}`);
+    }
   }
 
   async isAlive(handle: RunHandle): Promise<boolean> {
@@ -1007,43 +1083,48 @@ export interface DeepSonarContainer {
   state: string;
 }
 
-/** 枚举所有带 deepsonar.job 标签的容器（含已退出；autoRemove 的通常不留尸体） */
+export function parseDeepSonarContainerRows(out: string): DeepSonarContainer[] {
+  return out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [containerId = "", labels = "", state = ""] = line.split("\t");
+      const jobId = labels
+        .split(",")
+        .map((pair) => pair.trim())
+        .find((pair) => pair.startsWith("deepsonar.job="))
+        ?.slice("deepsonar.job=".length);
+      const attemptId = labels
+        .split(",")
+        .map((pair) => pair.trim())
+        .find((pair) => pair.startsWith("deepsonar.attempt="))
+        ?.slice("deepsonar.attempt=".length);
+      return {
+        containerId,
+        jobId: CANONICAL_UUID_RE.test(jobId ?? "") ? jobId!.toLowerCase() : "",
+        attemptId: CANONICAL_UUID_RE.test(attemptId ?? "") ? attemptId!.toLowerCase() : "",
+        state,
+      };
+    })
+    .filter((container) => container.containerId && container.jobId && container.attemptId);
+}
+
+/** 只枚举同时带 canonical Job/Attempt 双标签的容器（含已退出）。 */
 export async function listDeepSonarContainers(): Promise<DeepSonarContainer[]> {
-  try {
-    // 注意：docker ps 的 .Labels 是字符串（非 map），不能直接 index，取回后自行解析
-    const out = await docker(
-      "ps", "-a",
-      "--filter", "label=deepsonar.job",
-      "--format", "{{.ID}}\t{{.Labels}}\t{{.State}}",
-    );
-    return out
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((l) => {
-        const [containerId, labels, state] = l.split("\t");
-        const jobId = labels
-          .split(",")
-          .map((kv) => kv.trim())
-          .find((kv) => kv.startsWith("deepsonar.job="))
-          ?.slice("deepsonar.job=".length);
-        const attemptId = labels
-          .split(",")
-          .map((kv) => kv.trim())
-          .find((kv) => kv.startsWith("deepsonar.attempt="))
-          ?.slice("deepsonar.attempt=".length);
-        return { containerId, jobId: jobId ?? "", attemptId: attemptId ?? "", state };
-      })
-      .filter((c) => c.containerId && c.jobId);
-  } catch (e) {
-    console.error("[reconcile] docker ps 失败（跳过容器侧核对）:", e instanceof Error ? e.message : e);
-    return [];
-  }
+  // 注意：docker ps 的 .Labels 是字符串（非 map），不能直接 index，取回后自行解析。
+  const out = await docker(
+    "ps", "-a",
+    "--filter", "label=deepsonar.job",
+    "--filter", "label=deepsonar.attempt",
+    "--format", "{{.ID}}\t{{.Labels}}\t{{.State}}",
+  );
+  return parseDeepSonarContainerRows(out);
 }
 
 /** 强删容器（孤儿回收） */
 export async function forceRemoveContainer(containerId: string): Promise<void> {
-  await docker("rm", "-f", containerId);
+  await removeContainerWithRetry(containerId);
 }
 
 // ---------- 真实 Agent 运行（§8 事件通道 + 动态控制 MCP） ----------

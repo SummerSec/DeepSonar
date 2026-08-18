@@ -3,7 +3,7 @@ import websocket from "@fastify/websocket";
 import { getSharedAssetBlobStore } from "./blob-store/index.js";
 import { config } from "./config.js";
 import { migrate, sql } from "./db.js";
-import { drainInFlight, startDispatcher } from "./dispatcher.js";
+import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
@@ -16,10 +16,12 @@ import {
 import { preheatManagedGateway } from "@deepsonar/runtime-sandbox";
 import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
 import { startSkillSourceBootSync } from "./skill-sources.js";
-import { markDispatcherEnabled } from "./startup-status.js";
+import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status.js";
 import { normalizePendingJobPriorities } from "./core.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
 import { ensureDefaultAdmin } from "./users.js";
+import { refreshHostDiskPressure, startHostDiskMonitor } from "./host-disk.js";
+import { startRuntimeImageGc } from "./runtime-image-gc.js";
 
 async function main() {
   // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
@@ -43,6 +45,7 @@ async function main() {
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();
+  await refreshHostDiskPressure();
   const stopSkillSourceBootSync = startSkillSourceBootSync();
 
   const app = Fastify({
@@ -72,6 +75,10 @@ async function main() {
   const stopPlane = startPlaneSync();
   const stopTransfer = startTransferWorker();
   const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
+  const stopRuntimeImageGc = startRuntimeImageGc();
+  const stopHostDiskMonitor = startHostDiskMonitor(() => {
+    if (dispatcherRuntimeStatus().enabled) kickDispatcher();
+  });
 
   const shutdown = async () => {
     stopDispatcher();
@@ -81,6 +88,8 @@ async function main() {
     stopPlane();
     stopTransfer();
     stopRuntimeImageRegistrySync();
+    stopRuntimeImageGc();
+    stopHostDiskMonitor();
     stopSkillSourceBootSync();
     // 优雅退出（§12.2）：先等在执行的 job 收尾，再关 HTTP 与 DB
     await drainInFlight(15_000);

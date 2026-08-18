@@ -144,6 +144,7 @@ pending → claimed → provisioning → running
 - provision 的 Attempt、效果、资源身份和 `jobs.sandbox_id` 在同一个事务收口；用户取消先提交 Job/Attempt 终态，再通过进程内句柄触发 `AbortSignal`/runtime cancel。dispatcher 在调用 provider 前重查 `provisioning`，runtime 在安装监听后重查 signal，覆盖取消与句柄注册的两个竞态窗口；超时复用同一幂等中止路径，并等待外部 create 收口及清理完成后才释放 provision 槽位；迟到成功的 handle 先销毁，异常/abort 还会按 Job/Attempt 标签扫除迟到容器。Job 与 Attempt 终态也在同一事务提交。
 - 启动对账按 Attempt phase/effect 账本分类：只有尚未开始且无效果的 `preparing` 可回到 `pending`；`effect_pending/unknown` 统一转 `orphan`，清理沙箱、Token、画布和外部同步。
 - **启动中断批量恢复（#186）**：启动 reconcile 会先批量把 running Worker 收口为 `orphan`，但 role Worker 不在对账阶段推进画布或派生新 Hub，避免更新的 Hub 抢占人工恢复入口。`POST /tasks/:canvasId/resume-session` 在画布无活动 Job 时优先把该画布全部启动中断 role Worker 按原 Job ID 重新入队，响应 `action=rerun_interrupted_jobs` 与完整 `jobs[]`；Dispatcher 随后建立新 Attempt。旧 Attempt 与 `unknown` / `replay_policy=never` effect 原样保留，不自动重放；没有中断批次时才恢复单 Job 或唤醒 Hub。
+- **资源 desired-state 对账（#199）**：Agentbox destroy 的最终容器删除使用 120 秒单次上限、最多 5 次指数退避，只有明确 `no such container` 算幂等成功，耗尽后向上抛错。启动 reconcile 与每轮 Reaper 都以 DB 中 `claimed/provisioning/running` Job + active Attempt 为 desired state，只枚举同时具有 canonical `deepsonar.job` / `deepsonar.attempt` 标签的容器，以及严格 `deepsonar-assets-<canonical Job UUID>` 名称/受管标签的本地卷；非活跃资源每轮继续重试且清理防重入。禁止 `docker system prune`、前缀猜测容器归属或删除非 DeepSonar 资源。
 
 ## 6. 配置层级
 
@@ -208,6 +209,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 **画布广播**：真注入路径见 §4.2；账本为唯一投递真相，Session 文本仅作旁证。
 
+**宿主资源清理指标（#199）**：`/metrics` 暴露 desired-state 清理残留容器/卷、连续失败轮次和按资源分类失败 counter；安全 runtime image GC 暴露候选、删除、容器占用保留与失败；Node `statfs` 宿主文件系统探针暴露使用率和 `ok/warning/error` 水位。指标抓取路径只读进程内结果，不在抓取时调用 Docker。
+
 **鉴权（HTTP + WS，#38 已关）**：
 
 - `DEEPSONAR_AUTH_REQUIRED=true` 时 HTTP 需 Bearer（用户会话或 API Token + scope）。
@@ -220,6 +223,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
 - 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。项目按全局继承或项目托管策略选择受治理 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome audit/test/fuzz 是官方但 project-opt-in 的专项运行时。
+- **Runtime image GC（#199）**：可配置周期，`0` 关闭；只对 DB `runtime_image_versions` 及其 registry ref 账本中可证明 digest 一致的 named immutable ref 调用无 `-f` 的 `docker image rm`。保护全部 promoted 版本、每产品当前/最近回滚版、项目 `selected_version_id` 显式 pin，以及 pending/active/waiting Job 快照引用。删除前查询所有容器的 ancestor，删除竞态仍由 Docker 非强制引用门保留；无安全 ref、检查失败或容器占用一律 fail closed。绝不执行 broad prune。
+- **宿主磁盘水位（#199）**：Scheduler 用 Node `statfs` 检查配置路径所在文件系统；warning 只告警，error 使 `/readiness` 返回 `HOST_DISK_PRESSURE` 并暂停 Dispatcher 新 claim，探针不可读也 fail closed；两者都不终止已运行 Job。水位恢复后监控器显式唤醒事件驱动 Dispatcher。生产 real compose 只读挂载 `DEEPSONAR_HOST_DISK_SOURCE` 到探针路径。
 - 出网：`allow_egress` 任务级冻结；所有 real Job 的模型请求都经 Scheduler-owned gateway proxy。允许出网的沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，并通过同时接入两网的固定 proxy 到达 Scheduler。
 - Model Gateway 上游单次超时默认为 3,000 秒，但每次 attempt 取 `min(3_000_000ms, Job 剩余时间)`；仅在客户端响应头/响应体尚未开始发送前，对网络/超时和 HTTP 408/429/500/502/503/504 做最多 3 次指数退避加 jitter，永久 HTTP 错误不重试，已开始的 SSE/响应体绝不重放。Job 的 `used_requests` 按沙箱客户端请求只递增一次；上游 attempt/retry/exhausted 仅记录 provider、reason 等低基数指标，不记录请求体、URL 或 Job ID。网络/超时耗尽返回稳定 `502 upstream_unreachable`，最终上游 HTTP 响应原样直通。
 - Gateway 重试耗尽并导致 Agent CLI 退出后，runtime runner 只对明确的 HTTP 408/429/500/502/503/504、timeout 与 network 错误，在原沙箱使用已捕获的原 session ID 最多恢复 3 次（1/2/4 秒退避）。Claude Code 使用 `--resume`，Codex 使用 `exec resume`，OpenCode 使用 `--session`；400/401/403、普通退出、缺 session 或恢复耗尽均直接失败，不允许 `--continue`、latest session 或新会话兜底。恢复过程写入低基数 `run.retrying` / `run.retry_skipped`，已成功控制副作用继续由运行时去重与数据库幂等键保护。
@@ -281,6 +286,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
 | 项目级最大并发 Job 配额 | #187 | **已完成**：项目 `config_json.rules.maxConcurrentJobs` 只能收紧全局 `maxJobsPerProject`；未设置继承全局；`0` 暂停新 claim。Dispatcher 在 claim 事务内按项目有效上限跳过满额候选且不阻塞其他项目；`effective_rules` 返回有效上限与来源，Web 展示当前运行数。 |
 | Canvas 任务暂停/开始 | #188 | **已完成**：`target_json.execution_control` 的数据库权威 drain pause；成对幂等 API、Dispatcher Canvas 锁门禁、durable pending、start 精确唤醒、列表/画布 `pausing|paused|running` 投影和主操作。 |
+| vfs 宿主资源回收与磁盘水位 | #199 | **已完成**：Agentbox 销毁不吞最终删除错误；容器有界指数重试；启动/Reaper desired-state 对账严格限定双 UUID 标签和受管卷；旧 runtime image 仅按 DB 不可变 ref 与保护集合执行非强制 GC；`statfs` warning/error 水位进入 readiness、指标和 Dispatcher claim 门，恢复后自动唤醒。无 broad prune、无非 DeepSonar 资源删除。 |
 | Fact 过程真相工作台 | #159 | **已完成**：Schema v31 为 Fact 增加独立验证状态；画布提供 Facts 标签、服务端 keyset 分页与筛选、结构化证据/来源详情和人工验证动作。旧的幽灵 `/canvas-nodes/{id}/verification` 契约已删除，读写统一限定在 `/canvases/{id}/facts` 项目作用域内。 |
 | Agent CLI Session 时间线归一化 | #160 | **已完成**（Issue 起因是 Claude）：`queue-operation enqueue` 中带平台前缀的画布增量显示为广播，消费/移除记录不产生噪声；`user` 包装的纯 `tool_result` 不再虚增用户消息，assistant 的 thinking/text/tool_use 按原始块顺序展示且 usage 只累计一次；当前五类治理 CLI 各自解析归档格式，广播仅在归档持久化时展示。 |
 | Compose 任务 | 当前主路径 | **已落地**：同项目 confirmed Finding 作为 1–8 条冻结只读种子；Graph 隐藏项目 Finding UUID，重试前重新校验并 fail closed，Task Report 分离种子背景与本次产出。见 §6.1。 |

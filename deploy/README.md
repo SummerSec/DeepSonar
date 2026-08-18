@@ -17,6 +17,12 @@ real 模式使用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 写入共享资产只�
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
 该值只能覆盖为 immutable digest；启动和拉取路径会显式预拉，失败即停止部署。fake 模式不使用 helper。
 
+real compose 将 `DEEPSONAR_HOST_DISK_SOURCE`（默认 `/var/lib/docker`）只读挂载为
+Scheduler 的 `/host-disk`，仅供 Node `statfs` 水位检查。rootless Docker/vfs 必须把它改成
+实际 data-root（例如 `/home/admin/.local/share/docker`）。达到 error 阈值会暂停新 Job claim，
+恢复后自动唤醒；`DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC=0` 可关闭安全镜像 GC。GC 只删除 DB
+已知且未被 promoted/回滚版/项目 pin/非终态 Job/容器保护的 immutable runtime ref，不执行 prune。
+
 `image-admission` 的 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。
 未设或留空回退官方 pin（见 `deploy/.env.example`）；非法覆盖仍会 fail closed。
 
