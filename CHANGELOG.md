@@ -17,7 +17,7 @@
 - 启动对账批量 orphan 的 sibling Worker 不再被新 Hub 抢占恢复入口；一次任务恢复按原 Job ID 批量重新入队并建立新 Attempt，旧 unknown effect 不自动重放。未 finalize 的 normalized stream 以有界 synthetic manifest 保持可见。
 - 官方镜像清单不可达时 bundled fallback 只补缺失版本，不覆盖现有引用或信任；普通网络/拉取扫描失败不再撤销官方可信版本。
 - Pi Gateway 运行时补齐 `auth.json`、`provider/model` 选择与空响应失败收口，并增加无语义产出的停滞 Reaper。
-- DSH Cordis 使用合法的 agent-spine bash 配置、唯一工具注册和显式固定 integrity 的 subprocess implementation；Base 镜像新建或复用时均执行断网 JSON-RPC 启动冒烟。
+- DSH 完整 package closure 统一升级并固定到 `0.1.0-rc.7`，Cordis 使用合法的 agent-spine bash 配置、唯一工具注册和显式固定 integrity 的 subprocess implementation；Base 镜像新建或复用时均执行断网 JSON-RPC 启动冒烟。
 - Agent stderr 以精确脱敏、总量有界的 normalized evidence 保存，Job 错误仍保持短摘要。
 - 本地 Docker/vfs 宿主增加受管容器/卷周期 desired-state 清理、非强制 runtime image GC 和磁盘水位 claim 门禁；禁止 broad prune 和删除非 DeepSonar 资源。
 

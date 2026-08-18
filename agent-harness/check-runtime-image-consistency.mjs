@@ -50,8 +50,8 @@ for (const packageName of [
   "@deepseek-ai/dsh-code-runtime-worker-thread",
   "@deepseek-ai/dsh-compaction-basic",
 ]) {
-  if (config.npm[packageName]?.version !== "0.1.0-rc.6" || kaliConfig.npm[packageName]?.version !== "0.1.0-rc.6") {
-    throw new Error(`${packageName} must be pinned to 0.1.0-rc.6 in base and Kali manifests`);
+  if (config.npm[packageName]?.version !== "0.1.0-rc.7" || kaliConfig.npm[packageName]?.version !== "0.1.0-rc.7") {
+    throw new Error(`${packageName} must be pinned to 0.1.0-rc.7 in base and Kali manifests`);
   }
   if (!config.npm[packageName]?.integrity || !kaliConfig.npm[packageName]?.integrity) {
     throw new Error(`${packageName} must carry npm integrity in base and Kali manifests`);

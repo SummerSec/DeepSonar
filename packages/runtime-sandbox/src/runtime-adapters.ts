@@ -1106,7 +1106,7 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
 
 const dsh = Object.freeze<RuntimeAdapter>({
   id: "dsh",
-  version: "0.1.0-rc.6",
+  version: "0.1.0-rc.7",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,

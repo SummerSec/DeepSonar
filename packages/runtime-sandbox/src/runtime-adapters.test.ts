@@ -111,7 +111,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   } as const;
   await adapter.start(context);
   assert.match(fake.commands[0] ?? "", /^DSH_SYSTEM_PROMPT="\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
-  assert.equal(adapter.version, "0.1.0-rc.6");
+  assert.equal(adapter.version, "0.1.0-rc.7");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
   assert.equal(fake.envs[0]?.DSH_CORDIS_CONFIG, "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml");
@@ -130,7 +130,7 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const state = { contextIdentity: {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
-    adapter_id: "dsh", adapter_version: "0.1.0-rc.6", runtime_identity: "runtime",
+    adapter_id: "dsh", adapter_version: "0.1.0-rc.7", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
   }, model: "gpt-5.6", modelProvider: "feei", cwd: "/workspace" };
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
