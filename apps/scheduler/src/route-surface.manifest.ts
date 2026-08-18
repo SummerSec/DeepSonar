@@ -149,6 +149,7 @@ POST /imports/:id/preview
 POST /jobs
 POST /jobs/:id/cancel
 POST /jobs/:id/resume
+POST /jobs/:id/rerun-current
 POST /platform/exports
 POST /platform/shared-assets
 POST /projects
@@ -296,6 +297,7 @@ POST /jobs
 POST /jobs/{id}/cancel
 POST /platform/shared-assets
 POST /jobs/{id}/resume
+POST /jobs/{id}/rerun-current
 POST /projects
 POST /projects/{id}/archive
 POST /projects/{id}/shared-assets

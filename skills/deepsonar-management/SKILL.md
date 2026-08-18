@@ -66,7 +66,8 @@ python scripts/deepsonar-api.py jobs evidence-stream <jobId> [--cursor ...] [--l
 python scripts/deepsonar-api.py jobs create --project-id <projectId> --type explore [--title ...] [--payload '{...}']
 python scripts/deepsonar-api.py jobs priority <jobId> --priority 10
 python scripts/deepsonar-api.py jobs cancel <jobId>
-python scripts/deepsonar-api.py jobs resume <jobId>   # failed/timeout/orphan/waiting_human → pending；按 type/purpose 重新归一化固定 priority class
+python scripts/deepsonar-api.py jobs resume <jobId>   # 旧冻结快照重新执行；身份漂移时 409 SNAPSHOT_STALE
+python scripts/deepsonar-api.py jobs rerun-current <jobId>   # 按当前 RoleConfig/Credential/运行时完整重冻后重新执行
 
 # Finding / 画布 / 报告
 python scripts/deepsonar-api.py findings list [--project <projectId>] [--canvas <canvasId>]
@@ -268,10 +269,11 @@ python scripts/deepsonar-api.py tasks create <projectId> \
   --content "目标仓库：https://github.com/SummerSec/java-sec-code 。全量安全审计……" \
   --allow-egress true
 
-# 6) 盯 Job：pending → claimed → provisioning → running/waiting_human；终态或 waiting_human 用 resume（会重算固定 priority class）
+# 6) 盯 Job：pending → claimed → provisioning → running/waiting_human；resume 使用旧冻结快照，配置已变时改用 rerun-current
 python scripts/deepsonar-api.py jobs list --project <projectId>
 python scripts/deepsonar-api.py jobs get <jobId>
 python scripts/deepsonar-api.py jobs resume <jobId>
+python scripts/deepsonar-api.py jobs rerun-current <jobId>
 ```
 
 ## Real 模式前置清单（缺一 job 会 pending/failed/orphan）
@@ -295,7 +297,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 2. **git pull 后 schema bump**：先 `pg_dump -Fc`；版本不符时 Scheduler 会 fail closed。无自动升级——备份业务数据后对空库套 `database/schema.sql`（或让 Scheduler 对空库引导），再按需导入 `.deepsonarpack`。
 3. **RoleConfig 镜像**：`runtime_image_key 没有可信版本` = catalog 有 key 但无 trusted version。官方 digest 引导或 import+approve。`PATCH .../runtime-image` 返回 **404** = 调度器未加载新路由，重启后再试。OpenHarmony 等 `project_opt_in` 可 pin 到 RoleConfig，Job 解析仍要求项目启用。
 4. **多模型分配**：`credentials models` 看各 Provider 真实目录；hub 与 worker 可不同凭证。Job 快照在创建时冻结，改 RoleConfig **不影响**已创建 job。CLI/镜像轻量 PATCH 与 Provider 绑定 UI 等价。
-5. **tsx watch 改 src 会重载**：running job → `orphan`（「调度器重启」）；`jobs resume`（也支持 waiting_human）回 pending 并重算固定 priority class。排障时先确认无 running job 再改代码，或接受重跑。
+5. **tsx watch 改 src 会重载**：running job → `orphan`（「调度器重启」）；`jobs resume`（也支持 waiting_human）仅在当前受治理身份与旧快照一致时回 pending，否则返回 `SNAPSHOT_STALE`，应显式使用 `jobs rerun-current`。排障时先确认无 running job 再改代码，或接受重跑。
 6. **`jobs resume` 后若轮询关闭**：依赖 `pg_notify`；schema 触发器须覆盖 pending 恢复路径（基线已含）。
 7. **dispatcher `FOR UPDATE` + `LEFT JOIN credentials`**：必须 `FOR UPDATE OF j`，否则 Postgres `0A000` 导致领取失败。
 8. **证据 stream 写盘**：`stream.ndjson` 在 `attempts/<sandboxId>/` 下，mkdir 必须建 attempt 目录，否则 unhandledRejection ENOENT。
@@ -307,7 +309,7 @@ python scripts/deepsonar-api.py jobs resume <jobId>
 ## 边界
 
 - 不读取 Credential 明文；
-- 不绕过 Scheduler 直改 Job 状态（只用 cancel/resume/priority/retry）；
+- 不绕过 Scheduler 直改 Job 状态（只用 cancel/resume/rerun-current/priority/retry）；
 - 不直接操作 Docker / 数据库（除非用户明确要求清库/重建，且须保留凭据策略）；
 - 不创建/吊销 API Token、不查审计日志（管理面，除非用户给了 admin token 且明确要求）；
 - `tasks delete`、`exports delete`、`imports delete` 会删除持久化对象或制品，只在用户明确指定目标并确认删除意图时使用；

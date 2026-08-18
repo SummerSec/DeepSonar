@@ -148,6 +148,21 @@ Worker 全部置为 `orphan` 并收口旧 Attempt，资源与 Token 仍立即销
 `replay_policy=never` effect 不修改、不自动重放。没有该批次时，入口才沿用单 Job 恢复或
 显式 Hub 唤醒，并用响应 `action`、`jobs[]` 告知实际动作。
 
+Issue #202 将“旧快照恢复”与“按当前配置重跑”拆成两个确定性动作。`POST /jobs/:id/resume`
+只使用 Job 创建期冻结快照重新执行（同 Job ID、新 Attempt）；它仍解析当前完整配置，但只
+比较受治理运行身份：CLI selector/上游模型、Credential ID/provider、runtime adapter
+ID/version、DSH 模式、reasoning/context budget 与 runtime image key/digest/contract。
+RoleConfig version、时间戳、catalog/content hash 和共享资产 revision 等非身份字段不参与
+漂移判断。身份不同或当前配置无法解析时返回 `409 SNAPSHOT_STALE`，不得静默运行旧模型。
+`POST /jobs/:id/rerun-current` 则在 Dispatcher claim admission advisory lock 下按
+Canvas→Job 行锁顺序，复用 `resolveAgentSnapshotForJob`、任务网络策略与共享资产选择完整
+重冻 `agent_snapshot_json`，随后原子转 `pending` 并只通知一次。两条动作都只接受
+`failed/timeout/orphan/waiting_human`，清理 sandbox/lease/timestamps/error，保留
+payload/parent/canvas、Intent/Fact/Finding 及旧 Attempt/effect；waiting_human 的旧活动
+Attempt 收口为 interrupted，未确认 effect 保持 unknown，绝不跨沙箱续接 Session。
+任务 `resume-session` 的启动中断批次与单 Job 默认沿用旧快照；任一 stale 时整批无副作用
+拒绝并返回完整 `job_ids`，由操作者逐 Job 选择 `rerun-current`。
+
 Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否的周期 desired-state 对账。Agentbox destroy 先尝试 SDK 删除，但最终必须按容器 ID 执行单次 120 秒、最多 5 次的指数退避 force remove；只有 Docker 明确返回 no-such 才是幂等成功，其他错误必须抛给调用方并计指标。启动 reconcile 和 Reaper 运行期都从 DB 的 `claimed/provisioning/running` Job 与 active Attempt 推导应保留集合，不增加清理表；容器只接受同时具有 canonical UUID `deepsonar.job` / `deepsonar.attempt` 的双标签，卷只接受严格 `deepsonar-assets-<canonical Job UUID>` 名称并复核 local driver/scope 与可选受管标签。对账防重入，失败资源留到下一轮继续重试。任何 broad prune、仅凭模糊前缀删除容器或删除非 DeepSonar 资源均被禁止。
 
 ### 3.4 Agent 工具白名单（只提案）
@@ -239,7 +254,7 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 ### 4.5 人工介入与恢复
 
 - `request_human` 必须包含 `reason` 与结构化 `subject`。Finding subject 固定为 canonical `finding_id + subject_revision`，Scheduler 在事件事务内校验同项目、同画布及 `minVerifySeverity`；平台阻塞只接受 `authorization`、`credential`、`high_risk_action`、`business_decision` 四类。reason 只用于展示，禁止从自然语言反推 Finding 或绕过规则。校验通过后 Job 才转 `waiting_human`、Plane 标 Blocked 并建立 human 节点
-- 人处理完后调用 `POST /jobs/{id}/resume` → Job 重新入队（`pending`），恢复上下文从 events/findings 表重建
+- 人处理完后可调用 `POST /jobs/{id}/resume` 使用旧冻结快照重新入队；当前受治理身份漂移时返回 `SNAPSHOT_STALE`，改用 `POST /jobs/{id}/rerun-current` 按当前配置重冻。两者都是同 Job、新 Attempt，不跨已销毁沙箱恢复 CLI Session
 - Finding 详情可调用 `POST /findings/{id}/verify` 强制新建 Verify round，或调用 `POST /findings/{id}/evidence-jobs` 新建绑定该 Finding 的 review/test 补证 Job。两类动作继续受 follow-up 深度、验证轮次、活动任务唯一性与终态约束，不修改历史 Job；若同画布 Hub 正在等待人工，则在同一事务恢复为 `pending`
 - 若同画布等待的是 `hub_reason`，Finding 详情也可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` 仍只有系统 Verify 能写
 - 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径，而是用 verdict=`needs_human` 把 Finding 收口为可报告终态
@@ -456,7 +471,8 @@ Job 事件仍必须经过本摄入硬门。
 - `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤
 - `GET /findings/{id}`  Finding 详情；返回协议字段、评分原文/规范化结果、验证轮次、来源事件和结构化 trace
 - `POST /jobs/{id}/cancel`
-- `POST /jobs/{id}/resume`  人工处理后恢复
+- `POST /jobs/{id}/resume`  使用旧冻结快照重新执行；身份漂移时 `409 SNAPSHOT_STALE`
+- `POST /jobs/{id}/rerun-current`  按当前配置完整重冻并重新执行，保留画布
 - `POST /reconcile/run`（或定时）以 jobs 表为准修正 Plane 状态
 
 **Plane → 系统**

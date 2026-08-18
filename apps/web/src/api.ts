@@ -1696,7 +1696,7 @@ export const api = {
         material_source: opts?.material_source,
       })}`,
     ),
-  /** 继续执行：优先批量重跑启动中断 Worker，其次恢复单 Job / 唤醒 Hub；不删历史 */
+  /** 继续执行：默认旧冻结快照；身份漂移时服务端返回 SNAPSHOT_STALE */
   resumeTaskSession: (canvasId: string) =>
     send<{
       canvas_id: string;
@@ -1984,7 +1984,18 @@ export const api = {
       `/canvases/${canvasId}/jobs/cancel-active`,
       reason ? { reason } : {},
     ),
-  resumeJob: (id: string) => send<{ id: string; status: string }>("POST", `/jobs/${id}/resume`),
+  /** 同 Job、新 Attempt，严格使用旧冻结快照；身份漂移时 409 SNAPSHOT_STALE。 */
+  resumeJob: (id: string) =>
+    send<{ id: string; status: string; execution: "frozen_snapshot"; snapshot_refreshed: false }>(
+      "POST",
+      `/jobs/${id}/resume`,
+    ),
+  /** 同 Job、新 Attempt，按当前 RoleConfig/Credential/项目策略完整重冻快照。 */
+  rerunJobCurrent: (id: string) =>
+    send<{ id: string; status: string; execution: "current_snapshot"; snapshot_refreshed: true }>(
+      "POST",
+      `/jobs/${id}/rerun-current`,
+    ),
   settings: (projectId: string) => get<ProjectSettings>(`/projects/${projectId}/settings`),
   patchSettings: (
     projectId: string,

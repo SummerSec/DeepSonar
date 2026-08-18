@@ -29,6 +29,8 @@ if (!testDatabaseUrl) {
       reconcileModule,
       dispatcherModule,
       configModule,
+      coreModule,
+      runtimeSnapshotModule,
     ] = await Promise.all([
       import("fastify"),
       import("@fastify/websocket"),
@@ -39,6 +41,8 @@ if (!testDatabaseUrl) {
       import("./reconcile.js"),
       import("./dispatcher.js"),
       import("./config.js"),
+      import("./core.js"),
+      import("./domains/role-runtime-snapshot/index.js"),
     ]);
     const { sql, migrate } = dbModule;
     await migrate();
@@ -52,13 +56,6 @@ if (!testDatabaseUrl) {
     const canvasId = randomUUID();
     const hubId = randomUUID();
     const workerIds: string[] = Array.from({ length: 5 }, () => randomUUID());
-    const snapshot = {
-      agent_cli: "claude-code",
-      credential_id: null,
-      credential_provider: null,
-      model: null,
-    };
-
     try {
       await sql`
         INSERT INTO projects (id, canvas_id, name, config_json)
@@ -71,13 +68,18 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
+      const snapshot = await runtimeSnapshotModule.freezeAgentSnapshotNetworkPolicy(
+        sql,
+        canvasId,
+        await coreModule.resolveAgentSnapshotForJob(sql, projectId, "audit"),
+      );
       await sql`
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, priority, payload_json,
           agent_snapshot_json, started_at, finished_at
         ) VALUES (
           ${hubId}, ${projectId}, ${canvasId}, 'hub_reason', 'succeeded', 0,
-          ${sql.json({})}, ${sql.json(snapshot)}, now() - interval '2 minutes', now() - interval '1 minute'
+          ${sql.json({})}, ${sql.json(snapshot as never)}, now() - interval '2 minutes', now() - interval '1 minute'
         )`;
 
       for (const [index, workerId] of workerIds.entries()) {
@@ -87,7 +89,7 @@ if (!testDatabaseUrl) {
             payload_json, agent_snapshot_json, sandbox_id, started_at
           ) VALUES (
             ${workerId}, ${projectId}, ${canvasId}, ${hubId}, 'audit', 'running', 0,
-            ${sql.json({ prompt: `worker-${index}` })}, ${sql.json(snapshot)},
+            ${sql.json({ prompt: `worker-${index}` })}, ${sql.json(snapshot as never)},
             ${`destroyed-sandbox-${index}`}, now() - interval '30 seconds'
           )`;
         await sql`
