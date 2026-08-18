@@ -59,6 +59,7 @@ if (!testDatabaseUrl) {
       endSql = () => sql.end({ timeout: 5 });
       await migrate();
       authority = postgres(targetUrl.toString(), { max: 1 });
+      const authoritySql = authority;
 
       const app = Fastify({ logger: false });
       await app.register(websocketModule.default);
@@ -89,7 +90,7 @@ if (!testDatabaseUrl) {
         failed.json().error_code,
         "RUNTIME_IMAGE_NO_TRUSTED_VERSION",
       );
-      const [afterFailure] = await authority`
+      const [afterFailure] = await authoritySql`
         SELECT
           (SELECT COUNT(*)::int FROM canvases WHERE project_id = ${projectId}) AS canvases,
           (SELECT COUNT(*)::int FROM canvas_nodes n
@@ -189,7 +190,7 @@ if (!testDatabaseUrl) {
       };
       assert.equal(response.scheduled_start_at, scheduledStartAt);
 
-      const [committed] = await authority`
+      const [committed] = await authoritySql`
         SELECT c.target_json, j.id AS job_id, j.status AS job_status,
                j.priority, j.payload_json, j.agent_snapshot_json,
                (SELECT COUNT(*)::int FROM canvas_nodes n
@@ -241,7 +242,7 @@ if (!testDatabaseUrl) {
         url: `/tasks/${response.canvas_id}/retry`,
       });
       assert.equal(retry.statusCode, 201, retry.payload);
-      const [afterRetry] = await authority`
+      const [afterRetry] = await authoritySql`
         SELECT c.target_json,
                (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS jobs,
                (SELECT COUNT(*)::int FROM canvas_nodes n
