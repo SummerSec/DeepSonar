@@ -68,7 +68,14 @@ if (!testDatabaseUrl) {
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES
           (${scheduledCanvasId}, ${projectId}, 'scheduled drain', ${sql.json({ schedule } as never)}),
-          (${runnableCanvasId}, ${projectId}, 'runnable gate', '{}'::jsonb),
+          (${runnableCanvasId}, ${projectId}, 'runnable gate', ${sql.json({
+            execution_control: {
+              paused: true,
+              paused_at: "2026-08-18T09:00:00.000Z",
+              paused_by: "operator",
+              reason: "manual_pause",
+            },
+          } as never)}),
           (${idleCanvasId}, ${projectId}, 'idle wake', ${sql.json({
             execution_control: {
               paused: true,
