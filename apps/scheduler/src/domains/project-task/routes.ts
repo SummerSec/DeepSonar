@@ -567,13 +567,13 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     if ((canvas.status as string) === "archived") {
-      return reply.code(409).send({ error: "任务已归档，请先取消归档再恢复会话" });
+      return reply.code(409).send({ error: "任务已归档，请先取消归档再继续执行" });
     }
     const projectId = canvas.project_id as string;
 
     const active = await sql`
       SELECT id, type, status FROM jobs WHERE canvas_id = ${canvasId}
-        AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        AND status IN ('pending','claimed','provisioning','running')
       ORDER BY created_at DESC LIMIT 5`;
     if (active.length > 0) {
       // Only-pending + future schedule: "resume" means start now (clear gate).
@@ -620,7 +620,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
       const concurrentActive = await tx`
         SELECT id, type, status FROM jobs WHERE canvas_id = ${canvasId}
-          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+          AND status IN ('pending','claimed','provisioning','running')
         ORDER BY created_at DESC LIMIT 5`;
       if (concurrentActive.length > 0) {
         return {
@@ -1058,7 +1058,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     return { ...row, cancelled_jobs: cancelled };
   });
 
-  /** 取消归档：恢复为 active，不自动唤醒 Hub（需手动恢复会话）。 */
+  /** 取消归档：恢复为 active，不自动唤醒 Hub（需手动继续执行）。 */
   app.post("/tasks/:canvasId/unarchive", async (req, reply) => {
     const { canvasId } = req.params as { canvasId: string };
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;

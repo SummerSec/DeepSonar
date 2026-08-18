@@ -887,7 +887,7 @@ export function TasksPage() {
                   )}
                   {isArchived && (
                     <button
-                      title="取消归档，恢复为可调度任务（需手动恢复会话）"
+                      title="取消归档，恢复为可调度任务（需手动继续执行）"
                       onClick={async () => {
                         try {
                           await api.unarchiveTask(canvas.id);

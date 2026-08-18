@@ -389,6 +389,46 @@ if (!testDatabaseUrl) {
       assert.deepEqual(waitingEffectAfter, { status: "unknown", replay_policy: "never" });
       await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${waitingJobId}`;
 
+      const taskWaitingCanvasId = randomUUID();
+      await sql`
+        INSERT INTO canvases (id, project_id, title, target_json)
+        VALUES (${taskWaitingCanvasId}, ${projectId}, 'waiting human task resume', ${sql.json({
+          network_policy: { allow_egress: false },
+        })})`;
+      await sql`
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${taskWaitingCanvasId}, 'root', 'root', 'active', ${sql.json({})})`;
+      const taskWaitingSnapshot = await currentSnapshot(taskWaitingCanvasId);
+      const taskWaitingJob = await insertJob({
+        canvas: taskWaitingCanvasId,
+        status: "waiting_human",
+        snapshot: taskWaitingSnapshot,
+      });
+      const taskWaitingJobId = String(taskWaitingJob.id);
+      const taskWaitingAttempt = await attemptModule.createAttempt(
+        sql,
+        taskWaitingJobId,
+        attemptIdentity(taskWaitingSnapshot),
+      );
+      await attemptModule.beginEffect(sql, String(taskWaitingAttempt.id), {
+        effectId: "task-waiting-agent-run",
+        kind: "agent_run",
+        step: 1,
+        replayPolicy: "never",
+      });
+      const taskWaitingResume = await app.inject({
+        method: "POST",
+        url: `/tasks/${taskWaitingCanvasId}/resume-session`,
+      });
+      assert.equal(taskWaitingResume.statusCode, 200, taskWaitingResume.payload);
+      assert.equal(taskWaitingResume.json().action, "resume_job");
+      const [taskWaitingAfter] = await sql`SELECT status FROM jobs WHERE id = ${taskWaitingJobId}`;
+      const [taskWaitingAttemptAfter] = await sql`
+        SELECT status FROM job_attempts WHERE id = ${String(taskWaitingAttempt.id)}`;
+      assert.equal(taskWaitingAfter.status, "pending");
+      assert.equal(taskWaitingAttemptAfter.status, "interrupted");
+      await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${taskWaitingJobId}`;
+
       // Every non-recoverable state is rejected before snapshot resolution or
       // mutation. In particular, running work cannot be re-frozen in place.
       for (const status of ["pending", "claimed", "provisioning", "running"]) {
