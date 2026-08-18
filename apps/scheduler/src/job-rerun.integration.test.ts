@@ -90,11 +90,20 @@ if (!testDatabaseUrl) {
           await coreModule.resolveAgentSnapshotForJob(sql, projectId, roleName),
         );
       const baselineSnapshot = await currentSnapshot();
+      const attemptIdentity = (
+        snapshot: Awaited<ReturnType<typeof currentSnapshot>>,
+      ) => ({
+        agent_cli: snapshot.agent_cli,
+        adapter_id: snapshot.agent_runtime.adapter_id,
+        adapter_version: snapshot.agent_runtime.adapter_version,
+        runtime_image_ref: snapshot.runtime_image.image_ref,
+        ...(snapshot.runtime_image_key ? { runtime_image_key: snapshot.runtime_image_key } : {}),
+      });
 
       const insertJob = async (options: {
         canvas?: string;
         status: string;
-        snapshot?: Record<string, unknown>;
+        snapshot?: unknown;
         parentJobId?: string | null;
         payload?: Record<string, unknown>;
         sandboxId?: string | null;
@@ -133,7 +142,11 @@ if (!testDatabaseUrl) {
       // Dispatcher creates Attempt 2 without replacing the frozen snapshot.
       const resumeJob = await insertJob({ status: "failed", sandboxId: "old-failed-sandbox" });
       const resumeJobId = String(resumeJob.id);
-      const firstResumeAttempt = await attemptModule.createAttempt(sql, resumeJobId, baselineSnapshot);
+      const firstResumeAttempt = await attemptModule.createAttempt(
+        sql,
+        resumeJobId,
+        attemptIdentity(baselineSnapshot),
+      );
       await attemptModule.settleAttemptTerminal(
         sql,
         resumeJobId,
@@ -223,7 +236,11 @@ if (!testDatabaseUrl) {
           ${factNodeId}, ${canvasId}, 'fact', 'keep fact', 'verified', 'verified',
           ${sql.json({ marker: "keep-fact" })}
         )`;
-      const oldAttempt = await attemptModule.createAttempt(sql, rerunJobId, baselineSnapshot);
+      const oldAttempt = await attemptModule.createAttempt(
+        sql,
+        rerunJobId,
+        attemptIdentity(baselineSnapshot),
+      );
       await attemptModule.beginEffect(sql, String(oldAttempt.id), {
         effectId: "agent-run",
         kind: "agent_run",
@@ -344,7 +361,11 @@ if (!testDatabaseUrl) {
         sandboxId: "waiting-human-sandbox",
       });
       const waitingJobId = String(waitingJob.id);
-      const waitingAttempt = await attemptModule.createAttempt(sql, waitingJobId, waitingSnapshot);
+      const waitingAttempt = await attemptModule.createAttempt(
+        sql,
+        waitingJobId,
+        attemptIdentity(waitingSnapshot),
+      );
       await attemptModule.beginEffect(sql, String(waitingAttempt.id), {
         effectId: "waiting-agent-run",
         kind: "agent_run",

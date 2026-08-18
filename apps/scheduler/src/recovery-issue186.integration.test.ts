@@ -79,7 +79,7 @@ if (!testDatabaseUrl) {
           agent_snapshot_json, started_at, finished_at
         ) VALUES (
           ${hubId}, ${projectId}, ${canvasId}, 'hub_reason', 'succeeded', 0,
-          ${sql.json({})}, ${sql.json(snapshot)}, now() - interval '2 minutes', now() - interval '1 minute'
+          ${sql.json({})}, ${sql.json(snapshot as never)}, now() - interval '2 minutes', now() - interval '1 minute'
         )`;
 
       for (const [index, workerId] of workerIds.entries()) {
@@ -89,7 +89,7 @@ if (!testDatabaseUrl) {
             payload_json, agent_snapshot_json, sandbox_id, started_at
           ) VALUES (
             ${workerId}, ${projectId}, ${canvasId}, ${hubId}, 'audit', 'running', 0,
-            ${sql.json({ prompt: `worker-${index}` })}, ${sql.json(snapshot)},
+            ${sql.json({ prompt: `worker-${index}` })}, ${sql.json(snapshot as never)},
             ${`destroyed-sandbox-${index}`}, now() - interval '30 seconds'
           )`;
         await sql`

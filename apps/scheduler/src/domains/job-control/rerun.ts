@@ -8,7 +8,10 @@ import {
 import { sql } from "../../db.js";
 import { runner } from "../../runtime.js";
 import { markAttemptInterrupted } from "../job-attempt/index.js";
-import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/index.js";
+import {
+  createSqlJobLifecycleApplication,
+  RESUMABLE_JOB_STATUSES,
+} from "../job-lifecycle/index.js";
 import {
   freezeAgentSnapshotNetworkPolicy,
 } from "../role-runtime-snapshot/index.js";
@@ -213,7 +216,7 @@ export async function requeueJob(
     }
     const [job] = await tx`
       SELECT id, project_id, canvas_id, finding_id, type, status, payload_json,
-             agent_snapshot_json, sandbox_id
+             agent_snapshot_json, sandbox_id, priority
       FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) return { kind: "not_found" as const };
     const status = String(job.status);
@@ -258,22 +261,27 @@ export async function requeueJob(
       await recordJobSharedAssets(tx, jobId, currentSnapshot.shared_assets ?? []);
     }
 
-    const [updated] = await tx`
-      UPDATE jobs SET
-        status = 'pending',
-        agent_snapshot_json = ${tx.json(
-          (mode === "rerun-current" ? currentSnapshot : job.agent_snapshot_json) as never,
-        )},
-        error = NULL,
-        sandbox_id = NULL,
-        lease_expires_at = NULL,
-        claimed_at = NULL,
-        started_at = NULL,
-        finished_at = NULL,
-        heartbeat_at = NULL
-      WHERE id = ${jobId} AND status = ${status}
-      RETURNING id, project_id, canvas_id, type, status, priority`;
-    if (!updated) return { kind: "not_resumable" as const, status };
+    const transitioned = await createSqlJobLifecycleApplication(tx).transitionJob(jobId, "pending", {
+      agent_snapshot_json: tx.json(
+        (mode === "rerun-current" ? currentSnapshot : job.agent_snapshot_json) as never,
+      ),
+      error: null,
+      sandbox_id: null,
+      lease_expires_at: null,
+      claimed_at: null,
+      started_at: null,
+      finished_at: null,
+      heartbeat_at: null,
+    });
+    if (!transitioned) return { kind: "not_resumable" as const, status };
+    const updated = {
+      id: job.id,
+      project_id: job.project_id,
+      canvas_id: job.canvas_id,
+      type: job.type,
+      status: transitioned.status,
+      priority: job.priority,
+    };
 
     await normalizePendingJobPriority(jobId, tx);
     await resetReportState(tx, jobId);
