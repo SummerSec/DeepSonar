@@ -185,6 +185,9 @@ test("terminal delta overwrites active lifecycle rollup without a summary refres
       target_json: {},
       created_at: "2026-08-04T00:00:00.000Z",
       active_count: 1,
+      execution_active_count: 1,
+      pending_count: 0,
+      execution_state: "running",
       job_count: 1,
       started_at: "2026-08-04T00:00:01.000Z",
       ended_at: null,
@@ -206,6 +209,9 @@ test("terminal delta overwrites active lifecycle rollup without a summary refres
     delete_edge_ids: [],
     upsert_meta: [],
     active_count: 0,
+    execution_active_count: 0,
+    pending_count: 0,
+    execution_state: "running",
     job_count: 1,
     started_at: "2026-08-04T00:00:01.000Z",
     ended_at: "2026-08-04T00:01:00.000Z",
@@ -216,6 +222,9 @@ test("terminal delta overwrites active lifecycle rollup without a summary refres
   assert.equal(next.canvas?.ended_at, "2026-08-04T00:01:00.000Z");
   assert.equal(next.canvas?.root_status, "succeeded");
   assert.equal(next.canvas?.report_status, "succeeded");
+  assert.equal(next.canvas?.execution_active_count, 0);
+  assert.equal(next.canvas?.pending_count, 0);
+  assert.equal(next.canvas?.execution_state, "running");
 });
 
 test("delta lifecycle rollup explicitly clears stale nullable fields", () => {
@@ -227,6 +236,9 @@ test("delta lifecycle rollup explicitly clears stale nullable fields", () => {
       target_json: {},
       created_at: "2026-08-04T00:00:00.000Z",
       active_count: 2,
+      execution_active_count: 2,
+      pending_count: 0,
+      execution_state: "running",
       job_count: 2,
       started_at: "2026-08-04T00:00:01.000Z",
       ended_at: "2026-08-04T00:01:00.000Z",
@@ -270,6 +282,9 @@ test("legacy delta without lifecycle fields preserves the current rollup", () =>
       target_json: {},
       created_at: "2026-08-04T00:00:00.000Z",
       active_count: 1,
+      execution_active_count: 1,
+      pending_count: 0,
+      execution_state: "running",
       job_count: 2,
       started_at: "2026-08-04T00:00:01.000Z",
       ended_at: null,
@@ -305,6 +320,9 @@ test("partial or invalid lifecycle rollups are rejected without clearing active 
       target_json: {},
       created_at: "2026-08-04T00:00:00.000Z",
       active_count: 2,
+      execution_active_count: 2,
+      pending_count: 0,
+      execution_state: "running",
       job_count: 3,
       started_at: "2026-08-04T00:00:01.000Z",
       ended_at: null,
