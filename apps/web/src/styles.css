@@ -834,8 +834,21 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .react-flow__controls-button { border: 0; border-bottom: 1px solid var(--line); background: transparent; fill: #899398; }
 .react-flow__controls-button:hover { background: #171b1d; }
 .react-flow__controls-button svg { fill: #899398; }
-.react-flow__minimap { overflow: hidden; border: 1px solid var(--line-strong); background: #0a0c0d !important; }
-.react-flow__minimap-mask { fill: rgb(7 9 10 / .82); }
+.react-flow__minimap {
+  z-index: 20;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: #0a0c0d !important;
+  pointer-events: auto;
+}
+.react-flow__minimap svg {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none;
+  max-height: none;
+}
+.react-flow__minimap-mask { fill: rgb(7 9 10 / .82); pointer-events: all; }
 .react-flow__edge-path { stroke-width: 1.5; }
 .react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
 .react-flow__handle { opacity: 0; }
@@ -901,8 +914,8 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   background: color-mix(in srgb, var(--broadcast-target) 8%, transparent);
 }
 .broadcast-node-badge.has-failure { border-color: color-mix(in srgb, var(--broadcast-failed) 60%, var(--line)); }
-.canvas-filter-panel { width: min(760px, calc(100% - 32px)); transition: width 180ms var(--ease-decel); }
-.canvas-filter-panel.is-collapsed { width: min(430px, calc(100% - 32px)); }
+.canvas-filter-panel { width: min(760px, calc(100% - 176px)); transition: width 180ms var(--ease-decel); }
+.canvas-filter-panel.is-collapsed { width: min(430px, calc(100% - 176px)); }
 .canvas-export-button {
   display: inline-grid;
   width: 28px;

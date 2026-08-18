@@ -916,7 +916,10 @@ export function TaskCanvasPage() {
       )}
 
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
-        <div className={`min-h-0 flex-1 ${tab === "canvas" ? "flex flex-col" : "hidden"}`}>
+        <div
+          className={`absolute inset-0 flex min-h-0 flex-col ${tab === "canvas" ? "" : "invisible pointer-events-none"}`}
+          aria-hidden={tab !== "canvas"}
+        >
           {humanInterventions.length > 0 && (
             <section className="theme-divider shrink-0 border-b px-3 py-2 sm:px-4" aria-label="人工介入">
               <div className="mb-2 flex items-center gap-2">

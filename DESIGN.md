@@ -261,7 +261,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | Runtime Platform API 能力一致性 | #145/#152 | **已完成**：五个治理 adapter 均声明 Job 级 HTTP `platformControlApi` 且 `controlMcp=false`；所有 CLI 只走 Job 级 API，冻结 adapter 缺少 API capability 或 operation 时执行前 fail closed |
 | 项目镜像继承一致性 | #146 | `inherit_global` 继续只认全局 RoleConfig 镜像；`project_managed` 只认项目 `role_runtime_images` 映射。修复遗留项目 RoleConfig `runtime_image_key` 在导入、展示或 readiness 中被误当作有效配置的问题，不恢复 #130 已删除的独立项目镜像覆盖 |
 | 任务定时开始（北京 08:00） | #147 | **已完成并关 issue**：见 §5；`task-schedule` / `schedule-wake`、dispatcher 门禁、Web 表单与列表 `scheduled` 相位；无 schema 迁移 |
-| 画布广播可观测 | （过程真相 A） | **注入 + 投递账本已落地**：见 §4.2；分期细节与布局 B 见 `docs/TODO_CANVAS_PROCESS_TRUTH.md` |
+| 过程画布视口 / MiniMap | #185 | **已完成**：过程画布切走任务页签时保持挂载与尺寸（`visibility` 而非 `display:none`）；节点携带稳定宽高；`fitView` 在零尺寸/空 bounds 时拒绝，容器从 0 恢复后再适配；右上角 MiniMap 可点击/拖动/缩放并避开筛选面板 |
 | Hub 验证绑定与人工收口 | #153/#154/#155 | **已完成**：review/test 与 Finding 人工请求都使用结构化 canonical Finding 绑定；below-min、歧义和 trigger 错配在副作用前拒绝；Finding 详情可强制 Verify、派发绑定的 review/test 补证或收口 `needs_human`，并在需要时原子恢复同画布等待中的 Hub |
 | 共享资产卷孤儿回收 | #157 | **已完成**：启动对账合并 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，校验本地卷归属并回收无标签孤儿；删除使用 3 次指数退避，暴露清理失败计数、残留孤儿数量和最大年龄指标 |
 | 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
