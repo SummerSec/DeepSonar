@@ -174,8 +174,10 @@ POST /skill-sources
 POST /skill-sources/:id/sync
 POST /skill-sources/:id/trust
 POST /tasks/:canvasId/archive
+POST /tasks/:canvasId/pause
 POST /tasks/:canvasId/resume-session
 POST /tasks/:canvasId/retry
+POST /tasks/:canvasId/start
 POST /tasks/:canvasId/unarchive
 POST /tokens
 POST /tokens/:id/revoke
@@ -314,8 +316,10 @@ POST /shared-assets/{id}/archive
 POST /skill-sources
 POST /skill-sources/{id}/sync
 POST /skill-sources/{id}/trust
+POST /tasks/{canvasId}/pause
 POST /tasks/{canvasId}/resume-session
 POST /tasks/{canvasId}/retry
+POST /tasks/{canvasId}/start
 POST /tokens
 POST /tokens/{id}/revoke
 POST /tokens/{id}/rotate

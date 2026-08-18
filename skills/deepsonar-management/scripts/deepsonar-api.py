@@ -877,6 +877,8 @@ COMMANDS = {
 
     # ---------- 任务（一次任务 = 一个画布） ----------
     "tasks.create": _tasks_create,
+    "tasks.pause": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/pause"),
+    "tasks.start": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/start"),
     "tasks.resume-session": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/resume-session"),
     "tasks.retry": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/retry"),
     "tasks.archive": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/archive"),

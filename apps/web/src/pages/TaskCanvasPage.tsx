@@ -398,6 +398,33 @@ export function TaskCanvasPage() {
     }
   };
 
+  const toggleTaskExecution = async () => {
+    if (!canvasId || !meta || meta.execution_state === "pausing") return;
+    setConvBusy(true);
+    try {
+      const result = meta.execution_state === "paused"
+        ? await api.startTask(canvasId)
+        : await api.pauseTask(canvasId);
+      setMeta((current) => current ? {
+        ...current,
+        execution_state: result.execution_state,
+        execution_active_count: result.active_count,
+        pending_count: result.pending_count,
+      } : current);
+      if (result.execution_state === "pausing") {
+        flash(`暂停中，尚有 ${result.active_count} 个 Job 安全收尾`);
+      } else if (result.execution_state === "paused") {
+        flash(result.changed ? "任务已暂停" : "任务已经暂停");
+      } else {
+        flash(result.changed ? "任务已开始" : "任务已经处于开始状态");
+      }
+    } catch (e) {
+      flash(`任务控制失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+
   const hasActiveJob = jobs.some((j) => ACTIVE_JOB.has(j.status));
   const canResumeSession = !hasActiveJob && jobs.length > 0;
   const canHardRetry = !hasActiveJob && jobs.length > 0;
@@ -419,10 +446,17 @@ export function TaskCanvasPage() {
     endedAt: meta?.ended_at,
     startedAt: meta?.started_at,
     scheduledStartAt,
+    executionState: meta?.execution_state,
+    executionActiveCount: meta?.execution_active_count,
+    pendingCount: meta?.pending_count,
     nowMs: clock,
   });
   const lifecycleActive = taskLifecycle.isActive;
   const isScheduled = taskLifecycle.status === "scheduled";
+  const executionState = meta?.execution_state ?? "running";
+  const executionPausing = executionState === "pausing";
+  const executionPaused = executionState === "paused";
+  const taskArchived = canvasStatus === "archived";
   // 生命周期从实际开始执行起算；定时排队阶段不算进生命周期。
   const executionElapsed = meta?.started_at
     ? formatElapsed(meta.started_at, lifecycleActive ? null : taskLifecycle.endedAt, clock)
@@ -712,6 +746,11 @@ export function TaskCanvasPage() {
               .join(" · ")}
             {msg ? ` · ${msg}` : ""}
           </span>
+          {!taskArchived && (
+            <span className="mt-1 block text-[10px] leading-4 text-zinc-600">
+              暂停会阻止该任务领取和派生新 Job；已运行 Job 会安全收尾，不会强制中断。
+            </span>
+          )}
           {meta && (
             <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-4">
               <LifecycleDatum label="创建" value={relativeTime(meta.created_at)} title={formatTime(meta.created_at)} />
@@ -739,25 +778,29 @@ export function TaskCanvasPage() {
             </div>
           )}
         </div>
-        {/* 唯一主操作：暂停 / 继续；次要能力收进 ⋯ */}
+        {/* Canvas 执行门禁是主操作；Hub 收敛控制收进 ⋯。 */}
         <div className="order-2 ml-auto flex shrink-0 items-center gap-1.5 sm:order-none sm:ml-0">
-          <button
-            type="button"
-            disabled={convBusy || !convergence}
-            onClick={() => runConvergence(convergence?.hub_paused ? "resume" : "pause")}
-            className="flex items-center gap-1.5 rounded-full bg-white/[.04] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.07] hover:text-zinc-100 disabled:opacity-40"
-            title={convergence?.hub_paused ? "继续自动决策" : "暂停自动决策（进行中的 job 不受影响）"}
-          >
-            {convergence?.hub_paused ? (
-              <>
-                <Play size={12} /> 继续
-              </>
-            ) : (
-              <>
-                <Pause size={12} /> 暂停
-              </>
-            )}
-          </button>
+          {!taskArchived && (
+            <button
+              type="button"
+              disabled={convBusy || executionPausing || !meta}
+              onClick={() => void toggleTaskExecution()}
+              className="flex items-center gap-1.5 rounded-full bg-white/[.04] px-3 py-1.5 text-[11px] text-zinc-300 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.07] hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title={executionPausing
+                ? `暂停中，尚有 ${meta?.execution_active_count ?? 0} 个 Job 安全收尾`
+                : executionPaused
+                  ? "解除任务执行门禁；不会清除定时计划或重试失败 Job"
+                  : "阻止领取新 Job；已运行 Job 会安全收尾"}
+            >
+              {executionPausing ? (
+                <><Pause size={12} /> 暂停中 · {meta?.execution_active_count ?? 0} 个收尾</>
+              ) : executionPaused ? (
+                <><Play size={12} /> 开始</>
+              ) : (
+                <><Pause size={12} /> 暂停</>
+              )}
+            </button>
+          )}
           <div className="relative" ref={moreRef}>
             <button
               type="button"
@@ -770,6 +813,14 @@ export function TaskCanvasPage() {
             </button>
             {moreOpen && (
               <div className="theme-drawer absolute right-0 top-full z-20 mt-1 min-w-[13rem] overflow-hidden rounded-xl py-1 shadow-xl ring-1 ring-[var(--line-strong)]">
+                <button
+                  type="button"
+                  disabled={convBusy || !convergence}
+                  onClick={() => runConvergence(convergence?.hub_paused ? "resume" : "pause")}
+                  className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {convergence?.hub_paused ? "继续 Hub 自动决策" : "暂停 Hub 自动决策"}
+                </button>
                 <button
                   type="button"
                   disabled={convBusy || (!canResumeSession && !hasActiveJob)}

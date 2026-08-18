@@ -18,6 +18,8 @@ export const ACTIVE_TASK_JOB_STATUSES = new Set([
 export type TaskLifecycleStatus =
   | "archived"
   | "scheduled"
+  | "pausing"
+  | "paused"
   | "running"
   | "failed"
   | "completed"
@@ -46,6 +48,11 @@ export interface TaskLifecycleInput {
   startedAt?: string | null;
   /** Future ISO start gate from target_json.schedule.start_at. */
   scheduledStartAt?: string | null;
+  /** Scheduler-owned Canvas execution gate. */
+  executionState?: "pausing" | "paused" | "running" | null;
+  /** Jobs that must drain before a pause is fully settled; excludes pending. */
+  executionActiveCount?: number | null;
+  pendingCount?: number | null;
   /** Optional clock override for tests / live tick. */
   nowMs?: number;
 }
@@ -66,6 +73,8 @@ export const TASK_LIFECYCLE_META: Record<
 > = {
   archived: { label: "已归档", color: "#71717a" },
   scheduled: { label: "定时等待", color: "#a78bfa" },
+  pausing: { label: "暂停中", color: "#fbbf24" },
+  paused: { label: "已暂停", color: "#f59e0b" },
   running: { label: "进行中", color: "#65e6b4" },
   failed: { label: "失败", color: "#f87171" },
   completed: { label: "已完成", color: "#65e6b4" },
@@ -150,10 +159,13 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
     scheduledMs > nowMs &&
     !input.startedAt &&
     activeCount > 0;
+  const executionState = normalized(input.executionState);
 
   let status: TaskLifecycleStatus;
   if (archived) status = "archived";
   else if (waitingOnSchedule) status = "scheduled";
+  else if (executionState === "pausing") status = "pausing";
+  else if (executionState === "paused") status = "paused";
   else if (activeCount > 0) status = "running";
   else if (hasFailure) status = "failed";
   else if (hasReportPhase) status = "reporting";
@@ -170,7 +182,7 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
     ...TASK_LIFECYCLE_META[status],
     // Scheduled tasks still occupy the active queue (pending Jobs) so list
     // filters that look at isActive continue to surface them.
-    isActive: status === "running" || status === "scheduled",
+    isActive: status === "running" || status === "scheduled" || status === "pausing",
     activeCount,
     hasJobs,
     endedAt: input.endedAt ?? null,

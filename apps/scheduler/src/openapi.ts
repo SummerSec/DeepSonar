@@ -54,6 +54,23 @@ const ErrorSchema = {
   required: ["error"],
 };
 
+const TaskExecutionControlResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["canvas_id", "execution_state", "active_count", "pending_count", "changed"],
+  properties: {
+    canvas_id: { type: "string", format: "uuid" },
+    execution_state: { type: "string", enum: ["pausing", "paused", "running"] },
+    active_count: {
+      type: "integer",
+      minimum: 0,
+      description: "仍在安全收尾的 claimed/provisioning/running/waiting_human Job 数；pending 不计入",
+    },
+    pending_count: { type: "integer", minimum: 0 },
+    changed: { type: "boolean" },
+  },
+};
+
 const FactVerificationSchema = {
   type: "object",
   nullable: true,
@@ -497,9 +514,9 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
   { method: "get", path: "/projects/{id}/canvas", summary: "项目当前画布（兼容）", scope: "tasks:read", tags: ["Tasks"] },
-  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",
     path: "/canvases/{id}/broadcasts",
@@ -692,6 +709,23 @@ const OPS: Op[] = [
         properties: { fact: FactSummarySchema },
       },
     },
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/pause",
+    summary: "暂停任务领取新 Job（已运行 Job 安全收尾）",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    responses: { "200": TaskExecutionControlResponseSchema },
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/start",
+    summary: "解除任务暂停并唤醒调度",
+    description: "不清除定时计划，也不重试 failed/orphan/cancelled Job；归档任务返回 409。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    responses: { "200": TaskExecutionControlResponseSchema },
   },
   {
     method: "post",

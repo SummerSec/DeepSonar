@@ -148,6 +148,15 @@ export function applyCanvasDelta(
       ended_at: delta.ended_at,
       root_status: delta.root_status,
       report_status: delta.report_status,
+      ...(typeof delta.execution_active_count === "number"
+        && typeof delta.pending_count === "number"
+        && ["pausing", "paused", "running"].includes(String(delta.execution_state))
+        ? {
+            execution_active_count: delta.execution_active_count,
+            pending_count: delta.pending_count,
+            execution_state: delta.execution_state!,
+          }
+        : {}),
     };
   }
   return {
