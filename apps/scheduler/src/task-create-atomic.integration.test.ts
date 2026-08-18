@@ -170,7 +170,9 @@ if (!testDatabaseUrl) {
       });
       const assetVersionId = String(asset.version_id);
 
-      const scheduledStartAt = "2099-08-20T00:00:00.000Z";
+      const scheduledStartAt = new Date(
+        Date.now() + 30 * 24 * 60 * 60 * 1000,
+      ).toISOString();
       const success = await app.inject({
         method: "POST",
         url: `/projects/${projectId}/tasks`,
