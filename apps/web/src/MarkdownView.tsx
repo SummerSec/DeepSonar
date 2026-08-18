@@ -272,10 +272,10 @@ export function MarkdownView({
           rows={rows}
           spellCheck={false}
           placeholder={placeholder}
-          className="markdown-view-editor w-full resize-y rounded-xl border border-white/[.08] bg-black/30 px-3 py-2.5 font-mono text-[12px] leading-5 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-acc-500/50"
+          className="theme-input-surface markdown-view-editor w-full resize-y rounded-xl border px-3 py-2.5 font-mono text-[12px] leading-5 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-acc-500/50"
         />
       ) : (
-        <pre className={`${scrollable ? "max-h-[65vh] overflow-auto" : "overflow-visible"} whitespace-pre-wrap break-words rounded-xl bg-black/30 p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1 ring-white/[.06]`}>
+        <pre className={`${scrollable ? "max-h-[65vh] overflow-auto" : "overflow-visible"} theme-input-surface whitespace-pre-wrap break-words rounded-xl p-4 font-mono text-[11px] leading-5 text-zinc-400 ring-1`}>
           {markdown}
         </pre>
       )}

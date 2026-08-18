@@ -25,6 +25,7 @@ test("web confirmations use the themed dialog instead of browser-native confirm"
   assert.match(dialog, /theme-overlay/);
   assert.match(dialog, /theme-drawer/);
   assert.match(dialog, /tone === "danger"/);
+  assert.doesNotMatch(dialog, /bg-black\//);
 });
 
 test("Finding 人工入口只在等待中的未确认状态提供 needs_human 收口", () => {

@@ -481,7 +481,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 onKeyDown={(e) => e.key === "Enter" && commitSearch()}
                 onBlur={commitSearch}
                 placeholder="搜索标题、位置、指纹…"
-                className="w-full rounded-md border border-white/[.08] bg-black/25 py-2 pl-8 pr-8 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600"
+                className="theme-input-surface w-full rounded-md border py-2 pl-8 pr-8 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600"
               />
               {(searchDraft || q) && (
                 <button

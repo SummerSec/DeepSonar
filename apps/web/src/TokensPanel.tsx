@@ -158,7 +158,7 @@ export function TokensPanel() {
           </HelpTip>
         </div>
 
-        <div className="mb-3 rounded-lg border border-white/[.06] bg-black/20 px-3 py-2.5">
+        <div className="theme-surface mb-3 rounded-lg border px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">当前身份</span>
             <span className="rounded-full bg-white/[.05] px-2 py-0.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08]">

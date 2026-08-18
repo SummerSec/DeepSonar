@@ -735,7 +735,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   <p className="mb-2 text-[12px] leading-relaxed text-zinc-500">{intentDescription}</p>
                 )}
                 {dispatchPrompt ? (
-                  <div className="rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
+                  <div className="theme-input-surface rounded-xl px-3 py-3 ring-1">
                     <MarkdownView markdown={dispatchPrompt} scrollable={false} />
                   </div>
                 ) : (
@@ -750,7 +750,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   运行输出摘要
                 </div>
                 {runSummary ? (
-                  <div className="rounded-xl bg-black/25 px-3 py-3 ring-1 ring-white/[.06]">
+                  <div className="theme-input-surface rounded-xl px-3 py-3 ring-1">
                     <MarkdownView markdown={runSummary} scrollable={false} />
                   </div>
                 ) : active ? (
@@ -804,7 +804,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                     {detail.findings.slice(0, 8).map((f) => (
                       <div
                         key={f.id}
-                        className="flex items-center gap-3 rounded-xl bg-black/20 px-3 py-2.5 ring-1 ring-white/[.05]"
+                        className="theme-surface flex items-center gap-3 rounded-xl px-3 py-2.5 ring-1"
                       >
                         <SeverityBadge severity={f.severity} />
                         <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">{f.title}</span>
@@ -907,7 +907,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   value={eventQuery}
                   onChange={(e) => setEventQuery(e.target.value)}
                   placeholder="搜索事件内容…"
-                  className="min-h-8 min-w-[8rem] flex-1 rounded-lg bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700"
+                  className="theme-input-surface min-h-8 min-w-[8rem] flex-1 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 placeholder:text-zinc-700"
                 />
                 <span className="font-mono text-[10px] text-zinc-600">
                   {filteredEvents.length}/{jobEvents.length || detail.events.length}

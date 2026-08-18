@@ -293,7 +293,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           </fieldset>
 
           {form.kind === "compose" && (
-            <section className="rounded-lg border border-white/[.07] bg-black/15 p-4" aria-labelledby="compose-seeds-heading">
+            <section className="theme-surface rounded-lg border p-4" aria-labelledby="compose-seeds-heading">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 id="compose-seeds-heading" className="text-[13px] font-medium text-zinc-200">代入 Finding</h3>
@@ -447,7 +447,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
                     onChange={(e) => setForm({ ...form, startAtLocal: e.target.value })}
                     aria-invalid={Boolean(scheduleIssue)}
                     aria-describedby={scheduleIssue ? "task-schedule-error" : "task-schedule-hint"}
-                    className={`${inputCls} [color-scheme:dark] ${
+                    className={`${inputCls} ${
                       scheduleIssue
                         ? "border-red-500/45 focus:border-red-400/60"
                         : ""
@@ -679,7 +679,7 @@ export function TasksPage() {
                         {canvas.title}
                       </Link>
                       <div className="mt-1 flex items-center gap-2">
-                        <span className="rounded border border-white/[.07] bg-black/15 px-1.5 py-0.5 font-mono text-[9px] text-zinc-500" title={`完整任务编号：${canvas.id}`}>
+                        <span className="theme-chip rounded border px-1.5 py-0.5 font-mono text-[9px] text-zinc-500" title={`完整任务编号：${canvas.id}`}>
                           编号 · {canvas.id.slice(0, 8)}
                         </span>
                       </div>

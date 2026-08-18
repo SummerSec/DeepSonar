@@ -263,13 +263,13 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
         </div>
         {/* 摘要统计卡片 */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-[20px] bg-white/[.03] px-4 py-4 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+          <div className="theme-surface rounded-[20px] px-4 py-4 ring-1">
             <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">已确认漏洞</div>
             <div className="mt-1.5 text-[24px] font-semibold tabular-nums text-zinc-100">
               {s.confirmed_count ?? 0}
             </div>
           </div>
-          <div className="rounded-[20px] bg-white/[.03] px-4 py-4 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+          <div className="theme-surface rounded-[20px] px-4 py-4 ring-1">
             <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">按级别</div>
             <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
               {Object.keys(bySev).length === 0 && <span className="text-[14px] text-zinc-600">—</span>}
@@ -284,13 +284,13 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
               ))}
             </div>
           </div>
-          <div className="rounded-[20px] bg-white/[.03] px-4 py-4 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+          <div className="theme-surface rounded-[20px] px-4 py-4 ring-1">
             <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">未自动验证</div>
             <div className="mt-1.5 text-[24px] font-semibold tabular-nums text-zinc-100">
               {s.excluded_count ?? 0}
             </div>
           </div>
-          <div className="rounded-[20px] bg-white/[.03] px-4 py-4 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+          <div className="theme-surface rounded-[20px] px-4 py-4 ring-1">
             <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">生成时间</div>
             <div className="mt-1.5 text-[14px] leading-snug text-zinc-300">
               {formatTime(s.generated_at ?? report.updated_at)}
@@ -299,12 +299,12 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
         </div>
 
         {/* 下载与完整性哈希 */}
-        <div className="flex flex-wrap items-center gap-2 rounded-[20px] bg-white/[.025] px-4 py-3 ring-1 ring-white/[.055]">
+        <div className="theme-surface flex flex-wrap items-center gap-2 rounded-[20px] px-4 py-3 ring-1">
           <button
             type="button"
             onClick={() => void handleDownload("markdown")}
             disabled={downloading !== null}
-            className="flex items-center gap-1.5 rounded-full bg-white/[.035] px-3 py-2 font-mono text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-colors hover:bg-acc-500/[.07] hover:text-acc-300"
+            className="theme-chip flex items-center gap-1.5 rounded-full px-3 py-2 font-mono text-[10px] text-zinc-300 ring-1 transition-colors hover:bg-acc-500/[.07] hover:text-acc-300"
           >
             <FileArrowDown size={13} /> {downloading === "markdown" ? "下载中…" : "下载 Markdown"}
           </button>
@@ -312,7 +312,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
             type="button"
             onClick={() => void handleDownload("sarif")}
             disabled={downloading !== null}
-            className="flex items-center gap-1.5 rounded-full bg-white/[.035] px-3 py-2 font-mono text-[10px] text-zinc-300 ring-1 ring-white/[.06] transition-colors hover:bg-acc-500/[.07] hover:text-acc-300"
+            className="theme-chip flex items-center gap-1.5 rounded-full px-3 py-2 font-mono text-[10px] text-zinc-300 ring-1 transition-colors hover:bg-acc-500/[.07] hover:text-acc-300"
           >
             <DownloadSimple size={13} /> {downloading === "sarif" ? "下载中…" : "下载 SARIF"}
           </button>
@@ -332,7 +332,7 @@ export function ReportPanel({ canvasId }: { canvasId: string }) {
         </div>
 
         {/* 报告正文（安全渲染；无确认漏洞时正文自带「未发现已确认漏洞」与局限性声明） */}
-        <div className="rounded-[24px] bg-white/[.025] px-5 py-5 ring-1 ring-white/[.06] shadow-[inset_0_1px_0_rgba(255,255,255,.035)] sm:px-8 sm:py-7">
+        <div className="theme-surface rounded-[24px] px-5 py-5 ring-1 sm:px-8 sm:py-7">
           {markdown === null ? (
             <div className="flex items-center gap-2 py-4 text-[14px] text-zinc-500">
               <ArrowsClockwise size={14} className="animate-spin" /> 加载报告正文…

@@ -744,7 +744,7 @@ export function TaskCanvasPage() {
       <div className="task-workbench-header mx-3 mt-3 flex min-h-14 shrink-0 flex-wrap items-start gap-3 rounded-[20px] bg-white/[.03] px-3 py-2 ring-1 ring-white/[.06] sm:items-center">
         <Link
           to={`/projects/${projectId}/tasks`}
-          className="order-1 flex items-center gap-1.5 rounded-full bg-black/20 px-3 py-2 text-[10px] text-zinc-500 transition-colors hover:bg-white/[.05] hover:text-zinc-200 sm:order-none"
+          className="order-1 flex items-center gap-1.5 rounded-full theme-surface px-3 py-2 text-[10px] text-zinc-500 transition-colors hover:bg-[var(--surface-tint-strong)] hover:text-zinc-200 sm:order-none"
         >
           <ArrowLeft size={14} weight="light" /> 任务列表
         </Link>
@@ -946,13 +946,13 @@ export function TaskCanvasPage() {
             <div className="flex flex-wrap gap-2 border-t border-white/[.04] px-4 py-2.5">
               {scopeEntries.map(([k, v]) =>
                 typeof v === "string" && k === "内容" ? (
-                  <div key={k} className="w-full rounded-xl bg-black/20 px-4 py-3 ring-1 ring-white/[.045]">
+                  <div key={k} className="theme-surface w-full rounded-xl px-4 py-3 ring-1">
                     <MarkdownView markdown={v} />
                   </div>
                 ) : (
                   <span
                     key={k}
-                    className="inline-flex max-w-full items-baseline gap-1.5 rounded-full bg-black/20 px-2.5 py-1 ring-1 ring-white/[.045]"
+                    className="theme-chip inline-flex max-w-full items-baseline gap-1.5 rounded-full px-2.5 py-1 ring-1"
                   >
                     <span className="shrink-0 font-mono text-[9px] text-zinc-600">{k}</span>
                     <span className="truncate text-[10px] text-zinc-300">
