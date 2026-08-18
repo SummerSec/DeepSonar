@@ -625,6 +625,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       started_at: null,
       finished_at: null,
       heartbeat_at: null,
+      sandbox_id: null,
     });
     if (row) await normalizePendingJobPriority(id);
     if (!row) return reply.code(409).send({ error: "job 不在可恢复状态（succeeded/cancelled 不可恢复，重跑请用 retry）" });
@@ -637,6 +638,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       resourceId: id,
       projectId: (row.project_id as string) ?? null,
     });
+    await sql`SELECT pg_notify('deepsonar_jobs', 'job_resume')`;
     return row;
   });
 }
