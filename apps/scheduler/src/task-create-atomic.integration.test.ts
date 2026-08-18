@@ -168,6 +168,7 @@ if (!testDatabaseUrl) {
         origin: "human",
         actor: "issue-203-test",
       });
+      const assetVersionId = String(asset.version_id);
 
       const scheduledStartAt = "2099-08-20T00:00:00.000Z";
       const success = await app.inject({
@@ -207,7 +208,7 @@ if (!testDatabaseUrl) {
                   WHERE e.canvas_id = c.id AND source.node_type = 'root'
                     AND target.job_id = j.id AND e.edge_type = 'child') AS entry_edges,
                (SELECT COUNT(*)::int FROM job_shared_asset_versions link
-                  WHERE link.job_id = j.id AND link.version_id = ${asset.version_id}) AS asset_links,
+                  WHERE link.job_id = j.id AND link.version_id = ${assetVersionId}) AS asset_links,
                (SELECT COUNT(*)::int FROM audit_logs a
                   WHERE a.project_id = c.project_id AND a.action = 'task.create'
                     AND a.resource_id = j.id) AS audits
