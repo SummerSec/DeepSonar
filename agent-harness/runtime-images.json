@@ -94,7 +94,7 @@
     }
   },
   "toolsets": {
-    "base": { "imageKey": "deepsonar-base", "description": "Explore, Analyze, Code and Hub runtime", "maxSizeMiB": 500 },
+    "base": { "imageKey": "deepsonar-base", "description": "Explore, Analyze, Code and Hub runtime", "maxSizeMiB": 505 },
     "audit": { "imageKey": "deepsonar-audit", "description": "Audit and Verify runtime with deterministic security tools", "maxSizeMiB": 620 }
   }
 }
