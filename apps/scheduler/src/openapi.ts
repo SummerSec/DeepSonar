@@ -1399,7 +1399,7 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "post", path: "/skill-sources/{id}/sync", summary: "同步模块源（浅克隆）", scope: "skills:write", tags: ["Skills"] },
+  { method: "post", path: "/skill-sources/{id}/sync", summary: "同步模块源（浅克隆；返回 changed 与新旧 commit）", scope: "skills:write", tags: ["Skills"] },
   {
     method: "post",
     path: "/skill-sources/{id}/trust",

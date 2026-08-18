@@ -2076,7 +2076,16 @@ export const api = {
   createSkillSource: (s: { name: string; repo_url: string; branch: string }) =>
     send<SkillSource>("POST", "/skill-sources", s),
   syncSkillSource: (id: string) =>
-    send<{ ok: boolean; modules: number }>("POST", `/skill-sources/${id}/sync`),
+    send<{
+      ok: boolean;
+      modules: number;
+      changed: boolean;
+      previous_commit_sha: string | null;
+      last_commit_sha: string | null;
+      previous_content_hash: string | null;
+      last_content_hash: string | null;
+      synced_at: string;
+    }>("POST", `/skill-sources/${id}/sync`),
   deleteSkillSource: (id: string) => send<{ ok: boolean }>("DELETE", `/skill-sources/${id}`),
   trustSkillSource: (id: string, trust_status: SkillTrustStatus) =>
     send<SkillSource>("POST", `/skill-sources/${id}/trust`, { trust_status }),

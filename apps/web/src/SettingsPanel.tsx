@@ -35,6 +35,7 @@ import { SharedAssetsPanel } from "./SharedAssetsPanel";
 import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 import { inferToastKind, showToast } from "./toast";
+import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -1296,7 +1297,7 @@ export function SettingsPanel({
                         setSyncing(s.id);
                         try {
                           const r = await api.syncSkillSource(s.id);
-                          flash(`同步完成：${r.modules} 个模块`);
+                          flash(formatSkillSourceSyncFlash(r));
                           reload();
                         } catch (e) {
                           flash(`同步失败：${e instanceof Error ? e.message : e}`);
