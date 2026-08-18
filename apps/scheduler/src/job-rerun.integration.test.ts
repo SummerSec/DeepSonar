@@ -89,7 +89,11 @@ if (!testDatabaseUrl) {
           targetCanvasId,
           await coreModule.resolveAgentSnapshotForJob(sql, projectId, roleName),
         );
-      const baselineSnapshot = await currentSnapshot();
+      // Normalize postgres.js Result arrays before comparing the persisted
+      // JSONB snapshot with the creation-time value.
+      const baselineSnapshot = JSON.parse(
+        JSON.stringify(await currentSnapshot()),
+      ) as Awaited<ReturnType<typeof currentSnapshot>>;
       const attemptIdentity = (
         snapshot: Awaited<ReturnType<typeof currentSnapshot>>,
       ) => ({
