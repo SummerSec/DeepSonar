@@ -194,17 +194,28 @@ export function JobsPage() {
     setSearchParams(next, { replace: true });
   };
 
-  const act = async (id: string, kind: "cancel" | "resume") => {
+  const act = async (id: string, kind: "cancel" | "resume" | "rerun-current") => {
     if (kind === "cancel" && !await confirm({
       title: "强制退出该 Job？",
       description: "将立即取消调度并回收沙箱，当前执行不可恢复。",
       confirmLabel: "强制退出",
       tone: "danger",
     })) return;
+    if (kind === "resume" && !await confirm({
+      title: "使用旧冻结快照重新执行？",
+      description: "保留同一 Job 与画布，创建新 Attempt；不会读取当前已修改的模型、CLI、凭据或运行镜像。若身份已漂移，服务端会拒绝并提示按当前配置重新执行。",
+      confirmLabel: "旧快照重新执行",
+    })) return;
+    if (kind === "rerun-current" && !await confirm({
+      title: "按当前配置重新执行？",
+      description: "保留同一 Job、画布 Fact/Finding/Intent 与历史 Attempt/effect，按当前 RoleConfig、Credential、项目策略和运行镜像完整重冻快照。",
+      confirmLabel: "按当前配置执行",
+    })) return;
     setBusy(id);
     try {
       if (kind === "cancel") await api.cancelJob(id, { force: true, reason: "强制退出" });
-      else await api.resumeJob(id);
+      else if (kind === "resume") await api.resumeJob(id);
+      else await api.rerunJobCurrent(id);
       await reload();
     } catch (e) {
       setError(String(e));
@@ -454,13 +465,24 @@ export function JobsPage() {
                           </button>
                         )}
                         {RESUMABLE.has(j.status) && (
-                          <button
-                            disabled={busy === j.id}
-                            onClick={() => act(j.id, "resume")}
-                            className="rounded-md border border-ink-700 px-2.5 py-1 font-mono text-[12px] text-zinc-400 transition-colors hover:border-acc-500/50 hover:text-acc-400 disabled:opacity-50"
-                          >
-                            恢复
-                          </button>
+                          <>
+                            <button
+                              disabled={busy === j.id}
+                              onClick={() => act(j.id, "resume")}
+                              title="使用该 Job 创建时的旧冻结快照重新执行"
+                              className="rounded-md border border-ink-700 px-2.5 py-1 font-mono text-[12px] text-zinc-400 transition-colors hover:border-acc-500/50 hover:text-acc-400 disabled:opacity-50"
+                            >
+                              旧快照重跑
+                            </button>
+                            <button
+                              disabled={busy === j.id}
+                              onClick={() => act(j.id, "rerun-current")}
+                              title="按当前 RoleConfig、凭据与运行镜像重冻后重新执行"
+                              className="rounded-md border border-acc-500/30 px-2.5 py-1 font-mono text-[12px] text-acc-400 transition-colors hover:bg-acc-500/10 disabled:opacity-50"
+                            >
+                              当前配置重跑
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -584,13 +606,22 @@ export function JobsPage() {
                       </button>
                     )}
                     {RESUMABLE.has(j.status) && (
-                      <button
-                        disabled={busy === j.id}
-                        onClick={() => act(j.id, "resume")}
-                        className="secondary-button min-h-8 px-3 py-1 text-[10px]"
-                      >
-                        恢复
-                      </button>
+                      <>
+                        <button
+                          disabled={busy === j.id}
+                          onClick={() => act(j.id, "resume")}
+                          className="secondary-button min-h-8 px-3 py-1 text-[10px]"
+                        >
+                          旧快照重跑
+                        </button>
+                        <button
+                          disabled={busy === j.id}
+                          onClick={() => act(j.id, "rerun-current")}
+                          className="secondary-button min-h-8 px-3 py-1 text-[10px] text-acc-400"
+                        >
+                          当前配置重跑
+                        </button>
+                      </>
                     )}
                     <span className="ml-auto font-mono text-[8px] text-zinc-700">
                       {formatTime(j.started_at)}

@@ -56,6 +56,7 @@ type Tab = "canvas" | "facts" | "findings" | "jobs" | "report";
 // Human-gated work is still active; current running elapsed therefore continues
 // from the first actual start while a Job is waiting_human.
 const ACTIVE_JOB = ACTIVE_TASK_JOB_STATUSES;
+const RESUMABLE_JOB = new Set(["waiting_human", "orphan", "failed", "timeout"]);
 
 function parseConvergenceFromTarget(target: Record<string, unknown> | undefined): CanvasConvergence | null {
   if (!target || typeof target !== "object") return null;
@@ -507,7 +508,7 @@ export function TaskCanvasPage() {
     }
   };
 
-  /** 继续执行：优先批量重跑启动中断 Worker；无批次时恢复单 Job 或唤醒 Hub。 */
+  /** 继续执行：默认旧冻结快照；身份漂移时要求逐 Job 按当前配置重跑。 */
   const resumeSession = async () => {
     if (!canvasId) return;
     setConvBusy(true);
@@ -518,11 +519,39 @@ export function TaskCanvasPage() {
       else if (r.action === "rerun_interrupted_jobs") {
         flash(r.message ?? `已重新入队 ${r.jobs?.length ?? 0} 个中断 Worker（同 Job ID、新 Attempt）`);
       }
-      else if (r.action === "resume_job") flash("已恢复单个可恢复 Job");
+      else if (r.action === "resume_job") flash(r.message ?? "已使用旧冻结快照重新执行单个 Job");
       else if (r.action === "start_now") flash(r.message ?? "已清除定时门禁，任务立即进入调度");
       else flash("没有中断 Worker；已唤醒 Hub 继续决策");
     } catch (e) {
       flash(`继续执行失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+
+  const rerunOneJob = async (
+    job: { id: string; type: string },
+    mode: "resume" | "current",
+  ) => {
+    const useCurrent = mode === "current";
+    if (!await confirm({
+      title: useCurrent ? `按当前配置重新执行「${job.type}」？` : `使用旧冻结快照重新执行「${job.type}」？`,
+      description: useCurrent
+        ? "保留画布 Fact/Finding/Intent 与历史 Attempt/effect，按当前 RoleConfig、Credential、项目策略和运行镜像完整重冻快照。"
+        : "保留同一 Job 与画布并创建新 Attempt；不会采用当前配置变化，身份漂移时服务端会拒绝。",
+      confirmLabel: useCurrent ? "当前配置重跑" : "旧快照重跑",
+    })) return;
+    setConvBusy(true);
+    try {
+      if (useCurrent) await api.rerunJobCurrent(job.id);
+      else await api.resumeJob(job.id);
+      flash(useCurrent ? "已按当前配置重新入队" : "已使用旧冻结快照重新入队");
+      const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
+      setJobs(js.items);
+      setJobsCursor(js.next_cursor);
+      setJobsHasMore(js.has_more);
+    } catch (e) {
+      flash(`重新执行失败：${e instanceof Error ? e.message : e}`);
     } finally {
       setConvBusy(false);
     }
@@ -828,13 +857,13 @@ export function TaskCanvasPage() {
                     hasActiveJob
                       ? "任务已在执行"
                       : canResumeSession
-                        ? "优先重新执行全部启动中断 Worker（同 Job ID、新 Attempt）；否则恢复单个 Job 或唤醒 Hub"
+                        ? "优先使用旧冻结快照重新执行全部启动中断 Worker（同 Job ID、新 Attempt）；身份漂移时会返回 SNAPSHOT_STALE"
                         : "还没有执行记录"
                   }
                   onClick={() => void resumeSession()}
                   className="block w-full px-3 py-2 text-left text-[12px] text-zinc-300 hover:bg-white/[.05] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  继续执行
+                  旧快照继续执行
                 </button>
                 <button
                   type="button"
@@ -1266,7 +1295,8 @@ export function TaskCanvasPage() {
                           {jobElapsed(j)}
                         </td>
                         <td className={tdCls} onClick={(e) => e.stopPropagation()}>
-                          {ACTIVE_JOB.has(j.status) ? (
+                          <div className="flex flex-wrap gap-1.5">
+                          {ACTIVE_JOB.has(j.status) && (
                             <button
                               type="button"
                               disabled={convBusy}
@@ -1295,9 +1325,33 @@ export function TaskCanvasPage() {
                             >
                               强制退出
                             </button>
-                          ) : (
+                          )}
+                          {RESUMABLE_JOB.has(j.status) && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={convBusy}
+                                onClick={() => void rerunOneJob(j, "resume")}
+                                title="使用该 Job 创建时的旧冻结快照；身份漂移时拒绝"
+                                className="rounded-md border border-ink-700 px-2.5 py-1 font-mono text-[11px] text-zinc-400 transition-colors hover:border-acc-500/50 hover:text-acc-300 disabled:opacity-50"
+                              >
+                                旧快照重跑
+                              </button>
+                              <button
+                                type="button"
+                                disabled={convBusy}
+                                onClick={() => void rerunOneJob(j, "current")}
+                                title="按当前 RoleConfig、凭据与运行镜像重冻快照"
+                                className="rounded-md border border-acc-500/30 px-2.5 py-1 font-mono text-[11px] text-acc-400 transition-colors hover:bg-acc-500/10 disabled:opacity-50"
+                              >
+                                当前配置重跑
+                              </button>
+                            </>
+                          )}
+                          {!ACTIVE_JOB.has(j.status) && !RESUMABLE_JOB.has(j.status) && (
                             <span className="font-mono text-[12px] text-zinc-700">—</span>
                           )}
+                          </div>
                         </td>
                       </tr>
                     ))}
