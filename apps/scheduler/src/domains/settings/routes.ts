@@ -77,6 +77,16 @@ export function parseConcurrencyRulesPatch(input: unknown): Record<string, unkno
   return RulesPatch.parse(input);
 }
 
+export function projectJobQuotaPatchExceedsGlobal(
+  currentQuota: unknown,
+  nextQuota: unknown,
+  globalMaxJobsPerProject: number,
+): boolean {
+  return typeof nextQuota === "number"
+    && nextQuota !== currentQuota
+    && nextQuota > globalMaxJobsPerProject;
+}
+
 const GlobalRulesPatch = RulesPatch.superRefine((rules, ctx) => {
   if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentJobs")) {
     ctx.addIssue({ code: "custom", path: ["maxConcurrentJobs"], message: "maxConcurrentJobs 只能在项目设置中配置" });
@@ -357,6 +367,17 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       if (Object.prototype.hasOwnProperty.call(body.rules, "maxConcurrentJobs")) {
         if (body.rules.maxConcurrentJobs === null) {
           delete nextRules.maxConcurrentJobs;
+        } else {
+          const global = await globalRules(sql);
+          if (projectJobQuotaPatchExceedsGlobal(
+            currentRules.maxConcurrentJobs,
+            body.rules.maxConcurrentJobs,
+            global.maxJobsPerProject,
+          )) {
+            return reply.code(400).send({
+              error: `maxConcurrentJobs 不能超过全局每项目上限 ${global.maxJobsPerProject}`,
+            });
+          }
         }
       }
       cfg.rules = nextRules;

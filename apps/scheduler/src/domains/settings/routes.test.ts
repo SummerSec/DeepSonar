@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Fastify from "fastify";
-import { registerSettingsRoutes } from "./routes.js";
+import { projectJobQuotaPatchExceedsGlobal, registerSettingsRoutes } from "./routes.js";
 
 test("项目镜像策略 PATCH 的非法请求体返回 400", async () => {
   const app = Fastify({ logger: false });
@@ -43,4 +43,11 @@ test("项目并发配额 PATCH 拒绝非法值与全局键", async () => {
   });
   assert.equal(globalEndpoint.statusCode, 400);
   await app.close();
+});
+
+test("全局上限降低后允许原项目配额随其他规则保存", () => {
+  assert.equal(projectJobQuotaPatchExceedsGlobal(4, 4, 2), false);
+  assert.equal(projectJobQuotaPatchExceedsGlobal(4, 5, 2), true);
+  assert.equal(projectJobQuotaPatchExceedsGlobal(undefined, 4, 2), true);
+  assert.equal(projectJobQuotaPatchExceedsGlobal(4, null, 2), false);
 });
