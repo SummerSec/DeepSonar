@@ -54,6 +54,31 @@ const ErrorSchema = {
   required: ["error"],
 };
 
+const TaskCreateErrorSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["error", "error_code"],
+  properties: {
+    error: { type: "string", description: "任务未创建；人类可读的真实失败原因" },
+    error_code: {
+      type: "string",
+      enum: [
+        "TASK_SCHEDULE_INVALID",
+        "TASK_SEEDS_INVALID",
+        "TASK_TARGET_INVALID",
+        "PROJECT_ARCHIVED",
+        "RUNTIME_IMAGE_NO_TRUSTED_VERSION",
+        "RUNTIME_IMAGE_VERSION_UNAVAILABLE",
+        "RUNTIME_IMAGE_PLATFORM_UNAVAILABLE",
+        "RUNTIME_IMAGE_CHANNEL_UNAVAILABLE",
+        "RUNTIME_IMAGE_REFERENCE_INVALID",
+        "runtime_image_not_ready",
+        "TASK_RUNTIME_SNAPSHOT_UNAVAILABLE",
+      ],
+    },
+  },
+};
+
 const TaskExecutionControlResponseSchema = {
   type: "object",
   additionalProperties: false,
@@ -460,6 +485,8 @@ const OPS: Op[] = [
     method: "post",
     path: "/projects/{id}/tasks",
     summary: "创建任务（铸画布 + 入口 job）",
+    description:
+      "目标/种子校验、网络与运行快照冻结、Canvas/root/种子投影、入口 Hub Job/图节点/边及共享资产链接在同一事务提交；任一快照、镜像或凭据失败均不创建任务。task.create 审计仅在业务提交成功后写入。",
     scope: "tasks:write",
     tags: ["Tasks"],
     body: {
@@ -492,6 +519,16 @@ const OPS: Op[] = [
           type: "boolean",
           description: "为 true 时在下一北京时间 08:00（Asia/Shanghai）开始；scheduled_start_at 优先",
         },
+      },
+    },
+    responses: {
+      "400": {
+        description: "任务输入、组合种子或计划无效",
+        content: { "application/json": { schema: TaskCreateErrorSchema } },
+      },
+      "409": {
+        description: "项目已归档，或受治理的凭据/runtime image 快照当前不可用；任务未创建",
+        content: { "application/json": { schema: TaskCreateErrorSchema } },
       },
     },
   },

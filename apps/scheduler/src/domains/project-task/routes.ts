@@ -18,8 +18,17 @@ import {
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { revokeJobTokens } from "../../gateway.js";
+import { inc } from "../../metrics.js";
 import { planePollProject } from "../../plane-sync.js";
 import { runner } from "../../runtime.js";
+import {
+  RuntimeImageChannelUnavailableError,
+  RuntimeImageNoTrustedVersionError,
+  RuntimeImageNotReadyError,
+  RuntimeImagePlatformUnavailableError,
+  RuntimeImageReferenceInvalidError,
+  RuntimeImageVersionUnavailableError,
+} from "../../runtime-images.js";
 import { recoverCancelledDerivedJob } from "../job-control/recovery.js";
 import {
   SNAPSHOT_STALE,
@@ -30,7 +39,6 @@ import {
 } from "../job-control/rerun.js";
 import { markAttemptInterrupted } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
-import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
@@ -50,10 +58,15 @@ import {
   MAX_TASK_SEED_FINDINGS,
   TASK_KINDS,
   TaskSeedInputError,
-  frozenTaskSeeds,
   insertTaskSeedProjections,
   validateFrozenTaskSeedsForRetry,
 } from "../../task-compose.js";
+import {
+  TaskSnapshotUnavailableError,
+  TaskTargetInputError,
+  createTaskTransaction,
+  insertEntryHubJob,
+} from "./creation.js";
 
 const SyncProjectBody = z.object({
   plane_project_id: z.string().min(1),
@@ -292,9 +305,6 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
   app.post("/projects/:id/tasks", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = CreateTaskBody.parse(req.body);
-    const [project] = await sql`SELECT id, status FROM projects WHERE id = ${id}`;
-    if (!project) return reply.code(404).send({ error: "project not found" });
-    if (project.status !== "active") return reply.code(409).send({ error: "项目已归档，不能新建任务" });
 
     let schedule;
     try {
@@ -303,56 +313,75 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         schedule_beijing_8am: body.schedule_beijing_8am,
       });
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+        error_code: "TASK_SCHEDULE_INVALID",
+      });
     }
 
-    let canvasId: string;
+    const target = {
+      title: body.title,
+      content: body.content,
+      goal: body.content,
+      kind: body.kind,
+      ...(body.seed_finding_ids !== undefined ? { seed_finding_ids: body.seed_finding_ids } : {}),
+      ...(body.finding_protocol ? { finding_protocol: body.finding_protocol } : {}),
+      ...(body.allow_egress !== undefined
+        ? { network_policy: { allow_egress: body.allow_egress } }
+        : {}),
+      ...(schedule ? { schedule } : {}),
+    };
+    const payload = {
+      title: body.title,
+      content: body.content,
+      goal: body.content,
+      trigger: { kind: "user_task" },
+      ...(schedule ? { schedule } : {}),
+    };
+
+    let created;
     try {
-      canvasId = await ensureCanvasForTask({
+      created = await createTaskTransaction({
         projectId: id,
         title: body.title,
-        allowComposeSeeds: true,
-        target: {
-          title: body.title,
-          content: body.content,
-          goal: body.content,
-          kind: body.kind,
-          ...(body.seed_finding_ids !== undefined ? { seed_finding_ids: body.seed_finding_ids } : {}),
-          ...(body.finding_protocol ? { finding_protocol: body.finding_protocol } : {}),
-          ...(body.allow_egress !== undefined
-            ? { network_policy: { allow_egress: body.allow_egress } }
-            : {}),
-          ...(schedule ? { schedule } : {}),
-        },
+        target,
+        payload,
       });
     } catch (error) {
+      if (error instanceof TaskSeedInputError || error instanceof TaskTargetInputError) {
+        return reply.code(400).send({
+          error: error.message,
+          error_code: error instanceof TaskTargetInputError ? error.code : "TASK_SEEDS_INVALID",
+        });
+      }
       if (
-        error instanceof TaskSeedInputError ||
-        (error instanceof Error && error.message.includes("finding protocol"))
+        error instanceof RuntimeImageNoTrustedVersionError
+        || error instanceof RuntimeImageVersionUnavailableError
+        || error instanceof RuntimeImagePlatformUnavailableError
+        || error instanceof RuntimeImageChannelUnavailableError
+        || error instanceof RuntimeImageReferenceInvalidError
+        || error instanceof RuntimeImageNotReadyError
+        || error instanceof TaskSnapshotUnavailableError
       ) {
-        return reply.code(400).send({ error: error.message });
+        return reply.code("statusCode" in error ? Number(error.statusCode) : 409).send({
+          error: error.message,
+          error_code: error.code,
+        });
       }
       throw error;
     }
-    const frozenSeedIds = body.kind === "compose"
-      ? frozenTaskSeeds(
-          ((await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`)[0]?.target_json ?? {}) as Record<string, unknown>,
-        ).map((seed) => seed.id)
-      : [];
-    const { job, duplicated } = await createJob({
-      projectId: id,
-      canvasId,
-      type: "hub_reason",
-      payload: {
-        title: body.title,
-        content: body.content,
-        goal: body.content,
-        trigger: { kind: "user_task" },
-        ...(body.kind === "compose" ? { related_finding_ids: frozenSeedIds } : {}),
-        ...(schedule ? { schedule } : {}),
-      },
-    });
-    if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
+    if (created.kind === "not_found") {
+      return reply.code(404).send({ error: "project not found", error_code: "PROJECT_NOT_FOUND" });
+    }
+    if (created.kind === "archived") {
+      return reply.code(409).send({
+        error: "项目已归档，不能新建任务",
+        error_code: "PROJECT_ARCHIVED",
+      });
+    }
+
+    const { canvasId, job, frozenSeedIds } = created;
+    inc("deepsonar_jobs_created_total", { type: "hub_reason" });
     if (schedule) noteScheduleWakeAt(schedule.start_at);
     await audit(req, {
       action: "task.create",
@@ -947,48 +976,18 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         retryTarget,
       );
 
-      // 同事务内插入入口 Hub，避免 createJob 另开连接看不到未提交删除
-      const [hubJob] = await tx`
-        INSERT INTO jobs ${tx({
-          project_id: projectId,
-          canvas_id: canvasId,
-          plane_issue_id: (canvas.plane_issue_id as string) ?? null,
-          agent_snapshot_json: snapshot as never,
-          type: "hub_reason",
-          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
-          payload_json: { ...payload, scheduling_purpose: "hub" } as never,
-          timeout_sec: config.timeouts.auditSec,
-          followup_depth: 0,
-        })}
-        RETURNING *`;
-      await recordJobSharedAssets(tx as unknown as typeof sql, hubJob.id as string, snapshot.shared_assets ?? []);
-
-      const [{ next_x }] = await tx<[{ next_x: number }]>`
-        SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes
-        WHERE canvas_id = ${canvasId}`;
-      const [hubNode] = await tx`
-        INSERT INTO canvas_nodes ${tx({
-          canvas_id: canvasId,
-          job_id: hubJob.id as string,
-          node_type: "job",
-          title: "Hub 决策",
-          body_json: { type: "hub_reason", trigger: payload.trigger } as never,
-          x: next_x,
-          y: 300,
-          status: "pending",
-        })}
-        RETURNING id`;
-      const [root] = await tx`
-        SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
-      if (root) {
-        await tx`
-          INSERT INTO canvas_edges ${tx({
-            canvas_id: canvasId,
-            from_node_id: root.id,
-            to_node_id: hubNode.id,
-            edge_type: "child",
-          })}`;
-      }
+      // 创建与 retry 共用同一个 caller-owned transaction helper。
+      const hubJob = await insertEntryHubJob(
+        tx as unknown as typeof sql,
+        {
+          projectId,
+          canvasId,
+          rootNodeId: rootNode.id as string,
+          planeIssueId: (canvas.plane_issue_id as string) ?? null,
+          payload,
+          snapshot,
+        },
+      );
       return { job: hubJob, reason: undefined };
       });
     } catch (error) {

@@ -12,8 +12,11 @@ import {
   parseRuntimeImageRegistry,
   runtimeImageRefForChannel,
   runtimeImageVersionPin,
+  RuntimeImageChannelUnavailableError,
+  RuntimeImageNoTrustedVersionError,
   RuntimeImageNotReadyError,
   RuntimeImagePlatformUnavailableError,
+  runtimeImageSelectionError,
   runtimeImageRegistryNextSyncDelayMs,
   selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
@@ -183,6 +186,42 @@ test("bulk selection is strict about host platform and selected channel", () => 
       platforms: [],
     }],
   }], "github", "linux/amd64"), /platforms explicitly/);
+});
+
+test("snapshot diagnostics distinguish no trusted version, platform, and channel in stable order", () => {
+  const base = {
+    imageKey: "deepsonar-base",
+    official: true,
+    selectedVersionId: null,
+    selectedChannel: "github" as const,
+    hostPlatform: "linux/amd64",
+    hasSelectedTrustedVersion: false,
+    hasHostPlatform: false,
+    hasSelectedRef: false,
+  };
+  const noTrusted = runtimeImageSelectionError({
+    ...base,
+    hasTrustedVersion: false,
+  });
+  assert.ok(noTrusted instanceof RuntimeImageNoTrustedVersionError);
+  assert.equal(noTrusted.code, "RUNTIME_IMAGE_NO_TRUSTED_VERSION");
+
+  const platform = runtimeImageSelectionError({
+    ...base,
+    hasTrustedVersion: true,
+    hasSelectedTrustedVersion: true,
+  });
+  assert.ok(platform instanceof RuntimeImagePlatformUnavailableError);
+  assert.equal(platform.code, "RUNTIME_IMAGE_PLATFORM_UNAVAILABLE");
+
+  const channel = runtimeImageSelectionError({
+    ...base,
+    hasTrustedVersion: true,
+    hasSelectedTrustedVersion: true,
+    hasHostPlatform: true,
+  });
+  assert.ok(channel instanceof RuntimeImageChannelUnavailableError);
+  assert.equal(channel.code, "RUNTIME_IMAGE_CHANNEL_UNAVAILABLE");
 });
 
 test("v1 single image_ref is normalized to a known channel without changing the legacy projection", () => {

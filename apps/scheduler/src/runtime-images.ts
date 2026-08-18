@@ -132,6 +132,26 @@ export class RuntimeImageChannelUnavailableError extends Error {
   }
 }
 
+export class RuntimeImageNoTrustedVersionError extends Error {
+  readonly code = "RUNTIME_IMAGE_NO_TRUSTED_VERSION" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string) {
+    super(`runtime image ${imageKey} has no trusted version; wait for admission or select a trusted version`);
+    this.name = "RuntimeImageNoTrustedVersionError";
+  }
+}
+
+export class RuntimeImageVersionUnavailableError extends Error {
+  readonly code = "RUNTIME_IMAGE_VERSION_UNAVAILABLE" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string, readonly versionId: string) {
+    super(`runtime image ${imageKey} selected version ${versionId} is missing or not trusted`);
+    this.name = "RuntimeImageVersionUnavailableError";
+  }
+}
+
 export class RuntimeImagePlatformUnavailableError extends Error {
   readonly code = "RUNTIME_IMAGE_PLATFORM_UNAVAILABLE" as const;
   readonly statusCode = 409 as const;
@@ -142,6 +162,16 @@ export class RuntimeImagePlatformUnavailableError extends Error {
   }
 }
 
+export class RuntimeImageReferenceInvalidError extends Error {
+  readonly code = "RUNTIME_IMAGE_REFERENCE_INVALID" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string) {
+    super(`trusted runtime image ${imageKey} has no consistent immutable reference`);
+    this.name = "RuntimeImageReferenceInvalidError";
+  }
+}
+
 export class RuntimeImageNotReadyError extends Error {
   readonly code = "runtime_image_not_ready" as const;
 
@@ -149,6 +179,46 @@ export class RuntimeImageNotReadyError extends Error {
     super(`runtime_image_not_ready: runtime image is not prepared locally: ${imageRef}`);
     this.name = "RuntimeImageNotReadyError";
   }
+}
+
+export interface RuntimeImageSelectionState {
+  imageKey: string;
+  official: boolean;
+  selectedVersionId: string | null;
+  selectedChannel: RuntimeImageRegistryChannel;
+  hostPlatform: string;
+  hasTrustedVersion: boolean;
+  hasSelectedTrustedVersion: boolean;
+  hasHostPlatform: boolean;
+  hasSelectedRef: boolean;
+}
+
+/** Stable fail-closed diagnostic order for an empty snapshot selection. */
+export function runtimeImageSelectionError(
+  state: RuntimeImageSelectionState,
+): Error {
+  if (!state.hasTrustedVersion) {
+    return new RuntimeImageNoTrustedVersionError(state.imageKey);
+  }
+  if (state.selectedVersionId && !state.hasSelectedTrustedVersion) {
+    return new RuntimeImageVersionUnavailableError(
+      state.imageKey,
+      state.selectedVersionId,
+    );
+  }
+  if (!state.hasHostPlatform) {
+    return new RuntimeImagePlatformUnavailableError(
+      state.imageKey,
+      state.hostPlatform,
+    );
+  }
+  if (state.official && !state.hasSelectedRef) {
+    return new RuntimeImageChannelUnavailableError(
+      state.selectedChannel,
+      state.imageKey,
+    );
+  }
+  return new RuntimeImageReferenceInvalidError(state.imageKey);
 }
 
 export class RuntimeImagePreparationBusyError extends Error {
@@ -1651,19 +1721,52 @@ async function selectRuntimeImageSnapshot(
   if (!row) {
     const [image] = await db`
       SELECT image_key, official,
-             EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
-               AND v.platforms_json @> ${sql.json([hostPlatform])}) AS has_host_platform,
-             EXISTS (SELECT 1 FROM runtime_image_versions v JOIN runtime_image_version_refs r ON r.version_id = v.id
-               WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted' AND r.channel = ${selectedChannel}) AS has_selected_ref
+             EXISTS (
+               SELECT 1 FROM runtime_image_versions v
+               WHERE v.runtime_image_id = ri.id
+                 AND v.trust_status = 'trusted'
+             ) AS has_trusted_version,
+             EXISTS (
+               SELECT 1 FROM runtime_image_versions v
+               WHERE v.runtime_image_id = ri.id
+                 AND v.trust_status = 'trusted'
+                 AND (${selectedVersionId}::uuid IS NULL OR v.id = ${selectedVersionId}::uuid)
+             ) AS has_selected_trusted_version,
+             EXISTS (
+               SELECT 1 FROM runtime_image_versions v
+               WHERE v.runtime_image_id = ri.id
+                 AND v.trust_status = 'trusted'
+                 AND (${selectedVersionId}::uuid IS NULL OR v.id = ${selectedVersionId}::uuid)
+                 AND v.platforms_json @> ${sql.json([hostPlatform])}
+             ) AS has_host_platform,
+             EXISTS (
+               SELECT 1
+               FROM runtime_image_versions v
+               JOIN runtime_image_version_refs r
+                 ON r.version_id = v.id AND r.channel = ${selectedChannel}
+               WHERE v.runtime_image_id = ri.id
+                 AND v.trust_status = 'trusted'
+                 AND (${selectedVersionId}::uuid IS NULL OR v.id = ${selectedVersionId}::uuid)
+                 AND v.platforms_json @> ${sql.json([hostPlatform])}
+             ) AS has_selected_ref
       FROM runtime_images ri WHERE ri.id = ${imageId}`;
-    if (image && !image.has_host_platform) throw new RuntimeImagePlatformUnavailableError(String(image.image_key), hostPlatform);
-    if (image?.official && !image.has_selected_ref) throw new RuntimeImageChannelUnavailableError(selectedChannel, String(image.image_key));
-    throw new Error("runtime image binding has no matching trusted version");
+    if (!image) throw new Error("runtime image binding is unavailable");
+    throw runtimeImageSelectionError({
+      imageKey: String(image.image_key),
+      official: Boolean(image.official),
+      selectedVersionId,
+      selectedChannel,
+      hostPlatform,
+      hasTrustedVersion: Boolean(image.has_trusted_version),
+      hasSelectedTrustedVersion: Boolean(image.has_selected_trusted_version),
+      hasHostPlatform: Boolean(image.has_host_platform),
+      hasSelectedRef: Boolean(image.has_selected_ref),
+    });
   }
   const resolvedRef = row.resolved_ref as string | null;
   const digest = row.digest as string | null;
   if (!resolvedRef || !digest || immutableDigest(resolvedRef) !== digest) {
-    throw new Error(`trusted runtime image binding has no consistent immutable reference (key=${row.image_key})`);
+    throw new RuntimeImageReferenceInvalidError(String(row.image_key));
   }
   return {
     runtime_image_id: String(row.runtime_image_id),

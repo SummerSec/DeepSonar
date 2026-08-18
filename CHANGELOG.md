@@ -22,6 +22,7 @@
 - Agent stderr 以精确脱敏、总量有界的 normalized evidence 保存，Job 错误仍保持短摘要。
 - 本地 Docker/vfs 宿主增加受管容器/卷周期 desired-state 清理、非强制 runtime image GC 和磁盘水位 claim 门禁；禁止 broad prune 和删除非 DeepSonar 资源。
 - Job `resume` 现明确定义为使用旧冻结快照创建新 Attempt；当前 CLI/模型/凭据/runtime identity 漂移或无法解析时稳定返回 `409 SNAPSHOT_STALE`。任务级启动中断批次也会原子拒绝 stale 快照并返回 Job IDs，不再静默使用旧模型。
+- 人工任务创建现在将目标/种子、网络与 Hub 快照、Canvas/root、入口 Job/图边及共享资产链接原子提交；镜像或凭据失败不再留下无 Job 的空任务，并以稳定错误码区分无 trusted 版本、平台、通道/ref 与其它快照故障。
 
 ### 部署 / 升级说明
 

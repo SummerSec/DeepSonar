@@ -190,6 +190,14 @@ Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否
 
 > **本地库为唯一真相，Plane 为可选集成。** Web 直接创建：`POST /projects`（plane_project_id 可空）→ `POST /projects/{id}/tasks`（同事务建任务画布 + root + pending job）。
 
+人工任务创建的事务边界包含目标/Finding 协议/compose 种子校验、有效网络策略、当前
+RoleConfig/Credential/runtime image 快照、Canvas/root/种子投影、入口 Hub Job、Job
+节点/边和 `job_shared_asset_versions`。网络、Credential 或镜像选择失败会回滚整笔事务，
+因此 API 失败时不存在 root-only Canvas。镜像诊断先判定是否存在 trusted 版本，再判定
+显式 pin、宿主平台、所选 registry 通道/ref 和不可变 ref 一致性，分别返回稳定错误码。
+`audit()` 使用独立连接，不进入未提交事务；`task.create` 只在上述事务提交后写入，失败
+请求不写创建审计。
+
 1. 默认：在 Web「项目」页新建本地项目（或 `POST /projects`）
 2. 可选：在项目「设置 → Plane 集成」绑定 Plane Project；绑定后 Ready 状态的 issue 只需标题和自然语言描述即可被认领
 3. 创建任务：Web 表单、`POST /projects/{id}/tasks`、Plane Ready issue，或 `POST /projects/{id}/events` 外部事件；所有入口都先创建 `hub_reason` Job
