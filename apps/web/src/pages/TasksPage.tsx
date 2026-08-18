@@ -1,4 +1,4 @@
-import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Clock, GitMerge, Pause, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Clock, GitMerge, Pause, Play, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type FindingSummary, type Project } from "../api";
@@ -572,6 +572,9 @@ export function TasksPage() {
       endedAt: c.ended_at,
       startedAt: c.started_at,
       scheduledStartAt: readScheduledStartAt(c.target_json),
+      executionState: c.execution_state,
+      executionActiveCount: c.execution_active_count,
+      pendingCount: c.pending_count,
       nowMs: clock,
     }).isActive);
     if (filter === "findings") return canvases.filter((c) => c.finding_count > 0);
@@ -588,6 +591,9 @@ export function TasksPage() {
     endedAt: canvas.ended_at,
     startedAt: canvas.started_at,
     scheduledStartAt: readScheduledStartAt(canvas.target_json),
+    executionState: canvas.execution_state,
+    executionActiveCount: canvas.execution_active_count,
+    pendingCount: canvas.pending_count,
     nowMs: clock,
   }).isActive).length;
   const findingCount = canvases.reduce((total, canvas) => total + canvas.finding_count, 0);
@@ -616,11 +622,17 @@ export function TasksPage() {
               endedAt: canvas.ended_at,
               startedAt: canvas.started_at,
               scheduledStartAt,
+              executionState: canvas.execution_state,
+              executionActiveCount: canvas.execution_active_count,
+              pendingCount: canvas.pending_count,
               nowMs: clock,
             });
             const isActive = lifecycle.isActive;
             const isScheduled = lifecycle.status === "scheduled";
             const isArchived = lifecycle.status === "archived";
+            const executionState = canvas.execution_state;
+            const executionPausing = executionState === "pausing";
+            const executionPaused = executionState === "paused";
             const isCompose = canvas.target_json?.kind === "compose";
             // 生命周期从「实际开始执行」起算，未真正开始则为「未开始」。
             const executionElapsed = canvas.started_at
@@ -724,6 +736,44 @@ export function TasksPage() {
                   P{canvas.last_job_priority ?? "—"}
                 </span>
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-0.5">
+                  {!isArchived && (
+                    <button
+                      disabled={executionPausing}
+                      title={executionPausing
+                        ? `暂停中，尚有 ${canvas.execution_active_count} 个 Job 安全收尾`
+                        : executionPaused
+                          ? "解除任务暂停；不会清除定时计划或重试失败 Job"
+                          : "阻止领取新 Job；已运行 Job 会安全收尾"}
+                      onClick={async () => {
+                        if (executionPausing) return;
+                        try {
+                          const result = executionPaused
+                            ? await api.startTask(canvas.id)
+                            : await api.pauseTask(canvas.id);
+                          setCanvases((list) => list.map((item) => item.id === canvas.id ? {
+                            ...item,
+                            execution_state: result.execution_state,
+                            execution_active_count: result.active_count,
+                            pending_count: result.pending_count,
+                          } : item));
+                          if (result.execution_state === "pausing") {
+                            flash(`暂停中，尚有 ${result.active_count} 个 Job 安全收尾`);
+                          } else {
+                            flash(result.execution_state === "paused" ? "任务已暂停" : "任务已开始");
+                          }
+                        } catch (e) {
+                          flash(`任务控制失败：${e instanceof Error ? e.message : e}`);
+                        }
+                      }}
+                      className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-amber-300 transition-colors hover:bg-amber-500/[.08] hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {executionPausing
+                        ? <><Pause size={11} /> 暂停中 · {canvas.execution_active_count} 个收尾</>
+                        : executionPaused
+                          ? <><Play size={11} /> 开始</>
+                          : <><Pause size={11} /> 暂停</>}
+                    </button>
+                  )}
                   {!isArchived && canvas.last_job_id && canvas.last_job_status && ACTIVE_TASK_JOB_STATUSES.has(canvas.last_job_status) && (
                     <button
                       onClick={async () => {
@@ -759,18 +809,21 @@ export function TasksPage() {
                       立即开始
                     </button>
                   )}
-                  {!isArchived && !isActive && canvas.job_count > 0 && (
+                  {!isArchived && !isActive && !executionPaused && canvas.job_count > 0 && (
                     <button
-                      title="继续执行：恢复中断 Job 或唤醒 Hub（保留历史）"
+                      title="优先重新执行全部启动中断 Worker（同 Job ID、新 Attempt）；否则恢复单个 Job 或唤醒 Hub"
                       onClick={async () => {
                         try {
                           const r = await api.resumeTaskSession(canvas.id);
                           if (r.action === "already_running") flash(r.message ?? "任务已在执行");
-                          else if (r.action === "resume_job") flash("已恢复会话，继续执行");
+                          else if (r.action === "rerun_interrupted_jobs") {
+                            flash(r.message ?? `已重新入队 ${r.jobs?.length ?? 0} 个中断 Worker（同 Job ID、新 Attempt）`);
+                          }
+                          else if (r.action === "resume_job") flash("已恢复单个可恢复 Job");
                           else if (r.action === "start_now") flash(r.message ?? "已立即开始");
-                          else flash("已恢复会话，Hub 继续决策");
+                          else flash("没有中断 Worker；已唤醒 Hub 继续决策");
                         } catch (e) {
-                          flash(`恢复会话失败：${e instanceof Error ? e.message : e}`);
+                          flash(`继续执行失败：${e instanceof Error ? e.message : e}`);
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
@@ -779,7 +832,7 @@ export function TasksPage() {
                       恢复
                     </button>
                   )}
-                  {!isArchived && !isActive && canvas.job_count > 0 && (
+                  {!isArchived && !isActive && !executionPaused && canvas.job_count > 0 && (
                     <button
                       title="清空历史后从意图重新执行"
                       onClick={async () => {

@@ -77,6 +77,10 @@ const HELP: Record<string, string> = {
   deepsonar_api_auth_failed_total: "API auth failures (401/403)",
   deepsonar_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
   deepsonar_shared_assets_cleanup_failed_total: "共享资产卷清理失败次数",
+  deepsonar_desired_state_cleanup_failures_total: "Desired-state cleanup failures by managed resource type",
+  deepsonar_runtime_image_gc_removed_total: "Runtime image references removed by safe GC",
+  deepsonar_runtime_image_gc_failures_total: "Runtime image GC failures by reason",
+  deepsonar_host_disk_check_failures_total: "Host filesystem statfs failures",
   deepsonar_plane_sync_errors_total: "Plane sync/writeback errors",
   deepsonar_graph_snapshots_total: "Bounded graph prompt projections by scope and truncation",
   deepsonar_graph_yaml_chars_total: "Total characters injected through bounded graph projections by scope",
@@ -88,6 +92,13 @@ const HELP: Record<string, string> = {
 const PROCESS_GAUGE_HELP: Record<string, string> = {
   deepsonar_shared_assets_orphan_volumes: "对应 Job 已非活跃状态的受管共享资产卷数量",
   deepsonar_shared_assets_orphan_volume_age_seconds: "对应 Job 已非活跃状态的受管共享资产卷最大年龄秒数",
+  deepsonar_cleanup_residual_containers: "Desired-state cleanup 后残留的非活跃受管容器数量",
+  deepsonar_cleanup_residual_volumes: "Desired-state cleanup 后残留的非活跃受管卷数量",
+  deepsonar_cleanup_consecutive_failures: "Desired-state cleanup 连续失败轮次",
+  deepsonar_runtime_image_gc_candidates: "最近一次安全 GC 判定的可删除 runtime image 版本数量",
+  deepsonar_runtime_image_gc_retained_in_use: "最近一次安全 GC 因容器引用而保留的版本数量",
+  deepsonar_host_disk_used_percent: "Scheduler 监控的宿主文件系统已用百分比",
+  deepsonar_host_disk_pressure: "宿主文件系统水位：0=ok, 1=warning, 2=error/unknown",
 };
 
 /** Prometheus text exposition */

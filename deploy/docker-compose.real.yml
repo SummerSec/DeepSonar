@@ -9,10 +9,13 @@ services:
       # Sandboxes call the managed proxy; the proxy reaches Scheduler on the shared bridge.
       DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://deepsonar-gateway-proxy:3100/gateway}
       DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: ${DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http://scheduler:3100/gateway}
+      # Read-only bind of the host Docker data filesystem; statfs only, never file traversal/deletion.
+      DEEPSONAR_HOST_DISK_PATH: /host-disk
     volumes:
       - blob_data:/app/data
       - ./master.key:/run/secrets/deepsonar_master_key:ro
       - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${DEEPSONAR_HOST_DISK_SOURCE:-/var/lib/docker}:/host-disk:ro
   image-admission:
     volumes:
       - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock

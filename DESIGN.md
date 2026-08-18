@@ -134,6 +134,7 @@ pending → claimed → provisioning → running
 - 优先级：资格与排序分离（图阶段 / 收敛证据 vs 固定优先级），避免 priority 通胀。
 - **Provision admission（#158）**：并发上限由数据库 claim admission 判定，不是进程内 semaphore。超过 `global_settings.maxConcurrentProvisioning` 的 Job 保持 `pending`，不写入/消耗 `claimed_at`；释放槽位后由调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。仅在全局配置缺失时使用 `PROVISION_CONCURRENCY=2`。
 - **项目并发配额（#187）**：全局 `maxJobsPerProject` 仍是每项目安全硬上限。项目可在 `config_json.rules.maxConcurrentJobs` 收紧自己的 claim 预算（`0` 暂停领取新 Job），有效值 `min(全局每项目上限, 项目值 ?? 全局上限)`；不能放宽全局 cap。同一项目下全部任务与 Hub/Worker/Verify/Report 共用该额度。`pending` / `waiting_human` 不占额度（与 Dispatcher 活跃计数一致：`claimed` / `provisioning` / `running`）。修改只影响后续 claim，经 `pg_notify('deepsonar_jobs')` 唤醒，不终止已运行 Job；Job 快照不冻结此配额。
+- **任务 drain pause（#188）**：Canvas 在 `target_json.execution_control` 自由区保存 `paused/paused_at/paused_by/reason`。`POST /tasks/:canvasId/pause|start` 使用 Canvas 行锁提供数据库权威、幂等的执行门禁；Dispatcher 在 claim 前锁定并重读 Canvas，暂停后所有该画布的 pending Hub/Worker/Verify/Report 均保持 durable pending，不再领取。已有 `claimed/provisioning/running/waiting_human` Job 安全收尾，分别投影 `pausing → paused`；`pending` 不算收尾。start 不清定时计划、不重试失败/孤儿 Job，提交后 `pg_notify`，仅在解除暂停且画布无 pending/活动工作、Hub 仍有资格时幂等补一个 Hub。
 - **任务执行时间（定时开始，#147 已关闭）**：创建任务时可设 `schedule_beijing_8am`（下一北京时间 08:00）或 `scheduled_start_at`（ISO）；冻结在 `canvases.target_json.schedule`，到点前该画布全部 Job 保持 `pending` 不被 claim。默认仍为立即执行。调度器用进程内最近 `start_at` 定时器补唤醒（不依赖 `DISPATCH_POLL`）。「恢复会话 / 立即开始」在仅有 pending 时清除定时门；重试也会清门并立即重跑。
 
 ### 5.1 Job Attempt 与外部效果
@@ -142,6 +143,8 @@ pending → claimed → provisioning → running
 - Attempt 的 total state 持久化 `phase`、快照身份、sandbox/session/resource identity 和取消标记。外部动作先在 `job_attempt_effects` 写入 intent 与 `effect_pending`，完成后同事务写 settlement；`replay_policy` 默认 `never`，未确认窗口只标记 `unknown`，不因重启自动重放。
 - provision 的 Attempt、效果、资源身份和 `jobs.sandbox_id` 在同一个事务收口；用户取消先提交 Job/Attempt 终态，再通过进程内句柄触发 `AbortSignal`/runtime cancel。dispatcher 在调用 provider 前重查 `provisioning`，runtime 在安装监听后重查 signal，覆盖取消与句柄注册的两个竞态窗口；超时复用同一幂等中止路径，并等待外部 create 收口及清理完成后才释放 provision 槽位；迟到成功的 handle 先销毁，异常/abort 还会按 Job/Attempt 标签扫除迟到容器。Job 与 Attempt 终态也在同一事务提交。
 - 启动对账按 Attempt phase/effect 账本分类：只有尚未开始且无效果的 `preparing` 可回到 `pending`；`effect_pending/unknown` 统一转 `orphan`，清理沙箱、Token、画布和外部同步。
+- **启动中断批量恢复（#186）**：启动 reconcile 会先批量把 running Worker 收口为 `orphan`，但 role Worker 不在对账阶段推进画布或派生新 Hub，避免更新的 Hub 抢占人工恢复入口。`POST /tasks/:canvasId/resume-session` 在画布无活动 Job 时优先把该画布全部启动中断 role Worker 按原 Job ID 重新入队，响应 `action=rerun_interrupted_jobs` 与完整 `jobs[]`；Dispatcher 随后建立新 Attempt。旧 Attempt 与 `unknown` / `replay_policy=never` effect 原样保留，不自动重放；没有中断批次时才恢复单 Job 或唤醒 Hub。
+- **资源 desired-state 对账（#199）**：Agentbox destroy 的最终容器删除使用 120 秒单次上限、最多 5 次指数退避，只有明确 `no such container` 算幂等成功，耗尽后向上抛错。启动 reconcile 与每轮 Reaper 都以 DB 中 `claimed/provisioning/running` Job + active Attempt 为 desired state，只枚举同时具有 canonical `deepsonar.job` / `deepsonar.attempt` 标签的容器，以及严格 `deepsonar-assets-<canonical Job UUID>` 名称/受管标签的本地卷；非活跃资源每轮继续重试且清理防重入。禁止 `docker system prune`、前缀猜测容器归属或删除非 DeepSonar 资源。
 
 ## 6. 配置层级
 
@@ -155,6 +158,8 @@ pending → claimed → provisioning → running
 **冲突规则：任务 > 项目 > 全局**（RoleConfig 已如此；Finding 协议等演进配置同此心智）。
 
 DSH RoleConfig 的 `dsh_task_mode` 固定为 `standard | ptc`，默认 `standard`，并随 Job 冻结。Standard 使用 DSH 原生工具呈现；PTC 使用官方 Code Mode（`dsh-tools mode: code`）和受治理的 worker-thread TypeScript runtime，只把 `run_code` 作为模型直接工具。该字段对其他 Agent CLI 无效。模型思考强度统一属于 Provider Credential。Claude Code 只接受 `low | medium | high | xhigh`，运行时物化为 `.claude/settings.json` 的 `effortLevel`；Codex 接受 `none | minimal | low | medium | high | xhigh` 并同时写入 `config.toml` 与冻结启动覆盖；Pi 接受 `off | minimal | low | medium | high | xhigh | max` 并在启动/恢复时传 `--thinking`；OpenCode 将 1–64 字符的 Provider/模型 variant 在启动/恢复时原样传给 `--variant`。DSH 使用 Pi-AI 的规范档位 `off | minimal | low | medium | high | xhigh | max`，第三方实际传输值由每个模型的 `reasoningEfforts` YAML 映射，页面只允许所选模型声明的档位。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai`，Provider 编辑器按官方 `settings.yaml` 格式保存 `llm-pi-ai.providers` 与 `agent-default-model` YAML，可声明任意安全 route 及其 OpenAI/Anthropic 兼容 profile；Job 创建时冻结所选 route/model/reasoning，运行时强制把 `baseURL` 与 `apiKeyEnv` 投影到 Job Model Gateway，并挂载固定 commit 与 SHA-256 的 MIT 插件 `dsh-reasoning-settings@0.3.0`，为 `subagent` / `subagent_fork` 提供受已配置 route/model 限制的按次档位和继承修正。长期密钥不进入 Cordis 配置或沙箱。
+
+DSH 的无 UI Cordis composition 必须服从镜像内钉死包的真实 Schema；当前完整包闭包统一固定为 `0.1.0-rc.7`，避免 prerelease peer range 混装。`agent-spine-demo` 的 `toolBash` 只接受 `false | object`，平台传入对象并由 spine 单独挂载 bash 工具，禁止写 `true` 或重复注册工具。`dsh-bash-local` 依赖的 `dsh-subprocess-local` 作为固定 integrity 的独立插件显式安装和挂载，命令超时只配置在 bash executor。Base CI 无论新建还是复用不可变镜像，都以 `--network none` 启动 packaged-bin、完成 JSON-RPC `initialize` 并验证干净 `shutdown`；该启动级门禁不调用真实模型。
 
 Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项目
 `projects.config_json.finding_protocol`，任务创建请求可用 `finding_protocol` 只覆盖声明的键；列表字段在高层整表替换。解析后的 `EffectiveFindingProtocol`（模式、默认/允许 profiles、评分策略、显示名和来源）随新画布冻结，后续配置修改只影响新任务。
@@ -189,14 +194,22 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 语义 events | progress / finding / done / human | Postgres |
 | 画布广播 | Fact/Finding 向并发 Worker 的投递 | `canvas_broadcasts`（`planned`/`injected`/`unknown`…） |
 | 实时流 | text.delta / tool.call.* | 进程内 `stream-bus` + 短时 ticket 的 WS `/ws`；环形缓冲（单进程；多副本不共享 bus） |
-| 过程流 | normalized NDJSON | Job 目录；**运行中**可读 inflight `stream.ndjson` tail，**终态**读 manifest gzip |
+| 过程流 | normalized NDJSON | Job 目录；**运行中**可读 inflight `stream.ndjson` tail，**终态**读 manifest gzip；CLI stderr 按 chunk 精确脱敏后保留，单次运行总计最多 1 MiB 并显式记录截断，Job `error` 仍只存短摘要 |
 | Session / OTLP | CLI 原始 | 冷存储 blob |
+
+Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` 会从
+`attempts/*/stream.ndjson` 生成最多 32 个文件条目的 synthetic/inflight manifest，
+`evidence/stream` 继续按既有限界读取原始过程流。该 manifest 不为可变文件伪造 SHA-256，
+也不把已销毁容器中的 session identity 冒充为 Session 归档；orphan Job 通过
+`capture_error` 明确说明 CLI Session 无法跨容器恢复。
 
 **Job Session UI**：前端 `apps/web/src/session-viewer/` 按 CLI 方言将归档文本解析为消息、reasoning、tool call/result、usage 等时间线/工具统计/原始视图，并保留原始文件下载；解析格式须覆盖当前全部 `SupportedAgentCli`（claude-code / codex / open-code / pi / dsh），不假设五类归档拥有同一 schema。只有 CLI 归档中实际持久化了平台注入文本时，查看器才显示对应画布广播条目。**新增 Agent CLI 时必须同步** Session 归档适配器（`cli-session-adapters.ts`）与 Web 解析器，清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
 
 归档来源按 CLI 独立治理：Claude Code、Codex、Pi、DSH 从本次沙箱的受治理本地 session artifact 读取；OpenCode 使用 `opencode export <sessionId>` vendor export，受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或体积超限必须显式报告归档失败；查看器对归档内不可解析行保留 `skipped` 计数，不猜测 latest 或其它 Job。
 
 **画布广播**：真注入路径见 §4.2；账本为唯一投递真相，Session 文本仅作旁证。
+
+**宿主资源清理指标（#199）**：`/metrics` 暴露 desired-state 清理残留容器/卷、连续失败轮次和按资源分类失败 counter；安全 runtime image GC 暴露候选、删除、容器占用保留与失败；Node `statfs` 宿主文件系统探针暴露使用率和 `ok/warning/error` 水位。指标抓取路径只读进程内结果，不在抓取时调用 Docker。
 
 **鉴权（HTTP + WS，#38 已关）**：
 
@@ -210,6 +223,8 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
 - 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定镜像。项目按全局继承或项目托管策略选择受治理 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome audit/test/fuzz 是官方但 project-opt-in 的专项运行时。
+- **Runtime image GC（#199）**：可配置周期，`0` 关闭；只对 DB `runtime_image_versions` 及其 registry ref 账本中可证明 digest 一致的 named immutable ref 调用无 `-f` 的 `docker image rm`。保护全部 promoted 版本、每产品当前/最近回滚版、项目 `selected_version_id` 显式 pin，以及 pending/active/waiting Job 快照引用。删除前查询所有容器的 ancestor，删除竞态仍由 Docker 非强制引用门保留；无安全 ref、检查失败或容器占用一律 fail closed。绝不执行 broad prune。
+- **宿主磁盘水位（#199）**：Scheduler 用 Node `statfs` 检查配置路径所在文件系统；warning 只告警，error 使 `/readiness` 返回 `HOST_DISK_PRESSURE` 并暂停 Dispatcher 新 claim，探针不可读也 fail closed；两者都不终止已运行 Job。水位恢复后监控器显式唤醒事件驱动 Dispatcher。生产 real compose 只读挂载 `DEEPSONAR_HOST_DISK_SOURCE` 到探针路径。
 - 出网：`allow_egress` 任务级冻结；所有 real Job 的模型请求都经 Scheduler-owned gateway proxy。允许出网的沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge，并通过同时接入两网的固定 proxy 到达 Scheduler。
 - Model Gateway 上游单次超时默认为 3,000 秒，但每次 attempt 取 `min(3_000_000ms, Job 剩余时间)`；仅在客户端响应头/响应体尚未开始发送前，对网络/超时和 HTTP 408/429/500/502/503/504 做最多 3 次指数退避加 jitter，永久 HTTP 错误不重试，已开始的 SSE/响应体绝不重放。Job 的 `used_requests` 按沙箱客户端请求只递增一次；上游 attempt/retry/exhausted 仅记录 provider、reason 等低基数指标，不记录请求体、URL 或 Job ID。网络/超时耗尽返回稳定 `502 upstream_unreachable`，最终上游 HTTP 响应原样直通。
 - Gateway 重试耗尽并导致 Agent CLI 退出后，runtime runner 只对明确的 HTTP 408/429/500/502/503/504、timeout 与 network 错误，在原沙箱使用已捕获的原 session ID 最多恢复 3 次（1/2/4 秒退避）。Claude Code 使用 `--resume`，Codex 使用 `exec resume`，OpenCode 使用 `--session`；400/401/403、普通退出、缺 session 或恢复耗尽均直接失败，不允许 `--continue`、latest session 或新会话兜底。恢复过程写入低基数 `run.retrying` / `run.retry_skipped`，已成功控制副作用继续由运行时去重与数据库幂等键保护。
@@ -249,8 +264,10 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 双轨报告 | #43/#142 | **已完成**：任务收敛后按冻结输入摘要生成版本化 Task Report，默认返回最新版本并保留历史；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report。两条轨道都限制同一目标同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | **已完成**：通用 `profile/category/tags/evidence_refs` 与可选 severity/scoring；协议按任务>项目>全局解析并随画布冻结；真实 Agent 通过严格的 Job 级 API operation 提案，Scheduler 重算 CVSS 4.0/3.1、保留协议允许的未知版本原始数据；Web/报告支持标识、筛选与分组 |
 | 任务卡片状态 | #46 | **已完成**：任务级相位与 `active_count` 同源；勿用 `last_job_status=succeeded` 当任务完成 |
+| 启动 orphan 批量恢复与证据回退 | #186 | **已完成**：启动 reconcile 不再由 role Worker orphan 立即派生 Hub；任务恢复优先批量重跑同画布启动中断 Worker（同 Job、新 Attempt，明确 action/jobs，不重放 unknown effect）；缺 finalized manifest 时有界暴露 raw stream synthetic manifest 与真实 Session capture_error |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
 | 官方清单 fallback 不自残 | #191 | **已完成**：远程清单不可达时 `fallback=true` 只插入缺失版本，不 rename / 不改已有 `image_ref` / 不 revoke。官方可信版本的准入扫描失败（网络/pull）保持 trusted 并写审计；只有 `admission policy failed` 才自动 revoke。信任清空时打 error 级日志并写 `runtime_image.official_trust_empty` 审计。 |
+| DSH Cordis 启动准入与 stderr 证据 | #200 | **已完成**：`toolBash` 改用 rc.6 Schema 接受的对象，由 spine 单独挂载工具；删除重复 bash tool，显式安装/挂载固定 integrity 的 `dsh-subprocess-local`，并把超时配置归还 bash executor。Base 新建/复用镜像均执行断网 packaged-bin `initialize` + clean shutdown smoke，失败 CI stderr 最多保留 8 KiB；runtime 将完整但总量限 1 MiB、精确脱敏的 stderr chunk 写入 normalized evidence，Job error 保持短摘要。 |
 | 官方运行镜像多 channel catalog | #70、#143 | **已完成**：v2 canonical digest/platform/size + `registry_refs`/`registry_evidence` 合约、v1 归一化与严格 OCI/host/namespace 校验；release 按 ACR→GHCR→Docker Hub 发布并对每个可用目的地执行真实 `imagetools inspect`，配置通道失败时清单生成 fail-closed，v2 Release asset 与 bundled fallback 同步；schema v23 新库默认选择 `aliyun-acr`，平台全局通道由 Scheduler 落库并经 `GET /runtime-images/registry` 的 `selected_channel` 读取、`PATCH /runtime-images/registry/channel`（`images:manage`）切换，Job 创建时冻结所选 digest/ref，pull/resolution 对未发布通道 fail-closed；官方目录同步和独立准入 Worker 的首次扫描、恢复扫描、周期复扫均按部署 `DEEPSONAR_IMAGE_REGISTRY` 从同一 digest 的已有发布证据中选择引用，配置不匹配或证据缺失时拒绝扫描，绝不回退到 GHCR。若同一官方 digest 曾因旧 registry 引用不可达而被撤销，目录切换到已证明的新 registry 引用时会回到隔离态并仅排队一次恢复扫描；扫描成功才恢复官方信任，部署源上的真实扫描失败重新撤销，同引用的真实安全撤销不会被目录同步覆盖；Web 市场提供固定三选项通道选择器，与 CPU 平台筛选分离，展示加载/403/切换状态并在切换后刷新清单与镜像行 |
 | Chrome audit/test/fuzz 专项运行时 | #118 | **已实现发布基础设施**：三个官方 project-opt-in 镜像分别提供 C++ 静态分析、固定 Chromium/CDP 与固定 V8 源码构建的真实 `d8` + `v8_json_libfuzzer`；每个镜像同时声明 amd64/arm64、来源 SHA256/完整包闭包、工具清单与大小预算。V8 与 Chromium 版本语义分开声明；Job 仍只消费准入后的 immutable digest；核心 CI 与 Chrome amd64 合同冒烟已拆为路径过滤的 `.github/workflows/ci.yml` / `.github/workflows/chrome-runtime.yml`；Chrome Fuzz amd64 按正常目标架构构建并执行 smoke，arm64 在 x86 runner 上使用固定 Chromium Clang 与 arm64 sysroot 交叉构建，QEMU 仅用于组装，真实 `d8`/`v8_json_libfuzzer` smoke 在 `ubuntu-24.04-arm` 原生 runner 执行，原生 smoke 通过前不得组装发布 index；Release 还须完成多 registry inspect 后才生成 catalog |
 | 项目镜像策略 | #130 | **已完成**：项目创建与设置支持 `inherit_global` / `project_managed`；项目托管映射集中绑定全部角色到项目已启用的可信镜像，缺项使用 Base；项目 RoleConfig 不再接受独立镜像覆盖。real/local-docker 先监听 HTTP，再在后台准备 Base + 全局 Audit/Kali 等有效默认集合；就绪前不启用 Dispatcher，失败保持 live 并有界退避重试。项目策略、绑定或通道切换缺图时返回 `202 preparing/saved:false`，后台准备完成后显式重试才落库；Dispatcher 执行期只 inspect 并以 `runtime_image_not_ready` fail closed，不临时 pull |
@@ -268,6 +285,8 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 | 共享资产卷孤儿回收 | #157 | **已完成**：启动对账合并 label 与严格 `deepsonar-assets-<canonical UUID>` 名称扫描，校验本地卷归属并回收无标签孤儿；删除使用 3 次指数退避，暴露清理失败计数、残留孤儿数量和最大年龄指标 |
 | 共享资产 helper 预拉与 provision admission | #158 | **已完成（as-built）**：real 部署固定默认 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`，`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为 immutable digest；`deploy.sh` / `deploy.ps1` 在 real 启动和拉取路径显式预拉，失败即 fail closed，运行时只使用 `--pull=never`，fake 不预拉；Provision 超额 Job 由 DB claim admission 留在 pending，不消耗 `claimed_at`，槽位释放后显式唤醒。 |
 | 项目级最大并发 Job 配额 | #187 | **已完成**：项目 `config_json.rules.maxConcurrentJobs` 只能收紧全局 `maxJobsPerProject`；未设置继承全局；`0` 暂停新 claim。Dispatcher 在 claim 事务内按项目有效上限跳过满额候选且不阻塞其他项目；`effective_rules` 返回有效上限与来源，Web 展示当前运行数。 |
+| Canvas 任务暂停/开始 | #188 | **已完成**：`target_json.execution_control` 的数据库权威 drain pause；成对幂等 API、Dispatcher Canvas 锁门禁、durable pending、start 精确唤醒、列表/画布 `pausing|paused|running` 投影和主操作。 |
+| vfs 宿主资源回收与磁盘水位 | #199 | **已完成**：Agentbox 销毁不吞最终删除错误；容器有界指数重试；启动/Reaper desired-state 对账严格限定双 UUID 标签和受管卷；旧 runtime image 仅按 DB 不可变 ref 与保护集合执行非强制 GC；`statfs` warning/error 水位进入 readiness、指标和 Dispatcher claim 门，恢复后自动唤醒。无 broad prune、无非 DeepSonar 资源删除。 |
 | Fact 过程真相工作台 | #159 | **已完成**：Schema v31 为 Fact 增加独立验证状态；画布提供 Facts 标签、服务端 keyset 分页与筛选、结构化证据/来源详情和人工验证动作。旧的幽灵 `/canvas-nodes/{id}/verification` 契约已删除，读写统一限定在 `/canvases/{id}/facts` 项目作用域内。 |
 | Agent CLI Session 时间线归一化 | #160 | **已完成**（Issue 起因是 Claude）：`queue-operation enqueue` 中带平台前缀的画布增量显示为广播，消费/移除记录不产生噪声；`user` 包装的纯 `tool_result` 不再虚增用户消息，assistant 的 thinking/text/tool_use 按原始块顺序展示且 usage 只累计一次；当前五类治理 CLI 各自解析归档格式，广播仅在归档持久化时展示。 |
 | Compose 任务 | 当前主路径 | **已落地**：同项目 confirmed Finding 作为 1–8 条冻结只读种子；Graph 隐藏项目 Finding UUID，重试前重新校验并 fail closed，Task Report 分离种子背景与本次产出。见 §6.1。 |

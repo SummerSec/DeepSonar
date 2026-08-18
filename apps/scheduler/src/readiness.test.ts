@@ -126,6 +126,38 @@ test("real preflight accepts governed role, credential, evidence and image proje
   assert.equal(JSON.stringify(result).includes("ciphertext"), false);
   assert.equal(JSON.stringify(result).includes("ANTHROPIC_API_KEY"), false);
 });
+
+test("readiness exposes HOST_DISK_PRESSURE and blocks only at error threshold", () => {
+  const warning = evaluateReadiness(baseInput({
+    hostDisk: {
+      level: "warning",
+      path: "/host-disk",
+      usedPercent: 86,
+      warningPercent: 85,
+      errorPercent: 90,
+      checkedAt: "2026-08-04T00:00:00.000Z",
+      error: null,
+    },
+  }));
+  assert.equal(warning.ready, true);
+  assert.ok(warning.checks.some((check) =>
+    check.code === "HOST_DISK_PRESSURE" && check.severity === "warning"));
+
+  const error = evaluateReadiness(baseInput({
+    hostDisk: {
+      level: "error",
+      path: "/host-disk",
+      usedPercent: 92,
+      warningPercent: 85,
+      errorPercent: 90,
+      checkedAt: "2026-08-04T00:00:00.000Z",
+      error: null,
+    },
+  }));
+  assert.equal(error.ready, false);
+  assert.ok(error.checks.some((check) =>
+    check.code === "HOST_DISK_PRESSURE" && check.severity === "error"));
+});
 test("readiness follows strategy and ignores legacy project image column", () => {
   const inherited = evaluateReadiness(baseInput({
     projectImagePolicy: { image_strategy: "inherit_global", role_runtime_images: { audit: "deepsonar-chrome-audit" } },

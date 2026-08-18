@@ -50,6 +50,8 @@ import {
 } from "./domains/role-runtime-snapshot/index.js";
 import { bindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js";
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
+import { canvasExecutionIsPaused } from "./task-execution-control.js";
+import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -490,6 +492,19 @@ async function graphEligibilityReasonFromDb(
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 export async function claimPendingJobs(): Promise<{ id: string }[]> {
+  if (config.runtime.agentMode === "real" && config.runtime.provider === "local-docker") {
+    const disk = await refreshHostDiskPressure();
+    if (!hostDiskAllowsDispatch(disk)) {
+      if (disk.level === "error") {
+        console.error(
+          `[dispatcher] HOST_DISK_PRESSURE ${disk.usedPercent?.toFixed(2)}% >= ${disk.errorPercent}%: new claims paused`,
+        );
+      } else {
+        console.error(`[dispatcher] host disk status unknown at ${disk.path}: new claims paused`);
+      }
+      return [];
+    }
+  }
   // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
   // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
   // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
@@ -620,8 +635,22 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
 
       for (const job of pending) {
         if (claimed.length >= slots) break;
+        // Canvas execution control is a database-authoritative admission gate.
+        // Lock the Canvas after the candidate Job so a concurrent pause either
+        // linearizes before this re-read (and blocks claim) or after the claim.
+        // The initial join is only a scan hint; it is not authoritative.
+        let canvasTarget = (job as DispatchCandidate).canvas_target_json;
+        if (job.canvas_id) {
+          const [lockedCanvas] = await tx`
+            SELECT target_json FROM canvases
+            WHERE id = ${job.canvas_id as string}
+            FOR SHARE`;
+          if (!lockedCanvas) continue;
+          canvasTarget = lockedCanvas.target_json;
+          if (canvasExecutionIsPaused(canvasTarget)) continue;
+        }
         // Task-level schedule gate: hold every job on the canvas until start_at.
-        if (canvasScheduleBlocksDispatch((job as DispatchCandidate).canvas_target_json)) continue;
+        if (canvasScheduleBlocksDispatch(canvasTarget)) continue;
         const graphSkip = await graphEligibilityReasonFromDb(
           tx as unknown as typeof sql,
           job as DispatchCandidate,
@@ -806,7 +835,10 @@ async function runJob(jobId: string) {
           config.timeouts.provisionSec * 1000,
           `provision 超时（${config.timeouts.provisionSec}s）`,
           () => interruptProvision(jobId, attemptId!),
-          (lateHandle) => runner.destroy(lateHandle).catch(() => {}),
+          (lateHandle) => runner.destroy(lateHandle).catch((error) => {
+            inc("deepsonar_sandbox_cleanup_failed_total");
+            console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
+          }),
         );
       } finally {
         unregisterProvision();

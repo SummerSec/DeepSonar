@@ -111,7 +111,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   } as const;
   await adapter.start(context);
   assert.match(fake.commands[0] ?? "", /^DSH_SYSTEM_PROMPT="\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
-  assert.equal(adapter.version, "0.1.0-rc.6");
+  assert.equal(adapter.version, "0.1.0-rc.7");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
   assert.equal(fake.envs[0]?.DSH_CORDIS_CONFIG, "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml");
@@ -130,7 +130,7 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const state = { contextIdentity: {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
-    adapter_id: "dsh", adapter_version: "0.1.0-rc.6", runtime_identity: "runtime",
+    adapter_id: "dsh", adapter_version: "0.1.0-rc.7", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
   }, model: "gpt-5.6", modelProvider: "feei", cwd: "/workspace" };
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
@@ -181,8 +181,16 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /@deepseek-ai\/dsh-agent-spine-demo/);
   assert.match(config, /@deepseek-ai\/dsh-session-persistence-jsonl/);
   assert.match(config, /@deepseek-ai\/dsh-compaction-basic/);
+  assert.match(config, /name: '@deepseek-ai\/dsh-subprocess-local'/);
   assert.match(config, /skills:\n\s+enabled: true/);
   assert.match(config, /tools:\n\s+mode: native/);
+  // rc.6 declares toolBash as false | object; boolean true is invalid.
+  assert.match(config, /toolBash:\n\s+enableRunInBackground: true/);
+  assert.doesNotMatch(config, /toolBash: true/);
+  assert.doesNotMatch(config, /- id: bash\n/);
+  assert.match(config, /name: '@deepseek-ai\/dsh-bash-local'\n\s+config:\n\s+cwd:[\s\S]*?timeoutMs: 300000/);
+  assert.match(config, /^\s+toolJobs: false$/mu);
+  assert.match(config, /^\s+workspaceContext: false$/mu);
   assert.doesNotMatch(config, /dsh-code-runtime-worker-thread/);
   assert.match(config, /@deepseek-ai\/dsh-llm-pi-ai/);
   assert.match(config, /name: dsh-reasoning-settings/);

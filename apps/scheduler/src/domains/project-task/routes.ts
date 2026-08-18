@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { FindingProtocolConfig } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
@@ -32,6 +32,12 @@ import {
 import { PROJECT_IMAGE_STRATEGIES } from "../role-runtime-snapshot/application.js";
 import { noteScheduleWakeAt } from "../../schedule-wake.js";
 import { clearTaskSchedule, resolveCreateTaskSchedule } from "../../task-schedule.js";
+import {
+  TASK_EXECUTION_ACTIVE_STATUSES,
+  readTaskExecutionControl,
+  setTaskExecutionControl,
+  taskExecutionProjection,
+} from "../../task-execution-control.js";
 import {
   MAX_TASK_SEED_FINDINGS,
   TASK_KINDS,
@@ -406,9 +412,147 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     return reply.code(201).send({ canvas_id: canvasId, job, duplicated: false });
   });
 
+  const setExecutionPaused = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    paused: boolean,
+  ) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const actorId = req.actor?.id ?? req.actor?.name ?? null;
+    const result = await sql.begin(async (tx) => {
+      const [canvas] = await tx`
+        SELECT id, project_id, status, target_json
+        FROM canvases WHERE id = ${canvasId}
+        FOR UPDATE`;
+      if (!canvas) return { reason: "not_found" as const };
+      if (!paused && canvas.status === "archived") {
+        return { reason: "archived" as const };
+      }
+
+      const before = readTaskExecutionControl(canvas.target_json);
+      const changed = before.paused !== paused;
+      let target = (canvas.target_json ?? {}) as Record<string, unknown>;
+      if (changed) {
+        target = setTaskExecutionControl(target, paused, actorId);
+        await tx`
+          UPDATE canvases SET target_json = ${tx.json(target as never)}
+          WHERE id = ${canvasId}`;
+      }
+
+      if (!paused && changed) {
+        const [work] = await tx`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+            COUNT(*) FILTER (
+              WHERE status = ANY(${[...TASK_EXECUTION_ACTIVE_STATUSES]})
+            )::int AS active_count
+          FROM jobs WHERE canvas_id = ${canvasId}`;
+        if (Number(work?.pending_count ?? 0) === 0 && Number(work?.active_count ?? 0) === 0) {
+          const [interruptedWorker] = await tx`
+            SELECT 1
+            FROM jobs j
+            LEFT JOIN agent_roles r ON r.name = j.type
+            LEFT JOIN LATERAL (
+              SELECT outcome_json
+              FROM job_attempts
+              WHERE job_id = j.id
+              ORDER BY attempt_no DESC
+              LIMIT 1
+            ) attempt ON true
+            WHERE j.canvas_id = ${canvasId}
+              AND j.status = 'orphan'
+              AND (
+                r.kind = 'role'
+                OR (
+                  (j.agent_snapshot_json->>'role_kind') = 'role'
+                  AND j.type NOT IN ('hub_reason', 'verify_finding', 'report')
+                )
+              )
+              AND (
+                attempt.outcome_json->>'reason' IN ('scheduler_restart', 'provision_effect_unknown')
+                OR j.error LIKE '%调度器重启（执行中断）%'
+                OR j.error LIKE '%调度器重启（provision 外部效果状态未知）%'
+              )
+            LIMIT 1`;
+          if (!interruptedWorker) {
+            await maybeTriggerHub(
+              tx as unknown as typeof sql,
+              {
+                id: null,
+                project_id: canvas.project_id as string,
+                canvas_id: canvasId,
+                type: "task_start",
+                priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+              },
+              {
+                idleWake: true,
+                trigger: { kind: "task_start" },
+              },
+            );
+          }
+        }
+      }
+
+      const [counts] = await tx`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+          COUNT(*) FILTER (
+            WHERE status = ANY(${[...TASK_EXECUTION_ACTIVE_STATUSES]})
+          )::int AS active_count
+        FROM jobs WHERE canvas_id = ${canvasId}`;
+      return {
+        reason: null,
+        projectId: canvas.project_id as string,
+        before,
+        result: taskExecutionProjection(
+          canvasId,
+          target,
+          Number(counts?.active_count ?? 0),
+          Number(counts?.pending_count ?? 0),
+          changed,
+        ),
+      };
+    });
+
+    if (result.reason === "not_found") {
+      return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    }
+    if (result.reason === "archived") {
+      return reply.code(409).send({
+        error: "任务已归档，请先取消归档再开始",
+        error_code: "TASK_ARCHIVED",
+      });
+    }
+
+    await audit(req, {
+      action: paused ? "task.execution_pause" : "task.execution_start",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId: result.projectId,
+      before: result.before,
+      after: {
+        execution_state: result.result.execution_state,
+        active_count: result.result.active_count,
+        pending_count: result.result.pending_count,
+        changed: result.result.changed,
+      },
+    });
+    if (!paused) {
+      await sql`SELECT pg_notify('deepsonar_jobs', 'task_start')`;
+    }
+    return reply.code(200).send(result.result);
+  };
+
+  app.post("/tasks/:canvasId/pause", async (req, reply) =>
+    setExecutionPaused(req, reply, true));
+
+  app.post("/tasks/:canvasId/start", async (req, reply) =>
+    setExecutionPaused(req, reply, false));
+
   /**
-   * 恢复会话 = 继续执行任务（不删历史）。
-   * 优先级：解除 hub_paused → 恢复最近可恢复 Job → 空闲时强制唤醒 Hub。
+   * 继续执行任务（不删历史）。
+   * 优先级：批量重跑启动中断的角色 Worker → 恢复最近可恢复 Job →
+   * 空闲时强制唤醒 Hub。旧 Attempt/effect 账本只读保留。
    */
   app.post("/tasks/:canvasId/resume-session", async (req, reply) => {
     const { canvasId } = req.params as { canvasId: string };
@@ -466,7 +610,104 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       paused_at: undefined,
     });
 
-    // 优先恢复最近 failed/timeout/orphan（waiting_human 也算可继续）
+    // 启动中断的 sibling role Workers 是一个恢复批次。它们必须先于更新的
+    // hub_reason 原地回到 pending；Dispatcher 仍按同一 Job ID 创建新 Attempt。
+    // 旧 Attempt 上 unknown/never effects 保持原样，绝不由此入口重放。
+    const interruptedBatch = await sql.begin(async (rawTx) => {
+      const tx = rawTx as unknown as typeof sql;
+      await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+      const concurrentActive = await tx`
+        SELECT id, type, status FROM jobs WHERE canvas_id = ${canvasId}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        ORDER BY created_at DESC LIMIT 5`;
+      if (concurrentActive.length > 0) {
+        return { jobs: [] as Array<Record<string, unknown>>, active: concurrentActive };
+      }
+      const interruptedWorkers = await tx`
+        SELECT j.id, j.type, j.status, j.created_at
+        FROM jobs j
+        LEFT JOIN agent_roles r ON r.name = j.type
+        LEFT JOIN LATERAL (
+          SELECT status, outcome_json
+          FROM job_attempts
+          WHERE job_id = j.id
+          ORDER BY attempt_no DESC
+          LIMIT 1
+        ) attempt ON true
+        WHERE j.canvas_id = ${canvasId}
+          AND j.status = 'orphan'
+          AND (
+            r.kind = 'role'
+            OR (
+              j.agent_snapshot_json->>'role_kind' = 'role'
+              AND j.type NOT IN ('hub_reason', 'verify_finding', 'report')
+            )
+          )
+          AND (
+            attempt.outcome_json->>'reason' IN ('scheduler_restart', 'provision_effect_unknown')
+            OR j.error LIKE '%调度器重启（执行中断）%'
+            OR j.error LIKE '%调度器重启（provision 外部效果状态未知）%'
+          )
+        ORDER BY j.created_at ASC, j.id ASC
+        FOR UPDATE OF j`;
+      const rerunJobs: Array<Record<string, unknown>> = [];
+      const lifecycle = createSqlJobLifecycleApplication(tx);
+      for (const worker of interruptedWorkers) {
+        const row = await lifecycle.transitionJob(worker.id as string, "pending", {
+          error: null,
+          lease_expires_at: null,
+          claimed_at: null,
+          started_at: null,
+          finished_at: null,
+          heartbeat_at: null,
+          sandbox_id: null,
+        });
+        if (!row) continue;
+        await normalizePendingJobPriority(worker.id as string, tx);
+        rerunJobs.push({ ...worker, status: row.status });
+      }
+      if (rerunJobs.length > 0) {
+        const ids = rerunJobs.map((job) => String(job.id));
+        await tx`
+          UPDATE canvas_nodes SET status = 'pending', updated_at = now()
+          WHERE job_id = ANY(${ids}) AND node_type = ANY(${["job", "intent"]})`;
+        await tx`SELECT pg_notify('deepsonar_jobs', 'resume_interrupted_jobs')`;
+      }
+      return { jobs: rerunJobs, active: [] as Array<Record<string, unknown>> };
+    });
+    if (interruptedBatch.active.length > 0) {
+      return {
+        canvas_id: canvasId,
+        action: "already_running" as const,
+        jobs: interruptedBatch.active,
+        message: "中断 Worker 已由另一恢复请求重新入队",
+      };
+    }
+    if (interruptedBatch.jobs.length > 0) {
+      const ids = interruptedBatch.jobs.map((job) => String(job.id));
+      await audit(req, {
+        action: "task.resume_session",
+        resourceType: "canvas",
+        resourceId: canvasId,
+        projectId,
+        after: {
+          canvas_id: canvasId,
+          mode: "rerun_interrupted_jobs",
+          job_ids: ids,
+          effects_replayed: false,
+        },
+      });
+      return reply.code(200).send({
+        canvas_id: canvasId,
+        action: "rerun_interrupted_jobs" as const,
+        jobs: interruptedBatch.jobs,
+        convergence,
+        effects_replayed: false,
+        message: `已重新入队 ${interruptedBatch.jobs.length} 个启动中断的 Worker；保留原 Job/Attempt，调度时创建新 Attempt`,
+      });
+    }
+
+    // 无中断 Worker 批次时，保留原有单 Job 恢复语义。
     const [resumable] = await sql`
       SELECT id, type, status FROM jobs
       WHERE canvas_id = ${canvasId}

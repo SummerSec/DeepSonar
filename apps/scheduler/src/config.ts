@@ -34,6 +34,14 @@ function boundedInt(name: string, dflt: number, max: number): number {
   const v = Number(process.env[name]);
   return Number.isSafeInteger(v) && v > 0 && v <= max ? v : dflt;
 }
+function boundedNonNegativeInt(name: string, dflt: number, max: number): number {
+  const v = Number(process.env[name]);
+  return Number.isSafeInteger(v) && v >= 0 && v <= max ? v : dflt;
+}
+function percent(name: string, dflt: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 && v <= 100 ? v : dflt;
+}
 function bool(name: string, dflt: boolean): boolean {
   const v = process.env[name];
   if (v === undefined || v === "") return dflt;
@@ -46,6 +54,15 @@ function trustProxyHops(name: string, dflt: number): number {
   const v = Number(raw);
   return Number.isSafeInteger(v) && v >= 0 && v <= 8 ? v : dflt;
 }
+
+const configuredDiskWarningPercent = percent("DEEPSONAR_HOST_DISK_WARNING_PERCENT", 85);
+const configuredDiskErrorPercent = percent("DEEPSONAR_HOST_DISK_ERROR_PERCENT", 90);
+const hostDiskWarningPercent = configuredDiskWarningPercent < configuredDiskErrorPercent
+  ? configuredDiskWarningPercent
+  : 85;
+const hostDiskErrorPercent = configuredDiskWarningPercent < configuredDiskErrorPercent
+  ? configuredDiskErrorPercent
+  : 90;
 
 export const config = {
   databaseUrl: str("DATABASE_URL", "postgres://deepsonar:deepsonar@localhost:5432/deepsonar"),
@@ -252,6 +269,13 @@ export const config = {
     },
   },
 
+  hostDisk: {
+    path: path.resolve(str("DEEPSONAR_HOST_DISK_PATH", "/")),
+    warningPercent: hostDiskWarningPercent,
+    errorPercent: hostDiskErrorPercent,
+    checkIntervalSec: boundedInt("DEEPSONAR_HOST_DISK_CHECK_INTERVAL_SEC", 30, 3600),
+  },
+
   sharedAssets: {
     /** 用于填充共享资产卷的不可变 helper 镜像。 */
     helperImage: str("DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE", DEFAULT_SHARED_ASSETS_HELPER_IMAGE),
@@ -281,6 +305,8 @@ export const config = {
     /** 私有 GitHub Release 清单的短期/部署级读取凭据；永不返回 API。 */
     registryGithubToken: str("DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN"),
     registrySyncSec: int("DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC", 3600),
+    /** 0 disables safe DB-known runtime image GC. */
+    gcIntervalSec: boundedNonNegativeInt("DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC", 21_600, 31 * 24 * 3600),
     allowedRegistries: str("DEEPSONAR_ALLOWED_IMAGE_REGISTRIES", "ghcr.io,docker.io,registry-1.docker.io"),
     isRegistryAllowed(imageRef: string): boolean {
       const first = imageRef.split("/")[0]?.toLowerCase() ?? "";

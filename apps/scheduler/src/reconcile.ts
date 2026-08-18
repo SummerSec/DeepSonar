@@ -8,6 +8,8 @@ import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { sharedAssetsVolumeManager } from "./runtime.js";
+import { config } from "./config.js";
+import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
@@ -20,7 +22,8 @@ import { sharedAssetsVolumeManager } from "./runtime.js";
  */
 export async function reconcileOnBoot(): Promise<void> {
   const lifecycle = createSqlJobLifecycleApplication();
-  const containers = await listDeepSonarContainers();
+  const managesLocalDocker = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker";
+  const containers = managesLocalDocker ? await listDeepSonarContainers() : [];
   const activeJobs = await sql`
     SELECT j.id, j.status, j.sandbox_id, a.id AS attempt_id
       FROM jobs j
@@ -68,8 +71,8 @@ export async function reconcileOnBoot(): Promise<void> {
     await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
-    await closeOrphanJob(job);
   }
+  await finalizeBootOrphanJobs(provisionRecovery.orphaned);
 
   // sendMessage 前进程退出会留下 planned；启动后只把超过截止时间的记录
   // 标记 unknown，绝不自动重新注入同一事实。
@@ -93,13 +96,19 @@ export async function reconcileOnBoot(): Promise<void> {
     await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
-    await closeOrphanJob(j);
   }
+  await finalizeBootOrphanJobs(orphaned);
   if (orphaned.length > 0) {
     console.warn(`[reconcile] ${orphaned.length} 个 running job 已标记 orphan（可 resume）`);
   }
 
   await refreshSharedAssetsOrphanMetrics();
+  if (managesLocalDocker) {
+    const cleanup = await cleanupManagedResourcesOnce();
+    if (cleanup.removedContainers + cleanup.removedVolumes + cleanup.failures > 0) {
+      console.log("[reconcile] desired-state cleanup:", cleanup);
+    }
+  }
 
   if (containers.length > 0 || provisionRecovery.requeued.length > 0 || provisionRecovery.orphaned.length > 0 || orphaned.length > 0) {
     console.log(`[reconcile] 完成：容器 ${containers.length}，重置 ${provisionRecovery.requeued.length}，provision orphan ${provisionRecovery.orphaned.length}，running orphan ${orphaned.length}`);
@@ -124,7 +133,32 @@ async function refreshSharedAssetsOrphanMetrics(): Promise<void> {
   setGauge("deepsonar_shared_assets_orphan_volume_age_seconds", Math.max(0, oldestAgeSeconds));
 }
 
-async function closeOrphanJob(job: Record<string, unknown>): Promise<void> {
+/**
+ * Finish boot-orphan side effects after the lifecycle adapter has atomically
+ * marked the whole interrupted set. Role Workers deliberately stop at this
+ * recovery boundary: deriving a Hub here would be newer than the siblings and
+ * steal the task-level resume entry point.
+ */
+export async function finalizeBootOrphanJobs(jobs: readonly Record<string, unknown>[]): Promise<void> {
+  if (jobs.length === 0) return;
+  const roleRows = await sql<Array<{ name: string }>>`
+    SELECT name FROM agent_roles WHERE kind = 'role'`;
+  const roleNames = new Set(roleRows.map((row) => String(row.name)));
+  for (const job of jobs) {
+    const snapshot = job.agent_snapshot_json && typeof job.agent_snapshot_json === "object"
+      ? job.agent_snapshot_json as Record<string, unknown>
+      : {};
+    const type = String(job.type);
+    const isRoleWorker = roleNames.has(type)
+      || (snapshot.role_kind === "role" && !["hub_reason", "verify_finding", "report"].includes(type));
+    await closeOrphanJob(job, { deferCanvasAdvance: isRoleWorker });
+  }
+}
+
+async function closeOrphanJob(
+  job: Record<string, unknown>,
+  options: { deferCanvasAdvance: boolean },
+): Promise<void> {
   const jobId = String(job.id);
   await sql`
     UPDATE canvas_nodes SET status = 'failed', updated_at = now()
@@ -143,7 +177,7 @@ async function closeOrphanJob(job: Record<string, unknown>): Promise<void> {
       });
     }).catch((error) => console.error(`[reconcile] report recovery failed:`, error));
   }
-  if (job.canvas_id && job.type !== "report") {
+  if (job.canvas_id && job.type !== "report" && !options.deferCanvasAdvance) {
     await sql.begin(async (tx) => {
       await advanceCanvasAfterTerminalJob(tx as unknown as typeof sql, job, "orphan");
     }).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));

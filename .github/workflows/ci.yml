@@ -71,6 +71,9 @@ jobs:
       - name: Runtime image registry contract unit
         run: pnpm ci:unit:runtime-images
 
+      - name: Runtime resource cleanup and disk pressure unit
+        run: pnpm ci:unit:runtime-cleanup
+
       - name: Image admission registry selection unit
         run: pnpm ci:unit:image-admission
 
@@ -102,6 +105,15 @@ jobs:
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:job-lifecycle
+
+      - name: Scheduler orphan recovery evidence unit
+        run: pnpm ci:unit:recovery
+
+      - name: Scheduler orphan recovery PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          DEEPSONAR_HUB_ENABLED: "true"
+        run: pnpm ci:integration:recovery
 
       - name: Scheduler bounded-context characterization guardrails
         run: pnpm ci:unit:scheduler-characterization
@@ -397,7 +409,7 @@ jobs:
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         run: |
           set -euo pipefail
-          echo "${{ matrix.toolset }} build unchanged: reused previously validated immutable src cache; duplicate image smoke skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.toolset }} build unchanged: reused previously validated immutable src cache" >> "$GITHUB_STEP_SUMMARY"
       - name: Free disk for Kali toolchain image
         if: ${{ matrix.toolset == 'kali-minimal' && steps.resolve.outputs.skip != 'true' }}
         run: |
@@ -437,7 +449,7 @@ jobs:
           cache-to: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
             type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
-      - name: Load reused base runtime for Pi RPC smoke
+      - name: Load reused base runtime for CLI boot smokes
         if: ${{ matrix.toolset == 'base' && steps.resolve.outputs.skip == 'true' }}
         env:
           SOURCE_IMAGE: ${{ steps.resolve.outputs.src_ref }}
@@ -457,6 +469,17 @@ jobs:
           node agent-harness/test-pi-rpc.mjs deepsonar-base:ci 2>&1 | tee /tmp/pi-rpc-smoke.log || {
             detail="$(tail -c 8000 /tmp/pi-rpc-smoke.log | tr '\n' ' ')"
             echo "::error title=Pi RPC real Docker smoke::${detail}"
+            exit 1
+          }
+      - name: DSH Cordis real Docker boot smoke
+        if: ${{ matrix.toolset == 'base' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/test-dsh-cordis.mjs deepsonar-base:ci \
+            2> >(tee /tmp/dsh-cordis-smoke.stderr >&2) || {
+            detail="$(tail -c 8192 /tmp/dsh-cordis-smoke.stderr | tr '\n' ' ')"
+            echo "::error title=DSH Cordis real Docker boot smoke::${detail}"
             exit 1
           }
       - name: Maven online package smoke

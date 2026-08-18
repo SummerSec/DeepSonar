@@ -38,6 +38,7 @@ for (const packageName of [
   "@deepseek-ai/dsh-llm-pi-ai",
   "@deepseek-ai/dsh-sandbox-local",
   "@deepseek-ai/dsh-sandbox-policy",
+  "@deepseek-ai/dsh-subprocess-local",
   "@deepseek-ai/dsh-bash-local",
   "@deepseek-ai/dsh-fs-local",
   "@deepseek-ai/dsh-tool-bash",
@@ -49,14 +50,15 @@ for (const packageName of [
   "@deepseek-ai/dsh-code-runtime-worker-thread",
   "@deepseek-ai/dsh-compaction-basic",
 ]) {
-  if (config.npm[packageName]?.version !== "0.1.0-rc.6" || kaliConfig.npm[packageName]?.version !== "0.1.0-rc.6") {
-    throw new Error(`${packageName} must be pinned to 0.1.0-rc.6 in base and Kali manifests`);
+  if (config.npm[packageName]?.version !== "0.1.0-rc.7" || kaliConfig.npm[packageName]?.version !== "0.1.0-rc.7") {
+    throw new Error(`${packageName} must be pinned to 0.1.0-rc.7 in base and Kali manifests`);
   }
   if (!config.npm[packageName]?.integrity || !kaliConfig.npm[packageName]?.integrity) {
     throw new Error(`${packageName} must carry npm integrity in base and Kali manifests`);
   }
 }
 for (const [packageName, integrityArg] of [
+  ["@deepseek-ai/dsh-subprocess-local", "DSH_SUBPROCESS_LOCAL_INTEGRITY"],
   ["@deepseek-ai/dsh-code-runtime", "DSH_CODE_RUNTIME_INTEGRITY"],
   ["@deepseek-ai/dsh-code-runtime-worker-thread", "DSH_CODE_RUNTIME_WORKER_INTEGRITY"],
 ]) {

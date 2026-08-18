@@ -9,6 +9,8 @@ import type {
   ProviderAccountCatalogItem,
   PlatformToolConfig,
   ReadinessResponse,
+  TaskExecutionControlResult,
+  TaskExecutionState,
 } from "@deepsonar/shared-types";
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
@@ -121,6 +123,9 @@ export interface CanvasDelta {
   }>;
   /** Authoritative lifecycle rollup; null/zero values are meaningful. */
   active_count: CanvasLifecycleRollup["active_count"];
+  execution_active_count?: number;
+  pending_count?: number;
+  execution_state?: TaskExecutionState;
   job_count: CanvasLifecycleRollup["job_count"];
   started_at: CanvasLifecycleRollup["started_at"];
   ended_at: CanvasLifecycleRollup["ended_at"];
@@ -286,6 +291,10 @@ export type CanvasLifecycle = CanvasLifecycleRollup & {
   ended_at: string | null;
   /** 活动 Job 数量（pending 也算活动工作）。 */
   active_count: number;
+  /** Execution pause drain count; pending queue entries are projected separately. */
+  execution_active_count: number;
+  pending_count: number;
+  execution_state: TaskExecutionState;
   /** 画布上累计 Job 数量。 */
   job_count: number;
   /** 当前根节点阶段（由 Scheduler 从画布投影中治理）。 */
@@ -308,6 +317,9 @@ export type CanvasSummary = CanvasLifecycleRollup & {
   ended_at: string | null;
   job_count: number;
   active_count: number;
+  execution_active_count: number;
+  pending_count: number;
+  execution_state: TaskExecutionState;
   /** 当前根节点/报告阶段，避免列表从 last_job_status 推断任务终态。 */
   root_status: string | null;
   report_status: string | null;
@@ -581,7 +593,8 @@ export interface EvidenceFileMeta {
   path: string;
   kind: "main" | "subagent" | "vendor_export" | "stream" | "otlp";
   bytes: number;
-  sha256: string;
+  sha256: string | null;
+  inflight?: boolean;
 }
 
 export interface JobEvidence {
@@ -592,9 +605,12 @@ export interface JobEvidence {
     cli: string;
     session_id: string | null;
     created_at: string;
-    finalized_at: string;
+    finalized_at: string | null;
     files: EvidenceFileMeta[];
     capture_error?: string;
+    synthetic?: boolean;
+    inflight?: boolean;
+    truncated?: boolean;
   };
 }
 
@@ -1680,14 +1696,22 @@ export const api = {
         material_source: opts?.material_source,
       })}`,
     ),
-  /** 恢复会话：继续执行（恢复 Job / 唤醒 Hub / 清除定时立即开始），不删历史 */
+  /** 继续执行：优先批量重跑启动中断 Worker，其次恢复单 Job / 唤醒 Hub；不删历史 */
   resumeTaskSession: (canvasId: string) =>
     send<{
       canvas_id: string;
-      action: "already_running" | "resume_job" | "wake_hub" | "start_now";
+      action: "already_running" | "rerun_interrupted_jobs" | "resume_job" | "wake_hub" | "start_now";
+      jobs?: Array<{ id: string; type: string; status: string }>;
       job?: { id: string; status: string } | null;
+      effects_replayed?: boolean;
       message?: string;
     }>("POST", `/tasks/${canvasId}/resume-session`),
+  /** Drain-pause: block future claim while current work safely finishes. */
+  pauseTask: (canvasId: string) =>
+    send<TaskExecutionControlResult>("POST", `/tasks/${canvasId}/pause`),
+  /** Clear only the execution pause gate; schedules and failed/orphan Jobs are untouched. */
+  startTask: (canvasId: string) =>
+    send<TaskExecutionControlResult>("POST", `/tasks/${canvasId}/start`),
   /** 重试任务：清空本画布历史后从意图重新执行 */
   retryTask: (canvasId: string) => send<{ id: string; status: string }>("POST", `/tasks/${canvasId}/retry`),
   /** 归档任务（软删除，历史保留） */

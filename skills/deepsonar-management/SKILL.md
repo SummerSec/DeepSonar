@@ -51,6 +51,8 @@ python scripts/deepsonar-api.py tasks create <projectId> --title "审计 auth �
 python scripts/deepsonar-api.py tasks create <projectId> --title "组合验证" --kind compose --seed-finding-ids '<findingId1>,<findingId2>'
 python scripts/deepsonar-api.py tasks create <projectId> --title "明早执行" --kind standard --schedule-beijing-8am true
 python scripts/deepsonar-api.py tasks create <projectId> --title "定时执行" --kind standard --scheduled-start-at 2026-08-20T01:00:00.000Z
+python scripts/deepsonar-api.py tasks pause <canvasId>   # drain pause；不强杀已运行 Job
+python scripts/deepsonar-api.py tasks start <canvasId>   # 不清 schedule、不重试失败 Job
 python scripts/deepsonar-api.py tasks retry <canvasId>
 
 # Job

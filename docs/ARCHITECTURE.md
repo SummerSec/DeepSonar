@@ -139,6 +139,17 @@ pending → claimed → provisioning → running → succeeded
 
 provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；取消事务先提交 Job/Attempt 终态，随后通知当前进程的 provision 句柄。dispatcher 在调用 provider 前再次校验 Job 仍为 `provisioning`，runtime 在安装 abort listener 后立即重检 signal，避免取消落在句柄注册或监听安装窗口时丢失。资源身份、效果 settlement 与 `jobs.sandbox_id` 在同一个数据库事务落账。Job 终态和 Attempt 终态也在同一事务提交。启动 reconcile 只将“Attempt 为 preparing 且没有效果记录”的 Job 重排；其余 provision 未知窗口标记 orphan，清理容器、共享卷、短期 Token、画布/报告和 Plane，避免重复创建。
 
+启动 reconcile 对 running role Worker 采用批量恢复边界：生命周期层先把同次扫描命中的
+Worker 全部置为 `orphan` 并收口旧 Attempt，资源与 Token 仍立即销毁，但不在启动阶段逐个
+调用画布终态推进，因此不会生成一个时间更新的 Hub 抢占恢复入口。人工调用
+`POST /tasks/:canvasId/resume-session` 且画布无活动 Job 时，Scheduler 先选出该画布全部
+`scheduler_restart` / `provision_effect_unknown` 的 role Worker，按原 Job ID 原子状态机边
+重新入队；Dispatcher 领取时创建下一 Attempt。旧 Attempt 与 `unknown`、
+`replay_policy=never` effect 不修改、不自动重放。没有该批次时，入口才沿用单 Job 恢复或
+显式 Hub 唤醒，并用响应 `action`、`jobs[]` 告知实际动作。
+
+Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否的周期 desired-state 对账。Agentbox destroy 先尝试 SDK 删除，但最终必须按容器 ID 执行单次 120 秒、最多 5 次的指数退避 force remove；只有 Docker 明确返回 no-such 才是幂等成功，其他错误必须抛给调用方并计指标。启动 reconcile 和 Reaper 运行期都从 DB 的 `claimed/provisioning/running` Job 与 active Attempt 推导应保留集合，不增加清理表；容器只接受同时具有 canonical UUID `deepsonar.job` / `deepsonar.attempt` 的双标签，卷只接受严格 `deepsonar-assets-<canonical Job UUID>` 名称并复核 local driver/scope 与可选受管标签。对账防重入，失败资源留到下一轮继续重试。任何 broad prune、仅凭模糊前缀删除容器或删除非 DeepSonar 资源均被禁止。
+
 ### 3.4 Agent 工具白名单（只提案）
 
 | 工具名 | 谁可调用 | 调度器落地动作 |
@@ -180,6 +191,15 @@ loop:
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
   7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
 ```
+
+Canvas 级任务暂停是独立于 Hub convergence 和项目并发配额的 claim admission。控制对象保存在
+`canvases.target_json.execution_control={paused,paused_at,paused_by,reason}`，不增加定列。
+pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 `FOR SHARE` 锁定并重读
+同一 Canvas，因此多 Scheduler 进程不会越过已提交的暂停门。暂停不取消沙箱或篡改 Job 终态：
+`claimed/provisioning/running/waiting_human` 继续安全收尾，派生工作可作为 durable `pending`
+保留但不能 claim。start 只清执行门禁并通知 `deepsonar_jobs`；不修改 `target_json.schedule`，
+不把 failed/orphan/cancelled 恢复为 pending。只有本次确实解除暂停且无 pending/活动工作时，
+才复用 Hub Canvas 锁与活动 Hub 去重门补一次仍有资格的 Hub。
 
 ### 4.3 审计 → 验证链（单一决策点）
 
@@ -225,6 +245,11 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 - 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径，而是用 verdict=`needs_human` 把 Finding 收口为可报告终态
 
 恢复或重启后的每次执行均可在 Job 详情投影 Attempt、effect 和资源身份；`agent_run`、`agent_resume`、`cancel`、`timeout` 的效果记录用于区分可继续的同会话恢复和不可安全重放的未知窗口。
+
+任务级继续入口不承诺跨容器续接 Session。启动中断 role Worker 的动作名为“重新执行中断
+Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙箱。已销毁容器中的 Session
+无法恢复时必须明确展示 capture error，禁止选择 latest、伪造 Session 或把 normalized stream
+称为原始 Session。
 
 ---
 
@@ -359,6 +384,11 @@ Agent 输入输出是无界数据（单次运行原始事件流可达数十 MB�
 - 冷存储 MVP = 文件系统卷；二期换 MinIO/S3 只改 `blob_uri` 解析层
 - 库备份因此保持 MB 级；冷存储走文件级快照
 - 保留策略：findings 永久；transcript 默认 90 天；events 表按月分区到期 DROP PARTITION
+- finalized manifest 尚未落盘而 Scheduler 中断时，`GET /jobs/:id/evidence` 对
+  `attempts/*/stream.ndjson` 生成最多 32 个条目的 synthetic/inflight manifest；可变 raw
+  文件的 `sha256=null`，`finalized_at=null`，stream 端点仍按既有读取/解压/记录总预算提供
+  过程证据。若沙箱已销毁，manifest 的 `capture_error` 明示 Session 归档不可恢复，
+  `session_id=null`，不根据 Attempt 身份伪造文件。
 
 ### 6.3 索引与搜索策略
 
@@ -415,12 +445,13 @@ Job 事件仍必须经过本摄入硬门。
 - `POST /projects`  新建本地项目（plane_project_id 可空；不再预建项目级画布）
 - `GET/PATCH /projects/{id}`、`POST /projects/{id}/archive`  项目详情/改名/归档（归档=软删除，历史保留）
 - `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）；`kind=standard` 禁止种子，`kind=compose` 必须提交同项目 1–8 个当前可代入的 confirmed `seed_finding_ids`
+- `POST /tasks/{canvas_id}/pause` / `start`  幂等任务执行门禁（`jobs:control`）；返回 `execution_state`、收尾 `active_count`、`pending_count` 与 `changed`
 - `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布）；compose 在 wipe 前重验冻结种子，stale/跨项目/已处置时返回 `COMPOSE_SEEDS_STALE` 且保留现有运行数据
 - `PATCH /jobs/{id}/priority`（仅 pending 可改）
 - `PUT/DELETE /projects/{id}/integrations/plane`、`POST .../plane/sync`  Plane 绑定/解绑/手动补跑
 - `POST /projects/sync`  绑定 Plane 项目（兼容入口；画布随任务认领铸造）
-- `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup 计数 + 最近一次 job 状态/优先级）
-- `GET  /canvases/{id}`  单任务画布节点/边
+- `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup、`execution_state`、收尾/待领取计数及最近一次 job 状态/优先级）
+- `GET  /canvases/{id}`  单任务画布节点/边；Canvas 元数据带同一执行控制投影
 - `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
 - `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤
 - `GET /findings/{id}`  Finding 详情；返回协议字段、评分原文/规范化结果、验证轮次、来源事件和结构化 trace
@@ -461,8 +492,12 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边；HTTP 响应同步返回最终接收或稳定拒绝结果。
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、伪造的控制 MCP tool call 和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；平台控制 telemetry 仅保留 operation/调用标识与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列。
+- CLI stderr 不参与终态或语义事件推断。Runtime 在任意 SDK chunk 边界上对短期 Job Token 做流式精确脱敏，再以 `runtime.stderr` 写入 normalized evidence；单次运行累计最多 1 MiB，达到上限写 `runtime.stderr.truncated` 后停止采集。`jobs.error` 继续只保存短尾摘要，完整有界诊断只从鉴权 evidence 端点读取。
 - 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
 - Session 归档按 CLI 方言独立读取：Claude Code、Codex、Pi、DSH 使用本次沙箱的受治理本地 session artifact；OpenCode 使用 `opencode export <sessionId>` vendor export，受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或超限显式失败；Web 查看器分别解析五类格式并保留原始归档下载
+- 启动中断导致容器先于归档销毁时，只暴露已写入的 normalized stream synthetic manifest；
+  Session 显式 `capture_error`，不能用数据库中的 session identity 冒充归档，也不能跨新
+  Attempt 复用已销毁沙箱。
 - 数据库在新 Fact/Finding 节点提交后发出 `deepsonar_canvas_events` 通知；调度器实时回查节点正文，并用 `Agent.attach(...).sendMessage(...)` 向同一画布仍在运行的其他 Agent CLI 追加增量消息。追加消息只提供新任务数据，不改变冻结角色、网络或工具权限。仅当 Job 冻结能力 `incrementalMessages=true` 时订阅（Claude Code / Pi / DSH；Codex / OpenCode 不追加）。每次投递写入 `canvas_broadcasts`（`planned`→`injected`|`unknown`），`injected` 仅表示平台已调用 sendMessage 成功，不表示模型已读。画布广播徽标与连线是账本派生 overlay，不写入 `canvas_nodes` / `canvas_edges`；Job Session 的广播条目来自 CLI 持久化文本，只是旁证，同样不是 ACK。查询 `GET /canvases/:id/broadcasts`。产品摘要见 `DESIGN.md` §4.2
 - 终态后销毁该 Job 的独立沙箱；不创建或清理控制事件文件队列
 - 沙箱内不注入调度器数据库、管理 API 凭据或长期 Provider 密钥；`settings_config_json` 的无密钥结构仅在当前 Job 物化为 CLI 配置文件，endpoint 统一改写到 Gateway 并注入短期模型 Job token。平台控制 API 只注入另一枚按 operation 限权的短期 token；二者均随终态撤销并随一次性沙箱销毁
@@ -523,6 +558,7 @@ Provision admission 是数据库 claim 事务的一部分，而不是进程内 s
 
 - 官方 `deepsonar-base` 供 explore/analyze/review/code/hub/report，`deepsonar-audit` 供 audit；两者以固定 digest 的 `node:22-bookworm-slim` 为底（满足当前 Claude Code 的 Node 版本要求），共用 `agent-harness/runtime-images.json` 版本/来源/摘要单一定义，本地 image DSL 与生产 Dockerfile 均消费该约束并由 CI 检测漂移。
 - Base、Audit 与 Kali 官方运行时均固定安装 `@earendil-works/pi-coding-agent@0.84.1`，清单记录 npm `sha512` integrity；Docker 构建通过 `npm view ... dist.integrity` 实际核验该摘要后才安装。Pi 的 `models.json` 只写入 Gateway 地址与短期环境变量引用，长期 Provider 密钥不进入快照、工作区或 evidence。
+- Base CI 对 DSH 执行不依赖 Provider 凭据的真实容器启动门禁：完整包闭包统一固定为 `0.1.0-rc.7`，避免 prerelease peer range 混装；无论本轮构建还是复用 `src-*` 镜像，都用平台 standard mode 的完整无 UI Cordis composition、`--network none` 和 packaged-bin 验证 JSON-RPC `initialize` 与干净 `shutdown`。这会让镜像中钉死插件的 Schema 校验全部真实运行；`agent-spine-demo` 的 `toolBash` 必须是对象或 `false`，bash 工具只由 spine 挂载一次；`dsh-subprocess-local` 以固定 integrity 显式安装并先于 `dsh-bash-local` 挂载。
 - **镜像体积是准入硬门槛**：按角色拆包、`--no-install-recommends`、不安装重复 Agent SDK/CLI、构建后清理包缓存，并在断网冒烟中以 gzip 压缩分发包检查 `maxSizeMiB`、同时报告解压层大小。重型扫描器只进入专项镜像，不允许为了“可能用到”扩张默认 base。
 - `deepsonar-kali-minimal`（市场名 Kali Test）仅是 test 的官方默认镜像：固定官方 `kali-last-release` digest，预装 Python 3.10–3.14、固定 digest 的 Temurin JDK 8/11/17（默认 17，不含 21）、固定官方 Apache Maven 3.9.16、Kali 仓库的 Go/Rust 与清单化审计 CLI；Maven 位于 `/opt/deepsonar/maven` 且不预置 `.m2` 缓存。不安装 `kali-linux-*` / `kali-tools-*` metapackage、GUI、桌面或默认工具全集。Python 运行时构建后禁止联网补装，Java/Python/Maven 均提供明确的版本化命令。系统 verify 默认使用最小 Base，需要专项工具时通过 RoleConfig 显式覆盖。
 - Runtime-test Worker 只消费上述镜像内的预构建工具链，禁止在 Job 内冷装/下载 JDK、Maven、Gradle 或编译器；工具缺失时必须回传结构化 inconclusive/needs_human 证据。Java/Python/Go/Rust 的静态—动态能力和证据硬门见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
@@ -541,6 +577,8 @@ Provision admission 是数据库 claim 事务的一部分，而不是进程内 s
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
 
 官方运行时市场只从固定 HTTPS 信任边界内的 GitHub Release `latest` 清单同步。Scheduler 启动时同步一次，并按 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC` 定时刷新；远端不可用时回退随部署内置的清单。正式发布清单存在版本时，环境变量镜像引用仅作为无版本场景的启动兜底，不能覆盖正式最新版本。同步后每个官方镜像只有清单首个版本保持 `promoted_at`，历史版本继续保留，供项目显式固定与既有 Job 不可变快照追溯。Issue #70 Slice B 的 v2 发布清单由 release workflow 以 ACR→GHCR→Docker Hub 顺序生成；每个已发布目的地必须通过真实 `docker buildx imagetools inspect` 并与 canonical digest 相等，`registry_evidence` 记录 inspect/provenance，配置目的地发布失败则清单生成 fail-closed。Slice C 将平台全局 `runtime_registry_channel`（新库默认 `aliyun-acr`）落库：`GET /runtime-images/registry` 返回 `selected_channel`，管理员通过 `PATCH /runtime-images/registry/channel`（`images:manage`）在 `github`、`dockerhub`、`aliyun-acr` 间切换；项目限定 token 被拒绝。选择严格过滤 Scheduler 宿主平台，平台元数据为空也明确 fail closed。real/local-docker 先提供 `/health` liveness，再后台准备 Base 及全局有效 Audit/Kali 集合；就绪前不启用 Dispatcher，失败保持 live 并有界退避重试。项目策略/绑定/通道变更缺图时返回 `202 preparing/saved:false`，异步任务完成后重试才提交；通道门禁覆盖当前项目托管映射与显式 pin，成功前旧通道保持有效。省略 `version_id` 仍跟踪最新可信版本。Dispatcher 只 inspect 冻结 ref，缺失以 `runtime_image_not_ready` 分类计入指标和失败原因，执行期不 pull。
+
+本地 runtime image GC 只在 real/local-docker 且 `DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC>0` 时运行。候选必须来自 DB `runtime_image_versions` 与其 ref 账本，且 named immutable ref 的 digest 与版本 digest 一致；保护集合包含所有 `promoted_at` 版本、每产品按时间最近两版（当前 + 上一回滚版）、`project_runtime_images.selected_version_id`，以及 pending/claimed/provisioning/running/waiting_human Job 快照中的 `runtime_image_version_id`。删除前用精确 ancestor 检查全部容器，随后只执行不带 `-f` 的 `docker image rm <known-ref>`；Docker 竞态下的容器引用仍阻止删除。裸 digest、可变 tag、不一致 ref、Docker 检查失败均 fail closed；不调用 `docker image prune` / `docker system prune`，也不处理数据库目录外的服务镜像或第三方资源。
 
 RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表示“系统沙箱”：Scheduler 使用平台治理的最小 Base 底座创建沙箱，并在 Job 快照中记录其不可变 digest，但 RoleConfig 本身保持未绑定状态。Test 与 Audit 可默认绑定专项 Kali/Audit 镜像；其余内置角色默认使用系统沙箱。该选项不允许 Agent、Hub 或任务内容提供任意镜像引用。
 
@@ -674,6 +712,12 @@ LEASE_TTL_SEC=120
 HEARTBEAT_INTERVAL_SEC=30
 REAPER_INTERVAL_SEC=30
 
+DEEPSONAR_HOST_DISK_PATH=/
+DEEPSONAR_HOST_DISK_WARNING_PERCENT=85
+DEEPSONAR_HOST_DISK_ERROR_PERCENT=90
+DEEPSONAR_HOST_DISK_CHECK_INTERVAL_SEC=30
+DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC=21600 # 0 关闭
+
 AUTO_VERIFY_SEVERITIES=low,medium,high,critical
 MAX_FOLLOWUPS_PER_JOB=60
 MAX_FOLLOWUP_DEPTH=12
@@ -726,6 +770,7 @@ CANVAS_LAYOUT=auto
 | Agent 胡写、死循环派生 | 白名单工具 + followup 频次/深度护栏 + 超限转人工 |
 | 被审计代码 prompt injection | 见 §9.1 威胁建模（断网、白名单、payload 校验） |
 | 沙箱/调度器崩溃任务悬挂 | Lease + 心跳 + Reaper（§3.3） |
+| vfs 慢删造成僵尸容器/卷和旧镜像堆积 | destroy 有界重试 + 启动/周期 desired-state 对账；DB-known 非强制镜像 GC；`statfs` error 水位暂停新 claim，恢复后 notify |
 | 事件重试产生重复副作用 | event_id 幂等 + finding fingerprint 去重（§6） |
 | 事件顺序错乱（时钟偏差） | 自增 id 全局序 + job_seq 局部序，不信 created_at |
 | 原始事件流撑爆数据库 | 热冷分层（§6.2）：语义事件入库，原始流进文件 |

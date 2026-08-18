@@ -21,6 +21,7 @@ import {
   resolveTerminalRunError,
   resolveTerminalProcessOutcome,
   parseRuntimeLine,
+  parseDeepSonarContainerRows,
   runtimeCliEnv,
   assertSharedAssetsContainerMount,
   assertSharedAssetsVolumeOwnership,
@@ -40,9 +41,80 @@ import {
   gatewayProxyReuseAction,
   shouldRemoveGatewayLeftover,
   AgentboxRunner,
+  BoundedRuntimeStderrEvidence,
+  RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
+  CONTAINER_REMOVE_MAX_ATTEMPTS,
+  CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
   mergeObservedSessionIdentity,
   normalizePlainFinalOutput,
+  removeContainerWithRetry,
 } from "./agentbox.js";
+
+test("container force removal retries exponentially and reports exhaustion", async () => {
+  const calls: string[][] = [];
+  const delays: number[] = [];
+  const failure = new Error("daemon busy");
+  await assert.rejects(
+    removeContainerWithRetry(
+      "container-id",
+      async (...args) => {
+        calls.push(args);
+        throw failure;
+      },
+      async (delay) => {
+        delays.push(delay);
+      },
+    ),
+    (error: unknown) => error === failure,
+  );
+  assert.equal(calls.length, CONTAINER_REMOVE_MAX_ATTEMPTS);
+  assert.deepEqual(
+    delays,
+    Array.from(
+      { length: CONTAINER_REMOVE_MAX_ATTEMPTS - 1 },
+      (_, index) => CONTAINER_REMOVE_RETRY_BASE_DELAY_MS * 2 ** index,
+    ),
+  );
+});
+
+test("container force removal treats only explicit no-such as idempotent success", async () => {
+  let attempts = 0;
+  await removeContainerWithRetry("gone", async () => {
+    attempts += 1;
+    throw new Error("Error response from daemon: No such container: gone");
+  });
+  assert.equal(attempts, 1);
+});
+
+test("Agentbox destroy propagates authoritative container removal failure", async () => {
+  const failure = new Error("vfs removal failed");
+  const runner = new AgentboxRunner(async () => {
+    throw failure;
+  });
+  await assert.rejects(
+    runner.destroy({ sandboxId: "leftover" }),
+    (error: unknown) =>
+      error instanceof AggregateError
+      && error.errors.includes(failure),
+  );
+});
+
+test("managed container parsing requires canonical Job and Attempt labels", () => {
+  const jobId = "11111111-1111-4111-8111-111111111111";
+  const attemptId = "22222222-2222-4222-8222-222222222222";
+  const rows = parseDeepSonarContainerRows([
+    `kept\tdeepsonar.job=${jobId},deepsonar.attempt=${attemptId}\texited`,
+    `missing-attempt\tdeepsonar.job=${jobId}\texited`,
+    `bad-job\tdeepsonar.job=not-a-uuid,deepsonar.attempt=${attemptId}\texited`,
+    `bad-attempt\tdeepsonar.job=${jobId},deepsonar.attempt=not-a-uuid\texited`,
+  ].join("\n"));
+  assert.deepEqual(rows, [{
+    containerId: "kept",
+    jobId,
+    attemptId,
+    state: "exited",
+  }]);
+});
 import { NoopRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS, type SessionDiscoveryRuntime } from "./cli-session-adapters.js";
 
@@ -326,6 +398,39 @@ test("plain-final output is bounded at 1 MiB and preserves stderr on failure", (
   assert.equal(failed.text, "partial");
   assert.equal(failed.stderr, "fatal diagnostic");
   assert.equal(failed.events.at(-1)?.type, "run.failed");
+});
+
+test("runtime stderr evidence is complete, redacted across chunks, and bounded", () => {
+  const events: Array<Record<string, unknown>> = [];
+  const secret = "deepsonar-job-secret";
+  const stderr = new BoundedRuntimeStderrEvidence([secret], (event) => events.push(event), 32);
+  stderr.push(`before ${secret.slice(0, 10)}`);
+  stderr.push(`${secret.slice(10)} after ${"界".repeat(20)}`);
+  stderr.finish();
+
+  const captured = events
+    .filter((event) => event.type === "runtime.stderr")
+    .map((event) => String(event.chunk ?? ""))
+    .join("");
+  assert.equal(captured.includes(secret), false);
+  assert.match(captured, /^before \[REDACTED\] after /u);
+  assert.ok(Buffer.byteLength(captured, "utf8") <= 32);
+  assert.deepEqual(events.at(-1), {
+    type: "runtime.stderr.truncated",
+    captured_bytes: Buffer.byteLength(captured, "utf8"),
+    max_bytes: 32,
+  });
+});
+
+test("runtime stderr evidence default budget is 1 MiB and keeps short streams losslessly", () => {
+  const events: Array<Record<string, unknown>> = [];
+  const stderr = new BoundedRuntimeStderrEvidence([], (event) => events.push(event));
+  stderr.push("first chunk\n");
+  stderr.push("second chunk\n");
+  stderr.finish();
+  assert.equal(RUNTIME_STDERR_EVIDENCE_MAX_BYTES, 1024 * 1024);
+  assert.equal(events.map((event) => String(event.chunk ?? "")).join(""), "first chunk\nsecond chunk\n");
+  assert.equal(events.some((event) => event.type === "runtime.stderr.truncated"), false);
 });
 
 test("CLI 同会话恢复只接受明确的临时上游错误", () => {
