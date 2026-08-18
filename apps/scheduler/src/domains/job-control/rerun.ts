@@ -1,6 +1,5 @@
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
-  normalizePendingJobPriority,
   parseRelatedFindingIds,
   resolveAgentSnapshotForJob,
   type AgentRuntimeSnapshot,
@@ -283,7 +282,6 @@ export async function requeueJob(
       priority: job.priority,
     };
 
-    await normalizePendingJobPriority(jobId, tx);
     await resetReportState(tx, jobId);
     await tx`
       UPDATE canvas_nodes SET status = 'pending', updated_at = now()
