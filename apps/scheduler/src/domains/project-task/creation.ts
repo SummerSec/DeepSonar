@@ -259,6 +259,7 @@ export async function createTaskTransaction(
       },
       snapshot,
     });
+    await tx`SELECT pg_notify('deepsonar_jobs', 'task_created')`;
     return {
       kind: "created" as const,
       canvasId,
