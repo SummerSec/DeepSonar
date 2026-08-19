@@ -910,50 +910,73 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   max-width: none;
   max-height: none;
 }
+.react-flow {
+  --deepsonar-edge-zoom-boost: 1;
+}
 .react-flow__edge-path {
   fill: none !important;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.4;
+  stroke-width: calc(2.4px * var(--deepsonar-edge-zoom-boost, 1));
 }
-.react-flow__edge.selected .react-flow__edge-path { stroke-width: 2.8; }
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke-width: calc(2.8px * var(--deepsonar-edge-zoom-boost, 1));
+}
 .react-flow__handle { opacity: 0; }
-@keyframes deepsonar-edge-flow { to { stroke-dashoffset: -36; } }
+@keyframes deepsonar-edge-flow {
+  to { stroke-dashoffset: calc(-36px * var(--deepsonar-edge-zoom-boost, 1)); }
+}
 .react-flow__edge.deepsonar-edge .react-flow__edge-path {
   animation: deepsonar-edge-flow var(--deepsonar-edge-speed, 2.8s) cubic-bezier(.2,.8,.2,1) infinite;
 }
 .react-flow__edge.deepsonar-edge-child .react-flow__edge-path { stroke-dasharray: none; }
-.react-flow__edge.deepsonar-edge-produces .react-flow__edge-path { stroke-dasharray: 8 4; }
-.react-flow__edge.deepsonar-edge-verifies .react-flow__edge-path { stroke-dasharray: 3 4; }
-.react-flow__edge.deepsonar-edge-next .react-flow__edge-path { stroke-dasharray: 10 4 3 4; }
-.react-flow__edge.deepsonar-edge-from .react-flow__edge-path { stroke-dasharray: 5 4; }
-.react-flow__edge.deepsonar-edge-to .react-flow__edge-path { stroke-dasharray: 3 4; }
+.react-flow__edge.deepsonar-edge-produces .react-flow__edge-path {
+  stroke-dasharray: calc(8px * var(--deepsonar-edge-zoom-boost, 1)) calc(4px * var(--deepsonar-edge-zoom-boost, 1));
+}
+.react-flow__edge.deepsonar-edge-verifies .react-flow__edge-path {
+  stroke-dasharray: calc(3px * var(--deepsonar-edge-zoom-boost, 1)) calc(4px * var(--deepsonar-edge-zoom-boost, 1));
+}
+.react-flow__edge.deepsonar-edge-next .react-flow__edge-path {
+  stroke-dasharray:
+    calc(10px * var(--deepsonar-edge-zoom-boost, 1))
+    calc(4px * var(--deepsonar-edge-zoom-boost, 1))
+    calc(3px * var(--deepsonar-edge-zoom-boost, 1))
+    calc(4px * var(--deepsonar-edge-zoom-boost, 1));
+}
+.react-flow__edge.deepsonar-edge-from .react-flow__edge-path {
+  stroke-dasharray: calc(5px * var(--deepsonar-edge-zoom-boost, 1)) calc(4px * var(--deepsonar-edge-zoom-boost, 1));
+}
+.react-flow__edge.deepsonar-edge-to .react-flow__edge-path {
+  stroke-dasharray: calc(3px * var(--deepsonar-edge-zoom-boost, 1)) calc(4px * var(--deepsonar-edge-zoom-boost, 1));
+}
 .deepsonar-node { position: relative; }
 .react-flow__node.selected .deepsonar-node { border-color: var(--red-bright) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--red-bright) 45%, transparent) !important; }
 .react-flow__edge.broadcast-overlay-edge .react-flow__edge-path {
   stroke-linecap: round;
-  stroke-width: 2;
+  stroke-width: calc(2px * var(--deepsonar-edge-zoom-boost, 1));
   filter: none;
 }
 .react-flow__edge.broadcast-overlay-edge .react-flow__edge-text {
   font: 600 9px var(--font-mono);
   letter-spacing: .08em;
 }
-@keyframes deepsonar-broadcast-flow { to { stroke-dashoffset: -28px; } }
+@keyframes deepsonar-broadcast-flow {
+  to { stroke-dashoffset: calc(-28px * var(--deepsonar-edge-zoom-boost, 1)); }
+}
 .react-flow__edge.broadcast-overlay-edge.is-planned .react-flow__edge-path {
-  stroke-dasharray: 2 7;
+  stroke-dasharray: calc(2px * var(--deepsonar-edge-zoom-boost, 1)) calc(7px * var(--deepsonar-edge-zoom-boost, 1));
   animation: deepsonar-broadcast-flow 2.8s linear infinite;
 }
 .react-flow__edge.broadcast-overlay-edge.is-injected .react-flow__edge-path {
-  stroke-dasharray: 9 6;
+  stroke-dasharray: calc(9px * var(--deepsonar-edge-zoom-boost, 1)) calc(6px * var(--deepsonar-edge-zoom-boost, 1));
   animation: none !important;
 }
 .react-flow__edge.broadcast-overlay-edge.is-unknown .react-flow__edge-path {
-  stroke-dasharray: 1 7;
+  stroke-dasharray: calc(1px * var(--deepsonar-edge-zoom-boost, 1)) calc(7px * var(--deepsonar-edge-zoom-boost, 1));
   animation: none !important;
 }
 .react-flow__edge.broadcast-overlay-edge.is-failed .react-flow__edge-path {
-  stroke-dasharray: 4 5;
+  stroke-dasharray: calc(4px * var(--deepsonar-edge-zoom-boost, 1)) calc(5px * var(--deepsonar-edge-zoom-boost, 1));
   animation: none !important;
 }
 .react-flow__edge.broadcast-overlay-edge .react-flow__edge-textbg {
@@ -2749,7 +2772,7 @@ html[data-color-scheme="light"] .react-flow {
   background: #efede7;
 }
 html[data-color-scheme="light"] .react-flow__edge.deepsonar-edge .react-flow__edge-path {
-  stroke-width: 2.8;
+  stroke-width: calc(2.8px * var(--deepsonar-edge-zoom-boost, 1));
   filter: drop-shadow(0 0 0.7px #1a212b) drop-shadow(0 1px 0 rgba(255, 255, 255, .55));
 }
 html[data-color-scheme="light"] .canvas-filter-panel,

@@ -73,6 +73,8 @@ test("edge strokes keep size and light-theme contrast", () => {
   assert.match(css, /\.react-flow__edges\b[\s\S]*max-width:\s*none/);
   assert.match(css, /html\[data-color-scheme="light"\] \.react-flow__edge\.deepsonar-edge \.react-flow__edge-path/);
   assert.match(css, /--xy-edge-stroke-default/);
+  assert.match(css, /--deepsonar-edge-zoom-boost/);
+  assert.match(css, /calc\(2\.8px \* var\(--deepsonar-edge-zoom-boost, 1\)\)/);
   assert.match(css, /\.canvas-filter-toggle\b/);
   assert.match(css, /\.canvas-hidden-edge-hint\b/);
 });

@@ -33,6 +33,6 @@ test("canvas edges use the source node color for stroke and marker, with SVG leg
   const canvasSource = readFileSync(new URL("./CanvasView.tsx", import.meta.url), "utf8");
   assert.match(canvasSource, /stroke: sourceColor/);
   assert.match(canvasSource, /markerEnd:\s*\{[^}]*color: sourceColor/s);
-  assert.match(canvasSource, /strokeDasharray: st\.dash \|\| undefined/);
+  assert.match(canvasSource, /strokeDasharray: boostedDashCss\(st\.dash\)/);
   assert.match(canvasSource, /<svg[^>]*>\s*<line[\s\S]*strokeDasharray=\{it\.dash \|\| undefined\}/);
 });

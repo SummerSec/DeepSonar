@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Broadcast, CaretDown, CaretUp, DownloadSimple, Eye, EyeSlash, Funnel, PaperPlaneTilt, TreeStructure, X } from "@phosphor-icons/react";
 import {
   Background,
@@ -47,11 +47,14 @@ import { Sidebar } from "./Sidebar";
 import { SearchableMultiSelect } from "./SearchableSelect";
 import {
   consumeViewportFit,
+  FULL_GRAPH_MIN_ZOOM,
   hasPositiveNodeBounds,
   isUsableFlowSize,
+  resolveFitMinZoom,
   resolveViewportNodeIds,
   shouldRecoverViewport,
 } from "./canvas-viewport";
+import { applyEdgeZoomBoostVar, boostedDashCss, boostedStrokeCss } from "./edge-visibility";
 import {
   broadcastLedgerCountLabel,
   broadcastLedgerHeading,
@@ -70,8 +73,6 @@ export { EDGE_STYLE } from "./edge-style";
 
 /** Avoid a main-thread ELK layout spike on large topology snapshots. */
 export const ELK_NODE_THRESHOLD = 200;
-const FULL_GRAPH_MIN_ZOOM = 0.05;
-const FOCUSED_GRAPH_MIN_ZOOM = 0.2;
 export const CANVAS_DELTA_POLL_MS = 3_000;
 export const CANVAS_BROADCAST_POLL_MS = 3_000;
 export const CANVAS_MESSAGE_POLL_MS = 3_000;
@@ -97,6 +98,8 @@ function CanvasViewportController({
   const reactFlow = useReactFlow();
   const flowWidth = useStore((state) => state.width);
   const flowHeight = useStore((state) => state.height);
+  const flowZoom = useStore((state) => state.transform[2]);
+  const flowPane = useStore((state) => state.domNode);
   const latestGenerationRef = useRef(generation);
   const fittedGenerationRef = useRef("");
   const flowSizeRef = useRef({ width: 0, height: 0 });
@@ -114,6 +117,10 @@ function CanvasViewportController({
   useEffect(() => {
     latestGenerationRef.current = generation;
   }, [generation]);
+
+  useLayoutEffect(() => {
+    applyEdgeZoomBoostVar(flowPane, flowZoom);
+  }, [flowPane, flowZoom]);
 
   useEffect(() => {
     const previous = flowSizeRef.current;
@@ -156,7 +163,7 @@ function CanvasViewportController({
       void reactFlow.fitView({
         nodes: fitTargets,
         padding: requestNodeIds?.length ? 0.7 : 0.18,
-        minZoom: requestNodeIds?.length ? FOCUSED_GRAPH_MIN_ZOOM : FULL_GRAPH_MIN_ZOOM,
+        minZoom: resolveFitMinZoom(Boolean(requestNodeIds?.length)),
         maxZoom: requestNodeIds?.length ? 1.2 : 1.05,
         duration: 320,
       });
@@ -253,9 +260,9 @@ function toFlow(
           style: {
             stroke: sourceColor,
             color: sourceColor,
-            strokeWidth: 2.4,
+            strokeWidth: boostedStrokeCss(),
             opacity: focusNodeIds.size > 0 && focusMode === "dim" && !focusEdgeIds.has(e.id) ? 0.22 : 1,
-            strokeDasharray: st.dash || undefined,
+            strokeDasharray: boostedDashCss(st.dash),
             "--deepsonar-edge-speed": st.speed,
             "--xy-edge-stroke": sourceColor,
           } as CSSProperties,
@@ -290,7 +297,7 @@ function toFlow(
           labelBgBorderRadius: 4,
           style: {
             stroke: BROADCAST_STATUS_COLOR[edge.status],
-            strokeWidth: 2,
+            strokeWidth: boostedStrokeCss(2),
             opacity: edge.status === "unknown" ? 0.72 : edge.status === "failed" ? 0.84 : 0.94,
             "--deepsonar-edge-speed": "2.2s",
           } as CSSProperties,
