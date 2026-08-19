@@ -20,10 +20,12 @@ import {
   type AuthStatus,
   type PublicUser,
 } from "./api";
+import { AUTH_STATUS_UNAVAILABLE, resolveAuthStatusReadiness } from "./auth-status";
 
 interface AuthContextValue {
   loading: boolean;
   status: AuthStatus | null;
+  statusError: unknown | null;
   me: AuthMe | null;
   user: PublicUser | null;
   token: string;
@@ -39,6 +41,7 @@ const AuthCtx = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<AuthStatus | null>(null);
+  const [statusError, setStatusError] = useState<unknown | null>(null);
   const [me, setMe] = useState<AuthMe | null>(null);
   const [token, setTokenState] = useState(getLocalToken());
 
@@ -51,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const st = await api.authStatus();
       setStatus(st);
+      setStatusError(null);
       if (!st.auth_required) {
         setMe({
           auth_required: false,
@@ -73,9 +77,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTokenState("");
         setMe({ auth_required: true, authenticated: false, actor: null, user: null });
       }
-    } catch {
+    } catch (error) {
       setStatus(null);
-      setMe(null);
+      setStatusError(error);
     } finally {
       setLoading(false);
     }
@@ -143,6 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       loading,
       status,
+      statusError,
       me,
       user: me?.user ?? null,
       token,
@@ -152,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       setToken,
     }),
-    [loading, status, me, token, refresh, login, bootstrap, logout, setToken],
+    [loading, status, statusError, me, token, refresh, login, bootstrap, logout, setToken],
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
@@ -164,15 +169,27 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-/** 需要登录时拦截；auth 未开启或已登录则放行 */
+/** 需要登录时拦截；仅明确关闭鉴权或已登录则放行，status 失败不按开发模式放行 */
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { loading, status, me } = useAuth();
+  const { loading, status, statusError, me, refresh } = useAuth();
   const location = useLocation();
+  const readiness = resolveAuthStatusReadiness({ loading, status, error: statusError });
 
-  if (loading) {
+  if (readiness.kind === "loading") {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-zinc-500">
         检查登录状态…
+      </div>
+    );
+  }
+
+  if (readiness.kind === "error" && !me?.authenticated) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-[13px] text-zinc-500">
+        <p role="alert">{readiness.message || AUTH_STATUS_UNAVAILABLE}</p>
+        <button type="button" className="text-[12px] text-zinc-300 underline-offset-2 hover:underline" onClick={() => void refresh()}>
+          重试
+        </button>
       </div>
     );
   }
