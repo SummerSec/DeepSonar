@@ -1,4 +1,4 @@
-name: 缺陷
+name: 缺陷报告
 description: 功能异常、回归、部署或运行时错误
 title: "[Bug] "
 labels: [bug]
