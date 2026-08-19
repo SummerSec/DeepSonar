@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CredentialBatchBindingRequest } from "@deepsonar/shared-types";
+import { CredentialBatchBindingImpact, CredentialBatchBindingRequest } from "@deepsonar/shared-types";
 
 const routes = readFileSync(new URL("./domains/credential/routes.ts", import.meta.url), "utf8");
 
@@ -70,4 +70,31 @@ test("batch route has server-owned health gate; model catalog is not a bind requ
   assert.match(route, /idempotency_key/);
   assert.match(route, /IDEMPOTENCY_KEY_REUSED/);
   assert.match(route, /BATCH_TRANSACTION_FAILED/);
+  assert.match(route, /leftover_project_models_unchanged/);
+  assert.match(route, /inherit_global_ignores_project_model/);
+  assert.match(route, /parseProjectImagePolicy/);
+});
+
+test("batch impact defaults leftover-model honesty fields for stored replays", () => {
+  const parsed = CredentialBatchBindingImpact.parse({
+    mode: "bind",
+    effect: "new_jobs_only",
+    credential_id: "11111111-1111-4111-8111-111111111111",
+    source_credential_id: null,
+    role_config_count: 1,
+    pending_job_count: 0,
+    refreshed_pending_job_count: 0,
+    active_frozen_job_count: 0,
+    terminal_historical_job_count: 0,
+    role_configs: [{
+      role_config_id: "22222222-2222-4222-8222-222222222222",
+      role_name: "audit",
+      scope: "project",
+      project_id: "33333333-3333-4333-8333-333333333333",
+      model: "grok-4.5",
+    }],
+  });
+  assert.equal(parsed.leftover_project_models_unchanged, false);
+  assert.equal(parsed.role_configs[0]?.model_changed, false);
+  assert.equal(parsed.role_configs[0]?.inherit_global_ignores_project_model, false);
 });

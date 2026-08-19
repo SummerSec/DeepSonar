@@ -1,6 +1,7 @@
 export {
   createRoleRuntimeSnapshotApplication,
   resolveAgentSnapshotForJob,
+  roleIdentityForProjectPolicy,
   roleNameForJobType,
   withRuntimeTestToolchainPolicy,
   PLATFORM_DEFAULT_AGENT_CLI,

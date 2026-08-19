@@ -880,6 +880,8 @@ export interface BindableRoleConfig {
   model: string | null;
   context_window_tokens: number | null;
   scope: "global" | "project";
+  /** 项目 RoleConfig 所属项目的镜像/模型继承策略；全局行为 null。 */
+  image_strategy?: ProjectImageStrategy | null;
   /** null = 系统默认底座（deepsonar-base） */
   runtime_image_key: string | null;
   version: number;
