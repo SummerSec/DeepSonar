@@ -52,6 +52,16 @@ import {
   resolveViewportNodeIds,
   shouldRecoverViewport,
 } from "./canvas-viewport";
+import {
+  broadcastLedgerCountLabel,
+  broadcastLedgerHeading,
+  CANVAS_FILTER_DESKTOP_MQ,
+  countHiddenTopologyEdges,
+  defaultCanvasFiltersOpen,
+  hiddenEdgeHint,
+  shouldMountBroadcastLedger,
+  visibleTopologyEdges,
+} from "./canvas-process-chrome";
 import { findingTraceIds, traceDisplayIds, type TraceFocusMode } from "./finding-trace-focus";
 import { shouldRenderCanvasOverlays } from "./task-workbench-layers";
 
@@ -242,10 +252,12 @@ function toFlow(
           className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
           style: {
             stroke: sourceColor,
-            strokeWidth: 1.8,
-            opacity: focusNodeIds.size > 0 && focusMode === "dim" && !focusEdgeIds.has(e.id) ? 0.08 : 0.9,
+            color: sourceColor,
+            strokeWidth: 2.4,
+            opacity: focusNodeIds.size > 0 && focusMode === "dim" && !focusEdgeIds.has(e.id) ? 0.22 : 1,
             strokeDasharray: st.dash || undefined,
             "--deepsonar-edge-speed": st.speed,
+            "--xy-edge-stroke": sourceColor,
           } as CSSProperties,
           markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: sourceColor },
         };
@@ -410,7 +422,9 @@ export function CanvasView({
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [showContext, setShowContext] = useState(true);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(() =>
+    defaultCanvasFiltersOpen(typeof window === "undefined" ? null : window.matchMedia(CANVAS_FILTER_DESKTOP_MQ)),
+  );
   const [broadcastLedgerOpen, setBroadcastLedgerOpen] = useState(false);
   const [exportingImage, setExportingImage] = useState(false);
   const [exportImageError, setExportImageError] = useState<string | null>(null);
@@ -795,31 +809,29 @@ export function CanvasView({
   );
 
   // 布局签名：展示节点/边集合变化 → 重算（含筛选、深度、展开收起、图生长）
+  const topologyTrace = useMemo(
+    () => ({ active: traceActive, mode: traceMode, edgeIds: traceIds.edgeIds }),
+    [traceActive, traceIds.edgeIds, traceMode],
+  );
+
   const layoutKey = useMemo(() => {
     if (!data || displayIds.size === 0) return "";
     const nids = [...displayIds].sort().join(",");
-    const eids = data.edges
-      .filter((e) =>
-        displayIds.has(e.from_node_id) &&
-        displayIds.has(e.to_node_id) &&
-        (!traceActive || traceMode === "dim" || traceIds.edgeIds.has(e.id)))
+    const eids = visibleTopologyEdges(data.edges, displayIds, topologyTrace)
       .map((e) => e.id)
       .sort()
       .join(",");
     return `${nids}|${eids}`;
-  }, [data, displayIds, traceActive, traceIds.edgeIds, traceMode]);
+  }, [data, displayIds, topologyTrace]);
 
   const layoutSubgraph = useMemo(() => {
     if (!data || !layoutKey) return { nodes: [] as CanvasNode[], edges: [] as CanvasData["edges"] };
     return {
       nodes: data.nodes.filter((n) => displayIds.has(n.id)),
-      edges: data.edges.filter((e) =>
-        displayIds.has(e.from_node_id) &&
-        displayIds.has(e.to_node_id) &&
-        (!traceActive || traceMode === "dim" || traceIds.edgeIds.has(e.id))),
+      edges: visibleTopologyEdges(data.edges, displayIds, topologyTrace),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
-  }, [data, layoutKey, traceActive, traceIds.edgeIds, traceMode]);
+  }, [data, layoutKey, topologyTrace]);
 
   // elkjs：对小型当前展示子图重算最优分层布局。大图使用服务端持久化
   // 坐标，避免一次性把数百节点/边交给 ELK 阻塞主线程。
@@ -871,12 +883,7 @@ export function CanvasView({
     const subset: CanvasData = {
       ...data,
       nodes: data.nodes.filter((n) => displayIds.has(n.id)),
-      edges: data.edges.filter(
-        (e) =>
-          displayIds.has(e.from_node_id) &&
-          displayIds.has(e.to_node_id) &&
-          (!traceActive || traceMode === "dim" || traceIds.edgeIds.has(e.id)),
-      ),
+      edges: visibleTopologyEdges(data.edges, displayIds, topologyTrace),
     };
     const flow = toFlow(
       subset,
@@ -906,6 +913,7 @@ export function CanvasView({
     fallbackPos,
     handlers,
     outgoing,
+    topologyTrace,
     traceActive,
     traceIds.edgeIds,
     traceIds.nodeIds,
@@ -1051,6 +1059,8 @@ export function CanvasView({
       </div>
     );
 
+  const hiddenEdgeCount = countHiddenTopologyEdges(data.edges.length, layoutSubgraph.edges.length);
+  const hiddenEdgesLabel = hiddenEdgeHint(hiddenEdgeCount);
   const depthSummary =
     depthHiddenCount > 0
       ? `深度 ≤${effectiveMaxDepth} · 藏 ${depthHiddenCount}`
@@ -1090,10 +1100,10 @@ export function CanvasView({
           <p>“已注入会话”只代表传输完成；只有显式 ACK 才是“Agent 已确认”。</p>
         </section>
       )}
-      {broadcastPage && broadcastPage.total > 0 && (
+      {shouldMountBroadcastLedger(broadcastPage) && broadcastPage && (
         <section
-          className={`broadcast-status-panel${broadcastLedgerOpen ? " is-open" : " is-collapsed"}`}
-          aria-label="广播账本"
+          className={`broadcast-status-panel${broadcastLedgerOpen ? " is-open" : " is-collapsed"}${broadcastPage.total === 0 ? " is-empty" : ""}`}
+          aria-label={broadcastLedgerHeading(broadcastPage.total, broadcastPage.truncated)}
         >
           <button
             type="button"
@@ -1105,7 +1115,7 @@ export function CanvasView({
             <Broadcast size={14} />
             <span className="broadcast-status-panel-kicker">广播账本</span>
             <span className="broadcast-status-panel-count">
-              {broadcastPage.total}{broadcastPage.truncated ? "+" : ""} 条
+              {broadcastLedgerCountLabel(broadcastPage.total, broadcastPage.truncated)}
               {broadcastPage.items.some((item) => item.delivery_status === "failed") && (
                 <em className="broadcast-status-panel-alert">有失败</em>
               )}
@@ -1114,23 +1124,27 @@ export function CanvasView({
           </button>
           {broadcastLedgerOpen && (
             <div id="canvas-broadcast-ledger">
-              <ol>
-                {broadcastPage.items.slice(0, 5).map((item) => (
-                  <li key={item.id} className={`broadcast-status-row is-${item.delivery_status}`}>
-                    <span className="broadcast-status-rail" aria-hidden="true" />
-                    <div className="broadcast-status-copy">
-                      <strong>{item.title}</strong>
-                      <small>{item.target_node_title ?? item.target_role ?? "目标节点暂不可见"}</small>
-                    </div>
-                    <div className="broadcast-status-meta">
-                      <em className="broadcast-status-state" style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
-                        {broadcastStatusLabel(item.delivery_status)}
-                      </em>
-                      {item.attempt > 1 && <small>attempt ×{item.attempt}</small>}
-                    </div>
-                  </li>
-                ))}
-              </ol>
+              {broadcastPage.total === 0 ? (
+                <p className="broadcast-status-empty">当前画布没有广播投递记录。新的 Fact / Finding 投递会出现在这里。</p>
+              ) : (
+                <ol>
+                  {broadcastPage.items.slice(0, 5).map((item) => (
+                    <li key={item.id} className={`broadcast-status-row is-${item.delivery_status}`}>
+                      <span className="broadcast-status-rail" aria-hidden="true" />
+                      <div className="broadcast-status-copy">
+                        <strong>{item.title}</strong>
+                        <small>{item.target_node_title ?? item.target_role ?? "目标节点暂不可见"}</small>
+                      </div>
+                      <div className="broadcast-status-meta">
+                        <em className="broadcast-status-state" style={{ color: BROADCAST_STATUS_COLOR[item.delivery_status] }}>
+                          {broadcastStatusLabel(item.delivery_status)}
+                        </em>
+                        {item.attempt > 1 && <small>attempt ×{item.attempt}</small>}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
               <p>“已注入”仅表示内容进入 Agent 会话，不表示已阅读或处理。</p>
             </div>
           )}
@@ -1205,16 +1219,19 @@ export function CanvasView({
       >
         {filtersOpen ? (
           <div className="surface-core rounded-[16px] px-4 py-3">
-            <div className="mb-3 flex items-center gap-2 border-b border-white/[.055] pb-2.5">
+            <div className="mb-3 flex items-center gap-2 border-b border-[var(--line)] pb-2.5">
               <Funnel size={15} className="text-acc-400" />
-              <span className="text-[12px] font-medium text-zinc-200">筛选过程节点</span>
-              <span className="font-mono text-[10px] text-zinc-600">
+              <span className="text-[12px] font-medium text-[var(--text)]">筛选过程节点</span>
+              <span className="font-mono text-[10px] text-[var(--muted)]">
                 {filterActive
                   ? `命中 ${matchedCount} / ${totalNodeCount}`
                   : `显示 ${visibleNodes.length} / ${totalNodeCount}`}
                 {depthHiddenCount > 0 ? ` · 藏 ${depthHiddenCount}` : ""}
                 {manualOverrideHint}
               </span>
+              {hiddenEdgesLabel && (
+                <span className="canvas-hidden-edge-hint">{hiddenEdgesLabel}</span>
+              )}
               {layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD && (
                 <span className="font-mono text-[10px] text-amber-300">大图使用服务端坐标（跳过 ELK）</span>
               )}
@@ -1228,7 +1245,7 @@ export function CanvasView({
                     setStatusFilter([]);
                     setQuery("");
                   }}
-                  className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white"
+                  className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-[var(--muted)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
                 >
                   <X size={11} /> 清除
                 </button>
@@ -1246,7 +1263,7 @@ export function CanvasView({
               <button
                 type="button"
                 onClick={() => setFiltersOpen(false)}
-                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-500 ring-1 ring-white/[.08] hover:text-white"
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[10px] text-[var(--muted)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
               >
                 <CaretUp size={11} /> 收起
               </button>
@@ -1305,7 +1322,10 @@ export function CanvasView({
                 隐藏
               </button>
               {depthHiddenCount > 0 && (
-                <span className="font-mono text-[10px] text-zinc-600">藏 {depthHiddenCount} 个节点</span>
+                <span className="font-mono text-[10px] text-[var(--muted)]">藏 {depthHiddenCount} 个节点</span>
+              )}
+              {hiddenEdgesLabel && (
+                <span className="canvas-hidden-edge-hint">{hiddenEdgesLabel}</span>
               )}
               {manualOverrideCount > 0 && (
                 <span className="font-mono text-[10px] text-zinc-500">
@@ -1327,7 +1347,7 @@ export function CanvasView({
                 onChange={setKindFilter}
                 options={Object.entries(SEMANTIC_STYLE).map(([value, meta]) => ({ value, label: meta.label }))}
                 placeholder="全部类型"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-[var(--muted)] [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-[var(--text)] [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
               <SearchableMultiSelect
                 label="Severity"
@@ -1336,7 +1356,7 @@ export function CanvasView({
                 onChange={setSeverityFilter}
                 options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))}
                 placeholder="全部级别"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-[var(--muted)] [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-[var(--text)] [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
               <SearchableMultiSelect
                 label="角色"
@@ -1345,7 +1365,7 @@ export function CanvasView({
                 onChange={setRoleFilter}
                 options={roleOptions.map((value) => ({ value, label: value }))}
                 placeholder="全部角色"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-[var(--muted)] [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-[var(--text)] [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
               <SearchableMultiSelect
                 label="状态"
@@ -1354,16 +1374,16 @@ export function CanvasView({
                 onChange={setStatusFilter}
                 options={statusOptions.map((value) => ({ value, label: value }))}
                 placeholder="全部状态"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-[var(--muted)] [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-[var(--text)] [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
-              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
+              <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-[var(--muted)]">
                 搜索
                 <input
                   aria-label="搜索画布节点"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="标题 / 角色 / 内容"
-                  className="theme-input-surface min-h-10 rounded-lg px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 placeholder:text-zinc-700"
+                  className="theme-input-surface min-h-10 rounded-lg px-3 py-2 text-[12px] normal-case text-[var(--text)] ring-1 placeholder:text-[var(--muted)]"
                 />
               </label>
             </div>
@@ -1382,7 +1402,7 @@ export function CanvasView({
             <button
               type="button"
               onClick={() => setFiltersOpen(true)}
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-l-[16px] px-4 py-3 text-left text-[12px] text-zinc-300 hover:bg-white/[.045]"
+              className="canvas-filter-toggle flex min-w-0 flex-1 items-center gap-2 rounded-l-[16px] px-4 py-3 text-left text-[12px]"
               aria-expanded="false"
             >
               <Funnel size={15} className="shrink-0 text-acc-400" />
@@ -1392,11 +1412,14 @@ export function CanvasView({
                   命中 {matchedCount} / {totalNodeCount}
                 </span>
               )}
-              <span className="truncate font-mono text-[10px] text-zinc-500">
+              <span className="truncate font-mono text-[10px] text-[var(--muted)]">
                 {depthSummary}
                 {manualOverrideHint}
               </span>
-              <CaretDown size={12} className="ml-auto shrink-0 text-zinc-600" />
+              {hiddenEdgesLabel && (
+                <span className="canvas-hidden-edge-hint truncate">{hiddenEdgesLabel}</span>
+              )}
+              <CaretDown size={12} className="ml-auto shrink-0 text-[var(--muted)]" />
             </button>
             <button
               type="button"
