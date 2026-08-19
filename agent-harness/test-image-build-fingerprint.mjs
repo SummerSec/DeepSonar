@@ -36,6 +36,8 @@ for (const preset of ["deepsonar-chrome-audit", "deepsonar-chrome-test", "deepso
 const keys = Object.keys(PRESETS);
 assert(keys.includes("deepsonar-kali-minimal"), "kali preset required");
 assert(keys.includes("deepsonar-scheduler"), "scheduler preset required");
+assert(keys.includes("deepsonar-assets-helper"), "assets-helper preset required");
+assert(keys.includes("deepsonar-silo"), "silo preset required");
 assert(keys.includes("deepsonar-chrome-audit") && keys.includes("deepsonar-chrome-test") && keys.includes("deepsonar-chrome-fuzz"), "Chrome presets required");
 
 console.log(`image-build-fingerprint ok (${keys.length} presets)`);

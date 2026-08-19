@@ -73,6 +73,9 @@ test("构造器只接受带小写 sha256 digest 的不可变 OCI helper 镜像",
     );
   }
   assert.doesNotThrow(() => new DockerSharedAssetsVolumeManager(helperImage));
+  assert.doesNotThrow(() => new DockerSharedAssetsVolumeManager(
+    `ghcr.io/summersec/deepsonar-assets-helper@sha256:${"a".repeat(64)}`,
+  ));
 });
 
 test("helper image inspect 失败时不产生 helper 或卷副作用", async () => {
