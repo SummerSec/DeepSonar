@@ -6,6 +6,7 @@
 
 ### 修复
 
+- 官方镜像升版并 registry sync 后，项目显式 `selected_version_id` 不再静默改写；pin 无法解析而最新 trusted 可用时，readiness / 建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin 与最新版本，并给出一键升级或改为跟随最新），不再 HTTP 500。市场列表对过期 pin 显示 `pin_stale`。`version_id=null` 仍跟随最新 trusted。
 - 过程画布默认能看清拓扑连线（含亮色主题）；深度或筛选藏边时提示「已隐藏 N 条边」。
 - 桌面端筛选坞默认展开，亮色主题下「筛选节点」入口对比度可读。
 - 广播账本在 0 条时仍显示「广播账本 · 0 条」空态，不再整块卸载。

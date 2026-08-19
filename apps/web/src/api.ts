@@ -1022,6 +1022,9 @@ export interface RuntimeImageSummary {
   enabled: boolean;
   project_enabled: boolean | null;
   selected_version_id: string | null;
+  selected_version: string | null;
+  selected_trust_status: RuntimeImageTrustStatus | null;
+  pin_stale: boolean;
   latest_version_id: string | null;
   latest_version: string | null;
   digest: string | null;

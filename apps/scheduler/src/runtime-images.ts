@@ -146,6 +146,110 @@ export class RuntimeImagePlatformUnavailableError extends Error {
   }
 }
 
+/** Explicit project pin vs latest trusted. Null pin already follows latest. */
+export type RuntimeImagePinClassification = "follow_latest" | "pin_ok" | "pin_stale" | "unavailable";
+
+export function classifyRuntimeImagePin(input: {
+  selectedVersionId: string | null | undefined;
+  pinMatchesExecutableTrusted: boolean;
+  latestTrustedVersionId: string | null | undefined;
+}): RuntimeImagePinClassification {
+  const pin = runtimeImageVersionPin(input.selectedVersionId);
+  const latest = input.latestTrustedVersionId ?? null;
+  if (!pin) return latest ? "follow_latest" : "unavailable";
+  if (input.pinMatchesExecutableTrusted) return "pin_ok";
+  return latest ? "pin_stale" : "unavailable";
+}
+
+export function runtimeImagePinStaleMessage(input: {
+  roleName?: string;
+  imageKey: string;
+  selectedVersion: string | null;
+  selectedVersionId: string;
+  latestVersion: string | null;
+  latestVersionId: string;
+}): string {
+  const pinned = input.selectedVersion ?? input.selectedVersionId;
+  const latest = input.latestVersion ?? input.latestVersionId;
+  const subject = input.roleName
+    ? `${input.roleName} 所需 runtime image ${input.imageKey}`
+    : `runtime image ${input.imageKey}`;
+  return `${subject} 仍固定在 ${pinned}，该 pin 当前不是可执行的 trusted 版本；最新 trusted 为 ${latest}。请一键升级项目 pin，或改为跟随最新（version_id=null）。`;
+}
+
+export class RuntimeImagePinStaleError extends Error {
+  readonly code = "RUNTIME_IMAGE_PIN_STALE" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(
+    readonly imageKey: string,
+    readonly imageId: string,
+    readonly selectedVersionId: string,
+    readonly selectedVersion: string | null,
+    readonly latestVersionId: string,
+    readonly latestVersion: string | null,
+    readonly projectId?: string | null,
+  ) {
+    super(runtimeImagePinStaleMessage({
+      imageKey,
+      selectedVersion,
+      selectedVersionId,
+      latestVersion,
+      latestVersionId,
+    }));
+    this.name = "RuntimeImagePinStaleError";
+  }
+}
+
+export function runtimeImageHttpError(error: unknown): { statusCode: number; body: Record<string, unknown> } | null {
+  if (error instanceof RuntimeImagePinStaleError) {
+    return {
+      statusCode: error.statusCode,
+      body: {
+        error: error.message,
+        error_code: error.code,
+        image_key: error.imageKey,
+        image_id: error.imageId,
+        selected_version_id: error.selectedVersionId,
+        selected_version: error.selectedVersion,
+        latest_version_id: error.latestVersionId,
+        latest_version: error.latestVersion,
+        ...(error.projectId ? {
+          upgrade: {
+            method: "PUT",
+            path: `/projects/${error.projectId}/runtime-images/${error.imageId}`,
+            body: { enabled: true, version_id: error.latestVersionId },
+            follow_latest_body: { enabled: true, version_id: null },
+          },
+        } : {}),
+      },
+    };
+  }
+  if (error instanceof RuntimeImageChannelUnavailableError) {
+    return {
+      statusCode: error.statusCode,
+      body: {
+        error: error.message,
+        error_code: error.code,
+        channel: error.channel,
+        ...(error.imageKey ? { image_key: error.imageKey } : {}),
+      },
+    };
+  }
+  if (error instanceof RuntimeImagePlatformUnavailableError) {
+    return {
+      statusCode: error.statusCode,
+      body: {
+        error: error.message,
+        error_code: error.code,
+        image_key: error.imageKey,
+        platform: error.platform,
+      },
+    };
+  }
+  return null;
+}
+
 export class RuntimeImageNotReadyError extends Error {
   readonly code = "runtime_image_not_ready" as const;
 
@@ -1755,19 +1859,25 @@ export async function resolveRuntimeImageForJob(
   if (!image?.enabled || !projectAvailable) {
     throw new Error(`角色 ${roleName} 没有可用的可信运行镜像版本（key=${imageKey}）；请先准入 digest 并为项目启用`);
   }
-  return selectRuntimeImageSnapshot(db, String(image.id), image.selected_version_id as string | null, selectedChannel);
+  return selectRuntimeImageSnapshot(
+    db,
+    String(image.id),
+    image.selected_version_id as string | null,
+    selectedChannel,
+    projectId,
+  );
 }
 
-async function selectRuntimeImageSnapshot(
+async function queryExecutableRuntimeImageVersion(
   db: typeof sql,
   imageId: string,
   selectedVersionId: string | null,
   selectedChannel: RuntimeImageRegistryChannel,
-): Promise<RuntimeImageSnapshot> {
-  const hostPlatform = hostRuntimePlatform();
+  hostPlatform: "linux/amd64" | "linux/arm64",
+) {
   const [row] = await db`
     SELECT ri.id AS runtime_image_id, ri.image_key, ri.source_kind, ri.official,
-           v.id AS runtime_image_version_id,
+           v.id AS runtime_image_version_id, v.version,
            CASE WHEN ri.official THEN channel_ref.resolved_ref ELSE v.resolved_ref END AS resolved_ref,
            CASE WHEN ri.official THEN channel_ref.digest ELSE v.digest END AS digest,
            CASE WHEN ri.official THEN channel_ref.channel ELSE NULL END AS registry_channel,
@@ -1790,6 +1900,35 @@ async function selectRuntimeImageSnapshot(
       AND (NOT ri.official OR channel_ref.id IS NOT NULL)
     ORDER BY v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
     LIMIT 1`;
+  return row ?? null;
+}
+
+async function selectRuntimeImageSnapshot(
+  db: typeof sql,
+  imageId: string,
+  selectedVersionId: string | null,
+  selectedChannel: RuntimeImageRegistryChannel,
+  projectId?: string | null,
+): Promise<RuntimeImageSnapshot> {
+  const hostPlatform = hostRuntimePlatform();
+  const row = await queryExecutableRuntimeImageVersion(db, imageId, selectedVersionId, selectedChannel, hostPlatform);
+  if (!row && selectedVersionId) {
+    const latest = await queryExecutableRuntimeImageVersion(db, imageId, null, selectedChannel, hostPlatform);
+    if (latest) {
+      const [pin] = await db`
+        SELECT version FROM runtime_image_versions
+        WHERE id = ${selectedVersionId} AND runtime_image_id = ${imageId}`;
+      throw new RuntimeImagePinStaleError(
+        String(latest.image_key),
+        imageId,
+        selectedVersionId,
+        pin?.version ? String(pin.version) : null,
+        String(latest.runtime_image_version_id),
+        latest.version ? String(latest.version) : null,
+        projectId,
+      );
+    }
+  }
   if (!row) {
     const [image] = await db`
       SELECT image_key, official,

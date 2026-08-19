@@ -12,7 +12,10 @@ import {
   parseRuntimeImageRegistry,
   runtimeImageRefForChannel,
   runtimeImageVersionPin,
+  classifyRuntimeImagePin,
+  runtimeImageHttpError,
   RuntimeImageNotReadyError,
+  RuntimeImagePinStaleError,
   RuntimeImagePlatformUnavailableError,
   runtimeImageRegistryNextSyncDelayMs,
   selectLatestRuntimeImagePullItems,
@@ -681,4 +684,61 @@ test("拉取失败返回脱敏错误", async () => {
       return true;
     },
   );
+});
+
+test("null pin follows latest trusted; explicit pin stays until it is no longer executable", () => {
+  const latest = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const pin = "99999999-9999-4999-8999-999999999999";
+  assert.equal(classifyRuntimeImagePin({
+    selectedVersionId: null,
+    pinMatchesExecutableTrusted: false,
+    latestTrustedVersionId: latest,
+  }), "follow_latest");
+  assert.equal(classifyRuntimeImagePin({
+    selectedVersionId: pin,
+    pinMatchesExecutableTrusted: true,
+    latestTrustedVersionId: latest,
+  }), "pin_ok");
+  assert.equal(classifyRuntimeImagePin({
+    selectedVersionId: pin,
+    pinMatchesExecutableTrusted: false,
+    latestTrustedVersionId: latest,
+  }), "pin_stale");
+  assert.equal(classifyRuntimeImagePin({
+    selectedVersionId: pin,
+    pinMatchesExecutableTrusted: false,
+    latestTrustedVersionId: null,
+  }), "unavailable");
+  assert.equal(classifyRuntimeImagePin({
+    selectedVersionId: null,
+    pinMatchesExecutableTrusted: false,
+    latestTrustedVersionId: null,
+  }), "unavailable");
+});
+
+test("stale pin HTTP mapping is 409 with an upgrade action, not a generic 500", () => {
+  const error = new RuntimeImagePinStaleError(
+    "deepsonar-base",
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "99999999-9999-4999-8999-999999999999",
+    "0.1.38",
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "0.1.39",
+    "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  );
+  const mapped = runtimeImageHttpError(error);
+  assert.equal(mapped?.statusCode, 409);
+  assert.equal(mapped?.body.error_code, "RUNTIME_IMAGE_PIN_STALE");
+  assert.equal(mapped?.body.image_key, "deepsonar-base");
+  assert.equal(mapped?.body.selected_version, "0.1.38");
+  assert.equal(mapped?.body.latest_version, "0.1.39");
+  assert.match(String(mapped?.body.error), /0\.1\.38/);
+  assert.match(String(mapped?.body.error), /0\.1\.39/);
+  assert.deepEqual(mapped?.body.upgrade, {
+    method: "PUT",
+    path: "/projects/cccccccc-cccc-4ccc-8ccc-cccccccccccc/runtime-images/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    body: { enabled: true, version_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+    follow_latest_body: { enabled: true, version_id: null },
+  });
+  assert.equal(runtimeImageHttpError(new Error("runtime image binding has no matching trusted version")), null);
 });
