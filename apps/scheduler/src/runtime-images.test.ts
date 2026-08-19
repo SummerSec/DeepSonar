@@ -20,6 +20,10 @@ import {
   officialCatalogWriteMode,
   shouldReconcileRuntimeImagePromotions,
   validateRuntimeImageRegistryPolicy,
+  verifiedSameDigestChannelRefs,
+  withSharedAssetsHelperRef,
+  RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
+  RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
   type RuntimeImageRegistry,
 } from "./runtime-images.js";
 
@@ -493,6 +497,16 @@ test("dispatcher availability assertion is inspect-only", async () => {
   );
 });
 
+test("dispatcher inspect 以冻结 digest 为准，不要求 ACR RepoDigest", async () => {
+  const acrRef = `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`;
+  const dockerhubRef = `docker.io/sumsec/deepsonar@${DIGEST}`;
+  await assertRuntimeImageAvailable(acrRef, async (ref) => {
+    if (ref === acrRef) return { exists: false };
+    if (ref === dockerhubRef || ref === DIGEST) return { exists: true, repo_digests: [dockerhubRef] };
+    return { exists: false };
+  }, { sameDigestRefs: () => [dockerhubRef] });
+});
+
 test("本地已有准确 digest 时不拉取镜像", async () => {
   const imageRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
   let pulls = 0;
@@ -505,14 +519,129 @@ test("本地已有准确 digest 时不拉取镜像", async () => {
 
 test("本地缺失时只拉取冻结的 digest 引用并复检", async () => {
   const imageRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
-  let inspectCount = 0;
-  const pulled: string[] = [];
+  const inspected: string[] = [];
+  let pulled = false;
   await ensureRuntimeImageAvailable(imageRef, {
-    inspect: async () => (++inspectCount === 1 ? { exists: false } : { exists: true, repo_digests: [imageRef] }),
-    pull: async (ref) => { pulled.push(ref); },
+    inspect: async (ref) => {
+      inspected.push(ref);
+      if (pulled && (ref === imageRef || ref === DIGEST)) return { exists: true, repo_digests: [imageRef] };
+      return { exists: false };
+    },
+    pull: async (ref) => {
+      assert.equal(ref, imageRef);
+      pulled = true;
+    },
   });
-  assert.deepEqual(pulled, [imageRef]);
-  assert.equal(inspectCount, 2);
+  assert.equal(pulled, true);
+  assert.ok(inspected.includes(imageRef));
+  assert.ok(inspected.includes(DIGEST));
+});
+
+test("本地已有 dockerhub digest 时 aliyun-acr warmup 不再 pull", async () => {
+  const acrRef = `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`;
+  const dockerhubRef = `docker.io/sumsec/deepsonar@${DIGEST}`;
+  const pulled: string[] = [];
+  await ensureRuntimeImageAvailable(acrRef, {
+    inspect: async (ref) => {
+      if (ref === acrRef) return { exists: false };
+      if (ref === dockerhubRef || ref === DIGEST) {
+        return {
+          exists: true,
+          image_id: `sha256:${"c".repeat(64)}`,
+          repo_digests: [dockerhubRef],
+        };
+      }
+      return { exists: false };
+    },
+    pull: async (ref) => { pulled.push(ref); },
+    sameDigestRefs: () => [dockerhubRef],
+  });
+  assert.deepEqual(pulled, []);
+});
+
+test("ACR pull 超时后改拉同 digest 的 dockerhub 引用并标记 ready", async () => {
+  const acrRef = `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`;
+  const dockerhubRef = `docker.io/sumsec/deepsonar@${DIGEST}`;
+  const pulled: string[] = [];
+  const present = new Set<string>();
+  await ensureRuntimeImageAvailable(acrRef, {
+    inspect: async (ref) => {
+      if (present.has(dockerhubRef) && (ref === dockerhubRef || ref === DIGEST)) {
+        return { exists: true, repo_digests: [dockerhubRef] };
+      }
+      return { exists: false };
+    },
+    pull: async (ref) => {
+      pulled.push(ref);
+      if (ref === acrRef) {
+        throw new Error("failed to copy: httpReadSeeker: failed open: Get http://aliregistry.oss-cn-hangzhou.aliyuncs.com/docker/registry/v2/blobs/sha256/9d/9d25830889ce: net/http: timeout awaiting response headers");
+      }
+      if (ref === dockerhubRef) present.add(ref);
+    },
+    sameDigestRefs: () => [dockerhubRef],
+  });
+  assert.deepEqual(pulled, [acrRef, dockerhubRef]);
+});
+
+test("通道超时且同 digest 兜底失败时错误文案可与 digest not found 区分", async () => {
+  const acrRef = `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`;
+  const dockerhubRef = `docker.io/sumsec/deepsonar@${DIGEST}`;
+  await assert.rejects(
+    ensureRuntimeImageAvailable(acrRef, {
+      inspect: async () => ({ exists: false }),
+      pull: async () => {
+        throw new Error("failed to copy: httpReadSeeker: net/http: timeout awaiting response headers");
+      },
+      sameDigestRefs: () => [dockerhubRef],
+    }),
+    (error: unknown) => {
+      assert.match(String(error), new RegExp(RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR));
+      assert.doesNotMatch(String(error), new RegExp(`${RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR}:`));
+      return true;
+    },
+  );
+});
+
+test("通道回报缺失时使用 digest not found 而不是超时兜底文案", async () => {
+  const acrRef = `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`;
+  await assert.rejects(
+    ensureRuntimeImageAvailable(acrRef, {
+      inspect: async () => ({ exists: false }),
+      pull: async () => { throw new Error("manifest unknown: digest not found"); },
+    }),
+    (error: unknown) => {
+      assert.match(String(error), new RegExp(RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR));
+      assert.doesNotMatch(String(error), new RegExp(RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR));
+      return true;
+    },
+  );
+});
+
+test("清单证据只返回已核实的同 digest 其它通道引用", () => {
+  const dockerhubRef = `docker.io/sumsec/deepsonar@${DIGEST}`;
+  const githubRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
+  const acrRef = `${BUILTIN_ACR_HOST}/summersec/deepsonar-base@${DIGEST}`;
+  const refs = verifiedSameDigestChannelRefs([{
+    ...baseImage,
+    versions: [{
+      version: "0.1.40",
+      digest: DIGEST,
+      platforms: ["linux/amd64"],
+      registry_refs: { github: githubRef, dockerhub: dockerhubRef, "aliyun-acr": acrRef },
+      registry_evidence: evidenceFor({ github: githubRef, dockerhub: dockerhubRef, "aliyun-acr": acrRef }),
+    }],
+  }], DIGEST, acrRef);
+  assert.deepEqual(refs, [dockerhubRef, githubRef]);
+});
+
+test("startup warmup 集合包含共享资产 helper", () => {
+  const helper = `docker.io/library/busybox@sha256:${"f".repeat(64)}`;
+  const refs = withSharedAssetsHelperRef(
+    [{ image_ref: `registry.invalid/base@${DIGEST}`, image_key: "deepsonar-base" }],
+    helper,
+  );
+  assert.deepEqual(refs.map((item) => item.image_key), ["deepsonar-base", "shared-assets-helper"]);
+  assert.equal(refs.at(-1)?.image_ref, helper);
 });
 
 test("同一 digest 的并发确保请求共用一次拉取", async () => {
