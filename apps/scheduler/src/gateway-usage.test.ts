@@ -4,6 +4,7 @@ import {
   createGatewayUsageScanner,
   extractUsageBreakdown,
   joinGatewayUpstreamUrl,
+  rewriteGatewayOutboundModel,
   upstreamAuthHeaders,
 } from "./gateway.js";
 
@@ -38,6 +39,33 @@ test("凭据 base_url 已含 /v1 时去掉 Claude Code 重复的版本前缀", (
   assert.equal(
     joinGatewayUpstreamUrl("https://ai.feei.cn/v1/", "/v1/messages", "?beta=1"),
     "https://ai.feei.cn/v1/messages?beta=1",
+  );
+});
+
+test("Gateway 出站把 Claude CLI 别名改写成冻结的 upstream_model", () => {
+  assert.equal(
+    rewriteGatewayOutboundModel({ requestModel: "fable", upstreamModel: "grok-4.6" }),
+    "grok-4.6",
+  );
+  assert.equal(
+    rewriteGatewayOutboundModel({ requestModel: "Fable", upstreamModel: "grok-4.6" }),
+    "grok-4.6",
+  );
+  assert.equal(
+    rewriteGatewayOutboundModel({ requestModel: "sonnet", upstreamModel: "claude-sonnet-4-5" }),
+    "claude-sonnet-4-5",
+  );
+  assert.equal(
+    rewriteGatewayOutboundModel({ requestModel: "grok-4.6", upstreamModel: "grok-4.6" }),
+    "grok-4.6",
+  );
+  assert.equal(
+    rewriteGatewayOutboundModel({ requestModel: "fable", upstreamModel: null }),
+    "fable",
+  );
+  assert.equal(
+    rewriteGatewayOutboundModel({ requestModel: "fable", upstreamModel: "  " }),
+    "fable",
   );
 });
 

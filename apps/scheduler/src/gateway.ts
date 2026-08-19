@@ -27,6 +27,30 @@ import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-atte
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 
+/** Claude Code CLI selectors that must not be forwarded to a compatible upstream. */
+const CLAUDE_CLI_MODEL_ALIASES = new Set(["fable", "sonnet", "opus", "haiku"]);
+
+/**
+ * 出站 model：CLI 别名改写成 Job 冻结的 upstream_model；已是上游 ID 或没有冻结值则保持原值。
+ */
+export function rewriteGatewayOutboundModel(input: {
+  requestModel?: string | null;
+  upstreamModel?: string | null;
+}): string {
+  const request = input.requestModel?.trim() ?? "";
+  if (!request || !CLAUDE_CLI_MODEL_ALIASES.has(request.toLowerCase())) return request;
+  const upstream = input.upstreamModel?.trim() ?? "";
+  return upstream || request;
+}
+
+function frozenSnapshotUpstreamModel(snapshot: unknown): string | null {
+  const record = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+    ? snapshot as { upstream_model?: unknown }
+    : null;
+  const upstream = typeof record?.upstream_model === "string" ? record.upstream_model.trim() : "";
+  return upstream || null;
+}
+
 /** 模型网关允许进入业务层的最大请求体；超出后才由 Fastify 返回 413。 */
 export const MODEL_GATEWAY_BODY_LIMIT = 16 * 1024 * 1024;
 
@@ -474,6 +498,7 @@ export function registerGateway(app: FastifyInstance): void {
 
       const [jt] = await sql`
         SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec,
+               j.agent_snapshot_json,
                a.id AS attempt_id, a.attempt_no
         FROM job_tokens jt JOIN jobs j ON j.id = jt.job_id
         LEFT JOIN job_attempts a ON a.job_id = j.id AND a.status = 'active'
@@ -515,12 +540,6 @@ export function registerGateway(app: FastifyInstance): void {
 
       // 模型限制（仅对带 model 字段的请求体生效；fastify 已解析 JSON，重序列化转发）
       const rawBody = req.body as unknown;
-      const bodyBuf =
-        rawBody == null
-          ? null
-          : Buffer.isBuffer(rawBody)
-            ? rawBody
-            : Buffer.from(typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody), "utf8");
       const upstreamPath = (req.params as { "*": string })["*"];
       const otlp = upstreamPath.match(/^otel\/v1\/(logs|metrics|traces)$/);
       if (req.method === "POST" && otlp) {
@@ -540,6 +559,26 @@ export function registerGateway(app: FastifyInstance): void {
           return deny(reply, 413, error instanceof Error ? error.message : String(error), "otlp_rejected");
         }
       }
+      let outboundBody = rawBody;
+      if (rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)) {
+        const currentModel = typeof (rawBody as { model?: unknown }).model === "string"
+          ? (rawBody as { model: string }).model
+          : "";
+        const outboundModel = rewriteGatewayOutboundModel({
+          requestModel: currentModel,
+          upstreamModel: frozenSnapshotUpstreamModel(jt.agent_snapshot_json),
+        });
+        if (outboundModel && outboundModel !== currentModel) {
+          outboundBody = { ...(rawBody as Record<string, unknown>), model: outboundModel };
+        }
+      }
+      const outboundBuf =
+        outboundBody == null
+          ? null
+          : Buffer.isBuffer(outboundBody)
+            ? outboundBody
+            : Buffer.from(typeof outboundBody === "string" ? outboundBody : JSON.stringify(outboundBody), "utf8");
+
       // 解密 Credential（明文不出本进程）
       const [cred] = await sql`SELECT * FROM credentials WHERE id = ${jt.credential_id}`;
       if (!cred || (cred.status as string) !== "active") {
@@ -560,12 +599,12 @@ export function registerGateway(app: FastifyInstance): void {
 
       const gatewayAttemptId = typeof jt.attempt_id === "string" ? jt.attempt_id : null;
       if (!gatewayAttemptId) return deny(reply, 409, "Job 缺少活动 Attempt，拒绝无账本模型请求", "attempt_state_missing");
-      const model = rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
-        ? String((rawBody as { model?: unknown }).model ?? "")
+      const model = outboundBody && typeof outboundBody === "object" && !Array.isArray(outboundBody)
+        ? String((outboundBody as { model?: unknown }).model ?? "")
         : "";
       // 转发（流式直通；请求数先计，token 数响应后补记）。请求序号
       // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
-      const gatewayInputDigest = createHash("sha256").update(bodyBuf ?? Buffer.alloc(0)).digest("hex");
+      const gatewayInputDigest = createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex");
       const requestIntent = await sql.begin(async (tx) => {
         const [requestCounter] = await tx`
           UPDATE job_tokens
@@ -610,7 +649,7 @@ export function registerGateway(app: FastifyInstance): void {
           init: {
             method: req.method,
             headers,
-            body: bodyBuf && req.method !== "GET" ? new Uint8Array(bodyBuf) : undefined,
+            body: outboundBuf && req.method !== "GET" ? new Uint8Array(outboundBuf) : undefined,
           },
         });
       } catch (error) {
