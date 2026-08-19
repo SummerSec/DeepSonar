@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyGatewayOutboundModelRewrite,
   createGatewayUsageScanner,
   extractUsageBreakdown,
   joinGatewayUpstreamUrl,
@@ -67,6 +68,36 @@ test("Gateway 出站把 Claude CLI 别名改写成冻结的 upstream_model", () 
     rewriteGatewayOutboundModel({ requestModel: "fable", upstreamModel: "  " }),
     "fable",
   );
+});
+
+test("Gateway 出站 body 按冻结 snapshot.upstream_model 改写 CLI 别名", () => {
+  const snapshot = {
+    model: "fable",
+    upstream_model: "grok-4.6",
+    runtime_image: { image_key: "base" },
+  };
+  const body = { model: "fable", stream: true, max_tokens: 16 };
+  const rewritten = applyGatewayOutboundModelRewrite(body, snapshot);
+  assert.notEqual(rewritten, body);
+  assert.deepEqual(rewritten, { model: "grok-4.6", stream: true, max_tokens: 16 });
+
+  const mixed = applyGatewayOutboundModelRewrite({ model: "Fable" }, snapshot);
+  assert.equal((mixed as { model: string }).model, "grok-4.6");
+
+  const upstreamId = { model: "grok-4.6" };
+  assert.equal(applyGatewayOutboundModelRewrite(upstreamId, snapshot), upstreamId);
+
+  const alias = { model: "fable" };
+  assert.equal(applyGatewayOutboundModelRewrite(alias, { upstream_model: null }), alias);
+  assert.equal(applyGatewayOutboundModelRewrite(alias, { model: "fable" }), alias);
+  assert.equal(applyGatewayOutboundModelRewrite(alias, null), alias);
+
+  assert.equal(applyGatewayOutboundModelRewrite(null, snapshot), null);
+  assert.equal(applyGatewayOutboundModelRewrite("fable", snapshot), "fable");
+  const arrayBody = [{ model: "fable" }];
+  assert.equal(applyGatewayOutboundModelRewrite(arrayBody, snapshot), arrayBody);
+  const noModel = { stream: true };
+  assert.equal(applyGatewayOutboundModelRewrite(noModel, snapshot), noModel);
 });
 
 test("OpenAI usage 字段可解析，重复完整行不会重复计费", () => {

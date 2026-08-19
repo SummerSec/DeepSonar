@@ -34,8 +34,9 @@ pnpm db:rebuild -- --apply
 默认会尝试 `pg_dump -Fc` 到 `data/backups/`，再把 `public` 表移到
 `deepsonar_rebuild_src`，套用当前 `database/schema.sql`，按拓扑序复制交集列，
 最后补官方 catalog 种子（空 catalog 保留新基线；已有 RoleConfig / 用户 /
-项目等按列拷回），并把 IDENTITY / serial / bigserial 列的序列 `setval` 到
-`MAX(col)`。`--force` 才允许在已是当前版本、结构未知或仍有活跃 Job
+项目等按列拷回），再对**全部 public 基表**上 IDENTITY / serial / bigserial
+列做序列 reset：空表下次 `nextval` 为 1，非空 `MAX=N` 则下次为 `N+1`。
+`--force` 才允许在已是当前版本、结构未知或仍有活跃 Job
 时继续。这不是 Scheduler 启动时的自动升级，也不是 #34 增量 migration。
 
 手工空库路径：
