@@ -49,10 +49,12 @@ chmod +x deploy/deploy.sh
 ```
 
 ```powershell
-# Windows
+# Windows: prefer pwsh. deploy.ps1 is UTF-8 with BOM + ASCII so Windows PowerShell 5.1 also parses.
 Set-ExecutionPolicy -Scope Process Bypass
-.\deploy\deploy.ps1 -Action up -Mode real -NoBuild
-.\deploy\deploy.ps1 -Action up -Mode fake -NoBuild
+pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
+.\deploy\deploy.ps1 -Action up -Mode real -Source pull
+.\deploy\deploy.ps1 -Action up -Mode fake -Source pull
+.\deploy\deploy.ps1 -Action up -Mode real -Source build
 ```
 
 脚本会：
@@ -192,7 +194,7 @@ Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准�
 ```powershell
 .\deploy\deploy.ps1 status
 .\deploy\deploy.ps1 logs
-.\deploy\deploy.ps1 -Action pull -Mode real
+.\deploy\deploy.ps1 pull          # 拉平台镜像；real 默认同时拉 helper
 .\deploy\deploy.ps1 down
 ```
 

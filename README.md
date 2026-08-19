@@ -72,10 +72,12 @@ chmod +x deploy/deploy.sh
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-# 拉取镜像后启动（不要默认 --build）：
-.\deploy\deploy.ps1 -Action up -Mode real -NoBuild
+# 推荐 pwsh。脚本为 UTF-8 with BOM + ASCII，Windows PowerShell 5.1 也可解析。
+# 默认与 Linux 相同：up real pull（拉取 ACR 应用镜像，不本地 --build）
+pwsh -NoProfile -File .\deploy\deploy.ps1
+.\deploy\deploy.ps1 -Action up -Mode real -Source pull
 # 仅状态机：
-.\deploy\deploy.ps1 -Action up -Mode fake -NoBuild
+.\deploy\deploy.ps1 -Action up -Mode fake -Source pull
 ```
 
 脚本会：
@@ -138,6 +140,7 @@ done
 ```powershell
 .\deploy\deploy.ps1 status
 .\deploy\deploy.ps1 logs
+.\deploy\deploy.ps1 pull
 .\deploy\deploy.ps1 down
 ```
 
