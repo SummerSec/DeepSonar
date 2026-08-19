@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync as fsStatSync } from "node:fs";
-import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION } from "./image-build-fingerprint.mjs";
+import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
 // checkout's mode as 0644 regardless of that index bit. Keep the Linux gate
@@ -472,6 +472,22 @@ expect(releaseWorkflow.includes("Dockerfile.agent-openharmony-audit"), "release 
 expect(releaseWorkflow.includes("Dockerfile.agent-openharmony-fuzz"), "release workflow 未发布 OpenHarmony Fuzz Dockerfile");
 expect(releaseWorkflow.includes("steps.image.outputs.digest"), "release workflow 必须用统一 image digest（build 或 skip-reuse）");
 expect(releaseWorkflow.includes("image-build-fingerprint.mjs"), "release workflow 必须计算构建指纹以支持未变更跳过");
+expect(releaseWorkflow.includes("name: assets-helper") && releaseWorkflow.includes("Dockerfile.assets-helper"), "release workflow 必须按 app 镜像矩阵发布 deepsonar-assets-helper");
+expect(releaseWorkflow.includes("name: silo") && releaseWorkflow.includes("Dockerfile.silo"), "release workflow 必须按 app 镜像矩阵发布 deepsonar-silo");
+expect(PRESETS["deepsonar-assets-helper"]?.dockerfile === "deploy/Dockerfile.assets-helper" && PRESETS["deepsonar-assets-helper"]?.platforms === "linux/amd64", "assets-helper fingerprint preset 必须与 app 镜像一致");
+expect(PRESETS["deepsonar-silo"]?.dockerfile === "deploy/Dockerfile.silo" && PRESETS["deepsonar-silo"]?.platforms === "linux/amd64", "silo fingerprint preset 必须与 app 镜像一致");
+const assetsHelperDockerfile = readFileSync(new URL("../deploy/Dockerfile.assets-helper", import.meta.url), "utf8");
+const siloDockerfile = readFileSync(new URL("../deploy/Dockerfile.silo", import.meta.url), "utf8");
+const sharedAssetsVolume = readFileSync(new URL("../packages/runtime-sandbox/src/shared-assets-volume.ts", import.meta.url), "utf8");
+const deployScript = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "utf8");
+const busyboxHelperPin = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
+const siloPinTag = "docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z";
+const siloPinDigest = "docker.io/pgsty/silo@sha256:29a498b24669cae1fed11c1a2fb2b3d73c68829a0a9c0b14e71b386671d38fac";
+expect(assetsHelperDockerfile.includes(`FROM ${busyboxHelperPin}`), "assets-helper Dockerfile 必须 FROM 当前 busybox pin");
+expect(siloDockerfile.includes(`FROM ${siloPinDigest}`) && siloDockerfile.includes(siloPinTag), "silo Dockerfile 必须 FROM 已解析的上游 pin，并注明对应 Release tag");
+expect(sharedAssetsVolume.includes(busyboxHelperPin), "runtime 默认 helper 在官方 digest 发布前必须仍是 busybox pin");
+expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-assets-helper:${IMAGE_TAG}") && deployScript.includes(busyboxHelperPin), "deploy.sh 必须优先拉官方 helper 并在缺失时回退 busybox pin");
+expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-silo:${IMAGE_TAG}") && deployScript.includes(siloPinTag), "deploy.sh 必须优先拉官方 Silo 并在缺失时回退当前 pgsty tag");
 expect(releaseWorkflow.includes("resolve-image-src-cache.sh"), "release workflow 必须解析 GHCR src-* 内容寻址缓存");
 expect(releaseWorkflow.includes("steps.resolve.outputs.skip"), "release workflow 必须在构建输入未变时跳过 rebuild");
 expect(releaseWorkflow.includes("record-runtime-image-digest.mjs"), "release workflow 缺少 digest artifact 记录脚本");
