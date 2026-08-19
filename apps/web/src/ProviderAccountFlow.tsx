@@ -798,8 +798,8 @@ export function ProviderAccountFlow({
       const active = liveImpact.jobs.active_frozen.count;
       const recoverable = liveImpact.jobs.recoverable.count;
       const activeScans = liveImpact.scans.active.count;
-      if (pending > 0 || active > 0 || recoverable > 0) {
-        setError(`无法删除「${credential.name}」：仍有 ${pending} 个待领取 Job、${active} 个运行中/冻结 Job、${recoverable} 个可恢复 Job。请等待结束、取消或完成恢复后再删。`);
+      if (pending > 0 || active > 0) {
+        setError(`无法删除「${credential.name}」：仍有 ${pending} 个待领取 Job、${active} 个运行中/冻结 Job。请等待结束或取消后再删。`);
         return;
       }
       if (activeScans > 0) {
@@ -813,6 +813,7 @@ export function ProviderAccountFlow({
         description: [
           "将永久删除该 Provider 账号及其加密密钥，不可撤销。",
           bound > 0 ? `将同时解除 ${bound} 个角色配置绑定。` : "当前没有角色绑定。",
+          recoverable > 0 ? `有 ${recoverable} 条可恢复历史，删除后不能再按原快照 resume。` : "",
           historical > 0 ? `${historical} 条历史 Job 快照会保留，不会被改写。` : "",
         ].filter(Boolean).join("\n"),
         confirmLabel: "删除账号",

@@ -137,20 +137,59 @@ if (!testDatabaseUrl) {
       const [stillLive] = await sql`SELECT id FROM credentials WHERE id = ${liveId}`;
       assert.equal(String(stillLive?.id), liveId);
 
+      const pendingId = await insertCredential("pending-account");
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+        VALUES (${randomUUID()}, ${projectId}, ${canvasId}, 'delete_test', 'pending',
+          ${sql.json({ name: "delete_test", model: "model-a", credential_id: pendingId })})`;
+      const pendingRefuse = await request("DELETE", `/credentials/${pendingId}?unbind=true`);
+      assert.equal(pendingRefuse.statusCode, 409, pendingRefuse.payload);
+      assert.equal(json(pendingRefuse).error_code, "CREDENTIAL_IN_USE");
+      const [stillPending] = await sql`SELECT id FROM credentials WHERE id = ${pendingId}`;
+      assert.equal(String(stillPending?.id), pendingId);
+
       for (const status of ["failed", "timeout", "orphan"] as const) {
         const recoverableId = await insertCredential(`recoverable-${status}`);
+        const recoverableJobId = randomUUID();
+        await sql`
+          INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+          VALUES (${recoverableJobId}, ${projectId}, ${canvasId}, 'delete_test', ${status},
+            ${sql.json({ name: "delete_test", model: "model-a", credential_id: recoverableId })})`;
+        const impactBefore = json(await request("GET", `/credentials/${recoverableId}/impact`)) as {
+          jobs: { pending_unclaimed: { count: number }; active_frozen: { count: number }; recoverable: { count: number } };
+        };
+        assert.equal(impactBefore.jobs.pending_unclaimed.count, 0, status);
+        assert.equal(impactBefore.jobs.active_frozen.count, 0, status);
+        assert.equal(impactBefore.jobs.recoverable.count, 1, status);
+        const recoverableOk = await request("DELETE", `/credentials/${recoverableId}`);
+        assert.equal(recoverableOk.statusCode, 200, recoverableOk.payload);
+        const [goneRecoverable] = await sql`SELECT id FROM credentials WHERE id = ${recoverableId}`;
+        assert.equal(goneRecoverable, undefined);
+        const [jobStill] = await sql<{ status: string; agent_snapshot_json: { credential_id: string } }[]>`
+          SELECT status, agent_snapshot_json FROM jobs WHERE id = ${recoverableJobId}`;
+        assert.equal(jobStill?.status, status);
+        assert.equal(jobStill?.agent_snapshot_json.credential_id, recoverableId);
+      }
+
+      const manyRecoverableId = await insertCredential("many-recoverable");
+      const manyStatuses = ["failed", "timeout", "orphan", "failed", "timeout", "orphan", "failed"] as const;
+      assert.equal(manyStatuses.length, 7);
+      for (const status of manyStatuses) {
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
           VALUES (${randomUUID()}, ${projectId}, ${canvasId}, 'delete_test', ${status},
-            ${sql.json({ name: "delete_test", model: "model-a", credential_id: recoverableId })})`;
-        const recoverableRefuse = await request("DELETE", `/credentials/${recoverableId}`);
-        assert.equal(recoverableRefuse.statusCode, 409, recoverableRefuse.payload);
-        assert.equal(json(recoverableRefuse).error_code, "CREDENTIAL_IN_USE");
-        const impact = json(recoverableRefuse).impact as { jobs: { recoverable: { count: number } } };
-        assert.equal(impact.jobs.recoverable.count, 1, status);
-        const [stillRecoverable] = await sql`SELECT id FROM credentials WHERE id = ${recoverableId}`;
-        assert.equal(String(stillRecoverable?.id), recoverableId);
+            ${sql.json({ name: "delete_test", model: "model-a", credential_id: manyRecoverableId })})`;
       }
+      const manyImpact = json(await request("GET", `/credentials/${manyRecoverableId}/impact`)) as {
+        jobs: { pending_unclaimed: { count: number }; active_frozen: { count: number }; recoverable: { count: number } };
+      };
+      assert.equal(manyImpact.jobs.pending_unclaimed.count, 0);
+      assert.equal(manyImpact.jobs.active_frozen.count, 0);
+      assert.equal(manyImpact.jobs.recoverable.count, 7);
+      const manyOk = await request("DELETE", `/credentials/${manyRecoverableId}?unbind=true`);
+      assert.equal(manyOk.statusCode, 200, manyOk.payload);
+      const [goneMany] = await sql`SELECT id FROM credentials WHERE id = ${manyRecoverableId}`;
+      assert.equal(goneMany, undefined);
 
       const raceId = await insertCredential("race-account");
       const raceJobId = randomUUID();
@@ -163,12 +202,21 @@ if (!testDatabaseUrl) {
         request("POST", `/jobs/${raceJobId}/resume`),
       ]);
       const [raceStill] = await sql`SELECT id FROM credentials WHERE id = ${raceId}`;
-      assert.ok(raceStill, "credential must survive a concurrent delete/resume");
-      assert.equal(raceDelete.statusCode, 409, raceDelete.payload);
-      assert.equal(json(raceDelete).error_code, "CREDENTIAL_IN_USE");
-      assert.ok([200, 409].includes(raceResume.statusCode), raceResume.payload);
-      const [raceJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${raceJobId}`;
-      assert.ok(raceJob && ["failed", "pending"].includes(String(raceJob.status)), String(raceJob?.status));
+      const [raceJob] = await sql<{ status: string; agent_snapshot_json: { credential_id: string } }[]>`
+        SELECT status, agent_snapshot_json FROM jobs WHERE id = ${raceJobId}`;
+      assert.ok(raceJob, "race job must remain");
+      assert.equal(raceJob.agent_snapshot_json.credential_id, raceId);
+      if (raceDelete.statusCode === 200) {
+        assert.equal(raceStill, undefined);
+        assert.ok([200, 409].includes(raceResume.statusCode), raceResume.payload);
+        assert.ok(["failed", "pending"].includes(String(raceJob.status)), String(raceJob.status));
+      } else {
+        assert.equal(raceDelete.statusCode, 409, raceDelete.payload);
+        assert.equal(json(raceDelete).error_code, "CREDENTIAL_IN_USE");
+        assert.ok(raceStill, "pending/active after resume still blocks delete");
+        assert.ok([200, 409].includes(raceResume.statusCode), raceResume.payload);
+        assert.ok(["failed", "pending"].includes(String(raceJob.status)), String(raceJob.status));
+      }
 
       const historicalId = await insertCredential("historical-account");
       const historicalJobId = randomUUID();
