@@ -14,11 +14,13 @@ import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from
 import { isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
 import { getAgentCliRuntimeAdapter, REQUIRED_RUNTIME_CAPABILITIES } from "@deepsonar/runtime-sandbox";
 import {
+  classifyRuntimeImagePin,
   defaultRuntimeImageKey,
   hostRuntimePlatform,
   immutableDigest,
   localImageDigest,
   readRuntimeRegistryChannel,
+  runtimeImagePinStaleMessage,
 } from "./runtime-images.js";
 import {
   parseProjectImagePolicy,
@@ -88,6 +90,11 @@ export interface ReadinessRuntimeImageRow {
   promoted_at?: string | Date | null;
   approved_at?: string | Date | null;
   created_at?: string | Date | null;
+  runtime_image_id?: string | null;
+  selected_version_id?: string | null;
+  selected_version?: string | null;
+  latest_version_id?: string | null;
+  latest_version?: string | null;
 }
 
 export interface ReadinessAuditRow {
@@ -156,6 +163,13 @@ function credentialSummary(row: ReadinessCredentialRow): ReadinessCredentialSumm
 }
 
 function imageSummary(row: ReadinessRuntimeImageRow | undefined, imageKey: string): ReadinessRuntimeImageSummary {
+  const selectedVersionId = row?.selected_version_id ?? null;
+  const latestVersionId = row?.latest_version_id ?? null;
+  const pinStale = classifyRuntimeImagePin({
+    selectedVersionId,
+    pinMatchesExecutableTrusted: Boolean(row?.version_id && selectedVersionId && row.version_id === selectedVersionId),
+    latestTrustedVersionId: latestVersionId,
+  }) === "pin_stale";
   return {
     image_key: imageKey,
     version_id: row?.version_id ?? null,
@@ -165,6 +179,12 @@ function imageSummary(row: ReadinessRuntimeImageRow | undefined, imageKey: strin
     trust_status: row?.trust_status ?? null,
     project_enabled: row?.project_enabled ?? null,
     admission_scan_id: row?.admission_scan_id ?? null,
+    runtime_image_id: row?.runtime_image_id ?? null,
+    selected_version_id: selectedVersionId,
+    selected_version: row?.selected_version ?? null,
+    latest_version_id: latestVersionId,
+    latest_version: row?.latest_version ?? null,
+    pin_stale: pinStale,
   };
 }
 
@@ -648,7 +668,28 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     } else if (input.scope.projectId && !(image.official === true && image.project_opt_in === false) && image.project_enabled !== true) {
       checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 尚未在当前项目启用。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (!image.version_id) {
-      checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 没有 Scheduler 可执行的 trusted 版本。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
+      const pinState = classifyRuntimeImagePin({
+        selectedVersionId: image.selected_version_id,
+        pinMatchesExecutableTrusted: false,
+        latestTrustedVersionId: image.latest_version_id,
+      });
+      if (pinState === "pin_stale" && image.selected_version_id && image.latest_version_id) {
+        checks.push(fail(
+          "RUNTIME_IMAGE_PIN_STALE",
+          runtimeImagePinStaleMessage({
+            roleName: role.name,
+            imageKey,
+            selectedVersion: image.selected_version ?? null,
+            selectedVersionId: image.selected_version_id,
+            latestVersion: image.latest_version ?? null,
+            latestVersionId: image.latest_version_id,
+          }),
+          runtimeImagesFix(input.scope),
+          { role: summary, runtime_image: runtimeSummary },
+        ));
+      } else {
+        checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 没有 Scheduler 可执行的 trusted 版本。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
+      }
     } else if (image.trust_status !== "trusted") {
       checks.push(fail("RUNTIME_IMAGE_NOT_TRUSTED", `${role.name} 所需 runtime image ${imageKey} 没有 trusted 版本。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (!image.digest || resolvedRuntimeImageDigest(image.resolved_ref) !== image.digest) {
@@ -796,18 +837,24 @@ export async function loadReadiness(
   }))];
   const selectedChannel = await readRuntimeRegistryChannel(db);
   const images = await db`
-    SELECT ri.image_key, ri.enabled AS image_enabled, ri.project_opt_in, ri.source_kind, ri.official,
+    SELECT ri.image_key, ri.id AS runtime_image_id, ri.enabled AS image_enabled, ri.project_opt_in, ri.source_kind, ri.official,
            pri.enabled AS project_enabled,
+           pri.selected_version_id,
+           pin.version AS selected_version,
            v.id AS version_id,
            CASE WHEN ri.official THEN v.channel_digest ELSE v.digest END AS digest,
            CASE WHEN ri.official THEN v.channel_resolved_ref ELSE v.resolved_ref END AS resolved_ref,
            v.trust_status,
            v.platforms_json, v.promoted_at, v.approved_at, v.created_at,
+           latest.id AS latest_version_id,
+           latest.version AS latest_version,
            scan.id AS admission_scan_id,
            COALESCE(v.scan_summary_json->>'risk', '') = 'bypasses-admission-scan' AS admission_bypassed
     FROM runtime_images ri
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+    LEFT JOIN runtime_image_versions pin
+      ON pin.id = pri.selected_version_id
     LEFT JOIN LATERAL (
       SELECT v.*, selected_ref.digest AS channel_digest,
              selected_ref.resolved_ref AS channel_resolved_ref
@@ -825,6 +872,19 @@ export async function loadReadiness(
                v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
       LIMIT 1
     ) v ON true
+    LEFT JOIN LATERAL (
+      SELECT v.id, v.version
+      FROM runtime_image_versions v
+      LEFT JOIN runtime_image_version_refs selected_ref
+        ON selected_ref.version_id = v.id AND selected_ref.channel = ${selectedChannel}
+      WHERE v.runtime_image_id = ri.id
+        AND v.trust_status = 'trusted'
+        AND v.platforms_json @> ${db.json([hostRuntimePlatform()])}
+        AND (NOT ri.official OR selected_ref.id IS NOT NULL)
+        AND ri.enabled = true
+      ORDER BY v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
+      LIMIT 1
+    ) latest ON true
     LEFT JOIN LATERAL (
       SELECT s.id FROM runtime_image_scans s
       WHERE s.runtime_image_version_id = v.id AND s.status = 'succeeded'

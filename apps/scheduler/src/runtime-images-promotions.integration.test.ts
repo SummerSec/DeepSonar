@@ -188,4 +188,71 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM runtime_images WHERE image_key = ${imageKey}`;
     }
   });
+
+  test("stale project pin is distinct from latest trusted and is not silently rewritten", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    const { migrate, sql } = await import("./db.js");
+    const runtime = await import("./runtime-images.js");
+    await migrate();
+
+    const imageKey = `deepsonar-pin-stale-${randomUUID().slice(0, 8)}`;
+    const imageId = randomUUID();
+    const oldVersionId = randomUUID();
+    const newVersionId = randomUUID();
+    const oldDigest = `sha256:${"e".repeat(64)}`;
+    const newDigest = `sha256:${"f".repeat(64)}`;
+    const hostPlatform = runtime.hostRuntimePlatform();
+    const oldGithub = `ghcr.io/summersec/${imageKey}@${oldDigest}`;
+    const newRef = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${newDigest}`;
+    const oldAcr = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${oldDigest}`;
+    try {
+      await sql`UPDATE global_settings SET runtime_registry_channel = 'aliyun-acr' WHERE id = 'global'`;
+      await sql`
+        INSERT INTO runtime_images (id, image_key, name, description, publisher, source_kind, official)
+        VALUES (${imageId}, ${imageKey}, 'Pin stale fixture', 'fixture', 'SummerSec', 'official', true)`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+        VALUES
+          (${oldVersionId}, ${imageId}, '0.1.38', ${oldGithub}, ${oldGithub}, ${oldDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL),
+          (${newVersionId}, ${imageId}, '0.1.39', ${newRef}, ${newRef}, ${newDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now())`;
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
+        VALUES (${newVersionId}, 'aliyun-acr', ${newRef}, ${newRef}, ${newDigest}, ${sql.json({ source: "fixture" } as never)})`;
+
+      await assert.rejects(
+        () => runtime.resolveRuntimeImageForProjectBinding(sql, imageId, oldVersionId),
+        (error: unknown) => {
+          assert.ok(error instanceof runtime.RuntimeImagePinStaleError);
+          assert.equal(error.code, "RUNTIME_IMAGE_PIN_STALE");
+          assert.equal(error.statusCode, 409);
+          assert.equal(error.imageKey, imageKey);
+          assert.equal(error.selectedVersionId, oldVersionId);
+          assert.equal(error.selectedVersion, "0.1.38");
+          assert.equal(error.latestVersionId, newVersionId);
+          assert.equal(error.latestVersion, "0.1.39");
+          const mapped = runtime.runtimeImageHttpError(error);
+          assert.equal(mapped?.statusCode, 409);
+          assert.equal(mapped?.body.error_code, "RUNTIME_IMAGE_PIN_STALE");
+          return true;
+        },
+      );
+
+      const followLatest = await runtime.resolveRuntimeImageForProjectBinding(sql, imageId, null);
+      assert.equal(followLatest.runtime_image_version_id, newVersionId);
+      assert.equal(followLatest.image_digest, newDigest);
+
+      const pinLatest = await runtime.resolveRuntimeImageForProjectBinding(sql, imageId, newVersionId);
+      assert.equal(pinLatest.runtime_image_version_id, newVersionId);
+
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
+        VALUES (${oldVersionId}, 'aliyun-acr', ${oldAcr}, ${oldAcr}, ${oldDigest}, ${sql.json({ source: "fixture" } as never)})`;
+      const explicitPin = await runtime.resolveRuntimeImageForProjectBinding(sql, imageId, oldVersionId);
+      assert.equal(explicitPin.runtime_image_version_id, oldVersionId, "executable explicit pin must not auto-follow latest");
+      assert.equal(explicitPin.image_digest, oldDigest);
+    } finally {
+      await sql`DELETE FROM runtime_images WHERE id = ${imageId}`;
+    }
+  });
 }
