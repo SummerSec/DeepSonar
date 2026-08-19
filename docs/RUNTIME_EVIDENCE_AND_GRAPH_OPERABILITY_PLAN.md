@@ -126,6 +126,8 @@ data/blobs/
 
 ## 4. Credential 模型白名单
 
+> **#215 已关闭该设计**：模型可用性只认 `settings_config`；`allowed_model_ids` 残留字段静默忽略，Gateway 不再按 token 白名单 403。下文为历史方案。
+
 在 `credentials.public_metadata_json.allowed_model_ids` 保存非敏感字符串数组，不新增表列：
 
 - 仅 `kind=llm_provider` 接受该字段；去重、去空白、限制数量和单项长度。

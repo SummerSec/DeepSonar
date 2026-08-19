@@ -5,7 +5,6 @@ import {
   type ReasoningValue,
 } from "@deepsonar/shared-types";
 import {
-  allowedModelIds,
   isProviderKnown,
   UNKNOWN_PROVIDER_ERROR,
   validateCredentialCompatibility,
@@ -14,7 +13,6 @@ import {
   hasProviderSettingsConfig,
   isProviderAgentCli,
   projectProviderRuntimeSnapshot,
-  resolveEffectiveModel,
 } from "../../provider-settings.js";
 import { resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
@@ -194,14 +192,6 @@ export async function resolveAgentSnapshotForJob(
     if (cfg?.project_id != null && credProject && credProject !== projectId) throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
     if (cfg?.project_id == null && credProject) throw new Error("全局 RoleConfig 只能绑定全局 Credential");
     if ((llm.status as string) !== "active") throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
-    const configuredModel = resolveEffectiveModel({
-      roleModel: typeof cfg?.model === "string" ? cfg.model : null,
-      agentCli,
-      settingsConfig: snapshotSettingsConfig,
-    }) ?? PLATFORM_DEFAULT_AGENT_MODEL;
-    const allowed = allowedModelIds(llm.public_metadata_json);
-    if (allowed.length > 0 && !configuredModel) throw new Error(`Credential ${llm.id} 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖`);
-    if (configuredModel && allowed.length > 0 && !allowed.includes(configuredModel)) throw new Error(`模型 ${configuredModel} 不在 Credential ${llm.id} 的 allowed_model_ids 白名单`);
   }
   const roleKind = role.kind as "role" | "hub" | "system";
   const platformTools = resolvePlatformTools(roleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});

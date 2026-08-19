@@ -56,12 +56,12 @@ test("Credential 运行语义变更拒绝破坏既有消费者", () => {
     metadata: {},
     consumers,
   }) ?? "", /不能使用项目 project-2/);
-  assert.match(validateCredentialRuntimeMutation({
+  assert.equal(validateCredentialRuntimeMutation({
     provider: "anthropic",
     projectId: "project-1",
     metadata: { allowed_model_ids: ["claude-opus-4-1"] },
     consumers,
-  }) ?? "", /claude-sonnet-4-5.*白名单/);
+  }), null);
 });
 
 test("Credential 运行语义变更允许兼容的全局凭据与模型", () => {
@@ -94,7 +94,7 @@ test("Credential 配置文件 CLI 变更不能破坏已有角色绑定", () => {
   }) ?? "", /RoleConfig role-1.*claude-code.*codex/);
 });
 
-test("RoleConfig 导入绑定复用项目作用域、provider 与模型白名单校验", () => {
+test("RoleConfig 导入绑定复用项目作用域与 provider 校验", () => {
   const base = {
     source: "RoleConfig imported-role",
     purpose: "llm",
@@ -106,6 +106,7 @@ test("RoleConfig 导入绑定复用项目作用域、provider 与模型白名单
     metadata: { allowed_model_ids: ["claude-sonnet-4-5"] },
   };
   assert.equal(validateCredentialRoleConfigBinding(base), null);
+  assert.equal(validateCredentialRoleConfigBinding({ ...base, model: "claude-opus-4-1" }), null);
   assert.match(
     validateCredentialRoleConfigBinding({ ...base, roleConfigProjectId: null }) ?? "",
     /全局 RoleConfig.*全局 Credential/,
@@ -113,9 +114,5 @@ test("RoleConfig 导入绑定复用项目作用域、provider 与模型白名单
   assert.match(
     validateCredentialRoleConfigBinding({ ...base, provider: "openai" }) ?? "",
     /不兼容.*claude-code/,
-  );
-  assert.match(
-    validateCredentialRoleConfigBinding({ ...base, model: "claude-opus-4-1" }) ?? "",
-    /claude-opus-4-1.*白名单/,
   );
 });

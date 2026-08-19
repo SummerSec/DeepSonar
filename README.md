@@ -46,7 +46,7 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 - `provider` 表示上游协议，仅支持 **Anthropic Messages** 与 **OpenAI-compatible**；不内置 Anthropic、Kimi 等厂商预设。
 - `agent_cli` 表示运行时方言，当前治理支持 **Claude Code、Codex、OpenCode、Pi、DSH**（能力与兼容镜像在创建 Job 时校验并冻结到 `agent_snapshot_json`）。Credential 保存完整 `settings_config_json`；Job 只冻结无密钥结构，运行时经 Model Gateway 注入短期 Job token。
 - 五个 CLI 均走 **Job 级 HTTP 控制 API**（`platformControlApi`）；平台注入静态 `deepsonar-control` Skill，说明能力发现与鉴权，不授予额外权限。
-- 设置页可在保存前一键读取模型列表；显式 `allowed_model_ids` 只限制实际生效模型，不会由配置文件中的 model 自动生成白名单。
+- 设置页可在保存前一键读取模型列表；模型可用性只认 Credential `settings_config` 声明的清单，不再使用 `allowed_model_ids` 白名单。
 - 用户密码、Provider API Key 和完整 CLI 配置不会由管理 API 或 Web 明文回显；已保存密钥仅显示占位状态。
 - 适配器契约与 Session 归档清单见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)。
 - Session 归档按 CLI 方言独立处理：Claude Code、Codex、Pi、DSH 使用本次沙箱的受治理本地 session artifact；OpenCode 使用 `opencode export <sessionId>` vendor export，并受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或超限会显式报告，不把五类归档当作同一 schema。

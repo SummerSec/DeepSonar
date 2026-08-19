@@ -25,7 +25,6 @@ test("new Credential metadata accepts only server-owned fields and rejects secre
     }, { kind: "llm_provider", provider: "openai" }),
     {
       base_url: "https://api.example.test/v1",
-      allowed_model_ids: ["model-a"],
       model_concurrency: { "model-a": 2 },
       max_concurrent: 4,
     },
@@ -63,7 +62,6 @@ test("legacy/drop metadata keeps valid model and numeric entries only", () => {
       max_concurrent: "8",
     }),
     {
-      allowed_model_ids: ["model-a", "model-b"],
       model_concurrency: { "model-a": 2 },
     },
   );
@@ -93,7 +91,7 @@ test("provider catalog is authoritative for base_url capability", () => {
       base_url: "https://legacy.example/v1",
       allowed_model_ids: ["model-a"],
     }),
-    { allowed_model_ids: ["model-a"] },
+    {},
   );
 });
 
@@ -105,8 +103,18 @@ test("legacy projection drops unsafe/unknown metadata without echoing it", () =>
     unknown: secret,
     allowed_model_ids: ["claude-sonnet-4-5"],
   });
-  assert.deepEqual(projected, { allowed_model_ids: ["claude-sonnet-4-5"] });
+  assert.deepEqual(projected, {});
   assert.equal(JSON.stringify(projected).includes(secret), false);
+});
+
+test("leftover allowed_model_ids is ignored and model_concurrency stands alone", () => {
+  assert.deepEqual(
+    sanitizeCredentialMetadata({
+      allowed_model_ids: ["stale-model"],
+      model_concurrency: { "GLM-5.2[1M]": 2 },
+    }, { kind: "llm_provider", provider: "anthropic" }),
+    { model_concurrency: { "GLM-5.2[1M]": 2 } },
+  );
 });
 
 test("model catalogs are bounded to unique safe string IDs", () => {

@@ -753,14 +753,13 @@ export function qualifyPiModelRef(
 }
 
 /**
- * Job token 白名单必须覆盖 CLI 别名（如 fable）以及 settings 里解析后的上游 ID。
- * Claude Code 请求体里的 model 是 ANTHROPIC_DEFAULT_*_MODEL，不是 --model 别名。
+ * Job token 记录 settings_config 声明的模型以及 CLI 别名 / 上游 ID。
+ * 模型可用性只认配置文件，不再与 Credential allowed_model_ids 求交集。
  */
 export function jobGatewayAllowedModels(input: {
   roleModel?: string | null;
   upstreamModel?: string | null;
   settingsConfig: unknown;
-  credentialAllowedModels?: readonly string[];
 }): string[] {
   const declared: string[] = [];
   const push = (value: unknown) => {
@@ -771,13 +770,5 @@ export function jobGatewayAllowedModels(input: {
   push(input.roleModel);
   push(input.upstreamModel);
   for (const model of extractModelsFromSettings(input.settingsConfig)) push(model);
-  const credential = (input.credentialAllowedModels ?? [])
-    .map((model) => model.trim())
-    .filter(Boolean);
-  if (credential.length === 0) return declared;
-  const allowed = new Set(credential);
-  const role = input.roleModel?.trim() ?? "";
-  const matched = declared.filter((model) => allowed.has(model));
-  if (matched.length === 0) return [];
-  return declared.filter((model) => allowed.has(model) || model === role);
+  return declared;
 }

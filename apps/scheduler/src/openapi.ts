@@ -1630,7 +1630,6 @@ const OPS: Op[] = [
           additionalProperties: false,
           properties: {
             base_url: { type: "string", format: "uri", description: "仅 http/https；不得含 userinfo/query/fragment" },
-            allowed_model_ids: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
             model_concurrency: { type: "object", additionalProperties: { type: "integer", minimum: 0, maximum: 1000 } },
             max_concurrent: { type: "integer", minimum: 0, maximum: 1000 },
             registry: { type: "string", description: "OCI registry host/path（不含 scheme/userinfo/query/fragment）" },
@@ -2038,7 +2037,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           additionalProperties: false,
           properties: {
             base_url: { type: "string", format: "uri" },
-            allowed_model_ids: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
             model_concurrency: { type: "object", additionalProperties: { type: "integer", minimum: 0, maximum: 1000 } },
             max_concurrent: { type: "integer", minimum: 0, maximum: 1000 },
             registry: { type: "string" },

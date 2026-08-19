@@ -215,16 +215,11 @@ export function roleModelLabel(
 function modelIds(credential: ProviderCredential | null): string[] {
   if (!credential) return [];
   const catalog = credential.health?.model_catalog ?? credential.model_catalog_json ?? [];
-  const allowed = credential.public_metadata_json?.allowed_model_ids;
-  const allowlist = Array.isArray(allowed)
-    ? new Set(allowed.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()))
-    : null;
   const fromCatalog = Array.isArray(catalog)
     ? catalog.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       .map((item) => item.trim())
-      .filter((item) => !allowlist || allowlist.has(item))
     : [];
-  const fromSettings = modelsFromSettingsConfig(credential).filter((item) => !allowlist || allowlist.has(item));
+  const fromSettings = modelsFromSettingsConfig(credential);
   // Prefer catalog (health probe) but keep settingsConfig models so binding is not blocked
   // when the profile already declares a model and the catalog is still warming up.
   return [...new Set([...fromCatalog, ...fromSettings])].sort((a, b) => a.localeCompare(b));
@@ -766,6 +761,7 @@ export function ProviderAccountFlow({
     try {
       const existingMeta = editingCredential.public_metadata_json ?? {};
       const metadata = { ...existingMeta };
+      delete metadata.allowed_model_ids;
       if (baseUrl) metadata.base_url = baseUrl;
       else delete metadata.base_url;
       await api.updateCredential(editingCredential.id, {

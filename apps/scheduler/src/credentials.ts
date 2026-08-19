@@ -2,7 +2,6 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { resolveEffectiveModel } from "./provider-effective-model.js";
 
 /**
  * Provider Credential 加密（§6.2 存储要求）：
@@ -92,8 +91,8 @@ export const CREDENTIAL_METADATA_STRING_MAX_LENGTH = 500;
 
 const SECRET_LIKE_METADATA_KEY = /(password|passwd|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|access[_-]?key|credential|bearer)/i;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
-const LLM_METADATA_KEYS = new Set(["base_url", "allowed_model_ids", "model_concurrency", "max_concurrent"]);
-const LLM_METADATA_KEYS_NO_BASE_URL = new Set(["allowed_model_ids", "model_concurrency", "max_concurrent"]);
+const LLM_METADATA_KEYS = new Set(["base_url", "model_concurrency", "max_concurrent"]);
+const LLM_METADATA_KEYS_NO_BASE_URL = new Set(["model_concurrency", "max_concurrent"]);
 const OCI_METADATA_KEYS = new Set(["registry", "username"]);
 
 export class CredentialMetadataError extends Error {
@@ -182,26 +181,6 @@ function normalizeBaseUrl(value: unknown): string {
   return `${parsed.origin}${pathname}`;
 }
 
-function normalizeModelIds(value: unknown, mode: CredentialMetadataMode): string[] {
-  if (!Array.isArray(value)) throw new CredentialMetadataError("metadata.allowed_model_ids 必须是数组", "allowed_model_ids");
-  if (mode === "reject" && value.length > CREDENTIAL_MODEL_CATALOG_MAX) {
-    throw new CredentialMetadataError("metadata.allowed_model_ids 数量超限", "allowed_model_ids");
-  }
-  const result: string[] = [];
-  for (const item of value) {
-    try {
-      const model = cleanMetadataString(item, "allowed_model_ids", CREDENTIAL_MODEL_ID_MAX_LENGTH);
-      if (!result.includes(model)) result.push(model);
-      if (result.length >= CREDENTIAL_MODEL_CATALOG_MAX) break;
-    } catch (error) {
-      if (mode === "reject") throw error;
-      // Legacy/drop projections retain valid model IDs while removing only
-      // malformed items; an invalid item must not discard the whole allowlist.
-    }
-  }
-  return result;
-}
-
 function normalizeConcurrency(value: unknown, key: string, mode: CredentialMetadataMode): number {
   if (mode === "reject" && typeof value !== "number") {
     throw new CredentialMetadataError(`metadata.${key} 必须是 JSON number`, key);
@@ -231,6 +210,8 @@ export function sanitizeCredentialMetadata(
   const output: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(record)) {
+    // Leftover model allowlists are ignored; availability is owned by settings_config.
+    if (key === "allowed_model_ids") continue;
     if (SECRET_LIKE_METADATA_KEY.test(key) || !allowed.has(key)) {
       if (mode === "reject") {
         // Do not echo attacker-controlled key text in an API error: callers
@@ -242,8 +223,6 @@ export function sanitizeCredentialMetadata(
     try {
       if (key === "base_url") {
         output.base_url = normalizeBaseUrl(value);
-      } else if (key === "allowed_model_ids") {
-        output.allowed_model_ids = normalizeModelIds(value, mode);
       } else if (key === "max_concurrent") {
         if (value !== null && value !== "") {
           try {
@@ -293,20 +272,6 @@ export function sanitizeCredentialMetadata(
     }
   }
 
-  // model_concurrency is meaningful only for the explicit model allowlist.
-  if (Array.isArray(output.allowed_model_ids)) {
-    const allowedModels = new Set(output.allowed_model_ids as string[]);
-    const configured = output.model_concurrency as Record<string, number> | undefined;
-    if (configured) {
-      const filtered = Object.fromEntries(
-        Object.entries(configured).filter(([model]) => allowedModels.has(model)),
-      );
-      if (Object.keys(filtered).length > 0) output.model_concurrency = filtered;
-      else delete output.model_concurrency;
-    }
-  } else {
-    delete output.model_concurrency;
-  }
   return output;
 }
 
@@ -345,13 +310,6 @@ export type CredentialHealthErrorCategory =
   | "invalid_response"
   | "unknown";
 
-/** Credential 公共元数据中的模型白名单；空数组表示不额外限制。 */
-export function allowedModelIds(metadata: unknown): string[] {
-  const raw = (metadata as { allowed_model_ids?: unknown } | null)?.allowed_model_ids;
-  if (!Array.isArray(raw)) return [];
-  return [...new Set(raw.filter((v): v is string => typeof v === "string").map((v) => v.trim()).filter(Boolean))];
-}
-
 /**
  * Scheduler-owned model catalog capability. LLM providers currently expose a
  * governed catalog endpoint, so a non-empty successful catalog is required
@@ -384,20 +342,17 @@ function concurrencyLimit(value: unknown): number | null {
   return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : null;
 }
 
-/**
- * Credential 运行配额。allowed_model_ids 一旦存在，每个模型都必须有独立上限；
- * 为兼容旧元数据，缺失的 model_concurrency 项按 1 处理。
- */
+/** Credential 运行配额。逐模型上限只认显式 model_concurrency，不再由模型白名单派生。 */
 export function credentialConcurrencyPolicy(metadata: unknown): CredentialConcurrencyPolicy {
   const meta = (metadata ?? {}) as Record<string, unknown>;
-  const allowed = allowedModelIds(meta);
   const rawModels = meta.model_concurrency;
   const configured = rawModels && typeof rawModels === "object" && !Array.isArray(rawModels)
     ? rawModels as Record<string, unknown>
     : {};
   const modelConcurrency: Record<string, number> = {};
-  for (const model of allowed) {
-    modelConcurrency[model] = concurrencyLimit(configured[model]) ?? 1;
+  for (const [model, limit] of Object.entries(configured)) {
+    const n = concurrencyLimit(limit);
+    if (n !== null) modelConcurrency[model] = n;
   }
   return {
     maxConcurrent: concurrencyLimit(meta.max_concurrent),
@@ -560,7 +515,6 @@ export function validateCredentialRuntimeMutation(input: {
   consumers: CredentialRuntimeConsumer[];
 }): string | null {
   if (!isProviderKnown(input.provider)) return UNKNOWN_PROVIDER_ERROR;
-  const allowed = allowedModelIds(input.metadata);
   for (const consumer of input.consumers) {
     if (input.credentialAgentCli && input.credentialAgentCli !== consumer.agentCli) {
       return `${consumer.source} 使用 ${consumer.agentCli}，不能绑定 ${input.credentialAgentCli} 配置文件`;
@@ -569,17 +523,6 @@ export function validateCredentialRuntimeMutation(input: {
     if (compatibilityError) return `${consumer.source} 不兼容：${compatibilityError}`;
     if (input.projectId && consumer.projectId !== input.projectId) {
       return `${consumer.source} 属于${consumer.projectId ? `项目 ${consumer.projectId}` : "全局配置"}，不能使用项目 ${input.projectId} 的 Credential`;
-    }
-    const effectiveModel = resolveEffectiveModel({
-      roleModel: consumer.model,
-      agentCli: consumer.agentCli,
-      settingsConfig: input.settingsConfig,
-    });
-    if (allowed.length > 0 && !effectiveModel) {
-      return `${consumer.source} 的 Credential 配置文件未声明模型且 RoleConfig 未提供覆盖，不能使用已启用模型白名单的 Credential`;
-    }
-    if (effectiveModel && allowed.length > 0 && !allowed.includes(effectiveModel)) {
-      return `${consumer.source} 的模型 ${effectiveModel} 不在 Credential allowed_model_ids 白名单`;
     }
   }
   return null;
