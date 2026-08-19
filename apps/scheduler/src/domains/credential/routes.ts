@@ -1167,19 +1167,17 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const jobs = impact.jobs as {
         pending_unclaimed: { count: number };
         active_frozen: { count: number };
-        recoverable: { count: number };
       };
       const scans = impact.scans as { active: { count: number } };
       const pendingCount = Number(jobs.pending_unclaimed.count ?? 0);
       const activeCount = Number(jobs.active_frozen.count ?? 0);
-      const recoverableCount = Number(jobs.recoverable.count ?? 0);
       const activeScanCount = Number(scans.active.count ?? 0);
-      if (pendingCount > 0 || activeCount > 0 || recoverableCount > 0) {
+      if (pendingCount > 0 || activeCount > 0) {
         return {
           ok: false,
           statusCode: 409,
           body: {
-            error: "credential is still referenced by pending, active, or recoverable jobs",
+            error: "credential is still referenced by pending or active jobs",
             error_code: "CREDENTIAL_IN_USE",
             impact,
           },
