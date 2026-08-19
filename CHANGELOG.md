@@ -4,14 +4,30 @@
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-08-20
+
+### 新增
+
+- 态势页增加 P0 运营总览：`GET /dashboard/overview` 聚合项目 / 任务 / Job / Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建 / 完成任务与新增 Finding、活跃项目 Top 5 与最近活动；关注队列仍是处置入口。
+- 发布矩阵纳入官方 `deepsonar-assets-helper` 与 `deepsonar-silo`；real `up` / `pull` 优先拉 `$IMAGE_REGISTRY/deepsonar-*:$IMAGE_TAG`，缺失时分别回退 busybox pin 与 pgsty/silo。
+
 ### 修复
 
 - `inherit_global`（缺省 / 脏 `image_strategy`）下新 Job 不再被遗留项目 RoleConfig.model 覆盖；快照 `model` / `upstream_model` / 默认 CLI 跟全局 RoleConfig + 账号主模型。批量绑定仍可不改写行上模型，但 impact 与 Provider 流程标明这些值在 inherit 下不生效。
 - 官方镜像升版并 registry sync 后，项目显式 `selected_version_id` 不再静默改写；pin 无法解析而最新 trusted 可用时，readiness / 建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin 与最新版本，并给出一键升级或改为跟随最新），不再 HTTP 500。市场列表对过期 pin 显示 `pin_stale`。`version_id=null` 仍跟随最新 trusted。
 - 过程画布默认能看清拓扑连线（含亮色主题）；深度或筛选藏边时提示「已隐藏 N 条边」。
+- 过程画布在极低 `fitView` 缩放时连线仍保持可见，不再被压成看不见。
 - 桌面端筛选坞默认展开，亮色主题下「筛选节点」入口对比度可读。
 - 广播账本在 0 条时仍显示「广播账本 · 0 条」空态，不再整块卸载。
 - 删除 Provider 账号不再被 `failed` / `timeout` / `orphan` 的可恢复 Job 永久拦住；仅待领取与运行中/冻结 Job 返回 409。
+- 侧栏仅在 `auth_required === false` 时显示「开发模式」；`/auth/status` 未就绪或失败不再误当成鉴权关闭。
+- Windows PowerShell 5.1 与 pwsh 可解析 `deploy.ps1`（UTF-8 BOM + 仅 ASCII）。
+- `aliyun-acr` 启动 warmup 以冻结 digest 判定本地就绪，接受同 digest 的 Docker Hub / GHCR 本地图；选定通道 pull 超时后对已核实的同 digest 其它通道重试一次。共享资产 helper 纳入 startup warmup。
+
+### 部署 / 升级说明
+
+- 本版本不修改数据库 Schema（仍为 v35）。
+- 官方 `deepsonar-assets-helper` / `deepsonar-silo` 镜像只在本版本正式发布后才存在；在制品尚未打出前，compose 仍回退 busybox pin 与 pgsty/silo。
 
 ## [0.1.40] - 2026-08-19
 
@@ -354,6 +370,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.41]: https://github.com/SummerSec/DeepSonar/compare/v0.1.40...v0.1.41
 [0.1.40]: https://github.com/SummerSec/DeepSonar/compare/v0.1.39...v0.1.40
 [0.1.39]: https://github.com/SummerSec/DeepSonar/compare/v0.1.38...v0.1.39
 [0.1.38]: https://github.com/SummerSec/DeepSonar/compare/v0.1.37...v0.1.38
