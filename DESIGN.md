@@ -307,6 +307,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | aliyun-acr warmup OSS 超时与 helper | #228 | **已完成**：startup inspect 以冻结 digest / image Id 为就绪条件，不要求 RepoDigests 等于当前通道仓库名；选定通道 `docker pull` 因 timeout/EOF/OSS `httpReadSeeker` 失败时，对清单已核实的同 digest 其它通道（dockerhub/github）重试一次，不改 `runtime_registry_channel`、不改写历史 Job 快照；`/health.runtime_images.error` 区分「channel timed out, same-digest fallback attempted」与「digest not found」；默认 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 纳入 startup warmup，fake 仍不使用 helper。Job 执行期仍只 inspect，不隐式 pull。 |
 | 凭据删除不受可恢复 Job 永久锁死 | #234 | **已完成**：`DELETE /credentials/:id` 只拦 `pending_unclaimed` 与 `active_frozen`（claimed/provisioning/running/waiting_human）。`failed/timeout/orphan` 与 `succeeded/cancelled` 一样：影响投影照列，确认框可提示删除后不能按原快照 resume，但不 409。删除仍与 resume 串行加锁，不自动恢复、不改写冻结快照。 |
 | 态势普通数据看板 | #242 | **P0 已落地**：`/` 运营总览（总量/状态分布/近 7 日/活跃项目 Top N/最近活动）+ 关注队列仍为处置入口；`GET /dashboard/overview` 做轻量聚合，因 Job/Finding 列表有窗口上限。**P1 风险看板、P2 吞吐看板未做。** |
+| Windows deploy.ps1 编码与 pull 语义 | #243 | **已完成**：`deploy.ps1` 以 UTF-8 BOM 保存且正文仅 ASCII，避免 Windows PowerShell 5.1 按系统代码页把中文/全角标点解析成 ParserError；`pull`/`up` 与 `deploy.sh` 对齐（默认 real + 拉 ACR 应用镜像；优先官方 `deepsonar-assets-helper` / `deepsonar-silo`，缺失回退 busybox pin / pgsty silo；`-Source build` 才本地 `--build`；`-NoBuild` 仍映射为 pull）。推荐终端 `pwsh`。 |
 
 ## 12. 仓库地图
 
