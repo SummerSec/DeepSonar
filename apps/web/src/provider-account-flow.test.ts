@@ -304,6 +304,17 @@ test("provider UI exposes only protocol labels and the two supported OpenCode pr
   assert.match(flow, /providerProtocolLabel/);
 });
 
+test("deleteAccount hard-blocks only pending/active jobs; recoverable is a confirm warning", () => {
+  const start = flow.indexOf("const deleteAccount = async");
+  const end = flow.indexOf("const testConnection = async", start);
+  assert.ok(start >= 0 && end > start);
+  const handler = flow.slice(start, end);
+  assert.match(handler, /pending > 0 \|\| active > 0/);
+  assert.doesNotMatch(handler, /pending > 0 \|\| active > 0 \|\| recoverable > 0/);
+  assert.match(handler, /有 \$\{recoverable\} 条可恢复历史，删除后不能再按原快照 resume/);
+  assert.doesNotMatch(handler, /请等待结束、取消或完成恢复后再删/);
+});
+
 test("CredentialsPanel only hosts ProviderAccountFlow (no duplicate card grid)", () => {
   assert.match(panel, /<ProviderAccountFlow credentials=\{creds\}/);
   assert.doesNotMatch(panel, /登记 Credential/);

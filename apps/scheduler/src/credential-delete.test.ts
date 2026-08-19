@@ -33,15 +33,30 @@ test("credentialImpact accepts a query connection and DELETE uses tx", () => {
   assert.equal(handler.includes("credentialImpact(sql,"), false);
 });
 
-test("recoverable jobs and active scans block credential delete", () => {
+test("only pending and active jobs block credential delete; recoverable stays listed", () => {
   const handler = deleteHandler();
   assert.match(handler, /status = ANY\(\$\{BLOCKING_JOB_STATUSES/);
   assert.match(handler, /FOR UPDATE/);
-  assert.match(handler, /recoverableCount/);
-  assert.match(handler, /pending, active, or recoverable jobs/);
+  assert.match(handler, /pendingCount > 0 \|\| activeCount > 0/);
+  assert.doesNotMatch(handler, /recoverableCount/);
+  assert.match(handler, /pending or active jobs/);
+  assert.doesNotMatch(handler, /pending, active, or recoverable jobs/);
   assert.match(handler, /CREDENTIAL_SCAN_IN_USE/);
   assert.match(routes, /status IN \('failed','timeout','orphan'\)/);
   assert.match(routes, /result_json->>'registry_credential_id'/);
+});
+
+test("web deleteAccount only hard-blocks pending/active, not recoverable", () => {
+  const flow = readFileSync(new URL("../../web/src/ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  const start = flow.indexOf("const deleteAccount = async");
+  const end = flow.indexOf("const testConnection = async", start);
+  assert.ok(start >= 0 && end > start);
+  const handler = flow.slice(start, end);
+  assert.match(handler, /pending > 0 \|\| active > 0/);
+  assert.doesNotMatch(handler, /pending > 0 \|\| active > 0 \|\| recoverable > 0/);
+  assert.match(handler, /有 \$\{recoverable\} 条可恢复历史，删除后不能再按原快照 resume/);
+  assert.doesNotMatch(handler, /请等待结束、取消或完成恢复后再删/);
+  assert.match(handler, /请等待结束或取消后再删/);
 });
 
 test("unbind bumps RoleConfig version and audit keeps project_id", () => {
