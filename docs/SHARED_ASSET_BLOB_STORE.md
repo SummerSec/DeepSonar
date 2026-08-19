@@ -54,8 +54,8 @@ BLOB_S3_SESSION_TOKEN=
 # Local cache for Job volume materialization (defaults to BLOB_DIR)
 BLOB_S3_CACHE_DIR=./data/blobs
 
-# 仅 real local-docker：写入 Job 只读卷的 helper。
-# 引用必须始终包含 immutable 的小写 sha256 digest。
+# 仅 real local-docker：写入 Job 只读卷的 helper。必须是 immutable digest。
+# 部署脚本优先解析官方 deepsonar-assets-helper 的 RepoDigest；未发布前用此 busybox pin。
 DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
 # 仅在 global_settings.maxConcurrentProvisioning 缺失时使用的 fallback。
 PROVISION_CONCURRENCY=2
@@ -114,13 +114,15 @@ Agents never receive S3 credentials and must not curl object storage. There is i
 
 ### Real 沙箱 helper
 
-local-docker 卷写入器的固定默认值为
+local-docker 卷写入器的运行时默认回退仍是
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 只能覆盖为另一个以小写 64 位
 `sha256` digest 结尾的 immutable OCI 引用。real 模式的 `deploy.sh` 和
-`deploy.ps1` 在启动前及 real 拉取路径显式拉取该引用；拉取失败即停止部署。
+`deploy.ps1` 优先拉取同 registry/tag 的官方 `deepsonar-assets-helper`，
+把 RepoDigest 写成该变量；官方标签尚未发布时回退 busybox pin。拉取失败即停止部署。
 运行时随后以 `--pull=never` 创建写入器，Job 不能触发隐式 registry 拉取。
-fake 模式不使用也不预拉该 helper；不会发布独立的 helper 镜像，部署引用就是完整的供应链输入。
+fake 模式不使用也不预拉该 helper。官方 helper 由 Release 与 scheduler/web 一并发布，
+仓库不内置容器 tar，也不手写尚未存在的官方 digest。
 
 ## Security notes
 

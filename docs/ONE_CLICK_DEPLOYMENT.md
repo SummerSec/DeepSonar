@@ -22,7 +22,7 @@ Image Admission       PGSTY Silo（共享资产 S3 API，默认 127.0.0.1:9000�
 | `deploy/docker-compose.prod.yml` | PostgreSQL、Silo、Scheduler、Image Admission、Web、备份 |
 | `deploy/docker-compose.real.yml` | real 模式：挂载 Docker Socket |
 | `deploy/docker-compose.online.yml` | 空兼容层（旧脚本 `-f` 仍可用；推荐直接用 prod + pull） |
-| `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` | 平台服务镜像 |
+| `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` / `.assets-helper` / `.silo` | 平台服务镜像 |
 | `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony） |
 | `deploy/.env.example` | 环境变量模板（Release 会同步版本号） |
 | `deploy/runtime-image-registry.json` | 官方运行时清单（bundled fallback） |
@@ -63,9 +63,10 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交）；
 3. 按 `DEEPSONAR_IMAGE_TAG`（无 `v` 前缀）从阿里云 ACR 拉取  
    `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
-4. real 模式显式拉取 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该引用必须带 immutable sha256 digest，拉取失败则停止部署；
-5. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
-6. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
+4. 优先拉取同 registry/tag 的 `deepsonar-silo`，将 RepoDigest（或 tag）写成 `SILO_IMAGE`；该标签不存在时回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。已覆盖为其它镜像时不改写；
+5. real 模式优先拉取同 registry/tag 的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
+6. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
+7. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
 
 访问：**http://127.0.0.1:8080**
 
@@ -106,12 +107,15 @@ CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + Rol
 
 ### 4.1 共享资产 helper 与 provision admission（#158）
 
-real 模式写入共享资产只读卷时使用固定默认 helper：
+real 模式写入共享资产只读卷时，`deploy.sh` / `deploy.ps1` 的 `up`/`pull` 优先拉取
+`$IMAGE_REGISTRY/deepsonar-assets-helper:$IMAGE_TAG`（与 scheduler/web 同一发布通道），
+`docker image inspect` 取其 RepoDigest 并导出为 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`。
+该官方标签在下一正式 Release 才首次发布；当前 v0.1.40 及更旧版本回退
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
-可在 `deploy/.env` 用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 覆盖，但必须仍是带小写 64 位
-`sha256` digest 的 OCI 引用。`deploy.sh` 和 `deploy.ps1` 在 real 的 `up` 与 `pull` 路径显式执行
-`docker pull`；失败即 fail closed。Job 运行时只用 `--pull=never` 创建 helper，不能因单个 Job
-触发隐式 registry 拉取；fake 模式不预拉也不使用 helper。该 helper 不新增 DeepSonar 发布镜像。
+覆盖值必须仍是带小写 64 位 `sha256` digest 的 OCI 引用。失败即 fail closed。
+Job 运行时只用 `--pull=never` 创建 helper，不能因单个 Job 触发隐式 registry 拉取；
+fake 模式不预拉也不使用 helper。运行时默认在官方 digest 存在前仍是上述 busybox pin，
+不把未发布的官方 digest 写进仓库。
 
 Provision 并发是数据库 claim admission，不是进程内 semaphore：超过全局
 `global_settings.maxConcurrentProvisioning` 的 Job 留在 `pending`，不消耗 `claimed_at`；槽位释放后
@@ -175,7 +179,7 @@ Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准�
 
 ## 6. 对象存储
 
-生产 Compose 默认 `BLOB_STORE=s3` 指向内部 Silo（`http://silo:9000`）。证据/报告仍写本地 `BLOB_DIR` volume。切换外部 S3 见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)；切换前先迁移并校验对象。
+生产 Compose 默认 `BLOB_STORE=s3` 指向内部 Silo（`http://silo:9000`）。`SILO_IMAGE` 优先用官方 `deepsonar-silo`，下一正式 Release 前回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。证据/报告仍写本地 `BLOB_DIR` volume。切换外部 S3 见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)；切换前先迁移并校验对象。
 
 ## 7. 运维命令
 
@@ -183,7 +187,7 @@ Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准�
 ./deploy/deploy.sh status
 ./deploy/deploy.sh logs
 ./deploy/deploy.sh check
-./deploy/deploy.sh pull          # 拉平台镜像；real 默认同时拉 helper
+./deploy/deploy.sh pull          # 拉平台镜像与官方 Silo；real 默认同时拉 helper
 ./deploy/deploy.sh down          # 保留 postgres / blob / silo volume
 ```
 
@@ -228,7 +232,8 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 | 登录 429 像全站一起被锁 | 官方路径是浏览器 → Web(:8080) → Scheduler。Web 用入站 TCP peer 覆盖 `X-Forwarded-For`，Scheduler 默认只信任 1 跳（`DEEPSONAR_TRUST_PROXY_HOPS=1`）。在 Web 前面再加未纳入该 hop 策略的反向代理时，所有浏览器会共享同一 IP 桶（20 次/5 分钟）。不要把 Scheduler HTTP 暴露到公网；需要真实客户端 IP 时让 Web 直接看到浏览器（或该代理终止 TLS 后把真实 peer 交给 Web） |
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
-| real helper 拉取失败 | 检查 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 是否为可达的 immutable digest 引用；脚本会 fail closed |
+| real helper 拉取失败 | 官方 `deepsonar-assets-helper:$IMAGE_TAG` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |
+| Silo 拉取失败 | 官方 `deepsonar-silo:$IMAGE_TAG` 不存在时应回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；自定义 `SILO_IMAGE` 覆盖仍有效 |
 | image-admission Restarting (1) / 缺 scanner digest | 四个 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。未设或留空会回退官方默认；填了 tag 或非法值仍会启动失败 |
 | real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
 | 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |
@@ -240,6 +245,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 - [ ] 已建长期 API Token；外部事件 Token 单项目 + `tasks:write`
 - [ ] real：官方 base/audit（及所用专项）均为 digest 且可 pull
 - [ ] real：`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 为 immutable digest 且已被部署脚本预拉
+- [ ] `SILO_IMAGE` 为官方 `deepsonar-silo` 或当前 pgsty 回退 tag，且已被部署脚本预拉
 - [ ] 第三方准入扫描器为 digest；未设时使用官方默认 pin，非法覆盖会阻止 image-admission 启动
 - [ ] PostgreSQL / Silo / Scheduler / Image Admission / Web 正常
 - [ ] 已备份并演练恢复

@@ -31,7 +31,9 @@ $RealComposeFile = Join-Path $DeployDir "docker-compose.real.yml"
 $DefaultImageRegistry = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
 $AcrHost = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"
 $DefaultSharedAssetsHelperImage = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23"
+$DefaultSiloImage = "docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z"
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)
+$ImmutableDigestRe = "^[^@\s]+@sha256:[0-9a-f]{64}$"
 
 function Assert-Command([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -146,6 +148,7 @@ function Initialize-Env {
   Ensure-EnvKv "DEEPSONAR_IMAGE_REGISTRY" $DefaultImageRegistry
   Ensure-EnvKv "DEEPSONAR_IMAGE_TAG" $defaultImageTag
   Ensure-EnvKv "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $DefaultSharedAssetsHelperImage
+  Ensure-EnvKv "SILO_IMAGE" $DefaultSiloImage
   $raw = Read-EnvFileRaw
   if ($raw -match "(?m)^DEEPSONAR_IMAGE_TAG=latest$") {
     Ensure-EnvValue "DEEPSONAR_IMAGE_TAG" $defaultImageTag
@@ -169,18 +172,78 @@ function Read-EnvValue([string]$Name, [string]$Default = "") {
 
 function Get-SharedAssetsHelperImage {
   $image = Read-EnvValue "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $DefaultSharedAssetsHelperImage
-  if ($image -notmatch "^[^@\s]+@sha256:[0-9a-f]{64}$") {
+  if ($image -notmatch $ImmutableDigestRe) {
     throw "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE must be an immutable image ref with a 64-char lowercase sha256 digest"
   }
   return $image
 }
 
+function Get-ImageRepoDigest([string]$Tag, [string]$NameNeedle) {
+  $raw = & docker image inspect --format "{{range .RepoDigests}}{{println .}}{{end}}" $Tag
+  if ($LASTEXITCODE -ne 0) { return $null }
+  return @(
+    $raw -split "\r?\n" |
+      Where-Object { $_ -match $ImmutableDigestRe -and $_ -like "*${NameNeedle}*" }
+  ) | Select-Object -First 1
+}
+
 function Pull-SharedAssetsHelper {
   if ($Mode -ne "real") { return }
+  $registry = Read-EnvValue "DEEPSONAR_IMAGE_REGISTRY" $DefaultImageRegistry
+  $tag = Read-EnvValue "DEEPSONAR_IMAGE_TAG" (Get-DefaultImageTag)
+  if ($registry) {
+    $official = "$registry/deepsonar-assets-helper:$tag"
+    Write-Host "[deploy] Trying official shared-assets helper: $official"
+    & docker pull $official
+    if ($LASTEXITCODE -eq 0) {
+      $digest = Get-ImageRepoDigest $official "deepsonar-assets-helper@"
+      if ($digest -match $ImmutableDigestRe) {
+        Ensure-EnvValue "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $digest
+        Write-Host "[deploy] Resolved official helper immutable ref: $digest"
+        return
+      }
+      Write-Host "[deploy] Official helper has no RepoDigest; falling back to busybox pin"
+    } else {
+      Write-Host "[deploy] Official helper tag is unavailable (this Release may not publish it yet); falling back to busybox pin"
+    }
+  }
   $image = Get-SharedAssetsHelperImage
   Write-Host "[deploy] Pulling shared-assets helper: $image"
   & docker pull $image
   if ($LASTEXITCODE -ne 0) { throw "Failed to pull DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE: $image" }
+}
+
+function Test-PreferOfficialSilo([string]$Image) {
+  return (-not $Image) -or ($Image -eq $DefaultSiloImage) -or ($Image -like "*deepsonar-silo*")
+}
+
+function Pull-OfficialSilo {
+  $image = Read-EnvValue "SILO_IMAGE" $DefaultSiloImage
+  if (-not (Test-PreferOfficialSilo $image)) {
+    Write-Host "[deploy] Using overridden SILO_IMAGE=$image"
+    & docker pull $image
+    if ($LASTEXITCODE -ne 0) { throw "Failed to pull SILO_IMAGE: $image" }
+    return
+  }
+  $registry = Read-EnvValue "DEEPSONAR_IMAGE_REGISTRY" $DefaultImageRegistry
+  $tag = Read-EnvValue "DEEPSONAR_IMAGE_TAG" (Get-DefaultImageTag)
+  if ($registry) {
+    $official = "$registry/deepsonar-silo:$tag"
+    Write-Host "[deploy] Trying official Silo: $official"
+    & docker pull $official
+    if ($LASTEXITCODE -eq 0) {
+      $digest = Get-ImageRepoDigest $official "deepsonar-silo@"
+      $resolved = if ($digest -match $ImmutableDigestRe) { $digest } else { $official }
+      Ensure-EnvValue "SILO_IMAGE" $resolved
+      Write-Host "[deploy] Set SILO_IMAGE=$resolved"
+      return
+    }
+    Write-Host "[deploy] Official Silo tag is unavailable (this Release may not publish it yet); falling back to $DefaultSiloImage"
+  }
+  $fallback = Read-EnvValue "SILO_IMAGE" $DefaultSiloImage
+  Write-Host "[deploy] Pulling Silo: $fallback"
+  & docker pull $fallback
+  if ($LASTEXITCODE -ne 0) { throw "Failed to pull SILO_IMAGE: $fallback" }
 }
 
 function Pull-AppImages {
@@ -216,6 +279,7 @@ try {
     }
     "pull" {
       Pull-AppImages
+      Pull-OfficialSilo
       Pull-SharedAssetsHelper
       Write-Host "[deploy] App images pulled." -ForegroundColor Green
     }
@@ -233,6 +297,7 @@ try {
     "up" {
       & docker @ComposeArgs config --quiet
       if ($LASTEXITCODE -ne 0) { throw "Docker Compose validation failed" }
+      Pull-OfficialSilo
       Pull-SharedAssetsHelper
 
       if ($Source -eq "build") {

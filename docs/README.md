@@ -81,7 +81,7 @@
 | #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
 | #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
 | #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |
-| #157 / #158 | **已关**；共享资产孤儿卷回收、busybox helper 预拉、provision admission |
+| #157 / #158 | **已关**；共享资产孤儿卷回收、官方 `deepsonar-assets-helper` 发布与 busybox pin 回退、provision admission |
 | #243 Windows deploy.ps1 | **已关**；UTF-8 BOM + ASCII，避免 PS 5.1 代码页 ParserError；pull/up 与 `deploy.sh` 对齐 |
 | #159 / #160 | **已关**；Fact 工作台、Agent CLI Session 时间线归一化（#160 起因是 Claude，现覆盖五类归档；画布广播仅在 CLI 归档持久化时展示） |
 | Agent CLI 钉死版本 | 仓库已更新；**正式沙箱镜像**需 `v*` release 后才含新 CLI |

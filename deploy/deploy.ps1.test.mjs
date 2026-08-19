@@ -38,7 +38,7 @@ test("deploy.ps1 stays ASCII-only (no smart quotes or fullwidth punctuation)", (
   assert.equal(hit, null, hit ? `fragile punctuation at index ${hit.index}: ${JSON.stringify(hit[0])}` : "");
 });
 
-test("deploy.ps1 pull/up matches deploy.sh app-image semantics", () => {
+test("deploy.ps1 pull/up matches deploy.sh app-image and official-image semantics", () => {
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(3));
   assert.match(text, /\$Mode = "real"/);
   assert.match(text, /\$Source = "pull"/);
@@ -46,9 +46,14 @@ test("deploy.ps1 pull/up matches deploy.sh app-image semantics", () => {
   for (const name of ["deepsonar-scheduler", "deepsonar-web", "deepsonar-image-admission"]) {
     assert.match(text, new RegExp(name));
   }
+  assert.match(text, /deepsonar-assets-helper/);
+  assert.match(text, /deepsonar-silo/);
+  assert.match(text, /function Pull-OfficialSilo/);
+  assert.match(text, /function Pull-SharedAssetsHelper/);
+  assert.match(text, /falling back to busybox pin/);
+  assert.match(text, /pgsty\/silo:RELEASE\.2026-08-06T00-00-00Z/);
   assert.match(text, /up -d --pull missing/);
   assert.match(text, /up -d --build/);
-  assert.match(text, /function Pull-SharedAssetsHelper/);
   assert.match(text, /if \(\$NoBuild\) \{ \$Source = "pull" \}/);
 });
 

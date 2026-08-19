@@ -381,6 +381,8 @@ jobs:
           - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Scheduler", description: "DeepSonar 调度器与唯一副作用执行服务。" }
           - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Web", description: "DeepSonar Loop Graph 工程平台 Web 控制台。" }
           - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Image Admission", description: "DeepSonar 第三方运行镜像准入与安全扫描 Worker。" }
+          - { name: assets-helper, dockerfile: deploy/Dockerfile.assets-helper, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Assets Helper", description: "DeepSonar 共享资产只读卷写入 helper（busybox 根文件系统的官方再发布）。" }
+          - { name: silo, dockerfile: deploy/Dockerfile.silo, platforms: "linux/amd64", dockerhub_tag: "", title: "DeepSonar Silo", description: "DeepSonar 共享资产 S3 服务（官方再发布的 PGSTY Silo）。" }
           - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "audit", title: "DeepSonar Audit", description: "DeepSonar Audit 的官方审计运行时。" }
           # kali-minimal 体量大，amd64+arm64 同作业并行导出易 ENOSPC；独立 job 顺序构建
     env:

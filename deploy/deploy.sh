@@ -15,6 +15,7 @@ REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
 # 默认阿里云 ACR；可用 deploy/.env 覆盖
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
 DEFAULT_SHARED_ASSETS_HELPER_IMAGE="docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23"
+DEFAULT_SILO_IMAGE="docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z"
 REGISTRY_FILE="$SCRIPT_DIR/runtime-image-registry.json"
 DEFAULT_IMAGE_TAG=""
 if [ -f "$REGISTRY_FILE" ]; then
@@ -58,6 +59,17 @@ ensure_env_kv() {
   if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
     printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
     echo "[deploy] 已写入 $key=$value"
+  fi
+}
+
+set_env_kv() {
+  key="$1"
+  value="$2"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    tmp=$(mktemp)
+    sed "s|^${key}=.*|${key}=${value}|" "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
   fi
 }
 
@@ -106,6 +118,7 @@ fi
 ensure_env_kv "DEEPSONAR_IMAGE_REGISTRY" "$DEFAULT_IMAGE_REGISTRY"
 ensure_env_kv "DEEPSONAR_IMAGE_TAG" "$DEFAULT_IMAGE_TAG"
 ensure_env_kv "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" "$DEFAULT_SHARED_ASSETS_HELPER_IMAGE"
+ensure_env_kv "SILO_IMAGE" "$DEFAULT_SILO_IMAGE"
 # A previous generated env used latest; normalize only that legacy default.
 if grep -q '^DEEPSONAR_IMAGE_TAG=latest$' "$ENV_FILE"; then
   tmp=$(mktemp)
@@ -140,8 +153,10 @@ fi
 IMAGE_REGISTRY=$(awk -F= '$1=="DEEPSONAR_IMAGE_REGISTRY" {print $2; exit}' "$ENV_FILE")
 IMAGE_TAG=$(awk -F= '$1=="DEEPSONAR_IMAGE_TAG" {print $2; exit}' "$ENV_FILE")
 SHARED_ASSETS_HELPER_IMAGE=$(awk -F= '$1=="DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" {print $2; exit}' "$ENV_FILE")
+SILO_IMAGE=$(awk -F= '$1=="SILO_IMAGE" {print $2; exit}' "$ENV_FILE")
 IMAGE_REGISTRY=${IMAGE_REGISTRY:-$DEFAULT_IMAGE_REGISTRY}
 IMAGE_TAG=${IMAGE_TAG:-$DEFAULT_IMAGE_TAG}
+SILO_IMAGE=${SILO_IMAGE:-$DEFAULT_SILO_IMAGE}
 
 set -- docker compose -p deepsonar --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
 if [ "$MODE" = "real" ]; then
@@ -159,18 +174,79 @@ pull_app_images() {
   done
 }
 
+HELPER_IMAGE_DIGEST_RE='^[^@[:space:]]+@sha256:[0-9a-f]{64}$'
+
 validate_shared_assets_helper_image() {
-  if ! printf '%s\n' "$SHARED_ASSETS_HELPER_IMAGE" | grep -Eq '^[^@[:space:]]+@sha256:[0-9a-f]{64}$'; then
+  if ! printf '%s\n' "$SHARED_ASSETS_HELPER_IMAGE" | grep -Eq "$HELPER_IMAGE_DIGEST_RE"; then
     echo "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE 必须是带 64 位 sha256 digest 的 immutable image 引用" >&2
     exit 1
   fi
 }
 
+resolve_repo_digest() {
+  tag="$1"
+  needle="$2"
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag" 2>/dev/null \
+    | grep -E "$HELPER_IMAGE_DIGEST_RE" \
+    | grep -F "$needle" \
+    | head -1 \
+    || true
+}
+
 pull_shared_assets_helper() {
   [ "$MODE" = "real" ] || return 0
+  official_tag="${IMAGE_REGISTRY}/deepsonar-assets-helper:${IMAGE_TAG}"
+  echo "[deploy] 尝试拉取官方共享资产 helper：$official_tag"
+  if docker pull "$official_tag"; then
+    official_digest=$(resolve_repo_digest "$official_tag" "deepsonar-assets-helper@")
+    if printf '%s\n' "$official_digest" | grep -Eq "$HELPER_IMAGE_DIGEST_RE"; then
+      SHARED_ASSETS_HELPER_IMAGE="$official_digest"
+      set_env_kv "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" "$SHARED_ASSETS_HELPER_IMAGE"
+      export DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE="$SHARED_ASSETS_HELPER_IMAGE"
+      echo "[deploy] 已解析官方 helper 不可变引用：$SHARED_ASSETS_HELPER_IMAGE"
+      return 0
+    fi
+    echo "[deploy] 官方 helper 缺少 RepoDigest，回退 busybox pin"
+  else
+    echo "[deploy] 官方 helper 标签不可用（当前 Release 可能尚未发布），回退 busybox pin"
+  fi
+  SHARED_ASSETS_HELPER_IMAGE=${SHARED_ASSETS_HELPER_IMAGE:-$DEFAULT_SHARED_ASSETS_HELPER_IMAGE}
   validate_shared_assets_helper_image
   echo "[deploy] 拉取共享资产 helper：$SHARED_ASSETS_HELPER_IMAGE"
   docker pull "$SHARED_ASSETS_HELPER_IMAGE"
+}
+
+prefer_official_silo() {
+  case "$SILO_IMAGE" in
+    ""|"$DEFAULT_SILO_IMAGE"|*deepsonar-silo*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+pull_official_silo() {
+  if ! prefer_official_silo; then
+    echo "[deploy] 使用已覆盖的 SILO_IMAGE=$SILO_IMAGE"
+    docker pull "$SILO_IMAGE"
+    return 0
+  fi
+  official_tag="${IMAGE_REGISTRY}/deepsonar-silo:${IMAGE_TAG}"
+  echo "[deploy] 尝试拉取官方 Silo：$official_tag"
+  if docker pull "$official_tag"; then
+    official_digest=$(resolve_repo_digest "$official_tag" "deepsonar-silo@")
+    if printf '%s\n' "$official_digest" | grep -Eq "$HELPER_IMAGE_DIGEST_RE"; then
+      SILO_IMAGE="$official_digest"
+    else
+      SILO_IMAGE="$official_tag"
+    fi
+    set_env_kv "SILO_IMAGE" "$SILO_IMAGE"
+    export SILO_IMAGE
+    echo "[deploy] 已设置 SILO_IMAGE=$SILO_IMAGE"
+    return 0
+  fi
+  echo "[deploy] 官方 Silo 标签不可用（当前 Release 可能尚未发布），回退 $DEFAULT_SILO_IMAGE"
+  SILO_IMAGE=${SILO_IMAGE:-$DEFAULT_SILO_IMAGE}
+  echo "[deploy] 拉取 Silo：$SILO_IMAGE"
+  docker pull "$SILO_IMAGE"
 }
 
 case "$ACTION" in
@@ -190,6 +266,7 @@ case "$ACTION" in
     ;;
   pull)
     pull_app_images
+    pull_official_silo
     pull_shared_assets_helper
     echo "[deploy] 应用镜像已拉取"
     ;;
@@ -199,6 +276,7 @@ case "$ACTION" in
     ;;
   up)
     "$@" config --quiet
+    pull_official_silo
     pull_shared_assets_helper
     if [ "$SOURCE" = "build" ]; then
       echo "[deploy] 本地 Dockerfile 构建模式"
