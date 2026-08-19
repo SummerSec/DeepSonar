@@ -129,8 +129,35 @@ function Get-SharedAssetsHelperImage {
   return $image
 }
 
+function Get-ImageRepoDigest([string]$Tag) {
+  $raw = & docker image inspect --format "{{range .RepoDigests}}{{println .}}{{end}}" $Tag
+  if ($LASTEXITCODE -ne 0) { return $null }
+  return @(
+    $raw -split "\r?\n" |
+      Where-Object { $_ -match "^[^@\s]+@sha256:[0-9a-f]{64}$" -and $_ -like "*deepsonar-assets-helper@*" }
+  ) | Select-Object -First 1
+}
+
 function Pull-SharedAssetsHelper {
   if ($Mode -ne "real") { return }
+  $registry = Read-EnvValue "DEEPSONAR_IMAGE_REGISTRY" ""
+  $tag = Read-EnvValue "DEEPSONAR_IMAGE_TAG" (Get-DefaultImageTag)
+  if ($registry) {
+    $official = "$registry/deepsonar-assets-helper:$tag"
+    Write-Host "[deploy] 尝试拉取官方共享资产 helper：$official"
+    & docker pull $official
+    if ($LASTEXITCODE -eq 0) {
+      $digest = Get-ImageRepoDigest $official
+      if ($digest -match "^[^@\s]+@sha256:[0-9a-f]{64}$") {
+        Ensure-EnvValue "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $digest
+        Write-Host "[deploy] 已解析官方 helper 不可变引用：$digest"
+        return
+      }
+      Write-Host "[deploy] 官方 helper 缺少 RepoDigest，回退 busybox pin"
+    } else {
+      Write-Host "[deploy] 官方 helper 标签不可用（当前 Release 可能尚未发布），回退 busybox pin"
+    }
+  }
   $image = Get-SharedAssetsHelperImage
   Write-Host "[deploy] 拉取共享资产 helper：$image"
   & docker pull $image

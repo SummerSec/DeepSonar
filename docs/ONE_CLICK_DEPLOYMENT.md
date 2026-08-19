@@ -61,7 +61,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交）；
 3. 按 `DEEPSONAR_IMAGE_TAG`（无 `v` 前缀）从阿里云 ACR 拉取  
    `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
-4. real 模式显式拉取 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该引用必须带 immutable sha256 digest，拉取失败则停止部署；
+4. real 模式优先拉取与 scheduler/web 同 registry/tag 的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
 5. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
 6. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
 
@@ -104,12 +104,15 @@ CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + Rol
 
 ### 4.1 共享资产 helper 与 provision admission（#158）
 
-real 模式写入共享资产只读卷时使用固定默认 helper：
+real 模式写入共享资产只读卷时，`deploy.sh` / `deploy.ps1` 的 `up`/`pull` 优先拉取
+`$IMAGE_REGISTRY/deepsonar-assets-helper:$IMAGE_TAG`（与 scheduler/web 同一发布通道），
+`docker image inspect` 取其 RepoDigest 并导出为 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`。
+该官方标签在下一正式 Release 才首次发布；当前 v0.1.40 及更旧版本回退
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
-可在 `deploy/.env` 用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 覆盖，但必须仍是带小写 64 位
-`sha256` digest 的 OCI 引用。`deploy.sh` 和 `deploy.ps1` 在 real 的 `up` 与 `pull` 路径显式执行
-`docker pull`；失败即 fail closed。Job 运行时只用 `--pull=never` 创建 helper，不能因单个 Job
-触发隐式 registry 拉取；fake 模式不预拉也不使用 helper。该 helper 不新增 DeepSonar 发布镜像。
+覆盖值必须仍是带小写 64 位 `sha256` digest 的 OCI 引用。失败即 fail closed。
+Job 运行时只用 `--pull=never` 创建 helper，不能因单个 Job 触发隐式 registry 拉取；
+fake 模式不预拉也不使用 helper。运行时默认在官方 digest 存在前仍是上述 busybox pin，
+不把未发布的官方 digest 写进仓库。
 
 Provision 并发是数据库 claim admission，不是进程内 semaphore：超过全局
 `global_settings.maxConcurrentProvisioning` 的 Job 留在 `pending`，不消耗 `claimed_at`；槽位释放后
@@ -226,7 +229,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 | 登录 429 像全站一起被锁 | 官方路径是浏览器 → Web(:8080) → Scheduler。Web 用入站 TCP peer 覆盖 `X-Forwarded-For`，Scheduler 默认只信任 1 跳（`DEEPSONAR_TRUST_PROXY_HOPS=1`）。在 Web 前面再加未纳入该 hop 策略的反向代理时，所有浏览器会共享同一 IP 桶（20 次/5 分钟）。不要把 Scheduler HTTP 暴露到公网；需要真实客户端 IP 时让 Web 直接看到浏览器（或该代理终止 TLS 后把真实 peer 交给 Web） |
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
-| real helper 拉取失败 | 检查 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 是否为可达的 immutable digest 引用；脚本会 fail closed |
+| real helper 拉取失败 | 官方 `deepsonar-assets-helper:$IMAGE_TAG` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |
 | image-admission Restarting (1) / 缺 scanner digest | 四个 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。未设或留空会回退官方默认；填了 tag 或非法值仍会启动失败 |
 | real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
 | 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |

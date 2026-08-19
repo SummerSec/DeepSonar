@@ -61,6 +61,17 @@ ensure_env_kv() {
   fi
 }
 
+set_env_kv() {
+  key="$1"
+  value="$2"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    tmp=$(mktemp)
+    sed "s|^${key}=.*|${key}=${value}|" "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
 ensure_env_secret() {
   key="$1"
   value="$2"
@@ -159,15 +170,42 @@ pull_app_images() {
   done
 }
 
+HELPER_IMAGE_DIGEST_RE='^[^@[:space:]]+@sha256:[0-9a-f]{64}$'
+
 validate_shared_assets_helper_image() {
-  if ! printf '%s\n' "$SHARED_ASSETS_HELPER_IMAGE" | grep -Eq '^[^@[:space:]]+@sha256:[0-9a-f]{64}$'; then
+  if ! printf '%s\n' "$SHARED_ASSETS_HELPER_IMAGE" | grep -Eq "$HELPER_IMAGE_DIGEST_RE"; then
     echo "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE 必须是带 64 位 sha256 digest 的 immutable image 引用" >&2
     exit 1
   fi
 }
 
+resolve_official_helper_digest() {
+  tag="$1"
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag" 2>/dev/null \
+    | grep -E "$HELPER_IMAGE_DIGEST_RE" \
+    | grep -F "deepsonar-assets-helper@" \
+    | head -1 \
+    || true
+}
+
 pull_shared_assets_helper() {
   [ "$MODE" = "real" ] || return 0
+  official_tag="${IMAGE_REGISTRY}/deepsonar-assets-helper:${IMAGE_TAG}"
+  echo "[deploy] 尝试拉取官方共享资产 helper：$official_tag"
+  if docker pull "$official_tag"; then
+    official_digest=$(resolve_official_helper_digest "$official_tag")
+    if printf '%s\n' "$official_digest" | grep -Eq "$HELPER_IMAGE_DIGEST_RE"; then
+      SHARED_ASSETS_HELPER_IMAGE="$official_digest"
+      set_env_kv "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" "$SHARED_ASSETS_HELPER_IMAGE"
+      export DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE="$SHARED_ASSETS_HELPER_IMAGE"
+      echo "[deploy] 已解析官方 helper 不可变引用：$SHARED_ASSETS_HELPER_IMAGE"
+      return 0
+    fi
+    echo "[deploy] 官方 helper 缺少 RepoDigest，回退 busybox pin"
+  else
+    echo "[deploy] 官方 helper 标签不可用（当前 Release 可能尚未发布），回退 busybox pin"
+  fi
+  SHARED_ASSETS_HELPER_IMAGE=${SHARED_ASSETS_HELPER_IMAGE:-$DEFAULT_SHARED_ASSETS_HELPER_IMAGE}
   validate_shared_assets_helper_image
   echo "[deploy] 拉取共享资产 helper：$SHARED_ASSETS_HELPER_IMAGE"
   docker pull "$SHARED_ASSETS_HELPER_IMAGE"

@@ -13,9 +13,11 @@
 
 Windows：`.\deploy\deploy.ps1 -Action up -Mode real -NoBuild`；real 拉取：`.\deploy\deploy.ps1 -Action pull -Mode real`
 
-real 模式使用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 写入共享资产只读卷，默认是
+real 模式使用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 写入共享资产只读卷。`up`/`pull`
+优先拉取 `$IMAGE_REGISTRY/deepsonar-assets-helper:$IMAGE_TAG` 并导出 RepoDigest；
+该官方标签在下一正式 Release 才存在，当前版本回退
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
-该值只能覆盖为 immutable digest；启动和拉取路径会显式预拉，失败即停止部署。fake 模式不使用 helper。
+覆盖值必须仍是 immutable digest；失败即停止部署。fake 模式不使用 helper。
 
 real compose 将 `DEEPSONAR_HOST_DISK_SOURCE`（默认 `/var/lib/docker`）只读挂载为
 Scheduler 的 `/host-disk`，仅供 Node `statfs` 水位检查。rootless Docker/vfs 必须把它改成

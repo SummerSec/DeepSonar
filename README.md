@@ -82,7 +82,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token、Silo S3 凭据）；
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交 Git）；
-3. 使用当前 Release 的无 `v` 版本号拉取 `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
+3. 使用当前 Release 的无 `v` 版本号拉取 `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；real 模式再优先解析同 tag 的 `deepsonar-assets-helper`（缺失则回退 busybox pin）；
 4. 启动 PostgreSQL、PGSTY Silo、Scheduler、Image Admission、Web Gateway；
 5. 健康检查通过后输出访问地址。
 
@@ -117,7 +117,7 @@ DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
 VER=<release-version-without-v>
 
-for img in deepsonar-scheduler deepsonar-web deepsonar-image-admission; do
+for img in deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper; do
   docker pull "$REG/$img:$VER"
 done
 ```
@@ -188,7 +188,7 @@ crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/<image>:<ve
 | `deepsonar-base` / `deepsonar-audit` / `deepsonar-kali-minimal` | 官方运行时 |
 | `deepsonar-chrome-test` / `-audit` / `-fuzz` | Chrome 专项（项目 opt-in） |
 | `deepsonar-openharmony-test` / `-audit` / `-fuzz` | OpenHarmony 专项（项目 opt-in） |
-| `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` | 平台服务 |
+| `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` / `deepsonar-assets-helper` | 平台服务（helper 在下一正式 Release 首发） |
 
 ```bash
 REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
@@ -198,7 +198,7 @@ for img in \
   deepsonar-base deepsonar-audit deepsonar-kali-minimal \
   deepsonar-chrome-test deepsonar-chrome-audit deepsonar-chrome-fuzz \
   deepsonar-openharmony-test deepsonar-openharmony-audit deepsonar-openharmony-fuzz \
-  deepsonar-scheduler deepsonar-web deepsonar-image-admission
+  deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper
 do
   docker pull "$REG/$img:$VER"
 done
@@ -277,7 +277,7 @@ DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
 - Agent 只提案；控制面默认拒绝（严格 Zod 契约 + Job 状态/角色授权）；图引用 id 必须是画布 UUID，禁止字段名泄漏（如字面量 `root_id`）；
 - 被审计代码与外部事件均为不可信输入；
 - API Token、Job capability token 与模型凭据分离；Job 使用创建时冻结的 snapshot / 镜像 digest；
-- 共享资产经 CAS + 只读 named volume 注入；helper 使用固定 busybox digest，不把业务运行时镜像当拷贝工具；
+- 共享资产经 CAS + 只读 named volume 注入；helper 使用不可变 digest（官方 `deepsonar-assets-helper`，未发布前回退 busybox pin），不把业务运行时镜像当拷贝工具；
 - real 模式挂载 Docker Socket，仅限受控主机。
 
 ## 当前事实入口
