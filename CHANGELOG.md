@@ -6,7 +6,7 @@
 
 ### 修复
 
-- `db:rebuild` 回填后同时重置 serial/bigserial 与 IDENTITY 序列，避免 `events_id_seq` 停在空表初值导致后续 `events_pkey` 冲突。
+- `db:rebuild` 回填后对全部 public 基表重置 serial/bigserial 与 IDENTITY 序列：空表下次 `nextval` 为 1，非空 `MAX=N` 则下次为 `N+1`，避免官方种子表或空 `events` 跳号后撞 `events_pkey`。
 - 瓷白 / 雾白下项目镜像抽屉、确认框、终端外框和各页硬编码深色岛改走 `theme-*` token，避免深字叠深底。
 - 新建任务「指定时间」改为日期 + 时刻选择器，触发器始终显示完整 `YYYY-MM-DD HH:mm`；未来时刻校验只在提交时进行，不再用轮询改 `min` 打断选择。
 - 角色绑定镜像下拉以完整产品名为触发器主文案，种类放次行；悬停与展开列表均可读 OpenHarmony Audit / Test / Fuzz。

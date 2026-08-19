@@ -51,6 +51,25 @@ function frozenSnapshotUpstreamModel(snapshot: unknown): string | null {
   return upstream || null;
 }
 
+/**
+ * 转发路径：非数组对象且 model 是 Claude CLI 别名时，改写成快照顶层 upstream_model。
+ * 已是上游 ID、快照缺失/空、或 body 不是带 model 的对象时保持原值（可同对象引用）。
+ */
+export function applyGatewayOutboundModelRewrite(rawBody: unknown, agentSnapshot: unknown): unknown {
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return rawBody;
+  const currentModel = typeof (rawBody as { model?: unknown }).model === "string"
+    ? (rawBody as { model: string }).model
+    : "";
+  const outboundModel = rewriteGatewayOutboundModel({
+    requestModel: currentModel,
+    upstreamModel: frozenSnapshotUpstreamModel(agentSnapshot),
+  });
+  if (outboundModel && outboundModel !== currentModel) {
+    return { ...(rawBody as Record<string, unknown>), model: outboundModel };
+  }
+  return rawBody;
+}
+
 /** 模型网关允许进入业务层的最大请求体；超出后才由 Fastify 返回 413。 */
 export const MODEL_GATEWAY_BODY_LIMIT = 16 * 1024 * 1024;
 
@@ -559,19 +578,7 @@ export function registerGateway(app: FastifyInstance): void {
           return deny(reply, 413, error instanceof Error ? error.message : String(error), "otlp_rejected");
         }
       }
-      let outboundBody = rawBody;
-      if (rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)) {
-        const currentModel = typeof (rawBody as { model?: unknown }).model === "string"
-          ? (rawBody as { model: string }).model
-          : "";
-        const outboundModel = rewriteGatewayOutboundModel({
-          requestModel: currentModel,
-          upstreamModel: frozenSnapshotUpstreamModel(jt.agent_snapshot_json),
-        });
-        if (outboundModel && outboundModel !== currentModel) {
-          outboundBody = { ...(rawBody as Record<string, unknown>), model: outboundModel };
-        }
-      }
+      const outboundBody = applyGatewayOutboundModelRewrite(rawBody, jt.agent_snapshot_json);
       const outboundBuf =
         outboundBody == null
           ? null

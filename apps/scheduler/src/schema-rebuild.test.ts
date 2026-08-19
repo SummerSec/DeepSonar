@@ -7,7 +7,9 @@ import {
   intersectColumns,
   isOwnedSequenceColumn,
   officialCatalogBackfillSql,
+  ownedSequenceMaxSql,
   ownedSequenceResetSql,
+  ownedSequenceSetvalIsCalled,
   roleConfigBackfillSql,
   roleConfigModuleBackfillSql,
   topologicalCopyOrder,
@@ -153,9 +155,15 @@ test("owned sequence reset includes bigserial nextval defaults and IDENTITY", ()
     false,
   );
   const sql = ownedSequenceResetSql("events", "id");
+  const maxSql = ownedSequenceMaxSql("events", "id");
+  assert.equal(maxSql, '(SELECT MAX("id") FROM public."events")');
   assert.match(sql, /pg_get_serial_sequence\('public\.events', 'id'\)/);
   assert.match(sql, /GREATEST\(COALESCE\(\(SELECT MAX\("id"\) FROM public\."events"\), 1\), 1\)/);
   assert.match(sql, /setval\(/);
+  assert.match(sql, /\(SELECT MAX\("id"\) FROM public\."events"\) IS NOT NULL/);
+  assert.equal(ownedSequenceSetvalIsCalled(null), false);
+  assert.equal(ownedSequenceSetvalIsCalled(1), true);
+  assert.equal(ownedSequenceSetvalIsCalled(42), true);
 });
 
 test("schema baseline serial and IDENTITY primary keys are all in the rebuild reset set", async () => {
@@ -175,4 +183,11 @@ test("schema baseline serial and IDENTITY primary keys are all in the rebuild re
       `${item.table}.${item.column} (${item.kind}) must be reset after rebuild`,
     );
   }
+});
+
+test("owned sequence reset is over all public base tables after official seeds", async () => {
+  const source = await readFile(new URL("./schema-rebuild.ts", import.meta.url), "utf8");
+  assert.match(source, /await ensureOfficialSeeds\(db, schemaSql\);\s*\n\s*await resetOwnedSequences\(db\);/);
+  assert.match(source, /const tables = await listBaseTables\(db, "public"\)/);
+  assert.doesNotMatch(source, /resetOwnedSequences\(db, copiedTables\)/);
 });

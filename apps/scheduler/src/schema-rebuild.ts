@@ -99,12 +99,22 @@ export function isOwnedSequenceColumn(column: SequenceColumnMeta): boolean {
   return /^\s*nextval\s*\(/i.test(column.columnDefault ?? "");
 }
 
+/** Empty MAX → is_called=false (next nextval is 1). MAX=N → is_called=true (next is N+1). */
+export function ownedSequenceSetvalIsCalled(maxId: number | null): boolean {
+  return maxId != null;
+}
+
+export function ownedSequenceMaxSql(table: string, column: string): string {
+  return `(SELECT MAX(${quoteIdent(column)}) FROM public.${quoteIdent(table)})`;
+}
+
 export function ownedSequenceResetSql(table: string, column: string): string {
   const sequence = `pg_get_serial_sequence(${quoteSqlLiteral(`public.${table}`)}, ${quoteSqlLiteral(column)})`;
+  const maxSql = ownedSequenceMaxSql(table, column);
   return (
     `SELECT setval(${sequence}, ` +
-    `GREATEST(COALESCE((SELECT MAX(${quoteIdent(column)}) FROM public.${quoteIdent(table)}), 1), 1), ` +
-    `true)`
+    `GREATEST(COALESCE(${maxSql}, 1), 1), ` +
+    `${maxSql} IS NOT NULL)`
   );
 }
 
@@ -316,7 +326,9 @@ async function readForeignKeys(db: MigrationConnection, schema: string): Promise
   }));
 }
 
-async function resetOwnedSequences(db: MigrationConnection, tables: string[]): Promise<void> {
+/** Official seeds / new baseline tables are not in copiedTables; reset every public base table. */
+async function resetOwnedSequences(db: MigrationConnection): Promise<void> {
+  const tables = await listBaseTables(db, "public");
   for (const table of tables) {
     const columns = await db<{ column_name: string; is_identity: string; column_default: string | null }>`
       SELECT column_name, is_identity, column_default
@@ -561,7 +573,7 @@ export async function rebuildSchemaToLatest(
   }
 
   await ensureOfficialSeeds(db, schemaSql);
-  await resetOwnedSequences(db, copiedTables);
+  await resetOwnedSequences(db);
   await runMigrations(db, { schemaFile, targetVersion });
 
   if (!options.keepStaging) {
