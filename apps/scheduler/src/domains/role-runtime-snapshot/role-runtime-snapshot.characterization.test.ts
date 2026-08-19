@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   PLATFORM_DEFAULT_AGENT_CLI,
   parseProjectImagePolicy,
+  roleIdentityForProjectPolicy,
   roleNameForJobType,
   runtimeImageKeyForProjectPolicy,
   withRuntimeTestToolchainPolicy,
@@ -38,4 +39,21 @@ test("项目镜像策略按全局继承与项目托管分别选择镜像", () =>
   assert.equal(runtimeImageKeyForProjectPolicy(managed, "audit", "custom-audit"), "deepsonar-audit");
   assert.equal(runtimeImageKeyForProjectPolicy(managed, "review", "custom-review"), "deepsonar-base");
   assert.equal(runtimeImageKeyForProjectPolicy(managed, "test", "custom-test"), "deepsonar-base");
+});
+
+test("inherit_global 忽略遗留项目 RoleConfig 的 model 与默认 CLI", () => {
+  const leftover = { model: "grok-4.5", agent_cli: "codex" };
+  const global = { model: "grok-4.6", agent_cli: "claude-code" };
+  const inherited = roleIdentityForProjectPolicy(parseProjectImagePolicy(undefined), leftover, global);
+  assert.deepEqual(inherited, { model: "grok-4.6", agent_cli: "claude-code" });
+  assert.deepEqual(
+    roleIdentityForProjectPolicy(parseProjectImagePolicy({ image_strategy: "dirty" }), leftover, global),
+    inherited,
+  );
+  const managed = roleIdentityForProjectPolicy(
+    parseProjectImagePolicy({ image_strategy: "project_managed" }),
+    leftover,
+    global,
+  );
+  assert.deepEqual(managed, { model: "grok-4.5", agent_cli: "codex" });
 });

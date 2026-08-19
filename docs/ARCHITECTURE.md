@@ -541,9 +541,10 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 
 项目镜像策略不改表：`projects.config_json.image_strategy` 缺省为
 `inherit_global`，该策略下每个 Job 角色的镜像只读取全局 RoleConfig 的
-`runtime_image_key`，即使项目 RoleConfig 覆盖了 CLI、模型或其他字段；
+`runtime_image_key`，并且 `model` / 默认 CLI 也只认全局 RoleConfig（再落到账号主模型）；
+遗留项目 RoleConfig 行上的 `model` / `agent_cli` 在解析时忽略。
 `project_managed` 则只读取 `role_runtime_images` 的角色映射，缺项或 `null`
-固定使用系统 `deepsonar-base`。非空 key 在项目设置写入时必须命中已启用、可信且符合
+固定使用系统 `deepsonar-base`，并允许项目 RoleConfig 托管自己的 model / 默认 CLI。非空 key 在项目设置写入时必须命中已启用、可信且符合
 现有准入规则的 runtime image；最终解析的 immutable digest/ref 与工具清单仍只冻结在新 Job。
 
 Finding 协议是同一配置层级中的独立规则：全局存于

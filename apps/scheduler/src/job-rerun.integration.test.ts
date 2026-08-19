@@ -67,7 +67,12 @@ if (!testDatabaseUrl) {
       const roleName = `rerun_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
       await sql`
         INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${canvasId}, 'Job rerun integration', ${sql.json({})})`;
+        VALUES (${projectId}, ${canvasId}, 'Job rerun integration', ${sql.json({
+          // This fixture hosts its own model/CLI on the leftover project RoleConfig.
+          // inherit_global would ignore those fields; project_managed keeps them
+          // as the governed identity so resume can still 409 on drift.
+          image_strategy: "project_managed",
+        })})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${canvasId}, ${projectId}, 'Job rerun integration', ${sql.json({
@@ -141,8 +146,10 @@ if (!testDatabaseUrl) {
       const post = (jobId: string, action: "resume" | "rerun-current") =>
         app.inject({ method: "POST", url: `/jobs/${jobId}/${action}` });
 
-      // Model, CLI, and Credential drift all reject old-snapshot resume. After
-      // restoring the exact governed identity, the same Job is re-enqueued and
+      // Model, CLI, and Credential drift all reject old-snapshot resume. The
+      // project is project_managed so leftover RoleConfig.model/agent_cli are
+      // the governed identity (inherit_global would ignore them). After
+      // restoring the exact identity, the same Job is re-enqueued and
       // Dispatcher creates Attempt 2 without replacing the frozen snapshot.
       const resumeJob = await insertJob({ status: "failed", sandboxId: "old-failed-sandbox" });
       const resumeJobId = String(resumeJob.id);
