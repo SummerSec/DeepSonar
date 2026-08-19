@@ -11,7 +11,17 @@
 ./deploy/deploy.sh pull             # 拉平台镜像；real 默认同时预拉共享资产 helper
 ```
 
-Windows：`.\deploy\deploy.ps1 -Action up -Mode real -NoBuild`；real 拉取：`.\deploy\deploy.ps1 -Action pull -Mode real`
+Windows 推荐 **PowerShell 7+（`pwsh`）**。`deploy.ps1` 以 **UTF-8 with BOM** 保存，正文仅 ASCII，避免 Windows PowerShell 5.1 按系统代码页误解析中文/全角标点（ParserError）。5.1 也可直接运行。
+
+```powershell
+# 推荐：pwsh。默认与 deploy.sh 相同：up real pull
+pwsh -NoProfile -File .\deploy\deploy.ps1
+# 等价显式参数（-NoBuild 仍映射为 -Source pull）
+.\deploy\deploy.ps1 -Action up -Mode real -Source pull
+.\deploy\deploy.ps1 -Action up -Mode fake -Source pull
+.\deploy\deploy.ps1 -Action up -Mode real -Source build
+.\deploy\deploy.ps1 -Action pull -Mode real
+```
 
 real 模式使用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 写入共享资产只读卷，默认是
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
