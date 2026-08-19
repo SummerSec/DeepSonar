@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-08-19
+
 ### 修复
 
 - `db:rebuild` 回填后对全部 public 基表重置 serial/bigserial 与 IDENTITY 序列：空表下次 `nextval` 为 1，非空 `MAX=N` 则下次为 `N+1`，避免官方种子表或空 `events` 跳号后撞 `events_pkey`。
@@ -11,6 +13,15 @@
 - 新建任务「指定时间」改为日期 + 时刻选择器，触发器始终显示完整 `YYYY-MM-DD HH:mm`；未来时刻校验只在提交时进行，不再用轮询改 `min` 打断选择。
 - 角色绑定镜像下拉以完整产品名为触发器主文案，种类放次行；悬停与展开列表均可读 OpenHarmony Audit / Test / Fuzz。
 - 项目运行时镜像页与全局市场共用 `pull-status` 进度面板；启用返回 `202` 或 `409 busy` 时立刻展示当前拉取任务、来源、短 digest 与失败原因。
+- 任务工作台切到本次运行 / 发现 / 事实 / 报告后，过程画布不再盖住列表与报告正文。
+- 移除凭证层 `allowed_model_ids` 白名单，模型可用性只认 `settings_config`，避免 GLM / DeepSeek 任务被 Gateway 403。
+- Model Gateway 出站把 Claude CLI 别名 `fable` / `sonnet` / `opus` / `haiku` 改写成 Job 快照冻结的 `upstream_model`。
+- `image-admission` 在 Cosign 3 未配置 identity 时跳过非法 verify，合同扫描不再必然失败。
+
+### 部署 / 升级说明
+
+- 本版本不修改数据库 Schema。
+- 若升级前已经 `db:rebuild` 且出现 `events_pkey` 冲突，升级后再跑一次 `pnpm db:rebuild -- --apply`，或把 `events_id_seq` `setval` 到 `MAX(id)`。
 
 ## [0.1.39] - 2026-08-18
 
@@ -334,6 +345,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.40]: https://github.com/SummerSec/DeepSonar/compare/v0.1.39...v0.1.40
 [0.1.39]: https://github.com/SummerSec/DeepSonar/compare/v0.1.38...v0.1.39
 [0.1.38]: https://github.com/SummerSec/DeepSonar/compare/v0.1.37...v0.1.38
 [0.1.37]: https://github.com/SummerSec/DeepSonar/compare/v0.1.36...v0.1.37
