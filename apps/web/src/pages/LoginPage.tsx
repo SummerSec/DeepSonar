@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { DeepSonarMark } from "../components/DeepSonarMark";
 import { useAuth } from "../auth";
+import { isExplicitAuthDisabled } from "../auth-status";
 
 export function LoginPage() {
   const { loading, status, me, login, bootstrap, setToken, refresh } = useAuth();
@@ -29,8 +30,8 @@ export function LoginPage() {
     );
   }
 
-  // 未强制鉴权时无需登录
-  if (status && !status.auth_required) {
+  // 仅明确关闭鉴权时无需登录；status 未就绪或失败不按开发模式放行
+  if (isExplicitAuthDisabled(status)) {
     return <Navigate to="/" replace />;
   }
 

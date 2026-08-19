@@ -408,9 +408,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   border-radius: 10px;
   background: rgba(255, 255, 255, .03);
 }
-.rail-user.is-dev {
+.rail-user.is-dev,
+.rail-user.is-pending {
   justify-content: center;
   color: #5f6a70;
+  font-size: 10px;
+}
+.rail-user.is-error {
+  justify-content: center;
+  color: color-mix(in srgb, var(--red-bright) 72%, var(--text));
   font-size: 10px;
 }
 .rail-user-meta { min-width: 0; flex: 1; }
