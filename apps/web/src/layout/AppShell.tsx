@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { resolveRailAuthPresentation } from "../auth-status";
 import { DeepSonarMark } from "../components/DeepSonarMark";
 import { canAccessAnyScope } from "../permissions";
 import { formatHealthVersion } from "../product-version";
@@ -189,12 +190,17 @@ export function AppShell() {
 }
 
 function UserRailFooter({ collapsed }: { collapsed: boolean }) {
-  const { user, me, status, logout } = useAuth();
+  const { user, me, loading, status, statusError, logout } = useAuth();
   const navigate = useNavigate();
-  if (!status?.auth_required) {
+  const railAuth = resolveRailAuthPresentation({ loading, status, error: statusError });
+  if (railAuth.kind !== "session") {
     return (
-      <div className="rail-user is-dev" title="开发模式 · 鉴权关闭">
-        {!collapsed && <span>开发模式 · 鉴权关闭</span>}
+      <div
+        className={`rail-user ${railAuth.className}`}
+        title={railAuth.title}
+        role={railAuth.kind === "error" ? "alert" : undefined}
+      >
+        {!collapsed && <span>{railAuth.label}</span>}
         {collapsed && <span className="rail-user-dot" aria-hidden />}
         <button type="button" title="平台设置" className="rail-user-logout" onClick={() => navigate("/settings/access")}><Gear size={14} /></button>
       </div>
