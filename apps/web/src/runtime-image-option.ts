@@ -27,6 +27,24 @@ export function runtimeImageOptionLabel(
   return `${image.name} · ${runtimeImageKindHint(image, projectId)}`;
 }
 
+export function isRuntimeImagePinStale(
+  image: Pick<RuntimeImageSummary, "pin_stale" | "selected_version_id">,
+): boolean {
+  return Boolean(image.pin_stale && image.selected_version_id);
+}
+
+export function runtimeImagePinLabel(
+  image: Pick<RuntimeImageSummary, "selected_version_id" | "selected_version" | "latest_version" | "pin_stale">,
+): string {
+  if (!image.selected_version_id) return "自动（跟随最新 trusted）";
+  const pin = image.selected_version ?? "已选版本";
+  if (image.pin_stale) return `固定 ${pin} · 已过期`;
+  if (image.latest_version && image.selected_version && image.selected_version !== image.latest_version) {
+    return `固定 ${pin} · 最新 ${image.latest_version}`;
+  }
+  return `固定 ${pin}`;
+}
+
 export function runtimeImageSelectOption(
   image: Pick<RuntimeImageSummary, "name" | "image_key" | "official" | "project_opt_in" | "project_enabled">,
   projectId: string | null,

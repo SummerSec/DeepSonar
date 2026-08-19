@@ -326,6 +326,36 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                       {repair && (isExternalHref(repair.href)
                         ? <a href={repair.href} target="_blank" rel="noreferrer">{repair.target}<ArrowUpRight size={12} /></a>
                         : <Link to={repair.href}>{repair.target}<ArrowUpRight size={12} /></Link>)}
+                      {check.code === "RUNTIME_IMAGE_PIN_STALE"
+                        && readiness.scope.project_id
+                        && check.runtime_image?.runtime_image_id
+                        && check.runtime_image.latest_version_id && (
+                        <button
+                          type="button"
+                          className="intent-launch-pin-upgrade"
+                          disabled={busy}
+                          onClick={async () => {
+                            if (!readiness.scope.project_id || !check.runtime_image?.runtime_image_id || !check.runtime_image.latest_version_id) return;
+                            setBusy(true);
+                            try {
+                              await api.bindProjectRuntimeImage(
+                                readiness.scope.project_id,
+                                check.runtime_image.runtime_image_id,
+                                true,
+                                check.runtime_image.latest_version_id,
+                              );
+                              setReadiness(null);
+                              setOperationError(null);
+                            } catch (error) {
+                              setOperationError(error instanceof Error ? error.message : String(error));
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          升级 pin 到 {check.runtime_image.latest_version ?? "最新 trusted"}
+                        </button>
+                      )}
                     </span>
                   </li>
                 );
