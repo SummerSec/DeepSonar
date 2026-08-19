@@ -111,7 +111,7 @@ if (!testDatabaseUrl) {
         kind: "llm_provider",
         provider: "openai",
         secret,
-        metadata: { base_url: "https://provider.example/v1", allowed_model_ids: ["model-a"] },
+        metadata: { base_url: "https://provider.example/v1" },
       });
       assert.equal(created.statusCode, 201, created.payload);
       const credentialId = String(json(created).id);
@@ -198,7 +198,6 @@ if (!testDatabaseUrl) {
       const listed = json(list)[0] as Record<string, any>;
       assert.deepEqual(listed.public_metadata_json, {
         base_url: "https://provider.example/v1",
-        allowed_model_ids: ["model-a"],
       });
 
       const detail = await request("GET", `/credentials/${credentialId}`);
@@ -283,7 +282,6 @@ if (!testDatabaseUrl) {
       assert.equal(exportedCredentials.length, 1);
       assert.deepEqual(exportedCredentials[0]?.public_metadata, {
         base_url: "https://provider.example/v1",
-        allowed_model_ids: ["model-a"],
       });
       assertNoSecretMaterial([...pack.files.values()].map((value) => value.toString("utf8")).join("\n"));
 

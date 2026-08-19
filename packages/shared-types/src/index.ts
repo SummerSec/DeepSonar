@@ -533,7 +533,6 @@ export const ReadinessCredentialSummary = z.object({
   provider_valid: z.boolean(),
   project_id: z.string().uuid().nullable(),
   status: z.enum(["active", "disabled", "rotation_required"]),
-  allowed_model_count: z.number().int().nonnegative(),
 });
 export type ReadinessCredentialSummary = z.infer<typeof ReadinessCredentialSummary>;
 

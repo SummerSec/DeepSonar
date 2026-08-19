@@ -2,7 +2,7 @@
 """GW 工作包验收（§6.3）：Model Gateway + 短期 DEEPSONAR_JOB_TOKEN
 前置：调度器 3100 已应用 0016 迁移
 流程：mock 上游 → Credential(base_url=mock) → SQL 造 running job + job_token →
-      转发/认证注入/usage 计数/模型限制/额度/终态吊销 全链路断言
+      转发/认证注入/usage 计数/额度/终态吊销 全链路断言；模型可用性不再由 token 白名单拦截
 """
 import hashlib
 import json
@@ -92,20 +92,15 @@ def main():
          f"('{jid}', '{pid}', '{cid}', '{prefix}', '{th}', "
          f"'{{claude-test}}', 2, now() + interval '1 hour');")
 
-    # 4. 模型不在允许列表 → 403（不消耗请求数）
-    r = api("POST", "/gateway/v1/messages", {"model": "claude-evil"}, token=plaintext, expect=403)
-    assert r["error"]["type"] == "model_not_allowed"
-    print("模型限制 403 OK（不消耗额度）")
-
-    # 5. 正常转发：mock 收到注入的真实认证头；usage 计数
-    r = api("POST", "/gateway/v1/messages", {"model": "claude-test", "max_tokens": 1}, token=plaintext)
+    # 4. leftover token allowed_models 不再拦截请求模型（#215）
+    r = api("POST", "/gateway/v1/messages", {"model": "claude-evil", "max_tokens": 1}, token=plaintext)
     assert r["usage"]["input_tokens"] == 10
     assert captured["x-api-key"] == "sk-mock-secret", captured
     assert captured["authorization"] == "Bearer sk-mock-secret"
     assert captured["path"] == "/v1/messages"
     row = psql(f"SELECT used_requests, used_tokens FROM job_tokens WHERE token_prefix='{prefix}';")
     assert row == "1|15", row
-    print("转发 OK：认证头注入正确，used_requests=1 used_tokens=15")
+    print("转发 OK：残留 allowed_models 不拦截，认证头注入正确，used_requests=1 used_tokens=15")
 
     # 6. 第二次可用；第三次 429 额度用尽
     api("POST", "/gateway/v1/messages", {"model": "claude-test"}, token=plaintext)
@@ -127,10 +122,10 @@ def main():
     api("POST", "/gateway/v1/messages", {"model": "x"}, token="not-a-token", expect=401)
     print("非法 token 401 OK")
 
-    # 9. 审计：gateway.denied（model_not_allowed / job_inactive）已落行
+    # 9. 审计：gateway.denied（job_inactive）已落行
     n = psql("SELECT count(*) FROM audit_logs WHERE action IN ('gateway.denied') "
              f"AND resource_id IN (SELECT id::text FROM job_tokens WHERE token_prefix='{prefix}');")
-    assert int(n) >= 2, n
+    assert int(n) >= 1, n
     print("网关审计 OK:", n, "行")
 
     # 清理

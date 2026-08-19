@@ -62,7 +62,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
         provider: "anthropic",
         project_id: null,
         status: "active",
-        public_metadata_json: { allowed_model_ids: ["claude-sonnet-4-5"] },
+        public_metadata_json: {},
       },
       {
         role_config_id: workerConfigId,
@@ -73,7 +73,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
         provider: "anthropic",
         project_id: projectId,
         status: "active",
-        public_metadata_json: { allowed_model_ids: ["claude-sonnet-4-5"] },
+        public_metadata_json: {},
       },
     ],
     runtimeImages: [
@@ -185,7 +185,7 @@ test("readiness follows strategy and ignores legacy project image column", () =>
 });
 
 
-test("real preflight resolves an allowlisted model from Credential settings when RoleConfig model is null", () => {
+test("real preflight resolves a model from Credential settings when RoleConfig model is null", () => {
   const input = baseInput({
     roles: baseInput().roles.map((role) => ({
       ...role,
@@ -200,7 +200,7 @@ test("real preflight resolves an allowlisted model from Credential settings when
   });
   const result = evaluateReadiness(input);
   assert.equal(result.ready, true);
-  assert.equal(result.checks.some((check) => check.code === "MODEL_REQUIRED_BY_ALLOWLIST"), false);
+  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_CLI_INCOMPATIBLE"), false);
 });
 
 test("readiness repair metadata covers disabled runtime images", () => {
@@ -225,7 +225,7 @@ test("real preflight accepts a bare immutable digest from the runtime resolver",
   assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_DIGEST_INVALID"), false);
 });
 
-test("real preflight fails closed for CLI/provider/model and untrusted image mismatches", () => {
+test("real preflight fails closed for CLI/provider and untrusted image mismatches", () => {
   const input = baseInput({
     roles: baseInput().roles.map((role) => role.name === "audit"
       ? { ...role, project_agent_cli: "claude-code", project_model: "claude-opus-4-1" }
@@ -238,7 +238,6 @@ test("real preflight fails closed for CLI/provider/model and untrusted image mis
   const result = evaluateReadiness(input);
   assert.equal(result.ready, false);
   assert.ok(result.checks.some((check) => check.code === "CREDENTIAL_CLI_INCOMPATIBLE"));
-  assert.ok(result.checks.some((check) => check.code === "MODEL_NOT_ALLOWED"));
   assert.ok(result.checks.some((check) => check.code === "RUNTIME_IMAGE_NOT_TRUSTED"));
 });
 
@@ -420,8 +419,6 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, provider: "openai" } : credential) }),
     baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, status: "disabled" } : credential) }),
     baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, kind: "plane" } : credential) }),
-    baseInput({ roles: baseInput().roles.map((role) => role.name === "audit" ? { ...role, project_model: "" } : role) }),
-    baseInput({ roles: baseInput().roles.map((role) => role.name === "audit" ? { ...role, project_model: "not-allowed" } : role) }),
     baseInput({ audits: baseInput().audits?.map((audit) => audit.action === "credential.test" ? { ...audit, result: "error" } : audit) }),
     baseInput({ audits: baseInput().audits?.map((audit) => audit.action === "credential.models_discover" ? { ...audit, result: "error" } : audit) }),
     baseInput({ audits: baseInput().audits?.filter((audit) => audit.action !== "credential.models_discover") }),
@@ -477,8 +474,6 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     CREDENTIAL_TEST_FAILED: "credentials",
     CREDENTIAL_TEST_FAILED_FAKE: "credentials",
     CREDENTIAL_TEST_EVIDENCE_STALE: "credentials",
-    MODEL_REQUIRED_BY_ALLOWLIST: "role_config",
-    MODEL_NOT_ALLOWED: "role_config",
     MODEL_DISCOVERY_FAILED: "credentials",
     MODEL_DISCOVERY_EVIDENCE_MISSING: "credentials",
     MODEL_DISCOVERY_EVIDENCE_STALE: "credentials",
@@ -526,8 +521,6 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     "CREDENTIAL_TEST_FAILED",
     "CREDENTIAL_TEST_FAILED_FAKE",
     "CREDENTIAL_TEST_EVIDENCE_STALE",
-    "MODEL_REQUIRED_BY_ALLOWLIST",
-    "MODEL_NOT_ALLOWED",
     "MODEL_DISCOVERY_FAILED",
     "MODEL_DISCOVERY_EVIDENCE_MISSING",
     "MODEL_DISCOVERY_EVIDENCE_STALE",

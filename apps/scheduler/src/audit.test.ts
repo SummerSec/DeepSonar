@@ -21,8 +21,6 @@ test("Credential metadata audit summary excludes arbitrary sensitive values", ()
   assert.match(String(summary.metadata_shape_sha256), /^[0-9a-f]{64}$/);
   assert.equal(summary.metadata_key_count, 8);
   assert.equal(summary.base_url_present, true);
-  assert.equal(summary.allowed_model_ids_present, true);
-  assert.equal(summary.allowed_model_count, 1);
   assert.equal(summary.model_concurrency_present, true);
   assert.equal(summary.model_concurrency_count, 1);
   assert.equal(summary.max_concurrent_present, true);
@@ -48,7 +46,6 @@ test("credential.update audit state keeps useful identity and metadata change ev
   assert.equal(before.project_id, "project-before");
   const beforeMetadata = before.metadata as Record<string, unknown>;
   assert.equal(beforeMetadata.metadata_key_count, 2);
-  assert.equal(beforeMetadata.allowed_model_count, 1);
   assert.equal(after.name, "primary-renamed");
   assert.equal(after.project_id, "project-after");
   const afterMetadata = after.metadata as Record<string, unknown>;

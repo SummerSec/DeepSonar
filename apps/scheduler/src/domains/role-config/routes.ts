@@ -4,7 +4,7 @@ import { PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPl
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
-import { allowedModelIds, projectCredentialProvider, validateCredentialCompatibility } from "../../credentials.js";
+import { projectCredentialProvider, validateCredentialCompatibility } from "../../credentials.js";
 import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
@@ -19,7 +19,7 @@ import {
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
-import { parseContextWindowTokens, resolveEffectiveModel } from "../../provider-settings.js";
+import { parseContextWindowTokens } from "../../provider-settings.js";
 import { parseSandboxLimitsOverride } from "../role-runtime-snapshot/sandbox-limits.js";
 const RoleBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
@@ -128,20 +128,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         if (compatibilityError) return compatibilityError;
         if (cred.agent_cli && cred.agent_cli !== body.agent_cli) {
           return `Credential ${c.credential_id} 的配置文件属于 ${cred.agent_cli}，不能绑定到 ${body.agent_cli} 角色`;
-        }
-      }
-      if (c.purpose === "llm") {
-        const effectiveModel = resolveEffectiveModel({
-          roleModel: body.model,
-          agentCli: body.agent_cli,
-          settingsConfig: cred.settings_config_json,
-        });
-        const allowed = allowedModelIds(cred.public_metadata_json);
-        if (allowed.length > 0 && !effectiveModel) {
-          return `Credential ${c.credential_id} 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖`;
-        }
-        if (effectiveModel && allowed.length > 0 && !allowed.includes(effectiveModel)) {
-          return `模型 ${effectiveModel} 不在 Credential ${c.credential_id} 的 allowed_model_ids 白名单`;
         }
       }
     }

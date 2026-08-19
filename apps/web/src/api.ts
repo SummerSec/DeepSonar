@@ -2299,7 +2299,6 @@ export const api = {
       model: string | null;
       upstream_model: string | null;
       model_source: "role_override" | "credential_settings" | "none";
-      allowed_model_ids: string[];
       compatible: boolean;
       error: string | null;
     }>(`/credentials/${id}/compatibility?${query.toString()}`);

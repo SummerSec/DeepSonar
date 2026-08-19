@@ -14,7 +14,6 @@ import { z } from "zod";
 import { audit, credentialAuditState } from "../../audit.js";
 import { config } from "../../config.js";
 import {
-  allowedModelIds,
   normalizeModelCatalog,
   encryptSecret,
   fingerprintOf,
@@ -599,15 +598,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId}: ${error instanceof Error ? error.message : String(error)}`, body.credential_id, "choose_model", configId);
         }
         providerSnapshotByConfig.set(configId, providerSnapshot);
-        const modelForGate = providerSnapshot.upstream_model;
-        const allowed = allowedModelIds(target.public_metadata_json);
-        // Only enforce explicit allowlist. Catalog is not a bind gate.
-        if (allowed.length > 0 && !modelForGate) {
-          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId}: Credential 配置文件未声明模型且 RoleConfig 未提供覆盖`, body.credential_id, "choose_model", configId);
-        }
-        if (allowed.length > 0 && modelForGate && !allowed.includes(modelForGate)) {
-          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId} model ${modelForGate} is not in the credential allowlist`, body.credential_id, "choose_model", configId);
-        }
       }
 
       const refreshedPending: string[] = [];
@@ -1369,7 +1359,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       credential_id: id,
       ...providerProjection,
       models: normalizeModelCatalog(cred.model_catalog_json),
-      allowed_model_ids: allowedModelIds(projectCredentialMetadata("llm_provider", String(cred.provider), cred.public_metadata_json)),
       fetched_at: cred.model_catalog_fetched_at ?? null,
     };
   });
@@ -1408,14 +1397,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       agentCli,
       settingsConfig: cred.settings_config_json,
     });
-    const metadata = projectCredentialMetadata(String(cred.kind), String(cred.provider), cred.public_metadata_json);
     const compatibilityError = validateCredentialCompatibility(agentCli, String(cred.provider));
-    const allowed = allowedModelIds(metadata);
-    const modelError = model && allowed.length > 0 && !allowed.includes(model)
-      ? `模型 ${model} 不在 Credential allowed_model_ids 白名单`
-      : !model && allowed.length > 0
-        ? "Credential 已启用模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖"
-        : null;
     const profileCliError = cred.agent_cli && cred.agent_cli !== agentCli
       ? `Credential 配置文件属于 ${cred.agent_cli}，不能绑定到 ${agentCli}`
       : null;
@@ -1425,10 +1407,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       agent_cli: agentCli,
       model: requestedModel,
       upstream_model: model,
-      allowed_model_ids: allowed,
       model_source: query.model ? "role_override" : model ? "credential_settings" : "none",
-      compatible: !compatibilityError && !profileCliError && !modelError,
-      error: compatibilityError ?? profileCliError ?? modelError,
+      compatible: !compatibilityError && !profileCliError,
+      error: compatibilityError ?? profileCliError,
     };
   });
 

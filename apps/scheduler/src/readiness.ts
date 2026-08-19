@@ -11,8 +11,7 @@ import {
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
-import { allowedModelIds, isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
-import { resolveEffectiveModel } from "./provider-effective-model.js";
+import { isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
 import { getAgentCliRuntimeAdapter, REQUIRED_RUNTIME_CAPABILITIES } from "@deepsonar/runtime-sandbox";
 import {
   defaultRuntimeImageKey,
@@ -153,7 +152,6 @@ function credentialSummary(row: ReadinessCredentialRow): ReadinessCredentialSumm
     ...providerProjection,
     project_id: row.project_id,
     status: row.status,
-    allowed_model_count: allowedModelIds(row.public_metadata_json).length,
   };
 }
 
@@ -359,8 +357,6 @@ const ROLE_CONFIG_FIX_CODES = new Set([
   "CREDENTIAL_SCOPE_MISMATCH",
   "CREDENTIAL_CLI_INCOMPATIBLE",
   "CREDENTIAL_KIND_INCOMPATIBLE",
-  "MODEL_REQUIRED_BY_ALLOWLIST",
-  "MODEL_NOT_ALLOWED",
 ]);
 
 const CREDENTIAL_FIX_CODES = new Set([
@@ -576,17 +572,6 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
           roleConfigFix(input.scope),
           { role: summary, credential: credentialRef },
         ));
-      }
-      const allowed = allowedModelIds(binding.public_metadata_json);
-      const model = resolveEffectiveModel({
-        roleModel: role.model,
-        agentCli: role.agentCli ?? "claude-code",
-        settingsConfig: binding.settings_config_json,
-      });
-      if (allowed.length > 0 && !model) {
-        checks.push(fail("MODEL_REQUIRED_BY_ALLOWLIST", `${role.name} 的 Credential 有模型白名单，但配置文件未声明模型且 RoleConfig 未提供覆盖。`, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
-      } else if (model && allowed.length > 0 && !allowed.includes(model)) {
-        checks.push(fail("MODEL_NOT_ALLOWED", `模型 ${model} 不在 ${role.name} Credential 的允许列表中。`, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
       }
       const latestTest = latestAudit(audits, binding.credential_id, "credential.test");
       const latestModels = latestAudit(audits, binding.credential_id, "credential.models_discover");
