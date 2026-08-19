@@ -75,7 +75,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
       {children}
       {pending && createPortal(
         <div
-          className="theme-overlay fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-[3px]"
+          className="theme-overlay fixed inset-0 z-[90] grid place-items-center p-4 backdrop-blur-[3px]"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) finish(false);
           }}

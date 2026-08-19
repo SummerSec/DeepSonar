@@ -266,7 +266,7 @@ export function StreamView({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索文本 / 思考 / 工具…"
-          className="min-h-8 min-w-[8rem] flex-1 rounded-lg bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700"
+          className="theme-input-surface min-h-8 min-w-[8rem] flex-1 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 ring-1 placeholder:text-zinc-700"
         />
         {(kind !== "all" || query) && (
           <button
@@ -312,7 +312,7 @@ export function StreamView({
         {visible.map((b) => {
           if (b.kind === "text") {
             return b.reasoning ? (
-              <div key={b.key} className="mb-2 rounded-md border border-white/[.05] bg-black/10">
+              <div key={b.key} className="theme-surface mb-2 rounded-md border">
                 <button
                   type="button"
                   aria-expanded={!collapsedReasoning.has(b.key)}

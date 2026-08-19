@@ -38,6 +38,7 @@ import {
 } from "./CredentialConfigEditor";
 import { formatJsonObject } from "./json-text";
 import { SearchableSelect } from "./SearchableSelect";
+import { runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
 import { showToast } from "./toast";
 import { useConfirmDialog } from "./components/ConfirmDialog";
@@ -508,24 +509,6 @@ export function ProviderAccountFlow({
         if (aBase !== bBase) return aBase - bBase;
         return a.name.localeCompare(b.name, "zh");
       });
-  };
-
-  const runtimeImageOptionLabel = (image: RuntimeImageSummary, projectId: string | null): string => {
-    const kind =
-      image.image_key === "deepsonar-base"
-        ? "底座"
-        : image.official
-          ? image.project_opt_in
-            ? "专项·项目启用"
-            : "专项"
-          : "第三方";
-    const needsProject =
-      image.official && image.project_opt_in && projectId && image.project_enabled !== true
-        ? " · 未在项目启用"
-        : image.official && image.project_opt_in && !projectId
-          ? " · 运行前需项目启用"
-          : "";
-    return `${image.name} · ${kind}${needsProject}`;
   };
 
   useEffect(() => {
@@ -1559,16 +1542,15 @@ export function ProviderAccountFlow({
                             }}
                             options={[
                               { value: "", label: "系统底座（默认）", disabled: busy || !roleConfig.can_bind },
-                              ...runtimeImageOptionsFor(roleConfig.project_id).map((image) => ({
-                                value: image.image_key,
-                                label: runtimeImageOptionLabel(image, roleConfig.project_id),
-                                disabled: busy || !roleConfig.can_bind,
-                              })),
+                              ...runtimeImageOptionsFor(roleConfig.project_id).map((image) => (
+                                runtimeImageSelectOption(image, roleConfig.project_id, busy || !roleConfig.can_bind)
+                              )),
                               ...(roleConfig.runtime_image_key
                                 && !runtimeImageOptionsFor(roleConfig.project_id).some((image) => image.image_key === roleConfig.runtime_image_key)
                                 ? [{
                                     value: roleConfig.runtime_image_key,
-                                    label: `${roleConfig.runtime_image_key}（当前 · 需检查启用）`,
+                                    label: roleConfig.runtime_image_key,
+                                    hint: "当前 · 需检查启用",
                                     disabled: busy || !roleConfig.can_bind,
                                   }]
                                 : []),

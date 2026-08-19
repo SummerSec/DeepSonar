@@ -79,7 +79,7 @@ export function LoginPage() {
             尚无用户。创建首位管理员账号后即可登录控制台。
           </p>
         )}
-        <div className="mb-4 flex gap-1 rounded-full bg-black/20 p-1">
+        <div className="theme-surface mb-4 flex gap-1 rounded-full p-1">
           {(status?.bootstrap_available
             ? (["bootstrap", "token"] as const)
             : (["login", "token"] as const)
@@ -89,7 +89,7 @@ export function LoginPage() {
               type="button"
               onClick={() => setMode(m)}
               className={`flex-1 rounded-full py-1.5 text-[11px] transition-colors ${
-                mode === m ? "bg-white/[.08] text-zinc-100" : "text-zinc-600 hover:text-zinc-300"
+                mode === m ? "theme-chip text-zinc-100" : "text-zinc-600 hover:text-zinc-300"
               }`}
             >
               {m === "login" ? "账号登录" : m === "bootstrap" ? "创建管理员" : "API Token"}

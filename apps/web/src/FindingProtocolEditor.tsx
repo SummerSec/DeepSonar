@@ -76,7 +76,7 @@ export function FindingProtocolEditor({
               <strong>Agent 自选</strong>：Agent 在允许列表内自由选择。
             </HelpTip>
           </div>
-          <div className="grid grid-cols-3 gap-1 rounded-md bg-black/20 p-1 ring-1 ring-white/[.06]">
+          <div className="theme-surface grid grid-cols-3 gap-1 rounded-md p-1 ring-1">
             {(["hybrid", "fixed", "agent_choice"] as const).map((next) => {
               const meta = MODE_META[next];
               const active = mode === next;

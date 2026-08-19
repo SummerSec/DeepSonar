@@ -2,11 +2,13 @@ import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight,
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type FindingSummary, type Project } from "../api";
+import { DatetimeLocalPicker } from "../DatetimeLocalPicker";
 import { FindingProtocolEditor } from "../FindingProtocolEditor";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
+import { nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
 import { composeRetryErrorMessage, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
 import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatElapsed, formatTime, relativeTime } from "../ui";
 
@@ -45,66 +47,6 @@ function formatBeijingTime(iso: string | null | undefined): string | null {
   } catch {
     return iso;
   }
-}
-
-/** datetime-local value (YYYY-MM-DDTHH:mm) in the user's local wall clock. */
-function toDatetimeLocalValue(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/** Next 08:00 Asia/Shanghai as a local datetime-local string for the picker. */
-function nextBeijing8amLocalValue(from: Date = new Date()): string {
-  // Asia/Shanghai is fixed UTC+8; 08:00 Beijing = 00:00 UTC same calendar day.
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  const parts = Object.fromEntries(
-    fmt.formatToParts(from).filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
-  ) as Record<string, string>;
-  let y = Number(parts.year);
-  let m = Number(parts.month);
-  let d = Number(parts.day);
-  const hour = Number(parts.hour);
-  const minute = Number(parts.minute);
-  const second = Number(parts.second);
-  if (hour > 8 || (hour === 8 && (minute > 0 || second > 0))) {
-    const pivot = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-    pivot.setUTCDate(pivot.getUTCDate() + 1);
-    const next = Object.fromEntries(
-      fmt.formatToParts(pivot).filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
-    ) as Record<string, string>;
-    y = Number(next.year);
-    m = Number(next.month);
-    d = Number(next.day);
-  }
-  const utc = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)); // 08:00 Beijing
-  return toDatetimeLocalValue(utc);
-}
-
-function parseDatetimeLocalToIso(value: string): string | null {
-  if (!value.trim()) return null;
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) return null;
-  return new Date(ms).toISOString();
-}
-
-/** Past wall-clock times cannot schedule a future wake; surface before submit. */
-function scheduleTimeIssue(localValue: string, nowMs = Date.now()): string | null {
-  if (!localValue.trim()) return "请选择开始时间";
-  const iso = parseDatetimeLocalToIso(localValue);
-  if (!iso) return "开始时间格式无效";
-  if (Date.parse(iso) <= nowMs) {
-    return "开始时间不能是过去的时间。历史时刻不会触发调度，请改选未来时间，或改用「立即开始」。";
-  }
-  return null;
 }
 
 function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | null }) {
@@ -293,7 +235,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           </fieldset>
 
           {form.kind === "compose" && (
-            <section className="rounded-lg border border-white/[.07] bg-black/15 p-4" aria-labelledby="compose-seeds-heading">
+            <section className="theme-surface rounded-lg border p-4" aria-labelledby="compose-seeds-heading">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 id="compose-seeds-heading" className="text-[13px] font-medium text-zinc-200">代入 Finding</h3>
@@ -440,18 +382,11 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
               <div className="mt-3 space-y-3 border-t border-white/[.05] pt-3">
                 <label className="block">
                   <span className={labelCls}>开始时刻（本机时区）</span>
-                  <input
-                    type="datetime-local"
+                  <DatetimeLocalPicker
                     value={form.startAtLocal}
-                    min={toDatetimeLocalValue(new Date(clock))}
-                    onChange={(e) => setForm({ ...form, startAtLocal: e.target.value })}
-                    aria-invalid={Boolean(scheduleIssue)}
-                    aria-describedby={scheduleIssue ? "task-schedule-error" : "task-schedule-hint"}
-                    className={`${inputCls} [color-scheme:dark] ${
-                      scheduleIssue
-                        ? "border-red-500/45 focus:border-red-400/60"
-                        : ""
-                    }`}
+                    onChange={(next) => setForm({ ...form, startAtLocal: next })}
+                    invalid={Boolean(scheduleIssue)}
+                    describedBy={scheduleIssue ? "task-schedule-error" : "task-schedule-hint"}
                     required
                   />
                 </label>
@@ -679,7 +614,7 @@ export function TasksPage() {
                         {canvas.title}
                       </Link>
                       <div className="mt-1 flex items-center gap-2">
-                        <span className="rounded border border-white/[.07] bg-black/15 px-1.5 py-0.5 font-mono text-[9px] text-zinc-500" title={`完整任务编号：${canvas.id}`}>
+                        <span className="theme-chip rounded border px-1.5 py-0.5 font-mono text-[9px] text-zinc-500" title={`完整任务编号：${canvas.id}`}>
                           编号 · {canvas.id.slice(0, 8)}
                         </span>
                       </div>

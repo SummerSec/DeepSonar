@@ -1133,7 +1133,7 @@ export function CanvasView({
             <span className="hidden font-mono text-[10px] text-zinc-500 sm:inline">
               {traceIds.nodeIds.size} 节点 · {traceIds.edgeIds.size} 边
             </span>
-            <div className="ml-auto inline-flex rounded-lg bg-black/25 p-0.5 ring-1 ring-white/[.07]">
+            <div className="ml-auto inline-flex rounded-lg theme-surface p-0.5 ring-1">
               <button
                 type="button"
                 onClick={() => setTraceMode("dim")}
@@ -1242,7 +1242,7 @@ export function CanvasView({
             </div>
 
             {/* 深度：可手动输入上限（默认 3）；全开 / 隐藏；单节点展开在卡片上操作 */}
-            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-black/20 px-3 py-2.5 ring-1 ring-white/[.05]">
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl theme-surface px-3 py-2.5 ring-1">
               <TreeStructure size={14} className="shrink-0 text-acc-400" />
               <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500">
                 深度 ≤
@@ -1270,7 +1270,7 @@ export function CanvasView({
                       return Math.max(1, Math.min(graphMaxDepth, Math.trunc(d)));
                     });
                   }}
-                  className="h-7 w-12 rounded-md bg-black/40 px-1.5 text-center font-mono text-[12px] tabular-nums text-zinc-200 ring-1 ring-white/[.1] outline-none focus:ring-acc-400/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  className="theme-input-surface h-7 w-12 rounded-md px-1.5 text-center font-mono text-[12px] tabular-nums text-zinc-200 ring-1 outline-none focus:ring-acc-400/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
                 <span className="tabular-nums text-zinc-600">/ {graphMaxDepth}</span>
               </label>
@@ -1316,7 +1316,7 @@ export function CanvasView({
                 onChange={setKindFilter}
                 options={Object.entries(SEMANTIC_STYLE).map(([value, meta]) => ({ value, label: meta.label }))}
                 placeholder="全部类型"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
               <SearchableMultiSelect
                 label="Severity"
@@ -1325,7 +1325,7 @@ export function CanvasView({
                 onChange={setSeverityFilter}
                 options={["critical", "high", "medium", "low"].map((value) => ({ value, label: value }))}
                 placeholder="全部级别"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
               <SearchableMultiSelect
                 label="角色"
@@ -1334,7 +1334,7 @@ export function CanvasView({
                 onChange={setRoleFilter}
                 options={roleOptions.map((value) => ({ value, label: value }))}
                 placeholder="全部角色"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
               <SearchableMultiSelect
                 label="状态"
@@ -1343,7 +1343,7 @@ export function CanvasView({
                 onChange={setStatusFilter}
                 options={statusOptions.map((value) => ({ value, label: value }))}
                 placeholder="全部状态"
-                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-black/30 [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-white/[.08]"
+                className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600 [&>button]:min-h-10 [&>button]:w-full [&>button]:rounded-lg [&>button]:bg-[var(--surface-tint)] [&>button]:px-3 [&>button]:py-2 [&>button]:text-[12px] [&>button]:normal-case [&>button]:text-zinc-300 [&>button]:ring-1 [&>button]:ring-[var(--line)]"
               />
               <label className="flex min-w-0 flex-col gap-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-600">
                 搜索
@@ -1352,7 +1352,7 @@ export function CanvasView({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="标题 / 角色 / 内容"
-                  className="min-h-10 rounded-lg bg-black/30 px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 ring-white/[.08] placeholder:text-zinc-700"
+                  className="theme-input-surface min-h-10 rounded-lg px-3 py-2 text-[12px] normal-case text-zinc-300 ring-1 placeholder:text-zinc-700"
                 />
               </label>
             </div>
