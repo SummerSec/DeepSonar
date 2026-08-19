@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import { sql } from "./db.js";
-import { allowedModelIds, projectCredentialProvider } from "./credentials.js";
+import { projectCredentialProvider } from "./credentials.js";
 
 export interface AuditEntry {
   action: string;
@@ -52,7 +52,6 @@ export function summarizeCredentialMetadata(input: unknown): Record<string, unkn
   const metadataSha256 = createHash("sha256")
     .update(JSON.stringify(canonicalizeMetadata(record)), "utf8")
     .digest("hex");
-  const allowed = allowedModelIds(record);
   const rawConcurrency = record.model_concurrency;
   const modelConcurrencyCount = rawConcurrency && typeof rawConcurrency === "object" && !Array.isArray(rawConcurrency)
     ? Object.keys(rawConcurrency).length
@@ -61,8 +60,6 @@ export function summarizeCredentialMetadata(input: unknown): Record<string, unkn
     metadata_key_count: allKeys.length,
     metadata_shape_sha256: metadataSha256,
     base_url_present: Object.prototype.hasOwnProperty.call(record, "base_url"),
-    allowed_model_ids_present: Object.prototype.hasOwnProperty.call(record, "allowed_model_ids"),
-    allowed_model_count: allowed.length,
     model_concurrency_present: Object.prototype.hasOwnProperty.call(record, "model_concurrency"),
     model_concurrency_count: modelConcurrencyCount,
     max_concurrent_present: Object.prototype.hasOwnProperty.call(record, "max_concurrent"),

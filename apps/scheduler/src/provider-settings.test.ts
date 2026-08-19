@@ -278,19 +278,11 @@ test("job token allowlist includes Claude alias and resolved fable model", () =>
   );
   assert.deepEqual(
     jobGatewayAllowedModels({
-      roleModel: "fable",
-      settingsConfig: settings,
-      credentialAllowedModels: ["grok-4.6"],
+      roleModel: "GLM-5.2[1M]",
+      upstreamModel: "GLM-5.2",
+      settingsConfig: { env: { ANTHROPIC_MODEL: "GLM-5.2[1M]" } },
     }),
-    ["fable", "grok-4.6"],
-  );
-  assert.deepEqual(
-    jobGatewayAllowedModels({
-      roleModel: "fable",
-      settingsConfig: settings,
-      credentialAllowedModels: ["composer-2.5"],
-    }),
-    [],
+    ["GLM-5.2[1M]", "GLM-5.2"],
   );
 });
 

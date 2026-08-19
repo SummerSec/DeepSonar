@@ -143,7 +143,7 @@ test("model concurrency uses upstream model while preserving the CLI selector", 
         credential_id: "credential-1",
         model: "fable",
         upstream_model: "grok-4.5",
-        credential_metadata: { allowed_model_ids: ["grok-4.5"], model_concurrency: { "grok-4.5": 1 } },
+        credential_metadata: { model_concurrency: { "grok-4.5": 1 } },
       },
       counts,
       {

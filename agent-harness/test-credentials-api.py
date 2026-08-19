@@ -74,15 +74,17 @@ def main():
     req("PATCH", f"/credentials/{cid}", {"provider": "openai"}, expect=400)
     print("claude-code provider 兼容性拒绝 OK")
 
-    # 5.1 运行语义更新：不能用模型白名单破坏未选模型的绑定；普通 metadata 更新需审计
-    req("PATCH", f"/credentials/{cid}", {
-        "metadata": {"allowed_model_ids": ["claude-sonnet-4-5"]},
-    }, expect=400)
+    # 5.1 leftover allowed_model_ids 静默忽略；普通 metadata 更新需审计
+    ignored = req("PATCH", f"/credentials/{cid}", {
+        "metadata": {"allowed_model_ids": ["claude-sonnet-4-5"], "base_url": "https://api.anthropic.com/v1/"},
+    })
+    assert "allowed_model_ids" not in ignored["public_metadata_json"]
     updated = req("PATCH", f"/credentials/{cid}", {
         "name": f"anthropic-updated-{tag}",
         "metadata": {"base_url": "https://api.anthropic.com/v1/"},
     })
     assert updated["public_metadata_json"]["base_url"] == "https://api.anthropic.com/v1"
+    assert "allowed_model_ids" not in updated["public_metadata_json"]
     assert updated["impact"]["role_config_count"] == 1
     logs = req("GET", "/audit-logs?action=credential.update&limit=20")
     assert any(log.get("resource_id") == cid for log in logs), "Credential 更新必须写审计日志"
