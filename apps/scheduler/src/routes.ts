@@ -7,6 +7,7 @@ import { registerApiTokenRoutes } from "./domains/api-token/routes.js";
 import { registerAuditRoutes } from "./domains/audit/routes.js";
 import { registerAuthRoutes } from "./domains/auth/routes.js";
 import { registerCanvasRoutes } from "./domains/canvas/routes.js";
+import { registerDashboardRoutes } from "./domains/dashboard/routes.js";
 import { registerCredentialRoutes } from "./domains/credential/routes.js";
 import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
 import { registerJobControlRoutes } from "./domains/job-control/routes.js";
@@ -156,6 +157,7 @@ export function registerRoutes(app: FastifyInstance) {
   registerStreamRoutes(app);
 
   registerProjectTaskRoutes(app);
+  registerDashboardRoutes(app);
   registerSkillSourceRoutes(app);
   registerRuntimeImageRoutes(app);
 

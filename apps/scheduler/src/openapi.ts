@@ -406,6 +406,110 @@ const OPS: Op[] = [
     },
   },
 
+  // dashboard
+  {
+    method: "get",
+    path: "/dashboard/overview",
+    summary: "态势运营总览聚合",
+    description:
+      "P0 运营看板只读聚合：项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。列表上限不足以做总量时不要前端全量拉取。项目级 token 只看到本项目。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": {
+        description: "运营总览",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["generated_at", "calendar_timezone", "totals", "distributions", "periods", "trend_7d", "active_projects", "recent_activity"],
+              properties: {
+                generated_at: { type: "string", format: "date-time" },
+                calendar_timezone: { type: "string", enum: ["Asia/Shanghai"] },
+                totals: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["projects", "tasks", "jobs", "findings"],
+                  properties: {
+                    projects: { type: "integer", minimum: 0 },
+                    tasks: { type: "integer", minimum: 0 },
+                    jobs: { type: "integer", minimum: 0 },
+                    findings: { type: "integer", minimum: 0 },
+                  },
+                },
+                distributions: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["projects", "tasks", "jobs", "findings"],
+                  properties: {
+                    projects: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                    tasks: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                    jobs: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                    findings: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                  },
+                },
+                periods: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["today", "last_7d"],
+                  properties: {
+                    today: { $ref: "#/components/schemas/DashboardPeriodCounts" },
+                    last_7d: { $ref: "#/components/schemas/DashboardPeriodCounts" },
+                  },
+                },
+                trend_7d: {
+                  type: "array",
+                  items: {
+                    allOf: [
+                      { $ref: "#/components/schemas/DashboardPeriodCounts" },
+                      { type: "object", required: ["date"], properties: { date: { type: "string", format: "date" } } },
+                    ],
+                  },
+                },
+                active_projects: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "name", "status", "active_jobs", "task_count", "finding_count", "last_activity_at"],
+                    properties: {
+                      id: { type: "string", format: "uuid" },
+                      name: { type: "string" },
+                      status: { type: "string", enum: ["active", "archived"] },
+                      active_jobs: { type: "integer", minimum: 0 },
+                      task_count: { type: "integer", minimum: 0 },
+                      finding_count: { type: "integer", minimum: 0 },
+                      last_activity_at: { type: "string", format: "date-time", nullable: true },
+                    },
+                  },
+                },
+                recent_activity: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "kind", "title", "at", "project_id", "project_name", "canvas_id"],
+                    properties: {
+                      id: { type: "string" },
+                      kind: { type: "string", enum: ["task", "job", "finding"] },
+                      title: { type: "string" },
+                      at: { type: "string", format: "date-time" },
+                      project_id: { type: "string", format: "uuid" },
+                      project_name: { type: "string" },
+                      canvas_id: { type: "string", nullable: true },
+                      status: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+
   // projects
   { method: "get", path: "/projects", summary: "项目列表", scope: "projects:read", tags: ["Projects"] },
   {
@@ -1938,6 +2042,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     tags: [
       { name: "Meta" },
       { name: "Auth" },
+      { name: "Dashboard" },
       { name: "Projects" },
       { name: "Tasks" },
       { name: "Jobs" },
@@ -1973,6 +2078,25 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       },
       schemas: {
         Error: ErrorSchema,
+        DashboardStatusBucket: {
+          type: "object",
+          additionalProperties: false,
+          required: ["key", "count"],
+          properties: {
+            key: { type: "string" },
+            count: { type: "integer", minimum: 0 },
+          },
+        },
+        DashboardPeriodCounts: {
+          type: "object",
+          additionalProperties: false,
+          required: ["new_tasks", "completed_tasks", "new_findings"],
+          properties: {
+            new_tasks: { type: "integer", minimum: 0 },
+            completed_tasks: { type: "integer", minimum: 0 },
+            new_findings: { type: "integer", minimum: 0 },
+          },
+        },
         RuntimeRegistryChannelError: RuntimeRegistryChannelErrorSchema,
         CredentialImpact: {
           type: "object",
