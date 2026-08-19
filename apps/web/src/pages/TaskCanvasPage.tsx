@@ -36,6 +36,7 @@ import { factPageFilterKey, readFactPageFilters, updateFactPageQuery, type FactF
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
+import { taskWorkbenchCanvasLayerClass, taskWorkbenchListPaneClass } from "../task-workbench-layers";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
@@ -1000,7 +1001,7 @@ export function TaskCanvasPage() {
 
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
         <div
-          className={`absolute inset-0 flex min-h-0 flex-col ${tab === "canvas" ? "" : "invisible pointer-events-none"}`}
+          className={taskWorkbenchCanvasLayerClass(tab === "canvas")}
           aria-hidden={tab !== "canvas"}
         >
           {humanInterventions.length > 0 && (
@@ -1029,6 +1030,7 @@ export function TaskCanvasPage() {
           <div className="min-h-0 flex-1">
             <CanvasView
               canvasId={canvasId}
+              active={tab === "canvas"}
               onData={onCanvasData}
               trace={findingTrace}
               focusNodeId={focusNode}
@@ -1045,10 +1047,14 @@ export function TaskCanvasPage() {
           </div>
         </div>
 
-        {tab === "report" && <ReportPanel canvasId={canvasId} />}
+        {tab === "report" && (
+          <div className={`${taskWorkbenchListPaneClass()} min-h-0 overflow-hidden`}>
+            <ReportPanel canvasId={canvasId} />
+          </div>
+        )}
 
         {tab === "facts" && (
-          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className={`${taskWorkbenchListPaneClass()} overflow-y-auto p-4 sm:p-6`}>
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
               <SearchableMultiSelect label="验证状态" value={factFilters.verification_status} onChange={(values) => setFactQuery("verification_status", values)} placeholder="全部状态" options={["unverified", "verifying", "verified", "rejected", "needs_human"].map((value) => ({ value, label: value }))} />
               <SearchableMultiSelect label="证据类型" value={factFilters.evidence_kind} onChange={(values) => setFactQuery("evidence_kind", values)} placeholder="全部类型" options={[{ value: "review", label: "独立复核" }, { value: "test", label: "运行测试" }]} />
@@ -1122,7 +1128,7 @@ export function TaskCanvasPage() {
         )}
 
         {tab === "findings" && (
-          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className={`${taskWorkbenchListPaneClass()} overflow-y-auto p-4 sm:p-6`}>
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
               <p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p>
               <div className="flex flex-wrap gap-2">
@@ -1218,7 +1224,7 @@ export function TaskCanvasPage() {
         )}
 
         {tab === "jobs" && (
-          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className={`${taskWorkbenchListPaneClass()} overflow-y-auto p-4 sm:p-6`}>
             <div className="mb-4 flex flex-col gap-3 rounded-2xl bg-white/[.018] p-3 ring-1 ring-white/[.045] sm:flex-row sm:flex-wrap sm:items-end">
               <SearchableMultiSelect value={jobStatusFilters} onChange={setJobStatusFilters} placeholder="全部状态" options={Array.from(new Set(jobs.map((job) => job.status))).sort().map((value) => ({ value, label: value }))} label="状态" />
               <SearchableMultiSelect value={jobRoleTypeFilters} onChange={setJobRoleTypeFilters} placeholder="全部角色 / 类型" options={jobRoleTypeOptions.map((value) => ({ value, label: value }))} label="角色 / Job 类型" />
