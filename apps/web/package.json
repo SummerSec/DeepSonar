@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
-    "test:quick-start": "tsx --test src/dashboard-quick-start.test.ts",
+    "test:quick-start": "tsx --test src/dashboard-quick-start.test.ts src/dashboard-overview.test.ts",
     "test:lifecycle": "tsx --test src/task-lifecycle.test.ts && tsx ../../agent-harness/test-task-lifecycle.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "preview": "vite preview"

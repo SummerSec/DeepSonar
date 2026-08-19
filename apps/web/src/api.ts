@@ -18,6 +18,67 @@ export type { EffectiveFindingProtocol, FindingProtocolConfig } from "@deepsonar
 
 export type TaskKind = "standard" | "compose";
 
+export interface DashboardStatusBucket {
+  key: string;
+  count: number;
+}
+
+export interface DashboardPeriodCounts {
+  new_tasks: number;
+  completed_tasks: number;
+  new_findings: number;
+}
+
+export interface DashboardTrendDay extends DashboardPeriodCounts {
+  date: string;
+}
+
+export interface DashboardActiveProject {
+  id: string;
+  name: string;
+  status: "active" | "archived";
+  active_jobs: number;
+  task_count: number;
+  finding_count: number;
+  last_activity_at: string | null;
+}
+
+export interface DashboardActivityItem {
+  id: string;
+  kind: "task" | "job" | "finding";
+  title: string;
+  at: string;
+  project_id: string;
+  project_name: string;
+  canvas_id: string | null;
+  status?: string;
+}
+
+/** `GET /dashboard/overview` — P0 运营总览聚合，不受 Job/Finding 列表窗口截断。 */
+export interface DashboardOverview {
+  generated_at: string;
+  calendar_timezone: string;
+  totals: {
+    projects: number;
+    tasks: number;
+    jobs: number;
+    findings: number;
+  };
+  distributions: {
+    projects: DashboardStatusBucket[];
+    tasks: DashboardStatusBucket[];
+    jobs: DashboardStatusBucket[];
+    findings: DashboardStatusBucket[];
+  };
+  periods: {
+    today: DashboardPeriodCounts;
+    last_7d: DashboardPeriodCounts;
+  };
+  trend_7d: DashboardTrendDay[];
+  active_projects: DashboardActiveProject[];
+  recent_activity: DashboardActivityItem[];
+}
+
 export interface Project {
   id: string;
   /** 可空：NULL = 纯本地项目（Plane 为可选绑定） */
@@ -1661,6 +1722,7 @@ function unwrapPage<T>(payload: T[] | PageEnvelope<T>): T[] {
 }
 
 export const api = {
+  dashboardOverview: () => get<DashboardOverview>("/dashboard/overview"),
   projects: () => get<Project[]>("/projects"),
   createProject: (p: { name: string; description?: string; plane_project_id?: string | null; image_strategy?: ProjectImageStrategy }) =>
     send<Project>("POST", "/projects", p),

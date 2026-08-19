@@ -123,6 +123,7 @@ test("top-level routes module remains a hook and registrar composition root", ()
   assert.doesNotMatch(source, /\bapp\.(?:delete|get|head|options|patch|post|put|route)\s*\(/);
   for (const registrar of [
     "registerProjectTaskRoutes",
+    "registerDashboardRoutes",
     "registerJobControlRoutes",
     "registerFindingVerificationRoutes",
     "registerRoleConfigRoutes",
