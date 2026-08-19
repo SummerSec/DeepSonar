@@ -4,7 +4,15 @@ import Fastify from "fastify";
 import { registerSystemRoutes } from "./domains/system/routes.js";
 import { activateRuntimeImageConfiguration } from "./runtime-image-config-activation.js";
 import { createRuntimeImageWarmupCoordinator, DISPATCHER_DISABLED_LOG_AFTER } from "./runtime-image-warmup.js";
-import { defaultRuntimeImageKey, isStartupRequiredRuntimeImage, requestRuntimeImagePreparation, resolveStartupRuntimeImages } from "./runtime-images.js";
+import {
+  defaultRuntimeImageKey,
+  isStartupRequiredRuntimeImage,
+  requestRuntimeImagePreparation,
+  resolveStartupRuntimeImages,
+  RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
+  RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
+  withSharedAssetsHelperRef,
+} from "./runtime-images.js";
 import type { sql } from "./db.js";
 import { classifyDispatcherFailure } from "./dispatcher.js";
 import { RuntimeImageNotReadyError } from "./runtime-images.js";
@@ -287,4 +295,73 @@ test("Dispatcher classifies missing local images with a stable metric and persis
   const result = classifyDispatcherFailure(new RuntimeImageNotReadyError("registry.invalid/base@sha256:deadbeef"));
   assert.equal(result.reason, "runtime_image_not_ready");
   assert.match(result.message, /^runtime_image_not_ready:/);
+});
+
+test("/health.runtime_images.error 区分通道超时兜底与 digest not found", async () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const app = Fastify();
+  registerSystemRoutes(app, {
+    runtimeImageStatus: () => ({
+      status: "failed",
+      ready: false,
+      attempt: 2,
+      required: 3,
+      error: `冻结 runtime image 拉取失败（${digest}）：${RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR}: timeout awaiting response headers`,
+      retry_at: null,
+    }),
+    dispatcherStatus: () => ({ enabled: false, started_at: null }),
+  });
+  const timeoutHealth = await app.inject({ method: "GET", url: "/health" });
+  assert.match(timeoutHealth.json().runtime_images.error, /channel timed out, same-digest fallback attempted/);
+  assert.doesNotMatch(timeoutHealth.json().runtime_images.error, /digest not found/);
+  await app.close();
+
+  const missing = Fastify();
+  registerSystemRoutes(missing, {
+    runtimeImageStatus: () => ({
+      status: "failed",
+      ready: false,
+      attempt: 2,
+      required: 3,
+      error: `冻结 runtime image 拉取失败（${digest}）：${RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR}: manifest unknown`,
+      retry_at: null,
+    }),
+    dispatcherStatus: () => ({ enabled: false, started_at: null }),
+  });
+  const missingHealth = await missing.inject({ method: "GET", url: "/health" });
+  assert.match(missingHealth.json().runtime_images.error, /digest not found/);
+  assert.doesNotMatch(missingHealth.json().runtime_images.error, /same-digest fallback attempted/);
+  await missing.close();
+});
+
+test("startup warmup 解析结果包含共享资产 helper", async () => {
+  const helper = `docker.io/library/busybox@sha256:${"e".repeat(64)}`;
+  const snapshots = await resolveStartupRuntimeImages({} as typeof sql, "aliyun-acr", {
+    listRoles: async () => [
+      { name: "explore", runtime_image_key: null },
+      { name: "audit", runtime_image_key: "deepsonar-audit" },
+      { name: "test", runtime_image_key: "deepsonar-kali-minimal" },
+    ],
+    lookupImage: async () => officialMeta(false),
+    resolve: async (_db, _projectId, roleName, configuredKey) => {
+      const key = configuredKey ?? defaultRuntimeImageKey(roleName);
+      const digestChar = key === "deepsonar-base" ? "a" : key === "deepsonar-audit" ? "b" : "c";
+      return {
+        runtime_image_id: key,
+        runtime_image_version_id: key,
+        image_key: key,
+        image_ref: `registry.invalid/${key}@sha256:${digestChar.repeat(64)}`,
+        image_digest: `sha256:${digestChar.repeat(64)}`,
+        tools_manifest_sha256: null,
+        admission_scan_id: null,
+        contract_version: "v1",
+        source_kind: "official",
+        trust_status: "trusted",
+      };
+    },
+  });
+  const refs = withSharedAssetsHelperRef(snapshots, helper);
+  assert.equal(refs.at(-1)?.image_key, "shared-assets-helper");
+  assert.equal(refs.at(-1)?.image_ref, helper);
+  assert.equal(new Set(refs.map((item) => item.image_ref)).size, 4);
 });

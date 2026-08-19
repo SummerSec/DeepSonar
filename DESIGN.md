@@ -297,6 +297,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | Agent CLI Session 时间线归一化 | #160 | **已完成**（Issue 起因是 Claude）：`queue-operation enqueue` 中带平台前缀的画布增量显示为广播，消费/移除记录不产生噪声；`user` 包装的纯 `tool_result` 不再虚增用户消息，assistant 的 thinking/text/tool_use 按原始块顺序展示且 usage 只累计一次；当前五类治理 CLI 各自解析归档格式，广播仅在归档持久化时展示。 |
 | Compose 任务 | 当前主路径 | **已落地**：同项目 confirmed Finding 作为 1–8 条冻结只读种子；Graph 隐藏项目 Finding UUID，重试前重新校验并 fail closed，Task Report 分离种子背景与本次产出。见 §6.1。 |
 | s33 启动门禁 / Attempt outcome / 网关预热 | — | **已修复**：startup warmup 不再把 `project_opt_in` 镜像当作 dispatcher 前置（官方 Base/Audit/Kali 仍 fail-closed）；`/health` 暴露 dispatcher+warmup，连续失败打 error 级「dispatcher disabled」；`mark_job_done` 按 8192 UTF-8 字节收口，Attempt outcome 只存 summary hash/bytes；managed gateway 在 real boot 预热，Created leftover 超时必清，`docker run` 使用独立超时；skill-source boot sync 有显式超时且不阻塞 listen。 |
+| aliyun-acr warmup OSS 超时与 helper | #228 | **已完成**：startup inspect 以冻结 digest / image Id 为就绪条件，不要求 RepoDigests 等于当前通道仓库名；选定通道 `docker pull` 因 timeout/EOF/OSS `httpReadSeeker` 失败时，对清单已核实的同 digest 其它通道（dockerhub/github）重试一次，不改 `runtime_registry_channel`、不改写历史 Job 快照；`/health.runtime_images.error` 区分「channel timed out, same-digest fallback attempted」与「digest not found」；默认 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 纳入 startup warmup，fake 仍不使用 helper。Job 执行期仍只 inspect，不隐式 pull。 |
+| 凭据删除不受可恢复 Job 永久锁死 | #234 | **已完成**：`DELETE /credentials/:id` 只拦 `pending_unclaimed` 与 `active_frozen`（claimed/provisioning/running/waiting_human）。`failed/timeout/orphan` 与 `succeeded/cancelled` 一样：影响投影照列，确认框可提示删除后不能按原快照 resume，但不 409。删除仍与 resume 串行加锁，不自动恢复、不改写冻结快照。 |
 
 ## 12. 仓库地图
 

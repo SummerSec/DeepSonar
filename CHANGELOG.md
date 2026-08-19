@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 删除 Provider 账号不再被 `failed` / `timeout` / `orphan` 的可恢复 Job 永久拦住；仅待领取与运行中/冻结 Job 返回 409。
+
 ## [0.1.40] - 2026-08-19
 
 ### 修复

@@ -1671,7 +1671,7 @@ const OPS: Op[] = [
     method: "delete",
     path: "/credentials/{id}",
     summary: "删除已保存的 Provider 账号",
-    description: "有 pending/active/可恢复 Job 时返回 409 CREDENTIAL_IN_USE。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。仍绑定 RoleConfig 时需 ?unbind=true，并递增受影响 RoleConfig 的 version。吊销并删除 job_tokens；不改写历史 Job 快照。响应与审计不含密文；项目凭据审计保留 project_id。",
+    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。仍绑定 RoleConfig 时需 ?unbind=true，并递增受影响 RoleConfig 的 version。吊销并删除 job_tokens；不改写历史 Job 快照。响应与审计不含密文；项目凭据审计保留 project_id。",
     scope: "agents:write",
     tags: ["Credentials"],
     query: {
@@ -1696,7 +1696,7 @@ const OPS: Op[] = [
         },
       },
       "409": {
-        description: "仍被 RoleConfig 绑定、pending/active/可恢复 Job 或活动镜像准入扫描引用",
+        description: "仍被 RoleConfig 绑定、pending/active Job 或活动镜像准入扫描引用",
         content: {
           "application/json": {
             schema: {
@@ -1996,7 +1996,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                 recoverable: {
                   allOf: [
                     { $ref: "#/components/schemas/CredentialImpactJobBucket" },
-                    { description: "failed / timeout / orphan；可被 /jobs/:id/resume 或 resume-session 原地恢复为 pending" },
+                    { description: "failed / timeout / orphan；可被 /jobs/:id/resume 或 resume-session 原地恢复为 pending；不阻挡删除，删除后不能再按原快照 resume" },
                   ],
                 },
                 terminal_historical: {
