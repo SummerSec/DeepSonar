@@ -7,6 +7,9 @@
 ### 修复
 
 - `inherit_global`（缺省 / 脏 `image_strategy`）下新 Job 不再被遗留项目 RoleConfig.model 覆盖；快照 `model` / `upstream_model` / 默认 CLI 跟全局 RoleConfig + 账号主模型。批量绑定仍可不改写行上模型，但 impact 与 Provider 流程标明这些值在 inherit 下不生效。
+- 过程画布默认能看清拓扑连线（含亮色主题）；深度或筛选藏边时提示「已隐藏 N 条边」。
+- 桌面端筛选坞默认展开，亮色主题下「筛选节点」入口对比度可读。
+- 广播账本在 0 条时仍显示「广播账本 · 0 条」空态，不再整块卸载。
 - 删除 Provider 账号不再被 `failed` / `timeout` / `orphan` 的可恢复 Job 永久拦住；仅待领取与运行中/冻结 Job 返回 409。
 
 ## [0.1.40] - 2026-08-19
