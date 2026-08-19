@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 发布说明
+    url: https://github.com/SummerSec/DeepSonar/releases
+    about: 先核对当前版本和已修复项，避免重复开 issue。
