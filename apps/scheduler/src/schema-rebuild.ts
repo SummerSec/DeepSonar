@@ -83,6 +83,31 @@ export function quoteIdent(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
+export function quoteSqlLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/** information_schema shape used to decide which columns own a sequence. */
+export type SequenceColumnMeta = {
+  isIdentity: string;
+  columnDefault: string | null;
+};
+
+/** IDENTITY 与 serial/bigserial（column_default = nextval(...)）都要在回填后 setval。 */
+export function isOwnedSequenceColumn(column: SequenceColumnMeta): boolean {
+  if (column.isIdentity === "YES") return true;
+  return /^\s*nextval\s*\(/i.test(column.columnDefault ?? "");
+}
+
+export function ownedSequenceResetSql(table: string, column: string): string {
+  const sequence = `pg_get_serial_sequence(${quoteSqlLiteral(`public.${table}`)}, ${quoteSqlLiteral(column)})`;
+  return (
+    `SELECT setval(${sequence}, ` +
+    `GREATEST(COALESCE((SELECT MAX(${quoteIdent(column)}) FROM public.${quoteIdent(table)}), 1), 1), ` +
+    `true)`
+  );
+}
+
 export function intersectColumns(source: Iterable<string>, target: Iterable<string>): string[] {
   const targetSet = new Set(target);
   return [...source].filter((column) => targetSet.has(column)).sort((left, right) => left.localeCompare(right));
@@ -291,19 +316,19 @@ async function readForeignKeys(db: MigrationConnection, schema: string): Promise
   }));
 }
 
-async function resetIdentitySequences(db: MigrationConnection, tables: string[]): Promise<void> {
+async function resetOwnedSequences(db: MigrationConnection, tables: string[]): Promise<void> {
   for (const table of tables) {
-    const columns = await db<{ column_name: string }>`
-      SELECT column_name
+    const columns = await db<{ column_name: string; is_identity: string; column_default: string | null }>`
+      SELECT column_name, is_identity, column_default
       FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = ${table} AND is_identity = 'YES'
+      WHERE table_schema = 'public' AND table_name = ${table}
     `;
     for (const column of columns) {
-      await db.unsafe(
-        `SELECT setval(pg_get_serial_sequence('public.${table.replaceAll("'", "''")}', '${column.column_name.replaceAll("'", "''")}'), ` +
-          `COALESCE((SELECT MAX(${quoteIdent(column.column_name)}) FROM public.${quoteIdent(table)}), 1), ` +
-          `true)`,
-      );
+      if (!isOwnedSequenceColumn({
+        isIdentity: column.is_identity,
+        columnDefault: column.column_default,
+      })) continue;
+      await db.unsafe(ownedSequenceResetSql(table, column.column_name));
     }
   }
 }
@@ -536,7 +561,7 @@ export async function rebuildSchemaToLatest(
   }
 
   await ensureOfficialSeeds(db, schemaSql);
-  await resetIdentitySequences(db, copiedTables);
+  await resetOwnedSequences(db, copiedTables);
   await runMigrations(db, { schemaFile, targetVersion });
 
   if (!options.keepStaging) {

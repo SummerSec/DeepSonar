@@ -5,7 +5,9 @@ import {
   buildCopyInsertSql,
   CATALOG_TABLES,
   intersectColumns,
+  isOwnedSequenceColumn,
   officialCatalogBackfillSql,
+  ownedSequenceResetSql,
   roleConfigBackfillSql,
   roleConfigModuleBackfillSql,
   topologicalCopyOrder,
@@ -70,4 +72,107 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
   );
   assert.equal(manifest.has("schema_meta"), true);
   assert.equal(SCHEMA_VERSION, 35);
+});
+
+/** 基线 CREATE TABLE 里声明了 serial / IDENTITY 的列（information_schema 投影）。 */
+function ownedSequenceDeclarations(schemaSql: string): Array<{
+  table: string;
+  column: string;
+  kind: "serial" | "identity";
+}> {
+  const found: Array<{ table: string; column: string; kind: "serial" | "identity" }> = [];
+  const tableRe = /CREATE TABLE (\w+)\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = tableRe.exec(schemaSql))) {
+    const table = match[1] ?? "";
+    const open = match.index + match[0].length - 1;
+    let depth = 0;
+    let close = -1;
+    for (let i = open; i < schemaSql.length; i += 1) {
+      const ch = schemaSql[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          close = i;
+          break;
+        }
+      }
+    }
+    if (close < 0) continue;
+    for (const raw of schemaSql.slice(open + 1, close).split("\n")) {
+      const line = raw.replace(/--.*$/, "").trim().replace(/,$/, "");
+      if (!line || /^(CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN)\b/i.test(line)) continue;
+      const col = /^(\w+)\s+(.+)$/.exec(line);
+      if (!col) continue;
+      const column = col[1] ?? "";
+      const rest = col[2] ?? "";
+      if (/\bGENERATED\s+(?:ALWAYS|BY DEFAULT)\s+AS\s+IDENTITY\b/i.test(rest)) {
+        found.push({ table, column, kind: "identity" });
+      } else if (/\b(?:BIGSERIAL|SMALLSERIAL|SERIAL)\b/i.test(rest)) {
+        found.push({ table, column, kind: "serial" });
+      }
+    }
+  }
+  return found;
+}
+
+function catalogForDeclaration(table: string, column: string, kind: "serial" | "identity") {
+  return kind === "identity"
+    ? { isIdentity: "YES", columnDefault: null }
+    : { isIdentity: "NO", columnDefault: `nextval('${table}_${column}_seq'::regclass)` };
+}
+
+test("owned sequence reset includes bigserial nextval defaults and IDENTITY", () => {
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "NO",
+      columnDefault: "nextval('events_id_seq'::regclass)",
+    }),
+    true,
+  );
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "YES",
+      columnDefault: null,
+    }),
+    true,
+  );
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "NO",
+      columnDefault: null,
+    }),
+    false,
+  );
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "NO",
+      columnDefault: "now()",
+    }),
+    false,
+  );
+  const sql = ownedSequenceResetSql("events", "id");
+  assert.match(sql, /pg_get_serial_sequence\('public\.events', 'id'\)/);
+  assert.match(sql, /GREATEST\(COALESCE\(\(SELECT MAX\("id"\) FROM public\."events"\), 1\), 1\)/);
+  assert.match(sql, /setval\(/);
+});
+
+test("schema baseline serial and IDENTITY primary keys are all in the rebuild reset set", async () => {
+  const body = await readFile(SCHEMA_FILE, "utf8");
+  const declared = ownedSequenceDeclarations(body);
+  assert.deepEqual(
+    declared,
+    [
+      { table: "events", column: "id", kind: "serial" },
+      { table: "audit_logs", column: "id", kind: "identity" },
+    ],
+  );
+  for (const item of declared) {
+    assert.equal(
+      isOwnedSequenceColumn(catalogForDeclaration(item.table, item.column, item.kind)),
+      true,
+      `${item.table}.${item.column} (${item.kind}) must be reset after rebuild`,
+    );
+  }
 });

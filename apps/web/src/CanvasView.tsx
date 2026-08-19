@@ -53,6 +53,7 @@ import {
   shouldRecoverViewport,
 } from "./canvas-viewport";
 import { findingTraceIds, traceDisplayIds, type TraceFocusMode } from "./finding-trace-focus";
+import { shouldRenderCanvasOverlays } from "./task-workbench-layers";
 
 /** 边类型只控制线型/流速；颜色始终取源节点最终展示色。 */
 export { EDGE_STYLE } from "./edge-style";
@@ -370,6 +371,7 @@ function Legend() {
 
 export function CanvasView({
   canvasId,
+  active = true,
   onData,
   trace,
   focusNodeId,
@@ -379,6 +381,8 @@ export function CanvasView({
   onExitTrace,
 }: {
   canvasId: string;
+  /** 非过程画布 Tab 时停渲染 Job/节点抽屉，避免盖住列表（#219）。 */
+  active?: boolean;
   onData?: (data: CanvasData) => void;
   trace?: FindingTrace | null;
   focusNodeId?: string | null;
@@ -431,6 +435,13 @@ export function CanvasView({
     nodeRequestRef.current += 1;
     setSelected(null);
   }, []);
+
+  useEffect(() => {
+    if (!active) {
+      clearSelected();
+      setComposerOpen(false);
+    }
+  }, [active, clearSelected]);
 
   useEffect(() => {
     if (!selected) return;
@@ -1406,7 +1417,7 @@ export function CanvasView({
         - fact/finding/root/note/human/report：优先看节点 body（description/summary 等）
         - intent/job（含 hub、verify）：与「运行」页同一套 Job 过程详情
       */}
-      {selected &&
+      {shouldRenderCanvasOverlays(active) && selected &&
         (selected.job_id && ["intent", "job"].includes(selected.node_type) ? (
           <JobDetailPanel
             jobId={selected.job_id}
@@ -1429,7 +1440,7 @@ export function CanvasView({
             broadcastItems={broadcasts.sourceItems.get(selected.id) ?? []}
           />
         ))}
-      {composerOpen && (
+      {shouldRenderCanvasOverlays(active) && composerOpen && (
         <HumanMessageComposer
           canvasId={canvasId}
           projectId={data.canvas?.project_id ?? null}

@@ -26,6 +26,6 @@ test("canvas utilities default collapsed and expose accessible toggles", () => {
 
 test("task workbench keeps the process canvas mounted when switching tabs", () => {
   const page = readFileSync(new URL("./pages/TaskCanvasPage.tsx", import.meta.url), "utf8");
-  assert.match(page, /tab === "canvas" \? "" : "invisible pointer-events-none"/);
+  assert.match(page, /taskWorkbenchCanvasLayerClass\(tab === "canvas"\)/);
   assert.doesNotMatch(page, /tab === "canvas" \? "flex flex-col" : "hidden"/);
 });
