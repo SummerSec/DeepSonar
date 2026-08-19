@@ -43,6 +43,7 @@ GET /credentials/:id/compatibility
 GET /credentials/:id/impact
 GET /credentials/:id/models
 GET /credentials/providers
+GET /dashboard/overview
 GET /exports/:id
 GET /exports/:id/download
 GET /findings
@@ -219,6 +220,7 @@ GET /credentials/{id}/compatibility
 GET /credentials/{id}/impact
 GET /credentials/{id}/models
 GET /credentials/providers
+GET /dashboard/overview
 GET /findings
 GET /canvases/{id}/messages
 GET /findings/{id}
