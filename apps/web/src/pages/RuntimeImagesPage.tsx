@@ -94,7 +94,7 @@ function localCheckStyle(value: boolean | null | undefined): string {
     ? "text-emerald-300 bg-emerald-400/[.08] ring-emerald-400/20"
     : value === false
       ? "text-red-300 bg-red-400/[.08] ring-red-400/20"
-      : "text-zinc-400 bg-white/[.04] ring-white/[.08]";
+      : "theme-chip ring-1 ring-[var(--line)]";
 }
 
 function registrySourceLabel(registry: RuntimeImageRegistry): string {
@@ -204,8 +204,8 @@ function LocalCandidatePanel({
         </div>
       </dl>
       {candidate.reasons.length > 0 && (
-        <div className="theme-surface mt-3 rounded-lg px-3 py-2">
-          <div className="font-mono text-[9px] tracking-[.12em] text-zinc-600">CHECK REASONS</div>
+        <div className="theme-input-surface mt-3 rounded-lg px-3 py-2">
+          <div className="theme-muted font-mono text-[9px] tracking-[.12em]">CHECK REASONS</div>
           <ul className="mt-1 space-y-1 text-[11px] leading-5 text-zinc-400">
             {candidate.reasons.map((reason, index) => <li key={`${index}:${reason}`}>· {reason}</li>)}
           </ul>
@@ -224,7 +224,7 @@ function LocalCandidatePanel({
           {busy ? "授权中…" : "授权采用此候选"}
         </button>
         {!canAdopt && <span className="text-[11px] text-amber-300/80">当前账号无 images:approve；请让管理员复核并授权。</span>}
-        {canAdopt && !candidate.adoptable && <span className="text-[11px] text-zinc-600">仅 adoptable 候选可授权，检测本身不会改变信任状态。</span>}
+        {canAdopt && !candidate.adoptable && <span className="theme-muted text-[11px]">仅 adoptable 候选可授权，检测本身不会改变信任状态。</span>}
       </div>
     </div>
   );
@@ -367,6 +367,16 @@ export function RuntimeImagesPage() {
     const timer = setInterval(() => void reload(), 5_000);
     return () => clearInterval(timer);
   }, [projectId, search, selected?.image.id]);
+  useEffect(() => {
+    if (!selected) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector('[role="alertdialog"]')) return;
+      setSelected(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selected]);
 
   const open = async (id: string) => {
     setBusy(id);
@@ -960,7 +970,7 @@ export function RuntimeImagesPage() {
                     isSystemBaseRuntime(image)
                       ? "bg-sky-400/[.1] text-sky-300 ring-sky-400/25"
                       : image.official
-                        ? "bg-white/[.035] text-acc-300 ring-white/[.06]"
+                        ? "theme-chip text-acc-300 ring-1 ring-[var(--line)]"
                         : "bg-amber-400/[.08] text-amber-300 ring-amber-400/20"
                   }`}>
                     <Cube size={20} weight="light" />
@@ -999,7 +1009,7 @@ export function RuntimeImagesPage() {
                   </div>
                 </div>
                 <p className="mt-3 min-h-8 line-clamp-2 text-[11px] leading-4 text-zinc-500">{image.description || "暂无描述"}</p>
-                <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 border-y border-white/[.045] py-2 text-[10px] sm:grid-cols-3">
+                <div className="theme-divider mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 border-y py-2 text-[10px] sm:grid-cols-3">
                   <div className="flex min-w-0 items-baseline gap-1">
                     <span className="shrink-0 font-mono text-zinc-700">AUTHOR</span>
                     <strong className="min-w-0 truncate font-normal text-zinc-400">{image.publisher}</strong>
@@ -1075,7 +1085,7 @@ export function RuntimeImagesPage() {
                         <span className="font-mono text-[9px] tracking-[.14em] text-acc-300">LOCAL IMAGE GATE</span>
                         <h3 className="mt-1 text-sm font-medium text-zinc-100">只检测，不自动信任</h3>
                       </div>
-                      <span className="rounded-full bg-white/[.04] px-2 py-1 font-mono text-[9px] text-zinc-500">transport ≠ trust</span>
+                      <span className="theme-chip theme-muted rounded-full px-2 py-1 font-mono text-[9px]">transport ≠ trust</span>
                     </div>
                     <p className="mt-2 text-[11px] leading-5 text-zinc-500">
                       先在本机 docker pull / build / load，再输入本地 tag 或引用。服务端会重新读取 image ID、RepoDigest、契约和产品匹配；只有候选明确可采用时，管理员才可二次确认授权。
@@ -1117,7 +1127,7 @@ export function RuntimeImagesPage() {
           <div className="flex flex-col gap-6">
             {sections.map((section) => (
               <section key={section.key} className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-end justify-between gap-2 border-b border-white/[.06] pb-2">
+                <div className="theme-divider flex flex-wrap items-end justify-between gap-2 border-b pb-2">
                   <div>
                     <h3 className={`font-mono text-[11px] font-semibold tracking-[.08em] ${
                       section.tone === "base" ? "text-sky-300" : section.tone === "specialty" ? "text-acc-300" : "text-amber-300"
@@ -1142,37 +1152,38 @@ export function RuntimeImagesPage() {
           className="theme-overlay fixed inset-0 z-40 flex justify-end backdrop-blur-[2px]"
           role="dialog"
           aria-modal="true"
-          aria-label="镜像详情"
+          aria-label={`${selected.image.name} 运行证据`}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setSelected(null);
           }}
         >
-          <aside className="theme-drawer flex h-full min-h-0 min-w-0 w-full max-w-[620px] flex-col overflow-x-hidden overflow-y-auto overscroll-contain border-l p-4 sm:p-6">
-            <div className="flex min-w-0 items-start gap-3">
+          <aside className="theme-drawer flex h-full min-h-0 min-w-0 w-full max-w-[620px] flex-col overflow-hidden border-l">
+            <header className="theme-drawer-header theme-divider flex shrink-0 items-start gap-3 border-b px-4 py-4 sm:px-6">
               <div className="min-w-0 flex-1">
                 <span className="font-mono text-[9px] tracking-[.16em] text-acc-300">RUNTIME EVIDENCE</span>
-                <h2 className="mt-2 break-words text-xl text-zinc-100">{selected.image.name}</h2>
-                <p className="mt-1 break-all font-mono text-[10px] text-zinc-600">{selected.image.image_key}</p>
+                <h2 className="mt-2 break-words text-xl">{selected.image.name}</h2>
+                <p className="theme-muted mt-1 break-all font-mono text-[10px]">{selected.image.image_key}</p>
               </div>
               <button className="secondary-button shrink-0" onClick={() => setSelected(null)}>
                 关闭
               </button>
-            </div>
+            </header>
+            <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-4 sm:p-6">
 
             {/* 官方无版本：登记 digest（这才是「让 Kali 可选」的入口，不是第三方批准） */}
             {!projectId && selected.image.official && (
-              <section className="mt-6 rounded-2xl border border-acc-400/20 bg-acc-400/[.05] p-4">
+              <section className="rounded-2xl border border-acc-400/20 bg-acc-400/[.05] p-4">
                 <div className="flex items-center gap-2">
                   <SealCheck size={16} className="text-acc-300" />
-                  <strong className="text-[13px] font-medium text-zinc-100">登记官方 digest</strong>
+                  <strong className="text-[13px] font-medium">登记官方 digest</strong>
                 </div>
-                <p className="mt-2 break-words text-[12px] leading-5 text-zinc-500">
-                  官方镜像<strong className="text-zinc-400">不会出现「导入 → 扫描 → 批准」按钮</strong>：catalog 只是占位。
-                  需要配置 <code className="text-zinc-400">DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:…</code> 并重启，或在此粘贴不可变引用直接登记为
+                <p className="theme-muted mt-2 break-words text-[12px] leading-5">
+                  官方镜像<strong>不会出现「导入 → 扫描 → 批准」按钮</strong>：catalog 只是占位。
+                  需要配置 <code>DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:…</code> 并重启，或在此粘贴不可变引用直接登记为
                   trusted。可移动 tag 会被拒绝。
                 </p>
                 <label className="mt-3 block">
-                  <span className="mb-1 block font-mono text-[10px] uppercase tracking-[.12em] text-zinc-600">
+                  <span className="theme-muted mb-1 block font-mono text-[10px] uppercase tracking-[.12em]">
                     image_ref（必须含 @sha256:）
                   </span>
                   <input
@@ -1184,7 +1195,7 @@ export function RuntimeImagesPage() {
                   />
                 </label>
                 <label className="mt-2 block">
-                  <span className="mb-1 block font-mono text-[10px] uppercase tracking-[.12em] text-zinc-600">
+                  <span className="theme-muted mb-1 block font-mono text-[10px] uppercase tracking-[.12em]">
                     版本名（可选）
                   </span>
                   <input
@@ -1204,7 +1215,7 @@ export function RuntimeImagesPage() {
             </section>
             )}
 
-            <div className="mt-6 min-w-0 space-y-4">
+            <div className="mt-4 min-w-0 space-y-4">
               {selected.versions.some((version) => version.trust_status === "trusted") && selected.versions.some((version) => version.trust_status === "disabled") && (
                 <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/[.04] px-3 py-2 text-[11px] leading-5 text-zinc-400">
                   <span className="text-emerald-300">可信版本优先：</span>disabled 版本的扫描/停用诊断仍保留在下方，不会遮蔽当前可用的 trusted 版本。
@@ -1213,7 +1224,7 @@ export function RuntimeImagesPage() {
               {projectId && selected.versions.some((v) => v.trust_status === "trusted") && (
                 <div className="rounded-xl border border-acc-400/20 bg-acc-400/[.05] p-3">
                   <div className="font-mono text-[9px] tracking-[.14em] text-acc-300">PIN PLATFORM VERSION</div>
-                  <p className="mt-1 text-[11px] leading-5 text-zinc-500">
+                  <p className="theme-muted mt-1 text-[11px] leading-5">
                     为项目固定某一平台的可信 digest。不固定时，调度器按宿主 arch 自动选择。
                   </p>
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row">
@@ -1258,10 +1269,10 @@ export function RuntimeImagesPage() {
               )}
               {selected.versions.filter((version) => versionMatchesPlatform(version, platformFilter)).length === 0 ? (
                 <div className="theme-surface rounded-2xl border border-dashed px-4 py-8 text-center">
-                  <p className="text-[13px] text-zinc-300">
+                  <p className="text-[13px]">
                     {selected.versions.length === 0 ? "还没有任何版本" : `没有匹配 ${platformFilter} 的版本`}
                   </p>
-                  <p className="mt-2 text-[12px] leading-5 text-zinc-600">
+                  <p className="theme-muted mt-2 text-[12px] leading-5">
                     {selected.versions.length === 0
                       ? (selected.image.official
                         ? "所以看不到「批准」——批准作用在具体 version 上。请先用上方「登记官方 digest」，或配置环境变量后重启调度器。"
@@ -1277,9 +1288,9 @@ export function RuntimeImagesPage() {
                   const approve = canApproveVersion(version);
                   const isPinned = projectId && selected.image.selected_version_id === version.id;
                   return (
-                    <section key={version.id} className={`theme-surface min-w-0 rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : ""}`}>
+                    <section key={version.id} className={`min-w-0 rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : "theme-surface"}`}>
                       <div className="flex flex-wrap items-center gap-2">
-                        <strong className="break-words font-mono text-sm font-normal text-zinc-200">{version.version}</strong>
+                        <strong className="break-words font-mono text-sm font-normal">{version.version}</strong>
                         <TrustBadge status={version.trust_status} />
                         {version.platforms_json?.map((platform) => (
                           <span key={platform} className="rounded-full bg-sky-400/[.1] px-2 py-0.5 font-mono text-[8px] tracking-[.08em] text-sky-300">
@@ -1293,20 +1304,20 @@ export function RuntimeImagesPage() {
                           <span className="font-mono text-[8px] text-acc-300">PROJECT PIN</span>
                         )}
                       </div>
-                      <p className="mt-3 break-all font-mono text-[9px] leading-4 text-zinc-600">
+                      <p className="theme-muted mt-3 break-all font-mono text-[9px] leading-4">
                         {version.resolved_ref ?? version.image_ref}
                       </p>
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {version.tools_json.map((tool) => (
                           <span
                             key={tool.name}
-                            className="theme-chip break-words rounded-full px-2 py-1 font-mono text-[8px] text-zinc-500"
+                            className="theme-chip theme-muted break-words rounded-full px-2 py-1 font-mono text-[8px]"
                           >
                             {tool.name} {tool.version}
                           </span>
                         ))}
                       </div>
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-zinc-500">
+                      <div className="theme-muted mt-3 grid grid-cols-2 gap-2 text-[10px]">
                         <span>平台 {platformLabel(version.platforms_json)}</span>
                         <span>签名 {signatureLabel(version)}</span>
                         <span>SBOM {version.sbom_json ? "已生成" : "—"}</span>
@@ -1372,7 +1383,7 @@ export function RuntimeImagesPage() {
                         )}
                       </div>
                       {!projectId && !approve.ok && version.trust_status !== "trusted" && (
-                        <p className="mt-2 break-words text-[11px] leading-5 text-zinc-600">
+                        <p className="theme-muted mt-2 break-words text-[11px] leading-5">
                           「批准 / 提升」不可用：{approve.reason}
                           {selected.image.official && "。官方镜像更推荐上方「登记官方 digest」。"}
                         </p>
@@ -1381,7 +1392,7 @@ export function RuntimeImagesPage() {
                       {version.scans.map((scan) => (
                         <div
                           key={scan.id}
-                          className="mt-3 break-words border-t border-white/[.045] pt-3 font-mono text-[9px] text-zinc-600"
+                          className="theme-divider theme-muted mt-3 break-words border-t pt-3 font-mono text-[9px]"
                         >
                           scan {scan.id.slice(0, 8)} · {scan.status}
                           {scan.error ? ` · ${scan.error}` : ""}
@@ -1391,6 +1402,7 @@ export function RuntimeImagesPage() {
                   );
                 })
               )}
+            </div>
             </div>
           </aside>
         </div>
