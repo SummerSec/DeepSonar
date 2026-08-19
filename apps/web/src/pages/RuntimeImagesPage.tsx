@@ -19,6 +19,10 @@ import {
 } from "../api";
 import { SearchableSelect } from "../SearchableSelect";
 import {
+  isRuntimeImagePinStale,
+  runtimeImagePinLabel,
+} from "../runtime-image-option";
+import {
   formatPullElapsed,
   isRuntimeImagePullBusyError,
   projectBindingBusyNotice,
@@ -1006,6 +1010,11 @@ export function RuntimeImagesPage() {
                         默认运行环境：角色不绑专项镜像时自动使用（runtime_image_key=null）。
                       </p>
                     )}
+                    {projectId && isRuntimeImagePinStale(image) && (
+                      <p className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/[.08] px-2 py-1.5 text-[11px] leading-5 text-amber-200">
+                        项目仍固定在 {image.selected_version ?? image.selected_version_id}，该 pin 当前不是可执行的 trusted；市场最新 trusted 为 {image.latest_version ?? "新版本"}。
+                      </p>
+                    )}
                   </div>
                 </div>
                 <p className="mt-3 min-h-8 line-clamp-2 text-[11px] leading-4 text-zinc-500">{image.description || "暂无描述"}</p>
@@ -1067,9 +1076,27 @@ export function RuntimeImagesPage() {
                         {image.project_enabled ? "停用" : "启用"}
                       </button>
                       {image.project_enabled && (
-                        <span className="font-mono text-[9px] text-zinc-500">
-                          固定：{image.selected_version_id ? "已选版本" : "自动（按平台）"}
+                        <span className={`font-mono text-[9px] ${isRuntimeImagePinStale(image) ? "text-amber-300" : "text-zinc-500"}`}>
+                          {runtimeImagePinLabel(image)}
                         </span>
+                      )}
+                      {projectId && isRuntimeImagePinStale(image) && image.latest_version_id && (
+                        <button
+                          className="primary-button"
+                          disabled={busy === image.id}
+                          onClick={() => void bind(image, true, image.latest_version_id)}
+                        >
+                          升级 pin 到 {image.latest_version ?? "最新 trusted"}
+                        </button>
+                      )}
+                      {projectId && isRuntimeImagePinStale(image) && (
+                        <button
+                          className="secondary-button"
+                          disabled={busy === image.id}
+                          onClick={() => void bind(image, true, null)}
+                        >
+                          改为跟随最新
+                        </button>
                       )}
                     </>
                   )}
@@ -1221,11 +1248,37 @@ export function RuntimeImagesPage() {
                   <span className="text-emerald-300">可信版本优先：</span>disabled 版本的扫描/停用诊断仍保留在下方，不会遮蔽当前可用的 trusted 版本。
                 </div>
               )}
+              {projectId && isRuntimeImagePinStale(selected.image) && (
+                <div className="rounded-xl border border-amber-400/25 bg-amber-400/[.08] p-3">
+                  <div className="font-mono text-[9px] tracking-[.14em] text-amber-300">STALE PROJECT PIN</div>
+                  <p className="mt-1 text-[11px] leading-5 text-amber-100/90">
+                    项目仍固定在 {selected.image.selected_version ?? selected.image.selected_version_id}，该版本当前不是可执行的 trusted。最新 trusted 为 {selected.image.latest_version ?? "新版本"}。不会自动改写显式 pin。
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {selected.image.latest_version_id && (
+                      <button
+                        className="primary-button"
+                        disabled={busy === selected.image.id}
+                        onClick={() => void bind(selected.image, true, selected.image.latest_version_id)}
+                      >
+                        升级 pin 到 {selected.image.latest_version ?? "最新 trusted"}
+                      </button>
+                    )}
+                    <button
+                      className="secondary-button"
+                      disabled={busy === selected.image.id}
+                      onClick={() => void bind(selected.image, true, null)}
+                    >
+                      改为跟随最新
+                    </button>
+                  </div>
+                </div>
+              )}
               {projectId && selected.versions.some((v) => v.trust_status === "trusted") && (
                 <div className="rounded-xl border border-acc-400/20 bg-acc-400/[.05] p-3">
                   <div className="font-mono text-[9px] tracking-[.14em] text-acc-300">PIN PLATFORM VERSION</div>
                   <p className="theme-muted mt-1 text-[11px] leading-5">
-                    为项目固定某一平台的可信 digest。不固定时，调度器按宿主 arch 自动选择。
+                    为项目固定某一平台的可信 digest。不固定（version_id=null）时跟随最新 trusted，官方升版后自动可用。显式 pin 不会在 registry sync 时被改写。
                   </p>
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                     <SearchableSelect

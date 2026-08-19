@@ -24,6 +24,7 @@ import {
   readRuntimeRegistryChannel,
   RuntimeImageChannelUnavailableError,
   RuntimeImagePreparationBusyError,
+  runtimeImageHttpError,
   sanitizeRuntimeImageError,
   startRuntimeImagePull,
   syncOfficialRuntimeCatalog,
@@ -93,6 +94,19 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       SELECT ri.id, ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url,
              ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.created_at, ri.updated_at,
              pri.enabled AS project_enabled, pri.selected_version_id,
+             pin.version AS selected_version,
+             pin.trust_status AS selected_trust_status,
+             CASE
+               WHEN pri.selected_version_id IS NULL THEN false
+               WHEN latest.id IS NULL OR latest.trust_status IS DISTINCT FROM 'trusted' THEN false
+               WHEN NOT (COALESCE(latest.platforms_json, '[]'::jsonb) @> ${sql.json([hostPlatform])}) THEN false
+               WHEN ri.official AND latest.registry_channel IS NULL THEN false
+               WHEN pin.id IS NULL THEN true
+               WHEN pin.trust_status <> 'trusted' THEN true
+               WHEN NOT (pin.platforms_json @> ${sql.json([hostPlatform])}) THEN true
+               WHEN ri.official AND pin_ref.id IS NULL THEN true
+               ELSE false
+             END AS pin_stale,
              latest.id AS latest_version_id, latest.version AS latest_version,
              CASE WHEN ri.official THEN latest.channel_digest ELSE latest.digest END AS digest,
              CASE WHEN ri.official THEN latest.channel_resolved_ref ELSE latest.resolved_ref END AS resolved_ref,
@@ -103,6 +117,10 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       FROM runtime_images ri
       LEFT JOIN project_runtime_images pri
         ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+      LEFT JOIN runtime_image_versions pin
+        ON pin.id = pri.selected_version_id
+      LEFT JOIN runtime_image_version_refs pin_ref
+        ON pin_ref.version_id = pin.id AND pin_ref.channel = ${selectedChannel}
       LEFT JOIN LATERAL (
         SELECT v.*, selected_ref.digest AS channel_digest,
                selected_ref.resolved_ref AS channel_resolved_ref,
@@ -186,6 +204,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
         previous_channel: result.previous_channel,
       });
     } catch (error) {
+      const mapped = runtimeImageHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
       return reply.code(error instanceof RuntimeImagePreparationBusyError ? 409 : 500).send({
         error: sanitizeRuntimeImageError(error) || "runtime registry channel update failed",
         error_code: error instanceof RuntimeImagePreparationBusyError ? error.code : "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED",
@@ -799,6 +819,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
         }
       }
     } catch (error) {
+      const mapped = runtimeImageHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
       return reply.code(error instanceof RuntimeImagePreparationBusyError ? 409 : 503).send({
         error: sanitizeRuntimeImageError(error) || "runtime image preparation failed",
         code: error instanceof RuntimeImagePreparationBusyError ? error.code : "runtime_image_prepare_failed",

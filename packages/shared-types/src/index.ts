@@ -647,6 +647,12 @@ export const ReadinessRuntimeImageSummary = z.object({
   trust_status: z.string().nullable(),
   project_enabled: z.boolean().nullable(),
   admission_scan_id: z.string().uuid().nullable(),
+  runtime_image_id: z.string().uuid().nullable().optional(),
+  selected_version_id: z.string().uuid().nullable().optional(),
+  selected_version: z.string().nullable().optional(),
+  latest_version_id: z.string().uuid().nullable().optional(),
+  latest_version: z.string().nullable().optional(),
+  pin_stale: z.boolean().optional(),
 });
 export type ReadinessRuntimeImageSummary = z.infer<typeof ReadinessRuntimeImageSummary>;
 

@@ -2455,6 +2455,8 @@ input[type="password"]::-webkit-textfield-decoration-container {
 .intent-launch-readiness li > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .intent-launch-readiness li b { color: #c7b38b; font-weight: 500; }
 .intent-launch-readiness li a, .intent-launch-inline-link { display: inline-flex; align-items: center; gap: 3px; color: #e8bd70; text-decoration: underline; text-decoration-color: rgb(232 189 112 / .32); text-underline-offset: 3px; }
+.intent-launch-pin-upgrade { min-height: 24px; padding: 0 8px; border: 1px solid rgb(232 189 112 / .45); border-radius: 999px; color: #e8bd70; background: rgb(232 189 112 / .08); font: 500 10px var(--font-mono); cursor: pointer; }
+.intent-launch-pin-upgrade:disabled { cursor: not-allowed; opacity: .5; }
 .intent-launch-readiness > small { display: block; margin: 10px 0 0 27px; color: #887a61; font-size: 9px; }
 .intent-launch-operation-error { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 12px; border: 1px solid rgb(237 106 127 / .28); border-radius: 8px; color: #ef9aa8; background: rgb(237 106 127 / .055); font-size: 11px; }
 .intent-launch-operation-error > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 5px; }
