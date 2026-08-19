@@ -18,12 +18,15 @@ test("frozen role colors override semantic fallback only on role nodes", () => {
 });
 
 test("edge style keeps exact dash patterns and independent animation speeds", () => {
-  assert.deepEqual(EDGE_STYLE.produces, { dash: "6 3", speed: "2.8s" });
-  assert.deepEqual(EDGE_STYLE.verifies, { dash: "2 3", speed: "1.8s" });
-  assert.deepEqual(EDGE_STYLE.next, { dash: "10 4 2 4", speed: "2.2s" });
-  assert.deepEqual(EDGE_STYLE.from, { dash: "4 4", speed: "3.2s" });
-  assert.deepEqual(EDGE_STYLE.to, { dash: "1 4", speed: "2.5s" });
+  assert.deepEqual(EDGE_STYLE.produces, { dash: "8 4", speed: "2.8s" });
+  assert.deepEqual(EDGE_STYLE.verifies, { dash: "3 4", speed: "1.8s" });
+  assert.deepEqual(EDGE_STYLE.reviewed_by, { dash: "8 4", speed: "2.2s" });
+  assert.deepEqual(EDGE_STYLE.tested_by, { dash: "3 4", speed: "1.8s" });
+  assert.deepEqual(EDGE_STYLE.next, { dash: "10 4 3 4", speed: "2.2s" });
+  assert.deepEqual(EDGE_STYLE.from, { dash: "5 4", speed: "3.2s" });
+  assert.deepEqual(EDGE_STYLE.to, { dash: "3 4", speed: "2.5s" });
   assert.equal(EDGE_STYLE.child.dash, "");
+  assert.equal(EDGE_STYLE.child.speed, "4.8s");
 });
 
 test("canvas edges use the source node color for stroke and marker, with SVG legend patterns", () => {

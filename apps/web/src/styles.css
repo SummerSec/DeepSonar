@@ -872,7 +872,11 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .deepsonar-live-dot { animation: live-blink 2.2s var(--ease-decel) infinite; }
 
 /* React Flow as a forensic plotting surface. */
-.react-flow { background: #080a0b; }
+.react-flow {
+  --xy-edge-stroke-default: #8b9aa3;
+  --xy-edge-stroke-width-default: 2.4;
+  background: #080a0b;
+}
 .react-flow__background { opacity: .5; }
 .react-flow__attribution, .react-flow__attribution a { color: #3e464a; background: transparent; }
 .react-flow__controls { overflow: hidden; border: 1px solid var(--line-strong); background: #0a0c0d; }
@@ -894,17 +898,30 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   max-height: none;
 }
 .react-flow__minimap-mask { fill: rgb(7 9 10 / .82); pointer-events: all; }
-.react-flow__edge-path { stroke-width: 1.5; }
-.react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
+.react-flow__edges,
+.react-flow svg.react-flow__edges {
+  overflow: visible;
+  max-width: none;
+  max-height: none;
+}
+.react-flow__edge-path {
+  fill: none !important;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+}
+.react-flow__edge.selected .react-flow__edge-path { stroke-width: 2.8; }
 .react-flow__handle { opacity: 0; }
 @keyframes deepsonar-edge-flow { to { stroke-dashoffset: -36; } }
-.react-flow__edge.deepsonar-edge .react-flow__edge-path { animation: deepsonar-edge-flow var(--deepsonar-edge-speed, 2.8s) cubic-bezier(.2,.8,.2,1) infinite; }
-.react-flow__edge.deepsonar-edge-child .react-flow__edge-path { stroke-dasharray: 4 10; }
-.react-flow__edge.deepsonar-edge-produces .react-flow__edge-path { stroke-dasharray: 12 7; }
-.react-flow__edge.deepsonar-edge-verifies .react-flow__edge-path { stroke-dasharray: 3 6; }
-.react-flow__edge.deepsonar-edge-next .react-flow__edge-path { stroke-dasharray: 16 8; }
-.react-flow__edge.deepsonar-edge-from .react-flow__edge-path { stroke-dasharray: 2 7; }
-.react-flow__edge.deepsonar-edge-to .react-flow__edge-path { stroke-dasharray: 9 6; }
+.react-flow__edge.deepsonar-edge .react-flow__edge-path {
+  animation: deepsonar-edge-flow var(--deepsonar-edge-speed, 2.8s) cubic-bezier(.2,.8,.2,1) infinite;
+}
+.react-flow__edge.deepsonar-edge-child .react-flow__edge-path { stroke-dasharray: none; }
+.react-flow__edge.deepsonar-edge-produces .react-flow__edge-path { stroke-dasharray: 8 4; }
+.react-flow__edge.deepsonar-edge-verifies .react-flow__edge-path { stroke-dasharray: 3 4; }
+.react-flow__edge.deepsonar-edge-next .react-flow__edge-path { stroke-dasharray: 10 4 3 4; }
+.react-flow__edge.deepsonar-edge-from .react-flow__edge-path { stroke-dasharray: 5 4; }
+.react-flow__edge.deepsonar-edge-to .react-flow__edge-path { stroke-dasharray: 3 4; }
 .deepsonar-node { position: relative; }
 .react-flow__node.selected .deepsonar-node { border-color: var(--red-bright) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--red-bright) 45%, transparent) !important; }
 .react-flow__edge.broadcast-overlay-edge .react-flow__edge-path {
@@ -959,8 +976,19 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   background: color-mix(in srgb, var(--broadcast-target) 8%, transparent);
 }
 .broadcast-node-badge.has-failure { border-color: color-mix(in srgb, var(--broadcast-failed) 60%, var(--line)); }
-.canvas-filter-panel { width: min(760px, calc(100% - 176px)); transition: width 180ms var(--ease-decel); }
+.canvas-filter-panel { width: min(760px, calc(100% - 176px)); color: var(--text); transition: width 180ms var(--ease-decel); }
 .canvas-filter-panel.is-collapsed { width: min(430px, calc(100% - 176px)); }
+.canvas-filter-toggle {
+  color: var(--text);
+  background: transparent;
+}
+.canvas-filter-toggle:hover { background: var(--surface-tint-strong); }
+.canvas-hidden-edge-hint {
+  color: var(--text);
+  font: 600 10px var(--font-mono);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
 .canvas-export-button {
   display: inline-grid;
   width: 28px;
@@ -1036,6 +1064,7 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .broadcast-status-meta { align-items: flex-end; gap: 2px; }
 .broadcast-status-state { font: 600 9px var(--font-mono); font-style: normal; }
 .broadcast-status-panel > div > p { margin: 0; padding: 9px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1.5; }
+.broadcast-status-empty { margin: 0; padding: 10px 12px; color: var(--text); font-size: 11px; line-height: 1.55; }
 .broadcast-sidebar-section { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-tint); }
 .broadcast-sidebar-heading { display: flex; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 11px; }
 .broadcast-sidebar-heading strong { margin-left: auto; color: var(--muted); font: 500 10px var(--font-mono); }
@@ -2564,7 +2593,26 @@ html[data-color-scheme="light"] .settings-tabs button:hover { background: rgba(2
 html[data-color-scheme="light"] .settings-tabs button.is-active { color: #16221e; background: rgb(var(--accent-rgb) / .055); }
 html[data-color-scheme="light"] .settings-role-intro { color: #5d6964; background: rgb(var(--accent-rgb) / .035); }
 html[data-color-scheme="light"] .settings-role-intro strong { color: #1e2c27; }
-html[data-color-scheme="light"] .react-flow { background: #efede7; }
+html[data-color-scheme="light"] .react-flow {
+  --xy-edge-stroke-default: #3c4654;
+  background: #efede7;
+}
+html[data-color-scheme="light"] .react-flow__edge.deepsonar-edge .react-flow__edge-path {
+  stroke-width: 2.8;
+  filter: drop-shadow(0 0 0.7px #1a212b) drop-shadow(0 1px 0 rgba(255, 255, 255, .55));
+}
+html[data-color-scheme="light"] .canvas-filter-panel,
+html[data-color-scheme="light"] .broadcast-status-panel {
+  border-color: var(--line-strong);
+  box-shadow: 0 10px 24px rgba(20, 28, 40, .12);
+}
+html[data-color-scheme="light"] .canvas-filter-toggle,
+html[data-color-scheme="light"] .broadcast-status-panel-heading {
+  color: var(--text);
+}
+html[data-color-scheme="light"] .canvas-hidden-edge-hint {
+  color: #1a212b;
+}
 html[data-color-scheme="light"] .task-workbench { background: #e8e6df !important; }
 html[data-color-scheme="light"] .task-workbench-header,
 html[data-color-scheme="light"] .task-workbench-scope,
