@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { prepareRuntimeImage, resolveStartupRuntimeImages, sanitizeRuntimeImageError } from "./runtime-images.js";
+import { prepareRuntimeImage, resolveStartupRuntimeImages, sanitizeRuntimeImageError, withSharedAssetsHelperRef } from "./runtime-images.js";
 
 export interface RuntimeImageWarmupStatus {
   status: "idle" | "preparing" | "ready" | "failed";
@@ -96,7 +96,7 @@ export function startRuntimeImageWarmupOnBoot(
   extras: { afterPrepare?: (refs: Array<{ image_ref: string; image_key?: string }>) => Promise<void> } = {},
 ): () => void {
   startupCoordinator = createRuntimeImageWarmupCoordinator({
-    resolveRefs: () => resolveStartupRuntimeImages(),
+    resolveRefs: async () => withSharedAssetsHelperRef(await resolveStartupRuntimeImages()),
     prepare: prepareRuntimeImage,
     afterPrepare: extras.afterPrepare,
     onReady,
