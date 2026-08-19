@@ -96,6 +96,11 @@ export const PRESETS = {
     paths: [],
     platforms: "linux/amd64",
   },
+  "deepsonar-silo": {
+    dockerfile: "deploy/Dockerfile.silo",
+    paths: [],
+    platforms: "linux/amd64",
+  },
   "deepsonar-openharmony-test": {
     dockerfile: "deploy/Dockerfile.agent-openharmony",
     paths: [

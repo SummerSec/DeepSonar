@@ -18,6 +18,7 @@ $MasterKeyFile = Join-Path $DeployDir "master.key"
 $ComposeFile = Join-Path $DeployDir "docker-compose.prod.yml"
 $RealComposeFile = Join-Path $DeployDir "docker-compose.real.yml"
 $DefaultSharedAssetsHelperImage = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23"
+$DefaultSiloImage = "docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z"
 
 function Assert-Command([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -106,6 +107,10 @@ function Initialize-Env {
   if ($raw -notmatch "(?m)^DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=") {
     Ensure-EnvValue "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $DefaultSharedAssetsHelperImage
   }
+  $raw = Get-Content -LiteralPath $EnvFile -Raw -Encoding UTF8
+  if ($raw -notmatch "(?m)^SILO_IMAGE=") {
+    Ensure-EnvValue "SILO_IMAGE" $DefaultSiloImage
+  }
 
   if (-not (Test-Path -LiteralPath $MasterKeyFile)) {
     [IO.File]::WriteAllText($MasterKeyFile, (New-HexSecret 2), [Text.UTF8Encoding]::new($false))
@@ -129,12 +134,12 @@ function Get-SharedAssetsHelperImage {
   return $image
 }
 
-function Get-ImageRepoDigest([string]$Tag) {
+function Get-ImageRepoDigest([string]$Tag, [string]$NameNeedle) {
   $raw = & docker image inspect --format "{{range .RepoDigests}}{{println .}}{{end}}" $Tag
   if ($LASTEXITCODE -ne 0) { return $null }
   return @(
     $raw -split "\r?\n" |
-      Where-Object { $_ -match "^[^@\s]+@sha256:[0-9a-f]{64}$" -and $_ -like "*deepsonar-assets-helper@*" }
+      Where-Object { $_ -match "^[^@\s]+@sha256:[0-9a-f]{64}$" -and $_ -like "*${NameNeedle}*" }
   ) | Select-Object -First 1
 }
 
@@ -147,7 +152,7 @@ function Pull-SharedAssetsHelper {
     Write-Host "[deploy] 尝试拉取官方共享资产 helper：$official"
     & docker pull $official
     if ($LASTEXITCODE -eq 0) {
-      $digest = Get-ImageRepoDigest $official
+      $digest = Get-ImageRepoDigest $official "deepsonar-assets-helper@"
       if ($digest -match "^[^@\s]+@sha256:[0-9a-f]{64}$") {
         Ensure-EnvValue "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $digest
         Write-Host "[deploy] 已解析官方 helper 不可变引用：$digest"
@@ -162,6 +167,39 @@ function Pull-SharedAssetsHelper {
   Write-Host "[deploy] 拉取共享资产 helper：$image"
   & docker pull $image
   if ($LASTEXITCODE -ne 0) { throw "拉取 DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE 失败：$image" }
+}
+
+function Test-PreferOfficialSilo([string]$Image) {
+  return (-not $Image) -or ($Image -eq $DefaultSiloImage) -or ($Image -like "*deepsonar-silo*")
+}
+
+function Pull-OfficialSilo {
+  $image = Read-EnvValue "SILO_IMAGE" $DefaultSiloImage
+  if (-not (Test-PreferOfficialSilo $image)) {
+    Write-Host "[deploy] 使用已覆盖的 SILO_IMAGE=$image"
+    & docker pull $image
+    if ($LASTEXITCODE -ne 0) { throw "拉取 SILO_IMAGE 失败：$image" }
+    return
+  }
+  $registry = Read-EnvValue "DEEPSONAR_IMAGE_REGISTRY" ""
+  $tag = Read-EnvValue "DEEPSONAR_IMAGE_TAG" (Get-DefaultImageTag)
+  if ($registry) {
+    $official = "$registry/deepsonar-silo:$tag"
+    Write-Host "[deploy] 尝试拉取官方 Silo：$official"
+    & docker pull $official
+    if ($LASTEXITCODE -eq 0) {
+      $digest = Get-ImageRepoDigest $official "deepsonar-silo@"
+      $resolved = if ($digest -match "^[^@\s]+@sha256:[0-9a-f]{64}$") { $digest } else { $official }
+      Ensure-EnvValue "SILO_IMAGE" $resolved
+      Write-Host "[deploy] 已设置 SILO_IMAGE=$resolved"
+      return
+    }
+    Write-Host "[deploy] 官方 Silo 标签不可用（当前 Release 可能尚未发布），回退 $DefaultSiloImage"
+  }
+  $fallback = Read-EnvValue "SILO_IMAGE" $DefaultSiloImage
+  Write-Host "[deploy] 拉取 Silo：$fallback"
+  & docker pull $fallback
+  if ($LASTEXITCODE -ne 0) { throw "拉取 SILO_IMAGE 失败：$fallback" }
 }
 
 Assert-Command "docker"
@@ -183,6 +221,7 @@ try {
       Write-Host "[deploy] Compose configuration is valid." -ForegroundColor Green
     }
     "pull" {
+      Pull-OfficialSilo
       Pull-SharedAssetsHelper
       if ($Mode -eq "real") {
         Write-Host "[deploy] real 模式共享资产 helper 已拉取。" -ForegroundColor Green
@@ -204,6 +243,7 @@ try {
     "up" {
       & docker @ComposeArgs config --quiet
       if ($LASTEXITCODE -ne 0) { throw "Docker Compose validation failed" }
+      Pull-OfficialSilo
       Pull-SharedAssetsHelper
 
       $UpArgs = @("up", "-d")

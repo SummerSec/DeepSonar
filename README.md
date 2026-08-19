@@ -82,7 +82,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token、Silo S3 凭据）；
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交 Git）；
-3. 使用当前 Release 的无 `v` 版本号拉取 `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；real 模式再优先解析同 tag 的 `deepsonar-assets-helper`（缺失则回退 busybox pin）；
+3. 使用当前 Release 的无 `v` 版本号拉取 `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；再优先解析同 tag 的 `deepsonar-silo`（缺失则回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`）。real 模式另优先解析 `deepsonar-assets-helper`（缺失则回退 busybox pin）；
 4. 启动 PostgreSQL、PGSTY Silo、Scheduler、Image Admission、Web Gateway；
 5. 健康检查通过后输出访问地址。
 
@@ -117,14 +117,14 @@ DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
 VER=<release-version-without-v>
 
-for img in deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper; do
+for img in deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper deepsonar-silo; do
   docker pull "$REG/$img:$VER"
 done
 ```
 
 ### 对象存储
 
-生产 Compose 默认启动固定版本的 [PGSTY Silo](https://github.com/pgsty/silo)，共享资产 CAS 通过内部 `http://silo:9000` 使用 S3 API。API 与 Console 默认只绑定宿主机 `127.0.0.1:9000/9001`，数据保存在独立 `silo_data` volume；报告与运行证据仍写入本地 `blob_data`。切换既有对象存储时必须先迁移并校验对象，部署脚本不会删除旧卷。
+生产 Compose 默认启动官方再发布的 `deepsonar-silo`（FROM 已解析的 [PGSTY Silo](https://github.com/pgsty/silo) `RELEASE.2026-08-06T00-00-00Z` digest）。下一正式 Release 前仍回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；`SILO_IMAGE` 可覆盖为其它 S3 兼容镜像。共享资产 CAS 走内部 `http://silo:9000`。API 与 Console 默认只绑定宿主机 `127.0.0.1:9000/9001`，数据保存在独立 `silo_data` volume；报告与运行证据仍写入本地 `blob_data`。切换既有对象存储时必须先迁移并校验对象，部署脚本不会删除旧卷。
 
 ### 常用运维命令
 
@@ -188,7 +188,7 @@ crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/<image>:<ve
 | `deepsonar-base` / `deepsonar-audit` / `deepsonar-kali-minimal` | 官方运行时 |
 | `deepsonar-chrome-test` / `-audit` / `-fuzz` | Chrome 专项（项目 opt-in） |
 | `deepsonar-openharmony-test` / `-audit` / `-fuzz` | OpenHarmony 专项（项目 opt-in） |
-| `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` / `deepsonar-assets-helper` | 平台服务（helper 在下一正式 Release 首发） |
+| `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` / `deepsonar-assets-helper` / `deepsonar-silo` | 平台服务（helper/silo 在下一正式 Release 首发） |
 
 ```bash
 REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
@@ -198,7 +198,7 @@ for img in \
   deepsonar-base deepsonar-audit deepsonar-kali-minimal \
   deepsonar-chrome-test deepsonar-chrome-audit deepsonar-chrome-fuzz \
   deepsonar-openharmony-test deepsonar-openharmony-audit deepsonar-openharmony-fuzz \
-  deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper
+  deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper deepsonar-silo
 do
   docker pull "$REG/$img:$VER"
 done

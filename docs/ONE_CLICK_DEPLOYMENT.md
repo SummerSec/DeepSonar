@@ -22,7 +22,7 @@ Image Admission       PGSTY Silo（共享资产 S3 API，默认 127.0.0.1:9000�
 | `deploy/docker-compose.prod.yml` | PostgreSQL、Silo、Scheduler、Image Admission、Web、备份 |
 | `deploy/docker-compose.real.yml` | real 模式：挂载 Docker Socket |
 | `deploy/docker-compose.online.yml` | 空兼容层（旧脚本 `-f` 仍可用；推荐直接用 prod + pull） |
-| `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` | 平台服务镜像 |
+| `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` / `.assets-helper` / `.silo` | 平台服务镜像 |
 | `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony） |
 | `deploy/.env.example` | 环境变量模板（Release 会同步版本号） |
 | `deploy/runtime-image-registry.json` | 官方运行时清单（bundled fallback） |
@@ -61,9 +61,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交）；
 3. 按 `DEEPSONAR_IMAGE_TAG`（无 `v` 前缀）从阿里云 ACR 拉取  
    `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
-4. real 模式优先拉取与 scheduler/web 同 registry/tag 的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
-5. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
-6. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
+4. 优先拉取同 registry/tag 的 `deepsonar-silo`，将 RepoDigest（或 tag）写成 `SILO_IMAGE`；该标签不存在时回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。已覆盖为其它镜像时不改写；
+5. real 模式优先拉取同 registry/tag 的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
+6. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
+7. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
 
 访问：**http://127.0.0.1:8080**
 
@@ -176,7 +177,7 @@ Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准�
 
 ## 6. 对象存储
 
-生产 Compose 默认 `BLOB_STORE=s3` 指向内部 Silo（`http://silo:9000`）。证据/报告仍写本地 `BLOB_DIR` volume。切换外部 S3 见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)；切换前先迁移并校验对象。
+生产 Compose 默认 `BLOB_STORE=s3` 指向内部 Silo（`http://silo:9000`）。`SILO_IMAGE` 优先用官方 `deepsonar-silo`，下一正式 Release 前回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。证据/报告仍写本地 `BLOB_DIR` volume。切换外部 S3 见 [`SHARED_ASSET_BLOB_STORE.md`](./SHARED_ASSET_BLOB_STORE.md)；切换前先迁移并校验对象。
 
 ## 7. 运维命令
 
@@ -184,7 +185,7 @@ Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准�
 ./deploy/deploy.sh status
 ./deploy/deploy.sh logs
 ./deploy/deploy.sh check
-./deploy/deploy.sh pull          # 拉平台镜像；real 默认同时拉 helper
+./deploy/deploy.sh pull          # 拉平台镜像与官方 Silo；real 默认同时拉 helper
 ./deploy/deploy.sh down          # 保留 postgres / blob / silo volume
 ```
 
@@ -230,6 +231,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
 | real helper 拉取失败 | 官方 `deepsonar-assets-helper:$IMAGE_TAG` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |
+| Silo 拉取失败 | 官方 `deepsonar-silo:$IMAGE_TAG` 不存在时应回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；自定义 `SILO_IMAGE` 覆盖仍有效 |
 | image-admission Restarting (1) / 缺 scanner digest | 四个 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。未设或留空会回退官方默认；填了 tag 或非法值仍会启动失败 |
 | real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
 | 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |
@@ -241,6 +243,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 - [ ] 已建长期 API Token；外部事件 Token 单项目 + `tasks:write`
 - [ ] real：官方 base/audit（及所用专项）均为 digest 且可 pull
 - [ ] real：`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 为 immutable digest 且已被部署脚本预拉
+- [ ] `SILO_IMAGE` 为官方 `deepsonar-silo` 或当前 pgsty 回退 tag，且已被部署脚本预拉
 - [ ] 第三方准入扫描器为 digest；未设时使用官方默认 pin，非法覆盖会阻止 image-admission 启动
 - [ ] PostgreSQL / Silo / Scheduler / Image Admission / Web 正常
 - [ ] 已备份并演练恢复
