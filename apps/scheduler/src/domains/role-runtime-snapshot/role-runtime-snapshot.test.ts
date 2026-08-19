@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+process.env.AGENT_MODE = "fake";
+
+type SnapshotDb = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
+  json?: (value: unknown) => unknown;
+};
+
+const { resolveAgentSnapshotForJob } = await import("./application.js");
+
+function snapshotDb(input: {
+  projectConfig?: unknown;
+  projectCfg: Record<string, unknown> | undefined;
+  globalCfg: Record<string, unknown> | undefined;
+  credential?: Record<string, unknown>;
+}): SnapshotDb {
+  const query = async (strings: TemplateStringsArray) => {
+    const sql = strings.join("?");
+    if (sql.includes("FROM agent_roles")) {
+      return [{ id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
+    }
+    if (sql.includes("FROM projects")) {
+      return [{ config_json: input.projectConfig }];
+    }
+    if (sql.includes("FROM role_configs") && sql.includes("project_id IS NULL")) {
+      return input.globalCfg ? [input.globalCfg] : [];
+    }
+    if (sql.includes("FROM role_configs")) {
+      return input.projectCfg ? [input.projectCfg] : [];
+    }
+    if (sql.includes("FROM role_credentials") || sql.includes("JOIN credentials")) {
+      return input.credential ? [input.credential] : [];
+    }
+    if (sql.includes("FROM role_config_files")) return [];
+    return [];
+  };
+  return Object.assign(query, { json: (value: unknown) => value });
+}
+
+test("inherit_global leftover project RoleConfig.model does not steal snapshot model", async () => {
+  const leftoverProject = {
+    id: "project-audit-cfg",
+    project_id: "project-1",
+    agent_cli: "claude-code",
+    model: "grok-4.5",
+    version: 3,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 8,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+
+  for (const projectConfig of [undefined, {}, { image_strategy: "inherit_global" }, { image_strategy: "dirty" }]) {
+    const snapshot = await resolveAgentSnapshotForJob(
+      snapshotDb({ projectConfig, projectCfg: leftoverProject, globalCfg, credential }),
+      "project-1",
+      "audit",
+    );
+    assert.equal(snapshot.model, "grok-4.6", `model under ${JSON.stringify(projectConfig)}`);
+    assert.equal(snapshot.upstream_model, "grok-4.6", `upstream_model under ${JSON.stringify(projectConfig)}`);
+    assert.equal(snapshot.agent_cli, "claude-code");
+  }
+});

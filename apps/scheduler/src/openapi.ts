@@ -2200,7 +2200,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "dsh_task_mode", "model", "version",
             "runtime_image_key", "sandbox_limits_json", "context_window_tokens",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "credential_project_id", "credential_project_name", "scope", "can_bind",
-            "credential_provider_valid", "role_kind", "role_builtin",
+            "credential_provider_valid", "role_kind", "role_builtin", "image_strategy",
           ],
           properties: {
             id: { type: "string", format: "uuid" },
@@ -2227,6 +2227,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             credential_project_id: { type: "string", format: "uuid", nullable: true },
             credential_project_name: { type: "string", nullable: true },
             scope: { type: "string", enum: ["global", "project"] },
+            image_strategy: { type: "string", enum: ["inherit_global", "project_managed"], nullable: true },
             can_bind: { type: "boolean" },
             credential_provider_valid: { type: "boolean", nullable: true },
           },
@@ -2248,7 +2249,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         CredentialBatchBindingImpact: {
           type: "object",
           additionalProperties: false,
-          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "role_configs"],
+          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "leftover_project_models_unchanged", "role_configs"],
           properties: {
             mode: { type: "string", enum: ["bind", "migrate"] },
             effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"] },
@@ -2259,19 +2260,22 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             refreshed_pending_job_count: { type: "integer", minimum: 0 },
             active_frozen_job_count: { type: "integer", minimum: 0 },
             terminal_historical_job_count: { type: "integer", minimum: 0 },
+            leftover_project_models_unchanged: { type: "boolean", description: "True when bind kept stored project RoleConfig.model values" },
             role_configs: {
               type: "array",
               maxItems: 100,
               items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["role_config_id", "role_name", "scope", "project_id", "model"],
+                required: ["role_config_id", "role_name", "scope", "project_id", "model", "model_changed", "inherit_global_ignores_project_model"],
                 properties: {
                   role_config_id: { type: "string", format: "uuid" },
                   role_name: { type: "string" },
                   scope: { type: "string", enum: ["global", "project"] },
                   project_id: { type: "string", format: "uuid", nullable: true },
                   model: { type: "string", nullable: true },
+                  model_changed: { type: "boolean" },
+                  inherit_global_ignores_project_model: { type: "boolean", description: "Project leftover model is stored but ignored for new Jobs under inherit_global" },
                 },
               },
             },

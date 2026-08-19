@@ -6,6 +6,7 @@
 
 ### 修复
 
+- `inherit_global`（缺省 / 脏 `image_strategy`）下新 Job 不再被遗留项目 RoleConfig.model 覆盖；快照 `model` / `upstream_model` / 默认 CLI 跟全局 RoleConfig + 账号主模型。批量绑定仍可不改写行上模型，但 impact 与 Provider 流程标明这些值在 inherit 下不生效。
 - 官方镜像升版并 registry sync 后，项目显式 `selected_version_id` 不再静默改写；pin 无法解析而最新 trusted 可用时，readiness / 建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin 与最新版本，并给出一键升级或改为跟随最新），不再 HTTP 500。市场列表对过期 pin 显示 `pin_stale`。`version_id=null` 仍跟随最新 trusted。
 - 过程画布默认能看清拓扑连线（含亮色主题）；深度或筛选藏边时提示「已隐藏 N 条边」。
 - 桌面端筛选坞默认展开，亮色主题下「筛选节点」入口对比度可读。

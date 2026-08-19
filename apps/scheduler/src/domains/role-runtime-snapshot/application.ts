@@ -82,6 +82,28 @@ export function runtimeImageKeyForProjectPolicy(
   return globalRuntimeImageKey;
 }
 
+function trimmedRoleField(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * inherit_global（缺省 / 脏值）忽略遗留项目 RoleConfig 的 model 与默认 CLI；
+ * 只有 project_managed 才采用项目身份字段。
+ */
+export function roleIdentityForProjectPolicy(
+  policy: ProjectImagePolicy,
+  projectCfg: { model?: unknown; agent_cli?: unknown } | undefined,
+  globalCfg: { model?: unknown; agent_cli?: unknown } | undefined,
+): { model: string | null; agent_cli: string } {
+  const identityCfg = policy.image_strategy === "project_managed"
+    ? (projectCfg ?? globalCfg)
+    : globalCfg;
+  return {
+    model: trimmedRoleField(identityCfg?.model),
+    agent_cli: trimmedRoleField(identityCfg?.agent_cli) ?? PLATFORM_DEFAULT_AGENT_CLI,
+  };
+}
+
 let legacyAgentDefaultsWarningEmitted = false;
 function warnIgnoredLegacyAgentDefaults(): void {
   if (legacyAgentDefaultsWarningEmitted) return;
@@ -134,8 +156,11 @@ export async function resolveAgentSnapshotForJob(
   const projectImagePolicy = parseProjectImagePolicy(project?.config_json);
   const [projectCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`) as Array<Record<string, unknown>>;
   const [globalCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`) as Array<Record<string, unknown>>;
+  // Modules / bindings can still come from a leftover project row; model and
+  // default CLI follow image policy so inherit_global cannot steal identity.
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
-  const agentCli = typeof cfg?.agent_cli === "string" && cfg.agent_cli.trim() ? cfg.agent_cli.trim() : PLATFORM_DEFAULT_AGENT_CLI;
+  const identity = roleIdentityForProjectPolicy(projectImagePolicy, projectCfg, globalCfg);
+  const agentCli = identity.agent_cli;
   const dshTaskMode = cfg?.dsh_task_mode === "ptc" ? "ptc" : "standard";
 
   const rawModules = cfg?.modules_json;
@@ -168,7 +193,7 @@ export async function resolveAgentSnapshotForJob(
     : [];
   const providerSnapshot = projectProviderRuntimeSnapshot({
     agentCli,
-    roleModel: typeof cfg?.model === "string" ? cfg.model : null,
+    roleModel: identity.model,
     roleContextWindowTokens: cfg?.context_window_tokens,
     settingsConfig,
     manualConfigFiles: manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>,

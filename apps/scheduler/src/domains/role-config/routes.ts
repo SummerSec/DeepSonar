@@ -20,6 +20,7 @@ import {
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
 import { parseContextWindowTokens } from "../../provider-settings.js";
+import { parseProjectImagePolicy } from "../role-runtime-snapshot/application.js";
 import { parseSandboxLimitsOverride } from "../role-runtime-snapshot/sandbox-limits.js";
 const RoleBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
@@ -417,7 +418,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const rows = await sql`
       SELECT rc.id, rc.role_id, r.name AS role_name, r.title AS role_title,
              r.kind AS role_kind, r.builtin AS role_builtin, r.ui_color AS role_ui_color,
-             rc.project_id, p.name AS project_name, rc.agent_cli, rc.dsh_task_mode, rc.model,
+             rc.project_id, p.name AS project_name, p.config_json AS project_config_json,
+             rc.agent_cli, rc.dsh_task_mode, rc.model,
              rc.context_window_tokens, rc.version,
              CASE WHEN rc.project_id IS NULL THEN rc.runtime_image_key ELSE NULL END AS runtime_image_key,
              c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
@@ -442,14 +444,17 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         rc.project_id NULLS FIRST,
         p.name NULLS FIRST,
         r.name`;
-    return rows.map((row) => ({
-      ...row,
+    return rows.map((row) => {
+      const { project_config_json: projectConfigJson, ...bindable } = row;
+      return {
+      ...bindable,
       context_window_tokens: row.context_window_tokens == null ? null : Number(row.context_window_tokens),
       runtime_image_key: row.runtime_image_key ?? null,
       role_kind: row.role_kind ?? "role",
       role_builtin: Boolean(row.role_builtin),
       role_ui_color: typeof row.role_ui_color === "string" ? row.role_ui_color : null,
       scope: row.project_id ? "project" : "global",
+      image_strategy: row.project_id ? parseProjectImagePolicy(projectConfigJson).image_strategy : null,
       can_bind: !projectScope || String(row.project_id ?? "") === projectScope,
       credential_provider: row.credential_provider
         ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider
@@ -457,7 +462,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       credential_provider_valid: row.credential_provider
         ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider_valid
         : null,
-    }));
+    };
+    });
   });
 
   app.put("/role-configs/global/:roleId", async (req, reply) => {
