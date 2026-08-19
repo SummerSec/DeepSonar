@@ -203,6 +203,82 @@ test("real preflight resolves a model from Credential settings when RoleConfig m
   assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_CLI_INCOMPATIBLE"), false);
 });
 
+test("stale project pin is distinct from a missing trusted image", () => {
+  const stalePinId = "99999999-9999-4999-8999-999999999999";
+  const latestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const result = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? {
+          ...image,
+          version_id: null,
+          digest: null,
+          resolved_ref: null,
+          trust_status: null,
+          selected_version_id: stalePinId,
+          selected_version: "0.1.29",
+          latest_version_id: latestId,
+          latest_version: "0.1.39",
+        }
+      : image),
+  }));
+  assert.equal(result.ready, false);
+  const check = result.checks.find((item) => item.code === "RUNTIME_IMAGE_PIN_STALE" && item.role?.name === "hub_reason");
+  assert.ok(check);
+  assert.match(check?.message ?? "", /0\.1\.29/);
+  assert.match(check?.message ?? "", /0\.1\.39/);
+  assert.equal(check?.runtime_image?.pin_stale, true);
+  assert.equal(check?.runtime_image?.selected_version, "0.1.29");
+  assert.equal(check?.runtime_image?.latest_version, "0.1.39");
+  assert.equal(check?.fix?.action, "runtime_images");
+  assert.equal(result.checks.some((item) => item.code === "RUNTIME_IMAGE_UNAVAILABLE" && item.role?.name === "hub_reason"), false);
+});
+
+test("executable explicit pin stays ready even when marketplace latest is newer", () => {
+  const pinId = "99999999-9999-4999-8999-999999999999";
+  const latestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const digest = `sha256:${"a".repeat(64)}`;
+  const result = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? {
+          ...image,
+          version_id: pinId,
+          digest,
+          resolved_ref: `ghcr.io/summersec/deepsonar-base@${digest}`,
+          trust_status: "trusted",
+          selected_version_id: pinId,
+          selected_version: "0.1.38",
+          latest_version_id: latestId,
+          latest_version: "0.1.39",
+        }
+      : image),
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_PIN_STALE"), false);
+  const ready = result.checks.find((check) => check.code === "RUNTIME_IMAGE_READY" && check.role?.name === "hub_reason");
+  assert.equal(ready?.runtime_image?.pin_stale, false);
+  assert.equal(ready?.runtime_image?.selected_version, "0.1.38");
+  assert.equal(ready?.runtime_image?.latest_version, "0.1.39");
+});
+
+test("follow-latest pin still reports missing trusted when marketplace has none", () => {
+  const result = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? {
+          ...image,
+          version_id: null,
+          digest: null,
+          resolved_ref: null,
+          trust_status: null,
+          selected_version_id: null,
+          latest_version_id: null,
+        }
+      : image),
+  }));
+  assert.equal(result.ready, false);
+  assert.ok(result.checks.some((check) => check.code === "RUNTIME_IMAGE_UNAVAILABLE" && check.role?.name === "hub_reason"));
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_PIN_STALE"), false);
+});
+
 test("readiness repair metadata covers disabled runtime images", () => {
   const result = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"
@@ -426,6 +502,21 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     baseInput({ executionMode: "fake", audits: baseInput().audits?.map((audit) => audit.action === "credential.test" ? { ...audit, result: "error" } : audit) }),
     baseInput({ executionMode: "fake", credentials: [] }),
     baseInput({ runtimeImages: [] }),
+    baseInput({
+      runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+        ? {
+            ...image,
+            version_id: null,
+            digest: null,
+            resolved_ref: null,
+            trust_status: null,
+            selected_version_id: "99999999-9999-4999-8999-999999999999",
+            selected_version: "0.1.29",
+            latest_version_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            latest_version: "0.1.39",
+          }
+        : image),
+    }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, image_enabled: false } : image) }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, project_enabled: null } : image) }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, trust_status: "quarantined", admission_scan_id: null } : image) }),
@@ -478,6 +569,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     MODEL_DISCOVERY_EVIDENCE_MISSING: "credentials",
     MODEL_DISCOVERY_EVIDENCE_STALE: "credentials",
     RUNTIME_IMAGE_UNAVAILABLE: "runtime_images",
+    RUNTIME_IMAGE_PIN_STALE: "runtime_images",
     RUNTIME_IMAGE_DISABLED: "runtime_images",
     RUNTIME_IMAGE_PROJECT_NOT_ENABLED: "runtime_images",
     RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED: "runtime_images",
@@ -525,6 +617,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     "MODEL_DISCOVERY_EVIDENCE_MISSING",
     "MODEL_DISCOVERY_EVIDENCE_STALE",
     "RUNTIME_IMAGE_UNAVAILABLE",
+    "RUNTIME_IMAGE_PIN_STALE",
     "RUNTIME_IMAGE_DISABLED",
     "RUNTIME_IMAGE_PROJECT_NOT_ENABLED",
     "RUNTIME_IMAGE_NOT_TRUSTED",

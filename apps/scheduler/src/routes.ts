@@ -22,11 +22,17 @@ import { registerStreamRoutes } from "./domains/stream/routes.js";
 import { registerSystemRoutes } from "./domains/system/routes.js";
 import { registerTransferRoutes } from "./domains/transfer/routes.js";
 import { registerPlatformControlRoutes } from "./domains/platform-api/routes.js";
+import { runtimeImageHttpError } from "./runtime-images.js";
 
 export { parseConcurrencyRulesPatch } from "./domains/settings/routes.js";
 export { RuntimeImageRegistryChannelBody } from "./domains/runtime-image/routes.js";
 
 export function registerRoutes(app: FastifyInstance) {
+  app.setErrorHandler((error, _req, reply) => {
+    const mapped = runtimeImageHttpError(error);
+    if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+    return reply.send(error);
+  });
   // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
   app.addHook("onRequest", authHook);
   // Central ownership guard for project-scoped tokens. Resource UUIDs are not

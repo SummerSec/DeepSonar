@@ -1315,7 +1315,7 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/runtime-images",
-    summary: "镜像市场列表（可按项目和关键字过滤）",
+    summary: "镜像市场列表（可按项目和关键字过滤）。项目作用域返回 selected_version / pin_stale：过期 pin 不会被最新 trusted 行掩盖。",
     scope: "images:read",
     tags: ["Runtime Images"],
     query: { project_id: { type: "string", format: "uuid" }, search: { type: "string" } },
@@ -1528,7 +1528,7 @@ const OPS: Op[] = [
   {
     method: "put",
     path: "/projects/{id}/runtime-images/{imageId}",
-    summary: "项目启用/停用可信镜像并固定版本",
+    summary: "项目启用/停用可信镜像。version_id 省略或 null 表示跟随最新 trusted；显式 UUID 为 pin，过期 pin 不会自动改写。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {
