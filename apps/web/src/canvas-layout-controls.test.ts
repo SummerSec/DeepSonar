@@ -22,6 +22,8 @@ test("canvas utilities expose accessible toggles and image export", () => {
   assert.match(source, /isUsableFlowSize\(flowWidth, flowHeight\)/);
   assert.match(source, /shouldRecoverViewport\(/);
   assert.match(source, /hasPositiveNodeBounds\(fitTargets\)/);
+  assert.match(source, /resolveFitMinZoom\(/);
+  assert.match(source, /applyEdgeZoomBoostVar\(/);
 });
 
 test("task workbench keeps the process canvas mounted when switching tabs", () => {

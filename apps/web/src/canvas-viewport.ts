@@ -1,7 +1,17 @@
+/** User can still pinch/scroll out this far; automatic fitView must not. */
+export const FULL_GRAPH_MIN_ZOOM = 0.05;
+export const FOCUSED_GRAPH_MIN_ZOOM = 0.2;
+/** fitView floor so a growing graph is not crushed to a sub-pixel stroke. */
+export const READABLE_FIT_MIN_ZOOM = 0.2;
+
 export type ViewportFitDecision = {
   fittedGeneration: string;
   shouldFit: boolean;
 };
+
+export function resolveFitMinZoom(focused: boolean): number {
+  return focused ? FOCUSED_GRAPH_MIN_ZOOM : Math.max(FULL_GRAPH_MIN_ZOOM, READABLE_FIT_MIN_ZOOM);
+}
 
 /**
  * A fit is meaningful only after React Flow has measured the current nodes,

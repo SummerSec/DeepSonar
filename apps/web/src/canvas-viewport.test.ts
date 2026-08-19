@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   consumeViewportFit,
+  FULL_GRAPH_MIN_ZOOM,
+  FOCUSED_GRAPH_MIN_ZOOM,
   hasPositiveNodeBounds,
   isUsableFlowSize,
+  READABLE_FIT_MIN_ZOOM,
+  resolveFitMinZoom,
   resolveViewportNodeIds,
   shouldRecoverViewport,
 } from "./canvas-viewport.js";
@@ -42,6 +46,17 @@ test("trace focus fits the explicit node while an unfocused trace fits its visib
     resolveViewportNodeIds(["context"], traceNodeIds, true),
     undefined,
     "empty trace targets must fall back to the full visible graph",
+  );
+});
+
+test("automatic fitView keeps a readable min zoom; the pane can still zoom further out", () => {
+  assert.equal(FULL_GRAPH_MIN_ZOOM, 0.05);
+  assert.ok(READABLE_FIT_MIN_ZOOM > FULL_GRAPH_MIN_ZOOM);
+  assert.equal(resolveFitMinZoom(false), READABLE_FIT_MIN_ZOOM);
+  assert.equal(resolveFitMinZoom(true), FOCUSED_GRAPH_MIN_ZOOM);
+  assert.ok(
+    resolveFitMinZoom(false) > 0.08555,
+    "production crush zoom must not be used as the unfocused fit floor",
   );
 });
 
