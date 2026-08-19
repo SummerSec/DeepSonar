@@ -1,0 +1,72 @@
+name: 缺陷
+description: 功能异常、回归、部署或运行时错误
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请写清版本、复现和期望。日志与截图请打码密钥、Token、口令。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 发布 tag 或镜像标签
+      placeholder: v0.1.40
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: 组件
+      multiple: true
+      options:
+        - Web 控制台
+        - Scheduler
+        - Image Admission
+        - Model Gateway
+        - 部署 / Compose
+        - 数据库 / db:rebuild
+        - 运行时镜像
+        - 共享资产 / Silo
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: agent_mode
+    attributes:
+      label: Agent 模式
+      options:
+        - real
+        - fake
+        - 不确定 / 无关
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际现象
+      placeholder: 点了什么，看到了什么，现在卡在哪
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图说明
+      description: 调度器、admission、浏览器控制台均可。不要贴密钥。
