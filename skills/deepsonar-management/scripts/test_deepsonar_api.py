@@ -82,6 +82,23 @@ class DeepSonarApiCliTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module["ApiError"], "compose 任务必须"):
             self.run_command("tasks.create", ["project-id"], {"title": "bad", "kind": "compose"})
 
+    def test_task_update_patches_title_and_content(self):
+        self.run_command(
+            "tasks.update",
+            ["canvas-id"],
+            {"title": "更正标题", "content": "补充完成标准"},
+        )
+        self.assertEqual(
+            self.calls,
+            [(
+                "PATCH",
+                "/tasks/canvas-id",
+                {"title": "更正标题", "content": "补充完成标准"},
+            )],
+        )
+        with self.assertRaisesRegex(self.module["ApiError"], "至少提供 --title 或 --content"):
+            self.run_command("tasks.update", ["canvas-id"], {})
+
     def test_fact_ledgers_messages_and_provision_limit_use_current_contract(self):
         self.run_command(
             "facts.list", ["canvas-id"],

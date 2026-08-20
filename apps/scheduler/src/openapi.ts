@@ -842,6 +842,41 @@ const OPS: Op[] = [
     responses: { "200": TaskResumeResponseSchema },
   },
   { method: "post", path: "/tasks/{canvasId}/retry", summary: "重试任务（清空历史后从意图重跑）", scope: "jobs:control", tags: ["Tasks"] },
+  {
+    method: "patch",
+    path: "/tasks/{canvasId}",
+    summary: "更新任务标题与内容（不改写已冻结 Job 快照）",
+    description:
+      "同步 canvases.title 与 target_json.title/content/goal，并更新 root 节点标题/body。只影响后续 Hub 读图、新派生 Job 与显式重试；不改写已在跑或已结束 Job 的 agent_snapshot_json。归档任务返回 409 TASK_ARCHIVED。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        content: { type: "string", minLength: 1, maxLength: 20000, description: "必要背景、边界与完成标准；同步写入 target_json.content 与 goal" },
+      },
+    },
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "title", "target_json", "has_active_jobs", "snapshot_rewritten", "message"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          project_id: { type: "string", format: "uuid" },
+          title: { type: "string" },
+          status: { type: "string" },
+          archived_at: { type: ["string", "null"] },
+          target_json: { type: "object", additionalProperties: true },
+          has_active_jobs: { type: "boolean" },
+          snapshot_rewritten: { type: "boolean", enum: [false] },
+          message: { type: "string" },
+        },
+      },
+    },
+  },
   // jobs
   {
     method: "post",
