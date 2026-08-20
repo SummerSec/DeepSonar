@@ -1,4 +1,4 @@
-import { parseDshPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
 
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -26,6 +26,8 @@ export function extractModelFromSettings(agentCli: string, settingsConfig: unkno
     return match?.[1] || match?.[2] || null;
   }
   if (agentCli === "pi") {
+    const official = readOfficialLlmPiAiSettings(settingsConfig);
+    if (official?.defaultModel) return official.defaultModel;
     const providers = asObject(settings.providers);
     const providerEntries = Object.keys(providers).length > 0
       ? Object.values(providers)

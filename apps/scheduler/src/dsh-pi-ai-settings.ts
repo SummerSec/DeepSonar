@@ -79,6 +79,84 @@ export interface DshPiAiRuntimeProjection {
   config: { providers: Record<string, Record<string, unknown>> };
 }
 
+export interface OfficialLlmPiAiProfile {
+  route: string;
+  baseURL: string | null;
+  apiKey: string | null;
+  modelIds: string[];
+  defaultModel: string | null;
+  providers: Record<string, Record<string, unknown>>;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function looksLikeOfficialLlmPiAiRoot(value: Record<string, unknown> | null): value is Record<string, unknown> {
+  return Boolean(value && ("llm-pi-ai" in value || "agent-default-model" in value));
+}
+
+/** Official llm-pi-ai document from `{ config: yaml|object }` or a top-level paste. */
+export function readOfficialLlmPiAiDocument(settingsConfig: unknown): Record<string, unknown> | null {
+  const settings = asRecord(settingsConfig);
+  if (!settings) return null;
+  if (typeof settings.config === "string" && settings.config.trim()) {
+    const document = parseDocument(settings.config, { customTags: [], prettyErrors: false });
+    if (document.errors.length === 0) {
+      const root = asRecord(document.toJS({ maxAliasCount: 0 }));
+      if (looksLikeOfficialLlmPiAiRoot(root)) return root;
+    }
+  }
+  const nested = asRecord(settings.config);
+  if (looksLikeOfficialLlmPiAiRoot(nested)) return nested;
+  return looksLikeOfficialLlmPiAiRoot(settings) ? settings : null;
+}
+
+function trimUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  return value.trim().replace(/\/+$/u, "");
+}
+
+function trimText(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  return value.trim();
+}
+
+/** Lenient official llm-pi-ai read for extractors (pi + dsh). Does not enforce DSH allowlists. */
+export function readOfficialLlmPiAiSettings(settingsConfig: unknown): OfficialLlmPiAiProfile | null {
+  const root = readOfficialLlmPiAiDocument(settingsConfig);
+  if (!root) return null;
+  const providers = asRecord(asRecord(root["llm-pi-ai"])?.providers);
+  if (!providers || Object.keys(providers).length === 0) return null;
+  const defaultModel = asRecord(root["agent-default-model"]);
+  const selectedRoute = trimText(defaultModel?.provider) ?? "";
+  const selectedDefaultModel = trimText(defaultModel?.model) ?? "";
+  const route = selectedRoute && providers[selectedRoute] ? selectedRoute : Object.keys(providers)[0]!;
+  const profile = asRecord(providers[route]) ?? {};
+  const modelIds: string[] = [];
+  const push = (id: unknown) => {
+    const value = trimText(id);
+    if (value && !modelIds.includes(value)) modelIds.push(value);
+  };
+  push(selectedDefaultModel);
+  if (Array.isArray(profile.models)) {
+    for (const raw of profile.models) push(asRecord(raw)?.id);
+  } else {
+    for (const id of Object.keys(asRecord(profile.models) ?? {})) push(id);
+  }
+  return {
+    route,
+    baseURL: trimUrl(profile.baseURL ?? profile.baseUrl ?? profile.base_url),
+    apiKey: trimText(profile.apiKey ?? profile.api_key),
+    modelIds,
+    defaultModel: selectedDefaultModel || modelIds[0] || null,
+    providers: Object.fromEntries(
+      Object.entries(providers).map(([id, raw]) => [id, asRecord(raw) ?? {}]),
+    ),
+  };
+}
+
 export function parseDshPiAiSettings(
   settingsConfig: unknown,
   credentialProvider?: string | null,

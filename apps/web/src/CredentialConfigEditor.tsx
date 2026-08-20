@@ -80,8 +80,99 @@ export function providerProtocolLabel(
     : "OpenAI Responses";
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function looksLikeOfficialLlmPiAiRoot(value: Record<string, unknown> | null): value is Record<string, unknown> {
+  return Boolean(value && ("llm-pi-ai" in value || "agent-default-model" in value));
+}
+
+function readOfficialLlmPiAiDocumentClient(settings: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  if (!settings) return null;
+  if (typeof settings.config === "string" && settings.config.trim()) {
+    const document = parseDocument(settings.config, { customTags: [], prettyErrors: false });
+    if (document.errors.length === 0) {
+      const root = asRecord(document.toJS({ maxAliasCount: 0 }));
+      if (looksLikeOfficialLlmPiAiRoot(root)) return root;
+    }
+  }
+  const nested = asRecord(settings.config);
+  if (looksLikeOfficialLlmPiAiRoot(nested)) return nested;
+  return looksLikeOfficialLlmPiAiRoot(settings) ? settings : null;
+}
+
+function officialLlmPiAiProfile(settings: Record<string, unknown> | null | undefined): Record<string, unknown> | undefined {
+  const root = readOfficialLlmPiAiDocumentClient(settings);
+  const providers = asRecord(asRecord(root?.["llm-pi-ai"])?.providers);
+  if (!providers) return undefined;
+  const selected = asRecord(root?.["agent-default-model"]);
+  const route = typeof selected?.provider === "string" ? selected.provider.trim() : "";
+  const profile = route ? asRecord(providers[route]) : undefined;
+  return profile ?? Object.values(providers).find((value) => asRecord(value)) as Record<string, unknown> | undefined;
+}
+
+/** Parse official llm-pi-ai YAML/JSON or DeepSonar's private pi JSON into a settings object. */
+export function parsePiSettingsText(text: string): { ok: true; empty: boolean; value: Record<string, unknown> } | { ok: false; empty: boolean; error: string } {
+  if (!text.trim()) return { ok: true, empty: true, value: {} };
+  const json = validateJsonObjectText(text);
+  if (json.ok && !json.empty) return { ok: true, empty: false, value: json.value };
+  const document = parseDocument(text, { customTags: [], prettyErrors: false });
+  if (document.errors.length > 0) {
+    return { ok: false, empty: false, error: json.ok ? "空对象" : (json.error ?? document.errors[0]?.message ?? "YAML 解析失败") };
+  }
+  const root = asRecord(document.toJS({ maxAliasCount: 0 }));
+  if (!root) return { ok: false, empty: false, error: "配置必须是对象" };
+  return { ok: true, empty: false, value: root };
+}
+
+export function extractModelsFromSettingsClient(settings: Record<string, unknown> | null | undefined): string[] {
+  const found: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === "string" && value.trim() && !found.includes(value.trim())) found.push(value.trim());
+  };
+  const root = readOfficialLlmPiAiDocumentClient(settings ?? null);
+  if (root) {
+    const selected = asRecord(root["agent-default-model"]);
+    push(selected?.model);
+    const providers = asRecord(asRecord(root["llm-pi-ai"])?.providers) ?? {};
+    for (const raw of Object.values(providers)) {
+      const models = asRecord(raw)?.models;
+      if (Array.isArray(models)) for (const model of models) push(asRecord(model)?.id);
+    }
+    return found;
+  }
+  if (!settings) return found;
+  const env = asRecord(settings.env) ?? {};
+  push(env.ANTHROPIC_MODEL);
+  push(env.ANTHROPIC_DEFAULT_FABLE_MODEL);
+  push(env.ANTHROPIC_DEFAULT_SONNET_MODEL);
+  push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
+  push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
+  push(settings.model);
+  for (const model of Object.keys(asRecord(settings.models) ?? {})) push(model);
+  const providers = asRecord(settings.providers) ?? {};
+  for (const rawProvider of Object.values(providers)) {
+    const models = asRecord(rawProvider)?.models;
+    if (Array.isArray(models)) {
+      for (const rawModel of models) push(asRecord(rawModel)?.id);
+    } else {
+      for (const model of Object.keys(asRecord(models) ?? {})) push(model);
+    }
+  }
+  if (typeof settings.config === "string") {
+    const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
+    push(match?.[1] || match?.[2]);
+  }
+  return found;
+}
+
 export function extractSecretFromSettings(settings: Record<string, unknown> | null | undefined): string {
   if (!settings) return "";
+  const officialProfile = officialLlmPiAiProfile(settings);
+  const officialKey = officialProfile?.apiKey ?? officialProfile?.api_key;
+  if (typeof officialKey === "string" && officialKey.trim()) return officialKey.trim();
   const providers = settings.providers && typeof settings.providers === "object" && !Array.isArray(settings.providers)
     ? settings.providers as Record<string, unknown>
     : {};
@@ -118,22 +209,15 @@ export function extractSecretFromSettings(settings: Record<string, unknown> | nu
 
 export function extractBaseUrlFromSettingsClient(settings: Record<string, unknown> | null | undefined): string {
   if (!settings) return "";
+  const officialProfile = officialLlmPiAiProfile(settings);
+  const officialUrl = officialProfile?.baseURL ?? officialProfile?.baseUrl ?? officialProfile?.base_url;
+  if (typeof officialUrl === "string" && officialUrl.trim()) return officialUrl.trim().replace(/\/+$/u, "");
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
     ? settings.env as Record<string, unknown>
     : {};
   for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]) {
     const value = env[key];
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
-  }
-  if (typeof settings.config === "string" && settings.config.includes("llm-pi-ai:")) {
-    const document = parseDocument(settings.config, { customTags: [], prettyErrors: false });
-    if (document.errors.length === 0) {
-      const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
-      const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
-      const providers = piAi?.providers as Record<string, unknown> | undefined;
-      const profile = providers ? Object.values(providers)[0] as Record<string, unknown> | undefined : undefined;
-      if (typeof profile?.baseURL === "string") return profile.baseURL.trim().replace(/\/+$/u, "");
-    }
   }
   if (typeof settings.config === "string") {
     const nested = /\[model_providers\.[^\]]+\][\s\S]*?base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
@@ -257,6 +341,48 @@ function patchDshBaseUrl(settingsYaml: string, credentialProvider: string, baseU
   return stringify(root, { lineWidth: 0 });
 }
 
+function patchPiSettingsBaseUrl(settingsText: string, credentialProvider: string, baseUrl: string): string {
+  const parsed = parsePiSettingsText(settingsText);
+  if (!parsed.ok || parsed.empty) return settingsText;
+  const endpoint = baseUrl.trim().replace(/\/+$/u, "");
+  const official = readOfficialLlmPiAiDocumentClient(parsed.value);
+  if (official) {
+    const defaultModel = asRecord(official["agent-default-model"]);
+    const route = typeof defaultModel?.provider === "string" && defaultModel.provider.trim()
+      ? defaultModel.provider.trim()
+      : (credentialProvider === "anthropic" ? "anthropic" : "openai");
+    const profile = asRecord(asRecord(asRecord(official["llm-pi-ai"])?.providers)?.[route]);
+    if (!profile) return settingsText;
+    profile.baseURL = endpoint;
+    if (typeof parsed.value.config === "string") {
+      return formatJsonObject({ ...parsed.value, config: stringify(official, { lineWidth: 0 }) });
+    }
+    return validateJsonObjectText(settingsText).ok ? formatJsonObject(official) : stringify(official, { lineWidth: 0 });
+  }
+  const providers = asRecord(parsed.value.providers) ?? {};
+  const first = Object.values(providers).find((value) => asRecord(value));
+  const profile = asRecord(first);
+  if (!profile) return settingsText;
+  if ("baseURL" in profile && !("baseUrl" in profile)) profile.baseURL = endpoint;
+  else profile.baseUrl = endpoint;
+  return formatJsonObject(parsed.value);
+}
+
+function applyPiSettingsPaste(
+  text: string,
+  onSettingsJsonChange: (value: string) => void,
+  onBaseUrlChange: (value: string) => void,
+  onSecretChange: (value: string) => void,
+): void {
+  onSettingsJsonChange(text);
+  const parsed = parsePiSettingsText(text);
+  if (!parsed.ok || parsed.empty) return;
+  const nextBase = extractBaseUrlFromSettingsClient(parsed.value);
+  if (nextBase) onBaseUrlChange(nextBase);
+  const nextSecret = extractSecretFromSettings(parsed.value);
+  if (nextSecret && nextSecret !== MASKED_SECRET_PLACEHOLDER) onSecretChange(nextSecret);
+}
+
 /** Build settingsConfig object from editor state (create & edit share this). */
 export function buildSettingsConfigFromEditor(input: {
   agentCli: AgentCli;
@@ -320,6 +446,28 @@ export function buildSettingsConfigFromEditor(input: {
       ok: true,
       pastedAsIs: Boolean(settingsJson.trim()),
       settings: patchProviderOverrides({ config: config.replace(/\r\n/g, "\n") }, parsedContextWindowTokens, parsedReasoning),
+    };
+  }
+  if (agentCli === "pi") {
+    const parsed = parsePiSettingsText(settingsJson);
+    if (!parsed.ok) return { ok: false, error: `Pi Provider 配置无效：${parsed.error}` };
+    if (!parsed.empty) {
+      const settings = structuredClone(parsed.value);
+      if (secret.trim() && !readOfficialLlmPiAiDocumentClient(settings)) {
+        const providers = asRecord(settings.providers) ?? {};
+        const first = Object.values(providers).find((value) => asRecord(value));
+        if (asRecord(first)) asRecord(first)!.apiKey = secret.trim();
+      }
+      return { ok: true, pastedAsIs: true, settings: patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning) };
+    }
+    if (input.allowEmptyDefault === false) return { ok: false, error: "settingsConfig 不能为空" };
+    const providerKey = provider === "anthropic" ? "anthropic-messages" : "openai-responses";
+    return {
+      ok: true,
+      pastedAsIs: false,
+      settings: patchProviderOverrides({
+        providers: { deepsonar: { baseUrl: baseUrl.trim(), api: providerKey, apiKey: secret.trim(), models: [] } },
+      }, parsedContextWindowTokens, parsedReasoning),
     };
   }
   const validation = validateJsonObjectText(settingsJson);
@@ -446,6 +594,7 @@ export function CredentialConfigEditor({
 }) {
   const settingsValidation = useMemo(() => validateJsonObjectText(settingsJson), [settingsJson]);
   const dshYamlValidation = useMemo(() => validateDshYamlText(settingsJson), [settingsJson]);
+  const piSettingsValidation = useMemo(() => parsePiSettingsText(settingsJson), [settingsJson]);
   const tomlValidation = useMemo(() => validateTomlText(tomlText), [tomlText]);
   const authValidation = useMemo(() => validateJsonObjectText(authJson), [authJson]);
   const compatibleProviders = useMemo(() => {
@@ -473,16 +622,21 @@ export function CredentialConfigEditor({
   }, [contextWindowTokens]);
   const configValid = (agentCli === "codex"
     ? tomlValidation.ok && authValidation.ok
-    : agentCli === "dsh" ? dshYamlValidation.ok : settingsValidation.ok) && contextWindowValid && reasoningValid;
+    : agentCli === "dsh" ? dshYamlValidation.ok
+      : agentCli === "pi" ? piSettingsValidation.ok : settingsValidation.ok) && contextWindowValid && reasoningValid;
   const secretFromConfig = useMemo(() => {
     if (agentCli === "dsh") return "";
     if (agentCli === "codex") {
       if (authValidation.ok && !authValidation.empty) return extractSecretFromSettings({ auth: authValidation.value });
       return "";
     }
+    if (agentCli === "pi") {
+      if (piSettingsValidation.ok && !piSettingsValidation.empty) return extractSecretFromSettings(piSettingsValidation.value);
+      return "";
+    }
     if (settingsValidation.ok && !settingsValidation.empty) return extractSecretFromSettings(settingsValidation.value);
     return "";
-  }, [agentCli, authValidation, settingsValidation]);
+  }, [agentCli, authValidation, piSettingsValidation, settingsValidation]);
   const hasUsableConfigSecret = Boolean(secretFromConfig && secretFromConfig !== MASKED_SECRET_PLACEHOLDER);
   const canSubmit = Boolean(provider && name.trim() && configValid && (mode === "edit" || secret.trim() || hasUsableConfigSecret));
 
@@ -694,6 +848,24 @@ export function CredentialConfigEditor({
           </label>
           <label className="cc-switch-field"><span className="cc-switch-label">DSH Provider 配置 YAML</span>
             <textarea value={settingsJson} onChange={(event) => onSettingsJsonChange(event.target.value)} rows={12} className={`theme-input-surface cc-switch-json ${!dshYamlValidation.ok ? "border-red-700/80" : ""}`} spellCheck={false} />
+          </label>
+        </div>
+      ) : agentCli === "pi" ? (
+        <div className="cc-switch-form">
+          <label className="cc-switch-field"><span className="cc-switch-label">Provider API Key</span>
+            <input type="password" value={secret} onChange={(event) => onSecretChange(event.target.value)} className="theme-input-surface cc-switch-input" autoComplete="off" />
+          </label>
+          <label className="cc-switch-field"><span className="cc-switch-label">Base URL</span>
+            <input value={baseUrl} onChange={(event) => { const next = event.target.value.trim().replace(/\/+$/u, ""); onBaseUrlChange(next); onSettingsJsonChange(patchPiSettingsBaseUrl(settingsJson, provider, next)); }} className="theme-input-surface cc-switch-input" placeholder="https://provider.example/v1" />
+          </label>
+          <label className="cc-switch-field"><span className="cc-switch-label">Pi / llm-pi-ai 配置（YAML 或 JSON）</span>
+            <textarea
+              value={settingsJson}
+              onChange={(event) => applyPiSettingsPaste(event.target.value, onSettingsJsonChange, onBaseUrlChange, onSecretChange)}
+              rows={12}
+              className={`theme-input-surface cc-switch-json ${!piSettingsValidation.ok ? "border-red-700/80" : ""}`}
+              spellCheck={false}
+            />
           </label>
         </div>
       ) : (

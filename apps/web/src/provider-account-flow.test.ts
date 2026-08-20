@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { buildSettingsConfigFromEditor } from "./CredentialConfigEditor";
+import {
+  buildSettingsConfigFromEditor,
+  extractBaseUrlFromSettingsClient,
+  extractModelsFromSettingsClient,
+  extractSecretFromSettings,
+  parsePiSettingsText,
+} from "./CredentialConfigEditor";
 import {
   boundCredentialLabel,
   inheritIgnoresLeftoverProjectModel,
@@ -245,9 +251,88 @@ test("Codex Pi and OpenCode use their native reasoning controls", () => {
   if (openCode.ok) assert.equal(openCode.settings.reasoning, "thinking-v2.5");
 });
 
+const officialLlmPiAiYaml = `llm-pi-ai:
+  providers:
+    xxxx:
+      api: openai-responses
+      baseURL: https://xxxx.example/v1
+      apiKey: sk-official-pi
+      models:
+        - id: gpt-5.6
+agent-default-model:
+  provider: xxxx
+  model: gpt-5.6
+`;
+
+const officialLlmPiAiJson = `{
+  "llm-pi-ai": {
+    "providers": {
+      "xxxx": {
+        "api": "openai-responses",
+        "baseURL": "https://xxxx.example/v1",
+        "apiKey": "sk-official-pi",
+        "models": [{ "id": "gpt-5.6" }]
+      }
+    }
+  },
+  "agent-default-model": { "provider": "xxxx", "model": "gpt-5.6" }
+}`;
+
+test("Pi settings box accepts official llm-pi-ai YAML and JSON and extracts baseURL/model/key", () => {
+  const yaml = parsePiSettingsText(officialLlmPiAiYaml);
+  assert.equal(yaml.ok, true);
+  if (yaml.ok && !yaml.empty) {
+    assert.equal(extractBaseUrlFromSettingsClient(yaml.value), "https://xxxx.example/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(yaml.value), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(yaml.value), "sk-official-pi");
+  }
+  const json = parsePiSettingsText(officialLlmPiAiJson);
+  assert.equal(json.ok, true);
+  if (json.ok && !json.empty) {
+    assert.equal(extractBaseUrlFromSettingsClient(json.value), "https://xxxx.example/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(json.value), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(json.value), "sk-official-pi");
+  }
+  const builtYaml = buildSettingsConfigFromEditor({
+    agentCli: "pi",
+    settingsJson: officialLlmPiAiYaml,
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "",
+    provider: "openai",
+    contextWindowTokens: "",
+    reasoning: "",
+  });
+  assert.equal(builtYaml.ok, true);
+  if (builtYaml.ok) {
+    assert.equal(extractBaseUrlFromSettingsClient(builtYaml.settings), "https://xxxx.example/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(builtYaml.settings), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(builtYaml.settings), "sk-official-pi");
+  }
+  const builtJson = buildSettingsConfigFromEditor({
+    agentCli: "pi",
+    settingsJson: officialLlmPiAiJson,
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "",
+    provider: "openai",
+    contextWindowTokens: "",
+    reasoning: "",
+  });
+  assert.equal(builtJson.ok, true);
+  if (builtJson.ok) {
+    assert.equal(extractBaseUrlFromSettingsClient(builtJson.settings), "https://xxxx.example/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(builtJson.settings), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(builtJson.settings), "sk-official-pi");
+  }
+});
+
 test("DSH provider editor exposes machine configuration without TUI surface", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   assert.match(editor, /DeepSeek Harness（JSON-RPC）/u);
+  assert.match(editor, /Pi \/ llm-pi-ai 配置（YAML 或 JSON）/u);
   assert.match(editor, /providers/);
   assert.match(editor, /openai-responses/);
   assert.doesNotMatch(editor, /dsh-cc-tui|dsh-app-tui|dsh-app-web/);
