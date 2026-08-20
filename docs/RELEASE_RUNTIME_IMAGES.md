@@ -140,9 +140,11 @@ digest，发布 GHCR 以及配置的 ACR、Docker Hub 标签，检查每个目�
 `openharmony-runtime.yml` covers test, audit, and fuzz on `linux/amd64` and
 `linux/arm64`. It uses QEMU for builds, runs the offline environment checks, and
 pins one immutable GHCR `src-*` tag per architecture. OpenHarmony Test smoke is
-`hdc version` / `hdc -v` plus the source-tool check; it must not require a real
-device. It is path-filtered to the OpenHarmony Dockerfiles, the
-`openharmony-*.sh` scripts, the vendored `gitcode-repo-py3` launcher and official
-`toolchains/hdc` slice, the Test runtime manifest, `.dockerignore`, the shared
+`hdc version` / `hdc -v` plus the source-tool check; either command reporting
+`Ver:` is enough (qemu/no-daemon may print `Connect server failed` on the
+other), and it must not require a real device. It is path-filtered to the
+OpenHarmony Dockerfiles, the `openharmony-*.sh` scripts, the vendored
+`gitcode-repo-py3` launcher and official `toolchains/hdc` slice, the Test
+runtime manifest, `.dockerignore`, the shared
 fingerprint/cache scripts, and its own workflow file. Release still publishes
 all three OpenHarmony products.

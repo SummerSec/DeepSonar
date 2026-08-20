@@ -43,16 +43,21 @@ ccache --version >/dev/null
 node --version >/dev/null
 claude --version >/dev/null
 if (( require_hdc )); then
-  hdc_version="$(hdc version 2>&1)"
-  hdc_verbose="$(hdc -v 2>&1)"
-  if [[ "$hdc_version" != *Ver:* || "$hdc_verbose" != *Ver:* ]]; then
+  hdc_version="$(hdc version 2>&1 || true)"
+  hdc_verbose="$(hdc -v 2>&1 || true)"
+  # Official linux-x64 hdc under qemu (arm64 image) may print
+  # "Connect server failed" on one of version/-v when no daemon exists,
+  # and "Ver: …" on the other. Accept if either command reports a version.
+  if [[ "${hdc_version}${hdc_verbose}" != *Ver:* ]]; then
     printf '环境检查失败：hdc version / hdc -v 无有效输出\n%s\n%s\n' "$hdc_version" "$hdc_verbose" >&2
     exit 1
   fi
-  python3 - <<'PY'
+  tool_manifest="${DEEPSONAR_TOOL_MANIFEST:-/opt/deepsonar/tool-manifest.json}"
+  python3 - "$tool_manifest" <<'PY'
 import json
+import sys
 from pathlib import Path
-m = json.loads(Path("/opt/deepsonar/tool-manifest.json").read_text())
+m = json.loads(Path(sys.argv[1]).read_text())
 if m.get("contract") != "deepsonar.runtime.contract/v1" or m.get("imageKey") != "deepsonar-openharmony-test" or m.get("device", {}).get("protocol") != "hdc":
     raise SystemExit(1)
 PY

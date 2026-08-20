@@ -25,17 +25,19 @@ require_hdc() {
 smoke_version() {
   require_hdc
   local version verbose
-  version="$("$hdc_bin" version 2>&1)"
-  verbose="$("$hdc_bin" -v 2>&1)"
-  if [[ -z "$version" || "$version" != *Ver:* ]]; then
-    printf 'OpenHarmony hdc 检查失败：hdc version 无有效输出\n%s\n' "$version" >&2
+  version="$("$hdc_bin" version 2>&1 || true)"
+  verbose="$("$hdc_bin" -v 2>&1 || true)"
+  # Same qemu/no-daemon split as openharmony-env.sh: one command may only
+  # print "Connect server failed"; pass if either reports Ver:.
+  if [[ "${version}${verbose}" != *Ver:* ]]; then
+    printf 'OpenHarmony hdc 检查失败：hdc version / hdc -v 无有效输出\n%s\n%s\n' "$version" "$verbose" >&2
     exit 1
   fi
-  if [[ -z "$verbose" || "$verbose" != *Ver:* ]]; then
-    printf 'OpenHarmony hdc 检查失败：hdc -v 无有效输出\n%s\n' "$verbose" >&2
-    exit 1
+  if [[ "$version" == *Ver:* ]]; then
+    printf '%s\n' "$version"
+  else
+    printf '%s\n' "$verbose"
   fi
-  printf '%s\n' "$version"
 }
 
 emit_no_target() {
