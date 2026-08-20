@@ -6,6 +6,25 @@ import test from "node:test";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
+type SchedulerSql = typeof import("./db.js").sql;
+
+/** Wipe compose fixtures in FK-safe order. `events` / `event_dedup` have no ON DELETE CASCADE. */
+async function wipeProjectComposeFixtures(db: SchedulerSql, projectIds: readonly string[]): Promise<void> {
+  if (projectIds.length === 0) return;
+  const ids = [...projectIds];
+  await db`DELETE FROM canvas_edges WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ANY(${ids}::uuid[]))`;
+  await db`DELETE FROM canvas_nodes WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ANY(${ids}::uuid[]))`;
+  await db`DELETE FROM task_reports WHERE project_id = ANY(${ids}::uuid[])`;
+  await db`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ANY(${ids}::uuid[]))`;
+  await db`DELETE FROM findings WHERE project_id = ANY(${ids}::uuid[])`;
+  await db`DELETE FROM event_dedup WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ANY(${ids}::uuid[]))`;
+  await db`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ANY(${ids}::uuid[]))`;
+  await db`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ANY(${ids}::uuid[])`;
+  await db`DELETE FROM jobs WHERE project_id = ANY(${ids}::uuid[])`;
+  await db`DELETE FROM canvases WHERE project_id = ANY(${ids}::uuid[])`;
+  await db`DELETE FROM projects WHERE id = ANY(${ids}::uuid[])`;
+}
+
 if (!testDatabaseUrl) {
   test("compose task PostgreSQL integration (set TEST_DATABASE_URL to run)", {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
@@ -140,13 +159,7 @@ if (!testDatabaseUrl) {
         target: { kind: "compose", goal: "must fail", seed_finding_ids: [findingId] },
       }), TaskSeedInputError);
     } finally {
-      await sql`DELETE FROM canvas_edges WHERE canvas_id = ANY(${[sourceCanvasId, ...canvasIds]}::text[])`;
-      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ANY(${[sourceCanvasId, ...canvasIds]}::text[])`;
-      await sql`DELETE FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
-      await sql`DELETE FROM findings WHERE id = ${findingId}`;
-      await sql`DELETE FROM jobs WHERE id = ${sourceJobId}`;
-      await sql`DELETE FROM canvases WHERE project_id = ANY(${[projectId, otherProjectId]}::uuid[])`;
-      await sql`DELETE FROM projects WHERE id = ANY(${[projectId, otherProjectId]}::uuid[])`;
+      await wipeProjectComposeFixtures(sql, [projectId, otherProjectId]);
       await rm(blobDir, { recursive: true, force: true });
     }
   });
@@ -308,12 +321,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE findings SET disposition = 'rejected_fp' WHERE id = ${pendingIds[0]}`;
       await assert.rejects(validateFrozenTaskSeedsForRetry(sql, projectId, frozen), TaskSeedInputError);
     } finally {
-      await sql`DELETE FROM canvas_edges WHERE canvas_id = ANY(${[sourceCanvasId, ...canvasIds]}::text[])`;
-      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ANY(${[sourceCanvasId, ...canvasIds]}::text[])`;
-      await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await wipeProjectComposeFixtures(sql, [projectId]);
       await sql.end({ timeout: 5 });
     }
   });

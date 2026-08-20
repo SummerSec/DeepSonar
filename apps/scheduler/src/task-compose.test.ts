@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   MAX_TASK_SEED_FINDINGS,
@@ -12,6 +13,20 @@ import { buildOpenApiDocument } from "./openapi.js";
 
 const noDb = null as never;
 const id = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+
+test("compose integration teardown deletes events before jobs", () => {
+  const source = readFileSync(new URL("./task-compose.integration.test.ts", import.meta.url), "utf8");
+  const helperStart = source.indexOf("async function wipeProjectComposeFixtures");
+  const helper = source.slice(helperStart, source.indexOf("if (!testDatabaseUrl)"));
+  const eventsAt = helper.indexOf("DELETE FROM events");
+  const jobsAt = helper.lastIndexOf("DELETE FROM jobs");
+  assert.ok(helperStart >= 0);
+  assert.match(helper, /DELETE FROM event_dedup/);
+  assert.match(helper, /parent_job_id = NULL/);
+  assert.match(helper, /finding_verification_rounds/);
+  assert.ok(eventsAt >= 0 && eventsAt < jobsAt);
+  assert.equal(source.split("wipeProjectComposeFixtures(").length - 1, 3);
+});
 
 test("OpenAPI advertises compose task input and Finding candidate filters", () => {
   const document = buildOpenApiDocument() as {
