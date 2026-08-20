@@ -254,6 +254,16 @@ def _tasks_create(pos, f):
         body["schedule_beijing_8am"] = parse_bool(f["schedule-beijing-8am"], "--schedule-beijing-8am")
     return call("POST", f"/projects/{need(pos[0] if pos else None, 'projectId')}/tasks", body)
 
+def _tasks_update(pos, f):
+    body = {}
+    if f.get("title") is not None:
+        body["title"] = f["title"]
+    if f.get("content") is not None:
+        body["content"] = f["content"]
+    if not body:
+        raise ApiError("至少提供 --title 或 --content")
+    return call("PATCH", f"/tasks/{_p0(pos, 'canvasId')}", body)
+
 
 def _events_push(pos, f):
     body = {
@@ -877,6 +887,7 @@ COMMANDS = {
 
     # ---------- 任务（一次任务 = 一个画布） ----------
     "tasks.create": _tasks_create,
+    "tasks.update": _tasks_update,
     "tasks.pause": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/pause"),
     "tasks.start": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/start"),
     "tasks.resume-session": lambda pos, f: call("POST", f"/tasks/{_p0(pos, 'canvasId')}/resume-session"),

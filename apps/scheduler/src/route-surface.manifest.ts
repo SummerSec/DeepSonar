@@ -110,6 +110,7 @@ PATCH /projects/:id
 PATCH /projects/:id/settings
 PATCH /projects/:id/shared-assets/policy
 PATCH /runtime-images/registry/channel
+PATCH /tasks/:canvasId
 PATCH /users/:id
 POST /agent-roles
 POST /auth/bootstrap
@@ -275,6 +276,7 @@ PATCH /jobs/{id}/priority
 PATCH /projects/{id}
 PATCH /projects/{id}/settings
 PATCH /projects/{id}/shared-assets/policy
+PATCH /tasks/{canvasId}
 POST /agent-roles
 POST /auth/bootstrap
 POST /auth/change-password

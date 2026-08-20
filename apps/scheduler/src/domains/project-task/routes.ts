@@ -47,6 +47,12 @@ import {
   taskExecutionProjection,
 } from "../../task-execution-control.js";
 import {
+  PatchTaskIntentBody,
+  applyRootBodyIntent,
+  applyTaskIntentPatch,
+  taskIntentSavedMessage,
+} from "../../task-intent.js";
+import {
   MAX_TASK_SEED_FINDINGS,
   TASK_KINDS,
   TaskSeedInputError,
@@ -556,6 +562,106 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
 
   app.post("/tasks/:canvasId/start", async (req, reply) =>
     setExecutionPaused(req, reply, false));
+
+  /**
+   * 就地改任务标题与内容（#251）。
+   * 只写 canvases.title / target_json 与 root 节点展示；不改写已冻结 Job 快照。
+   */
+  app.patch("/tasks/:canvasId", async (req, reply) => {
+    const { canvasId } = req.params as { canvasId: string };
+    let body;
+    try {
+      body = PatchTaskIntentBody.parse(req.body);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return reply.code(400).send({
+          error: error.issues[0]?.message ?? "invalid body",
+          error_code: "INVALID_TASK_INTENT",
+        });
+      }
+      throw error;
+    }
+    const result = await sql.begin(async (tx) => {
+      const [canvas] = await tx`
+        SELECT id, project_id, title, status, archived_at, target_json
+        FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+      if (!canvas) return { reason: "not_found" as const };
+      if ((canvas.status as string) === "archived") return { reason: "archived" as const };
+
+      const nextTitle = body.title ?? (canvas.title as string);
+      const nextTarget = applyTaskIntentPatch(
+        (canvas.target_json ?? {}) as Record<string, unknown>,
+        body,
+      );
+      const [updated] = await tx`
+        UPDATE canvases
+        SET title = ${nextTitle}, target_json = ${tx.json(nextTarget as never)}
+        WHERE id = ${canvasId}
+        RETURNING id, project_id, title, status, archived_at, target_json`;
+
+      const [root] = await tx`
+        SELECT id, body_json FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND node_type = 'root'
+        LIMIT 1
+        FOR UPDATE`;
+      if (root) {
+        const nextBody = applyRootBodyIntent(
+          (root.body_json ?? {}) as Record<string, unknown>,
+          nextTarget,
+        );
+        await tx`
+          UPDATE canvas_nodes
+          SET title = ${nextTitle}, body_json = ${tx.json(nextBody as never)}, updated_at = now()
+          WHERE id = ${root.id}`;
+      }
+
+      const active = await tx`
+        SELECT 1 FROM jobs
+        WHERE canvas_id = ${canvasId}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        LIMIT 1`;
+      return {
+        reason: undefined,
+        canvas: updated,
+        hasActiveJobs: active.length > 0,
+      };
+    });
+
+    if (result.reason === "not_found") {
+      return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
+    }
+    if (result.reason === "archived") {
+      return reply.code(409).send({
+        error: "任务已归档，不能修改标题或内容",
+        error_code: "TASK_ARCHIVED",
+      });
+    }
+
+    const hasActiveJobs = result.hasActiveJobs === true;
+    await audit(req, {
+      action: "task.update_intent",
+      resourceType: "canvas",
+      resourceId: canvasId,
+      projectId: result.canvas.project_id as string,
+      after: {
+        title: body.title,
+        content: body.content,
+        snapshot_rewritten: false,
+        has_active_jobs: hasActiveJobs,
+      },
+    });
+    return reply.code(200).send({
+      id: result.canvas.id,
+      project_id: result.canvas.project_id,
+      title: result.canvas.title,
+      status: result.canvas.status,
+      archived_at: result.canvas.archived_at,
+      target_json: result.canvas.target_json,
+      has_active_jobs: hasActiveJobs,
+      snapshot_rewritten: false,
+      message: taskIntentSavedMessage(hasActiveJobs),
+    });
+  });
 
   /**
    * 继续执行任务（不删历史）。

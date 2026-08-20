@@ -217,6 +217,14 @@ jobs:
       - name: Compose task unit
         run: pnpm ci:unit:compose-tasks
 
+      - name: Task intent edit unit
+        run: pnpm ci:unit:task-intent
+
+      - name: Task intent edit PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:task-intent
+
       - name: Searchable dropdown unit and adoption guard
         run: pnpm ci:unit:searchable-selects
 

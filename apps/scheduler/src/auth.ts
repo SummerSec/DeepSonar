@@ -116,6 +116,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /tasks/:canvasId/start": "jobs:control",
   "POST /tasks/:canvasId/retry": "jobs:control",
   "POST /tasks/:canvasId/resume-session": "jobs:control",
+  "PATCH /tasks/:canvasId": "tasks:write",
   "POST /tasks/:canvasId/archive": "tasks:write",
   "POST /tasks/:canvasId/unarchive": "tasks:write",
   "DELETE /tasks/:canvasId": "tasks:write",

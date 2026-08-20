@@ -26,6 +26,8 @@ import {
   type EffectiveFindingProtocol,
   type JobSummary,
 } from "../api";
+import { useAuth } from "../auth";
+import { canEditTaskIntent, taskIntentContentFromTarget } from "../task-intent";
 import { CanvasView } from "../CanvasView";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type PageProgress } from "../canvas-page-sync";
 import { useConfirmDialog } from "../components/ConfirmDialog";
@@ -128,6 +130,7 @@ function HumanFactCard({ canvasId, node, onDone }: { canvasId: string; node: Can
 /** 任务详情：只展示本任务范围 / 本任务发现 / 本任务过程画布（不混其它任务） */
 export function TaskCanvasPage() {
   const confirm = useConfirmDialog();
+  const { me } = useAuth();
   const { projectId, canvasId } = useParams<{ projectId: string; canvasId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as Tab) || "canvas";
@@ -176,6 +179,10 @@ export function TaskCanvasPage() {
   const [clock, setClock] = useState(() => Date.now());
   /** 任务内容 / 审计范围：默认折叠，避免挤占画布 */
   const [scopeOpen, setScopeOpen] = useState(false);
+  const [intentTitle, setIntentTitle] = useState("");
+  const [intentContent, setIntentContent] = useState("");
+  const [intentDirty, setIntentDirty] = useState(false);
+  const [intentSaving, setIntentSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [findingTrace, setFindingTrace] = useState<FindingTrace | null>(null);
@@ -459,6 +466,12 @@ export function TaskCanvasPage() {
   const executionPausing = executionState === "pausing";
   const executionPaused = executionState === "paused";
   const taskArchived = canvasStatus === "archived";
+  const canEditIntent = canEditTaskIntent(me, taskArchived);
+  useEffect(() => {
+    if (intentDirty) return;
+    setIntentTitle(meta?.title ?? "");
+    setIntentContent(taskIntentContentFromTarget(meta?.target_json));
+  }, [intentDirty, meta?.title, meta?.target_json]);
   // 生命周期从实际开始执行起算；定时排队阶段不算进生命周期。
   const executionElapsed = meta?.started_at
     ? formatElapsed(meta.started_at, lifecycleActive ? null : taskLifecycle.endedAt, clock)
@@ -559,6 +572,29 @@ export function TaskCanvasPage() {
   };
 
   /** 重试任务 = 清空本画布历史后从意图重新执行 */
+  const saveTaskIntent = async () => {
+    if (!canvasId || !canEditIntent) return;
+    const title = intentTitle.trim();
+    const content = intentContent.trim();
+    if (!title) return flash("请写明希望得到的结果");
+    if (!content) return flash("请补充必要背景或边界");
+    setIntentSaving(true);
+    try {
+      const result = await api.updateTask(canvasId, { title, content });
+      setMeta((prev) => prev
+        ? { ...prev, title: result.title, target_json: result.target_json }
+        : prev);
+      setIntentTitle(result.title);
+      setIntentContent(taskIntentContentFromTarget(result.target_json));
+      setIntentDirty(false);
+      flash(result.message);
+    } catch (e) {
+      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setIntentSaving(false);
+    }
+  };
+
   const retryTaskHard = async () => {
     if (!canvasId) return;
     const ok = await confirm({
@@ -917,7 +953,7 @@ export function TaskCanvasPage() {
       </div>
 
       {/* 任务只展示自然语言内容；默认可折叠，避免挤占工作台。 */}
-      {scopeEntries.length > 0 && (
+      {(scopeEntries.length > 0 || canEditIntent) && (
         <div className="task-workbench-scope mx-3 mt-2 shrink-0 rounded-2xl bg-white/[.018] ring-1 ring-white/[.04]">
           <button
             type="button"
@@ -945,22 +981,74 @@ export function TaskCanvasPage() {
           </button>
           {scopeOpen && (
             <div className="flex flex-wrap gap-2 border-t border-white/[.04] px-4 py-2.5">
-              {scopeEntries.map(([k, v]) =>
-                typeof v === "string" && k === "内容" ? (
-                  <div key={k} className="theme-surface w-full rounded-xl px-4 py-3 ring-1">
-                    <MarkdownView markdown={v} />
-                  </div>
-                ) : (
-                  <span
-                    key={k}
-                    className="theme-chip inline-flex max-w-full items-baseline gap-1.5 rounded-full px-2.5 py-1 ring-1"
-                  >
-                    <span className="shrink-0 font-mono text-[9px] text-zinc-600">{k}</span>
-                    <span className="truncate text-[10px] text-zinc-300">
-                      {typeof v === "string" ? v : JSON.stringify(v)}
+              {canEditIntent ? (
+                <form
+                  className="flex w-full flex-col gap-3"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveTaskIntent();
+                  }}
+                >
+                  <label className="block">
+                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                      希望得到什么结果
                     </span>
-                  </span>
-                ),
+                    <input
+                      value={intentTitle}
+                      maxLength={200}
+                      onChange={(event) => {
+                        setIntentTitle(event.target.value);
+                        setIntentDirty(true);
+                      }}
+                      className="theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                      必要背景、边界与完成标准
+                    </span>
+                    <textarea
+                      value={intentContent}
+                      maxLength={20_000}
+                      rows={5}
+                      onChange={(event) => {
+                        setIntentContent(event.target.value);
+                        setIntentDirty(true);
+                      }}
+                      className="theme-input-surface min-h-36 w-full resize-y border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
+                    />
+                  </label>
+                  <p className="text-[11px] leading-5 text-zinc-600">
+                    保存后只影响后续 Hub 读图、新派生 Job 与显式重试；不会改写已在跑或已结束 Job 的冻结快照。
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={intentSaving || !intentDirty || !intentTitle.trim() || !intentContent.trim()}
+                      className="rounded-full bg-white/[.06] px-3 py-1.5 text-[11px] text-zinc-200 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.1] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {intentSaving ? "保存中…" : "保存"}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                scopeEntries.map(([k, v]) =>
+                  typeof v === "string" && k === "内容" ? (
+                    <div key={k} className="theme-surface w-full rounded-xl px-4 py-3 ring-1">
+                      <MarkdownView markdown={v} />
+                    </div>
+                  ) : (
+                    <span
+                      key={k}
+                      className="theme-chip inline-flex max-w-full items-baseline gap-1.5 rounded-full px-2.5 py-1 ring-1"
+                    >
+                      <span className="shrink-0 font-mono text-[9px] text-zinc-600">{k}</span>
+                      <span className="truncate text-[10px] text-zinc-300">
+                        {typeof v === "string" ? v : JSON.stringify(v)}
+                      </span>
+                    </span>
+                  ),
+                )
               )}
             </div>
           )}

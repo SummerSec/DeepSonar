@@ -1733,6 +1733,22 @@ export const api = {
     send<Project>("PATCH", `/projects/${id}`, p),
   archiveProject: (id: string) =>
     send<{ id: string; status: string }>("POST", `/projects/${id}/archive`),
+  /** 就地更新任务标题与内容；不改写已冻结 Job 快照 */
+  updateTask: (
+    canvasId: string,
+    t: { title?: string; content?: string },
+  ) =>
+    send<{
+      id: string;
+      project_id: string;
+      title: string;
+      status: string;
+      archived_at: string | null;
+      target_json: Record<string, unknown>;
+      has_active_jobs: boolean;
+      snapshot_rewritten: false;
+      message: string;
+    }>("PATCH", `/tasks/${canvasId}`, t),
   /** 语义化任务创建（同事务建画布 + root + pending job） */
   createTask: (
     projectId: string,
