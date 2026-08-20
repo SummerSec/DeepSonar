@@ -32,20 +32,11 @@ ARG DSH_CODE_RUNTIME_WORKER_INTEGRITY=sha512-CEGOMie1k733yc6TCSZuAtgbcs5H2QPO9wZ
 ARG DSH_REASONING_SETTINGS_VERSION=0.3.0
 ARG DSH_REASONING_SETTINGS_COMMIT=5768999dbbbb5088fd27f89c85970fe2f7b2c5c6
 ARG DSH_REASONING_SETTINGS_SHA256=e583207774b2875c4f5914540a8df699b4f0f947b3e3a28722504237ba3dc6e3
-ARG SEMGREP_VERSION=1.172.0
-ARG GITLEAKS_VERSION=8.30.1
-ARG SHELLCHECK_VERSION=0.11.0
-ARG SEMGREP_AMD64_SHA256=d8b94af4266a575287ad2cd844573743ab4fe58f6bfb6d9229327807937eade3
-ARG SEMGREP_ARM64_SHA256=c881a305b965e594b88b15c2c6419b398e76e438ec61e60916c8b2effe927240
-ARG GITLEAKS_AMD64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-ARG GITLEAKS_ARM64_SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
-ARG SHELLCHECK_AMD64_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-ARG SHELLCHECK_ARM64_SHA256=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
 
 RUN set -eu; \
   test "$TOOLSET" = base -o "$TOOLSET" = audit; \
   packages="git=${GIT_VERSION} python3=${PYTHON_VERSION} ca-certificates=${CA_CERTIFICATES_VERSION} curl=${CURL_VERSION} ripgrep=${RIPGREP_VERSION} jq=${JQ_VERSION} file=${FILE_VERSION} unzip=${UNZIP_VERSION} xz-utils=${XZ_VERSION}"; \
-  if [ "$TOOLSET" = audit ]; then packages="$packages python3-venv=${PYTHON_VERSION} binutils=${BINUTILS_VERSION}"; fi; \
+  if [ "$TOOLSET" = audit ]; then packages="$packages binutils=${BINUTILS_VERSION}"; fi; \
   for attempt in 1 2 3; do \
     if apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends $packages; then break; fi; \
     if [ "$attempt" = 3 ]; then exit 1; fi; \
@@ -100,25 +91,6 @@ RUN set -eu; \
   && rm -f "$reasoning_archive" \
   && npm cache clean --force
 
-RUN set -eu; if [ "$TOOLSET" = audit ]; then \
-      arch="$(dpkg --print-architecture)"; \
-      case "$arch" in \
-        amd64) semgrep_arch=x86_64; semgrep_sha="$SEMGREP_AMD64_SHA256"; gitleaks_arch=x64; gitleaks_sha="$GITLEAKS_AMD64_SHA256"; shellcheck_arch=x86_64; shellcheck_sha="$SHELLCHECK_AMD64_SHA256" ;; \
-        arm64) semgrep_arch=aarch64; semgrep_sha="$SEMGREP_ARM64_SHA256"; gitleaks_arch=arm64; gitleaks_sha="$GITLEAKS_ARM64_SHA256"; shellcheck_arch=aarch64; shellcheck_sha="$SHELLCHECK_ARM64_SHA256" ;; \
-        *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
-      esac; \
-      mkdir -p /tmp/deepsonar-tools /opt/deepsonar/semgrep; \
-      semgrep_file="/tmp/deepsonar-tools/semgrep-${SEMGREP_VERSION}-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_${semgrep_arch}.whl"; \
-      curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "https://files.pythonhosted.org/packages/$(test "$arch" = amd64 && printf '84/a5/21624510b65271a673961a894af7511b5123d662e84c74c765560ea28b27' || printf '1b/45/35488f2f609db23eed350ada093722484a6f8cb3b1eaf8ecfd54e2338521')/$(basename "$semgrep_file")" -o "$semgrep_file"; \
-      echo "$semgrep_sha  $semgrep_file" | sha256sum -c -; \
-      python3 -m venv /opt/deepsonar/semgrep; /opt/deepsonar/semgrep/bin/pip install --no-cache-dir "$semgrep_file"; ln -s /opt/deepsonar/semgrep/bin/semgrep /usr/local/bin/semgrep; \
-      curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${gitleaks_arch}.tar.gz" -o /tmp/deepsonar-tools/gitleaks.tar.gz; \
-      echo "$gitleaks_sha  /tmp/deepsonar-tools/gitleaks.tar.gz" | sha256sum -c -; tar -xzf /tmp/deepsonar-tools/gitleaks.tar.gz -C /usr/local/bin gitleaks; \
-      curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.${shellcheck_arch}.tar.xz" -o /tmp/deepsonar-tools/shellcheck.tar.xz; \
-      echo "$shellcheck_sha  /tmp/deepsonar-tools/shellcheck.tar.xz" | sha256sum -c -; mkdir /tmp/shellcheck; tar -xJf /tmp/deepsonar-tools/shellcheck.tar.xz -C /tmp/shellcheck --strip-components=1; install -m 0755 /tmp/shellcheck/shellcheck /usr/local/bin/shellcheck; \
-      rm -rf /tmp/deepsonar-tools /tmp/shellcheck; \
-    fi
-
 COPY agent-harness/runtime-images.json /opt/deepsonar/runtime-images.json
 COPY agent-harness/write-tool-manifest.mjs /opt/deepsonar/write-tool-manifest.mjs
 RUN node /opt/deepsonar/write-tool-manifest.mjs /opt/deepsonar/runtime-images.json "$TOOLSET" /opt/deepsonar/tool-manifest.json \
@@ -141,9 +113,7 @@ LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
       org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
       org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
-ENV IS_SANDBOX=1 \
-    SEMGREP_SEND_METRICS=off \
-    SEMGREP_ENABLE_VERSION_CHECK=0
+ENV IS_SANDBOX=1
 COPY --from=runtime-rootfs / /
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, statSync as fsStatSync } from "node:fs";
+import { existsSync, readFileSync, statSync as fsStatSync } from "node:fs";
 import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
@@ -82,7 +82,6 @@ const chromeAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-c
 const chromeTestDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-test", import.meta.url), "utf8");
 const chromeFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-fuzz", import.meta.url), "utf8");
 const chromeAuditEnv = readFileSync(new URL("../deploy/chrome-audit-env.sh", import.meta.url), "utf8");
-const chromeAuditScan = readFileSync(new URL("../deploy/chrome-audit-scan.sh", import.meta.url), "utf8");
 const chromeHeadless = readFileSync(new URL("../deploy/chrome-headless.sh", import.meta.url), "utf8");
 const chromeTestEnv = readFileSync(new URL("../deploy/chrome-test-env.sh", import.meta.url), "utf8");
 const chromeTestSmoke = readFileSync(new URL("./chrome-test-smoke.mjs", import.meta.url), "utf8");
@@ -213,7 +212,7 @@ expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=0.84.1") && kaliDock
 expect(dockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==") && dockerfile.includes(piIntegrityCheck), "Pi Coding Agent integrity must be verified during the base image build");
 expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==") && kaliDockerfile.includes(piIntegrityCheck), "Kali Pi Coding Agent integrity must be verified during the image build");
 const aptArgs = {
-  git: "GIT", python3: "PYTHON", "python3-venv": "PYTHON", "ca-certificates": "CA_CERTIFICATES",
+  git: "GIT", python3: "PYTHON", "ca-certificates": "CA_CERTIFICATES",
   curl: "CURL", ripgrep: "RIPGREP", jq: "JQ", file: "FILE", unzip: "UNZIP", "xz-utils": "XZ", binutils: "BINUTILS",
 };
 for (const [name, entry] of Object.entries(config.apt)) {
@@ -357,8 +356,10 @@ for (const arch of ["amd64", "arm64"]) {
   expect(/^[0-9a-f]{64}$/.test(asset?.common_sha256 ?? ""), `Chrome ${arch} common package must carry a SHA256 checksum`);
   expect(chromeTestDockerfile.includes(asset?.sha256 ?? "") && chromeTestDockerfile.includes(asset?.common_sha256 ?? ""), `Chrome ${arch} package checksums missing from Dockerfile`);
 }
-expect(chromeAuditDockerfile.includes("--filter=blob:none") || chromeAuditScan.includes("--filter=blob:none"), "Chrome Audit must support git partial clone");
-expect(chromeAuditDockerfile.includes("chrome-audit-rules.yml") && chromeAuditDockerfile.includes("semgrep"), "Chrome Audit must bundle Semgrep C++ rules");
+expect(chromeAuditEnv.includes("--filter") && chromeAuditDockerfile.includes("git"), "Chrome Audit must keep git partial clone as a base tool");
+expect(!existsSync(new URL("../deploy/chrome-audit-rules.yml", import.meta.url)), "Chrome Audit 不得捆绑平台扫描规则包");
+expect(!existsSync(new URL("../deploy/chrome-audit-scan.sh", import.meta.url)), "Chrome Audit 不得提供平台固定扫描入口");
+expect(!chromeAuditDockerfile.includes("chrome-audit-rules.yml") && !chromeAuditDockerfile.includes("chrome-audit-scan.sh") && !chromeAuditEnv.includes("chrome-audit-scan.sh"), "Chrome Audit 不得安装固定扫描脚本或规则包");
 expect(chromeAuditDockerfile.includes("clang") && chromeAuditDockerfile.includes("clang-tools") && chromeAuditDockerfile.includes("clang-tidy") && chromeAuditDockerfile.includes("clangd") && chromeAuditDockerfile.includes("binutils"), "Chrome Audit must bundle Clang tooling and binutils");
 expect(!chromeAuditDockerfile.includes("depot_tools"), "Chrome Audit must not include depot_tools");
 expect(chromeTestDockerfile.includes(`ARG PLAYWRIGHT_CORE_VERSION=${chromeSources.playwright.version}`) && chromeTestDockerfile.includes(`ARG PLAYWRIGHT_CORE_INTEGRITY=${chromeSources.playwright.integrity}`) && chromeTestDockerfile.includes("playwright-core@${PLAYWRIGHT_CORE_VERSION}") && chromeTestDockerfile.includes("CHROMIUM_VERSION") && chromeTestDockerfile.includes("chromium-common"), "Chrome Test must pin Playwright, Chromium, and chromium-common versions");
@@ -386,7 +387,7 @@ expect(
   "Chrome Fuzz build-time checks must run dynamically on amd64 and use gated static checks on arm64",
 );
 for (const [file, content] of [
-  ["chrome-audit-env.sh", chromeAuditEnv], ["chrome-audit-scan.sh", chromeAuditScan],
+  ["chrome-audit-env.sh", chromeAuditEnv],
   ["chrome-headless.sh", chromeHeadless], ["chrome-test-env.sh", chromeTestEnv],
   ["chrome-fuzz-env.sh", chromeFuzzEnv], ["chrome-fuzz-smoke.sh", chromeFuzzSmoke],
   ["chrome-fuzz-toolchain-preflight.sh", chromeFuzzPreflight],
@@ -490,8 +491,33 @@ expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmo
 expect(openHarmonyDockerfile.includes("openharmony-env.sh --check --hdc"), "OpenHarmony Test 必须在构建时执行含 hdc version 的环境 smoke check");
 expect(openHarmonyAuditDockerfile.includes("openharmony-audit-env.sh --check"), "OpenHarmony Audit 必须在构建时执行环境 smoke check");
 expect(openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check"), "OpenHarmony Fuzz 必须在构建时执行环境 smoke check");
-expect(!openHarmonyAuditDockerfile.includes("gitleaks"), "OpenHarmony Audit 不得安装 gitleaks（高危主线不依赖密钥扫描）");
-expect(!openHarmonyFuzzDockerfile.includes("gitleaks"), "OpenHarmony Fuzz 不得安装 gitleaks");
+const decisionScanners = ["semgrep", "gitleaks", "shellcheck"];
+const officialRuntimeSources = [
+  ["runtime-images.json", JSON.stringify(config)],
+  ["kali-minimal-runtime.json", JSON.stringify(kaliConfig)],
+  ["chrome-audit-runtime.json", JSON.stringify(chromeAuditConfig)],
+  ["chrome-test-runtime.json", JSON.stringify(chromeTestConfig)],
+  ["chrome-fuzz-runtime.json", JSON.stringify(chromeFuzzConfig)],
+  ["openharmony-test-runtime.json", JSON.stringify(openHarmonyTestConfig)],
+  ["Dockerfile.agent", dockerfile],
+  ["Dockerfile.agent-kali-minimal", kaliDockerfile],
+  ["Dockerfile.agent-chrome-audit", chromeAuditDockerfile],
+  ["Dockerfile.agent-chrome-test", chromeTestDockerfile],
+  ["Dockerfile.agent-chrome-fuzz", chromeFuzzDockerfile],
+  ["Dockerfile.agent-openharmony", openHarmonyDockerfile],
+  ["Dockerfile.agent-openharmony-audit", openHarmonyAuditDockerfile],
+  ["Dockerfile.agent-openharmony-fuzz", openHarmonyFuzzDockerfile],
+  ["agent-harness/image.mjs", localDefinition],
+];
+for (const [label, source] of officialRuntimeSources) {
+  for (const scanner of decisionScanners) {
+    expect(!source.includes(scanner), `${label} 不得安装决策扫描器 ${scanner}`);
+  }
+}
+expect(runtimeSmoke.includes("! command -v semgrep") && runtimeSmoke.includes("! command -v gitleaks") && runtimeSmoke.includes("! command -v shellcheck"), "offline smoke must fail if decision scanners reappear");
+expect(!runtimeSmoke.includes("semgrep --version") && !runtimeSmoke.includes("gitleaks version") && !runtimeSmoke.includes("shellcheck --version"), "offline smoke must not require decision scanners");
+expect(chromeAuditEnv.includes("for command_name in semgrep gitleaks shellcheck") && chromeAuditEnv.includes("不得预装决策扫描器"), "Chrome Audit env check must fail if decision scanners reappear");
+expect(!chromeAuditEnv.includes("semgrep --version") && !chromeAuditEnv.includes("semgrep --config"), "Chrome Audit env check must not run semgrep");
 expect(openHarmonyInit.includes("[[ \"$manifest\" == https://* ]]"), "OpenHarmony manifest 必须限制为 HTTPS");
 expect(!openHarmonyInit.includes("eval ") && !openHarmonyBuild.includes("eval "), "OpenHarmony 入口不得使用 eval");
 expect(!openHarmonyAuditScan.includes("eval ") && !openHarmonyFuzzBuild.includes("eval "), "OpenHarmony audit/fuzz 入口不得使用 eval");
