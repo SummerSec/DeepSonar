@@ -4,9 +4,13 @@ import type { CanvasHumanMessage, CanvasNode } from "./api.js";
 import {
   humanMessageAssetKey,
   humanMessageStatusLabel,
+  composeNodeIdForHumanIntervention,
   humanMessageTargetForNode,
   humanMessageTargetLabel,
+  humanMessageTargetNodeForJobId,
+  humanMessageTargetNodeFromContext,
   isActiveHumanMessageTarget,
+  jobCanReceiveHumanReply,
   messagesForCanvasNode,
   safeHumanMessageFileName,
 } from "./human-messages.js";
@@ -62,6 +66,31 @@ test("target mapping only permits active intent, job and report nodes", () => {
   assert.equal(isActiveHumanMessageTarget(node({ node_type: "report", status: "succeeded" })), false);
   assert.equal(isActiveHumanMessageTarget(node({ node_type: "finding", status: "running" })), false);
   assert.deepEqual(humanMessageTargetForNode(null), { kind: "hub" });
+});
+
+test("human intervention reply resolves the waiting job node, otherwise Hub", () => {
+  const waitingJob = node({ id: "job-node", node_type: "job", status: "waiting_human" });
+  const humanNode = node({
+    id: "human-1",
+    node_type: "human",
+    status: "open",
+    job_id: "job-1",
+    body_json: { reason: "需要授权", job_id: "job-1" },
+  });
+  assert.equal(isActiveHumanMessageTarget(humanNode), false);
+  assert.equal(humanMessageTargetNodeFromContext(humanNode, [waitingJob, humanNode])?.id, "job-node");
+  assert.equal(composeNodeIdForHumanIntervention(humanNode, [waitingJob, humanNode]), "job-node");
+  assert.equal(humanMessageTargetNodeFromContext(humanNode, [humanNode]), null);
+  assert.equal(composeNodeIdForHumanIntervention(humanNode, [humanNode]), "human-1");
+  assert.equal(humanMessageTargetNodeForJobId("job-1", [waitingJob, humanNode])?.id, "job-node");
+  assert.equal(humanMessageTargetNodeForJobId("missing", [waitingJob]), null);
+});
+
+test("本次运行列表只给等待人工或活动 human Job 直接回复入口", () => {
+  assert.equal(jobCanReceiveHumanReply({ type: "explore", status: "waiting_human" }), true);
+  assert.equal(jobCanReceiveHumanReply({ type: "human", status: "running" }), true);
+  assert.equal(jobCanReceiveHumanReply({ type: "explore", status: "running" }), false);
+  assert.equal(jobCanReceiveHumanReply({ type: "human", status: "succeeded" }), false);
 });
 
 test("file keys are message-scoped, ordered and path safe", () => {

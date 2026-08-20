@@ -6,6 +6,7 @@ import {
   Graph,
   HandPalm,
   ListBullets,
+  PaperPlaneTilt,
   Note,
   Pause,
   Play,
@@ -35,6 +36,12 @@ import { composeRetryErrorMessage } from "../composeTaskModel";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { FactDetailPanel } from "../FactDetailPanel";
 import { factPageFilterKey, readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
+import { HumanMessageComposer } from "../HumanMessageComposer";
+import {
+  humanMessageTargetNodeForJobId,
+  humanMessageTargetNodeFromContext,
+  jobCanReceiveHumanReply,
+} from "../human-messages";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
@@ -186,6 +193,8 @@ export function TaskCanvasPage() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [findingTrace, setFindingTrace] = useState<FindingTrace | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerNode, setComposerNode] = useState<CanvasNode | null>(null);
 
   // Lifecycle counters remain live while the task is open, independent of API polling.
   useEffect(() => {
@@ -208,6 +217,8 @@ export function TaskCanvasPage() {
     setNodes([]);
     setConvergence(null);
     setError(null);
+    setComposerOpen(false);
+    setComposerNode(null);
     loadFindingIndex(canvasId)
       .then((rows) => {
         if (!stop) setFindingIndex(rows);
@@ -716,6 +727,10 @@ export function TaskCanvasPage() {
         jobId: node.job_id ?? (typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null),
       };
     });
+  const openHumanReply = (target: CanvasNode | null) => {
+    setComposerNode(target);
+    setComposerOpen(true);
+  };
   const visibleFindings = findings.filter(
     (finding) => (!severities.length || severities.includes(finding.severity ?? ""))
       && (!profiles.length || profiles.includes(finding.profile))
@@ -1087,34 +1102,42 @@ export function TaskCanvasPage() {
         </div>
       )}
 
+      {humanInterventions.length > 0 && (
+        <section className="relative z-20 mx-3 mb-2 rounded-2xl bg-amber-400/[.06] px-3 py-2 ring-1 ring-amber-300/20 sm:px-4" aria-label="人工介入">
+          <div className="mb-2 flex items-center gap-2">
+            <HandPalm size={14} className="text-amber-300" />
+            <h2 className="text-[12px] font-medium text-zinc-300">人工介入</h2>
+            <span className="font-mono text-[9px] text-zinc-600">最近 {humanInterventions.length} 条</span>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {humanInterventions.map(({ node, reason, findingId, jobId }) => (
+              <div key={node.id} className="theme-surface flex min-w-[260px] max-w-[420px] flex-1 items-start gap-3 rounded-lg px-3 py-2 ring-1">
+                <div className="min-w-0 flex-1">
+                  <div className="break-words text-[12px] text-zinc-300">{node.title}</div>
+                  <div className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-zinc-600">{reason}</div>
+                </div>
+                <div className="flex shrink-0 flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={() => openHumanReply(humanMessageTargetNodeFromContext(node, nodes))}
+                    className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-300 hover:text-amber-200"
+                  >
+                    <PaperPlaneTilt size={12} /> 回复
+                  </button>
+                  {findingId && <button type="button" onClick={() => setQuery("finding", findingId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Finding</button>}
+                  {jobId && <button type="button" onClick={() => setQuery("job", jobId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Job</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
         <div
           className={taskWorkbenchCanvasLayerClass(tab === "canvas")}
           aria-hidden={tab !== "canvas"}
         >
-          {humanInterventions.length > 0 && (
-            <section className="theme-divider shrink-0 border-b px-3 py-2 sm:px-4" aria-label="人工介入">
-              <div className="mb-2 flex items-center gap-2">
-                <HandPalm size={14} className="text-amber-300" />
-                <h2 className="text-[12px] font-medium text-zinc-300">人工介入</h2>
-                <span className="font-mono text-[9px] text-zinc-600">最近 {humanInterventions.length} 条</span>
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {humanInterventions.map(({ node, reason, findingId, jobId }) => (
-                  <div key={node.id} className="theme-surface flex min-w-[260px] max-w-[420px] flex-1 items-start gap-3 rounded-lg px-3 py-2 ring-1">
-                    <div className="min-w-0 flex-1">
-                      <div className="break-words text-[12px] text-zinc-300">{node.title}</div>
-                      <div className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-zinc-600">{reason}</div>
-                    </div>
-                    <div className="flex shrink-0 flex-col gap-1">
-                      {findingId && <button type="button" onClick={() => setQuery("finding", findingId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Finding</button>}
-                      {jobId && <button type="button" onClick={() => setQuery("job", jobId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Job</button>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
           <div className="min-h-0 flex-1">
             <CanvasView
               canvasId={canvasId}
@@ -1390,6 +1413,18 @@ export function TaskCanvasPage() {
                         </td>
                         <td className={tdCls} onClick={(e) => e.stopPropagation()}>
                           <div className="flex flex-wrap gap-1.5">
+                          {jobCanReceiveHumanReply(j) && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openHumanReply(humanMessageTargetNodeForJobId(j.id, nodes));
+                              }}
+                              className="inline-flex items-center gap-1 rounded-md border border-amber-900/40 px-2.5 py-1 font-mono text-[12px] text-amber-300 transition-colors hover:bg-amber-950/40"
+                            >
+                              <PaperPlaneTilt size={12} /> 回复
+                            </button>
+                          )}
                           {ACTIVE_JOB.has(j.status) && (
                             <button
                               type="button"
@@ -1472,7 +1507,27 @@ export function TaskCanvasPage() {
         />
       )}
       {!selectedFact && selectedFinding && <FindingDetailPanel findingId={selectedFinding} onClose={() => setQuery("finding", null)} />}
-      {!selectedFact && selectedJob && <JobDetailPanel jobId={selectedJob} onClose={() => setQuery("job", null)} />}
+      {!selectedFact && selectedJob && (
+        <JobDetailPanel
+          jobId={selectedJob}
+          onClose={() => setQuery("job", null)}
+          onSendMessage={() => openHumanReply(humanMessageTargetNodeForJobId(selectedJob, nodes))}
+        />
+      )}
+      {composerOpen && (
+        <HumanMessageComposer
+          key={composerNode?.id ?? "hub"}
+          canvasId={canvasId}
+          projectId={projectId ?? null}
+          selectedNode={composerNode}
+          onClose={() => { setComposerOpen(false); setComposerNode(null); }}
+          onSent={() => {
+            setComposerOpen(false);
+            setComposerNode(null);
+            flash("消息已写入投递账本");
+          }}
+        />
+      )}
     </div>
   );
 }

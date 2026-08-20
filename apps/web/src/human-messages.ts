@@ -37,6 +37,44 @@ export function humanMessageTargetForNode(node: CanvasNode | null | undefined): 
   return isActiveHumanMessageTarget(node) ? { kind: "job", node_id: node.id } : { kind: "hub" };
 }
 
+function jobIdFromNode(node: CanvasNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.job_id) return node.job_id;
+  return typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null;
+}
+
+/** human 节点本身不能投递；解析到同 Job 的活动 intent/job/report，否则回落 Hub。 */
+export function humanMessageTargetNodeFromContext(
+  selected: CanvasNode | null | undefined,
+  nodes: readonly CanvasNode[],
+): CanvasNode | null {
+  if (isActiveHumanMessageTarget(selected)) return selected;
+  const jobId = jobIdFromNode(selected);
+  if (!jobId) return null;
+  return nodes.find((node) => node.job_id === jobId && isActiveHumanMessageTarget(node)) ?? null;
+}
+
+export function composeNodeIdForHumanIntervention(
+  humanNode: CanvasNode,
+  nodes: readonly CanvasNode[],
+): string {
+  return humanMessageTargetNodeFromContext(humanNode, nodes)?.id ?? humanNode.id;
+}
+
+export function humanMessageTargetNodeForJobId(
+  jobId: string | null | undefined,
+  nodes: readonly CanvasNode[],
+): CanvasNode | null {
+  if (!jobId) return null;
+  return nodes.find((node) => node.job_id === jobId && isActiveHumanMessageTarget(node)) ?? null;
+}
+
+/** 本次运行列表：waiting_human 或仍活动的 human Job 可直接回复。 */
+export function jobCanReceiveHumanReply(job: { type?: string | null; status?: string | null }): boolean {
+  if (!job.status || !HUMAN_MESSAGE_ACTIVE_STATUSES.has(job.status)) return false;
+  return job.status === "waiting_human" || job.type === "human";
+}
+
 export function humanMessageTargetLabel(message: CanvasHumanMessage, nodes: readonly CanvasNode[]): string {
   if (message.target_kind === "hub") return "Hub";
   const target = nodes.find((node) => node.id === message.target_node_id);

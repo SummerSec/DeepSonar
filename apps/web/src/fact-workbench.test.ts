@@ -183,4 +183,11 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   assert.match(page, /body_json\?\.finding_id/);
   assert.match(page, /body_json\?\.job_id/);
   assert.doesNotMatch(page, /match\([^\n]*finding_id|description[^\n]*finding_id/);
+  const banner = page.indexOf('aria-label="人工介入"');
+  const canvasLayer = page.indexOf("taskWorkbenchCanvasLayerClass(tab === \"canvas\")");
+  assert.ok(banner >= 0 && canvasLayer > banner, "人工介入条必须在画布层外，各 Tab 都可点回复");
+  assert.match(page, /openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)/);
+  assert.match(page, /<HumanMessageComposer/);
+  assert.match(page, /jobCanReceiveHumanReply\(j\)/);
+  assert.match(page, /onSendMessage=\{\(\) => openHumanReply\(humanMessageTargetNodeForJobId\(selectedJob, nodes\)\)\}/);
 });
