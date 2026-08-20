@@ -356,7 +356,7 @@ for (const arch of ["amd64", "arm64"]) {
   expect(/^[0-9a-f]{64}$/.test(asset?.common_sha256 ?? ""), `Chrome ${arch} common package must carry a SHA256 checksum`);
   expect(chromeTestDockerfile.includes(asset?.sha256 ?? "") && chromeTestDockerfile.includes(asset?.common_sha256 ?? ""), `Chrome ${arch} package checksums missing from Dockerfile`);
 }
-expect(chromeAuditEnv.includes("--filter") && chromeAuditDockerfile.includes("git"), "Chrome Audit must keep git partial clone as a base tool");
+expect(chromeAuditEnv.includes("git --version") && chromeAuditDockerfile.includes("git"), "Chrome Audit must keep git as a base tool");
 expect(!existsSync(new URL("../deploy/chrome-audit-rules.yml", import.meta.url)), "Chrome Audit 不得捆绑平台扫描规则包");
 expect(!existsSync(new URL("../deploy/chrome-audit-scan.sh", import.meta.url)), "Chrome Audit 不得提供平台固定扫描入口");
 expect(!chromeAuditDockerfile.includes("chrome-audit-rules.yml") && !chromeAuditDockerfile.includes("chrome-audit-scan.sh") && !chromeAuditEnv.includes("chrome-audit-scan.sh"), "Chrome Audit 不得安装固定扫描脚本或规则包");

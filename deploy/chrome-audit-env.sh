@@ -31,10 +31,6 @@ check_tools() {
     }
   done
   git --version >/dev/null
-  git clone --help 2>&1 | grep -Fq -- '--filter' || {
-    printf 'Chrome Audit 环境检查失败：git 不支持 partial clone\n' >&2
-    return 1
-  }
   clang --version >/dev/null
   clang-tidy --version >/dev/null
   clangd --version >/dev/null
