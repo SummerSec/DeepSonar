@@ -880,7 +880,9 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 /* React Flow as a forensic plotting surface. */
 .react-flow {
   --xy-edge-stroke-default: #8b9aa3;
-  --xy-edge-stroke-width-default: 2.4;
+  --deepsonar-edge-zoom-boost: 1;
+  --xy-edge-stroke-width: calc(2.4px * var(--deepsonar-edge-zoom-boost, 1));
+  --xy-edge-stroke-width-default: calc(2.4px * var(--deepsonar-edge-zoom-boost, 1));
   background: #080a0b;
 }
 .react-flow__background { opacity: .5; }
@@ -905,22 +907,25 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 }
 .react-flow__minimap-mask { fill: rgb(7 9 10 / .82); pointer-events: all; }
 .react-flow__edges,
+.react-flow .react-flow__edges svg,
 .react-flow svg.react-flow__edges {
-  overflow: visible;
-  max-width: none;
-  max-height: none;
-}
-.react-flow {
-  --deepsonar-edge-zoom-boost: 1;
+  z-index: 2;
+  overflow: visible !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  opacity: 1;
 }
 .react-flow__edge-path {
   fill: none !important;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: calc(2.4px * var(--deepsonar-edge-zoom-boost, 1));
+  stroke-width: calc(2.4px * var(--deepsonar-edge-zoom-boost, 1)) !important;
+  opacity: 1;
 }
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke-width: calc(2.8px * var(--deepsonar-edge-zoom-boost, 1));
+  stroke-width: calc(2.8px * var(--deepsonar-edge-zoom-boost, 1)) !important;
 }
 .react-flow__handle { opacity: 0; }
 @keyframes deepsonar-edge-flow {
@@ -1005,13 +1010,32 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   background: color-mix(in srgb, var(--broadcast-target) 8%, transparent);
 }
 .broadcast-node-badge.has-failure { border-color: color-mix(in srgb, var(--broadcast-failed) 60%, var(--line)); }
-.canvas-filter-panel { width: min(760px, calc(100% - 176px)); color: var(--text); transition: width 180ms var(--ease-decel); }
-.canvas-filter-panel.is-collapsed { width: min(430px, calc(100% - 176px)); }
-.canvas-filter-toggle {
+.canvas-filter-panel {
+  z-index: 30;
+  width: min(760px, calc(100% - 32px));
   color: var(--text);
-  background: transparent;
+  transition: width 180ms var(--ease-decel);
 }
+.canvas-filter-panel.is-collapsed {
+  width: max-content;
+  min-width: 12.5rem;
+  max-width: calc(100% - 32px);
+}
+.canvas-filter-panel .surface-core { overflow: visible; }
+.canvas-filter-toggle {
+  min-width: 8.5rem;
+  color: var(--text);
+  background: var(--panel-raised);
+  font-weight: 600;
+}
+.canvas-filter-toggle-label { flex: none; color: var(--text); }
 .canvas-filter-toggle:hover { background: var(--surface-tint-strong); }
+@media (max-width: 639px) {
+  .canvas-filter-panel.is-collapsed {
+    min-width: min(12.5rem, calc(100% - 32px));
+    box-shadow: 0 8px 22px rgb(0 0 0 / .32);
+  }
+  .canvas-filter-toggle { min-height: 44px; } }
 .canvas-hidden-edge-hint {
   color: var(--text);
   font: 600 10px var(--font-mono);
@@ -2772,7 +2796,7 @@ html[data-color-scheme="light"] .react-flow {
   background: #efede7;
 }
 html[data-color-scheme="light"] .react-flow__edge.deepsonar-edge .react-flow__edge-path {
-  stroke-width: calc(2.8px * var(--deepsonar-edge-zoom-boost, 1));
+  stroke-width: calc(2.8px * var(--deepsonar-edge-zoom-boost, 1)) !important;
   filter: drop-shadow(0 0 0.7px #1a212b) drop-shadow(0 1px 0 rgba(255, 255, 255, .55));
 }
 html[data-color-scheme="light"] .canvas-filter-panel,
@@ -2781,8 +2805,12 @@ html[data-color-scheme="light"] .broadcast-status-panel {
   box-shadow: 0 10px 24px rgba(20, 28, 40, .12);
 }
 html[data-color-scheme="light"] .canvas-filter-toggle,
+html[data-color-scheme="light"] .canvas-filter-toggle-label,
 html[data-color-scheme="light"] .broadcast-status-panel-heading {
-  color: var(--text);
+  color: #1a212b;
+}
+html[data-color-scheme="light"] .canvas-filter-toggle {
+  background: #fbfaf8;
 }
 html[data-color-scheme="light"] .canvas-hidden-edge-hint {
   color: #1a212b;

@@ -13,7 +13,9 @@ import {
   isEdgeReadableOnScreen,
   MIN_SCREEN_DASH_ON_PX,
   MIN_SCREEN_STROKE_PX,
+  resolveEdgeZoomBoostTargets,
   TOPOLOGY_STROKE_PX,
+  XY_EDGE_STROKE_WIDTH_CSS_VAR,
 } from "./edge-visibility.js";
 
 test("uncompensated #241 strokes vanish at the production fitView zoom", () => {
@@ -54,7 +56,23 @@ test("boost CSS helpers and pane var stay aligned", () => {
     FIT_CRUSH_ZOOM,
   );
   assert.equal(props.get(EDGE_ZOOM_BOOST_CSS_VAR), String(boost));
+  assert.equal(props.get(XY_EDGE_STROKE_WIDTH_CSS_VAR), `calc(${TOPOLOGY_STROKE_PX}px * ${boost})`);
   assert.ok(boost > 1);
+});
+
+test("zoom boost writes the CSS var onto .react-flow even when given a sibling pane", () => {
+  const rootProps = new Map<string, string>();
+  const paneProps = new Map<string, string>();
+  const root = { style: { setProperty: (name: string, value: string) => { rootProps.set(name, value); } } };
+  const pane = {
+    style: { setProperty: (name: string, value: string) => { paneProps.set(name, value); } },
+    closest: (selector: string) => selector === ".react-flow" ? root : null,
+  };
+  assert.deepEqual(resolveEdgeZoomBoostTargets(pane), [root, pane]);
+  const boost = applyEdgeZoomBoostVar(pane, FIT_CRUSH_ZOOM);
+  assert.equal(rootProps.get(EDGE_ZOOM_BOOST_CSS_VAR), String(boost));
+  assert.equal(rootProps.get(XY_EDGE_STROKE_WIDTH_CSS_VAR), `calc(${TOPOLOGY_STROKE_PX}px * ${boost})`);
+  assert.equal(paneProps.get(EDGE_ZOOM_BOOST_CSS_VAR), String(boost));
 });
 
 test("canvas view compensates fitView crush instead of remounting the graph", () => {
@@ -67,7 +85,9 @@ test("canvas view compensates fitView crush instead of remounting the graph", ()
   assert.match(canvas, /strokeDasharray: boostedDashCss\(st\.dash\)/);
   assert.match(canvas, /minZoom=\{FULL_GRAPH_MIN_ZOOM\}/);
   assert.match(css, /--deepsonar-edge-zoom-boost/);
-  assert.match(css, /stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)/);
+  assert.match(css, /--xy-edge-stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)/);
+  assert.match(css, /stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)\s*!important/);
+  assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*height:\s*100%\s*!important/);
   assert.match(css, /\.deepsonar-edge-to \.react-flow__edge-path \{[\s\S]*calc\(3px \* var\(--deepsonar-edge-zoom-boost/);
   assert.match(layers, /invisible pointer-events-none/);
   assert.doesNotMatch(

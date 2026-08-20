@@ -1,5 +1,7 @@
 /** CSS var on `.react-flow`: scale stroke/dash so CSS `scale(zoom)` cannot crush them. */
 export const EDGE_ZOOM_BOOST_CSS_VAR = "--deepsonar-edge-zoom-boost";
+/** xyflow reads this on the pane; keep it in lockstep with the boost. */
+export const XY_EDGE_STROKE_WIDTH_CSS_VAR = "--xy-edge-stroke-width";
 
 /** Screen-pixel floor. Below this, topology strokes look like they vanished. */
 export const MIN_SCREEN_STROKE_PX = 1.2;
@@ -40,12 +42,30 @@ export function boostedDashCss(dash: string): string | undefined {
   return parts.map((part) => `calc(${part}px * var(${EDGE_ZOOM_BOOST_CSS_VAR}, 1))`).join(" ");
 }
 
+type StyleTarget = {
+  style: { setProperty(name: string, value: string): void };
+  closest?: (selector: string) => StyleTarget | null;
+};
+
+/** Boost must land on `.react-flow`, not a sibling pane that edges never inherit. */
+export function resolveEdgeZoomBoostTargets(
+  pane: StyleTarget | null | undefined,
+): StyleTarget[] {
+  if (!pane) return [];
+  const root = pane.closest?.(".react-flow") ?? null;
+  return root && root !== pane ? [root, pane] : [pane];
+}
+
 export function applyEdgeZoomBoostVar(
-  pane: { style: { setProperty(name: string, value: string): void } } | null | undefined,
+  pane: StyleTarget | null | undefined,
   zoom: number,
 ): number {
   const boost = edgeZoomBoost(zoom);
-  pane?.style.setProperty(EDGE_ZOOM_BOOST_CSS_VAR, String(boost));
+  const stroke = `calc(${TOPOLOGY_STROKE_PX}px * ${boost})`;
+  for (const target of resolveEdgeZoomBoostTargets(pane)) {
+    target.style.setProperty(EDGE_ZOOM_BOOST_CSS_VAR, String(boost));
+    target.style.setProperty(XY_EDGE_STROKE_WIDTH_CSS_VAR, stroke);
+  }
   return boost;
 }
 
