@@ -145,9 +145,7 @@ export const PRESETS = {
     paths: [
       "agent-harness/chrome-audit-runtime.json",
       "deploy/chrome-runtime-sources.json",
-      "deploy/chrome-audit-rules.yml",
       "deploy/chrome-audit-env.sh",
-      "deploy/chrome-audit-scan.sh",
     ],
     platforms: "linux/amd64,linux/arm64",
   },

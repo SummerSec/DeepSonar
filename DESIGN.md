@@ -30,6 +30,7 @@
 5. **边界长期稳定，局部保持可替换**：数据所有权、安全模型和副作用边界按长期方案设计；边界内实现保持简单，避免临时双轨和兼容层。
 6. **分层设计，控制文件职责**：按领域和层次组织代码，单个文件只承担一个稳定职责。入口负责组装，领域模块负责规则，基础设施模块负责外部效果；不在同一文件里持续叠加跨领域逻辑，也不为追求拆分制造空洞薄层。
 7. **采用已验证的产品模式**：优先沿用成熟产品的术语、交互和运维方式，减少学习成本，不另造协议与工作流。
+8. **工具助力，扫描不决策（#267 / #266）**：官方运行时提供 **基础工具**（git、ripgrep、语言运行时、编译器、调试/反汇编、fuzz 引擎），给 AI 读代码、构建、调试、PoC 与 fuzz。**不**预装决策型扫描器（Semgrep / gitleaks / shellcheck 及同类规则引擎），**不**提供平台规定的固定扫描脚本/规则包作为 audit 主路径。是否扫描、扫什么、用什么启发式，由 Agent 在本轮 intent 下自行决定；平台只保证工具存在、版本钉死、断网可跑。Finding 质量来自 harness + Verify 硬门，不是复现企业 SAST/密钥扫描覆盖面。
 
 ## 3. 核心实体（实现）
 
@@ -315,6 +316,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 任务下发后就地改标题与内容 | #251 | **已完成**：`PATCH /tasks/:canvasId` 更新 `canvases.title` 与 `target_json.title/content/goal`，并同步 root 节点标题/body；只影响后续 Hub 读图、新派生 Job 与显式重试，不改写已冻结 `agent_snapshot_json`。工作台「任务内容」对未归档且具 `tasks:write` 的主体可编辑保存；viewer 只读。 |
 | Chrome / 长工具 stall 误杀 | #257 | **已完成**：Reaper stall 仍以语义事件为主、默认 900s；`tool.call.started/completed` 写入进度事件与 `payload_json.runtime_activity`。在飞工具且 lease 未过期时不判停滞，使 clang-tidy / fuzz / 其它角色的长 Bash 不被 15 分钟静默窗口误杀。`deepsonar-chrome-audit/test` 下限 5400s、`deepsonar-chrome-fuzz` 10800s；不抬高全局 `DEEPSONAR_JOB_STALL_SEC`。无工具活动的普通 Job 仍在 900s 后收口。 |
 | 配置中心 / 运行时护栏 | #263 | **Batch 1 已落地**：平台默认写入 `global_settings.rules_json`；角色覆盖在 `role_configs.runtime_knobs_json`；Job 冻结 `agent_snapshot_json.runtime_knobs`。覆盖 `stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`（仅平台）。Web 配置中心可改，保存走既有 toast + `settings.global_update` / `settings.project_update` / `role_config.upsert` 审计。后续批次（lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 与巡检）仍走部署 env。 |
+| 官方运行时不预装决策扫描器 | #267 / #266 | **已完成**：官方 base/audit/kali/chrome/openharmony 只提供基础工具；移除 Semgrep / gitleaks / shellcheck 与 Chrome 固定扫描规则/入口。Finding 质量靠 harness + Verify，不复现企业 SAST/密钥扫描。合入后须发版重建 `deepsonar-audit`、`deepsonar-kali-minimal`、`deepsonar-chrome-audit`。 |
 
 ## 12. 仓库地图
 

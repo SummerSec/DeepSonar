@@ -17,7 +17,12 @@ const commands = [
   "! find /usr/local/lib/node_modules/@deepseek-ai -maxdepth 1 -type d \\( -name 'dsh-client-ui-*' -o -name 'dsh-client-web*' -o -name 'dsh-web-*' -o -name 'dsh-tool-ask-user' \\) | grep -q .",
   "test ! -d /usr/local/lib/node_modules/dsh-cc-tui",
 ];
-if (toolset !== "base") commands.push("semgrep --version", "gitleaks version", "shellcheck --version", "objdump --version");
+if (toolset !== "base") commands.push("objdump --version");
+commands.push(
+  "! command -v semgrep",
+  "! command -v gitleaks",
+  "! command -v shellcheck",
+);
 if (toolset === "kali-minimal") commands.push(
   "uv --version",
   "python3.10 --version", "python3.11 --version", "python3.12 --version", "python3.13 --version", "python3.14 --version",
