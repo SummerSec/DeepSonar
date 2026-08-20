@@ -46,6 +46,15 @@ export function computeNodeDepths(
 
 /** 默认只展示前 3 层（depth 1–3） */
 export const DEFAULT_MAX_DEPTH = 3;
+/** 每个父节点默认揭开的直接后继数；其余按「再显示」分层加载 */
+export const DEFAULT_CHILD_LIMIT = 12;
+export const CHILD_REVEAL_STEP = 12;
+/** React Flow 一次挂载上限，避免筛选命中整图时主线程卡死 */
+export const MAX_RENDERED_NODES = 180;
+
+export function childLimitFor(parentId: string, extraByParent: ReadonlyMap<string, number>): number {
+  return DEFAULT_CHILD_LIMIT + (extraByParent.get(parentId) ?? 0);
+}
 
 export function maxDepthOf(depths: Map<string, number>): number {
   let max = 1;
@@ -90,6 +99,7 @@ export function isEffectivelyExpanded(
 /**
  * 从 root 出发：仅当父节点有效展开时揭开直接后继。
  * 任意有后继的节点都可被用户展开/收起，覆盖默认深度行为。
+ * `childLimitForParent` 存在时按边序截取直接后继（分层加载），缺省则揭开全部。
  */
 export function computeVisibleIds(
   nodes: CanvasNode[],
@@ -98,6 +108,7 @@ export function computeVisibleIds(
   maxDepth: number,
   expandedIds: ReadonlySet<string>,
   collapsedIds: ReadonlySet<string>,
+  childLimitForParent?: (parentId: string) => number,
 ): Set<string> {
   const outgoing = buildOutgoing(edges);
   const visible = new Set<string>();
@@ -125,7 +136,10 @@ export function computeVisibleIds(
     const id = queue.shift()!;
     const d = depths.get(id) ?? 1;
     if (!isEffectivelyExpanded(id, d, maxDepth, expandedIds, collapsedIds)) continue;
-    for (const to of outgoing.get(id) ?? []) {
+    const children = outgoing.get(id) ?? [];
+    const limit = childLimitForParent?.(id);
+    const capped = limit == null || children.length <= limit ? children : children.slice(0, limit);
+    for (const to of capped) {
       if (visible.has(to)) continue;
       visible.add(to);
       queue.push(to);
@@ -133,4 +147,34 @@ export function computeVisibleIds(
   }
 
   return visible;
+}
+
+export function remainingCappedChildren(
+  parentId: string,
+  outgoing: Map<string, string[]>,
+  limit: number,
+): number {
+  const total = outgoing.get(parentId)?.length ?? 0;
+  return Math.max(0, total - Math.max(0, Math.trunc(limit)));
+}
+
+/** 筛选命中过大时保留 root 与浅层，截断深层。 */
+export function capRenderedIds(
+  ids: ReadonlySet<string>,
+  nodes: CanvasNode[],
+  depths: Map<string, number>,
+  max: number,
+): { ids: Set<string>; truncated: number } {
+  if (ids.size <= max) return { ids: new Set(ids), truncated: 0 };
+  const ordered = nodes
+    .filter((node) => ids.has(node.id))
+    .sort((a, b) => {
+      if (a.node_type === "root" && b.node_type !== "root") return -1;
+      if (b.node_type === "root" && a.node_type !== "root") return 1;
+      return (depths.get(a.id) ?? 99) - (depths.get(b.id) ?? 99);
+    });
+  return {
+    ids: new Set(ordered.slice(0, max).map((node) => node.id)),
+    truncated: ids.size - max,
+  };
 }

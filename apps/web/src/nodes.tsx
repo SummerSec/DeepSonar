@@ -29,12 +29,16 @@ export type DEEPSONARNodeData = {
   depth?: number;
   /** 直接后继数量（>0 时显示展开/收起） */
   childCount?: number;
+  /** 因分层加载尚未揭开的直接后继 */
+  hiddenChildren?: number;
   /** 当前是否有效展开（后继可见） */
   isExpanded?: boolean;
   /** 展开本节点的直接后继 */
   onExpandNode?: () => void;
   /** 收起本节点后继 */
   onCollapseNode?: () => void;
+  /** 再揭开一批被分层截取的后继 */
+  onRevealMoreChildren?: () => void;
   /** 广播账本派生统计；不属于画布拓扑数据。 */
   broadcastSource?: BroadcastNodeStats;
   broadcastTarget?: BroadcastNodeStats;
@@ -151,6 +155,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const importedSeed = semantic === "finding" && n.body_json?.origin === "seed" && n.body_json?.readonly === true;
 
   const childCount = data.childCount ?? 0;
+  const hiddenChildren = data.hiddenChildren ?? 0;
   const isExpanded = Boolean(data.isExpanded);
   const hasChildren = childCount > 0;
 
@@ -345,32 +350,48 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
           </div>
 
           {hasChildren && (
-            <button
-              type="button"
-              className={`mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] transition-colors ${
-                isExpanded
-                  ? "text-zinc-500 ring-1 ring-white/[.08] hover:bg-white/[.04] hover:text-zinc-300"
-                  : "text-acc-400/90 ring-1 ring-acc-400/20 hover:bg-acc-400/[.08] hover:text-acc-300"
-              }`}
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                if (isExpanded) data.onCollapseNode?.();
-                else data.onExpandNode?.();
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-              aria-expanded={isExpanded}
-            >
-              {isExpanded ? (
-                <>
-                  <CaretUp size={11} /> 收起 · {childCount}
-                </>
-              ) : (
-                <>
-                  <CaretDown size={11} /> 展开 · {childCount}
-                </>
+            <div className="mt-2 flex flex-col gap-1">
+              <button
+                type="button"
+                className={`flex w-full items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] transition-colors ${
+                  isExpanded
+                    ? "text-zinc-500 ring-1 ring-white/[.08] hover:bg-white/[.04] hover:text-zinc-300"
+                    : "text-acc-400/90 ring-1 ring-acc-400/20 hover:bg-acc-400/[.08] hover:text-acc-300"
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  if (isExpanded) data.onCollapseNode?.();
+                  else data.onExpandNode?.();
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                aria-expanded={isExpanded}
+              >
+                {isExpanded ? (
+                  <>
+                    <CaretUp size={11} /> 收起 · {childCount}
+                  </>
+                ) : (
+                  <>
+                    <CaretDown size={11} /> 展开 · {childCount}
+                  </>
+                )}
+              </button>
+              {isExpanded && hiddenChildren > 0 && (
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-center gap-1 rounded-md py-1 font-mono text-[10px] text-acc-400/90 ring-1 ring-acc-400/20 hover:bg-acc-400/[.08]"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    data.onRevealMoreChildren?.();
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <CaretDown size={11} /> 再显示 · 余 {hiddenChildren}
+                </button>
               )}
-            </button>
+            </div>
           )}
         </div>
       </div>

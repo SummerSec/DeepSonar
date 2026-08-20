@@ -112,6 +112,15 @@ export function deriveCanvasBroadcasts(
   return { sourceStats, targetStats, sourceItems, overlayEdges };
 }
 
+/** Overlay is decoration, not topology. Default: badges only; inspect a node to see its deliveries. */
+export function visibleBroadcastOverlayEdges(
+  edges: readonly BroadcastOverlayEdge[],
+  focusNodeId: string | null | undefined,
+): BroadcastOverlayEdge[] {
+  if (!focusNodeId) return [];
+  return edges.filter((edge) => edge.source === focusNodeId || edge.target === focusNodeId);
+}
+
 export function broadcastStatusLabel(status: BroadcastDeliveryStatus): string {
   switch (status) {
     case "injected":

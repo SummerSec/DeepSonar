@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CanvasBroadcastItem, CanvasNode } from "./api.js";
-import { deriveCanvasBroadcasts } from "./canvas-broadcasts.js";
+import { deriveCanvasBroadcasts, visibleBroadcastOverlayEdges } from "./canvas-broadcasts.js";
 
 const nodes = [
   { id: "source", node_type: "fact" },
@@ -63,4 +63,16 @@ test("newest retry determines status and keeps a stable relationship edge id", (
     attempts: 2,
   }]);
   assert.equal(projection.sourceItems.get("source")?.length, 2, "Sidebar retains retry history");
+});
+
+test("broadcast overlay edges stay off the process graph until a node is inspected", () => {
+  const projection = deriveCanvasBroadcasts([
+    item({ id: "a", target_node_id: "target-a" }),
+    item({ id: "b", target_job_id: "job-b", target_node_id: "target-b" }),
+  ], nodes);
+  assert.equal(visibleBroadcastOverlayEdges(projection.overlayEdges, null).length, 0);
+  assert.deepEqual(
+    visibleBroadcastOverlayEdges(projection.overlayEdges, "target-b").map((edge) => edge.target),
+    ["target-b"],
+  );
 });

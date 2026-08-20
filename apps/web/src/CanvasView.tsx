@@ -8,6 +8,7 @@ import {
   getViewportForBounds,
   MarkerType,
   MiniMap,
+  Position,
   ReactFlow,
   useReactFlow,
   useStore,
@@ -17,7 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { toPng } from "html-to-image";
 import { api, type CanvasBroadcastPage, type CanvasData, type CanvasHumanMessage, type CanvasHumanMessagePage, type CanvasNode, type FindingTrace } from "./api";
-import { BROADCAST_STATUS_COLOR, broadcastStatusLabel, deriveCanvasBroadcasts, type CanvasBroadcastProjection } from "./canvas-broadcasts";
+import { BROADCAST_STATUS_COLOR, broadcastStatusLabel, deriveCanvasBroadcasts, visibleBroadcastOverlayEdges, type CanvasBroadcastProjection } from "./canvas-broadcasts";
 import {
   applyCanvasDelta,
   CANVAS_SKELETON_REFRESH_MS,
@@ -30,14 +31,21 @@ import {
 } from "./canvas-sync";
 import {
   buildOutgoing,
+  capRenderedIds,
+  childLimitFor,
+  CHILD_REVEAL_STEP,
   computeNodeDepths,
   computeVisibleIds,
   countDirectChildren,
+  DEFAULT_CHILD_LIMIT,
   DEFAULT_MAX_DEPTH,
   isEffectivelyExpanded,
+  MAX_RENDERED_NODES,
   maxDepthOf,
+  remainingCappedChildren,
 } from "./graph-depth";
-import { elkLayout, layoutNodes, NODE_H, NODE_W } from "./layout";
+import { elkLayout, layoutNodes, NODE_H, NODE_W, orthogonalRoutesFromPositions, type LayoutPoint } from "./layout";
+import { canvasEdgeTypes, ORTHOGONAL_EDGE_TYPE } from "./orthogonal-edge";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
 import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
@@ -81,6 +89,7 @@ export const CANVAS_MESSAGE_POLL_MS = 3_000;
 type ExpandHandlers = {
   expandNode: (id: string) => void;
   collapseNode: (id: string) => void;
+  revealMoreChildren: (id: string) => void;
 };
 
 function CanvasViewportController({
@@ -133,6 +142,7 @@ function CanvasViewportController({
     const requestGeneration = generation;
     const requestNodeIds = fitNodeIds;
     const expected = new Map(nodes.map((node) => [node.id, node.position]));
+    const largeGraph = nodes.length > 80;
     let frame = 0;
     let previousSignature = "";
     let stableFrames = 0;
@@ -141,12 +151,12 @@ function CanvasViewportController({
       if (latestGenerationRef.current !== requestGeneration) return;
       const currentNodes = reactFlow.getNodes().filter((node) => expected.has(node.id));
       const completeGeneration = currentNodes.length === nodes.length;
-      const signature = completeGeneration
+      const signature = completeGeneration && !largeGraph
         ? currentNodes
           .map((node) => `${node.id}:${node.position.x},${node.position.y}:${node.width ?? 0}x${node.height ?? 0}`)
           .sort()
           .join("|")
-        : "";
+        : completeGeneration ? `${currentNodes.length}` : "";
       stableFrames = signature && signature === previousSignature ? stableFrames + 1 : 0;
       previousSignature = signature;
       attempts += 1;
@@ -155,7 +165,7 @@ function CanvasViewportController({
         : currentNodes;
       const fitTargets = requestNodes.length > 0 ? requestNodes : currentNodes;
       if (!completeGeneration || stableFrames < 1 || !hasPositiveNodeBounds(fitTargets)) {
-        if (attempts < 120) frame = window.requestAnimationFrame(fitWhenMeasured);
+        if (attempts < (largeGraph ? 24 : 120)) frame = window.requestAnimationFrame(fitWhenMeasured);
         return;
       }
       const decision = consumeViewportFit(fittedGenerationRef.current, generation, true);
@@ -211,32 +221,47 @@ function toFlow(
   expandedIds: ReadonlySet<string>,
   collapsedIds: ReadonlySet<string>,
   outgoing: Map<string, string[]>,
+  extraByParent: ReadonlyMap<string, number>,
   handlers: ExpandHandlers,
   focusNodeIds: ReadonlySet<string>,
   focusEdgeIds: ReadonlySet<string>,
   focusMode: TraceFocusMode,
   broadcasts: CanvasBroadcastProjection,
+  animateEdges: boolean,
+  applyChildCap: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodeColors = new Map(data.nodes.map((node) => [node.id, nodeDisplayColor(node)]));
+  const positions = new Map<string, LayoutPoint>();
+  for (const node of data.nodes) {
+    positions.set(node.id, elkPos?.get(node.id) ?? fallbackPos?.get(node.id) ?? { x: node.x, y: node.y });
+  }
+  const fallbackRoutes = orthogonalRoutesFromPositions(data.edges, positions, data.nodes);
   return {
     nodes: data.nodes.map((n) => {
       const depth = depths.get(n.id) ?? 1;
       const childCount = countDirectChildren(n.id, outgoing);
       const expanded = isEffectivelyExpanded(n.id, depth, maxDepth, expandedIds, collapsedIds);
+      const hiddenChildren = applyChildCap && expanded
+        ? remainingCappedChildren(n.id, outgoing, childLimitFor(n.id, extraByParent))
+        : 0;
       return {
         id: n.id,
         type: n.node_type,
         // 布局只对当前可见子图计算，展开/收起后自适应重排
-        position: elkPos?.get(n.id) ?? fallbackPos?.get(n.id) ?? { x: n.x, y: n.y },
+        position: positions.get(n.id) ?? { x: n.x, y: n.y },
         width: NODE_W,
         height: NODE_H[n.node_type] ?? 172,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         data: {
           canvas: n,
           depth,
           childCount,
+          hiddenChildren,
           isExpanded: expanded,
           onExpandNode: childCount > 0 ? () => handlers.expandNode(n.id) : undefined,
           onCollapseNode: childCount > 0 ? () => handlers.collapseNode(n.id) : undefined,
+          onRevealMoreChildren: hiddenChildren > 0 ? () => handlers.revealMoreChildren(n.id) : undefined,
           broadcastSource: broadcasts.sourceStats.get(n.id),
           broadcastTarget: broadcasts.targetStats.get(n.id),
         },
@@ -255,8 +280,9 @@ function toFlow(
           id: e.id,
           source: e.from_node_id,
           target: e.to_node_id,
-          type: "smoothstep",
-          animated: true,
+          type: ORTHOGONAL_EDGE_TYPE,
+          data: { points: fallbackRoutes.get(e.id) },
+          animated: animateEdges,
           className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
           style: {
             stroke: sourceColor,
@@ -276,7 +302,7 @@ function toFlow(
           id: edge.id,
           source: edge.source,
           target: edge.target,
-          type: "smoothstep",
+          type: ORTHOGONAL_EDGE_TYPE,
           animated: edge.status === "planned",
           className: `deepsonar-edge broadcast-overlay-edge is-${edge.status}`,
           label: edge.attempts > 1 ? `广播 ×${edge.attempts}` : "广播",
@@ -422,6 +448,7 @@ export function CanvasView({
   const [elkResult, setElkResult] = useState<{
     key: string;
     positions: Map<string, { x: number; y: number }>;
+    edgePoints: Map<string, LayoutPoint[]>;
     mode: "elk" | "fallback";
   } | null>(null);
   const [kindFilter, setKindFilter] = useState<string[]>([]);
@@ -443,6 +470,8 @@ export function CanvasView({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   /** 用户强制收起（覆盖默认 depth 展开） */
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+  /** 父节点在默认 12 个后继之上再揭开的数量 */
+  const [childExtra, setChildExtra] = useState<Map<string, number>>(() => new Map());
   const hydratedNodesRef = useRef(new Map<string, CanvasNode>());
   const nodeRequestRef = useRef(0);
   const revisionRef = useRef("0");
@@ -589,6 +618,7 @@ export function CanvasView({
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
+    setChildExtra(new Map());
     hydratedNodesRef.current.clear();
     revisionRef.current = "0";
     void loadSummary().then(() => {
@@ -681,6 +711,15 @@ export function CanvasView({
     };
     setExpandedIds(prune);
     setCollapsedIds(prune);
+    setChildExtra((prev) => {
+      let changed = false;
+      const next = new Map<string, number>();
+      for (const [id, extra] of prev) {
+        if (alive.has(id)) next.set(id, extra);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
   }, [data]);
 
   const depths = useMemo(
@@ -722,12 +761,39 @@ export function CanvasView({
       next.delete(id);
       return next;
     });
+    setChildExtra((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const revealMoreChildren = useCallback((id: string) => {
+    setChildExtra((prev) => {
+      const next = new Map(prev);
+      next.set(id, (prev.get(id) ?? 0) + CHILD_REVEAL_STEP);
+      return next;
+    });
+    setCollapsedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    setExpandedIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
   }, []);
 
   const expandAll = useCallback(() => {
     setMaxDepth(graphMaxDepth);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
+    setChildExtra(new Map());
   }, [graphMaxDepth]);
 
   /** 隐藏深层：回到默认前 3 层，并清掉所有手动展开/收起 */
@@ -735,9 +801,10 @@ export function CanvasView({
     setMaxDepth(DEFAULT_MAX_DEPTH);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
+    setChildExtra(new Map());
   }, []);
 
-  const depthVisible = useMemo(() => {
+  const depthReachable = useMemo(() => {
     if (!data) return new Set<string>();
     return computeVisibleIds(
       data.nodes,
@@ -749,26 +816,40 @@ export function CanvasView({
     );
   }, [collapsedIds, data, depths, effectiveMaxDepth, expandedIds]);
 
+  const layeredVisible = useMemo(() => {
+    if (!data) return new Set<string>();
+    return computeVisibleIds(
+      data.nodes,
+      data.edges,
+      depths,
+      effectiveMaxDepth,
+      expandedIds,
+      collapsedIds,
+      (id) => childLimitFor(id, childExtra),
+    );
+  }, [childExtra, collapsedIds, data, depths, effectiveMaxDepth, expandedIds]);
+
   const filterActive = Boolean(
     kindFilter.length || severityFilter.length || roleFilter.length || statusFilter.length || query.trim(),
   );
 
   /**
    * 最终展示集合 = 深度门控 ∩ 属性筛选（可含一跳上下文）。
-   * 布局只对这批节点算，筛选/展开/画布增删都会触发重排。
+   * 未筛选时再按每父节点 12 条分层加载；筛选在完整深度可达集上匹配。
    */
-  const { displayIds: baseDisplayIds, matchedCount } = useMemo(() => {
-    if (!data) return { displayIds: new Set<string>(), matchedCount: 0 };
+  const { displayIds: baseDisplayIds, matchedCount, renderTruncated } = useMemo(() => {
+    if (!data) return { displayIds: new Set<string>(), matchedCount: 0, renderTruncated: 0 };
 
     if (!filterActive) {
-      return { displayIds: new Set(depthVisible), matchedCount: depthVisible.size };
+      const capped = capRenderedIds(layeredVisible, data.nodes, depths, MAX_RENDERED_NODES);
+      return { displayIds: capped.ids, matchedCount: layeredVisible.size, renderTruncated: capped.truncated };
     }
 
     const needle = query.trim().toLowerCase();
     const matched = new Set(
       data.nodes
         .filter((n) => {
-          if (!depthVisible.has(n.id)) return false;
+          if (!depthReachable.has(n.id)) return false;
           const role = String(n.body_json?.role ?? (n.node_type === "job" ? n.body_json?.type ?? "" : ""));
           const severity = String(n.body_json?.severity ?? "");
           const searchable =
@@ -788,20 +869,24 @@ export function CanvasView({
     if (showContext) {
       for (const edge of data.edges) {
         if (matched.has(edge.from_node_id) || matched.has(edge.to_node_id)) {
-          if (depthVisible.has(edge.from_node_id)) visible.add(edge.from_node_id);
-          if (depthVisible.has(edge.to_node_id)) visible.add(edge.to_node_id);
+          if (depthReachable.has(edge.from_node_id)) visible.add(edge.from_node_id);
+          if (depthReachable.has(edge.to_node_id)) visible.add(edge.to_node_id);
         }
       }
       for (const root of data.nodes.filter((n) => n.node_type === "root")) {
-        if (depthVisible.has(root.id)) visible.add(root.id);
+        if (depthReachable.has(root.id)) visible.add(root.id);
       }
     }
-    return { displayIds: visible, matchedCount: matched.size };
+    const capped = capRenderedIds(visible, data.nodes, depths, MAX_RENDERED_NODES);
+    return { displayIds: capped.ids, matchedCount: matched.size, renderTruncated: capped.truncated };
   }, [
+    childExtra,
     data,
-    depthVisible,
+    depthReachable,
+    depths,
     filterActive,
     kindFilter,
+    layeredVisible,
     query,
     roleFilter,
     severityFilter,
@@ -841,8 +926,8 @@ export function CanvasView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
   }, [data, layoutKey, topologyTrace]);
 
-  // elkjs：对小型当前展示子图重算最优分层布局。大图使用服务端持久化
-  // 坐标，避免一次性把数百节点/边交给 ELK 阻塞主线程。
+  // elkjs：对小型当前展示子图重算最优分层布局。超过阈值跳过 ELK，用列布局兜底，
+  // 不再使用服务端默认 (0,0) 叠在一起。
   useEffect(() => {
     if (layoutSubgraph.nodes.length === 0 || layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD) {
       setElkResult(null);
@@ -854,10 +939,10 @@ export function CanvasView({
     const { nodes: layoutN, edges: layoutE } = layoutSubgraph;
     elkLayout(layoutN, layoutE)
       .then((m) => {
-        if (alive) setElkResult({ key: layoutKey, positions: m, mode: "elk" });
+        if (alive) setElkResult({ key: layoutKey, positions: m.positions, edgePoints: m.edgePoints, mode: "elk" });
       })
       .catch(() => {
-        if (alive) setElkResult({ key: layoutKey, positions: new Map(), mode: "fallback" });
+        if (alive) setElkResult({ key: layoutKey, positions: new Map(), edgePoints: new Map(), mode: "fallback" });
       });
     return () => {
       alive = false;
@@ -867,22 +952,32 @@ export function CanvasView({
 
   const fallbackPos = useMemo(
     () =>
-      layoutSubgraph.nodes.length > 0 && layoutSubgraph.nodes.length <= ELK_NODE_THRESHOLD
+      layoutSubgraph.nodes.length > 0
         ? layoutNodes(layoutSubgraph.nodes, layoutSubgraph.edges)
         : null,
     [layoutSubgraph],
   );
   const elkPos = elkResult?.key === layoutKey ? elkResult.positions : null;
-  const layoutMode = elkResult?.key === layoutKey ? elkResult.mode : null;
+  const layoutMode = elkResult?.key === layoutKey
+    ? elkResult.mode
+    : layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD
+      ? "fallback"
+      : null;
 
   const handlers = useMemo(
-    () => ({ expandNode, collapseNode }),
-    [expandNode, collapseNode],
+    () => ({ expandNode, collapseNode, revealMoreChildren }),
+    [collapseNode, expandNode, revealMoreChildren],
   );
 
   const broadcasts = useMemo(
-    () => deriveCanvasBroadcasts(broadcastPage?.items ?? [], data?.nodes ?? []),
-    [broadcastPage?.items, data?.nodes],
+    () => {
+      const projection = deriveCanvasBroadcasts(broadcastPage?.items ?? [], data?.nodes ?? []);
+      return {
+        ...projection,
+        overlayEdges: visibleBroadcastOverlayEdges(projection.overlayEdges, selected?.id),
+      };
+    },
+    [broadcastPage?.items, data?.nodes, selected?.id],
   );
 
   // 只物化当前展示子图的 flow 节点，坐标来自最新布局
@@ -902,16 +997,20 @@ export function CanvasView({
       expandedIds,
       collapsedIds,
       outgoing,
+      childExtra,
       handlers,
       traceActive ? traceIds.nodeIds : new Set<string>(),
       traceActive ? traceIds.edgeIds : new Set<string>(),
       traceMode,
       broadcasts,
+      subset.nodes.length <= 24,
+      !filterActive,
     );
     return { visibleNodes: flow.nodes, visibleEdges: flow.edges };
   }, [
     collapsedIds,
     broadcasts,
+    childExtra,
     data,
     depths,
     displayIds,
@@ -919,6 +1018,7 @@ export function CanvasView({
     elkPos,
     expandedIds,
     fallbackPos,
+    filterActive,
     handlers,
     outgoing,
     topologyTrace,
@@ -985,8 +1085,12 @@ export function CanvasView({
 
   const depthHiddenCount = useMemo(() => {
     if (!data) return 0;
-    return data.nodes.length - depthVisible.size;
-  }, [data, depthVisible]);
+    return data.nodes.length - depthReachable.size;
+  }, [data, depthReachable]);
+  const layeredHiddenCount = useMemo(() => {
+    if (filterActive) return 0;
+    return Math.max(0, depthReachable.size - layeredVisible.size);
+  }, [depthReachable, filterActive, layeredVisible]);
 
   const manualOverrideCount = expandedIds.size + collapsedIds.size;
   const isFullyOpen =
@@ -1070,9 +1174,12 @@ export function CanvasView({
   const hiddenEdgeCount = countHiddenTopologyEdges(data.edges.length, layoutSubgraph.edges.length);
   const hiddenEdgesLabel = hiddenEdgeHint(hiddenEdgeCount);
   const depthSummary =
-    depthHiddenCount > 0
-      ? `深度 ≤${effectiveMaxDepth} · 藏 ${depthHiddenCount}`
-      : `深度 ≤${effectiveMaxDepth}`;
+    [
+      `深度 ≤${effectiveMaxDepth}`,
+      depthHiddenCount > 0 ? `藏 ${depthHiddenCount}` : null,
+      layeredHiddenCount > 0 ? `分层 ${layeredHiddenCount}` : null,
+      renderTruncated > 0 ? `截 ${renderTruncated}` : null,
+    ].filter(Boolean).join(" · ");
   const manualOverrideHint =
     manualOverrideCount > 0 ? ` · 手调 ${manualOverrideCount}` : "";
 
@@ -1202,10 +1309,13 @@ export function CanvasView({
         nodes={visibleNodes}
         edges={visibleEdges}
         nodeTypes={nodeTypes}
+        edgeTypes={canvasEdgeTypes}
+        defaultEdgeOptions={{ type: ORTHOGONAL_EDGE_TYPE }}
         onNodeClick={onNodeClick}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
+        onlyRenderVisibleElements
         minZoom={FULL_GRAPH_MIN_ZOOM}
         maxZoom={2}
         proOptions={{ hideAttribution: false }}
@@ -1223,7 +1333,7 @@ export function CanvasView({
       </ReactFlow>
 
       <div
-        className={`canvas-filter-panel surface-shell absolute left-4 ${traceActive ? "top-20 hidden sm:block" : "top-4"} z-[30] rounded-[20px] p-1 ${filtersOpen ? "is-open" : "is-collapsed"}`}
+        className={`canvas-filter-panel nopan nodrag nowheel surface-shell absolute left-4 ${traceActive ? "top-20" : "top-4"} z-[50] rounded-[20px] p-1 ${filtersOpen ? "is-open" : "is-collapsed"}`}
       >
         {filtersOpen ? (
           <div className="surface-core rounded-[16px] px-4 py-3">
@@ -1234,14 +1344,16 @@ export function CanvasView({
                 {filterActive
                   ? `命中 ${matchedCount} / ${totalNodeCount}`
                   : `显示 ${visibleNodes.length} / ${totalNodeCount}`}
-                {depthHiddenCount > 0 ? ` · 藏 ${depthHiddenCount}` : ""}
+                {depthHiddenCount > 0 ? ` · 深度藏 ${depthHiddenCount}` : ""}
+                {layeredHiddenCount > 0 ? ` · 分层 ${layeredHiddenCount}` : ""}
+                {renderTruncated > 0 ? ` · 截 ${renderTruncated}` : ""}
                 {manualOverrideHint}
               </span>
               {hiddenEdgesLabel && (
                 <span className="canvas-hidden-edge-hint">{hiddenEdgesLabel}</span>
               )}
               {layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD && (
-                <span className="font-mono text-[10px] text-amber-300">大图使用服务端坐标（跳过 ELK）</span>
+                <span className="font-mono text-[10px] text-amber-300">大图列布局（跳过 ELK）</span>
               )}
               {filterActive && (
                 <button
@@ -1343,7 +1455,7 @@ export function CanvasView({
                 </span>
               )}
               <span className="w-full font-mono text-[9px] leading-relaxed text-zinc-600 sm:ml-auto sm:w-auto">
-                默认 {DEFAULT_MAX_DEPTH}；每个有后继的节点都可「展开 / 收起」
+                默认深度 {DEFAULT_MAX_DEPTH}；每层先揭开 {DEFAULT_CHILD_LIMIT} 个后继
               </span>
             </div>
 
