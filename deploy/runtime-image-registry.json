@@ -12,36 +12,36 @@
       "default_role": "base",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
+          "version": "0.1.42",
+          "digest": "sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 531670400,
+          "size_bytes": 531956903,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-base@sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-base@sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e"
+            "github": "ghcr.io/summersec/deepsonar-base@sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-base@sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
+          "image_ref": "ghcr.io/summersec/deepsonar-base@sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-base@sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
-              "inspect_digest": "sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
+              "ref": "ghcr.io/summersec/deepsonar-base@sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
+              "inspect_digest": "sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
-              "inspect_digest": "sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
+              "ref": "docker.io/sumsec/deepsonar@sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
+              "inspect_digest": "sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-base@sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
-              "inspect_digest": "sha256:7973c516acfcd2a5ffa69db011013f030c3d3f25d2c0e55a675952059a894b3e",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-base@sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
+              "inspect_digest": "sha256:342f9c4b0439018ed9ef7fd3f5a332248dfe7d593d7c522bdbe8f83f74f7f25e",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -58,36 +58,36 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
+          "version": "0.1.42",
+          "digest": "sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 654597258,
+          "size_bytes": 537949260,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-audit@sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-audit@sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06"
+            "github": "ghcr.io/summersec/deepsonar-audit@sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-audit@sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
+          "image_ref": "ghcr.io/summersec/deepsonar-audit@sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-audit@sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
-              "inspect_digest": "sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
+              "ref": "ghcr.io/summersec/deepsonar-audit@sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
+              "inspect_digest": "sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
-              "inspect_digest": "sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
+              "ref": "docker.io/sumsec/deepsonar@sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
+              "inspect_digest": "sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-audit@sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
-              "inspect_digest": "sha256:ba3bbd09d2afe44ced9454297db21cf40de720e6068d8911589a271dc0951b06",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-audit@sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
+              "inspect_digest": "sha256:78d09f468a8dbfc9c0e074758a6ace534459545ff3c0c98db64efdc89ae4b1e7",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -104,36 +104,36 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
+          "version": "0.1.42",
+          "digest": "sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 1540545379,
+          "size_bytes": 1428005613,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-kali-minimal@sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6"
+            "github": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-kali-minimal@sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
+          "image_ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
-              "inspect_digest": "sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
+              "ref": "ghcr.io/summersec/deepsonar-kali-minimal@sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
+              "inspect_digest": "sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
-              "inspect_digest": "sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
+              "ref": "docker.io/sumsec/deepsonar@sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
+              "inspect_digest": "sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-kali-minimal@sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
-              "inspect_digest": "sha256:a9d521f67a8327c08dd4099bc27813ff7e25490c1f2811419b2d3b6d1c6642c6",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-kali-minimal@sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
+              "inspect_digest": "sha256:5557b41dab1707bd544d10dcb47635558cb492aba9bc7ec9d96cf77f8e92392a",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -150,36 +150,36 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
+          "version": "0.1.42",
+          "digest": "sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 658228473,
+          "size_bytes": 680469128,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-test@sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f"
+            "github": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-test@sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
+          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
-              "inspect_digest": "sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
+              "ref": "ghcr.io/summersec/deepsonar-openharmony-test@sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
+              "inspect_digest": "sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
-              "inspect_digest": "sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
+              "ref": "docker.io/sumsec/deepsonar@sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
+              "inspect_digest": "sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-test@sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
-              "inspect_digest": "sha256:2e82d136635e10baceb981a6140556de559b2660860e25e40e56ec7b9d15a90f",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-test@sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
+              "inspect_digest": "sha256:d455263193565d997f15c267f3a3638bb8e0361ff14011026b0d3e7ff769de2b",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -196,36 +196,36 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
+          "version": "0.1.42",
+          "digest": "sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 813706380,
+          "size_bytes": 813971583,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-openharmony-audit@sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-audit@sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65"
+            "github": "ghcr.io/summersec/deepsonar-openharmony-audit@sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-audit@sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-audit@sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
+          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-audit@sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-openharmony-audit@sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
-              "inspect_digest": "sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
+              "ref": "ghcr.io/summersec/deepsonar-openharmony-audit@sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
+              "inspect_digest": "sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
-              "inspect_digest": "sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
+              "ref": "docker.io/sumsec/deepsonar@sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
+              "inspect_digest": "sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-audit@sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
-              "inspect_digest": "sha256:177feceb000e812e6d2a8a445769b8269352d7b02e338dda0c8c500405841c65",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-audit@sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
+              "inspect_digest": "sha256:b3f8dbcbb3f191ec28564c3e1ec9486ee236d74b0a95d1de9d056e8d60f4b25c",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -242,36 +242,36 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
+          "version": "0.1.42",
+          "digest": "sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 795742025,
+          "size_bytes": 796000634,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-openharmony-fuzz@sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-fuzz@sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae"
+            "github": "ghcr.io/summersec/deepsonar-openharmony-fuzz@sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-fuzz@sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-fuzz@sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
+          "image_ref": "ghcr.io/summersec/deepsonar-openharmony-fuzz@sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-openharmony-fuzz@sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
-              "inspect_digest": "sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
+              "ref": "ghcr.io/summersec/deepsonar-openharmony-fuzz@sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
+              "inspect_digest": "sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
-              "inspect_digest": "sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
+              "ref": "docker.io/sumsec/deepsonar@sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
+              "inspect_digest": "sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-fuzz@sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
-              "inspect_digest": "sha256:c473795319212bb43d49f739cb53bb9a146306d98edf6e1784aee1753965a0ae",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-openharmony-fuzz@sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
+              "inspect_digest": "sha256:000cabd3f50579e3910a4bc0a17d458b81c6c32fa3e6c418f8e5a11dfa5ac545",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -288,36 +288,36 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
+          "version": "0.1.42",
+          "digest": "sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 804494789,
+          "size_bytes": 699899810,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-chrome-audit@sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-audit@sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce"
+            "github": "ghcr.io/summersec/deepsonar-chrome-audit@sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-audit@sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-chrome-audit@sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
+          "image_ref": "ghcr.io/summersec/deepsonar-chrome-audit@sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-chrome-audit@sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
-              "inspect_digest": "sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
+              "ref": "ghcr.io/summersec/deepsonar-chrome-audit@sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
+              "inspect_digest": "sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
-              "inspect_digest": "sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
+              "ref": "docker.io/sumsec/deepsonar@sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
+              "inspect_digest": "sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-audit@sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
-              "inspect_digest": "sha256:d42f4a9557918aa18974afce8f4f91919b64da6a868a37be2b88b97eb4a4c2ce",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-audit@sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
+              "inspect_digest": "sha256:a866b6bda57ed1e983618bd142062258a5f6040b2165144c3f78004ed0e16ead",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -334,36 +334,36 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
+          "version": "0.1.42",
+          "digest": "sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 792310259,
+          "size_bytes": 792587801,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-chrome-test@sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-test@sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374"
+            "github": "ghcr.io/summersec/deepsonar-chrome-test@sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-test@sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-chrome-test@sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
+          "image_ref": "ghcr.io/summersec/deepsonar-chrome-test@sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-chrome-test@sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
-              "inspect_digest": "sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
+              "ref": "ghcr.io/summersec/deepsonar-chrome-test@sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
+              "inspect_digest": "sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
-              "inspect_digest": "sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
+              "ref": "docker.io/sumsec/deepsonar@sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
+              "inspect_digest": "sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-test@sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
-              "inspect_digest": "sha256:76e8cb21caf7bc85c0456924d2fa6671b56c51a69fdc1650e5dcc9b281d48374",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-test@sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
+              "inspect_digest": "sha256:82ef2d5f520ae433f0e786f363f61457d9df8de1ea47ad32a172511a9a1d77f4",
               "provenance": "cross-registry-copy+inspect"
             }
           }
@@ -380,36 +380,36 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.1.41",
-          "digest": "sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
+          "version": "0.1.42",
+          "digest": "sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
           "platforms": [
             "linux/amd64",
             "linux/arm64"
           ],
-          "size_bytes": 1016114600,
+          "size_bytes": 1016410678,
           "registry_refs": {
-            "github": "ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
-            "dockerhub": "docker.io/sumsec/deepsonar@sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
-            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-fuzz@sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db"
+            "github": "ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
+            "dockerhub": "docker.io/sumsec/deepsonar@sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
+            "aliyun-acr": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-fuzz@sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292"
           },
-          "image_ref": "ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
+          "image_ref": "ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
           "registry_evidence": {
             "github": {
               "available": true,
-              "ref": "ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
-              "inspect_digest": "sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
+              "ref": "ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
+              "inspect_digest": "sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
               "provenance": "build-push+inspect"
             },
             "dockerhub": {
               "available": true,
-              "ref": "docker.io/sumsec/deepsonar@sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
-              "inspect_digest": "sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
+              "ref": "docker.io/sumsec/deepsonar@sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
+              "inspect_digest": "sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
               "provenance": "cross-registry-copy+inspect"
             },
             "aliyun-acr": {
               "available": true,
-              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-fuzz@sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
-              "inspect_digest": "sha256:f0a714c027ff28cdb195004dc903593bfbe2386799c6e2d966a503fbc34228db",
+              "ref": "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/deepsonar-chrome-fuzz@sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
+              "inspect_digest": "sha256:eba7342201f2bde993f9168c5e1bd60fc68d1dafb126ae56691456c086128292",
               "provenance": "cross-registry-copy+inspect"
             }
           }
