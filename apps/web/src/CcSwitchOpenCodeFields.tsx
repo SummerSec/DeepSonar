@@ -136,7 +136,7 @@ export function CcSwitchOpenCodeFields({
       <div className="cc-switch-field">
         <label className="cc-switch-label" htmlFor="cc-switch-opencode-url">Base URL</label>
         <input id="cc-switch-opencode-url" value={baseUrl} onChange={(event) => changeUrl(event.target.value)}
-          className="theme-input-surface cc-switch-input" placeholder="https://api.example.com/v1" />
+          className="theme-input-surface cc-switch-input" placeholder="http://127.0.0.1/v1" />
       </div>
       <div className="cc-switch-model-grid">
         <label className="cc-switch-toggle-row">
@@ -147,7 +147,7 @@ export function CcSwitchOpenCodeFields({
           <label className="cc-switch-sublabel" htmlFor="cc-switch-opencode-models-url">Models URL 覆盖</label>
           <input id="cc-switch-opencode-models-url" value={typeof options.modelsUrl === "string" ? options.modelsUrl : ""}
             onChange={(event) => updateOptions({ modelsUrl: event.target.value })} className="theme-input-surface cc-switch-input"
-            placeholder="https://api.example.com/v1/models" />
+            placeholder="http://127.0.0.1/v1/models" />
         </div>
       </div>
       <div className="cc-switch-field">

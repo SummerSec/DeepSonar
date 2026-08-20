@@ -89,7 +89,7 @@ if (!testDatabaseUrl) {
         kind: "llm_provider",
         provider: "openai",
         secret,
-        metadata: { base_url: "https://provider.example/v1", api_key: secret },
+        metadata: { base_url: "http://127.0.0.1/v1", api_key: secret },
       });
       assert.equal(rejectedCreate.statusCode, 400, rejectedCreate.payload);
       assertNoSecretMaterial(rejectedCreate.payload);
@@ -111,7 +111,7 @@ if (!testDatabaseUrl) {
         kind: "llm_provider",
         provider: "openai",
         secret,
-        metadata: { base_url: "https://provider.example/v1" },
+        metadata: { base_url: "http://127.0.0.1/v1" },
       });
       assert.equal(created.statusCode, 201, created.payload);
       const credentialId = String(json(created).id);
@@ -122,17 +122,17 @@ if (!testDatabaseUrl) {
         kind: "llm_provider",
         provider: "openrouter",
         secret,
-        metadata: { base_url: "https://openrouter.example/v1" },
+        metadata: { base_url: "http://127.0.0.1/v1" },
       });
       assert.equal(rejectedOpenRouterCreate.statusCode, 400, rejectedOpenRouterCreate.payload);
       const rejectedOpenRouterPatch = await request("PATCH", `/credentials/${credentialId}`, {
         provider: "openrouter",
-        metadata: { base_url: "https://openrouter.example/v1" },
+        metadata: { base_url: "http://127.0.0.1/v1" },
       });
       assert.equal(rejectedOpenRouterPatch.statusCode, 400, rejectedOpenRouterPatch.payload);
 
       const rejectedPatch = await request("PATCH", `/credentials/${credentialId}`, {
-        metadata: { base_url: "https://provider.example/v1", token: secret },
+        metadata: { base_url: "http://127.0.0.1/v1", token: secret },
       });
       assert.equal(rejectedPatch.statusCode, 400, rejectedPatch.payload);
       assertNoSecretMaterial(rejectedPatch.payload);
@@ -161,7 +161,7 @@ if (!testDatabaseUrl) {
       await sql`
         UPDATE credentials
         SET public_metadata_json = ${sql.json({
-          base_url: "https://provider.example/v1",
+          base_url: "http://127.0.0.1/v1",
           allowed_model_ids: ["model-a"],
           api_key: secret,
           unknown_secret: secret,
@@ -197,7 +197,7 @@ if (!testDatabaseUrl) {
       assertNoSecretMaterial(list.payload);
       const listed = json(list)[0] as Record<string, any>;
       assert.deepEqual(listed.public_metadata_json, {
-        base_url: "https://provider.example/v1",
+        base_url: "http://127.0.0.1/v1",
       });
 
       const detail = await request("GET", `/credentials/${credentialId}`);
@@ -219,7 +219,7 @@ if (!testDatabaseUrl) {
       assertNoSecretMaterial(compatibilityRejected.payload);
 
       globalThis.fetch = (async (input) => {
-        assert.equal(String(input), "https://provider.example/v1/models");
+        assert.equal(String(input), "http://127.0.0.1/v1/models");
         return new Response(JSON.stringify({ data: [{ id: "model-a" }] }), { status: 200 });
       }) as typeof fetch;
       const testSuccess = await request("POST", `/credentials/${credentialId}/test`, {});
@@ -281,7 +281,7 @@ if (!testDatabaseUrl) {
       const exportedCredentials = readJsonl(pack.files, "data/credentials.jsonl");
       assert.equal(exportedCredentials.length, 1);
       assert.deepEqual(exportedCredentials[0]?.public_metadata, {
-        base_url: "https://provider.example/v1",
+        base_url: "http://127.0.0.1/v1",
       });
       assertNoSecretMaterial([...pack.files.values()].map((value) => value.toString("utf8")).join("\n"));
 
@@ -313,7 +313,7 @@ if (!testDatabaseUrl) {
           ciphertext: legacyEnc.ciphertext,
           nonce: legacyEnc.nonce,
           auth_tag: legacyEnc.auth_tag,
-          public_metadata_json: { base_url: "https://provider.example/v1", allowed_model_ids: ["model-a"] } as never,
+          public_metadata_json: { base_url: "http://127.0.0.1/v1", allowed_model_ids: ["model-a"] } as never,
           fingerprint: fingerprintOf(legacySecret),
           last4: last4Of(legacySecret),
           created_by: "legacy-fixture",
@@ -541,10 +541,10 @@ if (!testDatabaseUrl) {
 
       // Active jobs intentionally block a provider migration; once terminal,
       // explicit repair succeeds and preserves the existing binding.
-      const blockedRepair = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "https://provider.example/v1" } });
+      const blockedRepair = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "http://127.0.0.1/v1" } });
       assert.equal(blockedRepair.statusCode, 409, blockedRepair.payload);
       await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${legacyJobId}`;
-      const repaired = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "https://provider.example/v1" } });
+      const repaired = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "http://127.0.0.1/v1" } });
       assert.equal(repaired.statusCode, 200, repaired.payload);
       const [legacyAfter] = await sql<{ provider: string; binding_count: number }[]>`
         SELECT c.provider, COUNT(rc.credential_id)::int AS binding_count

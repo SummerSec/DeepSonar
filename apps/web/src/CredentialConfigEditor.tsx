@@ -844,7 +844,7 @@ export function CredentialConfigEditor({
             <input type="password" value={secret} onChange={(event) => onSecretChange(event.target.value)} className="theme-input-surface cc-switch-input" autoComplete="off" />
           </label>
           <label className="cc-switch-field"><span className="cc-switch-label">Base URL</span>
-            <input value={baseUrl} onChange={(event) => { const next = event.target.value.trim().replace(/\/+$/u, ""); onBaseUrlChange(next); onSettingsJsonChange(patchDshBaseUrl(settingsJson, provider, next)); }} className="theme-input-surface cc-switch-input" placeholder="https://provider.example/v1" />
+            <input value={baseUrl} onChange={(event) => { const next = event.target.value.trim().replace(/\/+$/u, ""); onBaseUrlChange(next); onSettingsJsonChange(patchDshBaseUrl(settingsJson, provider, next)); }} className="theme-input-surface cc-switch-input" placeholder="http://127.0.0.1/v1" />
           </label>
           <label className="cc-switch-field"><span className="cc-switch-label">DSH Provider 配置 YAML</span>
             <textarea value={settingsJson} onChange={(event) => onSettingsJsonChange(event.target.value)} rows={12} className={`theme-input-surface cc-switch-json ${!dshYamlValidation.ok ? "border-red-700/80" : ""}`} spellCheck={false} />
@@ -856,7 +856,7 @@ export function CredentialConfigEditor({
             <input type="password" value={secret} onChange={(event) => onSecretChange(event.target.value)} className="theme-input-surface cc-switch-input" autoComplete="off" />
           </label>
           <label className="cc-switch-field"><span className="cc-switch-label">Base URL</span>
-            <input value={baseUrl} onChange={(event) => { const next = event.target.value.trim().replace(/\/+$/u, ""); onBaseUrlChange(next); onSettingsJsonChange(patchPiSettingsBaseUrl(settingsJson, provider, next)); }} className="theme-input-surface cc-switch-input" placeholder="https://provider.example/v1" />
+            <input value={baseUrl} onChange={(event) => { const next = event.target.value.trim().replace(/\/+$/u, ""); onBaseUrlChange(next); onSettingsJsonChange(patchPiSettingsBaseUrl(settingsJson, provider, next)); }} className="theme-input-surface cc-switch-input" placeholder="http://127.0.0.1/v1" />
           </label>
           <label className="cc-switch-field"><span className="cc-switch-label">Pi / llm-pi-ai 配置（YAML 或 JSON）</span>
             <textarea

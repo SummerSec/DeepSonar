@@ -30,16 +30,16 @@ test("Anthropic 上游同时注入 Bearer 与 x-api-key", () => {
 
 test("凭据 base_url 已含 /v1 时去掉 Claude Code 重复的版本前缀", () => {
   assert.equal(
-    joinGatewayUpstreamUrl("https://ai.feei.cn/v1", "v1/messages"),
-    "https://ai.feei.cn/v1/messages",
+    joinGatewayUpstreamUrl("http://127.0.0.1/v1", "v1/messages"),
+    "http://127.0.0.1/v1/messages",
   );
   assert.equal(
     joinGatewayUpstreamUrl("https://api.anthropic.com", "v1/messages"),
     "https://api.anthropic.com/v1/messages",
   );
   assert.equal(
-    joinGatewayUpstreamUrl("https://ai.feei.cn/v1/", "/v1/messages", "?beta=1"),
-    "https://ai.feei.cn/v1/messages?beta=1",
+    joinGatewayUpstreamUrl("http://127.0.0.1/v1/", "/v1/messages", "?beta=1"),
+    "http://127.0.0.1/v1/messages?beta=1",
   );
 });
 

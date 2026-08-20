@@ -27,14 +27,14 @@ test("legacySettingsConfig builds Claude env dialect", () => {
   const settings = legacySettingsConfig({
     provider: "anthropic",
     secret: "sk-test",
-    metadata: { base_url: "https://proxy.example/anthropic" },
+    metadata: { base_url: "http://127.0.0.1/anthropic" },
     agentCli: "claude-code",
     model: "claude-sonnet-4-5",
     reasoning: "high",
   });
   assert.deepEqual(settings.env, {
     ANTHROPIC_API_KEY: "sk-test",
-    ANTHROPIC_BASE_URL: "https://proxy.example/anthropic",
+    ANTHROPIC_BASE_URL: "http://127.0.0.1/anthropic",
     ANTHROPIC_MODEL: "claude-sonnet-4-5",
   });
   assert.equal(settings.reasoning, "high");
@@ -244,8 +244,8 @@ test("OpenCode settings use a CC Switch provider fragment and materialize a full
 
 test("extractBaseUrlFromSettings reads env and codex toml", () => {
   assert.equal(
-    extractBaseUrlFromSettings({ env: { ANTHROPIC_BASE_URL: "https://proxy.example/anthropic/" } }),
-    "https://proxy.example/anthropic",
+    extractBaseUrlFromSettings({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1/anthropic/" } }),
+    "http://127.0.0.1/anthropic",
   );
   const codex = legacySettingsConfig({
     provider: "openai",
@@ -289,7 +289,7 @@ test("job token allowlist includes Claude alias and resolved fable model", () =>
 test("restricted Claude config replaces direct credentials with the Job Gateway", () => {
   const files = materializeProviderSettings({
     agentCli: "claude-code",
-    settingsConfig: { env: { ANTHROPIC_API_KEY: "long-lived", ANTHROPIC_BASE_URL: "https://provider.example" } },
+    settingsConfig: { env: { ANTHROPIC_API_KEY: "long-lived", ANTHROPIC_BASE_URL: "http://127.0.0.1" } },
   });
   const [routed] = routeMaterializedProviderFilesThroughGateway({
     agentCli: "claude-code",
@@ -351,7 +351,7 @@ test("Job snapshot Provider settings retain routing/model data but no long-lived
   const snapshot = providerSettingsForJobSnapshot({
     env: {
       ANTHROPIC_MODEL: "claude-sonnet-4-5",
-      ANTHROPIC_BASE_URL: "https://provider.example",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1",
       ANTHROPIC_AUTH_TOKEN: "long-lived",
     },
     nested: { apiKey: "nested-secret", token: "plain-token", key: "plain-key", timeout: 30 },
@@ -360,7 +360,7 @@ test("Job snapshot Provider settings retain routing/model data but no long-lived
   assert.deepEqual(snapshot, {
     env: {
       ANTHROPIC_MODEL: "claude-sonnet-4-5",
-      ANTHROPIC_BASE_URL: "https://provider.example",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1",
     },
     nested: { timeout: 30 },
     config: 'model = "gpt-5"\n\n',
@@ -392,9 +392,9 @@ test("OpenCode context_window_tokens requires an existing output limit", () => {
 
 test("DSH validates structured Pi AI profiles without writing Provider config into the workspace", () => {
   const settings = defaultDshPiAiSettings({
-    route: "feei",
+    route: "xxxx",
     protocol: "openai-responses",
-    baseURL: "https://ai.feei.cn/v1",
+    baseURL: "http://127.0.0.1/v1",
     model: "gpt-5.6",
     contextWindow: 128000,
   });
@@ -407,7 +407,7 @@ const officialLlmPiAiYaml = `llm-pi-ai:
   providers:
     xxxx:
       api: openai-responses
-      baseURL: https://xxxx.example/v1
+      baseURL: http://127.0.0.1/v1
       models:
         - id: gpt-5.6
 agent-default-model:
@@ -420,7 +420,7 @@ const officialLlmPiAiJson = {
     providers: {
       xxxx: {
         api: "openai-responses",
-        baseURL: "https://xxxx.example/v1",
+        baseURL: "http://127.0.0.1/v1",
         apiKey: "sk-official-pi",
         models: [{ id: "gpt-5.6" }],
       },
@@ -431,43 +431,43 @@ const officialLlmPiAiJson = {
 
 test("Pi extracts official llm-pi-ai YAML and JSON the same way as DSH", () => {
   const wrappedYaml = { config: officialLlmPiAiYaml };
-  assert.equal(extractBaseUrlFromSettings(wrappedYaml), "https://xxxx.example/v1");
+  assert.equal(extractBaseUrlFromSettings(wrappedYaml), "http://127.0.0.1/v1");
   assert.deepEqual(extractModelsFromSettings(wrappedYaml), ["gpt-5.6"]);
   assert.equal(extractModelFromSettings("pi", wrappedYaml), "gpt-5.6");
   assert.equal(extractModelFromSettings("dsh", wrappedYaml), "gpt-5.6");
   assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "pi", settingsConfig: wrappedYaml }), "gpt-5.6");
 
-  assert.equal(extractBaseUrlFromSettings(officialLlmPiAiJson), "https://xxxx.example/v1");
+  assert.equal(extractBaseUrlFromSettings(officialLlmPiAiJson), "http://127.0.0.1/v1");
   assert.deepEqual(extractModelsFromSettings(officialLlmPiAiJson), ["gpt-5.6"]);
   assert.equal(extractModelFromSettings("pi", officialLlmPiAiJson), "gpt-5.6");
   assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "pi", settingsConfig: officialLlmPiAiJson }), "gpt-5.6");
-  assert.equal(extractBaseUrlFromSettings({ config: officialLlmPiAiJson }), "https://xxxx.example/v1");
+  assert.equal(extractBaseUrlFromSettings({ config: officialLlmPiAiJson }), "http://127.0.0.1/v1");
   assert.deepEqual(extractModelsFromSettings({ config: officialLlmPiAiJson }), ["gpt-5.6"]);
 
   const [file] = materializeProviderSettings({ agentCli: "pi", settingsConfig: officialLlmPiAiJson });
   assert.equal(file?.path, ".pi/agent/models.json");
   const materialized = JSON.parse(file!.content) as { providers: { xxxx: { baseUrl: string; models: Array<{ id: string }> } } };
-  assert.equal(materialized.providers.xxxx.baseUrl, "https://xxxx.example/v1");
+  assert.equal(materialized.providers.xxxx.baseUrl, "http://127.0.0.1/v1");
   assert.equal(materialized.providers.xxxx.models[0]?.id, "gpt-5.6");
 });
 
 test("DSH settings expose an arbitrary Pi AI route model and upstream base URL", () => {
   const settings = defaultDshPiAiSettings({
-    route: "agentrouter",
+    route: "relay",
     protocol: "openai-responses",
-    baseURL: "https://agentrouter.org/v1",
+    baseURL: "http://127.0.0.1:18080/v1",
     model: "gpt-5.6-sol",
   });
   assert.equal(extractModelFromSettings("dsh", settings), "gpt-5.6-sol");
   assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "dsh", settingsConfig: settings }), "gpt-5.6-sol");
-  assert.equal(extractBaseUrlFromSettings(settings), "https://agentrouter.org/v1");
+  assert.equal(extractBaseUrlFromSettings(settings), "http://127.0.0.1:18080/v1");
 });
 
 test("Job snapshot freezes DSH YAML config without treating it as TOML", () => {
   const settings = defaultDshPiAiSettings({
-    route: "feei",
+    route: "xxxx",
     protocol: "openai-responses",
-    baseURL: "https://ai.feei.cn/v1",
+    baseURL: "http://127.0.0.1/v1",
     model: "grok-4.6",
   });
   const snapshot = providerSettingsForJobSnapshot(settings, "dsh");
@@ -479,7 +479,7 @@ test("Job snapshot freezes DSH YAML config without treating it as TOML", () => {
 
 test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {
   assert.throws(() => materializeProviderSettings({ agentCli: "codex", settingsConfig: { context_window_tokens: 1023 } }), /1024/);
-  const settings = { context_window_tokens: 128000, config: 'model = "gpt-5"\n[model_providers.custom]\nbase_url = "https://example"\n', auth: { OPENAI_API_KEY: "secret" } };
+  const settings = { context_window_tokens: 128000, config: 'model = "gpt-5"\n[model_providers.custom]\nbase_url = "http://127.0.0.1"\n', auth: { OPENAI_API_KEY: "secret" } };
   const snapshot = providerSettingsForJobSnapshot(settings);
   assert.equal(snapshot.context_window_tokens, 128000);
   const codex = materializeProviderSettings({ agentCli: "codex", settingsConfig: snapshot });

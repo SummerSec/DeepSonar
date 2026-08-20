@@ -8,7 +8,7 @@ import {
 } from "./gateway.js";
 
 const request = {
-  url: "https://provider.example/v1/messages",
+  url: "http://127.0.0.1/v1/messages",
   init: { method: "POST", headers: { "content-type": "application/json" } },
   upstreamTimeoutMs: 3_000_000,
 };

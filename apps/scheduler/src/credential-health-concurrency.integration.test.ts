@@ -65,7 +65,7 @@ if (!testDatabaseUrl) {
           INSERT INTO credentials (id, name, kind, provider, ciphertext, nonce, auth_tag,
             public_metadata_json, fingerprint, last4)
           VALUES (${id}, ${name}, 'llm_provider', 'openai', ${encrypted.ciphertext}, ${encrypted.nonce},
-            ${encrypted.auth_tag}, ${sql.json({ base_url: "https://provider.example/v1" } as never)},
+            ${encrypted.auth_tag}, ${sql.json({ base_url: "http://127.0.0.1/v1" } as never)},
             ${`${name}-fingerprint`}, 'cret')`;
         return id;
       };
@@ -86,7 +86,7 @@ if (!testDatabaseUrl) {
         await fetchStarted;
         if (mutation === "patch") {
           const patched = await request("PATCH", `/credentials/${id}`, {
-            metadata: { base_url: "https://changed.example/v1" },
+            metadata: { base_url: "http://127.0.0.1:18083/v1" },
           });
           assert.equal(patched.statusCode, 200, patched.payload);
         } else {
@@ -101,10 +101,10 @@ if (!testDatabaseUrl) {
           FROM credentials WHERE id = ${id}`;
         assert.equal(row.provider, "openai");
         if (mutation === "patch") {
-          assert.deepEqual(row.public_metadata_json, { base_url: "https://changed.example/v1" });
+          assert.deepEqual(row.public_metadata_json, { base_url: "http://127.0.0.1:18083/v1" });
         } else {
           assert.equal(Number(row.key_version), 2);
-          assert.deepEqual(row.public_metadata_json, { base_url: "https://provider.example/v1" });
+          assert.deepEqual(row.public_metadata_json, { base_url: "http://127.0.0.1/v1" });
         }
         assert.equal(row.health_status, "unknown");
         assert.deepEqual(row.model_catalog_json, []);

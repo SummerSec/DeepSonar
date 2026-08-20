@@ -11,7 +11,7 @@ test("job snapshot projection keeps safe fields and recursively redacts settings
     settings_config_json: {
       env: {
         ANTHROPIC_API_KEY: "long-lived-key",
-        ANTHROPIC_BASE_URL: "https://gateway.example",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1",
       },
       nested: [{ token: "nested-secret", value: "safe" }],
     },
