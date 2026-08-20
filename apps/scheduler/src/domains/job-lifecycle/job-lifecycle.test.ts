@@ -252,6 +252,28 @@ test("Reaper provision 超时先提交终态，再等待所有 provision 中止�
   }
 });
 
+test("reapStalledExecution casts interpolated stall seconds to int before * interval", async () => {
+  const queries: string[] = [];
+  const db = Object.assign(
+    ((strings: TemplateStringsArray) => {
+      const query = strings.join(" ").replace(/\s+/gu, " ").trim();
+      queries.push(query);
+      return [];
+    }) as unknown as typeof sql,
+    { json: (value: unknown) => value },
+  );
+  const app = createSqlJobLifecycleApplication(db);
+  assert.deepEqual(await app.reapStalledExecution(900), []);
+  const stall = queries.find((query) => query.includes("产出停滞"));
+  assert.ok(stall, "stall UPDATE must run");
+  assert.match(stall, /::int\s*\*\s*interval '1 second'/);
+  assert.doesNotMatch(
+    stall,
+    /END\s*\)\s*\*\s*interval/,
+    "CASE/GREATEST result must not be multiplied as text",
+  );
+});
+
 test("lock-order contract keeps Canvas-aware event ingress out of Job-first transactions", () => {
   assert.match(architectureDoc, /Event ingress \(Job-only\).*job-only side effects.*commit/s);
   assert.match(architectureDoc, /never acquire Canvas under an already-held Job lock/i);

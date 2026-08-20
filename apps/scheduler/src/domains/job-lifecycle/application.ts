@@ -209,14 +209,14 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
               COALESCE((SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id), started_at)
             ) + (
               GREATEST(
-                ${stallSec},
+                ${stallSec}::int,
                 CASE agent_snapshot_json #>> '{runtime_image,image_key}'
-                  WHEN 'deepsonar-chrome-fuzz' THEN ${chromeFuzzStall}
-                  WHEN 'deepsonar-chrome-audit' THEN ${chromeAuditStall}
-                  WHEN 'deepsonar-chrome-test' THEN ${chromeTestStall}
-                  ELSE ${stallSec}
+                  WHEN 'deepsonar-chrome-fuzz' THEN ${chromeFuzzStall}::int
+                  WHEN 'deepsonar-chrome-audit' THEN ${chromeAuditStall}::int
+                  WHEN 'deepsonar-chrome-test' THEN ${chromeTestStall}::int
+                  ELSE ${stallSec}::int
                 END
-              ) * interval '1 second'
+              )::int * interval '1 second'
             ) < now()
             AND NOT (
               lease_expires_at IS NOT NULL
