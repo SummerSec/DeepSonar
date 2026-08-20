@@ -18,6 +18,7 @@ import {
 } from "../role-colors.js";
 import { sql } from "../db.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
+import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
 import {
   buildManifestSource,
   ensureTransferDirs,
@@ -193,6 +194,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
           subagents_json: rc.subagents_json,
           platform_tools_json: rc.platform_tools_json,
           sandbox_limits_json: rc.sandbox_limits_json,
+          runtime_knobs_json: rc.runtime_knobs_json,
           instructions_markdown: rc.instructions_markdown,
           runtime_image_key: rc.runtime_image_key,
           version: rc.version,
@@ -578,6 +580,7 @@ export async function applyPlatformImport(
           ? []
           : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${roleName}.modules_json`);
         const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
+        const runtimeKnobs = parseRuntimeKnobOverride(rc.runtime_knobs_json);
         if (Object.keys(sandboxLimits).length > 0) {
           throw new Error("global RoleConfig cannot set sandbox resource overrides");
         }
@@ -602,6 +605,7 @@ export async function applyPlatformImport(
             subagents_json: ((rc.subagents_json as unknown) ?? []) as never,
             platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
             sandbox_limits_json: sandboxLimits as never,
+            runtime_knobs_json: runtimeKnobs as never,
             instructions_markdown: (rc.instructions_markdown as string) ?? null,
             runtime_image_key: (rc.runtime_image_key as string) ?? null,
             version: 1,

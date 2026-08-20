@@ -38,6 +38,8 @@ const CreateJobBody = z.object({
   payload: z.record(z.string(), z.unknown()).default({}),
   priority: z.number().int().optional(),
   timeout_sec: z.number().int().positive().optional(),
+  stall_sec: z.number().int().min(0).max(172_800).optional(),
+  max_requests: z.number().int().min(0).max(1_000_000).optional(),
 });
 const PriorityBody = z.object({ priority: z.number().int() });
 const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
@@ -145,6 +147,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       payload,
       priority: body.priority,
       timeoutSec: body.timeout_sec,
+      stallSec: body.stall_sec,
+      maxRequests: body.max_requests,
     });
     if (duplicated) return reply.code(409).send({ error: "同一 issue 已有活动 job" });
     return reply.code(201).send(job);

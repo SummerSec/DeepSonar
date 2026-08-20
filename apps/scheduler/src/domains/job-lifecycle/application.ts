@@ -151,13 +151,19 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
 
     /** Reaper provision 超时（多来源恢复操作）。 */
     async reapProvisionTimeout(provisionSec) {
+      const fallback = Number.isSafeInteger(provisionSec) && provisionSec > 0 ? provisionSec : 300;
       const timedOut = await atomically(async (tx) => {
         const result = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
                           error = COALESCE(error, '') || 'provision 超时（Reaper 判定）'
           WHERE status IN ('claimed','provisioning')
             AND claimed_at IS NOT NULL
-            AND claimed_at + (${provisionSec} * interval '1 second') < now()
+            AND claimed_at + (
+              COALESCE(
+                NULLIF((agent_snapshot_json #>> '{runtime_knobs,provision_timeout_sec}')::int, 0),
+                ${fallback}::int
+              ) * interval '1 second'
+            ) < now()
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "provision_timeout" }, "provision 超时（Reaper 判定）");
@@ -194,7 +200,7 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
      * chrome-audit/test/fuzz 另有 per-image stall 下限，避免单条长工具超过全局 900s。
      */
     async reapStalledExecution(stallSec) {
-      if (!Number.isSafeInteger(stallSec) || stallSec <= 0) return [];
+      const platformStall = Number.isSafeInteger(stallSec) ? stallSec : 0;
       const chromeAuditStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"];
       const chromeTestStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-test"];
       const chromeFuzzStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"];
@@ -204,17 +210,27 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
                           error = COALESCE(error, '') || '产出停滞（Reaper 判定）'
           WHERE status = 'running'
             AND started_at IS NOT NULL
+            AND COALESCE(
+              (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
+              ${platformStall}::int
+            ) > 0
             AND GREATEST(
               started_at,
               COALESCE((SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id), started_at)
             ) + (
               GREATEST(
-                ${stallSec}::int,
+                COALESCE(
+                  (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
+                  ${platformStall}::int
+                ),
                 CASE agent_snapshot_json #>> '{runtime_image,image_key}'
                   WHEN 'deepsonar-chrome-fuzz' THEN ${chromeFuzzStall}::int
                   WHEN 'deepsonar-chrome-audit' THEN ${chromeAuditStall}::int
                   WHEN 'deepsonar-chrome-test' THEN ${chromeTestStall}::int
-                  ELSE ${stallSec}::int
+                  ELSE COALESCE(
+                    (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
+                    ${platformStall}::int
+                  )
                 END
               )::int * interval '1 second'
             ) < now()

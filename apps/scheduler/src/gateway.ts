@@ -13,6 +13,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { audit } from "./audit.js";
 import { config } from "./config.js";
+import { jobTokenQuotaExhausted } from "./runtime-knobs.js";
 import {
   decryptSecret,
   projectCredentialProvider,
@@ -278,6 +279,7 @@ export async function mintJobToken(input: {
   const secret = randomBytes(24).toString("base64url");
   const plaintext = `deepsonarjob_${prefix}_${secret}`;
   const ttl = input.ttlSec ?? config.gateway.tokenTtlSec;
+  const maxRequests = input.maxRequests ?? config.gateway.maxRequests;
   const [row] = await sql`
     INSERT INTO job_tokens ${sql({
       job_id: input.jobId,
@@ -286,7 +288,7 @@ export async function mintJobToken(input: {
       token_prefix: prefix,
       token_hash: hashJobToken(plaintext),
       allowed_models: (input.allowedModels ?? []) as never,
-      max_requests: input.maxRequests ?? config.gateway.maxRequests,
+      max_requests: maxRequests,
       max_tokens: input.maxTokens ?? null,
       expires_at: new Date(Date.now() + ttl * 1000),
     })}
@@ -304,7 +306,7 @@ export async function mintJobToken(input: {
         job_id: input.jobId,
         credential_id: input.credentialId,
         allowed_models: input.allowedModels ?? [],
-        max_requests: input.maxRequests ?? config.gateway.maxRequests,
+        max_requests: maxRequests,
       } as never),
       result: "ok",
     })}`;
@@ -544,7 +546,7 @@ export function registerGateway(app: FastifyInstance): void {
         });
         return deny(reply, 401, "job 已结束，token 不可用", "job_inactive");
       }
-      if ((jt.used_requests as number) >= (jt.max_requests as number)) {
+      if (jobTokenQuotaExhausted(jt.used_requests as number, jt.max_requests as number)) {
         await sql`UPDATE job_tokens SET status = 'exhausted' WHERE id = ${jt.id} AND status = 'active'`;
         void auditGateway(req, {
           action: "gateway.denied",
@@ -616,7 +618,7 @@ export function registerGateway(app: FastifyInstance): void {
         const [requestCounter] = await tx`
           UPDATE job_tokens
              SET used_requests = used_requests + 1
-           WHERE id = ${jt.id} AND status = 'active' AND used_requests < max_requests
+           WHERE id = ${jt.id} AND status = 'active' AND (max_requests <= 0 OR used_requests < max_requests)
            RETURNING used_requests`;
         if (!requestCounter) return null;
         const requestNo = Number(requestCounter.used_requests);

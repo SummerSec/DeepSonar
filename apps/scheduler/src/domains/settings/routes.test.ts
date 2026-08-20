@@ -45,6 +45,34 @@ test("项目并发配额 PATCH 拒绝非法值与全局键", async () => {
   await app.close();
 });
 
+test("运行时护栏 PATCH 拒绝非法值，项目不能写 provisionTimeoutSec", async () => {
+  const app = Fastify({ logger: false });
+  registerSettingsRoutes(app);
+
+  const stall = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { rules: { stallSec: -1 } },
+  });
+  assert.equal(stall.statusCode, 400);
+
+  const requests = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { rules: { jobTokenMaxRequests: 1_000_001 } },
+  });
+  assert.equal(requests.statusCode, 400);
+
+  const projectProvision = await app.inject({
+    method: "PATCH",
+    url: "/projects/11111111-1111-4111-8111-111111111111/settings",
+    payload: { rules: { provisionTimeoutSec: 400 } },
+  });
+  assert.equal(projectProvision.statusCode, 400);
+  assert.match(projectProvision.json<{ error: string }>().error, /invalid project settings rules/);
+  await app.close();
+});
+
 test("全局上限降低后允许原项目配额随其他规则保存", () => {
   assert.equal(projectJobQuotaPatchExceedsGlobal(4, 4, 2), false);
   assert.equal(projectJobQuotaPatchExceedsGlobal(4, 5, 2), true);

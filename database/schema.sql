@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 35);
+INSERT INTO schema_meta (id, version) VALUES ('global', 36);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1087,6 +1087,7 @@ CREATE TABLE role_configs (
   subagents_json jsonb NOT NULL DEFAULT '[]',
   platform_tools_json jsonb NOT NULL DEFAULT '{}',
   sandbox_limits_json jsonb NOT NULL DEFAULT '{}',
+  runtime_knobs_json jsonb NOT NULL DEFAULT '{}',
   instructions_markdown text,
   runtime_image_key text REFERENCES runtime_images(image_key),
   version int NOT NULL DEFAULT 1,

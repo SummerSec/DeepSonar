@@ -898,6 +898,8 @@ const OPS: Op[] = [
         payload: { type: "object", additionalProperties: true },
         priority: { type: "integer", description: "可选；必须等于系统固定调度档位" },
         timeout_sec: { type: "integer" },
+        stall_sec: { type: "integer", minimum: 0, description: "本 Job 产出停滞窗口；0 关闭。优先于角色/项目/平台。" },
+        max_requests: { type: "integer", minimum: 0, description: "本 Job Token 请求上限；0 不限制。" },
       },
     },
   },
@@ -1254,7 +1256,7 @@ const OPS: Op[] = [
         rules: {
           type: "object",
           additionalProperties: true,
-          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 1–1000；maxConcurrentJobs 只能写在项目设置。",
+          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 1–1000；stallSec / jobTokenMaxRequests 为 0–上限（0=不限制）；auditTimeoutSec / verifyTimeoutSec / provisionTimeoutSec 为配置中心第一批；maxConcurrentJobs 只能写在项目设置。",
         },
       },
     },
@@ -2356,6 +2358,15 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             },
           },
         },
+        RuntimeKnobOverride: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            stallSec: { type: "integer", minimum: 0, maximum: 172800, nullable: true, description: "角色覆盖的产出停滞窗口（秒）；0 关闭；省略继承上层" },
+            jobTokenMaxRequests: { type: "integer", minimum: 0, maximum: 1000000, nullable: true, description: "角色覆盖的 Job Token 请求上限；0 不限制" },
+            timeoutSec: { type: "integer", minimum: 60, maximum: 172800, nullable: true, description: "角色覆盖的 Job 超时（秒）" },
+          },
+        },
         SandboxLimitsOverride: {
           type: "object",
           additionalProperties: false,
@@ -2390,6 +2401,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             instructions_markdown: { type: "string", nullable: true },
             runtime_image_key: { type: "string", nullable: true, description: "仅全局 RoleConfig 使用；项目覆盖必须传 null，并通过项目镜像策略选择" },
             sandbox_limits: { $ref: "#/components/schemas/SandboxLimitsOverride" },
+            runtime_knobs: { $ref: "#/components/schemas/RuntimeKnobOverride" },
             credentials: {
               type: "array",
               items: {

@@ -60,9 +60,10 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.match(lifecycleSource, /tool\.call\.started/);
   assert.match(
     lifecycleSource,
-    /GREATEST\([\s\S]*\$\{stallSec\}::int[\s\S]*?\)::int\s*\*\s*interval '1 second'/,
+    /GREATEST\([\s\S]*\$\{platformStall\}::int[\s\S]*?\)::int\s*\*\s*interval '1 second'/,
     "stall seconds must be integer-cast before * interval; postgres.js params are text",
   );
+  assert.match(lifecycleSource, /runtime_knobs,stall_sec/);
   assert.match(lifecycleSource, /status IN \('claimed','provisioning','running'\)/);
   assert.match(lifecycleSource, /started_at\s+IS\s+NOT\s+NULL/);
   assert.match(lifecycleSource, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);

@@ -22,6 +22,7 @@ import { allocateRoleUiColor } from "../../role-colors.js";
 import { parseContextWindowTokens } from "../../provider-settings.js";
 import { parseProjectImagePolicy } from "../role-runtime-snapshot/application.js";
 import { parseSandboxLimitsOverride } from "../role-runtime-snapshot/sandbox-limits.js";
+import { parseRuntimeKnobOverride, validateRuntimeKnobOverride } from "../../runtime-knobs.js";
 const RoleBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
   title: z.string().default(""),
@@ -49,6 +50,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     runtime_image_key: z.string().nullish(),
     /** Project-only numeric sandbox resource overrides; capability flags stay server-owned. */
     sandbox_limits: z.unknown().optional(),
+    runtime_knobs: z.unknown().optional(),
     credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).default([]),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
   });
@@ -71,6 +73,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     if (!projectId && Object.keys(sandboxLimits).length > 0) {
       return "sandbox_limits numeric overrides are only allowed on project RoleConfigs";
     }
+    const knobsErr = validateRuntimeKnobOverride(body.runtime_knobs);
+    if (knobsErr) return knobsErr;
     const envErr = validateEnvVars(body.env_vars);
     try {
       parseContextWindowTokens(body.context_window_tokens);
@@ -172,6 +176,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       subagents_json: body.subagents as never,
       platform_tools_json: body.platform_tools as never,
       sandbox_limits_json: parseSandboxLimitsOverride(body.sandbox_limits) as never,
+      runtime_knobs_json: parseRuntimeKnobOverride(body.runtime_knobs) as never,
       instructions_markdown: body.instructions_markdown ?? null,
       runtime_image_key: projectId ? null : body.runtime_image_key ?? null,
     };

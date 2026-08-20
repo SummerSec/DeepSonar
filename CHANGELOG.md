@@ -4,12 +4,21 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 配置中心第一批运行时护栏落库并可热读（#263）：`stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`。优先级 Job > 角色 RoleConfig > 项目规则 > 平台 `global_settings` > 部署 env 引导。Web「配置中心」与角色编辑器可改，保存有可见 toast 并写审计。已在跑的 Job 继续用冻结快照；下一 Job 无需重启调度器。
+
 ### 修复
 
 - 过程画布筛选坞始终默认展开；折叠态「筛选节点」在亮/暗色与 <640px 下保持可点可读，不再被 `100%-176px` 裁成只剩导出。
 - 拓扑连线把 `--deepsonar-edge-zoom-boost` 与 `--xy-edge-stroke-width` 写到 `.react-flow` 根节点，并覆盖 Tailwind 对边 SVG 的 `height:auto`，默认 fitView 下描边可见。
 - Reaper 不再把健康沙箱里的单条长工具调用判成产出停滞：`tool.call.started` 写入语义进度与 `runtime_activity`，在飞工具且 lease 仍有效时跳过 stall；`deepsonar-chrome-audit/test/fuzz` 另有 5400/10800s 下限。全局 `DEEPSONAR_JOB_STALL_SEC` 默认仍为 900s。
 - 官方 runtime catalog 不再被 image-admission 周期复扫按 Debian/发行版 Trivy CRITICAL 或 secret 自动吊销；第三方仍保持 0 CRITICAL / 0 secret。仅有吊销版本时任务启动返回 `409 RUNTIME_IMAGE_REVOKED`，不再误报 `RUNTIME_IMAGE_PLATFORM_UNAVAILABLE`。`/health` 以 `official_trust_warnings` 暴露官方默认镜像已吊销。
+
+### 部署 / 升级说明
+
+- 本变更将 Schema 升至 v36（`role_configs.runtime_knobs_json`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- `DEEPSONAR_JOB_STALL_SEC` / `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` / `DEFAULT_AUDIT_TIMEOUT_SEC` / `DEFAULT_VERIFY_TIMEOUT_SEC` / `PROVISION_TIMEOUT_SEC` 现为引导值：库中有键则 UI/DB 优先。lease TTL、Reaper 间隔、Gateway 超时、镜像 registry/cosign/syft/trivy/clamav pins 与巡检间隔仍只走部署 env。
 
 ## [0.1.41] - 2026-08-20
 

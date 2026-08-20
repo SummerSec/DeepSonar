@@ -169,8 +169,8 @@ export const config = {
     sandboxUrl: str("DEEPSONAR_GATEWAY_SANDBOX_URL", "http://deepsonar-gateway-proxy:3100/gateway"),
     /** URL used only by the managed proxy to reach Scheduler /gateway. */
     proxyUpstreamUrl: str("DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL", "http://host.docker.internal:3100/gateway"),
-    /** Job Token 默认请求上限 */
-    maxRequests: int("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 500),
+    /** Job Token 默认请求上限；0 = 不限制。落库后由配置中心覆盖。 */
+    maxRequests: Number(process.env.DEEPSONAR_JOB_TOKEN_MAX_REQUESTS) === 0 ? 0 : int("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 500),
     /** Job Token 生命周期（秒），应 ≥ job timeout */
     tokenTtlSec: int("DEEPSONAR_JOB_TOKEN_TTL_SEC", 4 * 3600),
     /** 转发上游超时（毫秒；流式为首字节超时） */

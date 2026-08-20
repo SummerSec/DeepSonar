@@ -12,6 +12,7 @@ import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../domains/role-runtime-snapshot/index.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
+import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
 import {
   loadPackFile,
   openDeepsonarPack,
@@ -375,6 +376,7 @@ async function importRoleConfigs(
       ? []
       : validateModuleSelectors(rc.modules_json, `RoleConfig ${roleName}.modules_json`);
     const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
+    const runtimeKnobs = parseRuntimeKnobOverride(rc.runtime_knobs_json);
 
     // upsert 项目覆盖
     await tx`DELETE FROM role_configs WHERE project_id = ${projectId} AND role_id = ${role.id as string}`;
@@ -395,6 +397,7 @@ async function importRoleConfigs(
         subagents_json: ((rc.subagents_json as unknown) ?? []) as never,
         platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
         sandbox_limits_json: sandboxLimits as never,
+        runtime_knobs_json: runtimeKnobs as never,
         instructions_markdown: (rc.instructions_markdown as string) ?? null,
         runtime_image_key: null,
         version: 1,
