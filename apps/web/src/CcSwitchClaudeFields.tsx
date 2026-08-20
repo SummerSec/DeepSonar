@@ -244,7 +244,7 @@ export function CcSwitchClaudeFields({
           value={baseUrl}
           onChange={(event) => handleBaseUrlChange(event.target.value)}
           className="theme-input-surface cc-switch-input"
-          placeholder="https://api.anthropic.com 或中转地址"
+          placeholder="https://api.anthropic.com"
           autoComplete="off"
           spellCheck={false}
         />

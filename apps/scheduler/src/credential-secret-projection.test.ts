@@ -11,7 +11,7 @@ test("credential projection recursively redacts settings secrets and config assi
   const original = {
     env: {
       ANTHROPIC_AUTH_TOKEN: "anthropic-live-secret",
-      ANTHROPIC_BASE_URL: "https://provider.example",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1",
     },
     options: { apiKey: "openai-live-secret", timeout: 30 },
     config: 'api_key = "toml-live-secret"\nmodel = "gpt-5"\n',
@@ -25,22 +25,22 @@ test("credential projection recursively redacts settings secrets and config assi
   assert.equal(encoded.includes("openai-live-secret"), false);
   assert.equal(encoded.includes("toml-live-secret"), false);
   assert.equal(encoded.includes("nested-live-secret"), false);
-  assert.equal((projected.env as Record<string, unknown>).ANTHROPIC_BASE_URL, "https://provider.example");
+  assert.equal((projected.env as Record<string, unknown>).ANTHROPIC_BASE_URL, "http://127.0.0.1");
 });
 
 test("patch restore round-trips only server-owned masked values", () => {
   const original = {
-    env: { OPENAI_API_KEY: "openai-live-secret", OPENAI_BASE_URL: "https://old.example" },
+    env: { OPENAI_API_KEY: "openai-live-secret", OPENAI_BASE_URL: "http://127.0.0.1:18081" },
     config: 'api_key = "toml-live-secret"\nmodel = "gpt-5"\n',
   };
   const projected = redactSecretProjection(original) as Record<string, unknown>;
   const edited = structuredClone(projected) as Record<string, unknown>;
-  (edited.env as Record<string, unknown>).OPENAI_BASE_URL = "https://new.example";
+  (edited.env as Record<string, unknown>).OPENAI_BASE_URL = "http://127.0.0.1:18082";
   (edited.config as string) = (edited.config as string).replace('model = "gpt-5"', 'model = "gpt-5-codex"');
 
   const restored = restoreMaskedSecretValues(original, edited);
   assert.deepEqual(restored, {
-    env: { OPENAI_API_KEY: "openai-live-secret", OPENAI_BASE_URL: "https://new.example" },
+    env: { OPENAI_API_KEY: "openai-live-secret", OPENAI_BASE_URL: "http://127.0.0.1:18082" },
     config: 'api_key = "toml-live-secret"\nmodel = "gpt-5-codex"\n',
   });
   assert.equal(containsSecretMask(restored), false);

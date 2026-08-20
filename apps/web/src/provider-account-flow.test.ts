@@ -206,7 +206,7 @@ test("settings builder patches or removes the top-level context budget for every
     tomlText: "model = \"gpt-5\"",
     authJson: "{}",
     secret: "secret",
-    baseUrl: "https://example.test/v1",
+    baseUrl: "http://127.0.0.1/v1",
     provider: "openai",
     reasoning: "",
   };
@@ -241,7 +241,7 @@ test("Claude Code accepts only official effortLevel values", () => {
 });
 
 test("Codex Pi and OpenCode use their native reasoning controls", () => {
-  const common = { settingsJson: "{}", tomlText: "model = \"gpt-5\"", authJson: "{}", secret: "secret", baseUrl: "https://example.test/v1", provider: "openai", contextWindowTokens: "" };
+  const common = { settingsJson: "{}", tomlText: "model = \"gpt-5\"", authJson: "{}", secret: "secret", baseUrl: "http://127.0.0.1/v1", provider: "openai", contextWindowTokens: "" };
   assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "codex", reasoning: "xhigh" }).ok, true);
   assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "codex", reasoning: "max" }).ok, false);
   assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "pi", reasoning: "max" }).ok, true);
@@ -255,7 +255,7 @@ const officialLlmPiAiYaml = `llm-pi-ai:
   providers:
     xxxx:
       api: openai-responses
-      baseURL: https://xxxx.example/v1
+      baseURL: http://127.0.0.1/v1
       apiKey: sk-official-pi
       models:
         - id: gpt-5.6
@@ -269,7 +269,7 @@ const officialLlmPiAiJson = `{
     "providers": {
       "xxxx": {
         "api": "openai-responses",
-        "baseURL": "https://xxxx.example/v1",
+        "baseURL": "http://127.0.0.1/v1",
         "apiKey": "sk-official-pi",
         "models": [{ "id": "gpt-5.6" }]
       }
@@ -282,14 +282,14 @@ test("Pi settings box accepts official llm-pi-ai YAML and JSON and extracts base
   const yaml = parsePiSettingsText(officialLlmPiAiYaml);
   assert.equal(yaml.ok, true);
   if (yaml.ok && !yaml.empty) {
-    assert.equal(extractBaseUrlFromSettingsClient(yaml.value), "https://xxxx.example/v1");
+    assert.equal(extractBaseUrlFromSettingsClient(yaml.value), "http://127.0.0.1/v1");
     assert.deepEqual(extractModelsFromSettingsClient(yaml.value), ["gpt-5.6"]);
     assert.equal(extractSecretFromSettings(yaml.value), "sk-official-pi");
   }
   const json = parsePiSettingsText(officialLlmPiAiJson);
   assert.equal(json.ok, true);
   if (json.ok && !json.empty) {
-    assert.equal(extractBaseUrlFromSettingsClient(json.value), "https://xxxx.example/v1");
+    assert.equal(extractBaseUrlFromSettingsClient(json.value), "http://127.0.0.1/v1");
     assert.deepEqual(extractModelsFromSettingsClient(json.value), ["gpt-5.6"]);
     assert.equal(extractSecretFromSettings(json.value), "sk-official-pi");
   }
@@ -306,7 +306,7 @@ test("Pi settings box accepts official llm-pi-ai YAML and JSON and extracts base
   });
   assert.equal(builtYaml.ok, true);
   if (builtYaml.ok) {
-    assert.equal(extractBaseUrlFromSettingsClient(builtYaml.settings), "https://xxxx.example/v1");
+    assert.equal(extractBaseUrlFromSettingsClient(builtYaml.settings), "http://127.0.0.1/v1");
     assert.deepEqual(extractModelsFromSettingsClient(builtYaml.settings), ["gpt-5.6"]);
     assert.equal(extractSecretFromSettings(builtYaml.settings), "sk-official-pi");
   }
@@ -323,7 +323,7 @@ test("Pi settings box accepts official llm-pi-ai YAML and JSON and extracts base
   });
   assert.equal(builtJson.ok, true);
   if (builtJson.ok) {
-    assert.equal(extractBaseUrlFromSettingsClient(builtJson.settings), "https://xxxx.example/v1");
+    assert.equal(extractBaseUrlFromSettingsClient(builtJson.settings), "http://127.0.0.1/v1");
     assert.deepEqual(extractModelsFromSettingsClient(builtJson.settings), ["gpt-5.6"]);
     assert.equal(extractSecretFromSettings(builtJson.settings), "sk-official-pi");
   }

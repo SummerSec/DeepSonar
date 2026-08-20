@@ -18,13 +18,13 @@ test("provider/kind allowlist preserves supported mappings only", () => {
 test("new Credential metadata accepts only server-owned fields and rejects secret-like keys", () => {
   assert.deepEqual(
     sanitizeCredentialMetadata({
-      base_url: "https://api.example.test/v1///",
+      base_url: "http://127.0.0.1/v1///",
       allowed_model_ids: ["model-a", "model-a"],
       model_concurrency: { "model-a": 2 },
       max_concurrent: 4,
     }, { kind: "llm_provider", provider: "openai" }),
     {
-      base_url: "https://api.example.test/v1",
+      base_url: "http://127.0.0.1/v1",
       model_concurrency: { "model-a": 2 },
       max_concurrent: 4,
     },
@@ -69,9 +69,9 @@ test("legacy/drop metadata keeps valid model and numeric entries only", () => {
 
 test("base_url rejects userinfo/query/fragment and only allows http(s)", () => {
   for (const base_url of [
-    "https://user:password@example.test/v1",
-    "https://example.test/v1?token=secret",
-    "https://example.test/v1#fragment",
+    "https://user:password@127.0.0.1/v1",
+    "http://127.0.0.1/v1?token=secret",
+    "http://127.0.0.1/v1#fragment",
     "file:///tmp/provider",
   ]) {
     assert.throws(
@@ -83,12 +83,12 @@ test("base_url rejects userinfo/query/fragment and only allows http(s)", () => {
 
 test("provider catalog is authoritative for base_url capability", () => {
   assert.throws(
-    () => sanitizeCredentialMetadata({ base_url: "https://openrouter.ai/api/v1" }, { kind: "llm_provider", provider: "openrouter" }),
+    () => sanitizeCredentialMetadata({ base_url: "http://127.0.0.1/v1" }, { kind: "llm_provider", provider: "openrouter" }),
     /metadata key/,
   );
   assert.deepEqual(
     projectCredentialMetadata("llm_provider", "openrouter", {
-      base_url: "https://legacy.example/v1",
+      base_url: "http://127.0.0.1/v1",
       allowed_model_ids: ["model-a"],
     }),
     {},
@@ -98,7 +98,7 @@ test("provider catalog is authoritative for base_url capability", () => {
 test("legacy projection drops unsafe/unknown metadata without echoing it", () => {
   const secret = "sk-legacy-secret";
   const projected = projectCredentialMetadata("llm_provider", "anthropic", {
-    base_url: `https://example.test/v1?token=${secret}`,
+    base_url: `http://127.0.0.1/v1?token=${secret}`,
     api_key: secret,
     unknown: secret,
     allowed_model_ids: ["claude-sonnet-4-5"],

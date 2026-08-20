@@ -6,7 +6,7 @@ test("Credential metadata audit summary excludes arbitrary sensitive values", ()
   const secret = "do-not-write-this-token-anywhere";
   const metadata = {
     [`${secret}-metadata-key`]: "arbitrary value",
-    base_url: `https://${secret}.example.test/v1?token=${secret}`,
+    base_url: `http://127.0.0.1/v1?token=${secret}`,
     allowed_model_ids: [secret],
     max_concurrent: 4,
     model_concurrency: { [secret]: 2 },
@@ -32,13 +32,13 @@ test("credential.update audit state keeps useful identity and metadata change ev
     name: "primary",
     provider: "anthropic",
     projectId: "project-before",
-    metadata: { base_url: "https://api.example.test/v1", allowed_model_ids: ["claude-sonnet-4-5"] },
+    metadata: { base_url: "http://127.0.0.1/v1", allowed_model_ids: ["claude-sonnet-4-5"] },
   });
   const after = credentialAuditState({
     name: "primary-renamed",
     provider: "anthropic",
     projectId: "project-after",
-    metadata: { base_url: "https://api.example.test/v2", max_concurrent: 8 },
+    metadata: { base_url: "http://127.0.0.1/v2", max_concurrent: 8 },
   });
 
   assert.equal(before.name, "primary");

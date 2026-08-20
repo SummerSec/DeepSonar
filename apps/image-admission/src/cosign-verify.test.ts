@@ -50,9 +50,9 @@ test("keyless regexp identity still requires an issuer and never omits identity 
 });
 
 test("public-key verify uses --key and does not require identity", () => {
-  const policy = resolveCosignVerifyPolicy({ DEEPSONAR_COSIGN_KEY: "https://example.com/cosign.pub" });
+  const policy = resolveCosignVerifyPolicy({ DEEPSONAR_COSIGN_KEY: "http://127.0.0.1/cosign.pub" });
   const args = buildCosignVerifyArgs(image, policy);
-  assert.deepEqual(args, ["verify", "--output", "json", "--key", "https://example.com/cosign.pub", image]);
+  assert.deepEqual(args, ["verify", "--output", "json", "--key", "http://127.0.0.1/cosign.pub", image]);
 });
 
 test("Cosign unsigned vs CLI/identity errors are classified separately from admission policy", () => {

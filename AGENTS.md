@@ -117,6 +117,7 @@ pnpm typecheck        # 全 workspace 类型检查
 - RoleConfig `modules` 支持三类规范 selector：单模块 `"<source_id>:<module_id>"`、整插件 `"<source_id>:plugin:<plugin>"`、整来源 `"<source_id>:source:*"`；展开、冲突排除与最终内容 hash 由服务端 materializer 统一处理。
 - 实时流：`stream-bus` + 短时 `POST /auth/ws-ticket` → `/ws?ticket=`（#38 已关）；运行中可读 inflight `stream.ndjson`；多 Scheduler 副本不共享内存 bus。
 - Windows 探库：避免 PowerShell 弄坏 `node -e` 模板字符串；临时 `apps/scheduler/*.mjs` 跑完即删。
+- **硬编码链接**：禁止在源码、测试、文档示例中写死公网第三方/中转/个人域名（如 `ai.feei.cn`、`agentrouter.org`）。需要可运行的 URL 夹具时只用 `127.0.0.1` 或内网地址（RFC1918、Docker 内部主机名）；不要用公网域名冒充上游。产品内置的官方厂商默认端点（OpenAI / Anthropic / DeepSeek）与官方发行/包管理源除外。`CLAUDE.md` 与本文件同步（符号链接）。
 
 ## 工程原则
 

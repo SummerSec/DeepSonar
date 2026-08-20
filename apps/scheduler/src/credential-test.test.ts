@@ -18,11 +18,11 @@ test("connection success/failure returns fixed health category and safe URL", as
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example/v1///" },
+      public_metadata_json: { base_url: "http://127.0.0.1/v1///" },
     });
-    assert.deepEqual(successUrls, ["https://provider.example/v1/models"]);
+    assert.deepEqual(successUrls, ["http://127.0.0.1/v1/models"]);
     assert.equal(success.ok, true);
-    assert.equal(success.source_url, "https://provider.example/v1/models");
+    assert.equal(success.source_url, "http://127.0.0.1/v1/models");
 
     const failureUrls: string[] = [];
     globalThis.fetch = (async (input) => {
@@ -33,9 +33,9 @@ test("connection success/failure returns fixed health category and safe URL", as
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example/v1" },
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
     });
-    assert.deepEqual(failureUrls, ["https://provider.example/v1/models"]);
+    assert.deepEqual(failureUrls, ["http://127.0.0.1/v1/models"]);
     assert.equal(failure.ok, false);
     assert.equal(failure.category, "authentication");
     assert.equal(failure.detail.includes("super-secret"), false);
@@ -65,14 +65,14 @@ test("status-only probes best-effort cancel successful and failed response bodie
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example/v1" },
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
     });
     globalThis.fetch = (async () => responseWithTrackedBody(500)) as typeof fetch;
     await testCredential({
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example/v1" },
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
     });
     assert.equal(cancelled, 2);
   } finally {
@@ -104,16 +104,16 @@ test("connection test falls back on 404/405 and reports the last missing candida
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example/v2" },
+      public_metadata_json: { base_url: "http://127.0.0.1/v2" },
     });
     assert.deepEqual(urls, [
-      "https://provider.example/v2/models",
-      "https://provider.example/v2/v1/models",
+      "http://127.0.0.1/v2/models",
+      "http://127.0.0.1/v2/v1/models",
     ]);
     assert.equal(cancelled, 2);
     assert.equal(result.ok, false);
     assert.equal(result.detail, "Provider 连接失败（unknown，HTTP 405）");
-    assert.equal(result.source_url, "https://provider.example/v2/v1/models");
+    assert.equal(result.source_url, "http://127.0.0.1/v2/v1/models");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -128,7 +128,7 @@ test("preview discovery strips Anthropic compatibility suffix and de-duplicates 
       urls.push(String(input));
       assert.equal(new Headers(init?.headers).get("authorization"), "Bearer super-secret");
       assert.equal(new Headers(init?.headers).get("x-api-key"), "super-secret");
-      if (String(input) === "https://provider.example/models") {
+      if (String(input) === "http://127.0.0.1/models") {
         return new Response(JSON.stringify({ models: ["claude-sonnet"] }), { status: 200 });
       }
       return new Response("not found", { status: urls.length === 2 ? 405 : 404 });
@@ -136,16 +136,16 @@ test("preview discovery strips Anthropic compatibility suffix and de-duplicates 
     const result = await listCredentialModelsPreview({
       provider: "anthropic",
       kind: "llm_provider",
-      public_metadata_json: { base_url: "https://provider.example/api/anthropic/" },
+      public_metadata_json: { base_url: "http://127.0.0.1/api/anthropic/" },
     }, "super-secret");
     assert.deepEqual(urls, [
-      "https://provider.example/api/anthropic/v1/models",
-      "https://provider.example/v1/models",
-      "https://provider.example/models",
+      "http://127.0.0.1/api/anthropic/v1/models",
+      "http://127.0.0.1/v1/models",
+      "http://127.0.0.1/models",
     ]);
     assert.equal(new Set(urls).size, urls.length);
     assert.deepEqual(result.models, ["claude-sonnet"]);
-    assert.equal(result.source_url, "https://provider.example/models");
+    assert.equal(result.source_url, "http://127.0.0.1/models");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -166,10 +166,10 @@ test("saved discovery uses the ordinary model endpoint", async () => {
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example" },
+      public_metadata_json: { base_url: "http://127.0.0.1" },
     });
-    assert.deepEqual(urls, ["https://provider.example/v1/models"]);
-    assert.equal(result.source_url, "https://provider.example/v1/models");
+    assert.deepEqual(urls, ["http://127.0.0.1/v1/models"]);
+    assert.equal(result.source_url, "http://127.0.0.1/v1/models");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -186,7 +186,7 @@ test("model discovery returns bounded IDs and fixed error categories", async () 
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example/v1" },
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
     });
     assert.deepEqual(result.models, ["a", "z"]);
     assert.equal(result.source_url.includes("?"), false);
@@ -196,7 +196,7 @@ test("model discovery returns bounded IDs and fixed error categories", async () 
         provider: "openai",
         kind: "llm_provider",
         ...encrypted,
-        public_metadata_json: { base_url: "https://provider.example/v1" },
+        public_metadata_json: { base_url: "http://127.0.0.1/v1" },
       }),
       (error: unknown) => {
         assert.equal((error as { category?: string }).category, "upstream");
@@ -228,7 +228,7 @@ test("model discovery best-effort cancels a non-ok response body", async () => {
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
-      public_metadata_json: { base_url: "https://provider.example/v1" },
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
     }));
     assert.equal(cancelled, 1);
   } finally {
@@ -245,7 +245,7 @@ test("model discovery rejects oversized declared and streamed provider bodies", 
     provider: "openai",
     kind: "llm_provider",
     ...encrypted,
-    public_metadata_json: { base_url: "https://provider.example/v1" },
+    public_metadata_json: { base_url: "http://127.0.0.1/v1" },
   };
   try {
     globalThis.fetch = (async () => new Response(`body-secret-${"x".repeat(64)}`, {
@@ -298,7 +298,7 @@ test("model discovery maps a header-then-stall AbortError to timeout", async () 
         provider: "openai",
         kind: "llm_provider",
         ...encrypted,
-        public_metadata_json: { base_url: "https://provider.example/v1" },
+        public_metadata_json: { base_url: "http://127.0.0.1/v1" },
       }),
       (error: unknown) => {
         assert.equal((error as { category?: string }).category, "timeout");

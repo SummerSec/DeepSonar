@@ -26,7 +26,7 @@ test("git clone 被中止时不会回退默认分支", async () => {
   const calls: string[][] = [];
   await assert.rejects(
     cloneSkillSource({
-      repoUrl: "https://example.invalid/skills.git",
+      repoUrl: "http://127.0.0.1/skills.git",
       branch: "feature",
       destination: "/tmp/skills",
       signal: controller.signal,
@@ -41,7 +41,7 @@ test("git clone 被中止时不会回退默认分支", async () => {
   );
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.[4], "feature");
-  assert.equal(calls[0]?.[5], "https://example.invalid/skills.git");
+  assert.equal(calls[0]?.[5], "http://127.0.0.1/skills.git");
 });
 
 test("模块源启动同步在后台运行且不阻塞调用方", async () => {
