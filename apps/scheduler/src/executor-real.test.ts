@@ -465,6 +465,14 @@ test("late sub-agent completion keeps the first accepted mark_job_done proposal"
   assert.equal(state.done, first);
 });
 
+test("tool.call.started/completed are mapped into stall-visible progress activity", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /recordToolCallActivity\("started"/);
+  assert.match(source, /recordToolCallActivity\("completed"/);
+  assert.match(source, /toolCallProgressMessage/);
+  assert.match(source, /payload_json = payload_json \|\| \$\{sql\.json\(toolCallActivityPatch/);
+});
+
 test("all role Jobs, including audit, may publish shared assets", () => {
   // Publish is gated by frozen platform_tools, not role kind.
   assert.equal(canRolePublishSharedAsset("role"), true);

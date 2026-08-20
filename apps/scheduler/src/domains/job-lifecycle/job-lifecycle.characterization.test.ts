@@ -55,6 +55,14 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.match(lifecycleSource, /reapExecutionTimeout/);
   assert.match(lifecycleSource, /reapStalledExecution/);
   assert.match(reaperSource, /reapStalledExecution/);
+  assert.match(lifecycleSource, /runtime_activity,inflight_tool/);
+  assert.match(lifecycleSource, /deepsonar-chrome-fuzz/);
+  assert.match(lifecycleSource, /tool\.call\.started/);
+  assert.match(
+    lifecycleSource,
+    /GREATEST\([\s\S]*\$\{stallSec\}::int[\s\S]*?\)::int\s*\*\s*interval '1 second'/,
+    "stall seconds must be integer-cast before * interval; postgres.js params are text",
+  );
   assert.match(lifecycleSource, /status IN \('claimed','provisioning','running'\)/);
   assert.match(lifecycleSource, /started_at\s+IS\s+NOT\s+NULL/);
   assert.match(lifecycleSource, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);

@@ -7,6 +7,10 @@ import {
   frozenCanvasAllowEgress,
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
+import {
+  CHROME_JOB_STALL_SEC,
+  resolveJobStallSec,
+} from "./domains/job-lifecycle/stall-policy.js";
 
 const coreSource = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
 const projectTaskSource = readFileSync(new URL("./domains/project-task/routes.ts", import.meta.url), "utf8");
@@ -116,6 +120,15 @@ test("all direct Job creation paths freeze policy before INSERT", () => {
   }
 });
 
+test("Chrome runtimes raise stall floors without changing the global 900s default", () => {
+  assert.equal(resolveJobStallSec("deepsonar-audit", 900), 900);
+  assert.equal(resolveJobStallSec("deepsonar-chrome-audit", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"]);
+  assert.equal(resolveJobStallSec("deepsonar-chrome-test", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-test"]);
+  assert.equal(resolveJobStallSec("deepsonar-chrome-fuzz", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"]);
+  assert.ok(CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"] > 900);
+  assert.ok(CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"] > CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"]);
+});
+
 test("Dispatcher and real executor provision from the frozen snapshot only", () => {
   assert.match(dispatcherSource, /requireFrozenSnapshotAllowEgress\(snapshot, jobId\)/);
   assert.match(dispatcherSource, /const allowEgress = useReal && snapshotAllowEgress/);
@@ -123,4 +136,16 @@ test("Dispatcher and real executor provision from the frozen snapshot only", () 
   assert.match(executorSource, /requireFrozenSnapshotAllowEgress\(snapshot, jobId\)/);
   assert.match(executorSource, /env\.DEEPSONAR_ALLOW_EGRESS = allowEgress \? "1" : "0"/);
   assert.doesNotMatch(executorSource, /networkPolicy\.allow_egress/);
+});
+
+test("real executor maps tool.call boundaries into stall-visible activity", () => {
+  assert.match(executorSource, /recordToolCallActivity/);
+  assert.match(executorSource, /toolCallActivityPatch/);
+  assert.match(executorSource, /toolCallProgressMessage/);
+  const started = executorSource.indexOf('if (type === "tool.call.started")');
+  const completed = executorSource.indexOf('} else if (type === "tool.call.completed")');
+  const startedRecord = executorSource.indexOf('recordToolCallActivity("started"', started);
+  const completedRecord = executorSource.indexOf('recordToolCallActivity("completed"', completed);
+  assert.ok(started >= 0 && startedRecord > started && startedRecord < completed);
+  assert.ok(completed > started && completedRecord > completed);
 });
