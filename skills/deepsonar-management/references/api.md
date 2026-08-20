@@ -195,7 +195,7 @@ PUT body：
 `source_id` 必须是固定格式 UUID；selector 原样落库。`plugin:` 和 `source:*` 在创建下一 Job 时按当前 trusted/enabled catalog 展开，因此同步后的新增模块会跟随组选择器进入新快照；历史 Job 不会漂移。导入导出会保留合法 selector，路径中的 `..`、绝对路径、空段和未知保留前缀会被拒绝。
 
 常见 400：
-- `runtime_image_key 没有可信版本: <key>` — 市场 catalog 有 key 不等于有 `trust_status=trusted` 的版本；先配置 `DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:...` 重启，或 import+approve。
+- `runtime_image_key 没有可信版本: <key>` — 市场 catalog 有 key 不等于有 `trust_status=trusted` 的版本；先 `POST /runtime-images/registry/sync` 或配置 `DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:...` 重启，或 import+approve。若返回 `RUNTIME_IMAGE_REVOKED`，说明版本已被吊销而不是缺平台元数据。
 - 凭据 `purpose` 必须是 **`llm`** 才会进入模型通道；其它 purpose 不会被 Executor 当作 LLM key。
 
 `platform_tools` 接受平台工具**全集**中的任意工具名（每个 Agent 均可勾选，不再按 role/kind 裁剪 list）；未声明的工具默认启用。仅 **`mark_job_done`** 为形成合法终态所必需，不可关闭。授权以 Job 冻结的 `platform_tools` 快照为准。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
@@ -226,7 +226,7 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 
 ### 运行时镜像市场
 
-市场只接受受治理 OCI 目录。第三方导入首先进入 `quarantined`，由独立 Image Admission Worker 解析不可变 digest 并完成验签、SBOM、漏洞/凭据/恶意文件扫描和断网自检。扫描通过也不会自动 trusted；必须由 `images:approve` 管理员提升，第三方版本还需要项目显式启用。
+市场只接受受治理 OCI 目录。第三方导入首先进入 `quarantined`，由独立 Image Admission Worker 解析不可变 digest 并完成验签、SBOM、漏洞/凭据/恶意文件扫描和断网自检。**第三方**扫描失败（含 CRITICAL CVE / secret）会拒绝或自动吊销；扫描通过也不会自动 trusted，必须由 `images:approve` 管理员提升，并需要项目显式启用。**官方 catalog** 以 Release digest 为信任根：周期复扫会记录 CVE/secret 计数，但发行版 CRITICAL 不会自动 `revoked`。若历史版本因 `admission policy failed` 被误吊销，`POST /runtime-images/registry/sync` 会按同一 digest 恢复 trusted。建任务/绑定在没有 trusted 版本时返回 `409 RUNTIME_IMAGE_REVOKED` 或 `RUNTIME_IMAGE_NOT_TRUSTED`，不会伪装成 `RUNTIME_IMAGE_PLATFORM_UNAVAILABLE`。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |

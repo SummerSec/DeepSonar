@@ -11,6 +11,7 @@ import {
   resolveStartupRuntimeImages,
   RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
   RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
+  RuntimeImageRevokedError,
   withSharedAssetsHelperRef,
 } from "./runtime-images.js";
 import type { sql } from "./db.js";
@@ -116,6 +117,27 @@ test("consecutive warmup failures emit dispatcher-disabled error after threshold
   await flush();
   assert.equal(attempts, DISPATCHER_DISABLED_LOG_AFTER);
   assert.ok(logs.some((item) => item.level === "error" && /dispatcher disabled/.test(item.message)));
+});
+
+test("official revoked defaults fail warmup with RUNTIME_IMAGE_REVOKED at error level", async () => {
+  const logs: Array<{ level: string; message: string }> = [];
+  let coordinator!: ReturnType<typeof createRuntimeImageWarmupCoordinator>;
+  coordinator = createRuntimeImageWarmupCoordinator({
+    resolveRefs: async () => {
+      throw new RuntimeImageRevokedError("deepsonar-base");
+    },
+    prepare: async () => {},
+    onReady: () => {},
+    retryDelaysMs: [1],
+    sleep: async () => { coordinator.stop(); },
+    log: (level, message) => { logs.push({ level, message }); },
+  });
+  coordinator.start();
+  await flush();
+  assert.equal(coordinator.status().status, "failed");
+  assert.equal(coordinator.status().error_code, "RUNTIME_IMAGE_REVOKED");
+  assert.match(coordinator.status().error ?? "", /revoked/);
+  assert.ok(logs.some((item) => item.level === "error" && /RUNTIME_IMAGE_REVOKED|revoked/.test(item.message)));
 });
 
 test("warmup failure stays live, exposes a sanitized failure and retries", async () => {

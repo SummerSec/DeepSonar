@@ -146,6 +146,62 @@ export class RuntimeImagePlatformUnavailableError extends Error {
   }
 }
 
+export class RuntimeImageRevokedError extends Error {
+  readonly code = "RUNTIME_IMAGE_REVOKED" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string) {
+    super(`runtime image ${imageKey} has no trusted version; catalog versions are revoked`);
+    this.name = "RuntimeImageRevokedError";
+  }
+}
+
+export class RuntimeImageNotTrustedError extends Error {
+  readonly code = "RUNTIME_IMAGE_NOT_TRUSTED" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string) {
+    super(`runtime image ${imageKey} has no trusted version`);
+    this.name = "RuntimeImageNotTrustedError";
+  }
+}
+
+/** Distro CVE/secret auto-revokes that must not stick on official catalog sync. */
+export const OFFICIAL_FALSE_REVOKE_REASON_PREFIX = "admission policy failed";
+
+export type RuntimeImageBindingFailure =
+  | "revoked"
+  | "not_trusted"
+  | "platform_unavailable"
+  | "channel_unavailable"
+  | "unbound";
+
+/**
+ * Distinguish "no trusted version" from missing platform metadata.
+ * Trusted-but-wrong-arch is the only PLATFORM_UNAVAILABLE case.
+ */
+export function classifyRuntimeImageBindingFailure(input: {
+  hasTrusted: boolean;
+  hasTrustedHostPlatform: boolean;
+  hasRevoked: boolean;
+  official: boolean;
+  hasSelectedRef: boolean;
+}): RuntimeImageBindingFailure {
+  if (input.hasTrustedHostPlatform) {
+    if (input.official && !input.hasSelectedRef) return "channel_unavailable";
+    return "unbound";
+  }
+  if (input.hasTrusted) return "platform_unavailable";
+  if (input.hasRevoked) return "revoked";
+  return "not_trusted";
+}
+
+export function runtimeImageErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("code" in error)) return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
 /** Explicit project pin vs latest trusted. Null pin already follows latest. */
 export type RuntimeImagePinClassification = "follow_latest" | "pin_ok" | "pin_stale" | "unavailable";
 
@@ -244,6 +300,16 @@ export function runtimeImageHttpError(error: unknown): { statusCode: number; bod
         error_code: error.code,
         image_key: error.imageKey,
         platform: error.platform,
+      },
+    };
+  }
+  if (error instanceof RuntimeImageRevokedError || error instanceof RuntimeImageNotTrustedError) {
+    return {
+      statusCode: error.statusCode,
+      body: {
+        error: error.message,
+        error_code: error.code,
+        image_key: error.imageKey,
       },
     };
   }
@@ -1130,9 +1196,13 @@ export async function applyOfficialRuntimeCatalog(
         }
       } else {
         // A digest present in the trusted official catalog is authoritative for
-        // that exact digest. A revoked row is only re-scanned when the trusted
-        // catalog moves its admission pull reference to another registry; a
-        // same-ref sync must preserve genuine security revocations.
+        // that exact digest. Distro CVE/secret auto-revokes are restored; other
+        // revokes are only re-scanned when the admission pull reference moves.
+        const falseRevokePattern = `${OFFICIAL_FALSE_REVOKE_REASON_PREFIX}%`;
+        const [prior] = await sql`
+          SELECT id, trust_status, status_reason
+          FROM runtime_image_versions
+          WHERE runtime_image_id = ${image.id} AND digest = ${digest}`;
         const [saved] = await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
@@ -1144,6 +1214,8 @@ export async function applyOfficialRuntimeCatalog(
             size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
             trust_status = CASE
               WHEN runtime_image_versions.trust_status = 'revoked'
+                AND runtime_image_versions.status_reason LIKE ${falseRevokePattern} THEN 'trusted'
+              WHEN runtime_image_versions.trust_status = 'revoked'
                 AND runtime_image_versions.image_ref IS DISTINCT FROM EXCLUDED.image_ref THEN 'quarantined'
               WHEN runtime_image_versions.trust_status IN ('quarantined', 'scanning')
                 AND runtime_image_versions.status_reason = 'official registry reference changed; admission rescan required'
@@ -1154,11 +1226,15 @@ export async function applyOfficialRuntimeCatalog(
             END,
             status_reason = CASE
               WHEN runtime_image_versions.trust_status = 'revoked'
+                AND runtime_image_versions.status_reason LIKE ${falseRevokePattern} THEN NULL
+              WHEN runtime_image_versions.trust_status = 'revoked'
                 AND runtime_image_versions.image_ref IS DISTINCT FROM EXCLUDED.image_ref
                 THEN 'official registry reference changed; admission rescan required'
               ELSE runtime_image_versions.status_reason
             END,
             revoked_at = CASE
+              WHEN runtime_image_versions.trust_status = 'revoked'
+                AND runtime_image_versions.status_reason LIKE ${falseRevokePattern} THEN NULL
               WHEN runtime_image_versions.trust_status = 'revoked'
                 AND runtime_image_versions.image_ref IS DISTINCT FROM EXCLUDED.image_ref THEN NULL
               ELSE runtime_image_versions.revoked_at
@@ -1180,6 +1256,35 @@ export async function applyOfficialRuntimeCatalog(
             updated_at = now()
           RETURNING id`;
         if (!saved?.id) continue;
+        if (
+          prior?.trust_status === "revoked"
+          && String(prior.status_reason ?? "").startsWith(OFFICIAL_FALSE_REVOKE_REASON_PREFIX)
+        ) {
+          console.warn(`[runtime-images] restored official ${item.image_key}@${version.version} previously revoked by distro CVE policy`);
+          await sql`
+            INSERT INTO audit_logs ${sql({
+              actor_type: "system",
+              actor_id: "scheduler",
+              action: "runtime_image.official_trust_restored",
+              project_id: null,
+              resource_type: "runtime_image_version",
+              resource_id: String(saved.id),
+              request_id: null,
+              ip: null,
+              user_agent: null,
+              before_json: sql.json({
+                image_key: item.image_key,
+                version: version.version,
+                trust_status: prior.trust_status,
+                status_reason: prior.status_reason ?? null,
+              } as never),
+              after_json: sql.json({ trust_status: "trusted", reason: "official_cve_policy_restore" } as never),
+              result: "ok",
+              error_code: null,
+            })}`.catch((error) => {
+            console.error("[audit] 系统写入失败 runtime_image.official_trust_restored:", error instanceof Error ? error.message : error);
+          });
+        }
         await sql`DELETE FROM runtime_image_version_refs WHERE version_id = ${saved.id} AND channel <> ALL(${channels})`;
         for (const channel of channels) {
           await sql`
@@ -1260,6 +1365,37 @@ export async function applyOfficialRuntimeCatalog(
         error_code: "OFFICIAL_TRUST_EMPTY",
       })}`.catch((error) => {
       console.error("[audit] 系统写入失败 runtime_image.official_trust_empty:", error instanceof Error ? error.message : error);
+    });
+  }
+  const untrustedDefaults = await sql`
+    SELECT ri.image_key
+    FROM runtime_images ri
+    WHERE ri.official = true AND ri.enabled = true AND COALESCE(ri.project_opt_in, false) = false
+      AND NOT EXISTS (
+        SELECT 1 FROM runtime_image_versions v
+        WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
+      )
+    ORDER BY ri.image_key`;
+  if (untrustedDefaults.length > 0) {
+    const imageKeys = untrustedDefaults.map((row) => String(row.image_key));
+    console.error(`[runtime-images] official default images have no trusted version: ${imageKeys.join(", ")}`);
+    await sql`
+      INSERT INTO audit_logs ${sql({
+        actor_type: "system",
+        actor_id: "scheduler",
+        action: "runtime_image.official_default_untrusted",
+        project_id: null,
+        resource_type: "runtime_image_catalog",
+        resource_id: null,
+        request_id: null,
+        ip: null,
+        user_agent: null,
+        before_json: null,
+        after_json: sql.json({ image_keys: imageKeys, fallback: insertOnly, source: registry.source ?? null } as never),
+        result: "error",
+        error_code: "OFFICIAL_DEFAULT_UNTRUSTED",
+      })}`.catch((error) => {
+      console.error("[audit] 系统写入失败 runtime_image.official_default_untrusted:", error instanceof Error ? error.message : error);
     });
   }
   return {
@@ -1932,13 +2068,25 @@ async function selectRuntimeImageSnapshot(
   if (!row) {
     const [image] = await db`
       SELECT image_key, official,
+             EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted') AS has_trusted,
              EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
-               AND v.platforms_json @> ${sql.json([hostPlatform])}) AS has_host_platform,
+               AND v.platforms_json @> ${sql.json([hostPlatform])}) AS has_trusted_host_platform,
+             EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'revoked') AS has_revoked,
              EXISTS (SELECT 1 FROM runtime_image_versions v JOIN runtime_image_version_refs r ON r.version_id = v.id
                WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted' AND r.channel = ${selectedChannel}) AS has_selected_ref
       FROM runtime_images ri WHERE ri.id = ${imageId}`;
-    if (image && !image.has_host_platform) throw new RuntimeImagePlatformUnavailableError(String(image.image_key), hostPlatform);
-    if (image?.official && !image.has_selected_ref) throw new RuntimeImageChannelUnavailableError(selectedChannel, String(image.image_key));
+    const imageKey = String(image?.image_key ?? "unknown");
+    const reason = classifyRuntimeImageBindingFailure({
+      hasTrusted: Boolean(image?.has_trusted),
+      hasTrustedHostPlatform: Boolean(image?.has_trusted_host_platform),
+      hasRevoked: Boolean(image?.has_revoked),
+      official: Boolean(image?.official),
+      hasSelectedRef: Boolean(image?.has_selected_ref),
+    });
+    if (reason === "revoked") throw new RuntimeImageRevokedError(imageKey);
+    if (reason === "not_trusted") throw new RuntimeImageNotTrustedError(imageKey);
+    if (reason === "platform_unavailable") throw new RuntimeImagePlatformUnavailableError(imageKey, hostPlatform);
+    if (reason === "channel_unavailable") throw new RuntimeImageChannelUnavailableError(selectedChannel, imageKey);
     throw new Error("runtime image binding has no matching trusted version");
   }
   const resolvedRef = row.resolved_ref as string | null;

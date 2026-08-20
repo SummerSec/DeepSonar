@@ -13,10 +13,14 @@ import {
   runtimeImageRefForChannel,
   runtimeImageVersionPin,
   classifyRuntimeImagePin,
+  classifyRuntimeImageBindingFailure,
+  runtimeImageErrorCode,
   runtimeImageHttpError,
   RuntimeImageNotReadyError,
+  RuntimeImageNotTrustedError,
   RuntimeImagePinStaleError,
   RuntimeImagePlatformUnavailableError,
+  RuntimeImageRevokedError,
   runtimeImageRegistryNextSyncDelayMs,
   selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
@@ -741,4 +745,51 @@ test("stale pin HTTP mapping is 409 with an upgrade action, not a generic 500", 
     follow_latest_body: { enabled: true, version_id: null },
   });
   assert.equal(runtimeImageHttpError(new Error("runtime image binding has no matching trusted version")), null);
+});
+
+test("binding failure classification does not disguise revoked trust as missing platforms", () => {
+  assert.equal(classifyRuntimeImageBindingFailure({
+    hasTrusted: false,
+    hasTrustedHostPlatform: false,
+    hasRevoked: true,
+    official: true,
+    hasSelectedRef: false,
+  }), "revoked");
+  assert.equal(classifyRuntimeImageBindingFailure({
+    hasTrusted: false,
+    hasTrustedHostPlatform: false,
+    hasRevoked: false,
+    official: true,
+    hasSelectedRef: false,
+  }), "not_trusted");
+  assert.equal(classifyRuntimeImageBindingFailure({
+    hasTrusted: true,
+    hasTrustedHostPlatform: false,
+    hasRevoked: false,
+    official: true,
+    hasSelectedRef: true,
+  }), "platform_unavailable");
+  assert.equal(classifyRuntimeImageBindingFailure({
+    hasTrusted: true,
+    hasTrustedHostPlatform: true,
+    hasRevoked: false,
+    official: true,
+    hasSelectedRef: false,
+  }), "channel_unavailable");
+});
+
+test("revoked and untrusted runtime images map to 409 without PLATFORM_UNAVAILABLE", () => {
+  const revoked = new RuntimeImageRevokedError("deepsonar-base");
+  const revokedMapped = runtimeImageHttpError(revoked);
+  assert.equal(revokedMapped?.statusCode, 409);
+  assert.equal(revokedMapped?.body.error_code, "RUNTIME_IMAGE_REVOKED");
+  assert.equal(revokedMapped?.body.image_key, "deepsonar-base");
+  assert.doesNotMatch(String(revokedMapped?.body.error), /platforms explicitly/);
+  assert.equal(runtimeImageErrorCode(revoked), "RUNTIME_IMAGE_REVOKED");
+
+  const untrusted = new RuntimeImageNotTrustedError("deepsonar-audit");
+  const untrustedMapped = runtimeImageHttpError(untrusted);
+  assert.equal(untrustedMapped?.statusCode, 409);
+  assert.equal(untrustedMapped?.body.error_code, "RUNTIME_IMAGE_NOT_TRUSTED");
+  assert.equal(untrustedMapped?.body.image_key, "deepsonar-audit");
 });

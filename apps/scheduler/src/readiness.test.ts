@@ -279,6 +279,27 @@ test("follow-latest pin still reports missing trusted when marketplace has none"
   assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_PIN_STALE"), false);
 });
 
+test("revoked catalog versions are reported as RUNTIME_IMAGE_REVOKED not unavailable", () => {
+  const result = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? {
+          ...image,
+          version_id: null,
+          digest: null,
+          resolved_ref: null,
+          trust_status: null,
+          selected_version_id: null,
+          latest_version_id: null,
+          has_revoked: true,
+        }
+      : image),
+  }));
+  assert.equal(result.ready, false);
+  assert.ok(result.checks.some((check) => check.code === "RUNTIME_IMAGE_REVOKED" && check.role?.name === "hub_reason"));
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_UNAVAILABLE" && check.role?.name === "hub_reason"), false);
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_PLATFORM_UNAVAILABLE"), false);
+});
+
 test("readiness repair metadata covers disabled runtime images", () => {
   const result = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"
@@ -570,6 +591,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     MODEL_DISCOVERY_EVIDENCE_STALE: "credentials",
     RUNTIME_IMAGE_UNAVAILABLE: "runtime_images",
     RUNTIME_IMAGE_PIN_STALE: "runtime_images",
+    RUNTIME_IMAGE_REVOKED: "runtime_images",
     RUNTIME_IMAGE_DISABLED: "runtime_images",
     RUNTIME_IMAGE_PROJECT_NOT_ENABLED: "runtime_images",
     RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED: "runtime_images",

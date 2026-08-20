@@ -6,6 +6,7 @@
 
 ### 修复
 
+- 官方 runtime 镜像不再被 `image-admission` 的 Trivy CRITICAL/secret 复扫自动吊销；第三方仍零容忍。没有 trusted 版本时建任务返回 `409 RUNTIME_IMAGE_REVOKED` / `RUNTIME_IMAGE_NOT_TRUSTED`，不再伪装成缺平台元数据。升级后重启 Scheduler 或 `POST /runtime-images/registry/sync` 会恢复因 `admission policy failed` 被误吊销的官方 digest。
 - 过程画布筛选坞始终默认展开；折叠态「筛选节点」在亮/暗色与 <640px 下保持可点可读，不再被 `100%-176px` 裁成只剩导出。
 - 拓扑连线把 `--deepsonar-edge-zoom-boost` 与 `--xy-edge-stroke-width` 写到 `.react-flow` 根节点，并覆盖 Tailwind 对边 SVG 的 `height:auto`，默认 fitView 下描边可见。
 

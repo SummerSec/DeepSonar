@@ -189,6 +189,61 @@ if (!testDatabaseUrl) {
     }
   });
 
+  test("official catalog restores distro CVE auto-revokes on the same digest", async () => {
+    process.env.DEEPSONAR_IMAGE_REGISTRY = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec";
+    const { applyOfficialRuntimeCatalog } = await import("./runtime-images.js");
+    const { sql } = await import("./db.js");
+    const imageKey = `deepsonar-cve-restore-${randomUUID().slice(0, 8)}`;
+    const digest = `sha256:${"9".repeat(64)}`;
+    const githubRef = `ghcr.io/summersec/${imageKey}@${digest}`;
+    const acrRef = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${digest}`;
+    const catalog = {
+      schema: "deepsonar.registry/v2" as const,
+      schema_version: 2 as const,
+      source: "remote" as const,
+      images: [{
+        image_key: imageKey,
+        name: "CVE restore fixture",
+        description: "fixture",
+        publisher: "SummerSec",
+        source_kind: "official" as const,
+        project_opt_in: false,
+        versions: [{
+          version: "0.1.41",
+          image_ref: acrRef,
+          digest,
+          platforms: ["linux/amd64", "linux/arm64"],
+          registry_refs: { github: githubRef, "aliyun-acr": acrRef },
+        }],
+      }],
+    };
+    try {
+      const [image] = await sql`
+        INSERT INTO runtime_images (image_key, name, description, publisher, source_kind, official)
+        VALUES (${imageKey}, 'CVE restore fixture', 'fixture', 'SummerSec', 'official', true)
+        RETURNING id`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, status_reason, revoked_at)
+        VALUES
+          (${image.id}, '0.1.41', ${acrRef}, ${acrRef}, ${digest}, ${sql.json(["linux/amd64", "linux/arm64"] as never)},
+           'revoked', 'admission policy failed: critical=19, secrets=0', now())`;
+
+      await applyOfficialRuntimeCatalog(catalog);
+      const [restored] = await sql`
+        SELECT v.trust_status, v.status_reason, v.revoked_at,
+          (SELECT count(*)::int FROM audit_logs a
+           WHERE a.resource_id = v.id::text AND a.action = 'runtime_image.official_trust_restored') AS restore_audits
+        FROM runtime_image_versions v WHERE v.runtime_image_id = ${image.id} AND v.digest = ${digest}`;
+      assert.equal(restored.trust_status, "trusted");
+      assert.equal(restored.status_reason, null);
+      assert.equal(restored.revoked_at, null);
+      assert.equal(Number(restored.restore_audits), 1);
+    } finally {
+      await sql`DELETE FROM runtime_images WHERE image_key = ${imageKey}`;
+    }
+  });
+
   test("stale project pin is distinct from latest trusted and is not silently rewritten", async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
     const { migrate, sql } = await import("./db.js");

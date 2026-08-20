@@ -84,6 +84,7 @@ export interface ReadinessRuntimeImageRow {
   digest: string | null;
   resolved_ref: string | null;
   trust_status: string | null;
+  has_revoked?: boolean;
   admission_scan_id: string | null;
   admission_bypassed: boolean;
   platforms_json?: unknown;
@@ -687,6 +688,8 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
           runtimeImagesFix(input.scope),
           { role: summary, runtime_image: runtimeSummary },
         ));
+      } else if (image.has_revoked) {
+        checks.push(fail("RUNTIME_IMAGE_REVOKED", `${role.name} 所需 runtime image ${imageKey} 的版本已被吊销，没有可执行的 trusted 版本。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
       } else {
         checks.push(fail("RUNTIME_IMAGE_UNAVAILABLE", `${role.name} 所需 runtime image ${imageKey} 没有 Scheduler 可执行的 trusted 版本。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
       }
@@ -845,6 +848,10 @@ export async function loadReadiness(
            CASE WHEN ri.official THEN v.channel_digest ELSE v.digest END AS digest,
            CASE WHEN ri.official THEN v.channel_resolved_ref ELSE v.resolved_ref END AS resolved_ref,
            v.trust_status,
+           EXISTS (
+             SELECT 1 FROM runtime_image_versions revoked
+             WHERE revoked.runtime_image_id = ri.id AND revoked.trust_status = 'revoked'
+           ) AS has_revoked,
            v.platforms_json, v.promoted_at, v.approved_at, v.created_at,
            latest.id AS latest_version_id,
            latest.version AS latest_version,

@@ -81,6 +81,7 @@
 | #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
 | #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
 | #244 | **已关**；官方升版后显式项目 pin 不自动跟随；过期 pin 与最新 trusted 分开，预检/建任务 `RUNTIME_IMAGE_PIN_STALE` + 一键升级 |
+| #259 | **已关**；官方 runtime 不被 Trivy CRITICAL 复扫吊销；无 trusted 时 `RUNTIME_IMAGE_REVOKED`/`NOT_TRUSTED`，目录同步可恢复误吊销 digest |
 | #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |
 | #157 / #158 | **已关**；共享资产孤儿卷回收、官方 `deepsonar-assets-helper` 发布与 busybox pin 回退、provision admission |
 | #243 Windows deploy.ps1 | **已关**；UTF-8 BOM + ASCII，避免 PS 5.1 代码页 ParserError；pull/up 与 `deploy.sh` 对齐 |

@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { prepareRuntimeImage, resolveStartupRuntimeImages, sanitizeRuntimeImageError, withSharedAssetsHelperRef } from "./runtime-images.js";
+import { prepareRuntimeImage, resolveStartupRuntimeImages, runtimeImageErrorCode, sanitizeRuntimeImageError, withSharedAssetsHelperRef } from "./runtime-images.js";
 
 export interface RuntimeImageWarmupStatus {
   status: "idle" | "preparing" | "ready" | "failed";
@@ -7,6 +7,7 @@ export interface RuntimeImageWarmupStatus {
   attempt: number;
   required: number;
   error: string | null;
+  error_code?: string | null;
   retry_at: string | null;
 }
 
@@ -32,34 +33,37 @@ export function createRuntimeImageWarmupCoordinator(deps: WarmupDependencies) {
   let stopped = false;
   let started = false;
   let state: RuntimeImageWarmupStatus = {
-    status: "idle", ready: false, attempt: 0, required: 0, error: null, retry_at: null,
+    status: "idle", ready: false, attempt: 0, required: 0, error: null, error_code: null, retry_at: null,
   };
 
   const run = async () => {
     while (!stopped) {
       const attempt = state.attempt + 1;
-      state = { ...state, status: "preparing", attempt, error: null, retry_at: null };
+      state = { ...state, status: "preparing", attempt, error: null, error_code: null, retry_at: null };
       try {
         const refs = await deps.resolveRefs();
         state = { ...state, required: new Set(refs.map((item) => item.image_ref)).size };
         for (const ref of new Set(refs.map((item) => item.image_ref))) await deps.prepare(ref);
         if (deps.afterPrepare) await deps.afterPrepare(refs);
         if (stopped) return;
-        state = { ...state, status: "ready", ready: true, error: null, retry_at: null };
+        state = { ...state, status: "ready", ready: true, error: null, error_code: null, retry_at: null };
         deps.onReady();
         return;
       } catch (error) {
         const delay = delays[Math.min(attempt - 1, delays.length - 1)] ?? 30_000;
         const safeError = (deps.sanitize ?? sanitizeRuntimeImageError)(error) || "runtime image warmup failed";
+        const errorCode = runtimeImageErrorCode(error);
         state = {
           ...state,
           status: "failed",
           ready: false,
           error: safeError,
+          error_code: errorCode,
           retry_at: new Date(Date.now() + delay).toISOString(),
         };
         const log = deps.log ?? ((level, message) => (level === "error" ? console.error(message) : console.warn(message)));
-        log("warn", `[runtime-images] startup warmup failed (attempt ${attempt}); retrying in ${delay}ms: ${safeError}`);
+        const level = errorCode === "RUNTIME_IMAGE_REVOKED" || errorCode === "RUNTIME_IMAGE_NOT_TRUSTED" ? "error" : "warn";
+        log(level, `[runtime-images] startup warmup failed (attempt ${attempt}); retrying in ${delay}ms: ${safeError}`);
         if (attempt >= DISPATCHER_DISABLED_LOG_AFTER) {
           log(
             "error",
@@ -87,7 +91,7 @@ let startupCoordinator: ReturnType<typeof createRuntimeImageWarmupCoordinator> |
 
 export function runtimeImageWarmupStatus(): RuntimeImageWarmupStatus {
   return startupCoordinator?.status() ?? {
-    status: "idle", ready: false, attempt: 0, required: 0, error: null, retry_at: null,
+    status: "idle", ready: false, attempt: 0, required: 0, error: null, error_code: null, retry_at: null,
   };
 }
 

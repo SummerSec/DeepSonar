@@ -12,7 +12,11 @@ import {
 } from "./cosign-verify.js";
 import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
 import { resolveScannerImages, type ScannerName } from "./scanner-config.js";
-import { shouldRevokeOnScanFailure } from "./trust-policy.js";
+import {
+  admissionPolicyFailureMessage,
+  shouldRejectVulnerabilityFindings,
+  shouldRevokeOnScanFailure,
+} from "./trust-policy.js";
 
 const execFileP = promisify(execFile);
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://deepsonar:deepsonar@localhost:5432/deepsonar";
@@ -245,7 +249,9 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   const vulnerabilityReport = JSON.parse(await scanner("trivy", ["image", "--scanners", "vuln,secret", "--format", "json", "--severity", "HIGH,CRITICAL", resolvedRef]));
   const criticalCount = ((vulnerabilityReport.Results ?? []) as Array<{ Vulnerabilities?: Array<{ Severity?: string }> }>).flatMap((result) => result.Vulnerabilities ?? []).filter((item) => item.Severity === "CRITICAL").length;
   const secretCount = ((vulnerabilityReport.Results ?? []) as Array<{ Secrets?: unknown[] }>).reduce((sum, result) => sum + (result.Secrets?.length ?? 0), 0);
-  if (criticalCount > 0 || secretCount > 0) throw new Error(`admission policy failed: critical=${criticalCount}, secrets=${secretCount}`);
+  if (shouldRejectVulnerabilityFindings({ sourceKind: row.source_kind, criticalCount, secretCount })) {
+    throw new Error(admissionPolicyFailureMessage(criticalCount, secretCount));
+  }
 
   const platforms = [`${String(inspect.Os ?? "linux")}/${String(inspect.Architecture ?? "unknown")}`];
   const scanSummary = { contract: "passed", signature: signatureScan.status, malware: "clean", licenses: "captured-in-sbom", critical: criticalCount, secrets: secretCount, setuid, worker_id: workerId };
@@ -330,7 +336,7 @@ async function fail(row: Record<string, unknown>, error: unknown) {
     console.error(`[image-admission] ${row.image_key as string}@${row.version as string}: scan failed; official trust preserved (${message})`);
     await writeAdmissionAudit("runtime_image.trust_preserved", row, {
       trust_status: "trusted",
-      reason: "scan_failed_without_policy_violation",
+      reason: "official_catalog_scan_failed",
       error: message.slice(0, 300),
     }, "error");
     return;
@@ -406,7 +412,7 @@ async function checkTrackedTags() {
   }
 }
 
-/** 可信版本周期复扫；扫描失败会自动 revoked，并终止仍活跃的相关 Job。 */
+/** 第三方可信版本周期复扫；扫描失败会自动 revoked。官方 catalog 复扫失败只记扫描结果，不吊销。 */
 async function queueContinuousRescans() {
   await sql`
     INSERT INTO runtime_image_scans (runtime_image_version_id)
