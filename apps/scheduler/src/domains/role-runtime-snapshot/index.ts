@@ -7,6 +7,7 @@ export {
   PLATFORM_DEFAULT_AGENT_CLI,
   PLATFORM_DEFAULT_AGENT_MODEL,
   RUNTIME_TEST_TOOLCHAIN_POLICY,
+  OPENHARMONY_HDC_POLICY,
 } from "./application.js";
 export type {
   AgentRuntimeSnapshot,

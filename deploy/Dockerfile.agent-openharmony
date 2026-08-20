@@ -1,16 +1,30 @@
 # DeepSonar OpenHarmony 官方源码测试验证运行时。
+# 动态设备协议钉死官方 SDK toolchains/hdc；不包含全量源码或板级固件。
 ARG BASE_IMAGE=deepsonar-base:local
 FROM ${BASE_IMAGE} AS runtime-rootfs
 
 USER root
+ARG TARGETARCH
 ARG REPO_SHA256=2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020
+ARG HDC_VERSION=3.2.0b
+ARG HDC_SDK_VERSION=6.0.0.47
+ARG HDC_SDK_URL=https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz
+ARG HDC_SDK_SHA256=a315834ac133625efc912bd078f3e2b2550868d04aef1b5aa4f9679c8b3c9d8e
+ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e
+ARG HDC_LIBUSB_SHARED_SHA256=431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential ccache cmake ninja-build git-lfs python3-requests python-is-python3 openssh-client rsync patch \
+  && if [ "$TARGETARCH" = "arm64" ]; then \
+    dpkg --add-architecture amd64 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      qemu-user-static libc6:amd64 libstdc++6:amd64 libgcc-s1:amd64 libatomic1:amd64; \
+  fi \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* \
   && git lfs install --system \
-  && install -d -m 0755 /opt/deepsonar/bin /workspace
+  && install -d -m 0755 /opt/deepsonar/bin /opt/deepsonar/hdc /workspace
 
 COPY deploy/vendor/gitcode-repo-py3 /tmp/repo
 RUN sed -i 's/\r$//' /tmp/repo \
@@ -18,23 +32,35 @@ RUN sed -i 's/\r$//' /tmp/repo \
   && install -m 0755 /tmp/repo /usr/local/bin/repo \
   && rm -f /tmp/repo
 
+COPY deploy/vendor/openharmony-hdc/hdc /tmp/hdc
+COPY deploy/vendor/openharmony-hdc/libusb_shared.so /tmp/libusb_shared.so
 COPY deploy/openharmony-env.sh /tmp/openharmony-env.sh
 COPY deploy/openharmony-init.sh /tmp/openharmony-init.sh
 COPY deploy/openharmony-build.sh /tmp/openharmony-build.sh
-RUN install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.sh \
+COPY deploy/openharmony-hdc.sh /tmp/openharmony-hdc.sh
+COPY deploy/openharmony-hdc-bin.sh /tmp/openharmony-hdc-bin.sh
+RUN echo "$HDC_SHA256  /tmp/hdc" | sha256sum -c - \
+  && echo "$HDC_LIBUSB_SHARED_SHA256  /tmp/libusb_shared.so" | sha256sum -c - \
+  && install -m 0755 /tmp/hdc /opt/deepsonar/hdc/hdc \
+  && install -m 0755 /tmp/libusb_shared.so /opt/deepsonar/hdc/libusb_shared.so \
+  && install -m 0755 /tmp/openharmony-env.sh /opt/deepsonar/bin/openharmony-env.sh \
   && install -m 0755 /tmp/openharmony-init.sh /opt/deepsonar/bin/openharmony-init.sh \
   && install -m 0755 /tmp/openharmony-build.sh /opt/deepsonar/bin/openharmony-build.sh \
-  && rm -f /tmp/openharmony-env.sh /tmp/openharmony-init.sh /tmp/openharmony-build.sh \
+  && install -m 0755 /tmp/openharmony-hdc.sh /opt/deepsonar/bin/openharmony-hdc.sh \
+  && install -m 0755 /tmp/openharmony-hdc-bin.sh /opt/deepsonar/bin/hdc \
+  && rm -f /tmp/hdc /tmp/libusb_shared.so /tmp/openharmony-env.sh /tmp/openharmony-init.sh \
+    /tmp/openharmony-build.sh /tmp/openharmony-hdc.sh /tmp/openharmony-hdc-bin.sh \
   && if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi \
   && if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi \
   && chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
-RUN /opt/deepsonar/bin/openharmony-env.sh --check \
-  && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-test","imageKey":"deepsonar-openharmony-test","tools":["git","git-lfs","repo","python3","python3-requests","build-essential","ccache","cmake","ninja","node","claude"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\n")'
+RUN node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-test","imageKey":"deepsonar-openharmony-test","project_opt_in":true,"tools":["git","git-lfs","repo","python3","python3-requests","build-essential","ccache","cmake","ninja","hdc","node","claude"],"device":{"protocol":"hdc","binary":"/opt/deepsonar/hdc/hdc","wrapper":"/opt/deepsonar/bin/hdc","companion":["libusb_shared.so"],"commands":["list targets","shell","file send","file recv","install","hilog","fport","tconn"]},"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master","hdc":{"sdk":"https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz","version":"3.2.0b"}},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-env.sh","hdc":"/opt/deepsonar/bin/openharmony-hdc.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\n")' \
+  && PATH="/opt/deepsonar/bin:/opt/deepsonar/hdc:$PATH" /opt/deepsonar/bin/openharmony-env.sh --check --hdc
 
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
-    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HDC_HOME=/opt/deepsonar/hdc \
+    PATH=/opt/deepsonar/bin:/opt/deepsonar/hdc:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 
 FROM scratch
@@ -42,13 +68,14 @@ LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="openharmony-test" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
       org.opencontainers.image.title="DeepSonar OpenHarmony Test" \
-      org.opencontainers.image.description="OpenHarmony 官方源码同步与构建验证环境；不包含全量源码或特定开发板固件。" \
+      org.opencontainers.image.description="OpenHarmony 官方源码同步、构建验证与钉死 hdc 设备协议；不包含全量源码或特定开发板固件。" \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
       org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
       org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
-    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HDC_HOME=/opt/deepsonar/hdc \
+    PATH=/opt/deepsonar/bin:/opt/deepsonar/hdc:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY --from=runtime-rootfs / /
 WORKDIR /workspace
 USER deepsonar

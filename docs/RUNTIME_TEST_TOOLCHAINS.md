@@ -20,6 +20,7 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 - 先读取冻结 runtime manifest，按目标语言检查相关预装工具：Java 用 `command -v java`、`java -version`；Maven 项目再用 `command -v mvn`、`mvn -v`（必要时使用 `java8` / `java11` / `java17`）；Python 用目标所需的 `python3.x` / `uv`；Go 用 `command -v go`、`go version`；Rust 用 `command -v rustc`、`rustc --version`、`command -v cargo`、`cargo --version`，并记录镜像 key、digest 和版本。
 - 不在 Job 内用 `apt-get`、JDK/Maven 压缩包、SDKMAN、`./mvnw` 或其它 bootstrap fallback 安装或下载工具链。项目依赖是否可下载仍由冻结的 `DEEPSONAR_ALLOW_EGRESS` 决定。
 - 工具缺失时停止动态尝试，提交 `inconclusive`/`needs_human` 结构化证据；不得用静态叙述冒充运行时结果。
+- OpenHarmony Test 的设备协议是官方 `hdc`（`list targets` / `shell` / `file send|recv` / `install` / `hilog` / `fport` / `tconn`）。无 target 时必须结构化 `needs_human` / `inconclusive`，禁止把主机构建日志或源码叙述写成设备结果。audit/fuzz 仍可使用主机 Clang/ASan/libFuzzer；不要把 gdb/strace 或 Kali 进程工具当成 OH 的设备协议。
 - 合格的 test 证据至少要有 `subject_revision`、完整 `steps`、`expected`，以及 `actual` 或 `artifact_refs`，且 test 与 review 必须来自不同 Job。
 
 ## 冒烟与真实证据

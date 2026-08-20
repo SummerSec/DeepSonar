@@ -3,9 +3,13 @@ name: openharmony-runtime
 on:
   pull_request:
     paths:
+      - "deploy/Dockerfile.agent-openharmony"
       - "deploy/Dockerfile.agent-openharmony-*"
       - "deploy/openharmony-*.sh"
       - "deploy/vendor/gitcode-repo-py3"
+      - "deploy/vendor/openharmony-hdc/**"
+      - "agent-harness/openharmony-test-runtime.json"
+      - "agent-harness/test-openharmony-hdc.mjs"
       - ".dockerignore"
       - "agent-harness/image-build-fingerprint.mjs"
       - "agent-harness/resolve-image-src-cache.sh"
@@ -13,9 +17,13 @@ on:
   push:
     branches: [main]
     paths:
+      - "deploy/Dockerfile.agent-openharmony"
       - "deploy/Dockerfile.agent-openharmony-*"
       - "deploy/openharmony-*.sh"
       - "deploy/vendor/gitcode-repo-py3"
+      - "deploy/vendor/openharmony-hdc/**"
+      - "agent-harness/openharmony-test-runtime.json"
+      - "agent-harness/test-openharmony-hdc.mjs"
       - ".dockerignore"
       - "agent-harness/image-build-fingerprint.mjs"
       - "agent-harness/resolve-image-src-cache.sh"
@@ -37,6 +45,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - toolset: openharmony-test
+            dockerfile: deploy/Dockerfile.agent-openharmony
+            check: openharmony-env.sh
+            check_args: --check --hdc
+            platform: linux/amd64
+            arch: amd64
+          - toolset: openharmony-test
+            dockerfile: deploy/Dockerfile.agent-openharmony
+            check: openharmony-env.sh
+            check_args: --check --hdc
+            platform: linux/arm64
+            arch: arm64
           - toolset: openharmony-audit
             dockerfile: deploy/Dockerfile.agent-openharmony-audit
             check: openharmony-audit-env.sh

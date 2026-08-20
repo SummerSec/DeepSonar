@@ -104,8 +104,13 @@ export const PRESETS = {
   "deepsonar-openharmony-test": {
     dockerfile: "deploy/Dockerfile.agent-openharmony",
     paths: [
+      "agent-harness/openharmony-test-runtime.json",
       "deploy/vendor/gitcode-repo-py3",
+      "deploy/vendor/openharmony-hdc/hdc",
+      "deploy/vendor/openharmony-hdc/libusb_shared.so",
       "deploy/openharmony-env.sh",
+      "deploy/openharmony-hdc.sh",
+      "deploy/openharmony-hdc-bin.sh",
       "deploy/openharmony-init.sh",
       "deploy/openharmony-build.sh",
     ],

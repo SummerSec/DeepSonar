@@ -92,6 +92,10 @@ const chromeFuzzPreflight = readFileSync(new URL("../deploy/chrome-fuzz-toolchai
 const openHarmonyRepo = readFileSync(new URL("../deploy/vendor/gitcode-repo-py3", import.meta.url));
 const normalizedOpenHarmonyRepo = Buffer.from(openHarmonyRepo.toString("utf8").replace(/\r\n/g, "\n"));
 const openHarmonyEnv = readFileSync(new URL("../deploy/openharmony-env.sh", import.meta.url), "utf8");
+const openHarmonyHdc = readFileSync(new URL("../deploy/openharmony-hdc.sh", import.meta.url), "utf8");
+const openHarmonyHdcBin = readFileSync(new URL("../deploy/openharmony-hdc-bin.sh", import.meta.url), "utf8");
+const openHarmonyTestConfig = JSON.parse(readFileSync(new URL("./openharmony-test-runtime.json", import.meta.url), "utf8"));
+const openHarmonyHdcSmoke = readFileSync(new URL("./test-openharmony-hdc.mjs", import.meta.url), "utf8");
 const openHarmonyInit = readFileSync(new URL("../deploy/openharmony-init.sh", import.meta.url), "utf8");
 const openHarmonyBuild = readFileSync(new URL("../deploy/openharmony-build.sh", import.meta.url), "utf8");
 const openHarmonyAuditEnv = readFileSync(new URL("../deploy/openharmony-audit-env.sh", import.meta.url), "utf8");
@@ -163,7 +167,9 @@ assertSpecialistWorkflow(chromeWorkflow, "Chrome", [
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/chrome-runtime.yml",
 ]);
 assertSpecialistWorkflow(openHarmonyWorkflow, "OpenHarmony", [
-  "deploy/Dockerfile.agent-openharmony-*", "deploy/openharmony-*.sh", "deploy/vendor/gitcode-repo-py3", ".dockerignore",
+  "deploy/Dockerfile.agent-openharmony", "deploy/Dockerfile.agent-openharmony-*", "deploy/openharmony-*.sh",
+  "deploy/vendor/gitcode-repo-py3", "deploy/vendor/openharmony-hdc/**", "agent-harness/openharmony-test-runtime.json",
+  "agent-harness/test-openharmony-hdc.mjs", ".dockerignore",
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/openharmony-runtime.yml",
 ]);
 expect(!ciWorkflow.includes("chrome-runtime-images"), "core ci workflow must not contain the Chrome specialist job");
@@ -172,11 +178,12 @@ expect(ciWorkflow.includes("toolset: base") && ciWorkflow.includes("toolset: aud
 expect(chromeWorkflow.includes("chrome-runtime-images:") && chromeWorkflow.includes("timeout-minutes: 240") && chromeWorkflow.includes("platforms: linux/amd64") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome workflow must retain its cold-build allowance, amd64 matrix, and smoke");
 expect(chromeWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "Chrome workflow must pull immutable src-* images before cache-hit smoke");
 expect(openHarmonyWorkflow.includes("openharmony-runtime-images:") && openHarmonyWorkflow.includes("setup-qemu-action@v3"), "OpenHarmony workflow must retain its QEMU-backed specialist job");
+expect((openHarmonyWorkflow.match(/toolset: openharmony-test/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two test matrix entries");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-audit/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two audit matrix entries");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-fuzz/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two fuzz matrix entries");
-expect((openHarmonyWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 2 && (openHarmonyWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 2, "OpenHarmony workflow must retain amd64/arm64 matrix coverage");
+expect((openHarmonyWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 3 && (openHarmonyWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 3, "OpenHarmony workflow must retain amd64/arm64 matrix coverage for test/audit/fuzz");
 expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
-expect(!openHarmonyWorkflow.includes("openharmony-test"), "OpenHarmony specialist CI must not add a test matrix");
+expect(openHarmonyWorkflow.includes("check_args: --check --hdc"), "OpenHarmony Test CI must smoke hdc version without requiring a device");
 expect(localDefinition.includes('runtime-images.json'), "agent-harness/image.mjs must consume runtime-images.json");
 expect(dockerfile.includes(`ARG BASE_IMAGE=${config.baseImage}`), "Dockerfile.agent base image differs from runtime-images.json");
 expect(dockerfile.includes("FROM ${BASE_IMAGE}"), "Dockerfile.agent must consume the pinned BASE_IMAGE arg");
@@ -280,6 +287,8 @@ expect(ciWorkflow.includes("test-maven-package.mjs"), "CI must run the Maven pac
 expect(schedulerRuntimeImages.includes('test: "deepsonar-kali-minimal"'), "Scheduler Test default must resolve to Kali Test");
 expect(schedulerRuntimeImages.includes('verify: "deepsonar-base"'), "Scheduler Verify default must remain Base");
 expect(schedulerRuntimeSnapshot.includes("Runtime test toolchain (Scheduler policy)"), "Test snapshots must carry the prebuilt toolchain policy");
+expect(schedulerRuntimeSnapshot.includes("OpenHarmony hdc device protocol (Scheduler policy)"), "OH Test snapshots must require official hdc device evidence");
+expect(readFileSync(new URL("../package.json", import.meta.url), "utf8").includes("test-openharmony-hdc.mjs"), "ci:images must run the OpenHarmony hdc helper smoke");
 expect(schedulerRuntimeSnapshot.includes("Do **not** install or download JDK, Maven"), "Test snapshots must prohibit runtime JDK/Maven bootstrap");
 expect(schedulerDispatcher.includes("禁止 apt-get、下载 JDK/Maven"), "runtime_test intents must prohibit JDK/Maven downloads");
 expect(schema.includes("WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'"), "schema Test RoleConfig default must select Kali Test");
@@ -394,6 +403,8 @@ expect(releaseWorkflow.includes("chrome-images:") && releaseWorkflow.includes("c
 expect(releaseWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "$image_ref"') && releaseWorkflow.includes('test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"'), "release Chrome smoke must pull and run the matrix target platform");
 for (const [file, content] of [
   ["openharmony-env.sh", openHarmonyEnv],
+  ["openharmony-hdc.sh", openHarmonyHdc],
+  ["openharmony-hdc-bin.sh", openHarmonyHdcBin],
   ["openharmony-init.sh", openHarmonyInit],
   ["openharmony-build.sh", openHarmonyBuild],
   ["openharmony-audit-env.sh", openHarmonyAuditEnv],
@@ -424,9 +435,38 @@ for (const item of openHarmonyImages) {
   expect(!df.includes("google.com"), `${label} 构建期不得依赖 Google`);
   expect(df.includes("gitcode.com/openharmony/manifest.git"), `${label} 必须使用官方 GitCode manifest 默认地址`);
 }
-for (const tool of ["build-essential", "ccache", "cmake", "ninja-build", "repo", "git-lfs", "python3", "python3-requests", "python-is-python3"]) {
+for (const tool of ["build-essential", "ccache", "cmake", "ninja-build", "repo", "git-lfs", "python3", "python3-requests", "python-is-python3", "hdc"]) {
   expect(openHarmonyDockerfile.includes(tool), `OpenHarmony Test 镜像缺少工具：${tool}`);
 }
+expect(openHarmonyTestConfig.contract === "deepsonar.runtime.contract/v1", "OpenHarmony Test runtime contract drift");
+expect(openHarmonyTestConfig.project_opt_in === true, "OpenHarmony Test config must remain project_opt_in");
+expect(openHarmonyTestConfig.toolset === "openharmony-test", "OpenHarmony Test toolset drift");
+expect(openHarmonyTestConfig.downloads?.hdc?.version === "3.2.0b", "OpenHarmony Test must pin official hdc 3.2.0b");
+expect(openHarmonyTestConfig.downloads?.hdc?.sdk?.url === "https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz", "OpenHarmony Test hdc must use the official OpenHarmony SDK URL");
+expect(openHarmonyTestConfig.downloads?.hdc?.sdk?.sha256 === "a315834ac133625efc912bd078f3e2b2550868d04aef1b5aa4f9679c8b3c9d8e", "OpenHarmony Test official SDK SHA256 drift");
+expect(!JSON.stringify(openHarmonyTestConfig).includes("harmonyos/os"), "OpenHarmony Test must not pin HarmonyOS proprietary SDK paths");
+expect(!openHarmonyDockerfile.includes("DevEco") && !openHarmonyHdc.includes("DevEco"), "OpenHarmony Test must not install DevEco");
+expect(!openHarmonyDockerfile.includes("nmap") && !openHarmonyHdc.includes("nmap"), "OpenHarmony Test must not default-on nmap");
+const hdcAsset = openHarmonyTestConfig.downloads?.hdc?.assets;
+for (const arch of ["amd64", "arm64"]) {
+  expect(hdcAsset?.[arch]?.url === openHarmonyTestConfig.downloads.hdc.sdk.url, `OpenHarmony ${arch} hdc URL must match the official SDK`);
+  expect(/^[0-9a-f]{64}$/.test(hdcAsset?.[arch]?.sha256 ?? ""), `OpenHarmony ${arch} hdc must carry a SHA256 checksum`);
+  expect(hdcAsset?.[arch]?.sha256 === "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e", `OpenHarmony ${arch} hdc SHA256 drift`);
+  expect(hdcAsset?.[arch]?.libusbSharedSha256 === "431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887", `OpenHarmony ${arch} libusb_shared SHA256 drift`);
+  expect(openHarmonyDockerfile.includes(hdcAsset?.[arch]?.sha256 ?? ""), `OpenHarmony Test Dockerfile missing hdc checksum for ${arch}`);
+  expect(openHarmonyDockerfile.includes(hdcAsset[arch].libusbSharedSha256), `OpenHarmony Test Dockerfile missing libusb_shared checksum for ${arch}`);
+}
+expect(createHash("sha256").update(readFileSync(new URL("../deploy/vendor/openharmony-hdc/hdc", import.meta.url))).digest("hex") === hdcAsset.amd64.sha256, "vendored hdc SHA256 must match the runtime manifest");
+expect(createHash("sha256").update(readFileSync(new URL("../deploy/vendor/openharmony-hdc/libusb_shared.so", import.meta.url))).digest("hex") === hdcAsset.amd64.libusbSharedSha256, "vendored libusb_shared SHA256 must match the runtime manifest");
+expect(PRESETS["deepsonar-openharmony-test"]?.paths?.includes("agent-harness/openharmony-test-runtime.json"), "OpenHarmony Test fingerprint must include the hdc runtime manifest");
+expect(PRESETS["deepsonar-openharmony-test"]?.paths?.includes("deploy/vendor/openharmony-hdc/hdc"), "OpenHarmony Test fingerprint must include vendored hdc");
+expect(openHarmonyDockerfile.includes("openharmony-hdc.sh") && openHarmonyDockerfile.includes("device") && openHarmonyDockerfile.includes('"protocol":"hdc"'), "OpenHarmony Test must declare hdc as the device protocol");
+expect(openHarmonyDockerfile.includes("qemu-user-static") && openHarmonyHdcBin.includes("qemu-x86_64-static"), "OpenHarmony Test arm64 must run official linux-x64 hdc via qemu-user-static");
+expect(openHarmonyEnv.includes("hdc version") && openHarmonyEnv.includes("hdc -v") && openHarmonyEnv.includes("--hdc"), "OpenHarmony Test env smoke must expect hdc version / hdc -v");
+expect(openHarmonyHdc.includes("hdc version") && openHarmonyHdc.includes("hdc -v") && openHarmonyHdc.includes("needs_human") && openHarmonyHdc.includes("inconclusive") && openHarmonyHdc.includes("[Empty]"), "OpenHarmony hdc helper must smoke version and emit structured no-target evidence");
+expect(openHarmonyHdcSmoke.includes("hdc version smoke") && openHarmonyHdcSmoke.includes("no_hdc_target") && openHarmonyHdcSmoke.includes("needs_human"), "OpenHarmony hdc unit smoke must cover version and empty targets without a device");
+expect(!openHarmonyDockerfile.includes("ohos-sdk-windows_linux-public.tar.gz") || openHarmonyDockerfile.includes("HDC_SDK_URL"), "OpenHarmony Test may document the official SDK URL but must not bake the full SDK tree");
+expect(!openHarmonyAuditDockerfile.includes("openharmony-hdc") && !openHarmonyFuzzDockerfile.includes("openharmony-hdc"), "hdc is the Test device protocol; do not copy it into audit/fuzz as a Kali-style process tool");
 for (const tool of ["clang", "clang-tidy", "clang-tools", "libclang-rt-dev", "sparse", "cppcheck", "bear", "libasan8", "libubsan1", "gdb"]) {
   expect(openHarmonyAuditDockerfile.includes(tool), `OpenHarmony Audit 镜像缺少工具：${tool}`);
 }
@@ -447,7 +487,7 @@ expect(openHarmonyFuzzEnv.includes('if [[ "$check_mode" == "static" ]]'), "OpenH
 expect(openHarmonyFuzzEnv.includes("ASAN_OPTIONS=detect_leaks=0") && openHarmonyFuzzEnv.includes('"$smoke_binary" -runs=1'), "OpenHarmony Fuzz amd64 mode must run the sanitizer/libFuzzer smoke binary");
 expect(openHarmonyFuzzDockerfile.includes("ARG TARGETARCH") && openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check --static"), "OpenHarmony Fuzz image build must use static mode for arm64 targets");
 expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
-expect(openHarmonyDockerfile.includes("openharmony-env.sh --check"), "OpenHarmony Test 必须在构建时执行环境 smoke check");
+expect(openHarmonyDockerfile.includes("openharmony-env.sh --check --hdc"), "OpenHarmony Test 必须在构建时执行含 hdc version 的环境 smoke check");
 expect(openHarmonyAuditDockerfile.includes("openharmony-audit-env.sh --check"), "OpenHarmony Audit 必须在构建时执行环境 smoke check");
 expect(openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check"), "OpenHarmony Fuzz 必须在构建时执行环境 smoke check");
 expect(!openHarmonyAuditDockerfile.includes("gitleaks"), "OpenHarmony Audit 不得安装 gitleaks（高危主线不依赖密钥扫描）");
