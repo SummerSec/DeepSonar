@@ -93,6 +93,11 @@ import {
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
 import {
+  toolCallActivityPatch,
+  toolCallProgressMessage,
+  type ToolCallPhase,
+} from "./domains/job-lifecycle/stall-policy.js";
+import {
   CONTROL_INPUT_ERROR_CODES,
   ControlInputError,
   controlInputCodeForOperation,
@@ -1403,8 +1408,19 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       (o.path as string) ?? (o.url as string) ?? "";
     return `${toolName}${target ? ` ${String(target).slice(0, 80)}` : ""}`;
   };
-  // 「当前动作」直接更新节点显示态（throttle 1.5s；非语义事件，不进 events 表）
+  // 「当前动作」直接更新节点显示态（throttle 1.5s）；tool.call 另写 runtime_activity 刷新 stall。
   let lastActionPush = 0;
+  let lastToolProgressEmit = 0;
+  const recordToolCallActivity = (phase: ToolCallPhase, toolName: string) => {
+    void sql`
+      UPDATE jobs SET payload_json = payload_json || ${sql.json(toolCallActivityPatch(phase, toolName) as never)}
+      WHERE id = ${jobId} AND status = 'running'`.catch(() => {});
+    const now = Date.now();
+    if (phase === "started" || now - lastToolProgressEmit > 20_000) {
+      lastToolProgressEmit = now;
+      void emit("progress", { message: toolCallProgressMessage(phase, toolName) }).catch(() => {});
+    }
+  };
   const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(attemptId ?? job.sandbox_id ?? job.id ?? "unknown"));
   const evidenceAttemptId = evidenceWriter.attemptId;
   // 只有证据行持久化后才发布实时流游标。
@@ -1588,6 +1604,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             callId: typeof e.callId === "string" ? e.callId : undefined,
             input: e.input,
           }, evidenceAttemptId, evidenceSeq);
+          recordToolCallActivity("started", toolName);
           const now = Date.now();
           if (now - lastActionPush > 1500) {
             lastActionPush = now;
@@ -1596,6 +1613,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
               WHERE job_id = ${jobId} AND node_type = 'job'`.catch(() => {});
           }
         } else if (type === "tool.call.completed") {
+          const toolName = String(e.toolName ?? "tool");
           publishStream(jobId, {
             type,
             toolName: e.toolName,
@@ -1605,6 +1623,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             error: e.error,
             exit: e.exit,
           }, evidenceAttemptId, evidenceSeq);
+          recordToolCallActivity("completed", toolName);
         } else if (type === "text.delta" || type === "reasoning.delta") {
           publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) }, evidenceAttemptId, evidenceSeq);
         } else if (type.startsWith("run.") || type.startsWith("message.")) {

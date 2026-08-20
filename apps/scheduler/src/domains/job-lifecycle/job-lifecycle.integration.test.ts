@@ -138,7 +138,54 @@ if (!testDatabaseUrl) {
       );
       assert.equal(await app.cancelJob(cancelA, "late cancel"), null, "cancelled Job is a no-op");
       assert.deepEqual(await app.cancelJobsOnCanvas(canvasId, "late bulk cancel"), [], "bulk cancel is a zero-row no-op");
+
+      const insertRunning = async (imageKey: string | null, extra?: { payload?: Record<string, unknown> }) => {
+        const id = randomUUID();
+        jobIds.push(id);
+        await sql`
+          INSERT INTO jobs (id, project_id, canvas_id, type, status, started_at, lease_expires_at, agent_snapshot_json, payload_json)
+          VALUES (
+            ${id}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+            now() - interval '1000 seconds', now() + interval '60 seconds',
+            ${sql.json({
+              ...snapshot,
+              ...(imageKey ? { runtime_image: { image_key: imageKey } } : {}),
+            } as never)},
+            ${sql.json((extra?.payload ?? {}) as never)}
+          )`;
+        return id;
+      };
+
+      const silentAudit = await insertRunning("deepsonar-audit");
+      const chromeAuditTool = await insertRunning("deepsonar-chrome-audit");
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json, created_at)
+        VALUES (
+          ${chromeAuditTool}, ${randomUUID()}, 1, 'progress',
+          ${sql.json({ message: "tool.call.started Bash" } as never)},
+          now() - interval '1000 seconds'
+        )`;
+      const chromeFuzzInflight = await insertRunning("deepsonar-chrome-fuzz", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+      });
+      const silentChromeNoTool = await insertRunning("deepsonar-chrome-audit");
+      const longToolAudit = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+      });
+
+      const stalled = await app.reapStalledExecution(900);
+      const stalledIds = new Set(stalled.map((row) => row.id));
+      assert.equal(stalledIds.has(silentAudit), true, "silent non-chrome job is reaped after 900s");
+      assert.equal(stalledIds.has(chromeAuditTool), false, "chrome-audit with stale tool.call.started + live lease is kept");
+      assert.equal(stalledIds.has(chromeFuzzInflight), false, "chrome-fuzz with in-flight tool + live lease is kept");
+      assert.equal(stalledIds.has(silentChromeNoTool), false, "chrome-audit uses the 5400s stall floor");
+      assert.equal(stalledIds.has(longToolAudit), false, "non-chrome in-flight tool + live lease is kept");
+
+      const [silentRow] = await sql`SELECT status, error FROM jobs WHERE id = ${silentAudit}`;
+      assert.equal(silentRow.status, "failed");
+      assert.match(String(silentRow.error), /产出停滞/);
     } finally {
+      await sql`DELETE FROM events WHERE job_id = ANY(${jobIds})`;
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds})`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
       await sql`DELETE FROM projects WHERE id = ${projectId}`;

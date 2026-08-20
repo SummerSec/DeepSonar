@@ -131,7 +131,7 @@ export const config = {
     provisionSec: int("PROVISION_TIMEOUT_SEC", 300),
     leaseTtlSec: int("LEASE_TTL_SEC", 120),
     reaperIntervalSec: int("REAPER_INTERVAL_SEC", 30),
-    /** running Job 无语义事件超过此时长则判失败；0 关闭。默认 15 分钟，避免 CLI 静默挂满全局 timeout。 */
+    /** running Job 无语义事件且无在飞 tool.call 超过此时长则判失败；0 关闭。默认 15 分钟。chrome 镜像另有 per-image 下限。 */
     stallSec: Number(process.env.DEEPSONAR_JOB_STALL_SEC) === 0 ? 0 : int("DEEPSONAR_JOB_STALL_SEC", 900),
     /** 任务领取的兜底轮询（默认 0=关闭，纯 LISTEN/NOTIFY 事件驱动） */
     dispatchPollSec: int("DEEPSONAR_DISPATCH_POLL_SEC", 0),

@@ -15,6 +15,7 @@ import {
   requestAttemptCancel,
   settleAttemptTerminal,
 } from "../job-attempt/index.js";
+import { CHROME_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
 
 export type {
   JobLifecycleDatabase,
@@ -187,9 +188,16 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
       });
     },
 
-    /** running 但语义事件停摆：lease 心跳不能证明 Agent 还在干活。 */
+    /**
+     * running 但语义事件停摆：lease 心跳单独不能证明 Agent 还在干活。
+     * 在飞 tool.call（payload 或最近一条 tool.call.started 进度）且 lease 仍有效时不判停滞；
+     * chrome-audit/test/fuzz 另有 per-image stall 下限，避免单条长工具超过全局 900s。
+     */
     async reapStalledExecution(stallSec) {
       if (!Number.isSafeInteger(stallSec) || stallSec <= 0) return [];
+      const chromeAuditStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"];
+      const chromeTestStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-test"];
+      const chromeFuzzStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"];
       return atomically(async (tx) => {
         const result = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
@@ -199,7 +207,36 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
             AND GREATEST(
               started_at,
               COALESCE((SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id), started_at)
-            ) + (${stallSec} * interval '1 second') < now()
+            ) + (
+              GREATEST(
+                ${stallSec},
+                CASE agent_snapshot_json #>> '{runtime_image,image_key}'
+                  WHEN 'deepsonar-chrome-fuzz' THEN ${chromeFuzzStall}
+                  WHEN 'deepsonar-chrome-audit' THEN ${chromeAuditStall}
+                  WHEN 'deepsonar-chrome-test' THEN ${chromeTestStall}
+                  ELSE ${stallSec}
+                END
+              ) * interval '1 second'
+            ) < now()
+            AND NOT (
+              lease_expires_at IS NOT NULL
+              AND lease_expires_at > now()
+              AND (
+                NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
+                OR COALESCE(
+                  (
+                    SELECT e.payload_json->>'message'
+                      FROM events e
+                     WHERE e.job_id = jobs.id
+                       AND e.type = 'progress'
+                       AND e.payload_json->>'message' LIKE 'tool.call.%'
+                     ORDER BY e.created_at DESC, e.id DESC
+                     LIMIT 1
+                  ),
+                  ''
+                ) LIKE ${`${TOOL_CALL_STARTED_PREFIX}%`}
+              )
+            )
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
