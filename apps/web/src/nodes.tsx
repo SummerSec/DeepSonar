@@ -253,7 +253,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                 </span>
                 <span className="font-mono text-[9px] tracking-[0.14em] text-zinc-600">{style.short}</span>
                 {importedSeed && (
-                  <span className="rounded border border-amber-400/25 bg-amber-400/[.08] px-1.5 py-0.5 font-mono text-[9px] text-amber-300" title="从项目已确认 Finding 冻结的只读种子">
+                  <span className="rounded border border-amber-400/25 bg-amber-400/[.08] px-1.5 py-0.5 font-mono text-[9px] text-amber-300" title="从项目 Finding 冻结的只读种子（含未确认，不是本画布可确认正本）">
                     SEED · 只读
                   </span>
                 )}

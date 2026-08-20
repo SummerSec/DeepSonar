@@ -201,7 +201,7 @@ export async function buildGraphSnapshot(
         severity: body.severity ?? null,
         location: body.location ?? null,
         summary: body.summary ?? null,
-        verify_status: "confirmed",
+        verify_status: String(body.frozen_verify_status ?? body.verify_status ?? "pending"),
         imported: true,
       };
     });
@@ -281,6 +281,16 @@ export async function buildGraphSnapshot(
     return false;
   };
 
+  if (target.kind === "compose" && (scope === "hub" || scope === "agent")) {
+    const composeScope = (promptTarget.compose_scope ?? {}) as Record<string, unknown>;
+    addSection("compose_scope", [
+      "  " + kv("mode", composeScope.mode ?? "seed_assets_only"),
+      "  " + kv("seed_count", composeScope.seed_count ?? 0),
+      "  " + kv("locations", composeScope.locations ?? []),
+      "  " + kv("rule", composeScope.rule ?? "只围绕冻结种子做确认、补证与组合链；禁止扩大资产范围。"),
+    ]);
+  }
+
   if (scope === "hub") {
     const index = serializeFindingStatusIndex(
       visibleFindingRows.map((finding) => {
@@ -294,7 +304,7 @@ export async function buildGraphSnapshot(
           severity: finding.severity as string | null,
           verify_status: finding.verify_status as string | null,
           ...(options.minVerifySeverity
-            ? { verify_required: isSeverityInVerifyScope(options.minVerifySeverity, finding.severity) }
+            ? { verify_required: finding.imported ? false : isSeverityInVerifyScope(options.minVerifySeverity, finding.severity) }
             : {}),
           verification_attempt: Number(summary.verification_attempt ?? 0),
           missing_evidence: Array.isArray(summary.missing_evidence) ? summary.missing_evidence as string[] : [],
@@ -384,7 +394,7 @@ export async function buildGraphSnapshot(
                 ...(finding.imported ? { imported: true, readonly: true } : { finding_id: finding.id }),
                 verify_status: finding.verify_status,
                 ...(options.minVerifySeverity
-                  ? { verify_required: isSeverityInVerifyScope(options.minVerifySeverity, finding.severity) }
+                  ? { verify_required: finding.imported ? false : isSeverityInVerifyScope(options.minVerifySeverity, finding.severity) }
                   : {}),
               }
             : {}),
@@ -441,7 +451,7 @@ export async function buildGraphSnapshot(
     addSection(
       "confirmed_background",
       visibleFindingRows
-        .filter((finding) => finding.verify_status === "confirmed")
+        .filter((finding) => finding.imported || finding.verify_status === "confirmed")
         .slice(0, 24)
         .map((finding) => row({
           ...(finding.imported
@@ -450,6 +460,7 @@ export async function buildGraphSnapshot(
           title: short(finding.title, 160),
           severity: finding.severity,
           verify_status: finding.verify_status,
+          ...(finding.imported ? { location: short(finding.location, 140) } : {}),
         })),
     );
   } else if (scope === "verify") {

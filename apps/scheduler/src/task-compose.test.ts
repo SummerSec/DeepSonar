@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   MAX_TASK_SEED_FINDINGS,
@@ -13,6 +14,20 @@ import { buildOpenApiDocument } from "./openapi.js";
 const noDb = null as never;
 const id = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 
+test("compose integration teardown deletes events before jobs", () => {
+  const source = readFileSync(new URL("./task-compose.integration.test.ts", import.meta.url), "utf8");
+  const helperStart = source.indexOf("async function wipeProjectComposeFixtures");
+  const helper = source.slice(helperStart, source.indexOf("if (!testDatabaseUrl)"));
+  const eventsAt = helper.indexOf("DELETE FROM events");
+  const jobsAt = helper.lastIndexOf("DELETE FROM jobs");
+  assert.ok(helperStart >= 0);
+  assert.match(helper, /DELETE FROM event_dedup/);
+  assert.match(helper, /parent_job_id = NULL/);
+  assert.match(helper, /finding_verification_rounds/);
+  assert.ok(eventsAt >= 0 && eventsAt < jobsAt);
+  assert.equal(source.split("wipeProjectComposeFixtures(").length - 1, 3);
+});
+
 test("OpenAPI advertises compose task input and Finding candidate filters", () => {
   const document = buildOpenApiDocument() as {
     paths: Record<string, Record<string, {
@@ -23,6 +38,8 @@ test("OpenAPI advertises compose task input and Finding candidate filters", () =
   const taskProperties = document.paths["/projects/{id}/tasks"].post.requestBody?.content?.["application/json"]?.schema?.properties ?? {};
   assert.ok("kind" in taskProperties);
   assert.ok("seed_finding_ids" in taskProperties);
+  assert.doesNotMatch(JSON.stringify(taskProperties.seed_finding_ids), /当前 confirmed/);
+  assert.match(JSON.stringify(taskProperties.seed_finding_ids), /未确认/);
   const findingFilters = new Set((document.paths["/findings"].get.parameters ?? []).map((parameter) => parameter.name));
   for (const filter of ["severity", "profile", "category", "verify_status", "disposition"]) assert.ok(findingFilters.has(filter));
 });
@@ -86,6 +103,8 @@ test("frozen compose targets retain summaries while prompt targets hide database
   assert.equal(prompt.seed_count, 1);
   assert.equal("seed_finding_ids" in prompt, false);
   assert.equal("seed_findings" in prompt, false);
+  assert.deepEqual((prompt.compose_scope as { mode: string; locations: string[] }).mode, "seed_assets_only");
+  assert.deepEqual((prompt.compose_scope as { locations: string[] }).locations, ["src/a.ts:1"]);
 });
 
 test("Hub Finding index marks imported seeds and never serializes their database Finding id", () => {

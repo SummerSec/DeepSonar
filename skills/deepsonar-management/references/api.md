@@ -59,7 +59,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?}`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入的 confirmed Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
+| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?}`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
 | PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?}`（至少一项）；同步 `canvases.title` 与 `target_json.title/content/goal` 及 root 节点。只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`。归档返回 `409 TASK_ARCHIVED` |
 | POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
 | POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |

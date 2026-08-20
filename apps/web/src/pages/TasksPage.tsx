@@ -9,7 +9,7 @@ import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import { nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
-import { composeRetryErrorMessage, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
+import { composeRetryErrorMessage, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
 import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatElapsed, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived";
@@ -57,8 +57,8 @@ function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | n
 
 function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
   const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
-    title: initialSeedIds.length ? "基于已确认发现继续分析" : "",
-    content: initialSeedIds.length ? "结合选中的已确认发现，寻找仍缺失的利用条件、交互关系或可验证的组合链。" : "",
+    title: initialSeedIds.length ? "围绕选中 Finding 继续深挖" : "",
+    content: initialSeedIds.length ? "只围绕选中 Finding 做确认、补证或组合链，不扩大资产范围。" : "",
     kind: initialSeedIds.length ? "compose" : "standard",
     network: "project",
     schedule: "immediate",
@@ -73,6 +73,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
   const [seedSeverities, setSeedSeverities] = useState<string[]>([]);
   const [seedProfiles, setSeedProfiles] = useState<string[]>([]);
   const [seedDispositions, setSeedDispositions] = useState<string[]>([]);
+  const [seedVerifyStatuses, setSeedVerifyStatuses] = useState<string[]>([]);
   const [seedCanvases, setSeedCanvases] = useState<string[]>([]);
   const [seedLoading, setSeedLoading] = useState(initialSeedIds.length > 0);
   /** Tick so past-time warnings update if the form stays open across a boundary. */
@@ -88,7 +89,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
     if (form.kind !== "compose") return;
     let active = true;
     setSeedLoading(true);
-    api.findings({ project_id: projectId, verify_status: "confirmed" })
+    api.findings({ project_id: projectId })
       .then((items) => {
         if (!active) return;
         const eligible = filterComposeSeedCandidates(items);
@@ -112,9 +113,18 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
       severities: seedSeverities,
       profiles: seedProfiles,
       dispositions: seedDispositions,
+      verifyStatuses: seedVerifyStatuses,
       canvasIds: seedCanvases,
     });
-  }, [seedCandidates, seedSearch, seedSeverities, seedProfiles, seedDispositions, seedCanvases]);
+  }, [seedCandidates, seedSearch, seedSeverities, seedProfiles, seedDispositions, seedVerifyStatuses, seedCanvases]);
+  const seedCanvasOptions = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const finding of seedCandidates) {
+      if (!finding.canvas_id) continue;
+      labels.set(finding.canvas_id, finding.canvas_title ?? finding.canvas_id.slice(0, 8));
+    }
+    return [...labels.entries()].map(([value, label]) => ({ value, label }));
+  }, [seedCandidates]);
   const scheduledPreview = useMemo(() => {
     if (form.schedule !== "at" || scheduleIssue) return null;
     const iso = parseDatetimeLocalToIso(form.startAtLocal);
@@ -229,7 +239,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
                 className={`rounded-lg border px-3.5 py-3 text-left transition-colors ${form.kind === "compose" ? "border-acc-400/35 bg-acc-500/[.08] text-zinc-100" : "theme-input-surface text-zinc-400 hover:border-white/[.12]"}`}
               >
                 <span className="flex items-center gap-2 text-[13px] font-medium"><GitMerge size={15} />组合续挖</span>
-                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-600">显式选择已确认发现，在新画布继续找缺口或组合链</span>
+                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-600">选择要深挖的 Finding（含未确认），新画布只围绕这些条目，不扩大资产范围</span>
               </button>
             </div>
           </fieldset>
@@ -239,16 +249,17 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 id="compose-seeds-heading" className="text-[13px] font-medium text-zinc-200">代入 Finding</h3>
-                  <p className="mt-0.5 text-[11px] leading-5 text-zinc-600">只列出当前仍可用的 confirmed Finding，提交后摘要随任务冻结。</p>
+                  <p className="mt-0.5 text-[11px] leading-5 text-zinc-600">选择要深挖的 Finding（含未确认），新画布只围绕这些条目，不扩大资产范围。提交后摘要随任务冻结。</p>
                 </div>
                 <span className={`font-mono text-[10px] ${selectedSeedIds.size ? "text-acc-300" : "text-zinc-600"}`}>{selectedSeedIds.size} / {MAX_COMPOSE_SEEDS}</span>
               </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
                 <input value={seedSearch} onChange={(event) => setSeedSearch(event.target.value)} className={inputCls} placeholder="标题、位置、标签…" aria-label="搜索可代入 Finding" />
                 <SearchableMultiSelect value={seedSeverities} onChange={setSeedSeverities} options={SEED_SEVERITY_OPTIONS} placeholder="全部风险" ariaLabel="按风险筛选种子" className="block [&>button]:w-full" />
                 <SearchableMultiSelect value={seedProfiles} onChange={setSeedProfiles} options={[...new Set(seedCandidates.map((finding) => finding.profile))].sort().map((value) => ({ value, label: value }))} placeholder="全部 profile" ariaLabel="按 profile 筛选种子" className="block [&>button]:w-full" />
+                <SearchableMultiSelect value={seedVerifyStatuses} onChange={setSeedVerifyStatuses} options={COMPOSE_SEED_VERIFY_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} placeholder="全部验证" ariaLabel="按验证状态筛选种子" className="block [&>button]:w-full" />
                 <SearchableMultiSelect value={seedDispositions} onChange={setSeedDispositions} options={DISPOSITION_OPTIONS.filter((option) => ["open", "accepted", "confirmed_vuln"].includes(option.value))} placeholder="全部处置" ariaLabel="按处置状态筛选种子" className="block [&>button]:w-full" />
-                <SearchableMultiSelect value={seedCanvases} onChange={setSeedCanvases} options={[...new Map(seedCandidates.filter((finding) => finding.canvas_id).map((finding) => [finding.canvas_id!, finding.canvas_title ?? finding.canvas_id!.slice(0, 8)])).entries()].map(([value, label]) => ({ value, label }))} placeholder="全部原任务" ariaLabel="按原任务筛选种子" className="block [&>button]:w-full" />
+                <SearchableMultiSelect value={seedCanvases} onChange={setSeedCanvases} options={seedCanvasOptions} placeholder="全部原任务" ariaLabel="按原任务筛选种子" className="block [&>button]:w-full" />
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/[.05] pb-2">
                 <span className="text-[10px] text-zinc-600">当前筛选 {filteredSeedCandidates.length} 条</span>
@@ -292,7 +303,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
                         <span className="flex flex-wrap items-center gap-1.5">
                           <span className="text-[12px] font-medium text-zinc-300">{finding.title}</span>
                           <SeverityBadge severity={finding.severity} />
-                          <span className="rounded-full border border-emerald-400/20 bg-emerald-400/[.07] px-1.5 py-0.5 font-mono text-[8px] text-emerald-300">技术 · 已确认</span>
+                          <span className="rounded-full border border-sky-400/20 bg-sky-400/[.07] px-1.5 py-0.5 font-mono text-[8px] text-sky-300">技术 · {COMPOSE_SEED_VERIFY_OPTIONS.find((option) => option.value === String(finding.verify_status ?? "pending"))?.label ?? finding.verify_status ?? "待验证"}</span>
                           <span className="rounded-full border border-amber-400/20 bg-amber-400/[.07] px-1.5 py-0.5 font-mono text-[8px] text-amber-300">处置 · {DISPOSITION_OPTIONS.find((option) => option.value === String(finding.disposition ?? "open"))?.label ?? finding.disposition}</span>
                         </span>
                         <span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-600">{finding.profile} · {finding.canvas_title ?? "原任务未知"} · {finding.location ?? "无位置"}</span>

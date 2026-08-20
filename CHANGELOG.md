@@ -6,6 +6,8 @@
 
 ### 新增
 
+- 组合续挖（`kind=compose`）可选择同项目未确认 Finding（pending / verifying / needs_human / confirmed），并禁止把新画布扩成新一轮资产扫描（#273）。Hub 不得下发未绑定种子的 explore/audit；`emit_finding` 拒收种子资产以外的新仓/新模块 Finding。重试仍在源 Finding 被删、跨项目或否定处置时 `COMPOSE_SEEDS_STALE`，不因仍未 confirmed 而拒绝。
+
 - 配置中心第一批运行时护栏落库并可热读（#263）：`stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`。优先级 Job > 角色 RoleConfig > 项目规则 > 平台 `global_settings` > 部署 env 引导。Web「配置中心」与角色编辑器可改，保存有可见 toast 并写审计。已在跑的 Job 继续用冻结快照；下一 Job 无需重启调度器。
 
 ### 修复

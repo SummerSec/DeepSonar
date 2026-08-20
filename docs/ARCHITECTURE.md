@@ -460,7 +460,7 @@ Job 事件仍必须经过本摄入硬门。
 
 - `POST /projects`  新建本地项目（plane_project_id 可空；不再预建项目级画布）
 - `GET/PATCH /projects/{id}`、`POST /projects/{id}/archive`  项目详情/改名/归档（归档=软删除，历史保留）
-- `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）；`kind=standard` 禁止种子，`kind=compose` 必须提交同项目 1–8 个当前可代入的 confirmed `seed_finding_ids`
+- `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）；`kind=standard` 禁止种子，`kind=compose` 必须提交同项目 1–8 个当前可代入（未否定处置，含未确认）的 `seed_finding_ids`
 - `POST /tasks/{canvas_id}/pause` / `start`  幂等任务执行门禁（`jobs:control`）；返回 `execution_state`、收尾 `active_count`、`pending_count` 与 `changed`
 - `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布）；compose 在 wipe 前重验冻结种子，stale/跨项目/已处置时返回 `COMPOSE_SEEDS_STALE` 且保留现有运行数据
 - `PATCH /jobs/{id}/priority`（仅 pending 可改）
@@ -554,7 +554,7 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 `target_json`。`resolveFindingProtocol` 按任务 > 项目 > 全局覆盖（数组按层替换并去重），生成
 `EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
 
-compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目、技术态为 `confirmed` 且 disposition 为 `open|accepted|confirmed_vuln`，然后把内容写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。
+compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目且 disposition 为 `open|accepted|confirmed_vuln`（**不要求** `confirmed`），然后把内容与冻结当时的 `verify_status`/`disposition` 写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID 与 `compose_scope` 位置规则；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。compose 画布禁止未绑定种子的 explore/audit，且 `emit_finding` 必须落在种子资产范围内。
 
 Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
 

@@ -49,7 +49,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 
 | 概念 | 说明 |
 |------|------|
-| **任务** | 即 `canvases` 一行；API `GET /projects/:id/canvases`；`kind=standard` 为普通任务，`kind=compose` 以同项目已确认 Finding 作为冻结种子继续综合分析 |
+| **任务** | 即 `canvases` 一行；API `GET /projects/:id/canvases`；`kind=standard` 为普通任务，`kind=compose` 以同项目 1–8 条未否定处置 Finding（含未确认）作为冻结只读种子，且不得扩大资产范围 |
 | **Job** | 一次沙箱运行：`hub_reason` / 角色名 / `verify_finding` / `report` 等 |
 | **Intent** | Hub 下发；与角色 Job 1:1；`prompt` 直接注入 Worker CLI |
 | **Fact** | 工作角色增量产出；可带 verification 证据块 |
@@ -85,7 +85,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
 - **验证范围（#133）**：`minVerifySeverity` 同时控制自动 Verify 与收敛集合；明确低于阈值的 Finding 保持 `pending` 并记录 `below_min_verify_severity` 策略标记，不创建 Verify Job/round、不阻塞 Hub complete/Report。缺失或未知 severity 保守地继续验证；`info` 即严格全量模式。
-- **Hub Finding 绑定（#153 / #154 / #161）**：Hub 对本轮 canonical Finding 节点派发 review/test 时，Scheduler 在派生前解析并冻结唯一 `finding_id` 与 `verification_followup`；多 Finding、映射歧义、Verify trigger 不一致或低于 `minVerifySeverity` 的目标使整次决策稳定拒绝。compose 的 imported seed 是例外：review/test 只把其共享资产挂到探索 Worker，不创建 verification follow-up，也不改写历史 Finding。`request_human` 也必须携带结构化 subject：Finding subject 由 Scheduler 校验同项目、同画布 canonical 关系及最低验证级别，平台阻塞则只能使用受限 kind；系统绝不解析 reason 文本推断目标。analyze/explore 仍可引用多个来源。
+- **Hub Finding 绑定（#153 / #154 / #161 / #273）**：Hub 对本轮 canonical Finding 节点派发 review/test 时，Scheduler 在派生前解析并冻结唯一 `finding_id` 与 `verification_followup`；多 Finding、映射歧义、Verify trigger 不一致或低于 `minVerifySeverity` 的目标使整次决策稳定拒绝。compose 的 imported seed 是例外：review/test 只把其共享资产挂到探索 Worker，不创建 verification follow-up，也不改写历史 Finding；compose 画布上 explore/audit 必须绑定至少一条 imported 种子投影，不得未绑定地全图打猎。`request_human` 也必须携带结构化 subject：Finding subject 由 Scheduler 校验同项目、同画布 canonical 关系及最低验证级别，平台阻塞则只能使用受限 kind；系统绝不解析 reason 文本推断目标。analyze 仍可引用多个来源。
 - **人工验证收口（#155）**：Finding 详情提供三种显式动作：强制新建受护栏约束的 Verify round、新建绑定 Finding 的 review/test 补证 Job，以及在同画布 Hub 处于 `waiting_human` 时把尚未 confirmed 的 Finding 收口为 `needs_human`。所有动作按 canvas-first 顺序加锁、禁止终态重开并拒绝同类活动 Job；需要恢复时在同一事务将 Hub 转回 `pending` 并通知 dispatcher。人工入口绝不开放 `confirmed`。
 - **双轨报告（#43/#142）**：收敛门通过后，Scheduler 为画布派发版本化 Task Report；每版冻结 `report-input.json` 与 checksum，相同输入幂等，输入变化时追加版本，失败同输入重试复用版本。每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。两类报告在 `pending/generating` 期间都只允许同一目标一个活跃版本，失败只更新报告行，不改变 Finding 状态。
 - **通用 Finding 协议（#44）**：`profile`、`category`、`tags`、`evidence_refs` 是跨安全、质量、合规等领域的通用字段；严重度可不提供，CVSS 评分可选。有效协议由全局、项目、任务三层按任务 > 项目 > 全局合并，在建画布时写入 `target_json.effective_finding_protocol` 冻结；Job 和 Agent 只读取该快照。Scheduler 校验 profile/字段边界、去重并决定 Verify，受支持的 CVSS 4.0/3.1 向量由系统重算，协议显式接受的未知版本保留原始向量/指标。
@@ -180,11 +180,12 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 ### 6.1 Compose 任务的冻结种子
 
-- `kind=compose` 必须从当前项目选择 1–8 条 `verify_status=confirmed` 且 disposition 为 `open` / `accepted` / `confirmed_vuln` 的 Finding；`standard` 禁止携带种子。
-- 创建时把选中 Finding 的必要摘要和来源身份冻结进 `canvases.target_json.seed_findings`，并生成当前画布内的只读 finding 投影。投影只作为已确认背景，不复制 Finding 记录，也不进入本画布的 Verify 生命周期。
-- Graph 对 Agent 暴露当前画布节点 UUID，并标记 `imported` / `readonly`；项目 Finding UUID 和完整冻结摘要不进入 prompt。Hub 仍只能引用当前画布 canonical 节点。
-- 重试是一次新执行。Scheduler 在清空旧运行数据前重新校验全部源 Finding；源条目已失效、被处置或跨项目时返回 `COMPOSE_SEEDS_STALE`，原画布数据不动。
-- Task Report 明确记录 `task_kind`、种子数量和冻结种子列表，种子与本次运行新产出的 Finding 分开统计。
+- `kind=compose` 必须从当前项目选择 1–8 条未否定处置（`open` / `accepted` / `confirmed_vuln`）的 Finding；**不要求** `verify_status=confirmed`。`pending` / `verifying` / `needs_human` / `confirmed` 均可作种子。`standard` 禁止携带种子。默认排除 `rejected_fp` / `resolved` / `archived`。
+- 创建时把选中 Finding 的必要摘要、来源身份以及冻结当时的 `verify_status` / `disposition` 写入 `canvases.target_json.seed_findings`，并生成当前画布内的只读 finding 投影。投影只作为背景，**不是本画布 canonical Finding**：不复制 Finding 记录，不进入本画布 Verify 生命周期；原 Verify 仍在源画布。新证据应回到源 Finding 或产出明确的新 Finding，不得把投影节点当成可确认正本。
+- Graph 对 Agent 暴露当前画布节点 UUID，并标记 `imported` / `readonly`；项目 Finding UUID 和完整冻结摘要不进入 prompt。Hub 仍只能引用当前画布 canonical 节点。YAML 另投影 `compose_scope`（种子位置与「禁止扩大资产范围」规则）。
+- **范围护栏（#273）**：compose 画布只围绕冻结种子做确认、补证与组合链，禁止新一轮资产扫描。Hub 不得下发未绑定种子投影的 explore/audit；若保留 explore/audit，必须绑定至少一条 imported 种子，prompt 只覆盖该种子资产。`emit_finding` 必须能追溯到种子资产（同仓/同模块或组合链位置），越界新资产由 Scheduler 拒绝。
+- 重试是一次新执行。Scheduler 在清空旧运行数据前重新校验全部源 Finding；源条目已失效、跨项目或变成否定处置时返回 `COMPOSE_SEEDS_STALE`，原画布数据不动。**不因仍未 confirmed 而拒绝重试。**
+- Task Report 明确记录 `task_kind`、种子数量和冻结种子列表（含冻结当时的 verify/disposition），种子与本次运行新产出的 Finding 分开统计。
 
 实现入口：`apps/scheduler/src/task-compose.ts`、`domains/project-task/routes.ts`、`graph.ts`、`report.ts` 与 Web `TasksPage.tsx`。
 
@@ -246,7 +247,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 - **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1 风险分布与 P2 吞吐看板未做。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
-- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条可用的 confirmed Finding，创建后显示为只读种子背景。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联，并提供人工 `verified` / `rejected` / `needs_human` 收口。
+- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联，并提供人工 `verified` / `rejected` / `needs_human` 收口。
 - 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
@@ -308,7 +309,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | vfs 宿主资源回收与磁盘水位 | #199 | **已完成**：Agentbox 销毁不吞最终删除错误；容器有界指数重试；启动/Reaper desired-state 对账严格限定双 UUID 标签和受管卷；旧 runtime image 仅按 DB 不可变 ref 与保护集合执行非强制 GC；`statfs` warning/error 水位进入 readiness、指标和 Dispatcher claim 门，恢复后自动唤醒。无 broad prune、无非 DeepSonar 资源删除。 |
 | Fact 过程真相工作台 | #159 | **已完成**：Schema v31 为 Fact 增加独立验证状态；画布提供 Facts 标签、服务端 keyset 分页与筛选、结构化证据/来源详情和人工验证动作。旧的幽灵 `/canvas-nodes/{id}/verification` 契约已删除，读写统一限定在 `/canvases/{id}/facts` 项目作用域内。 |
 | Agent CLI Session 时间线归一化 | #160 | **已完成**（Issue 起因是 Claude）：`queue-operation enqueue` 中带平台前缀的画布增量显示为广播，消费/移除记录不产生噪声；`user` 包装的纯 `tool_result` 不再虚增用户消息，assistant 的 thinking/text/tool_use 按原始块顺序展示且 usage 只累计一次；当前五类治理 CLI 各自解析归档格式，广播仅在归档持久化时展示。 |
-| Compose 任务 | 当前主路径 | **已落地**：同项目 confirmed Finding 作为 1–8 条冻结只读种子；Graph 隐藏项目 Finding UUID，重试前重新校验并 fail closed，Task Report 分离种子背景与本次产出。见 §6.1。 |
+| Compose 任务 | #273 | **已落地**：同项目未否定处置 Finding（含 pending 等未确认）作为 1–8 条冻结只读种子；不复制 Finding、不进入本画布 Verify。Graph 隐藏项目 Finding UUID 并投影 `compose_scope`；Hub 禁止未绑定种子的 explore/audit；`emit_finding` 拒收越界新资产；重试前重新校验且不因未确认而 stale。见 §6.1。 |
 | s33 启动门禁 / Attempt outcome / 网关预热 | — | **已修复**：startup warmup 不再把 `project_opt_in` 镜像当作 dispatcher 前置（官方 Base/Audit/Kali 仍 fail-closed）；`/health` 暴露 dispatcher+warmup，连续失败打 error 级「dispatcher disabled」；`mark_job_done` 按 8192 UTF-8 字节收口，Attempt outcome 只存 summary hash/bytes；managed gateway 在 real boot 预热，Created leftover 超时必清，`docker run` 使用独立超时；skill-source boot sync 有显式超时且不阻塞 listen。 |
 | aliyun-acr warmup OSS 超时与 helper | #228 | **已完成**：startup inspect 以冻结 digest / image Id 为就绪条件，不要求 RepoDigests 等于当前通道仓库名；选定通道 `docker pull` 因 timeout/EOF/OSS `httpReadSeeker` 失败时，对清单已核实的同 digest 其它通道（dockerhub/github）重试一次，不改 `runtime_registry_channel`、不改写历史 Job 快照；`/health.runtime_images.error` 区分「channel timed out, same-digest fallback attempted」与「digest not found」；默认 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 纳入 startup warmup，fake 仍不使用 helper。Job 执行期仍只 inspect，不隐式 pull。 |
 | 凭据删除不受可恢复 Job 永久锁死 | #234 | **已完成**：`DELETE /credentials/:id` 只拦 `pending_unclaimed` 与 `active_frozen`（claimed/provisioning/running/waiting_human）。`failed/timeout/orphan` 与 `succeeded/cancelled` 一样：影响投影照列，确认框可提示删除后不能按原快照 resume，但不 409。删除仍与 resume 串行加锁，不自动恢复、不改写冻结快照。 |

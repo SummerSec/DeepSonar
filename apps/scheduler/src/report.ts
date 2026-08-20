@@ -122,6 +122,7 @@ export interface ReportInput {
     location: string | null;
     summary: string | null;
     frozen_disposition: string;
+    frozen_verify_status: string;
   }>;
   scope_and_coverage: Record<string, unknown>;
   evidence: unknown[];
@@ -293,6 +294,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     location: seed.location,
     summary: seed.summary,
     frozen_disposition: seed.disposition,
+    frozen_verify_status: seed.verify_status,
   }));
   const findings = await db`
     SELECT f.id, f.title, f.severity, f.profile, f.category, f.tags_json,

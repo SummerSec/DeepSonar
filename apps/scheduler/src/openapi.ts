@@ -585,7 +585,7 @@ const OPS: Op[] = [
           maxItems: 8,
           uniqueItems: true,
           items: { type: "string", format: "uuid" },
-          description: "仅 compose 可用；同项目、当前 confirmed 且 disposition 可代入的具体 Finding UUID",
+          description: "仅 compose 可用；同项目、未否定处置的具体 Finding UUID（含 pending 等未确认状态）",
         },
         scheduled_start_at: {
           type: "string",
