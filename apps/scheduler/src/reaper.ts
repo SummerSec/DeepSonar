@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { globalRules } from "./core.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
@@ -19,12 +20,13 @@ import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
 export async function reapOnce(): Promise<{ timeouts: number; orphans: number; provisionStuck: number; stalled: number }> {
   const lifecycle = createSqlJobLifecycleApplication();
   const timedOut = await lifecycle.reapExecutionTimeout();
+  const liveRules = await globalRules(sql);
 
   // provision 卡死（§8.3）：claimed/provisioning 超过 provision 独立超时 → failed
-  const provisionStuck = await lifecycle.reapProvisionTimeout(config.timeouts.provisionSec);
+  const provisionStuck = await lifecycle.reapProvisionTimeout(liveRules.provisionTimeoutSec);
 
   const orphaned = await lifecycle.reapLeaseOrphans();
-  const stalled = await lifecycle.reapStalledExecution(config.timeouts.stallSec);
+  const stalled = await lifecycle.reapStalledExecution(liveRules.stallSec);
 
   for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled]) {
     const jobId = j.id as string;

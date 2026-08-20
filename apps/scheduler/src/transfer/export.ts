@@ -317,6 +317,7 @@ async function collectRoles(
       subagents_json: rc.subagents_json,
       platform_tools_json: rc.platform_tools_json,
       sandbox_limits_json: rc.sandbox_limits_json,
+      runtime_knobs_json: rc.runtime_knobs_json,
       // 项目镜像仅由 projects.config_json.image_strategy/role_runtime_images 管理。
       runtime_image_key: null,
       version: rc.version,

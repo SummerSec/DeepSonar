@@ -21,7 +21,7 @@ const CAPABILITY_NAV: { to: string; end: boolean; label: string; caption: string
 const PLATFORM_NAV: { to: string; label: string; caption: string; icon: Icon; scopes: string[] }[] = [
   { to: "/settings/access", label: "安全与访问", caption: "账号、用户与 Token", icon: ShieldCheck, scopes: ["tokens:manage"] },
   { to: "/settings/credentials", label: "凭据", caption: "Provider 密钥边界", icon: Key, scopes: ["agents:read"] },
-  { to: "/settings/platform", label: "平台数据", caption: "调度策略与配置包", icon: Database, scopes: ["agents:read", "exports:read"] },
+  { to: "/settings/platform", label: "配置中心", caption: "运行时护栏与调度", icon: Database, scopes: ["agents:read", "exports:read"] },
 ];
 const SECONDARY_COMMANDS = [
   { label: "跨项目发现", caption: "全局证据检索", to: "/findings", icon: Bug, group: "跨项目检索" },

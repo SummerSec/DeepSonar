@@ -35,13 +35,14 @@ const DEFAULT_CONFIG: RoleConfigInput = {
   platform_tools: {},
   instructions_markdown: null,
   runtime_image_key: null,
+  runtime_knobs: {},
   credentials: [],
   config_files: [],
 };
 
 const CONFIG_KEYS = new Set([
   "agent_cli", "dsh_task_mode", "model", "context_window_tokens", "env_keys", "env_vars", "modules", "skills", "commands", "mcps",
-  "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "credentials", "config_files",
+  "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "runtime_knobs", "credentials", "config_files",
 ]);
 const SECRET_FIELD = /^(?:api_?key|access_token|api_token|auth_token|refresh_token|client_secret|private_key|secret|password|authorization|cookie|credential(?:s|_id)?)$/i;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;

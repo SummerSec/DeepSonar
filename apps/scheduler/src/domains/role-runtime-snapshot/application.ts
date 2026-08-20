@@ -21,6 +21,7 @@ import { sql } from "../../db.js";
 import { config } from "../../config.js";
 import { freezeAgentCliRuntime, requireAgentCliRuntimeAdapter } from "@deepsonar/runtime-sandbox";
 import { parseSandboxLimitsOverride, resolveEffectiveSandboxLimits } from "./sandbox-limits.js";
+import { parseRuntimeKnobOverride } from "../../runtime-knobs.js";
 import type {
   RoleRuntimeSnapshotApplication,
   RoleRuntimeSnapshotResult,
@@ -268,6 +269,10 @@ export async function resolveAgentSnapshotForJob(
     runtime_image_key: runtimeImageKey,
     runtime_image: runtimeImage,
     sandbox_limits: sandboxLimits,
+    role_runtime_knobs: {
+      global: parseRuntimeKnobOverride(globalCfg?.runtime_knobs_json),
+      project: parseRuntimeKnobOverride(projectCfg?.runtime_knobs_json),
+    },
   };
 }
 

@@ -19,14 +19,23 @@ import {
   PROJECT_IMAGE_STRATEGIES,
   runtimeImageKeyForProjectPolicy,
 } from "../role-runtime-snapshot/application.js";
+import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
+const RUNTIME_KNOB_RULE_KEYS = {
+  stallSec: RUNTIME_KNOB_BOUNDS.stallSec,
+  jobTokenMaxRequests: RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests,
+  auditTimeoutSec: RUNTIME_KNOB_BOUNDS.timeoutSec,
+  verifyTimeoutSec: RUNTIME_KNOB_BOUNDS.timeoutSec,
+  provisionTimeoutSec: RUNTIME_KNOB_BOUNDS.provisionTimeoutSec,
+} as const;
 const GLOBAL_ONLY_RULE_KEYS = new Set([
   "maxGlobalJobs",
   "maxJobsPerProject",
   "maxConcurrentProvisioning",
   "maxConcurrentByProvider",
   "maxConcurrentByAgentCli",
+  "provisionTimeoutSec",
 ]);
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code", "pi", "dsh"]);
 const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
@@ -35,6 +44,17 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
     const value = rules[key];
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1000) {
       ctx.addIssue({ code: "custom", path: [key], message: `${key} 必须是 1-1000 的整数` });
+    }
+  }
+  for (const [key, bound] of Object.entries(RUNTIME_KNOB_RULE_KEYS)) {
+    if (!(key in rules)) continue;
+    const value = rules[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < bound.min || value > bound.max) {
+      ctx.addIssue({
+        code: "custom",
+        path: [key],
+        message: `${key} 必须是 ${bound.min}-${bound.max} 的整数${key === "jobTokenMaxRequests" || key === "stallSec" ? "（0 表示不限制）" : ""}`,
+      });
     }
   }
   if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentJobs")) {

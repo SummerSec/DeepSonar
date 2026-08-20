@@ -10,6 +10,7 @@ import {
   type ProviderCredential,
   type RoleConfigInput,
   type RoleConfigView,
+  type RuntimeKnobOverride,
   type SandboxLimitsOverride,
   type SkillSource,
   type SkillSourceDetail,
@@ -74,6 +75,11 @@ interface ConfigForm {
     memoryMiB: string;
     pidsLimit: string;
   };
+  runtime_knobs: {
+    stallSec: string;
+    jobTokenMaxRequests: string;
+    timeoutSec: string;
+  };
   modules: string[];
   skills: string;
   commands: string;
@@ -94,6 +100,7 @@ const EMPTY: ConfigForm = {
   instructions_markdown: "",
   runtime_image_key: "",
   sandbox_limits: { cpu: "", memoryMiB: "", pidsLimit: "" },
+  runtime_knobs: { stallSec: "", jobTokenMaxRequests: "", timeoutSec: "" },
   modules: [],
   skills: "[]",
   commands: "[]",
@@ -120,6 +127,11 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
       cpu: cfg.sandbox_limits_json?.cpu === undefined ? "" : String(cfg.sandbox_limits_json.cpu),
       memoryMiB: cfg.sandbox_limits_json?.memoryMiB === undefined ? "" : String(cfg.sandbox_limits_json.memoryMiB),
       pidsLimit: cfg.sandbox_limits_json?.pidsLimit === undefined ? "" : String(cfg.sandbox_limits_json.pidsLimit),
+    },
+    runtime_knobs: {
+      stallSec: cfg.runtime_knobs_json?.stallSec == null ? "" : String(cfg.runtime_knobs_json.stallSec),
+      jobTokenMaxRequests: cfg.runtime_knobs_json?.jobTokenMaxRequests == null ? "" : String(cfg.runtime_knobs_json.jobTokenMaxRequests),
+      timeoutSec: cfg.runtime_knobs_json?.timeoutSec == null ? "" : String(cfg.runtime_knobs_json.timeoutSec),
     },
     modules: cfg.modules_json ?? [],
     skills: JSON.stringify(cfg.skills_json ?? [], null, 2),
@@ -152,6 +164,26 @@ function contextWindowTokensFromForm(raw: string): number | null {
     throw new Error("上下文预算必须是 1024–10000000 的整数");
   }
   return value;
+}
+
+function optionalKnobInt(raw: string, label: string, min: number, max: number): number | undefined {
+  if (!raw.trim()) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${label} 必须是 ${min}–${max} 的整数`);
+  }
+  return value;
+}
+
+function runtimeKnobsFromForm(form: ConfigForm): RuntimeKnobOverride {
+  const stallSec = optionalKnobInt(form.runtime_knobs.stallSec, "产出停滞窗口", 0, 172_800);
+  const jobTokenMaxRequests = optionalKnobInt(form.runtime_knobs.jobTokenMaxRequests, "Job Token 请求上限", 0, 1_000_000);
+  const timeoutSec = optionalKnobInt(form.runtime_knobs.timeoutSec, "角色 Job 超时", 60, 172_800);
+  return {
+    ...(stallSec === undefined ? {} : { stallSec }),
+    ...(jobTokenMaxRequests === undefined ? {} : { jobTokenMaxRequests }),
+    ...(timeoutSec === undefined ? {} : { timeoutSec }),
+  };
 }
 
 function sandboxLimitsFromForm(form: ConfigForm): SandboxLimitsOverride {
@@ -377,6 +409,7 @@ export function RoleConfigEditor({
         instructions_markdown: form.instructions_markdown.trim() || null,
         runtime_image_key: projectId ? null : form.runtime_image_key.trim() || null,
         sandbox_limits: sandboxLimitsFromForm(form),
+        runtime_knobs: runtimeKnobsFromForm(form),
         credentials: form.credential_id
           ? [{ credential_id: form.credential_id, purpose: "llm" }]
           : [],
@@ -567,6 +600,42 @@ export function RoleConfigEditor({
                     aria-label={`${field.label} ${field.unit}`}
                   />
                   <span className="mt-1 block font-mono text-[10px] text-zinc-600">bounds {field.min}–{field.max}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="mt-4 border-t border-ink-700/60 pt-4">
+            <label className={labelCls}>
+              运行时护栏覆盖
+              <HelpTip>
+                留空继承项目 / 平台 / 部署 env。0 表示关闭停滞判定或不限制 Token 请求。
+                Chrome 专项镜像仍有 stall 下限；这里可以再抬高。优先级：Job &gt; 本角色 &gt; 项目规则 &gt; 平台。
+              </HelpTip>
+            </label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {([
+                { key: "stallSec" as const, label: "停滞窗口", unit: "秒", min: 0, max: 172_800 },
+                { key: "jobTokenMaxRequests" as const, label: "Token 请求上限", unit: "次", min: 0, max: 1_000_000 },
+                { key: "timeoutSec" as const, label: "Job 超时", unit: "秒", min: 60, max: 172_800 },
+              ]).map((field) => (
+                <label key={field.key} className="rounded-md border border-ink-700 bg-ink-850/70 px-2.5 py-2">
+                  <span className="mb-1 block font-mono text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    {field.label} <span className="normal-case text-zinc-600">({field.unit})</span>
+                  </span>
+                  <input
+                    type="number"
+                    min={field.min}
+                    max={field.max}
+                    step={1}
+                    value={form.runtime_knobs[field.key]}
+                    onChange={(event) => setForm((current) => ({
+                      ...current,
+                      runtime_knobs: { ...current.runtime_knobs, [field.key]: event.target.value },
+                    }))}
+                    placeholder="继承上层"
+                    className={inputCls}
+                    aria-label={field.label}
+                  />
                 </label>
               ))}
             </div>

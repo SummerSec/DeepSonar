@@ -154,9 +154,11 @@ pending → claimed → provisioning → running
 | 全局 | `global_settings`、全局 `role_configs`、平台 skill 源、镜像市场 | 缺省 |
 | 项目 | 规则（含 `maxConcurrentJobs` 调度配额）、启用角色、项目 RoleConfig、出网默认、`config_json` 中的镜像策略 | **压过全局**（调度硬 cap 除外：项目只能收紧 `maxConcurrentJobs`） |
 | 任务/画布 | `target_json`、出网覆盖、Finding 协议等 | **压过项目** |
-| Job | `agent_snapshot_json` 创建时冻结 | 执行只认快照 |
+| Job | `agent_snapshot_json` 创建时冻结（含 `runtime_knobs`） | 执行只认快照 |
 
 **冲突规则：任务 > 项目 > 全局**（RoleConfig 已如此；Finding 协议等演进配置同此心智）。
+
+**运行时护栏（#263 batch 1）**：`stallSec`、`jobTokenMaxRequests`、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec` 落在 `global_settings.rules_json`，可被项目 `config_json.rules` 与角色 `role_configs.runtime_knobs_json` 覆盖；创建 Job 时可再指定 `stall_sec` / `max_requests` / `timeout_sec`。优先级 **Job > 角色（项目 RoleConfig 字段覆盖全局 RoleConfig）> 项目规则 > 平台规则 > 部署 env 引导**。`provisionTimeoutSec` 仅平台可写。`stallSec=0` 关闭停滞判定；`jobTokenMaxRequests=0` 不限制 Gateway 请求。Scheduler 每次读库（`globalRules()` / 建 Job 冻结快照），改完无需重启；已在跑的 Job 继续用创建时冻结值。Chrome 专项镜像仍有 stall 下限，角色/Job 可再抬高。lease TTL、Reaper 间隔、Gateway 超时、镜像 registry/cosign/syft/trivy/clamav 与巡检间隔仍走部署 env，后续批次再前端化。
 
 DSH RoleConfig 的 `dsh_task_mode` 固定为 `standard | ptc`，默认 `standard`，并随 Job 冻结。Standard 使用 DSH 原生工具呈现；PTC 使用官方 Code Mode（`dsh-tools mode: code`）和受治理的 worker-thread TypeScript runtime，只把 `run_code` 作为模型直接工具。该字段对其他 Agent CLI 无效。模型思考强度统一属于 Provider Credential。Claude Code 只接受 `low | medium | high | xhigh`，运行时物化为 `.claude/settings.json` 的 `effortLevel`；Codex 接受 `none | minimal | low | medium | high | xhigh` 并同时写入 `config.toml` 与冻结启动覆盖；Pi 接受 `off | minimal | low | medium | high | xhigh | max` 并在启动/恢复时传 `--thinking`；OpenCode 将 1–64 字符的 Provider/模型 variant 在启动/恢复时原样传给 `--variant`。DSH 使用 Pi-AI 的规范档位 `off | minimal | low | medium | high | xhigh | max`，第三方实际传输值由每个模型的 `reasoningEfforts` YAML 映射，页面只允许所选模型声明的档位。Pi 与 DSH 同属 llm-pi-ai 家族：Provider 编辑器接受官方 `settings.yaml` / 等价 JSON（`llm-pi-ai.providers` + `agent-default-model`），也保留 Pi 自有 `{ providers: { deepsonar: … } }` 形状；粘贴后提取 `baseURL` / 默认模型 / 若存在的 `apiKey`，POST/PATCH Credential 写入 `public_metadata.base_url`。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai`，按同一官方 YAML 保存并做严格校验，可声明任意安全 route 及其 OpenAI/Anthropic 兼容 profile；Job 创建时冻结所选 route/model/reasoning，运行时强制把 `baseURL` 与 `apiKeyEnv` 投影到 Job Model Gateway，并挂载固定 commit 与 SHA-256 的 MIT 插件 `dsh-reasoning-settings@0.3.0`，为 `subagent` / `subagent_fork` 提供受已配置 route/model 限制的按次档位和继承修正。Pi 将官方 profile 物化为 `.pi/agent/models.json`。长期密钥不进入 Cordis 配置或沙箱。
 
@@ -240,7 +242,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 - 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。
 - **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1 风险分布与 P2 吞吐看板未做。
-- Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；全局调度规则与平台配置包归平台数据。
+- Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
 - 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条可用的 confirmed Finding，创建后显示为只读种子背景。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联，并提供人工 `verified` / `rejected` / `needs_human` 收口。
 - 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
@@ -311,6 +313,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | Windows deploy.ps1 编码与 pull 语义 | #243 | **已完成**：`deploy.ps1` 以 UTF-8 BOM 保存且正文仅 ASCII，避免 Windows PowerShell 5.1 按系统代码页把中文/全角标点解析成 ParserError；`pull`/`up` 与 `deploy.sh` 对齐（默认 real + 拉 ACR 应用镜像；优先官方 `deepsonar-assets-helper` / `deepsonar-silo`，缺失回退 busybox pin / pgsty silo；`-Source build` 才本地 `--build`；`-NoBuild` 仍映射为 pull）。推荐终端 `pwsh`。 |
 | 任务下发后就地改标题与内容 | #251 | **已完成**：`PATCH /tasks/:canvasId` 更新 `canvases.title` 与 `target_json.title/content/goal`，并同步 root 节点标题/body；只影响后续 Hub 读图、新派生 Job 与显式重试，不改写已冻结 `agent_snapshot_json`。工作台「任务内容」对未归档且具 `tasks:write` 的主体可编辑保存；viewer 只读。 |
 | Chrome / 长工具 stall 误杀 | #257 | **已完成**：Reaper stall 仍以语义事件为主、默认 900s；`tool.call.started/completed` 写入进度事件与 `payload_json.runtime_activity`。在飞工具且 lease 未过期时不判停滞，使 clang-tidy / fuzz / 其它角色的长 Bash 不被 15 分钟静默窗口误杀。`deepsonar-chrome-audit/test` 下限 5400s、`deepsonar-chrome-fuzz` 10800s；不抬高全局 `DEEPSONAR_JOB_STALL_SEC`。无工具活动的普通 Job 仍在 900s 后收口。 |
+| 配置中心 / 运行时护栏 | #263 | **Batch 1 已落地**：平台默认写入 `global_settings.rules_json`；角色覆盖在 `role_configs.runtime_knobs_json`；Job 冻结 `agent_snapshot_json.runtime_knobs`。覆盖 `stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`（仅平台）。Web 配置中心可改，保存走既有 toast + `settings.global_update` / `settings.project_update` / `role_config.upsert` 审计。后续批次（lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 与巡检）仍走部署 env。 |
 
 ## 12. 仓库地图
 
@@ -322,7 +325,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v35）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
+| `database/schema.sql` | 唯一 schema 基线（当前 v36）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
@@ -360,7 +363,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 2. **改表 = 改基线 + bump 版本 + 重建库验证**。短期**不**做 #34 类增量 ALTER 链（产品与 schema 仍在快速迭代，过早迁移会锁死演进）。同实例升级用 `pnpm db:rebuild`（备份 + 套最新 `schema.sql` + 列交集回填）；跨环境复制仍走 **`.deepsonarpack`**。Credential 仅迁元数据，不导出明文 Secret。
 3. **列表 API 不塞大 body**；大字段详情/按需（#39）。  
 4. **进 prompt 的内容当不可信**；共享资产只读挂载（#41）。  
-5. **配置覆盖：任务 > 项目 > 全局**；Job 只认冻结快照。  
+5. **配置覆盖：Job > 角色/项目 > 平台 > env 引导**；Job 只认冻结快照。  
 6. 细节冲突时：代码 + schema + OpenAPI + 测试 > 本摘要；演进以 open issue 为准。
 
 ## 14. 当前事实入口

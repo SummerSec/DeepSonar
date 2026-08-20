@@ -86,6 +86,7 @@
 | #243 Windows deploy.ps1 | **已关**；UTF-8 BOM + ASCII，避免 PS 5.1 代码页 ParserError；pull/up 与 `deploy.sh` 对齐 |
 | #251 任务下发后改标题/内容 | **已关**；`PATCH /tasks/:canvasId` 就地改 title/content，不改写冻结 Job 快照 |
 | #257 Chrome / 长工具 stall 误杀 | **已关**；在飞 `tool.call` + 有效 lease 不判停滞；chrome-audit/test/fuzz 有 stall 下限，全局默认仍 900s |
+| #263 配置中心 / 运行时护栏 | **Batch 1 as-built**（stall / token 上限 / audit·verify·provision 超时落库 + Web 配置中心）；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 与巡检仍走 env |
 | #159 / #160 | **已关**；Fact 工作台、Agent CLI Session 时间线归一化（#160 起因是 Claude，现覆盖五类归档；画布广播仅在 CLI 归档持久化时展示） |
 | Agent CLI 钉死版本 | 仓库已更新；**正式沙箱镜像**需 `v*` release 后才含新 CLI |
 | #34 增量 ALTER 链 | **刻意搁置**；坚持基线 + 重建库。运维可用 `pnpm db:rebuild` 备份后按列交集回填，不是启动自动升级 |

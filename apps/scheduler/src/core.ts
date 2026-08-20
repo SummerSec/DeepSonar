@@ -9,6 +9,13 @@ import {
   type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import {
+  RUNTIME_KNOB_BOUNDS,
+  asBoundedInt,
+  freezeRuntimeKnobs,
+  mergeRoleRuntimeKnobOverrides,
+  resolveRuntimeKnobs,
+} from "./runtime-knobs.js";
 import { isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
@@ -186,6 +193,12 @@ export interface ProjectRules {
   maxVerificationRounds: number;
   auditTimeoutSec: number;
   verifyTimeoutSec: number;
+  /** running Job 无语义事件且无在飞 tool.call 超过此时长则判失败；0 关闭。 */
+  stallSec: number;
+  /** Job Token 请求上限；0 = 不限制。 */
+  jobTokenMaxRequests: number;
+  /** provision（起沙箱）超时；项目可覆盖，Reaper/Dispatcher 热读。 */
+  provisionTimeoutSec: number;
   hubEnabled: boolean;
   maxHubRounds: number;
   maxIntentsPerDecision: number;
@@ -567,6 +580,9 @@ function envDefaultRules(): ProjectRules {
     maxVerificationRounds: 3,
     auditTimeoutSec: config.timeouts.auditSec,
     verifyTimeoutSec: config.timeouts.verifySec,
+    stallSec: config.timeouts.stallSec,
+    jobTokenMaxRequests: config.gateway.maxRequests,
+    provisionTimeoutSec: config.timeouts.provisionSec,
     hubEnabled: config.hub.enabled,
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
@@ -601,8 +617,21 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
       Number.isInteger(maxVerificationRounds) && maxVerificationRounds >= 1 && maxVerificationRounds <= 20
         ? maxVerificationRounds
         : base.maxVerificationRounds,
-    auditTimeoutSec: (raw.auditTimeoutSec as number) ?? base.auditTimeoutSec,
-    verifyTimeoutSec: (raw.verifyTimeoutSec as number) ?? base.verifyTimeoutSec,
+    auditTimeoutSec: asBoundedInt(raw.auditTimeoutSec, base.auditTimeoutSec, RUNTIME_KNOB_BOUNDS.timeoutSec.min, RUNTIME_KNOB_BOUNDS.timeoutSec.max),
+    verifyTimeoutSec: asBoundedInt(raw.verifyTimeoutSec, base.verifyTimeoutSec, RUNTIME_KNOB_BOUNDS.timeoutSec.min, RUNTIME_KNOB_BOUNDS.timeoutSec.max),
+    stallSec: asBoundedInt(raw.stallSec, base.stallSec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max),
+    jobTokenMaxRequests: asBoundedInt(
+      raw.jobTokenMaxRequests,
+      base.jobTokenMaxRequests,
+      RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.min,
+      RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.max,
+    ),
+    provisionTimeoutSec: asBoundedInt(
+      raw.provisionTimeoutSec,
+      base.provisionTimeoutSec,
+      RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.min,
+      RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.max,
+    ),
     hubEnabled: (raw.hubEnabled as boolean) ?? base.hubEnabled,
     maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
@@ -664,6 +693,7 @@ export async function rulesForProject(db: typeof sql, projectId: string): Promis
     maxConcurrentJobs: quota.limit,
     maxConcurrentJobsSource: quota.source,
     maxConcurrentProvisioning: global.maxConcurrentProvisioning,
+    provisionTimeoutSec: global.provisionTimeoutSec,
     maxConcurrentByProvider: global.maxConcurrentByProvider,
     maxConcurrentByAgentCli: global.maxConcurrentByAgentCli,
   };
@@ -765,6 +795,8 @@ export interface CreateJobInput {
   priority?: number;
   payload?: Record<string, unknown>;
   timeoutSec?: number;
+  stallSec?: number;
+  maxRequests?: number;
   followupDepth?: number;
   /** 外部入口幂等键；仅入口 job 使用。 */
   ingressKey?: string;
@@ -833,18 +865,43 @@ export async function createJob(input: CreateJobInput) {
           snapshotFindingIds,
         ),
       );
+      const [projectRow, globalRow] = await Promise.all([
+        tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`,
+        tx`SELECT rules_json FROM global_settings WHERE id = 'global'`,
+      ]);
+      const projectRulesRaw = (((projectRow[0]?.config_json as Record<string, unknown> | undefined)?.rules ?? {}) ?? {}) as Record<string, unknown>;
+      const platformRulesRaw = ((globalRow[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+      const roleKnobs = mergeRoleRuntimeKnobOverrides(
+        snapshot.role_runtime_knobs?.global,
+        snapshot.role_runtime_knobs?.project,
+      );
+      const resolvedKnobs = resolveRuntimeKnobs({
+        jobType: input.type,
+        imageKey: snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key,
+        job: {
+          timeoutSec: input.timeoutSec,
+          stallSec: input.stallSec,
+          jobTokenMaxRequests: input.maxRequests,
+        },
+        role: roleKnobs,
+        project: projectRulesRaw,
+        platform: platformRulesRaw,
+      });
+      const frozenKnobs = freezeRuntimeKnobs(resolvedKnobs);
+      const { role_runtime_knobs: _roleKnobs, ...snapshotBase } = snapshot;
+      const snapshotWithKnobs = { ...snapshotBase, runtime_knobs: frozenKnobs };
       const [created] = await tx`
         INSERT INTO jobs ${tx({
           project_id: input.projectId,
           canvas_id: input.canvasId ?? null,
           plane_issue_id: input.planeIssueId ?? null,
-          agent_snapshot_json: snapshot as never,
+          agent_snapshot_json: snapshotWithKnobs as never,
           parent_job_id: input.parentJobId ?? null,
           finding_id: input.findingId ?? null,
           type: input.type,
           priority,
           payload_json: payload as never,
-          timeout_sec: input.timeoutSec ?? config.timeouts.auditSec,
+          timeout_sec: resolvedKnobs.timeoutSec,
           followup_depth: input.followupDepth ?? 0,
           ingress_key: input.ingressKey ?? null,
         })}

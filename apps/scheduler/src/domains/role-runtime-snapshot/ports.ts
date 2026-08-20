@@ -4,6 +4,7 @@ import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
 import type { EffectiveSandboxLimits, FrozenNetworkPolicy } from "./sandbox-limits.js";
+import type { FrozenRuntimeKnobs, RuntimeKnobOverride } from "../../runtime-knobs.js";
 
 /** Minimal transaction-shaped client accepted by the snapshot application. */
 export type RoleRuntimeSnapshotTransaction = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
@@ -60,6 +61,10 @@ export interface RoleRuntimeSnapshotResult {
   runtime_image: RuntimeImageSnapshot;
   /** Complete, immutable resource contract consumed by Dispatcher. */
   sandbox_limits: EffectiveSandboxLimits;
+  /** Project RoleConfig overlay on global RoleConfig; consumed at Job create then dropped. */
+  role_runtime_knobs?: { global?: RuntimeKnobOverride; project?: RuntimeKnobOverride };
+  /** Frozen batch-1 runtime knobs. Next Job reads current DB; running Job keeps this snapshot. */
+  runtime_knobs?: FrozenRuntimeKnobs;
   /** Added by the Job creation boundary from the canvas target. */
   network_policy?: FrozenNetworkPolicy;
   /** Exact immutable shared-asset versions selected when this Job is created. */

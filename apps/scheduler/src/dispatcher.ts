@@ -830,10 +830,14 @@ async function runJob(jobId: string) {
           await interruptProvision(jobId, attemptId!);
           throw new Error(`job ${jobId} 在 provision 启动前已离开 provisioning 状态`);
         }
+        const frozenProvisionSec = snapshot.runtime_knobs?.provision_timeout_sec;
+        const provisionSec = typeof frozenProvisionSec === "number" && frozenProvisionSec > 0
+          ? frozenProvisionSec
+          : (await globalRules(sql)).provisionTimeoutSec;
         handle = await withProvisionTimeout(
           runner.provision(provisionInput),
-          config.timeouts.provisionSec * 1000,
-          `provision 超时（${config.timeouts.provisionSec}s）`,
+          provisionSec * 1000,
+          `provision 超时（${provisionSec}s）`,
           () => interruptProvision(jobId, attemptId!),
           (lateHandle) => runner.destroy(lateHandle).catch((error) => {
             inc("deepsonar_sandbox_cleanup_failed_total");

@@ -227,6 +227,14 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: {} }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: -1 }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: 1001 }));
+  assert.throws(() => parseConcurrencyRulesPatch({ stallSec: -1 }));
+  assert.throws(() => parseConcurrencyRulesPatch({ jobTokenMaxRequests: 1_000_001 }));
+  assert.throws(() => parseConcurrencyRulesPatch({ provisionTimeoutSec: 10 }));
+  assert.deepEqual(parseConcurrencyRulesPatch({ stallSec: 0, jobTokenMaxRequests: 0, provisionTimeoutSec: 400 }), {
+    stallSec: 0,
+    jobTokenMaxRequests: 0,
+    provisionTimeoutSec: 400,
+  });
   assert.deepEqual(parseConcurrencyRulesPatch({ maxConcurrentJobs: 0 }), { maxConcurrentJobs: 0 });
   assert.deepEqual(parseConcurrencyRulesPatch({ maxConcurrentJobs: null }), { maxConcurrentJobs: null });
   assert.deepEqual(parseConcurrencyRulesPatch({ maxGlobalJobs: 4, maxConcurrentProvisioning: 3, maxConcurrentByAgentCli: { "claude-code": 4 } }), {
@@ -299,6 +307,25 @@ test("project maxConcurrentJobs inherits, tightens, and cannot widen the global 
   );
   assert.equal(clamped.maxConcurrentJobs, 6);
   assert.equal(clamped.maxConcurrentJobsSource, "project");
+});
+
+test("changing stallSec and jobTokenMaxRequests is visible to the next globalRules read", async () => {
+  const first = await globalRules(fakeDb([{ rules_json: { stallSec: 900, jobTokenMaxRequests: 500 } }]));
+  const next = await globalRules(fakeDb([{ rules_json: { stallSec: 3_600, jobTokenMaxRequests: 0 } }]));
+  assert.equal(first.stallSec, 900);
+  assert.equal(first.jobTokenMaxRequests, 500);
+  assert.equal(next.stallSec, 3_600);
+  assert.equal(next.jobTokenMaxRequests, 0);
+
+  const project = await rulesForProject(
+    fakeDb(
+      [{ rules_json: { stallSec: 900, provisionTimeoutSec: 400 } }],
+      [{ config_json: { rules: { stallSec: 2_000, provisionTimeoutSec: 1_200 } } }],
+    ),
+    "project-1",
+  );
+  assert.equal(project.stallSec, 2_000);
+  assert.equal(project.provisionTimeoutSec, 400);
 });
 
 test("claim candidates carry their project policy and never fall back when it is missing", () => {

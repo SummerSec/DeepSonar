@@ -744,11 +744,13 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       upstreamModel,
       settingsConfig: snapshot.settings_config_json,
     });
+    const frozenKnobs = snapshot.runtime_knobs;
     const jt = await mintJobToken({
       jobId: job.id as string,
       projectId: job.project_id as string,
       credentialId: cred.id as string,
       allowedModels: tokenModels,
+      maxRequests: typeof frozenKnobs?.job_token_max_requests === "number" ? frozenKnobs.job_token_max_requests : undefined,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
     });
     gatewayToken = jt.plaintext;

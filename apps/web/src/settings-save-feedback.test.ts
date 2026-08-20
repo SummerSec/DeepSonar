@@ -26,6 +26,18 @@ test("primary settings save buttons expose busy and saved labels", () => {
   assert.match(editor, /busy \? "保存中…" : saved \? "已保存"/);
 });
 
+test("config center exposes batch-1 runtime knobs with toast save feedback", () => {
+  assert.match(panel, /配置中心 · 运行时护栏/);
+  assert.match(panel, /stallSec/);
+  assert.match(panel, /jobTokenMaxRequests/);
+  assert.match(panel, /provisionTimeoutSec/);
+  assert.match(panel, /showToast\(m, inferToastKind\(m\)\)/);
+  assert.match(shell, /配置中心/);
+  const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /运行时护栏覆盖/);
+  assert.match(editor, /runtime_knobs/);
+});
+
 test("project rules expose a claim-time concurrent job quota", () => {
   assert.match(panel, /最大同时运行 Job 数/);
   assert.match(panel, /maxConcurrentJobs/);

@@ -30,9 +30,9 @@ const SECTIONS: Record<string, {
     scopes: ["agents:read"],
   },
   platform: {
-    title: "平台数据与调度",
+    title: "配置中心与调度",
     eyebrow: "PLATFORM / OPERATIONS",
-    subtitle: "维护全局调度纪律与平台配置包。项目数据仍归各自项目空间管理。",
+    subtitle: "维护运行时护栏、全局调度纪律与平台配置包。项目数据仍归各自项目空间管理。",
     section: "platform",
     icon: Database,
     scopes: ["agents:read", "exports:read", "imports:read"],

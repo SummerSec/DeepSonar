@@ -271,6 +271,8 @@ export function SettingsPanel({
       maxAutoRetries: rules.maxAutoRetries,
       auditTimeoutSec: rules.auditTimeoutSec,
       verifyTimeoutSec: rules.verifyTimeoutSec,
+      stallSec: rules.stallSec,
+      jobTokenMaxRequests: rules.jobTokenMaxRequests,
       hubEnabled: rules.hubEnabled,
       maxHubRounds: rules.maxHubRounds,
       maxIntentsPerDecision: rules.maxIntentsPerDecision,
@@ -281,6 +283,7 @@ export function SettingsPanel({
       ruleBody.maxGlobalJobs = rules.maxGlobalJobs;
       ruleBody.maxJobsPerProject = rules.maxJobsPerProject;
       ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
+      ruleBody.provisionTimeoutSec = rules.provisionTimeoutSec;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
     } else {
       const trimmed = projectJobQuota.trim();
@@ -989,6 +992,40 @@ export function SettingsPanel({
                 {numField("auditTimeoutSec", "审计超时（秒）")}
                 {numField("verifyTimeoutSec", "验证超时（秒）")}
               </div>
+            </section>
+
+            <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+              <div className="border-b border-white/[.055] px-4 py-3">
+                <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                  <span>配置中心 · 运行时护栏</span>
+                  <HelpTip>
+                    优先级：Job 创建覆盖 &gt; 角色 RoleConfig &gt; 项目规则 &gt; 平台默认 &gt; 部署 env 引导。
+                    修改立即写入数据库，下一 Job 生效，无需重启调度器。
+                    stallSec / jobTokenMaxRequests 填 0 表示关闭停滞判定 / 不限制 Token 请求。
+                    lease / Reaper 间隔 / Gateway 超时 / 镜像巡检仍走部署 env，本批未前端化。
+                  </HelpTip>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
+                {numField(
+                  "stallSec",
+                  "产出停滞窗口（秒）",
+                  "running Job 无语义事件且无在飞 tool.call 超过此时长则判失败。0 关闭。Chrome 专项镜像另有下限，角色/Job 可再抬高。",
+                )}
+                {numField(
+                  "jobTokenMaxRequests",
+                  "Job Token 请求上限",
+                  "单个 Job 经 Model Gateway 的请求次数。0 表示不限制。长跑任务可在角色或 Job 上覆盖。",
+                )}
+                {!projectId && numField(
+                  "provisionTimeoutSec",
+                  "起沙箱超时（秒）",
+                  "claimed/provisioning 超过此时长由 Reaper 判失败。仅平台可改；项目不可覆盖。",
+                )}
+              </div>
+              <p className="px-4 pb-4 text-[11px] leading-5 text-zinc-500">
+                保存后写入审计日志。已在跑的 Job 继续使用创建时冻结的快照；新 Job 读取当前数据库值。
+              </p>
             </section>
 
             {effectiveFindingProtocol && (

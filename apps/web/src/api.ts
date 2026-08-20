@@ -631,6 +631,9 @@ export interface EffectiveRules {
   maxAutoRetries: number;
   auditTimeoutSec: number;
   verifyTimeoutSec: number;
+  stallSec: number;
+  jobTokenMaxRequests: number;
+  provisionTimeoutSec: number;
   hubEnabled: boolean;
   maxHubRounds: number;
   maxIntentsPerDecision: number;
@@ -1231,6 +1234,13 @@ export interface SandboxLimitsOverride {
   pidsLimit?: number;
 }
 
+/** Role-level overlay for batch-1 runtime knobs. Null/omit inherits the next layer. */
+export interface RuntimeKnobOverride {
+  stallSec?: number | null;
+  jobTokenMaxRequests?: number | null;
+  timeoutSec?: number | null;
+}
+
 export type RoleConfigInput = {
   agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
   dsh_task_mode?: "standard" | "ptc";
@@ -1253,6 +1263,7 @@ export type RoleConfigInput = {
   runtime_image_key?: string | null;
   /** Project-only CPU/memory/PID overrides; blank fields inherit server defaults. */
   sandbox_limits?: SandboxLimitsOverride | null;
+  runtime_knobs?: RuntimeKnobOverride | null;
   credentials: { credential_id: string; purpose: string }[];
   /** Provider 配置文件：路径按 CLI 固定白名单（首期每角色最多 1 个） */
   config_files: { path: string; content: string }[];
@@ -1278,6 +1289,7 @@ export interface RoleConfigView {
   instructions_markdown: string | null;
   runtime_image_key: string | null;
   sandbox_limits_json: SandboxLimitsOverride;
+  runtime_knobs_json?: RuntimeKnobOverride;
   version: number;
   created_at: string;
   updated_at: string;
