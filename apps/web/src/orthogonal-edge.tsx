@@ -3,6 +3,7 @@ import {
   orthogonalBusPoints,
   pathMidpoint,
   polylinePath,
+  snapOrthogonalEndpoints,
   type LayoutPoint,
 } from "./edge-path";
 
@@ -23,10 +24,14 @@ export function OrthogonalEdge({
   style,
   interactionWidth,
 }: EdgeProps<Edge<OrthogonalEdgeData>>) {
-  const elk = Array.isArray(data?.points) ? data.points : [];
-  const points = elk.length >= 2
-    ? elk
-    : orthogonalBusPoints({ x: sourceX, y: sourceY }, { x: targetX, y: targetY });
+  const source = { x: sourceX, y: sourceY };
+  const target = { x: targetX, y: targetY };
+  const laid = Array.isArray(data?.points) ? data.points : [];
+  const points = snapOrthogonalEndpoints(
+    laid.length >= 2 ? laid : orthogonalBusPoints(source, target),
+    source,
+    target,
+  );
   const path = polylinePath(points);
   const mid = pathMidpoint(points);
   return (

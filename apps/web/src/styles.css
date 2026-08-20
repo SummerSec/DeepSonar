@@ -906,16 +906,19 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   max-height: none;
 }
 .react-flow__minimap-mask { fill: rgb(7 9 10 / .82); pointer-events: all; }
-.react-flow__edges,
-.react-flow .react-flow__edges svg,
-.react-flow svg.react-flow__edges {
+.react-flow__edges {
   z-index: 1;
+  overflow: visible;
+}
+/*
+ * xyflow 12 给每条边一个无宽高的 SVG，靠 overflow:visible 把折线画到 300×150
+ * 默认盒外面。禁止再写 width/height:100%：那会把 SVG 视口钉在画布原点的一屏上，
+ * 平移到右侧列时连线被裁掉，节点（绝对定位 div）却还在。
+ */
+.react-flow .react-flow__edges svg {
   overflow: visible !important;
-  width: 100% !important;
-  height: 100% !important;
   max-width: none !important;
   max-height: none !important;
-  opacity: 1;
 }
 .react-flow__nodes {
   z-index: 3;

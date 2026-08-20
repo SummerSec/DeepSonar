@@ -87,7 +87,12 @@ test("canvas view compensates fitView crush instead of remounting the graph", ()
   assert.match(css, /--deepsonar-edge-zoom-boost/);
   assert.match(css, /--xy-edge-stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)/);
   assert.match(css, /stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)\s*!important/);
-  assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*height:\s*100%\s*!important/);
+  assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*overflow:\s*visible\s*!important/);
+  assert.doesNotMatch(
+    css,
+    /\.react-flow \.react-flow__edges svg[\s\S]{0,280}height:\s*100%\s*!important/,
+    "per-edge SVGs must not be sized to the pane or panned columns clip",
+  );
   assert.match(css, /\.deepsonar-edge-to \.react-flow__edge-path \{[\s\S]*calc\(3px \* var\(--deepsonar-edge-zoom-boost/);
   assert.match(layers, /invisible pointer-events-none/);
   assert.doesNotMatch(

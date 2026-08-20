@@ -6,6 +6,7 @@ import {
   pathMidpoint,
   polylinePath,
   simplifyPolyline,
+  snapOrthogonalEndpoints,
 } from "./edge-path";
 
 test("orthogonal bus is a three-segment gutter, not a diagonal", () => {
@@ -56,6 +57,19 @@ test("elk sections keep start, bends, and end in order", () => {
       { x: 320, y: 80 },
       { x: 320, y: 200 },
       { x: 400, y: 200 },
+    ],
+  );
+});
+
+test("render path keeps the gutter bus but snaps to live handles", () => {
+  const laid = orthogonalBusPoints({ x: 0, y: 10 }, { x: 200, y: 110 });
+  assert.deepEqual(
+    snapOrthogonalEndpoints(laid, { x: 4, y: 12 }, { x: 196, y: 108 }),
+    [
+      { x: 4, y: 12 },
+      { x: 56, y: 12 },
+      { x: 56, y: 108 },
+      { x: 196, y: 108 },
     ],
   );
 });
