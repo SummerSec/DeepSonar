@@ -65,6 +65,23 @@ export function orthogonalBusPoints(
   ]);
 }
 
+/** Keep the bus X from layout, but start/end on the live React Flow handles. */
+export function snapOrthogonalEndpoints(
+  points: readonly LayoutPoint[],
+  source: LayoutPoint,
+  target: LayoutPoint,
+): LayoutPoint[] {
+  if (points.length < 2) return orthogonalBusPoints(source, target);
+  const next = points.map((point) => ({ x: point.x, y: point.y }));
+  next[0] = { x: source.x, y: source.y };
+  next[next.length - 1] = { x: target.x, y: target.y };
+  if (next.length >= 3) {
+    next[1] = { x: next[1].x, y: source.y };
+    next[next.length - 2] = { x: next[next.length - 2].x, y: target.y };
+  }
+  return simplifyPolyline(next);
+}
+
 export function polylinePath(points: readonly LayoutPoint[]): string {
   if (points.length < 2) return "";
   const [first, ...rest] = points;

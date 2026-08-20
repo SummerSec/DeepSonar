@@ -4,23 +4,38 @@
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-08-20
+
 ### 新增
 
-- 组合续挖（`kind=compose`）可选择同项目未确认 Finding（pending / verifying / needs_human / confirmed），并禁止把新画布扩成新一轮资产扫描（#273）。Hub 不得下发未绑定种子的 explore/audit；`emit_finding` 拒收种子资产以外的新仓/新模块 Finding。重试仍在源 Finding 被删、跨项目或否定处置时 `COMPOSE_SEEDS_STALE`，不因仍未 confirmed 而拒绝。
-
 - 配置中心第一批运行时护栏落库并可热读（#263）：`stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`。优先级 Job > 角色 RoleConfig > 项目规则 > 平台 `global_settings` > 部署 env 引导。Web「配置中心」与角色编辑器可改，保存有可见 toast 并写审计。已在跑的 Job 继续用冻结快照；下一 Job 无需重启调度器。
+- 任务下发后可就地修改标题与内容（#253 / #251）：画布工作台直接改当前任务意图，调度器写入权威任务记录并保留过程画布；不另开任务、不改写已冻结 Job 快照。
+- 组合续挖（`kind=compose`）可选择同项目未确认 Finding（pending / verifying / needs_human / confirmed），并禁止把新画布扩成新一轮资产扫描（#273 / #274）。Hub 不得下发未绑定种子的 explore/audit；`emit_finding` 拒收种子资产以外的新仓/新模块 Finding。重试仍在源 Finding 被删、跨项目或否定处置时 `COMPOSE_SEEDS_STALE`，不因仍未 confirmed 而拒绝。
+- OpenHarmony Test 钉死官方 SDK `hdc` 作为设备协议（#268）；CI 只冒烟 `hdc version`，无设备时结构化 `needs_human`。
 
 ### 修复
 
+- 大过程画布分层加载（#270）：默认每层先揭开 12 个后继、限制同时渲染节点数，筛选坞保持可点；超过 ELK 阈值改用列布局，不再叠在服务端 `(0,0)`。
+- 拓扑边改为东出西进的层间正交总线，竖段贴在源节点右侧近层间隙并按同一父节点分车道；广播 overlay 默认不盖过程图，点选节点才画对应叠加层。
+- 不再把每条边的 SVG 钉成画布一屏：平移/放大到右侧列时正交折线仍可见，端点扣到真实 handle。
 - 过程画布筛选坞始终默认展开；折叠态「筛选节点」在亮/暗色与 <640px 下保持可点可读，不再被 `100%-176px` 裁成只剩导出。
-- 拓扑连线把 `--deepsonar-edge-zoom-boost` 与 `--xy-edge-stroke-width` 写到 `.react-flow` 根节点，并覆盖 Tailwind 对边 SVG 的 `height:auto`，默认 fitView 下描边可见。
+- 拓扑连线把 `--deepsonar-edge-zoom-boost` 与 `--xy-edge-stroke-width` 写到 `.react-flow` 根节点，默认 fitView 下描边保持可读。
+- 任务页人工介入可直接回复，不再静默只打 Hub（#272）。
 - Reaper 不再把健康沙箱里的单条长工具调用判成产出停滞：`tool.call.started` 写入语义进度与 `runtime_activity`，在飞工具且 lease 仍有效时跳过 stall；`deepsonar-chrome-audit/test/fuzz` 另有 5400/10800s 下限。全局 `DEEPSONAR_JOB_STALL_SEC` 默认仍为 900s。
 - 官方 runtime catalog 不再被 image-admission 周期复扫按 Debian/发行版 Trivy CRITICAL 或 secret 自动吊销；第三方仍保持 0 CRITICAL / 0 secret。仅有吊销版本时任务启动返回 `409 RUNTIME_IMAGE_REVOKED`，不再误报 `RUNTIME_IMAGE_PLATFORM_UNAVAILABLE`。`/health` 以 `official_trust_warnings` 暴露官方默认镜像已吊销。
+- Pi Provider 编辑器接受官方 `llm-pi-ai` settings YAML/JSON，提取 `baseURL` / 模型 / API key，并物化到 `.pi/agent/models.json`（#255）。
+- OpenHarmony arm64 冒烟接受 qemu 上拆开的 `Connect server failed` + `Ver:` 输出（#276）：合并 `hdc version` / `hdc -v` 后出现 `Ver:` 即通过，不再要求两条都带版本；hdc 缺失或完全无版本仍 fail closed。
+
+### 变更
+
+- 源码、测试与文档示例禁止写死公网第三方/中转域名；需要可运行 URL 夹具时只用 `127.0.0.1` 或内网地址。产品内置官方厂商默认端点与官方发行源除外（#258）。
+- 官方运行时只保留基础工具，移除 Semgrep、gitleaks、shellcheck 与 chrome-audit-scan（#267 / #266）。Finding 质量走 harness + Verify；OpenHarmony Test 的 `hdc` 钉死仍保留。
 
 ### 部署 / 升级说明
 
-- 本变更将 Schema 升至 v36（`role_configs.runtime_knobs_json`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 本版本将 Schema 升至 v36（`role_configs.runtime_knobs_json`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
 - `DEEPSONAR_JOB_STALL_SEC` / `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` / `DEFAULT_AUDIT_TIMEOUT_SEC` / `DEFAULT_VERIFY_TIMEOUT_SEC` / `PROVISION_TIMEOUT_SEC` 现为引导值：库中有键则 UI/DB 优先。lease TTL、Reaper 间隔、Gateway 超时、镜像 registry/cosign/syft/trivy/clamav pins 与巡检间隔仍只走部署 env。
+- 官方 Audit / Kali / Chrome 运行时工具清单有变，发版会重建相应镜像（指纹变化）；旧 pin 不会被静默改写。
 
 ## [0.1.41] - 2026-08-20
 
@@ -388,6 +403,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.42]: https://github.com/SummerSec/DeepSonar/compare/v0.1.41...v0.1.42
 [0.1.41]: https://github.com/SummerSec/DeepSonar/compare/v0.1.40...v0.1.41
 [0.1.40]: https://github.com/SummerSec/DeepSonar/compare/v0.1.39...v0.1.40
 [0.1.39]: https://github.com/SummerSec/DeepSonar/compare/v0.1.38...v0.1.39
