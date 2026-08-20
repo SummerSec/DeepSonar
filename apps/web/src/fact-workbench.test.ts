@@ -190,4 +190,9 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   assert.match(page, /<HumanMessageComposer/);
   assert.match(page, /jobCanReceiveHumanReply\(j\)/);
   assert.match(page, /onSendMessage=\{\(\) => openHumanReply\(humanMessageTargetNodeForJobId\(selectedJob, nodes\)\)\}/);
+  assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)\}/);
+  const composer = source("HumanMessageComposer.tsx");
+  assert.match(composer, /nodeEligible \? "job" : null/);
+  assert.match(composer, /targetKind === "hub" \? \{ kind: "hub" as const \} : null/);
+  assert.doesNotMatch(composer, /nodeEligible \? "job" : "hub"/);
 });

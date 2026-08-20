@@ -93,6 +93,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 ### 4.1 人工消息与动态附件收件箱
 
 - Web 可向当前画布的 **Hub**，或当前选中的 active `intent` / `job` / `report` 节点发送 1–8000 字人工消息；终态或非运行节点不接受定向消息。发送记录以 durable human message ledger 为准，前端只做派生展示，不写回或污染画布拓扑原始数据。
+- 发送入口在任务工作台（人工介入条、本次运行 `waiting_human` Job、工作台 Job 详情），不在过程画布上放 FAB 或画布级撰写器。解析不到活动 Job 时不得静默发给 Hub，必须显式选择；`human` 是节点类型，不能投递。
 - 多文件先逐个写入项目共享资产，逻辑 key 为 `human-messages/<message-uuid>/<序号>-<安全文件名>`；全部上传成功后，消息才一次性引用对应不可变 `version_id`。任一附件上传失败时不创建带残缺引用的消息；已经成功上传的项目资产保留并明确提示。
 - 运行时将每条消息的附件按 message UUID 放入动态收件箱 `/workspace/.deepsonar/inbox/<message-id>/`，并在注入文本中提供不可变路径、摘要与字节数。收件箱不是 Agent 可写回的控制队列，也不改变原有 snapshot 输入。
 - 确认严格分两阶段：`injected` 仅表示“已注入会话，等待 Agent 确认”；只有目标 Agent 显式调用受治理的 ACK operation，持久化 `acknowledged_at`（及可选 `ack_summary`）后，UI 才显示“Agent 已确认”。不得从普通文本回复、Session 内容或节点标题推断已读/已处理。

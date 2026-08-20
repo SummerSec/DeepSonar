@@ -33,8 +33,8 @@ export function isActiveHumanMessageTarget(node: CanvasNode | null | undefined):
   );
 }
 
-export function humanMessageTargetForNode(node: CanvasNode | null | undefined): HumanMessageTarget {
-  return isActiveHumanMessageTarget(node) ? { kind: "job", node_id: node.id } : { kind: "hub" };
+export function humanMessageTargetForNode(node: CanvasNode | null | undefined): HumanMessageTarget | null {
+  return isActiveHumanMessageTarget(node) ? { kind: "job", node_id: node.id } : null;
 }
 
 function jobIdFromNode(node: CanvasNode | null | undefined): string | null {
@@ -43,7 +43,7 @@ function jobIdFromNode(node: CanvasNode | null | undefined): string | null {
   return typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null;
 }
 
-/** human 节点本身不能投递；解析到同 Job 的活动 intent/job/report，否则回落 Hub。 */
+/** human 节点本身不能投递；解析到同 Job 的活动 intent/job/report，否则没有目标。 */
 export function humanMessageTargetNodeFromContext(
   selected: CanvasNode | null | undefined,
   nodes: readonly CanvasNode[],
@@ -54,13 +54,6 @@ export function humanMessageTargetNodeFromContext(
   return nodes.find((node) => node.job_id === jobId && isActiveHumanMessageTarget(node)) ?? null;
 }
 
-export function composeNodeIdForHumanIntervention(
-  humanNode: CanvasNode,
-  nodes: readonly CanvasNode[],
-): string {
-  return humanMessageTargetNodeFromContext(humanNode, nodes)?.id ?? humanNode.id;
-}
-
 export function humanMessageTargetNodeForJobId(
   jobId: string | null | undefined,
   nodes: readonly CanvasNode[],
@@ -69,10 +62,9 @@ export function humanMessageTargetNodeForJobId(
   return nodes.find((node) => node.job_id === jobId && isActiveHumanMessageTarget(node)) ?? null;
 }
 
-/** 本次运行列表：waiting_human 或仍活动的 human Job 可直接回复。 */
+/** 本次运行列表只给正在等待人工的 Job 直接回复；human 是节点类型，不是 Job 类型。 */
 export function jobCanReceiveHumanReply(job: { type?: string | null; status?: string | null }): boolean {
-  if (!job.status || !HUMAN_MESSAGE_ACTIVE_STATUSES.has(job.status)) return false;
-  return job.status === "waiting_human" || job.type === "human";
+  return job.status === "waiting_human";
 }
 
 export function humanMessageTargetLabel(message: CanvasHumanMessage, nodes: readonly CanvasNode[]): string {

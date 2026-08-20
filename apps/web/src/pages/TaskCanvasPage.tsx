@@ -1154,6 +1154,7 @@ export function TaskCanvasPage() {
                 sp.delete("focusNode");
                 setSearchParams(sp, { replace: true });
               }}
+              onSendHumanMessage={(node) => openHumanReply(humanMessageTargetNodeFromContext(node, nodes))}
             />
           </div>
         </div>
@@ -1516,7 +1517,7 @@ export function TaskCanvasPage() {
       )}
       {composerOpen && (
         <HumanMessageComposer
-          key={composerNode?.id ?? "hub"}
+          key={composerNode?.id ?? "unresolved"}
           canvasId={canvasId}
           projectId={projectId ?? null}
           selectedNode={composerNode}
