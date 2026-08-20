@@ -45,11 +45,11 @@ function fakeSandbox(): {
 
 function testDshProvider(reasoning?: string) {
   return {
-    provider: "feei",
+    provider: "xxxx",
     model: "gpt-5.6",
     config: {
       providers: {
-        feei: {
+        xxxx: {
           api: "openai-responses",
           apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN",
           baseURL: "http://deepsonar-gateway:3100/gateway",
@@ -132,10 +132,10 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
     adapter_id: "dsh", adapter_version: "0.1.0-rc.7", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
-  }, model: "gpt-5.6", modelProvider: "feei", cwd: "/workspace" };
+  }, model: "gpt-5.6", modelProvider: "xxxx", cwd: "/workspace" };
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
   assert.equal(init.method, "initialize");
-  assert.deepEqual(init.params, { cwd: "/workspace", provider: "feei", model: "gpt-5.6" });
+  assert.deepEqual(init.params, { cwd: "/workspace", provider: "xxxx", model: "gpt-5.6" });
   const initEvents = adapter.decodeOutput({ jsonrpc: "2.0", id: init.id, result: { serverInfo: { name: "deepseek-harness-sdk-runtime", version: "0.0.1" } } }, state);
   assert.equal(initEvents[0]?.type, "runtime_outbound");
   const prompt = JSON.parse(String(initEvents[0]?.content).trim()) as Record<string, unknown>;
@@ -195,7 +195,7 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /@deepseek-ai\/dsh-llm-pi-ai/);
   assert.match(config, /name: dsh-reasoning-settings/);
   assert.match(config, /inheritReasoning: true/);
-  assert.match(config, /"feei"/);
+  assert.match(config, /"xxxx"/);
   assert.doesNotMatch(config, /dsh-llm-deepseek/);
   assert.doesNotMatch(config, /"reasoning"/);
   assert.match(config, /dshHome: !!js process\.env\.DSH_HOME \?\? '\/workspace\/\.deepsonar-home\/\.dsh'/);

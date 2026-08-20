@@ -392,9 +392,9 @@ test("OpenCode context_window_tokens requires an existing output limit", () => {
 
 test("DSH validates structured Pi AI profiles without writing Provider config into the workspace", () => {
   const settings = defaultDshPiAiSettings({
-    route: "feei",
+    route: "xxxx",
     protocol: "openai-responses",
-    baseURL: "https://ai.feei.cn/v1",
+    baseURL: "https://xxxx.example/v1",
     model: "gpt-5.6",
     contextWindow: 128000,
   });
@@ -453,21 +453,21 @@ test("Pi extracts official llm-pi-ai YAML and JSON the same way as DSH", () => {
 
 test("DSH settings expose an arbitrary Pi AI route model and upstream base URL", () => {
   const settings = defaultDshPiAiSettings({
-    route: "agentrouter",
+    route: "relay",
     protocol: "openai-responses",
-    baseURL: "https://agentrouter.org/v1",
+    baseURL: "https://relay.example/v1",
     model: "gpt-5.6-sol",
   });
   assert.equal(extractModelFromSettings("dsh", settings), "gpt-5.6-sol");
   assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "dsh", settingsConfig: settings }), "gpt-5.6-sol");
-  assert.equal(extractBaseUrlFromSettings(settings), "https://agentrouter.org/v1");
+  assert.equal(extractBaseUrlFromSettings(settings), "https://relay.example/v1");
 });
 
 test("Job snapshot freezes DSH YAML config without treating it as TOML", () => {
   const settings = defaultDshPiAiSettings({
-    route: "feei",
+    route: "xxxx",
     protocol: "openai-responses",
-    baseURL: "https://ai.feei.cn/v1",
+    baseURL: "https://xxxx.example/v1",
     model: "grok-4.6",
   });
   const snapshot = providerSettingsForJobSnapshot(settings, "dsh");
