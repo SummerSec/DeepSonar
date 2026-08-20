@@ -26,6 +26,7 @@ test("/health remains live and reports ready=false while warmup is pending", asy
       status: "preparing", ready: false, attempt: 1, required: 3, error: null, retry_at: null,
     }),
     dispatcherStatus: () => ({ enabled: false, started_at: null }),
+    officialImageWarnings: () => [],
   });
   const response = await app.inject({ method: "GET", url: "/health" });
   assert.equal(response.statusCode, 200);
@@ -48,6 +49,7 @@ test("/health version uses DEEPSONAR_IMAGE_TAG when DEEPSONAR_VERSION is unset",
       status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
     }),
     dispatcherStatus: () => ({ enabled: true, started_at: "2026-01-01T00:00:00.000Z" }),
+    officialImageWarnings: () => [],
   });
   try {
     const response = await app.inject({ method: "GET", url: "/health" });
@@ -69,6 +71,7 @@ test("/health ready requires both warmup and dispatcher", async () => {
       status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
     }),
     dispatcherStatus: () => ({ enabled: false, started_at: null }),
+    officialImageWarnings: () => [],
   });
   const response = await app.inject({ method: "GET", url: "/health" });
   assert.equal(response.statusCode, 200);
@@ -310,6 +313,7 @@ test("/health.runtime_images.error 区分通道超时兜底与 digest not found"
       retry_at: null,
     }),
     dispatcherStatus: () => ({ enabled: false, started_at: null }),
+    officialImageWarnings: () => [],
   });
   const timeoutHealth = await app.inject({ method: "GET", url: "/health" });
   assert.match(timeoutHealth.json().runtime_images.error, /channel timed out, same-digest fallback attempted/);
@@ -327,11 +331,29 @@ test("/health.runtime_images.error 区分通道超时兜底与 digest not found"
       retry_at: null,
     }),
     dispatcherStatus: () => ({ enabled: false, started_at: null }),
+    officialImageWarnings: () => [],
   });
   const missingHealth = await missing.inject({ method: "GET", url: "/health" });
   assert.match(missingHealth.json().runtime_images.error, /digest not found/);
   assert.doesNotMatch(missingHealth.json().runtime_images.error, /same-digest fallback attempted/);
   await missing.close();
+});
+
+test("/health surfaces official default image revoked as a warning", async () => {
+  const app = Fastify();
+  registerSystemRoutes(app, {
+    runtimeImageStatus: () => ({
+      status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
+    }),
+    dispatcherStatus: () => ({ enabled: true, started_at: "2026-01-01T00:00:00.000Z" }),
+    officialImageWarnings: () => ["official default image deepsonar-base revoked"],
+  });
+  const response = await app.inject({ method: "GET", url: "/health" });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().runtime_images.official_trust_warnings, [
+    "official default image deepsonar-base revoked",
+  ]);
+  await app.close();
 });
 
 test("startup warmup 解析结果包含共享资产 helper", async () => {

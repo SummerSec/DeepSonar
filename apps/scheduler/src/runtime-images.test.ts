@@ -13,10 +13,14 @@ import {
   runtimeImageRefForChannel,
   runtimeImageVersionPin,
   classifyRuntimeImagePin,
+  diagnoseRuntimeImageSelectionFailure,
+  officialDefaultImageRevokedWarning,
   runtimeImageHttpError,
   RuntimeImageNotReadyError,
+  RuntimeImageNotTrustedError,
   RuntimeImagePinStaleError,
   RuntimeImagePlatformUnavailableError,
+  RuntimeImageRevokedError,
   runtimeImageRegistryNextSyncDelayMs,
   selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
@@ -741,4 +745,54 @@ test("stale pin HTTP mapping is 409 with an upgrade action, not a generic 500", 
     follow_latest_body: { enabled: true, version_id: null },
   });
   assert.equal(runtimeImageHttpError(new Error("runtime image binding has no matching trusted version")), null);
+});
+
+test("selector diagnosis distinguishes revoked official versions from missing platforms", () => {
+  const hostPlatform = "linux/amd64";
+  const revoked = diagnoseRuntimeImageSelectionFailure({
+    imageKey: "deepsonar-base",
+    official: true,
+    hostPlatform,
+    channel: "aliyun-acr",
+    hasTrustedHostPlatform: false,
+    hasTrustedVersion: false,
+    hasRevokedHostPlatform: true,
+    hasRevokedVersion: true,
+    hasSelectedRef: false,
+  });
+  assert.ok(revoked instanceof RuntimeImageRevokedError);
+  assert.equal(revoked.code, "RUNTIME_IMAGE_REVOKED");
+  const mappedRevoked = runtimeImageHttpError(revoked);
+  assert.equal(mappedRevoked?.statusCode, 409);
+  assert.equal(mappedRevoked?.body.error_code, "RUNTIME_IMAGE_REVOKED");
+  assert.equal(mappedRevoked?.body.image_key, "deepsonar-base");
+  assert.doesNotMatch(String(mappedRevoked?.body.error), /platforms explicitly/);
+
+  const notTrusted = diagnoseRuntimeImageSelectionFailure({
+    imageKey: "deepsonar-base",
+    official: true,
+    hostPlatform,
+    channel: "aliyun-acr",
+    hasTrustedHostPlatform: false,
+    hasTrustedVersion: false,
+    hasRevokedHostPlatform: false,
+    hasRevokedVersion: false,
+    hasSelectedRef: false,
+  });
+  assert.ok(notTrusted instanceof RuntimeImageNotTrustedError);
+  assert.equal(runtimeImageHttpError(notTrusted)?.body.error_code, "RUNTIME_IMAGE_NOT_TRUSTED");
+
+  const missingPlatform = diagnoseRuntimeImageSelectionFailure({
+    imageKey: "deepsonar-base",
+    official: true,
+    hostPlatform,
+    channel: "aliyun-acr",
+    hasTrustedHostPlatform: false,
+    hasTrustedVersion: true,
+    hasRevokedHostPlatform: false,
+    hasRevokedVersion: false,
+    hasSelectedRef: true,
+  });
+  assert.ok(missingPlatform instanceof RuntimeImagePlatformUnavailableError);
+  assert.equal(officialDefaultImageRevokedWarning("deepsonar-base"), "official default image deepsonar-base revoked");
 });
