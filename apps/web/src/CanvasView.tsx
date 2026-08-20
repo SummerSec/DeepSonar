@@ -8,6 +8,7 @@ import {
   getViewportForBounds,
   MarkerType,
   MiniMap,
+  Position,
   ReactFlow,
   useReactFlow,
   useStore,
@@ -17,7 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { toPng } from "html-to-image";
 import { api, type CanvasBroadcastPage, type CanvasData, type CanvasHumanMessage, type CanvasHumanMessagePage, type CanvasNode, type FindingTrace } from "./api";
-import { BROADCAST_STATUS_COLOR, broadcastStatusLabel, deriveCanvasBroadcasts, type CanvasBroadcastProjection } from "./canvas-broadcasts";
+import { BROADCAST_STATUS_COLOR, broadcastStatusLabel, deriveCanvasBroadcasts, visibleBroadcastOverlayEdges, type CanvasBroadcastProjection } from "./canvas-broadcasts";
 import {
   applyCanvasDelta,
   CANVAS_SKELETON_REFRESH_MS,
@@ -43,7 +44,8 @@ import {
   maxDepthOf,
   remainingCappedChildren,
 } from "./graph-depth";
-import { elkLayout, layoutNodes, NODE_H, NODE_W } from "./layout";
+import { elkLayout, layoutNodes, NODE_H, NODE_W, orthogonalRoutesFromPositions, type LayoutPoint } from "./layout";
+import { canvasEdgeTypes, ORTHOGONAL_EDGE_TYPE } from "./orthogonal-edge";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
 import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
@@ -229,6 +231,11 @@ function toFlow(
   applyChildCap: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodeColors = new Map(data.nodes.map((node) => [node.id, nodeDisplayColor(node)]));
+  const positions = new Map<string, LayoutPoint>();
+  for (const node of data.nodes) {
+    positions.set(node.id, elkPos?.get(node.id) ?? fallbackPos?.get(node.id) ?? { x: node.x, y: node.y });
+  }
+  const fallbackRoutes = orthogonalRoutesFromPositions(data.edges, positions, data.nodes);
   return {
     nodes: data.nodes.map((n) => {
       const depth = depths.get(n.id) ?? 1;
@@ -241,9 +248,11 @@ function toFlow(
         id: n.id,
         type: n.node_type,
         // 布局只对当前可见子图计算，展开/收起后自适应重排
-        position: elkPos?.get(n.id) ?? fallbackPos?.get(n.id) ?? { x: n.x, y: n.y },
+        position: positions.get(n.id) ?? { x: n.x, y: n.y },
         width: NODE_W,
         height: NODE_H[n.node_type] ?? 172,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         data: {
           canvas: n,
           depth,
@@ -271,7 +280,8 @@ function toFlow(
           id: e.id,
           source: e.from_node_id,
           target: e.to_node_id,
-          type: "smoothstep",
+          type: ORTHOGONAL_EDGE_TYPE,
+          data: { points: fallbackRoutes.get(e.id) },
           animated: animateEdges,
           className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
           style: {
@@ -292,7 +302,7 @@ function toFlow(
           id: edge.id,
           source: edge.source,
           target: edge.target,
-          type: "smoothstep",
+          type: ORTHOGONAL_EDGE_TYPE,
           animated: edge.status === "planned",
           className: `deepsonar-edge broadcast-overlay-edge is-${edge.status}`,
           label: edge.attempts > 1 ? `广播 ×${edge.attempts}` : "广播",
@@ -438,6 +448,7 @@ export function CanvasView({
   const [elkResult, setElkResult] = useState<{
     key: string;
     positions: Map<string, { x: number; y: number }>;
+    edgePoints: Map<string, LayoutPoint[]>;
     mode: "elk" | "fallback";
   } | null>(null);
   const [kindFilter, setKindFilter] = useState<string[]>([]);
@@ -928,10 +939,10 @@ export function CanvasView({
     const { nodes: layoutN, edges: layoutE } = layoutSubgraph;
     elkLayout(layoutN, layoutE)
       .then((m) => {
-        if (alive) setElkResult({ key: layoutKey, positions: m, mode: "elk" });
+        if (alive) setElkResult({ key: layoutKey, positions: m.positions, edgePoints: m.edgePoints, mode: "elk" });
       })
       .catch(() => {
-        if (alive) setElkResult({ key: layoutKey, positions: new Map(), mode: "fallback" });
+        if (alive) setElkResult({ key: layoutKey, positions: new Map(), edgePoints: new Map(), mode: "fallback" });
       });
     return () => {
       alive = false;
@@ -959,8 +970,14 @@ export function CanvasView({
   );
 
   const broadcasts = useMemo(
-    () => deriveCanvasBroadcasts(broadcastPage?.items ?? [], data?.nodes ?? []),
-    [broadcastPage?.items, data?.nodes],
+    () => {
+      const projection = deriveCanvasBroadcasts(broadcastPage?.items ?? [], data?.nodes ?? []);
+      return {
+        ...projection,
+        overlayEdges: visibleBroadcastOverlayEdges(projection.overlayEdges, selected?.id),
+      };
+    },
+    [broadcastPage?.items, data?.nodes, selected?.id],
   );
 
   // 只物化当前展示子图的 flow 节点，坐标来自最新布局
@@ -986,7 +1003,7 @@ export function CanvasView({
       traceActive ? traceIds.edgeIds : new Set<string>(),
       traceMode,
       broadcasts,
-      subset.nodes.length <= 80,
+      subset.nodes.length <= 24,
       !filterActive,
     );
     return { visibleNodes: flow.nodes, visibleEdges: flow.edges };
@@ -1292,6 +1309,8 @@ export function CanvasView({
         nodes={visibleNodes}
         edges={visibleEdges}
         nodeTypes={nodeTypes}
+        edgeTypes={canvasEdgeTypes}
+        defaultEdgeOptions={{ type: ORTHOGONAL_EDGE_TYPE }}
         onNodeClick={onNodeClick}
         nodesDraggable={false}
         nodesConnectable={false}

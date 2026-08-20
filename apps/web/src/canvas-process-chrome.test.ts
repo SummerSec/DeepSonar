@@ -94,7 +94,9 @@ test("collapsed dock keeps 筛选节点 readable and cannot clip to export-only"
 test("edge strokes keep size, pane var, z-index, and light-theme contrast", () => {
   const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
   assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*height:\s*100%\s*!important/);
-  assert.match(css, /\.react-flow__edges[\s\S]*z-index:\s*2/);
+  assert.match(css, /\.react-flow__edges[\s\S]*z-index:\s*1/);
+  assert.match(css, /\.react-flow__nodes[\s\S]*z-index:\s*3/);
+  assert.match(css, /\.react-flow__edge\.deepsonar-edge\.animated \.react-flow__edge-path/);
   assert.match(css, /\.canvas-filter-panel \{[\s\S]*z-index:\s*50/);
   assert.match(css, /html\[data-color-scheme="light"\] \.react-flow__edge\.deepsonar-edge \.react-flow__edge-path/);
   assert.match(css, /--xy-edge-stroke-default/);

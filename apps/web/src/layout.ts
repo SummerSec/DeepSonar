@@ -1,4 +1,11 @@
 import type { CanvasEdge, CanvasNode } from "./api";
+import {
+  collectElkSectionPoints,
+  orthogonalBusPoints,
+  type LayoutPoint,
+} from "./edge-path";
+
+export type { LayoutPoint };
 
 /**
  * elkjs 分层 DAG 自动布局（§8.3 Phase ③）：
@@ -26,17 +33,22 @@ export const NODE_H: Record<string, number> = {
   report: 172,
 };
 
+export type ElkLayoutResult = {
+  positions: Map<string, LayoutPoint>;
+  edgePoints: Map<string, LayoutPoint[]>;
+};
+
 export async function elkLayout(
   nodes: CanvasNode[],
   edges: CanvasEdge[],
-): Promise<Map<string, { x: number; y: number }>> {
+): Promise<ElkLayoutResult> {
   // ELK 约 1.5 MB，仅在真正打开过程画布后异步加载，避免拖慢总览/项目/配置首屏。
   const { default: ELK } = await import("elkjs/lib/elk.bundled.js");
   const elk = new ELK();
-  // 节点少时略收紧间距，多时保持宽松，减少空洞与交叉
+  // 节点少时略收紧间距，多时保持宽松，减少空洞与交叉。层间要留垂直总线。
   const n = Math.max(nodes.length, 1);
-  const layerGap = n <= 6 ? "80" : n <= 20 ? "100" : "120";
-  const nodeGap = n <= 6 ? "48" : n <= 20 ? "56" : "64";
+  const layerGap = n <= 6 ? "96" : n <= 20 ? "140" : "180";
+  const nodeGap = n <= 6 ? "56" : n <= 20 ? "72" : "88";
   const res = await elk.layout({
     id: "canvas",
     layoutOptions: {
@@ -44,7 +56,10 @@ export async function elkLayout(
       "elk.direction": "RIGHT",
       "elk.layered.spacing.nodeNodeBetweenLayers": layerGap,
       "elk.spacing.nodeNode": nodeGap,
-      "elk.layered.spacing.edgeNodeBetweenLayers": "36",
+      "elk.layered.spacing.edgeNodeBetweenLayers": "48",
+      "elk.layered.spacing.edgeEdgeBetweenLayers": "16",
+      "elk.spacing.edgeEdge": "12",
+      "elk.spacing.edgeNode": "20",
       "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
       "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
       "elk.layered.cycleBreaking.strategy": "GREEDY",
@@ -58,16 +73,75 @@ export async function elkLayout(
       id: node.id,
       width: NODE_W,
       height: NODE_H[node.node_type] ?? 172,
+      layoutOptions: { "elk.portConstraints": "FIXED_SIDE" },
+      ports: [
+        { id: `${node.id}:in`, width: 1, height: 1, layoutOptions: { "elk.port.side": "WEST" } },
+        { id: `${node.id}:out`, width: 1, height: 1, layoutOptions: { "elk.port.side": "EAST" } },
+      ],
     })),
     edges: edges.map((e) => ({
       id: e.id,
-      sources: [e.from_node_id],
-      targets: [e.to_node_id],
+      sources: [`${e.from_node_id}:out`],
+      targets: [`${e.to_node_id}:in`],
     })),
   });
-  const pos = new Map<string, { x: number; y: number }>();
-  for (const c of res.children ?? []) pos.set(c.id, { x: c.x ?? 0, y: c.y ?? 0 });
-  return pos;
+  const positions = new Map<string, LayoutPoint>();
+  for (const child of res.children ?? []) positions.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
+  type ElkLaidEdge = {
+    id?: string;
+    sections?: Parameters<typeof collectElkSectionPoints>[0][];
+    edges?: ElkLaidEdge[];
+  };
+  const laidOutEdges: ElkLaidEdge[] = [
+    ...((res.edges ?? []) as ElkLaidEdge[]),
+    ...(res.children ?? []).flatMap((child) => ((child as ElkLaidEdge).edges ?? [])),
+  ];
+  const edgePoints = new Map<string, LayoutPoint[]>();
+  for (const edge of laidOutEdges) {
+    if (!edge.id) continue;
+    const section = edge.sections?.[0];
+    if (!section) continue;
+    const points = collectElkSectionPoints(section);
+    if (points.length >= 2) edgePoints.set(edge.id, points);
+  }
+  return { positions, edgePoints };
+}
+
+export function orthogonalRoutesFromPositions(
+  edges: CanvasEdge[],
+  positions: Map<string, LayoutPoint>,
+  nodes: CanvasNode[],
+): Map<string, LayoutPoint[]> {
+  const height = new Map(nodes.map((node) => [node.id, NODE_H[node.node_type] ?? 172]));
+  const grouped = new Map<string, CanvasEdge[]>();
+  for (const edge of edges) {
+    const from = positions.get(edge.from_node_id);
+    const to = positions.get(edge.to_node_id);
+    if (!from || !to) continue;
+    const key = `${Math.round(from.x)}->${Math.round(to.x)}`;
+    const list = grouped.get(key);
+    if (list) list.push(edge);
+    else grouped.set(key, [edge]);
+  }
+  const routes = new Map<string, LayoutPoint[]>();
+  for (const group of grouped.values()) {
+    group.forEach((edge, lane) => {
+      const from = positions.get(edge.from_node_id)!;
+      const to = positions.get(edge.to_node_id)!;
+      const sourceH = height.get(edge.from_node_id) ?? 172;
+      const targetH = height.get(edge.to_node_id) ?? 172;
+      routes.set(
+        edge.id,
+        orthogonalBusPoints(
+          { x: from.x + NODE_W, y: from.y + sourceH / 2 },
+          { x: to.x, y: to.y + targetH / 2 },
+          lane,
+          group.length,
+        ),
+      );
+    });
+  }
+  return routes;
 }
 
 /**

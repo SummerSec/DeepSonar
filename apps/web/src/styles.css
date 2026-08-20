@@ -909,13 +909,16 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .react-flow__edges,
 .react-flow .react-flow__edges svg,
 .react-flow svg.react-flow__edges {
-  z-index: 2;
+  z-index: 1;
   overflow: visible !important;
   width: 100% !important;
   height: 100% !important;
   max-width: none !important;
   max-height: none !important;
   opacity: 1;
+}
+.react-flow__nodes {
+  z-index: 3;
 }
 .react-flow__edge-path {
   fill: none !important;
@@ -931,7 +934,7 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 @keyframes deepsonar-edge-flow {
   to { stroke-dashoffset: calc(-36px * var(--deepsonar-edge-zoom-boost, 1)); }
 }
-.react-flow__edge.deepsonar-edge .react-flow__edge-path {
+.react-flow__edge.deepsonar-edge.animated .react-flow__edge-path {
   animation: deepsonar-edge-flow var(--deepsonar-edge-speed, 2.8s) cubic-bezier(.2,.8,.2,1) infinite;
 }
 .react-flow__edge.deepsonar-edge-child .react-flow__edge-path { stroke-dasharray: none; }
