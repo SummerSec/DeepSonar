@@ -21,7 +21,7 @@ import {
   type ReasoningValue,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
-import { defaultDshPiAiSettings, parseDshPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
 import { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel } from "./provider-effective-model.js";
 export { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 
@@ -517,16 +517,23 @@ requires_openai_auth = true
     ];
   }
   if (input.agentCli === "pi") {
+    const official = readOfficialLlmPiAiSettings(settings);
     const source = structuredClone(settings) as Record<string, unknown>;
     delete source.context_window_tokens;
     delete source.reasoning;
-    const configuredProviders = asObject(source.providers);
+    const configuredProviders = official
+      ? official.providers
+      : asObject(source.providers);
     const providerSource = Object.keys(configuredProviders).length > 0
       ? configuredProviders
       : { deepsonar: source };
     const selectedModelId = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
     const providers = Object.fromEntries(Object.entries(providerSource).map(([providerId, rawProvider]) => {
       const provider = structuredClone(asObject(rawProvider));
+      if (typeof provider.baseUrl !== "string" || !provider.baseUrl.trim()) {
+        const officialUrl = typeof provider.baseURL === "string" ? provider.baseURL : typeof provider.base_url === "string" ? provider.base_url : "";
+        if (officialUrl.trim()) provider.baseUrl = officialUrl.trim().replace(/\/+$/u, "");
+      }
       let models: Array<Record<string, unknown>>;
       if (Array.isArray(provider.models)) {
         models = provider.models.filter((model): model is Record<string, unknown> => Boolean(model && typeof model === "object" && !Array.isArray(model)));
@@ -657,10 +664,9 @@ export function projectProviderRuntimeSnapshot(input: {
 
 /** Resolve the direct upstream endpoint before Job Gateway projection. */
 export function extractBaseUrlFromSettings(settingsConfig: unknown): string | null {
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  if (official?.baseURL) return official.baseURL;
   const settings = asObject(settingsConfig);
-  if (typeof settings.config === "string" && settings.config.includes("llm-pi-ai:")) {
-    return parseDshPiAiSettings(settings).upstreamBaseUrl;
-  }
   const env = asObject(settings.env);
   for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]) {
     const value = env[key];
@@ -692,10 +698,9 @@ export function extractBaseUrlFromSettings(settingsConfig: unknown): string | nu
 
 /** Collect model IDs declared inside settingsConfig (for binding UI / defaults). */
 export function extractModelsFromSettings(settingsConfig: unknown): string[] {
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  if (official && official.modelIds.length > 0) return official.modelIds;
   const settings = asObject(settingsConfig);
-  if (typeof settings.config === "string" && settings.config.includes("llm-pi-ai:")) {
-    return parseDshPiAiSettings(settings).modelIds;
-  }
   const found: string[] = [];
   const push = (value: unknown) => {
     if (typeof value === "string" && value.trim() && !found.includes(value.trim())) found.push(value.trim());

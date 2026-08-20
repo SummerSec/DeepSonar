@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings, parseDshPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
 
 const thirdPartySettings = {
   reasoning: "high",
@@ -22,6 +22,19 @@ agent-default-model:
   model: gpt-5.6
 `,
 };
+
+test("official llm-pi-ai reader accepts YAML wrap, config object, and top-level JSON", () => {
+  const fromYaml = readOfficialLlmPiAiSettings(thirdPartySettings);
+  assert.equal(fromYaml?.baseURL, "https://ai.feei.cn/v1");
+  assert.equal(fromYaml?.defaultModel, "gpt-5.6");
+  assert.deepEqual(fromYaml?.modelIds, ["gpt-5.6"]);
+  const officialJson = {
+    "llm-pi-ai": { providers: { feei: { api: "openai-responses", baseURL: "https://ai.feei.cn/v1/", models: [{ id: "gpt-5.6" }] } } },
+    "agent-default-model": { provider: "feei", model: "gpt-5.6" },
+  };
+  assert.equal(readOfficialLlmPiAiSettings(officialJson)?.baseURL, "https://ai.feei.cn/v1");
+  assert.equal(readOfficialLlmPiAiSettings({ config: officialJson })?.defaultModel, "gpt-5.6");
+});
 
 test("DSH accepts an arbitrary llm-pi-ai provider route from settings YAML", () => {
   const parsed = parseDshPiAiSettings(thirdPartySettings, "openai");

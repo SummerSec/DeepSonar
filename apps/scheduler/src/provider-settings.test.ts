@@ -403,6 +403,54 @@ test("DSH validates structured Pi AI profiles without writing Provider config in
   assert.doesNotMatch(JSON.stringify(settings), /apiKeyEnv|long-lived-key|dsh-llm-deepseek/);
 });
 
+const officialLlmPiAiYaml = `llm-pi-ai:
+  providers:
+    xxxx:
+      api: openai-responses
+      baseURL: https://xxxx.example/v1
+      models:
+        - id: gpt-5.6
+agent-default-model:
+  provider: xxxx
+  model: gpt-5.6
+`;
+
+const officialLlmPiAiJson = {
+  "llm-pi-ai": {
+    providers: {
+      xxxx: {
+        api: "openai-responses",
+        baseURL: "https://xxxx.example/v1",
+        apiKey: "sk-official-pi",
+        models: [{ id: "gpt-5.6" }],
+      },
+    },
+  },
+  "agent-default-model": { provider: "xxxx", model: "gpt-5.6" },
+};
+
+test("Pi extracts official llm-pi-ai YAML and JSON the same way as DSH", () => {
+  const wrappedYaml = { config: officialLlmPiAiYaml };
+  assert.equal(extractBaseUrlFromSettings(wrappedYaml), "https://xxxx.example/v1");
+  assert.deepEqual(extractModelsFromSettings(wrappedYaml), ["gpt-5.6"]);
+  assert.equal(extractModelFromSettings("pi", wrappedYaml), "gpt-5.6");
+  assert.equal(extractModelFromSettings("dsh", wrappedYaml), "gpt-5.6");
+  assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "pi", settingsConfig: wrappedYaml }), "gpt-5.6");
+
+  assert.equal(extractBaseUrlFromSettings(officialLlmPiAiJson), "https://xxxx.example/v1");
+  assert.deepEqual(extractModelsFromSettings(officialLlmPiAiJson), ["gpt-5.6"]);
+  assert.equal(extractModelFromSettings("pi", officialLlmPiAiJson), "gpt-5.6");
+  assert.equal(resolveEffectiveModel({ roleModel: null, agentCli: "pi", settingsConfig: officialLlmPiAiJson }), "gpt-5.6");
+  assert.equal(extractBaseUrlFromSettings({ config: officialLlmPiAiJson }), "https://xxxx.example/v1");
+  assert.deepEqual(extractModelsFromSettings({ config: officialLlmPiAiJson }), ["gpt-5.6"]);
+
+  const [file] = materializeProviderSettings({ agentCli: "pi", settingsConfig: officialLlmPiAiJson });
+  assert.equal(file?.path, ".pi/agent/models.json");
+  const materialized = JSON.parse(file!.content) as { providers: { xxxx: { baseUrl: string; models: Array<{ id: string }> } } };
+  assert.equal(materialized.providers.xxxx.baseUrl, "https://xxxx.example/v1");
+  assert.equal(materialized.providers.xxxx.models[0]?.id, "gpt-5.6");
+});
+
 test("DSH settings expose an arbitrary Pi AI route model and upstream base URL", () => {
   const settings = defaultDshPiAiSettings({
     route: "agentrouter",

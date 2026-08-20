@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { parseDocument } from "yaml";
 import {
   ArrowRight,
   Check,
@@ -29,6 +28,7 @@ import {
   extractContextWindowTokens,
   extractProviderReasoning,
   extractBaseUrlFromSettingsClient,
+  extractModelsFromSettingsClient,
   extractSecretFromSettings,
   providerProtocolLabel,
   redactSecretText,
@@ -93,61 +93,9 @@ function isBuiltinBindableRole(roleConfig: BindableRoleConfig): boolean {
     .includes((roleConfig.role_name ?? "").toLowerCase());
 }
 
-/** Models declared inside CC Switch settingsConfig (env / toml / open-code). */
+/** Models declared inside CC Switch settingsConfig (env / toml / official llm-pi-ai / open-code). */
 function modelsFromSettingsConfig(credential: Pick<ProviderCredential, "settings_config_json"> | null): string[] {
-  if (!credential?.settings_config_json) return [];
-  const settings = credential.settings_config_json;
-  const found: string[] = [];
-  const push = (value: unknown) => {
-    if (typeof value === "string" && value.trim() && !found.includes(value.trim())) found.push(value.trim());
-  };
-  const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
-    ? settings.env as Record<string, unknown>
-    : {};
-  push(env.ANTHROPIC_MODEL);
-  push(env.ANTHROPIC_DEFAULT_FABLE_MODEL);
-  push(env.ANTHROPIC_DEFAULT_SONNET_MODEL);
-  push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
-  push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
-  push(settings.model);
-  const openCodeModels = settings.models && typeof settings.models === "object" && !Array.isArray(settings.models)
-    ? settings.models as Record<string, unknown>
-    : {};
-  for (const model of Object.keys(openCodeModels)) push(model);
-  const piProviders = settings.providers && typeof settings.providers === "object" && !Array.isArray(settings.providers)
-    ? settings.providers as Record<string, unknown>
-    : {};
-  for (const rawProvider of Object.values(piProviders)) {
-    if (!rawProvider || typeof rawProvider !== "object" || Array.isArray(rawProvider)) continue;
-    const models = (rawProvider as Record<string, unknown>).models;
-    if (Array.isArray(models)) {
-      for (const rawModel of models) {
-        if (rawModel && typeof rawModel === "object" && !Array.isArray(rawModel)) push((rawModel as Record<string, unknown>).id);
-      }
-    } else if (models && typeof models === "object" && !Array.isArray(models)) {
-      for (const model of Object.keys(models as Record<string, unknown>)) push(model);
-    }
-  }
-  if (typeof settings.config === "string") {
-    if (settings.config.includes("llm-pi-ai:")) {
-      const document = parseDocument(settings.config, { customTags: [], prettyErrors: false });
-      if (document.errors.length === 0) {
-        const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
-        const selected = root["agent-default-model"] as Record<string, unknown> | undefined;
-        push(selected?.model);
-        const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
-        const providers = piAi?.providers as Record<string, unknown> | undefined;
-        for (const profile of Object.values(providers ?? {})) {
-          const models = (profile as Record<string, unknown>)?.models;
-          if (Array.isArray(models)) for (const model of models) push((model as Record<string, unknown>)?.id);
-        }
-      }
-    } else {
-      const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
-      push(match?.[1] || match?.[2]);
-    }
-  }
-  return found;
+  return extractModelsFromSettingsClient(credential?.settings_config_json ?? null);
 }
 
 export function boundCredentialLabel(
@@ -590,6 +538,18 @@ export function ProviderAccountFlow({
       setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
     } else if (cli === "dsh") {
       setEditSettingsJson(typeof settings.config === "string" ? settings.config : "");
+      setEditTomlText("");
+      setEditAuthJson("");
+      setEditApiKey("");
+      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+    } else if (cli === "pi") {
+      setEditSettingsJson(
+        typeof settings.config === "string" && settings.config.trim()
+          ? settings.config
+          : Object.keys(settings).length > 0
+            ? formatJsonObject(redactSecretValues(settings) as Record<string, unknown>)
+            : "",
+      );
       setEditTomlText("");
       setEditAuthJson("");
       setEditApiKey("");
