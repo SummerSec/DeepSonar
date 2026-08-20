@@ -24,8 +24,14 @@ import {
   type HubDecision,
   type HubReferenceLookup,
 } from "../../graph.js";
-import { ControlInputError, invalidRole, invalidVerification } from "../../control-input.js";
+import { ControlInputError, invalidControlPayload, invalidRole, invalidVerification } from "../../control-input.js";
 import { normalizeFindingProposal } from "../../finding-protocol.js";
+import {
+  assertComposeFindingInScope,
+  assertComposeScopedHubIntent,
+  composeBoundWorkerPrompt,
+} from "../../compose-scope.js";
+import { frozenTaskSeeds, TaskSeedInputError } from "../../task-compose.js";
 
 export interface EventSideEffectServices {
   hubReferenceLookup?: HubReferenceLookup;
@@ -66,6 +72,7 @@ export interface HubFindingBinding {
   node_id: string;
   severity: unknown;
   imported?: boolean;
+  location?: string | null;
 }
 
 export function resolveHubFindingIntent(
@@ -427,6 +434,7 @@ export function createEventIngestionSideEffectApplication(
         decisionTrigger,
         findingByNodeId,
         ambiguousFindingNodeIds,
+        composeCanvas: false,
       };
     }
 
@@ -457,7 +465,7 @@ export function createEventIngestionSideEffectApplication(
     ];
     const findingRows = findingNodeIds.length
       ? (await tx<HubFindingBinding[]>`
-          SELECT f.id, f.node_id, f.severity, false AS imported
+          SELECT f.id, f.node_id, f.severity, false AS imported, f.location
           FROM findings f
           JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
           JOIN canvas_nodes source ON source.id = f.node_id
@@ -469,7 +477,8 @@ export function createEventIngestionSideEffectApplication(
           UNION ALL
           SELECT f.id, source.id AS node_id,
                  COALESCE(source.body_json->>'severity', f.severity) AS severity,
-                 true AS imported
+                 true AS imported,
+                 COALESCE(source.body_json->>'location', f.location) AS location
           FROM canvas_nodes source
           JOIN findings f ON f.id = (source.body_json->>'finding_id')::uuid
           WHERE source.canvas_id = ${canvasId}
@@ -486,7 +495,21 @@ export function createEventIngestionSideEffectApplication(
       }
       findingByNodeId.set(finding.node_id, finding);
     }
+    const [canvas] = await tx<{ target_json: unknown }[]>`
+      SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+    const composeCanvas = ((canvas?.target_json ?? {}) as Record<string, unknown>).kind === "compose";
+    const importedSeedNodeIds = new Set(
+      [...findingByNodeId.values()].filter((finding) => finding.imported).map((finding) => finding.node_id),
+    );
     for (const [index, intent] of submittedIntents.entries()) {
+      if (composeCanvas) {
+        assertComposeScopedHubIntent(
+          intent.role,
+          intent.from,
+          importedSeedNodeIds,
+          `intents.${index}.from`,
+        );
+      }
       const resolution = resolveHubFindingIntent(
         intent.role,
         intent.from,
@@ -528,6 +551,7 @@ export function createEventIngestionSideEffectApplication(
       decisionTrigger,
       findingByNodeId,
       ambiguousFindingNodeIds,
+      composeCanvas,
     };
   }
 
@@ -658,6 +682,22 @@ export function createEventIngestionSideEffectApplication(
             ? null
             : normalized.scoring.base_severity
           : (normalized.severity ?? null);
+      const canvasId = (job.canvas_id as string | null) ?? null;
+      if (canvasId) {
+        const [canvas] = await tx<{ target_json: unknown }[]>`
+          SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+        const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
+        if (target.kind === "compose") {
+          try {
+            assertComposeFindingInScope(normalized.location, frozenTaskSeeds(target));
+          } catch (error) {
+            if (error instanceof TaskSeedInputError) {
+              throw invalidControlPayload(error.message, "location");
+            }
+            throw error;
+          }
+        }
+      }
       const fingerprint = sha16(
         [
           normalized.profile,
@@ -813,6 +853,7 @@ export function createEventIngestionSideEffectApplication(
         decisionTrigger,
         findingByNodeId,
         ambiguousFindingNodeIds,
+        composeCanvas,
       } = validation;
       const insertHubEdges: HubEdgeBatchInsert = async (edgeTx, edges) => {
         const uniqueEdges = dedupeCanvasEdges(edges);
@@ -873,7 +914,20 @@ export function createEventIngestionSideEffectApplication(
           findingByNodeId,
           ambiguousFindingNodeIds,
         ).finding;
-        const importedSeedFindingId = sourceFinding?.imported ? sourceFinding.id : null;
+        const boundImported = [...new Map(
+          it.from.flatMap((id) => {
+            const finding = findingByNodeId.get(id);
+            return finding?.imported ? [[finding.node_id, finding] as const] : [];
+          }),
+        ).values()];
+        const relatedImportedIds = boundImported.map((finding) => finding.id);
+        const boundLocations = boundImported
+          .map((finding) => finding.location)
+          .filter((value): value is string => Boolean(value));
+        const importedSeedFindingId = sourceFinding?.imported ? sourceFinding.id : relatedImportedIds[0] ?? null;
+        const workerPrompt = composeCanvas && boundLocations.length > 0
+          ? composeBoundWorkerPrompt(it.prompt, boundLocations)
+          : it.prompt.trim();
         const trigger = sourceFinding && !sourceFinding.imported
           ? {
               ...decisionTrigger,
@@ -888,12 +942,14 @@ export function createEventIngestionSideEffectApplication(
         const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
           trigger.kind ?? "",
         );
-        const verificationFollowup = importedSeedFindingId
+        const verificationFollowup = importedSeedFindingId && sourceFinding?.imported
           ? null
           : ports.findingVerification.buildVerificationFollowupPayload(trigger, it.from, role);
         const followupFindingId =
           typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
-        const snapshotFindingId = followupFindingId ?? importedSeedFindingId;
+        const snapshotFindingIds = followupFindingId
+          ? [followupFindingId]
+          : relatedImportedIds;
         const snapshot = await freezeAgentSnapshotNetworkPolicy(
           tx,
           canvasId,
@@ -901,7 +957,7 @@ export function createEventIngestionSideEffectApplication(
             tx,
             job.project_id as string,
             role,
-            snapshotFindingId ? [snapshotFindingId] : [],
+            snapshotFindingIds,
           ),
         );
         // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
@@ -923,11 +979,11 @@ export function createEventIngestionSideEffectApplication(
             scheduling_purpose: schedulingPurpose,
             intent: {
               description: it.description,
-              prompt: it.prompt.trim(),
+              prompt: workerPrompt,
               from: it.from,
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
-            ...(importedSeedFindingId ? { related_finding_ids: [importedSeedFindingId] } : {}),
+            ...(relatedImportedIds.length > 0 ? { related_finding_ids: relatedImportedIds } : {}),
             ...(verificationFollowup
               ? {
                   verification_followup: {

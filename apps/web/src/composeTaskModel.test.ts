@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { FindingSummary } from "./api";
 import {
@@ -35,11 +36,13 @@ function finding(overrides: Partial<FindingSummary> = {}): FindingSummary {
   };
 }
 
-test("compose candidate eligibility is confirmed plus an allowed disposition", () => {
+test("compose candidate eligibility allows unconfirmed verify_status and excludes negative dispositions", () => {
   assert.equal(isComposeSeedCandidate(finding()), true);
   assert.equal(isComposeSeedCandidate(finding({ disposition: "accepted" })), true);
   assert.equal(isComposeSeedCandidate(finding({ disposition: "confirmed_vuln" })), true);
-  assert.equal(isComposeSeedCandidate(finding({ verify_status: "pending" })), false);
+  assert.equal(isComposeSeedCandidate(finding({ verify_status: "pending" })), true);
+  assert.equal(isComposeSeedCandidate(finding({ verify_status: "verifying" })), true);
+  assert.equal(isComposeSeedCandidate(finding({ verify_status: "needs_human" })), true);
   assert.equal(isComposeSeedCandidate(finding({ disposition: "rejected_fp" })), false);
   assert.equal(isComposeSeedCandidate(finding({ disposition: "resolved" })), false);
   assert.equal(isComposeSeedCandidate(finding({ disposition: "archived" })), false);
@@ -51,19 +54,21 @@ test("compose candidate filters cover every severity, disposition, profile, orig
     finding({ id: "finding-2", severity: "medium", profile: "quality.bug", disposition: "accepted", canvas_id: "canvas-2", canvas_title: "Parser audit", summary: "Parser quality issue", tags_json: ["parser"] }),
     finding({ id: "finding-3", title: "Low impact information leak", severity: "low", disposition: "confirmed_vuln", canvas_id: "canvas-3", canvas_title: "Metadata audit", summary: "Limited metadata exposure", tags_json: ["metadata"] }),
     finding({ id: "finding-4", disposition: "rejected_fp" }),
+    finding({ id: "finding-5", verify_status: "pending", title: "Pending medium chain", severity: "medium", canvas_id: "canvas-5", canvas_title: "Pending audit", tags_json: ["chain"], summary: "Pending seed waiting for confirmation" }),
   ];
   assert.deepEqual(filterComposeSeedCandidates(rows, { severities: ["high"] }).map((row) => row.id), ["finding-1"]);
-  assert.deepEqual(filterComposeSeedCandidates(rows, { severities: ["medium", "low"] }).map((row) => row.id), ["finding-2", "finding-3"]);
+  assert.deepEqual(filterComposeSeedCandidates(rows, { severities: ["medium", "low"] }).map((row) => row.id), ["finding-2", "finding-3", "finding-5"]);
   assert.deepEqual(filterComposeSeedCandidates(rows, { dispositions: ["accepted", "confirmed_vuln"] }).map((row) => row.id), ["finding-2", "finding-3"]);
   assert.deepEqual(filterComposeSeedCandidates(rows, { profiles: ["quality.bug"] }).map((row) => row.id), ["finding-2"]);
   assert.deepEqual(filterComposeSeedCandidates(rows, { canvasIds: ["canvas-1", "canvas-3"] }).map((row) => row.id), ["finding-1", "finding-3"]);
+  assert.deepEqual(filterComposeSeedCandidates(rows, { verifyStatuses: ["pending"] }).map((row) => row.id), ["finding-5"]);
   assert.deepEqual(filterComposeSeedCandidates(rows, { search: "AUTH" }).map((row) => row.id), ["finding-1"]);
   assert.deepEqual(filterComposeSeedCandidates(rows, { search: "origin audit" }).map((row) => row.id), ["finding-1"]);
 });
 
 test("compose retry errors turn stale seeds into an actionable next step", () => {
   assert.equal(
-    composeRetryErrorMessage(new Error("POST /tasks/id/retry -> 409: 种子必须全部属于当前项目，且当前为 confirmed")),
+    composeRetryErrorMessage(new Error("POST /tasks/id/retry -> 409: 种子必须全部属于当前项目，且当前处置为 open/accepted/confirmed_vuln（不要求 confirmed）")),
     "冻结种子当前已不可用。请回到 Findings 重新选择可代入项并新建组合任务。",
   );
   assert.equal(composeRetryErrorMessage(new Error("network down")), "重试失败：network down");
@@ -76,4 +81,14 @@ test("compose task query always carries a concrete unique bounded ID list", () =
     composeSeedTaskUrl("project-1", ["finding-1", "finding-1", "finding-2"]),
     "/projects/project-1/tasks?compose=finding-1,finding-2",
   );
+});
+
+test("task form and Findings page keep unconfirmed Findings selectable by default", () => {
+  const tasks = readFileSync(new URL("./pages/TasksPage.tsx", import.meta.url), "utf8");
+  const findings = readFileSync(new URL("./pages/FindingsPage.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(tasks, /verify_status:\s*"confirmed"/);
+  assert.match(tasks, /选择要深挖的 Finding（含未确认）/);
+  assert.match(tasks, /seedVerifyStatuses/);
+  assert.match(findings, /isComposeSeedCandidate/);
+  assert.match(findings, /含未确认/);
 });

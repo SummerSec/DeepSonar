@@ -114,6 +114,7 @@ if (!testDatabaseUrl) {
       const graph = await buildGraphSnapshot(composeCanvasId, "hub", { maxYamlChars: 12_000 });
       assert.ok(graph.referableIds.includes(String(projection.id)));
       assert.match(graph.yaml, /"imported":true/);
+      assert.match(graph.yaml, /compose_scope:/);
       assert.match(graph.yaml, new RegExp(String(projection.id)));
       assert.doesNotMatch(graph.yaml, new RegExp(findingId));
 
@@ -122,7 +123,7 @@ if (!testDatabaseUrl) {
       assert.deepEqual((afterDisposition.target_json as Record<string, unknown>).seed_findings, frozen.seed_findings);
       await assert.rejects(
         validateFrozenTaskSeedsForRetry(sql, projectId, frozen),
-        (error: unknown) => error instanceof TaskSeedInputError && /当前为 confirmed/.test(error.message),
+        (error: unknown) => error instanceof TaskSeedInputError && /当前处置为/.test(error.message),
       );
 
       const before = Number((await sql`SELECT count(*)::int AS count FROM canvases WHERE project_id = ${projectId}`)[0].count);
@@ -146,8 +147,174 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM jobs WHERE id = ${sourceJobId}`;
       await sql`DELETE FROM canvases WHERE project_id = ANY(${[projectId, otherProjectId]}::uuid[])`;
       await sql`DELETE FROM projects WHERE id = ANY(${[projectId, otherProjectId]}::uuid[])`;
-      await sql.end({ timeout: 5 });
       await rm(blobDir, { recursive: true, force: true });
+    }
+  });
+
+  test("compose accepts pending seeds, rejects out-of-scope findings and unbound explore", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    process.env.AGENT_MODE = "fake";
+    const { migrate, sql } = await import("./db.js");
+    const { ensureCanvasForTask, ingestEvent } = await import("./core.js");
+    const { TaskSeedInputError, validateFrozenTaskSeedsForRetry } = await import("./task-compose.js");
+    const { ControlInputError } = await import("./control-input.js");
+    await migrate();
+
+    const projectId = randomUUID();
+    const sourceCanvasId = randomUUID();
+    const sourceRootId = randomUUID();
+    const sourceJobId = randomUUID();
+    const pendingIds = Array.from({ length: 7 }, () => randomUUID());
+    const confirmedId = randomUUID();
+    const canvasIds: string[] = [];
+    const workerJobId = randomUUID();
+    const hubJobId = randomUUID();
+    try {
+      await sql`
+        INSERT INTO projects (id, canvas_id, name, config_json)
+        VALUES (${projectId}, ${"compose-pending-" + projectId}, 'compose-pending', ${sql.json({ rules: { hubEnabled: true } })})`;
+      await sql`INSERT INTO canvases (id, project_id, title, target_json)
+        VALUES (${sourceCanvasId}, ${projectId}, 'origin pending', ${sql.json({ goal: "origin" })})`;
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (${sourceJobId}, ${projectId}, ${sourceCanvasId}, 'audit', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
+      await sql`INSERT INTO canvas_nodes (id, canvas_id, node_type, title, status, body_json)
+        VALUES (${sourceRootId}, ${sourceCanvasId}, 'root', 'origin pending', 'succeeded', ${sql.json({})})`;
+      for (const [index, findingId] of pendingIds.entries()) {
+        const nodeId = randomUUID();
+        await sql`INSERT INTO canvas_nodes (id, canvas_id, node_type, title, status, body_json)
+          VALUES (${nodeId}, ${sourceCanvasId}, 'finding', ${"pending medium " + index}, 'open', ${sql.json({ summary: "pending" })})`;
+        await sql`INSERT INTO findings (
+            id, project_id, job_id, node_id, fingerprint, title, severity, profile,
+            category, tags_json, location, summary, verify_status, disposition
+          ) VALUES (
+            ${findingId}, ${projectId}, ${sourceJobId}, ${nodeId}, ${"pending-fixture-" + index},
+            ${"pending medium " + index}, 'medium', 'security.vulnerability', 'injection',
+            ${sql.json(["chain"])}, ${"hiview/base/mod" + index + ".cpp:10"}, 'pending historical summary', 'pending', 'open'
+          )`;
+      }
+      const confirmedNodeId = randomUUID();
+      await sql`INSERT INTO canvas_nodes (id, canvas_id, node_type, title, status, body_json)
+        VALUES (${confirmedNodeId}, ${sourceCanvasId}, 'finding', 'confirmed sibling', 'confirmed', ${sql.json({})})`;
+      await sql`INSERT INTO findings (
+          id, project_id, job_id, node_id, fingerprint, title, severity, profile,
+          category, tags_json, location, summary, verify_status, disposition
+        ) VALUES (
+          ${confirmedId}, ${projectId}, ${sourceJobId}, ${confirmedNodeId}, 'pending-confirmed-sibling',
+          'confirmed sibling', 'medium', 'security.vulnerability', 'injection',
+          ${sql.json(["chain"])}, 'hiview/base/confirmed.cpp:1', 'confirmed summary', 'confirmed', 'open'
+        )`;
+
+      const pendingCanvasId = await ensureCanvasForTask({
+        projectId,
+        title: "pending compose",
+        allowComposeSeeds: true,
+        target: { kind: "compose", goal: "confirm the mediums", seed_finding_ids: pendingIds },
+      });
+      canvasIds.push(pendingCanvasId);
+      const [pendingCanvas] = await sql`SELECT target_json FROM canvases WHERE id = ${pendingCanvasId}`;
+      const frozen = pendingCanvas.target_json as Record<string, unknown>;
+      assert.equal(frozen.kind, "compose");
+      assert.equal((frozen.seed_findings as { verify_status: string }[]).every((seed) => seed.verify_status === "pending"), true);
+      await validateFrozenTaskSeedsForRetry(sql, projectId, frozen);
+      const pendingGraph = await (await import("./graph.js")).buildGraphSnapshot(pendingCanvasId, "hub", { maxYamlChars: 12_000 });
+      assert.match(pendingGraph.yaml, /compose_scope:/);
+      assert.match(pendingGraph.yaml, /"verify_status":"pending"/);
+      assert.doesNotMatch(pendingGraph.yaml, new RegExp(pendingIds[0]));
+
+      const mixedCanvasId = await ensureCanvasForTask({
+        projectId,
+        title: "mixed compose",
+        allowComposeSeeds: true,
+        target: { kind: "compose", goal: "mix", seed_finding_ids: [...pendingIds.slice(0, 7), confirmedId].slice(0, 8) },
+      });
+      canvasIds.push(mixedCanvasId);
+
+      const [projection] = await sql`SELECT id FROM canvas_nodes
+        WHERE canvas_id = ${pendingCanvasId} AND node_type = 'finding' ORDER BY created_at LIMIT 1`;
+      const [root] = await sql`SELECT id FROM canvas_nodes WHERE canvas_id = ${pendingCanvasId} AND node_type = 'root'`;
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (
+          ${workerJobId}, ${projectId}, ${pendingCanvasId}, 'audit', 'running',
+          ${sql.json({ name: "audit", role_kind: "role", platform_tools: ["emit_finding", "mark_job_done"] })},
+          ${sql.json({})}
+        )`;
+      await sql`INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+        VALUES (${pendingCanvasId}, ${workerJobId}, 'job', 'audit', 'running', ${sql.json({})})`;
+
+      await ingestEvent(workerJobId, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "finding",
+        payload: {
+          title: "Same module follow-on",
+          summary: "Additional evidence stays inside the frozen hiview module and supports the selected seed.",
+          location: "hiview/services/follow.cpp:4",
+          profile: "security.vulnerability",
+        },
+      });
+      await assert.rejects(
+        ingestEvent(workerJobId, {
+          v: 1,
+          event_id: randomUUID(),
+          type: "finding",
+          payload: {
+            title: "Unrelated new repository",
+            summary: "This finding points at a repository that was never part of the frozen compose seeds.",
+            location: "appexecfwk/src/new.cpp:1",
+            profile: "security.vulnerability",
+          },
+        }),
+        (error: unknown) => error instanceof ControlInputError && /种子资产/.test(String(error)),
+      );
+
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (
+          ${hubJobId}, ${projectId}, ${pendingCanvasId}, 'hub_reason', 'running',
+          ${sql.json({ name: "hub_reason", role_kind: "hub", platform_tools: ["list_available_roles", "submit_hub_decision", "mark_job_done"] })},
+          ${sql.json({})}
+        )`;
+      await assert.rejects(
+        ingestEvent(hubJobId, {
+          v: 1,
+          event_id: randomUUID(),
+          type: "hub_decision",
+          payload: {
+            intents: [{
+              from: [String(root.id)],
+              role: "explore",
+              description: "Hunt a new repo",
+              prompt: "Clone repositories outside the frozen seeds and keep hunting the whole graph for variants.",
+            }],
+          },
+        }),
+        (error: unknown) => error instanceof ControlInputError && /imported 种子/.test(String(error)),
+      );
+      await ingestEvent(hubJobId, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "hub_decision",
+        payload: {
+          intents: [{
+            from: [String(projection.id)],
+            role: "explore",
+            description: "Stay on seed assets",
+            prompt: "Only inspect the bound seed projection assets and collect missing confirmation evidence.",
+          }],
+        },
+      });
+      const [exploreJob] = await sql`SELECT payload_json FROM jobs WHERE parent_job_id = ${hubJobId} AND type = 'explore'`;
+      assert.match(String((exploreJob.payload_json as { intent?: { prompt?: string } }).intent?.prompt), /调度器范围/);
+
+      await sql`UPDATE findings SET disposition = 'rejected_fp' WHERE id = ${pendingIds[0]}`;
+      await assert.rejects(validateFrozenTaskSeedsForRetry(sql, projectId, frozen), TaskSeedInputError);
+    } finally {
+      await sql`DELETE FROM canvas_edges WHERE canvas_id = ANY(${[sourceCanvasId, ...canvasIds]}::text[])`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ANY(${[sourceCanvasId, ...canvasIds]}::text[])`;
+      await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await sql.end({ timeout: 5 });
     }
   });
 }

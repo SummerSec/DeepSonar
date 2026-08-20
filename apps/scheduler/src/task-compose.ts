@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { composeScopeForPrompt } from "./compose-scope.js";
 import { config } from "./config.js";
 import type { sql } from "./db.js";
 
@@ -24,7 +25,7 @@ export interface FrozenTaskSeedFinding {
   origin_canvas_id: string;
   origin_job_id: string;
   disposition: string;
-  verify_status: "confirmed";
+  verify_status: string;
 }
 
 type Db = typeof sql;
@@ -59,7 +60,7 @@ function assertRequestShape(kind: TaskKind, ids: readonly string[]): void {
   }
   if (kind === "compose" && (ids.length < 1 || ids.length > MAX_TASK_SEED_FINDINGS)) {
     throw new TaskSeedInputError(
-      `compose 任务必须选择 1-` + MAX_TASK_SEED_FINDINGS + ` 条 confirmed Finding`,
+      `compose 任务必须选择 1-` + MAX_TASK_SEED_FINDINGS + ` 条同项目、未否定处置的 Finding（含未确认）`,
     );
   }
 }
@@ -86,12 +87,11 @@ async function loadEligibleSeedFindings(
     ) report ON true
     WHERE f.project_id = ${projectId}
       AND f.id = ANY(${ids as string[]}::uuid[])
-      AND f.verify_status = 'confirmed'
       AND f.disposition = ANY(${[...COMPOSE_SEED_DISPOSITIONS]}::text[])`;
   const byId = new Map(rows.map((row) => [String(row.id).toLowerCase(), row]));
   if (byId.size !== ids.length) {
     throw new TaskSeedInputError(
-      "种子必须全部属于当前项目，且当前为 confirmed 并处于 open/accepted/confirmed_vuln",
+      "种子必须全部属于当前项目，且当前处置为 open/accepted/confirmed_vuln（不要求 confirmed）",
     );
   }
   return Promise.all(ids.map(async (id) => {
@@ -133,7 +133,7 @@ async function loadEligibleSeedFindings(
       origin_canvas_id: String(row.origin_canvas_id),
       origin_job_id: String(row.origin_job_id),
       disposition: String(row.disposition),
-      verify_status: "confirmed",
+      verify_status: String(row.verify_status ?? "pending"),
     };
   }));
 }
@@ -250,9 +250,11 @@ export async function insertTaskSeedProjections(
 /** Prompt projection excludes project Finding IDs; agents reference canvas node UUIDs only. */
 export function taskTargetForPrompt(target: Record<string, unknown>): Record<string, unknown> {
   if (target.kind !== "compose") return target;
+  const seeds = frozenTaskSeeds(target);
   const promptTarget: Record<string, unknown> = {
     ...target,
-    seed_count: frozenTaskSeeds(target).length,
+    seed_count: seeds.length,
+    compose_scope: composeScopeForPrompt(seeds),
   };
   delete promptTarget.seed_finding_ids;
   delete promptTarget.seed_findings;

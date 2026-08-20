@@ -248,7 +248,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 })}
                 className="accent-emerald-400"
               />
-              选择当前可代入结果（最多 {MAX_COMPOSE_SEEDS} 条）
+              选择当前可代入结果（最多 {MAX_COMPOSE_SEEDS} 条，含未确认）
             </label>
             <span className="font-mono text-[10px] text-zinc-600">{selectedCandidates.length} / {MAX_COMPOSE_SEEDS}</span>
           </div>
