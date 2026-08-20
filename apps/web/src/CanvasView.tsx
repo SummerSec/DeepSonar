@@ -59,6 +59,7 @@ import {
   broadcastLedgerCountLabel,
   broadcastLedgerHeading,
   CANVAS_FILTER_DESKTOP_MQ,
+  CANVAS_FILTER_TOGGLE_LABEL,
   countHiddenTopologyEdges,
   defaultCanvasFiltersOpen,
   hiddenEdgeHint,
@@ -1222,7 +1223,7 @@ export function CanvasView({
       </ReactFlow>
 
       <div
-        className={`canvas-filter-panel surface-shell absolute left-4 ${traceActive ? "top-20 hidden sm:block" : "top-4"} z-10 rounded-[20px] p-1 ${filtersOpen ? "is-open" : "is-collapsed"}`}
+        className={`canvas-filter-panel surface-shell absolute left-4 ${traceActive ? "top-20 hidden sm:block" : "top-4"} z-[30] rounded-[20px] p-1 ${filtersOpen ? "is-open" : "is-collapsed"}`}
       >
         {filtersOpen ? (
           <div className="surface-core rounded-[16px] px-4 py-3">
@@ -1409,11 +1410,12 @@ export function CanvasView({
             <button
               type="button"
               onClick={() => setFiltersOpen(true)}
-              className="canvas-filter-toggle flex min-w-0 flex-1 items-center gap-2 rounded-l-[16px] px-4 py-3 text-left text-[12px]"
+              className="canvas-filter-toggle flex flex-1 items-center gap-2 rounded-l-[16px] px-4 py-3 text-left text-[12px]"
               aria-expanded="false"
+              aria-label={CANVAS_FILTER_TOGGLE_LABEL}
             >
               <Funnel size={15} className="shrink-0 text-acc-400" />
-              <span className="shrink-0">筛选节点</span>
+              <span className="canvas-filter-toggle-label">{CANVAS_FILTER_TOGGLE_LABEL}</span>
               {filterActive && (
                 <span className="truncate font-mono text-[10px] text-acc-400">
                   命中 {matchedCount} / {totalNodeCount}

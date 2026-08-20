@@ -5,6 +5,7 @@ import {
   broadcastLedgerCountLabel,
   broadcastLedgerHeading,
   CANVAS_FILTER_DESKTOP_MQ,
+  CANVAS_FILTER_TOGGLE_LABEL,
   countHiddenTopologyEdges,
   defaultCanvasFiltersOpen,
   hiddenEdgeHint,
@@ -12,10 +13,11 @@ import {
   visibleTopologyEdges,
 } from "./canvas-process-chrome";
 
-test("desktop filters default open; compact view stays collapsed", () => {
+test("filter dock defaults open even when the 640px window query fails", () => {
   assert.equal(CANVAS_FILTER_DESKTOP_MQ, "(min-width: 640px)");
+  assert.equal(CANVAS_FILTER_TOGGLE_LABEL, "筛选节点");
   assert.equal(defaultCanvasFiltersOpen({ matches: true }), true);
-  assert.equal(defaultCanvasFiltersOpen({ matches: false }), false);
+  assert.equal(defaultCanvasFiltersOpen({ matches: false }), true);
   assert.equal(defaultCanvasFiltersOpen(null), true);
   assert.equal(defaultCanvasFiltersOpen(undefined), true);
 });
@@ -61,20 +63,45 @@ test("broadcast ledger stays mounted at total=0", () => {
 test("canvas view wires discoverable chrome instead of silent unmount", () => {
   const source = readFileSync(new URL("./CanvasView.tsx", import.meta.url), "utf8");
   assert.match(source, /defaultCanvasFiltersOpen\(/);
+  assert.match(source, /CANVAS_FILTER_TOGGLE_LABEL/);
   assert.match(source, /shouldMountBroadcastLedger\(broadcastPage\)/);
   assert.match(source, /hiddenEdgeHint\(/);
   assert.match(source, /broadcastLedgerHeading\(/);
+  assert.match(source, /z-\[30\]/);
   assert.doesNotMatch(source, /broadcastPage && broadcastPage\.total > 0/);
   assert.doesNotMatch(source, /const \[filtersOpen, setFiltersOpen\] = useState\(false\)/);
+  assert.doesNotMatch(
+    source,
+    /canvas-filter-toggle[^\n]*min-w-0/,
+    "collapsed toggle must not shrink away and leave only 导出",
+  );
 });
 
-test("edge strokes keep size and light-theme contrast", () => {
+test("collapsed dock keeps 筛选节点 readable and cannot clip to export-only", () => {
   const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
-  assert.match(css, /\.react-flow__edges\b[\s\S]*max-width:\s*none/);
+  const collapsed = css.match(/\.canvas-filter-panel\.is-collapsed \{[^}]+\}/)?.[0] ?? "";
+  assert.match(collapsed, /min-width:\s*12\.5rem/);
+  assert.match(collapsed, /max-width:\s*calc\(100% - 32px\)/);
+  assert.doesNotMatch(collapsed, /100% - 176px/);
+  assert.match(css, /\.canvas-filter-toggle \{[^}]*min-width:\s*8\.5rem/);
+  assert.match(css, /\.canvas-filter-toggle \{[^}]*background:\s*var\(--panel-raised\)/);
+  assert.match(css, /\.canvas-filter-toggle-label \{[^}]*flex:\s*none/);
+  assert.match(css, /html\[data-color-scheme="light"\] \.canvas-filter-toggle-label/);
+  assert.match(css, /html\[data-color-scheme="light"\] \.canvas-filter-toggle \{[^}]*background:\s*#fbfaf8/);
+  assert.match(css, /@media \(max-width:\s*639px\)[\s\S]*\.canvas-filter-toggle \{[^}]*min-height:\s*44px/);
+});
+
+test("edge strokes keep size, pane var, z-index, and light-theme contrast", () => {
+  const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*height:\s*100%\s*!important/);
+  assert.match(css, /\.react-flow__edges[\s\S]*z-index:\s*2/);
+  assert.match(css, /\.canvas-filter-panel \{[\s\S]*z-index:\s*30/);
   assert.match(css, /html\[data-color-scheme="light"\] \.react-flow__edge\.deepsonar-edge \.react-flow__edge-path/);
   assert.match(css, /--xy-edge-stroke-default/);
+  assert.match(css, /--xy-edge-stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)/);
   assert.match(css, /--deepsonar-edge-zoom-boost/);
   assert.match(css, /calc\(2\.8px \* var\(--deepsonar-edge-zoom-boost, 1\)\)/);
+  assert.match(css, /stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)\s*!important/);
   assert.match(css, /\.canvas-filter-toggle\b/);
   assert.match(css, /\.canvas-hidden-edge-hint\b/);
 });

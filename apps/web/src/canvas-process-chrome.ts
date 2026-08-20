@@ -2,10 +2,15 @@ import type { CanvasBroadcastPage, CanvasEdge } from "./api";
 import type { TraceFocusMode } from "./finding-trace-focus";
 
 export const CANVAS_FILTER_DESKTOP_MQ = "(min-width: 640px)";
+export const CANVAS_FILTER_TOGGLE_LABEL = "筛选节点";
 
-/** 桌面端默认展开筛选；未知/SSR 按桌面处理，避免入口被收起藏掉。 */
-export function defaultCanvasFiltersOpen(media: { matches: boolean } | null | undefined): boolean {
-  return media?.matches ?? true;
+/**
+ * 筛选坞始终默认展开。
+ * 不能用窗口 640px 当桌面判断：系统 150–200% 缩放时 CSS 像素会跌破断点，
+ * 折叠后再被 100%-176px 裁切就只剩「导出」。
+ */
+export function defaultCanvasFiltersOpen(_media?: { matches: boolean } | null): boolean {
+  return true;
 }
 
 export function visibleTopologyEdges<T extends Pick<CanvasEdge, "id" | "from_node_id" | "to_node_id">>(

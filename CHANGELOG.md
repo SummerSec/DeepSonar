@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 过程画布筛选坞始终默认展开；折叠态「筛选节点」在亮/暗色与 <640px 下保持可点可读，不再被 `100%-176px` 裁成只剩导出。
+- 拓扑连线把 `--deepsonar-edge-zoom-boost` 与 `--xy-edge-stroke-width` 写到 `.react-flow` 根节点，并覆盖 Tailwind 对边 SVG 的 `height:auto`，默认 fitView 下描边可见。
+
 ## [0.1.41] - 2026-08-20
 
 ### 新增
