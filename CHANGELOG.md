@@ -24,6 +24,7 @@
 - Reaper 不再把健康沙箱里的单条长工具调用判成产出停滞：`tool.call.started` 写入语义进度与 `runtime_activity`，在飞工具且 lease 仍有效时跳过 stall；`deepsonar-chrome-audit/test/fuzz` 另有 5400/10800s 下限。全局 `DEEPSONAR_JOB_STALL_SEC` 默认仍为 900s。
 - 官方 runtime catalog 不再被 image-admission 周期复扫按 Debian/发行版 Trivy CRITICAL 或 secret 自动吊销；第三方仍保持 0 CRITICAL / 0 secret。仅有吊销版本时任务启动返回 `409 RUNTIME_IMAGE_REVOKED`，不再误报 `RUNTIME_IMAGE_PLATFORM_UNAVAILABLE`。`/health` 以 `official_trust_warnings` 暴露官方默认镜像已吊销。
 - Pi Provider 编辑器接受官方 `llm-pi-ai` settings YAML/JSON，提取 `baseURL` / 模型 / API key，并物化到 `.pi/agent/models.json`（#255）。
+- OpenHarmony arm64 冒烟接受 qemu 上拆开的 `Connect server failed` + `Ver:` 输出（#276）：合并 `hdc version` / `hdc -v` 后出现 `Ver:` 即通过，不再要求两条都带版本；hdc 缺失或完全无版本仍 fail closed。
 
 ### 变更
 
