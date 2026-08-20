@@ -67,7 +67,7 @@ test("canvas view wires discoverable chrome instead of silent unmount", () => {
   assert.match(source, /shouldMountBroadcastLedger\(broadcastPage\)/);
   assert.match(source, /hiddenEdgeHint\(/);
   assert.match(source, /broadcastLedgerHeading\(/);
-  assert.match(source, /z-\[30\]/);
+  assert.match(source, /z-\[50\]/);
   assert.doesNotMatch(source, /broadcastPage && broadcastPage\.total > 0/);
   assert.doesNotMatch(source, /const \[filtersOpen, setFiltersOpen\] = useState\(false\)/);
   assert.doesNotMatch(
@@ -95,7 +95,7 @@ test("edge strokes keep size, pane var, z-index, and light-theme contrast", () =
   const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
   assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*height:\s*100%\s*!important/);
   assert.match(css, /\.react-flow__edges[\s\S]*z-index:\s*2/);
-  assert.match(css, /\.canvas-filter-panel \{[\s\S]*z-index:\s*30/);
+  assert.match(css, /\.canvas-filter-panel \{[\s\S]*z-index:\s*50/);
   assert.match(css, /html\[data-color-scheme="light"\] \.react-flow__edge\.deepsonar-edge \.react-flow__edge-path/);
   assert.match(css, /--xy-edge-stroke-default/);
   assert.match(css, /--xy-edge-stroke-width:\s*calc\(2\.4px \* var\(--deepsonar-edge-zoom-boost, 1\)\)/);

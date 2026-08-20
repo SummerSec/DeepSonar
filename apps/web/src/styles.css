@@ -1011,15 +1011,20 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 }
 .broadcast-node-badge.has-failure { border-color: color-mix(in srgb, var(--broadcast-failed) 60%, var(--line)); }
 .canvas-filter-panel {
-  z-index: 30;
+  z-index: 50;
   width: min(760px, calc(100% - 32px));
+  max-height: min(46vh, 420px);
+  overflow: auto;
   color: var(--text);
+  pointer-events: auto;
   transition: width 180ms var(--ease-decel);
 }
 .canvas-filter-panel.is-collapsed {
   width: max-content;
   min-width: 12.5rem;
   max-width: calc(100% - 32px);
+  max-height: none;
+  overflow: visible;
 }
 .canvas-filter-panel .surface-core { overflow: visible; }
 .canvas-filter-toggle {

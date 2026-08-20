@@ -79,6 +79,8 @@ const COL_X = [80, 460, 840, 1220, 1600, 1980];
 /** 行距 = 节点高度 + 间隙，避免固定列兜底时重叠 */
 const ROW_GAP = 220;
 const TOP = 90;
+/** 单列过长时折成子列，避免服务端坐标全挤在 (0,0) 后纵向无限拉长 */
+const COL_WRAP = 16;
 
 function columnOf(n: CanvasNode): number {
   switch (n.node_type) {
@@ -118,14 +120,20 @@ export function layoutNodes(nodes: CanvasNode[], edges: CanvasEdge[]): Map<strin
   }
   cols.get(3)?.sort((a, b) => (verifyToFinding.get(a.id) ?? 999) - (verifyToFinding.get(b.id) ?? 999));
 
-  // 最大列高，用于各列垂直居中对齐
-  const maxRows = Math.max(...[...cols.values()].map((c) => c.length), 1);
+  // 最大列高，用于各列垂直居中对齐（折列后按实际行数）
+  const maxRows = Math.max(...[...cols.values()].map((c) => Math.min(c.length, COL_WRAP)), 1);
 
   const pos = new Map<string, { x: number; y: number }>();
   for (const [c, list] of cols) {
-    const offset = ((maxRows - list.length) * ROW_GAP) / 2;
+    const rows = Math.min(list.length, COL_WRAP);
+    const offset = ((maxRows - rows) * ROW_GAP) / 2;
     list.forEach((n, i) => {
-      pos.set(n.id, { x: COL_X[c] ?? 80, y: TOP + offset + i * ROW_GAP });
+      const subCol = Math.floor(i / COL_WRAP);
+      const row = i % COL_WRAP;
+      pos.set(n.id, {
+        x: (COL_X[c] ?? 80) + subCol * (NODE_W + 48),
+        y: TOP + offset + row * ROW_GAP,
+      });
     });
   }
   return pos;

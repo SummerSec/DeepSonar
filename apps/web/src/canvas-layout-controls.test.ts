@@ -19,7 +19,9 @@ test("canvas utilities expose accessible toggles and image export", () => {
   assert.match(source, /pannable/);
   assert.match(source, /zoomable/);
   assert.match(source, /ariaLabel="过程画布缩略图"/);
-  assert.match(source, /isUsableFlowSize\(flowWidth, flowHeight\)/);
+  assert.match(source, /onlyRenderVisibleElements/);
+  assert.match(source, /DEFAULT_CHILD_LIMIT/);
+  assert.match(source, /筛选过程节点/);
   assert.match(source, /shouldRecoverViewport\(/);
   assert.match(source, /hasPositiveNodeBounds\(fitTargets\)/);
   assert.match(source, /resolveFitMinZoom\(/);
