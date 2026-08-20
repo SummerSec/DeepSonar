@@ -5,11 +5,22 @@ import { resolveProductVersion } from "../../product-version.js";
 import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
 import { dispatcherRuntimeStatus } from "../../startup-status.js";
 
+async function defaultOfficialImageWarnings(): Promise<string[]> {
+  try {
+    const { listOfficialDefaultImageTrustWarnings, officialDefaultImageRevokedWarning } = await import("../../runtime-images.js");
+    const rows = await listOfficialDefaultImageTrustWarnings();
+    return [...new Set(rows.map((row) => officialDefaultImageRevokedWarning(String(row.image_key))))];
+  } catch {
+    return [];
+  }
+}
+
 export function registerSystemRoutes(
   app: FastifyInstance,
   dependencies: {
     runtimeImageStatus?: typeof runtimeImageWarmupStatus;
     dispatcherStatus?: typeof dispatcherRuntimeStatus;
+    officialImageWarnings?: () => Promise<string[]> | string[];
   } = {},
 ): void {
   app.get("/metrics", async (_req, reply) =>
@@ -50,11 +61,20 @@ export function registerSystemRoutes(
   app.get("/health", async () => {
     const runtimeImages = (dependencies.runtimeImageStatus ?? runtimeImageWarmupStatus)();
     const dispatcher = (dependencies.dispatcherStatus ?? dispatcherRuntimeStatus)();
+    const officialTrustWarnings = await Promise.resolve(
+      (dependencies.officialImageWarnings ?? defaultOfficialImageWarnings)(),
+    );
+    if (officialTrustWarnings.length > 0) {
+      console.warn(`[health] ${officialTrustWarnings.join("; ")}`);
+    }
     return {
       ok: true,
       ready: runtimeImages.ready && dispatcher.enabled,
       version: resolveProductVersion(),
-      runtime_images: runtimeImages,
+      runtime_images: {
+        ...runtimeImages,
+        official_trust_warnings: officialTrustWarnings,
+      },
       dispatcher,
       ts: Date.now(),
     };

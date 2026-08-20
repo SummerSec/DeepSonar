@@ -12,7 +12,11 @@ import {
 } from "./cosign-verify.js";
 import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
 import { resolveScannerImages, type ScannerName } from "./scanner-config.js";
-import { shouldRevokeOnScanFailure } from "./trust-policy.js";
+import {
+  evaluateVulnerabilityAdmissionPolicy,
+  isOfficialSource,
+  shouldRevokeOnScanFailure,
+} from "./trust-policy.js";
 
 const execFileP = promisify(execFile);
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://deepsonar:deepsonar@localhost:5432/deepsonar";
@@ -186,7 +190,7 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   const scanSeed = row.scan_seed && typeof row.scan_seed === "object"
     ? row.scan_seed as Record<string, unknown>
     : {};
-  const restoreOfficialTrust = row.source_kind === "official" && scanSeed.restore_official_trust === true;
+  const restoreOfficialTrust = isOfficialSource(row.source_kind) && scanSeed.restore_official_trust === true;
   if (!allowedRegistries.has(registryOf(imageRef))) throw new Error(`registry not allowed: ${registryOf(imageRef)}`);
 
   await sql`UPDATE runtime_image_scans SET status = 'running' WHERE id = ${scanId}`;
@@ -245,7 +249,12 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   const vulnerabilityReport = JSON.parse(await scanner("trivy", ["image", "--scanners", "vuln,secret", "--format", "json", "--severity", "HIGH,CRITICAL", resolvedRef]));
   const criticalCount = ((vulnerabilityReport.Results ?? []) as Array<{ Vulnerabilities?: Array<{ Severity?: string }> }>).flatMap((result) => result.Vulnerabilities ?? []).filter((item) => item.Severity === "CRITICAL").length;
   const secretCount = ((vulnerabilityReport.Results ?? []) as Array<{ Secrets?: unknown[] }>).reduce((sum, result) => sum + (result.Secrets?.length ?? 0), 0);
-  if (criticalCount > 0 || secretCount > 0) throw new Error(`admission policy failed: critical=${criticalCount}, secrets=${secretCount}`);
+  const vulnPolicy = evaluateVulnerabilityAdmissionPolicy({
+    sourceKind: row.source_kind,
+    criticalCount,
+    secretCount,
+  });
+  if (!vulnPolicy.ok) throw new Error(vulnPolicy.message);
 
   const platforms = [`${String(inspect.Os ?? "linux")}/${String(inspect.Architecture ?? "unknown")}`];
   const scanSummary = { contract: "passed", signature: signatureScan.status, malware: "clean", licenses: "captured-in-sbom", critical: criticalCount, secrets: secretCount, setuid, worker_id: workerId };
@@ -266,6 +275,21 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
       UPDATE runtime_image_scans SET status = 'succeeded', result_json = ${tx.json({ ...scanSummary, resolved_ref: resolvedRef, digest } as never)},
         finished_at = now() WHERE id = ${scanId}`;
   });
+  if (restoreOfficialTrust) {
+    await writeAdmissionAudit("runtime_image.trust_restored", row, {
+      trust_status: "trusted",
+      reason: "official_catalog_rescan",
+      digest,
+    });
+  }
+  if (isOfficialSource(row.source_kind) && (criticalCount > 0 || secretCount > 0)) {
+    console.warn(`[image-admission] ${row.image_key as string}@${row.version as string}: official catalog findings recorded (critical=${criticalCount}, secrets=${secretCount}); trust preserved`);
+    await writeAdmissionAudit("runtime_image.official_findings", row, {
+      trust_status: row.trust_status === "trusted" || restoreOfficialTrust ? "trusted" : "quarantined",
+      critical: criticalCount,
+      secrets: secretCount,
+    }, "error");
+  }
 }
 
 async function inspectAndScan(row: Record<string, unknown>) {
@@ -305,14 +329,14 @@ async function fail(row: Record<string, unknown>, error: unknown) {
   const scanSeed = row.scan_seed && typeof row.scan_seed === "object"
     ? row.scan_seed as Record<string, unknown>
     : {};
-  const restoreOfficialTrust = row.source_kind === "official" && scanSeed.restore_official_trust === true;
+  const restoreOfficialTrust = isOfficialSource(row.source_kind) && scanSeed.restore_official_trust === true;
   const revoke = shouldRevokeOnScanFailure({
     sourceKind: row.source_kind,
     trustStatus: row.trust_status,
     restoreOfficialTrust,
     errorMessage: message,
   });
-  const preserveOfficialTrust = row.source_kind === "official" && row.trust_status === "trusted" && !revoke;
+  const preserveOfficialTrust = isOfficialSource(row.source_kind) && row.trust_status === "trusted" && !revoke;
   await sql.begin(async (tx) => {
     await tx`UPDATE runtime_image_scans SET status = 'failed', error = ${message}, finished_at = now() WHERE id = ${row.scan_id as string}`;
     if (preserveOfficialTrust) {
@@ -330,7 +354,7 @@ async function fail(row: Record<string, unknown>, error: unknown) {
     console.error(`[image-admission] ${row.image_key as string}@${row.version as string}: scan failed; official trust preserved (${message})`);
     await writeAdmissionAudit("runtime_image.trust_preserved", row, {
       trust_status: "trusted",
-      reason: "scan_failed_without_policy_violation",
+      reason: "official_scan_failed_without_revoke",
       error: message.slice(0, 300),
     }, "error");
     return;
@@ -406,7 +430,7 @@ async function checkTrackedTags() {
   }
 }
 
-/** 可信版本周期复扫；扫描失败会自动 revoked，并终止仍活跃的相关 Job。 */
+/** 可信版本周期复扫。第三方扫描失败会自动 revoked；官方 catalog 只记失败与告警，不自动吊销。 */
 async function queueContinuousRescans() {
   await sql`
     INSERT INTO runtime_image_scans (runtime_image_version_id)

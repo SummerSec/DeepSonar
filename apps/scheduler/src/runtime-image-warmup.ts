@@ -8,6 +8,7 @@ export interface RuntimeImageWarmupStatus {
   required: number;
   error: string | null;
   retry_at: string | null;
+  official_trust_warnings?: string[];
 }
 
 export const DISPATCHER_DISABLED_LOG_AFTER = 3;

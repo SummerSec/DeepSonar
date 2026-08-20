@@ -146,6 +146,86 @@ export class RuntimeImagePlatformUnavailableError extends Error {
   }
 }
 
+export class RuntimeImageRevokedError extends Error {
+  readonly code = "RUNTIME_IMAGE_REVOKED" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string, readonly platform: string) {
+    super(`runtime image ${imageKey} has no trusted version for ${platform}; available versions are revoked`);
+    this.name = "RuntimeImageRevokedError";
+  }
+}
+
+export class RuntimeImageNotTrustedError extends Error {
+  readonly code = "RUNTIME_IMAGE_NOT_TRUSTED" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(readonly imageKey: string, readonly platform: string) {
+    super(`runtime image ${imageKey} has no trusted version for ${platform}`);
+    this.name = "RuntimeImageNotTrustedError";
+  }
+}
+
+export function officialDefaultImageRevokedWarning(imageKey: string): string {
+  return `official default image ${imageKey} revoked`;
+}
+
+export async function listOfficialDefaultImageTrustWarnings(
+  db: typeof sql = sql,
+): Promise<Array<{ image_key: string; version: string | null; trust_status: string }>> {
+  return db`
+    SELECT ri.image_key, v.version, v.trust_status
+    FROM runtime_images ri
+    JOIN runtime_image_versions v ON v.runtime_image_id = ri.id
+    WHERE ri.official = true
+      AND ri.enabled = true
+      AND ri.project_opt_in = false
+      AND v.trust_status = 'revoked'
+      AND NOT EXISTS (
+        SELECT 1 FROM runtime_image_versions trusted
+        WHERE trusted.runtime_image_id = ri.id AND trusted.trust_status = 'trusted'
+      )
+    ORDER BY ri.image_key, v.version`;
+}
+
+export async function writeOfficialDefaultImageTrustWarnings(db: typeof sql = sql): Promise<string[]> {
+  const rows = await listOfficialDefaultImageTrustWarnings(db);
+  const warnings = [...new Set(rows.map((row) => officialDefaultImageRevokedWarning(String(row.image_key))))];
+  for (const warning of warnings) {
+    console.warn(`[runtime-images] ${warning}`);
+  }
+  return warnings;
+}
+
+export type RuntimeImageSelectionDiagnosis = {
+  imageKey: string;
+  official: boolean;
+  hostPlatform: string;
+  channel: RuntimeImageRegistryChannel;
+  hasTrustedHostPlatform: boolean;
+  hasTrustedVersion: boolean;
+  hasRevokedHostPlatform: boolean;
+  hasRevokedVersion: boolean;
+  hasSelectedRef: boolean;
+};
+
+/** Trusted+platform missing is PLATFORM; no trusted but revoked is REVOKED; otherwise NOT_TRUSTED. */
+export function diagnoseRuntimeImageSelectionFailure(input: RuntimeImageSelectionDiagnosis): Error {
+  if (input.hasTrustedHostPlatform) {
+    if (input.official && !input.hasSelectedRef) {
+      return new RuntimeImageChannelUnavailableError(input.channel, input.imageKey);
+    }
+    return new Error("runtime image binding has no matching trusted version");
+  }
+  if (input.hasTrustedVersion) {
+    return new RuntimeImagePlatformUnavailableError(input.imageKey, input.hostPlatform);
+  }
+  if (input.hasRevokedHostPlatform || input.hasRevokedVersion) {
+    return new RuntimeImageRevokedError(input.imageKey, input.hostPlatform);
+  }
+  return new RuntimeImageNotTrustedError(input.imageKey, input.hostPlatform);
+}
+
 /** Explicit project pin vs latest trusted. Null pin already follows latest. */
 export type RuntimeImagePinClassification = "follow_latest" | "pin_ok" | "pin_stale" | "unavailable";
 
@@ -237,6 +317,17 @@ export function runtimeImageHttpError(error: unknown): { statusCode: number; bod
     };
   }
   if (error instanceof RuntimeImagePlatformUnavailableError) {
+    return {
+      statusCode: error.statusCode,
+      body: {
+        error: error.message,
+        error_code: error.code,
+        image_key: error.imageKey,
+        platform: error.platform,
+      },
+    };
+  }
+  if (error instanceof RuntimeImageRevokedError || error instanceof RuntimeImageNotTrustedError) {
     return {
       statusCode: error.statusCode,
       body: {
@@ -1236,6 +1327,9 @@ export async function applyOfficialRuntimeCatalog(
       UPDATE runtime_image_versions SET promoted_at = NULL, updated_at = now()
       WHERE runtime_image_id = ${image.id} AND trust_status = 'disabled'`;
   }
+  await writeOfficialDefaultImageTrustWarnings(sql).catch((error) => {
+    console.warn("[runtime-images] official trust warning query failed:", error instanceof Error ? error.message : error);
+  });
   const [trust] = await sql`
     SELECT count(*)::int AS n
     FROM runtime_image_versions v
@@ -1933,13 +2027,26 @@ async function selectRuntimeImageSnapshot(
     const [image] = await db`
       SELECT image_key, official,
              EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
-               AND v.platforms_json @> ${sql.json([hostPlatform])}) AS has_host_platform,
+               AND v.platforms_json @> ${sql.json([hostPlatform])}) AS has_trusted_host_platform,
+             EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted') AS has_trusted_version,
+             EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'revoked'
+               AND v.platforms_json @> ${sql.json([hostPlatform])}) AS has_revoked_host_platform,
+             EXISTS (SELECT 1 FROM runtime_image_versions v WHERE v.runtime_image_id = ri.id AND v.trust_status = 'revoked') AS has_revoked_version,
              EXISTS (SELECT 1 FROM runtime_image_versions v JOIN runtime_image_version_refs r ON r.version_id = v.id
                WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted' AND r.channel = ${selectedChannel}) AS has_selected_ref
       FROM runtime_images ri WHERE ri.id = ${imageId}`;
-    if (image && !image.has_host_platform) throw new RuntimeImagePlatformUnavailableError(String(image.image_key), hostPlatform);
-    if (image?.official && !image.has_selected_ref) throw new RuntimeImageChannelUnavailableError(selectedChannel, String(image.image_key));
-    throw new Error("runtime image binding has no matching trusted version");
+    if (!image) throw new Error("runtime image binding has no matching trusted version");
+    throw diagnoseRuntimeImageSelectionFailure({
+      imageKey: String(image.image_key),
+      official: image.official === true,
+      hostPlatform,
+      channel: selectedChannel,
+      hasTrustedHostPlatform: Boolean(image.has_trusted_host_platform),
+      hasTrustedVersion: Boolean(image.has_trusted_version),
+      hasRevokedHostPlatform: Boolean(image.has_revoked_host_platform),
+      hasRevokedVersion: Boolean(image.has_revoked_version),
+      hasSelectedRef: Boolean(image.has_selected_ref),
+    });
   }
   const resolvedRef = row.resolved_ref as string | null;
   const digest = row.digest as string | null;

@@ -255,4 +255,53 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM runtime_images WHERE id = ${imageId}`;
     }
   });
+
+  test("only revoked official versions return RUNTIME_IMAGE_REVOKED, not PLATFORM_UNAVAILABLE", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    const { migrate, sql } = await import("./db.js");
+    const runtime = await import("./runtime-images.js");
+    await migrate();
+
+    const imageKey = `deepsonar-revoked-only-${randomUUID().slice(0, 8)}`;
+    const imageId = randomUUID();
+    const versionId = randomUUID();
+    const digest = `sha256:${"9".repeat(64)}`;
+    const acrRef = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${digest}`;
+    try {
+      await sql`UPDATE global_settings SET runtime_registry_channel = 'aliyun-acr' WHERE id = 'global'`;
+      await sql`
+        INSERT INTO runtime_images (id, image_key, name, description, publisher, source_kind, official, project_opt_in)
+        VALUES (${imageId}, ${imageKey}, 'Revoked official', 'fixture', 'SummerSec', 'official', true, false)`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, status_reason, revoked_at)
+        VALUES
+          (${versionId}, ${imageId}, '0.1.41', ${acrRef}, ${acrRef}, ${digest},
+           ${sql.json(["linux/amd64", "linux/arm64"] as never)},
+           'revoked', 'admission policy failed: critical=19, secrets=0', now())`;
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
+        VALUES (${versionId}, 'aliyun-acr', ${acrRef}, ${acrRef}, ${digest}, ${sql.json({ source: "fixture" } as never)})`;
+
+      await assert.rejects(
+        () => runtime.resolveRuntimeImageForProjectBinding(sql, imageId, null),
+        (error: unknown) => {
+          assert.ok(error instanceof runtime.RuntimeImageRevokedError);
+          assert.equal(error.code, "RUNTIME_IMAGE_REVOKED");
+          assert.equal(error.statusCode, 409);
+          assert.equal(error.imageKey, imageKey);
+          const mapped = runtime.runtimeImageHttpError(error);
+          assert.equal(mapped?.statusCode, 409);
+          assert.equal(mapped?.body.error_code, "RUNTIME_IMAGE_REVOKED");
+          assert.doesNotMatch(String(mapped?.body.error), /PLATFORM_UNAVAILABLE|platforms explicitly/);
+          return true;
+        },
+      );
+
+      const warnings = await runtime.listOfficialDefaultImageTrustWarnings(sql);
+      assert.ok(warnings.some((row) => row.image_key === imageKey && row.trust_status === "revoked"));
+    } finally {
+      await sql`DELETE FROM runtime_images WHERE id = ${imageId}`;
+    }
+  });
 }
