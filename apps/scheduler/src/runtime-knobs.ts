@@ -51,10 +51,13 @@ export interface FrozenRuntimeKnobs {
   sources: ResolvedRuntimeKnobs["sources"];
 }
 
-export function envRuntimeKnobDefaults(): Required<Pick<
-  RuntimeKnobLayer,
-  "stallSec" | "jobTokenMaxRequests" | "auditTimeoutSec" | "verifyTimeoutSec" | "provisionTimeoutSec"
->> {
+export function envRuntimeKnobDefaults(): {
+  stallSec: number;
+  jobTokenMaxRequests: number;
+  auditTimeoutSec: number;
+  verifyTimeoutSec: number;
+  provisionTimeoutSec: number;
+} {
   return {
     stallSec: config.timeouts.stallSec,
     jobTokenMaxRequests: config.gateway.maxRequests,
@@ -132,7 +135,7 @@ export function validateRuntimeKnobOverride(value: unknown): string | null {
   return null;
 }
 
-function hasInvalidOptionalInt(raw: Record<string, unknown>, keys: string[], parsed: number | undefined): boolean {
+function hasInvalidOptionalInt(raw: Record<string, unknown>, keys: string[], parsed: number | null | undefined): boolean {
   const present = keys.find((key) => Object.prototype.hasOwnProperty.call(raw, key));
   if (!present) return false;
   return raw[present] !== null && parsed === undefined;
@@ -193,7 +196,15 @@ export function resolveRuntimeKnobs(input: {
   jobType: string;
   imageKey?: string | null;
 }): ResolvedRuntimeKnobs {
-  const env = { ...envRuntimeKnobDefaults(), ...parseRuntimeKnobLayer(input.env) };
+  const envDefaults = envRuntimeKnobDefaults();
+  const envLayer = parseRuntimeKnobLayer(input.env);
+  const env = {
+    stallSec: envLayer.stallSec ?? envDefaults.stallSec,
+    jobTokenMaxRequests: envLayer.jobTokenMaxRequests ?? envDefaults.jobTokenMaxRequests,
+    auditTimeoutSec: envLayer.auditTimeoutSec ?? envDefaults.auditTimeoutSec,
+    verifyTimeoutSec: envLayer.verifyTimeoutSec ?? envDefaults.verifyTimeoutSec,
+    provisionTimeoutSec: envLayer.provisionTimeoutSec ?? envDefaults.provisionTimeoutSec,
+  };
   const job = parseRuntimeKnobOverride(input.job, JOB_TIMEOUT_BOUNDS);
   const role = parseRuntimeKnobOverride(input.role);
   const project = parseRuntimeKnobLayer(input.project);
